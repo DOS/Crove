@@ -39,7 +39,7 @@ Raised in review; undecided unless marked **Decided**. Each needs a decision rec
 4. **Identity sequencing.** DOS ecosystem integration (DOS ID, DOS.Me, DOS.AI) is a product goal. The open question is sequencing only: whether org/membership sync from DOS must sit on the Phase 0 critical path (it depends on DOS-1, DOS-26, DOS-27 in DOS.Me), or whether DOS ID login ships first with Crove-managed membership and DOS org linking (`external_org_id`) follows when billing needs it.
 5. **G6 protected-path approval.** Decide what backs the protected-path approval label. Proposal: invariant suite from base + a dedicated security reviewer agent + external security review at milestones (Phase 1 exit already has one).
 6. **Forks.** If Twenty, Desk, Cal, Postiz and Documenso have no real users, shut them down instead of one-way sync, parity checklists, `legacy_id_map` and a 30-day rollback. Needed: real-user count per fork.
-7. **Repo visibility.** The plan says the core repo stays private until Phase 1 exit; `DOS/Crove` is public today. **Decided** 2026-10-13: stay public; DOS-side implementation details stay in the private DOS.Me repo. Set up gitleaks (pre-commit + CI) and the G1 scan before further commits.
+7. **Repo visibility.** The plan says the core repo stays private until Phase 1 exit; `DOS/Crove` is public today. **Decided** 2026-10-13: stay public; DOS-side implementation details stay in the private DOS.Me repo. gitleaks runs in CI since 2026-10-13, plus a local pre-commit hook after `pnpm install` when gitleaks is installed; the G1 project-ref scan is still to do.
 
 ## Why Crove OS
 

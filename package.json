@@ -8,7 +8,8 @@
     "dev": "pnpm --filter @crove/web dev",
     "build": "pnpm --filter @crove/web build",
     "start": "pnpm --filter @crove/web start",
-    "lint": "pnpm --filter @crove/web lint"
+    "lint": "pnpm --filter @crove/web lint",
+    "prepare": "node tools/install-git-hooks.mjs"
   },
   "devDependencies": {
     "prettier": "^3.5.0",
