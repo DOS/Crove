@@ -16,30 +16,80 @@
 
 | Phase | Time-box | Status |
 |---|---|---|
-| 0 Prep + walking skeleton | 2 weeks | Not started |
+| 0 Thin kernel + Document Inbox (revised, see Decisions) | 4-6 weeks | Not started |
 | 0b Finance spike | 2 weeks, parallel | Not started |
 | 1 Kernel v0 + Party & Document Inbox | 8 weeks | Not started |
-| 2a Finance A1 | 10 weeks | Not started |
+| 2a Finance A1 (scope set by interviews) | 10 weeks | Not started |
 | 2b Finance A2 | 8 weeks | Not started |
-| 3 CRM + Calendar | 12 weeks | Not started |
-| 4 Service | 10 weeks | Not started |
-| 5 Social | 6 weeks | Not started |
-| 6 Sign | 8 weeks | Not started |
-| 7 HRM | 10 weeks | Not started |
+| 3 CRM + Calendar | 12 weeks | Waits for wedge-customer demand (Decision 2) |
+| 4 Service | 10 weeks | Waits for wedge-customer demand (Decision 2) |
+| 5 Social | 6 weeks | Waits for wedge-customer demand (Decision 2) |
+| 6 Sign | 8 weeks | Waits for wedge-customer demand (Decision 2) |
+| 7 HRM | 10 weeks | Waits for wedge-customer demand (Decision 2) |
 
-Day-0 checklist: §12. Exit criteria per phase: §13.
+Day-0 checklist: §12. Exit criteria per phase: §13, except Phase 0, which is replaced by the revised Phase 0 below.
 
-### Open review items (2026-10-13)
+### Decisions (2026-10-13)
 
-Raised in review; undecided unless marked **Decided**. Each needs a decision recorded here or in an ADR.
+These decisions override any conflicting text in the body of this plan. Rationale: [ADR-0026](../adr/0026-wedge-scope-and-phase-0.md).
 
-1. **Customer validation.** The plan has no section on target segment, pricing, competitors (MISA, Base.vn, KiotViet, Sapo) or a customer-facing success metric. First revenue is around week 20 at the earliest. Proposal: pick one wedge (Document Inbox -> AI-proposed bookkeeping -> human approval) and run 10-15 customer interviews before Phase 2a scope is frozen.
-2. **Scope.** Six native modules, each a product category with specialist competitors and its own integrations and compliance. Proposal: start a new module only when the wedge's customers pull for it.
-3. **Stage-appropriate rigor.** Build now what is expensive to change later (tenancy, `(org_id, id)` keys, single write path, money types, migration discipline, proposals and audit); defer what can be added later (HMAC seal, WORM stream, self-host + `generic-oidc` + plain PG17, MCP, SSE, partitions, NAT). Phase 0's 9 exit criteria in 2 weeks is likely 2-3 months as written.
-4. **Identity sequencing.** DOS ecosystem integration (DOS ID, DOS.Me, DOS.AI) is a product goal. The open question is sequencing only: whether org/membership sync from DOS must sit on the Phase 0 critical path (it depends on DOS-1, DOS-26, DOS-27 in DOS.Me), or whether DOS ID login ships first with Crove-managed membership and DOS org linking (`external_org_id`) follows when billing needs it.
-5. **G6 protected-path approval.** Decide what backs the protected-path approval label. Proposal: invariant suite from base + a dedicated security reviewer agent + external security review at milestones (Phase 1 exit already has one).
-6. **Forks.** If Twenty, Desk, Cal, Postiz and Documenso have no real users, shut them down instead of one-way sync, parity checklists, `legacy_id_map` and a 30-day rollback. Needed: real-user count per fork.
-7. **Repo visibility.** The plan says the core repo stays private until Phase 1 exit; `DOS/Crove` is public today. **Decided** 2026-10-13: stay public; DOS-side implementation details stay in the private DOS.Me repo. gitleaks runs in CI since 2026-10-13, plus a local pre-commit hook after `pnpm install` when gitleaks is installed. G1 runs in the same `Secret scan` job: generic Supabase identifier rules in `.gitleaks.toml`, plus literal refs from the `G1_BLOCKLIST` Actions secret (add Crove's own project refs once they exist). `Secret scan` is a required check on `main`.
+1. **Wedge first.** Start with the Document Inbox: founders forward invoices and bank statements, AI proposes the bookkeeping, a human approves. First customers: startups and SMEs that use an outsourced accounting firm; test selling through accounting firms (one firm keeps books for many companies). The owner runs 10-15 interviews (founders + accounting firms) before Phase 2a scope is frozen; script below.
+2. **Scope.** Committed: kernel + Accounting. CRM, Service, Social, Sign and HRM (Phases 3-7) start only when wedge customers pull for them.
+3. **Lighter Phase 0.** Build now what is expensive to change later; defer the rest (table below). Phase 0 is time-boxed to 4-6 weeks, not 2.
+4. **Identity sequencing.** DOS ID login (OIDC) from day one; org membership is managed in Crove at first; DOS org linking (`external_org_id`, DOS-1/26/27) comes when per-org billing through DOS.AI is needed (DOS-7, DOS-17). The DOS ecosystem stays the goal; Phase 0 no longer waits on DOS.Me PRs.
+5. **Protected-path review.** No manual owner approval label (the owner does not review code). Instead: invariant suite taken from base, a security reviewer agent on every protected-path PR, and an external security review before the first external tenant. Agents keep merging after review passes.
+6. **Forks frozen.** No fork has real users (confirmed by the owner; prod stats show only a few test accounts). No one-way sync, parity checklists, `legacy_id_map` imports or rollback windows. Drop the Phase 2a Twenty -> party sync and the fork import/parity exit criteria in Phases 3-6. Shutting the forks down is a DOS-side decision.
+7. **Repo visibility.** Stay public; DOS-side implementation details stay in the private DOS.Me repo. gitleaks runs in CI since 2026-10-13, plus a local pre-commit hook after `pnpm install` when gitleaks is installed. G1 runs in the same `Secret scan` job: generic Supabase identifier rules in `.gitleaks.toml`, plus literal refs from the `G1_BLOCKLIST` Actions secret (add Crove's own project refs once they exist). `Secret scan` is a required check on `main`.
+
+### Phase 0, revised (4-6 weeks): thin kernel + Document Inbox
+
+**Build:**
+- Kernel tenancy: shared tables with `org_id`, `PRIMARY KEY (org_id, id)`, composite FKs, RLS; `enter_context` derives org and actor from the DB (no HMAC seal yet); login roles own nothing and have no table grants; one role per module.
+- One write path: `execute()` with auth, zod, RBAC, idempotency, handler, outbox, append-only audit; proposals + Inbox items for R2/R3.
+- Money as NUMERIC, decimals as strings on the wire; committed idempotent migrations only.
+- Identity: DOS ID login via OIDC, Crove session JWT + rotating refresh token, Crove-managed membership (owner invites).
+- Party (create/list/search), file upload, e-invoice XML extraction in the `crove-extract` sandbox (deterministic, no LLM).
+- Document Inbox: upload or forward an email -> XML parsed -> proposal (vendor party + purchase document draft) -> approve in the Inbox -> `execute()`.
+- Worker + outbox relay on pg-boss; worker-first deploys to beta on Cloud Run; minimal shell (login, org, party list, Inbox).
+- CI: lint, typecheck, unit tests, migration replay on the Supabase CLI.
+
+**Exit criteria:**
+1. On beta: log in with DOS ID -> create org -> forward an e-invoice email -> proposal appears in the Inbox -> approve -> vendor and document exist, with audit rows and an activity on the timeline.
+2. Generated cross-org RLS tests: 0 leaks. No write path outside `execute()` (arch test + pgTAP).
+3. Audit rows cannot be updated or deleted; the same email resent creates no duplicates.
+4. Worker-first deploy proven; a test alert reaches the owner's phone.
+5. The 10-15 customer interviews are done and summarized; Phase 2a scope is adjusted from them.
+
+**Needs owner approval before it happens (spends money):** creating the Crove Supabase projects (beta + prod with PITR) and the GCP projects.
+
+**Deferred, with the trigger to revisit:**
+
+| Deferred | Revisit when |
+|---|---|
+| HMAC-sealed context | Before the first external tenant |
+| WORM fact stream, 10-year archive packages | Before Finance GA |
+| Self-host (plain PG17, `generic-oidc` with Crove membership, S3-compatible) | Open-source traction or a self-host request |
+| DOS org sync (DOS-1, DOS-26, DOS-27) | Per-org billing through DOS.AI (DOS-7, DOS-17) |
+| MCP, public `/v1` API, outbound webhooks | A customer or partner needs them |
+| SSE realtime | Inbox polling is too slow for users |
+| Yearly partitions for `audit_event` | `audit_event` passes ~10M rows |
+| NAT with a fixed IP | A provider requires an IP allowlist |
+
+### Customer interview script (owner)
+
+Ask about what already happened, not "would you use this". Founders / SMEs:
+1. Who keeps your books today (yourself, in-house, an accounting firm)? What does it cost per month?
+2. How many purchase invoices and bank statements a month? How do they arrive (email, Zalo, paper)?
+3. Tell me about the last time paperwork cost you time or caused trouble.
+4. What software do you use (MISA, Excel...)? What do you like and hate about it?
+5. If AI read every invoice and proposed the entries so you only approved, what would stop you from trusting it?
+6. What would you pay per month if it saved you X hours or part of the accounting fee?
+
+Accounting firms:
+7. How many companies do you keep books for? Hours per company per month?
+8. How do clients send documents? What costs the most effort (data entry, bank reconciliation, chasing documents)?
+9. What software do you use, and what keeps you on it?
+10. If a tool collected each client's documents and proposed entries, would you pay per client or per month? How much?
 
 ## Why Crove OS
 
