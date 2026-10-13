@@ -1,0 +1,30 @@
+# Crove gitleaks config: the default rules plus G1 checks for Supabase identifiers.
+# Literal project refs (DOS and Crove) are never listed in this repo; CI appends
+# them from the G1_BLOCKLIST Actions secret (.github/scripts/g1_config.py).
+# Do not add `[extend] path` here: CI's generated config extends this file, and
+# gitleaks stops extending after 2 levels, which would silently drop the defaults.
+title = "crove"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "g1-supabase-project-url"
+description = "Supabase project URL or DB host (G1)"
+regex = '''(?i)\b([a-z]{20})\.(?:[a-z]+\.)?supabase\.(?:co|in)\b'''
+secretGroup = 1
+keywords = ["supabase"]
+
+[[rules]]
+id = "g1-supabase-pooler-user"
+description = "Supabase pooler connection string with a project ref (G1)"
+regex = '''(?i)postgres(?:ql)?(?:\+\w+)?://[a-z0-9_]+\.([a-z]{20})[:@]'''
+secretGroup = 1
+keywords = ["postgres"]
+
+[[rules]]
+id = "g1-supabase-project-ref-arg"
+description = "Supabase project ref passed as an argument or setting (G1)"
+regex = '''(?i)project[_-]?(?:ref|id)["'\s:=]+([a-z]{20})\b'''
+secretGroup = 1
+keywords = ["project-ref", "project_ref", "projectref", "project_id", "project-id", "projectid"]
