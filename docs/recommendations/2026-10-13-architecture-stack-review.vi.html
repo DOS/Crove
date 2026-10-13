@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="vi" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Đánh giá kiến trúc và stack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+/* Same house style as docs/plan/crove-os-kernel.vi.html: dark first, one column, sticky TOC from 1180px. */
+:root{
+  --bg:#101114; --surface:#16181d; --card:#1b1e25; --line:#2c303a; --fg:#eef0f4; --muted:#a3a9b6;
+  --accent:#ff2e29; --accent-ink:#ff8a85; --org:#8b93ff;
+  --ok:#34d399; --ok-bg:#0f2a21; --warn:#fbbf24; --warn-bg:#2a2110; --bad:#f87171; --bad-bg:#2d1515; --info:#60a5fa; --info-bg:#121f35;
+  --code-bg:#23262e;
+  --font-body:"Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f5f5f7; --surface:#ffffff; --card:#ffffff; --line:#dcdfe6; --fg:#15171c; --muted:#596070;
+    --accent:#d61f1a; --accent-ink:#b02420; --org:#4f46e5;
+    --ok:#047857; --ok-bg:#e6f5ee; --warn:#9a5b06; --warn-bg:#fcf1d9; --bad:#b91c1c; --bad-bg:#fcebeb; --info:#1d4ed8; --info-bg:#e7eefc;
+    --code-bg:#eceef2; color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f5f5f7; --surface:#ffffff; --card:#ffffff; --line:#dcdfe6; --fg:#15171c; --muted:#596070;
+  --accent:#d61f1a; --accent-ink:#b02420; --org:#4f46e5;
+  --ok:#047857; --ok-bg:#e6f5ee; --warn:#9a5b06; --warn-bg:#fcf1d9; --bad:#b91c1c; --bad-bg:#fcebeb; --info:#1d4ed8; --info-bg:#e7eefc;
+  --code-bg:#eceef2; color-scheme:light;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased}
+.page{padding-block:32px 72px;padding-inline:clamp(16px,4vw,40px)}
+.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:32px;max-width:1260px;margin-inline:auto}
+@media (min-width:1180px){.layout{grid-template-columns:230px minmax(0,1fr)}}
+main{min-width:0;max-width:980px}
+a{color:var(--accent-ink);text-decoration:none;overflow-wrap:anywhere}a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+nav.toc{font-size:14px;line-height:1.5}
+nav.toc .toc-title{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:0 0 8px}
+nav.toc ol{list-style:none;margin:0;padding:0 0 6px;display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px}
+nav.toc li{flex:0 0 auto}
+nav.toc a{display:block;color:var(--muted);padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface)}
+nav.toc a:hover{color:var(--fg);text-decoration:none;border-color:var(--muted)}
+@media (min-width:1180px){
+  nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;padding-right:4px}
+  nav.toc ol{display:block;overflow:visible;padding:0}
+  nav.toc a{border:0;background:none;border-left:2px solid var(--line);border-radius:0;padding:5px 12px}
+  nav.toc a:hover{border-left-color:var(--accent)}
+}
+.eyebrow{color:var(--accent-ink);font-weight:600;letter-spacing:.08em;text-transform:uppercase;font-size:13px;margin:0}
+h1{font-size:clamp(30px,4.6vw,44px);line-height:1.15;letter-spacing:-.015em;margin:10px 0 12px;text-wrap:balance}
+h2{font-size:24px;line-height:1.3;margin:56px 0 14px;padding-top:20px;border-top:1px solid var(--line);text-wrap:balance;scroll-margin-top:16px}
+h3{font-size:18px;line-height:1.4;margin:28px 0 10px;color:var(--accent-ink);text-wrap:balance}
+p{margin:0 0 12px;max-width:74ch}
+.lede{font-size:18px;color:var(--muted);max-width:70ch}
+.muted{color:var(--muted)}
+.small{font-size:14px}
+ul,ol{padding-left:22px;margin:0 0 12px}
+li{margin:5px 0}
+code{font-family:var(--font-mono);font-size:.86em;background:var(--code-bg);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
+strong{font-weight:600}
+.meta{display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted);font-size:14px;margin:6px 0 24px}
+.callout{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;background:var(--card);padding:16px 20px;margin:18px 0}
+.callout.info{border-left-color:var(--info)}
+.callout.warn{border-left-color:var(--warn)}
+.callout>*:last-child{margin-bottom:0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:20px 0}
+.tile{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:2px}
+.tile b{font-size:26px;line-height:1.2;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.tile span{font-size:13.5px;color:var(--muted);line-height:1.45}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin:16px 0}
+.grid>*{min-width:0}
+.card{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:16px 18px}
+.card h4{margin:0 0 8px;font-size:16px}
+.card .lbl{font-size:12px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;margin:12px 0 4px}
+.card .lbl.ok{color:var(--ok)} .card .lbl.warn{color:var(--warn)} .card .lbl.acc{color:var(--accent-ink)}
+.card ul{font-size:14.5px;padding-left:18px}
+.card>*:last-child{margin-bottom:0}
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;margin:16px 0;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:760px;font-size:14px;line-height:1.55}
+th,td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}
+th{background:var(--surface);font-weight:600;font-size:13.5px;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td:first-child{font-weight:600;white-space:nowrap}
+.b{display:inline-block;padding:0 8px;border-radius:999px;font-size:12px;font-weight:600;line-height:20px;border:1px solid currentColor;white-space:nowrap;vertical-align:1px}
+.b-ok{color:var(--ok);background:var(--ok-bg)} .b-warn{color:var(--warn);background:var(--warn-bg)}
+.b-bad{color:var(--bad);background:var(--bad-bg)} .b-info{color:var(--info);background:var(--info-bg)}
+/* Architecture layers */
+.arch{display:grid;gap:8px;margin:18px 0}
+.layer{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:12px 14px;display:grid;grid-template-columns:170px minmax(0,1fr);gap:10px 14px;align-items:start}
+@media (max-width:680px){.layer{grid-template-columns:minmax(0,1fr)}}
+.layer.hl{border-color:var(--accent)}
+.layer .ln{font-size:12px;letter-spacing:.07em;text-transform:uppercase;font-weight:600;color:var(--muted);line-height:1.4;padding-top:4px}
+.layer .ln small{display:block;text-transform:none;letter-spacing:0;font-weight:400;font-family:var(--font-mono);font-size:11.5px;margin-top:2px}
+.boxes{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+.bx{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:3px 10px;font-size:13.5px;line-height:1.5}
+.bx.hl{border-color:var(--accent)}
+.bx.dim{color:var(--muted);border-style:dashed}
+.bx code{background:none;padding:0}
+.ar{text-align:center;color:var(--muted);font-size:13px;line-height:1.2}
+.pipe{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:13px}
+.pipe span.s{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:2px 8px}
+.pipe span.s.hl{border-color:var(--accent)}
+.pipe span.a{color:var(--muted)}
+ol.recs>li{margin:12px 0}
+footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-size:14px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="page">
+<div class="layout">
+
+<nav class="toc" aria-label="Mục lục">
+  <p class="toc-title">Mục lục</p>
+  <ol>
+    <li><a href="#ket-luan">Kết luận</a></li>
+    <li><a href="#kien-truc">Kiến trúc kỹ thuật</a></li>
+    <li><a href="#tieu-chi">Đánh giá theo 4 tiêu chí</a></li>
+    <li><a href="#stack">Stack từng lớp</a></li>
+    <li><a href="#de-xuat">Đề xuất thay đổi</a></li>
+    <li><a href="#dev-ghet">Dev có thể không thích</a></li>
+    <li><a href="#nguon">Nguồn</a></li>
+  </ol>
+</nav>
+
+<main>
+<p class="eyebrow">Crove OS · Đánh giá kỹ thuật</p>
+<h1>Kiến trúc và tech stack: có phải tốt nhất chưa?</h1>
+<p class="lede">Đánh giá lại plan <a href="../plan/crove-os-kernel.vi.html">Crove OS Kernel</a> theo 4 tiêu chí: scale, tích hợp third-party, dev thêm tính năng dễ, hiện đại và được dev yêu thích. Ràng buộc duy nhất là PostgreSQL; mọi lớp khác đều được phép đổi.</p>
+<div class="meta">
+  <span>Ngày <strong>13/10/2026</strong></span>
+  <span>Version, ngày phát hành, download: tra trực tiếp npm registry, GitHub API và docs chính thức trong ngày</span>
+</div>
+
+<h2 id="ket-luan">Kết luận</h2>
+<div class="tiles">
+  <div class="tile"><b>Kiến trúc: giữ</b><span>Modular monolith + command pipeline + outbox + RLS + contract-first là đúng hướng và đúng thời điểm</span></div>
+  <div class="tile"><b>~80% stack: giữ</b><span>Hono, oRPC, zod 4, Kysely + Kanel, pg-boss, AI SDK 7, MCP SDK 2, Node 26 đều là lựa chọn mạnh nhất ở lớp của nó</span></div>
+  <div class="tile"><b>1 thay đổi lớn</b><span>App shell: Next.js 16 → Vite 8 + TanStack Router (SPA). Giữ Next cho landing page</span></div>
+  <div class="tile"><b>1 spike, 2 chỉnh, 2 bổ sung</b><span>Spike DBOS cho durable process trước Phase 2a; chỉnh formatter và oRPC v2; bổ sung cell-ready và nền tảng tích hợp</span></div>
+</div>
+<div class="callout">
+  <p><strong>Tóm lại:</strong> phần lõi backend của plan đã gần như là lựa chọn tốt nhất hiện có. Chỗ lệch rõ nhất là frontend: plan dùng Next.js nhưng chỉ dùng một phần nhỏ của nó: Server Actions không phải đường ghi (<code>'use server'</code> chỉ cho logout và đổi ngôn ngữ), <code>use cache</code> chỉ cho dữ liệu không thuộc tenant, RSC chỉ chặn đăng nhập và nạp org context, dữ liệu lấy phía client qua TanStack Query, tắt <code>typedRoutes</code> và tự viết route generator. Một SPA trên Vite 8 + TanStack Router làm đúng việc đó mà ít code tự viết hơn, build nhanh hơn, dễ tự host hơn. Next vẫn phổ biến hơn nhiều (67,7M download/tuần so với 11,6M của TanStack Start, framework xây trên TanStack Router; số tải riêng của Router chưa tra), nhưng theo State of JS 2025 mức hài lòng với Next đang giảm, còn TanStack Start là cái tên được dev tự điền vào nhiều nhất.</p>
+  <p>Về kiến trúc, có 2 bổ sung đáng làm ngay vì rẻ bây giờ nhưng đắt về sau: chuẩn bị chia tenant theo cell (nhiều DB) và vạch lộ trình nền tảng tích hợp (OAuth app, SDK, webhook outbound) thay vì dồn hết vào Phase 3.</p>
+</div>
+
+<h2 id="kien-truc">Kiến trúc kỹ thuật của plan</h2>
+<p>Gọi đúng tên các pattern: <strong>modular monolith</strong> TypeScript, <strong>command-oriented (CQRS-lite)</strong> với một pipeline ghi duy nhất, <strong>contract-first + codegen</strong>, <strong>shared-schema multi-tenancy</strong> bằng Postgres RLS và context có chữ ký, <strong>transactional outbox</strong> + event-driven async, và <strong>policy engine</strong> coi AI agent là một actor có quyền hạn chế.</p>
+
+<div class="arch" role="img" aria-label="Các lớp kiến trúc của Crove kernel từ bề mặt đến dữ liệu">
+  <div class="layer">
+    <div class="ln">Bề mặt<small>surfaces</small></div>
+    <div class="boxes">
+      <span class="bx">Web app (<code>/rpc</code>)</span><span class="bx">REST <code>/v1</code> OpenAPI 3.1</span><span class="bx">MCP <code>/mcp</code></span><span class="bx">AI agent tools</span><span class="bx">Webhook vào</span><span class="bx">Webhook ra</span><span class="bx">Job / schedule</span>
+    </div>
+  </div>
+  <div class="ar">↓ tất cả sinh ra từ cùng một registry</div>
+  <div class="layer">
+    <div class="ln">Contract<small>@crove/kernel-contract</small></div>
+    <div class="boxes">
+      <span class="bx hl"><code>defineCommand</code></span><span class="bx"><code>defineQuery</code></span><span class="bx"><code>defineEvent</code></span><span class="bx"><code>defineJob</code></span><span class="bx"><code>defineProcess</code></span><span class="bx"><code>defineModule</code> (manifest)</span>
+      <span class="bx dim">codegen → oRPC contract, OpenAPI, MCP/AI tool schema, routes, catalog seed</span>
+    </div>
+  </div>
+  <div class="ar">↓</div>
+  <div class="layer hl">
+    <div class="ln">Kernel runtime<small>execute()</small></div>
+    <div class="pipe">
+      <span class="s">session + rate limit</span><span class="a">→</span><span class="s">zod parse</span><span class="a">→</span><span class="s hl">enter_context + SET ROLE</span><span class="a">→</span><span class="s">entitlement</span><span class="a">→</span><span class="s">RBAC ∩ grant ∩ taint</span><span class="a">→</span><span class="s">idempotency</span><span class="a">→</span><span class="s">lock + version</span><span class="a">→</span><span class="s hl">policy R0-R3</span><span class="a">→</span><span class="s">handler</span><span class="a">→</span><span class="s">outbox + audit</span><span class="a">→</span><span class="s">COMMIT</span>
+    </div>
+  </div>
+  <div class="ar">↓ handler chỉ chạm DB của module mình</div>
+  <div class="layer">
+    <div class="ln">Module<small>1 package = 1 schema = 1 role</small></div>
+    <div class="boxes">
+      <span class="bx hl">kernel: party, file, task, activity, inbox</span><span class="bx">finance</span><span class="bx">crm</span><span class="bx">service</span><span class="bx">social</span><span class="bx">sign</span><span class="bx">hr</span>
+      <span class="bx dim">DAG: kernel-runtime &lt; kernel &lt; module; đọc chéo qua query, ghi chéo qua event/command</span>
+    </div>
+  </div>
+  <div class="ar">↓ async chỉ qua outbox</div>
+  <div class="layer">
+    <div class="ln">Async<small>worker</small></div>
+    <div class="boxes">
+      <span class="bx">outbox → relay</span><span class="bx">pg-boss queue (fan-out do DB quyết)</span><span class="bx">subscriber idempotent</span><span class="bx">process (state machine)</span><span class="bx">connector + <code>external_call</code> ledger</span><span class="bx">sandbox parse file</span>
+    </div>
+  </div>
+  <div class="ar">↓</div>
+  <div class="layer">
+    <div class="ln">Dữ liệu</div>
+    <div class="boxes">
+      <span class="bx hl">PostgreSQL 17: RLS, PK <code>(org_id, id)</code>, schema theo module</span><span class="bx">Object storage S3 API</span><span class="bx">Kho WORM cho sự kiện có giá trị pháp lý</span>
+    </div>
+  </div>
+  <div class="layer">
+    <div class="ln">Bên ngoài<small>adapter, tắt được</small></div>
+    <div class="boxes">
+      <span class="bx">OIDC IdP (Cloud: DOS ID)</span><span class="bx">AI endpoint chuẩn OpenAI (Cloud: DOS.AI)</span><span class="bx">Provider: e-invoice, ngân hàng, CA, Google, Meta...</span>
+    </div>
+  </div>
+</div>
+<p class="small muted">Triển khai: một container image chạy 3 vai trò <code>api | worker | job</code> trên Cloud Run; web app là frontend riêng, không giữ secret, không chạm DB.</p>
+
+<h2 id="tieu-chi">Đánh giá theo 4 tiêu chí</h2>
+<div class="grid">
+  <div class="card">
+    <h4>1. Scale</h4>
+    <p class="lbl ok">Đã tốt</p>
+    <ul>
+      <li>API stateless, autoscale trên Cloud Run; worker pool scale độc lập.</li>
+      <li>Mọi bảng tenant có PK <code>(org_id, id)</code>, không có <code>UNIQUE(id)</code> toàn cục, không join chéo org: về sau tách tenant sang DB khác (cell) là khả thi. Ngoại lệ là các bảng identity như <code>user_account</code>, <code>tenant</code> (thuộc control plane, xem đề xuất #5).</li>
+      <li>Đọc và ghi đã tách wrapper (<code>withTenantReadTx</code>), nên định tuyến query đọc sang read replica rất dễ.</li>
+      <li>Queue công bằng theo org; outbox lag &gt; 30 giây thì tạm dừng job nền; quota và abuse limit theo org.</li>
+      <li>Audit partition theo năm; bảng nóng có TTL.</li>
+      <li>Số dư sổ cái có bảng <code>period_balance</code> (Phase 2a), chỉ definer ghi sổ được ghi và đối soát hằng đêm, nên báo cáo không phải SUM lại toàn bộ sổ.</li>
+    </ul>
+    <p class="lbl warn">Giới hạn</p>
+    <ul>
+      <li>Một Postgres primary là trần ghi. Đủ cho hàng nghìn tenant SME (plan ước tính 5.000 tenant ≈ 1,5-3k USD hạ tầng/tháng, chưa tính LLM), không phải vô hạn.</li>
+      <li>Relay outbox chạy độc quyền trên 1 instance (advisory lock): đây là trần throughput event. Suy luận (chưa đo): đủ cho giai đoạn đầu; khi lớn cần chia relay theo <code>hash(org_id)</code>.</li>
+    </ul>
+    <p class="lbl acc">Đề xuất</p>
+    <ul><li>Làm cell-ready ngay (đề xuất #5). Read replica cho báo cáo khi cần.</li></ul>
+  </div>
+  <div class="card">
+    <h4>2. Tích hợp third-party</h4>
+    <p class="lbl ok">Đã tốt</p>
+    <ul>
+      <li>Một registry sinh ra 5 bề mặt: RPC nội bộ, REST/OpenAPI, MCP, AI tool, webhook event. Command mới tự có mặt ở mọi kênh mà nó khai báo.</li>
+      <li>Webhook vào gắn với binding: org suy ra từ binding, chữ ký verify trong API, xử lý async.</li>
+      <li>Connector chạy trong job có khai báo egress; ledger <code>external_call</code> cho idempotency và đối soát khi kết quả mơ hồ; credential được mã hóa envelope bằng key của deployment (Cloud: KMS), chỉ job khai báo egress đúng provider mới giải mã được.</li>
+      <li>Tên public đóng băng (CloudEvents <code>com.crove.*</code>), event có version và upcaster.</li>
+    </ul>
+    <p class="lbl warn">Lỗ hổng</p>
+    <ul>
+      <li>Public API, webhook ra, MCP đều dồn vào Phase 3, tức khoảng 30 tuần sau mới có.</li>
+      <li>Chưa chốt Authorization Server (OAuth cho app bên thứ ba và MCP client) cho bản self-host; bản Cloud dựa vào DOS ID.</li>
+      <li>Chưa có SDK cho dev bên ngoài; chưa có chỗ cho app bên thứ ba gắn UI (cố ý chưa làm ở v1).</li>
+    </ul>
+    <p class="lbl acc">Đề xuất</p>
+    <ul><li>Vạch lộ trình nền tảng tích hợp ngay (đề xuất #6).</li></ul>
+  </div>
+  <div class="card">
+    <h4>3. Dev thêm tính năng</h4>
+    <p class="lbl ok">Đã tốt</p>
+    <ul>
+      <li>Vertical slice: 1 module = 1 package + 1 schema + 1 role + manifest. Module mới = 1 file migration + <code>pnpm g module</code>.</li>
+      <li>Golden path: <code>pnpm g command</code> sinh contract, handler, test, i18n, route; 1 command = 1 file.</li>
+      <li>Ranh giới do máy kiểm tra (dependency-cruiser, DB role, lint), nên module này không làm vỡ module kia.</li>
+      <li>Vòng lặp local nhanh: theo số đo trong plan, <code>db reset</code> ≈ 38 giây, migration mới ≈ 2 giây, pgTAP &lt; 1 giây.</li>
+      <li>Contract-first: UI, API, agent dùng cùng một type.</li>
+    </ul>
+    <p class="lbl warn">Rủi ro</p>
+    <ul>
+      <li>Framework nội bộ khá lớn (<code>define*</code>, manifest, codegen), nên dev mới tốn công học.</li>
+      <li>Vài thứ đang tự viết mà thư viện đã có sẵn (route generator, <code>AppLink</code>, process engine).</li>
+    </ul>
+    <p class="lbl acc">Đề xuất</p>
+    <ul><li>Chỉ tự viết những gì là lợi thế cạnh tranh (policy, proposal, ledger, audit); phần còn lại dùng thư viện (đề xuất #1, #2).</li></ul>
+  </div>
+  <div class="card">
+    <h4>4. Hiện đại và DX</h4>
+    <p class="lbl ok">Đã có đủ các pattern năm 2026</p>
+    <ul>
+      <li>Modular monolith, contract-first + codegen, type-safe từ DB tới UI.</li>
+      <li>RLS multi-tenancy, transactional outbox, durable process.</li>
+      <li>Policy-as-code cho AI, MCP-native, OpenTelemetry.</li>
+      <li>Toolchain viết bằng Rust/Go: <code>tsgo</code> (TS 7), oxlint; thêm Rolldown nếu sang Vite 8.</li>
+    </ul>
+    <p class="lbl warn">Cố ý không có (đúng giai đoạn)</p>
+    <ul>
+      <li>Microservices, Kafka, k8s, GraphQL, local-first sync. Thêm vào lúc này chỉ tăng chi phí vận hành.</li>
+    </ul>
+    <p class="lbl acc">Đề xuất</p>
+    <ul><li>Điểm trừ DX lớn nhất là frontend (đề xuất #1) và formatter còn beta (đề xuất #3).</li></ul>
+  </div>
+</div>
+
+<h2 id="stack">Tech stack từng lớp</h2>
+<p class="small muted"><span class="b b-ok">Giữ</span> lựa chọn hiện tại là tốt nhất · <span class="b b-warn">Chỉnh</span> giữ nhưng sửa cách dùng · <span class="b b-bad">Đổi</span> nên thay · <span class="b b-info">Spike</span> thử trước khi quyết · <span class="b b-warn">Bổ sung</span> thêm phần plan chưa có</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Lớp</th><th>Plan</th><th>Đối thủ mạnh nhất 2026</th><th>Kết luận</th><th>Lý do (dữ liệu 13/10/2026)</th></tr></thead>
+<tbody>
+<tr><td>Ngôn ngữ</td><td>TypeScript toàn stack</td><td>Go / Rust cho backend</td><td><span class="b b-ok">Giữ</span></td><td>Một ngôn ngữ, type đi từ DB tới UI. Hệ sinh thái AI SDK, MCP, zod mạnh nhất ở TS. Agent viết TS đúng nhiều nhất.</td></tr>
+<tr><td>Runtime</td><td>Node 26</td><td>Bun 1.4</td><td><span class="b b-ok">Giữ</span></td><td>Node 26 lên LTS ngày 28/10/2026. Bun 1.4 vừa viết lại từ Zig sang Rust (20/08/2026), tự nhận chưa tương thích 100% với Node; OTel cho <code>pg</code> trên Bun chưa được kiểm chứng. Bun do Anthropic mua từ 12/2025, vẫn MIT. Đổi runtime sau này rẻ vì code là TS chuẩn (Hono chạy native trên Bun; pg-boss ghi hỗ trợ Bun trong yêu cầu runtime, chưa kiểm chứng ở quy mô lớn), nên không cần nhận rủi ro bây giờ; cho test suite chạy thêm trên Bun hằng đêm để biết khi nào nó sẵn sàng.</td></tr>
+<tr><td>Monorepo</td><td>pnpm + turbo</td><td>Vite+ 1.x, Nx</td><td><span class="b b-ok">Giữ</span></td><td>Vite+ mới ra 1.0 ngày 28/09/2026 (MIT). Xem lại khi nó ổn định.</td></tr>
+<tr><td>HTTP</td><td>Hono 4</td><td>Fastify 5, Elysia</td><td><span class="b b-ok">Giữ</span></td><td>Hono 4.13, 74M download/tuần, v5 đang RC. Có <code>@modelcontextprotocol/hono</code> chính thức. Không dùng JWT middleware của Hono (2 advisory high 01/2026); plan đã dùng <code>jose</code>.</td></tr>
+<tr><td>RPC / contract</td><td>oRPC 1.15</td><td>tRPC 11, ts-rest</td><td><span class="b b-warn">Chỉnh</span></td><td>oRPC là thư viện duy nhất vừa contract-first vừa phục vụ REST/OpenAPI từ cùng router. OpenAPI của tRPC còn alpha và chỉ sinh spec; ts-rest không phát hành từ 03/2025. Cần chỉnh: oRPC v2 (beta) đổi wire format và error body, nên chỉ mở <code>/v1</code> public khi đã lên v2.</td></tr>
+<tr><td>Validation</td><td>zod 4</td><td>Valibot, ArkType</td><td><span class="b b-ok">Giữ</span></td><td>oRPC, AI SDK, MCP SDK dùng zod trực tiếp.</td></tr>
+<tr><td>Truy cập DB</td><td>Kysely 0.29 + Kanel 4</td><td>Drizzle, Prisma</td><td><span class="b b-ok">Giữ</span></td><td>Drizzle 1.0 vẫn là RC (rc.4, 27/06/2026); <code>SET LOCAL ROLE</code> theo transaction phải dùng wrapper cộng đồng; schema TS thành nguồn sự thật thứ hai bên cạnh SQL migration. Prisma 8 đang RC, thiếu isolation level. Kysely làm <code>enter_context</code> + <code>SET LOCAL ROLE</code> trực tiếp. <code>kanel-zod</code> sinh thêm zod schema từ DB.</td></tr>
+<tr><td>Job queue</td><td>pg-boss 12</td><td>Hatchet, Temporal, Inngest, Trigger.dev, Restate</td><td><span class="b b-ok">Giữ</span></td><td>pg-boss 12.37 (MIT, 2,7M/tuần) đã có <code>groupConcurrency</code> (công bằng theo tenant), <code>key_strict_fifo</code>, DLQ + redrive, cron có timezone, <code>flow()</code>, OTel. Temporal cần cluster riêng; Inngest dùng license SSPL; Restate dùng BSL và không chạy trên Postgres; Trigger.dev self-host cần Redis và nhiều service khác.</td></tr>
+<tr><td>Durable process</td><td>Tự viết (<code>process_instance</code>, timer = job, chờ người = proposal)</td><td>DBOS Transact 5.2 (MIT)</td><td><span class="b b-info">Spike</span></td><td>DBOS có thể thay process engine và phần lớn <code>external_call</code>: sleep nhiều ngày, <code>recv</code> chờ duyệt có timeout, step ghi DB chung transaction với checkpoint, queue chia theo key, cron có timezone. Plan từng loại DBOS vì nó tự migrate lúc khởi động; lý do này không còn đúng vì đã có <code>runMigrations:false</code> + CLI migrate. Rủi ro: khôi phục workflow trên Cloud Run (instance ID không cố định; tự động khôi phục chỉ có ở Conductor trả phí), workflow đang chờ duyệt vẫn chiếm slot queue, v5 vừa có breaking change (16/09/2026).</td></tr>
+<tr><td>AI</td><td>AI SDK 7 + openai-compatible</td><td>Mastra, LangGraph, TanStack AI (RC)</td><td><span class="b b-ok">Giữ</span></td><td>Mỏng, không khóa vào provider nào. Framework agent nặng hơn sẽ đè lên policy engine của Crove.</td></tr>
+<tr><td>MCP</td><td><code>@modelcontextprotocol/server</code> 2.x</td><td>-</td><td><span class="b b-ok">Giữ</span></td><td>SDK v2 stable từ 27/07/2026. Spec 2026-07-28 là stateless (không còn session), khớp mô hình 1 command = 1 transaction; đăng ký client chuyển sang CIMD thay cho DCR.</td></tr>
+<tr><td>Auth</td><td>openid-client 6 + jose 6</td><td>Better Auth 1.7</td><td><span class="b b-ok">Giữ</span></td><td>Giữ bản tự làm vì việc của relying party nhỏ; openid-client 0 advisory. Better Auth (đội ngũ về Vercel từ 07/2026) có 27 advisory trong năm 2026, tập trung ở đúng các plugin Crove cần (sso, oauth-provider, api-key, mcp), và thêm bảng user/session chạy ngoài <code>enter_context</code>. Bổ sung nhỏ: <code>@simplewebauthn/server</code> cho WebAuthn step-up khi duyệt R3 (P11).</td></tr>
+<tr><td>Web app</td><td>Next.js 16.4</td><td>Vite 8 + TanStack Router (SPA); TanStack Start</td><td><span class="b b-bad">Đổi</span></td><td>Xem đề xuất #1. Plan bật <code>cacheComponents</code> nhưng cấm cache dữ liệu tenant (§9), nên gần như không hưởng lợi từ hướng đi chính của Next 16.4 (Cache Components là mặc định từ Next 17). TanStack Router v1 đã ổn định từ 12/2023; TanStack Start mới stable ngày 12/10/2026 nên chưa dùng.</td></tr>
+<tr><td>URL state, i18n</td><td>nuqs, next-intl</td><td><code>validateSearch</code> của router, use-intl</td><td><span class="b b-bad">Đổi</span></td><td>Đi theo đề xuất #1. use-intl là lõi của next-intl, không phụ thuộc framework; nuqs có adapter cho TanStack Router nếu muốn giữ.</td></tr>
+<tr><td>UI</td><td>shadcn + Base UI 1.x + Tailwind 4 + TanStack Table 9</td><td>-</td><td><span class="b b-ok">Giữ</span></td><td>Base UI 1.9; shadcn đổi mặc định sang Base UI từ 07/2026 (nguồn thứ cấp); Tailwind 4.3; Table v9 stable từ 04/08/2026.</td></tr>
+<tr><td>Realtime</td><td>v0 poll, 2b SSE</td><td>Zero 1.10, ElectricSQL, PowerSync</td><td><span class="b b-ok">Giữ</span></td><td>Zero GA 03/2026, mutator chạy trong transaction của mình (khớp với command), nhưng không áp RLS khi đọc (đọc từ replica SQLite), nên phải viết lại luật tenant trong code; chưa có aggregate. ElectricSQL đã về Databricks (08/2026); PowerSync self-host dùng FSL, không phải OSI. Zero là ứng viên cho UI kiểu Linear từ Phase 3.</td></tr>
+<tr><td>Lint / format</td><td>oxlint + oxfmt</td><td>Biome 2.5</td><td><span class="b b-warn">Chỉnh</span></td><td>oxlint 1.88 ổn. oxfmt 0.73 vẫn beta, trái chính sách version của chính plan (không dùng alpha/beta). Dùng formatter của Biome hoặc Prettier cho tới khi oxfmt lên 1.0.</td></tr>
+<tr><td>Test</td><td>Vitest 5, Playwright, msw</td><td>-</td><td><span class="b b-ok">Giữ</span></td><td>Chuẩn hiện tại.</td></tr>
+<tr><td>Observability</td><td>OTel + pino → Cloud Logging</td><td>-</td><td><span class="b b-ok">Giữ</span></td><td>Chuẩn mở, đổi backend lúc nào cũng được.</td></tr>
+<tr><td>Hạ tầng</td><td>Cloud Run + Supabase + Vercel, OpenTofu</td><td>Fly, Railway, Cloudflare Workers</td><td><span class="b b-ok">Giữ</span></td><td>Cloud Run hợp với monolith dùng Postgres nặng và worker chạy lâu. Nếu đổi sang SPA, Vercel chỉ còn là tùy chọn: CDN tĩnh nào cũng được.</td></tr>
+<tr><td>Tích hợp</td><td><code>CredentialBroker</code> tự làm + Standard Webhooks</td><td>Nango, Svix</td><td><span class="b b-ok">Giữ</span></td><td>Nango dùng Elastic License 2.0 (không phải OSI); bản self-host miễn phí chỉ có auth + proxy, ghi rõ là "cho hobby", không cách ly tenant. Svix server (MIT) tự host được, là tùy chọn cho webhook ra nếu cần retry + dashboard có sẵn.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="de-xuat">Đề xuất thay đổi</h2>
+<ol class="recs">
+  <li><strong>App shell: Vite 8 + React 19.3 + TanStack Router (SPA)</strong> <span class="b b-bad">Đổi</span> · trước bootstrap PR #5 "web skeleton"
+    <ul>
+      <li>Giữ Next.js cho landing page (<code>apps/web</code> hiện tại, cần SEO). App sản phẩm đặt ở một app mới, build ra file tĩnh.</li>
+      <li><strong>Bỏ được code tự viết:</strong>
+        <ul>
+          <li>Virtual file routes của TanStack Router dựng route tree từ manifest module mà vẫn có type, thay cho route generator và <code>AppLink</code> tự viết.</li>
+          <li><code>validateSearch</code> bằng zod thay nuqs.</li>
+          <li>Loader tích hợp sẵn với TanStack Query, có prefetch khi hover.</li>
+        </ul>
+      </li>
+      <li><strong>Đơn giản hơn:</strong>
+        <ul>
+          <li>Tự host chỉ cần một thư mục file tĩnh.</li>
+          <li>CSP dạng hash dễ làm với <code>index.html</code> tĩnh, nên bỏ được spike A14.</li>
+          <li>Không còn bề mặt tấn công RSC: React có lỗ hổng RCE ở RSC ngày 03/12/2025, và Next có bản vá bảo mật ngoài lịch dự kiến ngày 14/10/2026.</li>
+        </ul>
+      </li>
+      <li><strong>Build nhanh:</strong> Vite 8 dùng Rolldown làm bundler duy nhất. Ví dụ Vite công bố: build của Linear giảm từ 46 giây xuống 6 giây.</li>
+      <li><strong>Cái giá:</strong>
+        <ul>
+          <li>Chặn đăng nhập chuyển sang <code>beforeLoad</code> phía client; bảo mật thật vẫn nằm ở API.</li>
+          <li><code>app.crove.com</code> và <code>api.crove.com</code> cùng site nên cookie vẫn dùng được.</li>
+        </ul>
+      </li>
+      <li><strong>Cập nhật kèm:</strong> ADR-0011; trong plan: §2 (các dòng Web, i18n/URL state, Shell auth), §3.1, §3.2, §3.4, §7.5 (Shell), §9, §15 (Frontend); bỏ spike A14.</li>
+      <li><strong>Độ tin cậy:</strong> khoảng 75%. Nếu sau này cần SSR thì lên TanStack Start trên cùng router, không phải viết lại.</li>
+    </ul>
+  </li>
+  <li><strong>Spike DBOS cho durable process</strong> <span class="b b-info">Spike</span> · trước Phase 2a, không nằm trên đường găng Phase 0
+    <ul>
+      <li>Phase 0-1 chưa có process chạy dài, nên giữ outbox + pg-boss như plan.</li>
+      <li>Trước khi viết process đầu tiên (đồng bộ ngân hàng, phát hành hóa đơn điện tử, chuỗi duyệt), spike 1 tuần so DBOS với process engine tự viết.</li>
+      <li><strong>Pass khi đạt đủ:</strong>
+        <ul>
+          <li>Khôi phục workflow đúng trên Cloud Run worker pool mà không cần Conductor.</li>
+          <li>Chờ duyệt 7 ngày mà không chiếm slot queue.</li>
+          <li>Schema xuất được thành file SQL để commit.</li>
+          <li>Công bằng theo org.</li>
+        </ul>
+      </li>
+      <li><strong>Fail</strong> thì giữ plan.</li>
+    </ul>
+  </li>
+  <li><strong>Formatter</strong> <span class="b b-warn">Chỉnh</span> · Phase 0
+    <ul>
+      <li>Dùng Biome (formatter) hoặc Prettier cho tới khi oxfmt lên 1.0; vẫn giữ oxlint để lint.</li>
+      <li>Việc đổi lại sau này chỉ tốn một PR.</li>
+    </ul>
+  </li>
+  <li><strong>oRPC v2 trước public API</strong> <span class="b b-warn">Chỉnh</span> · trước Phase 3
+    <ul>
+      <li><code>/rpc</code> nội bộ cứ chạy v1.</li>
+      <li><code>/v1</code> public chỉ mở trên oRPC v2, với error envelope do Crove tự định nghĩa (plan đã chọn RFC 9457), để bên thứ ba không gặp lần đổi format lỗi giữa v1 và v2.</li>
+      <li>MCP tool tự dựng từ contract qua MCP SDK chính thức, vì oRPC chưa có adapter MCP chính thức.</li>
+    </ul>
+  </li>
+  <li><strong>Cell-ready ngay từ đầu</strong> <span class="b b-warn">Bổ sung</span> · Phase 0, rẻ
+    <ul>
+      <li><code>@crove/db</code> nhận <code>org_id</code> khi chọn connection pool, dù hiện tại mọi org trỏ về cùng một DB.</li>
+      <li>Tách rõ bảng "control plane" (identity, danh bạ tenant, staff, session) khỏi bảng dữ liệu tenant.</li>
+      <li>Kết quả: khi một DB đầy, chuyển nhóm tenant sang DB thứ hai (cell) mà không phải sửa code nghiệp vụ. Làm sau thì phải đụng mọi chỗ mở transaction.</li>
+    </ul>
+  </li>
+  <li><strong>Lộ trình nền tảng tích hợp</strong> <span class="b b-warn">Bổ sung</span> · mở rộng ADR-0019 (MCP grants) hoặc thêm ADR mới, trước Phase 3
+    <ul>
+      <li>Chốt Authorization Server cho OAuth app bên thứ ba và MCP client ở bản self-host. Ứng viên: Zitadel (AGPL, cùng license), Ory Hydra, Keycloak. Đăng ký client theo CIMD.</li>
+      <li>Webhook ra: tự làm trên outbox + Standard Webhooks; Svix OSS là phương án dự phòng.</li>
+      <li>SDK TS/Python sinh từ OpenAPI.</li>
+      <li>Cân nhắc kéo một phần read API + webhook ra sớm lên Phase 2, vì kế toán cần nối với ngân hàng, cổng thanh toán và công cụ BI.</li>
+    </ul>
+  </li>
+</ol>
+
+<h2 id="dev-ghet">Những gì dev có thể không thích</h2>
+<div class="callout warn">
+  <ul>
+    <li><strong>Nhiều luật và gate.</strong> G1-G6, tối đa 800 dòng mỗi PR, protected path... được thiết kế cho AI agent tự code. Dev người sẽ thấy nặng tay. Nếu sau này tuyển dev, nên ghi rõ phần nào là luật cứng (bảo mật, migration) và phần nào là hướng dẫn.</li>
+    <li><strong>Phần Postgres khó.</strong> Role, definer, context có chữ ký, RLS: đúng về bảo mật nhưng khó debug. Plan bù bằng <code>apply_tenant_conventions()</code>, ma trận RLS sinh tự động và generator; dev bình thường gần như không phải đụng vào.</li>
+    <li><strong>Framework nội bộ.</strong> Đây là cái giá của một "OS" có một đường ghi duy nhất. Cách giảm: mỗi thứ tự viết phải là lợi thế riêng của Crove; thứ gì thư viện đã làm tốt thì dùng thư viện (đề xuất #1, #2).</li>
+  </ul>
+</div>
+
+<h2 id="nguon">Nguồn</h2>
+<ul class="small">
+  <li>Node release schedule: <a href="https://github.com/nodejs/Release">github.com/nodejs/Release</a> · Bun 1.4: <a href="https://bun.com/blog/bun-v1.4">bun.com/blog/bun-v1.4</a></li>
+  <li>pg-boss: <a href="https://pgboss.io/api/queues">pgboss.io/api/queues</a> · DBOS: <a href="https://docs.dbos.dev/typescript/tutorials/queue-tutorial">queue</a>, <a href="https://docs.dbos.dev/production/workflow-recovery">workflow recovery</a>, <a href="https://docs.dbos.dev/production/hosting-conductor">Conductor</a> · Hatchet Postgres-only: <a href="https://hatchet.run/launch-week-01/pg-only-mode">hatchet.run</a> · Inngest self-host: <a href="https://www.inngest.com/docs/self-hosting">inngest.com</a> · Restate: <a href="https://docs.restate.dev/server/overview">docs.restate.dev</a> · Trigger.dev self-host: <a href="https://trigger.dev/docs/self-hosting/overview">trigger.dev</a></li>
+  <li>oRPC: <a href="https://orpc.dev/llms.txt">orpc.dev</a>, <a href="https://orpc.dev/docs/migrations/from-v1">migration v1 → v2</a> · tRPC OpenAPI: <a href="https://trpc.io/docs/openapi">trpc.io/docs/openapi</a> · Hono RPC: <a href="https://hono.dev/docs/guides/rpc">hono.dev</a></li>
+  <li>Drizzle releases: <a href="https://github.com/drizzle-team/drizzle-orm/releases">GitHub</a>, RLS: <a href="https://orm.drizzle.team/docs/rls">orm.drizzle.team</a> · Prisma: <a href="https://www.prisma.io/docs/orm/release-status">release status</a></li>
+  <li>Better Auth: <a href="https://better-auth.com/blog/better-auth-joins-vercel">joins Vercel</a>, <a href="https://www.better-auth.com/blog/authjs-joins-better-auth">Auth.js joins Better Auth</a></li>
+  <li>MCP spec 2026-07-28: <a href="https://modelcontextprotocol.io/specification/2026-07-28/changelog">changelog</a> · TS SDK: <a href="https://github.com/modelcontextprotocol/typescript-sdk">GitHub</a></li>
+  <li>Nango self-hosting: <a href="https://nango.dev/docs/guides/platform/self-hosting/self-hosting.md">nango.dev</a> · Standard Webhooks: <a href="https://github.com/standard-webhooks/standard-webhooks">GitHub</a> · Svix: <a href="https://github.com/svix/svix-webhooks">GitHub</a></li>
+  <li>Next.js 16.4: <a href="https://nextjs.org/blog/next-16-4">nextjs.org</a> · React 19.3: <a href="https://react.dev/blog/2026/09/09/react-19-3">react.dev</a> · Vite 8: <a href="https://vite.dev/blog/announcing-vite8">vite.dev</a> · TanStack Start stable: <a href="https://github.com/TanStack/router/blob/main/docs/start/framework/react/migrate-from-release-candidate.md">migration guide</a> · Virtual file routes: <a href="https://tanstack.com/router/latest/docs/framework/react/routing/virtual-file-routes">tanstack.com</a> · State of JS 2025: <a href="https://2025.stateofjs.com/en-US/libraries/meta-frameworks/">meta-frameworks</a></li>
+  <li>Zero: <a href="https://zero.rocicorp.dev/docs/status">status</a>, <a href="https://zero.rocicorp.dev/docs/when-to-use">when to use</a> · ElectricSQL: <a href="https://electric.ax/blog">blog</a> · TanStack Table v9: <a href="https://tanstack.com/blog/announcing-tanstack-table-v9">tanstack.com</a> · AI SDK 7: <a href="https://vercel.com/blog/ai-sdk-7">vercel.com</a> · oxfmt beta: <a href="https://oxc.rs/blog/2026-02-24-oxfmt-beta">oxc.rs</a> · Biome: <a href="https://biomejs.dev/blog/">biomejs.dev</a></li>
+</ul>
+<p class="small muted">Chưa kiểm chứng được: thời điểm shadcn đổi mặc định sang Base UI (chỉ có nguồn thứ cấp); AI Elements có tương thích AI SDK 7 không; DBOS có xuất schema thành file SQL tĩnh được không; OTel tự động cho <code>pg</code> khi chạy trên Bun.</p>
+
+<footer>
+  Crove · Đánh giá kiến trúc và tech stack · 13/10/2026 · Bản nguồn của plan: <a href="../plan/crove-os-kernel.md">docs/plan/crove-os-kernel.md</a>
+</footer>
+</main>
+</div>
+</div>
+</body>
+</html>
