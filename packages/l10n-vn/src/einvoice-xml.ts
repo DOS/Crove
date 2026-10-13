@@ -2,7 +2,7 @@
 // Decision 1450/QD-TCT). Deterministic, no LLM. Entity expansion is disabled and DOCTYPE is rejected.
 import { XMLParser } from 'fast-xml-parser';
 import { money, sum, toMoney } from './money.ts';
-import { normalizeNumber, normalizeSeries, type InvoiceLine, type InvoiceParty, type LineNature, type ParsedInvoice, type TaxBreakdown } from './invoice.ts';
+import { lineContribution, normalizeNumber, normalizeSeries, type InvoiceLine, type InvoiceParty, type LineNature, type ParsedInvoice, type TaxBreakdown } from './invoice.ts';
 
 export class EInvoiceParseError extends Error {}
 
@@ -127,7 +127,9 @@ export function parseEInvoiceXml(bytes: Uint8Array): ParsedInvoice {
   }));
 
   const vatTotal = amount(totals, 'TgTThue') ?? toMoney(sum(taxBreakdown.map((t) => t.vatAmount)));
-  const subtotal = amount(totals, 'TgTCThue') ?? toMoney(sum(taxBreakdown.map((t) => t.taxableAmount)));
+  const subtotal =
+    amount(totals, 'TgTCThue') ??
+    toMoney(taxBreakdown.length > 0 ? sum(taxBreakdown.map((t) => t.taxableAmount)) : sum(lines.map(lineContribution)));
   const total = amount(totals, 'TgTTTBSo') ?? toMoney(money(subtotal).plus(money(vatTotal)));
 
   return {

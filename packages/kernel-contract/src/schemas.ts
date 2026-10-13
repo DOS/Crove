@@ -5,10 +5,14 @@ import { z } from 'zod';
 export const zId = z.uuid();
 // At most 16 integer digits, the size of the numeric(20,4) money columns.
 export const zMoney = z.string().regex(/^-?\d{1,16}(\.\d{1,8})?$/, 'decimal string');
-export const zLocalDate = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
-  .refine((v) => new Date(`${v}T00:00:00Z`).toISOString().startsWith(v), 'not a calendar date');
+// YYYY-MM-DD that names a real day. Never throws (toISOString() does on an Invalid Date).
+export function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value);
+}
+// Same rule as isCalendarDate in @crove/l10n-vn, which does not depend on this package.
+export const zLocalDate = z.string().refine(isCalendarDate, 'YYYY-MM-DD calendar date');
 // Failed checks that make an invoice impossible to post as-is; confirming them does not help.
 export const BLOCKING_CHECK_IDS: readonly string[] = ['currency', 'lines_sum', 'total'];
 export const zAccountCode = z.string().regex(/^\d{3,5}$/);

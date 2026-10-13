@@ -78,6 +78,13 @@ export function lineContribution(line: InvoiceLine): Money {
   return toMoney(line.nature === 'discount' && amount.isPositive() ? amount.negated() : amount);
 }
 
+// YYYY-MM-DD that names a real day. Never throws (toISOString() does on an Invalid Date).
+export function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value);
+}
+
 // Deterministic checks. Confidence comes from these, never from a model's self-assessment.
 export function checkInvoice(
   invoice: ParsedInvoice,
@@ -124,7 +131,7 @@ export function checkInvoice(
     checks.push({ id: 'seller_tax_code', status: 'pass', message: `MST người bán ${seller.normalized} hợp lệ` });
   }
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(invoice.issueDate) || !new Date(`${invoice.issueDate}T00:00:00Z`).toISOString().startsWith(invoice.issueDate)) {
+  if (!isCalendarDate(invoice.issueDate)) {
     checks.push({ id: 'issue_date', status: 'fail', message: 'Ngày lập hóa đơn không hợp lệ' });
   } else if (invoice.issueDate > today) {
     checks.push({ id: 'issue_date', status: 'warn', message: 'Ngày lập hóa đơn ở tương lai' });

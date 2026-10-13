@@ -5,6 +5,7 @@ import {
   bookableLines,
   buildPurchaseJournal,
   checkInvoice,
+  isCalendarDate,
   journalIsBalanced,
   looksLikeEInvoiceXml,
   parseEInvoiceXml,
@@ -65,10 +66,24 @@ describe('e-invoice XML', () => {
     expect(checkInvoice(invoice, '2026-10-13').find((c) => c.id === 'total')?.status).toBe('fail');
   });
 
-  it('fails dates that do not exist', () => {
+  it.each(['2026-02-30', '2026-13-01', '0000-00-00', '13/10/2026', ''])('fails the date %j without throwing', (issueDate) => {
     const invoice = parseEInvoiceXml(fixture);
-    invoice.issueDate = '2026-02-30';
+    invoice.issueDate = issueDate;
     expect(checkInvoice(invoice, '2026-10-13').find((c) => c.id === 'issue_date')?.status).toBe('fail');
+    expect(isCalendarDate(issueDate)).toBe(false);
+  });
+
+  it('derives the subtotal from the lines when a sales invoice has no subtotal or rate table', () => {
+    const xml = fixture
+      .toString('utf8')
+      .replace(/<THTTLTSuat>[\s\S]*<\/THTTLTSuat>/, '')
+      .replace('<TgTCThue>1800000</TgTCThue>', '')
+      .replace('<TgTThue>180000</TgTThue>', '<TgTThue>0</TgTThue>')
+      .replace('<TgTTTBSo>1980000</TgTTTBSo>', '<TgTTTBSo>1800000</TgTTTBSo>');
+    const invoice = parseEInvoiceXml(new TextEncoder().encode(xml));
+    expect(invoice.subtotal).toBe('1800000');
+    const byId = Object.fromEntries(checkInvoice(invoice, '2026-10-13').map((c) => [c.id, c.status]));
+    expect(byId).toMatchObject({ lines_sum: 'pass', total: 'pass' });
   });
 
   it('rejects malformed or oversized amounts instead of guessing them', () => {

@@ -138,7 +138,11 @@ export function InboxDetailPage() {
       )}
       {pending && blocked && (
         <div className="mb-4">
-          <ErrorText>Số tiền trên hóa đơn không khớp nhau (hoặc là hóa đơn ngoại tệ) nên không ghi sổ được. Hãy từ chối và xin người bán hóa đơn điều chỉnh.</ErrorText>
+          <ErrorText>
+            {payload?.extractionMethod === 'einvoice_xml'
+              ? 'Số tiền trên hóa đơn không khớp nhau (hoặc là hóa đơn ngoại tệ) nên không ghi sổ được. Hãy từ chối và xin người bán hóa đơn điều chỉnh.'
+              : 'Số tiền AI đọc được không khớp nhau, có thể do đọc sai một chữ số. Hãy từ chối và tải lên tệp XML của hóa đơn điện tử này để ghi sổ chính xác.'}
+          </ErrorText>
         </div>
       )}
       {pending && !blocked && failed > 0 && (
