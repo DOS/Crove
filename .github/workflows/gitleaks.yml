@@ -35,5 +35,10 @@ jobs:
           tar -xzf gitleaks.tar.gz gitleaks
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
 
+      - name: Build scan config (G1 blocklist)
+        env:
+          G1_BLOCKLIST: ${{ secrets.G1_BLOCKLIST }}
+        run: python3 .github/scripts/g1_config.py "$RUNNER_TEMP/gitleaks.toml"
+
       - name: Scan full git history
-        run: gitleaks git . --redact --verbose --exit-code 1
+        run: gitleaks git . --config "$RUNNER_TEMP/gitleaks.toml" --redact --verbose --exit-code 1
