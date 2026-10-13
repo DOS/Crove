@@ -1,0 +1,21 @@
+{
+  "name": "@crove/kernel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Kernel module: orgs, members, files, inbound email, extractions, proposals and the AI Inbox",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@crove/db": "workspace:*",
+    "@crove/kernel-contract": "workspace:*",
+    "@crove/kernel-runtime": "workspace:*",
+    "kysely": "catalog:",
+    "zod": "catalog:"
+  }
+}

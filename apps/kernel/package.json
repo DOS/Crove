@@ -1,0 +1,35 @@
+{
+  "name": "@crove/kernel-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Crove kernel server: one image, roles api | worker | all | migrate",
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=../../.env src/main.ts all",
+    "start": "node src/main.ts all",
+    "migrate": "node --env-file-if-exists=../../.env src/main.ts migrate",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@crove/agent": "workspace:*",
+    "@crove/db": "workspace:*",
+    "@crove/kernel": "workspace:*",
+    "@crove/kernel-contract": "workspace:*",
+    "@crove/kernel-runtime": "workspace:*",
+    "@crove/l10n-vn": "workspace:*",
+    "@crove/mod-finance": "workspace:*",
+    "@hono/node-server": "catalog:",
+    "@orpc/server": "catalog:",
+    "hono": "catalog:",
+    "jose": "catalog:",
+    "kysely": "catalog:",
+    "pg": "catalog:",
+    "pg-boss": "catalog:",
+    "postal-mime": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/pg": "catalog:"
+  }
+}

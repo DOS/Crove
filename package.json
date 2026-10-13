@@ -1,18 +1,29 @@
 {
   "name": "crove-monorepo",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "private": true,
-  "description": "Crove - The Modern Business OS for Solo Founders & SMEs",
-  "packageManager": "pnpm@10.6.1",
+  "description": "Crove - the open-source, AI-native Business OS for solo founders and SMEs",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "packageManager": "pnpm@12.11.2",
+  "engines": {
+    "node": ">=26"
+  },
   "scripts": {
-    "dev": "pnpm --filter @crove/web dev",
-    "build": "pnpm --filter @crove/web build",
-    "start": "pnpm --filter @crove/web start",
-    "lint": "pnpm --filter @crove/web lint",
+    "dev": "pnpm --parallel --filter @crove/kernel-server --filter @crove/app dev",
+    "dev:web": "pnpm --filter @crove/web dev",
+    "build": "pnpm -r --filter=!@crove/web build",
+    "typecheck": "pnpm -r --filter=!@crove/web typecheck",
+    "lint": "oxlint --deny-warnings apps/kernel apps/app packages modules",
+    "test": "vitest run",
+    "test:db": "vitest run --project db",
+    "db:migrate": "pnpm --filter @crove/db migrate",
     "prepare": "node tools/install-git-hooks.mjs"
   },
   "devDependencies": {
-    "prettier": "^3.5.0",
-    "typescript": "^5.7.3"
+    "@types/node": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

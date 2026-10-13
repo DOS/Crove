@@ -38,3 +38,7 @@ pnpm-debug.log*
 # Temporary files
 *.tsbuildinfo
 next-env.d.ts
+
+# Local artifacts
+.data
+.playwright-mcp

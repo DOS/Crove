@@ -1,0 +1,20 @@
+{
+  "name": "@crove/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "The only package that talks to an AI model (any OpenAI-compatible endpoint)",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "catalog:",
+    "@crove/l10n-vn": "workspace:*",
+    "ai": "catalog:",
+    "zod": "catalog:"
+  }
+}

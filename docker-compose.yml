@@ -1,0 +1,96 @@
+# Crove self-host: `docker compose up` then open http://localhost:8080.
+# Defaults are for local use only. For a real deployment, copy .env.example to .env and change every secret.
+name: crove
+
+x-secrets: &secrets
+  CROVE_APP_DB_PASSWORD: ${CROVE_APP_DB_PASSWORD:-local-app-password}
+  CROVE_WORKER_DB_PASSWORD: ${CROVE_WORKER_DB_PASSWORD:-local-worker-password}
+  AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-local-auth-password}
+  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-postgres-password}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build: .
+    image: crove:local
+    command: ['migrate']
+    environment:
+      <<: *secrets
+      ADMIN_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-local-postgres-password}@db:5432/postgres
+      DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
+    depends_on:
+      db:
+        condition: service_healthy
+
+  auth:
+    image: supabase/gotrue:v2.197.0
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: '9999'
+      API_EXTERNAL_URL: ${PUBLIC_URL:-http://localhost:8080}/auth/v1
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${AUTH_DB_PASSWORD:-local-auth-password}@db:5432/postgres?search_path=auth
+      GOTRUE_SITE_URL: ${PUBLIC_URL:-http://localhost:8080}
+      GOTRUE_URI_ALLOW_LIST: ${PUBLIC_URL:-http://localhost:8080}/**
+      GOTRUE_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
+      GOTRUE_JWT_EXP: '3600'
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_DISABLE_SIGNUP: ${AUTH_DISABLE_SIGNUP:-false}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true'
+      # true skips email confirmation (local use). Set false with a real SMTP server in production.
+      GOTRUE_MAILER_AUTOCONFIRM: ${AUTH_AUTOCONFIRM:-true}
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:-mailpit}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-1025}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_FROM:-noreply@crove.local}
+      GOTRUE_SMTP_SENDER_NAME: Crove
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  crove:
+    build: .
+    image: crove:local
+    command: ['all']
+    environment:
+      <<: *secrets
+      DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
+      WORKER_DATABASE_URL: postgres://crove_worker:${CROVE_WORKER_DB_PASSWORD:-local-worker-password}@db:5432/postgres
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      AUTH_UPSTREAM_URL: http://auth:9999
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+      INBOUND_DOMAIN: ${INBOUND_DOMAIN:-}
+      INBOUND_SECRET: ${INBOUND_SECRET:-}
+    volumes:
+      - files:/data/files
+    ports:
+      - '${PORT:-8080}:8080'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      auth:
+        condition: service_started
+
+  mailpit:
+    image: axllent/mailpit:v1.31.5
+    ports:
+      - '127.0.0.1:8025:8025'
+
+volumes:
+  db-data:
+  files:
