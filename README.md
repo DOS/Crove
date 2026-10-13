@@ -1,4 +1,4 @@
-# 👑 Crove — The Modern Business OS
+# 👑 Crove - The Modern Business OS
 
 > **The All-in-One Business Operating System for Solo Founders & SMEs.**  
 > Unifying Social Distribution, Workflow Automation, CRM, Digital Asset Management, and Growth Analytics.
@@ -51,6 +51,12 @@ pnpm dev
 pnpm build
 pnpm start
 ```
+
+---
+
+## 🗺️ Plan
+
+Architecture and roadmap for the Crove OS kernel: [`docs/plan/crove-os-kernel.md`](./docs/plan/crove-os-kernel.md) (source of record, tracks phase status and open review items). Vietnamese reading copy: [`docs/plan/crove-os-kernel.vi.html`](./docs/plan/crove-os-kernel.vi.html).
 
 ---
 
