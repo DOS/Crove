@@ -18,7 +18,7 @@
 |---|---|---|
 | 0 Thin kernel + Document Inbox (revised, see Decisions) | 4-6 weeks | Not started |
 | 0b Finance spike | 2 weeks, parallel | Not started |
-| 1 Kernel v0 + Party & Document Inbox | 8 weeks | Not started |
+| 1 Kernel v0 hardening (residual work only, see revised Phase 0) | 8 weeks | Not started |
 | 2a Finance A1 (scope set by interviews) | 10 weeks | Not started |
 | 2b Finance A2 | 8 weeks | Not started |
 | 3 CRM + Calendar | 12 weeks | Waits for wedge-customer demand (Decision 2) |
@@ -59,6 +59,8 @@ These decisions override any conflicting text in the body of this plan. Rational
 3. Audit rows cannot be updated or deleted; the same email resent creates no duplicates.
 4. Worker-first deploy proven; a test alert reaches the owner's phone.
 5. The 10-15 customer interviews are done and summarized; Phase 2a scope is adjusted from them.
+
+**Phase 1 after this** keeps only what Phase 0 does not cover: PDF/image extraction with evidence and the Vietnamese benchmark, the full RLS matrix including legal entities, load tests, kill switches, notifications and search, the basic PDPL package, dogfooding, and the security review. Party and the XML Document Inbox are Phase 0 deliverables, not repeated.
 
 **Needs owner approval before it happens (spends money):** creating the Crove Supabase projects (beta + prod with PITR) and the GCP projects.
 
