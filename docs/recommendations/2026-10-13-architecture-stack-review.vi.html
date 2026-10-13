@@ -143,10 +143,10 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
   <div class="tile"><b>Kiến trúc: giữ</b><span>Modular monolith + command pipeline + outbox + RLS + contract-first là đúng hướng và đúng thời điểm</span></div>
   <div class="tile"><b>~80% stack: giữ</b><span>Hono, oRPC, zod 4, Kysely + Kanel, pg-boss, AI SDK 7, MCP SDK 2, Node 26 đều là lựa chọn mạnh nhất ở lớp của nó</span></div>
   <div class="tile"><b>1 thay đổi lớn</b><span>App shell: Next.js 16 → Vite 8 + TanStack Router (SPA). Giữ Next cho landing page</span></div>
-  <div class="tile"><b>1 spike + 4 chỉnh</b><span>Spike DBOS cho durable process trước Phase 2a; chỉnh formatter, oRPC v2, cell-ready, nền tảng tích hợp</span></div>
+  <div class="tile"><b>1 spike, 2 chỉnh, 2 bổ sung</b><span>Spike DBOS cho durable process trước Phase 2a; chỉnh formatter và oRPC v2; bổ sung cell-ready và nền tảng tích hợp</span></div>
 </div>
 <div class="callout">
-  <p><strong>Tóm lại:</strong> phần lõi backend của plan đã gần như là lựa chọn tốt nhất hiện có. Chỗ lệch rõ nhất là frontend: plan dùng Next.js nhưng tắt gần hết tính năng của Next (không Server Actions, không <code>use cache</code>, RSC chỉ để chặn đăng nhập, tắt <code>typedRoutes</code>, tự viết route generator). Một SPA trên Vite 8 + TanStack Router làm đúng việc đó mà ít code tự viết hơn, build nhanh hơn, dễ tự host hơn, và nhóm dev đang thích nó hơn.</p>
+  <p><strong>Tóm lại:</strong> phần lõi backend của plan đã gần như là lựa chọn tốt nhất hiện có. Chỗ lệch rõ nhất là frontend: plan dùng Next.js nhưng chỉ dùng một phần nhỏ của nó: Server Actions không phải đường ghi (<code>'use server'</code> chỉ cho logout và đổi ngôn ngữ), <code>use cache</code> chỉ cho dữ liệu không thuộc tenant, RSC chỉ chặn đăng nhập và nạp org context, dữ liệu lấy phía client qua TanStack Query, tắt <code>typedRoutes</code> và tự viết route generator. Một SPA trên Vite 8 + TanStack Router làm đúng việc đó mà ít code tự viết hơn, build nhanh hơn, dễ tự host hơn. Next vẫn phổ biến hơn nhiều (67,7M download/tuần so với 11,6M của TanStack Start), nhưng theo State of JS 2025 mức hài lòng với Next đang giảm, còn TanStack Start là cái tên được dev tự điền vào nhiều nhất.</p>
   <p>Về kiến trúc, có 2 bổ sung đáng làm ngay vì rẻ bây giờ nhưng đắt về sau: chuẩn bị chia tenant theo cell (nhiều DB) và vạch lộ trình nền tảng tích hợp (OAuth app, SDK, webhook outbound) thay vì dồn hết vào Phase 3.</p>
 </div>
 
@@ -213,16 +213,16 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
     <p class="lbl ok">Đã tốt</p>
     <ul>
       <li>API stateless, autoscale trên Cloud Run; worker pool scale độc lập.</li>
-      <li>Mọi bảng có PK <code>(org_id, id)</code>, không có UNIQUE toàn cục, không join chéo org: về sau tách tenant sang DB khác (cell) là khả thi.</li>
+      <li>Mọi bảng tenant có PK <code>(org_id, id)</code>, không có <code>UNIQUE(id)</code> toàn cục, không join chéo org: về sau tách tenant sang DB khác (cell) là khả thi. Ngoại lệ là các bảng identity như <code>user_account</code>, <code>tenant</code> (thuộc control plane, xem đề xuất #5).</li>
       <li>Đọc và ghi đã tách wrapper (<code>withTenantReadTx</code>), nên định tuyến query đọc sang read replica rất dễ.</li>
       <li>Queue công bằng theo org; outbox lag &gt; 30 giây thì tạm dừng job nền; quota và abuse limit theo org.</li>
       <li>Audit partition theo năm; bảng nóng có TTL.</li>
+      <li>Số dư sổ cái có bảng <code>period_balance</code> (Phase 2a), chỉ definer ghi sổ được ghi và đối soát hằng đêm, nên báo cáo không phải SUM lại toàn bộ sổ.</li>
     </ul>
     <p class="lbl warn">Giới hạn</p>
     <ul>
-      <li>Một Postgres primary là trần ghi. Đủ cho hàng nghìn tenant SME (plan ước tính 5.000 tenant ≈ 1,5-3k USD hạ tầng/tháng), không phải vô hạn.</li>
-      <li>Relay outbox chạy độc quyền trên 1 instance (advisory lock): đây là trần throughput event. Suy luận của tao: đủ cho giai đoạn đầu; khi lớn cần chia relay theo <code>hash(org_id)</code>.</li>
-      <li>Báo cáo kế toán trên sổ lớn cần bảng số dư tổng hợp (projection), không SUM lại mỗi lần.</li>
+      <li>Một Postgres primary là trần ghi. Đủ cho hàng nghìn tenant SME (plan ước tính 5.000 tenant ≈ 1,5-3k USD hạ tầng/tháng, chưa tính LLM), không phải vô hạn.</li>
+      <li>Relay outbox chạy độc quyền trên 1 instance (advisory lock): đây là trần throughput event. Suy luận (chưa đo): đủ cho giai đoạn đầu; khi lớn cần chia relay theo <code>hash(org_id)</code>.</li>
     </ul>
     <p class="lbl acc">Đề xuất</p>
     <ul><li>Làm cell-ready ngay (đề xuất #5). Read replica cho báo cáo khi cần.</li></ul>
@@ -233,7 +233,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
     <ul>
       <li>Một registry sinh ra 5 bề mặt: RPC nội bộ, REST/OpenAPI, MCP, AI tool, webhook event. Command mới tự có mặt ở mọi kênh mà nó khai báo.</li>
       <li>Webhook vào gắn với binding: org suy ra từ binding, chữ ký verify trong API, xử lý async.</li>
-      <li>Connector chạy trong job có khai báo egress; ledger <code>external_call</code> cho idempotency và đối soát khi kết quả mơ hồ; credential mã hóa theo tenant.</li>
+      <li>Connector chạy trong job có khai báo egress; ledger <code>external_call</code> cho idempotency và đối soát khi kết quả mơ hồ; credential được mã hóa envelope bằng key của deployment (Cloud: KMS), chỉ job khai báo egress đúng provider mới giải mã được.</li>
       <li>Tên public đóng băng (CloudEvents <code>com.crove.*</code>), event có version và upcaster.</li>
     </ul>
     <p class="lbl warn">Lỗ hổng</p>
@@ -282,13 +282,13 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 </div>
 
 <h2 id="stack">Tech stack từng lớp</h2>
-<p class="small muted"><span class="b b-ok">Giữ</span> lựa chọn hiện tại là tốt nhất · <span class="b b-warn">Chỉnh</span> giữ nhưng sửa cách dùng · <span class="b b-bad">Đổi</span> nên thay · <span class="b b-info">Spike</span> thử trước khi quyết</p>
+<p class="small muted"><span class="b b-ok">Giữ</span> lựa chọn hiện tại là tốt nhất · <span class="b b-warn">Chỉnh</span> giữ nhưng sửa cách dùng · <span class="b b-bad">Đổi</span> nên thay · <span class="b b-info">Spike</span> thử trước khi quyết · <span class="b b-warn">Bổ sung</span> thêm phần plan chưa có</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Lớp</th><th>Plan</th><th>Đối thủ mạnh nhất 2026</th><th>Kết luận</th><th>Lý do (dữ liệu 13/10/2026)</th></tr></thead>
 <tbody>
 <tr><td>Ngôn ngữ</td><td>TypeScript toàn stack</td><td>Go / Rust cho backend</td><td><span class="b b-ok">Giữ</span></td><td>Một ngôn ngữ, type đi từ DB tới UI. Hệ sinh thái AI SDK, MCP, zod mạnh nhất ở TS. Agent viết TS đúng nhiều nhất.</td></tr>
-<tr><td>Runtime</td><td>Node 26</td><td>Bun 1.4</td><td><span class="b b-ok">Giữ</span></td><td>Node 26 lên LTS ngày 28/10/2026. Bun 1.4 vừa viết lại từ Zig sang Rust (20/08/2026), tự nhận chưa tương thích 100% với Node; OTel cho <code>pg</code> trên Bun chưa được kiểm chứng. Bun do Anthropic mua từ 12/2025, vẫn MIT; dùng làm tool thì được, chưa nên chạy prod.</td></tr>
+<tr><td>Runtime</td><td>Node 26</td><td>Bun 1.4</td><td><span class="b b-ok">Giữ</span></td><td>Node 26 lên LTS ngày 28/10/2026. Bun 1.4 vừa viết lại từ Zig sang Rust (20/08/2026), tự nhận chưa tương thích 100% với Node; OTel cho <code>pg</code> trên Bun chưa được kiểm chứng. Bun do Anthropic mua từ 12/2025, vẫn MIT. Đổi runtime sau này rẻ vì code là TS chuẩn (Hono, pg-boss đều hỗ trợ Bun), nên không cần nhận rủi ro bây giờ; cho test suite chạy thêm trên Bun hằng đêm để biết khi nào nó sẵn sàng.</td></tr>
 <tr><td>Monorepo</td><td>pnpm + turbo</td><td>Vite+ 1.x, Nx</td><td><span class="b b-ok">Giữ</span></td><td>Vite+ mới ra 1.0 ngày 28/09/2026 (MIT). Xem lại khi nó ổn định.</td></tr>
 <tr><td>HTTP</td><td>Hono 4</td><td>Fastify 5, Elysia</td><td><span class="b b-ok">Giữ</span></td><td>Hono 4.13, 74M download/tuần, v5 đang RC. Có <code>@modelcontextprotocol/hono</code> chính thức. Không dùng JWT middleware của Hono (2 advisory high 01/2026); plan đã dùng <code>jose</code>.</td></tr>
 <tr><td>RPC / contract</td><td>oRPC 1.15</td><td>tRPC 11, ts-rest</td><td><span class="b b-warn">Chỉnh</span></td><td>oRPC là thư viện duy nhất vừa contract-first vừa phục vụ REST/OpenAPI từ cùng router. OpenAPI của tRPC còn alpha và chỉ sinh spec; ts-rest không phát hành từ 03/2025. Cần chỉnh: oRPC v2 (beta) đổi wire format và error body, nên chỉ mở <code>/v1</code> public khi đã lên v2.</td></tr>
@@ -298,8 +298,8 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <tr><td>Durable process</td><td>Tự viết (<code>process_instance</code>, timer = job, chờ người = proposal)</td><td>DBOS Transact 5.2 (MIT)</td><td><span class="b b-info">Spike</span></td><td>DBOS có thể thay process engine và phần lớn <code>external_call</code>: sleep nhiều ngày, <code>recv</code> chờ duyệt có timeout, step ghi DB chung transaction với checkpoint, queue chia theo key, cron có timezone. Plan từng loại DBOS vì nó tự migrate lúc khởi động; lý do này không còn đúng vì đã có <code>runMigrations:false</code> + CLI migrate. Rủi ro: khôi phục workflow trên Cloud Run (instance ID không cố định; tự động khôi phục chỉ có ở Conductor trả phí), workflow đang chờ duyệt vẫn chiếm slot queue, v5 vừa có breaking change (16/09/2026).</td></tr>
 <tr><td>AI</td><td>AI SDK 7 + openai-compatible</td><td>Mastra, LangGraph, TanStack AI (RC)</td><td><span class="b b-ok">Giữ</span></td><td>Mỏng, không khóa vào provider nào. Framework agent nặng hơn sẽ đè lên policy engine của Crove.</td></tr>
 <tr><td>MCP</td><td><code>@modelcontextprotocol/server</code> 2.x</td><td>-</td><td><span class="b b-ok">Giữ</span></td><td>SDK v2 stable từ 27/07/2026. Spec 2026-07-28 là stateless (không còn session), khớp mô hình 1 command = 1 transaction; đăng ký client chuyển sang CIMD thay cho DCR.</td></tr>
-<tr><td>Auth</td><td>openid-client 6 + jose 6</td><td>Better Auth 1.7</td><td><span class="b b-warn">Chỉnh</span></td><td>Giữ bản tự làm vì việc của relying party nhỏ; openid-client 0 advisory. Better Auth (đội ngũ về Vercel từ 07/2026) có 27 advisory trong năm 2026, tập trung ở đúng các plugin Crove cần (sso, oauth-provider, api-key, mcp), và thêm bảng user/session chạy ngoài <code>enter_context</code>. Bổ sung: <code>@simplewebauthn/server</code> cho step-up khi duyệt R3.</td></tr>
-<tr><td>Web app</td><td>Next.js 16.4</td><td>Vite 8 + TanStack Router (SPA); TanStack Start</td><td><span class="b b-bad">Đổi</span></td><td>Xem đề xuất #1. Next 16.4 đang đi theo hướng Cache Components mặc định, ngược với plan. TanStack Router v1 đã ổn định từ 12/2023; TanStack Start mới stable ngày 12/10/2026 nên chưa dùng.</td></tr>
+<tr><td>Auth</td><td>openid-client 6 + jose 6</td><td>Better Auth 1.7</td><td><span class="b b-ok">Giữ</span></td><td>Giữ bản tự làm vì việc của relying party nhỏ; openid-client 0 advisory. Better Auth (đội ngũ về Vercel từ 07/2026) có 27 advisory trong năm 2026, tập trung ở đúng các plugin Crove cần (sso, oauth-provider, api-key, mcp), và thêm bảng user/session chạy ngoài <code>enter_context</code>. Bổ sung nhỏ: <code>@simplewebauthn/server</code> cho WebAuthn step-up khi duyệt R3 (P11).</td></tr>
+<tr><td>Web app</td><td>Next.js 16.4</td><td>Vite 8 + TanStack Router (SPA); TanStack Start</td><td><span class="b b-bad">Đổi</span></td><td>Xem đề xuất #1. Plan bật <code>cacheComponents</code> nhưng cấm cache dữ liệu tenant (§9), nên gần như không hưởng lợi từ hướng đi chính của Next 16.4 (Cache Components là mặc định từ Next 17). TanStack Router v1 đã ổn định từ 12/2023; TanStack Start mới stable ngày 12/10/2026 nên chưa dùng.</td></tr>
 <tr><td>URL state, i18n</td><td>nuqs, next-intl</td><td><code>validateSearch</code> của router, use-intl</td><td><span class="b b-bad">Đổi</span></td><td>Đi theo đề xuất #1. use-intl là lõi của next-intl, không phụ thuộc framework; nuqs có adapter cho TanStack Router nếu muốn giữ.</td></tr>
 <tr><td>UI</td><td>shadcn + Base UI 1.x + Tailwind 4 + TanStack Table 9</td><td>-</td><td><span class="b b-ok">Giữ</span></td><td>Base UI 1.9; shadcn đổi mặc định sang Base UI từ 07/2026 (nguồn thứ cấp); Tailwind 4.3; Table v9 stable từ 04/08/2026.</td></tr>
 <tr><td>Realtime</td><td>v0 poll, 2b SSE</td><td>Zero 1.10, ElectricSQL, PowerSync</td><td><span class="b b-ok">Giữ</span></td><td>Zero GA 03/2026, mutator chạy trong transaction của mình (khớp với command), nhưng không áp RLS khi đọc (đọc từ replica SQLite), nên phải viết lại luật tenant trong code; chưa có aggregate. ElectricSQL đã về Databricks (08/2026); PowerSync self-host dùng FSL, không phải OSI. Zero là ứng viên cho UI kiểu Linear từ Phase 3.</td></tr>
@@ -338,7 +338,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
           <li><code>app.crove.com</code> và <code>api.crove.com</code> cùng site nên cookie vẫn dùng được.</li>
         </ul>
       </li>
-      <li><strong>Cập nhật kèm:</strong> ADR-0011, §9 Frontend shell, spike A14.</li>
+      <li><strong>Cập nhật kèm:</strong> ADR-0011; trong plan: §2 (các dòng Web, i18n/URL state, Shell auth), §3.1, §3.2, §3.4, §7.5 (Shell), §9, §15 (Frontend); bỏ spike A14.</li>
       <li><strong>Độ tin cậy:</strong> khoảng 75%. Nếu sau này cần SSR thì lên TanStack Start trên cùng router, không phải viết lại.</li>
     </ul>
   </li>
@@ -377,7 +377,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
       <li>Kết quả: khi một DB đầy, chuyển nhóm tenant sang DB thứ hai (cell) mà không phải sửa code nghiệp vụ. Làm sau thì phải đụng mọi chỗ mở transaction.</li>
     </ul>
   </li>
-  <li><strong>Lộ trình nền tảng tích hợp</strong> <span class="b b-warn">Bổ sung</span> · quyết trong ADR-0019 trước Phase 3
+  <li><strong>Lộ trình nền tảng tích hợp</strong> <span class="b b-warn">Bổ sung</span> · mở rộng ADR-0019 (MCP grants) hoặc thêm ADR mới, trước Phase 3
     <ul>
       <li>Chốt Authorization Server cho OAuth app bên thứ ba và MCP client ở bản self-host. Ứng viên: Zitadel (AGPL, cùng license), Ory Hydra, Keycloak. Đăng ký client theo CIMD.</li>
       <li>Webhook ra: tự làm trên outbox + Standard Webhooks; Svix OSS là phương án dự phòng.</li>
