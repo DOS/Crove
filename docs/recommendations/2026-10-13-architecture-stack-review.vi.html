@@ -214,7 +214,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
     <ul>
       <li>API stateless, autoscale trên Cloud Run; worker pool scale độc lập.</li>
       <li>Mọi bảng tenant có PK <code>(org_id, id)</code>, không có <code>UNIQUE(id)</code> toàn cục, không join chéo org: về sau tách tenant sang DB khác (cell) là khả thi. Ngoại lệ là các bảng identity như <code>user_account</code>, <code>tenant</code> (thuộc control plane, xem đề xuất #5).</li>
-      <li>Đọc và ghi đã tách wrapper (<code>withTenantReadTx</code>), nên định tuyến query đọc sang read replica rất dễ.</li>
+      <li>Đọc và ghi đã tách wrapper (<code>withTenantReadTx</code>), nên về sau có thể đưa một phần query đọc sang read replica. Điều kiện: kiểm tra session và membership (<code>enter_context</code>) vẫn chạy trên primary, vì replica trễ có thể để người vừa logout hoặc vừa bị loại khỏi org đọc tiếp dữ liệu, trái cam kết thu hồi quyền ngay của plan (§4.5, §7.3, §7.5).</li>
       <li>Queue công bằng theo org; outbox lag &gt; 30 giây thì tạm dừng job nền; quota và abuse limit theo org.</li>
       <li>Audit partition theo năm; bảng nóng có TTL.</li>
       <li>Số dư sổ cái có bảng <code>period_balance</code> (Phase 2a), chỉ definer ghi sổ được ghi và đối soát hằng đêm, nên báo cáo không phải SUM lại toàn bộ sổ.</li>
@@ -225,7 +225,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
       <li>Relay outbox chạy độc quyền trên 1 instance (advisory lock): đây là trần throughput event. Suy luận (chưa đo): đủ cho giai đoạn đầu; khi lớn cần chia relay theo <code>hash(org_id)</code>.</li>
     </ul>
     <p class="lbl acc">Đề xuất</p>
-    <ul><li>Làm cell-ready ngay (đề xuất #5). Read replica cho báo cáo khi cần.</li></ul>
+    <ul><li>Làm cell-ready ngay (đề xuất #5). Read replica chỉ cho báo cáo, khi cần, và chỉ sau khi có test session bị thu hồi và thành viên bị loại trong lúc replica đang trễ.</li></ul>
   </div>
   <div class="card">
     <h4>2. Tích hợp third-party</h4>
