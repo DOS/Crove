@@ -252,7 +252,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
   <li><strong>Thứ tự tích hợp danh tính.</strong> Tích hợp hệ sinh thái DOS (DOS ID, DOS.Me, DOS.AI) là mục tiêu sản phẩm. Câu hỏi chỉ là thứ tự: đồng bộ org/thành viên từ DOS có phải nằm trên đường găng Phase 0 không (nó phụ thuộc DOS-1, DOS-26, DOS-27 bên DOS.Me), hay đăng nhập DOS ID chạy trước với membership do Crove tự quản, rồi nối org DOS (<code>external_org_id</code>) khi cần tính tiền.</li>
   <li><strong>Cổng duyệt G6.</strong> Cần quyết cái gì đứng sau nhãn duyệt cho đường dẫn bảo vệ. Đề xuất: bộ bất biến lấy từ nhánh gốc + reviewer agent chuyên bảo mật + review bảo mật thuê ngoài ở các mốc (Phase 1 exit đã có).</li>
   <li><strong>Các fork.</strong> Nếu Twenty, Desk, Cal, Postiz, Documenso chưa có người dùng thật thì tắt luôn, khỏi sync một chiều, parity, <code>legacy_id_map</code> và 30 ngày rollback. Cần biết: số người dùng thật trên từng fork.</li>
-  <li><strong>Repo public.</strong> Plan ghi repo core private tới hết Phase 1, nhưng <code>DOS/Crove</code> đang public. Đã chốt 13/10: giữ public; chi tiết triển khai bên DOS nằm trong repo private DOS.Me. gitleaks đã chạy trong CI và pre-commit từ 13/10; còn thiếu G1 (quét project ref).</li>
+  <li><strong>Repo public.</strong> Plan ghi repo core private tới hết Phase 1, nhưng <code>DOS/Crove</code> đang public. Đã chốt 13/10: giữ public; chi tiết triển khai bên DOS nằm trong repo private DOS.Me. gitleaks đã chạy trong CI từ 13/10, kèm hook pre-commit ở máy local sau <code>pnpm install</code> nếu đã cài gitleaks; còn thiếu G1 (quét project ref).</li>
 </ol>
 
 <h2 id="vi-sao">Vì sao làm Crove OS</h2>
