@@ -1,6 +1,6 @@
 # 0027. Open-source core vs Crove Cloud, and auth on Supabase Auth
 
-- Status: accepted
+- Status: accepted, except decision 4 (app shell), which is proposed and not yet decided (owner, 2026-10-13)
 - Date: 2026-10-13
 - Deciders: owner (JOY)
 - Supersedes: ADR-0026 decision 3's 4-6 week time-box (now a one-week MVP, open source first) and decision 4 (DOS ID via OIDC first); the "self-host deferred" row of the Phase 0 deferral table
@@ -18,7 +18,7 @@ A stack review on 2026-10-13 (docs/recommendations) found the Next.js app shell 
 1. `DOS/Crove` is the open-source core. It contains no DOS-only features and must run with `docker compose up` on a laptop: Postgres 17, Supabase Auth, Crove (api + worker + UI), and Mailpit for local email. Every external dependency sits behind an adapter with a generic default.
 2. A private `crove-cloud` repo holds Crove OS for DOS: DOS configuration, DOS.AI defaults and credits, DOS org sync, managed connectors, infrastructure and the `app.crove.io` deployment. It depends on the core; the core never depends on it.
 3. Auth uses Supabase Auth only (no other Supabase services). The SPA uses the Supabase Auth client; the kernel verifies access tokens (JWKS or the deployment's JWT secret), maps them to `user_account` and keeps org membership in Crove. Crove Cloud points the same code at DOS's Supabase Auth.
-4. The app shell is a Vite + TanStack Router SPA served by the kernel on the same origin. Next.js stays for the landing page.
+4. Proposed, not decided: the app shell is a Vite + TanStack Router SPA served by the kernel on the same origin, and Next.js stays for the landing page. The owner decides after reviewer feedback.
 
 ## Consequences
 
