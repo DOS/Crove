@@ -2,7 +2,7 @@
 // Decision 1450/QD-TCT). Deterministic, no LLM. Entity expansion is disabled and DOCTYPE is rejected.
 import { XMLParser } from 'fast-xml-parser';
 import { money, sum, toMoney } from './money.ts';
-import type { InvoiceLine, InvoiceParty, LineNature, ParsedInvoice, TaxBreakdown } from './invoice.ts';
+import { normalizeNumber, normalizeSeries, type InvoiceLine, type InvoiceParty, type LineNature, type ParsedInvoice, type TaxBreakdown } from './invoice.ts';
 
 export class EInvoiceParseError extends Error {}
 
@@ -37,8 +37,8 @@ function text(node: unknown, key: string): string | null {
 function amount(node: unknown, key: string): string | null {
   const raw = text(node, key);
   if (raw === null) return null;
-  const cleaned = raw.replace(/,/g, '');
-  return /^-?\d+(\.\d+)?$/.test(cleaned) ? toMoney(money(cleaned)) : null;
+  // Decree 123 XML uses "." as the decimal separator; anything else is rejected, never guessed.
+  return /^-?\d+(\.\d+)?$/.test(raw) ? toMoney(money(raw)) : null;
 }
 
 function findHDon(value: unknown, depth = 0): Node | null {
@@ -104,7 +104,8 @@ export function parseEInvoiceXml(bytes: Uint8Array): ParsedInvoice {
 
   const items = isNode(content.DSHHDVu) ? content.DSHHDVu.HHDVu : undefined;
   const lines: InvoiceLine[] = (Array.isArray(items) ? items : []).filter(isNode).map((item, index) => ({
-    lineNo: Number(text(item, 'STT') ?? index + 1) || index + 1,
+    // Printed STT can repeat or skip; storage needs a unique, sequential line number.
+    lineNo: index + 1,
     nature: nature(text(item, 'TChat')),
     code: text(item, 'MHHDVu'),
     description: text(item, 'THHDVu') ?? '',
@@ -131,8 +132,8 @@ export function parseEInvoiceXml(bytes: Uint8Array): ParsedInvoice {
     source: 'einvoice_xml',
     invoiceType: text(general, 'THDon'),
     template: text(general, 'KHMSHDon'),
-    series: text(general, 'KHHDon') ?? '',
-    number,
+    series: normalizeSeries(text(general, 'KHHDon') ?? ''),
+    number: normalizeNumber(number),
     issueDate: issueDate.slice(0, 10),
     currency: text(general, 'DVTTe') ?? 'VND',
     exchangeRate: amount(general, 'TGia'),

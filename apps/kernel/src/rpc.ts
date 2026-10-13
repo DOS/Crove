@@ -2,7 +2,7 @@
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { contract } from '@crove/kernel-contract';
-import { createOrg, myOrgs } from '@crove/kernel';
+import { createOrg, myOrgs, type OrgSummary } from '@crove/kernel';
 import { DomainError, type Runtime } from '@crove/kernel-runtime';
 import type { AuthUser } from './auth.ts';
 
@@ -17,12 +17,16 @@ export function toORPCError(error: unknown): ORPCError<string, unknown> {
   return new ORPCError(domain.code, { status: domain.status, message: domain.message, data: domain.details });
 }
 
-export async function resolveOrg(runtime: Runtime, user: AuthUser, slug: string | null): Promise<string> {
+export async function resolveMembership(runtime: Runtime, user: AuthUser, slug: string | null): Promise<OrgSummary> {
   if (!slug) throw new DomainError('ORG_REQUIRED', 400, 'Thiếu tổ chức (header x-crove-org)');
   const orgs = await runtime.orgless((db) => myOrgs(db, user.userId));
   const org = orgs.find((o) => o.slug === slug);
   if (!org) throw new DomainError('NOT_A_MEMBER', 403, 'Bạn không thuộc tổ chức này');
-  return org.orgId;
+  return org;
+}
+
+export async function resolveOrg(runtime: Runtime, user: AuthUser, slug: string | null): Promise<string> {
+  return (await resolveMembership(runtime, user, slug)).orgId;
 }
 
 export function createRpcHandler(runtime: Runtime) {

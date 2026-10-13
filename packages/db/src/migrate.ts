@@ -27,9 +27,7 @@ export async function readMigrations(dir: string): Promise<MigrationFile[]> {
     const match = FILE_PATTERN.exec(name);
     if (!match?.[1]) throw new Error(`migration file name does not match the naming rule: ${name}`);
     // Normalize line endings so a Windows checkout (CRLF) and Linux (LF) hash the same file identically.
-    const sql = (await readFile(join(dir, name), 'utf8')).replace(/
-/g, '
-');
+    const sql = (await readFile(join(dir, name), 'utf8')).replaceAll('\r\n', '\n');
     files.push({ version: match[1], name, sql, sha256: createHash('sha256').update(sql).digest('hex') });
   }
   return files;
@@ -85,6 +83,13 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
         GRANT USAGE ON SCHEMA crove_meta TO crove_tenant;
         GRANT SELECT ON crove_meta.schema_migrations TO crove_tenant;
       END IF;
+    END $$;`);
+    // PostgreSQL grants EXECUTE to PUBLIC on every new function. Module schemas only expose what a
+    // migration grants explicitly, so a definer function added later without a REVOKE stays closed.
+    await client.query(`DO $$ DECLARE s text; BEGIN
+      FOR s IN SELECT nspname FROM pg_namespace WHERE nspname LIKE 'crove\\_%' AND nspname NOT IN ('crove_meta', 'crove_jobs') LOOP
+        EXECUTE format('REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC', s);
+      END LOOP;
     END $$;`);
   } finally {
     await client.query("SELECT pg_advisory_unlock(hashtext('crove_migrate'))").catch(() => {});

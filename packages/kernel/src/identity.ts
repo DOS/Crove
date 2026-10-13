@@ -39,8 +39,9 @@ export function slugify(name: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
-  return base.length >= 3 ? base : `org-${base}`.slice(0, 40);
+    .slice(0, 40)
+    .replace(/-+$/, '');
+  return base.length >= 3 ? base : `org-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export async function createOrg(runtime: Runtime, userId: string, name: string): Promise<OrgSummary> {

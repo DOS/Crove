@@ -9,11 +9,11 @@ import type pg from 'pg';
 import { schemaMissing } from '@crove/db/migrate';
 import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES, ORG_HEADER } from '@crove/kernel-contract';
 import { DomainError, fileKey, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
-import { buildJournalWorkbook, type JournalEntryView } from '@crove/mod-finance';
+import { JOURNAL_EXPORT_LIMIT, buildJournalWorkbook, type JournalEntryView } from '@crove/mod-finance';
 import type { Authenticate, AuthUser } from './auth.ts';
 import { publicAuthUrl, type Config } from './config.ts';
 import { MAX_EMAIL_BYTES, handleInboundEmail, secretMatches } from './inbound.ts';
-import { createRpcHandler, resolveOrg } from './rpc.ts';
+import { createRpcHandler, resolveMembership, resolveOrg } from './rpc.ts';
 
 export interface HttpDeps {
   config: Config;
@@ -35,6 +35,33 @@ function body(bytes: Uint8Array): ArrayBuffer {
 }
 
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'host', 'content-length']);
+// Client-supplied forwarding headers are dropped; the proxy sets X-Real-IP from the socket instead.
+const SPOOFABLE = new Set(['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'x-client-ip']);
+// Public Supabase Auth endpoints the web app needs. Everything else (notably /admin) is not reachable.
+const AUTH_PUBLIC_PATHS =
+  /^\/(?:token|signup|verify|recover|user|logout|otp|resend|settings|health|authorize|callback|reauthenticate|factors(?:\/[\w-]+(?:\/(?:challenge|verify))?)?|\.well-known\/jwks\.json)$/;
+const MAX_FILES_PER_UPLOAD = 5;
+const UPLOAD_BODY_LIMIT = 60 * 1024 * 1024;
+function contentSecurityPolicy(authUrl: string): string {
+  // Hosted Supabase Auth lives on another origin; the bundled one is proxied under /auth/v1.
+  const authOrigin = new URL(authUrl, 'http://localhost').origin;
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "img-src 'self' blob: data:",
+    `connect-src 'self' ${authOrigin}`,
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+}
+
+function clientIp(c: Context): string | null {
+  const incoming = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming;
+  return incoming?.socket?.remoteAddress ?? null;
+}
 
 export function createHttpApp(deps: HttpDeps) {
   const { config, runtime, store, authenticate } = deps;
@@ -49,7 +76,7 @@ export function createHttpApp(deps: HttpDeps) {
     if (!client) return c.json({ ready: false, reason: 'database' }, 503);
     try {
       const missing = await schemaMissing(client, config.MIGRATIONS_DIR);
-      return missing.length === 0 ? c.json({ ready: true }) : c.json({ ready: false, missing }, 503);
+      return missing.length === 0 ? c.json({ ready: true }) : c.json({ ready: false, reason: 'schema' }, 503);
     } finally {
       client.release();
     }
@@ -69,18 +96,24 @@ export function createHttpApp(deps: HttpDeps) {
     const upstream = config.AUTH_UPSTREAM_URL.replace(/\/$/, '');
     app.all('/auth/v1/*', bodyLimit({ maxSize: 1024 * 1024 }), async (c) => {
       const url = new URL(c.req.url);
-      const target = `${upstream}${url.pathname.replace(/^\/auth\/v1/, '')}${url.search}`;
+      const path = url.pathname.replace(/^\/auth\/v1/, '');
+      if (!AUTH_PUBLIC_PATHS.test(path)) return c.json({ code: 'NOT_FOUND' }, 404);
       const headers = new Headers();
       c.req.raw.headers.forEach((value, key) => {
-        if (!HOP_BY_HOP.has(key.toLowerCase())) headers.set(key, value);
+        const name = key.toLowerCase();
+        if (!HOP_BY_HOP.has(name) && !SPOOFABLE.has(name)) headers.set(key, value);
       });
+      const ip = clientIp(c);
+      if (ip) headers.set('x-real-ip', ip);
       const method = c.req.method;
-      const response = await fetch(target, {
+      const response = await fetch(`${upstream}${path}${url.search}`, {
         method,
         headers,
         body: method === 'GET' || method === 'HEAD' ? null : await c.req.arrayBuffer(),
         redirect: 'manual',
-      });
+        signal: AbortSignal.timeout(15_000),
+      }).catch(() => null);
+      if (!response) return c.json({ code: 'AUTH_UNAVAILABLE', message: 'Dịch vụ đăng nhập không phản hồi' }, 503);
       const out = new Headers();
       response.headers.forEach((value, key) => {
         if (!HOP_BY_HOP.has(key.toLowerCase()) && key.toLowerCase() !== 'content-encoding') out.set(key, value);
@@ -114,7 +147,7 @@ export function createHttpApp(deps: HttpDeps) {
     await next();
   });
 
-  app.all('/api/rpc/*', async (c) => {
+  app.all('/api/rpc/*', bodyLimit({ maxSize: 1024 * 1024 }), async (c) => {
     const { matched, response } = await rpc.handle(c.req.raw, {
       prefix: '/api/rpc',
       context: { user: c.get('user'), orgSlug: c.req.header(ORG_HEADER) ?? null },
@@ -122,13 +155,16 @@ export function createHttpApp(deps: HttpDeps) {
     return matched ? response : c.json({ code: 'NOT_FOUND' }, 404);
   });
 
-  app.post('/api/files', bodyLimit({ maxSize: MAX_UPLOAD_BYTES * 10 + 1024 * 1024 }), async (c) => {
+  app.post('/api/files', bodyLimit({ maxSize: UPLOAD_BODY_LIMIT }), async (c) => {
     try {
       const user = c.get('user');
-      const orgId = await resolveOrg(runtime, user, c.req.header(ORG_HEADER) ?? null);
+      const membership = await resolveMembership(runtime, user, c.req.header(ORG_HEADER) ?? null);
+      if (membership.role === 'viewer') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không tải được chứng từ');
+      const orgId = membership.orgId;
       const body = await c.req.parseBody({ all: true });
-      const files = ([] as unknown[]).concat(body.file ?? []).filter((f): f is File => f instanceof File).slice(0, 10);
+      const files = ([] as unknown[]).concat(body.file ?? []).filter((f): f is File => f instanceof File);
       if (files.length === 0) throw new DomainError('NO_FILE', 400, 'Chưa chọn tệp');
+      if (files.length > MAX_FILES_PER_UPLOAD) throw new DomainError('TOO_MANY_FILES', 413, `Tối đa ${MAX_FILES_PER_UPLOAD} tệp mỗi lần`);
       const results = [];
       for (const file of files) {
         if (file.size > MAX_UPLOAD_BYTES) throw new DomainError('TOO_LARGE', 413, `${file.name} vượt quá 25 MB`);
@@ -188,11 +224,14 @@ export function createHttpApp(deps: HttpDeps) {
       const user = c.get('user');
       const orgSlug = c.req.header(ORG_HEADER) ?? null;
       const orgId = await resolveOrg(runtime, user, orgSlug);
-      const range = { from: c.req.query('from') || undefined, to: c.req.query('to') || undefined };
+      const range = { from: c.req.query('from') || undefined, to: c.req.query('to') || undefined, limit: JOURNAL_EXPORT_LIMIT };
       const entries = await runtime.query<JournalEntryView[]>('finance.journal.list', range, {
         actor: { type: 'user', userId: user.userId },
         orgId,
       });
+      if (entries.length >= JOURNAL_EXPORT_LIMIT) {
+        throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều bút toán để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
+      }
       const bytes = await buildJournalWorkbook([...entries].reverse(), orgSlug ?? '');
       return new Response(body(bytes), {
         headers: {
@@ -214,7 +253,11 @@ export function createHttpApp(deps: HttpDeps) {
     app.use('/assets/*', serveStatic({ root }));
     app.use('/favicon.svg', serveStatic({ root }));
     const indexPath = join(config.WEB_DIST, 'index.html');
-    app.get('*', async (c) => c.html(await readFile(indexPath, 'utf8')));
+    const csp = contentSecurityPolicy(publicAuthUrl(config));
+    app.get('*', async (c) => {
+      c.header('content-security-policy', csp);
+      return c.html(await readFile(indexPath, 'utf8'));
+    });
   } else {
     app.get('/', (c) => c.text('Crove API is running. Build apps/app to serve the web UI from this port.'));
   }

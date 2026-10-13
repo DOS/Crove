@@ -61,6 +61,16 @@ export interface InvoiceCheck {
   message: string;
 }
 
+// Normalized invoice identifiers used for storage and duplicate detection.
+export function normalizeSeries(series: string): string {
+  return series.trim().toUpperCase().replace(/\s+/g, '');
+}
+
+export function normalizeNumber(number: string): string {
+  const trimmed = number.trim().replace(/\s+/g, '');
+  return /^\d+$/.test(trimmed) ? trimmed.replace(/^0+(?=\d)/, '') : trimmed.toUpperCase();
+}
+
 // Signed contribution of a line to the pre-tax subtotal.
 export function lineContribution(line: InvoiceLine): Money {
   if (line.nature === 'note' || line.nature === 'promotion') return '0';
@@ -69,8 +79,15 @@ export function lineContribution(line: InvoiceLine): Money {
 }
 
 // Deterministic checks. Confidence comes from these, never from a model's self-assessment.
-export function checkInvoice(invoice: ParsedInvoice, today: string = new Date().toISOString().slice(0, 10)): InvoiceCheck[] {
+export function checkInvoice(
+  invoice: ParsedInvoice,
+  today: string = new Date().toISOString().slice(0, 10),
+  baseCurrency = 'VND',
+): InvoiceCheck[] {
   const checks: InvoiceCheck[] = [];
+  if (invoice.currency.toUpperCase() !== baseCurrency) {
+    checks.push({ id: 'currency', status: 'fail', message: `Hóa đơn bằng ${invoice.currency}; chưa hỗ trợ ghi sổ ngoại tệ` });
+  }
   const linesTotal = sum(invoice.lines.map(lineContribution));
 
   checks.push(

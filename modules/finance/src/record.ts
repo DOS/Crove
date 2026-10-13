@@ -47,10 +47,20 @@ export const recordPurchase = defineCommand({
   input: z.object({
     payload: zPurchaseProposal,
     lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })),
+    acceptFailedChecks: z.boolean().default(false),
   }),
   risk: 'R3',
   access: 'proposal',
-  handler: async (ctx, { payload, lineAccounts }) => {
+  handler: async (ctx, { payload, lineAccounts, acceptFailedChecks }) => {
+    const { invoice } = payload;
+    // The checks shown in the Inbox are enforced here, not only in the UI.
+    if (invoice.currency.toUpperCase() !== 'VND') {
+      throw new DomainError('UNSUPPORTED_CURRENCY', 422, 'Chưa hỗ trợ ghi sổ hóa đơn ngoại tệ');
+    }
+    const failed = payload.checks.filter((c) => c.status === 'fail');
+    if (failed.length > 0 && !acceptFailedChecks) {
+      throw new DomainError('CHECKS_FAILED', 422, `Còn ${failed.length} kiểm tra không đạt; hãy xác nhận đã đối chiếu chứng từ gốc`);
+    }
     const overrides = new Map(lineAccounts.map((l) => [l.lineNo, l.debitAccount]));
     const lines: ProposedLine[] = payload.lines.map((l) => {
       const account = overrides.get(l.lineNo);
@@ -61,10 +71,14 @@ export const recordPurchase = defineCommand({
     const known = await ctx.trx.selectFrom('crove_finance.account').select('code').where('code', 'in', codes).execute();
     if (known.length !== codes.length) throw new DomainError('UNKNOWN_ACCOUNT', 422, 'Có tài khoản không thuộc hệ thống TT133');
 
-    const { invoice } = payload;
     const memo = `HĐ ${invoice.series ? `${invoice.series}-` : ''}${invoice.number} ${payload.seller.name}`.trim();
     const journal = buildPurchaseJournal(lines, invoice.vatTotal, memo);
     if (!journalIsBalanced(journal)) throw new DomainError('UNBALANCED', 422, 'Bút toán không cân');
+    // The payable booked must equal the invoice total exactly.
+    const payable = journal.filter((j) => j.accountCode === '331').reduce((acc, j) => acc.plus(money(j.credit)).minus(money(j.debit)), money(0));
+    if (!payable.equals(money(invoice.total))) {
+      throw new DomainError('TOTAL_MISMATCH', 422, 'Tổng các dòng và thuế không khớp tổng thanh toán của hóa đơn');
+    }
 
     const partyId = await upsertVendor(ctx, payload.seller);
     const document = await ctx.trx

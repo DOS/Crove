@@ -1,4 +1,5 @@
 // Worker job: read a received file, extract the invoice, run deterministic checks and raise a proposal.
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId, type PurchaseProposal } from '@crove/kernel-contract';
 import { defineQuery, type BlobStore, type Runtime } from '@crove/kernel-runtime';
@@ -67,20 +68,18 @@ export const purchaseLookup = defineQuery({
           .where('invoice_number', '=', input.number)
           .executeTakeFirst()
       : undefined;
-    const proposals = await ctx.trx
+    const duplicate = await ctx.trx
       .selectFrom('crove_kernel.proposal')
-      .select(['id', 'payload'])
+      .select('id')
       .where('org_id', '=', ctx.orgId)
       .where('kind', '=', 'finance.purchase')
       .where('status', 'in', ['pending', 'executed'])
-      .orderBy('created_at', 'desc')
-      .limit(500)
-      .execute();
-    const duplicate = proposals.find((p) => {
-      const inv = (p.payload as { invoice?: { series?: string; number?: string }; seller?: { taxCode?: string | null; name?: string } }) ?? {};
-      const sameSeller = input.sellerTaxCode ? inv.seller?.taxCode === input.sellerTaxCode : inv.seller?.name === input.sellerName;
-      return sameSeller && inv.invoice?.series === input.series && inv.invoice?.number === input.number;
-    });
+      .where(sql`payload #>> '{invoice,series}'`, '=', input.series)
+      .where(sql`payload #>> '{invoice,number}'`, '=', input.number)
+      .where(input.sellerTaxCode ? sql`payload #>> '{seller,taxCode}'` : sql`payload #>> '{seller,name}'`, '=', input.sellerTaxCode ?? input.sellerName)
+      .orderBy('created_at')
+      .limit(1)
+      .executeTakeFirst();
     return {
       vendorDefault: rule?.debit_account ?? null,
       duplicateDocumentId: document?.id ?? null,

@@ -247,13 +247,14 @@ export class Runtime {
             if (!existing || existing.command !== name || existing.request_sha256 !== inputSha256) {
               throw new DomainError('IDEMPOTENCY_MISMATCH', 422, 'Khóa idempotency đã dùng cho yêu cầu khác');
             }
-            if (existing.response !== null) return existing.response as O;
+            const stored = existing.response as { value?: O } | null;
+            if (stored !== null && typeof stored === 'object' && 'value' in stored) return stored.value as O;
             throw new DomainError('RETRY', 409, 'Yêu cầu đang được xử lý');
           }
           const output = await this.runInTx<O>(trx, def, input, { orgId: options.orgId, actor: options.actor, role, proposalId: null });
           await trx
             .updateTable('crove_kernel.idempotency_key')
-            .set({ response: JSON.stringify(output ?? null) })
+            .set({ response: JSON.stringify({ value: output ?? null }) })
             .where('org_id', '=', options.orgId)
             .where('actor_key', '=', key)
             .where('key', '=', options.idempotencyKey)

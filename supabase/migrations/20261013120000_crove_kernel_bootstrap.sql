@@ -84,7 +84,7 @@ BEGIN
   EXECUTE format(
     'CREATE POLICY tenant_isolation ON %s AS PERMISSIVE FOR ALL TO crove_tenant '
     'USING (org_id = (SELECT crove_kernel.ctx_org_id())) WITH CHECK (org_id = (SELECT crove_kernel.ctx_org_id()))', t);
-  EXECUTE format('REVOKE ALL ON %s FROM PUBLIC', t);
+  EXECUTE format('REVOKE ALL ON %s FROM PUBLIC, crove_tenant', t);
   IF append_only THEN
     EXECUTE format('GRANT SELECT, INSERT ON %s TO crove_tenant', t);
   ELSE
@@ -146,6 +146,15 @@ CREATE TABLE IF NOT EXISTS crove_kernel.tenant_member (
 );
 CREATE INDEX IF NOT EXISTS tenant_member_user_idx ON crove_kernel.tenant_member (user_id);
 SELECT crove_kernel.apply_tenant_rls('crove_kernel.tenant_member');
+
+-- A user sees their own account and the accounts of members of the org in context, nobody else.
+ALTER TABLE crove_kernel.user_account ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS member_visibility ON crove_kernel.user_account;
+CREATE POLICY member_visibility ON crove_kernel.user_account AS PERMISSIVE FOR SELECT TO crove_tenant
+  USING (
+    id = (SELECT crove_kernel.ctx_user_id())
+    OR id IN (SELECT m.user_id FROM crove_kernel.tenant_member m WHERE m.org_id = (SELECT crove_kernel.ctx_org_id()))
+  );
 
 -- Upserts the Crove user for a verified identity-provider subject. Called on every authenticated request.
 CREATE OR REPLACE FUNCTION crove_kernel.identity_upsert(p_issuer text, p_subject text, p_email text, p_name text)

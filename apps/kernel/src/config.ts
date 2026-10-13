@@ -25,6 +25,8 @@ const schema = z.object({
   AUTH_JWKS_URL: optional,
   AUTH_ISSUER: optional,
   AUTH_AUDIENCE: z.string().default('authenticated'),
+  // Mirrors GOTRUE_MAILER_AUTOCONFIRM so the kernel can refuse unsafe public deployments.
+  AUTH_AUTOCONFIRM: z.enum(['true', 'false']).default('false'),
   // Any OpenAI-compatible endpoint. Without it, e-invoice XML still works; PDF/images do not.
   AI_BASE_URL: optional,
   AI_API_KEY: optional,
@@ -51,7 +53,30 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!config.AUTH_JWT_SECRET && !config.AUTH_JWKS_URL) {
     throw new Error('set AUTH_JWT_SECRET (self-hosted Supabase Auth) or AUTH_JWKS_URL (hosted Supabase Auth)');
   }
+  if (config.AUTH_JWT_SECRET && config.AUTH_JWT_SECRET.length < 32) {
+    throw new Error('AUTH_JWT_SECRET must be at least 32 characters');
+  }
+  if (!isLocalUrl(config.PUBLIC_URL)) {
+    if (config.AUTH_JWT_SECRET && SAMPLE_SECRETS.has(config.AUTH_JWT_SECRET)) {
+      throw new Error('AUTH_JWT_SECRET is a sample value; generate a random secret before exposing Crove');
+    }
+    if (config.AUTH_AUTOCONFIRM === 'true') {
+      throw new Error('AUTH_AUTOCONFIRM=true lets anyone claim any email address; set it to false and configure SMTP');
+    }
+  }
   return config;
+}
+
+// Values shipped in docker-compose.yml and .env.example. Fine on localhost, never on a public URL.
+const SAMPLE_SECRETS = new Set(['local-only-jwt-secret-change-me-0123456789', 'change-me-to-a-long-random-string-0123456789']);
+
+export function isLocalUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  } catch {
+    return false;
+  }
 }
 
 export function publicAuthUrl(config: Config): string {

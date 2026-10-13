@@ -4,7 +4,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { generateText, Output } from 'ai';
 import { z } from 'zod';
-import type { ParsedInvoice } from '@crove/l10n-vn';
+import { normalizeNumber, normalizeSeries, type ParsedInvoice } from '@crove/l10n-vn';
 
 export interface AiConfig {
   baseURL: string;
@@ -111,8 +111,8 @@ function toParsed(x: z.infer<typeof zExtracted>): ParsedInvoice | null {
     source: 'ai',
     invoiceType: null,
     template: null,
-    series: x.series.trim(),
-    number: x.number.trim(),
+    series: normalizeSeries(x.series),
+    number: normalizeNumber(x.number),
     issueDate: x.issueDate.trim().slice(0, 10),
     currency: x.currency || 'VND',
     exchangeRate: null,

@@ -2,11 +2,6 @@
 # Defaults are for local use only. For a real deployment, copy .env.example to .env and change every secret.
 name: crove
 
-x-secrets: &secrets
-  CROVE_APP_DB_PASSWORD: ${CROVE_APP_DB_PASSWORD:-local-app-password}
-  CROVE_WORKER_DB_PASSWORD: ${CROVE_WORKER_DB_PASSWORD:-local-worker-password}
-  AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-local-auth-password}
-  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
 
 services:
   db:
@@ -26,7 +21,10 @@ services:
     image: crove:local
     command: ['migrate']
     environment:
-      <<: *secrets
+      CROVE_APP_DB_PASSWORD: ${CROVE_APP_DB_PASSWORD:-local-app-password}
+      CROVE_WORKER_DB_PASSWORD: ${CROVE_WORKER_DB_PASSWORD:-local-worker-password}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-local-auth-password}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
       ADMIN_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-local-postgres-password}@db:5432/postgres
       DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
     depends_on:
@@ -46,6 +44,10 @@ services:
       GOTRUE_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
       GOTRUE_JWT_EXP: '3600'
       GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_ISSUER: crove-auth
+      GOTRUE_PASSWORD_MIN_LENGTH: '8'
+      # The kernel proxy sets X-Real-IP from the client socket, so rate limits are per client.
+      GOTRUE_RATE_LIMIT_HEADER: X-Real-IP
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
       GOTRUE_DISABLE_SIGNUP: ${AUTH_DISABLE_SIGNUP:-false}
       GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true'
@@ -66,7 +68,9 @@ services:
     image: crove:local
     command: ['all']
     environment:
-      <<: *secrets
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
+      AUTH_ISSUER: crove-auth
+      AUTH_AUTOCONFIRM: ${AUTH_AUTOCONFIRM:-true}
       DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
       WORKER_DATABASE_URL: postgres://crove_worker:${CROVE_WORKER_DB_PASSWORD:-local-worker-password}@db:5432/postgres
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
@@ -79,7 +83,8 @@ services:
     volumes:
       - files:/data/files
     ports:
-      - '${PORT:-8080}:8080'
+      # Loopback only. Put a TLS reverse proxy in front (and set PUBLIC_URL) to serve other machines.
+      - '127.0.0.1:${PORT:-8080}:8080'
     depends_on:
       migrate:
         condition: service_completed_successfully

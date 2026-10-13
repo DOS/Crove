@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS crove_finance.purchase_document (
   CHECK (total = subtotal + vat_amount)
 );
 CREATE INDEX IF NOT EXISTS purchase_document_date_idx ON crove_finance.purchase_document (org_id, invoice_date DESC);
-SELECT crove_kernel.apply_tenant_rls('crove_finance.purchase_document');
+SELECT crove_kernel.apply_tenant_rls('crove_finance.purchase_document', true);
+SELECT crove_kernel.make_append_only('crove_finance.purchase_document');
 
 CREATE TABLE IF NOT EXISTS crove_finance.purchase_line (
   org_id uuid NOT NULL,
@@ -105,7 +106,8 @@ CREATE TABLE IF NOT EXISTS crove_finance.purchase_line (
   PRIMARY KEY (org_id, document_id, line_no),
   FOREIGN KEY (org_id, document_id) REFERENCES crove_finance.purchase_document (org_id, id) ON DELETE CASCADE
 );
-SELECT crove_kernel.apply_tenant_rls('crove_finance.purchase_line');
+SELECT crove_kernel.apply_tenant_rls('crove_finance.purchase_line', true);
+SELECT crove_kernel.make_append_only('crove_finance.purchase_line');
 
 CREATE TABLE IF NOT EXISTS crove_finance.journal_entry (
   org_id uuid NOT NULL REFERENCES crove_kernel.tenant (org_id) ON DELETE CASCADE,
@@ -120,7 +122,8 @@ CREATE TABLE IF NOT EXISTS crove_finance.journal_entry (
   UNIQUE (org_id, source_type, source_id)
 );
 CREATE INDEX IF NOT EXISTS journal_entry_date_idx ON crove_finance.journal_entry (org_id, entry_date DESC);
-SELECT crove_kernel.apply_tenant_rls('crove_finance.journal_entry');
+SELECT crove_kernel.apply_tenant_rls('crove_finance.journal_entry', true);
+SELECT crove_kernel.make_append_only('crove_finance.journal_entry');
 
 CREATE TABLE IF NOT EXISTS crove_finance.journal_line (
   org_id uuid NOT NULL,
@@ -135,7 +138,8 @@ CREATE TABLE IF NOT EXISTS crove_finance.journal_line (
   FOREIGN KEY (org_id, entry_id) REFERENCES crove_finance.journal_entry (org_id, id) ON DELETE CASCADE,
   CHECK ((debit = 0) <> (credit = 0))
 );
-SELECT crove_kernel.apply_tenant_rls('crove_finance.journal_line');
+SELECT crove_kernel.apply_tenant_rls('crove_finance.journal_line', true);
+SELECT crove_kernel.make_append_only('crove_finance.journal_line');
 
 -- Every journal entry must balance at commit time.
 CREATE OR REPLACE FUNCTION crove_finance.check_entry_balanced() RETURNS trigger

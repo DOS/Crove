@@ -40,6 +40,7 @@ export const contract = {
           revision: z.number().int().positive(),
           lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).optional(),
           note: z.string().max(500).optional(),
+          acceptFailedChecks: z.boolean().optional(),
           idempotencyKey: zId,
         }),
       )

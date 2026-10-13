@@ -29,7 +29,14 @@ function FilePreview({ fileId, contentType, filename }: { fileId: string; conten
   if (!url) return <Spinner />;
   if (contentType.startsWith('image/')) return <img src={url} alt={filename} className="w-full rounded-lg border border-line" />;
   if (contentType === 'application/pdf')
-    return <iframe src={url} title={filename} sandbox="" className="h-[70vh] w-full rounded-lg border border-line bg-white" />;
+    return (
+      <div className="rounded-lg border border-line bg-surface-2 p-4 text-sm">
+        <p className="text-fg">{filename}</p>
+        <a href={url} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block text-brand-300 hover:underline">
+          Mở PDF trong tab mới
+        </a>
+      </div>
+    );
   return (
     <div className="rounded-lg border border-line bg-surface-2 p-4 text-sm">
       <p className="text-fg">Tệp XML hóa đơn điện tử</p>
@@ -48,6 +55,7 @@ export function InboxDetailPage() {
   const accounts = useQuery(orpc.accounts.list.queryOptions());
   const [lineAccounts, setLineAccounts] = useState<Record<number, string>>({});
   const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [acceptFailed, setAcceptFailed] = useState(false);
 
   const payload = detail.data?.payload ?? null;
   const lines = useMemo(
@@ -70,6 +78,8 @@ export function InboxDetailPage() {
   if (!item) return null;
   const pending = item.status === 'pending';
   const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
+  const currency = payload?.invoice.currency ?? 'VND';
+  const money = (value: string | null | undefined) => formatMoney(value, currency);
 
   return (
     <>
@@ -95,13 +105,14 @@ export function InboxDetailPage() {
                 </Button>
                 <Button
                   variant="primary"
-                  disabled={approve.isPending || reject.isPending || !payload}
+                  disabled={approve.isPending || reject.isPending || !payload || (failed > 0 && !acceptFailed)}
                   onClick={() =>
                     approve.mutate({
                       id,
                       revision: item.revision,
                       idempotencyKey,
                       lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
+                      ...(failed > 0 ? { acceptFailedChecks: acceptFailed } : {}),
                     })
                   }
                 >
@@ -123,8 +134,12 @@ export function InboxDetailPage() {
         </div>
       )}
       {pending && failed > 0 && (
-        <div className="mb-4">
+        <div className="mb-4 space-y-2">
           <ErrorText>Có {failed} kiểm tra không đạt. Hãy đối chiếu với chứng từ gốc trước khi duyệt.</ErrorText>
+          <label className="flex items-center gap-2 text-sm text-fg-2">
+            <input type="checkbox" checked={acceptFailed} onChange={(e) => setAcceptFailed(e.target.checked)} />
+            Tôi đã đối chiếu chứng từ gốc và vẫn muốn ghi sổ
+          </label>
         </div>
       )}
 
@@ -146,16 +161,17 @@ export function InboxDetailPage() {
               <div className="grid grid-cols-3 gap-2 sm:col-span-2">
                 <div>
                   <p className="text-xs text-fg-3">Trước thuế</p>
-                  <p className="tabular text-sm text-fg">{formatMoney(payload.invoice.subtotal)}</p>
+                  <p className="tabular text-sm text-fg">{money(payload.invoice.subtotal)}</p>
                 </div>
                 <div>
                   <p className="text-xs text-fg-3">Thuế GTGT</p>
-                  <p className="tabular text-sm text-fg">{formatMoney(payload.invoice.vatTotal)}</p>
+                  <p className="tabular text-sm text-fg">{money(payload.invoice.vatTotal)}</p>
                 </div>
                 <div>
                   <p className="text-xs text-fg-3">Tổng thanh toán</p>
-                  <p className="tabular text-base font-semibold text-fg">{formatMoney(payload.invoice.total)}</p>
+                  <p className="tabular text-base font-semibold text-fg">{money(payload.invoice.total)}</p>
                 </div>
+                <p className="text-xs text-fg-3 sm:col-span-3">Đơn vị tiền: {currency}</p>
               </div>
             </Card>
           )}
@@ -192,7 +208,7 @@ export function InboxDetailPage() {
                         {l.description}
                         <p className="text-xs text-fg-3">{l.reason}</p>
                       </td>
-                      <td className="tabular py-2 pr-2 text-right text-fg">{formatMoney(l.amount)}</td>
+                      <td className="tabular py-2 pr-2 text-right text-fg">{money(l.amount)}</td>
                       <td className="py-2">
                         <select
                           disabled={!pending}
@@ -232,8 +248,8 @@ export function InboxDetailPage() {
                       <td className="py-2 text-fg">
                         <span className="font-mono">{j.accountCode}</span> <span className="text-fg-3">{accountName(j.accountCode)}</span>
                       </td>
-                      <td className="tabular py-2 text-right text-fg">{j.debit !== '0' ? formatMoney(j.debit) : ''}</td>
-                      <td className="tabular py-2 text-right text-fg">{j.credit !== '0' ? formatMoney(j.credit) : ''}</td>
+                      <td className="tabular py-2 text-right text-fg">{j.debit !== '0' ? money(j.debit) : ''}</td>
+                      <td className="tabular py-2 text-right text-fg">{j.credit !== '0' ? money(j.credit) : ''}</td>
                     </tr>
                   ))}
                 </tbody>

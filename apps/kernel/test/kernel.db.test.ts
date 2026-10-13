@@ -210,4 +210,61 @@ suite('kernel on PostgreSQL', () => {
       .catch((e: DomainError) => e.code);
     expect(outsiderView).toBe('NOT_A_MEMBER');
   });
+
+  it('keeps recorded documents and journal entries append-only', async () => {
+    const admin = new pg.Client({ connectionString: adminUrl });
+    await admin.connect();
+    try {
+      await expect(admin.query('UPDATE crove_finance.journal_line SET debit = debit')).rejects.toThrow(/append-only/);
+      await expect(admin.query('DELETE FROM crove_finance.purchase_document')).rejects.toThrow(/append-only/);
+    } finally {
+      await admin.end();
+    }
+  });
+
+  it('only shows user accounts of the org in context', async () => {
+    const ids = await db.transaction().execute(async (trx) => {
+      await sql`SELECT crove_kernel.enter_context(${users.outsider}::uuid, ${orgB}::uuid)`.execute(trx);
+      return (await trx.selectFrom('crove_kernel.user_account').select('id').execute()).map((r) => r.id);
+    });
+    expect(ids).toEqual([users.outsider]);
+    expect(await db.selectFrom('crove_kernel.user_account').select('id').execute()).toHaveLength(0);
+  });
+
+  it('lets only owners grant admin, and never changes an owner', async () => {
+    const admin = await upsertIdentity(db, { issuer: 'test', subject: 'admin', email: 'admin@example.com', name: null });
+    await upsertIdentity(db, { issuer: 'test', subject: 'member', email: 'member@example.com', name: null });
+    await runtime.execute('kernel.member.add', { email: 'admin@example.com', role: 'admin' }, { actor: asUser(users.owner), orgId: orgA });
+    const asAdmin = { actor: asUser(admin), orgId: orgA };
+    await expect(runtime.execute('kernel.member.add', { email: 'member@example.com', role: 'admin' }, asAdmin)).rejects.toMatchObject({
+      status: 403,
+    });
+    await expect(runtime.execute('kernel.member.add', { email: 'owner@example.com', role: 'viewer' }, asAdmin)).rejects.toMatchObject({
+      status: 403,
+    });
+    await expect(runtime.execute('kernel.member.add', { email: 'member@example.com', role: 'member' }, asAdmin)).resolves.toBeTruthy();
+  });
+
+  it('records an invoice with failed checks only after explicit confirmation, and never a foreign-currency one', async () => {
+    const variant = (number: string, edit: (xml: string) => string) =>
+      new TextEncoder().encode(edit(FIXTURE.toString('utf8').replace('<SHDon>1234</SHDon>', `<SHDon>${number}</SHDon>`)));
+    const propose = async (bytes: Uint8Array) => {
+      const { fileId } = await ingest(orgA, users.owner, bytes);
+      const { proposalId } = await extractAndPropose({ runtime, store, extractor: null, today: () => '2026-10-13' }, orgA, fileId);
+      const detail = await runtime.query<{ revision: number }>('kernel.inbox.get', { id: proposalId }, { actor: asUser(users.owner), orgId: orgA });
+      return { id: proposalId, revision: detail.revision };
+    };
+    const asOwner = { actor: asUser(users.owner), orgId: orgA };
+
+    const mismatch = await propose(variant('1235', (xml) => xml.replace('<TThue>180000</TThue>', '<TThue>170000</TThue>')));
+    await expect(runtime.execute('kernel.proposal.approve', mismatch, asOwner)).rejects.toMatchObject({ code: 'CHECKS_FAILED' });
+    await expect(runtime.execute('kernel.proposal.approve', { ...mismatch, acceptFailedChecks: true }, asOwner)).resolves.toMatchObject({
+      journalEntryId: expect.any(String),
+    });
+
+    const usd = await propose(variant('1236', (xml) => xml.replace('<DVTTe>VND</DVTTe>', '<DVTTe>USD</DVTTe>')));
+    await expect(runtime.execute('kernel.proposal.approve', { ...usd, acceptFailedChecks: true }, asOwner)).rejects.toMatchObject({
+      code: 'UNSUPPORTED_CURRENCY',
+    });
+  });
 });

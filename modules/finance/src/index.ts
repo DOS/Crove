@@ -4,7 +4,7 @@ import { accountsList, documentsList, journalList, vendorsList } from './queries
 
 export { extractAndPropose, type ExtractDeps } from './extract.ts';
 export { buildJournalWorkbook } from './export.ts';
-export type { JournalEntryView } from './queries.ts';
+export { JOURNAL_EXPORT_LIMIT, type JournalEntryView } from './queries.ts';
 
 export const financeCommands = [recordPurchase];
 export const financeQueries = [fileForExtraction, purchaseLookup, vendorsList, documentsList, journalList, accountsList];

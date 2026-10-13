@@ -4,6 +4,8 @@ import { zAccountCode, zId, zRole } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
+// Commands a proposal may execute when approved (they must also declare access: 'proposal').
+const PROPOSAL_COMMANDS = new Set(['finance.purchase.record']);
 const ADMINS = ['owner', 'admin'] as const;
 
 export const addMember = defineCommand({
@@ -12,9 +14,24 @@ export const addMember = defineCommand({
   risk: 'R1',
   access: ADMINS,
   handler: async (ctx, input) => {
+    // Only owners may grant or change admin rights; nobody can change an owner through this command.
+    if (input.role === 'admin' && ctx.role !== 'owner') {
+      throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới cấp được quyền quản trị');
+    }
     const { rows } = await sql<{ id: string | null }>`SELECT crove_kernel.user_id_by_email(${input.email}) AS id`.execute(ctx.trx);
     const userId = rows[0]?.id;
     if (!userId) throw new DomainError('USER_NOT_FOUND', 404, 'Người này chưa có tài khoản, hãy nhờ họ đăng ký trước');
+    const existing = await ctx.trx
+      .selectFrom('crove_kernel.tenant_member')
+      .select('role')
+      .where('org_id', '=', ctx.orgId)
+      .where('user_id', '=', userId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (existing?.role === 'owner') throw new DomainError('FORBIDDEN', 403, 'Không đổi được vai trò của chủ sở hữu');
+    if (existing?.role === 'admin' && ctx.role !== 'owner') {
+      throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đổi được vai trò của quản trị viên');
+    }
     await ctx.trx
       .insertInto('crove_kernel.tenant_member')
       .values({ org_id: ctx.orgId, user_id: userId, role: input.role })
@@ -195,6 +212,7 @@ export const approveProposal = defineCommand({
     revision: z.number().int().positive(),
     lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).optional(),
     note: z.string().max(500).optional(),
+    acceptFailedChecks: z.boolean().optional(),
   }),
   risk: 'R3',
   access: MEMBERS,
@@ -202,9 +220,10 @@ export const approveProposal = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới duyệt được');
     const proposal = await lockPendingProposal(ctx, input.id, input.revision);
+    if (!PROPOSAL_COMMANDS.has(proposal.command)) throw new DomainError('FORBIDDEN', 403, 'Loại đề xuất không được hỗ trợ');
     const result = await ctx.run<{ documentId: string; journalEntryId: string }>(
       proposal.command,
-      { payload: proposal.payload, lineAccounts: input.lineAccounts ?? [] },
+      { payload: proposal.payload, lineAccounts: input.lineAccounts ?? [], acceptFailedChecks: input.acceptFailedChecks ?? false },
       { proposalId: proposal.id },
     );
     await ctx.trx

@@ -37,7 +37,10 @@ export function previewPurchaseJournal(lines: PreviewLine[], vatTotal: string): 
     out.push(units < 0n ? { accountCode: account, debit: '0', credit: fromUnits(-units) } : { accountCode: account, debit: fromUnits(units), credit: '0' });
   }
   const vat = toUnits(vatTotal);
-  if (vat !== 0n) out.push({ accountCode: lines.some((l) => l.debitAccount === '211') ? '1332' : '1331', debit: fromUnits(vat), credit: '0' });
+  if (vat !== 0n) {
+    const accountCode = lines.some((l) => l.debitAccount === '211') ? '1332' : '1331';
+    out.push(vat < 0n ? { accountCode, debit: '0', credit: fromUnits(-vat) } : { accountCode, debit: fromUnits(vat), credit: '0' });
+  }
   const net = out.reduce((acc, l) => acc + toUnits(l.debit) - toUnits(l.credit), 0n);
   if (net !== 0n) out.push(net > 0n ? { accountCode: '331', debit: '0', credit: fromUnits(net) } : { accountCode: '331', debit: fromUnits(-net), credit: '0' });
   return out;

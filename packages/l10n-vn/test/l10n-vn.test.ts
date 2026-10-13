@@ -59,6 +59,13 @@ describe('e-invoice XML', () => {
     expect(checkInvoice(invoice, '2026-10-13').find((c) => c.id === 'lines_sum')?.status).toBe('fail');
   });
 
+  it('fails the currency check for foreign-currency invoices', () => {
+    const invoice = parseEInvoiceXml(fixture);
+    invoice.currency = 'USD';
+    expect(checkInvoice(invoice, '2026-10-13').find((c) => c.id === 'currency')?.status).toBe('fail');
+    expect(checkInvoice(parseEInvoiceXml(fixture), '2026-10-13').some((c) => c.id === 'currency')).toBe(false);
+  });
+
   it('rejects DOCTYPE and entities', () => {
     const evil = new TextEncoder().encode('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "b">]><HDon/>');
     expect(() => parseEInvoiceXml(evil)).toThrow(EInvoiceParseError);
@@ -92,6 +99,17 @@ describe('TT133 accounting', () => {
       ['6422', '800000', '0'],
       ['1331', '180000', '0'],
       ['331', '0', '1980000'],
+    ]);
+    expect(journalIsBalanced(journal)).toBe(true);
+  });
+
+  it('credits expense and input VAT for an adjustment invoice with negative amounts', () => {
+    const lines = [{ lineNo: 1, debitAccount: '6422', amount: '-1000000' }];
+    const journal = buildPurchaseJournal(lines as Parameters<typeof buildPurchaseJournal>[0], '-100000', 'HĐ điều chỉnh');
+    expect(journal.map((j) => [j.accountCode, j.debit, j.credit])).toEqual([
+      ['6422', '0', '1000000'],
+      ['1331', '0', '100000'],
+      ['331', '1100000', '0'],
     ]);
     expect(journalIsBalanced(journal)).toBe(true);
   });

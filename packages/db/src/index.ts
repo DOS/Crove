@@ -39,3 +39,14 @@ export function createDb(pool: pg.Pool): Kysely<Database> {
 }
 
 export type Db = Kysely<Database>;
+
+// Row-level security is the tenant boundary, so the API and worker must never connect as a role that skips it.
+export async function assertRlsEnforced(pool: pg.Pool): Promise<void> {
+  const { rows } = await pool.query<{ rolname: string; rolsuper: boolean; rolbypassrls: boolean }>(
+    'SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user',
+  );
+  const role = rows[0];
+  if (!role || role.rolsuper || role.rolbypassrls) {
+    throw new Error(`database role ${role?.rolname ?? '?'} bypasses row-level security; connect as crove_app / crove_worker`);
+  }
+}

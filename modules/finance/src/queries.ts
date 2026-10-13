@@ -95,9 +95,11 @@ export interface JournalEntryView {
   document?: { series: string; number: string; issueDate: string; partyName: string; partyTaxCode: string | null };
 }
 
+export const JOURNAL_EXPORT_LIMIT = 20_000;
+
 export const journalList = defineQuery({
   name: 'finance.journal.list',
-  input: zRange,
+  input: zRange.extend({ limit: z.number().int().positive().max(JOURNAL_EXPORT_LIMIT).optional() }),
   access: ALL,
   handler: async (ctx, input): Promise<JournalEntryView[]> => {
     let entries = ctx.trx
@@ -121,7 +123,7 @@ export const journalList = defineQuery({
       .where('j.org_id', '=', ctx.orgId)
       .orderBy('j.entry_date', 'desc')
       .orderBy('j.created_at', 'desc')
-      .limit(1000);
+      .limit(input.limit ?? 1000);
     if (input.from) entries = entries.where('j.entry_date', '>=', input.from);
     if (input.to) entries = entries.where('j.entry_date', '<=', input.to);
     const rows = await entries.execute();

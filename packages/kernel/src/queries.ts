@@ -37,7 +37,8 @@ export function orgDetailQuery(options: OrgDetailOptions) {
         slug: tenant.slug,
         name: tenant.name,
         role: ctx.role ?? 'viewer',
-        inboundAddress: options.inboundDomain ? `${tenant.inbound_token}@${options.inboundDomain}` : null,
+        inboundAddress:
+          options.inboundDomain && (ctx.role === 'owner' || ctx.role === 'admin') ? `${tenant.inbound_token}@${options.inboundDomain}` : null,
         members: members.map((m) => ({ userId: m.user_id, email: m.email, displayName: m.display_name, role: m.role })),
       };
     },

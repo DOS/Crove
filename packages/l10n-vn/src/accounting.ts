@@ -94,7 +94,9 @@ export function buildPurchaseJournal(lines: ProposedLine[], vatTotal: Money, mem
   const vat = money(vatTotal);
   if (!vat.isZero()) {
     const vatAccount = lines.some((l) => l.debitAccount === '211') ? VAT_INPUT_ASSETS : VAT_INPUT_GOODS;
-    drafts.push({ lineNo: lineNo++, accountCode: vatAccount, debit: toMoney(vat), credit: '0', memo: `Thuế GTGT ${memo}` });
+    drafts.push(vat.isNegative()
+      ? { lineNo: lineNo++, accountCode: vatAccount, debit: '0', credit: toMoney(vat.negated()), memo: `Thuế GTGT ${memo}` }
+      : { lineNo: lineNo++, accountCode: vatAccount, debit: toMoney(vat), credit: '0', memo: `Thuế GTGT ${memo}` });
   }
   const net = sum(drafts.map((d) => money(d.debit).minus(money(d.credit))));
   if (!net.isZero()) {
