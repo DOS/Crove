@@ -12,7 +12,7 @@
 |---|---|
 | Current stage | **Pre-Phase 0.** No kernel code yet. |
 | Repo state | `main` @ `45000dc`: Next.js landing page + design system scaffold only (pnpm 10.6.1, TypeScript 5.7). |
-| Redaction | `DOS/Crove` is public. Technical details of DOS-side items (§11) live only in the private DOS.Me repo; this file keeps their IDs, priorities and gates. |
+| Redaction | `DOS/Crove` is public. Security-sensitive details of DOS-side fixes (§11) live only in the private DOS.Me repo; those rows keep only IDs, priorities and gates. Integration contracts Crove builds against (DOS-27 events and API, DOS-7, DOS-17) stay here. |
 
 | Phase | Time-box | Status |
 |---|---|---|
@@ -1326,7 +1326,7 @@ DOS.AI's agent memory (`dosai.agent_memory`) is not used.
 
 Only for **Crove Cloud**; self-host depends on none of these. Each item is a separate PR in the DOS.Me repo, under DOS.Me's migration rules.
 
-> **Redacted.** `DOS/Crove` is a public repo. Technical details, evidence and current state of DOS-side items live only in the private DOS.Me repo. This table keeps IDs, priorities and what each item gates.
+> **Redacted.** `DOS/Crove` is a public repo. Rows marked "Details in DOS.Me (private)" keep only IDs, priorities and what each item gates; their details and current state live in the private DOS.Me repo. Integration contracts Crove builds against (DOS-27, DOS-7, DOS-17) stay public here.
 
 | # | Priority | Item | Change | Evidence | Needed before |
 |---|---|---|---|---|---|
