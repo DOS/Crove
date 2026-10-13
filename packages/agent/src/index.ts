@@ -99,10 +99,20 @@ export class InvoiceExtractor {
   }
 }
 
+// Accepts plain decimals only ("1250000", "-200000.5"). Printed formats such as "1.250.000" or
+// "1,5" are ambiguous, so they are refused instead of being guessed.
 function cleanDecimal(value: string | null): string | null {
   if (value === null) return null;
-  const cleaned = value.replace(/[^\d.-]/g, '');
+  const cleaned = value.replace(/[\s₫]|VND|đ/gi, '');
   return /^-?\d+(\.\d+)?$/.test(cleaned) ? cleaned : null;
+}
+
+export class AmountFormatError extends Error {}
+
+function requiredAmount(value: string | null, field: string): string {
+  const amount = cleanDecimal(value);
+  if (amount === null) throw new AmountFormatError(`AI trả về số tiền không đọc được ở ${field}: ${value ?? 'trống'}`);
+  return amount;
 }
 
 function toParsed(x: z.infer<typeof zExtracted>): ParsedInvoice | null {
@@ -127,13 +137,13 @@ function toParsed(x: z.infer<typeof zExtracted>): ParsedInvoice | null {
       unit: l.unit,
       quantity: cleanDecimal(l.quantity),
       unitPrice: cleanDecimal(l.unitPrice),
-      amount: cleanDecimal(l.amount) ?? '0',
+      amount: requiredAmount(l.amount, `dòng ${i + 1}`),
       vatRate: l.vatRate,
     })),
     taxBreakdown: [],
-    subtotal: cleanDecimal(x.subtotal) ?? '0',
+    subtotal: requiredAmount(x.subtotal, 'tiền trước thuế'),
     vatTotal: cleanDecimal(x.vatTotal) ?? '0',
-    total: cleanDecimal(x.total) ?? '0',
+    total: requiredAmount(x.total, 'tổng thanh toán'),
     totalInWords: null,
     taxAuthorityCode: null,
     hasSignature: false,

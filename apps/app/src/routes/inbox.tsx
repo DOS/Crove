@@ -102,7 +102,11 @@ export function InboxPage() {
         </div>
         <Card className="p-4">
           <p className="text-xs font-medium uppercase tracking-wide text-fg-3">Forward hóa đơn qua email</p>
-          {org.data?.inboundAddress ? (
+          {org.isLoading ? (
+            <div className="mt-3">
+              <Spinner />
+            </div>
+          ) : org.data?.inboundAddress ? (
             <>
               <p className="mt-2 break-all font-mono text-sm text-fg">{org.data.inboundAddress}</p>
               <Button className="mt-3" onClick={() => void navigator.clipboard.writeText(org.data?.inboundAddress ?? '')}>

@@ -3,7 +3,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId, type PurchaseProposal } from '@crove/kernel-contract';
 import { defineQuery, type BlobStore, type Runtime } from '@crove/kernel-runtime';
-import { AiNotConfiguredError, type InvoiceExtractor } from '@crove/agent';
+import { AiNotConfiguredError, AmountFormatError, type InvoiceExtractor } from '@crove/agent';
 import {
   EInvoiceParseError,
   bookableLines,
@@ -130,7 +130,7 @@ async function readInvoice(
     }
     return { method: 'unsupported', invoice: null, error: 'Định dạng tệp chưa được hỗ trợ (chỉ nhận XML, PDF, JPG, PNG, WEBP)' };
   } catch (error) {
-    if (error instanceof EInvoiceParseError || error instanceof AiNotConfiguredError) {
+    if (error instanceof EInvoiceParseError || error instanceof AiNotConfiguredError || error instanceof AmountFormatError) {
       return { method: isXml ? 'einvoice_xml' : 'unsupported', invoice: null, error: error.message };
     }
     throw error;

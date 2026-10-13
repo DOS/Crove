@@ -97,8 +97,9 @@ export function InboxDetailPage() {
                   variant="danger"
                   disabled={reject.isPending || approve.isPending}
                   onClick={() => {
-                    const reason = window.prompt('Lý do từ chối (không bắt buộc)') ?? undefined;
-                    reject.mutate({ id, ...(reason ? { reason } : {}) });
+                    const reason = window.prompt('Lý do từ chối (không bắt buộc)');
+                    if (reason === null) return;
+                    reject.mutate({ id, ...(reason.trim() ? { reason: reason.trim().slice(0, 500) } : {}) });
                   }}
                 >
                   Từ chối

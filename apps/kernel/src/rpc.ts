@@ -13,6 +13,7 @@ export interface RpcContext {
 
 export function toORPCError(error: unknown): ORPCError<string, unknown> {
   if (error instanceof ORPCError) return error;
+  if (!(error instanceof DomainError) || error.status >= 500) console.error('[rpc]', error);
   const domain = error instanceof DomainError ? error : new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
   return new ORPCError(domain.code, { status: domain.status, message: domain.message, data: domain.details });
 }

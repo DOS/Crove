@@ -49,7 +49,7 @@ export async function handleInboundEmail(deps: InboundDeps, raw: Uint8Array, env
   if (!orgId) throw new DomainError('UNKNOWN_RECIPIENT', 404, 'Địa chỉ nhận không hợp lệ');
 
   const files = [];
-  for (const attachment of email.attachments.slice(0, 20)) {
+  for (const attachment of (email.attachments ?? []).slice(0, 20)) {
     const filename = attachment.filename ?? 'attachment';
     const contentType = acceptedType(attachment.mimeType, filename);
     if (!contentType) continue;

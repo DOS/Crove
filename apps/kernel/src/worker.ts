@@ -45,16 +45,19 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       for (;;) {
         const sent = await deps.workerDb.transaction().execute(async (trx) => {
           const { rows } = await sql<OutboxRow>`SELECT * FROM crove_kernel.outbox_claim(100)`.execute(trx);
-          for (const row of rows) {
-            if (row.type === 'kernel.file.ingested') {
-              const fileId = String(row.payload.fileId);
-              await boss.send(
-                QUEUES.extract,
-                { orgId: row.org_id, fileId },
-                { singletonKey: `${row.org_id}:${fileId}`, retryLimit: 3, retryDelay: 20, retryBackoff: true },
-              );
-            }
-          }
+          // A failed send rolls back the claim; singletonKey makes the retry idempotent.
+          await Promise.all(
+            rows
+              .filter((row) => row.type === 'kernel.file.ingested')
+              .map((row) => {
+                const fileId = String(row.payload.fileId);
+                return boss.send(
+                  QUEUES.extract,
+                  { orgId: row.org_id, fileId },
+                  { singletonKey: `${row.org_id}:${fileId}`, retryLimit: 3, retryDelay: 20, retryBackoff: true },
+                );
+              }),
+          );
           return rows.length;
         });
         if (sent < 100) break;
@@ -67,6 +70,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   };
 
   const listener = new pg.Client({ connectionString: deps.connectionString, application_name: 'crove-relay-listen' });
+  // Without a handler a dropped connection would crash the process; the 1 s timer keeps draining the outbox.
+  listener.on('error', (error) => console.error('[relay] listen connection lost', error.message));
   await listener.connect();
   await listener.query('LISTEN crove_outbox');
   listener.on('notification', () => void relay());

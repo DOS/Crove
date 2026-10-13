@@ -34,7 +34,42 @@ function body(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'host', 'content-length']);
+const HOP_BY_HOP = new Set([
+  'connection',
+  'keep-alive',
+  'transfer-encoding',
+  'upgrade',
+  'host',
+  'content-length',
+  'te',
+  'trailer',
+  'proxy-authorization',
+  'proxy-connection',
+]);
+const EXTENSION_TYPES: Record<string, string> = {
+  xml: 'application/xml',
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+};
+
+// Copies headers except hop-by-hop ones, including any the Connection header names.
+function forwardable(source: Headers, extraDrop: ReadonlySet<string> = new Set()): Headers {
+  const named = new Set(
+    (source.get('connection') ?? '')
+      .split(',')
+      .map((h) => h.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const out = new Headers();
+  source.forEach((value, key) => {
+    const name = key.toLowerCase();
+    if (!HOP_BY_HOP.has(name) && !named.has(name) && !extraDrop.has(name)) out.set(key, value);
+  });
+  return out;
+}
 // Client-supplied forwarding headers are dropped; the proxy sets X-Real-IP from the socket instead.
 const SPOOFABLE = new Set(['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'x-client-ip']);
 // Public Supabase Auth endpoints the web app needs. Everything else (notably /admin) is not reachable.
@@ -98,11 +133,7 @@ export function createHttpApp(deps: HttpDeps) {
       const url = new URL(c.req.url);
       const path = url.pathname.replace(/^\/auth\/v1/, '');
       if (!AUTH_PUBLIC_PATHS.test(path)) return c.json({ code: 'NOT_FOUND' }, 404);
-      const headers = new Headers();
-      c.req.raw.headers.forEach((value, key) => {
-        const name = key.toLowerCase();
-        if (!HOP_BY_HOP.has(name) && !SPOOFABLE.has(name)) headers.set(key, value);
-      });
+      const headers = forwardable(c.req.raw.headers, SPOOFABLE);
       const ip = clientIp(c);
       if (ip) headers.set('x-real-ip', ip);
       const method = c.req.method;
@@ -114,10 +145,8 @@ export function createHttpApp(deps: HttpDeps) {
         signal: AbortSignal.timeout(15_000),
       }).catch(() => null);
       if (!response) return c.json({ code: 'AUTH_UNAVAILABLE', message: 'Dịch vụ đăng nhập không phản hồi' }, 503);
-      const out = new Headers();
-      response.headers.forEach((value, key) => {
-        if (!HOP_BY_HOP.has(key.toLowerCase()) && key.toLowerCase() !== 'content-encoding') out.set(key, value);
-      });
+      // fetch() already decoded the body, so the upstream content-encoding no longer applies.
+      const out = forwardable(response.headers, new Set(['content-encoding']));
       return new Response(response.body, { status: response.status, headers: out });
     });
   }
@@ -168,14 +197,8 @@ export function createHttpApp(deps: HttpDeps) {
       const results = [];
       for (const file of files) {
         if (file.size > MAX_UPLOAD_BYTES) throw new DomainError('TOO_LARGE', 413, `${file.name} vượt quá 25 MB`);
-        const lower = file.name.toLowerCase();
-        const type = ACCEPTED_UPLOAD_TYPES.includes(file.type)
-          ? file.type
-          : lower.endsWith('.xml')
-            ? 'application/xml'
-            : lower.endsWith('.pdf')
-              ? 'application/pdf'
-              : null;
+        const extension = file.name.toLowerCase().split('.').pop() ?? '';
+        const type = ACCEPTED_UPLOAD_TYPES.includes(file.type) ? file.type : (EXTENSION_TYPES[extension] ?? null);
         if (!type) throw new DomainError('UNSUPPORTED_TYPE', 415, `${file.name}: chỉ nhận XML, PDF, JPG, PNG, WEBP`);
         const bytes = new Uint8Array(await file.arrayBuffer());
         const sha256 = sha256Hex(bytes);
@@ -254,9 +277,11 @@ export function createHttpApp(deps: HttpDeps) {
     app.use('/favicon.svg', serveStatic({ root }));
     const indexPath = join(config.WEB_DIST, 'index.html');
     const csp = contentSecurityPolicy(publicAuthUrl(config));
+    let indexHtml: string | null = null;
     app.get('*', async (c) => {
       c.header('content-security-policy', csp);
-      return c.html(await readFile(indexPath, 'utf8'));
+      indexHtml ??= await readFile(indexPath, 'utf8');
+      return c.html(indexHtml);
     });
   } else {
     app.get('/', (c) => c.text('Crove API is running. Build apps/app to serve the web UI from this port.'));

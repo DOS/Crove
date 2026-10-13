@@ -153,8 +153,8 @@ export const recordPurchase = defineCommand({
       )
       .execute();
 
-    // Remember the debit account carrying the largest amount for this vendor.
-    const main = [...lines].sort((a, b) => money(b.amount).comparedTo(money(a.amount)))[0];
+    // Remember the debit account carrying the largest amount (either sign) for this vendor.
+    const main = [...lines].sort((a, b) => money(b.amount).abs().comparedTo(money(a.amount).abs()))[0];
     if (main) {
       await ctx.trx
         .insertInto('crove_finance.vendor_account_rule')

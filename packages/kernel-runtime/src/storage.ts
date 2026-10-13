@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 
@@ -33,7 +33,7 @@ export class LocalDiskStore implements BlobStore {
   async put(key: string, bytes: Uint8Array): Promise<void> {
     const target = this.path(key);
     await mkdir(dirname(target), { recursive: true });
-    const tmp = `${target}.${process.pid}.tmp`;
+    const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
     await writeFile(tmp, bytes);
     await rename(tmp, target);
   }
