@@ -319,7 +319,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
       <li>Giữ Next.js cho landing page (<code>apps/web</code> hiện tại, cần SEO). App sản phẩm đặt ở một app mới, build ra file tĩnh.</li>
       <li><strong>Bỏ được code tự viết:</strong>
         <ul>
-          <li>Virtual file routes của TanStack Router dựng route tree từ manifest module mà vẫn có type, thay cho route generator và <code>AppLink</code> tự viết.</li>
+          <li>Virtual file routes của TanStack Router dựng route tree từ manifest module mà vẫn có type, nên phần tự viết thu nhỏ còn một adapter đọc manifest (route, menu, kiểm tra module có bật), không còn generator đầy đủ và <code>AppLink</code> riêng.</li>
           <li><code>validateSearch</code> bằng zod thay nuqs.</li>
           <li>Loader tích hợp sẵn với TanStack Query, có prefetch khi hover.</li>
         </ul>
@@ -327,7 +327,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
       <li><strong>Đơn giản hơn:</strong>
         <ul>
           <li>Tự host chỉ cần một thư mục file tĩnh.</li>
-          <li>CSP dạng hash dễ làm với <code>index.html</code> tĩnh, nên bỏ được spike A14.</li>
+          <li>CSP dạng hash dễ làm hơn với <code>index.html</code> tĩnh. Spike A14 vẫn giữ, chỉ đổi mục tiêu sang CSP + Trusted Types cho SPA.</li>
           <li>Không còn bề mặt tấn công RSC: React có lỗ hổng RCE ở RSC ngày 03/12/2025, và Next có bản vá bảo mật ngoài lịch dự kiến ngày 14/10/2026.</li>
         </ul>
       </li>
@@ -335,10 +335,10 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
       <li><strong>Cái giá:</strong>
         <ul>
           <li>Chặn đăng nhập chuyển sang <code>beforeLoad</code> phía client; bảo mật thật vẫn nằm ở API.</li>
-          <li><code>app.crove.com</code> và <code>api.crove.com</code> cùng site nên cookie vẫn dùng được.</li>
+          <li>Login dùng Supabase Auth (ADR-0027): cần kiểm chứng callback PKCE, refresh, logout và MFA trong SPA. Guard phía client chỉ phục vụ UX; kernel vẫn xác thực token và kiểm membership ở mọi request.</li>
         </ul>
       </li>
-      <li><strong>Cập nhật kèm:</strong> ADR-0011; trong plan: §2 (các dòng Web, i18n/URL state, Shell auth), §3.1, §3.2, §3.4, §7.5 (Shell), §9, §15 (Frontend); bỏ spike A14.</li>
+      <li><strong>Cập nhật kèm:</strong> ADR-0011; trong plan: §2 (các dòng Web, i18n/URL state, Shell auth), §3.1, §3.2, §3.4, §7.5 (Shell), §9, §15 (Frontend); đổi mục tiêu spike A14.</li>
       <li><strong>Độ tin cậy:</strong> khoảng 75%. Nếu sau này cần SSR thì lên TanStack Start trên cùng router, không phải viết lại.</li>
     </ul>
   </li>
