@@ -214,7 +214,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
     <ul>
       <li>API stateless, autoscale trên Cloud Run; worker pool scale độc lập.</li>
       <li>Mọi bảng tenant có PK <code>(org_id, id)</code>, không có <code>UNIQUE(id)</code> toàn cục, không join chéo org: về sau tách tenant sang DB khác (cell) là khả thi. Ngoại lệ là các bảng identity như <code>user_account</code>, <code>tenant</code> (thuộc control plane, xem đề xuất #5).</li>
-      <li>Đọc và ghi đã tách wrapper (<code>withTenantReadTx</code>), nên định tuyến query đọc sang read replica rất dễ.</li>
+      <li>Đọc và ghi đã tách wrapper (<code>withTenantReadTx</code>), nên về sau có thể đưa một phần query đọc sang read replica. Điều kiện: kiểm tra session và membership (<code>enter_context</code>) vẫn chạy trên primary, vì replica trễ có thể để người vừa logout hoặc vừa bị loại khỏi org đọc tiếp dữ liệu, trái cam kết thu hồi quyền ngay của plan (§4.5, §7.3, §7.5).</li>
       <li>Queue công bằng theo org; outbox lag &gt; 30 giây thì tạm dừng job nền; quota và abuse limit theo org.</li>
       <li>Audit partition theo năm; bảng nóng có TTL.</li>
       <li>Số dư sổ cái có bảng <code>period_balance</code> (Phase 2a), chỉ definer ghi sổ được ghi và đối soát hằng đêm, nên báo cáo không phải SUM lại toàn bộ sổ.</li>
@@ -225,7 +225,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
       <li>Relay outbox chạy độc quyền trên 1 instance (advisory lock): đây là trần throughput event. Suy luận (chưa đo): đủ cho giai đoạn đầu; khi lớn cần chia relay theo <code>hash(org_id)</code>.</li>
     </ul>
     <p class="lbl acc">Đề xuất</p>
-    <ul><li>Làm cell-ready ngay (đề xuất #5). Read replica cho báo cáo khi cần.</li></ul>
+    <ul><li>Làm cell-ready ngay (đề xuất #5). Read replica chỉ cho báo cáo, khi cần, và chỉ sau khi có test session bị thu hồi và thành viên bị loại trong lúc replica đang trễ.</li></ul>
   </div>
   <div class="card">
     <h4>2. Tích hợp third-party</h4>
@@ -319,7 +319,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
       <li>Giữ Next.js cho landing page (<code>apps/web</code> hiện tại, cần SEO). App sản phẩm đặt ở một app mới, build ra file tĩnh.</li>
       <li><strong>Bỏ được code tự viết:</strong>
         <ul>
-          <li>Virtual file routes của TanStack Router dựng route tree từ manifest module mà vẫn có type, thay cho route generator và <code>AppLink</code> tự viết.</li>
+          <li>Virtual file routes của TanStack Router dựng route tree từ manifest module mà vẫn có type, nên phần tự viết thu nhỏ còn một adapter đọc manifest (route, menu, kiểm tra module có bật), không còn generator đầy đủ và <code>AppLink</code> riêng.</li>
           <li><code>validateSearch</code> bằng zod thay nuqs.</li>
           <li>Loader tích hợp sẵn với TanStack Query, có prefetch khi hover.</li>
         </ul>
@@ -327,7 +327,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
       <li><strong>Đơn giản hơn:</strong>
         <ul>
           <li>Tự host chỉ cần một thư mục file tĩnh.</li>
-          <li>CSP dạng hash dễ làm với <code>index.html</code> tĩnh, nên bỏ được spike A14.</li>
+          <li>CSP dạng hash dễ làm hơn với <code>index.html</code> tĩnh. Spike A14 vẫn giữ, chỉ đổi mục tiêu sang CSP + Trusted Types cho SPA.</li>
           <li>Không còn bề mặt tấn công RSC: React có lỗ hổng RCE ở RSC ngày 03/12/2025, và Next có bản vá bảo mật ngoài lịch dự kiến ngày 14/10/2026.</li>
         </ul>
       </li>
@@ -335,10 +335,10 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
       <li><strong>Cái giá:</strong>
         <ul>
           <li>Chặn đăng nhập chuyển sang <code>beforeLoad</code> phía client; bảo mật thật vẫn nằm ở API.</li>
-          <li><code>app.crove.com</code> và <code>api.crove.com</code> cùng site nên cookie vẫn dùng được.</li>
+          <li>Login dùng Supabase Auth (ADR-0027): cần kiểm chứng callback PKCE, refresh, logout và MFA trong SPA. Guard phía client chỉ phục vụ UX; kernel vẫn xác thực token và kiểm membership ở mọi request.</li>
         </ul>
       </li>
-      <li><strong>Cập nhật kèm:</strong> ADR-0011; trong plan: §2 (các dòng Web, i18n/URL state, Shell auth), §3.1, §3.2, §3.4, §7.5 (Shell), §9, §15 (Frontend); bỏ spike A14.</li>
+      <li><strong>Cập nhật kèm:</strong> ADR-0011; trong plan: §2 (các dòng Web, i18n/URL state, Shell auth), §3.1, §3.2, §3.4, §7.5 (Shell), §9, §15 (Frontend); đổi mục tiêu spike A14.</li>
       <li><strong>Độ tin cậy:</strong> khoảng 75%. Nếu sau này cần SSR thì lên TanStack Start trên cùng router, không phải viết lại.</li>
     </ul>
   </li>
