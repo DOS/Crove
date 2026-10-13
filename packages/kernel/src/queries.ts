@@ -1,6 +1,9 @@
 import { z } from 'zod';
+import { sql } from 'kysely';
 import {
   zId,
+  zLocalDate,
+  zMoney,
   zProposalStatus,
   zPurchaseProposal,
   type PurchaseProposal,
@@ -84,14 +87,35 @@ export const inboxList = defineQuery({
   input: z.object({ status: zProposalStatus.optional() }),
   access: ALL,
   handler: async (ctx, input) => {
+    const countChecksSql = (status: 'fail' | 'warn') =>
+      sql<string>`(SELECT count(*) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(payload -> 'checks') = 'array' THEN payload -> 'checks' ELSE '[]'::jsonb END) c WHERE c ->> 'status' = ${status})`;
     let query = ctx.trx
       .selectFrom('crove_kernel.proposal')
-      .select(['id', 'kind', 'status', 'title', 'payload', 'duplicate_of', 'created_at'])
+      .select(['id', 'kind', 'status', 'title', 'duplicate_of', 'created_at'])
+      .select([
+        sql<string | null>`left(payload #>> '{seller,name}', 500)`.as('seller_name'),
+        sql<string | null>`left(payload #>> '{invoice,total}', 30)`.as('total'),
+        sql<string | null>`left(payload #>> '{invoice,issueDate}', 10)`.as('issue_date'),
+        countChecksSql('fail').as('failed_checks'),
+        countChecksSql('warn').as('warn_checks'),
+      ])
       .where('org_id', '=', ctx.orgId)
       .orderBy('created_at', 'desc')
       .limit(200);
     if (input.status) query = query.where('status', '=', input.status);
-    return (await query.execute()).map(toInboxItem);
+    return (await query.execute()).map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      status: row.status,
+      title: row.title,
+      sellerName: row.seller_name,
+      total: row.total && zMoney.safeParse(row.total).success ? row.total : null,
+      issueDate: row.issue_date && zLocalDate.safeParse(row.issue_date).success ? row.issue_date : null,
+      failedChecks: Number(row.failed_checks),
+      warnChecks: Number(row.warn_checks),
+      duplicateOf: row.duplicate_of,
+      createdAt: row.created_at.toISOString(),
+    }));
   },
 });
 

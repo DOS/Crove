@@ -1,7 +1,7 @@
 // finance.purchase.record: turns an approved purchase proposal into a vendor, a purchase document
 // and a balanced TT133 journal entry. Runs only through kernel.proposal.approve.
 import { z } from 'zod';
-import { zAccountCode, zPurchaseProposal } from '@crove/kernel-contract';
+import { BLOCKING_CHECK_IDS, zAccountCode, zPurchaseProposal } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { buildPurchaseJournal, journalIsBalanced, money, parseTaxCode, type ProposedLine } from '@crove/l10n-vn';
 
@@ -58,6 +58,9 @@ export const recordPurchase = defineCommand({
       throw new DomainError('UNSUPPORTED_CURRENCY', 422, 'Chưa hỗ trợ ghi sổ hóa đơn ngoại tệ');
     }
     const failed = payload.checks.filter((c) => c.status === 'fail');
+    if (failed.some((c) => BLOCKING_CHECK_IDS.includes(c.id))) {
+      throw new DomainError('CHECKS_BLOCKING', 422, 'Số tiền trên hóa đơn không khớp nhau nên không ghi sổ được; hãy từ chối và xin hóa đơn điều chỉnh');
+    }
     if (failed.length > 0 && !acceptFailedChecks) {
       throw new DomainError('CHECKS_FAILED', 422, `Còn ${failed.length} kiểm tra không đạt; hãy xác nhận đã đối chiếu chứng từ gốc`);
     }

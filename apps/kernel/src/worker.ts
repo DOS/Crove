@@ -5,10 +5,11 @@ import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
 import type { BlobStore, Runtime } from '@crove/kernel-runtime';
 import type { InvoiceExtractor } from '@crove/agent';
-import { extractAndPropose } from '@crove/mod-finance';
+import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
 
 export const JOB_SCHEMA = 'crove_jobs';
 export const QUEUES = { extract: 'finance-file-extract' } as const;
+const EXTRACT_RETRY_LIMIT = 3;
 
 interface OutboxRow {
   seq: string;
@@ -33,7 +34,14 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
 
   await boss.work<{ orgId: string; fileId: string }>(QUEUES.extract, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
-    await extractAndPropose({ runtime: deps.runtime, store: deps.store, extractor: deps.extractor }, job.data.orgId, job.data.fileId);
+    const { orgId, fileId } = job.data;
+    try {
+      await extractAndPropose({ runtime: deps.runtime, store: deps.store, extractor: deps.extractor }, orgId, fileId);
+    } catch (error) {
+      console.error(`[extract] file ${fileId} attempt ${job.retryCount + 1}`, error);
+      if (job.retryCount < EXTRACT_RETRY_LIMIT) throw error;
+      await recordExtractionFailure(deps.runtime, orgId, fileId, 'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML');
+    }
   });
 
   let running = false;
@@ -54,7 +62,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 return boss.send(
                   QUEUES.extract,
                   { orgId: row.org_id, fileId },
-                  { singletonKey: `${row.org_id}:${fileId}`, retryLimit: 3, retryDelay: 20, retryBackoff: true },
+                  { singletonKey: `${row.org_id}:${fileId}`, retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
                 );
               }),
           );

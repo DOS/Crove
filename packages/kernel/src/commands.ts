@@ -1,7 +1,7 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zAccountCode, zId, zRole } from '@crove/kernel-contract';
-import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
+import { DomainError, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal').
@@ -57,6 +57,7 @@ export const ingestFile = defineCommand({
   risk: 'R1',
   access: MEMBERS,
   handler: async (ctx, input) => {
+    if (input.storageKey !== fileKey(ctx.orgId, input.sha256)) throw new DomainError('INVALID_STORAGE_KEY', 400, 'Khóa lưu trữ không hợp lệ');
     const inserted = await ctx.trx
       .insertInto('crove_kernel.file')
       .values({

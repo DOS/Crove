@@ -19,6 +19,32 @@ export function fromUnits(units: bigint): string {
 export interface PreviewLine {
   debitAccount: string;
   amount: string;
+  vatRate: string | null;
+}
+
+// Integer division rounding half away from zero, like decimal.js ROUND_HALF_UP.
+function divRound(n: bigint, d: bigint): bigint {
+  const negative = n < 0n;
+  const q = ((negative ? -n : n) * 2n + d) / (2n * d);
+  return negative ? -q : q;
+}
+
+function vatPercent(rate: string | null): bigint {
+  const match = /^(\d{1,2})%$/.exec(rate?.trim() ?? '');
+  return match ? BigInt(match[1] ?? '0') : 0n;
+}
+
+// Mirrors fixedAssetVat in @crove/l10n-vn: 1332 for fixed assets, estimated per line on mixed invoices.
+function fixedAssetVat(lines: PreviewLine[], vat: bigint): bigint {
+  const assets = lines.filter((l) => l.debitAccount === '211');
+  if (assets.length === 0 || vat === 0n) return 0n;
+  if (assets.length === lines.length) return vat;
+  const estimate = divRound(
+    assets.reduce((acc, l) => acc + toUnits(l.amount) * vatPercent(l.vatRate), 0n),
+    100n * SCALE,
+  ) * SCALE;
+  const clamp = (v: bigint, lo: bigint, hi: bigint) => (v < lo ? lo : v > hi ? hi : v);
+  return vat > 0n ? clamp(estimate, 0n, vat) : clamp(estimate, vat, 0n);
 }
 
 export interface PreviewJournalLine {
@@ -37,9 +63,10 @@ export function previewPurchaseJournal(lines: PreviewLine[], vatTotal: string): 
     out.push(units < 0n ? { accountCode: account, debit: '0', credit: fromUnits(-units) } : { accountCode: account, debit: fromUnits(units), credit: '0' });
   }
   const vat = toUnits(vatTotal);
-  if (vat !== 0n) {
-    const accountCode = lines.some((l) => l.debitAccount === '211') ? '1332' : '1331';
-    out.push(vat < 0n ? { accountCode, debit: '0', credit: fromUnits(-vat) } : { accountCode, debit: fromUnits(vat), credit: '0' });
+  const assetVat = fixedAssetVat(lines, vat);
+  for (const [accountCode, value] of [['1331', vat - assetVat], ['1332', assetVat]] as const) {
+    if (value === 0n) continue;
+    out.push(value < 0n ? { accountCode, debit: '0', credit: fromUnits(-value) } : { accountCode, debit: fromUnits(value), credit: '0' });
   }
   const net = out.reduce((acc, l) => acc + toUnits(l.debit) - toUnits(l.credit), 0n);
   if (net !== 0n) out.push(net > 0n ? { accountCode: '331', debit: '0', credit: fromUnits(net) } : { accountCode: '331', debit: fromUnits(-net), credit: '0' });

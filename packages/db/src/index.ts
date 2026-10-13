@@ -24,7 +24,7 @@ export interface PoolOptions {
 }
 
 export function createPool(options: PoolOptions): pg.Pool {
-  return new pg.Pool({
+  const pool = new pg.Pool({
     connectionString: options.connectionString,
     max: options.max ?? 10,
     application_name: options.applicationName ?? 'crove',
@@ -32,6 +32,9 @@ export function createPool(options: PoolOptions): pg.Pool {
     idle_in_transaction_session_timeout: 10_000,
     types,
   });
+  // An idle client losing its connection (database restart) emits 'error'; unhandled, it would exit the process.
+  pool.on('error', (error) => console.error('[db] idle client error', error.message));
+  return pool;
 }
 
 export function createDb(pool: pg.Pool): Kysely<Database> {
@@ -46,7 +49,10 @@ export async function assertRlsEnforced(pool: pg.Pool): Promise<void> {
     'SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user',
   );
   const role = rows[0];
-  if (!role || role.rolsuper || role.rolbypassrls) {
+  const owned = await pool.query<{ n: string }>(
+    "SELECT count(*) AS n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname LIKE 'crove\\_%' AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)",
+  );
+  if (!role || role.rolsuper || role.rolbypassrls || Number(owned.rows[0]?.n ?? 0) > 0) {
     throw new Error(`database role ${role?.rolname ?? '?'} bypasses row-level security; connect as crove_app / crove_worker`);
   }
 }

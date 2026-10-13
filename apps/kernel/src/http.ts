@@ -14,6 +14,7 @@ import type { Authenticate, AuthUser } from './auth.ts';
 import { publicAuthUrl, type Config } from './config.ts';
 import { MAX_EMAIL_BYTES, handleInboundEmail, secretMatches } from './inbound.ts';
 import { createRpcHandler, resolveMembership, resolveOrg } from './rpc.ts';
+import { safeFilename, sniffType } from './sniff.ts';
 
 export interface HttpDeps {
   config: Config;
@@ -46,14 +47,6 @@ const HOP_BY_HOP = new Set([
   'proxy-authorization',
   'proxy-connection',
 ]);
-const EXTENSION_TYPES: Record<string, string> = {
-  xml: 'application/xml',
-  pdf: 'application/pdf',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  webp: 'image/webp',
-};
 
 // Copies headers except hop-by-hop ones, including any the Connection header names.
 function forwardable(source: Headers, extraDrop: ReadonlySet<string> = new Set()): Headers {
@@ -93,9 +86,16 @@ function contentSecurityPolicy(authUrl: string): string {
   ].join('; ');
 }
 
-function clientIp(c: Context): string | null {
+// The socket address, or with trusted reverse proxies the X-Forwarded-For entry they appended.
+function clientIp(c: Context, trustedHops: number): string | null {
   const incoming = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming;
-  return incoming?.socket?.remoteAddress ?? null;
+  const socket = incoming?.socket?.remoteAddress ?? null;
+  if (trustedHops === 0) return socket;
+  const chain = (c.req.header('x-forwarded-for') ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return chain[chain.length - trustedHops] ?? socket;
 }
 
 export function createHttpApp(deps: HttpDeps) {
@@ -134,7 +134,7 @@ export function createHttpApp(deps: HttpDeps) {
       const path = url.pathname.replace(/^\/auth\/v1/, '');
       if (!AUTH_PUBLIC_PATHS.test(path)) return c.json({ code: 'NOT_FOUND' }, 404);
       const headers = forwardable(c.req.raw.headers, SPOOFABLE);
-      const ip = clientIp(c);
+      const ip = clientIp(c, config.TRUSTED_PROXY_HOPS);
       if (ip) headers.set('x-real-ip', ip);
       const method = c.req.method;
       const response = await fetch(`${upstream}${path}${url.search}`, {
@@ -197,17 +197,19 @@ export function createHttpApp(deps: HttpDeps) {
       const results = [];
       for (const file of files) {
         if (file.size > MAX_UPLOAD_BYTES) throw new DomainError('TOO_LARGE', 413, `${file.name} vượt quá 25 MB`);
-        const extension = file.name.toLowerCase().split('.').pop() ?? '';
-        const type = ACCEPTED_UPLOAD_TYPES.includes(file.type) ? file.type : (EXTENSION_TYPES[extension] ?? null);
-        if (!type) throw new DomainError('UNSUPPORTED_TYPE', 415, `${file.name}: chỉ nhận XML, PDF, JPG, PNG, WEBP`);
         const bytes = new Uint8Array(await file.arrayBuffer());
+        // The content decides the type; the browser's MIME type and the extension are only hints.
+        const type = sniffType(bytes);
+        if (!type || !ACCEPTED_UPLOAD_TYPES.includes(type)) {
+          throw new DomainError('UNSUPPORTED_TYPE', 415, `${file.name}: chỉ nhận XML, PDF, JPG, PNG, WEBP`);
+        }
         const sha256 = sha256Hex(bytes);
         const storageKey = fileKey(orgId, sha256);
         await store.put(storageKey, bytes, type);
         results.push(
           await runtime.execute<{ fileId: string; duplicate: boolean }>(
             'kernel.file.ingest',
-            { filename: file.name.slice(0, 255), contentType: type, sizeBytes: bytes.byteLength, sha256, storageKey, source: 'upload' },
+            { filename: safeFilename(file.name, type), contentType: type, sizeBytes: bytes.byteLength, sha256, storageKey, source: 'upload' },
             { actor: { type: 'user', userId: user.userId }, orgId },
           ),
         );

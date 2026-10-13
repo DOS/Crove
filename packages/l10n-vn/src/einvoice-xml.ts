@@ -29,7 +29,8 @@ function text(node: unknown, key: string): string | null {
   if (!isNode(node)) return null;
   const value = node[key];
   if (value === undefined || value === null) return null;
-  if (typeof value === 'string') return value.trim() === '' ? null : value.trim();
+  // Long values are truncated: a 5 MB file must not turn into megabyte-sized names in every listing.
+  if (typeof value === 'string') return value.trim() === '' ? null : value.trim().slice(0, 2000);
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   return null;
 }
@@ -38,7 +39,8 @@ function amount(node: unknown, key: string): string | null {
   const raw = text(node, key);
   if (raw === null) return null;
   // Decree 123 XML uses "." as the decimal separator; anything else is rejected, never guessed.
-  return /^-?\d+(\.\d+)?$/.test(raw) ? toMoney(money(raw)) : null;
+  if (!/^-?\d{1,16}(\.\d{1,8})?$/.test(raw)) throw new EInvoiceParseError(`Số không hợp lệ ở thẻ ${key}: ${raw.slice(0, 40)}`);
+  return toMoney(money(raw));
 }
 
 function findHDon(value: unknown, depth = 0): Node | null {

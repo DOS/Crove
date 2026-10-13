@@ -10,7 +10,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { DomainError, Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
-import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
+import { extractAndPropose, financeCommands, financeQueries, recordExtractionFailure } from '@crove/mod-finance';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -262,9 +262,44 @@ suite('kernel on PostgreSQL', () => {
       journalEntryId: expect.any(String),
     });
 
+    const totalOff = await propose(variant('1237', (xml) => xml.replace('<TgTTTBSo>1980000</TgTTTBSo>', '<TgTTTBSo>1979999</TgTTTBSo>')));
+    const pending = await runtime.query<Array<{ id: string; failedChecks: number; total: string | null }>>(
+      'kernel.inbox.list',
+      { status: 'pending' },
+      asOwner,
+    );
+    expect(pending.find((p) => p.id === totalOff.id)).toMatchObject({ failedChecks: 1, total: '1979999' });
+    await expect(runtime.execute('kernel.proposal.approve', { ...totalOff, acceptFailedChecks: true }, asOwner)).rejects.toMatchObject({
+      code: 'CHECKS_BLOCKING',
+    });
+
     const usd = await propose(variant('1236', (xml) => xml.replace('<DVTTe>VND</DVTTe>', '<DVTTe>USD</DVTTe>')));
     await expect(runtime.execute('kernel.proposal.approve', { ...usd, acceptFailedChecks: true }, asOwner)).rejects.toMatchObject({
       code: 'UNSUPPORTED_CURRENCY',
     });
+  });
+
+  it('marks a file as failed when extraction keeps failing, so it never stays "processing"', async () => {
+    const { fileId } = await ingest(orgA, users.owner, new TextEncoder().encode('<a>unreadable</a>'));
+    await recordExtractionFailure(runtime, orgA, fileId, 'Không đọc được');
+    await recordExtractionFailure(runtime, orgA, fileId, 'Không đọc được');
+    const recent = await runtime.query<Array<{ id: string; status: string; error: string | null }>>(
+      'kernel.files.recent',
+      {},
+      { actor: asUser(users.owner), orgId: orgA },
+    );
+    expect(recent.find((f) => f.id === fileId)).toMatchObject({ status: 'failed', error: 'Không đọc được' });
+  });
+
+  it("refuses a storage key that belongs to another org", async () => {
+    const bytes = new TextEncoder().encode('<a>other org</a>');
+    const sha256 = sha256Hex(bytes);
+    await expect(
+      runtime.execute(
+        'kernel.file.ingest',
+        { filename: 'x.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey: fileKey(orgB, sha256), source: 'upload' },
+        { actor: asUser(users.owner), orgId: orgA },
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_STORAGE_KEY' });
   });
 });

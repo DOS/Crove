@@ -5,6 +5,7 @@ import PostalMime from 'postal-mime';
 import { sql } from 'kysely';
 import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '@crove/kernel-contract';
 import { DomainError, fileKey, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { safeFilename, sniffType } from './sniff.ts';
 
 export const MAX_EMAIL_BYTES = 40 * 1024 * 1024;
 
@@ -15,17 +16,6 @@ export function secretMatches(header: string | undefined, secret: string): boole
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function acceptedType(contentType: string, filename: string): string | null {
-  const type = contentType.toLowerCase().split(';')[0]?.trim() ?? '';
-  if (ACCEPTED_UPLOAD_TYPES.includes(type)) return type;
-  const lower = filename.toLowerCase();
-  if (lower.endsWith('.xml')) return 'application/xml';
-  if (lower.endsWith('.pdf')) return 'application/pdf';
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-  if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.webp')) return 'image/webp';
-  return null;
-}
 
 export interface InboundDeps {
   runtime: Runtime;
@@ -50,17 +40,18 @@ export async function handleInboundEmail(deps: InboundDeps, raw: Uint8Array, env
 
   const files = [];
   for (const attachment of (email.attachments ?? []).slice(0, 20)) {
-    const filename = attachment.filename ?? 'attachment';
-    const contentType = acceptedType(attachment.mimeType, filename);
-    if (!contentType) continue;
     const content = attachment.content;
     const bytes =
       typeof content === 'string' ? new TextEncoder().encode(content) : content instanceof Uint8Array ? content : new Uint8Array(content);
     if (bytes.byteLength === 0 || bytes.byteLength > MAX_UPLOAD_BYTES) continue;
+    // Signatures, logos and other attachments that are not invoices are skipped by their content.
+    const contentType = sniffType(bytes);
+    if (!contentType || !ACCEPTED_UPLOAD_TYPES.includes(contentType)) continue;
+    const filename = safeFilename(attachment.filename ?? 'tep-dinh-kem', contentType);
     const sha256 = sha256Hex(bytes);
     const storageKey = fileKey(orgId, sha256);
     await deps.store.put(storageKey, bytes, contentType);
-    files.push({ filename: filename.slice(0, 255), contentType, sizeBytes: bytes.byteLength, sha256, storageKey, source: 'email' as const });
+    files.push({ filename, contentType, sizeBytes: bytes.byteLength, sha256, storageKey, source: 'email' as const });
   }
   const messageId = email.messageId ?? `sha256:${sha256Hex(raw)}`;
   return deps.runtime.execute<{ duplicate: boolean; fileIds: string[] }>(

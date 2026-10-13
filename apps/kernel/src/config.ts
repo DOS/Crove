@@ -10,6 +10,10 @@ const optional = z
 
 const schema = z.object({
   PORT: z.coerce.number().int().positive().default(8080),
+  // Loopback by default; the Docker image sets 0.0.0.0 and compose publishes the port on loopback.
+  HOST: z.string().default('127.0.0.1'),
+  // Number of reverse proxies in front of Crove whose X-Forwarded-For entries are trusted (0 = none).
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   PUBLIC_URL: z.string().default('http://localhost:8080'),
   DATABASE_URL: z.string().min(1),
   WORKER_DATABASE_URL: optional,
@@ -55,6 +59,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (config.AUTH_JWT_SECRET && config.AUTH_JWT_SECRET.length < 32) {
     throw new Error('AUTH_JWT_SECRET must be at least 32 characters');
+  }
+  if (config.INBOUND_SECRET && config.INBOUND_SECRET.length < 32) {
+    throw new Error('INBOUND_SECRET must be at least 32 characters');
   }
   if (!isLocalUrl(config.PUBLIC_URL)) {
     if (config.AUTH_JWT_SECRET && SAMPLE_SECRETS.has(config.AUTH_JWT_SECRET)) {

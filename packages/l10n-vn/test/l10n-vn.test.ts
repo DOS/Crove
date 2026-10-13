@@ -59,6 +59,29 @@ describe('e-invoice XML', () => {
     expect(checkInvoice(invoice, '2026-10-13').find((c) => c.id === 'lines_sum')?.status).toBe('fail');
   });
 
+  it('requires amounts to match exactly, since the payable is posted at the invoice total', () => {
+    const invoice = parseEInvoiceXml(fixture);
+    invoice.total = '1979999';
+    expect(checkInvoice(invoice, '2026-10-13').find((c) => c.id === 'total')?.status).toBe('fail');
+  });
+
+  it('fails dates that do not exist', () => {
+    const invoice = parseEInvoiceXml(fixture);
+    invoice.issueDate = '2026-02-30';
+    expect(checkInvoice(invoice, '2026-10-13').find((c) => c.id === 'issue_date')?.status).toBe('fail');
+  });
+
+  it('rejects malformed or oversized amounts instead of guessing them', () => {
+    const variant = (from: string, to: string) => new TextEncoder().encode(fixture.toString('utf8').replace(from, to));
+    expect(() => parseEInvoiceXml(variant('<TgTTTBSo>1980000</TgTTTBSo>', `<TgTTTBSo>${'9'.repeat(40)}</TgTTTBSo>`))).toThrow(EInvoiceParseError);
+    expect(() => parseEInvoiceXml(variant('<TgTTTBSo>1980000</TgTTTBSo>', '<TgTTTBSo>1.980.000</TgTTTBSo>'))).toThrow(/TgTTTBSo/);
+  });
+
+  it('truncates oversized text from the XML', () => {
+    const xml = fixture.toString('utf8').replace('<Ten>CÔNG TY TNHH DỊCH VỤ MẪU</Ten>', `<Ten>${'A'.repeat(5000)}</Ten>`);
+    expect(parseEInvoiceXml(new TextEncoder().encode(xml)).seller.name).toHaveLength(2000);
+  });
+
   it('fails the currency check for foreign-currency invoices', () => {
     const invoice = parseEInvoiceXml(fixture);
     invoice.currency = 'USD';

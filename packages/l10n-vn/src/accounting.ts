@@ -5,6 +5,7 @@ import { lineContribution, type InvoiceLine, type ParsedInvoice } from './invoic
 export const PAYABLE_ACCOUNT = '331';
 export const VAT_INPUT_GOODS = '1331';
 export const VAT_INPUT_ASSETS = '1332';
+export const FIXED_ASSETS = '211';
 export const FIXED_ASSET_THRESHOLD = '30000000';
 
 export interface AccountSuggestion {
@@ -92,11 +93,12 @@ export function buildPurchaseJournal(lines: ProposedLine[], vatTotal: Money, mem
       : { lineNo: lineNo++, accountCode: account, debit: toMoney(value), credit: '0', memo });
   }
   const vat = money(vatTotal);
-  if (!vat.isZero()) {
-    const vatAccount = lines.some((l) => l.debitAccount === '211') ? VAT_INPUT_ASSETS : VAT_INPUT_GOODS;
-    drafts.push(vat.isNegative()
-      ? { lineNo: lineNo++, accountCode: vatAccount, debit: '0', credit: toMoney(vat.negated()), memo: `Thuế GTGT ${memo}` }
-      : { lineNo: lineNo++, accountCode: vatAccount, debit: toMoney(vat), credit: '0', memo: `Thuế GTGT ${memo}` });
+  const assetVat = fixedAssetVat(lines, vat);
+  for (const [account, value] of [[VAT_INPUT_GOODS, vat.minus(assetVat)], [VAT_INPUT_ASSETS, assetVat]] as const) {
+    if (value.isZero()) continue;
+    drafts.push(value.isNegative()
+      ? { lineNo: lineNo++, accountCode: account, debit: '0', credit: toMoney(value.negated()), memo: `Thuế GTGT ${memo}` }
+      : { lineNo: lineNo++, accountCode: account, debit: toMoney(value), credit: '0', memo: `Thuế GTGT ${memo}` });
   }
   const net = sum(drafts.map((d) => money(d.debit).minus(money(d.credit))));
   if (!net.isZero()) {
@@ -105,6 +107,30 @@ export function buildPurchaseJournal(lines: ProposedLine[], vatTotal: Money, mem
       : { lineNo: lineNo++, accountCode: PAYABLE_ACCOUNT, debit: toMoney(net.negated()), credit: '0', memo });
   }
   return drafts;
+}
+
+// Whole-number VAT rates such as "10%"; exempt or untaxed lines ("KCT", "KKKNT") count as 0.
+export function vatPercent(rate: string | null): number {
+  const match = /^(\d{1,2})%$/.exec(rate?.trim() ?? '');
+  return match ? Number(match[1]) : 0;
+}
+
+// Input VAT on fixed assets goes to 1332, the rest to 1331. For a mixed invoice the asset share is
+// estimated from each asset line's rate, rounded to whole VND and capped at the invoice VAT.
+export function fixedAssetVat(lines: Array<Pick<ProposedLine, 'debitAccount' | 'amount' | 'vatRate'>>, vat: ReturnType<typeof money>) {
+  const assets = lines.filter((l) => l.debitAccount === FIXED_ASSETS);
+  if (assets.length === 0 || vat.isZero()) return money(0);
+  if (assets.length === lines.length) return vat;
+  const estimate = sum(assets.map((l) => money(l.amount).times(vatPercent(l.vatRate)).dividedBy(100))).toDecimalPlaces(0);
+  return vat.isPositive() ? minOf(maxOf(estimate, money(0)), vat) : maxOf(minOf(estimate, money(0)), vat);
+}
+
+function minOf(a: ReturnType<typeof money>, b: ReturnType<typeof money>) {
+  return a.lessThan(b) ? a : b;
+}
+
+function maxOf(a: ReturnType<typeof money>, b: ReturnType<typeof money>) {
+  return a.greaterThan(b) ? a : b;
 }
 
 export function journalIsBalanced(lines: JournalLineDraft[]): boolean {

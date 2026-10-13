@@ -1,7 +1,7 @@
 // Worker job: read a received file, extract the invoice, run deterministic checks and raise a proposal.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zId, type PurchaseProposal } from '@crove/kernel-contract';
+import { zId, zPurchaseProposal, type PurchaseProposal } from '@crove/kernel-contract';
 import { defineQuery, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { AiNotConfiguredError, AmountFormatError, type InvoiceExtractor } from '@crove/agent';
 import {
@@ -137,6 +137,18 @@ async function readInvoice(
   }
 }
 
+// Marks a file as unreadable so it leaves the "processing" state; a no-op if it already has a result.
+export async function recordExtractionFailure(runtime: Runtime, orgId: string, fileId: string, message: string): Promise<void> {
+  const actor = { type: 'system' as const, component: 'finance.extract' };
+  const file = await runtime.query<{ hasExtraction: boolean } | null>('finance.extraction.file', { fileId }, { actor, orgId });
+  if (!file || file.hasExtraction) return;
+  await runtime.execute(
+    'kernel.extraction.record',
+    { fileId, method: 'unsupported', status: 'failed', result: null, checks: [], error: message, proposal: null },
+    { actor, orgId },
+  );
+}
+
 export async function extractAndPropose(deps: ExtractDeps, orgId: string, fileId: string): Promise<{ proposalId: string | null }> {
   const actor = { type: 'system' as const, component: 'finance.extract' };
   const file = await deps.runtime.query<{
@@ -196,6 +208,10 @@ export async function extractAndPropose(deps: ExtractDeps, orgId: string, fileId
     sourceFileId: fileId,
     extractionMethod: method === 'unsupported' ? 'einvoice_xml' : method,
   };
+  // AI output can carry values the schema refuses (for example an impossible date); never store those as a proposal.
+  if (!zPurchaseProposal.safeParse(payload).success) {
+    return fail('Dữ liệu đọc được không hợp lệ (ví dụ ngày lập hóa đơn); hãy kiểm tra chứng từ gốc', checks);
+  }
 
   return deps.runtime.execute<{ proposalId: string | null }>(
     'kernel.extraction.record',

@@ -64,8 +64,8 @@ async function main() {
     await assertRlsEnforced(pool);
     const authenticate = createAuthenticator(config, db);
     const app = createHttpApp({ config, runtime, store, authenticate, pool, aiEnabled: buildExtractor(config) !== null });
-    const server = serve({ fetch: app.fetch, port: config.PORT, hostname: '0.0.0.0' });
-    console.log(`[api] listening on :${config.PORT}`);
+    const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });
+    console.log(`[api] listening on ${config.HOST}:${config.PORT}`);
     stops.push(async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await pool.end();

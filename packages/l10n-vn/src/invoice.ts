@@ -91,7 +91,7 @@ export function checkInvoice(
   const linesTotal = sum(invoice.lines.map(lineContribution));
 
   checks.push(
-    approxEqual(linesTotal, invoice.subtotal)
+    approxEqual(linesTotal, invoice.subtotal, '0')
       ? { id: 'lines_sum', status: 'pass', message: 'Tổng các dòng khớp tiền trước thuế' }
       : {
           id: 'lines_sum',
@@ -101,7 +101,7 @@ export function checkInvoice(
   );
 
   checks.push(
-    approxEqual(money(invoice.subtotal).plus(money(invoice.vatTotal)), invoice.total)
+    approxEqual(money(invoice.subtotal).plus(money(invoice.vatTotal)), invoice.total, '0')
       ? { id: 'total', status: 'pass', message: 'Tiền trước thuế + VAT khớp tổng thanh toán' }
       : { id: 'total', status: 'fail', message: 'Tiền trước thuế + VAT lệch tổng thanh toán' },
   );
@@ -109,7 +109,7 @@ export function checkInvoice(
   if (invoice.taxBreakdown.length > 0) {
     const vat = sum(invoice.taxBreakdown.map((t) => t.vatAmount));
     checks.push(
-      approxEqual(vat, invoice.vatTotal)
+      approxEqual(vat, invoice.vatTotal, '0')
         ? { id: 'vat_breakdown', status: 'pass', message: 'Bảng thuế suất khớp tổng VAT' }
         : { id: 'vat_breakdown', status: 'fail', message: 'Bảng thuế suất lệch tổng VAT' },
     );
@@ -124,7 +124,7 @@ export function checkInvoice(
     checks.push({ id: 'seller_tax_code', status: 'pass', message: `MST người bán ${seller.normalized} hợp lệ` });
   }
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(invoice.issueDate)) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(invoice.issueDate) || !new Date(`${invoice.issueDate}T00:00:00Z`).toISOString().startsWith(invoice.issueDate)) {
     checks.push({ id: 'issue_date', status: 'fail', message: 'Ngày lập hóa đơn không hợp lệ' });
   } else if (invoice.issueDate > today) {
     checks.push({ id: 'issue_date', status: 'warn', message: 'Ngày lập hóa đơn ở tương lai' });

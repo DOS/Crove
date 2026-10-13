@@ -3,36 +3,42 @@ import { z } from 'zod';
 // Wire conventions: snake_case is not used on the wire for the MVP API; decimals are strings,
 // accounting dates are YYYY-MM-DD, ids are UUIDs.
 export const zId = z.uuid();
-export const zMoney = z.string().regex(/^-?\d+(\.\d+)?$/, 'decimal string');
-export const zLocalDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD');
+// At most 16 integer digits, the size of the numeric(20,4) money columns.
+export const zMoney = z.string().regex(/^-?\d{1,16}(\.\d{1,8})?$/, 'decimal string');
+export const zLocalDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
+  .refine((v) => new Date(`${v}T00:00:00Z`).toISOString().startsWith(v), 'not a calendar date');
+// Failed checks that make an invoice impossible to post as-is; confirming them does not help.
+export const BLOCKING_CHECK_IDS: readonly string[] = ['currency', 'lines_sum', 'total'];
 export const zAccountCode = z.string().regex(/^\d{3,5}$/);
 export const zRole = z.enum(['owner', 'admin', 'member', 'viewer']);
 export const zSlug = z.string().regex(/^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$/);
 
 export const zCheck = z.object({
-  id: z.string(),
+  id: z.string().max(50),
   status: z.enum(['pass', 'warn', 'fail']),
-  message: z.string(),
+  message: z.string().max(1000),
 });
 
 export const zPartyRef = z.object({
-  name: z.string(),
-  taxCode: z.string().nullable(),
-  address: z.string().nullable(),
-  email: z.string().nullable(),
-  phone: z.string().nullable(),
+  name: z.string().max(500),
+  taxCode: z.string().max(20).nullable(),
+  address: z.string().max(1000).nullable(),
+  email: z.string().max(320).nullable(),
+  phone: z.string().max(50).nullable(),
 });
 
 export const zProposedLine = z.object({
   lineNo: z.number().int().positive(),
-  description: z.string(),
-  unit: z.string().nullable(),
+  description: z.string().max(2000),
+  unit: z.string().max(100).nullable(),
   quantity: zMoney.nullable(),
   unitPrice: zMoney.nullable(),
   amount: zMoney,
-  vatRate: z.string().nullable(),
+  vatRate: z.string().max(20).nullable(),
   debitAccount: zAccountCode,
-  reason: z.string(),
+  reason: z.string().max(500),
 });
 
 export const zJournalLineDraft = z.object({
@@ -40,7 +46,7 @@ export const zJournalLineDraft = z.object({
   accountCode: zAccountCode,
   debit: zMoney,
   credit: zMoney,
-  memo: z.string(),
+  memo: z.string().max(1000),
 });
 
 // Payload stored on a finance.purchase proposal and executed by finance.purchase.record.
@@ -48,20 +54,20 @@ export const zPurchaseProposal = z.object({
   seller: zPartyRef,
   buyer: zPartyRef,
   invoice: z.object({
-    template: z.string().nullable(),
-    series: z.string(),
-    number: z.string(),
+    template: z.string().max(50).nullable(),
+    series: z.string().max(50),
+    number: z.string().max(50),
     issueDate: zLocalDate,
-    currency: z.string(),
-    paymentMethod: z.string().nullable(),
-    taxAuthorityCode: z.string().nullable(),
+    currency: z.string().max(10),
+    paymentMethod: z.string().max(100).nullable(),
+    taxAuthorityCode: z.string().max(100).nullable(),
     subtotal: zMoney,
     vatTotal: zMoney,
     total: zMoney,
   }),
-  lines: z.array(zProposedLine).min(1),
-  journal: z.array(zJournalLineDraft).min(2),
-  checks: z.array(zCheck),
+  lines: z.array(zProposedLine).min(1).max(1000),
+  journal: z.array(zJournalLineDraft).min(2).max(1010),
+  checks: z.array(zCheck).max(50),
   sourceFileId: zId,
   extractionMethod: z.enum(['einvoice_xml', 'pdf_text_ai', 'image_ai']),
 });

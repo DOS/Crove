@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { BLOCKING_CHECK_IDS } from '@crove/kernel-contract';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Card, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
@@ -78,6 +79,7 @@ export function InboxDetailPage() {
   if (!item) return null;
   const pending = item.status === 'pending';
   const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
+  const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
   const currency = payload?.invoice.currency ?? 'VND';
   const money = (value: string | null | undefined) => formatMoney(value, currency);
 
@@ -106,7 +108,7 @@ export function InboxDetailPage() {
                 </Button>
                 <Button
                   variant="primary"
-                  disabled={approve.isPending || reject.isPending || !payload || (failed > 0 && !acceptFailed)}
+                  disabled={approve.isPending || reject.isPending || !payload || blocked || (failed > 0 && !acceptFailed)}
                   onClick={() =>
                     approve.mutate({
                       id,
@@ -134,7 +136,12 @@ export function InboxDetailPage() {
           <ErrorText>{errorMessage(approve.error ?? reject.error)}</ErrorText>
         </div>
       )}
-      {pending && failed > 0 && (
+      {pending && blocked && (
+        <div className="mb-4">
+          <ErrorText>Số tiền trên hóa đơn không khớp nhau (hoặc là hóa đơn ngoại tệ) nên không ghi sổ được. Hãy từ chối và xin người bán hóa đơn điều chỉnh.</ErrorText>
+        </div>
+      )}
+      {pending && !blocked && failed > 0 && (
         <div className="mb-4 space-y-2">
           <ErrorText>Có {failed} kiểm tra không đạt. Hãy đối chiếu với chứng từ gốc trước khi duyệt.</ErrorText>
           <label className="flex items-center gap-2 text-sm text-fg-2">

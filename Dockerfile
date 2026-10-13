@@ -10,6 +10,7 @@ RUN pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "
 
 FROM node:26-slim
 ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
     STORAGE_DIR=/data/files \
     WEB_DIST=/app/apps/app/dist \
     MIGRATIONS_DIR=/app/supabase/migrations
