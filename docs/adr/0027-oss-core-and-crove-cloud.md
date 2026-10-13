@@ -1,0 +1,30 @@
+# 0027. Open-source core vs Crove Cloud, and auth on Supabase Auth
+
+- Status: accepted
+- Date: 2026-10-13
+- Deciders: owner (JOY)
+- Supersedes: ADR-0026 decision 3's 4-6 week time-box (now a one-week MVP, open source first) and decision 4 (DOS ID via OIDC first); the "self-host deferred" row of the Phase 0 deferral table
+
+## Context
+
+The plan mixed two products: an open-source Business OS for any developer, and Crove OS run by DOS. That put DOS ID, DOS.AI and DOS org sync on the core's critical path and deferred self-hosting. An OSS product that cannot run on a laptop without DOS services is not usable by other developers.
+
+For login, the options were OIDC only (self-hosters must bring an IdP), a library such as Better Auth inside the kernel, or Supabase Auth (GoTrue). DOS ID is itself Supabase Auth, and its project signs access tokens with ES256 and publishes a JWKS. The full self-hosted Supabase stack is about ten containers and several GB of RAM, and most of it (PostgREST, Realtime, Edge Functions) is not used or conflicts with the single write path.
+
+A stack review on 2026-10-13 (docs/recommendations) found the Next.js app shell used mostly as a client SPA, and recommended Vite + TanStack Router.
+
+## Decision
+
+1. `DOS/Crove` is the open-source core. It contains no DOS-only features and must run with `docker compose up` on a laptop: Postgres 17, Supabase Auth, Crove (api + worker + UI), and Mailpit for local email. Every external dependency sits behind an adapter with a generic default.
+2. A private `crove-cloud` repo holds Crove OS for DOS: DOS configuration, DOS.AI defaults and credits, DOS org sync, managed connectors, infrastructure and the `app.crove.io` deployment. It depends on the core; the core never depends on it.
+3. Auth uses Supabase Auth only (no other Supabase services). The SPA uses the Supabase Auth client; the kernel verifies access tokens (JWKS or the deployment's JWT secret), maps them to `user_account` and keeps org membership in Crove. Crove Cloud points the same code at DOS's Supabase Auth.
+4. The app shell is a Vite + TanStack Router SPA served by the kernel on the same origin. Next.js stays for the landing page.
+
+## Consequences
+
+- Self-host works from day one; Crove Cloud is configuration plus a thin private layer.
+- Email + password, magic link, social and OIDC providers, MFA and password reset come from Supabase Auth instead of custom code.
+- Supabase Auth owns and migrates its `auth` schema. This is an accepted exception to "no vendor self-migration": it touches only `auth`, never `crove_*`.
+- Core auth is coupled to the Supabase Auth API. Swapping it later means a new identity adapter; `user_account` keeps `(issuer, subject)` so users survive the swap.
+- Open spike: whether Supabase Auth runs on the plain `postgres:17` image or needs Supabase's Postgres image.
+- Cloud-only parts of the plan body (DOS prerequisites, Cloud topology, costs) move to `crove-cloud` when it is created.

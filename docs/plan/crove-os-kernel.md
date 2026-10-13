@@ -16,9 +16,9 @@
 
 | Phase | Time-box | Status |
 |---|---|---|
-| 0 Thin kernel + Document Inbox (revised, see Decisions) | 4-6 weeks | Not started |
+| MVP step 1 (open source, local) then step 2 (Crove Cloud), see MVP below | 1 week | In progress |
 | 0b Finance spike | 2 weeks, parallel | Not started |
-| 1 Kernel v0 hardening (residual work only, see revised Phase 0) | 8 weeks | Not started |
+| 1 Kernel v0 hardening (residual work after the MVP) | 8 weeks | Not started |
 | 2a Finance A1 (scope set by interviews) | 10 weeks | Not started |
 | 2b Finance A2 | 8 weeks | Not started |
 | 3 CRM + Calendar | 12 weeks | Waits for wedge-customer demand (Decision 2) |
@@ -27,51 +27,50 @@
 | 6 Sign | 8 weeks | Waits for wedge-customer demand (Decision 2) |
 | 7 HRM | 10 weeks | Waits for wedge-customer demand (Decision 2) |
 
-Day-0 checklist: §12. Exit criteria per phase: §13, except Phase 0, which is replaced by the revised Phase 0 below.
+Day-0 checklist: §12. Exit criteria per phase: §13, except Phase 0, which is replaced by the MVP below.
 
 ### Decisions (2026-10-13)
 
-These decisions override any conflicting text in the body of this plan. Rationale: [ADR-0026](../adr/0026-wedge-scope-and-phase-0.md).
+These decisions override any conflicting text in the body of this plan. Rationale: [ADR-0026](../adr/0026-wedge-scope-and-phase-0.md), [ADR-0027](../adr/0027-oss-core-and-crove-cloud.md).
 
-1. **Wedge first.** Start with the Document Inbox: founders forward invoices and bank statements, AI proposes the bookkeeping, a human approves. First customers: startups and SMEs that use an outsourced accounting firm; test selling through accounting firms (one firm keeps books for many companies). The owner runs 10-15 interviews (founders + accounting firms) before Phase 2a scope is frozen; script below.
+1. **Wedge first.** Start with the Document Inbox: founders forward invoices and bank statements, AI proposes the bookkeeping, a human approves. First customers: startups and SMEs that use an outsourced accounting firm; test selling through accounting firms. The owner runs 10-15 interviews (founders + accounting firms) before Phase 2a scope is frozen; script below.
 2. **Scope.** Committed: kernel + Accounting. CRM, Service, Social, Sign and HRM (Phases 3-7) start only when wedge customers pull for them.
-3. **Lighter Phase 0.** Build now what is expensive to change later; defer the rest (table below). Phase 0 is time-boxed to 4-6 weeks, not 2.
-4. **Identity sequencing.** DOS ID login (OIDC) from day one; org membership is managed in Crove at first; DOS org linking (`external_org_id`, DOS-1/26/27) comes when per-org billing through DOS.AI is needed (DOS-7, DOS-17). The DOS ecosystem stays the goal; Phase 0 no longer waits on DOS.Me PRs.
-5. **Protected-path review.** No manual owner approval label (the owner does not review code). Instead: invariant suite taken from base, a security reviewer agent on every protected-path PR, and an external security review before the first external tenant. Agents keep merging after review passes.
-6. **Forks frozen.** No fork has real users (confirmed by the owner; prod stats show only a few test accounts). No one-way sync, parity checklists, `legacy_id_map` imports or rollback windows. Drop the Phase 2a Twenty -> party sync and the fork import/parity exit criteria in Phases 3-6. Shutting the forks down is a DOS-side decision.
-7. **Repo visibility.** Stay public; DOS-side implementation details stay in the private DOS.Me repo. gitleaks runs in CI since 2026-10-13, plus a local pre-commit hook after `pnpm install` when gitleaks is installed. G1 runs in the same `Secret scan` job: generic Supabase identifier rules in `.gitleaks.toml`, plus literal refs from the `G1_BLOCKLIST` Actions secret (add Crove's own project refs once they exist). `Secret scan` is a required check on `main`.
+3. **Rigor by stage.** Build now what is expensive to change later; defer the rest (table below).
+4. **Two products, one codebase.** This repo is the open-source Business OS: it serves every developer, has no DOS-only features and must run on a laptop with one command (`docker compose up`), with no DOS service, no Supabase account and no cloud spend. Crove OS for DOS ("Crove Cloud") lives in a private `crove-cloud` repo: DOS configuration, DOS.AI defaults and credits, DOS org sync, managed Vietnamese connectors, infrastructure and the `app.crove.io` deployment. It builds on this repo's images; this repo never depends on it. Body sections that are Cloud-only (§11, Cloud topology, costs) move there when that repo is created. Self-host is a hard requirement, not a deferral.
+5. **Auth = Supabase Auth (GoTrue) + Postgres, not the full Supabase stack.** Self-host compose runs Postgres 17, Supabase Auth and Crove (plus Mailpit locally): email + password, magic link, Google/Microsoft/OIDC providers, MFA and password reset come from Supabase Auth. Crove Cloud uses the same code pointed at DOS's Supabase Auth (accounts shared with DOS ID). The kernel verifies Supabase access tokens (JWKS when asymmetric keys are on, otherwise the deployment's JWT secret), maps them to `user_account`, and keeps org membership in Crove. PostgREST, Realtime, Storage, Edge Functions and Studio are not used. Open spike: Supabase Auth on the plain `postgres:17` image vs Supabase's Postgres image.
+6. **App shell = Vite + TanStack Router SPA, served by the kernel on the same origin** (per the 2026-10-13 stack review). Next.js stays for the landing page (`apps/web`). One container serves API, worker and UI for self-host.
+7. **Protected-path review.** No manual owner approval label. Instead: invariant suite taken from base, a security reviewer agent on every protected-path PR, and an external security review before the first external tenant.
+8. **Forks frozen.** No fork has real users (confirmed by the owner). No one-way sync, parity checklists, `legacy_id_map` imports or rollback windows; drop the Phase 2a Twenty -> party sync and the fork import/parity exit criteria in Phases 3-6.
+9. **Repo visibility.** Stay public. gitleaks runs in CI since 2026-10-13, plus a local pre-commit hook after `pnpm install` when gitleaks is installed. G1 runs in the same `Secret scan` job: generic Supabase identifier rules in `.gitleaks.toml`, plus literal refs from the `G1_BLOCKLIST` Actions secret (add Crove's own project refs once they exist). `Secret scan` is a required check on `main`.
 
-### Phase 0, revised (4-6 weeks): thin kernel + Document Inbox
+### MVP
 
-**Build:**
-- Kernel tenancy: shared tables with `org_id`, `PRIMARY KEY (org_id, id)`, composite FKs, RLS; `enter_context` derives org and actor from the DB (no HMAC seal yet); login roles own nothing and have no table grants; one role per module.
-- One write path: `execute()` with auth, zod, RBAC, idempotency, handler, outbox, append-only audit; proposals + Inbox items for R2/R3.
-- Money as NUMERIC, decimals as strings on the wire; committed idempotent migrations only.
-- Identity: DOS ID login via OIDC, Crove session JWT + rotating refresh token, Crove-managed membership (owner invites).
-- Party (create/list/search), file upload, e-invoice XML extraction in the `crove-extract` sandbox (deterministic, no LLM).
-- Document Inbox: upload or forward an email -> XML parsed -> proposal (vendor party + purchase document draft) -> approve in the Inbox -> `execute()`.
-- Worker + outbox relay on pg-boss; worker-first deploys to beta on Cloud Run; minimal shell (login, org, party list, Inbox).
-- CI: lint, typecheck, unit tests, migration replay on the Supabase CLI.
+**Step 1, open source, local (no spend):** `docker compose up` gives a working flow: sign up -> create org -> upload or forward an invoice -> e-invoice XML parsed deterministically, PDF/image read by any OpenAI-compatible model -> proposal in the Inbox (vendor, purchase document, suggested TT133 entry) -> approve/edit/reject -> documents, vendors and entries lists -> Excel export for the accountant.
 
-**Exit criteria:**
-1. On beta: log in with DOS ID -> create org -> forward an e-invoice email -> proposal appears in the Inbox -> approve -> vendor and document exist, with audit rows and an activity on the timeline.
-2. Generated cross-org RLS tests: 0 leaks. No write path outside `execute()` (arch test + pgTAP).
-3. Audit rows cannot be updated or deleted; the same email resent creates no duplicates.
-4. Worker-first deploy proven; a test alert reaches the owner's phone.
-5. The 10-15 customer interviews are done and summarized; Phase 2a scope is adjusted from them.
+**Step 2, Crove Cloud:** the same image with DOS configuration (DOS Supabase Auth, DOS.AI), deployed to `app.crove.io`. Needs owner approval for spend, a Cloudflare token for DNS and email routing, and one DOS.Me change (add `app.crove.io` to the DOS Supabase Auth redirect URLs).
 
-**Phase 1 after this** keeps only what Phase 0 does not cover: PDF/image extraction with evidence and the Vietnamese benchmark, the full RLS matrix including legal entities, load tests, kill switches, notifications and search, the basic PDPL package, dogfooding, and the security review. Party and the XML Document Inbox are Phase 0 deliverables, not repeated.
+**Build in step 1:**
+- Tenancy: shared tables with `org_id`, `PRIMARY KEY (org_id, id)`, composite FKs, RLS; `enter_context` derives org and actor from the DB (no HMAC seal yet); login roles do not own tables.
+- One write path: `execute()` with auth, zod, RBAC, idempotency, handler, outbox, append-only audit; proposals + Inbox items.
+- Money as NUMERIC, decimals as strings on the wire; committed idempotent SQL migrations applied by a built-in runner (no Supabase CLI needed).
+- Party, file storage (local disk or S3-compatible), extraction, Inbox, purchase documents, suggested journal entries, Excel export.
+- Worker + outbox relay on pg-boss; one image with roles `api | worker | all`.
+- CI: lint, typecheck, unit tests, migration replay on plain Postgres.
 
-**Needs owner approval before it happens (spends money):** creating the Crove Supabase projects (beta + prod with PITR) and the GCP projects.
+**Exit criteria (step 1):**
+1. On a fresh laptop: `docker compose up` -> sign up -> forward or upload an e-invoice -> proposal in the Inbox -> approve -> vendor, document and entry exist, with audit rows.
+2. Generated cross-org RLS tests: 0 leaks. No write path outside `execute()`.
+3. Audit rows cannot be updated or deleted; the same document resent creates no duplicates.
+4. Playwright end-to-end run of exit criterion 1 is green.
 
 **Deferred, with the trigger to revisit:**
 
 | Deferred | Revisit when |
 |---|---|
 | HMAC-sealed context | Before the first external tenant |
+| Sandboxed extraction container (parsing runs in-process with a non-expanding XML parser) | Before the first external tenant |
 | WORM fact stream, 10-year archive packages | Before Finance GA |
-| Self-host (plain PG17, `generic-oidc` with Crove membership, S3-compatible) | Open-source traction or a self-host request |
-| DOS org sync (DOS-1, DOS-26, DOS-27) | Per-org billing through DOS.AI (DOS-7, DOS-17) |
+| DOS org sync (DOS-1, DOS-26, DOS-27), in Crove Cloud | Per-org billing through DOS.AI (DOS-7, DOS-17) |
 | MCP, public `/v1` API, outbound webhooks | A customer or partner needs them |
 | SSE realtime | Inbox polling is too slow for users |
 | Yearly partitions for `audit_event` | `audit_event` passes ~10M rows |

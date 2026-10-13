@@ -1,6 +1,6 @@
 # 0026. Wedge, scope and a lighter Phase 0
 
-- Status: accepted
+- Status: accepted, partly superseded by ADR-0027
 - Date: 2026-10-13
 - Deciders: owner (JOY)
 
