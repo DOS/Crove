@@ -1,0 +1,25 @@
+{
+  "name": "@crove/mod-finance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Finance module (MVP): purchase invoices, TT133 journal entries, extraction to proposals, Excel export",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@crove/agent": "workspace:*",
+    "@crove/db": "workspace:*",
+    "@crove/kernel-contract": "workspace:*",
+    "@crove/kernel-runtime": "workspace:*",
+    "@crove/l10n-vn": "workspace:*",
+    "exceljs": "catalog:",
+    "kysely": "catalog:",
+    "unpdf": "catalog:",
+    "zod": "catalog:"
+  }
+}
