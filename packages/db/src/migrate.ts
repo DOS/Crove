@@ -26,7 +26,10 @@ export async function readMigrations(dir: string): Promise<MigrationFile[]> {
   for (const name of names) {
     const match = FILE_PATTERN.exec(name);
     if (!match?.[1]) throw new Error(`migration file name does not match the naming rule: ${name}`);
-    const sql = await readFile(join(dir, name), 'utf8');
+    // Normalize line endings so a Windows checkout (CRLF) and Linux (LF) hash the same file identically.
+    const sql = (await readFile(join(dir, name), 'utf8')).replace(/
+/g, '
+');
     files.push({ version: match[1], name, sql, sha256: createHash('sha256').update(sql).digest('hex') });
   }
   return files;
