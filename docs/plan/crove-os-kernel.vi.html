@@ -253,12 +253,31 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
   <li><strong>Đăng nhập = Supabase Auth (GoTrue) + Postgres, không dùng nguyên bộ Supabase.</strong> Compose tự host gồm Postgres 17, Supabase Auth và Crove (local thêm Mailpit). Email + mật khẩu, magic link, Google/Microsoft/OIDC, MFA, quên mật khẩu đều do Supabase Auth lo. Crove Cloud dùng cùng code, trỏ vào Supabase Auth của DOS (dùng chung tài khoản với DOS ID). Kernel xác minh token Supabase (qua JWKS nếu bật khóa bất đối xứng, nếu không thì dùng JWT secret của deployment), ánh xạ sang <code>user_account</code>, thành viên org vẫn do Crove quản. Không dùng PostgREST, Realtime, Storage, Edge Functions, Studio. Còn phải thử: Supabase Auth chạy trên image <code>postgres:17</code> thường hay cần image Postgres của Supabase.</li>
   <li><strong>Giao diện app = SPA Vite + TanStack Router, do kernel phục vụ cùng origin</strong> (theo review stack 13/10). Next.js giữ cho trang landing (<code>apps/web</code>). Bản tự host: một container chạy cả API, worker và giao diện.</li>
   <li><strong>Duyệt PR bảo mật.</strong> Bỏ nhãn duyệt tay của mày. Thay bằng bộ test bất biến lấy từ nhánh gốc, agent review bảo mật cho mọi PR chạm đường dẫn bảo vệ, review bảo mật thuê ngoài trước tenant bên ngoài đầu tiên.</li>
-  <li><strong>Đóng băng các fork.</strong> Chưa fork nào có khách thật (mày xác nhận). Bỏ sync một chiều, đối chiếu tính năng, import và rollback; bỏ sync Twenty ở Phase 2a và tiêu chí import/parity ở Phase 3-6.</li>
+  <li><strong>Tắt các fork.</strong> Chưa fork nào có khách thật (mày xác nhận). Mày đã quyết tắt hẳn các fork chứ không chỉ đóng băng; việc tắt làm bên DOS, theo dõi ngoài repo này. Bỏ sync một chiều, đối chiếu tính năng, import và rollback; bỏ sync Twenty ở Phase 2a và tiêu chí import/parity ở Phase 3-6.</li>
   <li><strong>Repo public.</strong> Giữ public. gitleaks đã chạy trong CI từ 13/10, kèm hook pre-commit ở máy local sau <code>pnpm install</code> nếu đã cài gitleaks. G1 chạy chung job <code>Secret scan</code>: rule chung cho định danh Supabase trong <code>.gitleaks.toml</code>, cộng danh sách project ref lưu trong secret <code>G1_BLOCKLIST</code>. <code>Secret scan</code> là check bắt buộc trên <code>main</code>.</li>
+  <li><strong>Giá bán (chỉ Crove Cloud).</strong> Bán theo từng app, cộng gói "Full". Mỗi module một khóa entitlement (<code>finance</code>, <code>crm</code>, ...); <code>full</code> mở tất cả. Bản tự host có mọi module theo AGPL; billing chỉ nằm trong <code>crove-cloud</code>.</li>
+  <li><strong>Đặt tên.</strong> Trong code gọi là "module": <code>modules/&lt;id&gt;</code>, <code>@crove/mod-&lt;id&gt;</code>, schema <code>crove_&lt;id&gt;</code> (như mục 5.3), vì <code>apps/</code> đã dùng cho các thành phần deploy riêng. Trên giao diện sản phẩm và marketing gọi là "app" (Crove CRM, Crove Social...), có app switcher để chuyển giữa các app.</li>
+  <li><strong>Đề xuất đã duyệt.</strong> Mỗi mục có ADR trước PR tương ứng của MVP.
+    <ul>
+      <li><strong>Composition root (chỗ lắp mọi adapter vào kernel).</strong> Lõi export một hàm kiểu <code>createKernel({ identity, ai, broker, connectors, billing })</code>. <code>apps/kernel/main.ts</code> của lõi lắp các adapter mặc định mã nguồn mở (danh tính: mặc định Supabase Auth; AI: endpoint chuẩn OpenAI bất kỳ); <code>crove-cloud</code> có entrypoint riêng, lắp adapter DOS và connector thương mại, rồi build image Cloud. Phần khác biệt của Cloud chỉ gồm một entrypoint, các package private và cấu hình.</li>
+      <li><strong>Bật module theo từng deployment</strong>, ví dụ <code>CROVE_MODULES=crm,finance</code>. Migration vẫn chạy cho mọi schema (một chuỗi migration tuyến tính duy nhất); biến này chỉ quyết định command, query, job, route và mục menu nào được đăng ký. Quyền theo từng org vẫn do entitlement quyết (quyết định 10).</li>
+      <li><strong>Module chạy được khi module khác tắt.</strong> UI slot và <code>ctx.query</code> trả về kết quả có kiểu <code>not_installed</code> thay vì báo lỗi; CI chạy riêng từng module.</li>
+    </ul>
+  </li>
+  <li><strong>TypeScript 7.0.2</strong> (tag <code>latest</code> trên npm, phát hành 8/7/2026). 7.1 mới chỉ có bản dev build hằng đêm (tag <code>next</code>) nên không dùng (theo chính sách phiên bản, mục 2); Renovate sẽ lên 7.1 khi có bản stable. Tùy chọn: một job CI chạy hằng đêm, không chặn merge, typecheck với <code>typescript@next</code>.</li>
 </ol>
 <h3>MVP</h3>
 <p><strong>Bước 1, mã nguồn mở, chạy local (không tốn tiền):</strong> <code>docker compose up</code> là chạy được trọn luồng: đăng ký → tạo org → upload hoặc forward hóa đơn → XML hóa đơn điện tử đọc tất định, PDF/ảnh đọc bằng model chuẩn OpenAI bất kỳ → đề xuất trong Inbox (nhà cung cấp, chứng từ mua, bút toán TT133 gợi ý) → duyệt/sửa/từ chối → danh sách chứng từ, nhà cung cấp, bút toán → xuất Excel cho kế toán.</p>
 <p><strong>Bước 2, Crove Cloud:</strong> cùng image, cấu hình DOS (Supabase Auth của DOS, DOS.AI), deploy lên <code>app.crove.io</code>. Cần mày duyệt chi, token Cloudflare cho DNS và email, và một thay đổi bên DOS.Me (thêm <code>app.crove.io</code> vào redirect URL của Supabase Auth bên DOS).</p>
+<p><strong>Làm ở bước 1:</strong></p>
+<ul>
+  <li>Tách dữ liệu theo org: bảng dùng chung có <code>org_id</code>, khóa <code>(org_id, id)</code>, FK composite, RLS; <code>enter_context</code> lấy org và tác nhân từ DB (chưa ký HMAC); login role không sở hữu bảng.</li>
+  <li>Một đường ghi: <code>execute()</code> gồm xác thực, zod, phân quyền, idempotency, handler, outbox, audit không sửa được; đề xuất chờ duyệt + mục Inbox.</li>
+  <li>Tiền dùng NUMERIC, số thập phân truyền dạng chuỗi; migration SQL idempotent đã commit, chạy bằng runner có sẵn (không cần Supabase CLI).</li>
+  <li>Party, lưu file (đĩa local hoặc kho chuẩn S3), đọc chứng từ, Inbox, chứng từ mua, bút toán gợi ý, xuất Excel.</li>
+  <li>Worker + relay outbox trên pg-boss; một image với các role <code>api | worker | all</code>.</li>
+  <li>CI: lint, typecheck, unit test, replay migration trên Postgres thường.</li>
+</ul>
 <p><strong>Xong bước 1 khi:</strong></p>
 <ol>
   <li>Trên laptop mới: <code>docker compose up</code> → đăng ký → forward hoặc upload hóa đơn điện tử → đề xuất trong Inbox → duyệt → có nhà cung cấp, chứng từ, bút toán và audit.</li>
