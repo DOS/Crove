@@ -17,3 +17,4 @@ Crove is the open-source Business OS (AGPL). It must run with `docker compose up
 - **AI** calls only in `packages/agent`, through an OpenAI-compatible endpoint. AI output is tainted: deterministic checks decide, humans approve.
 - **Public repo:** no secrets, Supabase project refs, internal URLs or real customer data. gitleaks + G1 run in CI and in the pre-commit hook.
 - Code, comments and commit messages in English. No em dashes.
+- Docs-only PRs need no agent review: `pnpm docs:check` and CI (`Docs check` job) must pass.
