@@ -56,3 +56,29 @@ export async function assertRlsEnforced(pool: pg.Pool): Promise<void> {
     throw new Error(`database role ${role?.rolname ?? '?'} bypasses row-level security; connect as crove_app / crove_worker`);
   }
 }
+
+// System work belongs to the worker alone (External-tenant gate T5): the API role must not be able to enter
+// system context, resolve inbound tokens or claim inbound mail, and the worker role must. Functions that do
+// not exist yet (before migrate) are skipped.
+export const WORKER_ONLY_FUNCTIONS = [
+  'crove_kernel.enter_system_context(uuid)',
+  'crove_kernel.org_by_inbound_token(text)',
+  'crove_kernel.inbound_claim(integer)',
+] as const;
+
+export async function assertSystemContextAccess(pool: pg.Pool, expected: 'denied' | 'granted'): Promise<void> {
+  const { rows } = await pool.query<{ rolname: string; fn: string; can: boolean }>(
+    `SELECT current_user AS rolname, f.name AS fn, has_function_privilege(f.oid, 'EXECUTE') AS can
+     FROM (SELECT name, to_regprocedure(name)::oid AS oid FROM unnest($1::text[]) name) f
+     WHERE f.oid IS NOT NULL`,
+    [WORKER_ONLY_FUNCTIONS],
+  );
+  const wrong = rows.filter((row) => row.can !== (expected === 'granted'));
+  if (wrong.length === 0) return;
+  const role = wrong[0]?.rolname ?? '?';
+  const names = wrong.map((row) => row.fn).join(', ');
+  if (expected === 'denied') {
+    throw new Error(`database role ${role} can enter system context (${names}); the API must connect as crove_app (run migrate first)`);
+  }
+  throw new Error(`database role ${role} cannot enter system context (${names}); the worker must connect as crove_worker (WORKER_DATABASE_URL)`);
+}

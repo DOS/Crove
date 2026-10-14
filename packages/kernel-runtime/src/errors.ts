@@ -34,6 +34,8 @@ export function toDomainError(error: unknown): DomainError {
     case '23502':
     case '22P02':
       return new DomainError('INVALID', 422, 'Dữ liệu không hợp lệ');
+    case '53400':
+      return new DomainError('OVERLOADED', 503, 'Hệ thống đang quá tải, hãy thử lại sau');
     case '40001':
     case '40P01':
       return new DomainError('RETRY', 409, 'Xung đột đồng thời, hãy thử lại');

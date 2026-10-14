@@ -3,13 +3,23 @@ import { sql } from 'kysely';
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
-import type { BlobStore, Runtime } from '@crove/kernel-runtime';
+import { DomainError, inboundKey, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import type { InvoiceExtractor } from '@crove/agent';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
+import { processInboundEmail, type InboundJob } from './inbound.ts';
 
 export const JOB_SCHEMA = 'crove_jobs';
-export const QUEUES = { extract: 'finance-file-extract' } as const;
+export const QUEUES = { extract: 'finance-file-extract', inbound: 'kernel-inbound-email' } as const;
 const EXTRACT_RETRY_LIMIT = 3;
+const INBOUND_RETRY_LIMIT = 3;
+
+interface InboundRow {
+  seq: string;
+  blob_id: string;
+  raw_sha256: string;
+  size_bytes: string;
+  recipient: string;
+}
 
 interface OutboxRow {
   seq: string;
@@ -25,6 +35,7 @@ export interface WorkerDeps {
   runtime: Runtime;
   store: BlobStore;
   extractor: InvoiceExtractor | null;
+  inboundDomain: string | null;
 }
 
 export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>> {
@@ -42,6 +53,25 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       if (job.retryCount < EXTRACT_RETRY_LIMIT) throw error;
       await recordExtractionFailure(deps.runtime, orgId, fileId, 'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML');
     }
+  });
+
+  // The raw message is deleted once it is filed or dropped; after the last failed attempt it is kept for
+  // investigation (each delivery owns its blob, so no other job can still need it).
+  await boss.work<InboundJob>(QUEUES.inbound, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const label = job.data.sha256.slice(0, 12);
+    try {
+      const result = await processInboundEmail({ runtime: deps.runtime, store: deps.store, domain: deps.inboundDomain }, job.data);
+      console.log(`[inbound] message ${label}: ${result.duplicate ? 'duplicate' : `${result.fileIds.length} file(s)`}`);
+    } catch (error) {
+      // A message no org can receive (unknown or closed recipient, invalid content) is dropped, not retried.
+      if (!(error instanceof DomainError && error.status !== 409 && error.status < 500)) {
+        console.error(`[inbound] message ${label} attempt ${job.retryCount + 1}`, error);
+        throw error;
+      }
+      console.warn(`[inbound] message ${label} dropped: ${error.code}`);
+    }
+    await deps.store.delete(inboundKey(job.data.blobId));
   });
 
   let running = false;
@@ -65,6 +95,27 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   { singletonKey: `${row.org_id}:${fileId}`, retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
                 );
               }),
+          );
+          return rows.length;
+        });
+        if (sent < 100) break;
+      }
+      for (;;) {
+        const sent = await deps.workerDb.transaction().execute(async (trx) => {
+          const { rows } = await sql<InboundRow>`SELECT * FROM crove_kernel.inbound_claim(100)`.execute(trx);
+          await Promise.all(
+            rows.map((row) =>
+              boss.send(
+                QUEUES.inbound,
+                {
+                  blobId: row.blob_id,
+                  sha256: row.raw_sha256,
+                  sizeBytes: Number(row.size_bytes),
+                  recipient: row.recipient || null,
+                } satisfies InboundJob,
+                { singletonKey: row.blob_id, retryLimit: INBOUND_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
+              ),
+            ),
           );
           return rows.length;
         });
