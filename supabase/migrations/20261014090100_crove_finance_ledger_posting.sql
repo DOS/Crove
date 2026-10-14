@@ -1,5 +1,7 @@
 -- Crove finance: the ledger is written only through crove_finance.post_journal_entry(), a posted entry
 -- never gains lines, and every entry has at least 2 lines and balances at commit. Idempotent.
+-- Functions pin pg_catalog first and pg_temp last: with an empty search_path PostgreSQL still resolves
+-- type names in the caller's temporary schema first.
 SET LOCAL lock_timeout = '2s';
 
 -- The transaction that created the entry, stamped by a trigger (never by the caller). Entries posted
@@ -7,7 +9,7 @@ SET LOCAL lock_timeout = '2s';
 ALTER TABLE crove_finance.journal_entry ADD COLUMN IF NOT EXISTS created_xact_id xid8;
 
 CREATE OR REPLACE FUNCTION crove_finance.stamp_entry_xact() RETURNS trigger
-LANGUAGE plpgsql SET search_path = '' AS $$
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
   NEW.created_xact_id := pg_catalog.pg_current_xact_id();
   RETURN NEW;
@@ -21,7 +23,7 @@ CREATE TRIGGER journal_entry_stamp_xact
 -- A line may only be added in the transaction that created its entry. Applies to every role,
 -- superusers included; pg_current_xact_id() is the top-level transaction, so savepoints do not matter.
 CREATE OR REPLACE FUNCTION crove_finance.reject_line_on_posted_entry() RETURNS trigger
-LANGUAGE plpgsql SET search_path = '' AS $$
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v_xact xid8;
 BEGIN
@@ -43,7 +45,7 @@ CREATE TRIGGER journal_line_entry_open
 -- Raises unless the entry has at least 2 lines and debits equal credits. Reads through RLS, so lines the
 -- caller cannot see count as missing and the check fails closed.
 CREATE OR REPLACE FUNCTION crove_finance.assert_entry_balanced(p_org_id uuid, p_entry_id uuid) RETURNS void
-LANGUAGE plpgsql SET search_path = '' AS $$
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v_diff numeric;
   v_lines int;
@@ -63,7 +65,7 @@ END $$;
 -- itself, so an entry with no lines at all fails too. Replaces the line-only version, which skipped
 -- entries without lines.
 CREATE OR REPLACE FUNCTION crove_finance.check_entry_balanced() RETURNS trigger
-LANGUAGE plpgsql SET search_path = '' AS $$
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
   IF TG_TABLE_NAME = 'journal_entry' THEN
     PERFORM crove_finance.assert_entry_balanced(NEW.org_id, NEW.id);
@@ -89,7 +91,7 @@ CREATE OR REPLACE FUNCTION crove_finance.post_journal_entry(
   p_source_id uuid,
   p_lines jsonb
 ) RETURNS uuid
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v_org uuid := crove_kernel.ctx_org_id();
   v_entry uuid;
@@ -110,13 +112,6 @@ BEGIN
   RETURN v_entry;
 END $$;
 
--- Owned by the NOLOGIN definer role, so tenant RLS still applies inside it.
-ALTER FUNCTION crove_finance.post_journal_entry(date, text, text, uuid, jsonb) OWNER TO crove_definer_tenant;
-
--- Tenant roles keep SELECT but lose direct INSERT; only the definer writes the ledger.
-REVOKE INSERT ON crove_finance.journal_entry, crove_finance.journal_line FROM crove_tenant;
-GRANT INSERT ON crove_finance.journal_entry, crove_finance.journal_line TO crove_definer_tenant;
-
 REVOKE ALL ON FUNCTION
   crove_finance.stamp_entry_xact(),
   crove_finance.reject_line_on_posted_entry(),
@@ -129,3 +124,21 @@ GRANT EXECUTE ON FUNCTION
   crove_finance.assert_entry_balanced(uuid, uuid),
   crove_finance.post_journal_entry(date, text, text, uuid, jsonb)
 TO crove_tenant;
+
+-- Owned by the NOLOGIN definer role, so tenant RLS still applies inside it. The grants above are set
+-- first and carry over to the new owner. A runner that is not a superuser (hosted PostgreSQL) may only
+-- hand a function to a role it can SET ROLE to, and the new owner needs CREATE on the schema while the
+-- ownership moves; that CREATE is revoked right after.
+DO $$
+BEGIN
+  IF NOT (SELECT r.rolsuper FROM pg_catalog.pg_roles r WHERE r.rolname = current_user) THEN
+    EXECUTE pg_catalog.format('GRANT crove_definer_tenant TO %I WITH INHERIT FALSE, SET TRUE', current_user);
+  END IF;
+END $$;
+GRANT CREATE ON SCHEMA crove_finance TO crove_definer_tenant;
+ALTER FUNCTION crove_finance.post_journal_entry(date, text, text, uuid, jsonb) OWNER TO crove_definer_tenant;
+REVOKE CREATE ON SCHEMA crove_finance FROM crove_definer_tenant;
+
+-- Tenant roles keep SELECT but lose direct INSERT; only the definer writes the ledger.
+REVOKE INSERT ON crove_finance.journal_entry, crove_finance.journal_line FROM crove_tenant;
+GRANT INSERT ON crove_finance.journal_entry, crove_finance.journal_line TO crove_definer_tenant;

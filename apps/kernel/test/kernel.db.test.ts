@@ -261,6 +261,38 @@ suite('kernel on PostgreSQL', () => {
     });
   });
 
+  it("never resolves types or casts from the caller's temporary schema inside definer functions", async () => {
+    const app = new pg.Client({ connectionString: appUrl });
+    await app.connect();
+    try {
+      // A temp table named "text" is also a type; casts on it run whatever the caller wrote.
+      await app.query('CREATE TEMP TABLE text (v pg_catalog.text)');
+      for (const [name, from, to, kind] of [
+        ['hijack_uuid', 'pg_catalog.uuid', 'pg_temp.text', ''],
+        ['hijack_text', 'pg_temp.text', 'pg_catalog.text', 'AS IMPLICIT'],
+      ] as const) {
+        await app.query(
+          `CREATE FUNCTION pg_temp.${name}(${from}) RETURNS ${to} LANGUAGE plpgsql
+           AS $$ BEGIN RAISE EXCEPTION 'hijacked as %', current_user; END $$`,
+        );
+        await app.query(`CREATE CAST (${from} AS ${to}) WITH FUNCTION pg_temp.${name}(${from}) ${kind}`);
+      }
+      await app.query('BEGIN');
+      await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.outsider, orgB]);
+      // Objects reach a text column only through the planted cast; without it they are not account codes.
+      const lines = [
+        { line_no: 1, account_code: { v: '6422' }, debit: '100', credit: '0' },
+        { line_no: 2, account_code: { v: '331' }, debit: '0', credit: '100' },
+      ];
+      await expect(
+        app.query(`SELECT crove_finance.post_journal_entry('2026-10-01', 'x', 'test', $1::uuid, $2::jsonb)`, [randomUUID(), JSON.stringify(lines)]),
+      ).rejects.toThrow(/foreign key/);
+    } finally {
+      await app.query('ROLLBACK').catch(() => {});
+      await app.end();
+    }
+  });
+
   it('turns an e-invoice into a proposal, and records it once on approval', async () => {
     const { fileId, duplicate } = await ingest(orgA, users.owner, FIXTURE);
     expect(duplicate).toBe(false);

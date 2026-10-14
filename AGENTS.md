@@ -11,7 +11,7 @@ Crove is the open-source Business OS (AGPL). It must run with `docker compose up
 ## Rules
 
 - **One write path.** Every state change is a command executed through `Runtime.execute()` (`packages/kernel-runtime`). No other code writes tenant tables.
-- **Schema only via migrations** in `supabase/migrations/<14-digit UTC>_crove_<module>_<desc>.sql`. Idempotent statements, never edit an applied file, never DDL at runtime.
+- **Schema only via migrations** in `supabase/migrations/<14-digit UTC>_crove_<module>_<desc>.sql`. Idempotent statements, never edit an applied file, never DDL at runtime. Every function sets `search_path = pg_catalog, pg_temp`, never `''`.
 - **Tenancy:** every tenant table has `org_id`, `PRIMARY KEY (org_id, id)` and RLS via `crove_kernel.apply_tenant_rls`. Login roles own nothing.
 - **Money** is NUMERIC in SQL and a decimal string everywhere else; arithmetic through `decimal.js` (`@crove/l10n-vn` money helpers). Never JS numbers for amounts.
 - **AI** calls only in `packages/agent`, through an OpenAI-compatible endpoint. AI output is tainted: deterministic checks decide, humans approve.
