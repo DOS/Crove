@@ -2,6 +2,14 @@
 
 Crove is the open-source Business OS (AGPL). It must run with `docker compose up` and no DOS service. Anything DOS-specific belongs in the private Crove Cloud layer, never here.
 
+## Picking up work (GitHub Project "Crove")
+
+- Work comes from the board https://github.com/orgs/DOS/projects/8 (issues in DOS/Crove). One task = one issue = one worktree = one PR. Split work by feature, not by layer: a task goes end to end (migration, server, contract, UI, tests).
+- Pick the highest-priority open issue (`priority:P1` first) in the earliest milestone, skipping issues already `In progress` and issues labelled `owner-action` (the owner's job).
+- To claim it: set Status to `In progress` and comment `Claimed by <session or agent name>, branch <branch>`. All agents share one GitHub account, so the comment is the lock. Never take over a claimed issue.
+- The PR body says `Closes #<n>`; merging moves the issue to Done. If a task needs work in another area (for example UI for a new kernel API), open a follow-up issue instead of growing the PR.
+- New migrations: rebase on `origin/main` right before merging and keep your migration timestamp greater than every file on `main`.
+
 ## Worktrees (several agents work on this repo at once)
 
 - Never edit in the main checkout (`D:\Projects\Crove` or wherever the repo is cloned). Do every task in its own worktree, on its own branch, created from a freshly fetched `origin/main`:
