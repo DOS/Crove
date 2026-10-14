@@ -4,6 +4,7 @@
 > Every blocker and major finding was accepted, or rejected with a reason, in the Appendix. Paths are relative to the `Crove` repo root (separate repo; working name, settled 2026-10-13).
 > Library versions checked against the npm registry on 2026-10-13. Version policy: always the latest stable.
 > Update 2026-10-13: separate repo, own DB, federated identity (OIDC), provider-agnostic AI, AGPL-3.0 + CLA, always latest stable.
+> Update 2026-10-14: consolidated. The body now describes the decided design (Decisions 1-14): Supabase Auth identity (ADR-0027, ADR-0028), one image serving the SPA, the built-in migration runner, the MVP in place of Phase 0, and the External-tenant gate. Where `main` differs from the decided design, the text says so.
 > Vietnamese reading copy: [crove-os-kernel.vi.html](crove-os-kernel.vi.html). This English file is the source of record.
 
 ## Tracking
@@ -11,7 +12,8 @@
 | | |
 |---|---|
 | Current stage | **MVP step 1 merged** (open source, local) on 2026-10-13 as #8, with two exit criteria still open: criterion 2 (generated cross-org RLS tests; today one hand-written RLS test covers `file` and `party`) and criterion 4 (a Playwright end-to-end test in the repo; #8 was verified by a manual `docker compose up` run). Step 2 (Crove Cloud) waits on owner approvals: spend, a DNS token, and the DOS-side redirect URL change. |
-| Repo state | `main` @ `44ab80a`: kernel (`apps/kernel`, `packages/*`), finance module, Vite + TanStack Router SPA (`apps/app`), `docker compose` with bundled Supabase Auth, and the Next.js landing page (`apps/web`). CI: lint, typecheck, 47 unit and 11 database tests (as of #8). |
+| Repo state | `main` @ `6040386` (code unchanged since #8 apart from the dependency upgrade in #15): kernel (`apps/kernel`, `packages/*`), finance module, Vite + TanStack Router SPA (`apps/app`), `docker compose` with bundled Supabase Auth, and the Next.js landing page (`apps/web`). CI: lint, typecheck, 47 unit and 11 database tests (as of #8). |
+| Body status | Consolidated on 2026-10-14: the body describes the decided design, and "on `main`" notes mark what is not implemented yet. The External-tenant gate below lists what must be true before Crove Cloud accepts an external tenant. ADR-0026 and ADR-0027 are accepted; ADR-0028 (identity sessions and revocation) is proposed. |
 | Redaction | `DOS/Crove` is public. Security-sensitive details of DOS-side fixes (§11) live only in the private DOS.Me repo; those rows keep only IDs, priorities and gates. Integration contracts Crove builds against (DOS-27 events and API, DOS-7, DOS-17) stay here. |
 
 | Phase | Time-box | Status |
@@ -28,11 +30,11 @@
 | 6 Sign | 8 weeks | Waits for wedge-customer demand (Decision 2) |
 | 7 HRM | 10 weeks | Waits for wedge-customer demand (Decision 2) |
 
-Day-0 checklist: §12. Exit criteria per phase: §13, except Phase 0, which is replaced by the MVP below.
+Setup checklist: §12. Exit criteria per phase: §13; the MVP below replaces Phase 0.
 
 ### Decisions (2026-10-13)
 
-These decisions override any conflicting text in the body of this plan. Rationale: [ADR-0026](../adr/0026-wedge-scope-and-phase-0.md), [ADR-0027](../adr/0027-oss-core-and-crove-cloud.md).
+The body of this plan was rewritten on 2026-10-14 to describe these decisions; if a conflict remains, the decisions win. Rationale: [ADR-0026](../adr/0026-wedge-scope-and-phase-0.md), [ADR-0027](../adr/0027-oss-core-and-crove-cloud.md); identity sessions and revocation: [ADR-0028](../adr/0028-identity-sessions-and-revocation.md) (proposed).
 
 1. **Wedge first.** Start with the Document Inbox: founders forward invoices and bank statements, AI proposes the bookkeeping, a human approves. First customers: startups and SMEs that use an outsourced accounting firm; test selling through accounting firms. The owner runs 10-15 interviews (founders + accounting firms) before Phase 2a scope is frozen; script below.
 2. **Scope.** Committed: kernel + Accounting. CRM, Service, Social, Sign and HRM (Phases 3-7) start only when wedge customers pull for them.
@@ -58,7 +60,7 @@ These decisions override any conflicting text in the body of this plan. Rational
     - **DBOS Transact spike** (1 week) before Phase 2a; fail means keeping the own process engine.
     - **Bun nightly canary** in CI, non-blocking.
     - **Client platforms:** PWA first, then Expo for mobile and Tauri 2 for desktop when their triggers are met (fallbacks Capacitor and Electron).
-    - §2 now reflects the final stack; Decisions 1-14 still override the rest of the body.
+    - §2 has the final stack.
 
 ### MVP
 
@@ -80,20 +82,43 @@ These decisions override any conflicting text in the body of this plan. Rational
 3. Audit rows cannot be updated or deleted; the same document resent creates no duplicates.
 4. Playwright end-to-end run of exit criterion 1 is green.
 
-**Follow-ups from #8 (Phase 1 residual work):** move `enter_system_context` out of the API role (inbound email runs there today); a re-extract command for files read by AI; pending invites with consent; remove and update member; inbound token rotation; an end-to-end check of Supabase Auth rate limits; CSV/Excel formula prefixing; exact decimals in the Excel export; audit retention and offboarding.
+**Follow-ups from #8 (Phase 1 residual work):** move `enter_system_context` out of the API role (inbound email runs there today; T5, #24); a re-extract command for files read by AI (#40); pending invites with consent (#35); remove and update member (#36); inbound token rotation (#37); an end-to-end check of Supabase Auth rate limits (#34); CSV/Excel formula prefixing and exact decimals in the Excel export (T13, #29); audit retention and offboarding (#38).
 
 **Deferred, with the trigger to revisit:**
 
 | Deferred | Revisit when |
 |---|---|
-| HMAC-sealed context | Before the first external tenant |
-| Sandboxed extraction container (parsing runs in-process with a non-expanding XML parser) | Before the first external tenant |
+| HMAC-sealed context | Before the first external tenant (External-tenant gate T11) |
+| Sandboxed extraction container (parsing runs in-process with a non-expanding XML parser) | Before the first external tenant (External-tenant gate T12) |
 | WORM fact stream, 10-year archive packages | Before Finance GA |
 | DOS org sync (DOS-1, DOS-26, DOS-27), in Crove Cloud | Per-org billing through DOS.AI (DOS-7, DOS-17) |
 | MCP, public `/v1` API, outbound webhooks | A customer or partner needs them |
 | SSE realtime | Inbox polling is too slow for users |
 | Yearly partitions for `audit_event` | `audit_event` passes ~10M rows |
 | NAT with a fixed IP | A provider requires an IP allowlist |
+
+### External-tenant gate
+
+Crove Cloud accepts its first external tenant only when every row below is green and its evidence is linked here (PR, CI run or report). An external tenant is any org whose members are not the owner's own team. The "On `main`" column records the state on 2026-10-14; issue numbers are the tracking issues in this repo.
+
+| # | Must be true | Evidence required | On `main` (2026-10-14) | Issue |
+|---|---|---|---|---|
+| T1 | Identity per ADR-0028, accepted and implemented: issuer, audience and expiry required (boot fails without `AUTH_ISSUER`); `sub`, `session_id` and `role` required; anonymous tokens rejected; revocation fail-closed (self-host: `auth.sessions` checked in the request transaction; Cloud: Supabase Auth check with a cache of at most 30 s, 503 when unreachable); banned, deleted and disabled users rejected | ADR-0028 status `accepted`; unit tests for every missing or wrong claim; integration test: after sign-out the same token is rejected on the next request (self-host) and within the cache lifetime (remote mode, against a Supabase Auth container in CI); Auth unreachable returns 503; ban and delete rejected | Issuer checked only when `AUTH_ISSUER` is set; `exp` checked only when present; no revocation check, so a signed-out token works until it expires (1 h in compose) | #22 |
+| T2 | R3 approval restricted to authorized roles: an `owner`, or a user an owner granted the approval permission (§4.6, P12); `aal2` required (P11) with a live revocation check; the audit row records approver, `aal` and `session_id` | Database tests: `admin`, `member` and `viewer` get 403; an `aal1` token gets 403 `STEP_UP_REQUIRED`; an `aal2` token executes; audit row content asserted | `kernel.proposal.approve` is R3 but open to `owner`, `admin` and `member`; no `aal` check; no MFA screens in the SPA | #20, #32 |
+| T3 | Ledger immutability: only the posting path (a definer) writes journal entries and lines; a posted entry cannot gain lines; every entry has at least 2 lines and balances at commit | Database tests as the module and login roles: direct INSERT into `journal_entry` or `journal_line` is denied; adding a line to an entry committed earlier fails; an entry with 0 or 1 line, or unbalanced, fails at commit; reversal nets to zero; a fast-check property test of the posting path | `crove_tenant` may INSERT into `journal_entry` and `journal_line` (the append-only triggers block only UPDATE, DELETE and TRUNCATE); the balance trigger runs per line, so an entry with no lines passes and a balanced pair of lines can be added to an existing entry later | #19 |
+| T4 | Org creation runs through `execute()` with an audit row | Database test: creating an org writes `tenant`, the owner `tenant_member` and an `audit_event` row in one transaction; login roles cannot execute the raw definer (EXECUTE matrix test); a per-user rate limit | The `create_org` definer is called from the RPC handler outside `execute()`, with no audit row; `crove_tenant` may execute it | #23 |
+| T5 | Inbound email processing moved out of the API role's system context: the API verifies the shared secret, limits size and stores the raw message; parsing and `kernel.inbound.receive` run in the worker | EXECUTE matrix test: the API login role cannot call `enter_system_context`; integration test: a forwarded e-invoice still yields a proposal, processed by the worker | The API parses MIME, stores attachments and runs `kernel.inbound.receive` as a system actor through `enter_system_context`, which `crove_tenant` (and so the API role) may execute | #24 |
+| T6 | The pg-boss schema is vendored into committed migrations; no code path runs pg-boss with `migrate: true` | Committed, version-guarded migration for `crove_jobs` (`pnpm db:vendor:pgboss`); CI check that the pinned pg-boss version matches the vendored schema version; migration replay creates `crove_jobs` with no runtime DDL | The `migrate` role starts pg-boss with `migrate: true` (`migrateJobs` in `apps/kernel/src/worker.ts`) | #25 |
+| T7 | An S3-compatible storage adapter, shared by API and worker | `BlobStore` S3 implementation with integration tests against an S3-compatible server in CI; an end-to-end run with `api` and `worker` as separate containers and no shared volume; keys and references per §7.6 | `LocalDiskStore` only; split roles need a shared volume | #26 |
+| T8 | Generated cross-org RLS matrix (MVP exit criterion 2) | The CI `db` job generates cases for every tenant table: cross-org read, insert, update and delete denied or 0 rows; no context gives 0 rows; a new tenant table without cases fails CI | One hand-written test covers `file` and `party` | #17 |
+| T9 | Playwright end-to-end test (MVP exit criterion 4) | A required CI job runs `docker compose up` and Playwright through MVP exit criterion 1 (sign up, create org, upload an e-invoice, approve, lists, export) | Verified by a manual run only | #18 |
+| T10 | Context re-entry guard (§4.5, item 1) | The negative tests listed in §4.5 run in the CI `db` job | No guard: `enter_context` can be called again in the same transaction | #27 |
+| T11 | Sealed context (§4.5, item 5; deferred table above) | Database tests: context settings forged or reset with `set_config` give 0 rows and failing `WITH CHECK`; the seal covers the whole context | The `ctx_*` helpers read plain transaction settings; no seal | - |
+| T12 | Sandboxed file parsing: PDF, XML and MIME parsing run in `crove-extract` (no secrets, no egress, CPU, memory and time limits) | Tests: the sandbox cannot open a network connection and has no secrets in its environment; a dependency rule stops the API and worker from importing parsers | Parsing runs in-process (XML with a non-expanding parser); MIME parsing runs in the API | #28 |
+| T13 | Excel export keeps money exact and escapes formulas | Unit test: amounts with more than 15 significant digits and 4 decimals round-trip exactly from the exported file (never through JavaScript `Number`); text cells starting with `=`, `+`, `-` or `@` are escaped | `modules/finance/src/export.ts` converts amounts with `Number(...)` | #29 |
+| T14 | External security review (Decision 7) and `SECURITY.md` | A written report from an independent reviewer covering auth, context and RLS, the sandbox, inbound email and webhooks; every high or critical finding fixed or accepted in writing by the owner; `SECURITY.md` with a private reporting channel | Not started; no `SECURITY.md` | #31, #33 |
+| T15 | Decision 7 review flow in CI | A required workflow on `main` that runs, for PRs touching protected paths (§10, G6), the invariant suite taken from the base branch and a security reviewer agent; a test PR shows it blocking | Only the `ci` and `gitleaks` workflows | #30 |
+| T16 | PDPL package (§7.9) | DPIA, cross-border transfer dossier, DPA template, 72 h breach runbook and sub-processor list, reviewed by a lawyer | Not started | #62 |
 
 ### Customer interview script (owner)
 
@@ -159,29 +184,31 @@ The architecture and plan TL;DR follows.
 
 1. **Don't rebuild existing infrastructure.** Identity comes from Supabase Auth (Decision 5), AI via an OpenAI-compatible endpoint. The only new code is a thin business core that runs fully with no DOS services (self-host).
 2. **Reuse from DOS for Crove Cloud** (each is an adapter that can be turned off):
-   - DOS ID accounts through DOS's Supabase Auth (Decision 5), plus the DOS-Me API for org/membership and org/team change webhooks. DOS membership sync is enabled only after gate DOS-1 passes.
+   - DOS ID accounts through DOS's Supabase Auth (Decision 5).
+   - Later, when per-org billing needs it: DOS org sync through the DOS-Me API and org/team change webhooks, enabled only after gate DOS-1 passes.
    - DOS.AI: models, metering, credits.
    - DOS-Me credential broker (`provider_connections` + Vault): optional connector.
 3. **Reuse the designs of patterns running in DOS prod** (design only, no shared tables): `team_webhook_outbox` -> outbox; `collaboration_write_ledger` -> proposals and `external_call`; `agent_action_audit` -> append-only audit.
 4. **New code:**
-   - Kernel runtime: `execute()`, sealed context + RLS, R0-R3 policy, proposals and AI Inbox, relay, audit, identity projection (`user_account`, `tenant`, `tenant_member`) and org membership.
+   - Kernel runtime: `execute()`, sealed context + RLS, R0-R3 policy, proposals and AI Inbox, relay, audit, `user_account` mapping and org membership (`tenant`, `tenant_member`).
    - Kernel module: party, file, activity, task.
    - Business modules and the shell.
 5. **Libraries:** Hono, oRPC 1.x (contract-first), Kysely + Kanel, pg-boss, zod 4, AI SDK 7, `jose` + Supabase Auth, the Vite+ toolchain, a Vite + React + TanStack Router SPA, shadcn/Base UI, TanStack Query, `use-intl`. Details in §2.
 6. **Locked architecture:**
    - Repo: separate repo (`DOS/Crove`), TypeScript modular monolith, AGPL-3.0 + CLA. Private repo `crove-cloud` holds infrastructure, environment config and commercial connectors.
-   - Runtime: one image running three roles `api | worker | job` on Cloud Run; separate GCP projects for prod and beta; file parsing runs in its own sandbox. Self-host runs the same image on any container platform.
-   - Data: Crove owns its DB. Crove Cloud uses a dedicated Supabase project (prod + beta, ap-southeast-1, 7-day PITR); self-host uses any PostgreSQL 17. Schemas `crove_*`; migrations live in the Crove repo.
-   - Identity: Supabase Auth (Decision 5) + one-way projection in `crove_kernel`. No FKs, no reads from DOS's DB; business data never syncs with DOS.
+   - Runtime: one image with roles `migrate | api | worker | all`; the `api` role also serves the SPA. Self-host: `docker compose up` (PostgreSQL 17, Supabase Auth, Crove, Mailpit). Crove Cloud: the same image on Cloud Run (API service, worker pool, migrate job) in separate GCP projects for prod and beta. File parsing moves to its own sandbox before the first external tenant.
+   - Data: Crove owns its DB. Crove Cloud uses a dedicated Supabase project (prod + beta, ap-southeast-1, 7-day PITR); self-host uses any PostgreSQL 17. Schemas `crove_*`; migrations live in the Crove repo and the built-in runner (`migrate` role) applies them.
+   - Identity: Supabase Auth (Decision 5). The kernel verifies the access token and checks revocation on every request (ADR-0028), maps `(issuer, subject)` to `user_account` and owns org membership. No FKs to, or reads from, DOS's DB; business data never syncs with DOS.
    - Write path: every write goes through `kernel.execute()`, in a transaction carrying a sealed context that RLS checks.
    - Async: everything runs through outbox -> pg-boss; the DB decides the fan-out.
    - AI: one agent per org, calling an OpenAI-compatible endpoint (Cloud: DOS.AI). R2/R3 actions always become proposals and run deterministically only after approval.
    - The SPA, served by the kernel, holds no secrets and never touches the DB; Next.js is used only for the landing page.
-7. **Roadmap:** 2-week walking skeleton -> Finance spike -> kernel v0 "Party & Document Inbox" -> Finance 2a/2b -> CRM (incl. Calendar) -> Service (incl. social inbox) -> Social -> Sign -> HRM; Projects later. Every fork is replaced by a native module; a fork runs in parallel only until its module meets its exit criteria. The core repo stays private until the end of Phase 1 (security review + `SECURITY.md`), then goes public. (Superseded 2026-10-13: `DOS/Crove` is already public; see Tracking #7.)
+7. **Roadmap:** MVP step 1 (merged) -> step 2, Crove Cloud -> Finance spike -> Phase 1 hardening, including the External-tenant gate -> Finance 2a/2b. CRM (incl. Calendar), Service (incl. social inbox), Social, Sign and HRM start only when wedge customers pull for them (Decision 2); Projects later. The forks are shut down, not migrated (Decision 8). The core repo is public (Decision 9).
 8. **Hard gates:**
    - Crove Cloud does not enable DOS membership sync until gate DOS-1 passes; self-host is unaffected.
    - Agents have no tools that touch prod/beta DBs, Crove's or DOS's.
-   - The public repo never contains project refs, internal URLs or secrets (gitleaks and project-ref scanning from the first commit).
+   - The public repo never contains project refs, internal URLs or secrets (gitleaks and project-ref scanning in the required `Secret scan` check).
+   - Crove Cloud accepts no external tenant until the External-tenant gate (Tracking) is green.
 
 ## 1. Architecture principles
 
@@ -190,7 +217,7 @@ The architecture and plan TL;DR follows.
    - Postgres enforces: tenancy (RLS + composite FKs), a ledger that always balances and cannot be edited, gapless document numbers, idempotency, append-only logs.
    - RBAC, business rules and AI policy live in one TypeScript pipeline.
 3. **Trust comes only from sealed context.** Org, actor, legal-entity scope and sensitivity flags are derived by `enter_context` and HMAC-signed. No definer, job or tool accepts these values as trusted parameters.
-4. **Committed SQL is the only schema.** Idempotent migrations live in `supabase/migrations` of the Crove repo; prod and beta receive schema only through the pipeline. No ORM push, no runtime DDL, no vendor self-migration, no out-of-band DDL.
+4. **Committed SQL is the only schema.** Idempotent migrations live in `supabase/migrations` of the Crove repo and are applied by the built-in runner (`migrate` role); prod and beta receive schema only through the pipeline. No ORM push, no runtime DDL, no vendor self-migration (one accepted exception: Supabase Auth migrates its own `auth` schema, ADR-0027), no out-of-band DDL. On `main`, pg-boss still creates `crove_jobs` itself (External-tenant gate T6).
 5. **Shared tables in Crove's DB, `org_id` everywhere, default-deny roles.** Login roles are NOINHERIT and own nothing. `service_role` and BYPASSRLS never run user, agent or job code.
 6. **Modules are packages with contracts, arranged as a DAG `kernel-runtime < kernel < modules`.**
    - Each module has one schema and one role.
@@ -205,7 +232,7 @@ The architecture and plan TL;DR follows.
     - One way to do each thing, a generator for every artifact, mechanical naming rules.
     - Local DB loop; CI failures print the fix command.
     - A PR cannot loosen its own security controls.
-13. **Lean.** Only Postgres, containers and Vercel. No Kafka, Redis, k8s or search cluster. A capability enters the kernel only when it has 2 consumers, or when it is a security or integrity invariant.
+13. **Lean.** Only Postgres and containers (Vercel only for the landing page). No Kafka, Redis, k8s or search cluster. A capability enters the kernel only when it has 2 consumers, or when it is a security or integrity invariant.
 14. **Expand/contract; public names frozen.** Migrations must be compatible with the running app. Breaking changes go in a separate contract PR.
 15. **Self-host first: every DOS integration is an adapter.** Identity (`IdentityProvider`, Supabase Auth by default; Decision 12), AI (OpenAI-compatible endpoint), credential broker and billing sit behind interfaces. The core runs fully with no DOS services; Crove Cloud is just a configuration.
 
@@ -246,24 +273,32 @@ The architecture and plan TL;DR follows.
 | Observability | <ul><li>OTel SDK + `pino` -> Cloud Logging/Trace/Error Reporting.</li><li>Alerts via Cloud Monitoring, data from the prober.</li><li>10% sampling, 100% of errors kept.</li><li>No Sentry in v0.</li><li>Self-host: OTLP export or stdout.</li></ul> | No dependency on the DOS collector (not deployed yet) | Datadog via the DOS collector | When the DOS collector is actually running |
 | Infrastructure | <ul><li>Self-host: `docker compose up` (PostgreSQL 17, Supabase Auth, Crove api + worker + UI in one image, Mailpit); in production, the same images + any PostgreSQL 17 + S3-compatible storage.</li><li>Crove Cloud: GCP `crove-prod`, `crove-beta` (`asia-southeast1`): Cloud Run services, worker pool, Jobs, Artifact Registry, Secret Manager; a dedicated Supabase project per environment (ap-southeast-1, PG17; 7-day PITR on prod), not shared with DOS.</li><li>Vercel only for the landing page; the SPA is served by the kernel.</li><li>OpenTofu 1.x in the private `crove-cloud` repo, run by CI via WIF.</li></ul> | One command for self-host; Cloud environments separated by IAM boundaries; own DB means no noisy neighbours and usable PITR | Worker as a service with min=max=1 | A data residency requirement |
 | CI security | `gitleaks` (from the first commit), project-ref scanning (G1), `zizmor`, dependency-review (with license checks), Opengrep | Supply chain; the repo will be public | CodeQL | - |
-| License | <ul><li>AGPL-3.0 for the core repo (`LICENSE` at the root; SPDX headers optional).</li><li>License-grant CLA (contributors keep copyright and grant the project owner the rights to use, sublicense and relicense), individual + corporate, enforced with CLA Assistant.</li><li>"Crove" trademark + brand policy.</li></ul> | Open source while keeping the right to sell commercial licenses and move to a more permissive license later; DCO does not allow relicensing | - | Before going public; when a large corporate contributor appears |
+| License | <ul><li>AGPL-3.0 for the core repo (`LICENSE` at the root; SPDX headers optional).</li><li>License-grant CLA (contributors keep copyright and grant the project owner the rights to use, sublicense and relicense), individual + corporate, enforced with CLA Assistant.</li><li>"Crove" trademark + brand policy.</li></ul> | Open source while keeping the right to sell commercial licenses and move to a more permissive license later; DCO does not allow relicensing | - | Before accepting outside contributions; when a large corporate contributor appears |
 
 **Client platforms.** Because the app shell is a static SPA and every write goes through the kernel API, desktop and mobile clients need no new backend. PWA, Mobile and Desktop above are direction only, built when their trigger is met.
 
-**State on `main` (2026-10-14).** The MVP already uses pnpm 12 (`packageManager: pnpm@12.11.2`, `catalogMode: strict`), Node 26, TypeScript 7.0.2, oxlint 1.88, Vitest 5, Hono 4, oRPC 1.15, Kysely 0.29, pg-boss 12, Vite 8, TanStack Router and Query, `@supabase/auth-js`, `jose` and Tailwind 4. Not adopted yet: Vite+ (scripts still call `oxlint`, `vitest` and `pnpm -r` directly), Kanel codegen, shadcn/Base UI, an i18n library, a formatter and Playwright. The landing page (`apps/web`) sits outside the catalog and is still on Next.js 15.5, React 19.2, Tailwind 3 and TypeScript 5.9, with its own `node:22-alpine` Dockerfile; the target is Next.js 16 on catalog versions.
+**State on `main` (2026-10-14).** The MVP already uses pnpm 12 (`packageManager: pnpm@12.11.2`, `catalogMode: strict`), Node 26, TypeScript 7.0.2, oxlint 1.88, Vitest 5, Hono 4, oRPC 1.15, Kysely 0.29, pg-boss 12, Vite 8, TanStack Router and Query, `@supabase/auth-js`, `jose` and Tailwind 4. Not adopted yet: Vite+ (scripts still call `oxlint`, `vitest` and `pnpm -r` directly), Kanel codegen, shadcn/Base UI, an i18n library, a formatter, Playwright, the vendored pg-boss schema (pg-boss creates `crove_jobs` at migrate time) and an S3 storage adapter (local disk only). Since #15 the landing page (`apps/web`) uses catalog versions (Next.js 16.4, React 19.3, Tailwind 4, TypeScript 7.0.2); its own Dockerfile still starts from `node:22-alpine`.
 
 ## 3. Topology
 
-> §3.2-3.5, §12 and ADR-0011 still describe the Next.js shell on Vercel and Supabase CLI migrations; Decision 6 and §2 override them.
+One image, `crove-kernel` (root `Dockerfile`), runs every deployment. Its entrypoint (`apps/kernel/src/main.ts`) takes a role:
+
+- `migrate`: apply the committed migrations with the built-in runner, set login-role passwords from the environment, and (on `main`, until External-tenant gate T6) create the pg-boss schema;
+- `api`: the HTTP API plus the SPA's static files, on one origin;
+- `worker`: the outbox relay and pg-boss jobs;
+- `all`: `api` and `worker` in one process, the self-host default.
+
+Self-host and Crove Cloud differ only in configuration (Decision 4). The Cloud-only parts of this section (Cloud diagram, environments, deploy workflows) move to `crove-cloud` when that repo is created.
 
 ### 3.1 Repo tree
 
-**Core repo** (`DOS/Crove`, AGPL-3.0; public since 2026-10-13, Decision 9). This is the target layout; `main` today differs: a root `vitest.config.ts` and `packages/l10n-vn`, only the `ci` and `gitleaks` workflows, and no `apps/extract` or `kernel-http`, `ui`, `testing` packages yet.
+**Core repo** (`DOS/Crove`, AGPL-3.0; public since 2026-10-13, Decision 9). This is the target layout. `main` today differs: a root `vitest.config.ts` and `packages/l10n-vn`; only the `ci` and `gitleaks` workflows; no `apps/extract`, `kernel-http`, `ui` or `testing` packages; no `LICENSE`, `CLA.md`, `CONTRIBUTING.md`, `TRADEMARKS.md` or `SECURITY.md` yet (§12-C).
 
 ```
 Crove/
 ├── AGENTS.md · CLAUDE.md(@AGENTS.md) · README.md · LICENSE (AGPL-3.0) · CLA.md · CONTRIBUTING.md · TRADEMARKS.md
-├── SECURITY.md                      added before going public (§13 Phase 1)
+├── SECURITY.md                      before the first external tenant (External-tenant gate T14)
+├── Dockerfile · docker-compose.yml · .env.example      one image; self-host stack
 ├── package.json · pnpm-workspace.yaml · pnpm-lock.yaml · vite.config.ts (Vite+)
 ├── .claude/
 │   ├── rules/*.md                   rules with `paths:` (§10)
@@ -273,43 +308,44 @@ Crove/
 ├── apps/
 │   ├── app/                         product SPA (Vite + TanStack Router), static files served by the kernel; routes from manifests
 │   ├── web/                         landing page (Next.js) -> Vercel
-│   ├── kernel/                      image `crove-kernel`: main.ts -> api | worker | job <name> | stream (2b)
-│   └── extract/                     image `crove-extract`: sandbox, parsing libraries only
+│   ├── kernel/                      image `crove-kernel`: main.ts -> migrate | api | worker | all (later: stream in 2b)
+│   └── extract/                     image `crove-extract`: sandbox, parsing libraries only (External-tenant gate T12)
 ├── packages/
 │   ├── kernel-contract/             zod + @orpc/contract: codecs, define*-contract, errors, Filter AST, contract.generated.ts
 │   ├── kernel-runtime/              execute, context, RBAC, policy, idempotency, outbox/relay, audit, proposal, numbering,
-│   │                                egress guard, identity adapter (Supabase Auth by default); './async' is the ONLY pg-boss importer
+│   │                                egress guard, storage adapters, identity (Supabase Auth token verification, ADR-0028);
+│   │                                './async' is the ONLY pg-boss importer
 │   ├── kernel/                      KERNEL MODULE (id `kernel`, golden module): party, file, extraction, activity, task, tag,
 │   │                                notification, inbound
-│   ├── kernel-http/                 Hono + oRPC server (/rpc; later /v1, /mcp), /auth, /webhooks
-│   ├── db/                          Kysely factory, withTenantTx | withTenantReadTx | withSystemTx, type parsers, generated/
+│   ├── kernel-http/                 Hono + oRPC server (/api/rpc; later /v1, /mcp), /auth/v1 proxy, /api/inbound, /webhooks
+│   ├── db/                          Kysely factory, withTenantTx | withTenantReadTx | withSystemTx, type parsers,
+│   │                                built-in migration runner, generated/
 │   ├── agent/                       the ONLY ai/@ai-sdk importer
 │   ├── ui/                          shadcn/Base UI, tokens, DataView
-│   └── testing/                     command-driven factories, one tenant per test, TestClock, mock Supabase Auth tokens,
+│   └── testing/                     command-driven factories, one tenant per test, TestClock, test-signed Supabase Auth tokens,
 │                                    synthetic fixtures (the only source of ai.examples)
 ├── modules/<id>/                    @crove/mod-<id>, added per phase
 ├── supabase/
-│   ├── config.toml                  local config only, no project refs
-│   ├── migrations/<ts>_crove_<token>_<desc>.sql   the ONLY place for DDL
+│   ├── migrations/<ts>_crove_<token>_<desc>.sql   the ONLY place for DDL (the folder name is historical; no Supabase CLI)
 │   └── tests/database/{_conformance,_rls_matrix,_invariants}.test.sql · <token>/*.test.sql
 ├── evals/ · docs/{adr,vendor,specs,generated,self-host}/
 └── tools/{cli,generators,arch,agent}/   `crove` CLI, templates, migration-lint, hook dispatcher, SessionStart
 ```
 
-**Private repo `crove-cloud`** (never public):
+**Private repo `crove-cloud`** (never public; created with MVP step 2, issue #55):
 
 ```
 crove-cloud/
-├── infra/               OpenTofu: GCP projects, SAs, WIF, secrets, buckets, budgets, Supabase projects, Vercel, DNS
-├── .github/workflows/   deploy-beta, deploy-prod, release-gate, db-push, infra
-├── env/{beta,prod}/     project refs, OIDC client ids, domains, AI endpoints (no secrets)
+├── infra/               OpenTofu: GCP projects, SAs, WIF, secrets, buckets, budgets, Supabase projects, Vercel (landing), DNS
+├── .github/workflows/   deploy-beta, deploy-prod, release-gate, infra
+├── env/{beta,prod}/     project refs, the Supabase Auth URL and public key, domains, AI endpoints (no secrets)
 ├── connectors/          connectors needing contracts/certification: e-invoice issuing, bank aggregators, CA signing, MISA broker
 └── billing/             entitlements and billing link to DOS (DOS-7, DOS-17)
 ```
 
 **Boundary rules:**
 - The core repo does not import, submodule or read files from DOS.Me or `crove-cloud`. `crove-cloud` depends one-way on core: it checks out the exact SHA, builds images and injects config at deploy time.
-- Crove touches DOS only through HTTP adapters (principle 15): `dos-id` (OIDC + DOS-Me API + webhooks), the AI endpoint (`api.dos.ai`), `dos-broker` (`api.dos.me`, optional). No DB connection to DOS.
+- Crove touches DOS only through HTTP adapters (principle 15): DOS's Supabase Auth (JWKS, `/auth/v1`, session checks per ADR-0028), the AI endpoint (`api.dos.ai`), `dos-broker` (`api.dos.me`, optional) and, later, DOS org sync (DOS-27). No DB connection to DOS.
 - The core repo contains no project refs, client ids, internal domains or secrets; those live in `crove-cloud` and Secret Manager.
 - Connectors in `crove-cloud` are built into the Cloud image. This is valid because the project owner holds full rights to the core via the CLA (ADR-0022). Third parties extend via API/MCP, not in-process.
 - Agents start at the core repo root; implementation sessions don't need `crove-cloud`.
@@ -317,35 +353,50 @@ crove-cloud/
 
 ### 3.2 Runtime diagram
 
+**Self-host, `docker compose up` (implemented on `main`):**
+
 ```
- Browser (app.crove.com) ── HTML/RSC ──► Vercel `crove-web` (sin1): no secrets, no DB; RSC only does auth gate + org context
-    │ ── OIDC redirect (PKCE) ──► IdP: DOS ID (Cloud) | any OIDC IdP (self-host)
-    │ Bearer Crove session JWT + X-Crove-Org
+ Browser ── http://localhost:8080 (a TLS reverse proxy in front for other machines; PUBLIC_URL) ──►
+ ┌─ crove: image crove-kernel, role `all` ─────────────────────────────────────────────────────────┐
+ │ /                    SPA static files (apps/app/dist); unknown paths fall back to index.html     │
+ │ /api/config          public runtime config (auth URL, flags); no secrets                         │
+ │ /api/rpc/*           oRPC commands and queries -> execute() / query()                            │
+ │ /api/files · /api/export/journal.xlsx · /api/inbound/email (shared secret)                       │
+ │ /auth/v1/*           allowlisted proxy to Supabase Auth                                          │
+ │ /healthz · /readyz   liveness; readiness = every committed migration applied                     │
+ │ worker               outbox relay (LISTEN crove_outbox + 1 s poll) -> pg-boss -> jobs             │
+ └──────┬────────────────────────────────────┬──────────────────────────┬──────────────────────────┘
+        │ crove_app (API) · crove_worker      │ volume `files`           │ HTTPS (optional): any OpenAI-compatible endpoint
+        ▼                                     ▼
+ db (postgres:17): crove_kernel · crove_finance · crove_jobs · crove_meta (migration ledger) · auth (Supabase Auth)
+ auth (supabase/gotrue, pinned): owns schema `auth`; email through SMTP (Mailpit locally)
+ migrate (same image, role `migrate`): runs to completion before `auth` and `crove` start
+```
+
+**Crove Cloud (decided; built with MVP step 2, not deployed yet):**
+
+```
+ Browser (app.crove.com) ──► Cloud Run service crove-api (role api): SPA + /api/*; Bearer = access token from DOS's Supabase Auth
+    │ @supabase/auth-js (PKCE) ──► DOS's Supabase Auth (accounts shared with DOS ID); the kernel verifies via JWKS
+    │                               and checks revocation against it (ADR-0028)
+ Cloud Run worker pool crove-worker (role worker) · Cloud Run Job crove-migrate (role migrate)
+ later: crove-extract sandbox (bytes in, JSON out; no secrets, no egress) · prober job · crove-stream (2b)
     ▼
- ┌─────────────── GCP `crove-prod` · asia-southeast1   (beta: `crove-beta`, identical layout) ─────────────┐
- │ crove-api      Cloud Run service · /auth/* /rpc /webhooks/* /healthz /readyz /version · min 1, max 4     │
- │ crove-stream   (2b) /events (SSE) · /ai/*  ·  (Phase 3) /mcp                                             │
- │ crove-worker   worker pool · relay (exclusive via advisory lock) + subscribers + jobs · watchdog         │
- │ crove-extract  sandbox: SA with no permissions, no egress, bytes in, JSON out; only the worker calls it  │
- │ Cloud Run Jobs prober (every minute) · ops (staff, via protected workflow) · import (Phase 3)            │
- └──────┬──────────────────────────────────────────────┬─────────────────────────────┬──────────────────┘
-        │ :6543 tx (kernel)  ·  :5432 session (pg-boss) │ S3 API                      │ HTTPS (default egress)
-        ▼                                               ▼                             ▼
- Supabase `crove-db-prod` (dedicated) · PG17 · SG      GCS crove-files-prod          DOS ID (OIDC) · api.dos.me (org/membership; broker, optional)
- crove_kernel (incl. user_account, tenant,             GCS crove-archive-prod (WORM)  api.dos.ai (OpenAI-compatible AI endpoint)
-   tenant_member, session) · crove_<module> · crove_jobs                              Provider needing an IP allowlist -> dedicated NAT (when needed)
-
- DOS-Me ── org/team webhooks (HMAC-signed, DOS-27) ──► crove-api /webhooks/dos-id/<binding_public_id>
+ Dedicated Supabase project per environment (PG17, Singapore; prod with 7-day PITR): used as Postgres only
+ GCS through the S3 API (files; archive WORM) · api.dos.ai (OpenAI-compatible) · later: DOS org sync (DOS-27)
 ```
 
-**Self-host:** the same images on any container platform; any PG17 instead of Supabase (PgBouncer transaction mode or direct connections instead of Supavisor); any S3-compatible store instead of GCS; any OIDC IdP instead of DOS ID; any OpenAI-compatible endpoint instead of DOS.AI.
+**Other self-host shapes:** the same image on any container platform; any PostgreSQL 17 (PgBouncer in transaction mode, or direct connections at low load); `api` and `worker` as separate containers once the S3 adapter exists (T7); an external Supabase Auth through `AUTH_JWKS_URL` and `PUBLIC_AUTH_URL`; any OpenAI-compatible endpoint. By default it calls no DOS service.
 
 **Hard rules:**
-- The shell imports only `@crove/kernel-contract` and `kernel-client`.
-- The browser calls `api.crove.com` directly; CORS uses an explicit allowlist.
-- Server Actions are not a write path.
+- The SPA is static files served by the kernel on the same origin. It holds no secrets, never touches the DB, and imports only `@crove/kernel-contract` and the oRPC client. Runtime config carries no secrets.
+- Every write is an oRPC command through `execute()`; client route guards are UX only. The product app has no server-side code.
+- Same origin, so CORS stays closed for `/api`.
+- Next.js serves only the landing page (`apps/web`, on Vercel).
 
 ### 3.3 Connection budget and egress
+
+The login roles below are the decided design. On `main` the API uses `crove_app` and the worker and pg-boss share `crove_worker` (§7.1). Ports are Supavisor's (Crove Cloud); self-host connects directly or through PgBouncer.
 
 | Login role | Port | Used by | Client pool | `CONNECTION LIMIT` (incl. rollout headroom) | Timeouts |
 |---|---|---|---|---|---|
@@ -357,71 +408,81 @@ crove-cloud/
 
 - **Transaction-mode roles:** set LIMIT >= the `pool_size` Supavisor gives that role.
 - **Session-mode roles:** count the full pool plus LISTEN connections, then double it for rollouts.
-- **Total limit:** must stay below the Crove project's `max_connections`, minus Supabase's reserved share and an operations share (`db push`, ops). Real numbers are fixed after the Phase 0 baseline. Need more: scale compute, not limits.
-- **Self-host:** no Supavisor; use PgBouncer transaction mode (or direct connections at low load) with the same role and limit table.
+- **Total limit:** must stay below the Crove project's `max_connections`, minus Supabase's reserved share and an operations share (`migrate`, ops). Real numbers are fixed by the baseline after MVP step 2 (§12-E). Need more: scale compute, not limits.
+- **Self-host:** no Supavisor; PgBouncer transaction mode (or direct connections at low load) with the same role and limit table. `main` opens pools of 10 per role.
 - **Egress:**
-  - v0 has no NAT: DOS ID, the DOS-Me API, DOS.AI, the DOS-Me broker (if used) and GCS all use default egress. The API never goes through NAT.
+  - No NAT at first: DOS's Supabase Auth, DOS.AI, the DOS-Me broker (if used) and GCS all use default egress. The API never goes through NAT.
   - When a directly called provider requires an IP allowlist, set up `crove-nat-provider`: prod-only IP, FQDN allowlist, used only by the worker and Jobs.
   - Tenant-supplied URLs (Phase 3+) take the default path through the SSRF guard (§7.7), never the allowlisted IP.
   - Private Google Access enabled on the subnet.
 - **Secrets:**
   - Each secret has exactly one source of truth; cross-project reads go through IAM.
-  - Cloud: the prod `CROVE_INTERNAL_API_KEY` (sourced in the DOS.Me cloud project, used for identity reconcile and the broker) is readable only by the `crove-prod` worker SA; beta uses its own beta key.
-  - The Crove session signing key and the DOS webhook secret are sourced in Secret Manager of `crove-prod`/`crove-beta`; self-host reads them from env vars or its own secret store.
+  - Per deployment: login-role passwords (set by `migrate` from the environment), `AUTH_JWT_SECRET` (self-host, HS256; Cloud uses JWKS and holds no Auth secret), `INBOUND_SECRET`, the AI key, S3 credentials, and later `context_key` (in the DB, readable only by `crove_ctx`).
+  - Cloud: Secret Manager of `crove-prod`/`crove-beta`. Self-host: environment variables or its own secret store. `config.ts` refuses the sample secrets and `AUTH_AUTOCONFIRM=true` on a non-local `PUBLIC_URL` (implemented).
+  - When DOS org sync is enabled (later): the prod internal key for DOS-27 reconcile is readable only by the `crove-prod` worker SA; beta uses its own beta key.
 
 ### 3.4 Environments
 
-| | Local / agent sandbox | CI | Preview (per PR) | Beta | Prod |
+| | Local / agent sandbox | CI | Self-host | Crove Cloud beta | Crove Cloud prod |
 |---|---|---|---|---|---|
-| Git ref | worktree | PR | PR head | `dev` | `main` |
-| DB | Supabase CLI on Docker, started by SessionStart (`db reset` ≈38 s; fallback: embedded PG17) | Supabase CLI on Docker + plain PG17 (G3) | Preview branch of `crove-db-beta`, full replay | Supabase `crove-db-beta` | Supabase `crove-db-prod` (7-day PITR) |
-| Kernel | `pnpm dev` (entry `all`) | hermetic | Phase 1-2: none. Phase 3: revision `pr-<n>` in project `crove-ci` | `crove-beta` | `crove-prod` |
-| Shell | `next dev` | `next start` (hermetic) | Phase 1-2: off (only the `ui-only` label enables it, pointing at beta). Phase 3: preview env | `beta-app.crove.com` | `app.crove.com` |
-| Auth | Mock OIDC IdP (`@crove/testing`) + seeded users | same as local | DOS ID beta, client `Crove Beta` | DOS ID beta, client `Crove Beta` | DOS ID prod, client `Crove` |
-| AI / S3 | MSW fixtures / local Storage S3 | same as local | beta gateway / beta bucket, prefix `preview/` | beta gateway / `crove-*-beta` | `api.dos.ai` / `crove-*-prod` |
+| Git ref | worktree | PR, `main` | a release tag | `dev` (created with Cloud beta) | `main` |
+| DB | `docker compose up` (postgres:17), or a local PG17 for `pnpm dev`; `pnpm db:migrate` | PG17 service container; the `db` test project applies migrations with the built-in runner | any PostgreSQL 17 (bundled in compose) | dedicated Supabase project (beta) | dedicated Supabase project (prod, 7-day PITR) |
+| Kernel | `pnpm dev` (kernel + Vite dev server proxying `/api` and `/auth`), or compose role `all` | hermetic tests | compose role `all`, or `api` + `worker` containers (needs T7) | Cloud Run `api` service + `worker` pool + `migrate` job | same |
+| SPA | Vite dev server | `vite build` | served by the kernel | served by the kernel (`beta-app.crove.com`) | served by the kernel (`app.crove.com`) |
+| Auth | bundled Supabase Auth + Mailpit | test-signed tokens from `@crove/testing` (planned; `main` tests the config guards and the `/auth/v1` proxy) | bundled Supabase Auth with real SMTP and `AUTH_AUTOCONFIRM=false`, or any Supabase Auth via `AUTH_JWKS_URL` | DOS's Supabase Auth (beta) | DOS's Supabase Auth (prod) |
+| AI / files | optional AI endpoint; local disk | no AI (XML path); local disk | any OpenAI-compatible endpoint; local disk or S3-compatible | beta gateway; `crove-*-beta` | `api.dos.ai`; `crove-*-prod` |
 
-- `crove-db-*` project refs and OIDC client ids live only in `crove-cloud`.
-- **Self-host** is an environment the user sets up, configured via env vars (DB URL, OIDC issuer, AI endpoint, S3). By default it calls no DOS services.
+- No per-PR preview environment before Phase 3.
+- Crove Cloud project refs, keys and domains live only in `crove-cloud`.
+- **Self-host** is configured through environment variables (`.env.example`: `PUBLIC_URL`, database passwords, Supabase Auth secret and SMTP, AI endpoint, inbound email). By default it calls no DOS service.
+- Domains: `crove.com` for the landing page, `app.crove.com` for Crove Cloud (ADR-0027 decision 5); the API shares the app's origin, so there is no `api.crove.com`.
 
-Before mapping `api.crove.com` and `app.crove.com`, confirm both names are unused. Fallback names: `kernel.crove.com` and `os.crove.com`.
+### 3.5 Deploy order and upgrades
 
-### 3.5 Deploy order
+**Self-host (implemented):**
+1. Pull or build the new image.
+2. `migrate` runs first. The built-in runner takes an advisory lock, applies each new file in its own transaction, records version and sha256 in `crove_meta.schema_migrations`, and refuses a file that was edited after it was applied. It then sets role passwords and (until T6) creates the pg-boss schema. Compose starts `auth` and `crove` only after `migrate` completes.
+3. `crove` starts; `/readyz` returns 503 until every committed migration is in the ledger.
+4. With split roles: `migrate`, then `worker`, then `api`.
 
-CI gates run in the core repo. Deploy workflows live in `crove-cloud`; they trigger when core's `dev`/`main` gets a new commit and always check out that exact SHA.
+**Crove Cloud (decided; built with MVP step 2, issue #56).** CI gates run in the core repo. Deploy workflows live in `crove-cloud`; they trigger on a new core commit and always check out that exact SHA.
 
-1. **PR -> `dev`.** The agent squash-merges when G1-G6, security and CLA are green. PRs touching protected paths also need the invariant suite from base and a security reviewer agent (Decision 7, §10); there is no owner approval label.
+1. **PR -> `dev`.** Today PRs merge to `main`; the `dev` branch is created when Cloud beta exists. The agent squash-merges when the required checks are green. PRs touching protected paths also need the invariant suite from base and a security reviewer agent (Decision 7, §10); there is no owner approval label.
 2. **`dev` -> beta** (`deploy-beta`, WIF can only reach `crove-beta`):
-   1. Migrations to `crove-db-beta`: the beta project's Supabase GitHub integration (branch `dev`), or `supabase db push` from CI.
-   2. Build `crove-kernel:<sha>` with `CROVE_SCHEMA_MANIFEST` listing every migration version in the repo.
-   3. **Deploy the worker first** (`--no-promote`, then split). The worker waits for `schema_missing()` to be empty, up to 30 minutes, before consuming. The startup probe calls only `/healthz`.
+   1. Run the `crove-migrate` Job against the beta DB.
+   2. Build `crove-kernel:<sha>`; the image carries every migration file, which is the schema manifest.
+   3. **Deploy the worker first** (`--no-promote`, then split). The worker waits until no committed migration is missing, up to 30 minutes, before consuming. The startup probe calls only `/healthz`.
    4. Deploy the API with `--no-traffic --tag candidate`. Poll the tag's `/readyz`: schema complete and worker build >= API build. When it passes, shift 100% of traffic.
-   5. Vercel builds `crove-web`, then CI runs the Playwright smoke tests.
+   5. CI runs the Playwright smoke tests.
 3. **`dev` -> `main`** (scheduled promote PR, e.g. Tuesday and Thursday, merge commit):
    1. Pre-merge check: no pending migration has a version <= the max in the prod ledger (read via prod `/version`). Hotfix PRs to `main` contain no migrations; migrations always go through `dev`.
    2. If there is DDL on a hot table or a pg-boss upgrade: open a **promote window**. Scale the worker to 0, pause exports. The API doesn't touch pg-boss, so it keeps serving.
-   3. `supabase db push` to `crove-db-prod` from `crove-cloud` CI (the integration's prod auto-deploy is always off). The workflow compares the ledger with the files and warns on missing versions.
+   3. Run the `crove-migrate` Job against prod.
    4. `deploy-prod` (WIF only from `main` and the `crove-prod` environment; owner 1-click approval recommended): worker -> API candidate -> `/readyz` -> tag smoke -> traffic shift.
-   5. `release-gate` waits for `/version` to contain the last commit touching **the same glob set as the trigger** (`apps/**`, `packages/**`, `modules/**`, `supabase/**`), then writes a commit status on the core repo. When the gate is green, the Vercel Deployment Check promotes the shell to the alias.
-4. **Rollback:** API first, worker second, so the worker is always >= the API. The shell uses instant rollback. Schema never rolls back; fix forward only.
+   5. `release-gate` waits for `/version` to contain the last commit touching **the same glob set as the trigger** (`apps/**`, `packages/**`, `modules/**`, `supabase/**`), then writes a commit status on the core repo.
+4. **Rollback:** API first, worker second, so the worker is always >= the API. Schema never rolls back; fix forward only.
 5. **Contract changes (DROP/RENAME/type change):** a separate PR, starting with `-- crove:contract adr=<id>`. Merge only once the commit removing every reference is already on `main`.
 6. **Migration ordering (Crove's own ledger):**
-   - Never edit or rename a migration that has reached `dev`.
-   - A new version must be greater than the max on `dev` (G2). If parallel sessions overtake a file's timestamp: `pnpm db:retime`, then `/reset-preview` (resets only that PR's preview branch).
-   - Self-host applies migrations with `supabase db push --db-url` (pinned Supabase CLI, no Supabase service needed) before running a new image; the image waits for an empty `schema_missing()` as above.
+   - Never edit or rename a migration that has reached the default branch; the runner refuses an edited file.
+   - A new version must be greater than the max on the default branch (G2). If parallel sessions overtake a file's timestamp: `pnpm db:retime`.
+
+On `main` today, `/readyz` checks only the schema; the worker-build check and `/version` are not implemented.
 
 ## 4. Kernel
 
 ### 4.1 Layers
 
 ```
-OIDC IdP (Cloud: DOS ID + DOS-Me API + org/team webhooks; self-host: any IdP)
-   ▼ one-way projection via the IdentityProvider adapter (dos-id | generic-oidc); no FKs, no reads from the IdP's DB (§7.3)
-@crove/kernel-runtime  machinery in crove_kernel, including the identity projection (user_account, tenant, tenant_member, session)
+Supabase Auth (self-host: bundled in compose; Crove Cloud: DOS's Supabase Auth)
+   ▼ access token verified on every request, revocation checked (ADR-0028); (issuer, subject) -> user_account; no FKs (§7.3)
+@crove/kernel-runtime  machinery in crove_kernel, including user_account and org membership (tenant, tenant_member)
    ▲ only through the public API: define*, implement, ctx (enforced by dependency-cruiser, including for @crove/kernel)
 @crove/kernel          kernel MODULE (schema crove_kernel, role crove_m_kernel)
    ▲
 @crove/mod-<id>        schema crove_<id>, role crove_m_<id>
 ```
+
+Later, Crove Cloud only: a DOS org sync adapter in `crove-cloud` projects DOS org membership into `tenant_member` (§7.3, deferred).
 
 ### 4.2 define* functions
 
@@ -485,7 +546,7 @@ export default implement(postJournalEntry, {
 
 | Kind | Identity | Source | Effective permissions | Constraints |
 |---|---|---|---|---|
-| `user` | user_id, sid, aal | Crove session JWT issued after OIDC login (matching surface), verified locally | Membership gate (`tenant_member`) + Crove `role_assignment` | Enters via `crove_api`; in the worker only via an approved proposal |
+| `user` | user_id, session_id, aal | Supabase Auth access token, verified by the kernel on every request (issuer, audience and expiry required; revocation checked, ADR-0028) | Membership gate (`tenant_member`) + Crove `role_assignment` | Enters via `crove_api`; in the worker only via an approved proposal |
 | `agent` | agent_id, run_id, on_behalf_of, grant_id, kind | In-process; MCP via OAuth (Phase 3) | user ∩ grant ∩ trigger class ∩ scope ∩ taint | Chat/MCP enter via api; background runs enter via the worker with a run ref |
 | `api_key` (Phase 3) | key id, created_by | Bearer, stored as sha256 | Key role ∩ the creator's **current** permissions | Expires in <=90 days; never R3; auto-disabled when the creator leaves the org |
 | `automation` (Phase 4) | id, version, owner | Scheduler / subscriber | Grant within the owner's permissions, re-checked on every run | Causal depth <=5 |
@@ -496,7 +557,7 @@ export default implement(postJournalEntry, {
 
 | # | Step | Error |
 |---|---|---|
-| 0 | <ul><li>Verify the Crove session JWT (`iss/aud/exp/sub/sid`) and check the session surface.</li><li>Rate limit by IP and actor **before** any DB write.</li><li>Org comes from `X-Crove-Org` or the binding, never from claims or tool parameters.</li></ul> | 401/429 |
+| 0 | <ul><li>Verify the Supabase access token (`iss`, `aud`, `exp`, `sub`, `session_id` required) and check that the session is not revoked (ADR-0028: self-host in the DB, Crove Cloud through Supabase Auth with a cache of at most 30 s; fail closed).</li><li>Rate limit by IP and actor **before** any DB write.</li><li>Org comes from `X-Crove-Org` (the org slug) or the binding, never from claims or tool parameters.</li></ul> | 401/429/503 |
 | 1 | Look up the command; check surface and kill switch | 404/503 |
 | 2 | Strict zod parse | 422 |
 | 3 | <ul><li>`BEGIN`; `enter_context(...)`; `SET LOCAL ROLE crove_m_<id>`.</li><li>A rejection before membership is established writes a `security_event` (per caller, sampled, with TTL), not the target org's audit.</li></ul> | 403 |
@@ -522,6 +583,8 @@ export default implement(postJournalEntry, {
 
 `@crove/db` has 3 wrappers: `withTenantTx`, `withTenantReadTx` (`BEGIN READ ONLY`) and `withSystemTx`. Only `@crove/kernel-runtime` calls them. Login roles have no table grants, so a query outside a wrapper fails with `permission denied`.
 
+On `main`: `crove_kernel.enter_context(user_id, org_id)` checks that the user is a member of an active tenant and sets `crove.org_id` and `crove.user_id` as transaction-local settings; `enter_system_context(org_id)` does the same for system work. There is no seal, no re-entry guard and no actor-to-`session_user` binding yet, the login roles are members of `crove_tenant` with table grants, and `crove_tenant` (so the API role) may execute `enter_system_context`. The rest of this section is the decided design; External-tenant gate rows T5, T10 and T11 track the gaps.
+
 ```sql
 BEGIN;                                          -- BEGIN READ ONLY for queries
 SELECT crove_kernel.enter_context($1::jsonb);   -- login crove_api | crove_worker
@@ -531,13 +594,28 @@ COMMIT;
 ```
 
 **`crove_kernel.enter_context`** (owner `crove_ctx`, `SET search_path = pg_catalog, pg_temp`, EXECUTE granted only to `crove_api` and `crove_worker`):
-1. **Block re-entry within the same transaction:** a transaction-level advisory lock keyed on `pg_backend_pid()`. It cannot be released and works in READ ONLY.
+1. **Block re-entry within the same transaction.** PostgreSQL advisory locks are re-entrant: "If a session already holds a given advisory lock, additional requests by it will always succeed, even if other sessions are awaiting the lock; this statement is true regardless of whether the existing lock hold and new request are at session level or transaction level" ([PostgreSQL 17, §13.3.5](https://www.postgresql.org/docs/17/explicit-locking.html#ADVISORY-LOCKS)). Taking a lock alone therefore never blocks a second `enter_context`. The definer does two steps, in this order:
+   1. **Check:** if `pg_catalog.pg_locks` shows the context lock already held by this backend (`locktype = 'advisory'`, `classid` = Crove's context namespace constant, `objid = pg_backend_pid()`, `objsubid = 2`, `pid = pg_backend_pid()`, `granted`), raise `CONTEXT_REENTRY` (SQLSTATE 42501).
+   2. **Take:** `pg_advisory_xact_lock(<namespace>, pg_backend_pid())`. The key includes the backend pid, so sessions never contend.
+
+   Why this holds: a transaction-level advisory lock has no unlock call (`pg_advisory_unlock` and `pg_advisory_unlock_all` release only session-level locks) and lasts until the transaction ends; it works in READ ONLY transactions. A marker in a setting would not hold on its own, because a login role can reset any custom setting with `set_config`; the definer still refuses when a valid `crove.ctx_seal` for the current transaction is present, as defense in depth. A session-level lock taken earlier on the same key makes `enter_context` fail closed. `ROLLBACK TO SAVEPOINT` that undoes the first `enter_context` also releases its lock and reverts its settings, so the next call is a clean first entry. Reading `pg_locks` briefly locks the lock manager's partitions; the Phase 1 load test (p95 R1 command < 150 ms) measures the cost.
+
+   **Negative tests** (CI `db` project; External-tenant gate T10):
+   - `enter_context` twice in one read-write transaction: the second call raises `CONTEXT_REENTRY`, with the same or a different org or actor.
+   - The same inside `BEGIN READ ONLY`.
+   - `enter_context`, `SAVEPOINT`, `enter_context`: raises. `SAVEPOINT`, `enter_context`, `RELEASE SAVEPOINT`, `enter_context`: raises.
+   - `enter_context`, then `pg_advisory_unlock(...)`, `pg_advisory_unlock_all()` and resetting `crove.ctx`/`crove.ctx_seal` with `set_config`, then `enter_context`: still raises.
+   - `SAVEPOINT`, `enter_context`, `ROLLBACK TO SAVEPOINT`: the context settings are empty and the helpers return NULL; a new `enter_context` succeeds.
+   - A session-level `pg_advisory_lock` on the same key taken before `enter_context`: raises (fail closed).
+   - The next transaction on the same pooled connection enters normally; two sessions entering at the same moment do not block each other.
+
+   The single-session cases above were checked on PostgreSQL 17 with a prototype of this function on 2026-10-14.
 2. **Bind the actor kind to `session_user`:**
    - `crove_api` may only use `user`, `agent` (chat/MCP) and `api_key`.
    - `crove_worker` may use `system`, `automation` and background `agent`.
    - Any other actor in the worker enters only via a job ref (`outbox_event.id`) or an approved proposal. The function re-reads these references from the DB and does not trust parameters.
 3. **Check tenant and actor:** the tenant must be `active`. Actors are checked directly against the DB, never against cached data:
-   - user: the session (`sid`) is not revoked, and a `tenant_member` row exists within its confirmation TTL (§7.3);
+   - user: not disabled in Crove (`user_account.disabled_at`, ADR-0028); self-host also checks here that the Supabase Auth session (`session_id`) still exists; a `tenant_member` row exists (with DOS org sync, later: within its confirmation TTL, §7.3);
    - grant: unexpired, and the grantor is still a member;
    - key: still valid, and the creator is still a member.
 4. **Derive:** org role, legal-entity scope (an explicit list or the explicit value `'*'`), sensitivity flags, and the membership fingerprint.
@@ -557,14 +635,14 @@ COMMIT;
 - Lint bans `set_config`, `SET`, `RESET ROLE` and `sql.raw` outside `packages/db/src/context/**`.
 - Repositories still write `WHERE org_id = $ctx` explicitly.
 - **Per-pool type parsers:** numeric, int8 and date -> string; timestamptz -> `Date`; json -> parsed. Round-trip test against Kanel.
-- **Org-less commands:** `kernel.me.orgs` uses `my_orgs()`, taking the user from the verified session JWT. `kernel.tenant.activate` is only for the org's owner at the IdP: it checks `tenant_member.idp_role = owner` right after the adapter refreshes that org's membership (Cloud: calls the DOS-Me API), not from claims.
+- **Org-less commands:** `kernel.me.orgs` uses `my_orgs()`, taking the user from the verified access token. `kernel.org.create` runs through `execute()` in an org-less mode: a definer creates the tenant and the owner membership, and the audit row is written in the same transaction (External-tenant gate T4; on `main` the `create_org` definer runs outside `execute()` with no audit). With DOS org sync (later), linking a tenant to a DOS org requires the user to be that org's owner, checked against the DOS-Me API, not claims.
 
 ### 4.6 Authorization
 
-- **Membership gate:** `crove_kernel.tenant_member` (projection from the IdP, §7.3), read directly in `enter_context`. IdP roles map only to Crove's base role (`member`).
-- **Privileged Crove permissions come only from a `role_assignment` granted by a Crove owner:** finance/hr admin, R3 approval, policy editing, role and key management. The person who activates the tenant (must be the org owner at the IdP) gets the Crove `owner` role.
-- **Built-in roles:** `owner`, `admin`, `member`, `viewer`, `finance.chief_accountant`, `finance.accountant`, `finance.viewer`, `crm.sales`, `desk.agent`, `hr.manager`, `external_accountant` (scoped to legal entities), `team_lead` (when teams are projected from the IdP; Cloud needs DOS-5). Custom roles are permission sets drawn from the registry.
-- **Revocation through membership:** `role_assignment` has FK `(org_id, user_id)` -> `crove_kernel.tenant_member ON DELETE CASCADE`; a leave-org event or reconcile deletes the `tenant_member` row.
+- **Membership gate:** `crove_kernel.tenant_member`, managed in Crove through audited commands (§7.3), read directly in `enter_context`. With DOS org sync (later), DOS roles map only to Crove's base role (`member`).
+- **Privileged Crove permissions come only from a `role_assignment` granted by a Crove owner:** finance/hr admin, R3 approval, policy editing, role and key management. The user who creates the org gets the Crove `owner` role (with DOS org sync, later: the DOS org owner who links the tenant). On `main`, `tenant_member.role` (`owner`, `admin`, `member`, `viewer`) is the only role model, and R3 approval is open to `owner`, `admin` and `member` (External-tenant gate T2).
+- **Built-in roles:** `owner`, `admin`, `member`, `viewer`, `finance.chief_accountant`, `finance.accountant`, `finance.viewer`, `crm.sales`, `desk.agent`, `hr.manager`, `external_accountant` (scoped to legal entities), `team_lead` (when teams exist; DOS teams in Cloud need DOS-5). Custom roles are permission sets drawn from the registry.
+- **Revocation through membership:** `role_assignment` has FK `(org_id, user_id)` -> `crove_kernel.tenant_member ON DELETE CASCADE`; removing a member (or, with DOS org sync, a leave-org event or reconcile) deletes the `tenant_member` row.
 - **Permission cache:**
   - Keyed on `(org, actor, membership_fingerprint, authz_version)`, TTL <=60 s.
   - Tested: a downgrade takes effect from the very next command.
@@ -758,20 +836,24 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
 
 | Surface | Phase | Content |
 |---|---|---|
-| `/auth/*`, `/.well-known/jwks.json` | v0 | OIDC callback, refresh, logout, Crove session JWKS (§7.5); per-IP rate limit; no org needed |
-| `/rpc` | v0 | oRPC; Bearer (Crove session JWT, surface `web`) + `X-Crove-Org` |
-| `/webhooks/<provider>/<binding_public_id>` | v0 | <ul><li>Raw body, size-limited.</li><li>Signature verified **inside crove-api** (secret in Secret Manager); invalid -> 401 and nothing stored.</li><li>Valid -> `record_inbound_webhook(binding_public_id, payload_ref)`, org derived from the binding.</li><li>The worker processes it as actor `system:webhook:<provider>`.</li><li>IdP identity events (§7.3) take the same path through a deployment-level binding with no org; the org is mapped from `external_org_id` in the event.</li></ul> |
-| `/healthz` `/readyz` `/version` | v0 | <ul><li>The startup probe calls only `/healthz`.</li><li>`/readyz`: schema complete and worker >= API.</li><li>`/version`: build, `schema_missing`.</li></ul> |
+| `/` | MVP | SPA static files (`apps/app/dist`); deep links fall back to `index.html`; hash-based CSP + Trusted Types (spike A14) |
+| `/api/config` | MVP | Public runtime config: Supabase Auth URL and public key, feature flags; no secrets |
+| `/auth/v1/*` | MVP, self-host | Allowlisted proxy to the bundled Supabase Auth; body-limited; passes the client IP for Supabase Auth's rate limits. Absent when the deployment points at an external Supabase Auth (Crove Cloud) |
+| `/api/rpc/*` | MVP | oRPC; Bearer Supabase access token + `X-Crove-Org` (org slug); every command through `execute()` |
+| `/api/files`, `/api/files/:id`, `/api/export/journal.xlsx` | MVP | Upload (type sniffed from content, size-limited), download, Excel export; same token and org header |
+| `/api/inbound/email` | MVP | Raw MIME from a mail worker, authenticated with `INBOUND_SECRET`; the recipient token selects the org. Decided: the API only verifies, size-limits and stores the raw message; parsing and `kernel.inbound.receive` run in the worker (External-tenant gate T5) |
+| `/webhooks/<provider>/<binding_public_id>` | 2a | <ul><li>Raw body, size-limited.</li><li>Signature verified **inside the API** (secret in the deployment's secret store); invalid -> 401 and nothing stored.</li><li>Valid -> `record_inbound_webhook(binding_public_id, payload_ref)`, org derived from the binding.</li><li>The worker processes it as actor `system:webhook:<provider>`.</li><li>DOS org events (later, DOS-27) take the same path through a deployment-level binding with no org; the org is mapped from `external_org_id` in the event.</li></ul> |
+| `/healthz` `/readyz` `/version` | MVP, Cloud | <ul><li>The startup probe calls only `/healthz`.</li><li>`/readyz`: every committed migration applied (implemented); worker build >= API build (Cloud).</li><li>`/version`: build and missing migrations (Cloud).</li></ul> |
 | `/events` (SSE), `/ai/*` | 2b | Runs on `crove-stream` |
-| `/v1` (OpenAPI 3.1, RFC 9457, `Idempotency-Key`), outbound webhooks | 3 | Commands that declare `http`; Standard Webhooks |
-| `/mcp` | 3 (Cloud: after DOS-9) | Registered MCP clients only; org and grant derived server-side |
+| `/v1` (OpenAPI 3.1, RFC 9457, `Idempotency-Key`), outbound webhooks | 3 | Commands that declare `http`; oRPC v2 (Decision 14); Standard Webhooks |
+| `/mcp` | 3 (Cloud: after DOS-9) | Registered MCP clients only, with tokens from the OAuth 2.1 authorization server (Decision 14), never a user's browser token; org and grant derived server-side |
 
 **Rules:**
 - Handlers only call `kernel.execute`.
 - `DomainError` maps to typed oRPC errors, `problem+json`, or MCP `isError`.
-- CORS uses an allowlist.
-- No body-reading middleware runs before `/rpc`.
-- Files go through presigned URLs.
+- Same origin: CORS stays closed for `/api`.
+- No body-reading middleware runs before `/api/rpc`.
+- With the S3 adapter, uploads and downloads use presigned URLs (§7.6); with local disk they stream through the kernel.
 
 ### 4.12 Entitlements, quotas, kill switches, staff
 
@@ -794,7 +876,7 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
 - **Errors and results:** errors are `DomainError{code,status,details,retryable}`. Results are `{status:'ok',data,command_id,event_ids}` or `{status:'pending_approval',proposal_id,inbox_item_id}`.
 - **Tracing:** one `crove.command` span per execute, no PII. `traceparent` is stored on the outbox so traces continue across async work.
 - **Metrics:** `crove_command_total{command,outcome}`, latency, outbox lag, oldest job age, DLQ, subscriber errors, pending proposals, AI cost.
-- **Crove-owned alerting path (delivered in Phase 0):**
+- **Crove-owned alerting path (Crove Cloud, before the first external tenant; issue #39):**
   - Cloud Scheduler runs the `crove-prober` job every minute. The prober calls `crove_kernel.health()` as `crove_prober` and reads: age of the oldest unpublished outbox row, longest-queued job, DLQ, relay/worker heartbeats, purge results.
   - Results become Cloud Monitoring metrics, with absence alerts.
   - SEV1 pages the owner's phone and also opens an issue for an agent to handle per runbook.
@@ -883,9 +965,10 @@ Existing fork schemas are not in the Crove DB. The `crove_` prefix is kept so se
   - No FK leaves Crove's DB. Identity is a projection table in `crove_kernel` (§7.3): `role_assignment` -> `tenant_member` (CASCADE); `record.owner_user_id`/`party.user_id` -> `user_account` (SET NULL).
   - No FKs between modules. No Crove triggers on non-`crove_*` tables.
 - **Migration discipline** (same as DOS, applied to Crove's own ledger):
-  - Prod and beta receive schema only through the pipeline (§3.5). Never run DDL via Supabase MCP, the Dashboard or `psql` against `crove-db-prod`/`crove-db-beta`. Try DDL on the local DB or a preview branch; every change must become a committed file before merge.
-  - Every PR is replayed locally (G3) and on a preview branch (G4).
-  - Never DROP a table or schema to fix drift: use `CREATE … IF NOT EXISTS` + `supabase migration repair`, tested on a fresh preview branch first.
+  - Prod and beta receive schema only through the pipeline (§3.5): the `migrate` role of the released image. Never run DDL via Supabase MCP, the Dashboard or `psql` against `crove-db-prod`/`crove-db-beta`. Try DDL on a local PG17; every change must become a committed file before merge.
+  - Every PR is replayed on plain PG17 by the built-in runner (G3); Crove Cloud adds a beta replay (G4).
+  - The ledger is `crove_meta.schema_migrations` (version, name, sha256); it is never edited by hand, and the runner refuses a file edited after it was applied.
+  - Never DROP a table or schema to fix drift: write a new idempotent forward migration (`CREATE … IF NOT EXISTS`), tested on a fresh database first.
 - **Runs on plain PG17 (self-host):** the `_crove_kernel_bootstrap` migration creates the `extensions` schema with `pgcrypto`, `pg_trgm`, `unaccent` (`btree_gist` from 2a; `pg_cron` optional, without it housekeeping runs in the worker). It is the only file allowed to touch the `extensions` schema. Statements touching Supabase-specific roles (`anon`, `authenticated`, `service_role`) are wrapped in existence guards.
 
 ```sql
@@ -954,10 +1037,10 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 
 | Table (`crove_kernel`) | Key points | Phase |
 |---|---|---|
-| `tenant` | `org_id uuid PK` (issued by Crove, v7); `idp`, `external_org_id` (UNIQUE `(idp, external_org_id)`), `slug`, `name`; status `pending\|active\|offboarding\|closed`; locale, timezone, `base_currency`, `authz_version`, `idp_synced_at` | v0 |
-| `user_account` | `id uuid` (issued by Crove); UNIQUE `(issuer, subject)`; email, name, status. Not named `user` because that is a Postgres keyword. Together with `session` and `idp_event`, a machinery table without `org_id`, on the conformance allowlist | v0 |
-| `tenant_member` | PK `(org_id, user_id)`; `idp_role`, `confirmed_at`, `source_seq`; deleting the row revokes (§7.3) | v0 |
-| `session` / `idp_event` | Crove session: `sid`, surface, `refresh_sha256`, `aal`, expiry, `revoked_at` / IdP event dedupe: PK `(idp, event_id)`, 30-day TTL | v0 |
+| `tenant` | `org_id uuid PK` (issued by Crove, v7); `slug`, `name`; status `active\|offboarding\|closed`; `inbound_token`; locale, timezone, `base_currency`, `authz_version`; `external_org_id` (nullable, UNIQUE when set) for DOS org sync later. On `main`: status `active\|closed`, no `external_org_id` yet | v0 |
+| `user_account` | `id uuid` (issued by Crove); UNIQUE `(issuer, subject)` from the verified Supabase token; email, name, `disabled_at` (ADR-0028), `last_seen_at`. Not named `user` because that is a Postgres keyword. A machinery table without `org_id`, on the conformance allowlist | v0 |
+| `tenant_member` | PK `(org_id, user_id)`; `role` (Crove base role); written only by commands (create org, add, invite, change role, remove; audited); deleting the row revokes (§7.3). With DOS org sync (later): `source`, `confirmed_at`, `source_seq` | v0 |
+| `idp_event` | Later, DOS org sync only: event dedupe, PK `(source, event_id)`, 30-day TTL. There is no Crove `session` table: sessions live in Supabase Auth (ADR-0028) | later |
 | `context_key` | Singleton, readable only by `crove_ctx`; random per environment; never exported | v0 |
 | `legal_entity` | kind, `tax_code` (UNIQUE when present), parent | v0 |
 | `module_setting`, `org_policy`, `currency`, `entity_type`, `permission` | Catalog seeded from manifests | v0 |
@@ -975,7 +1058,7 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 | `number_series`, `number_allocation`, `external_call`, `process_instance`, `connection_binding`, `credential`, `document`, `document_version`, `field_history` (yearly partitions, PII crypto-shredded), `subject_key` | | 2a |
 | `ai_thread`, `ai_message` (per-user RLS) | | 2b |
 | `usage_counter`, `feature_flag*` | | Before charging |
-| `record_share`, `sharing_default`, `saved_view`, `custom_field_*`, `record_link`, `legacy_id_map`, `api_key`, `webhook_*`, `search_doc` | | 3 |
+| `record_share`, `sharing_default`, `saved_view`, `custom_field_*`, `record_link`, `api_key`, `webhook_*`, `search_doc` | | 3 |
 | `automation*`, `notification_pref`, `activity_link` | | 4 |
 | `search_chunk`, `list*`, `eval_candidate` | | later |
 
@@ -999,7 +1082,7 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 
 | Role | Attributes / privileges | Membership | Purpose |
 |---|---|---|---|
-| `crove_api` | LOGIN NOINHERIT; limits and timeouts per §3.3; EXECUTE only (`enter_context`, `my_orgs`, `record_inbound_webhook`, `identity_login`, `session_refresh`, `session_revoke`, `schema_missing`) | `crove_m_*` (SET, no INHERIT) | API |
+| `crove_api` | LOGIN NOINHERIT; limits and timeouts per §3.3; EXECUTE only (`enter_context`, `my_orgs`, `identity_upsert`, `auth_session_valid` (self-host, ADR-0028), `record_inbound_message`, `record_inbound_webhook`, `schema_missing`) | `crove_m_*` (SET, no INHERIT) | API |
 | `crove_worker` | LOGIN NOINHERIT | `crove_m_*`, `crove_system` (SET) | Worker, Jobs |
 | `crove_queue` | LOGIN NOINHERIT; DML on `crove_jobs` | - | pg-boss |
 | `crove_prober` | LOGIN; EXECUTE `health()` | - | Prober |
@@ -1007,13 +1090,15 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 | `crove_m_<id>` | NOLOGIN | `crove_tenant` (INHERIT) | Module role |
 | `crove_system` | NOLOGIN; EXECUTE on cross-tenant machinery; DML on `crove_jobs` | - | Relay, purge |
 | `crove_owner` | NOLOGIN | - | Owns the `crove_*` tables |
-| `crove_ctx` | NOLOGIN NOBYPASSRLS | - | Owns `enter_context` and `ctx_*`; reads `context_key`, `tenant`, `tenant_member`, `session`, grants/keys/roles through explicit policies |
-| `crove_definer_identity` | NOLOGIN | - | The only writer of the identity projection (`user_account`, the identity part of `tenant`, `tenant_member`, `session`, `idp_event`); owns `identity_login`, `session_*` (EXECUTE to `crove_api`) and `identity_apply` (EXECUTE to `crove_system`) |
+| `crove_ctx` | NOLOGIN NOBYPASSRLS | - | Owns `enter_context` and `ctx_*`; reads `context_key`, `tenant`, `tenant_member`, `user_account`, grants/keys/roles through explicit policies |
+| `crove_auth_reader` | NOLOGIN | - | Self-host only: SELECT on `auth.sessions` and `auth.users`; owns `auth_session_valid` (ADR-0028) |
+| `crove_definer_identity` | NOLOGIN | - | The only writer of `user_account` (`identity_upsert`, EXECUTE to `crove_api`) and of the tenant row and first owner membership (`kernel.org.create`, through `execute()`); later `identity_apply` for DOS org sync (EXECUTE to `crove_system`) |
 | `crove_definer_tenant` | NOLOGIN | `crove_tenant` (INHERIT) => RLS applies to it | `emit`, `audit_write`, numbering, posting, proposals |
-| `crove_definer_system` | NOLOGIN | - | Outbox claim, purge, refresh: EXECUTE only to `crove_system`. Exception: `schema_missing()` (reads `supabase_migrations.schema_migrations`) is granted to every Crove login role |
+| `crove_definer_system` | NOLOGIN | - | Outbox claim, purge, refresh: EXECUTE only to `crove_system`. Exception: `schema_missing()` (reads `crove_meta.schema_migrations`) is granted to every Crove login role |
 
+- On `main`: two login roles, `crove_app` (API) and `crove_worker`, both INHERIT members of `crove_tenant`, which holds the table grants; definers are owned by the migration owner; there are no module roles yet; self-host adds `supabase_auth_admin` for the bundled Supabase Auth. The table above is the decided design.
 - Roles are created idempotently with drift guards: `createrole_self_grant=''`; raise if a role is superuser, has bypassrls, createrole, createdb, or the wrong login/inherit.
-- Passwords are set by a workflow from Secret Manager. Rotation is two-step (new secret version -> deploy -> verify -> drop the old one), checking `supabase network-bans` to avoid Fail2ban.
+- Passwords are set by the `migrate` role from environment variables (self-host) or from Secret Manager by the Cloud deploy workflow. Rotation is two-step (new secret version -> deploy -> verify -> drop the old one), checking `supabase network-bans` to avoid Fail2ban.
 - G3 asserts the **exact EXECUTE matrix** of every role, and runs generated negative tests with forged org/legal-entity parameters.
 
 ### 7.2 RLS template
@@ -1033,20 +1118,18 @@ CREATE POLICY le_scope ON crove_finance.invoice AS RESTRICTIVE FOR ALL TO crove_
 
 ### 7.3 Identity seam
 
-**The `IdentityProvider` adapter** is the only place that knows who the IdP is. Two implementations: `dos-id` (Crove Cloud) and `generic-oidc` (self-host, local, CI). Interface: `discover`, `verifyLogin`, `fetchMemberships`, `verifyEvent`, `reconcile`.
+Identity comes from Supabase Auth (Decision 5, ADR-0027); how the kernel verifies tokens, checks revocation and requires step-up is set by ADR-0028 (proposed; External-tenant gate T1). Crove issues no sessions and runs no OIDC client: social and OIDC providers are configured in Supabase Auth.
 
-**One-way projection** (IdP -> Crove, never the reverse):
-1. **Login:** verify the ID token (`iss`, `aud`, `nonce`, `exp`, signature via JWKS) -> JIT upsert `user_account` by `(issuer, subject)` -> fetch the **authoritative** orgs and roles from the DOS-Me API using the user's own access token -> upsert `tenant` (status `pending` if not yet activated) and `tenant_member` -> issue a Crove session (§7.5).
-   - Org/team claims in the JWT are not used: they can be up to 1 h stale; membership always comes from the authoritative DOS-Me API.
-   - `generic-oidc`: membership is managed by Crove (owner invites, audited); optionally mapped from the `groups` claim if the IdP is configured for it.
-2. **Changes and revocation:** DOS sends `org.member.added|removed|role_changed`, `org.deleted`, `team.*`, `user.disabled|deleted` via HMAC-signed webhooks (DOS-27). Crove verifies signature and timestamp (±5 minutes), dedupes by event id in `idp_event`, applies per-org by `seq` and drops stale events.
-   - Leaving an org: delete the `tenant_member` row (cascading `role_assignment`), revoke the related sessions, grants and keys, bump `authz_version`. Effective from the next command.
-   - `org.deleted`: the tenant moves to `offboarding` (§7.9).
-3. **Reconcile:** job `kernel.identity.reconcile` runs every 6 h for each `active` tenant, and immediately after repeated webhook failures. It compares the projection with the DOS-Me API (internal key), fixes drift, and alerts when Crove grants more access than the IdP.
-4. **TTL:** each `tenant_member` has `confirmed_at` (updated on login, event or reconcile). If not reconfirmed for 24 h, `enter_context` rejects and queues an immediate reconcile.
-5. **Projection writes:** only through `crove_definer_identity` definers (§7.1), audited. IdP roles map only to the base role (§4.6).
-
-**Trust dependency:** Crove Cloud membership comes from DOS org membership via the DOS-Me API and events, and is enabled only after gate DOS-1 passes. Self-host is unaffected.
+1. **Every request:** the kernel verifies the access token (§7.5), checks that the session is not revoked (ADR-0028), and maps `(issuer, subject)` to `user_account` through the `identity_upsert` definer (created on first use; email and name refreshed). The mapping may be cached briefly; it carries no authorization.
+2. **Membership lives in Crove.** `tenant_member` is written only by commands through `execute()`, all audited: the org creator becomes `owner` (`kernel.org.create`); owners and admins add members by email (`kernel.member.add`); pending invites with consent, removal and role changes are Phase 1 work (issues #35, #36). `enter_context` reads membership in every transaction, so removal takes effect on the next request. JWT claims never grant membership or roles.
+3. **Crove Cloud** runs the same code pointed at DOS's Supabase Auth, so DOS ID accounts sign in to Crove. Each Supabase Auth has its own issuer, so `user_account` rows from different deployments never collide.
+4. **DOS org sync (deferred, Crove Cloud only).** When per-org billing through DOS.AI needs it (Tracking, deferred table), a `crove-cloud` adapter projects DOS org membership into `tenant_member`, one way (DOS -> Crove):
+   - changes arrive as HMAC-signed DOS-27 events (`org.member.added|removed|role_changed`, `org.deleted`, `team.*`, `user.disabled|deleted`), checked for signature and timestamp (±5 minutes), deduped in `idp_event`, applied per org by `seq`; stale events are dropped;
+   - leaving an org deletes the `tenant_member` row (cascading `role_assignment`), revokes related grants and keys and bumps `authz_version`; `org.deleted` moves the tenant to `offboarding` (§7.9);
+   - a reconcile job compares the projection with the DOS-Me API every 6 h and after repeated webhook failures, fixes drift and alerts when Crove grants more than DOS;
+   - each synced membership carries `confirmed_at`; if it is not reconfirmed within 24 h, `enter_context` rejects and queues a reconcile;
+   - writes go only through `crove_definer_identity` definers, audited; DOS roles map only to the base role (§4.6);
+   - it is enabled only after gate DOS-1 passes. Self-host is unaffected.
 
 **Rest of the seam:**
 - Business data never syncs to or from DOS. Crove transactions write only `crove_*`.
@@ -1059,11 +1142,11 @@ CREATE POLICY le_scope ON crove_finance.invoice AS RESTRICTIVE FOR ALL TO crove_
 - FKs without an index;
 - Crove triggers on tables outside `crove_*`.
 
-**Changing IdP** (e.g. a self-hoster moving to another IdP): map the old `(issuer, subject)` to the new one with an audited staff command; Crove's `org_id` and `user_account.id` don't change.
+**Changing identity provider** (e.g. a self-hoster moving from the bundled Supabase Auth to another Supabase Auth): map the old `(issuer, subject)` to the new one with an audited staff command; Crove's `org_id` and `user_account.id` don't change. Replacing Supabase Auth with another product needs a new identity adapter (ADR-0027).
 
 ### 7.4 Credentials and bindings
 
-- **Crove-generated secrets** (session signing key, webhook secrets): each deployment holds its own. Cloud uses Secret Manager; self-host uses env vars or its own secret store. There is no path from the Crove DB to DOS's Vault. API keys are stored only as sha256.
+- **Crove-generated secrets** (inbound email secret, webhook secrets): each deployment holds its own. Cloud uses Secret Manager; self-host uses env vars or its own secret store. There is no path from the Crove DB to DOS's Vault. API keys are stored only as sha256.
 - **Third-party credentials** go through the `CredentialBroker` adapter:
   - `crove-local` (every deployment): tokens envelope-encrypted with the deployment key (Cloud: KMS), stored in `crove_kernel.credential`; only jobs with `egress: provider:<x>` can decrypt.
   - `dos-broker` (Cloud, optional): `public.provider_connections` + DOS's Vault, called through the DOS-Me broker (DOS-8, DOS-20).
@@ -1076,20 +1159,24 @@ CREATE POLICY le_scope ON crove_finance.invoice AS RESTRICTIVE FOR ALL TO crove_
 
 ### 7.5 Auth and sessions
 
-Rewritten 2026-10-14 for Supabase Auth (Decision 5, ADR-0027). Other sections that still describe Crove-issued session JWTs, OIDC callbacks under `/auth` or the `dos-id`/`generic-oidc` adapters (§3.2, §3.3, §4.1, §4.3, §4.4, §4.11, §6, §7.3, §12, §13 (Phases 0-1), §14, §16) predate Decision 5; Decisions 5 and 12 override them until the identity ADR rewrites them.
+Supabase Auth issues and owns sessions (Decision 5, ADR-0027). ADR-0028 (proposed) sets how the kernel verifies and revokes them.
 
-- **Login:** the SPA uses the Supabase Auth client (`@supabase/auth-js`, PKCE): email + password, magic link, Google/Microsoft/OIDC providers, MFA and password reset. Self-host runs Supabase Auth in the compose stack; Crove Cloud points the same code at DOS's Supabase Auth (accounts shared with DOS ID).
-- **Kernel:**
-  - Verifies Supabase access tokens with `jose`: JWKS when asymmetric keys are on (ES256/RS256), otherwise the deployment's JWT secret (HS256); the issuer is checked when configured.
-  - Maps `(issuer, subject)` to `user_account` (§7.3 step 1). Org membership lives in Crove and `enter_context` checks it on every request, so removal from an org takes effect immediately.
-  - `/mcp` accepts only MCP client tokens (Phase 3, issued by the authorization server in Decision 14), never a user's browser token.
-  - R3 approval needs step-up: a Supabase Auth MFA session (`aal: aal2` in the token).
-  - Open: revoking an access token before it expires (logout, disabled user); decided in the identity ADR (for example a short token lifetime or a session check).
+- **Login (SPA):** `@supabase/auth-js` with PKCE: email + password, magic link, Google/Microsoft/OIDC providers, MFA and password reset. Self-host runs Supabase Auth in the compose stack behind the kernel's `/auth/v1` proxy; Crove Cloud points the same code at DOS's Supabase Auth (accounts shared with DOS ID). Sign-up, email confirmation and SMTP are Supabase Auth settings; the kernel refuses to start on a public URL with auto-confirm on or a sample JWT secret (implemented in `config.ts`). Password recovery, MFA enrollment and callback screens: issue #32.
+- **Kernel, every request** (ADR-0028):
+  - verifies the access token with `jose`: JWKS (ES256/RS256) when `AUTH_JWKS_URL` is set, otherwise HS256 with the deployment's JWT secret; issuer, audience and expiry required, plus `sub`, `session_id` and `role = authenticated`; anonymous tokens rejected;
+  - checks revocation, fail closed: self-host with the bundled Supabase Auth looks up `session_id` in `auth.sessions` (and the user's ban or deletion) in the request transaction; Crove Cloud asks Supabase Auth (`GET /auth/v1/user`) with a positive cache of at most 30 s, and answers 503 when Supabase Auth is unreachable;
+  - maps `(issuer, subject)` to `user_account`; `enter_context` checks membership in every transaction.
+- **On `main`:** signature and audience are verified; the issuer is checked only when `AUTH_ISSUER` is set and `exp` only when present; there is no revocation check, so a signed-out token works until it expires (1 h in compose). External-tenant gate T1 tracks the change.
+- **Step-up:** R3 approvals need `aal = aal2` in the verified token (Supabase Auth MFA, policy P11) and a live revocation check that skips the cache. On `main`, approval needs neither (External-tenant gate T2).
+- **API and MCP clients:** `/v1` and `/mcp` accept only tokens from the OAuth 2.1 authorization server (Decision 14, Phase 3), never a user's browser token.
 - **Shell:**
   - `@supabase/auth-js` keeps the session in browser storage and refreshes it; the SPA sends the access token as Bearer. Runtime config (`/api/config`) carries no secrets.
+  - Logout calls Supabase sign-out, which removes the session, so the old token fails the next revocation check; the SPA clears its query cache and tells other tabs.
   - Client route guards (`beforeLoad`) are UX only.
   - Hash-based CSP + Trusted Types for the static `index.html` (spike A14, retargeted by Decision 6); no third-party scripts.
-- **Redirect URLs:** Supabase Auth allows redirects only to domains the owner controls (Cloud: `app.crove.com`).
+- **Redirect URLs:** Supabase Auth allows redirects only to domains the owner controls (self-host: `PUBLIC_URL`; Cloud: `app.crove.com`, a DOS-side change, issue #54).
+
+Superseded design (kept only so older references resolve): Crove-issued session JWTs and refresh tokens, the `session` table, OIDC callbacks under `/auth/*`, the `dos-id` and `generic-oidc` `IdentityProvider` adapters and `/.well-known/jwks.json`. Red-team rows S18, O8 and O14-O19 in the Appendix refer to that design.
 
 ### 7.6 Untrusted input
 
@@ -1124,18 +1211,18 @@ Rewritten 2026-10-14 for Supabase Auth (Decision 5, ADR-0027). Other sections th
 
 ### 7.8 Threat model, CI evidence, detective controls
 
-- **Threat model:** RLS stops application bugs: a forgotten org filter, a wrong join, an agent-written query. A compromised server is contained by least-privilege login roles, the seal, per-environment identities, immutability triggers and WORM anchors. A compromised `crove-api` alone could write fake membership through `identity_login`; that is detected by reconciling with the IdP and alerting on new memberships in orgs that have a tenant.
+- **Threat model:** RLS stops application bugs: a forgotten org filter, a wrong join, an agent-written query. A compromised server is contained by least-privilege login roles, the seal, per-environment identities, immutability triggers and WORM anchors. A compromised API process passes the verified user to `enter_context`, so it can act as any existing member; it cannot create membership outside audited commands. That is contained by least-privilege login roles and per-environment identities, and detected by the controls below; it is not prevented.
 - **Evidence (G3):**
   - **Conformance:** `org_id`, RLS and policies using the right helpers, PK rules, indexed composite FKs, money domains, no `timestamp without time zone`, append-only tables with INSERT only, functions with `search_path = pg_catalog, pg_temp`, the exact EXECUTE matrix, no CREATE at runtime.
   - **Generated RLS matrix:** cross-org, cross-legal-entity (kernel tables included), forged `le_scope`/flags/user, no context.
-  - **Invariant suite taken from `origin/dev`,** run against the PR's schema, so a PR cannot loosen its own gate.
+  - **Invariant suite taken from the base branch,** run against the PR's schema, so a PR cannot loosen its own gate (Decision 7, External-tenant gate T15).
   - Vitest `db`: one tenant per test.
   - Red-team evals.
 - **Detective controls (with alerts):**
   - one actor or one worker context touching > N orgs within 5 minutes;
   - spikes in `NOT_A_MEMBER` or RLS errors;
   - DDL outside the pipeline on the Crove DB (event trigger logging; Cloud adds pgaudit);
-  - owner/admin role changes at the IdP for orgs with a tenant (§7.3 events), and projection drift from the IdP during reconcile.
+  - owner and admin grants in Crove (audit events), and, with DOS org sync later, role changes at DOS and projection drift found by reconcile.
 
 ### 7.9 DR, legal retention, PDPL, deletion, offboarding
 
@@ -1175,7 +1262,7 @@ Data residency requirements are handled with a legal opinion plus a copy in Viet
 | IPs in audit | Truncate | 6 months |
 | Exports | Auto-expire | 35-90 days, encrypted |
 
-**Offboarding** (owner request, or the IdP reports `org.deleted`; then the tenant locks writes immediately and an export goes to the last known owner):
+**Offboarding** (owner request, or, with DOS org sync, DOS reports `org.deleted`; then the tenant locks writes immediately and an export goes to the last known owner):
 1. Export for the tenant.
 2. Move to `offboarding`, then `closed`.
 3. Delete files, outbox archive, DLQ payloads, eval store, AI payloads.
@@ -1183,7 +1270,7 @@ Data residency requirements are handled with a legal opinion plus a copy in Viet
 
 ### 7.10 Incident response
 
-- **Runbooks:** stuck worker, outbox lag, DLQ, Supabase incident, PITR restore, IdP or DOS-Me API incident (new logins fail, existing sessions run to expiry; failed webhooks are covered by reconcile), quota hit, credential rotation (`context_key`, `crove_*` passwords, session signing key, internal key, webhook secrets), breach notification, kill switches.
+- **Runbooks:** stuck worker, outbox lag, DLQ, Supabase incident, PITR restore, Supabase Auth incident (Crove Cloud: DOS's Supabase Auth; new logins fail, and because revocation checks fail closed, requests get 503 once the session-check cache expires, ADR-0028), JWKS refresh after a signing-key revocation, quota hit, credential rotation (`context_key`, `crove_*` passwords, the self-host Supabase Auth JWT secret, `INBOUND_SECRET`, webhook secrets, the DOS internal key once DOS org sync exists), breach notification, kill switches.
 - **Paging:** SEV1 to the owner's phone, plus an issue for the on-call agent.
 - **Status page:** simple.
 - **pgaudit** (Cloud): logs DDL/ROLE by `postgres` on `crove-db-prod`.
@@ -1351,7 +1438,7 @@ Updated 2026-10-14 for the Vite + TanStack Router SPA (Decision 6).
 - **Path rules (`.claude/rules/`, all with `paths:`):** `core`, `migration`, `finance` (NUMERIC, reverse entries only), `tests`, `web` (Base UI, tokens, typed router links, useCommand), `agent`, `identity` (identity adapters and `/auth`), `orpc` (only for `packages/kernel-http/**` and `packages/kernel-contract/**`; pins v1 idioms).
 - **Skills (`.claude/skills/`):** `new-command`, `new-migration`, `new-event`, `i18n-key`, `debug-ci`, `db-local`; `new-module` added from Phase 2a. Each skill calls a generator or a deterministic command.
 - **Generators (`tools/`):**
-  - `db:new <token> <desc>`: timestamp = max(now, latest on `origin/dev` + 1 s). Also generates a pgTAP stub. Refuses a second file for the same schema.
+  - `db:new <token> <desc>`: timestamp = max(now, latest on the default branch + 1 s). Also generates a pgTAP stub. Refuses a second file for the same schema.
   - Other DB commands: `db:retime`, `db:types` (local), `db:types:from-ci` (fallback), `db:vendor:pgboss`, `db:partitions`.
   - `g command|query|event|subscriber|job|screen`.
   - `gen` / `gen:check` generate: registry, routes, contract, catalog/subscription/queue seeds into the PR's migration, snapshots, dependency-cruiser rules.
@@ -1359,13 +1446,12 @@ Updated 2026-10-14 for the Vite + TanStack Router SPA (Decision 6).
 - **Hooks** (one dispatcher in `tools/agent`):
   - **SessionStart (cloud sessions):**
     - install Node 26 from nodejs.org; run `pnpm install`;
-    - start `dockerd`, pull the exactly-tagged Supabase images from Docker Hub (with retry, token in an env secret), then `supabase db start`.
-    - Measured: ≈4 minutes first time, `db reset` ≈38 s, a new migration ≈2 s, pgTAP <1 s.
-    - Fallback: embedded PG17.
+    - start PostgreSQL 17 (Docker `postgres:17`, or embedded PG17 as the fallback) and apply the migrations with the built-in runner (`pnpm db:migrate`); no Supabase CLI.
+    - Record first-start, reset and migration timings when the hook lands.
   - **PostToolUse:** `oxfmt` + `oxlint` (not type-aware) on the edited file.
   - **Stop:** lint + typecheck + unit tests for the affected part; reads `stop_hook_active`; 120 s cap.
   - **PreToolUse:**
-    - block Supabase MCP `apply_migration`/`execute_sql`, and any `supabase db push`/`supabase link` not pointed at the local DB (no project ref needs to live in the repo);
+    - block Supabase MCP `apply_migration`/`execute_sql`, and any migration run (`pnpm db:migrate`, the `migrate` role, `supabase db push`) not pointed at a local DB (no project ref needs to live in the repo);
     - block `git push --force` to `dev`/`main`;
     - block attaching fork repos in implementation sessions (clean-room).
 - **CI gates** (all in the core repo; deploy workflows live in `crove-cloud`):
@@ -1374,8 +1460,8 @@ Updated 2026-10-14 for the Vite + TanStack Router SPA (Decision 6).
 |---|---|---|
 | G1 `scope` | Every PR | <ul><li>Public/private boundary: blocks paths and content that belong in `crove-cloud` (OpenTofu, deploy workflows, environment config, commercial connectors).</li><li>Scans for Supabase project refs (`<ref>.supabase.co`, pooler connection strings), OIDC client ids, internal domains. The blocklist (DOS's and Crove's project refs) lives in an Actions secret, not in the repo.</li></ul> |
 | G2 `migration-lint` | PRs touching `supabase/**` | <ul><li>Ordering: new version > base max, no duplicates; no editing, deleting or renaming old files; every file matches the naming rule (§5.3).</li><li>Content rules from §5.5.</li></ul> |
-| G3 `db-replay` | PRs touching `supabase/**`, `packages/db/**`, `modules/**` | <ul><li>Clean replay on Supabase CLI and on plain PG17; re-apply new migrations and compare fingerprints; pgTAP.</li><li>Conformance, RLS matrix, **invariant suite from `origin/dev`**, EXECUTE matrix.</li><li>Manifest matches catalog; types diff (prints the fix command).</li><li>splinter, `pg-boss doctor`, `vitest --project db`.</li></ul> |
-| G4 `supabase-preview` | PRs with a preview branch on `crove-db-beta` | <ul><li>Required on `main`.</li><li>On `dev` it is only a warning, with automatic infra-failure triage; agents use `/reset-preview`.</li><li>Fork PRs (after going public) get no preview; G3 is the gate.</li></ul> |
+| G3 `db-replay` | PRs touching `supabase/**`, `packages/db/**`, `modules/**` | <ul><li>Clean replay on plain PG17 with the built-in runner (on `main`: the `db` test project in `ci`); re-apply new migrations and compare fingerprints; pgTAP.</li><li>Conformance, RLS matrix, **invariant suite from the base branch**, EXECUTE matrix.</li><li>Manifest matches catalog; types diff (prints the fix command).</li><li>splinter, `pg-boss doctor`, `vitest --project db`.</li></ul> |
+| G4 `supabase-preview` | Crove Cloud, once `crove-cloud` and the beta project exist: PRs replayed on a preview branch of `crove-db-beta` | <ul><li>Required on `main`.</li><li>On `dev` it is only a warning, with automatic infra-failure triage; agents use `/reset-preview`.</li><li>PRs from forks of the repo get no preview; G3 is the gate.</li></ul> |
 | G5 `ci` | Every PR | <ul><li>Format, lint, typecheck, `--affected` tests; dependency-cruiser; knip.</li><li>Derived risk <= declared risk.</li><li>PII scan.</li><li><=800 non-generated lines (unless labelled `split-exempt` with a reason).</li></ul> |
 | G6 `protected` | Protected paths: context/policy/authz, `packages/db/src/context/**`, identity adapters and `/auth`, migrations with GRANT/POLICY/DEFINER/ROLE, `_*.test.sql` tests, `.github/workflows/**`, `.claude/settings*`, hooks, `AGENTS.md`, `LICENSE`, `CLA.md`, `agent-autonomy.md` | Generates a plain-language before/after summary; the invariant suite runs from base and a security reviewer agent reviews the PR; an external security review comes before the first external tenant (Decision 7). No owner approval label. Every PR to `crove-cloud` counts as protected |
 | `cla` | Every PR | CLA Assistant: every commit author has signed the CLA (individual or corporate); the project's bot and agent accounts are allowlisted |
@@ -1393,7 +1479,7 @@ Updated 2026-10-14 for the Vite + TanStack Router SPA (Decision 6).
   - unit, db and 1 e2e test; one migration + pgTAP.
 - **Multi-session workflow:**
   - One worktree per session.
-  - `db:new` reserves a timestamp against `origin/dev`.
+  - `db:new` reserves a timestamp against the default branch.
   - Only one kernel migration PR at a time.
   - "Reviewed" means: automated reviewers (Claude review reading the patch file by file, CodeRabbit) + a fresh-context subagent, plus G6 for protected paths.
 - **Weekly effectiveness metrics:** CI minutes and iterations per PR, % of PRs needing human intervention, rate of Preview failures caused by infra.
@@ -1405,14 +1491,14 @@ Updated 2026-10-14 for the Vite + TanStack Router SPA (Decision 6).
 
 ## 11. Prerequisites in DOS.Me
 
-Only for **Crove Cloud**; self-host depends on none of these. Each item is a separate PR in the DOS.Me repo, under DOS.Me's migration rules.
+Only for **Crove Cloud**; self-host depends on none of these. Each item is a separate PR in the DOS.Me repo, under DOS.Me's migration rules. MVP step 2 needs only one DOS-side change: allow `app.crove.com` as a redirect URL on DOS's Supabase Auth (owner approval, issue #54). The rows below matter when DOS org sync, DOS billing or the DOS broker are enabled.
 
 > **Redacted.** `DOS/Crove` is a public repo. Rows marked "Details in DOS.Me (private)" keep only IDs, priorities and what each item gates; their details and current state live in the private DOS.Me repo. Integration contracts Crove builds against (DOS-27, DOS-7, DOS-17) stay public here.
 
 | # | Priority | Item | Change | Evidence | Needed before |
 |---|---|---|---|---|---|
-| DOS-1 | P0 | Org membership for Crove | Details in DOS.Me (private) | pgTAP + contract test (in DOS.Me) | Crove Cloud enables DOS membership sync; Phase 0 exit gate |
-| DOS-27 | P0 | Org events and API for Crove | <ul><li>Extend the `team_webhook_outbox` pattern (trigger + `SKIP LOCKED` claim + receipt) to `organizations`/`org_members`: `org.member.added\|removed\|role_changed`, `org.deleted`, `team.*`, `user.disabled\|deleted`.</li><li>Envelope with `event_id`, `org_id`, per-org `seq`, `occurred_at`; HMAC-signed with a Crove-specific rotatable secret; retry with backoff.</li><li>Org/membership API: a user-token endpoint (the user's own orgs and roles) and an internal endpoint (`X-DOS-App-ID: crove` + internal key) for reconcile.</li><li>The prod internal key is readable only by the `crove-prod` worker SA; beta has its own key (absorbs DOS-10).</li></ul> | Contract test: removing a member delivers an event to Crove in <=1 minute; redelivery creates no duplicates | Minimal events: Phase 0 exit gate; full events + reconcile: Phase 1 |
+| DOS-1 | P0 | Org membership for Crove | Details in DOS.Me (private) | pgTAP + contract test (in DOS.Me) | Crove Cloud enables DOS org sync (deferred, Tracking) |
+| DOS-27 | P0 | Org events and API for Crove | <ul><li>Extend the `team_webhook_outbox` pattern (trigger + `SKIP LOCKED` claim + receipt) to `organizations`/`org_members`: `org.member.added\|removed\|role_changed`, `org.deleted`, `team.*`, `user.disabled\|deleted`.</li><li>Envelope with `event_id`, `org_id`, per-org `seq`, `occurred_at`; HMAC-signed with a Crove-specific rotatable secret; retry with backoff.</li><li>Org/membership API: a user-token endpoint (the user's own orgs and roles) and an internal endpoint (`X-DOS-App-ID: crove` + internal key) for reconcile.</li><li>The prod internal key is readable only by the `crove-prod` worker SA; beta has its own key (absorbs DOS-10).</li></ul> | Contract test: removing a member delivers an event to Crove in <=1 minute; redelivery creates no duplicates | Crove Cloud enables DOS org sync (deferred, Tracking) |
 | DOS-26 | P1 | Access token hook | Details in DOS.Me (private) | pgTAP + contract test (in DOS.Me) | Cloud opens to external users (Crove doesn't use the claims, but DOS ID is the login door) |
 | DOS-9 | P2 | OAuth client policy | Details in DOS.Me (private) | Playwright | Before Cloud GA and before external MCP (Phase 3) |
 | DOS-7 | P2 | `crove` product + per-org entitlements | `plan_features`, `plan_aliases`, `resolve_org_plan(text)`; seed the currently hardcoded matrix | Endpoint returns identical output | Before Cloud charges |
@@ -1425,79 +1511,79 @@ Only for **Crove Cloud**; self-host depends on none of these. Each item is a sep
 
 **No longer prerequisites for Crove (2026-10-13):** DOS-2, DOS-3, DOS-4, DOS-10 (merged into DOS-27), DOS-11, DOS-12, DOS-13, DOS-14 (dropped), DOS-15, DOS-16, DOS-21, DOS-22, DOS-23, DOS-24, DOS-25. Reason: Crove has its own repo, DB, migration ledger and gates, never reads DOS's DB, issues its own `org_id`, and does not connect to the DOS Event Router. They remain DOS-side items, tracked in DOS.Me.
 
-## 12. Day-0 checklist
+## 12. Setup checklist (status 2026-10-14)
 
-**A. Defaults already decided** (recorded in ADRs; no question blocks code)
+Day 0 is behind us: the repo exists, is public and has the MVP. This list keeps what is still open; issue numbers are the tracking issues in this repo.
+
+**A. Defaults already decided** (recorded in ADRs or Decisions; no question blocks code)
 - **Protected paths (G6):** PRs touching context, policy, authorization, GRANT/POLICY in migrations, workflows, hooks or infrastructure run the invariant suite from base and get a security reviewer agent review; an external security review comes before the first external tenant (Decision 7). No owner approval label. Recorded in `AGENTS.md`.
-- **License:** `AGPL-3.0-only`; license-grant CLA based on the Apache ICLA/CCLA, reviewed by a lawyer before accepting outside PRs. The repo goes public at Phase 1 exit (ADR-0022).
+- **License:** `AGPL-3.0-only` (declared in `README.md` and `package.json`); license-grant CLA based on the Apache ICLA/CCLA, reviewed by a lawyer before accepting outside PRs (ADR-0022, to write). The repo is public (Decision 9).
 - **Release:** SemVer tags from `main`. Crove Cloud promotes through a workflow in `crove-cloud`, with a 1-click approval step.
-- **Crove Cloud operations** (Supabase Pro + 7-day PITR on prod, budget, alert channel, domains `app/api.crove.com`): belong to `crove-cloud`, decided before opening Cloud to customers; they do not block Phase 0-1 of the core repo.
-- **Core modules** (§5.7): CRM incl. Calendar, Service incl. social inbox, Social, Sign, Accounting, HRM. Twenty, Go Desk, Documenso, Cal.com and Postiz are all replaced by native modules (§13).
+- **Crove Cloud operations** (Supabase Pro + 7-day PITR on prod, budget, alert channel, domain `app.crove.com`): belong to `crove-cloud`, set up with MVP step 2; they do not block the core repo.
+- **Scope:** kernel + Accounting committed; CRM (incl. Calendar), Service (incl. social inbox), Social, Sign and HRM wait for wedge-customer demand (Decisions 1-2). The forks are shut down, not migrated (Decision 8).
 
-**B. Non-code tracks (start in week 1; each track has an owner and a deadline)**
-- [ ] Vietnamese accountant: golden-company data for TT133/TT99; preset review; report acceptance.
-- [ ] Lawyer: PDPL (DPIA, TIA, DPA, 72 h runbook), Cybersecurity Law 116/2025, >=10-year retention, digital signatures, Circular 58/2026, household businesses 2026; CLA (individual + corporate), brand policy, commercial license terms.
+**B. Non-code tracks (each has an owner and a deadline)**
+- [ ] Owner: 10-15 customer interviews (founders + accounting firms) before Phase 2a scope is frozen (Decision 1; issue #57).
+- [ ] Vietnamese accountant: golden-company data for TT133/TT99; preset review; report acceptance (issue #61).
+- [ ] Lawyer: PDPL (DPIA, TIA, DPA, 72 h runbook; External-tenant gate T16), Cybersecurity Law 116/2025, >=10-year retention, digital signatures, Circular 58/2026, household businesses 2026; CLA (individual + corporate), brand policy, commercial license terms (issue #62).
 - [ ] E-invoice issuing provider and bank aggregator (connector in `crove-cloud`, or via DOS-18/19); enable MISA eSign.
 
-**C. Repo, open source and DOS-side PRs**
-- [ ] Create the core repo `DOS/Crove` (private until Phase 1 exit) and the private repo `crove-cloud`; protect `dev`/`main`; squash merges.
-- [ ] First commit: `LICENSE` (AGPL-3.0), `CLA.md`, `CONTRIBUTING.md`, `TRADEMARKS.md`; gitleaks (pre-commit + CI) and the G1 project-ref scan running from that commit.
-- [ ] License-grant CLA, individual + corporate; enable CLA Assistant on the core repo.
-- [ ] File the "Crove" trademark (Vietnam IP Office; consider Madrid for other markets).
-- [ ] DOS-side PRs for Crove Cloud (§11): DOS-1 to prod -> DOS-27 -> DOS-26.
+**C. Repo and open source**
+- [x] `DOS/Crove` created and public; squash merges to `main` (`dev` is created with Cloud beta).
+- [x] gitleaks and the G1 project-ref scan in the required `Secret scan` check, scanning the full history; a local pre-commit hook (Decision 9).
+- [ ] `LICENSE` (AGPL-3.0 text), `CLA.md`, `CONTRIBUTING.md`, `TRADEMARKS.md`, `SECURITY.md`: not in the repo yet (issue #33; `SECURITY.md` is part of External-tenant gate T14).
+- [ ] License-grant CLA, individual + corporate; enable CLA Assistant.
+- [ ] File the "Crove" trademark (Vietnam IP Office; consider Madrid for other markets; issue #63).
 
-**D. Crove Cloud infrastructure (OpenTofu in `crove-cloud`, run by CI via WIF; never from an agent sandbox)**
-- [ ] Supabase projects `crove-db-prod` and `crove-db-beta` (ap-southeast-1):
+**D. Crove Cloud, MVP step 2** (OpenTofu in `crove-cloud`, run by CI via WIF; never from an agent sandbox)
+- [ ] Owner approvals: spend (issue #52), a Cloudflare token for `app.crove.com` DNS and email routing (issue #53), and the DOS-side redirect URL change on DOS's Supabase Auth (issue #54).
+- [ ] Create the private `crove-cloud` repo (issue #55).
+- [ ] Dedicated Supabase projects `crove-db-prod` and `crove-db-beta` (ap-southeast-1), used as Postgres only:
   - 7-day PITR on prod; restore runbook written now, rehearsed before Finance GA;
-  - branching (preview per PR) on `crove-db-beta` via the core repo's Supabase GitHub integration; prod auto-deploy off;
   - the agent's Supabase identity is not a member of either project.
 - [ ] GCP projects `crove-prod` and `crove-beta`, each with:
-  - a dedicated SA per service;
+  - a dedicated SA per service (API, worker, migrate job);
   - WIF per branch/environment (prod accepts only `main` + environment `crove-prod`);
   - Artifact Registry, Secret Manager, budget alerts.
+- [ ] Worker-first deploys to beta and prod (§3.5; issue #56).
 - [ ] No NAT yet. No `crove-ci` project before Phase 3.
-- [ ] `crove_*` passwords set by a workflow from Secret Manager.
-- [ ] Buckets `crove-files-<env>` and `crove-archive-<env>`. Lock retention only **after a dry run**, only on the archive, with bucket names fixed in the workflow.
-- [ ] Vercel `crove-web` (root `apps/web`, `sin1`, Deployment Check on `release-gate`, previews off). DNS. DOS ID clients `Crove` and `Crove Beta` (redirect URIs per §7.5); DOS -> Crove webhook secret.
+- [ ] `crove_*` passwords set by the deploy workflow from Secret Manager.
+- [ ] Buckets `crove-files-<env>` and `crove-archive-<env>`, reached through the S3 adapter (External-tenant gate T7). Lock retention only **after a dry run**, only on the archive, with bucket names fixed in the workflow.
+- [ ] Vercel `crove-web` for the landing page only (root `apps/web`, `sin1`, previews off). DNS for `app.crove.com`.
+- [ ] Prober and alerting: a test alert reaches the owner's phone (issue #39).
 
 **E. Baseline**
-- [ ] Crove project after Phase 0: compute, `max_connections`, Supavisor `pool_size`, IOPS; connections, CPU and WAL per role.
-- [ ] Pre-revenue cost model (estimate, enforced with budget alerts). Monthly: Cloud Run ≈110 USD; dedicated Supabase ≈150-200 (Pro plan 25, prod compute Small-Medium 15-60, beta 10-15, 7-day PITR ≈100); preview branches 20-100; CI minutes 50-300; Vercel/GCS/logs 20-60. **Total ≈350-770 USD.**
+- [ ] After MVP step 2: compute, `max_connections`, Supavisor `pool_size`, IOPS; connections, CPU and WAL per role.
+- [ ] Pre-revenue cost model (estimate, enforced with budget alerts). Monthly: Cloud Run ≈110 USD; dedicated Supabase ≈150-200 (Pro plan 25, prod compute Small-Medium 15-60, beta 10-15, 7-day PITR ≈100); preview branches (G4) 20-100; CI minutes 50-300; Vercel/GCS/logs 20-60. **Total ≈350-770 USD.** Self-host and local development cost nothing.
 - [ ] At 100 tenants: add 50-150 USD. At 5,000 tenants: ≈1.5-3k USD of infrastructure, excluding LLM; the DB moves to Large/XL by then. Changing compute restarts the Crove DB (a few minutes), done in a maintenance window.
 
-**F. Agent infrastructure:** SessionStart with a local DB (record the measurements), rules, skills, hooks (owner-approved), `AGENTS.md` at the repo root.
+**F. Agent infrastructure:** SessionStart with a local PostgreSQL 17 and the built-in runner (record the timings), rules, skills, hooks (owner-approved), `AGENTS.md` at the repo root (exists).
 
-**G. Bootstrap PR chain** (each PR <=800 non-generated lines):
-1. workspace, tooling, license/CLA files, basic gates (gitleaks, G1, `cla`);
-2. roles, schemas, context/seal, RLS helpers, identity tables, pgTAP (`_crove_kernel_bootstrap`);
-3. runtime: execute, audit, outbox, relay;
-4. `apps/kernel` (entry, health/readiness, Dockerfile) + `/auth` (OIDC, Crove sessions, `dos-id` and `generic-oidc` adapters);
-5. web skeleton;
-6. workflows and gates (deploy lives in `crove-cloud`);
-7. golden party slice.
+**G. Bootstrap:** done. MVP step 1 (#8) delivered the workspace, roles and schemas, the runtime (`execute`, audit, outbox, relay), `apps/kernel` (roles, health and readiness, Dockerfile), the SPA and the finance slice. The original 7-PR bootstrap chain is superseded.
 
-**H. Spikes** (each <=1 week, run in parallel; each ends with "pass" or a fallback recorded in an ADR):
-- A2 pg-boss over :5432 and :6543;
-- A3 Kanel 4;
-- A5 PG17 on Supabase: `GRANT … WITH SET/INHERIT`, definer ownership, advisory guard, whether `postgres` can set `session_replication_role`;
-- A7 OIDC with DOS ID beta: discovery, PKCE, `nonce`, JWKS, `amr`/`aal` for step-up, calling the DOS-Me API with the user's token;
-- A8 presign + `if-generation-match` on GCS;
-- A10 AI endpoint conformance (DOS.AI and at least one other OpenAI-compatible endpoint);
-- A12 G3 runtime (Supabase CLI + plain PG17);
-- A14 Next SRI CSP with a static shell;
-- A15 sandbox egress blocking on Cloud Run;
-- A16 migrations on plain PG17 via `supabase db push --db-url` (self-host).
-- Dropped A1: a separate repo means turbo root = git root.
+**H. Spikes** (each <=1 week; each ends with "pass" or a fallback recorded in an ADR):
+- Supabase Auth on the plain `postgres:17` image (Decision 5): the compose stack on `main` runs it; keep it covered by the Playwright end-to-end job (T9).
+- Supabase Auth flow in the SPA: PKCE callback, refresh, logout, MFA and `aal2` (Decision 6; issue #32).
+- A2 pg-boss over Supavisor :5432 and :6543 (Crove Cloud).
+- A3 Kanel 4 (issue #48).
+- A5 PG17 on Supabase: `GRANT … WITH SET/INHERIT`, definer ownership, the §4.5 re-entry guard behind Supavisor transaction mode, whether `postgres` can set `session_replication_role`.
+- A8 presign + `if-generation-match` on GCS.
+- A10 AI endpoint conformance (DOS.AI and at least one other OpenAI-compatible endpoint; issue #51).
+- A12 G3 runtime on plain PG17.
+- A14 CSP + Trusted Types for the SPA (retargeted by Decision 6).
+- A15 sandbox egress blocking on Cloud Run (External-tenant gate T12).
+- DBOS Transact, 1 week, before Phase 2a (Decision 14; issue #59).
+- Dropped: A1 (separate repo), A7 (OIDC with DOS ID; replaced by Supabase Auth), A16 (`supabase db push --db-url`; replaced by the built-in runner).
 - Moved to the phase that needs them: A4 (TS7 at scale) -> 2a; A9 (NAT) -> when a provider requires it; A11 (OAuth RFC 8707) -> 3; A13 (legal) -> track B.
 
-**I. ADRs before writing code:** 0001, 0002, 0003, 0007, 0022; 0023 before Phase 0 exit (§16).
+**I. ADRs:** 0026 and 0027 accepted, 0028 proposed; the rest per §16.
 
 ## 13. Phase roadmap
 
 **General rules:**
 - Every phase has a time-box. If it runs out before the exit criteria are met, cut scope or re-plan **in writing**; no silent extensions.
-- Demo on beta every 2 weeks.
-- From Phase 3, two module streams can run in parallel, since modules depend only on the kernel. Sequential ≈74 weeks; 2 streams ≈54 weeks (estimate).
+- Demo every 2 weeks: a local `docker compose up` run until Crove Cloud beta exists, then on beta.
+- Committed: the MVP, Phases 0b, 1, 2a and 2b (kernel + Accounting). Phases 3-7 start only when wedge customers pull for them (Decision 2). If several are pulled, two module streams can run in parallel, since modules depend only on the kernel (estimate if all are pulled: sequential ≈74 weeks, 2 streams ≈54 weeks).
 
 **Definition of Done for every module phase:**
 - Every write goes through `execute()`; G1-G6 green; RLS matrix with 0 leaks.
@@ -1508,40 +1594,40 @@ Only for **Crove Cloud**; self-host depends on none of these. Each item is a sep
 - PII classified.
 - No AGPL code copied.
 
-### Phase 0: Prep + walking skeleton (2 weeks)
+### MVP (replaces Phase 0)
 
-**Exit criteria:**
-1. Core repo (private) and `crove-cloud` created. LICENSE, CLA Assistant, gitleaks and the G1 project-ref scan running from the first commit; G1-G6 green on the core repo.
-2. Own DB: migrations travel the full path preview branch -> `crove-db-beta` -> `crove-db-prod` (PITR on); replay green on plain PG17 too.
-3. OIDC login works with DOS ID beta: JIT `user_account`, membership from the DOS-Me API, `tenant`/`tenant_member` projection. Removing a member in DOS delivers an event to Crove and the next command is rejected. The `generic-oidc` adapter works against the mock IdP in CI.
-4. Crove Cloud: gate DOS-1 passes before enabling prod DOS membership sync; DOS-27 delivers the minimal events (`org.member.removed`, `org.deleted`).
-5. Local DB loop in cloud sessions: first start <=5 minutes, `db reset` <=60 s, pgTAP runs.
-6. The skeleton runs end to end on beta: login -> pick org -> create and list parties -> audit row -> event through the relay -> subscriber writes activity, shown in the UI.
-7. Deploy ordering proven:
-   - worker-first;
-   - an image deployed before its migration is not ready, and becomes ready once the migration lands;
-   - the "new API + old worker" test is green.
-8. The prober fires a test alert to the owner's phone; budget alerts work.
-9. ADRs 0001/0002/0003/0007/0022/0023 merged; baseline recorded; non-code tracks have owners and dates.
+The MVP in Tracking replaces Phase 0 (ADR-0027): step 1 (open source, local) merged on 2026-10-13 as #8, with exit criteria 2 and 4 still open (External-tenant gate T8, T9); step 2 deploys Crove Cloud. Where each former Phase 0 exit criterion went:
 
-### Phase 0b: Finance spike (2 weeks, in parallel from week 2)
+| Former Phase 0 criterion | Now |
+|---|---|
+| Repo, license, CLA, gitleaks and G1 from the first commit; G1-G6 green | Repo public with gitleaks + G1 required (Decision 9); `LICENSE`, `CLA.md` and CLA Assistant still missing (§12-C); G2-G6 grow with Phase 1 |
+| Own DB; migrations through preview -> beta -> prod; replay on plain PG17 | Built-in runner on any PG17 (MVP, implemented); the Cloud DB path comes with MVP step 2 |
+| OIDC login with DOS ID; membership from the DOS-Me API; `generic-oidc` adapter | Replaced by Supabase Auth with membership in Crove (Decision 5, ADR-0027, ADR-0028) |
+| Gate DOS-1 and minimal DOS-27 events | Deferred with DOS org sync (Tracking, deferred table) |
+| Local DB loop in cloud sessions | Local PG17 + built-in runner (§10, §12-F) |
+| Skeleton end to end on beta | MVP exit criterion 1, locally today; on Cloud with step 2 |
+| Deploy ordering proven (worker first, readiness, new API with old worker) | Crove Cloud deploys (§3.5, issue #56), before the first external tenant |
+| Prober test alert; budget alerts | Crove Cloud, before the first external tenant (issue #39) |
+| ADRs 0001/0002/0003/0007/0022/0023 | §16; 0023 is replaced by 0027 + 0028 |
 
-Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sample data.
+### Phase 0b: Finance spike (2 weeks, in parallel with Phase 1)
+
+Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sample data (issue #58).
 
 **Exit criteria:**
 - Every entry balances; entries cannot be edited; reversal nets to zero; 1,000 parallel posts yield gapless numbers 1..1000.
 - Reports match an accountant's hand calculation.
 - An ADR locks the numbering, legal-entity and posting APIs before the kernel is frozen.
 
-### Phase 1: Kernel v0 + "Party & Document Inbox" (8 weeks)
+### Phase 1: Kernel v0 hardening + "Party & Document Inbox" (8 weeks)
 
 **Scope:**
-- v0 tables from §6; pipeline §4; security §7.
+- The External-tenant gate (Tracking), the MVP follow-ups (Tracking) and the v0 tables from §6 not built yet; pipeline §4; security §7.
 - Party (duplicate hints by tax code/national ID/phone; 2025 addresses + mapping from the old ones).
 - Intake: upload, or forward email to an opaque address -> extraction in the sandbox (XML first) -> proposal -> AI Inbox (R0/R1).
 - In-app notifications; pg_trgm search; audit viewer for admins.
-- Full identity: reconcile, all DOS-27 events, `generic-oidc` with membership management.
-- Minimal self-host guide (`docs/self-host/`: docker compose with PG17 + kernel + extract + shell + a sample OIDC IdP).
+- Identity per ADR-0028; membership management in Crove (invites with consent, remove, change role).
+- Self-host guide (`docs/self-host/`): compose with PG17 + Supabase Auth + Crove, TLS reverse proxy, SMTP, backups, upgrades.
 
 **Exit criteria:**
 1. Arch tests + pgTAP prove there is no write path outside `execute()`.
@@ -1551,13 +1637,14 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
 5. PDFs and images produce proposals with evidence and deterministic confidence. Red-team >=30 cases: 0 auto-executed R2+, 0 data leaks.
 6. A Vietnamese benchmark of >=100 documents is a PR gate.
 7. Load with 100k parties per tenant:
-   - p95 DB-only R1 command < 150 ms;
+   - p95 DB-only R1 command < 150 ms (including the §4.5 re-entry guard and the ADR-0028 revocation check);
    - p95 outbox lag < 2 s;
    - target >=50 events/s on 1 worker;
    - back-pressure works.
-8. Org and global kill switches rehearsed. The basic PDPL package is done before the first external tenant.
+8. Org and global kill switches rehearsed.
 9. 2-week dogfood (DOS org and Crove org): 0 integrity incidents.
-10. **Public checkpoint:** independent security review (auth, context/RLS, sandbox, webhooks); `SECURITY.md` (private reporting channel, response times); gitleaks + the blocklist re-scan the full git history. If it passes, the core repo goes public. (Superseded 2026-10-13: the repo is already public; this checkpoint still gates the security review and `SECURITY.md`.)
+10. **Security checkpoint:** independent security review (auth, context/RLS, sandbox, inbound email, webhooks); `SECURITY.md` (private reporting channel, response times); gitleaks + the blocklist scan the full git history (already on every run). The repo is already public (Decision 9).
+11. Every External-tenant gate row is green with its evidence linked.
 
 ### Phase 2a: Finance A1 (10 weeks)
 
@@ -1565,16 +1652,16 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
 - numbering, `external_call`, `process_instance`, `connection_binding` + `CredentialBroker` (`crove-local`; Cloud using the DOS broker needs DOS-8, DOS-20);
 - effective-dated data helpers (`btree_gist`);
 - hash chain + WORM stream;
-- `field_history`; R3 with P09-P13; aal2.
+- `field_history`; R3 with P09-P13 (`aal2` for R3 is already required by the External-tenant gate).
 
-**Finance:**
+**Finance** (scope frozen after the interviews, Decision 1; issue #60):
 - `legal_entity_books` TT133/TT99 v2026.1; chart of accounts; periods; opening balances.
 - Purchase vouchers from intake; sales invoices; receipt/payment/bank debit/bank credit/general journal vouchers (PT/PC/BN/BC/NVK).
 - Post, reverse, period close; VAT.
 - **File-based bank statements** with dedupe by running balance.
 - **Inbound e-invoices** (Cloud: `misa-inbound-einvoice` via the DOS broker, or a connector in `crove-cloud`).
 - Reports: trial balance, general ledger, B01/B02, receivables/payables.
-- Archive package; accountant preset; **one-way Twenty -> party sync** through Twenty's API (Twenty lives in the DOS project; `legacy_id_map`, uuidv5 including `org_id`).
+- Archive package; accountant preset.
 
 **Exit criteria:**
 - Ledger invariants (pgTAP + model-based fast-check), specifically:
@@ -1597,37 +1684,31 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
 - Ask-the-books answers always cite the metric and the query hash.
 - A tainted run cannot send anything.
 
-### Phase 3: CRM + Calendar, replacing Twenty and Cal.com (12 weeks)
+### Phase 3: CRM + Calendar (12 weeks, when wedge customers pull for it; reference: Twenty, Cal.com, Calendly)
 
-**Kernel additions:** `record_share`, `saved_view` + Filter AST, custom fields, `record_link`, `search_doc`, `api_key`, `/v1`, outbound webhooks, `/mcp` (Cloud: after DOS-9; grants per org, client and user), project `crove-ci` + kernel `pr-<n>`, team scope (Cloud: after DOS-5/6). Plus the `calendar` service: events, availability, Google Calendar, Microsoft 365 and CalDAV sync through connectors.
+**Kernel additions:** `record_share`, `saved_view` + Filter AST, custom fields, `record_link`, `search_doc`, `api_key`, `/v1`, outbound webhooks, `/mcp` (Cloud: after DOS-9; grants per org, client and user), the OAuth 2.1 authorization server (Decision 14), project `crove-ci` + kernel `pr-<n>`, team scope (Cloud: after DOS-5/6). Plus the `calendar` service: events, availability, Google Calendar, Microsoft 365 and CalDAV sync through connectors.
 
 **CRM scope:**
 - Contacts and companies are `party`; deals and pipelines; saved views, custom fields, record sharing; CSV import.
 - A shared customer timeline: email, appointments, conversations, tickets, contracts, invoices.
 - AI: customer summaries, next-step suggestions, email drafts; every write is a proposal.
 
-**Calendar scope (replacing Cal.com, Calendly as reference):**
+**Calendar scope:**
 - Public booking page `/-/b/…`: event types, round-robin, Vietnamese holidays, buffers; only free slots returned; Turnstile, rate limits; reschedule/cancel through single-use token links.
 - A booking creates or matches a `party`, writes `activity`, links to a deal; Meet, Zoom, Teams meeting links; reminders as jobs.
 - AI proposes slots from email or chat; sending an invitation is a proposal.
 
 **Exit criteria:**
-- Twenty data imported into the Crove DB through commands (actor `system:import`); old ids mapped via `legacy_id_map` (uuidv5 including `org_id`); no direct SQL reads from the DOS project.
-- Parity per feature checklist + mapping table + drop/export list (Twenty custom objects become `custom jsonb` or files).
-- 2 weeks of green parity reports, with only the pre-declared differences.
-- Internal orgs cut over first; 30 days to roll back.
-- CRM<->Desk sync removed; `crove_crm.*` tools aliased to the native tools.
 - No double booking: `EXCLUDE USING gist` on `tstzrange`; 200 concurrent bookings of one slot give exactly 1 success.
 - Stored as UTC + IANA timezone; free/busy drift against external calendars <=1 minute.
-- Old Cal.com bookings imported via `legacy_id_map`; old booking links redirect.
 
-### Phase 4: Service, replacing Go Desk (10 weeks)
+### Phase 4: Service (10 weeks, when wedge customers pull for it; reference: Go Desk, Zendesk)
 
 **Kernel additions:** the `channel` layer: one OAuth connection per page or account (Facebook Page, Instagram, Zalo OA, TikTok, email), shared by Service (inbound) and Social (publishing). Connectors sit behind adapters; Cloud uses platform-approved apps, self-hosters register their own.
 
 **Scope:**
 - Unified inbox: email, messages and comments from Facebook Page, Instagram, Zalo OA, TikTok. Each conversation links to a `party` and becomes a ticket when needed.
-- Record-based tickets; numbering starts above the old numbers; SLA, assignment, reply templates; automation v1 with loop protection.
+- Record-based tickets with per-org numbering; SLA, assignment, reply templates; automation v1 with loop protection.
 - AI triage, summaries, reply drafts. Outbound sends are R2 and need approval, unless the org enables auto-reply for approved question classes. Customer messages are tainted input.
 
 **Exit criteria:**
@@ -1636,7 +1717,7 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
 - An expired channel token alerts and stops sending; inbound messages are not lost.
 - The AI never promises prices, discounts or refunds outside policy.
 
-### Phase 5: Social, replacing Postiz (6 weeks; Publer, Nuelink, Buffer as reference)
+### Phase 5: Social (6 weeks, when wedge customers pull for it; reference: Postiz, Publer, Nuelink, Buffer)
 
 **Scope:**
 - Reuses the Phase 4 `channel` layer; adds LinkedIn, YouTube, X.
@@ -1648,9 +1729,8 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
 - Each post is published exactly once per channel: idempotency through `external_call`; a mid-flight timeout reconciles by the channel's post id, never double-posts.
 - An expired channel token pauses that channel's queue and alerts; no posts lost.
 - AI posts drafted from tainted input never auto-publish.
-- Posts scheduled in Postiz imported via `legacy_id_map`.
 
-### Phase 6: Sign, replacing Documenso (8 weeks; Docusign as reference)
+### Phase 6: Sign (8 weeks, when wedge customers pull for it; reference: Documenso, Docusign)
 
 **Scope:**
 - Vietnamese CAs via MISA eSign/WeSign.
@@ -1663,7 +1743,7 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
 - Signed documents cannot be altered (hash); the audit certificate verifies independently.
 - Reused or forwarded signing links are rejected.
 
-### Phase 7: HRM (10 weeks)
+### Phase 7: HRM (10 weeks, when wedge customers pull for it)
 
 **Scope:**
 - Employee records, departments; labor contracts signed through Sign; basic recruiting (candidates, interview scheduling via `calendar`).
@@ -1681,52 +1761,45 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
 - **Projects:** `task_ext` attached to `kernel.task`; boards on `list`; billable hours flow to Accounting exactly once.
 - Workflow builder, bulk email marketing, websites, ads: only on real customer demand.
 
-### Replacing the forks
+### The forks
 
-| Fork | Decision | When |
+No fork has real users. The owner archived the five fork repositories on 2026-10-14 (Decision 8); taking down their running deployments is a DOS-side step, tracked outside this repo (issue #70). Nothing is synced, imported, compared for parity or kept as a rollback target. Native modules may use a fork only as a behavioural reference, under the clean-room rule (§10).
+
+| Fork | Native module | Starts |
 |---|---|---|
-| Twenty (CRM) | Rewrite. Party is the source of truth from 2a, one-way sync | Phase 3 |
-| Go Desk | Rewrite as Service, including the social inbox | Phase 4 |
-| Documenso (Sign) | Rewrite, because Vietnamese CAs and audit are required | Phase 6 |
-| Cal (from Cal.com) | Merge into CRM; bookings are `activity` on a party | Phase 3 |
-| Post (from Postiz) | Rewrite as Social; comments and messages go to Service | Phase 5 |
-
-**Every fork is replaced.** A fork runs in parallel and receives one-way sync from Crove until its native module meets the phase exit criteria, then it is removed with the procedure below.
-
-**Removing a fork:**
-1. Freeze writes and run the final delta.
-2. Produce a signed verification report.
-3. Flip the native flag, add redirects.
-4. Revoke connections, webhooks and bindings.
-5. Switch the fork's role to NOLOGIN.
-6. Keep the data read-only for the retention period, with a checksummed archive.
-7. Dropping a fork schema needs its own ADR and the owner's decision; it is never a step in fixing drift.
+| Twenty (CRM) | CRM | Phase 3, on demand |
+| Cal (from Cal.com) | CRM calendar and booking pages | Phase 3, on demand |
+| Go Desk | Service, including the social inbox | Phase 4, on demand |
+| Post (from Postiz) | Social; comments and messages go to Service | Phase 5, on demand |
+| Documenso (Sign) | Sign, with Vietnamese CAs | Phase 6, on demand |
 
 ## 14. Major risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Identity projection drifts or revokes late (a user who left a DOS org can still get into Crove) | <ul><li>Fetch membership from the DOS-Me API at login, don't trust claims.</li><li>Signed webhooks + dedupe; revoke sessions on leaving an org.</li><li>Periodic reconcile; 24 h membership TTL.</li><li>Alert when Crove grants more than the IdP.</li></ul> |
-| Crove Cloud enables DOS membership sync before gate DOS-1 passes | Hard gate at Phase 0 exit; self-host unaffected; team scope off until DOS-5 |
-| DOS incident (login, webhooks, AI) | Existing Crove sessions run to expiry; reconcile covers failed webhooks; AI jobs retry, then DLQ; runbooks §7.10 |
-| Security code merged without any human reading it | Invariant suite from base; G6 (security reviewer agent on every protected-path PR); external security review before the first external tenant (Decision 7); small PRs; per-environment identities |
-| Agents get tools that touch prod or see tenant PII | Local DB; agents are not members of the Crove prod/beta projects; no Supabase MCP against prod/beta; PreToolUse hook |
-| Leaks through the public repo (project refs, internal URLs, secrets, customer data) | <ul><li>gitleaks from the first commit; full history re-scan before going public.</li><li>G1 scans for project refs against a blocklist kept outside the repo.</li><li>Environment config only in `crove-cloud`; fixtures only synthetic data.</li></ul> |
-| AGPL/CLA friction (contributors reluctant to sign, companies wary of AGPL) | License-grant CLA (contributors keep copyright), with a corporate version; a clear `CONTRIBUTING.md`; commercial license; third-party plugins run out of process via API/MCP |
-| Brand impersonation (forks using the Crove name, fake Cloud offerings) | Trademark registration; `TRADEMARKS.md`: redistributions must change name and logo; official domains |
-| Second-system effect, scope creep | Time-boxes; walking skeleton; trimmed v0; demo every 2 weeks |
-| External Finance dependencies (e-invoice issuing, banks, legal) | Non-code tracks from week 1; split into 2a/2b |
-| API and worker version skew | Worker-first; DB-decided fan-out; skew test in e2e |
-| Out-of-order migrations skipped | Full schema manifest; pre-promote check; hotfix rule; ledger comparison after push |
-| Malicious content in files, email, prompts | Sandbox; provenance-based taint; opaque addresses; Rule of Two |
+| Revocation is late or fails open (a signed-out, banned or removed user keeps access) | <ul><li>ADR-0028: issuer, audience and expiry required; self-host checks `auth.sessions` in the request transaction; Crove Cloud checks Supabase Auth with a cache of at most 30 s, fail closed.</li><li>Membership read from the DB on every request; claims never grant membership.</li><li>External-tenant gate T1.</li></ul> |
+| Crove Cloud depends on DOS's Supabase Auth for login and revocation checks | Fail closed means a DOS Auth outage turns into Crove Cloud 503s after the cache window; runbook §7.10; status page; measure Auth latency and rate limits before the first external tenant (issue #34) |
+| Coupling to Supabase Auth internals (self-host reads `auth.sessions` and `auth.users`; Supabase Auth migrates its own schema) | Supabase documents the `auth.sessions` lookup; compose pins the Supabase Auth image; database tests run against that version; a schema change breaks the check closed; a new identity adapter can replace Supabase Auth (`user_account` keeps `(issuer, subject)`) |
+| Known MVP gaps reach an external tenant | External-tenant gate (Tracking): every row needs its evidence (test, CI check or report) before Crove Cloud accepts an external tenant |
+| DOS org sync enabled before gate DOS-1 passes (later) | Hard gate on enabling the adapter; self-host unaffected; team scope off until DOS-5 |
+| DOS incident (AI, later org events) | AI jobs retry, then DLQ; the e-invoice XML path needs no AI; reconcile covers failed org events; runbooks §7.10 |
+| Security code merged without any human reading it | Invariant suite from base; G6 (security reviewer agent on every protected-path PR); external security review before the first external tenant (Decision 7; T14, T15); small PRs; per-environment identities |
+| Agents get tools that touch prod or see tenant PII | Local DB; agents are not members of Crove Cloud's Supabase projects; no Supabase MCP or migration runs against prod/beta; PreToolUse hook |
+| Leaks through the public repo (project refs, internal URLs, secrets, customer data) | <ul><li>gitleaks scans the full history on every run; `Secret scan` is required on `main`.</li><li>G1 scans for project refs against a blocklist kept outside the repo.</li><li>Environment config only in `crove-cloud`; fixtures only synthetic data.</li></ul> |
+| AGPL/CLA friction (contributors reluctant to sign, companies wary of AGPL) | License-grant CLA (contributors keep copyright), with a corporate version; a clear `CONTRIBUTING.md` (both still to add, issue #33); commercial license; third-party plugins run out of process via API/MCP |
+| Brand impersonation (forks using the Crove name, fake Cloud offerings) | Trademark registration (issue #63); `TRADEMARKS.md`: redistributions must change name and logo; official domains |
+| Second-system effect, scope creep | Wedge first; only kernel + Accounting committed; Phases 3-7 on demand (Decisions 1-2); time-boxes; demo every 2 weeks |
+| External Finance dependencies (e-invoice issuing, banks, legal) | Non-code tracks; split into 2a/2b |
+| API and worker version skew (Crove Cloud; `all` has none) | Worker-first; DB-decided fan-out; skew test in e2e |
+| Out-of-order or edited migrations | Built-in runner: one ledger with sha256 per file, refuses edited files; `/readyz` waits for missing versions; pre-promote check; hotfix rule |
+| Malicious content in files, email, prompts | Sandbox (T12); inbound processing out of the API (T5); provenance-based taint; opaque addresses; Rule of Two |
 | Using another org's credentials through the broker | Bindings check ownership and org (§7.4); default `crove-local`; `dos-broker` stays off until gates DOS-8 and DOS-20 pass |
 | Connection exhaustion | Per-workload roles; Crove project baseline; separate `crove-stream`; scale compute before raising limits |
-| PDPL and data residency | PDPL gate before external tenants; crypto-shredding; deletion map; a copy in Vietnam if a lawyer requires it |
+| PDPL and data residency | PDPL package before external tenants (T16); crypto-shredding; deletion map; a copy in Vietnam if a lawyer requires it |
 | Operating with only the owner and agents | Prober + alerts; runbooks; kill switches; on-call agent; scheduled releases |
 | Libraries ship new versions constantly (oRPC, pg-boss, AI SDK) | Daily Renovate + CI/eval gates; 1-2 importing packages per library; version-matched vendor docs; Plan B for each |
-| Two sources of truth alongside the forks | Early one-way sync; each fork has a clear replacement phase; checklist-based parity |
-| Large scope: 6 core modules rewritten from scratch | Later modules reuse the kernel's party, activity, file, task, `calendar`, `channel`, notifications and AI Inbox; generators for commands, screens and tests; per-phase time-boxes; 2 parallel streams from Phase 3 |
-| Pre-revenue cost | Budget alerts; CI concurrency; auto-close stale PRs; no NAT/per-PR kernel before needed; Supabase compute starts small and grows with the baseline |
+| Large scope if many modules are pulled | Only kernel + Accounting committed; later modules reuse the kernel's party, activity, file, task, `calendar`, `channel`, notifications and AI Inbox; generators for commands, screens and tests; per-phase time-boxes |
+| Pre-revenue cost | Self-host and local development cost nothing; Cloud spend needs owner approval (MVP step 2); budget alerts; CI concurrency; auto-close stale PRs; no NAT or per-PR kernel before needed; Supabase compute starts small and grows with the baseline |
 
 ## 15. Deliberately NOT in v1
 
@@ -1761,41 +1834,57 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
   - No FKs, DB connections or business-data sync with DOS.
 - **Finance A:** no consolidated reporting, inventory costing, fixed-asset depreciation, automatic FX revaluation, full payroll or tax filing.
 - **Fork replacement:**
-  - No two-way sync, no one-shot full migration, no copying AGPL code.
+  - No sync, imports or parity checks with the archived forks (Decision 8); no copying AGPL code.
 - **Reporting and infrastructure:**
   - No custom report builder, no multi-region, no customer-managed keys.
   - No NAT before a provider requires it; no per-PR kernel before Phase 3.
 
-## 16. First ADRs to write
+## 16. ADRs
 
-ADRs live in `docs/adr/`, using the minimal MADR 4.0 template.
+ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this plan describes the current design.
+
+**Written:**
+
+| ADR | Content | Status |
+|---|---|---|
+| [0026](../adr/0026-wedge-scope-and-phase-0.md) | Wedge (Document Inbox), scope (kernel + Accounting), rigor by stage, protected-path review without an owner label, forks frozen | Accepted 2026-10-13; partly superseded by 0027 |
+| [0027](../adr/0027-oss-core-and-crove-cloud.md) | Open-source core vs Crove Cloud; auth on Supabase Auth only; app shell (Vite + TanStack Router SPA); brand | Accepted 2026-10-13 and 2026-10-14 |
+| [0028](../adr/0028-identity-sessions-and-revocation.md) | Identity: Supabase Auth access tokens verified with required issuer, audience and expiry; fail-closed revocation per deployment type; disabled users; membership on every request; `aal2` for R3 | Proposed 2026-10-14; accepting and implementing it is External-tenant gate T1 (issue #22) |
+
+**To write** (the ones the External-tenant gate depends on first):
 
 | ADR | Content | Due |
 |---|---|---|
-| 0001 | Separate repos (core public after Phase 1 + private `crove-cloud`), migration flow on Crove's own ledger, G1-G6 gates in the core repo, PR policy (size, protected paths, what "reviewed" means) | Before code (Phase 0) |
-| 0002 | Crove's own DB: Supabase prod/beta projects, runs on any PG17, capacity baseline, DR/RPO/RTO, 7-day PITR + rehearsed restore runbook, WORM stream, >=10-year retention | Before code |
-| 0003 | Runtime and environments: separate GCP projects, WIF, worker-first deploys from `crove-cloud`, readiness manifest, per-role connection budget, egress | Before code |
-| 0007 | Tenancy and context: `enter_context`, full seal, advisory guard, actor bound to `session_user`, split definer roles, RLS template, `search_path` | Before code |
-| 0022 | `AGPL-3.0-only` license, license-grant CLA (individual + corporate, CLA Assistant), trademark + brand policy, open-core boundary (core vs `crove-cloud`), business model, commercial license, third-party extension via API/MCP | Before the first commit to the core repo (history will be public) |
-| 0023 | Federated identity: DOS ID via OIDC, `IdentityProvider` adapter, one-way projection, org API, webhooks + dedupe + reconcile + TTL, Crove sessions, DOS-1 gate | Before Phase 0 exit |
-| 0004 | Surfaces: oRPC 1.x contract-first, v0 has `/rpc` + `/auth` + `/webhooks`, surface-bound sessions | Before Phase 1 features |
-| 0005 | Data access: Kysely + Kanel, type parsers, snake_case on the wire | Before Phase 1 features |
+| 0007 | Tenancy and context: `enter_context`, full seal, the re-entry guard of §4.5, actor bound to `session_user`, split definer roles, RLS template, `search_path` | Before the first external tenant (T10, T11) |
+| 0018 | Untrusted content: extraction sandbox, inbound email processed in the worker, opaque email addresses, provenance-based taint | Before the first external tenant (T5, T12) |
+| 0001 | Repos (public core + private `crove-cloud`), Crove's own migration ledger and built-in runner, G1-G6 gates, PR policy (size, protected paths, what "reviewed" means, the Decision 7 flow) | Before the first external tenant (T15) |
+| 0002 | Crove's own DB: dedicated Supabase prod/beta projects, runs on any PG17, capacity baseline, DR/RPO/RTO, 7-day PITR + rehearsed restore runbook, WORM stream, >=10-year retention | Before MVP step 2 |
+| 0003 | Runtime and environments: one image with roles `migrate`, `api`, `worker` and `all`, separate GCP projects, WIF, worker-first deploys from `crove-cloud`, readiness, per-role connection budget, egress | Before MVP step 2 |
+| 0022 | `AGPL-3.0-only` license, license-grant CLA (individual + corporate, CLA Assistant), trademark + brand policy, open-core boundary, business model, commercial license, third-party extension via API/MCP | Before accepting outside contributions (the repo is already public) |
+| Decision 12 proposals | Composition root (`createKernel`), per-deployment module enablement, modules that run when others are off | Before the matching PR (issues #43, #44) |
+| 0004 | Surfaces: oRPC 1.x contract-first; `/api/rpc`, `/api/*`, the `/auth/v1` proxy and `/webhooks` | Before Phase 1 features |
+| 0005 | Data access: Kysely + Kanel, type parsers, snake_case on the wire, cell-ready pool resolution | Before Phase 1 features |
 | 0006 | Naming rules (§5.3) | Before Phase 1 features |
-| 0008 | Async: <ul><li>insert-only outbox + `outbox_pending`; fan-out seeded by migration;</li><li>non-transactional handlers; org-scoped keys;</li><li>retention; yearly partitions;</li><li>bytes per 1M commands.</li></ul> | Before Phase 1 features |
-| 0010 | Risk and policy: levels, derived risk, P01-P13, proposal revisions, the agent autonomy table | Before Phase 1 features |
-| 0011 | Frontend: Next flags, cache policy, CSP/Trusted Types, untrusted HTML, previews | Before Phase 1 features |
-| 0013 | Evidence storage and integrity: staging, generation preconditions, versioning, WORM bucket | Before Phase 1 features |
-| 0015 | Version and upgrade policy | Before Phase 1 features |
+| 0008 | Async: <ul><li>insert-only outbox + `outbox_pending`; fan-out seeded by migration;</li><li>non-transactional handlers; org-scoped keys;</li><li>pg-boss schema vendored into migrations (T6);</li><li>retention; yearly partitions;</li><li>bytes per 1M commands.</li></ul> | Before Phase 1 features |
+| 0010 | Risk and policy: levels, derived risk, P01-P13, who may approve R3 (T2), proposal revisions, the agent autonomy table | Before Phase 1 features |
+| 0011 | Frontend: SPA cache policy, CSP/Trusted Types, untrusted HTML | Before Phase 1 features |
+| 0013 | Evidence storage and integrity: S3 adapter (T7), staging, generation preconditions, versioning, WORM bucket | Before Phase 1 features |
+| 0015 | Version and upgrade policy (including the Vite+/Oxfmt exception) | Before Phase 1 features |
 | 0017 | Data classification, PII, crypto-shredding, deletion map, PDPL | Before Phase 1 features |
-| 0018 | Untrusted content: extraction sandbox, opaque email addresses, provenance-based taint | Before Phase 1 features |
-| 0021 | Kernel support for Finance: <ul><li>domains `amount numeric(20,4)`, `unit_amount numeric(24,8)`, `quantity numeric(20,6)`, `fx_rate numeric(24,10)`;</li><li>gapless numbering; period close; hash chain;</li><li>`source_revision`;</li><li>bank line keys.</li></ul> | Outcome of spike 0b |
-| 0020 | Per-fork decisions and the clean-room process | 2a, before syncing Twenty |
+| 0021 | Kernel support for Finance: <ul><li>domains `amount numeric(20,4)`, `unit_amount numeric(24,8)`, `quantity numeric(20,6)`, `fx_rate numeric(24,10)`;</li><li>ledger immutability (T3); gapless numbering; period close; hash chain;</li><li>`source_revision`;</li><li>bank line keys.</li></ul> | Outcome of spike 0b |
+| DBOS | Process engine: DBOS Transact or the plan's own engine (spike result, Decision 14) | Before Phase 2a |
 | 0009 / 0012 | Agent runtime and chat (OpenAI-compatible provider) / SSE invalidation | 2b |
+| OAuth | OAuth 2.1 authorization server for self-host (Decision 14; issue #67) | Before Phase 3 |
+| 0020 | Clean-room process for using the archived forks as references | Before Phase 3 |
 | 0014 / 0019 / 0016 | Freezing public names + the `com.crove` prefix / MCP grants / egress, SSRF and NAT | Phase 3, or when the first provider requires an IP allowlist |
 | 0024 | Kernel `calendar` service: events, availability, external calendar sync, double-booking prevention | Before Phase 3 |
 | 0025 | `channel` layer: social and email connections shared by Service and Social, Cloud apps vs self-host | Before Phase 4 |
 
+0023 (federated identity: DOS ID via OIDC, `IdentityProvider` adapter, Crove sessions) will not be written: ADR-0027 and ADR-0028 replace it.
+
 ## Appendix: Red-team log
+
+History: this log records the 2026-10-12 review rounds and is not rewritten. Where it conflicts with the body, the body wins; for example S6's advisory-lock re-entry guard is corrected in §4.5, and S18, O8 and O14-O19 refer to Crove-issued sessions, superseded by Supabase Auth (§7.5).
 
 Legend: S = security, F = feasibility and agent DX, O = operations and cost. Severity: B = blocker, M = major, m = minor.
 
