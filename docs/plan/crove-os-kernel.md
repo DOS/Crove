@@ -4,7 +4,7 @@
 > Every blocker and major finding was accepted, or rejected with a reason, in the Appendix. Paths are relative to the `Crove` repo root (separate repo; working name, settled 2026-10-13).
 > Library versions checked against the npm registry on 2026-10-13. Version policy: always the latest stable.
 > Update 2026-10-13: separate repo, own DB, federated identity (OIDC), provider-agnostic AI, AGPL-3.0 + CLA, always latest stable.
-> Update 2026-10-14: consolidated. The body now describes the decided design (Decisions 1-14): Supabase Auth identity (ADR-0027; sessions and revocation per ADR-0028, proposed), one image serving the SPA, the built-in migration runner, the MVP in place of Phase 0, and the External-tenant gate. Where `main` differs from the decided design, the text says so.
+> Update 2026-10-14: consolidated. The body now describes the decided design (Decisions 1-15): Supabase Auth identity (ADR-0027; sessions and revocation per ADR-0028, proposed), one image serving the SPA, the built-in migration runner, the MVP in place of Phase 0, and the External-tenant gate. Where `main` differs from the decided design, the text says so.
 > Vietnamese reading copy: [crove-os-kernel.vi.html](crove-os-kernel.vi.html). This English file is the source of record.
 
 ## Tracking
@@ -34,7 +34,7 @@ Setup checklist: §12. Exit criteria per phase: §13; the MVP below replaces Pha
 
 ### Decisions (2026-10-13)
 
-The body of this plan was rewritten on 2026-10-14 to describe these decisions; if a conflict remains, the decisions win. Rationale: [ADR-0026](../adr/0026-wedge-scope-and-phase-0.md), [ADR-0027](../adr/0027-oss-core-and-crove-cloud.md); identity sessions and revocation: [ADR-0028](../adr/0028-identity-sessions-and-revocation.md) (proposed).
+The body of this plan was rewritten on 2026-10-14 to describe these decisions; if a conflict remains, the decisions win. Rationale: [ADR-0026](../adr/0026-wedge-scope-and-phase-0.md), [ADR-0027](../adr/0027-oss-core-and-crove-cloud.md); identity sessions and revocation: [ADR-0028](../adr/0028-identity-sessions-and-revocation.md) (proposed); agents and the org chart: [ADR-0029](../adr/0029-agents-positions-and-org-chart.md).
 
 1. **Wedge first.** Start with the Document Inbox: founders forward invoices and bank statements, AI proposes the bookkeeping, a human approves. First customers: startups and SMEs that use an outsourced accounting firm; test selling through accounting firms. The owner runs 10-15 interviews (founders + accounting firms) before Phase 2a scope is frozen; script below.
 2. **Scope.** Committed: kernel + Accounting. CRM, Service, Social, Sign and HRM (Phases 3-7) start only when wedge customers pull for them.
@@ -61,6 +61,7 @@ The body of this plan was rewritten on 2026-10-14 to describe these decisions; i
     - **Bun nightly canary** in CI, non-blocking.
     - **Client platforms:** PWA first, then Expo for mobile and Tauri 2 for desktop when their triggers are met (fallbacks Capacitor and Electron).
     - §2 has the final stack.
+15. **Agents hold positions in an org chart shared with humans** (owner direction, 2026-10-14; [ADR-0029](../adr/0029-agents-positions-and-org-chart.md)). Each module ships one or more agent templates, for example `finance.chief_accountant` ("Kế toán trưởng (AI)"). A position is held by a human or an agent, and has a job description and tasks. Agents work with humans, and with each other where a module or an org has no humans: delegation only down their subtree, escalation to the supervisor position, communication only through tasks, comments and proposals. Only humans manage the chart, templates, limits and budgets. R3, and any proposal flagged P03-P07, always ends at a human (the nearest one up the chart holding the permission, else the org owner); agents never approve work from their own causal chain (External-tenant gate T18). Budgets, wake-up limits and kill switches per agent, module and org. Legal sign-off (kế toán trưởng, signed statements) stays with a qualified human. Ideas borrowed from Paperclip (MIT); Paperclip is not embedded, and external runtimes act through MCP grants.
 
 ### MVP
 
@@ -121,6 +122,7 @@ Crove Cloud accepts its first external tenant only when every row below is green
 | T15 | Decision 7 review flow in CI | A required workflow on `main` that runs, for PRs touching protected paths (§10, G6), the invariant suite taken from the base branch and a security reviewer agent; a test PR shows it blocking | Only the `ci` and `gitleaks` workflows | #30 |
 | T16 | PDPL package (§7.9) | DPIA, cross-border transfer dossier, DPA template, 72 h breach runbook and sub-processor list, reviewed by a lawyer | Not started | #62 |
 | T17 | Definer hardening: every `crove_*` function pins `search_path = pg_catalog, pg_temp`, and login roles have no TEMP privilege | A CI catalog test over `pg_proc` fails on any `crove_*` function without the pinned path, and checks that login roles cannot create temporary objects | #71 pinned every `crove_kernel` function and the new ledger functions; no regression guard yet, and login roles keep the default TEMP privilege | #74 |
+| T18 | Agents cannot raise their own power or launder approvals (ADR-0029) | Negative database tests: an agent actor cannot run any position, holder, template, `max_risk`, budget or kill-switch command; an agent cannot approve R3, a proposal flagged P03-P07, or work from its own causal chain; P10 counts only humans; a run that lost its checkout lease cannot write; removing a member vacates the position; a `reports_to` cycle is rejected under concurrency | Not started: positions and position agents do not exist yet; agent approvals must not ship before #75 | ADR-0029 |
 
 ### Customer interview script (owner)
 
@@ -150,7 +152,7 @@ Accounting firms:
 | Actions | Forms, buttons, hand-written APIs per feature | Every operation is a typed command shared by UI, API, agent and automation |
 | Safety when AI acts | AI uses the user's permissions | R0-R3 policy, proposals, taint, AI-specific audit |
 | Data | Records with unclear provenance | Every number traces back to source documents and evidence |
-| Agents | One bot per app | One agent sees every module |
+| Agents | One bot per app | Agents per module hold positions in one org chart with humans, and work together through tasks |
 | How it's built | Humans write code | 100% AI agents; codebase designed for AI to read and modify correctly |
 
 **Tried: stitching together the best open-source fork per module** (Twenty for CRM, Documenso for Sign, Cal.com for Cal, a Go-based Desk, Postiz for Post). What happened in practice:
@@ -203,7 +205,7 @@ The architecture and plan TL;DR follows.
    - Identity: Supabase Auth (Decision 5). The kernel verifies the access token and checks revocation on every request (ADR-0028, proposed), maps `(issuer, subject)` to `user_account` and owns org membership. No FKs to, or reads from, DOS's DB; business data never syncs with DOS.
    - Write path: every write goes through `kernel.execute()`, in a transaction carrying a sealed context that RLS checks.
    - Async: everything runs through outbox -> pg-boss; the DB decides the fan-out.
-   - AI: one agent per org, calling an OpenAI-compatible endpoint (Cloud: DOS.AI). R2/R3 actions always become proposals and run deterministically only after approval.
+   - AI: agents hold positions in the org chart next to humans (one or more per module, ADR-0029) and call an OpenAI-compatible endpoint (Cloud: DOS.AI). R2/R3 actions always become proposals and run deterministically only after approval.
    - The SPA, served by the kernel, holds no secrets and never touches the DB; Next.js is used only for the landing page.
 7. **Roadmap:** MVP step 1 (merged) -> step 2, Crove Cloud -> Finance spike -> Phase 1 hardening, including the External-tenant gate -> Finance 2a/2b. CRM (incl. Calendar), Service (incl. social inbox), Social, Sign and HRM start only when wedge customers pull for them (Decision 2); Projects later. The forks are shut down, not migrated (Decision 8). The core repo is public (Decision 9).
 8. **Hard gates:**
@@ -553,7 +555,7 @@ export default implement(postJournalEntry, {
 | Kind | Identity | Source | Effective permissions | Constraints |
 |---|---|---|---|---|
 | `user` | user_id, session_id, aal | Supabase Auth access token, verified by the kernel on every request (issuer, audience and expiry required; revocation checked per ADR-0028, proposed) | Membership gate (`tenant_member`) + Crove `role_assignment` | Enters via `crove_api`; in the worker only via an approved proposal |
-| `agent` | agent_id, run_id, on_behalf_of, grant_id, kind | In-process; MCP via OAuth (Phase 3) | user ∩ grant ∩ trigger class ∩ scope ∩ taint | Chat/MCP enter via api; background runs enter via the worker with a run ref |
+| `agent` | agent_id, run_id, position (read from `position` at entry), on_behalf_of, grant_id, kind | In-process; MCP via OAuth (Phase 3) | Position-holding agent: position role ∩ template ceiling ∩ `max_risk` ∩ trigger class ∩ scope ∩ taint (ADR-0029). Chat-invoked: user ∩ grant ∩ trigger class ∩ scope ∩ taint | Chat/MCP enter via api; background runs enter via the worker with a run ref |
 | `api_key` (Phase 3) | key id, created_by | Bearer, stored as sha256 | Key role ∩ the creator's **current** permissions | Expires in <=90 days; never R3; auto-disabled when the creator leaves the org |
 | `automation` (Phase 4) | id, version, owner | Scheduler / subscriber | Grant within the owner's permissions, re-checked on every run | Causal depth <=5 |
 | `system` | component | Worker only | `allowSystem` commands; kernel-enqueued jobs | R3 only with an approval verified in the DB (P13) |
@@ -619,11 +621,12 @@ COMMIT;
 2. **Bind the actor kind to `session_user`:**
    - `crove_api` may only use `user`, `agent` (chat/MCP) and `api_key`.
    - `crove_worker` may use `system`, `automation` and background `agent`.
-   - Any other actor in the worker enters only via a job ref (`outbox_event.id`) or an approved proposal. The function re-reads these references from the DB and does not trust parameters.
+   - Any other actor in the worker enters only via a job ref (`outbox_event.id`), an approved proposal, or, for a position-holding agent, a live `ai_run` ref (ADR-0029). The function re-reads these references from the DB and does not trust parameters.
 3. **Check tenant and actor:** the tenant must be `active`. Actors are checked directly against the DB, never against cached data:
    - user: not disabled in Crove (`user_account.disabled_at`, ADR-0028, proposed); self-host also checks here that the Supabase Auth session (`session_id`) still exists; a `tenant_member` row exists (with DOS org sync, later: within its confirmation TTL, §7.3);
    - grant: unexpired, and the grantor is still a member;
    - key: still valid, and the creator is still a member.
+   - position-holding agent (ADR-0029): `active`, still the holder of an `active` position, the run is live, and no budget hard stop or kill switch applies; permissions come from `position.role_key`, not from `tenant_member`.
 4. **Derive:** org role, legal-entity scope (an explicit list or the explicit value `'*'`), sensitivity flags, and the membership fingerprint.
 5. **Write the context and seal it:**
    - `crove.ctx` is the canonical JSON of the **entire** context: org, actor, user, le_scope, flags, command_id, ai_run_id, trace_id.
@@ -683,6 +686,7 @@ COMMIT;
 | agent in a user-opened chat, untainted | allow | allow + 24 h undo | review | review |
 | agent tainted, or triggered by email/event/webhook | allow (triggering thread only) | review | send tools hidden | review |
 | MCP / DOS.AI agent (Phase 3) | allow | allow | review | review |
+| agent holding a position, woken by assignment or schedule, untainted (ADR-0029) | allow | allow + 24 h undo | review | review by a human |
 | automation | allow | allow | review, except bounded admin-approved rules | review |
 | api_key | allow | allow | allow within scope | deny |
 | system | `allowSystem` commands | allow | via job | P13 |
@@ -690,17 +694,17 @@ COMMIT;
 | Rule | Effect |
 |---|---|
 | P01 | Deny: grant expired or revoked, budget exhausted, rate exceeded, kill switch on |
-| P02 | Deny: risk > the grant's or key's `max_risk` |
+| P02 | Deny: risk > the grant's or key's `max_risk`; for a position-holding agent, the lower of `agent.max_risk` and its external-runtime grant's `max_risk` (ADR-0029) |
 | P03 | Review, not overridable: run or input tainted and risk >= R1 |
 | P04 | Review, not overridable: changing a payee, bank account, or contact point |
 | P05 | Review: R3 by a non-user actor. Founder exception only when all hold: class is allowlisted, <= limit, counterparty **verified by a human**, matches a learned rule, and untainted |
 | P06 | Review: R2 by a non-user actor. Founder exception: delayed send, cancellable, only to verified contacts, untainted |
 | P07 | Review: untrusted trigger and risk >= R1 |
 | P08 | Escalate one level: impact > 20 records, or above the org's money threshold |
-| P09 | Accountant preset: posting needs `finance.chief_accountant` approval |
-| P10 | Four-eyes for R3 when >=2 eligible approvers exist. The approver **must not be an author** of any part of the final input. Single-person orgs may self-approve, flagged in the audit |
+| P09 | Accountant preset: posting needs approval by a **human** holding `finance.chief_accountant` |
+| P10 | Four-eyes for R3 when >=2 eligible **human** approvers exist; agents are never counted (ADR-0029). The approver **must not be an author** of any part of the final input, and the creator chain of a task counts as authors. An org whose only human is the owner may self-approve, flagged in the audit |
 | P11 | R3 approval requires `aal2` or WebAuthn (on by default; turning it off needs the owner and is audited) |
-| P12 | The approver must personally hold the command's permission and legal-entity scope. Eligible approvers are snapshotted when the proposal is created; role changes while pending are audited and re-checked |
+| P12 | The approver must personally hold the command's permission and legal-entity scope. For R3, and for any proposal with P03-P07 in its outcome, the approver must be a human; an agent never approves work from its own causal chain (ADR-0029). Eligible approvers are snapshotted when the proposal is created; role changes while pending are audited and re-checked |
 | P13 | System does R3 only with a same-org approval in `approved` state matching the command and `input_sha256`, usable once (`UNIQUE executed_command_id`). Imports that post entries also go through an R3 proposal |
 
 **Recorded outcome:** decision, approver, rule ids, `policy_version`, `org_policy.version`, git SHA.
@@ -1053,7 +1057,9 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 | `record` | <ul><li>UNIQUE `(org_id,id,entity_type)`.</li><li>`legal_entity_id`, `owner_user_id`, `visibility`, `version`.</li><li>`source_trust external\|user\|system`, `verified_at/by`.</li></ul> | v0 |
 | `record_le` | Links org-wide records to legal entities | v0 |
 | `role`, `role_permission`, `role_assignment` | `(org_id, user_id)` FK -> `tenant_member` (CASCADE) | v0 |
-| `agent`, `agent_grant` | In-app agents; a grant holds permissions, `max_risk`, legal entities, limits, trigger classes, expiry | v0 |
+| `position` | Org chart seat: title, module, `role_key`, `reports_to` (composite FK, no self-reference, cycle trigger under a per-org lock), `holder_user_id` (FK -> `tenant_member`, `ON DELETE SET NULL`) or `holder_agent_id`, at most one; `le_scope`, `flags`, structured `job_description`, status; the owner is the root (ADR-0029) | v0 |
+| `agent`, `agent_grant` | Agents (not `tenant_member`s): `template_key`, `max_risk`, `runtime builtin\|external`, `model_alias`, status `active\|paused\|retired`; a grant holds permissions, `max_risk`, legal entities, limits, trigger classes, expiry | v0 |
+| `agent_wakeup`, `budget_policy` | Wake-up requests (assignment, mention, event, schedule), coalesced per agent / budget per agent, module or org with warn % and hard stop (ADR-0029) | v0 / 2a |
 | `org_entitlement` | Static seed + abuse limits | v0 |
 | `idempotency_key` | PK `(org_id, actor_key, key)` | v0 |
 | `outbox_event` / `outbox_pending` / `event_subscription` / `processed_message` | Insert-only / hot queue / fan-out seeded by migration / PK `(consumer, event_id)` | v0 |
@@ -1077,7 +1083,7 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 | `inbound_message` | UNIQUE `(org_id, channel, external_id)`; always `external` | v0 |
 | `file`, `file_link` | <ul><li>`storage_key org/<org_id>/<sha256>` plus `generation`.</li><li>sha256 computed by the server.</li></ul> | v0 |
 | `extraction` | Always `tainted`; keyed on `(file, schema_key, schema_version, extractor_version)` | v0 |
-| `activity`, `task`, `tag`, `record_tag`, `notification` | System-kind activity written only via a definer; notifications per user | v0 |
+| `activity`, `task`, `tag`, `record_tag`, `notification` | System-kind activity written only via a definer; notifications per user. `task`: `assignee_position_id`, `parent_task_id`, `source`, status, `request_depth`, atomic checkout (ADR-0029) | v0 |
 | `follower` | | later |
 
 **Search v0:** `pg_trgm` on normalized `record.title`: `lower(extensions.unaccent(normalize(x, NFC)))`, through RLS. `search_doc` comes in Phase 3; the projector never copies fields classified `pii`, `national_id` or `sensitive`.
@@ -1284,7 +1290,7 @@ Data residency requirements are handled with a legal opinion plus a copy in Viet
 
 ## 8. AI layer
 
-- **One agent per org:** one persona, several skill packs per module. Subagents only do heavy reading and return summaries.
+- **Agents per position (ADR-0029):** modules declare agent templates; each agent holds a position in the org chart, works on tasks, delegates only down its subtree and escalates to its supervisor position. A user can also open a chat with the org assistant, which acts on that user's behalf. Subagents only do heavy reading and return summaries.
 - **`@crove/agent`** wraps AI SDK 7 and points at the OpenAI-compatible endpoint configured per deployment (Cloud: `api.dos.ai/v1`). It owns:
   - aliases `crove-fast | crove-reason | crove-vision | crove-embed` (Cloud: aliases defined by DOS.AI; self-host: an alias -> model table in config); lint bans string model ids;
   - tools generated from commands;
@@ -1389,6 +1395,7 @@ DOS.AI's agent memory (`dosai.agent_memory`) is not used.
 - **Grants:** `agent_grant` per (org, client_id, user), created from a connection screen in Crove. Each grant picks exactly one org and one `max_risk`.
 - **Resolution:** `/mcp` derives org and grant from the token's `client_id` + `sub`, and rejects every other org.
 - **Execution:** R0/R1 run directly; R2/R3 always create proposals. Grants are revoked when membership ends.
+- **Position agents on an external runtime (ADR-0029):** an `agent_grant` bound to `(org, client_id, agent_id)`, created by a human with the permission, revoked when the agent is paused or retired or no longer holds a position.
 - **DOS.AI agents (Cloud):** bound via `provider_connections(provider='crove')`. Crove is registered as a first-party MCP family so the gateway writes `agent_action_audit`.
 
 ## 9. Frontend shell
@@ -1857,6 +1864,7 @@ ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this pla
 | [0026](../adr/0026-wedge-scope-and-phase-0.md) | Wedge (Document Inbox), scope (kernel + Accounting), rigor by stage, protected-path review without an owner label, forks frozen | Accepted 2026-10-13; partly superseded by 0027 |
 | [0027](../adr/0027-oss-core-and-crove-cloud.md) | Open-source core vs Crove Cloud; auth on Supabase Auth only; app shell (Vite + TanStack Router SPA); brand | Accepted 2026-10-13 and 2026-10-14 |
 | [0028](../adr/0028-identity-sessions-and-revocation.md) | Identity: Supabase Auth access tokens verified with required issuer, audience and expiry; fail-closed revocation per deployment type; disabled users; membership on every request; `aal2` for R3 | Proposed 2026-10-14; accepting and implementing it is External-tenant gate T1 (issue #22) |
+| [0029](../adr/0029-agents-positions-and-org-chart.md) | Agents as org members: positions held by humans or agents, module agent templates, tasks with delegation and escalation, wake-ups, budgets, R3 always ends at a human, runtimes as adapters | Accepted 2026-10-14 (direction); details proposed until the Phase 1 PR |
 
 **To write** (the ones the External-tenant gate depends on first):
 
