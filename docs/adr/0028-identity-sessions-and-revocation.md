@@ -15,7 +15,7 @@ What `main` does today (`apps/kernel/src/auth.ts`, `apps/kernel/src/config.ts`):
 - Verifies the signature with `jose`: HS256 with `AUTH_JWT_SECRET`, or ES256/RS256 from `AUTH_JWKS_URL`. Verifies the audience (`AUTH_AUDIENCE`, default `authenticated`).
 - Checks the issuer only when `AUTH_ISSUER` is set; the setting is optional.
 - Checks `exp` only when the token carries it: `jose` validates `exp` when present but does not require it unless told to.
-- Requires `sub`, `email` and `role = authenticated`. Ignores `session_id`, `aal` and `is_anonymous`.
+- Requires `sub`, `email` and `role = authenticated`. Since #71 it reads `aal` (missing or unknown counts as `aal1`) and carries it on the user actor, but nothing enforces it yet. Ignores `session_id` and `is_anonymous`.
 - Caches the `(issuer, subject) -> user_account` mapping for 5 minutes. This cache holds no authorization decision.
 - Re-checks org membership in `enter_context` on every request. This is correct and stays.
 - Has no revocation check. After sign-out, a ban or a deletion, a copied access token keeps working until it expires (the compose stack sets `GOTRUE_JWT_EXP=3600`, one hour).
@@ -126,7 +126,7 @@ Unchanged and required: `enter_context` reads `tenant_member` (and later `role_a
 - Policy P11 is on by default. An org owner can turn it off for that org; the change is audited. A single-user self-host can do the same.
 - The compose stack enables TOTP MFA in Supabase Auth, and the SPA gets enrollment and challenge screens (issue #32).
 - Audit rows for R3 commands record `aal` and `session_id`.
-- Who may approve is a separate rule (plan §4.6, issue #20): only an `owner`, or a user an owner granted the approval permission.
+- Who may approve is a separate rule (plan §4.6): today `owner` and `admin`, the roles that may post (#71); once role assignments exist, the holders of the approval permission, with four-eyes and the approver-permission check (P10, P12, issue #75).
 
 ## Consequences
 
@@ -162,7 +162,7 @@ Remote mode (contract test against a Supabase Auth container in CI with `AUTH_SE
 R3 approvals:
 
 - `aal1` token: 403 `STEP_UP_REQUIRED`. `aal2` token: executed, and the audit row records `aal` and `session_id`.
-- `member` and `viewer` cannot approve (issue #20).
+- `member` and `viewer` cannot approve (covered since #71).
 
 ## References
 
