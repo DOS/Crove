@@ -10,13 +10,14 @@
 
 | | |
 |---|---|
-| Current stage | **Pre-Phase 0.** No kernel code yet. |
-| Repo state | `main` @ `45000dc`: Next.js landing page + design system scaffold only (pnpm 10.6.1, TypeScript 5.7). |
+| Current stage | **MVP step 1 merged** (open source, local) on 2026-10-13 as #8, with two exit criteria still open: criterion 2 (generated cross-org RLS tests; today one hand-written RLS test covers `file` and `party`) and criterion 4 (a Playwright end-to-end test in the repo; #8 was verified by a manual `docker compose up` run). Step 2 (Crove Cloud) waits on owner approvals: spend, a DNS token, and the DOS-side redirect URL change. |
+| Repo state | `main` @ `44ab80a`: kernel (`apps/kernel`, `packages/*`), finance module, Vite + TanStack Router SPA (`apps/app`), `docker compose` with bundled Supabase Auth, and the Next.js landing page (`apps/web`). CI: lint, typecheck, 47 unit and 11 database tests (as of #8). |
 | Redaction | `DOS/Crove` is public. Security-sensitive details of DOS-side fixes (§11) live only in the private DOS.Me repo; those rows keep only IDs, priorities and gates. Integration contracts Crove builds against (DOS-27 events and API, DOS-7, DOS-17) stay here. |
 
 | Phase | Time-box | Status |
 |---|---|---|
-| MVP step 1 (open source, local) then step 2 (Crove Cloud), see MVP below | 1 week | In progress |
+| MVP step 1 (open source, local), see MVP below | 1 week | Merged 2026-10-13 (#8); exit criteria 2 and 4 open |
+| MVP step 2 (Crove Cloud) | - | Blocked on owner approvals |
 | 0b Finance spike | 2 weeks, parallel | Not started |
 | 1 Kernel v0 hardening (residual work after the MVP) | 8 weeks | Not started |
 | 2a Finance A1 (scope set by interviews) | 10 weeks | Not started |
@@ -69,6 +70,8 @@ These decisions override any conflicting text in the body of this plan. Rational
 2. Generated cross-org RLS tests: 0 leaks. No write path outside `execute()`.
 3. Audit rows cannot be updated or deleted; the same document resent creates no duplicates.
 4. Playwright end-to-end run of exit criterion 1 is green.
+
+**Follow-ups from #8 (Phase 1 residual work):** move `enter_system_context` out of the API role (inbound email runs there today); a re-extract command for files read by AI; pending invites with consent; remove and update member; inbound token rotation; an end-to-end check of Supabase Auth rate limits; CSV/Excel formula prefixing; exact decimals in the Excel export; audit retention and offboarding.
 
 **Deferred, with the trigger to revisit:**
 
