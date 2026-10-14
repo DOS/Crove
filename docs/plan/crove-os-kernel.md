@@ -157,26 +157,26 @@ The architecture and plan TL;DR follows.
 
 ## 0. TL;DR
 
-1. **Don't rebuild existing infrastructure.** Identity comes from an IdP via OIDC, AI via an OpenAI-compatible endpoint. The only new code is a thin business core that runs fully with no DOS services (self-host).
+1. **Don't rebuild existing infrastructure.** Identity comes from Supabase Auth (Decision 5), AI via an OpenAI-compatible endpoint. The only new code is a thin business core that runs fully with no DOS services (self-host).
 2. **Reuse from DOS for Crove Cloud** (each is an adapter that can be turned off):
-   - DOS ID as the OIDC IdP (the "Crove" client already exists), plus the DOS-Me API for org/membership and org/team change webhooks. DOS membership sync is enabled only after gate DOS-1 passes.
+   - DOS ID accounts through DOS's Supabase Auth (Decision 5), plus the DOS-Me API for org/membership and org/team change webhooks. DOS membership sync is enabled only after gate DOS-1 passes.
    - DOS.AI: models, metering, credits.
    - DOS-Me credential broker (`provider_connections` + Vault): optional connector.
 3. **Reuse the designs of patterns running in DOS prod** (design only, no shared tables): `team_webhook_outbox` -> outbox; `collaboration_write_ledger` -> proposals and `external_call`; `agent_action_audit` -> append-only audit.
 4. **New code:**
-   - Kernel runtime: `execute()`, sealed context + RLS, R0-R3 policy, proposals and AI Inbox, relay, audit, identity projection (`user_account`, `tenant`, `tenant_member`) and Crove sessions.
+   - Kernel runtime: `execute()`, sealed context + RLS, R0-R3 policy, proposals and AI Inbox, relay, audit, identity projection (`user_account`, `tenant`, `tenant_member`) and org membership.
    - Kernel module: party, file, activity, task.
    - Business modules and the shell.
-5. **Libraries:** Hono, oRPC 1.x (contract-first), Kysely + Kanel, pg-boss, zod 4, AI SDK 7, `openid-client` + `jose`, Next 16 + shadcn/Base UI, TanStack Query.
+5. **Libraries:** Hono, oRPC 1.x (contract-first), Kysely + Kanel, pg-boss, zod 4, AI SDK 7, `jose` + Supabase Auth, the Vite+ toolchain, a Vite + React + TanStack Router SPA, shadcn/Base UI, TanStack Query, `use-intl`. Details in §2.
 6. **Locked architecture:**
    - Repo: separate repo (`DOS/Crove`), TypeScript modular monolith, AGPL-3.0 + CLA. Private repo `crove-cloud` holds infrastructure, environment config and commercial connectors.
    - Runtime: one image running three roles `api | worker | job` on Cloud Run; separate GCP projects for prod and beta; file parsing runs in its own sandbox. Self-host runs the same image on any container platform.
    - Data: Crove owns its DB. Crove Cloud uses a dedicated Supabase project (prod + beta, ap-southeast-1, 7-day PITR); self-host uses any PostgreSQL 17. Schemas `crove_*`; migrations live in the Crove repo.
-   - Identity: OIDC + one-way projection in `crove_kernel`. No FKs, no reads from DOS's DB; business data never syncs with DOS.
+   - Identity: Supabase Auth (Decision 5) + one-way projection in `crove_kernel`. No FKs, no reads from DOS's DB; business data never syncs with DOS.
    - Write path: every write goes through `kernel.execute()`, in a transaction carrying a sealed context that RLS checks.
    - Async: everything runs through outbox -> pg-boss; the DB decides the fan-out.
    - AI: one agent per org, calling an OpenAI-compatible endpoint (Cloud: DOS.AI). R2/R3 actions always become proposals and run deterministically only after approval.
-   - The Next.js shell on Vercel holds no secrets and never touches the DB.
+   - The SPA, served by the kernel, holds no secrets and never touches the DB; Next.js is used only for the landing page.
 7. **Roadmap:** 2-week walking skeleton -> Finance spike -> kernel v0 "Party & Document Inbox" -> Finance 2a/2b -> CRM (incl. Calendar) -> Service (incl. social inbox) -> Social -> Sign -> HRM; Projects later. Every fork is replaced by a native module; a fork runs in parallel only until its module meets its exit criteria. The core repo stays private until the end of Phase 1 (security review + `SECURITY.md`), then goes public. (Superseded 2026-10-13: `DOS/Crove` is already public; see Tracking #7.)
 8. **Hard gates:**
    - Crove Cloud does not enable DOS membership sync until gate DOS-1 passes; self-host is unaffected.
@@ -207,7 +207,7 @@ The architecture and plan TL;DR follows.
     - A PR cannot loosen its own security controls.
 13. **Lean.** Only Postgres, containers and Vercel. No Kafka, Redis, k8s or search cluster. A capability enters the kernel only when it has 2 consumers, or when it is a security or integrity invariant.
 14. **Expand/contract; public names frozen.** Migrations must be compatible with the running app. Breaking changes go in a separate contract PR.
-15. **Self-host first: every DOS integration is an adapter.** Identity (`IdentityProvider`: `dos-id`, `generic-oidc`), AI (OpenAI-compatible endpoint), credential broker and billing sit behind interfaces. The core runs fully with no DOS services; Crove Cloud is just a configuration.
+15. **Self-host first: every DOS integration is an adapter.** Identity (`IdentityProvider`, Supabase Auth by default; Decision 12), AI (OpenAI-compatible endpoint), credential broker and billing sit behind interfaces. The core runs fully with no DOS services; Crove Cloud is just a configuration.
 
 ## 2. Stack choices
 
@@ -242,7 +242,7 @@ The architecture and plan TL;DR follows.
 | Mobile (direction, not MVP) | Expo (SDK 57, React Native 0.87, Expo Router). Shares the TypeScript contracts, zod schemas, oRPC client, TanStack Query and i18n messages with the web app; the UI is native and separate from shadcn. Use cases: approve Inbox proposals, push notifications, scan invoices and receipts with the camera into the Document Inbox, biometric step-up for R3 approvals. Scope like HubSpot's free iOS/Android app: an extension of the web app, not a copy | Native camera, push and biometrics with one TypeScript codebase for logic | Capacitor 8 wrapping the same SPA (reuses 100% of the UI, webview feel) | Wedge customers ask for mobile approvals or camera capture |
 | Desktop (direction, not MVP) | Tauri 2 (2.12) wrapping the same SPA static files: Rust shell, OS webview, small binaries, tray, native notifications, auto-update | Reuses the SPA as is; small binaries and low RAM | Electron 44 (bundled Chromium gives consistent rendering, at the cost of size and RAM; Slack and VS Code use it) | A real-time chat or other always-open module needs tray and native notifications (such a chat also needs WebSocket or SSE realtime, already planned in the Realtime row) |
 | Tests | `vitest` 5.x (unit/db/browser) via `vp test`, `msw` 3.x, `fast-check` 4, latest `@playwright/test` (CI only). The Playwright end-to-end test is MVP exit criterion 4, still open | Latest stable; one toolchain | Vitest 4.1 if plugins lag | - |
-| DB tests & lint | pgTAP via Supabase CLI (pinned), splinter, `plpgsql_check`, `libpg-query` 17 (including the plpgsql parser) | Catalog meta-tests; RLS matrix | - | - |
+| DB tests & lint | Today: a Vitest `db` project that applies the committed migrations to plain PostgreSQL 17 with the built-in runner (a CI service container; no Supabase CLI) and tests RLS, append-only audit and ledger invariants. Next: pgTAP catalog meta-tests and the generated cross-org RLS matrix (MVP exit criterion 2, still open). Later, as migrations grow: splinter, `plpgsql_check`, `libpg-query` 17 (including the plpgsql parser) for migration lint | Real migrations on real Postgres from day one; catalog meta-tests and the RLS matrix come next | - | - |
 | Observability | <ul><li>OTel SDK + `pino` -> Cloud Logging/Trace/Error Reporting.</li><li>Alerts via Cloud Monitoring, data from the prober.</li><li>10% sampling, 100% of errors kept.</li><li>No Sentry in v0.</li><li>Self-host: OTLP export or stdout.</li></ul> | No dependency on the DOS collector (not deployed yet) | Datadog via the DOS collector | When the DOS collector is actually running |
 | Infrastructure | <ul><li>Self-host: `docker compose up` (PostgreSQL 17, Supabase Auth, Crove api + worker + UI in one image, Mailpit); in production, the same images + any PostgreSQL 17 + S3-compatible storage.</li><li>Crove Cloud: GCP `crove-prod`, `crove-beta` (`asia-southeast1`): Cloud Run services, worker pool, Jobs, Artifact Registry, Secret Manager; a dedicated Supabase project per environment (ap-southeast-1, PG17; 7-day PITR on prod), not shared with DOS.</li><li>Vercel only for the landing page; the SPA is served by the kernel.</li><li>OpenTofu 1.x in the private `crove-cloud` repo, run by CI via WIF.</li></ul> | One command for self-host; Cloud environments separated by IAM boundaries; own DB means no noisy neighbours and usable PITR | Worker as a service with min=max=1 | A data residency requirement |
 | CI security | `gitleaks` (from the first commit), project-ref scanning (G1), `zizmor`, dependency-review (with license checks), Opengrep | Supply chain; the repo will be public | CodeQL | - |
@@ -262,27 +262,28 @@ The architecture and plan TL;DR follows.
 Crove/
 ├── AGENTS.md · CLAUDE.md(@AGENTS.md) · README.md · LICENSE (AGPL-3.0) · CLA.md · CONTRIBUTING.md · TRADEMARKS.md
 ├── SECURITY.md                      added before going public (§13 Phase 1)
-├── package.json · pnpm-workspace.yaml · pnpm-lock.yaml · turbo.json
+├── package.json · pnpm-workspace.yaml · pnpm-lock.yaml · vite.config.ts (Vite+)
 ├── .claude/
 │   ├── rules/*.md                   rules with `paths:` (§10)
 │   ├── skills/*/SKILL.md            skills that call generators
 │   └── settings.json                hook dispatcher (every change needs owner approval)
 ├── .github/workflows/               scope, migration-lint, db-replay, ci, protected, e2e, evals, security, cla (§10); no deploy workflows
 ├── apps/
-│   ├── web/                         Next shell -> Vercel `crove-web`; routes generated from manifests
+│   ├── app/                         product SPA (Vite + TanStack Router), static files served by the kernel; routes from manifests
+│   ├── web/                         landing page (Next.js) -> Vercel
 │   ├── kernel/                      image `crove-kernel`: main.ts -> api | worker | job <name> | stream (2b)
 │   └── extract/                     image `crove-extract`: sandbox, parsing libraries only
 ├── packages/
 │   ├── kernel-contract/             zod + @orpc/contract: codecs, define*-contract, errors, Filter AST, contract.generated.ts
 │   ├── kernel-runtime/              execute, context, RBAC, policy, idempotency, outbox/relay, audit, proposal, numbering,
-│   │                                egress guard, identity adapters (`dos-id`, `generic-oidc`); './async' is the ONLY pg-boss importer
+│   │                                egress guard, identity adapter (Supabase Auth by default); './async' is the ONLY pg-boss importer
 │   ├── kernel/                      KERNEL MODULE (id `kernel`, golden module): party, file, extraction, activity, task, tag,
 │   │                                notification, inbound
 │   ├── kernel-http/                 Hono + oRPC server (/rpc; later /v1, /mcp), /auth, /webhooks
 │   ├── db/                          Kysely factory, withTenantTx | withTenantReadTx | withSystemTx, type parsers, generated/
 │   ├── agent/                       the ONLY ai/@ai-sdk importer
-│   ├── ui/                          shadcn/Base UI, tokens, DataView, AppLink
-│   └── testing/                     command-driven factories, one tenant per test, TestClock, mock OIDC IdP,
+│   ├── ui/                          shadcn/Base UI, tokens, DataView
+│   └── testing/                     command-driven factories, one tenant per test, TestClock, mock Supabase Auth tokens,
 │                                    synthetic fixtures (the only source of ai.examples)
 ├── modules/<id>/                    @crove/mod-<id>, added per phase
 ├── supabase/
@@ -1073,21 +1074,20 @@ CREATE POLICY le_scope ON crove_finance.invoice AS RESTRICTIVE FOR ALL TO crove_
 
 ### 7.5 Auth and sessions
 
-- **Login (OIDC Authorization Code + PKCE):**
-  - The shell redirects to the IdP with `state`, `nonce`, `code_challenge`. The `/-/callback` route sends `code` + `code_verifier` to `POST /auth/callback` on `crove-api`.
-  - The kernel is the relying party (`openid-client`): exchanges the code, verifies the ID token, runs §7.3 step 1. IdP tokens are used only server-side during login, never reach the browser and are never stored.
-- **Crove session:**
-  - Access JWT, ES256, signed by Crove (10-minute TTL; `sub` = `user_account.id`, `sid`, `aal`, surface). Public JWKS at `/.well-known/jwks.json`.
-  - Rotating refresh tokens; reuse detection revokes the whole chain. Stored as sha256 in `crove_kernel.session`; httpOnly host-only cookie on `api.crove.com` (`Path=/auth`, `SameSite=Strict`); expires after 14 days, or after 7 days unused.
-  - Every request: `enter_context` checks the `sid` is not revoked, so logout, leaving an org or `user.disabled` take effect immediately.
+Rewritten 2026-10-14 for Supabase Auth (Decision 5, ADR-0027). Other sections that still describe Crove-issued session JWTs, OIDC callbacks under `/auth` or the `dos-id`/`generic-oidc` adapters (§3.2, §3.3, §4.1, §4.3, §4.4, §4.11, §6, §7.3, §12, §13 (Phases 0-1), §14, §16) predate Decision 5; Decisions 5 and 12 override them until the identity ADR rewrites them.
+
+- **Login:** the SPA uses the Supabase Auth client (`@supabase/auth-js`, PKCE): email + password, magic link, Google/Microsoft/OIDC providers, MFA and password reset. Self-host runs Supabase Auth in the compose stack; Crove Cloud points the same code at DOS's Supabase Auth (accounts shared with DOS ID).
 - **Kernel:**
-  - Verifies session JWTs locally with `jose`.
-  - Sessions are bound to a surface: `/rpc`, `/events`, `/ai` accept only `web` sessions; `/mcp` accepts only MCP tokens (Phase 3). IdP tokens are never accepted directly.
-  - R3 approval needs aal2: taken from the IdP's `amr`/`acr` at login (step-up via `max_age` + `acr_values`), or Crove-managed WebAuthn (P11).
+  - Verifies Supabase access tokens with `jose`: JWKS when asymmetric keys are on (ES256/RS256), otherwise the deployment's JWT secret (HS256); the issuer is checked when configured.
+  - Maps `(issuer, subject)` to `user_account` (§7.3 step 1). Org membership lives in Crove and `enter_context` checks it on every request, so removal from an org takes effect immediately.
+  - `/mcp` accepts only MCP client tokens (Phase 3, issued by the authorization server in Decision 14), never a user's browser token.
+  - R3 approval needs step-up: a Supabase Auth MFA session (`aal: aal2` in the token).
+  - Open: revoking an access token before it expires (logout, disabled user); decided in the identity ADR (for example a short token lifetime or a session check).
 - **Shell:**
-  - The access JWT sits in an `app.crove.com` cookie: the RSC auth gate verifies it with the public JWKS (no secret needed), and the browser reads it to send as Bearer. Exposure is on par with the `@supabase/ssr` cookie of the previous design; the refresh token is not readable by JS.
-  - Hash-based CSP via Next SRI (spike A14), falling back to dynamic rendering for the app shell. Trusted Types on; no third-party scripts.
-- **Preview redirect URIs:** declared only on the `Crove Beta` client, and only for preview domains the owner controls.
+  - `@supabase/auth-js` keeps the session in browser storage and refreshes it; the SPA sends the access token as Bearer. Runtime config (`/api/config`) carries no secrets.
+  - Client route guards (`beforeLoad`) are UX only.
+  - Hash-based CSP + Trusted Types for the static `index.html` (spike A14, retargeted by Decision 6); no third-party scripts.
+- **Redirect URLs:** Supabase Auth allows redirects only to domains the owner controls (Cloud: `app.crove.com`).
 
 ### 7.6 Untrusted input
 
@@ -1297,30 +1297,32 @@ DOS.AI's agent memory (`dosai.agent_memory`) is not used.
 
 ## 9. Frontend shell
 
+Updated 2026-10-14 for the Vite + TanStack Router SPA (Decision 6).
+
 - **Routes:**
-  - `pnpm gen` generates the route tree from manifests: `app/[locale]/(app)/[org]/<module>/**` (page/layout/loading/error, `@panel` + route interception for peek), plus `routes.generated.ts`, the nav/slot registry and message types.
-  - Lint bans hand-written files under `(app)/[org]`, string `href`s and `next/link` in module code; use `<AppLink to=… params=…>`.
+  - The TanStack Router route tree is built from module manifests (virtual file routes); a small adapter reads each manifest (routes, menu items, whether the module is enabled). `pnpm gen` also emits the nav/slot registry and message types.
+  - Navigation uses the router's typed `Link`/`navigate`; lint bans string `href`s in module code.
 - **URLs:**
   - `/<orgSlug>/<module>/<entity>/<recordId>`. `/-/` is reserved for org-less routes: login, callback, onboarding, invite, account, orgs; public pages under `/-/p/…` (Phase 5).
-  - Org UUIDs redirect 308 to the slug.
-  - List state lives in search params (nuqs).
+  - Org UUIDs redirect to the slug.
+  - List state lives in search params, validated with `validateSearch` + zod.
 - **Org context:**
   - The org in the URL is the only signal. The last-used org is kept in a cookie, used only to redirect `/`.
-  - The `[org]` layout runs server-side in Suspense: verify the session JWT (public JWKS) -> `kernel.me.org_context` -> `notFound()` if not a member.
+  - The org route's `beforeLoad` loads `kernel.me` (org context) and redirects if the user is not a member; this guard is UX only, the kernel checks token and membership on every request.
   - `OrgProvider` supplies: org, role, permissions, entitlements, an oRPC client with `X-Crove-Org` attached, query keys prefixed `['org', org_id]`.
   - Logout: hard navigation, `queryClient.clear()`, and a BroadcastChannel message to other tabs.
-- **Locale:** next-intl, `localePrefix:'never'`; locale from the user's cookie, default `vi`.
+- **Locale:** `use-intl` (ICU messages), no locale prefix in URLs; locale from the user's cookie, default `vi`.
 - **Data:**
   - Client-first: `useSuspenseQuery`/`useInfiniteQuery`.
   - `useCommand()` generates a UUIDv7 `Idempotency-Key`, with optimistic update and rollback, and invalidates on completion.
-  - A route's `load` is used for prefetch on hover or focus.
+  - Route loaders prefetch on hover or focus (`defaultPreload: 'intent'`).
 - **Updates:** v0 refetches on focus and polls the Inbox every 30 s. 2b moves to SSE: ids only, filtered by membership and legal-entity scope re-checked every 60 s, per-org seq.
 - **Caching:**
-  - Tenant data is **never** cached on the server or in any shared layer.
-  - `use cache` is allowed only in `src/kernel-web/**` for non-tenant data: l10n packs, tax/bank codes, i18n.
-  - CI bans every other cache directive, and fails if the shell has `SUPABASE_SERVICE_ROLE` or any kernel secret.
+  - Tenant data is **never** cached on a server or in any shared layer; the SPA is static files and TanStack Query caches only in the tab.
+  - Only non-tenant data (l10n packs, tax/bank codes, i18n messages) may be cached across users.
+  - CI fails if the SPA build contains `SUPABASE_SERVICE_ROLE` or any kernel secret; runtime config carries no secrets.
   - The kernel returns `Cache-Control: no-store`.
-- **Mutations:** Server Actions are not a write path; `'use server'` is used only for logout and locale switching.
+- **Mutations:** every write is an oRPC command call to the kernel; the product app has no server-side code.
 - **Design system:**
   - `@crove/ui` is the only UI import and the only importer of `@base-ui/react`.
   - OKLCH tokens; lint bans raw color classes (`web` rule).
@@ -1328,7 +1330,7 @@ DOS.AI's agent memory (`dosai.agent_memory`) is not used.
   - AI Elements: vendored in 2b.
 - **Safety:** untrusted HTML renders only in a sandboxed iframe (§7.6); CSP and Trusted Types on; R3 approval needs step-up.
 - **Preview:** off in Phase 1-2, enabled only with the `ui-only` label. PRs are verified with hermetic `e2e`, and on beta after merge.
-- **Next checks:** about 10 `instant()` tests for the key navigations.
+- **Navigation checks:** about 10 Playwright tests for the key navigations.
 
 ## 10. AI coding foundation
 
@@ -1344,7 +1346,7 @@ DOS.AI's agent memory (`dosai.agent_memory`) is not used.
   - public-repo rules (no project refs, internal URLs, secrets or real data), clean-room rules, CLA.
 
   Each module has its own `AGENTS.md`, <=150 lines.
-- **Path rules (`.claude/rules/`, all with `paths:`):** `core`, `migration`, `finance` (NUMERIC, reverse entries only), `tests`, `web` (Base UI, tokens, no `use cache`, AppLink, useCommand), `agent`, `identity` (identity adapters and `/auth`), `orpc` (only for `packages/kernel-http/**` and `packages/kernel-contract/**`; pins v1 idioms).
+- **Path rules (`.claude/rules/`, all with `paths:`):** `core`, `migration`, `finance` (NUMERIC, reverse entries only), `tests`, `web` (Base UI, tokens, typed router links, useCommand), `agent`, `identity` (identity adapters and `/auth`), `orpc` (only for `packages/kernel-http/**` and `packages/kernel-contract/**`; pins v1 idioms).
 - **Skills (`.claude/skills/`):** `new-command`, `new-migration`, `new-event`, `i18n-key`, `debug-ci`, `db-local`; `new-module` added from Phase 2a. Each skill calls a generator or a deterministic command.
 - **Generators (`tools/`):**
   - `db:new <token> <desc>`: timestamp = max(now, latest on `origin/dev` + 1 s). Also generates a pgTAP stub. Refuses a second file for the same schema.
@@ -1733,11 +1735,11 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
   - No forwarding to the DOS Event Router.
 - **Schema:**
   - No runtime DDL, metadata engine, custom objects, per-tenant schemas or EAV.
-  - No ORM migrator; no vendor self-migration (Mastra, DBOS, LangGraph).
+  - No ORM migrator; no vendor self-migration (Mastra, LangGraph; DBOS only if the Phase 2a spike shows its schema ships as committed SQL, Decision 14).
 - **Jobs:** no transactional pg-boss handlers.
 - **Frontend:**
   - No persisted client cache; no server-side caching of tenant data.
-  - No Server Actions for mutations; no `typedRoutes`.
+  - No server-side code in the product app: it is a static SPA and every write is a kernel command (Decision 6).
   - No offline-first app; no realtime co-editing (PWA + Web Push later).
 - **Customization and integrations:**
   - No tenant-written code or policy language.
