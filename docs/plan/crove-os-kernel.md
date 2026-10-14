@@ -254,9 +254,11 @@ The architecture and plan TL;DR follows.
 
 ## 3. Topology
 
+> §3.2-3.5, §12 and ADR-0011 still describe the Next.js shell on Vercel and Supabase CLI migrations; Decision 6 and §2 override them.
+
 ### 3.1 Repo tree
 
-**Core repo** (`DOS/Crove`, AGPL-3.0; private until Phase 1 exit, then public):
+**Core repo** (`DOS/Crove`, AGPL-3.0; public since 2026-10-13, Decision 9). This is the target layout; `main` today differs: a root `vitest.config.ts` and `packages/l10n-vn`, only the `ci` and `gitleaks` workflows, and no `apps/extract` or `kernel-http`, `ui`, `testing` packages yet.
 
 ```
 Crove/
@@ -387,7 +389,7 @@ Before mapping `api.crove.com` and `app.crove.com`, confirm both names are unuse
 
 CI gates run in the core repo. Deploy workflows live in `crove-cloud`; they trigger when core's `dev`/`main` gets a new commit and always check out that exact SHA.
 
-1. **PR -> `dev`.** The agent squash-merges when G1-G6, security and CLA are green. PRs touching protected paths wait for the approval label (§10).
+1. **PR -> `dev`.** The agent squash-merges when G1-G6, security and CLA are green. PRs touching protected paths also need the invariant suite from base and a security reviewer agent (Decision 7, §10); there is no owner approval label.
 2. **`dev` -> beta** (`deploy-beta`, WIF can only reach `crove-beta`):
    1. Migrations to `crove-db-beta`: the beta project's Supabase GitHub integration (branch `dev`), or `supabase db push` from CI.
    2. Build `crove-kernel:<sha>` with `CROVE_SCHEMA_MANIFEST` listing every migration version in the repo.
@@ -1375,7 +1377,7 @@ Updated 2026-10-14 for the Vite + TanStack Router SPA (Decision 6).
 | G3 `db-replay` | PRs touching `supabase/**`, `packages/db/**`, `modules/**` | <ul><li>Clean replay on Supabase CLI and on plain PG17; re-apply new migrations and compare fingerprints; pgTAP.</li><li>Conformance, RLS matrix, **invariant suite from `origin/dev`**, EXECUTE matrix.</li><li>Manifest matches catalog; types diff (prints the fix command).</li><li>splinter, `pg-boss doctor`, `vitest --project db`.</li></ul> |
 | G4 `supabase-preview` | PRs with a preview branch on `crove-db-beta` | <ul><li>Required on `main`.</li><li>On `dev` it is only a warning, with automatic infra-failure triage; agents use `/reset-preview`.</li><li>Fork PRs (after going public) get no preview; G3 is the gate.</li></ul> |
 | G5 `ci` | Every PR | <ul><li>Format, lint, typecheck, `--affected` tests; dependency-cruiser; knip.</li><li>Derived risk <= declared risk.</li><li>PII scan.</li><li><=800 non-generated lines (unless labelled `split-exempt` with a reason).</li></ul> |
-| G6 `protected` | Protected paths: context/policy/authz, `packages/db/src/context/**`, identity adapters and `/auth`, migrations with GRANT/POLICY/DEFINER/ROLE, `_*.test.sql` tests, `.github/workflows/**`, `.claude/settings*`, hooks, `AGENTS.md`, `LICENSE`, `CLA.md`, `agent-autonomy.md` | Generates a plain-language before/after summary, then waits for the owner's approval label (needs owner sign-off on the policy, §12-A). Every PR to `crove-cloud` counts as protected |
+| G6 `protected` | Protected paths: context/policy/authz, `packages/db/src/context/**`, identity adapters and `/auth`, migrations with GRANT/POLICY/DEFINER/ROLE, `_*.test.sql` tests, `.github/workflows/**`, `.claude/settings*`, hooks, `AGENTS.md`, `LICENSE`, `CLA.md`, `agent-autonomy.md` | Generates a plain-language before/after summary; the invariant suite runs from base and a security reviewer agent reviews the PR; an external security review comes before the first external tenant (Decision 7). No owner approval label. Every PR to `crove-cloud` counts as protected |
 | `cla` | Every PR | CLA Assistant: every commit author has signed the CLA (individual or corporate); the project's bot and agent accounts are allowlisted |
 | `license` (optional) | New source files | `SPDX-License-Identifier` header matches ADR-0022 |
 | `kernel-migration-lock` | PRs with a `_crove_kernel_` file | Fails if another open PR also has a `_crove_kernel_` file |
@@ -1426,7 +1428,7 @@ Only for **Crove Cloud**; self-host depends on none of these. Each item is a sep
 ## 12. Day-0 checklist
 
 **A. Defaults already decided** (recorded in ADRs; no question blocks code)
-- **Protected paths (G6):** PRs touching context, policy, authorization, GRANT/POLICY in migrations, workflows, hooks or infrastructure need owner approval via `CODEOWNERS`; agents do not self-merge these. Recorded in `AGENTS.md`.
+- **Protected paths (G6):** PRs touching context, policy, authorization, GRANT/POLICY in migrations, workflows, hooks or infrastructure run the invariant suite from base and get a security reviewer agent review; an external security review comes before the first external tenant (Decision 7). No owner approval label. Recorded in `AGENTS.md`.
 - **License:** `AGPL-3.0-only`; license-grant CLA based on the Apache ICLA/CCLA, reviewed by a lawyer before accepting outside PRs. The repo goes public at Phase 1 exit (ADR-0022).
 - **Release:** SemVer tags from `main`. Crove Cloud promotes through a workflow in `crove-cloud`, with a 1-click approval step.
 - **Crove Cloud operations** (Supabase Pro + 7-day PITR on prod, budget, alert channel, domains `app/api.crove.com`): belong to `crove-cloud`, decided before opening Cloud to customers; they do not block Phase 0-1 of the core repo.
@@ -1707,7 +1709,7 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
 | Identity projection drifts or revokes late (a user who left a DOS org can still get into Crove) | <ul><li>Fetch membership from the DOS-Me API at login, don't trust claims.</li><li>Signed webhooks + dedupe; revoke sessions on leaving an org.</li><li>Periodic reconcile; 24 h membership TTL.</li><li>Alert when Crove grants more than the IdP.</li></ul> |
 | Crove Cloud enables DOS membership sync before gate DOS-1 passes | Hard gate at Phase 0 exit; self-host unaffected; team scope off until DOS-5 |
 | DOS incident (login, webhooks, AI) | Existing Crove sessions run to expiry; reconcile covers failed webhooks; AI jobs retry, then DLQ; runbooks §7.10 |
-| Security code merged without any human reading it | Invariant suite from base; G6 (`CODEOWNERS`, owner approval); small PRs; per-environment identities |
+| Security code merged without any human reading it | Invariant suite from base; G6 (security reviewer agent on every protected-path PR); external security review before the first external tenant (Decision 7); small PRs; per-environment identities |
 | Agents get tools that touch prod or see tenant PII | Local DB; agents are not members of the Crove prod/beta projects; no Supabase MCP against prod/beta; PreToolUse hook |
 | Leaks through the public repo (project refs, internal URLs, secrets, customer data) | <ul><li>gitleaks from the first commit; full history re-scan before going public.</li><li>G1 scans for project refs against a blocklist kept outside the repo.</li><li>Environment config only in `crove-cloud`; fixtures only synthetic data.</li></ul> |
 | AGPL/CLA friction (contributors reluctant to sign, companies wary of AGPL) | License-grant CLA (contributors keep copyright), with a corporate version; a clear `CONTRIBUTING.md`; commercial license; third-party plugins run out of process via API/MCP |
@@ -1754,7 +1756,7 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
   - No approvals stored in AI SDK messages.
   - No tenant data in git or evals unless the org opts in.
 - **Platform:**
-  - No OpenFGA/SpiceDB, no in-house IdP (Crove is only an OIDC relying party), no GraphQL.
+  - No OpenFGA/SpiceDB, no in-house IdP (identity comes from Supabase Auth, Decision 5; the Phase 3 OAuth 2.1 server is an off-the-shelf component, Decision 14), no GraphQL.
   - No Supabase Vault for Crove secrets (self-host doesn't have it); no Sentry in v0.
   - No FKs, DB connections or business-data sync with DOS.
 - **Finance A:** no consolidated reporting, inventory costing, fixed-asset depreciation, automatic FX revaluation, full payroll or tax filing.
