@@ -9,7 +9,7 @@
 
 ## 1. 🌟 Design Philosophy & Brand Identity
 
-Crove is the **All-in-One Business Operating System (OS)** designed specifically for **Solo Founders, Creators, Indie Hackers, and SMEs**. It consolidates essential business operations—Distribution & Social, Workflow Automation, CRM & Audience, Digital Asset Management, and Growth Analytics—into a cohesive, unified workspace.
+Crove is the **All-in-One Business Operating System (OS)** designed specifically for **Solo Founders, Creators, Indie Hackers, and SMEs**. It consolidates essential business operations - Distribution & Social, Workflow Automation, CRM & Audience, Digital Asset Management, and Growth Analytics - into a cohesive, unified workspace.
 
 ### Core Design Principles
 1. **Zero Clutter, Maximum Density (SaaS Power User UX):** Information density is high but never overwhelming. Use subtle borders (`1px border-zinc-200/80` or `border-zinc-800/80`), clear visual hierarchies, and collapsible sidebars.

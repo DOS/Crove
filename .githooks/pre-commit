@@ -1,5 +1,13 @@
 #!/bin/sh
 # Block commits that add secrets. CI (.github/workflows/gitleaks.yml) is the hard gate.
+# Docs hygiene (dashes, links, HTML) runs only when staged files include docs. CI (Docs check) is the hard gate.
+if git diff --cached --name-only --diff-filter=d | grep -Eq '\.md$|^docs/'; then
+  if command -v node >/dev/null 2>&1; then
+    node tools/docs-check.mjs || exit 1
+  else
+    echo "pre-commit: node not found, skipping docs check (CI still checks)." >&2
+  fi
+fi
 if ! command -v gitleaks >/dev/null 2>&1 || ! gitleaks git --help >/dev/null 2>&1; then
   echo "pre-commit: gitleaks >= 8.19 not found on PATH, skipping local secret scan (CI still scans)." >&2
   exit 0
