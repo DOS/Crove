@@ -127,12 +127,13 @@ TO crove_tenant;
 
 -- Owned by the NOLOGIN definer role, so tenant RLS still applies inside it. The grants above are set
 -- first and carry over to the new owner. A runner that is not a superuser (hosted PostgreSQL) may only
--- hand a function to a role it can SET ROLE to, and the new owner needs CREATE on the schema while the
--- ownership moves; that CREATE is revoked right after.
+-- hand a function to a role it can SET ROLE to, and needs that role's privileges to replace the function
+-- or revoke on it later; the new owner needs CREATE on the schema while the ownership moves, and that
+-- CREATE is revoked right after.
 DO $$
 BEGIN
   IF NOT (SELECT r.rolsuper FROM pg_catalog.pg_roles r WHERE r.rolname = current_user) THEN
-    EXECUTE pg_catalog.format('GRANT crove_definer_tenant TO %I WITH INHERIT FALSE, SET TRUE', current_user);
+    EXECUTE pg_catalog.format('GRANT crove_definer_tenant TO %I WITH INHERIT TRUE, SET TRUE', current_user);
   END IF;
 END $$;
 GRANT CREATE ON SCHEMA crove_finance TO crove_definer_tenant;

@@ -1,6 +1,7 @@
 -- crove_definer_tenant: NOLOGIN owner of the SECURITY DEFINER functions that write tenant data for the
 -- context they run in (plan §7.1). It is a member of crove_tenant, so tenant RLS applies to it; it never
--- bypasses RLS and no login role can SET ROLE to it. Modules grant it only the writes their definers need.
+-- bypasses RLS. The API and worker roles are not members of it; only a migration runner that is not a
+-- superuser joins it, to hand functions to it. Modules grant it only the writes their definers need.
 -- Idempotent.
 
 DO $$
