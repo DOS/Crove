@@ -3,13 +3,21 @@ import { sql } from 'kysely';
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
-import type { BlobStore, Runtime } from '@crove/kernel-runtime';
+import { DomainError, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import type { InvoiceExtractor } from '@crove/agent';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
+import { processInboundEmail } from './inbound.ts';
 
 export const JOB_SCHEMA = 'crove_jobs';
-export const QUEUES = { extract: 'finance-file-extract' } as const;
+export const QUEUES = { extract: 'finance-file-extract', inbound: 'kernel-inbound-email' } as const;
 const EXTRACT_RETRY_LIMIT = 3;
+const INBOUND_RETRY_LIMIT = 3;
+
+interface InboundRow {
+  seq: string;
+  raw_sha256: string;
+  recipient: string;
+}
 
 interface OutboxRow {
   seq: string;
@@ -25,6 +33,7 @@ export interface WorkerDeps {
   runtime: Runtime;
   store: BlobStore;
   extractor: InvoiceExtractor | null;
+  inboundDomain: string | null;
 }
 
 export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>> {
@@ -41,6 +50,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       console.error(`[extract] file ${fileId} attempt ${job.retryCount + 1}`, error);
       if (job.retryCount < EXTRACT_RETRY_LIMIT) throw error;
       await recordExtractionFailure(deps.runtime, orgId, fileId, 'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML');
+    }
+  });
+
+  await boss.work<{ sha256: string; recipient: string | null }>(QUEUES.inbound, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const { sha256, recipient } = job.data;
+    try {
+      const result = await processInboundEmail({ runtime: deps.runtime, store: deps.store, domain: deps.inboundDomain }, sha256, recipient);
+      console.log(`[inbound] message ${sha256.slice(0, 12)}: ${result.duplicate ? 'duplicate' : `${result.fileIds.length} file(s)`}`);
+    } catch (error) {
+      // A message no org can receive (unknown or closed recipient, invalid content) is dropped, not retried.
+      if (error instanceof DomainError && error.status !== 409 && error.status < 500) {
+        console.warn(`[inbound] message ${sha256.slice(0, 12)} dropped: ${error.code}`);
+        return;
+      }
+      console.error(`[inbound] message ${sha256.slice(0, 12)} attempt ${job.retryCount + 1}`, error);
+      throw error;
     }
   });
 
@@ -65,6 +91,22 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   { singletonKey: `${row.org_id}:${fileId}`, retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
                 );
               }),
+          );
+          return rows.length;
+        });
+        if (sent < 100) break;
+      }
+      for (;;) {
+        const sent = await deps.workerDb.transaction().execute(async (trx) => {
+          const { rows } = await sql<InboundRow>`SELECT * FROM crove_kernel.inbound_claim(100)`.execute(trx);
+          await Promise.all(
+            rows.map((row) =>
+              boss.send(
+                QUEUES.inbound,
+                { sha256: row.raw_sha256, recipient: row.recipient || null },
+                { singletonKey: `${row.raw_sha256}:${row.recipient}`, retryLimit: INBOUND_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
+              ),
+            ),
           );
           return rows.length;
         });

@@ -16,6 +16,11 @@ export function fileKey(orgId: string, sha256: string): string {
   return `org/${orgId}/${sha256}`;
 }
 
+// Raw inbound email, stored by the API before any org is known; only the worker reads it.
+export function inboundKey(sha256: string): string {
+  return `inbound/${sha256}`;
+}
+
 export class LocalDiskStore implements BlobStore {
   private readonly root: string;
 
@@ -24,7 +29,7 @@ export class LocalDiskStore implements BlobStore {
   }
 
   private path(key: string): string {
-    if (!/^org\/[0-9a-f-]{36}\/[0-9a-f]{64}$/.test(key)) throw new Error('invalid storage key');
+    if (!/^(?:org\/[0-9a-f-]{36}|inbound)\/[0-9a-f]{64}$/.test(key)) throw new Error('invalid storage key');
     const full = resolve(join(this.root, key));
     if (!full.startsWith(this.root + sep)) throw new Error('invalid storage key');
     return full;

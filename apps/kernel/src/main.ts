@@ -5,7 +5,7 @@
 //   all      api + worker in one process (default for self-host)
 import { serve } from '@hono/node-server';
 import { InvoiceExtractor } from '@crove/agent';
-import { assertRlsEnforced, createDb, createPool } from '@crove/db';
+import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
 import { LocalDiskStore, Runtime } from '@crove/kernel-runtime';
@@ -55,6 +55,11 @@ async function main() {
   if (!['migrate', 'api', 'worker', 'all'].includes(role)) throw new Error(`unknown role ${role}`);
   const config = loadConfig();
   if (role === 'migrate') return runMigrate(config);
+  // The worker alone enters system context, so it never shares the API's login role (External-tenant gate T5).
+  const workerUrl = config.WORKER_DATABASE_URL;
+  if ((role === 'worker' || role === 'all') && !workerUrl) {
+    throw new Error('WORKER_DATABASE_URL is required for the worker; connect it as crove_worker');
+  }
 
   const store = new LocalDiskStore(config.STORAGE_DIR);
   const stops: Array<() => Promise<void>> = [];
@@ -62,6 +67,7 @@ async function main() {
   if (role === 'api' || role === 'all') {
     const { pool, db, runtime } = buildRuntime(config, config.DATABASE_URL, 'crove-api');
     await assertRlsEnforced(pool);
+    await assertSystemContextAccess(pool, 'denied');
     const authenticate = createAuthenticator(config, db);
     const app = createHttpApp({ config, runtime, store, authenticate, pool, aiEnabled: buildExtractor(config) !== null });
     const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });
@@ -72,11 +78,19 @@ async function main() {
     });
   }
 
-  if (role === 'worker' || role === 'all') {
-    const connectionString = config.WORKER_DATABASE_URL ?? config.DATABASE_URL;
+  if ((role === 'worker' || role === 'all') && workerUrl) {
+    const connectionString = workerUrl;
     const { pool, db, runtime } = buildRuntime(config, connectionString, 'crove-worker');
     await assertRlsEnforced(pool);
-    const stop = await startWorker({ connectionString, workerDb: db, runtime, store, extractor: buildExtractor(config) });
+    await assertSystemContextAccess(pool, 'granted');
+    const stop = await startWorker({
+      connectionString,
+      workerDb: db,
+      runtime,
+      store,
+      extractor: buildExtractor(config),
+      inboundDomain: config.INBOUND_DOMAIN ?? null,
+    });
     stops.push(async () => {
       await stop();
       await pool.end();

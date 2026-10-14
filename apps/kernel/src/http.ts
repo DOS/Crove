@@ -12,7 +12,7 @@ import { DomainError, fileKey, sha256Hex, type BlobStore, type Runtime } from '@
 import { JOURNAL_EXPORT_LIMIT, buildJournalWorkbook, type JournalEntryView } from '@crove/mod-finance';
 import { actorOf, type Authenticate, type AuthUser } from './auth.ts';
 import { publicAuthUrl, type Config } from './config.ts';
-import { MAX_EMAIL_BYTES, handleInboundEmail, secretMatches } from './inbound.ts';
+import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts';
 import { createRpcHandler, resolveMembership, resolveOrg } from './rpc.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 
@@ -158,8 +158,9 @@ export function createHttpApp(deps: HttpDeps) {
       if (!secretMatches(c.req.header('authorization'), secret)) return c.json({ code: 'UNAUTHENTICATED' }, 401);
       try {
         const raw = new Uint8Array(await c.req.arrayBuffer());
-        const result = await handleInboundEmail({ runtime, store, domain }, raw, c.req.header('x-crove-recipient') ?? null);
-        return c.json(result);
+        // Stored and queued only; the worker parses it and files the attachments (External-tenant gate T5).
+        const result = await acceptInboundEmail({ runtime, store, domain }, raw, c.req.header('x-crove-recipient') ?? null);
+        return c.json(result, 202);
       } catch (error) {
         return problem(c, error);
       }

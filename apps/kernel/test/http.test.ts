@@ -1,8 +1,11 @@
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { BlobStore, Runtime } from '@crove/kernel-runtime';
+import { LocalDiskStore, inboundKey, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 
@@ -77,5 +80,65 @@ describe('auth proxy', () => {
     expect(seen?.path).toBe('/token?grant_type=password');
     expect(seen?.headers['x-real-ip']).toBe('203.0.113.9');
     expect(seen?.headers['x-forwarded-for']).toBeUndefined();
+  });
+});
+
+describe('inbound email on the API', () => {
+  const INBOUND_SECRET = 'y'.repeat(32);
+  let touched: string[] = [];
+  const app = createHttpApp({
+    config: loadConfig({
+      DATABASE_URL: 'postgres://localhost/x',
+      AUTH_JWT_SECRET: SECRET,
+      INBOUND_DOMAIN: 'in.test',
+      INBOUND_SECRET,
+      WEB_DIST: '/nonexistent',
+    }),
+    runtime: {
+      orgless: async () => {
+        touched.push('enqueue');
+      },
+    } as unknown as Runtime,
+    store: {
+      put: async (key: string) => {
+        touched.push(key);
+      },
+      get: async () => new Uint8Array(),
+    },
+    authenticate: async () => {
+      throw new Error('not used');
+    },
+    pool: {} as pg.Pool,
+    aiEnabled: false,
+  });
+  const deliver = (headers: Record<string, string>, body = 'Subject: x\r\n\r\nhello') =>
+    app.request('/api/inbound/email', { method: 'POST', headers, body });
+
+  it('stores and enqueues the raw message and answers 202, without parsing it', async () => {
+    touched = [];
+    const response = await deliver({ authorization: `Bearer ${INBOUND_SECRET}`, 'x-crove-recipient': `${'a'.repeat(24)}@in.test` });
+    expect(response.status).toBe(202);
+    expect(touched).toEqual([expect.stringMatching(/^inbound\/[0-9a-f]{64}$/), 'enqueue']);
+  });
+
+  it('refuses a wrong secret, an empty body and a malformed address before storing anything', async () => {
+    touched = [];
+    expect((await deliver({ authorization: 'Bearer nope' })).status).toBe(401);
+    expect((await deliver({ authorization: `Bearer ${INBOUND_SECRET}` }, '')).status).toBe(400);
+    expect((await deliver({ authorization: `Bearer ${INBOUND_SECRET}`, 'x-crove-recipient': 'not-a-token@in.test' })).status).toBe(404);
+    expect(touched).toEqual([]);
+  });
+
+  it('keeps raw messages under their own key scheme on local disk', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'crove-store-'));
+    try {
+      const store = new LocalDiskStore(root);
+      const bytes = new TextEncoder().encode('raw message');
+      await store.put(inboundKey(sha256Hex(bytes)), bytes);
+      expect(await store.get(inboundKey(sha256Hex(bytes)))).toEqual(bytes);
+      await expect(store.put('inbound/../escape', bytes)).rejects.toThrow(/invalid storage key/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

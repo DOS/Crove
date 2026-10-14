@@ -56,3 +56,21 @@ export async function assertRlsEnforced(pool: pg.Pool): Promise<void> {
     throw new Error(`database role ${role?.rolname ?? '?'} bypasses row-level security; connect as crove_app / crove_worker`);
   }
 }
+
+// System context (a tenant context without a user) belongs to the worker alone (External-tenant gate T5):
+// the API role must not be able to enter it, and the worker role must. Skipped before the schema exists.
+export async function assertSystemContextAccess(pool: pg.Pool, expected: 'denied' | 'granted'): Promise<void> {
+  const { rows } = await pool.query<{ rolname: string; can: boolean | null }>(
+    `SELECT current_user AS rolname,
+            CASE WHEN f.oid IS NULL THEN NULL ELSE has_function_privilege(f.oid, 'EXECUTE') END AS can
+     FROM (SELECT to_regprocedure('crove_kernel.enter_system_context(uuid)')::oid AS oid) f`,
+  );
+  const row = rows[0];
+  if (!row || row.can === null) return;
+  if (expected === 'denied' && row.can) {
+    throw new Error(`database role ${row.rolname} can enter system context; the API must connect as crove_app (run migrate first)`);
+  }
+  if (expected === 'granted' && !row.can) {
+    throw new Error(`database role ${row.rolname} cannot enter system context; the worker must connect as crove_worker (WORKER_DATABASE_URL)`);
+  }
+}

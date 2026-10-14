@@ -7,13 +7,15 @@ import { SignJWT } from 'jose';
 import { sql, type Transaction } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createDb, createPool, type Database, type Db } from '@crove/db';
+import { assertSystemContextAccess, createDb, createPool, type Database, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { DomainError, Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries, recordExtractionFailure } from '@crove/mod-finance';
 import { actorOf, createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
+import { createHttpApp } from '../src/http.ts';
+import { migrateJobs, startWorker } from '../src/worker.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -37,9 +39,15 @@ suite('kernel on PostgreSQL', () => {
   const dbName = `crove_test_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let adminUrl: string;
   let appUrl: string;
+  let workerUrl: string;
   let pool: pg.Pool;
   let db: Db;
+  // The API login role (crove_app): user actors only.
   let runtime: Runtime;
+  let workerPool: pg.Pool;
+  let workerDb: Db;
+  // The worker login role (crove_worker): the only one that may run system actors.
+  let workerRuntime: Runtime;
   const store = new MemoryStore();
   const users: Record<'owner' | 'outsider' | 'viewer', string> = { owner: '', outsider: '', viewer: '' };
   let orgA = '';
@@ -64,7 +72,7 @@ suite('kernel on PostgreSQL', () => {
 
   async function propose(bytes: Uint8Array) {
     const { fileId } = await ingest(orgA, users.owner, bytes);
-    const { proposalId } = await extractAndPropose({ runtime, store, extractor: null, today: () => '2026-10-13' }, orgA, fileId);
+    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, today: () => '2026-10-13' }, orgA, fileId);
     const detail = await runtime.query<{ revision: number }>('kernel.inbox.get', { id: proposalId }, { actor: asUser(users.owner), orgId: orgA });
     return { id: proposalId, revision: detail.revision };
   }
@@ -110,17 +118,26 @@ suite('kernel on PostgreSQL', () => {
     base.pathname = `/${dbName}`;
     adminUrl = base.toString();
     await migrate({ adminUrl, dir: MIGRATIONS });
-    await setRolePasswords(adminUrl, { crove_app: 'test-app-pw' });
-    const app = new URL(adminUrl);
-    app.username = 'crove_app';
-    app.password = 'test-app-pw';
-    appUrl = app.toString();
+    await setRolePasswords(adminUrl, { crove_app: 'test-app-pw', crove_worker: 'test-worker-pw' });
+    const loginUrl = (username: string, password: string) => {
+      const url = new URL(adminUrl);
+      url.username = username;
+      url.password = password;
+      return url.toString();
+    };
+    appUrl = loginUrl('crove_app', 'test-app-pw');
+    workerUrl = loginUrl('crove_worker', 'test-worker-pw');
+    const register = (target: Db) =>
+      new Runtime(target).register({
+        commands: [...kernelCommands, ...financeCommands],
+        queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
+      });
     pool = createPool({ connectionString: appUrl, max: 4 });
     db = createDb(pool);
-    runtime = new Runtime(db).register({
-      commands: [...kernelCommands, ...financeCommands],
-      queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
-    });
+    runtime = register(db);
+    workerPool = createPool({ connectionString: workerUrl, max: 4 });
+    workerDb = createDb(workerPool);
+    workerRuntime = register(workerDb);
     users.owner = await upsertIdentity(db, { issuer: 'test', subject: 'owner', email: 'owner@example.com', name: 'Owner' });
     users.outsider = await upsertIdentity(db, { issuer: 'test', subject: 'outsider', email: 'outsider@example.com', name: null });
     users.viewer = await upsertIdentity(db, { issuer: 'test', subject: 'viewer', email: 'viewer@example.com', name: null });
@@ -131,6 +148,7 @@ suite('kernel on PostgreSQL', () => {
 
   afterAll(async () => {
     await pool?.end();
+    await workerPool?.end();
     if (!ADMIN) return;
     const admin = new pg.Client({ connectionString: ADMIN });
     await admin.connect();
@@ -299,7 +317,7 @@ suite('kernel on PostgreSQL', () => {
     const again = await ingest(orgA, users.owner, FIXTURE);
     expect(again).toEqual({ fileId, duplicate: true });
 
-    const { proposalId } = await extractAndPropose({ runtime, store, extractor: null, today: () => '2026-10-13' }, orgA, fileId);
+    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, today: () => '2026-10-13' }, orgA, fileId);
     expect(proposalId).toBeTruthy();
     const detail = await runtime.query<{ revision: number; payload: { invoice: { total: string } } }>(
       'kernel.inbox.get',
@@ -419,8 +437,8 @@ suite('kernel on PostgreSQL', () => {
 
   it('marks a file as failed when extraction keeps failing, so it never stays "processing"', async () => {
     const { fileId } = await ingest(orgA, users.owner, new TextEncoder().encode('<a>unreadable</a>'));
-    await recordExtractionFailure(runtime, orgA, fileId, 'Không đọc được');
-    await recordExtractionFailure(runtime, orgA, fileId, 'Không đọc được');
+    await recordExtractionFailure(workerRuntime, orgA, fileId, 'Không đọc được');
+    await recordExtractionFailure(workerRuntime, orgA, fileId, 'Không đọc được');
     const recent = await runtime.query<Array<{ id: string; status: string; error: string | null }>>(
       'kernel.files.recent',
       {},
@@ -488,5 +506,174 @@ suite('kernel on PostgreSQL', () => {
     await expect(authenticate(await bearer({ aal: 'aal1' }))).resolves.toEqual({ ...stepUp, aal: 'aal1' });
     await expect(authenticate(await bearer({}))).resolves.toEqual({ ...stepUp, aal: 'aal1' });
     expect(actorOf(stepUp)).toEqual({ type: 'user', userId: stepUp.userId, aal: 'aal2' });
+  });
+
+  // External-tenant gate T5: system context is the worker's alone.
+  it('lets only the worker login role enter system context (EXECUTE matrix)', async () => {
+    const functions = [
+      'crove_kernel.enter_system_context(uuid)',
+      'crove_kernel.enter_context(uuid,uuid)',
+      'crove_kernel.org_by_inbound_token(text)',
+      'crove_kernel.inbound_enqueue(text,bigint,text)',
+      'crove_kernel.inbound_claim(integer)',
+      'crove_kernel.outbox_claim(integer)',
+    ];
+    const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant'];
+    const matrix = await withAdmin(async (admin) => {
+      const { rows } = await admin.query<{ fn: string; role: string; can: boolean }>(
+        `SELECT f AS fn, r AS role, has_function_privilege(r, f, 'EXECUTE') AS can
+         FROM unnest($1::text[]) f CROSS JOIN unnest($2::text[]) r`,
+        [functions, roles],
+      );
+      return Object.fromEntries(functions.map((f) => [f, roles.filter((r) => rows.some((row) => row.fn === f && row.role === r && row.can))]));
+    });
+    expect(matrix).toEqual({
+      'crove_kernel.enter_system_context(uuid)': ['crove_worker'],
+      'crove_kernel.enter_context(uuid,uuid)': ['crove_app'],
+      'crove_kernel.org_by_inbound_token(text)': ['crove_worker'],
+      'crove_kernel.inbound_enqueue(text,bigint,text)': ['crove_app'],
+      'crove_kernel.inbound_claim(integer)': ['crove_worker'],
+      'crove_kernel.outbox_claim(integer)': ['crove_worker'],
+    });
+
+    // The API login role is refused by the database itself, and so is a system command run through it.
+    await expect(db.transaction().execute((trx) => sql`SELECT crove_kernel.enter_system_context(${orgA}::uuid)`.execute(trx))).rejects.toThrow(
+      /permission denied for function enter_system_context/,
+    );
+    await expect(
+      runtime.execute(
+        'kernel.inbound.receive',
+        { messageId: 'smuggled', from: null, subject: null, files: [] },
+        { actor: { type: 'system', component: 'inbound.email' }, orgId: orgA },
+      ),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+
+    // The worker login role enters an org without a user.
+    const entered = await workerDb.transaction().execute(async (trx) => {
+      await sql`SELECT crove_kernel.enter_system_context(${orgA}::uuid)`.execute(trx);
+      const { rows } = await sql<{ org: string; user: string | null }>`SELECT crove_kernel.ctx_org_id() AS org, crove_kernel.ctx_user_id() AS user`.execute(trx);
+      return rows[0];
+    });
+    expect(entered).toEqual({ org: orgA, user: null });
+
+    // A more privileged definer granted to the API cannot reach it either: the check is on session_user.
+    await withAdmin(async (admin) => {
+      await admin.query(`CREATE FUNCTION public.t5_probe(p uuid) RETURNS void LANGUAGE sql SECURITY DEFINER
+        SET search_path = pg_catalog, pg_temp AS $$ SELECT crove_kernel.enter_system_context(p) $$`);
+      await admin.query('GRANT EXECUTE ON FUNCTION public.t5_probe(uuid) TO crove_app');
+    });
+    try {
+      await expect(db.transaction().execute((trx) => sql`SELECT public.t5_probe(${orgA}::uuid)`.execute(trx))).rejects.toThrow(
+        /SYSTEM_CONTEXT_WORKER_ONLY/,
+      );
+    } finally {
+      await withAdmin((admin) => admin.query('DROP FUNCTION public.t5_probe(uuid)'));
+    }
+
+    // The startup guards agree with the grants.
+    await expect(assertSystemContextAccess(pool, 'denied')).resolves.toBeUndefined();
+    await expect(assertSystemContextAccess(workerPool, 'granted')).resolves.toBeUndefined();
+    await expect(assertSystemContextAccess(pool, 'granted')).rejects.toThrow(/cannot enter system context/);
+    await expect(assertSystemContextAccess(workerPool, 'denied')).rejects.toThrow(/can enter system context/);
+  });
+
+  it('files a forwarded e-invoice through the worker: the API only stores and enqueues it', { timeout: 90_000 }, async () => {
+    const inboundSecret = 'test-only-inbound-secret-0123456789abcdef';
+    const config = loadConfig({
+      DATABASE_URL: appUrl,
+      AUTH_JWT_SECRET: 'test-only-jwt-secret-for-inbound-0123456789',
+      INBOUND_DOMAIN: 'in.test',
+      INBOUND_SECRET: inboundSecret,
+      WEB_DIST: '/nonexistent',
+    });
+    const app = createHttpApp({
+      config,
+      runtime,
+      store,
+      authenticate: async () => {
+        throw new Error('not used');
+      },
+      pool,
+      aiEnabled: false,
+    });
+    const token = await withAdmin(async (admin) => {
+      const { rows } = await admin.query<{ inbound_token: string }>('SELECT inbound_token FROM crove_kernel.tenant WHERE org_id = $1', [orgA]);
+      return rows[0]?.inbound_token ?? '';
+    });
+    const attachment = Buffer.from(variant('1240')).toString('base64').replace(/.{76}/g, '$&\r\n');
+    const mime = [
+      'From: Nha cung cap <ketoan@vendor.example>',
+      `To: ${token}@in.test`,
+      'Subject: Hoa don 1240',
+      'Message-ID: <hd-1240@vendor.example>',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary="b1"',
+      '',
+      '--b1',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'Hoa don dinh kem',
+      '--b1',
+      'Content-Type: application/xml; name="hd-1240.xml"',
+      'Content-Disposition: attachment; filename="hd-1240.xml"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      attachment,
+      '--b1--',
+      '',
+    ].join('\r\n');
+    const deliver = (secret: string) =>
+      app.request('/api/inbound/email', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${secret}`, 'content-type': 'message/rfc822', 'x-crove-recipient': `${token}@in.test` },
+        body: mime,
+      });
+    const count = (query: string, params: unknown[]) =>
+      withAdmin(async (admin) => Number((await admin.query<{ n: string }>(query, params)).rows[0]?.n ?? 0));
+    const emailProposals = () =>
+      count(
+        `SELECT count(*) AS n FROM crove_kernel.proposal p
+         JOIN crove_kernel.file f ON f.org_id = p.org_id AND f.id = p.source_file_id
+         WHERE p.org_id = $1 AND f.source = 'email'`,
+        [orgA],
+      );
+    const receiveAudits = () =>
+      count(`SELECT count(*) AS n FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.inbound.receive' AND actor_type = 'system'`, [orgA]);
+    const pending = () => count('SELECT count(*) AS n FROM crove_kernel.inbound_pending', []);
+    const until = async (check: () => Promise<boolean>) => {
+      const deadline = Date.now() + 60_000;
+      while (!(await check())) {
+        if (Date.now() > deadline) throw new Error('timed out waiting for the worker');
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    };
+
+    expect((await deliver('wrong-secret')).status).toBe(401);
+    const first = await deliver(inboundSecret);
+    expect(first.status).toBe(202);
+    expect(await first.json()).toMatchObject({ accepted: true, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    // A retried delivery while the message is still pending is absorbed.
+    expect((await deliver(inboundSecret)).status).toBe(202);
+    // Nothing reached the tenant yet: the API stored the raw message and queued it, and did not parse it.
+    expect(await pending()).toBe(1);
+    expect(await count('SELECT count(*) AS n FROM crove_kernel.inbound_message WHERE org_id = $1', [orgA])).toBe(0);
+
+    await migrateJobs(adminUrl);
+    const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: null, inboundDomain: 'in.test' });
+    try {
+      await until(async () => (await emailProposals()) === 1);
+      expect(await pending()).toBe(0);
+      expect(await receiveAudits()).toBe(1);
+      const inbox = await runtime.query<Array<{ title: string; total: string | null }>>('kernel.inbox.list', {}, { actor: asUser(users.owner), orgId: orgA });
+      expect(inbox.some((p) => p.total === '1980000')).toBe(true);
+
+      // The same message delivered again later is recorded once (idempotent on Message-ID).
+      expect((await deliver(inboundSecret)).status).toBe(202);
+      await until(async () => (await receiveAudits()) === 2);
+      expect(await count(`SELECT count(*) AS n FROM crove_kernel.inbound_message WHERE org_id = $1 AND message_id LIKE '%hd-1240@vendor.example%'`, [orgA])).toBe(1);
+      expect(await emailProposals()).toBe(1);
+    } finally {
+      await stop();
+    }
   });
 });
