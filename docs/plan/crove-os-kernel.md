@@ -4,7 +4,7 @@
 > Every blocker and major finding was accepted, or rejected with a reason, in the Appendix. Paths are relative to the `Crove` repo root (separate repo; working name, settled 2026-10-13).
 > Library versions checked against the npm registry on 2026-10-13. Version policy: always the latest stable.
 > Update 2026-10-13: separate repo, own DB, federated identity (OIDC), provider-agnostic AI, AGPL-3.0 + CLA, always latest stable.
-> Update 2026-10-14: consolidated. The body now describes the decided design (Decisions 1-14): Supabase Auth identity (ADR-0027, ADR-0028), one image serving the SPA, the built-in migration runner, the MVP in place of Phase 0, and the External-tenant gate. Where `main` differs from the decided design, the text says so.
+> Update 2026-10-14: consolidated. The body now describes the decided design (Decisions 1-14): Supabase Auth identity (ADR-0027; sessions and revocation per ADR-0028, proposed), one image serving the SPA, the built-in migration runner, the MVP in place of Phase 0, and the External-tenant gate. Where `main` differs from the decided design, the text says so.
 > Vietnamese reading copy: [crove-os-kernel.vi.html](crove-os-kernel.vi.html). This English file is the source of record.
 
 ## Tracking
@@ -13,7 +13,7 @@
 |---|---|
 | Current stage | **MVP step 1 merged** (open source, local) on 2026-10-13 as #8, with two exit criteria still open: criterion 2 (generated cross-org RLS tests; today one hand-written RLS test covers `file` and `party`) and criterion 4 (a Playwright end-to-end test in the repo; #8 was verified by a manual `docker compose up` run). Step 2 (Crove Cloud) waits on owner approvals: spend, a DNS token, and the DOS-side redirect URL change. |
 | Repo state | `main` @ `6040386` (code unchanged since #8 apart from the dependency upgrade in #15): kernel (`apps/kernel`, `packages/*`), finance module, Vite + TanStack Router SPA (`apps/app`), `docker compose` with bundled Supabase Auth, and the Next.js landing page (`apps/web`). CI: lint, typecheck, 47 unit and 11 database tests (as of #8). |
-| Body status | Consolidated on 2026-10-14: the body describes the decided design, and "on `main`" notes mark what is not implemented yet. The External-tenant gate below lists what must be true before Crove Cloud accepts an external tenant. ADR-0026 and ADR-0027 are accepted; ADR-0028 (identity sessions and revocation) is proposed. |
+| Body status | Consolidated on 2026-10-14: the body describes the decided design, and "on `main`" notes mark what is not implemented yet. The External-tenant gate below lists what must be true before Crove Cloud accepts an external tenant. ADR-0026 and ADR-0027 are accepted; ADR-0028 (identity sessions and revocation) is proposed. Text citing ADR-0028 describes that proposal until it is accepted (gate T1). |
 | Redaction | `DOS/Crove` is public. Security-sensitive details of DOS-side fixes (§11) live only in the private DOS.Me repo; those rows keep only IDs, priorities and gates. Integration contracts Crove builds against (DOS-27 events and API, DOS-7, DOS-17) stay here. |
 
 | Phase | Time-box | Status |
@@ -103,7 +103,7 @@ Crove Cloud accepts its first external tenant only when every row below is green
 
 | # | Must be true | Evidence required | On `main` (2026-10-14) | Issue |
 |---|---|---|---|---|
-| T1 | Identity per ADR-0028, accepted and implemented: issuer, audience and expiry required (boot fails without `AUTH_ISSUER`); `sub`, `session_id` and `role` required; anonymous tokens rejected; revocation fail-closed (self-host: `auth.sessions` checked in the request transaction; Cloud: Supabase Auth check with a cache of at most 30 s, 503 when unreachable); banned, deleted and disabled users rejected | ADR-0028 status `accepted`; unit tests for every missing or wrong claim; integration test: after sign-out the same token is rejected on the next request (self-host) and within the cache lifetime (remote mode, against a Supabase Auth container in CI); Auth unreachable returns 503; ban and delete rejected | Issuer checked only when `AUTH_ISSUER` is set; `exp` checked only when present; no revocation check, so a signed-out token works until it expires (1 h in compose) | #22 |
+| T1 | Identity per ADR-0028, accepted and implemented: issuer, audience and expiry required (boot fails without `AUTH_ISSUER`); `sub`, `session_id` and `role` required; anonymous tokens rejected; revocation fail-closed (self-host: `auth.sessions` checked in the request transaction, read grant applied by the one-shot `auth-grants` step after Supabase Auth's first start; Cloud: Supabase Auth check with a cache of at most 30 s, where only a 200 for the token's own user is valid, any other 4xx is 401, and network errors, 5xx or 429 are 503); banned, deleted and disabled users rejected | ADR-0028 status `accepted`; unit tests for every missing or wrong claim; fresh-install test: `docker compose up` on empty volumes completes `auth-grants`, and the first sign-up, sign-in and API call succeed with the `db` check active; integration test: after sign-out the same token is rejected on the next request (self-host) and within the cache lifetime (remote mode, against a Supabase Auth container in CI); Auth unreachable, 5xx or 429 returns 503, and a 400 returns 401; ban and delete rejected | Issuer checked only when `AUTH_ISSUER` is set; `exp` checked only when present; no revocation check, so a signed-out token works until it expires (1 h in compose) | #22 |
 | T2 | R3 approval restricted to authorized roles: an `owner`, or a user an owner granted the approval permission (§4.6, P12); `aal2` required (P11) with a live revocation check; the audit row records approver, `aal` and `session_id` | Database tests: `admin`, `member` and `viewer` get 403; an `aal1` token gets 403 `STEP_UP_REQUIRED`; an `aal2` token executes; audit row content asserted | `kernel.proposal.approve` is R3 but open to `owner`, `admin` and `member`; no `aal` check; no MFA screens in the SPA | #20, #32 |
 | T3 | Ledger immutability: only the posting path (a definer) writes journal entries and lines; a posted entry cannot gain lines; every entry has at least 2 lines and balances at commit | Database tests as the module and login roles: direct INSERT into `journal_entry` or `journal_line` is denied; adding a line to an entry committed earlier fails; an entry with 0 or 1 line, or unbalanced, fails at commit; reversal nets to zero; a fast-check property test of the posting path | `crove_tenant` may INSERT into `journal_entry` and `journal_line` (the append-only triggers block only UPDATE, DELETE and TRUNCATE); the balance trigger runs per line, so an entry with no lines passes and a balanced pair of lines can be added to an existing entry later | #19 |
 | T4 | Org creation runs through `execute()` with an audit row | Database test: creating an org writes `tenant`, the owner `tenant_member` and an `audit_event` row in one transaction; login roles cannot execute the raw definer (EXECUTE matrix test); a per-user rate limit | The `create_org` definer is called from the RPC handler outside `execute()`, with no audit row; `crove_tenant` may execute it | #23 |
@@ -113,7 +113,7 @@ Crove Cloud accepts its first external tenant only when every row below is green
 | T8 | Generated cross-org RLS matrix (MVP exit criterion 2) | The CI `db` job generates cases for every tenant table: cross-org read, insert, update and delete denied or 0 rows; no context gives 0 rows; a new tenant table without cases fails CI | One hand-written test covers `file` and `party` | #17 |
 | T9 | Playwright end-to-end test (MVP exit criterion 4) | A required CI job runs `docker compose up` and Playwright through MVP exit criterion 1 (sign up, create org, upload an e-invoice, approve, lists, export) | Verified by a manual run only | #18 |
 | T10 | Context re-entry guard (§4.5, item 1) | The negative tests listed in §4.5 run in the CI `db` job | No guard: `enter_context` can be called again in the same transaction | #27 |
-| T11 | Sealed context (§4.5, item 5; deferred table above) | Database tests: context settings forged or reset with `set_config` give 0 rows and failing `WITH CHECK`; the seal covers the whole context | The `ctx_*` helpers read plain transaction settings; no seal | - |
+| T11 | Sealed context (§4.5, item 5; deferred table above) | Database tests: context settings forged or reset with `set_config` give 0 rows and failing `WITH CHECK`; the seal covers the whole context | The `ctx_*` helpers read plain transaction settings; no seal | #73 |
 | T12 | Sandboxed file parsing: PDF, XML and MIME parsing run in `crove-extract` (no secrets, no egress, CPU, memory and time limits) | Tests: the sandbox cannot open a network connection and has no secrets in its environment; a dependency rule stops the API and worker from importing parsers | Parsing runs in-process (XML with a non-expanding parser); MIME parsing runs in the API | #28 |
 | T13 | Excel export keeps money exact and escapes formulas | Unit test: amounts with more than 15 significant digits and 4 decimals round-trip exactly from the exported file (never through JavaScript `Number`); text cells starting with `=`, `+`, `-` or `@` are escaped | `modules/finance/src/export.ts` converts amounts with `Number(...)` | #29 |
 | T14 | External security review (Decision 7) and `SECURITY.md` | A written report from an independent reviewer covering auth, context and RLS, the sandbox, inbound email and webhooks; every high or critical finding fixed or accepted in writing by the owner; `SECURITY.md` with a private reporting channel | Not started; no `SECURITY.md` | #31, #33 |
@@ -198,7 +198,7 @@ The architecture and plan TL;DR follows.
    - Repo: separate repo (`DOS/Crove`), TypeScript modular monolith, AGPL-3.0 + CLA. Private repo `crove-cloud` holds infrastructure, environment config and commercial connectors.
    - Runtime: one image with roles `migrate | api | worker | all`; the `api` role also serves the SPA. Self-host: `docker compose up` (PostgreSQL 17, Supabase Auth, Crove, Mailpit). Crove Cloud: the same image on Cloud Run (API service, worker pool, migrate job) in separate GCP projects for prod and beta. File parsing moves to its own sandbox before the first external tenant.
    - Data: Crove owns its DB. Crove Cloud uses a dedicated Supabase project (prod + beta, ap-southeast-1, 7-day PITR); self-host uses any PostgreSQL 17. Schemas `crove_*`; migrations live in the Crove repo and the built-in runner (`migrate` role) applies them.
-   - Identity: Supabase Auth (Decision 5). The kernel verifies the access token and checks revocation on every request (ADR-0028), maps `(issuer, subject)` to `user_account` and owns org membership. No FKs to, or reads from, DOS's DB; business data never syncs with DOS.
+   - Identity: Supabase Auth (Decision 5). The kernel verifies the access token and checks revocation on every request (ADR-0028, proposed), maps `(issuer, subject)` to `user_account` and owns org membership. No FKs to, or reads from, DOS's DB; business data never syncs with DOS.
    - Write path: every write goes through `kernel.execute()`, in a transaction carrying a sealed context that RLS checks.
    - Async: everything runs through outbox -> pg-boss; the DB decides the fan-out.
    - AI: one agent per org, calling an OpenAI-compatible endpoint (Cloud: DOS.AI). R2/R3 actions always become proposals and run deterministically only after approval.
@@ -286,7 +286,8 @@ One image, `crove-kernel` (root `Dockerfile`), runs every deployment. Its entryp
 - `migrate`: apply the committed migrations with the built-in runner, set login-role passwords from the environment, and (on `main`, until External-tenant gate T6) create the pg-boss schema;
 - `api`: the HTTP API plus the SPA's static files, on one origin;
 - `worker`: the outbox relay and pg-boss jobs;
-- `all`: `api` and `worker` in one process, the self-host default.
+- `all`: `api` and `worker` in one process, the self-host default;
+- `auth-grants` (proposed in ADR-0028): a one-shot step after Supabase Auth's first start that grants `crove_auth_reader` SELECT on `auth.sessions` and `auth.users` for the self-host revocation check.
 
 Self-host and Crove Cloud differ only in configuration (Decision 4). The Cloud-only parts of this section (Cloud diagram, environments, deploy workflows) move to `crove-cloud` when that repo is created.
 
@@ -313,7 +314,7 @@ Crove/
 ├── packages/
 │   ├── kernel-contract/             zod + @orpc/contract: codecs, define*-contract, errors, Filter AST, contract.generated.ts
 │   ├── kernel-runtime/              execute, context, RBAC, policy, idempotency, outbox/relay, audit, proposal, numbering,
-│   │                                egress guard, storage adapters, identity (Supabase Auth token verification, ADR-0028);
+│   │                                egress guard, storage adapters, identity (Supabase Auth token verification, ADR-0028 proposed);
 │   │                                './async' is the ONLY pg-boss importer
 │   ├── kernel/                      KERNEL MODULE (id `kernel`, golden module): party, file, extraction, activity, task, tag,
 │   │                                notification, inbound
@@ -345,7 +346,7 @@ crove-cloud/
 
 **Boundary rules:**
 - The core repo does not import, submodule or read files from DOS.Me or `crove-cloud`. `crove-cloud` depends one-way on core: it checks out the exact SHA, builds images and injects config at deploy time.
-- Crove touches DOS only through HTTP adapters (principle 15): DOS's Supabase Auth (JWKS, `/auth/v1`, session checks per ADR-0028), the AI endpoint (`api.dos.ai`), `dos-broker` (`api.dos.me`, optional) and, later, DOS org sync (DOS-27). No DB connection to DOS.
+- Crove touches DOS only through HTTP adapters (principle 15): DOS's Supabase Auth (JWKS, `/auth/v1`, session checks per ADR-0028, proposed), the AI endpoint (`api.dos.ai`), `dos-broker` (`api.dos.me`, optional) and, later, DOS org sync (DOS-27). No DB connection to DOS.
 - The core repo contains no project refs, client ids, internal domains or secrets; those live in `crove-cloud` and Secret Manager.
 - Connectors in `crove-cloud` are built into the Cloud image. This is valid because the project owner holds full rights to the core via the CLA (ADR-0022). Third parties extend via API/MCP, not in-process.
 - Agents start at the core repo root; implementation sessions don't need `crove-cloud`.
@@ -371,6 +372,8 @@ crove-cloud/
  db (postgres:17): crove_kernel · crove_finance · crove_jobs · crove_meta (migration ledger) · auth (Supabase Auth)
  auth (supabase/gotrue, pinned): owns schema `auth`; email through SMTP (Mailpit locally)
  migrate (same image, role `migrate`): runs to completion before `auth` and `crove` start
+ auth-grants (same image; proposed in ADR-0028, not on `main`): after `auth` has created auth.sessions and
+             auth.users, grants SELECT on them to crove_auth_reader and exits; `crove` then starts after it
 ```
 
 **Crove Cloud (decided; built with MVP step 2, not deployed yet):**
@@ -378,7 +381,7 @@ crove-cloud/
 ```
  Browser (app.crove.com) ──► Cloud Run service crove-api (role api): SPA + /api/*; Bearer = access token from DOS's Supabase Auth
     │ @supabase/auth-js (PKCE) ──► DOS's Supabase Auth (accounts shared with DOS ID); the kernel verifies via JWKS
-    │                               and checks revocation against it (ADR-0028)
+    │                               and checks revocation against it (ADR-0028, proposed)
  Cloud Run worker pool crove-worker (role worker) · Cloud Run Job crove-migrate (role migrate)
  later: crove-extract sandbox (bytes in, JSON out; no secrets, no egress) · prober job · crove-stream (2b)
     ▼
@@ -442,8 +445,9 @@ The login roles below are the decided design. On `main` the API uses `crove_app`
 **Self-host (implemented):**
 1. Pull or build the new image.
 2. `migrate` runs first. The built-in runner takes an advisory lock, applies each new file in its own transaction, records version and sha256 in `crove_meta.schema_migrations`, and refuses a file that was edited after it was applied. It then sets role passwords and (until T6) creates the pg-boss schema. Compose starts `auth` and `crove` only after `migrate` completes.
-3. `crove` starts; `/readyz` returns 503 until every committed migration is in the ledger.
-4. With split roles: `migrate`, then `worker`, then `api`.
+3. Proposed in ADR-0028 (not on `main`): after `auth` starts, the one-shot `auth-grants` role waits until Supabase Auth has created `auth.sessions` and `auth.users`, grants SELECT on them to `crove_auth_reader` and exits; compose starts `crove` only after it completes. It reruns on every `docker compose up`. Installs without compose run `auth-grants` after Supabase Auth's first start and after each Supabase Auth upgrade; until then requests get 503 and `/readyz` reports `auth_grants`.
+4. `crove` starts; `/readyz` returns 503 until every committed migration is in the ledger.
+5. With split roles: `migrate`, Supabase Auth, `auth-grants`, then `worker`, then `api`.
 
 **Crove Cloud (decided; built with MVP step 2, issue #56).** CI gates run in the core repo. Deploy workflows live in `crove-cloud`; they trigger on a new core commit and always check out that exact SHA.
 
@@ -474,7 +478,7 @@ On `main` today, `/readyz` checks only the schema; the worker-build check and `/
 
 ```
 Supabase Auth (self-host: bundled in compose; Crove Cloud: DOS's Supabase Auth)
-   ▼ access token verified on every request, revocation checked (ADR-0028); (issuer, subject) -> user_account; no FKs (§7.3)
+   ▼ access token verified on every request, revocation checked (ADR-0028, proposed); (issuer, subject) -> user_account; no FKs (§7.3)
 @crove/kernel-runtime  machinery in crove_kernel, including user_account and org membership (tenant, tenant_member)
    ▲ only through the public API: define*, implement, ctx (enforced by dependency-cruiser, including for @crove/kernel)
 @crove/kernel          kernel MODULE (schema crove_kernel, role crove_m_kernel)
@@ -546,7 +550,7 @@ export default implement(postJournalEntry, {
 
 | Kind | Identity | Source | Effective permissions | Constraints |
 |---|---|---|---|---|
-| `user` | user_id, session_id, aal | Supabase Auth access token, verified by the kernel on every request (issuer, audience and expiry required; revocation checked, ADR-0028) | Membership gate (`tenant_member`) + Crove `role_assignment` | Enters via `crove_api`; in the worker only via an approved proposal |
+| `user` | user_id, session_id, aal | Supabase Auth access token, verified by the kernel on every request (issuer, audience and expiry required; revocation checked per ADR-0028, proposed) | Membership gate (`tenant_member`) + Crove `role_assignment` | Enters via `crove_api`; in the worker only via an approved proposal |
 | `agent` | agent_id, run_id, on_behalf_of, grant_id, kind | In-process; MCP via OAuth (Phase 3) | user ∩ grant ∩ trigger class ∩ scope ∩ taint | Chat/MCP enter via api; background runs enter via the worker with a run ref |
 | `api_key` (Phase 3) | key id, created_by | Bearer, stored as sha256 | Key role ∩ the creator's **current** permissions | Expires in <=90 days; never R3; auto-disabled when the creator leaves the org |
 | `automation` (Phase 4) | id, version, owner | Scheduler / subscriber | Grant within the owner's permissions, re-checked on every run | Causal depth <=5 |
@@ -557,7 +561,7 @@ export default implement(postJournalEntry, {
 
 | # | Step | Error |
 |---|---|---|
-| 0 | <ul><li>Verify the Supabase access token (`iss`, `aud`, `exp`, `sub`, `session_id` required) and check that the session is not revoked (ADR-0028: self-host in the DB, Crove Cloud through Supabase Auth with a cache of at most 30 s; fail closed).</li><li>Rate limit by IP and actor **before** any DB write.</li><li>Org comes from `X-Crove-Org` (the org slug) or the binding, never from claims or tool parameters.</li></ul> | 401/429/503 |
+| 0 | <ul><li>Verify the Supabase access token (`iss`, `aud`, `exp`, `sub`, `session_id` required) and check that the session is not revoked (ADR-0028, proposed: self-host in the DB, Crove Cloud through Supabase Auth with a cache of at most 30 s; fail closed).</li><li>Rate limit by IP and actor **before** any DB write.</li><li>Org comes from `X-Crove-Org` (the org slug) or the binding, never from claims or tool parameters.</li></ul> | 401/429/503 |
 | 1 | Look up the command; check surface and kill switch | 404/503 |
 | 2 | Strict zod parse | 422 |
 | 3 | <ul><li>`BEGIN`; `enter_context(...)`; `SET LOCAL ROLE crove_m_<id>`.</li><li>A rejection before membership is established writes a `security_event` (per caller, sampled, with TTL), not the target org's audit.</li></ul> | 403 |
@@ -583,7 +587,7 @@ export default implement(postJournalEntry, {
 
 `@crove/db` has 3 wrappers: `withTenantTx`, `withTenantReadTx` (`BEGIN READ ONLY`) and `withSystemTx`. Only `@crove/kernel-runtime` calls them. Login roles have no table grants, so a query outside a wrapper fails with `permission denied`.
 
-On `main`: `crove_kernel.enter_context(user_id, org_id)` checks that the user is a member of an active tenant and sets `crove.org_id` and `crove.user_id` as transaction-local settings; `enter_system_context(org_id)` does the same for system work. There is no seal, no re-entry guard and no actor-to-`session_user` binding yet, the login roles are members of `crove_tenant` with table grants, and `crove_tenant` (so the API role) may execute `enter_system_context`. The rest of this section is the decided design; External-tenant gate rows T5, T10 and T11 track the gaps.
+On `main`: `crove_kernel.enter_context(user_id, org_id)` checks that the user is a member of an active tenant and sets `crove.org_id` and `crove.user_id` as transaction-local settings; `enter_system_context(org_id)` does the same for system work. There is no seal, no re-entry guard and no actor-to-`session_user` binding yet, the login roles are members of `crove_tenant` with table grants, and `crove_tenant` (so the API role) may execute `enter_system_context`. The rest of this section is the decided design, except the ADR-0028 checks in item 3, which are proposed; External-tenant gate rows T1, T5, T10 and T11 track the gaps.
 
 ```sql
 BEGIN;                                          -- BEGIN READ ONLY for queries
@@ -615,7 +619,7 @@ COMMIT;
    - `crove_worker` may use `system`, `automation` and background `agent`.
    - Any other actor in the worker enters only via a job ref (`outbox_event.id`) or an approved proposal. The function re-reads these references from the DB and does not trust parameters.
 3. **Check tenant and actor:** the tenant must be `active`. Actors are checked directly against the DB, never against cached data:
-   - user: not disabled in Crove (`user_account.disabled_at`, ADR-0028); self-host also checks here that the Supabase Auth session (`session_id`) still exists; a `tenant_member` row exists (with DOS org sync, later: within its confirmation TTL, §7.3);
+   - user: not disabled in Crove (`user_account.disabled_at`, ADR-0028, proposed); self-host also checks here that the Supabase Auth session (`session_id`) still exists; a `tenant_member` row exists (with DOS org sync, later: within its confirmation TTL, §7.3);
    - grant: unexpired, and the grantor is still a member;
    - key: still valid, and the creator is still a member.
 4. **Derive:** org role, legal-entity scope (an explicit list or the explicit value `'*'`), sensitivity flags, and the membership fingerprint.
@@ -1038,9 +1042,9 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 | Table (`crove_kernel`) | Key points | Phase |
 |---|---|---|
 | `tenant` | `org_id uuid PK` (issued by Crove, v7); `slug`, `name`; status `active\|offboarding\|closed`; `inbound_token`; locale, timezone, `base_currency`, `authz_version`; `external_org_id` (nullable, UNIQUE when set) for DOS org sync later. On `main`: status `active\|closed`, no `external_org_id` yet | v0 |
-| `user_account` | `id uuid` (issued by Crove); UNIQUE `(issuer, subject)` from the verified Supabase token; email, name, `disabled_at` (ADR-0028), `last_seen_at`. Not named `user` because that is a Postgres keyword. A machinery table without `org_id`, on the conformance allowlist | v0 |
+| `user_account` | `id uuid` (issued by Crove); UNIQUE `(issuer, subject)` from the verified Supabase token; email, name, `disabled_at` (ADR-0028, proposed), `last_seen_at`. Not named `user` because that is a Postgres keyword. A machinery table without `org_id`, on the conformance allowlist | v0 |
 | `tenant_member` | PK `(org_id, user_id)`; `role` (Crove base role); written only by commands (create org, add, invite, change role, remove; audited); deleting the row revokes (§7.3). With DOS org sync (later): `source`, `confirmed_at`, `source_seq` | v0 |
-| `idp_event` | Later, DOS org sync only: event dedupe, PK `(source, event_id)`, 30-day TTL. There is no Crove `session` table: sessions live in Supabase Auth (ADR-0028) | later |
+| `idp_event` | Later, DOS org sync only: event dedupe, PK `(source, event_id)`, 30-day TTL. There is no Crove `session` table: sessions live in Supabase Auth (ADR-0027) | later |
 | `context_key` | Singleton, readable only by `crove_ctx`; random per environment; never exported | v0 |
 | `legal_entity` | kind, `tax_code` (UNIQUE when present), parent | v0 |
 | `module_setting`, `org_policy`, `currency`, `entity_type`, `permission` | Catalog seeded from manifests | v0 |
@@ -1082,7 +1086,7 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 
 | Role | Attributes / privileges | Membership | Purpose |
 |---|---|---|---|
-| `crove_api` | LOGIN NOINHERIT; limits and timeouts per §3.3; EXECUTE only (`enter_context`, `my_orgs`, `identity_upsert`, `auth_session_valid` (self-host, ADR-0028), `record_inbound_message`, `record_inbound_webhook`, `schema_missing`) | `crove_m_*` (SET, no INHERIT) | API |
+| `crove_api` | LOGIN NOINHERIT; limits and timeouts per §3.3; EXECUTE only (`enter_context`, `my_orgs`, `identity_upsert`, `auth_session_valid` (self-host, ADR-0028, proposed), `record_inbound_message`, `record_inbound_webhook`, `schema_missing`) | `crove_m_*` (SET, no INHERIT) | API |
 | `crove_worker` | LOGIN NOINHERIT | `crove_m_*`, `crove_system` (SET) | Worker, Jobs |
 | `crove_queue` | LOGIN NOINHERIT; DML on `crove_jobs` | - | pg-boss |
 | `crove_prober` | LOGIN; EXECUTE `health()` | - | Prober |
@@ -1091,7 +1095,7 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 | `crove_system` | NOLOGIN; EXECUTE on cross-tenant machinery; DML on `crove_jobs` | - | Relay, purge |
 | `crove_owner` | NOLOGIN | - | Owns the `crove_*` tables |
 | `crove_ctx` | NOLOGIN NOBYPASSRLS | - | Owns `enter_context` and `ctx_*`; reads `context_key`, `tenant`, `tenant_member`, `user_account`, grants/keys/roles through explicit policies |
-| `crove_auth_reader` | NOLOGIN | - | Self-host only: SELECT on `auth.sessions` and `auth.users`; owns `auth_session_valid` (ADR-0028) |
+| `crove_auth_reader` | NOLOGIN | - | Proposed in ADR-0028, self-host only: SELECT on `auth.sessions` and `auth.users`, granted by the one-shot `auth-grants` step after Supabase Auth's first start; owns `auth_session_valid` |
 | `crove_definer_identity` | NOLOGIN | - | The only writer of `user_account` (`identity_upsert`, EXECUTE to `crove_api`) and of the tenant row and first owner membership (`kernel.org.create`, through `execute()`); later `identity_apply` for DOS org sync (EXECUTE to `crove_system`) |
 | `crove_definer_tenant` | NOLOGIN | `crove_tenant` (INHERIT) => RLS applies to it | `emit`, `audit_write`, numbering, posting, proposals |
 | `crove_definer_system` | NOLOGIN | - | Outbox claim, purge, refresh: EXECUTE only to `crove_system`. Exception: `schema_missing()` (reads `crove_meta.schema_migrations`) is granted to every Crove login role |
@@ -1120,7 +1124,7 @@ CREATE POLICY le_scope ON crove_finance.invoice AS RESTRICTIVE FOR ALL TO crove_
 
 Identity comes from Supabase Auth (Decision 5, ADR-0027); how the kernel verifies tokens, checks revocation and requires step-up is set by ADR-0028 (proposed; External-tenant gate T1). Crove issues no sessions and runs no OIDC client: social and OIDC providers are configured in Supabase Auth.
 
-1. **Every request:** the kernel verifies the access token (§7.5), checks that the session is not revoked (ADR-0028), and maps `(issuer, subject)` to `user_account` through the `identity_upsert` definer (created on first use; email and name refreshed). The mapping may be cached briefly; it carries no authorization.
+1. **Every request:** the kernel verifies the access token (§7.5), checks that the session is not revoked (ADR-0028, proposed), and maps `(issuer, subject)` to `user_account` through the `identity_upsert` definer (created on first use; email and name refreshed). The mapping may be cached briefly; it carries no authorization.
 2. **Membership lives in Crove.** `tenant_member` is written only by commands through `execute()`, all audited: the org creator becomes `owner` (`kernel.org.create`); owners and admins add members by email (`kernel.member.add`); pending invites with consent, removal and role changes are Phase 1 work (issues #35, #36). `enter_context` reads membership in every transaction, so removal takes effect on the next request. JWT claims never grant membership or roles.
 3. **Crove Cloud** runs the same code pointed at DOS's Supabase Auth, so DOS ID accounts sign in to Crove. Each Supabase Auth has its own issuer, so `user_account` rows from different deployments never collide.
 4. **DOS org sync (deferred, Crove Cloud only).** When per-org billing through DOS.AI needs it (Tracking, deferred table), a `crove-cloud` adapter projects DOS org membership into `tenant_member`, one way (DOS -> Crove):
@@ -1162,9 +1166,10 @@ Identity comes from Supabase Auth (Decision 5, ADR-0027); how the kernel verifie
 Supabase Auth issues and owns sessions (Decision 5, ADR-0027). ADR-0028 (proposed) sets how the kernel verifies and revokes them.
 
 - **Login (SPA):** `@supabase/auth-js` with PKCE: email + password, magic link, Google/Microsoft/OIDC providers, MFA and password reset. Self-host runs Supabase Auth in the compose stack behind the kernel's `/auth/v1` proxy; Crove Cloud points the same code at DOS's Supabase Auth (accounts shared with DOS ID). Sign-up, email confirmation and SMTP are Supabase Auth settings; the kernel refuses to start on a public URL with auto-confirm on or a sample JWT secret (implemented in `config.ts`). Password recovery, MFA enrollment and callback screens: issue #32.
-- **Kernel, every request** (ADR-0028):
+- **Kernel, every request** (ADR-0028, proposed):
   - verifies the access token with `jose`: JWKS (ES256/RS256) when `AUTH_JWKS_URL` is set, otherwise HS256 with the deployment's JWT secret; issuer, audience and expiry required, plus `sub`, `session_id` and `role = authenticated`; anonymous tokens rejected;
-  - checks revocation, fail closed: self-host with the bundled Supabase Auth looks up `session_id` in `auth.sessions` (and the user's ban or deletion) in the request transaction; Crove Cloud asks Supabase Auth (`GET /auth/v1/user`) with a positive cache of at most 30 s, and answers 503 when Supabase Auth is unreachable;
+  - checks revocation, fail closed: self-host with the bundled Supabase Auth looks up `session_id` in `auth.sessions` (and the user's ban or deletion) in the request transaction, after the one-shot `auth-grants` step has granted that read; Crove Cloud asks Supabase Auth (`GET /auth/v1/user`) with a positive cache of at most 30 s: only a 200 whose `id` equals the token's `sub` is valid, any other 4xx is 401, and a network error, 5xx or 429 is 503;
+  - `email` stays required and non-empty, so phone-only Supabase Auth users get 401;
   - maps `(issuer, subject)` to `user_account`; `enter_context` checks membership in every transaction.
 - **On `main`:** signature and audience are verified; the issuer is checked only when `AUTH_ISSUER` is set and `exp` only when present; there is no revocation check, so a signed-out token works until it expires (1 h in compose). External-tenant gate T1 tracks the change.
 - **Step-up:** R3 approvals need `aal = aal2` in the verified token (Supabase Auth MFA, policy P11) and a live revocation check that skips the cache. On `main`, approval needs neither (External-tenant gate T2).
@@ -1270,7 +1275,7 @@ Data residency requirements are handled with a legal opinion plus a copy in Viet
 
 ### 7.10 Incident response
 
-- **Runbooks:** stuck worker, outbox lag, DLQ, Supabase incident, PITR restore, Supabase Auth incident (Crove Cloud: DOS's Supabase Auth; new logins fail, and because revocation checks fail closed, requests get 503 once the session-check cache expires, ADR-0028), JWKS refresh after a signing-key revocation, quota hit, credential rotation (`context_key`, `crove_*` passwords, the self-host Supabase Auth JWT secret, `INBOUND_SECRET`, webhook secrets, the DOS internal key once DOS org sync exists), breach notification, kill switches.
+- **Runbooks:** stuck worker, outbox lag, DLQ, Supabase incident, PITR restore, Supabase Auth incident (Crove Cloud: DOS's Supabase Auth; new logins fail, and because revocation checks fail closed, requests get 503 once the session-check cache expires, ADR-0028, proposed), JWKS refresh after a signing-key revocation, quota hit, credential rotation (`context_key`, `crove_*` passwords, the self-host Supabase Auth JWT secret, `INBOUND_SECRET`, webhook secrets, the DOS internal key once DOS org sync exists), breach notification, kill switches.
 - **Paging:** SEV1 to the owner's phone, plus an issue for the on-call agent.
 - **Status page:** simple.
 - **pgaudit** (Cloud): logs DDL/ROLE by `postgres` on `crove-db-prod`.
@@ -1602,7 +1607,7 @@ The MVP in Tracking replaces Phase 0 (ADR-0027): step 1 (open source, local) mer
 |---|---|
 | Repo, license, CLA, gitleaks and G1 from the first commit; G1-G6 green | Repo public with gitleaks + G1 required (Decision 9); `LICENSE`, `CLA.md` and CLA Assistant still missing (§12-C); G2-G6 grow with Phase 1 |
 | Own DB; migrations through preview -> beta -> prod; replay on plain PG17 | Built-in runner on any PG17 (MVP, implemented); the Cloud DB path comes with MVP step 2 |
-| OIDC login with DOS ID; membership from the DOS-Me API; `generic-oidc` adapter | Replaced by Supabase Auth with membership in Crove (Decision 5, ADR-0027, ADR-0028) |
+| OIDC login with DOS ID; membership from the DOS-Me API; `generic-oidc` adapter | Replaced by Supabase Auth with membership in Crove (Decision 5, ADR-0027; sessions per ADR-0028, proposed) |
 | Gate DOS-1 and minimal DOS-27 events | Deferred with DOS org sync (Tracking, deferred table) |
 | Local DB loop in cloud sessions | Local PG17 + built-in runner (§10, §12-F) |
 | Skeleton end to end on beta | MVP exit criterion 1, locally today; on Cloud with step 2 |
@@ -1626,7 +1631,7 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
 - Party (duplicate hints by tax code/national ID/phone; 2025 addresses + mapping from the old ones).
 - Intake: upload, or forward email to an opaque address -> extraction in the sandbox (XML first) -> proposal -> AI Inbox (R0/R1).
 - In-app notifications; pg_trgm search; audit viewer for admins.
-- Identity per ADR-0028; membership management in Crove (invites with consent, remove, change role).
+- Identity per ADR-0028 (once accepted); membership management in Crove (invites with consent, remove, change role).
 - Self-host guide (`docs/self-host/`): compose with PG17 + Supabase Auth + Crove, TLS reverse proxy, SMTP, backups, upgrades.
 
 **Exit criteria:**
@@ -1637,7 +1642,7 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
 5. PDFs and images produce proposals with evidence and deterministic confidence. Red-team >=30 cases: 0 auto-executed R2+, 0 data leaks.
 6. A Vietnamese benchmark of >=100 documents is a PR gate.
 7. Load with 100k parties per tenant:
-   - p95 DB-only R1 command < 150 ms (including the §4.5 re-entry guard and the ADR-0028 revocation check);
+   - p95 DB-only R1 command < 150 ms (including the §4.5 re-entry guard and the revocation check proposed in ADR-0028);
    - p95 outbox lag < 2 s;
    - target >=50 events/s on 1 worker;
    - back-pressure works.
@@ -1777,7 +1782,7 @@ No fork has real users. The owner archived the five fork repositories on 2026-10
 
 | Risk | Mitigation |
 |---|---|
-| Revocation is late or fails open (a signed-out, banned or removed user keeps access) | <ul><li>ADR-0028: issuer, audience and expiry required; self-host checks `auth.sessions` in the request transaction; Crove Cloud checks Supabase Auth with a cache of at most 30 s, fail closed.</li><li>Membership read from the DB on every request; claims never grant membership.</li><li>External-tenant gate T1.</li></ul> |
+| Revocation is late or fails open (a signed-out, banned or removed user keeps access) | <ul><li>ADR-0028 (proposed): issuer, audience and expiry required; self-host checks `auth.sessions` in the request transaction; Crove Cloud checks Supabase Auth with a cache of at most 30 s, fail closed.</li><li>Membership read from the DB on every request; claims never grant membership.</li><li>External-tenant gate T1.</li></ul> |
 | Crove Cloud depends on DOS's Supabase Auth for login and revocation checks | Fail closed means a DOS Auth outage turns into Crove Cloud 503s after the cache window; runbook §7.10; status page; measure Auth latency and rate limits before the first external tenant (issue #34) |
 | Coupling to Supabase Auth internals (self-host reads `auth.sessions` and `auth.users`; Supabase Auth migrates its own schema) | Supabase documents the `auth.sessions` lookup; compose pins the Supabase Auth image; database tests run against that version; a schema change breaks the check closed; a new identity adapter can replace Supabase Auth (`user_account` keeps `(issuer, subject)`) |
 | Known MVP gaps reach an external tenant | External-tenant gate (Tracking): every row needs its evidence (test, CI check or report) before Crove Cloud accepts an external tenant |

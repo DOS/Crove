@@ -22,7 +22,7 @@ What `main` does today (`apps/kernel/src/auth.ts`, `apps/kernel/src/config.ts`):
 
 Supabase Auth facts this ADR relies on (checked against Supabase documentation and the Supabase Auth source on 2026-10-14):
 
-1. Access tokens carry `iss`, `aud`, `exp`, `sub`, `role`, `session_id` and `aal` (`aal1` single factor, `aal2` multi-factor). The JWT fields reference lists `session_id` and `aal` as required claims, `amr` as optional, and `is_anonymous` for anonymous users. [1]
+1. The JWT fields reference lists these claims as required, that is present on every access token: `iss`, `aud`, `exp`, `iat`, `sub`, `role`, `aal` (`aal1` single factor, `aal2` multi-factor), `session_id`, `email`, `phone` and `is_anonymous`. `amr`, `app_metadata` and `user_metadata` are optional. The page's authenticated-user example carries `"phone": ""`, so a claim can be present but empty. [1]
 2. "There is no way to revoke a user's access token jwt until it expires." Supabase recommends a shorter JWT expiry for that reason. [2]
 3. "When a user signs out, the sessions affected by the sign-out are removed from the database entirely." To detect it, "you can check that the `session_id` claim in the JWT corresponds to a row in the `auth.sessions` table. If such a row does not exist, it means that the user has signed out." [3]
 4. Access tokens are "usually between 5 minutes and 1 hour". Time-boxed sessions and inactivity timeouts are enforced when a session is next refreshed, not proactively. [3]
@@ -75,11 +75,12 @@ Rejected as the only mechanism.
 - Verify only with `jose`, never with Hono's JWT middleware. Pin algorithms: ES256/RS256 through JWKS when `AUTH_JWKS_URL` is set, otherwise HS256 with `AUTH_JWT_SECRET`. A deployment accepts one family, never both.
 - `AUTH_ISSUER` becomes required: boot fails without it, and the issuer must match exactly. `AUTH_AUDIENCE` stays required (default `authenticated`).
 - Required claims: `iss`, `aud`, `exp`, `sub`, `session_id`, and `role = authenticated` (pass `requiredClaims` to `jose` so a token without `exp` fails). Reject `is_anonymous = true`. Clock tolerance at most 30 seconds. A missing `aal` means `aal1`.
+- `email` stays required and non-empty, as on `main`: Crove identifies and adds members by email. A Supabase Auth user who signs in with a phone number only (empty `email`) gets 401 until a later ADR supports phone-only accounts.
 - JWKS cache: at most 10 minutes. The runbook covers forcing a refresh after a key revocation.
 
 ### 2. Revocation, fail closed
 
-Setting `AUTH_SESSION_CHECK` selects the mechanism. Boot fails if it is missing or off on a non-local `PUBLIC_URL`, like the existing `AUTH_AUTOCONFIRM` guard.
+Setting `AUTH_SESSION_CHECK` selects the mechanism: `db`, `remote` or `off`. When it is not set, the default is `db` if `AUTH_UPSTREAM_URL` is set (the bundled Supabase Auth on the same database) and `remote` otherwise, so an unset value never means "no check". `off` is accepted only on a local `PUBLIC_URL`; on any other URL boot fails, like the existing `AUTH_AUTOCONFIRM` guard.
 
 | Deployment | Mechanism | Revocation delay |
 |---|---|---|
@@ -90,13 +91,17 @@ Option (a) details:
 
 - A SECURITY DEFINER function, for example `crove_kernel.auth_session_valid(session_id uuid, subject uuid)`, owned by a NOLOGIN role that can only SELECT `auth.sessions` and `auth.users`. It runs in the request transaction, inside `enter_context` or right before it.
 - Valid means: the session row exists for that user; its `not_after`, when set, is in the future; the user exists, is not soft-deleted, and `banned_until` is null or past.
-- The `migrate` role applies the grant once Supabase Auth has created those tables. Until then the check fails closed, and `/readyz` stays not ready.
+- The grant needs a step after Supabase Auth's first start, because `auth.sessions` and `auth.users` do not exist until Supabase Auth has run its own migrations, and in the compose stack `auth` starts only after `migrate` completes. The image gets a one-shot role `auth-grants`: it waits (up to 2 minutes) until both tables exist, grants SELECT on exactly those two tables to `crove_auth_reader`, and exits. Compose runs `migrate`, then `auth`, then `auth-grants` (depends on `auth` started), then `crove` (depends on `auth-grants` completed successfully). It runs on every `docker compose up`, so the grant is re-applied if Supabase Auth ever recreates a table. Installs without compose run `auth-grants` once after Supabase Auth's first start and after each Supabase Auth upgrade.
+- Until the grant exists the check fails closed: requests get 503 and `/readyz` reports not ready with reason `auth_grants`.
+- Rejected alternative: `ALTER DEFAULT PRIVILEGES FOR ROLE supabase_auth_admin IN SCHEMA auth GRANT SELECT ON TABLES TO crove_auth_reader` in `migrate`. It needs no extra step, but it grants read access to every current and future `auth` table, including refresh tokens, MFA factor secrets and one-time tokens, far more than the check needs.
 
 Option (b) details:
 
 - Cache key: `session_id` plus the SHA-256 of the token. Keep a positive answer for 30 seconds at most, never past the token's `exp`. One request in flight per session (single flight).
-- A 401 or 403 from Supabase Auth (`session_not_found`, `user_not_found`, `user_banned`, `bad_jwt`) becomes a Crove 401 and evicts the entry.
-- Supabase Auth unreachable, 5xx or 429 with no fresh cache entry: answer 503 and deny the request.
+- Only a 200 response whose body `id` equals the token's `sub` counts as valid; that is the only answer that is cached.
+- Any other 4xx (for example 400 `bad_jwt` or `validation_failed`, 401, 403 `session_not_found`, `user_not_found` or `user_banned`, 404) becomes a Crove 401 and evicts the entry.
+- A network error, a timeout, any 5xx or a 429, with no fresh cache entry: answer 503 and deny the request.
+- Any other status, or a 200 whose `id` does not match, is treated as invalid (401).
 
 Both mechanisms:
 
@@ -126,6 +131,7 @@ Unchanged and required: `enter_context` reads `tenant_member` (and later `role_a
 ## Consequences
 
 - Good: sign-out, ban or deletion stops access on the next request in self-host and within 30 seconds on Crove Cloud. R3 needs a second factor. Boot refuses configurations that would fail open.
+- Bad: self-host gains a one-shot `auth-grants` step in the startup order (compose: `migrate` -> `auth` -> `auth-grants` -> `crove`); installs without compose must remember to run it.
 - Bad: Crove Cloud depends on DOS's Supabase Auth for every request after the cache window. An Auth outage makes Crove Cloud answer 503 (plan §7.10 runbook, §14 risk). Rate limits are measured before the first external tenant (issue #34).
 - Bad: self-host reads two Supabase Auth internal tables. Supabase documents this lookup as the way to detect sign-out, the compose stack pins the Supabase Auth image, and the database tests run against that version. A schema change breaks the check closed, not open.
 - The earlier plan design for Crove-issued sessions (session JWTs and refresh tokens, a `session` table, OIDC callbacks under `/auth/*`, the `dos-id` and `generic-oidc` adapters, `/.well-known/jwks.json`) is superseded. `user_account` keeps `(issuer, subject)`, so a later identity adapter can replace Supabase Auth.
@@ -136,10 +142,13 @@ Unchanged and required: `enter_context` reads `tenant_member` (and later `role_a
 Unit (kernel auth):
 
 - 401 for a token with no `iss` or a wrong one, no `aud` or a wrong one, no `exp`, an expired `exp`, no `sub`, no `session_id`, `role` other than `authenticated`, `is_anonymous = true`, `alg: none`, and an HS256 token when JWKS is configured.
-- Boot fails without `AUTH_ISSUER`, and with `AUTH_SESSION_CHECK` missing or off on a public URL.
+- Boot fails without `AUTH_ISSUER`, and with `AUTH_SESSION_CHECK=off` on a public URL; an unset `AUTH_SESSION_CHECK` resolves to `db` or `remote` as described above.
+- A token with an empty `email` (phone-only user): 401.
 
 Database and integration, self-host mode (Supabase Auth image pinned as in compose):
 
+- Fresh install: `docker compose up` on empty volumes; `auth-grants` completes; the first sign-up, sign-in and API call succeed with the `db` check active (not skipped).
+- Before `auth-grants` has run: requests get 503 and `/readyz` reports `auth_grants`.
 - Sign in and call the API: 200. Sign out. The same token gets 401 on the next request.
 - Ban the user in Supabase Auth: 401. Delete the user: 401. Set `user_account.disabled_at`: 401 or 403.
 - Remove the membership: the next request in that org gets 403.
@@ -147,7 +156,8 @@ Database and integration, self-host mode (Supabase Auth image pinned as in compo
 Remote mode (contract test against a Supabase Auth container in CI with `AUTH_SESSION_CHECK=remote`):
 
 - After sign-out, the token is rejected within the cache lifetime plus one second; an R3 approval with that token is rejected immediately.
-- Supabase Auth unreachable, or answering 429: 503 and no data returned.
+- Supabase Auth unreachable, timing out, or answering 5xx or 429: 503 and no data returned.
+- Supabase Auth answering 400, or a 200 for a different user id: 401.
 
 R3 approvals:
 
