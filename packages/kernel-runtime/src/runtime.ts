@@ -9,9 +9,17 @@ import { sha256Hex } from './storage.ts';
 
 export type Risk = 'R0' | 'R1' | 'R2' | 'R3';
 
-export type Actor =
-  | { type: 'user'; userId: string }
-  | { type: 'system'; component: string };
+// Authenticator assurance level of the user's access token: aal2 means the session passed MFA.
+// Carried on every user actor so R3 approval can require aal2 (plan §4.7 P11); not enforced yet.
+export type Aal = 'aal1' | 'aal2';
+
+export interface UserActor {
+  type: 'user';
+  userId: string;
+  aal: Aal;
+}
+
+export type Actor = UserActor | { type: 'system'; component: string };
 
 // 'members' = owner/admin/member; 'system' = system actor only; 'proposal' = only via an approved proposal.
 export type Access = readonly MemberRole[] | 'system' | 'proposal';

@@ -3,14 +3,17 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { sql } from 'kysely';
+import { SignJWT } from 'jose';
+import { sql, type Transaction } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createDb, createPool, type Db } from '@crove/db';
+import { createDb, createPool, type Database, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { DomainError, Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries, recordExtractionFailure } from '@crove/mod-finance';
+import { actorOf, createAuthenticator } from '../src/auth.ts';
+import { loadConfig } from '../src/config.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -42,7 +45,7 @@ suite('kernel on PostgreSQL', () => {
   let orgA = '';
   let orgB = '';
 
-  const asUser = (userId: string) => ({ type: 'user' as const, userId });
+  const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
 
   async function ingest(orgId: string, userId: string, bytes: Uint8Array) {
     const sha256 = sha256Hex(bytes);
@@ -53,6 +56,49 @@ suite('kernel on PostgreSQL', () => {
       { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, source: 'upload' },
       { actor: asUser(userId), orgId },
     );
+  }
+
+  // The fixture invoice under another invoice number, so each variant is a new document.
+  const variant = (number: string, edit: (xml: string) => string = (xml) => xml) =>
+    new TextEncoder().encode(edit(FIXTURE.toString('utf8').replace('<SHDon>1234</SHDon>', `<SHDon>${number}</SHDon>`)));
+
+  async function propose(bytes: Uint8Array) {
+    const { fileId } = await ingest(orgA, users.owner, bytes);
+    const { proposalId } = await extractAndPropose({ runtime, store, extractor: null, today: () => '2026-10-13' }, orgA, fileId);
+    const detail = await runtime.query<{ revision: number }>('kernel.inbox.get', { id: proposalId }, { actor: asUser(users.owner), orgId: orgA });
+    return { id: proposalId, revision: detail.revision };
+  }
+
+  async function withAdmin<T>(fn: (admin: pg.Client) => Promise<T>): Promise<T> {
+    const admin = new pg.Client({ connectionString: adminUrl });
+    await admin.connect();
+    try {
+      return await fn(admin);
+    } finally {
+      await admin.end();
+    }
+  }
+
+  // The API login role in its owner's context in org B; org A keeps only the entries approvals post.
+  function inOrgB<T>(fn: (trx: Transaction<Database>) => Promise<T>): Promise<T> {
+    return db.transaction().execute(async (trx) => {
+      await sql`SELECT crove_kernel.enter_context(${users.outsider}::uuid, ${orgB}::uuid)`.execute(trx);
+      return fn(trx);
+    });
+  }
+
+  type PostingLine = { line_no: number; account_code: string; debit: string; credit: string };
+  const BALANCED: PostingLine[] = [
+    { line_no: 1, account_code: '6422', debit: '100', credit: '0' },
+    { line_no: 2, account_code: '331', debit: '0', credit: '100' },
+  ];
+
+  async function post(lines: PostingLine[]): Promise<string> {
+    return inOrgB(async (trx) => {
+      const { rows } = await sql<{ id: string }>`
+        SELECT crove_finance.post_journal_entry('2026-10-01', 'test', 'test', ${randomUUID()}::uuid, ${JSON.stringify(lines)}::jsonb) AS id`.execute(trx);
+      return rows[0]?.id ?? '';
+    });
   }
 
   beforeAll(async () => {
@@ -152,6 +198,67 @@ suite('kernel on PostgreSQL', () => {
       await admin.query('ROLLBACK').catch(() => {});
       await admin.end();
     }
+    await expect(post([BALANCED[0] as PostingLine, { line_no: 2, account_code: '331', debit: '0', credit: '90' }])).rejects.toThrow(
+      /does not balance/,
+    );
+  });
+
+  it('refuses an entry with no lines at commit, checked from the entry side', async () => {
+    await withAdmin(async (admin) => {
+      await admin.query('BEGIN');
+      try {
+        await admin.query(
+          `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id)
+           VALUES ($1, '2026-10-01', 'no lines', 'test', crove_kernel.uuid_v7())`,
+          [orgA],
+        );
+        await expect(admin.query('COMMIT')).rejects.toThrow(/needs at least 2 lines \(has 0\)/);
+      } finally {
+        await admin.query('ROLLBACK').catch(() => {});
+      }
+    });
+    await expect(post([])).rejects.toThrow(/at least 2 lines/);
+  });
+
+  it('writes the ledger only through the posting function, which stamps org and author from the context', async () => {
+    await expect(
+      inOrgB((trx) =>
+        trx
+          .insertInto('crove_finance.journal_entry')
+          .values({ org_id: orgB, entry_date: '2026-10-01', description: 'direct', source_type: 'test', source_id: randomUUID() })
+          .execute(),
+      ),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      inOrgB((trx) =>
+        trx
+          .insertInto('crove_finance.journal_line')
+          .values({ org_id: orgB, entry_id: randomUUID(), line_no: 1, account_code: '6422', debit: '100' })
+          .execute(),
+      ),
+    ).rejects.toThrow(/permission denied/);
+
+    const entryId = await post(BALANCED);
+    await withAdmin(async (admin) => {
+      const { rows } = await admin.query('SELECT org_id, created_by FROM crove_finance.journal_entry WHERE id = $1', [entryId]);
+      expect(rows).toEqual([{ org_id: orgB, created_by: users.outsider }]);
+    });
+  });
+
+  it('refuses lines added to an entry posted in an earlier transaction, even for the database owner', async () => {
+    const entryId = await post(BALANCED);
+    await withAdmin(async (admin) => {
+      // A balanced pair keeps the entry balanced, so only the posted-entry rule can stop it.
+      await expect(
+        admin.query(
+          `INSERT INTO crove_finance.journal_line (org_id, entry_id, line_no, account_code, debit, credit) VALUES
+           ($1, $2, 3, '6422', 50, 0), ($1, $2, 4, '331', 0, 50)`,
+          [orgB, entryId],
+        ),
+      ).rejects.toThrow(/already posted/);
+      const { rows } = await admin.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_finance.journal_line WHERE entry_id = $1', [entryId]);
+      expect(rows[0]?.n).toBe(2);
+    });
   });
 
   it('turns an e-invoice into a proposal, and records it once on approval', async () => {
@@ -188,6 +295,13 @@ suite('kernel on PostgreSQL', () => {
       { actor: asUser(users.owner), orgId: orgA, idempotencyKey: approvalRequest },
     );
     expect(replay).toEqual(first);
+    await withAdmin(async (admin) => {
+      const { rows } = await admin.query(
+        'SELECT created_by, created_xact_id IS NOT NULL AS stamped FROM crove_finance.journal_entry WHERE id = $1',
+        [first.journalEntryId],
+      );
+      expect(rows).toEqual([{ created_by: users.owner, stamped: true }]);
+    });
     await expect(
       runtime.execute('kernel.proposal.approve', { id: proposalId, revision: detail.revision }, { actor: asUser(users.owner), orgId: orgA }),
     ).rejects.toMatchObject({ code: 'PROPOSAL_DECIDED' });
@@ -246,14 +360,6 @@ suite('kernel on PostgreSQL', () => {
   });
 
   it('records an invoice with failed checks only after explicit confirmation, and never a foreign-currency one', async () => {
-    const variant = (number: string, edit: (xml: string) => string) =>
-      new TextEncoder().encode(edit(FIXTURE.toString('utf8').replace('<SHDon>1234</SHDon>', `<SHDon>${number}</SHDon>`)));
-    const propose = async (bytes: Uint8Array) => {
-      const { fileId } = await ingest(orgA, users.owner, bytes);
-      const { proposalId } = await extractAndPropose({ runtime, store, extractor: null, today: () => '2026-10-13' }, orgA, fileId);
-      const detail = await runtime.query<{ revision: number }>('kernel.inbox.get', { id: proposalId }, { actor: asUser(users.owner), orgId: orgA });
-      return { id: proposalId, revision: detail.revision };
-    };
     const asOwner = { actor: asUser(users.owner), orgId: orgA };
 
     const mismatch = await propose(variant('1235', (xml) => xml.replace('<TThue>180000</TThue>', '<TThue>170000</TThue>')));
@@ -301,5 +407,54 @@ suite('kernel on PostgreSQL', () => {
         { actor: asUser(users.owner), orgId: orgA },
       ),
     ).rejects.toMatchObject({ code: 'INVALID_STORAGE_KEY' });
+  });
+
+  it('lets only roles that may post approve an R3 proposal, and records the approver', async () => {
+    const member = await upsertIdentity(db, { issuer: 'test', subject: 'plain-member', email: 'plain-member@example.com', name: null });
+    const approver = await upsertIdentity(db, { issuer: 'test', subject: 'approver', email: 'approver@example.com', name: null });
+    const asOwner = { actor: asUser(users.owner), orgId: orgA };
+    await runtime.execute('kernel.member.add', { email: 'plain-member@example.com', role: 'member' }, asOwner);
+    await runtime.execute('kernel.member.add', { email: 'approver@example.com', role: 'admin' }, asOwner);
+    const proposal = await propose(variant('1238'));
+
+    await expect(runtime.execute('kernel.proposal.approve', proposal, { actor: asUser(member), orgId: orgA })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      status: 403,
+    });
+    await expect(runtime.execute('kernel.proposal.approve', proposal, { actor: asUser(approver), orgId: orgA })).resolves.toMatchObject({
+      journalEntryId: expect.any(String),
+    });
+
+    await withAdmin(async (admin) => {
+      const decided = await admin.query('SELECT status, decided_by FROM crove_kernel.proposal WHERE id = $1', [proposal.id]);
+      expect(decided.rows).toEqual([{ status: 'executed', decided_by: approver }]);
+      const audit = await admin.query(
+        `SELECT actor_id, outcome FROM crove_kernel.audit_event
+         WHERE command = 'kernel.proposal.approve' AND target_id = $1 ORDER BY occurred_at`,
+        [proposal.id],
+      );
+      expect(audit.rows).toEqual([
+        { actor_id: member, outcome: 'denied' },
+        { actor_id: approver, outcome: 'ok' },
+      ]);
+    });
+  });
+
+  it('reads the assurance level from every token, not from the identity cache', async () => {
+    const secret = 'test-only-jwt-secret-for-aal-0123456789';
+    const authenticate = createAuthenticator(loadConfig({ DATABASE_URL: appUrl, AUTH_JWT_SECRET: secret }), db);
+    const bearer = async (claims: Record<string, unknown>) =>
+      `Bearer ${await new SignJWT({ email: 'mfa@example.com', role: 'authenticated', ...claims })
+        .setProtectedHeader({ alg: 'HS256' })
+        .setSubject('mfa-user')
+        .setAudience('authenticated')
+        .setExpirationTime('5m')
+        .sign(new TextEncoder().encode(secret))}`;
+
+    const stepUp = await authenticate(await bearer({ aal: 'aal2' }));
+    expect(stepUp.aal).toBe('aal2');
+    await expect(authenticate(await bearer({ aal: 'aal1' }))).resolves.toEqual({ ...stepUp, aal: 'aal1' });
+    await expect(authenticate(await bearer({}))).resolves.toEqual({ ...stepUp, aal: 'aal1' });
+    expect(actorOf(stepUp)).toEqual({ type: 'user', userId: stepUp.userId, aal: 'aal2' });
   });
 });
