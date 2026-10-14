@@ -29,4 +29,4 @@ A stack review on 2026-10-13 (docs/recommendations) found the Next.js app shell 
 - Core auth is coupled to the Supabase Auth API. Swapping it later means a new identity adapter; `user_account` keeps `(issuer, subject)` so users survive the swap.
 - Open spike: whether Supabase Auth runs on the plain `postgres:17` image or needs Supabase's Postgres image.
 - Cloud-only parts of the plan body (DOS prerequisites, Cloud topology, costs) move to `crove-cloud` when it is created.
-- One neutral name lets developers adopt the core without buying into DOS, while Cloud still sells through DOS ID and DOS.AI. Trademark clearance and filing are tracked outside this public repo.
+- One neutral name lets developers adopt the core without buying into DOS, while Cloud still sells through DOS ID and DOS.AI.
