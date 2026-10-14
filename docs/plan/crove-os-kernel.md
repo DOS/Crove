@@ -555,7 +555,7 @@ export default implement(postJournalEntry, {
 | Kind | Identity | Source | Effective permissions | Constraints |
 |---|---|---|---|---|
 | `user` | user_id, session_id, aal | Supabase Auth access token, verified by the kernel on every request (issuer, audience and expiry required; revocation checked per ADR-0028, proposed) | Membership gate (`tenant_member`) + Crove `role_assignment` | Enters via `crove_api`; in the worker only via an approved proposal |
-| `agent` | agent_id, position_id, run_id, on_behalf_of, grant_id, kind | In-process; MCP via OAuth (Phase 3) | Position-holding agent: position role ∩ template ceiling ∩ `max_risk` ∩ trigger class ∩ scope ∩ taint (ADR-0029). Chat-invoked: user ∩ grant ∩ trigger class ∩ scope ∩ taint | Chat/MCP enter via api; background runs enter via the worker with a run ref |
+| `agent` | agent_id, run_id, position (read from `position` at entry), on_behalf_of, grant_id, kind | In-process; MCP via OAuth (Phase 3) | Position-holding agent: position role ∩ template ceiling ∩ `max_risk` ∩ trigger class ∩ scope ∩ taint (ADR-0029). Chat-invoked: user ∩ grant ∩ trigger class ∩ scope ∩ taint | Chat/MCP enter via api; background runs enter via the worker with a run ref |
 | `api_key` (Phase 3) | key id, created_by | Bearer, stored as sha256 | Key role ∩ the creator's **current** permissions | Expires in <=90 days; never R3; auto-disabled when the creator leaves the org |
 | `automation` (Phase 4) | id, version, owner | Scheduler / subscriber | Grant within the owner's permissions, re-checked on every run | Causal depth <=5 |
 | `system` | component | Worker only | `allowSystem` commands; kernel-enqueued jobs | R3 only with an approval verified in the DB (P13) |
@@ -686,7 +686,7 @@ COMMIT;
 | agent in a user-opened chat, untainted | allow | allow + 24 h undo | review | review |
 | agent tainted, or triggered by email/event/webhook | allow (triggering thread only) | review | send tools hidden | review |
 | MCP / DOS.AI agent (Phase 3) | allow | allow | review | review |
-| agent holding a position, woken by assignment or schedule, untainted (ADR-0029) | allow | allow | review | review by a human |
+| agent holding a position, woken by assignment or schedule, untainted (ADR-0029) | allow | allow + 24 h undo | review | review by a human |
 | automation | allow | allow | review, except bounded admin-approved rules | review |
 | api_key | allow | allow | allow within scope | deny |
 | system | `allowSystem` commands | allow | via job | P13 |
@@ -694,7 +694,7 @@ COMMIT;
 | Rule | Effect |
 |---|---|
 | P01 | Deny: grant expired or revoked, budget exhausted, rate exceeded, kill switch on |
-| P02 | Deny: risk > the grant's or key's `max_risk` |
+| P02 | Deny: risk > the grant's or key's `max_risk`; for a position-holding agent, the lower of `agent.max_risk` and its external-runtime grant's `max_risk` (ADR-0029) |
 | P03 | Review, not overridable: run or input tainted and risk >= R1 |
 | P04 | Review, not overridable: changing a payee, bank account, or contact point |
 | P05 | Review: R3 by a non-user actor. Founder exception only when all hold: class is allowlisted, <= limit, counterparty **verified by a human**, matches a learned rule, and untainted |
@@ -702,7 +702,7 @@ COMMIT;
 | P07 | Review: untrusted trigger and risk >= R1 |
 | P08 | Escalate one level: impact > 20 records, or above the org's money threshold |
 | P09 | Accountant preset: posting needs approval by a **human** holding `finance.chief_accountant` |
-| P10 | Four-eyes for R3 when >=2 eligible approvers exist. The approver **must not be an author** of any part of the final input. Single-person orgs may self-approve, flagged in the audit |
+| P10 | Four-eyes for R3 when >=2 eligible **human** approvers exist; agents are never counted (ADR-0029). The approver **must not be an author** of any part of the final input, and the creator chain of a task counts as authors. An org whose only human is the owner may self-approve, flagged in the audit |
 | P11 | R3 approval requires `aal2` or WebAuthn (on by default; turning it off needs the owner and is audited) |
 | P12 | The approver must personally hold the command's permission and legal-entity scope. For R3, and for any proposal with P03-P07 in its outcome, the approver must be a human; an agent never approves work from its own causal chain (ADR-0029). Eligible approvers are snapshotted when the proposal is created; role changes while pending are audited and re-checked |
 | P13 | System does R3 only with a same-org approval in `approved` state matching the command and `input_sha256`, usable once (`UNIQUE executed_command_id`). Imports that post entries also go through an R3 proposal |
