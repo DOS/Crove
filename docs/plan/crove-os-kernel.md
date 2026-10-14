@@ -6,7 +6,7 @@
 > Update 2026-10-13: separate repo, own DB, federated identity (OIDC), provider-agnostic AI, AGPL-3.0 + CLA, always latest stable.
 > Update 2026-10-14: consolidated. The body now describes the decided design (Decisions 1-15): Supabase Auth identity (ADR-0027; sessions and revocation per ADR-0028), one image serving the SPA, the built-in migration runner, the MVP in place of Phase 0, and the External-tenant gate. Where `main` differs from the decided design, the text says so.
 > Update 2026-10-14 (later): ADR-0028 accepted with the hybrid revocation design C (Decision 16); §7.5, the External-tenant gate (T1) and §11 (DOS-28) describe it.
-> Vietnamese reading copy: [crove-os-kernel.vi.html](crove-os-kernel.vi.html). This English file is the source of record.
+> Vietnamese decision page (concise, not a full translation): [crove-os-kernel.vi.html](crove-os-kernel.vi.html). This English file is the full source of record.
 
 ## Tracking
 
