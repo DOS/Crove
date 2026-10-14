@@ -530,7 +530,7 @@ SET LOCAL ROLE crove_m_finance;                 -- member of crove_tenant
 COMMIT;
 ```
 
-**`crove_kernel.enter_context`** (owner `crove_ctx`, `SET search_path = ''`, EXECUTE granted only to `crove_api` and `crove_worker`):
+**`crove_kernel.enter_context`** (owner `crove_ctx`, `SET search_path = pg_catalog, pg_temp`, EXECUTE granted only to `crove_api` and `crove_worker`):
 1. **Block re-entry within the same transaction:** a transaction-level advisory lock keyed on `pg_backend_pid()`. It cannot be released and works in READ ONLY.
 2. **Bind the actor kind to `session_user`:**
    - `crove_api` may only use `user`, `agent` (chat/MCP) and `api_key`.
@@ -911,7 +911,7 @@ DO $$ DECLARE n int := 0; BEGIN LOOP BEGIN
   - touch only the schema named in the file name;
   - `IF NOT EXISTS`, `OR REPLACE` or a guarded `DO`;
   - `DROP POLICY IF EXISTS` before every `CREATE POLICY`;
-  - `SET search_path` on **every** function;
+  - `SET search_path = pg_catalog, pg_temp` on **every** function (an empty path still resolves type names in the caller's temporary schema first);
   - `REVOKE ALL ON FUNCTION … FROM PUBLIC` plus explicit GRANTs;
   - a retry block for DDL on hot tables (`outbox_*`, `audit_event`, `record`, `idempotency_key`, `processed_message`, `crove_jobs.*`);
   - a contract header on every breaking statement.
@@ -1126,7 +1126,7 @@ Rewritten 2026-10-14 for Supabase Auth (Decision 5, ADR-0027). Other sections th
 
 - **Threat model:** RLS stops application bugs: a forgotten org filter, a wrong join, an agent-written query. A compromised server is contained by least-privilege login roles, the seal, per-environment identities, immutability triggers and WORM anchors. A compromised `crove-api` alone could write fake membership through `identity_login`; that is detected by reconciling with the IdP and alerting on new memberships in orgs that have a tenant.
 - **Evidence (G3):**
-  - **Conformance:** `org_id`, RLS and policies using the right helpers, PK rules, indexed composite FKs, money domains, no `timestamp without time zone`, append-only tables with INSERT only, functions with `search_path=''`, the exact EXECUTE matrix, no CREATE at runtime.
+  - **Conformance:** `org_id`, RLS and policies using the right helpers, PK rules, indexed composite FKs, money domains, no `timestamp without time zone`, append-only tables with INSERT only, functions with `search_path = pg_catalog, pg_temp`, the exact EXECUTE matrix, no CREATE at runtime.
   - **Generated RLS matrix:** cross-org, cross-legal-entity (kernel tables included), forged `le_scope`/flags/user, no context.
   - **Invariant suite taken from `origin/dev`,** run against the PR's schema, so a PR cannot loosen its own gate.
   - Vitest `db`: one tenant per test.

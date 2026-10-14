@@ -7,6 +7,9 @@ const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal').
 const PROPOSAL_COMMANDS = new Set(['finance.purchase.record']);
 const ADMINS = ['owner', 'admin'] as const;
+// Approving executes an R3 command that posts to the ledger, so only roles that may post approve.
+// The role model has no finance roles yet; owner and admin are the roles that may post today.
+const APPROVERS = ADMINS;
 
 export const addMember = defineCommand({
   name: 'kernel.member.add',
@@ -216,7 +219,7 @@ export const approveProposal = defineCommand({
     acceptFailedChecks: z.boolean().optional(),
   }),
   risk: 'R3',
-  access: MEMBERS,
+  access: APPROVERS,
   target: (input) => ({ type: 'kernel.proposal', id: input.id }),
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới duyệt được');

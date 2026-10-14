@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { BLOCKING_CHECK_IDS, zAccountCode, zPurchaseProposal } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { buildPurchaseJournal, journalIsBalanced, money, parseTaxCode, type ProposedLine } from '@crove/l10n-vn';
+import { postJournalEntry } from './ledger.ts';
 
 async function upsertVendor(ctx: CommandContext, seller: z.infer<typeof zPurchaseProposal>['seller']): Promise<string> {
   const taxCode = parseTaxCode(seller.taxCode)?.normalized ?? null;
@@ -128,33 +129,20 @@ export const recordPurchase = defineCommand({
       )
       .execute();
 
-    const entry = await ctx.trx
-      .insertInto('crove_finance.journal_entry')
-      .values({
-        org_id: ctx.orgId,
-        entry_date: invoice.issueDate,
-        description: memo,
-        source_type: 'finance.purchase_document',
-        source_id: document.id,
-        created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
-      })
-      .returning('id')
-      .executeTakeFirstOrThrow();
-    await ctx.trx
-      .insertInto('crove_finance.journal_line')
-      .values(
-        journal.map((j) => ({
-          org_id: ctx.orgId,
-          entry_id: entry.id,
-          line_no: j.lineNo,
-          account_code: j.accountCode,
-          debit: j.debit,
-          credit: j.credit,
-          party_id: j.accountCode === '331' ? partyId : null,
-          memo: j.memo,
-        })),
-      )
-      .execute();
+    const journalEntryId = await postJournalEntry(ctx, {
+      entryDate: invoice.issueDate,
+      description: memo,
+      sourceType: 'finance.purchase_document',
+      sourceId: document.id,
+      lines: journal.map((j) => ({
+        lineNo: j.lineNo,
+        accountCode: j.accountCode,
+        debit: j.debit,
+        credit: j.credit,
+        partyId: j.accountCode === '331' ? partyId : null,
+        memo: j.memo,
+      })),
+    });
 
     // Remember the debit account carrying the largest amount (either sign) for this vendor.
     const main = [...lines].sort((a, b) => money(b.amount).abs().comparedTo(money(a.amount).abs()))[0];
@@ -178,7 +166,7 @@ export const recordPurchase = defineCommand({
     }
 
     await ctx.activity('finance.purchase_document', document.id, 'purchase.recorded', `Ghi sổ ${memo}`);
-    await ctx.emit('finance.purchase.recorded', { documentId: document.id, journalEntryId: entry.id });
-    return { documentId: document.id, journalEntryId: entry.id };
+    await ctx.emit('finance.purchase.recorded', { documentId: document.id, journalEntryId });
+    return { documentId: document.id, journalEntryId };
   },
 });

@@ -3,25 +3,33 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import type { Db } from '@crove/db';
 import { upsertIdentity } from '@crove/kernel';
-import { DomainError } from '@crove/kernel-runtime';
+import { DomainError, type Aal, type UserActor } from '@crove/kernel-runtime';
 import type { Config } from './config.ts';
 
 export interface AuthUser {
   userId: string;
   email: string;
   name: string | null;
+  // From the token of this request: aal2 only when the session passed MFA.
+  aal: Aal;
 }
 
 interface SupabaseClaims extends JWTPayload {
   email?: string;
   role?: string;
+  aal?: string;
   user_metadata?: { full_name?: string; name?: string };
+}
+
+export function actorOf(user: AuthUser): UserActor {
+  return { type: 'user', userId: user.userId, aal: user.aal };
 }
 
 export function createAuthenticator(config: Config, db: Db) {
   const jwks = config.AUTH_JWKS_URL ? createRemoteJWKSet(new URL(config.AUTH_JWKS_URL)) : null;
   const secret = config.AUTH_JWT_SECRET ? new TextEncoder().encode(config.AUTH_JWT_SECRET) : null;
-  const cache = new Map<string, { user: AuthUser; expires: number }>();
+  // Caches only the identity mapping; the assurance level is read from every token.
+  const cache = new Map<string, { user: Omit<AuthUser, 'aal'>; expires: number }>();
 
   async function verify(token: string): Promise<SupabaseClaims> {
     const options = {
@@ -43,16 +51,18 @@ export function createAuthenticator(config: Config, db: Db) {
     if (!claims.sub || !claims.email || claims.role !== 'authenticated') {
       throw new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nhập không hợp lệ');
     }
+    // A missing or unknown aal claim counts as the lowest level.
+    const aal: Aal = claims.aal === 'aal2' ? 'aal2' : 'aal1';
     const issuer = claims.iss ?? 'supabase-auth';
     const key = `${issuer}|${claims.sub}`;
     const hit = cache.get(key);
-    if (hit && hit.expires > Date.now()) return hit.user;
+    if (hit && hit.expires > Date.now()) return { ...hit.user, aal };
     const name = claims.user_metadata?.full_name ?? claims.user_metadata?.name ?? null;
     const userId = await upsertIdentity(db, { issuer, subject: claims.sub, email: claims.email, name });
     const user = { userId, email: claims.email, name };
     cache.set(key, { user, expires: Date.now() + 5 * 60_000 });
     if (cache.size > 10_000) cache.clear();
-    return user;
+    return { ...user, aal };
   };
 }
 

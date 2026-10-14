@@ -210,6 +210,8 @@ export interface JournalEntryTable {
   source_id: string;
   created_by: string | null;
   created_at: DefaultTimestamp;
+  // xid8 stamped by a trigger; entries are written only by crove_finance.post_journal_entry().
+  created_xact_id: ColumnType<string | null, never, never>;
 }
 
 export interface JournalLineTable {

@@ -10,7 +10,7 @@ import { schemaMissing } from '@crove/db/migrate';
 import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES, ORG_HEADER } from '@crove/kernel-contract';
 import { DomainError, fileKey, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { JOURNAL_EXPORT_LIMIT, buildJournalWorkbook, type JournalEntryView } from '@crove/mod-finance';
-import type { Authenticate, AuthUser } from './auth.ts';
+import { actorOf, type Authenticate, type AuthUser } from './auth.ts';
 import { publicAuthUrl, type Config } from './config.ts';
 import { MAX_EMAIL_BYTES, handleInboundEmail, secretMatches } from './inbound.ts';
 import { createRpcHandler, resolveMembership, resolveOrg } from './rpc.ts';
@@ -210,7 +210,7 @@ export function createHttpApp(deps: HttpDeps) {
           await runtime.execute<{ fileId: string; duplicate: boolean }>(
             'kernel.file.ingest',
             { filename: safeFilename(file.name, type), contentType: type, sizeBytes: bytes.byteLength, sha256, storageKey, source: 'upload' },
-            { actor: { type: 'user', userId: user.userId }, orgId },
+            { actor: actorOf(user), orgId },
           ),
         );
       }
@@ -227,7 +227,7 @@ export function createHttpApp(deps: HttpDeps) {
       const file = await runtime.query<{ filename: string; content_type: string; storage_key: string }>(
         'kernel.file.get',
         { id: c.req.param('id') },
-        { actor: { type: 'user', userId: user.userId }, orgId },
+        { actor: actorOf(user), orgId },
       );
       const bytes = await store.get(file.storage_key);
       return new Response(body(bytes), {
@@ -251,7 +251,7 @@ export function createHttpApp(deps: HttpDeps) {
       const orgId = await resolveOrg(runtime, user, orgSlug);
       const range = { from: c.req.query('from') || undefined, to: c.req.query('to') || undefined, limit: JOURNAL_EXPORT_LIMIT };
       const entries = await runtime.query<JournalEntryView[]>('finance.journal.list', range, {
-        actor: { type: 'user', userId: user.userId },
+        actor: actorOf(user),
         orgId,
       });
       if (entries.length >= JOURNAL_EXPORT_LIMIT) {

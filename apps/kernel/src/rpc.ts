@@ -3,8 +3,8 @@ import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { contract } from '@crove/kernel-contract';
 import { createOrg, myOrgs, type OrgSummary } from '@crove/kernel';
-import { DomainError, type Runtime } from '@crove/kernel-runtime';
-import type { AuthUser } from './auth.ts';
+import { DomainError, type Runtime, type UserActor } from '@crove/kernel-runtime';
+import { actorOf, type AuthUser } from './auth.ts';
 
 export interface RpcContext {
   user: AuthUser;
@@ -40,8 +40,8 @@ export function createRpcHandler(runtime: Runtime) {
       throw toORPCError(error);
     }
   };
-  const inOrg = async <T>(context: RpcContext, fn: (orgId: string, actor: { type: 'user'; userId: string }) => Promise<T>) =>
-    guard(async () => fn(await resolveOrg(runtime, context.user, context.orgSlug), { type: 'user', userId: context.user.userId }));
+  const inOrg = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor) => Promise<T>) =>
+    guard(async () => fn(await resolveOrg(runtime, context.user, context.orgSlug), actorOf(context.user)));
 
   const router = os.router({
     me: {
