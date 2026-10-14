@@ -10,11 +10,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { assertSystemContextAccess, createDb, createPool, type Database, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { DomainError, Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
+import { DomainError, Runtime, fileKey, inboundKey, newInboundBlobId, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries, recordExtractionFailure } from '@crove/mod-finance';
 import { actorOf, createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
+import { processInboundEmail } from '../src/inbound.ts';
 import { migrateJobs, startWorker } from '../src/worker.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -30,6 +31,12 @@ class MemoryStore implements BlobStore {
     const b = this.blobs.get(key);
     if (!b) throw new Error('missing blob');
     return b;
+  }
+  async delete(key: string) {
+    this.blobs.delete(key);
+  }
+  keys(prefix: string) {
+    return [...this.blobs.keys()].filter((k) => k.startsWith(prefix));
   }
 }
 
@@ -514,7 +521,7 @@ suite('kernel on PostgreSQL', () => {
       'crove_kernel.enter_system_context(uuid)',
       'crove_kernel.enter_context(uuid,uuid)',
       'crove_kernel.org_by_inbound_token(text)',
-      'crove_kernel.inbound_enqueue(text,bigint,text)',
+      'crove_kernel.inbound_enqueue(text,text,bigint,text)',
       'crove_kernel.inbound_claim(integer)',
       'crove_kernel.outbox_claim(integer)',
     ];
@@ -531,7 +538,7 @@ suite('kernel on PostgreSQL', () => {
       'crove_kernel.enter_system_context(uuid)': ['crove_worker'],
       'crove_kernel.enter_context(uuid,uuid)': ['crove_app'],
       'crove_kernel.org_by_inbound_token(text)': ['crove_worker'],
-      'crove_kernel.inbound_enqueue(text,bigint,text)': ['crove_app'],
+      'crove_kernel.inbound_enqueue(text,text,bigint,text)': ['crove_app'],
       'crove_kernel.inbound_claim(integer)': ['crove_worker'],
       'crove_kernel.outbox_claim(integer)': ['crove_worker'],
     });
@@ -556,6 +563,34 @@ suite('kernel on PostgreSQL', () => {
     });
     expect(entered).toEqual({ org: orgA, user: null });
 
+    // No crove_kernel function is executable by PUBLIC.
+    await withAdmin(async (admin) => {
+      const { rows } = await admin.query(
+        `SELECT p.proname FROM pg_proc p, aclexplode(p.proacl) a WHERE a.grantee = 0 AND p.pronamespace = 'crove_kernel'::regnamespace`,
+      );
+      expect(rows).toEqual([]);
+    });
+
+    // The session_user check holds on its own: even with EXECUTE granted to crove_app (rolled back), it refuses.
+    await withAdmin(async (admin) => {
+      await admin.query('BEGIN');
+      try {
+        await admin.query('GRANT EXECUTE ON FUNCTION crove_kernel.enter_system_context(uuid) TO crove_app');
+        await admin.query('SET SESSION AUTHORIZATION crove_app');
+        await expect(admin.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgA])).rejects.toMatchObject({
+          code: '42501',
+          message: 'SYSTEM_CONTEXT_WORKER_ONLY',
+        });
+      } finally {
+        await admin.query('ROLLBACK');
+      }
+      const { rows } = await admin.query<{ can: boolean; who: string }>(
+        `SELECT has_function_privilege('crove_app', 'crove_kernel.enter_system_context(uuid)', 'EXECUTE') AS can, session_user AS who`,
+      );
+      expect(rows[0]).toMatchObject({ can: false });
+      expect(rows[0]?.who).not.toBe('crove_app');
+    });
+
     // A more privileged definer granted to the API cannot reach it either: the check is on session_user.
     await withAdmin(async (admin) => {
       await admin.query(`CREATE FUNCTION public.t5_probe(p uuid) RETURNS void LANGUAGE sql SECURITY DEFINER
@@ -573,8 +608,10 @@ suite('kernel on PostgreSQL', () => {
     // The startup guards agree with the grants.
     await expect(assertSystemContextAccess(pool, 'denied')).resolves.toBeUndefined();
     await expect(assertSystemContextAccess(workerPool, 'granted')).resolves.toBeUndefined();
-    await expect(assertSystemContextAccess(pool, 'granted')).rejects.toThrow(/cannot enter system context/);
-    await expect(assertSystemContextAccess(workerPool, 'denied')).rejects.toThrow(/can enter system context/);
+    await expect(assertSystemContextAccess(pool, 'granted')).rejects.toThrow(
+      /cannot enter system context \(crove_kernel.enter_system_context\(uuid\), crove_kernel.org_by_inbound_token\(text\), crove_kernel.inbound_claim\(integer\)\)/,
+    );
+    await expect(assertSystemContextAccess(workerPool, 'denied')).rejects.toThrow(/can enter system context \(crove_kernel.enter_system_context/);
   });
 
   it('files a forwarded e-invoice through the worker: the API only stores and enqueues it', { timeout: 90_000 }, async () => {
@@ -622,11 +659,11 @@ suite('kernel on PostgreSQL', () => {
       '--b1--',
       '',
     ].join('\r\n');
-    const deliver = (secret: string) =>
+    const deliver = (secret: string, body = mime) =>
       app.request('/api/inbound/email', {
         method: 'POST',
         headers: { authorization: `Bearer ${secret}`, 'content-type': 'message/rfc822', 'x-crove-recipient': `${token}@in.test` },
-        body: mime,
+        body,
       });
     const count = (query: string, params: unknown[]) =>
       withAdmin(async (admin) => Number((await admin.query<{ n: string }>(query, params)).rows[0]?.n ?? 0));
@@ -655,8 +692,23 @@ suite('kernel on PostgreSQL', () => {
     // A retried delivery while the message is still pending is absorbed.
     expect((await deliver(inboundSecret)).status).toBe(202);
     // Nothing reached the tenant yet: the API stored the raw message and queued it, and did not parse it.
+    // The duplicate delivery's blob was deleted again, so one blob backs the one pending row.
     expect(await pending()).toBe(1);
+    expect(store.keys('inbound/')).toHaveLength(1);
     expect(await count('SELECT count(*) AS n FROM crove_kernel.inbound_message WHERE org_id = $1', [orgA])).toBe(0);
+
+    // Backpressure: past 10000 pending messages the API answers 503 and keeps nothing.
+    await withAdmin((admin) =>
+      admin.query(`INSERT INTO crove_kernel.inbound_pending (blob_id, raw_sha256, size_bytes)
+        SELECT encode(sha256(('filler-' || i)::bytea), 'hex'), encode(sha256(('filler-' || i)::bytea), 'hex'), 1
+        FROM generate_series(1, 10000) i`),
+    );
+    const overloaded = await deliver(inboundSecret, mime.replace('hd-1240@', 'hd-1240-again@'));
+    expect(overloaded.status).toBe(503);
+    expect(await overloaded.json()).toMatchObject({ code: 'OVERLOADED' });
+    expect(store.keys('inbound/')).toHaveLength(1);
+    await withAdmin((admin) => admin.query(`DELETE FROM crove_kernel.inbound_pending WHERE size_bytes = 1`));
+    expect(await pending()).toBe(1);
 
     await migrateJobs(adminUrl);
     const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: null, inboundDomain: 'in.test' });
@@ -664,6 +716,8 @@ suite('kernel on PostgreSQL', () => {
       await until(async () => (await emailProposals()) === 1);
       expect(await pending()).toBe(0);
       expect(await receiveAudits()).toBe(1);
+      // Filed, so the raw message is deleted.
+      await until(async () => store.keys('inbound/').length === 0);
       const inbox = await runtime.query<Array<{ title: string; total: string | null }>>('kernel.inbox.list', {}, { actor: asUser(users.owner), orgId: orgA });
       expect(inbox.some((p) => p.total === '1980000')).toBe(true);
 
@@ -672,8 +726,20 @@ suite('kernel on PostgreSQL', () => {
       await until(async () => (await receiveAudits()) === 2);
       expect(await count(`SELECT count(*) AS n FROM crove_kernel.inbound_message WHERE org_id = $1 AND message_id LIKE '%hd-1240@vendor.example%'`, [orgA])).toBe(1);
       expect(await emailProposals()).toBe(1);
+      await until(async () => store.keys('inbound/').length === 0);
     } finally {
       await stop();
+    }
+
+    // The worker refuses a blob that does not match the size or hash the API enqueued.
+    const blobId = newInboundBlobId();
+    const raw = new TextEncoder().encode(mime);
+    await store.put(inboundKey(blobId), raw);
+    const job = { blobId, sha256: sha256Hex(raw), sizeBytes: raw.byteLength, recipient: `${token}@in.test` };
+    for (const tampered of [{ ...job, sizeBytes: raw.byteLength + 1 }, { ...job, sha256: sha256Hex('other') }]) {
+      await expect(processInboundEmail({ runtime: workerRuntime, store, domain: 'in.test' }, tampered)).rejects.toMatchObject({
+        code: 'INBOUND_BLOB_MISMATCH',
+      });
     }
   });
 });

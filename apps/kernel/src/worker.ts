@@ -3,10 +3,10 @@ import { sql } from 'kysely';
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
-import { DomainError, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { DomainError, inboundKey, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import type { InvoiceExtractor } from '@crove/agent';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
-import { processInboundEmail } from './inbound.ts';
+import { processInboundEmail, type InboundJob } from './inbound.ts';
 
 export const JOB_SCHEMA = 'crove_jobs';
 export const QUEUES = { extract: 'finance-file-extract', inbound: 'kernel-inbound-email' } as const;
@@ -15,7 +15,9 @@ const INBOUND_RETRY_LIMIT = 3;
 
 interface InboundRow {
   seq: string;
+  blob_id: string;
   raw_sha256: string;
+  size_bytes: string;
   recipient: string;
 }
 
@@ -53,21 +55,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     }
   });
 
-  await boss.work<{ sha256: string; recipient: string | null }>(QUEUES.inbound, { batchSize: 1 }, async ([job]) => {
+  // The raw message is deleted once it is filed or dropped; after the last failed attempt it is kept for
+  // investigation (each delivery owns its blob, so no other job can still need it).
+  await boss.work<InboundJob>(QUEUES.inbound, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
-    const { sha256, recipient } = job.data;
+    const label = job.data.sha256.slice(0, 12);
     try {
-      const result = await processInboundEmail({ runtime: deps.runtime, store: deps.store, domain: deps.inboundDomain }, sha256, recipient);
-      console.log(`[inbound] message ${sha256.slice(0, 12)}: ${result.duplicate ? 'duplicate' : `${result.fileIds.length} file(s)`}`);
+      const result = await processInboundEmail({ runtime: deps.runtime, store: deps.store, domain: deps.inboundDomain }, job.data);
+      console.log(`[inbound] message ${label}: ${result.duplicate ? 'duplicate' : `${result.fileIds.length} file(s)`}`);
     } catch (error) {
       // A message no org can receive (unknown or closed recipient, invalid content) is dropped, not retried.
-      if (error instanceof DomainError && error.status !== 409 && error.status < 500) {
-        console.warn(`[inbound] message ${sha256.slice(0, 12)} dropped: ${error.code}`);
-        return;
+      if (!(error instanceof DomainError && error.status !== 409 && error.status < 500)) {
+        console.error(`[inbound] message ${label} attempt ${job.retryCount + 1}`, error);
+        throw error;
       }
-      console.error(`[inbound] message ${sha256.slice(0, 12)} attempt ${job.retryCount + 1}`, error);
-      throw error;
+      console.warn(`[inbound] message ${label} dropped: ${error.code}`);
     }
+    await deps.store.delete(inboundKey(job.data.blobId));
   });
 
   let running = false;
@@ -103,8 +107,13 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
             rows.map((row) =>
               boss.send(
                 QUEUES.inbound,
-                { sha256: row.raw_sha256, recipient: row.recipient || null },
-                { singletonKey: `${row.raw_sha256}:${row.recipient}`, retryLimit: INBOUND_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
+                {
+                  blobId: row.blob_id,
+                  sha256: row.raw_sha256,
+                  sizeBytes: Number(row.size_bytes),
+                  recipient: row.recipient || null,
+                } satisfies InboundJob,
+                { singletonKey: row.blob_id, retryLimit: INBOUND_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
               ),
             ),
           );

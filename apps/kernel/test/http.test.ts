@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { LocalDiskStore, inboundKey, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { DomainError, LocalDiskStore, inboundKey, newInboundBlobId, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 
@@ -86,6 +86,8 @@ describe('auth proxy', () => {
 describe('inbound email on the API', () => {
   const INBOUND_SECRET = 'y'.repeat(32);
   let touched: string[] = [];
+  // What the enqueue definer answers: true (queued), false (already pending) or an error.
+  let enqueue: () => boolean = () => true;
   const app = createHttpApp({
     config: loadConfig({
       DATABASE_URL: 'postgres://localhost/x',
@@ -97,6 +99,7 @@ describe('inbound email on the API', () => {
     runtime: {
       orgless: async () => {
         touched.push('enqueue');
+        return enqueue();
       },
     } as unknown as Runtime,
     store: {
@@ -104,6 +107,9 @@ describe('inbound email on the API', () => {
         touched.push(key);
       },
       get: async () => new Uint8Array(),
+      delete: async (key: string) => {
+        touched.push(`delete ${key}`);
+      },
     },
     authenticate: async () => {
       throw new Error('not used');
@@ -121,6 +127,27 @@ describe('inbound email on the API', () => {
     expect(touched).toEqual([expect.stringMatching(/^inbound\/[0-9a-f]{64}$/), 'enqueue']);
   });
 
+  it('deletes its blob again when the message is already pending or the backlog is full', async () => {
+    const headers = { authorization: `Bearer ${INBOUND_SECRET}` };
+    try {
+      touched = [];
+      enqueue = () => false;
+      expect((await deliver(headers)).status).toBe(202);
+      expect(touched).toEqual([expect.stringMatching(/^inbound\//), 'enqueue', `delete ${touched[0]}`]);
+
+      touched = [];
+      enqueue = () => {
+        throw new DomainError('OVERLOADED', 503, 'busy');
+      };
+      const response = await deliver(headers);
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ code: 'OVERLOADED' });
+      expect(touched).toEqual([expect.stringMatching(/^inbound\//), 'enqueue', `delete ${touched[0]}`]);
+    } finally {
+      enqueue = () => true;
+    }
+  });
+
   it('refuses a wrong secret, an empty body and a malformed address before storing anything', async () => {
     touched = [];
     expect((await deliver({ authorization: 'Bearer nope' })).status).toBe(401);
@@ -134,8 +161,12 @@ describe('inbound email on the API', () => {
     try {
       const store = new LocalDiskStore(root);
       const bytes = new TextEncoder().encode('raw message');
-      await store.put(inboundKey(sha256Hex(bytes)), bytes);
-      expect(await store.get(inboundKey(sha256Hex(bytes)))).toEqual(bytes);
+      const key = inboundKey(newInboundBlobId());
+      await store.put(key, bytes);
+      expect(await store.get(key)).toEqual(bytes);
+      await store.delete(key);
+      await expect(store.get(key)).rejects.toThrow();
+      await expect(store.delete(key)).resolves.toBeUndefined();
       await expect(store.put('inbound/../escape', bytes)).rejects.toThrow(/invalid storage key/);
     } finally {
       await rm(root, { recursive: true, force: true });

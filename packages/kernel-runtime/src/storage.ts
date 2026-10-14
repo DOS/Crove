@@ -1,11 +1,13 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 
 // Object storage adapter. Local disk is the default; S3-compatible stores implement the same interface.
 export interface BlobStore {
   put(key: string, bytes: Uint8Array, contentType: string): Promise<void>;
   get(key: string): Promise<Uint8Array>;
+  // Removes the blob; a missing key is not an error.
+  delete(key: string): Promise<void>;
 }
 
 export function sha256Hex(bytes: Uint8Array | string): string {
@@ -16,9 +18,14 @@ export function fileKey(orgId: string, sha256: string): string {
   return `org/${orgId}/${sha256}`;
 }
 
-// Raw inbound email, stored by the API before any org is known; only the worker reads it.
-export function inboundKey(sha256: string): string {
-  return `inbound/${sha256}`;
+// Raw inbound email, stored by the API before any org is known, under a random id per delivery so the
+// worker can delete it once handled without counting references. Only the worker reads it.
+export function inboundKey(blobId: string): string {
+  return `inbound/${blobId}`;
+}
+
+export function newInboundBlobId(): string {
+  return randomBytes(32).toString('hex');
 }
 
 export class LocalDiskStore implements BlobStore {
@@ -45,5 +52,9 @@ export class LocalDiskStore implements BlobStore {
 
   async get(key: string): Promise<Uint8Array> {
     return new Uint8Array(await readFile(this.path(key)));
+  }
+
+  async delete(key: string): Promise<void> {
+    await rm(this.path(key), { force: true });
   }
 }

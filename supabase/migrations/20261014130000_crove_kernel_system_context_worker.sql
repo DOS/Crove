@@ -19,8 +19,12 @@
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS crove_kernel.inbound_pending (
   seq bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  -- Random id of this delivery's blob (inbound/<blob_id>): each row owns its blob, so the worker can delete
+  -- it once the message is handled without counting references.
+  blob_id text NOT NULL UNIQUE CHECK (blob_id ~ '^[0-9a-f]{64}$'),
+  -- Hash and size of the raw message; the worker refuses a blob that does not match both.
   raw_sha256 text NOT NULL CHECK (raw_sha256 ~ '^[0-9a-f]{64}$'),
-  size_bytes bigint NOT NULL CHECK (size_bytes > 0),
+  size_bytes bigint NOT NULL CHECK (size_bytes BETWEEN 1 AND 41943040),
   -- Envelope recipient from the mail worker ('' when it sent none); the worker falls back to the headers.
   recipient text NOT NULL DEFAULT '' CHECK (length(recipient) <= 320),
   received_at timestamptz NOT NULL DEFAULT now(),
@@ -29,15 +33,20 @@ CREATE TABLE IF NOT EXISTS crove_kernel.inbound_pending (
 REVOKE ALL ON crove_kernel.inbound_pending FROM PUBLIC;
 ALTER TABLE crove_kernel.inbound_pending ENABLE ROW LEVEL SECURITY;
 
--- Records a raw message the API stored under its sha256, for the worker. Reads nothing and writes no tenant
--- data; a repeated delivery of the same message to the same recipient while it is pending is a no-op.
-CREATE OR REPLACE FUNCTION crove_kernel.inbound_enqueue(p_raw_sha256 text, p_size_bytes bigint, p_recipient text)
+-- Records a raw message the API stored as inbound/<blob_id>, for the worker. Reads nothing and writes no
+-- tenant data. Returns false when the same message to the same recipient is already pending (the caller then
+-- deletes its blob). The API role is not trusted with volume: past 10000 pending messages it raises 53400
+-- (configuration_limit_exceeded), which the API answers with 503.
+CREATE OR REPLACE FUNCTION crove_kernel.inbound_enqueue(p_blob_id text, p_raw_sha256 text, p_size_bytes bigint, p_recipient text)
 RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v_new boolean;
 BEGIN
-  INSERT INTO crove_kernel.inbound_pending (raw_sha256, size_bytes, recipient)
-  VALUES (p_raw_sha256, p_size_bytes, lower(coalesce(p_recipient, '')))
+  IF (SELECT count(*) FROM (SELECT 1 FROM crove_kernel.inbound_pending LIMIT 10001) s) > 10000 THEN
+    RAISE EXCEPTION 'INBOUND_BACKLOG' USING ERRCODE = '53400';
+  END IF;
+  INSERT INTO crove_kernel.inbound_pending (blob_id, raw_sha256, size_bytes, recipient)
+  VALUES (p_blob_id, p_raw_sha256, p_size_bytes, lower(coalesce(p_recipient, '')))
   ON CONFLICT (raw_sha256, recipient) DO NOTHING;
   v_new := FOUND;
   PERFORM pg_catalog.pg_notify('crove_outbox', '');
@@ -46,13 +55,13 @@ END $$;
 
 -- Claims pending inbound mail for the worker relay (system only).
 CREATE OR REPLACE FUNCTION crove_kernel.inbound_claim(p_limit int)
-RETURNS TABLE (seq bigint, raw_sha256 text, recipient text)
+RETURNS TABLE (seq bigint, blob_id text, raw_sha256 text, size_bytes bigint, recipient text)
 LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   DELETE FROM crove_kernel.inbound_pending p
   WHERE p.seq IN (
     SELECT q.seq FROM crove_kernel.inbound_pending q ORDER BY q.seq LIMIT p_limit FOR UPDATE SKIP LOCKED
   )
-  RETURNING p.seq, p.raw_sha256, p.recipient
+  RETURNING p.seq, p.blob_id, p.raw_sha256, p.size_bytes, p.recipient
 $$;
 
 -- Same contract as the bootstrap version, plus the session_user binding. CREATE OR REPLACE keeps owner and ACL.
@@ -77,7 +86,7 @@ REVOKE ALL ON FUNCTION
   crove_kernel.enter_system_context(uuid),
   crove_kernel.org_by_inbound_token(text),
   crove_kernel.enter_context(uuid, uuid),
-  crove_kernel.inbound_enqueue(text, bigint, text),
+  crove_kernel.inbound_enqueue(text, text, bigint, text),
   crove_kernel.inbound_claim(int)
 FROM PUBLIC, crove_tenant, crove_app, crove_worker;
 
@@ -89,5 +98,5 @@ TO crove_worker;
 
 GRANT EXECUTE ON FUNCTION
   crove_kernel.enter_context(uuid, uuid),
-  crove_kernel.inbound_enqueue(text, bigint, text)
+  crove_kernel.inbound_enqueue(text, text, bigint, text)
 TO crove_app;
