@@ -102,7 +102,7 @@ export function Suite() {
             {t.suite.titleEnd}
           </h2>
 
-          <p className="text-zinc-600 dark:text-zinc-300 text-sm sm:text-base leading-relaxed">
+          <p className="text-zinc-600 dark:text-zinc-300 text-sm sm:text-base leading-relaxed sm:leading-6">
             {t.suite.subtitle}
           </p>
         </div>
@@ -122,13 +122,13 @@ export function Suite() {
               >
                 {/* Background decorative corner glow */}
                 <div
-                  className={`absolute -top-12 -right-12 w-44 h-44 bg-gradient-to-br ${app.gradient} opacity-10 blur-2xl rounded-full pointer-events-none group-hover:opacity-20 transition-opacity duration-300`}
+                  className={`absolute -top-12 -right-12 w-44 h-44 bg-linear-to-br ${app.gradient} opacity-10 blur-2xl rounded-full pointer-events-none group-hover:opacity-20 transition-opacity duration-300`}
                 />
 
                 <div className="space-y-4 relative z-10">
                   <div className="flex items-center justify-between">
                     <div
-                      className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${app.gradient} flex items-center justify-center text-white shadow-md shadow-brand-500/20 group-hover:scale-105 transition-transform duration-300`}
+                      className={`w-12 h-12 rounded-2xl bg-linear-to-br ${app.gradient} flex items-center justify-center text-white shadow-md shadow-brand-500/20 group-hover:scale-105 transition-transform duration-300`}
                     >
                       <Icon className="w-6 h-6" />
                     </div>
@@ -145,7 +145,7 @@ export function Suite() {
                       <span>{app.title}</span>
                       <ArrowUpRight className="w-4 h-4 text-zinc-400 group-hover:text-brand-500 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform duration-200" />
                     </h3>
-                    <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
+                    <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed sm:leading-5">
                       {app.desc}
                     </p>
                   </div>

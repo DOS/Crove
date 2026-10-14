@@ -34,7 +34,7 @@ export function LanguageToggle({ className = '' }: { className?: string }) {
       <button
         onClick={() => setIsOpen(!isOpen)}
         aria-label="Change Language"
-        className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-zinc-200/90 dark:border-zinc-800/90 bg-white/80 dark:bg-zinc-900/80 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 hover:text-brand-600 dark:hover:text-brand-400 hover:border-brand-300 dark:hover:border-brand-500/40 text-xs font-semibold backdrop-blur-md shadow-sm transition-all duration-200"
+        className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-zinc-200/90 dark:border-zinc-800/90 bg-white/80 dark:bg-zinc-900/80 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 hover:text-brand-600 dark:hover:text-brand-400 hover:border-brand-300 dark:hover:border-brand-500/40 text-xs font-semibold backdrop-blur-md shadow-xs transition-all duration-200"
       >
         <span className="text-sm">{current.flag}</span>
         <span className="font-bold">{current.short}</span>

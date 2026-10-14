@@ -48,7 +48,7 @@ export function Features() {
         <div className="mt-14 grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* Card 1 - AI Repurposer (Span 2 cols on md) */}
           <div className="md:col-span-2 p-6 sm:p-8 rounded-3xl border border-zinc-200/90 dark:border-zinc-800/80 bg-white/80 dark:bg-[#0f0f1c]/80 backdrop-blur-xl relative overflow-hidden flex flex-col justify-between group hover:border-brand-400 dark:hover:border-brand-500/50 transition-all duration-300">
-            <div className="absolute top-0 right-0 w-72 h-72 bg-gradient-to-bl from-brand-500/15 via-transparent to-transparent rounded-full pointer-events-none" />
+            <div className="absolute top-0 right-0 w-72 h-72 bg-linear-to-bl from-brand-500/15 via-transparent to-transparent rounded-full pointer-events-none" />
 
             <div className="space-y-4 max-w-xl z-10">
               <div className="w-11 h-11 rounded-2xl bg-brand-600 text-white flex items-center justify-center shadow-lg shadow-brand-500/25">
@@ -63,7 +63,7 @@ export function Features() {
                 {t.features.card1Title}
               </h3>
 
-              <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
+              <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed sm:leading-5">
                 {t.features.card1Desc}
               </p>
             </div>
@@ -100,7 +100,7 @@ export function Features() {
           {/* Card 2 - Visual Drag & Drop Calendar */}
           <div className="p-6 sm:p-8 rounded-3xl border border-zinc-200/90 dark:border-zinc-800/80 bg-white/80 dark:bg-[#0f0f1c]/80 backdrop-blur-xl relative overflow-hidden flex flex-col justify-between group hover:border-brand-400 dark:hover:border-brand-500/50 transition-all duration-300">
             <div className="space-y-4 z-10">
-              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center shadow-lg shadow-emerald-500/25">
+              <div className="w-11 h-11 rounded-2xl bg-linear-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center shadow-lg shadow-emerald-500/25">
                 <Calendar className="w-5 h-5" />
               </div>
 
@@ -112,7 +112,7 @@ export function Features() {
                 {t.features.card2Title}
               </h3>
 
-              <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
+              <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed sm:leading-5">
                 {t.features.card2Desc}
               </p>
             </div>
@@ -128,7 +128,7 @@ export function Features() {
           {/* Card 3 - Video Automation (TikTok & Reels) */}
           <div className="p-6 sm:p-8 rounded-3xl border border-zinc-200/90 dark:border-zinc-800/80 bg-white/80 dark:bg-[#0f0f1c]/80 backdrop-blur-xl relative overflow-hidden flex flex-col justify-between group hover:border-brand-400 dark:hover:border-brand-500/50 transition-all duration-300">
             <div className="space-y-4 z-10">
-              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-rose-500 to-pink-600 text-white flex items-center justify-center shadow-lg shadow-rose-500/25">
+              <div className="w-11 h-11 rounded-2xl bg-linear-to-br from-rose-500 to-pink-600 text-white flex items-center justify-center shadow-lg shadow-rose-500/25">
                 <Video className="w-5 h-5" />
               </div>
 
@@ -140,7 +140,7 @@ export function Features() {
                 {t.features.card3Title}
               </h3>
 
-              <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
+              <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed sm:leading-5">
                 {t.features.card3Desc}
               </p>
             </div>
@@ -161,7 +161,7 @@ export function Features() {
           {/* Card 4 - Cross-channel Analytics */}
           <div className="p-6 sm:p-8 rounded-3xl border border-zinc-200/90 dark:border-zinc-800/80 bg-white/80 dark:bg-[#0f0f1c]/80 backdrop-blur-xl relative overflow-hidden flex flex-col justify-between group hover:border-brand-400 dark:hover:border-brand-500/50 transition-all duration-300">
             <div className="space-y-4 z-10">
-              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white flex items-center justify-center shadow-lg shadow-indigo-500/25">
+              <div className="w-11 h-11 rounded-2xl bg-linear-to-br from-indigo-500 to-purple-600 text-white flex items-center justify-center shadow-lg shadow-indigo-500/25">
                 <BarChart3 className="w-5 h-5" />
               </div>
 
@@ -173,7 +173,7 @@ export function Features() {
                 {t.features.card4Title}
               </h3>
 
-              <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
+              <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed sm:leading-5">
                 {t.features.card4Desc}
               </p>
             </div>
@@ -189,7 +189,7 @@ export function Features() {
           {/* Card 5 - Agency & Workspaces */}
           <div className="p-6 sm:p-8 rounded-3xl border border-zinc-200/90 dark:border-zinc-800/80 bg-white/80 dark:bg-[#0f0f1c]/80 backdrop-blur-xl relative overflow-hidden flex flex-col justify-between group hover:border-brand-400 dark:hover:border-brand-500/50 transition-all duration-300">
             <div className="space-y-4 z-10">
-              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 text-white flex items-center justify-center shadow-lg shadow-amber-500/25">
+              <div className="w-11 h-11 rounded-2xl bg-linear-to-br from-amber-500 to-orange-600 text-white flex items-center justify-center shadow-lg shadow-amber-500/25">
                 <Users2 className="w-5 h-5" />
               </div>
 
@@ -201,7 +201,7 @@ export function Features() {
                 {t.features.card5Title}
               </h3>
 
-              <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
+              <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed sm:leading-5">
                 {t.features.card5Desc}
               </p>
             </div>

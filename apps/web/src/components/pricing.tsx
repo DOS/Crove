@@ -140,7 +140,7 @@ export function Pricing() {
             <button
               onClick={() => setIsYearly(!isYearly)}
               aria-label="Toggle Billing Interval"
-              className="w-13 h-7 rounded-full bg-zinc-200 dark:bg-zinc-800 p-1 relative transition-colors focus:outline-none"
+              className="h-7 rounded-full bg-zinc-200 dark:bg-zinc-800 p-1 relative transition-colors focus:outline-hidden"
             >
               <div
                 className={`w-5 h-5 rounded-full bg-brand-600 shadow-md transition-transform duration-200 ${
@@ -177,7 +177,7 @@ export function Pricing() {
             >
               {/* Highlight badge */}
               {plan.highlighted && (
-                <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full bg-gradient-to-r from-brand-600 to-purple-600 text-white text-xs font-extrabold shadow-md uppercase tracking-wider">
+                <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full bg-linear-to-r from-brand-600 to-purple-600 text-white text-xs font-extrabold shadow-md uppercase tracking-wider">
                   {plan.badge}
                 </div>
               )}
@@ -213,13 +213,13 @@ export function Pricing() {
 
                 {/* Feature List */}
                 <div className="space-y-3 pt-2">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                  <span className="block text-[11px] font-bold uppercase tracking-wider text-zinc-400">
                     Included:
                   </span>
                   <ul className="space-y-2.5 text-xs text-zinc-700 dark:text-zinc-300">
                     {plan.features.map((feat, fIdx) => (
                       <li key={fIdx} className="flex items-start gap-2.5">
-                        <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                        <Check className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
                         <span>{feat}</span>
                       </li>
                     ))}
@@ -233,7 +233,7 @@ export function Pricing() {
                   href={`${APP_URL}/auth/login`}
                   className={`w-full py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all ${
                     plan.highlighted
-                      ? 'bg-gradient-to-r from-brand-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 text-white shadow-lg shadow-brand-500/25 hover:scale-[1.02] active:scale-[0.98]'
+                      ? 'bg-linear-to-r from-brand-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 text-white shadow-lg shadow-brand-500/25 hover:scale-[1.02] active:scale-[0.98]'
                       : 'bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-900 dark:text-white border border-zinc-200 dark:border-zinc-700'
                   }`}
                 >

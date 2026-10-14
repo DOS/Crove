@@ -7,7 +7,7 @@ import { I18nProvider } from '../i18n/i18n-context';
 const plusJakartaSans = Plus_Jakarta_Sans({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700', '800'],
-  variable: '--font-sans',
+  variable: '--font-jakarta',
   display: 'swap',
 });
 

@@ -37,17 +37,17 @@ export function Hero() {
   return (
     <section className="relative pt-28 pb-16 md:pt-36 md:pb-24 overflow-hidden">
       {/* Background ambient lighting effects */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] md:w-[850px] h-[400px] md:h-[550px] bg-gradient-to-tr from-brand-600/20 via-brand-500/12 to-fuchsia-500/10 blur-[130px] rounded-full pointer-events-none -z-10" />
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] md:w-[850px] h-[400px] md:h-[550px] bg-linear-to-tr from-brand-600/20 via-brand-500/12 to-fuchsia-500/10 blur-[130px] rounded-full pointer-events-none -z-10" />
       <div className="absolute top-12 right-12 w-64 h-64 bg-brand-500/10 blur-[90px] rounded-full pointer-events-none -z-10" />
       <div className="absolute bottom-10 left-10 w-72 h-72 bg-purple-600/10 blur-[100px] rounded-full pointer-events-none -z-10" />
 
       {/* Grid Pattern overlay */}
-      <div className="absolute inset-0 bg-grid-pattern opacity-50 dark:opacity-40 -z-10 [mask-image:radial-gradient(ellipse_at_center,transparent_20%,black_75%)]" />
+      <div className="absolute inset-0 bg-grid-pattern opacity-50 dark:opacity-40 -z-10 mask-[radial-gradient(ellipse_at_center,transparent_20%,black_75%)]" />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center max-w-4xl mx-auto space-y-5">
           {/* Top announcement pill */}
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-brand-200 dark:border-brand-500/30 bg-white/80 dark:bg-brand-950/40 backdrop-blur-md shadow-sm shadow-brand-500/10 text-xs font-semibold text-brand-700 dark:text-brand-300 animate-fade-in">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-brand-200 dark:border-brand-500/30 bg-white/80 dark:bg-brand-950/40 backdrop-blur-md shadow-xs shadow-brand-500/10 text-xs font-semibold text-brand-700 dark:text-brand-300 animate-fade-in">
             <span className="flex h-2 w-2 relative">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-brand-500"></span>
@@ -60,7 +60,7 @@ export function Hero() {
           </div>
 
           {/* Main Headline */}
-          <h1 className="text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-zinc-900 dark:text-white leading-[1.12]">
+          <h1 className="text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-zinc-900 dark:text-white leading-[1.12] sm:leading-none lg:leading-none">
             {t.hero.titleStart}
             <span className="text-gradient-purple block sm:inline">
               {t.hero.titleGradient}
@@ -69,7 +69,7 @@ export function Hero() {
           </h1>
 
           {/* Subheading */}
-          <p className="text-base sm:text-lg lg:text-xl text-zinc-600 dark:text-zinc-300 max-w-3xl mx-auto font-normal leading-relaxed">
+          <p className="text-base sm:text-lg lg:text-xl text-zinc-600 dark:text-zinc-300 max-w-3xl mx-auto font-normal leading-relaxed sm:leading-7 lg:leading-7">
             {t.hero.subtitle}
           </p>
 
@@ -77,7 +77,7 @@ export function Hero() {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-3">
             <a
               href={`${APP_URL}/auth/login`}
-              className="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-gradient-to-r from-brand-600 via-brand-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 text-white font-bold text-sm shadow-lg shadow-brand-500/25 hover:shadow-brand-500/40 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2 group"
+              className="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-linear-to-r from-brand-600 via-brand-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 text-white font-bold text-sm shadow-lg shadow-brand-500/25 hover:shadow-brand-500/40 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2 group"
             >
               <Sparkles className="w-4 h-4 text-brand-200" />
               <span>{t.hero.startFree}</span>
@@ -86,7 +86,7 @@ export function Hero() {
 
             <Link
               href="#suite"
-              className="w-full sm:w-auto px-6 py-3.5 rounded-xl border border-zinc-200/90 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/60 text-zinc-800 dark:text-zinc-200 hover:text-brand-600 dark:hover:text-white hover:border-brand-300 dark:hover:border-brand-500/40 font-semibold text-sm backdrop-blur-md hover:bg-white dark:hover:bg-zinc-900 shadow-sm transition-all duration-200 flex items-center justify-center gap-2"
+              className="w-full sm:w-auto px-6 py-3.5 rounded-xl border border-zinc-200/90 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/60 text-zinc-800 dark:text-zinc-200 hover:text-brand-600 dark:hover:text-white hover:border-brand-300 dark:hover:border-brand-500/40 font-semibold text-sm backdrop-blur-md hover:bg-white dark:hover:bg-zinc-900 shadow-xs transition-all duration-200 flex items-center justify-center gap-2"
             >
               <Layers className="w-4 h-4 text-brand-500" />
               <span>{t.hero.watchDemo}</span>
@@ -113,7 +113,7 @@ export function Hero() {
         {/* Hero Interactive App Mockup Preview (Linear/Raycast Business OS Style) */}
         <div className="mt-12 sm:mt-16 relative max-w-5xl mx-auto">
           {/* Glowing backdrop border */}
-          <div className="absolute -inset-1 bg-gradient-to-r from-brand-600 via-purple-500 to-pink-500 rounded-3xl blur-md opacity-35 dark:opacity-50 animate-glow-pulse" />
+          <div className="absolute -inset-1 bg-linear-to-r from-brand-600 via-purple-500 to-pink-500 rounded-3xl blur-md opacity-35 dark:opacity-50 animate-glow-pulse" />
 
           {/* Main Dashboard Window */}
           <div className="relative rounded-2xl border border-zinc-200/90 dark:border-zinc-800 bg-white/95 dark:bg-[#0c0c16]/95 backdrop-blur-2xl shadow-2xl overflow-hidden">
@@ -158,7 +158,7 @@ export function Hero() {
                       <Share2 className="w-3.5 h-3.5" />
                       <span>{t.hero.mockupAppPost}</span>
                     </div>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-black/20 text-white font-mono">
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-sm bg-black/20 text-white font-mono">
                       28+
                     </span>
                   </button>
@@ -175,7 +175,7 @@ export function Hero() {
                       <Cpu className="w-3.5 h-3.5" />
                       <span>{t.hero.mockupAppFlow}</span>
                     </div>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-600 dark:text-brand-300 font-bold">
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-sm bg-brand-500/20 text-brand-600 dark:text-brand-300 font-bold">
                       AI
                     </span>
                   </button>
@@ -258,7 +258,7 @@ export function Hero() {
 
                   <a
                     href={`${APP_URL}/launches`}
-                    className="px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all"
+                    className="px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>{t.hero.mockupNewPost}</span>
@@ -270,7 +270,7 @@ export function Hero() {
                   {/* Item 1 - Video Short */}
                   <div className="p-3 rounded-xl border border-zinc-200/90 dark:border-zinc-800/90 bg-zinc-50/70 dark:bg-zinc-900/50 flex items-center justify-between gap-3 hover:border-brand-400 transition-colors">
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-rose-500/10 text-rose-600 flex items-center justify-center flex-shrink-0">
+                      <div className="w-8 h-8 rounded-lg bg-rose-500/10 text-rose-600 flex items-center justify-center shrink-0">
                         <Video className="w-4 h-4" />
                       </div>
                       <div className="min-w-0">
@@ -283,7 +283,7 @@ export function Hero() {
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-600 border border-rose-500/20">
                         TikTok 9:16
                       </span>
@@ -296,7 +296,7 @@ export function Hero() {
                   {/* Item 2 - LinkedIn + X */}
                   <div className="p-3 rounded-xl border border-zinc-200/90 dark:border-zinc-800/90 bg-zinc-50/70 dark:bg-zinc-900/50 flex items-center justify-between gap-3 hover:border-brand-400 transition-colors">
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-600 flex items-center justify-center flex-shrink-0">
+                      <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-600 flex items-center justify-center shrink-0">
                         <Share2 className="w-4 h-4" />
                       </div>
                       <div className="min-w-0">
@@ -309,7 +309,7 @@ export function Hero() {
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 border border-blue-500/20">
                         LinkedIn
                       </span>
@@ -322,7 +322,7 @@ export function Hero() {
                   {/* Item 3 - Email & CRM */}
                   <div className="p-3 rounded-xl border border-zinc-200/90 dark:border-zinc-800/90 bg-zinc-50/70 dark:bg-zinc-900/50 flex items-center justify-between gap-3 hover:border-brand-400 transition-colors">
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-purple-500/10 text-purple-600 flex items-center justify-center flex-shrink-0">
+                      <div className="w-8 h-8 rounded-lg bg-purple-500/10 text-purple-600 flex items-center justify-center shrink-0">
                         <Users2 className="w-4 h-4" />
                       </div>
                       <div className="min-w-0">
@@ -335,7 +335,7 @@ export function Hero() {
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 border border-purple-500/20">
                         Newsletter
                       </span>
@@ -344,7 +344,7 @@ export function Hero() {
                 </div>
 
                 {/* Bottom AI Copilot Status Bar */}
-                <div className="p-2.5 rounded-xl bg-gradient-to-r from-brand-600/10 via-purple-500/10 to-pink-500/10 border border-brand-500/20 flex items-center justify-between text-xs">
+                <div className="p-2.5 rounded-xl bg-linear-to-r from-brand-600/10 via-purple-500/10 to-pink-500/10 border border-brand-500/20 flex items-center justify-between text-xs">
                   <div className="flex items-center gap-2 text-brand-700 dark:text-brand-300 font-semibold">
                     <Sparkles className="w-3.5 h-3.5 text-brand-500 animate-spin" />
                     <span>{t.hero.mockupAiBadge}</span>

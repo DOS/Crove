@@ -105,7 +105,7 @@ export function InteractivePreview() {
                   onClick={() => handleTemplateChange(idx)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                     selectedTemplateIndex === idx
-                      ? 'bg-brand-600 text-white shadow-sm font-bold'
+                      ? 'bg-brand-600 text-white shadow-xs font-bold'
                       : 'bg-white dark:bg-zinc-800/80 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-700'
                   }`}
                 >
@@ -118,7 +118,7 @@ export function InteractivePreview() {
               <button
                 onClick={handleAIRefine}
                 disabled={isAIProcessing}
-                className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-brand-600 hover:from-purple-500 hover:to-brand-500 text-white text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
+                className="px-3 py-1.5 rounded-lg bg-linear-to-r from-purple-600 to-brand-600 hover:from-purple-500 hover:to-brand-500 text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
               >
                 <Sparkles className="w-3.5 h-3.5" />
                 <span>{isAIProcessing ? t.preview.aiPolishing : t.preview.aiPolishBtn}</span>
@@ -156,7 +156,7 @@ export function InteractivePreview() {
                   value={customText}
                   onChange={(e) => setCustomText(e.target.value)}
                   placeholder={t.preview.placeholder}
-                  className="w-full h-44 sm:h-52 p-3.5 rounded-2xl bg-zinc-50/70 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 text-xs sm:text-sm text-zinc-900 dark:text-white resize-none outline-none transition-all leading-relaxed"
+                  className="w-full h-44 sm:h-52 p-3.5 rounded-2xl bg-zinc-50/70 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 text-xs sm:text-sm text-zinc-900 dark:text-white resize-none outline-hidden transition-all leading-relaxed sm:leading-5"
                 />
               </div>
 
@@ -197,7 +197,7 @@ export function InteractivePreview() {
                       onClick={() => setActivePlatform(p.id)}
                       className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
                         activePlatform === p.id
-                          ? 'bg-white dark:bg-zinc-800 text-brand-600 dark:text-brand-400 shadow-sm font-bold'
+                          ? 'bg-white dark:bg-zinc-800 text-brand-600 dark:text-brand-400 shadow-xs font-bold'
                           : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-white'
                       }`}
                     >
@@ -212,7 +212,7 @@ export function InteractivePreview() {
                 {/* Author row */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-brand-600 to-purple-600 flex items-center justify-center text-white font-bold text-xs shadow-sm">
+                    <div className="w-9 h-9 rounded-full bg-linear-to-tr from-brand-600 to-purple-600 flex items-center justify-center text-white font-bold text-xs shadow-xs">
                       CR
                     </div>
                     <div>
@@ -224,13 +224,13 @@ export function InteractivePreview() {
                     </div>
                   </div>
 
-                  <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-brand-50 dark:bg-brand-950 text-brand-600 dark:text-brand-400">
+                  <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-sm bg-brand-50 dark:bg-brand-950 text-brand-600 dark:text-brand-400">
                     {activePlatform}
                   </span>
                 </div>
 
                 {/* Content body */}
-                <p className="text-xs sm:text-sm text-zinc-800 dark:text-zinc-200 leading-relaxed whitespace-pre-line line-clamp-5">
+                <p className="text-xs sm:text-sm text-zinc-800 dark:text-zinc-200 leading-relaxed sm:leading-5 whitespace-pre-line line-clamp-5">
                   {customText || t.preview.placeholder}
                 </p>
 

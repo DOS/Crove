@@ -12,7 +12,7 @@ export function CTA() {
   return (
     <section className="py-16 sm:py-24 relative overflow-hidden">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="relative rounded-3xl overflow-hidden border border-brand-500/30 bg-gradient-to-br from-[#1a103c] via-[#0b0816] to-[#15092a] p-8 sm:p-14 lg:p-18 text-center shadow-2xl shadow-brand-500/20">
+        <div className="relative rounded-3xl overflow-hidden border border-brand-500/30 bg-linear-to-br from-[#1a103c] via-[#0b0816] to-[#15092a] p-8 sm:p-14 text-center shadow-2xl shadow-brand-500/20">
           {/* Ambient Lighting inside banner */}
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[300px] bg-brand-500/30 blur-[130px] rounded-full pointer-events-none -z-10" />
           <div className="absolute inset-0 bg-grid-pattern opacity-25 pointer-events-none" />
@@ -23,13 +23,13 @@ export function CTA() {
               <span>{t.cta.pill}</span>
             </div>
 
-            <h2 className="text-3xl sm:text-5xl font-extrabold text-white tracking-tight leading-tight">
+            <h2 className="text-3xl sm:text-5xl font-extrabold text-white tracking-tight leading-tight sm:leading-none">
               {t.cta.titleStart}
               <span className="text-gradient-purple">{t.cta.titleGradient}</span>
               {t.cta.titleEnd}
             </h2>
 
-            <p className="text-xs sm:text-sm text-zinc-300 max-w-xl mx-auto leading-relaxed">
+            <p className="text-xs sm:text-sm text-zinc-300 max-w-xl mx-auto leading-relaxed sm:leading-5">
               {t.cta.subtitle}
             </p>
 

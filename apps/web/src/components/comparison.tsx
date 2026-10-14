@@ -126,7 +126,7 @@ export function Comparison() {
                         row.crove ? (
                           <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
                             <div className="w-5 h-5 rounded-full bg-emerald-500/10 flex items-center justify-center">
-                              <Check className="w-3.5 h-3.5 stroke-[3]" />
+                              <Check className="w-3.5 h-3.5 stroke-3" />
                             </div>
                             <span className="text-xs font-semibold">Tích hợp sẵn</span>
                           </div>
