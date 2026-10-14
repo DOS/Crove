@@ -223,15 +223,16 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <div class="table-wrap"><table class="fit">
   <tbody>
     <tr><td>Bản gốc</td><td>Plan bản cuối 12/10/2026, cập nhật 13/10/2026. Bản chuẩn tiếng Anh cho agent theo dõi: <code>docs/plan/crove-os-kernel.md</code>. Trang này là bản đọc tiếng Việt.</td></tr>
-    <tr><td>Đang ở</td><td><span class="b b-warn">Trước Phase 0</span> Chưa có code kernel.</td></tr>
-    <tr><td>Repo hiện có</td><td><code>main</code> @ <code>45000dc</code>: chỉ có landing page và design system (Next.js, pnpm 10.6.1, TypeScript 5.7).</td></tr>
+    <tr><td>Đang ở</td><td><span class="b b-warn">Đã merge MVP bước 1</span> (mã nguồn mở, chạy local) ngày 13/10/2026 qua PR #8, còn thiếu 2 tiêu chí hoàn thành: tiêu chí 2 (bộ test RLS chéo org sinh tự động; hiện chỉ có một test RLS viết tay cho bảng <code>file</code> và <code>party</code>) và tiêu chí 4 (test Playwright end-to-end nằm trong repo; PR #8 chỉ kiểm bằng tay qua <code>docker compose up</code>). Bước 2 (Crove Cloud) chờ owner duyệt: chi tiền, token DNS và thay đổi redirect URL bên DOS.</td></tr>
+    <tr><td>Repo hiện có</td><td><code>main</code> @ <code>44ab80a</code>: kernel (<code>apps/kernel</code>, <code>packages/*</code>), module finance, SPA Vite + TanStack Router (<code>apps/app</code>), <code>docker compose</code> kèm Supabase Auth, và landing page Next.js (<code>apps/web</code>). CI: lint, typecheck, 47 unit test và 11 test database (tính tới PR #8).</td></tr>
     <tr><td>Lược bớt</td><td>Repo <code>DOS/Crove</code> đang public, nên chi tiết nhạy cảm về bảo mật của các việc bên DOS (mục 11) chỉ nằm trong repo private DOS.Me; các dòng đó chỉ giữ mã việc, ưu tiên và cổng. Hợp đồng tích hợp mà Crove dựa vào (event và API DOS-27, DOS-7, DOS-17) vẫn ghi ở đây.</td></tr>
   </tbody>
 </table></div>
 <div class="table-wrap"><table class="fit">
   <thead><tr><th>Phase</th><th>Time-box</th><th>Trạng thái</th></tr></thead>
   <tbody>
-    <tr><td>MVP bước 1 (mã nguồn mở, local) rồi bước 2 (Crove Cloud), xem MVP</td><td>1 tuần</td><td><span class="b b-warn">đang làm</span></td></tr>
+    <tr><td>MVP bước 1 (mã nguồn mở, local), xem MVP</td><td>1 tuần</td><td><span class="b b-warn">đã merge 13/10/2026 (PR #8), còn thiếu tiêu chí 2 và 4</span></td></tr>
+    <tr><td>MVP bước 2 (Crove Cloud)</td><td>-</td><td><span class="b b-warn">chờ owner duyệt</span></td></tr>
     <tr><td>0b · Spike Accounting</td><td>2 tuần, song song</td><td><span class="b b-mute">chưa bắt đầu</span></td></tr>
     <tr><td>1 · Hoàn thiện kernel v0 (phần còn lại sau MVP)</td><td>8 tuần</td><td><span class="b b-mute">chưa bắt đầu</span></td></tr>
     <tr><td>2a · Accounting A1</td><td>10 tuần</td><td><span class="b b-mute">chưa bắt đầu</span></td></tr>
@@ -268,7 +269,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 </ol>
 <h3>MVP</h3>
 <p><strong>Bước 1, mã nguồn mở, chạy local (không tốn tiền):</strong> <code>docker compose up</code> là chạy được trọn luồng: đăng ký → tạo org → upload hoặc forward hóa đơn → XML hóa đơn điện tử đọc tất định, PDF/ảnh đọc bằng model chuẩn OpenAI bất kỳ → đề xuất trong Inbox (nhà cung cấp, chứng từ mua, bút toán TT133 gợi ý) → duyệt/sửa/từ chối → danh sách chứng từ, nhà cung cấp, bút toán → xuất Excel cho kế toán.</p>
-<p><strong>Bước 2, Crove Cloud:</strong> cùng image, cấu hình DOS (Supabase Auth của DOS, DOS.AI), deploy lên <code>app.crove.com</code>. Cần mày duyệt chi, token Cloudflare cho DNS và email, và một thay đổi bên DOS.Me (thêm <code>app.crove.com</code> vào redirect URL của Supabase Auth bên DOS).</p>
+<p><strong>Bước 2, Crove Cloud:</strong> cùng image, cấu hình DOS (Supabase Auth của DOS, DOS.AI), deploy lên <code>app.crove.com</code>. Cần owner duyệt chi, token Cloudflare cho DNS và email, và một thay đổi bên DOS.Me (thêm <code>app.crove.com</code> vào redirect URL của Supabase Auth bên DOS).</p>
 <p><strong>Làm ở bước 1:</strong></p>
 <ul>
   <li>Tách dữ liệu theo org: bảng dùng chung có <code>org_id</code>, khóa <code>(org_id, id)</code>, FK composite, RLS; <code>enter_context</code> lấy org và tác nhân từ DB (chưa ký HMAC); login role không sở hữu bảng.</li>
@@ -285,6 +286,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
   <li>Audit không sửa, không xóa được; gửi lại cùng chứng từ không tạo bản trùng.</li>
   <li>Test Playwright cho tiêu chí 1 xanh.</li>
 </ol>
+<p><strong>Việc còn lại từ PR #8 (thuộc phần hoàn thiện ở Phase 1):</strong> đưa <code>enter_system_context</code> ra khỏi role của API (email inbound đang chạy ở đó); lệnh đọc lại cho file do AI đọc; mời thành viên có bước đồng ý; xóa và đổi vai trò thành viên; xoay vòng token inbound; kiểm tra rate limit của Supabase Auth từ đầu đến cuối; chặn công thức khi xuất CSV/Excel; số thập phân chính xác trong file Excel; lưu giữ audit và offboarding.</p>
 <div class="table-wrap"><table class="fit">
   <thead><tr><th>Hoãn lại</th><th>Xem lại khi</th></tr></thead>
   <tbody>
