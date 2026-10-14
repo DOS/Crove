@@ -70,7 +70,7 @@ export function Testimonials() {
                   ))}
                 </div>
 
-                <p className="text-xs sm:text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed italic">
+                <p className="text-xs sm:text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed sm:leading-5 italic">
                   "{item.content}"
                 </p>
               </div>
@@ -78,7 +78,7 @@ export function Testimonials() {
               {/* Author Row */}
               <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800/80 flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-brand-600 to-purple-600 flex items-center justify-center text-white font-bold text-xs shadow-sm">
+                  <div className="w-9 h-9 rounded-full bg-linear-to-tr from-brand-600 to-purple-600 flex items-center justify-center text-white font-bold text-xs shadow-xs">
                     {item.avatar}
                   </div>
                   <div>
@@ -91,7 +91,7 @@ export function Testimonials() {
                   </div>
                 </div>
 
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-brand-50 dark:bg-brand-950 text-brand-600 dark:text-brand-400 border border-brand-200/50 dark:border-brand-800/50">
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-sm bg-brand-50 dark:bg-brand-950 text-brand-600 dark:text-brand-400 border border-brand-200/50 dark:border-brand-800/50">
                   {item.channels}
                 </span>
               </div>

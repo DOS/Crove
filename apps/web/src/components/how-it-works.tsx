@@ -71,7 +71,7 @@ export function HowItWorks() {
                       {step.step}
                     </span>
                     <div
-                      className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${step.gradient} flex items-center justify-center text-white shadow-md shadow-brand-500/20 group-hover:scale-105 transition-transform duration-300`}
+                      className={`w-12 h-12 rounded-2xl bg-linear-to-br ${step.gradient} flex items-center justify-center text-white shadow-md shadow-brand-500/20 group-hover:scale-105 transition-transform duration-300`}
                     >
                       <Icon className="w-6 h-6" />
                     </div>
@@ -81,7 +81,7 @@ export function HowItWorks() {
                     <h3 className="text-lg font-bold text-zinc-900 dark:text-white">
                       {step.title}
                     </h3>
-                    <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
+                    <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed sm:leading-5">
                       {step.description}
                     </p>
                   </div>

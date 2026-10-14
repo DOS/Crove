@@ -53,13 +53,13 @@ export function FAQ() {
               >
                 <button
                   onClick={() => toggle(idx)}
-                  className="w-full p-4 sm:p-5 text-left flex items-center justify-between gap-4 focus:outline-none"
+                  className="w-full p-4 sm:p-5 text-left flex items-center justify-between gap-4 focus:outline-hidden"
                 >
                   <span className="font-bold text-xs sm:text-sm text-zinc-900 dark:text-white">
                     {faq.q}
                   </span>
                   <div
-                    className={`p-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-transform duration-200 flex-shrink-0 ${
+                    className={`p-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-transform duration-200 shrink-0 ${
                       isOpen ? 'rotate-180 bg-brand-100 dark:bg-brand-950 text-brand-600 dark:text-brand-400' : ''
                     }`}
                   >
@@ -68,7 +68,7 @@ export function FAQ() {
                 </button>
 
                 {isOpen && (
-                  <div className="px-4 sm:px-5 pb-5 pt-0 text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed border-t border-zinc-100 dark:border-zinc-800/60 animate-fade-in">
+                  <div className="px-4 sm:px-5 pb-5 pt-0 text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed sm:leading-5 border-t border-zinc-100 dark:border-zinc-800/60 animate-fade-in">
                     {faq.a}
                   </div>
                 )}

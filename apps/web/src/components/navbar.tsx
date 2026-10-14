@@ -26,14 +26,14 @@ export function Navbar() {
   return (
     <header className="fixed top-0 left-0 right-0 z-50 transition-all duration-300 pt-3 px-3 sm:px-6 lg:px-8">
       <div
-        className={`max-w-7xl mx-auto rounded-2xl transition-all duration-300 px-4 sm:px-6 h-16 sm:h-18 flex items-center justify-between ${
+        className={`max-w-7xl mx-auto rounded-2xl transition-all duration-300 px-4 sm:px-6 h-16 flex items-center justify-between ${
           scrolled
             ? 'bg-white/85 dark:bg-[#0c0c16]/85 backdrop-blur-xl border border-zinc-200/90 dark:border-zinc-800/80 shadow-lg shadow-brand-950/5 dark:shadow-brand-950/20'
             : 'bg-white/50 dark:bg-zinc-950/40 backdrop-blur-md border border-zinc-200/50 dark:border-zinc-800/40'
         }`}
       >
         {/* Brand Logo with Business OS tag */}
-        <Link href="/" className="group flex items-center gap-2.5 focus:outline-none">
+        <Link href="/" className="group flex items-center gap-2.5 focus:outline-hidden">
           <CroveLogo size={34} />
           <span className="hidden sm:inline-block px-2 py-0.5 rounded-md bg-brand-500/10 text-brand-600 dark:text-brand-400 text-[10px] font-extrabold uppercase tracking-wider border border-brand-500/20">
             Business OS
@@ -107,7 +107,7 @@ export function Navbar() {
 
           <a
             href={`${APP_URL}/auth/login`}
-            className="px-4 py-2 rounded-xl bg-gradient-to-r from-brand-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 text-white font-bold text-xs shadow-md shadow-brand-500/20 hover:shadow-brand-500/35 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center gap-1.5"
+            className="px-4 py-2 rounded-xl bg-linear-to-r from-brand-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 text-white font-bold text-xs shadow-md shadow-brand-500/20 hover:shadow-brand-500/35 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center gap-1.5"
           >
             <Sparkles className="w-3.5 h-3.5 text-brand-200" />
             <span>{t.nav.getStarted}</span>
@@ -120,7 +120,7 @@ export function Navbar() {
           <ThemeToggle />
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="p-2 rounded-xl border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 focus:outline-none"
+            className="p-2 rounded-xl border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 focus:outline-hidden"
             aria-label="Toggle Menu"
           >
             {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5 text-zinc-700 dark:text-zinc-300" />}

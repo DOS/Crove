@@ -12,7 +12,7 @@ export function CroveLogo({
   return (
     <div className={`flex items-center gap-2.5 select-none ${className}`}>
       <div
-        className="relative flex items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 shadow-md shadow-brand-500/30 overflow-hidden flex-shrink-0 transition-transform duration-200 group-hover:scale-105"
+        className="relative flex items-center justify-center rounded-xl bg-linear-to-br from-brand-500 to-brand-700 shadow-md shadow-brand-500/30 overflow-hidden shrink-0 transition-transform duration-200 group-hover:scale-105"
         style={{ width: size, height: size }}
       >
         <svg

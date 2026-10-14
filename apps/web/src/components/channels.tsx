@@ -137,7 +137,7 @@ export function Channels() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div
-                      className={`w-7 h-7 rounded-lg bg-gradient-to-br ${channel.color} text-white flex items-center justify-center font-bold text-xs shadow-sm`}
+                      className={`w-7 h-7 rounded-lg bg-linear-to-br ${channel.color} text-white flex items-center justify-center font-bold text-xs shadow-xs`}
                     >
                       {channel.name.slice(0, 2)}
                     </div>
