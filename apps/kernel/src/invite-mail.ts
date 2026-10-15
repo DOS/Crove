@@ -1,8 +1,9 @@
 // The invite email (issue #129). Sent by the API right after kernel.member.invite.create commits, because only that
 // response holds the raw token: the database keeps its SHA-256, and the outbox payload is stored as plain JSON, so a
 // worker could never build the link. The trade-off: delivery is synchronous with a few retries inside the request,
-// not a durable job. If every attempt fails (or no mail server is configured) the inviter is told and still has the
-// one-time link to pass on, and a new invite for the same email replaces the old one and sends a new mail.
+// not a durable job. If every attempt fails the failure is logged (error codes only) and the answer is unchanged:
+// the inviter always sees the one-time link and can pass it on, and a new invite for the same email replaces the old
+// one and sends a new mail.
 //
 // The mail is the same whether or not the email has an account, and says nothing about one.
 import { deliver, type Delivery, type DeliverOptions, type Mailer, type OutboundMail } from './mail.ts';
@@ -35,7 +36,11 @@ function escapeHtml(value: string): string {
 
 // Names come from users (org name, display name): one line, no control characters, bounded.
 function oneLine(value: string, max = 120): string {
-  const flat = value.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ').trim();
+  // Control, line separator and format characters (bidi overrides could reorder a subject among them).
+  const flat = value
+    .replace(/\p{Cf}+/gu, '')
+    .replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ')
+    .trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
@@ -89,5 +94,6 @@ export function inviteMail(input: InviteMailInput, publicUrl: string): OutboundM
 }
 
 export function createInviteMailSender(mailer: Mailer, publicUrl: string, options: DeliverOptions = {}): SendInviteMail {
-  return (invite) => deliver(mailer, inviteMail(invite, publicUrl), { label: 'invite mail', ...options });
+  // async: a template error becomes a rejected promise, never a synchronous throw past the caller's handler.
+  return async (invite) => deliver(mailer, inviteMail(invite, publicUrl), { label: 'invite mail', ...options });
 }

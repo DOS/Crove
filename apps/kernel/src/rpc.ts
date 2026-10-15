@@ -76,17 +76,19 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         guard(async () => {
           const org = await resolveMembership(runtime, context.user, context.orgSlug);
           const created = await runtime.execute<CreatedInvite>('kernel.member.invite.create', input, { actor: actorOf(context.user), orgId: org.orgId });
-          await sendInviteMail?.({
-            to: created.email,
-            orgName: org.name,
-            inviterName: context.user.name,
-            inviterEmail: context.user.email,
-            role: created.role,
-            expiresAt: created.expiresAt,
-            acceptPath: created.acceptPath,
-          }).catch((error: unknown) => {
+          try {
+            await sendInviteMail?.({
+              to: created.email,
+              orgName: org.name,
+              inviterName: context.user.name,
+              inviterEmail: context.user.email,
+              role: created.role,
+              expiresAt: created.expiresAt,
+              acceptPath: created.acceptPath,
+            });
+          } catch (error) {
             console.error(`[mail] invite mail not sent: ${error instanceof Error ? error.name : 'unknown error'}`);
-          });
+          }
           return created;
         }),
       ),

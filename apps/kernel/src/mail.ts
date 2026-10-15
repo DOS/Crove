@@ -88,44 +88,79 @@ export function describeMailError(error: unknown): string {
   return typeof e.responseCode === 'number' ? `${code} ${e.responseCode}` : code;
 }
 
-// A 5xx reply, refused credentials or a malformed message fail the same way on every attempt; a 4xx reply is the
-// server asking to try again later.
+// A 5xx reply, refused credentials, a server without the TLS we require or a malformed message fail the same way on
+// every attempt; a 4xx reply is the server asking to try again later.
 function permanent(error: unknown): boolean {
   const e = (error ?? {}) as SmtpError;
   if (typeof e.responseCode === 'number') return e.responseCode >= 500;
-  return e.code === 'EAUTH' || e.code === 'EENVELOPE' || e.code === 'EMESSAGE' || e.code === 'ECONFIG';
+  return ['EAUTH', 'ENOAUTH', 'ETLS', 'EENVELOPE', 'EMESSAGE', 'ECONFIG'].includes(String(e.code));
 }
+
+const DEADLINE = Symbol('deadline');
 
 export interface DeliverOptions {
   // Waits before the second, third, ... attempt. Default: two retries, after 0.5 s and 2 s.
   retryDelaysMs?: readonly number[];
+  // Bound on the whole delivery, attempts and waits included (default 10 s): the caller (an HTTP request holding a
+  // one-time link) must answer before any reverse proxy times out. A send still running then is left to finish in
+  // the background and reported as failed.
+  deadlineMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
   log?: (line: string) => void;
   // Names the mail in log lines, e.g. "invite mail". Never the recipient.
   label?: string;
 }
 
-/** Sends one mail with retries on transient errors. Never throws: the result says what happened. */
+/**
+ * Sends one mail with retries on transient errors, within a deadline. Never throws: the result says what happened.
+ * A retry after a timeout may deliver the mail twice; for an invite that is harmless.
+ */
 export async function deliver(mailer: Mailer, mail: OutboundMail, options: DeliverOptions = {}): Promise<Delivery> {
   const log = options.log ?? ((line: string) => console.error(line));
   const label = options.label ?? 'mail';
   if (!mailer.enabled) {
-    await mailer.send(mail).catch(() => undefined);
+    await Promise.resolve()
+      .then(() => mailer.send(mail))
+      .catch(() => undefined);
     return 'off';
   }
   const delays = options.retryDelaysMs ?? [500, 2_000];
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = options.now ?? Date.now;
+  const deadline = now() + (options.deadlineMs ?? 10_000);
   for (let attempt = 0; ; attempt++) {
     try {
-      await mailer.send(mail);
+      await withDeadline(mailer, mail, deadline - now());
       return 'sent';
     } catch (error) {
+      if (error === DEADLINE) {
+        log(`[mail] ${label} not sent within the deadline (attempt ${attempt + 1})`);
+        return 'failed';
+      }
       const delay = delays[attempt];
-      if (permanent(error) || delay === undefined) {
+      if (permanent(error) || delay === undefined || now() + delay >= deadline) {
         log(`[mail] ${label} not sent after ${attempt + 1} attempt(s): ${describeMailError(error)}`);
         return 'failed';
       }
       await sleep(delay);
     }
+  }
+}
+
+async function withDeadline(mailer: Mailer, mail: OutboundMail, remainingMs: number): Promise<void> {
+  if (remainingMs <= 0) throw DEADLINE;
+  // A send that throws synchronously becomes a rejection here.
+  const send = Promise.resolve().then(() => mailer.send(mail));
+  // Past the deadline the send runs on; its outcome no longer matters.
+  send.catch(() => undefined);
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(DEADLINE), remainingMs);
+  });
+  try {
+    await Promise.race([send, expired]);
+  } finally {
+    clearTimeout(timer);
   }
 }

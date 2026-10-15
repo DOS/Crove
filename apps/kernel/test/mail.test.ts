@@ -28,6 +28,7 @@ interface Received {
 // a command, to inject failures.
 function smtpServer(reply: (command: string) => string | null = () => null) {
   const received: Received[] = [];
+  const commands: string[] = [];
   const server: Server = createServer((socket: Socket) => {
     let buffer = '';
     let inData = false;
@@ -52,12 +53,15 @@ function smtpServer(reply: (command: string) => string | null = () => null) {
         const line = buffer.slice(0, eol);
         buffer = buffer.slice(eol + 2);
         const verb = line.split(/[ :]/)[0]?.toUpperCase() ?? '';
+        commands.push(verb);
         const custom = reply(verb);
         if (custom) {
           socket.write(`${custom}\r\n`);
           continue;
         }
         if (verb === 'EHLO' || verb === 'HELO') socket.write('250-test\r\n250 8BITMIME\r\n');
+        // Like a real server that does not advertise STARTTLS.
+        else if (verb === 'STARTTLS') socket.write('502 5.5.1 STARTTLS not available\r\n');
         else if (verb === 'MAIL') {
           current.from = line;
           socket.write('250 OK\r\n');
@@ -77,6 +81,7 @@ function smtpServer(reply: (command: string) => string | null = () => null) {
   });
   return {
     received,
+    commands,
     start: () => new Promise<number>((resolve) => server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port))),
     stop: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
@@ -110,6 +115,44 @@ describe('SMTP adapter', () => {
     // The org name cannot add a header.
     expect(mail?.data).not.toMatch(/^Bcc:/im);
     expect(logs).toEqual([]);
+  });
+});
+
+describe('SMTP adapter, refusals', () => {
+  it('does not send credentials to a server without STARTTLS', async () => {
+    const smtp = smtpServer();
+    const port = await smtp.start();
+    try {
+      const logs: string[] = [];
+      const mailer = createSmtpMailer({ host: '127.0.0.1', port, user: 'u', pass: 'p', from: 'noreply@crove.local' });
+      expect(await deliver(mailer, MAIL, { log: (l) => logs.push(l) })).toBe('failed');
+      // Not retried: the server will not offer TLS on a second attempt either.
+      expect(logs).toEqual([expect.stringMatching(/^\[mail\] mail not sent after 1 attempt\(s\): ETLS/)]);
+      expect(smtp.commands).not.toContain('AUTH');
+      expect(smtp.received).toEqual([]);
+    } finally {
+      await smtp.stop();
+    }
+  });
+
+  it('retries a 4xx reply and gives up at once on a 5xx reply', async () => {
+    let busy = 1;
+    const smtp = smtpServer((verb) => (verb === 'RCPT' && busy-- > 0 ? '451 4.3.0 try again later' : null));
+    const port = await smtp.start();
+    const rejecting = smtpServer((verb) => (verb === 'RCPT' ? '550 5.1.1 no such user' : null));
+    const rejectingPort = await rejecting.start();
+    try {
+      const noSleep = async () => undefined;
+      expect(await deliver(createSmtpMailer({ host: '127.0.0.1', port, from: 'noreply@crove.local' }), MAIL, { sleep: noSleep })).toBe('sent');
+      expect(smtp.received).toHaveLength(1);
+      const logs: string[] = [];
+      const mailer = createSmtpMailer({ host: '127.0.0.1', port: rejectingPort, from: 'noreply@crove.local' });
+      expect(await deliver(mailer, MAIL, { sleep: noSleep, log: (l) => logs.push(l) })).toBe('failed');
+      expect(logs).toEqual(['[mail] mail not sent after 1 attempt(s): EENVELOPE 550']);
+    } finally {
+      await smtp.stop();
+      await rejecting.stop();
+    }
   });
 });
 
@@ -181,6 +224,34 @@ describe('deliver', () => {
     expect(logs[0]).not.toContain(TOKEN);
   });
 
+  it('answers within the deadline, whatever the server does', async () => {
+    const hanging: Mailer = { enabled: true, send: () => new Promise<void>(() => undefined) };
+    const logs: string[] = [];
+    const started = Date.now();
+    expect(await deliver(hanging, MAIL, { deadlineMs: 50, log: (l) => logs.push(l), label: 'invite mail' })).toBe('failed');
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(logs).toEqual(['[mail] invite mail not sent within the deadline (attempt 1)']);
+    // No retry starts when its wait would pass the deadline.
+    const once = failing([smtpError('ECONNECTION'), smtpError('ECONNECTION')]);
+    let clock = 0;
+    expect(await deliver(once, MAIL, { deadlineMs: 1_000, retryDelaysMs: [5_000], now: () => clock, sleep: async (ms) => void (clock += ms), log: () => undefined })).toBe(
+      'failed',
+    );
+    expect(once.calls).toBe(1);
+  });
+
+  it('turns a sender that throws synchronously into a failure', async () => {
+    const sync: Mailer = {
+      enabled: true,
+      send: () => {
+        throw Object.assign(new Error(TOKEN), { code: 'EMESSAGE' });
+      },
+    };
+    const logs: string[] = [];
+    expect(await deliver(sync, MAIL, { log: (l) => logs.push(l) })).toBe('failed');
+    expect(logs).toEqual(['[mail] mail not sent after 1 attempt(s): EMESSAGE']);
+  });
+
   it('describes errors without their message', () => {
     expect(describeMailError(smtpError('EENVELOPE', 550))).toBe('EENVELOPE 550');
     expect(describeMailError(new TypeError(TOKEN))).toBe('TypeError');
@@ -207,6 +278,11 @@ describe('invite mail', () => {
     expect(mail.html).not.toContain('<b>ABC</b>');
   });
 
+  it('strips bidi overrides from names', () => {
+    const mail = inviteMail({ ...INVITE, orgName: 'Ngân hàng \u202Egnoh nân\u202C' }, 'https://books.example.com');
+    expect(mail.subject).toBe('Lời mời tham gia Ngân hàng gnoh nân trên Crove');
+  });
+
   it('never takes its host from anything but PUBLIC_URL', () => {
     expect(acceptUrl('http://localhost:8080/', '/-/invite#abc')).toBe('http://localhost:8080/-/invite#abc');
   });
@@ -224,6 +300,9 @@ describe('mail configuration', () => {
     expect(() => loadConfig({ ...base, SMTP_HOST: 'smtp.example.com', SMTP_FROM: 'a@example.com', SMTP_USER: 'u' })).toThrow(/SMTP_PASS/);
     const on = loadConfig({ ...base, SMTP_HOST: 'mailpit', SMTP_PORT: '1025', SMTP_FROM: 'noreply@crove.local', SMTP_USER: '', SMTP_PASS: '' });
     expect(on.SMTP_PORT).toBe(1025);
+    // SMTP_PORT= in a .env means the default, as before the kernel read it.
+    expect(loadConfig({ ...base, SMTP_PORT: '' }).SMTP_PORT).toBe(587);
+    expect(() => loadConfig({ ...base, SMTP_PORT: '70000' })).toThrow(/SMTP_PORT/);
     expect(createMailer(on).enabled).toBe(true);
   });
 });

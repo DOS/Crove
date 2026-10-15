@@ -82,7 +82,8 @@ const schema = z.object({
   // is off, and the inviter passes the link on. Port 465 is implicit TLS; with SMTP_USER and SMTP_PASS on any other
   // port the server must offer STARTTLS.
   SMTP_HOST: optional,
-  SMTP_PORT: z.coerce.number().int().min(1).max(65_535).default(587),
+  // An empty value (SMTP_PORT= in a .env) means the default.
+  SMTP_PORT: optional.transform((v) => (v === undefined ? 587 : Number(v))).pipe(z.number().int().min(1).max(65_535)),
   SMTP_USER: optional,
   SMTP_PASS: optional,
   SMTP_FROM: optional,

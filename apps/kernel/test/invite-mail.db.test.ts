@@ -9,7 +9,7 @@ import pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { kernelCommands, kernelQueries } from '@crove/kernel';
+import { MAX_INVITES_PER_EMAIL_PER_DAY, kernelCommands, kernelQueries } from '@crove/kernel';
 import { Runtime, type BlobStore } from '@crove/kernel-runtime';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig, type Config } from '../src/config.ts';
@@ -252,6 +252,12 @@ suite('invite mail on PostgreSQL', () => {
     // Invalid input never reaches the command.
     expect((await rpc('org/invite', ownerMfa, { email: 'not-an-email', role: 'member' }, org.slug)).status).toBe(400);
     expect(sent).toEqual([]);
+    // Over the daily limit for one email: refused, and no mail.
+    const again = `again-${randomUUID().slice(0, 8)}@mail.test`;
+    for (let i = 0; i < MAX_INVITES_PER_EMAIL_PER_DAY; i++) expect((await rpc('org/invite', ownerMfa, { email: again, role: 'member' }, org.slug)).status).toBe(200);
+    expect(sent).toHaveLength(MAX_INVITES_PER_EMAIL_PER_DAY);
+    expect(await rpc('org/invite', ownerMfa, { email: again, role: 'member' }, org.slug)).toMatchObject({ status: 429, body: { code: 'INVITE_RATE_LIMITED' } });
+    expect(sent).toHaveLength(MAX_INVITES_PER_EMAIL_PER_DAY);
   });
 
   it('sends the same mail whether or not the email has an account', async () => {
@@ -298,6 +304,13 @@ suite('invite mail on PostgreSQL', () => {
     const again = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: `x-${randomUUID().slice(0, 6)}@mail.test`, role: 'member' }, org.slug, broken);
     expect(again).toMatchObject({ status: 200 });
     expect(printed).toContain('[mail] invite mail not sent: Error');
+    // Nor does one that throws before returning a promise.
+    const syncThrow = appWith((() => {
+      throw new TypeError(`sync ${token}`);
+    }) as SendInviteMail);
+    const third = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: `y-${randomUUID().slice(0, 6)}@mail.test`, role: 'member' }, org.slug, syncThrow);
+    expect(third).toMatchObject({ status: 200 });
+    expect(printed).toContain('[mail] invite mail not sent: TypeError');
 
     // The one-time link still works.
     expect(await rpc('invites/accept', await tokenFor(invitee), { token }, null)).toMatchObject({ status: 200 });
