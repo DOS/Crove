@@ -447,10 +447,9 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
         client: definer,
         org: 'A',
         enter: async (c) => {
-          await c.query(`SELECT pg_catalog.set_config('crove.org_id', $1, true), pg_catalog.set_config('crove.user_id', $2, true)`, [
-            orgs.A.id,
-            orgs.A.owner,
-          ]);
+          // Entered through enter_context (as the admin connection, before switching role), never by writing the
+          // context settings by hand: a hand-written context grants nothing once the context is sealed (T11).
+          await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [orgs.A.owner, orgs.A.id]);
           await c.query('SET LOCAL ROLE crove_definer_tenant');
           const { rows } = await c.query<{ who: string }>('SELECT current_user AS who');
           if (rows[0]?.who !== 'crove_definer_tenant') throw new Error('SET ROLE crove_definer_tenant did not take effect');
