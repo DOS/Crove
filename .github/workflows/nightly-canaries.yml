@@ -1,14 +1,20 @@
 name: nightly-canaries
 
 # Early warning for toolchain drift: the unit tests on Bun (latest stable) and the typecheck on typescript@next.
-# Scheduled only, so a red canary never blocks a PR. On failure, one tracking issue (label `tooling`) is opened or
-# updated; see the `report` job.
+# Scheduled, so a red canary never blocks an ordinary PR. On a scheduled or manual failure, one tracking issue
+# (label `tooling`) is opened or updated; see the `report` job.
 
 on:
   schedule:
     # 02:00 Asia/Ho_Chi_Minh (UTC+7) is 19:00 UTC the day before.
     - cron: '0 19 * * *'
   workflow_dispatch:
+  # Only a PR that edits this file: the edit is run before it merges. A file with only schedule and
+  # workflow_dispatch triggers was never registered by GitHub after #171 merged (no run, dispatch 404, #174);
+  # a pull request run registers it.
+  pull_request:
+    paths:
+      - .github/workflows/nightly-canaries.yml
 
 permissions:
   contents: read
@@ -81,11 +87,12 @@ jobs:
       - name: Lockfile is unchanged
         run: git diff --exit-code -- pnpm-lock.yaml package.json
 
-  # The only job with a write permission and the only one that touches issues. It runs only when a canary failed.
+  # The only job with a write permission and the only one that touches issues. It runs only when a canary failed,
+  # and never on a pull request run (the PR shows the failure itself).
   report:
     name: Open or update the tracking issue
     needs: [bun-unit, typescript-next]
-    if: ${{ always() && (needs.bun-unit.result == 'failure' || needs.typescript-next.result == 'failure') }}
+    if: ${{ always() && github.event_name != 'pull_request' && (needs.bun-unit.result == 'failure' || needs.typescript-next.result == 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
