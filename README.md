@@ -75,4 +75,4 @@ Architecture and roadmap: [`docs/plan/crove-os-kernel.md`](./docs/plan/crove-os-
 
 ## License
 
-AGPL-3.0 © Crove / DOS.
+AGPL-3.0-only, see [`LICENSE`](./LICENSE). © Crove / DOS. See also [`CONTRIBUTING.md`](./CONTRIBUTING.md), [`SECURITY.md`](./SECURITY.md), [`TRADEMARKS.md`](./TRADEMARKS.md) and the draft [`CLA.md`](./CLA.md).

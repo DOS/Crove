@@ -302,7 +302,7 @@ Self-host and Crove Cloud differ only in configuration (Decision 4). The Cloud-o
 
 ### 3.1 Repo tree
 
-**Core repo** (`DOS/Crove`, AGPL-3.0; public since 2026-10-13, Decision 9). This is the target layout. `main` today differs: a root `vitest.config.ts` and `packages/l10n-vn`; only the `ci` and `gitleaks` workflows; no `apps/extract`, `kernel-http`, `ui` or `testing` packages; no `LICENSE`, `CLA.md`, `CONTRIBUTING.md`, `TRADEMARKS.md` or `SECURITY.md` yet (§12-C).
+**Core repo** (`DOS/Crove`, AGPL-3.0; public since 2026-10-13, Decision 9). This is the target layout. `main` today differs: a root `vitest.config.ts` and `packages/l10n-vn`; only the `ci` and `gitleaks` workflows; no `apps/extract`, `kernel-http`, `ui` or `testing` packages; `LICENSE`, `CLA.md` (draft), `CONTRIBUTING.md`, `TRADEMARKS.md` and `SECURITY.md` are now added (§12-C).
 
 ```
 Crove/
@@ -1571,8 +1571,8 @@ Day 0 is behind us: the repo exists, is public and has the MVP. This list keeps 
 **C. Repo and open source**
 - [x] `DOS/Crove` created and public; squash merges to `main` (`dev` is created with Cloud beta).
 - [x] gitleaks and the G1 project-ref scan in the required `Secret scan` check, scanning the full history; a local pre-commit hook (Decision 9).
-- [ ] `LICENSE` (AGPL-3.0 text), `CLA.md`, `CONTRIBUTING.md`, `TRADEMARKS.md`, `SECURITY.md`: not in the repo yet (issue #33; `SECURITY.md` is part of External-tenant gate T14).
-- [ ] License-grant CLA, individual + corporate; enable CLA Assistant.
+- [x] `LICENSE` (AGPL-3.0 text), `CLA.md` (draft, pending legal review), `CONTRIBUTING.md`, `TRADEMARKS.md`, `SECURITY.md`: added (issue #33; `SECURITY.md` is part of External-tenant gate T14).
+- [ ] License-grant CLA, individual + corporate: draft added in `CLA.md`; lawyer review and enabling CLA Assistant remain.
 - [ ] File the "Crove" trademark (Vietnam IP Office; consider Madrid for other markets; issue #63).
 
 **D. Crove Cloud, MVP step 2** (OpenTofu in `crove-cloud`, run by CI via WIF; never from an agent sandbox)
@@ -1640,7 +1640,7 @@ The MVP in Tracking replaces Phase 0 (ADR-0027): step 1 (open source, local) mer
 
 | Former Phase 0 criterion | Now |
 |---|---|
-| Repo, license, CLA, gitleaks and G1 from the first commit; G1-G6 green | Repo public with gitleaks + G1 required (Decision 9); `LICENSE`, `CLA.md` and CLA Assistant still missing (§12-C); G2-G6 grow with Phase 1 |
+| Repo, license, CLA, gitleaks and G1 from the first commit; G1-G6 green | Repo public with gitleaks + G1 required (Decision 9); `LICENSE` and a draft `CLA.md` added; lawyer review of the CLA and CLA Assistant still pending (§12-C); G2-G6 grow with Phase 1 |
 | Own DB; migrations through preview -> beta -> prod; replay on plain PG17 | Built-in runner on any PG17 (MVP, implemented); the Cloud DB path comes with MVP step 2 |
 | OIDC login with DOS ID; membership from the DOS-Me API; `generic-oidc` adapter | Replaced by Supabase Auth with membership in Crove (Decision 5, ADR-0027; sessions per ADR-0028) |
 | Gate DOS-1 and minimal DOS-27 events | Deferred with DOS org sync (Tracking, deferred table) |
