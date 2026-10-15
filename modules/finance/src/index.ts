@@ -1,4 +1,4 @@
-import { recordPurchase } from './record.ts';
+import { recordPurchase, revisePurchase } from './record.ts';
 import { fileForExtraction, purchaseLookup } from './extract.ts';
 import { accountsList, documentsList, journalList, vendorsList } from './queries.ts';
 
@@ -6,5 +6,5 @@ export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './
 export { buildJournalWorkbook } from './export.ts';
 export { JOURNAL_EXPORT_LIMIT, type JournalEntryView } from './queries.ts';
 
-export const financeCommands = [recordPurchase];
+export const financeCommands = [recordPurchase, revisePurchase];
 export const financeQueries = [fileForExtraction, purchaseLookup, vendorsList, documentsList, journalList, accountsList];

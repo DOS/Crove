@@ -1,9 +1,11 @@
 // finance.purchase.record: turns an approved purchase proposal into a vendor, a purchase document
-// and a balanced TT133 journal entry. Runs only through kernel.proposal.approve.
+// and a balanced TT133 journal entry. Runs only through kernel.proposal.approve, on the stored revision as is.
+// finance.purchase.revise: computes the payload of a new revision when a user edits a pending proposal
+// (kernel.proposal.edit); it writes nothing.
 import { z } from 'zod';
 import { BLOCKING_CHECK_IDS, zAccountCode, zPurchaseProposal } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
-import { buildPurchaseJournal, journalIsBalanced, money, parseTaxCode, type ProposedLine } from '@crove/l10n-vn';
+import { buildPurchaseJournal, journalIsBalanced, money, parseTaxCode } from '@crove/l10n-vn';
 import { postJournalEntry } from './ledger.ts';
 
 async function upsertVendor(ctx: CommandContext, seller: z.infer<typeof zPurchaseProposal>['seller']): Promise<string> {
@@ -43,16 +45,52 @@ async function upsertVendor(ctx: CommandContext, seller: z.infer<typeof zPurchas
   return created.id;
 }
 
+function journalMemo(payload: z.infer<typeof zPurchaseProposal>): string {
+  const { invoice } = payload;
+  return `HĐ ${invoice.series ? `${invoice.series}-` : ''}${invoice.number} ${payload.seller.name}`.trim();
+}
+
+async function assertKnownAccounts(ctx: CommandContext, codes: string[]): Promise<void> {
+  const unique = [...new Set(codes)];
+  const known = await ctx.trx.selectFrom('crove_finance.account').select('code').where('code', 'in', unique).execute();
+  if (known.length !== unique.length) throw new DomainError('UNKNOWN_ACCOUNT', 422, 'Có tài khoản không thuộc hệ thống TT133');
+}
+
+export const revisePurchase = defineCommand({
+  name: 'finance.purchase.revise',
+  input: z.object({
+    payload: zPurchaseProposal,
+    lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).min(1).max(1000),
+  }),
+  risk: 'R1',
+  access: 'proposal',
+  handler: async (ctx, { payload, lineAccounts }) => {
+    const lineNos = new Set(payload.lines.map((l) => l.lineNo));
+    if (lineAccounts.some((l) => !lineNos.has(l.lineNo))) throw new DomainError('UNKNOWN_LINE', 422, 'Có dòng không thuộc hóa đơn này');
+    const overrides = new Map(lineAccounts.map((l) => [l.lineNo, l.debitAccount]));
+    let changed = false;
+    const lines = payload.lines.map((l) => {
+      const account = overrides.get(l.lineNo);
+      if (!account || account === l.debitAccount) return l;
+      changed = true;
+      return { ...l, debitAccount: account, reason: 'Người dùng chọn' };
+    });
+    if (!changed) return { changed: false as const, payload };
+    await assertKnownAccounts(ctx, lines.map((l) => l.debitAccount));
+    const revised = { ...payload, lines, journal: buildPurchaseJournal(lines, payload.invoice.vatTotal, journalMemo(payload)) };
+    return { changed: true as const, payload: revised };
+  },
+});
+
 export const recordPurchase = defineCommand({
   name: 'finance.purchase.record',
   input: z.object({
     payload: zPurchaseProposal,
-    lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })),
     acceptFailedChecks: z.boolean().default(false),
   }),
   risk: 'R3',
   access: 'proposal',
-  handler: async (ctx, { payload, lineAccounts, acceptFailedChecks }) => {
+  handler: async (ctx, { payload, acceptFailedChecks }) => {
     const { invoice } = payload;
     // The checks shown in the Inbox are enforced here, not only in the UI.
     if (invoice.currency.toUpperCase() !== 'VND') {
@@ -65,17 +103,11 @@ export const recordPurchase = defineCommand({
     if (failed.length > 0 && !acceptFailedChecks) {
       throw new DomainError('CHECKS_FAILED', 422, `Còn ${failed.length} kiểm tra không đạt; hãy xác nhận đã đối chiếu chứng từ gốc`);
     }
-    const overrides = new Map(lineAccounts.map((l) => [l.lineNo, l.debitAccount]));
-    const lines: ProposedLine[] = payload.lines.map((l) => {
-      const account = overrides.get(l.lineNo);
-      return account && account !== l.debitAccount ? { ...l, debitAccount: account, reason: 'Người duyệt chọn' } : l;
-    });
+    // Line accounts come from the approved revision; changing them is an edit (kernel.proposal.edit).
+    const { lines } = payload;
+    await assertKnownAccounts(ctx, lines.map((l) => l.debitAccount));
 
-    const codes = [...new Set(lines.map((l) => l.debitAccount))];
-    const known = await ctx.trx.selectFrom('crove_finance.account').select('code').where('code', 'in', codes).execute();
-    if (known.length !== codes.length) throw new DomainError('UNKNOWN_ACCOUNT', 422, 'Có tài khoản không thuộc hệ thống TT133');
-
-    const memo = `HĐ ${invoice.series ? `${invoice.series}-` : ''}${invoice.number} ${payload.seller.name}`.trim();
+    const memo = journalMemo(payload);
     const journal = buildPurchaseJournal(lines, invoice.vatTotal, memo);
     if (!journalIsBalanced(journal)) throw new DomainError('UNBALANCED', 422, 'Bút toán không cân');
     // The payable booked must equal the invoice total exactly.

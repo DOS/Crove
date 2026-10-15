@@ -1,15 +1,21 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zAccountCode, zId, zRole } from '@crove/kernel-contract';
+import { zAccountCode, zId, zPurchaseProposal, zRole } from '@crove/kernel-contract';
 import { DomainError, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
+import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors, type ActorRef } from './approval.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal').
 const PROPOSAL_COMMANDS = new Set(['finance.purchase.record']);
+// The module command that computes a new revision's payload when a user edits a proposal (access: 'proposal').
+const PROPOSAL_REVISERS: Record<string, string> = { 'finance.purchase.record': 'finance.purchase.revise' };
 const ADMINS = ['owner', 'admin'] as const;
 // Approving executes an R3 command that posts to the ledger, so only roles that may post approve.
-// The role model has no finance roles yet; owner and admin are the roles that may post today.
+// The role model has no finance roles yet; owner and admin are the roles that may post today. This is the
+// coarse gate; the approval policy in approval.ts (snapshot, live role, four-eyes) decides per proposal.
 const APPROVERS = ADMINS;
+
+const zLineAccounts = z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).max(1000);
 
 export const addMember = defineCommand({
   name: 'kernel.member.add',
@@ -169,6 +175,16 @@ export const recordExtraction = defineCommand({
       .executeTakeFirstOrThrow();
     let proposalId: string | null = null;
     if (input.proposal) {
+      // Authors (P10): the extraction itself, and the user who uploaded the source file, since the content
+      // is read from what they supplied. A forwarded email has no authenticated sender, so it adds nobody.
+      const file = await ctx.trx
+        .selectFrom('crove_kernel.file')
+        .select('created_by')
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', input.fileId)
+        .executeTakeFirst();
+      const authors: ActorRef[] = [actorRef(ctx.actor)];
+      if (file?.created_by) authors.push({ type: 'user', id: file.created_by });
       const proposal = await ctx.trx
         .insertInto('crove_kernel.proposal')
         .values({
@@ -180,6 +196,9 @@ export const recordExtraction = defineCommand({
           source_file_id: input.fileId,
           extraction_id: extraction.id,
           duplicate_of: input.proposal.duplicateOf,
+          // P12: who may approve this command right now; approval re-checks each one's role live.
+          eligible_approvers: await eligibleApprovers(ctx.trx, ctx.orgId, input.proposal.command),
+          authors: JSON.stringify(authors),
         })
         .returning('id')
         .executeTakeFirstOrThrow();
@@ -209,12 +228,56 @@ async function lockPendingProposal(ctx: CommandContext, id: string, revision?: n
   return proposal;
 }
 
+// True when lineAccounts asks for any account other than the one stored in the revision.
+function changesContent(payload: unknown, lineAccounts: z.infer<typeof zLineAccounts>): boolean {
+  if (lineAccounts.length === 0) return false;
+  const parsed = zPurchaseProposal.safeParse(payload);
+  if (!parsed.success) return true;
+  const stored = new Map(parsed.data.lines.map((l) => [l.lineNo, l.debitAccount]));
+  return lineAccounts.some((l) => stored.get(l.lineNo) !== l.debitAccount);
+}
+
+// Edits a pending proposal: the new content becomes a new revision authored by the editor (plan §8.3), and
+// the approval policy runs again on it. An edit never approves; kernel.proposal.approve does, separately.
+export const editProposal = defineCommand({
+  name: 'kernel.proposal.edit',
+  input: z.object({ id: zId, revision: z.number().int().positive(), lineAccounts: zLineAccounts.min(1) }),
+  risk: 'R1',
+  access: MEMBERS,
+  target: (input) => ({ type: 'kernel.proposal', id: input.id }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới chỉnh sửa được');
+    const proposal = await lockPendingProposal(ctx, input.id, input.revision);
+    const reviser = PROPOSAL_REVISERS[proposal.command];
+    if (!reviser) throw new DomainError('NOT_EDITABLE', 422, 'Loại đề xuất này không chỉnh sửa được');
+    const authors = parseAuthors(proposal.authors);
+    if (!authors) throw new DomainError('NOT_EDITABLE', 422, 'Đề xuất thiếu thông tin người soạn nên không chỉnh sửa được');
+    const revised = await ctx.run<{ changed: boolean; payload: unknown }>(
+      reviser,
+      { payload: proposal.payload, lineAccounts: input.lineAccounts },
+      { proposalId: proposal.id },
+    );
+    if (!revised.changed) return { revision: proposal.revision, changed: false };
+    const revision = proposal.revision + 1;
+    await ctx.trx
+      .updateTable('crove_kernel.proposal')
+      .set({ payload: JSON.stringify(revised.payload), revision, authors: JSON.stringify(addAuthor(authors, actorRef(ctx.actor))) })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', proposal.id)
+      .execute();
+    ctx.audit({ revision });
+    await ctx.activity('kernel.proposal', proposal.id, 'proposal.edited', `Chỉnh sửa (bản ${revision}): ${proposal.title}`);
+    return { revision, changed: true };
+  },
+});
+
 export const approveProposal = defineCommand({
   name: 'kernel.proposal.approve',
   input: z.object({
     id: zId,
     revision: z.number().int().positive(),
-    lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).optional(),
+    // The accounts the approver saw. They must match the revision: changing them is an edit, never an approval.
+    lineAccounts: zLineAccounts.optional(),
     note: z.string().max(500).optional(),
     acceptFailedChecks: z.boolean().optional(),
   }),
@@ -225,9 +288,27 @@ export const approveProposal = defineCommand({
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới duyệt được');
     const proposal = await lockPendingProposal(ctx, input.id, input.revision);
     if (!PROPOSAL_COMMANDS.has(proposal.command)) throw new DomainError('FORBIDDEN', 403, 'Loại đề xuất không được hỗ trợ');
+    if (input.lineAccounts && changesContent(proposal.payload, input.lineAccounts)) {
+      throw new DomainError('CONTENT_CHANGED', 409, 'Bạn đã đổi tài khoản nhưng chưa lưu; hãy lưu chỉnh sửa trước khi duyệt');
+    }
+    // P12 (snapshot and live role) and P10 (four-eyes), on the revision being approved.
+    const decision = await decideApproval(ctx.trx, ctx.orgId, ctx.actor, proposal, { lock: true });
+    if (decision.reason === 'four_eyes') {
+      throw new DomainError('FOUR_EYES_REQUIRED', 403, 'Cần một người khác duyệt (bạn đã tải lên hoặc chỉnh sửa đề xuất này)', { rule: 'P10' });
+    }
+    if (decision.reason !== 'ok') {
+      throw new DomainError('NOT_ELIGIBLE', 403, 'Bạn không có quyền duyệt đề xuất này', { rule: 'P12' });
+    }
+    ctx.audit({
+      revision: proposal.revision,
+      aal: ctx.actor.aal,
+      policy: { P12: 'pass', P10: decision.selfApproved ? 'self_approved' : 'pass' },
+      eligible_approvers: decision.eligibleCount,
+      self_approved: decision.selfApproved,
+    });
     const result = await ctx.run<{ documentId: string; journalEntryId: string }>(
       proposal.command,
-      { payload: proposal.payload, lineAccounts: input.lineAccounts ?? [], acceptFailedChecks: input.acceptFailedChecks ?? false },
+      { payload: proposal.payload, acceptFailedChecks: input.acceptFailedChecks ?? false },
       { proposalId: proposal.id },
     );
     await ctx.trx
@@ -268,4 +349,4 @@ export const rejectProposal = defineCommand({
   },
 });
 
-export const kernelCommands = [addMember, ingestFile, receiveInbound, recordExtraction, approveProposal, rejectProposal];
+export const kernelCommands = [addMember, ingestFile, receiveInbound, recordExtraction, editProposal, approveProposal, rejectProposal];

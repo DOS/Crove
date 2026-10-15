@@ -10,6 +10,7 @@ import {
 } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
+import { EDITOR_ROLES, decideApproval } from './approval.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
@@ -140,6 +141,10 @@ export const inboxGet = defineQuery({
           .executeTakeFirst()
       : undefined;
     const result = row.result as { documentId?: string; journalEntryId?: string } | null;
+    // The same decision kernel.proposal.approve makes (without its locks), so the Inbox shows Approve only
+    // to users the server will accept.
+    const approval = await decideApproval(ctx.trx, ctx.orgId, ctx.actor, row, { lock: false });
+    const canChange = row.status === 'pending' && ctx.actor.type === 'user' && ctx.role !== null && EDITOR_ROLES.includes(ctx.role);
     return {
       ...toInboxItem(row),
       revision: row.revision,
@@ -149,6 +154,10 @@ export const inboxGet = defineQuery({
       decidedAt: row.decided_at ? row.decided_at.toISOString() : null,
       decisionNote: row.decision_note,
       result: result?.documentId && result.journalEntryId ? { documentId: result.documentId, journalEntryId: result.journalEntryId } : null,
+      canApprove: approval.reason === 'ok',
+      approveReason: approval.reason,
+      canEdit: canChange,
+      canReject: canChange,
     };
   },
 });

@@ -53,6 +53,8 @@ export interface CommandContext extends QueryContext {
   now: Date;
   emit(type: string, payload: Record<string, unknown>): Promise<string>;
   activity(recordType: string, recordId: string, kind: string, summary: string): Promise<void>;
+  // Adds fields to this command's own audit row (for example the policy outcome of an approval).
+  audit(detail: Record<string, unknown>): void;
   // Runs another registered command in the same transaction (audited on its own row).
   run<O>(name: string, input: unknown, options?: { proposalId?: string }): Promise<O>;
 }
@@ -174,6 +176,7 @@ export class Runtime {
     base: { orgId: string; actor: Actor; role: MemberRole | null; proposalId: string | null },
   ): Promise<O> {
     const commandId = uuidv7();
+    let auditDetail: Record<string, unknown> | undefined;
     const ctx: CommandContext = {
       trx,
       orgId: base.orgId,
@@ -200,6 +203,9 @@ export class Runtime {
           })
           .execute();
       },
+      audit: (detail) => {
+        auditDetail = { ...auditDetail, ...detail };
+      },
       run: async <R>(name: string, nestedInput: unknown, options?: { proposalId?: string }): Promise<R> => {
         const nested = this.commands.get(name);
         if (!nested) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
@@ -219,6 +225,9 @@ export class Runtime {
       inputSha256: sha256Hex(stableStringify(input)),
       target: def.target?.(input) ?? null,
       proposalId: base.proposalId,
+      ...(auditDetail
+        ? { detail: { ...(base.actor.type === 'system' ? { component: base.actor.component } : {}), ...auditDetail } }
+        : {}),
     });
     return output;
   }
@@ -287,7 +296,8 @@ export class Runtime {
               inputSha256,
               target: def.target?.(input) ?? null,
               proposalId: null,
-              detail: { code: domain.code },
+              // The policy rule that refused, when the error names one (for example P10 or P12).
+              detail: { code: domain.code, ...(typeof domain.details?.rule === 'string' ? { rule: domain.details.rule } : {}) },
             });
           })
           .catch(() => {});
