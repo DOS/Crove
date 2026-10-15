@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
+import { MemberSessions, MySessions } from '../components/sessions.tsx';
 import { Badge, Button, Card, ErrorText, Input, PageHeader, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { formatDateTime } from '../lib/format.ts';
@@ -296,13 +297,16 @@ export function SettingsPage() {
           <p className="text-xs font-medium uppercase tracking-wide text-fg-3">Thành viên</p>
           <ul className="mt-3 divide-y divide-[var(--line)]">
             {org.data?.members.map((m) => (
-              <li key={m.userId} className="flex items-center justify-between gap-3 py-2 text-sm">
-                <span className="truncate text-fg">{m.displayName ?? m.email}</span>
-                {isOwner && me.data && m.userId !== me.data.userId ? (
-                  <MemberControls member={m} />
-                ) : (
-                  <Badge tone={m.role === 'owner' ? 'brand' : 'neutral'}>{ROLE_LABEL[m.role]}</Badge>
-                )}
+              <li key={m.userId} className="py-2 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="truncate text-fg">{m.displayName ?? m.email}</span>
+                  {isOwner && me.data && m.userId !== me.data.userId ? (
+                    <MemberControls member={m} />
+                  ) : (
+                    <Badge tone={m.role === 'owner' ? 'brand' : 'neutral'}>{ROLE_LABEL[m.role]}</Badge>
+                  )}
+                </div>
+                {isOwner && me.data && m.userId !== me.data.userId && <MemberSessions userId={m.userId} name={m.displayName ?? m.email} />}
               </li>
             ))}
           </ul>
@@ -313,6 +317,7 @@ export function SettingsPage() {
             </>
           )}
         </Card>
+        {me.data && <MySessions userId={me.data.userId} />}
       </div>
     </>
   );
