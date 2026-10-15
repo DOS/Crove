@@ -91,11 +91,62 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
         EXECUTE format('REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC', s);
       END LOOP;
     END $$;`);
+    // Fails the run (and so the deploy) when a function or a role grant reopens the pg_temp hijack. The
+    // files are already committed, so the fix is a new forward migration.
+    const violations = await hardeningViolations(client);
+    if (violations.length > 0) {
+      throw new Error(`database hardening check failed; add a migration that fixes:\n  - ${violations.join('\n  - ')}`);
+    }
   } finally {
     await client.query("SELECT pg_advisory_unlock(hashtext('crove_migrate'))").catch(() => {});
     await client.end();
   }
   return applied;
+}
+
+// The only accepted function settings. pg_catalog first so built-in names win; pg_temp last so the
+// caller's temporary schema is searched after it. An empty path is not enough: PostgreSQL still resolves
+// type names in the caller's temporary schema first, so a caller could substitute its own types and casts.
+export const PINNED_SEARCH_PATH = 'search_path=pg_catalog, pg_temp';
+
+/**
+ * Lists every way the current database breaks the definer hardening (T17), or [] when it holds:
+ * - every function and procedure in a `crove_*` schema has exactly `PINNED_SEARCH_PATH` as its settings.
+ *   This covers SECURITY INVOKER functions too: an invoker function called from a definer body (a trigger
+ *   on a table the definer writes, a helper) runs with the definer's privileges, so `SET search_path = ''`
+ *   there is the same hole, and a later `ALTER FUNCTION ... SECURITY DEFINER` keeps the old settings.
+ *   Excluded: extension members (their scripts own them; extensions live in `extensions` anyway) and the
+ *   pg-boss schema `crove_jobs`, which pg-boss creates and versions itself (and checks for drift); its
+ *   functions are SECURITY INVOKER, so a SECURITY DEFINER function appearing there is still reported.
+ * - no Crove role (every role named `crove_*`: login, group, definer-owner and module roles) other than the
+ *   one running the check can create temporary objects in this database. Without TEMPORARY a session has no
+ *   temporary schema to plant types, casts or functions in.
+ */
+export async function hardeningViolations(client: pg.ClientBase): Promise<string[]> {
+  const { rows: functions } = await client.query<{ fn: string; config: string | null }>(
+    `SELECT p.oid::pg_catalog.regprocedure::text AS fn, pg_catalog.array_to_string(p.proconfig, '; ') AS config
+     FROM pg_catalog.pg_proc p
+     JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname LIKE 'crove\\_%'
+       AND p.prokind IN ('f', 'p')
+       AND (n.nspname <> 'crove_jobs' OR p.prosecdef)
+       AND NOT EXISTS (
+         SELECT 1 FROM pg_catalog.pg_depend d
+         WHERE d.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass AND d.objid = p.oid AND d.deptype = 'e')
+       AND p.proconfig IS DISTINCT FROM ARRAY[$1]::text[]
+     ORDER BY 1`,
+    [PINNED_SEARCH_PATH],
+  );
+  const { rows: roles } = await client.query<{ rolname: string }>(
+    `SELECT r.rolname FROM pg_catalog.pg_roles r
+     WHERE r.rolname LIKE 'crove\\_%' AND r.rolname <> current_user AND NOT r.rolsuper
+       AND pg_catalog.has_database_privilege(r.oid, pg_catalog.current_database(), 'TEMPORARY')
+     ORDER BY 1`,
+  );
+  return [
+    ...functions.map((f) => `function ${f.fn} has settings ${f.config === null ? '(none)' : `"${f.config}"`}, expected "${PINNED_SEARCH_PATH}"`),
+    ...roles.map((r) => `role ${r.rolname} can create temporary objects (TEMPORARY on the database)`),
+  ];
 }
 
 // Versions present in the repo but missing from the database ledger (used by /readyz).

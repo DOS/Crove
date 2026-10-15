@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { migrate, readMigrations } from '../src/migrate.ts';
+import { hardeningViolations, migrate, readMigrations } from '../src/migrate.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -120,5 +120,76 @@ suite('migrations with a runner that is not a superuser', () => {
       );
       expect(role.rows).toEqual([{ rolcanlogin: false, rolsuper: false, rolbypassrls: false, can_create: false }]);
     });
+  });
+
+  // External-tenant gate T17: every crove_* function pins search_path, and Crove roles have no TEMP.
+  it('pins search_path on every function and leaves Crove roles without TEMPORARY', async () => {
+    await withClient(runnerUrl, async (runner) => {
+      expect(await hardeningViolations(runner)).toEqual([]);
+      const { rows } = await runner.query<{ role: string; temp: boolean }>(
+        `SELECT r AS role, has_database_privilege(r, current_database(), 'TEMPORARY') AS temp
+         FROM unnest(ARRAY[${CROVE_ROLES.map((r) => `'${r}'`).join(', ')}, 'supabase_auth_admin']) r ORDER BY 1`,
+      );
+      // The bundled Supabase Auth keeps what PUBLIC gave it; only Crove roles lose it.
+      expect(rows).toEqual([
+        { role: 'crove_app', temp: false },
+        { role: 'crove_auth_reader', temp: false },
+        { role: 'crove_definer_tenant', temp: false },
+        { role: 'crove_tenant', temp: false },
+        { role: 'crove_worker', temp: false },
+        { role: 'supabase_auth_admin', temp: true },
+      ]);
+      const { rows: pub } = await runner.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM pg_database d, aclexplode(d.datacl) a
+         WHERE d.datname = current_database() AND a.grantee = 0 AND a.privilege_type = 'TEMPORARY'`,
+      );
+      expect(pub[0]?.n).toBe(0);
+    });
+  });
+
+  it('reports planted functions that do not pin search_path, and TEMPORARY granted back', async () => {
+    await withClient(runnerUrl, async (runner) => {
+      await runner.query('BEGIN');
+      try {
+        await runner.query(`
+          CREATE SCHEMA crove_t17;
+          CREATE FUNCTION crove_finance.t17_none() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;
+          CREATE FUNCTION crove_finance.t17_empty() RETURNS int LANGUAGE sql SET search_path = '' AS $$ SELECT 1 $$;
+          CREATE FUNCTION crove_t17.t17_partial() RETURNS int LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog AS $$ SELECT 1 $$;
+          CREATE FUNCTION crove_t17.t17_extra() RETURNS int LANGUAGE sql SET search_path = pg_catalog, pg_temp SET work_mem = '64kB' AS $$ SELECT 1 $$;
+          CREATE PROCEDURE crove_t17.t17_proc() LANGUAGE sql AS $$ SELECT 1 $$;
+          CREATE FUNCTION crove_t17.t17_ok() RETURNS int LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ SELECT 1 $$;
+          CREATE SCHEMA IF NOT EXISTS crove_jobs;
+          CREATE FUNCTION crove_jobs.t17_invoker() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;
+          CREATE FUNCTION crove_jobs.t17_definer() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;`);
+        await runner.query(`GRANT TEMPORARY ON DATABASE ${dbName} TO crove_app`);
+        expect(await hardeningViolations(runner)).toEqual([
+          'function crove_finance.t17_empty() has settings "search_path=""", expected "search_path=pg_catalog, pg_temp"',
+          'function crove_finance.t17_none() has settings (none), expected "search_path=pg_catalog, pg_temp"',
+          'function crove_jobs.t17_definer() has settings (none), expected "search_path=pg_catalog, pg_temp"',
+          'function crove_t17.t17_extra() has settings "search_path=pg_catalog, pg_temp; work_mem=64kB", expected "search_path=pg_catalog, pg_temp"',
+          'function crove_t17.t17_partial() has settings "search_path=pg_catalog", expected "search_path=pg_catalog, pg_temp"',
+          'function crove_t17.t17_proc() has settings (none), expected "search_path=pg_catalog, pg_temp"',
+          'role crove_app can create temporary objects (TEMPORARY on the database)',
+        ]);
+      } finally {
+        await runner.query('ROLLBACK');
+      }
+      expect(await hardeningViolations(runner)).toEqual([]);
+    });
+  });
+
+  it('fails the migration run loudly while an unpinned function exists', async () => {
+    await withClient(runnerUrl, (runner) =>
+      runner.query(`CREATE FUNCTION crove_finance.t17_unpinned() RETURNS int LANGUAGE sql SET search_path = '' AS $$ SELECT 1 $$`),
+    );
+    try {
+      await expect(migrate({ adminUrl: runnerUrl, dir: MIGRATIONS })).rejects.toThrow(
+        /database hardening check failed[\s\S]*crove_finance\.t17_unpinned\(\)/,
+      );
+    } finally {
+      await withClient(runnerUrl, (runner) => runner.query('DROP FUNCTION crove_finance.t17_unpinned()'));
+    }
+    expect(await migrate({ adminUrl: runnerUrl, dir: MIGRATIONS })).toEqual([]);
   });
 });
