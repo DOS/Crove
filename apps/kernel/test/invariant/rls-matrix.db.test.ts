@@ -28,6 +28,10 @@ const RUNTIME_ROLES = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_defin
 // table owner read or write them. They need RLS enabled (so a later grant stays deny-all until a policy is
 // added) and must be listed here, so a new table cannot quietly become one.
 const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.outbox_pending']);
+// Tables whose row factory lands on main before the table itself. CI runs main's copy of this file on the PR that
+// adds a tenant table, so the factory has to be on main first; until the table exists, its factory is not stale.
+// Remove an entry once its table is on main.
+const PENDING_TABLES = new Set(['crove_kernel.member_invite']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -128,6 +132,10 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     }),
   },
   'crove_kernel.auth_session_org': { make: (o) => ({ row: { org_id: o.id, user_id: o.owner, session_id: randomUUID() } }) },
+  // Pending member invites (issue #35). An open invite per (org, email), so every row gets its own address.
+  'crove_kernel.member_invite': {
+    make: (o) => ({ row: { org_id: o.id, email: `invite-${tag()}@rls.test`, role: 'member', invited_by: o.owner } }),
+  },
   'crove_finance.purchase_document': {
     make: (o) => ({
       row: { org_id: o.id, party_id: o.party, invoice_number: tag(), invoice_date: '2026-10-01', subtotal: '100', vat_amount: '10', total: '110' },
@@ -473,7 +481,7 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
     const names = relations.map((r) => r.name);
     expect(names).toContain('crove_kernel.party');
     expect(names).toContain('crove_finance.journal_line');
-    const stale = Object.keys(ROW_FACTORIES).filter((t) => !names.includes(t));
+    const stale = Object.keys(ROW_FACTORIES).filter((t) => !names.includes(t) && !PENDING_TABLES.has(t));
     expect(stale, 'row factories for tables that no longer have org_id: remove them').toEqual([]);
     const staleMachinery = [...MACHINERY].filter((t) => !names.includes(t));
     expect(staleMachinery, 'MACHINERY lists tables that no longer have org_id').toEqual([]);
