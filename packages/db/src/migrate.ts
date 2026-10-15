@@ -122,25 +122,31 @@ export const PINNED_SEARCH_PATH = 'search_path=pg_catalog, pg_temp';
  *   schema; otherwise such a role could plant an unscanned function there.
  * - every function outside the `crove_*` schemas that a `crove_*` object reaches without naming it through
  *   search_path either pins `PINNED_SEARCH_PATH`, or sets no search_path and is SECURITY INVOKER (it then runs
- *   with its caller's path, which inside a definer is the pinned one). Reached means: the function of a trigger
- *   on a `crove_*` table (`pg_trigger.tgfoid`); a function or operator (its `oprcode`) that a `crove_*` object
- *   is bound to by OID in `pg_depend` (column defaults, generated columns, CHECK and domain constraints, index
- *   expressions, RLS policies, view rules, SQL-standard bodies); a support function (input, output, receive,
- *   send, typmod, analyze, subscript, range canonical and subtype_diff) of a type a `crove_*` object uses,
- *   followed through domains, arrays, ranges and composite attributes; and the function of a cast between two
- *   such types. Casts and type support are found by type, never through search_path, and triggers fire on
- *   whatever writes the table, so a definer runs them without naming them. A function or operator named in a
- *   body resolves through the pinned path, which reaches only pg_catalog (functions and operators are never
- *   looked up in pg_temp), so an outside one is reachable only when bound by OID. Not covered: an explicitly
- *   schema-qualified call inside a PL/pgSQL body, which the catalog does not record.
+ *   with its caller's path, which inside a definer is the pinned one). Reached means a function, or an
+ *   operator's `oprcode`, that `pg_depend` binds by OID to: a `crove_*` object or one of its parts (a trigger
+ *   and its WHEN clause, column defaults, generated columns, CHECK constraints, index expressions, RLS
+ *   policies, view rules, SQL-standard bodies); a type a `crove_*` object uses, followed through domains,
+ *   arrays, ranges and composite attributes (its input, output, receive, send, typmod, analyze and subscript
+ *   functions, range canonical and subtype_diff, domain defaults) or a CHECK constraint of such a domain; or an
+ *   aggregate reached that way (its support functions). Also the function of any cast to or from such a type:
+ *   casts are found by type, and a body can name the other side in pg_catalog. Triggers fire on whatever
+ *   writes the table, and casts and type support are found by type, so a definer runs them without naming
+ *   them. A function or operator named in a body resolves through the pinned path, which reaches only
+ *   pg_catalog (functions and operators are never looked up in pg_temp), so an outside one is reachable only
+ *   when bound by OID. Built-in objects are pinned and have no `pg_depend` rows; none is SECURITY DEFINER or
+ *   sets a search_path. Not covered: an explicitly schema-qualified call inside a PL/pgSQL body, which the
+ *   catalog does not record; functions an outside function calls in turn; and triggers, defaults and
+ *   constraints of tables outside `crove_*` that a definer writes (no definer does today).
  * - no Crove role (every role named `crove_*`: login, group, definer-owner and module roles) other than the
  *   one running the check can create temporary objects in this database. Without TEMPORARY a session has no
  *   temporary schema to plant types, casts or functions in.
- * - no other role that can use or SET ROLE to a Crove role (directly or through other roles, per
- *   `pg_auth_members`) can create temporary objects either: its session would carry a temporary schema into
- *   that Crove role's rights, and 20261015120000_crove_kernel_revoke_temp granted TEMPORARY directly to every
- *   non-Crove role that held it. A role holding ADMIN OPTION on that Crove role is skipped: it can already make
- *   itself that role, so a planted object gains it nothing (the migration runner is such a role).
+ * - no other role that can act as a Crove role (use its privileges, SET ROLE to it, or hold ADMIN OPTION on
+ *   it and so grant it to itself; directly or through other roles, per `pg_auth_members`) can create
+ *   temporary objects either: its session would carry a temporary schema into that Crove role's rights, and
+ *   from there into the owner of any `crove_*` SECURITY DEFINER function the role may run. This matters
+ *   because 20261015120000_crove_kernel_revoke_temp granted TEMPORARY directly to every non-Crove role that
+ *   held it. Skipped: a role that can already act as every owner of a `crove_*` SECURITY DEFINER function,
+ *   since a planted object gains it nothing.
  *
  * There is deliberately no bypass (no environment flag, no warn-only mode): a deploy that fails this check is
  * fixed with a forward migration or by the database owner, never skipped. A skipped check leaves a privilege
@@ -190,28 +196,29 @@ export async function hardeningViolations(client: pg.ClientBase): Promise<string
      bound AS MATERIALIZED (
        SELECT d.classid, d.objid, d.objsubid, d.refclassid, d.refobjid FROM pg_catalog.pg_depend d
        WHERE d.refclassid IN ('pg_catalog.pg_proc'::pg_catalog.regclass, 'pg_catalog.pg_operator'::pg_catalog.regclass)
-         AND d.classid <> 'pg_catalog.pg_trigger'::pg_catalog.regclass
      ),
-     reached(fn, via) AS (
-       SELECT g.tgfoid, pg_catalog.pg_describe_object('pg_catalog.pg_trigger'::pg_catalog.regclass, g.oid, 0)
-       FROM pg_catalog.pg_trigger g JOIN pg_catalog.pg_class c ON c.oid = g.tgrelid
-       WHERE c.relnamespace IN (SELECT oid FROM crove_ns)
-       UNION ALL
+     direct(fn, via) AS (
        SELECT CASE WHEN b.refclassid = 'pg_catalog.pg_proc'::pg_catalog.regclass THEN b.refobjid ELSE o.oprcode::pg_catalog.oid END,
               pg_catalog.pg_describe_object(b.classid, b.objid, b.objsubid)
        FROM bound b
        LEFT JOIN pg_catalog.pg_operator o ON b.refclassid = 'pg_catalog.pg_operator'::pg_catalog.regclass AND o.oid = b.refobjid
-       WHERE (pg_catalog.pg_identify_object_as_address(b.classid, b.objid, b.objsubid)).object_names[1] LIKE 'crove\\_%'
-       UNION ALL
-       SELECT f.fn, 'type ' || pg_catalog.format_type(t.oid, NULL)
-       FROM used_types u JOIN pg_catalog.pg_type t ON t.oid = u.t
-       LEFT JOIN pg_catalog.pg_range r ON r.rngtypid = t.oid
-       CROSS JOIN LATERAL pg_catalog.unnest(ARRAY[t.typinput, t.typoutput, t.typreceive, t.typsend, t.typmodin, t.typmodout,
-         t.typanalyze, t.typsubscript, r.rngcanonical, r.rngsubdiff]::pg_catalog.oid[]) f(fn)
+       WHERE (b.classid = 'pg_catalog.pg_type'::pg_catalog.regclass AND b.objid IN (SELECT t FROM used_types))
+          OR (b.classid = 'pg_catalog.pg_constraint'::pg_catalog.regclass AND EXISTS (
+                SELECT 1 FROM pg_catalog.pg_constraint k WHERE k.oid = b.objid AND k.contypid IN (SELECT t FROM used_types)))
+          OR (pg_catalog.pg_identify_object_as_address(b.classid, b.objid, b.objsubid)).object_names[1] LIKE 'crove\\_%'
        UNION ALL
        SELECT k.castfunc, pg_catalog.pg_describe_object('pg_catalog.pg_cast'::pg_catalog.regclass, k.oid, 0)
        FROM pg_catalog.pg_cast k
-       WHERE k.castfunc <> 0 AND k.castsource IN (SELECT t FROM used_types) AND k.casttarget IN (SELECT t FROM used_types)
+       WHERE k.castfunc <> 0 AND (k.castsource IN (SELECT t FROM used_types) OR k.casttarget IN (SELECT t FROM used_types))
+     ),
+     reached(fn, via) AS (
+       SELECT fn, via FROM direct
+       UNION ALL
+       SELECT b.refobjid, pg_catalog.pg_describe_object(b.classid, b.objid, b.objsubid)
+       FROM direct r
+       JOIN pg_catalog.pg_proc a ON a.oid = r.fn AND a.prokind = 'a'
+       JOIN bound b ON b.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass AND b.objid = a.oid
+         AND b.refclassid = 'pg_catalog.pg_proc'::pg_catalog.regclass
      )
      SELECT x.fn, x.kind, x.path, x.via FROM (
        SELECT p.oid::pg_catalog.regprocedure::text AS fn, p.prokind::text AS kind, p.prosecdef AS definer,
@@ -233,14 +240,27 @@ export async function hardeningViolations(client: pg.ClientBase): Promise<string
        AND pg_catalog.has_database_privilege(r.oid, pg_catalog.current_database(), 'TEMPORARY')
      ORDER BY 1`,
   );
-  const { rows: members } = await client.query<{ rolname: string; via: string }>(
-    `SELECT r.rolname, pg_catalog.string_agg(c.rolname::text, ', ' ORDER BY c.rolname::text COLLATE "C") AS via
-     FROM pg_catalog.pg_roles r JOIN pg_catalog.pg_roles c ON c.rolname LIKE 'crove\\_%'
+  // "Acts as" y: uses y's privileges, may SET ROLE to y, or holds ADMIN OPTION on y and so may grant y to itself.
+  const actsAs = (x: string, y: string) =>
+    `(pg_catalog.pg_has_role(${x}, ${y}, 'USAGE') OR pg_catalog.pg_has_role(${x}, ${y}, 'SET')` +
+    ` OR pg_catalog.pg_has_role(${x}, ${y}, 'MEMBER WITH ADMIN OPTION'))`;
+  const { rows: members } = await client.query<{ rolname: string; via: string; grants: string }>(
+    `WITH crove AS (SELECT c.oid, c.rolname FROM pg_catalog.pg_roles c WHERE c.rolname LIKE 'crove\\_%'),
+     owners AS (
+       SELECT DISTINCT p.proowner AS oid FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname LIKE 'crove\\_%' AND p.prosecdef
+     )
+     SELECT r.rolname,
+            (SELECT pg_catalog.string_agg(c.rolname::text, ', ' ORDER BY c.rolname::text COLLATE "C")
+             FROM crove c WHERE ${actsAs('r.oid', 'c.oid')}) AS via,
+            (SELECT pg_catalog.string_agg(DISTINCT g.rolname::text COLLATE "C", ', ' ORDER BY g.rolname::text COLLATE "C")
+             FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid
+             WHERE m.member = r.oid AND EXISTS (SELECT 1 FROM crove c WHERE g.oid = c.oid OR ${actsAs('g.oid', 'c.oid')})) AS grants
+     FROM pg_catalog.pg_roles r
      WHERE r.rolname NOT LIKE 'crove\\_%' AND r.rolname <> current_user AND NOT r.rolsuper
-       AND (pg_catalog.pg_has_role(r.oid, c.oid, 'USAGE') OR pg_catalog.pg_has_role(r.oid, c.oid, 'SET'))
-       AND NOT pg_catalog.pg_has_role(r.oid, c.oid, 'MEMBER WITH ADMIN OPTION')
        AND pg_catalog.has_database_privilege(r.oid, pg_catalog.current_database(), 'TEMPORARY')
-     GROUP BY r.rolname
+       AND EXISTS (SELECT 1 FROM crove c WHERE ${actsAs('r.oid', 'c.oid')})
+       AND EXISTS (SELECT 1 FROM owners o WHERE NOT ${actsAs('r.oid', 'o.oid')})
      ORDER BY r.rolname::text COLLATE "C"`,
   );
   const { rows: jobCreators } = await client.query<{ rolname: string }>(
@@ -278,8 +298,8 @@ export async function hardeningViolations(client: pg.ClientBase): Promise<string
     ),
     ...members.map(
       (r) =>
-        `role ${r.rolname} can create temporary objects (TEMPORARY on database ${dbName}) and can use or SET ROLE to ${r.via}; ` +
-        `fix as the database owner or a superuser: REVOKE ${r.via} FROM ${r.rolname}, or take TEMPORARY away from ${r.rolname} ` +
+        `role ${r.rolname} can create temporary objects (TEMPORARY on database ${dbName}) and can act as ${r.via}; ` +
+        `fix as the database owner or a superuser: REVOKE ${r.grants} FROM ${r.rolname}, or take TEMPORARY away from ${r.rolname} ` +
         `(REVOKE TEMPORARY ON DATABASE ${dbName} FROM ${r.rolname}, and from PUBLIC or any role it inherits TEMPORARY from)`,
     ),
   ];
