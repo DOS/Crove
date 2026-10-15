@@ -64,6 +64,11 @@ const schema = z.object({
   // at most ORG_CREATE_LIMIT_PER_DAY in any rolling 24 hours and ORG_CREATE_LIMIT_TOTAL ever (closed orgs count).
   ORG_CREATE_LIMIT_PER_DAY: z.coerce.number().int().min(1).max(999_999).default(5),
   ORG_CREATE_LIMIT_TOTAL: z.coerce.number().int().min(1).max(999_999).default(20),
+  // Per-org limits on rotating the inbound email address (#113), enforced in the database across API instances:
+  // at most INBOUND_ROTATE_LIMIT_PER_DAY in any rolling 24 hours and INBOUND_ROTATE_LIMIT_TOTAL ever. Every rotation
+  // leaves a permanent tombstone, so the total bounds the ledger.
+  INBOUND_ROTATE_LIMIT_PER_DAY: z.coerce.number().int().min(1).max(999_999).default(3),
+  INBOUND_ROTATE_LIMIT_TOTAL: z.coerce.number().int().min(1).max(999_999).default(50),
   // Any OpenAI-compatible endpoint. Without it, e-invoice XML still works; PDF/images do not.
   AI_BASE_URL: optional,
   AI_API_KEY: optional,

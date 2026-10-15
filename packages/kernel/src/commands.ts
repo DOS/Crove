@@ -211,24 +211,57 @@ export const receiveInbound = defineCommand({
   },
 });
 
+// How often one org may rotate its inbound address (#113): perDay in any rolling 24 hours, total ever. Every
+// rotation leaves a permanent tombstone row in crove_kernel.inbound_address, so the total bounds the ledger.
+// Enforced by crove_kernel.inbound_rotate under a per-org lock, so the limit holds across API instances; a replay of
+// an existing idempotency key never reaches the definer and does not count.
+export interface InboundRotateLimits {
+  perDay: number;
+  total: number;
+}
+
+// The definer uses the same defaults when the API sets no limits.
+export const DEFAULT_INBOUND_ROTATE_LIMITS: InboundRotateLimits = { perDay: 3, total: 50 };
+
+// Matches the range the definer accepts.
+const MAX_INBOUND_ROTATE_LIMIT = 999_999;
+
+function assertRotateLimit(name: string, value: number): void {
+  if (!Number.isInteger(value) || value < 1 || value > MAX_INBOUND_ROTATE_LIMIT) {
+    throw new Error(`${name} must be an integer from 1 to ${MAX_INBOUND_ROTATE_LIMIT}`);
+  }
+}
+
 // Rotates the org's inbound email address (plan §7.6). The old token is tombstoned and never issued again; mail
-// to it is dropped by the worker like mail to an unknown token. R2: the address is shared with suppliers, so
-// changing it has an effect outside Crove (their mail to the old address stops arriving), and it cannot be
-// undone, which rules out R1. Owner only, enforced here and again in the definer.
-export const rotateInbound = defineCommand({
-  name: 'kernel.inbound.rotate',
-  input: z.object({}),
-  risk: 'R2',
-  access: ['owner'],
-  handler: async (ctx) => {
-    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đổi được địa chỉ nhận hóa đơn');
-    const { rows } = await sql<{ token: string | null }>`SELECT crove_kernel.inbound_rotate() AS token`.execute(ctx.trx);
-    const token = rows[0]?.token;
-    if (!token) throw new DomainError('INTERNAL', 500, 'Không đổi được địa chỉ nhận hóa đơn');
-    await ctx.activity('kernel.org', ctx.orgId, 'inbound.rotated', 'Đổi địa chỉ email nhận hóa đơn; địa chỉ cũ ngừng nhận thư');
-    return { inboundToken: token };
-  },
-});
+// to it is dropped by the worker like mail to an unknown token, including mail that was already queued for it
+// when the rotation ran (the worker resolves the org when it processes a message, not when the API accepts it), so
+// a supplier's mail in flight is lost without a bounce. R2: the address is shared with suppliers, so changing it
+// has an effect outside Crove (their mail to the old address stops arriving), and it cannot be undone, which rules
+// out R1. Owner only, enforced here and again in the definer. Over the limits the definer refuses with
+// INBOUND_ROTATE_RATE_LIMITED (429 RATE_LIMITED) before writing anything.
+export function inboundRotateCommand(limits: InboundRotateLimits = DEFAULT_INBOUND_ROTATE_LIMITS) {
+  assertRotateLimit('perDay', limits.perDay);
+  assertRotateLimit('total', limits.total);
+  return defineCommand({
+    name: 'kernel.inbound.rotate',
+    input: z.object({}),
+    risk: 'R2',
+    access: ['owner'],
+    handler: async (ctx) => {
+      if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đổi được địa chỉ nhận hóa đơn');
+      // Transaction-local, read by the definer right below.
+      await sql`SELECT set_config('crove.inbound_rotate_limit_per_day', ${String(limits.perDay)}, true),
+                       set_config('crove.inbound_rotate_limit_total', ${String(limits.total)}, true)`.execute(ctx.trx);
+      const { rows } = await sql<{ token: string | null }>`SELECT crove_kernel.inbound_rotate() AS token`.execute(ctx.trx);
+      const token = rows[0]?.token;
+      if (!token) throw new DomainError('INTERNAL', 500, 'Không đổi được địa chỉ nhận hóa đơn');
+      await ctx.activity('kernel.org', ctx.orgId, 'inbound.rotated', 'Đổi địa chỉ email nhận hóa đơn; địa chỉ cũ ngừng nhận thư');
+      return { inboundToken: token };
+    },
+  });
+}
+
+export const rotateInbound = inboundRotateCommand();
 
 export const zProposalDraft = z.object({
   kind: z.string(),
@@ -488,7 +521,6 @@ const otherKernelCommands = [
   removeMember,
   ingestFile,
   receiveInbound,
-  rotateInbound,
   recordExtraction,
   editProposal,
   approveProposal,
@@ -496,9 +528,14 @@ const otherKernelCommands = [
   revokeSession,
 ];
 
-// The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS).
-export function buildKernelCommands(options: { orgCreateLimits?: OrgCreateLimits } = {}) {
-  return [options.orgCreateLimits ? orgCreateCommand(options.orgCreateLimits) : createOrgCommand, ...otherKernelCommands];
+// The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),
+// options.inboundRotateLimits the inbound address rotation limits (default DEFAULT_INBOUND_ROTATE_LIMITS).
+export function buildKernelCommands(options: { orgCreateLimits?: OrgCreateLimits; inboundRotateLimits?: InboundRotateLimits } = {}) {
+  return [
+    options.orgCreateLimits ? orgCreateCommand(options.orgCreateLimits) : createOrgCommand,
+    ...otherKernelCommands,
+    options.inboundRotateLimits ? inboundRotateCommand(options.inboundRotateLimits) : rotateInbound,
+  ];
 }
 
 export const kernelCommands = buildKernelCommands();

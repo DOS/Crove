@@ -116,6 +116,10 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
   const token = recipients.map((r) => tokenOf(r, domain)).find((t) => t !== null);
   if (!token) throw unknownRecipient();
 
+  // The org is resolved now, when the message is processed, not when the API accepted it. So mail queued for a token
+  // that the org rotated away in between is dropped here like mail to a token that never existed (plan §7.6, #113):
+  // right for a leaked address, but a supplier's legitimate mail in that window is lost without a bounce. Nothing
+  // records the drop for the org yet (only the worker log line).
   const orgId = await deps.runtime.orgless(async (db) => {
     const { rows } = await sql<{ org_id: string | null }>`SELECT crove_kernel.org_by_inbound_token(${token}) AS org_id`.execute(db);
     return rows[0]?.org_id ?? null;

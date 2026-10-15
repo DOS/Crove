@@ -147,8 +147,9 @@ suite('inbound address rotation invariants on PostgreSQL', () => {
       });
     const oldToken = await tokenOf(org.orgId);
     expect(await resolve(oldToken)).toBe(org.orgId);
+    // With a fresh second factor, so this holds whether rotation is R2 or R3 (step-up, #113).
     const { inboundToken } = await runtime.execute<{ inboundToken: string }>('kernel.inbound.rotate', {}, {
-      actor: asUser(users.owner),
+      actor: asMfa(users.owner),
       orgId: org.orgId,
       idempotencyKey: randomUUID(),
     });
@@ -163,9 +164,12 @@ suite('inbound address rotation invariants on PostgreSQL', () => {
     expect(await resolve(inboundToken.toUpperCase())).toBe(org.orgId);
     expect(await resolve(oldToken)).toBeNull();
     expect(await resolve('0123456789abcdef01234567')).toBeNull();
-    // The audit row names the actor and carries no token.
+    // The audit row names the actor and carries no token (as R3 it also records the assurance used).
     const audits = await rotateAudits(org.orgId);
-    expect(audits.at(-1)).toEqual({ actor_id: users.owner, outcome: 'ok', detail: {} });
+    expect(audits.at(-1)).toMatchObject({ actor_id: users.owner, outcome: 'ok' });
+    const detail = JSON.stringify(audits.at(-1)?.detail);
+    expect(detail).not.toContain(inboundToken);
+    expect(detail).not.toContain(oldToken);
   });
 
   it('lets only the owner rotate: admins, members and viewers are refused by the command and by the definer', async () => {
