@@ -183,6 +183,10 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
 $$;
 
 -- TRUE when the context may see this legal entity; FALSE without a context or scope.
+-- It verifies the seal on every call. A policy must not call it per row with a column argument: compare the column
+-- against a scope fetched once, e.g. legal_entity_id::text = ANY ((SELECT crove_kernel.ctx_le_scope())) OR
+-- '*' = ANY ((SELECT crove_kernel.ctx_le_scope())), or call it only with a constant wrapped in (SELECT ...), so the
+-- check runs as an InitPlan once per statement.
 CREATE OR REPLACE FUNCTION crove_kernel.ctx_le_allowed(p_legal_entity_id uuid) RETURNS boolean
 LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
   SELECT coalesce('*' = ANY (s.scope) OR p_legal_entity_id::text = ANY (s.scope), false)

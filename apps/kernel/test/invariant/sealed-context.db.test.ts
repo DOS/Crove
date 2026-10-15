@@ -454,6 +454,81 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
     }
   });
 
+  it('refuses a forged context in the session and inbound rotation definers, with no effect', async () => {
+    const app = await connect(appUrl);
+    const definers = [
+      ['crove_kernel.session_list', `SELECT * FROM crove_kernel.session_list($1::uuid)`, () => [users.owner]],
+      ['crove_kernel.session_revoke', `SELECT * FROM crove_kernel.session_revoke($1::uuid, NULL, 'forged')`, () => [users.owner]],
+      ['crove_kernel.inbound_rotate', `SELECT crove_kernel.inbound_rotate()`, () => []],
+    ] as const;
+    const state = () =>
+      withAdmin(async (a) => {
+        const tokens = await a.query<{ org_id: string; inbound_token: string }>(
+          'SELECT org_id, inbound_token FROM crove_kernel.tenant WHERE org_id = ANY($1::uuid[]) ORDER BY org_id',
+          [[orgA, orgB]],
+        );
+        const addresses = await a.query<{ n: string }>(
+          'SELECT count(*) AS n FROM crove_kernel.inbound_address WHERE org_id = ANY($1::uuid[])',
+          [[orgA, orgB]],
+        );
+        const revoked = await a.query<{ n: string }>(
+          `SELECT (SELECT count(*) FROM crove_kernel.auth_session_org WHERE status = 'revoked')
+                + (SELECT count(*) FROM crove_kernel.auth_session WHERE status = 'revoked') AS n`,
+        );
+        return { tokens: tokens.rows, addresses: addresses.rows[0]?.n, revoked: revoked.rows[0]?.n };
+      });
+
+    // With the sealed context of the owner of org A, each definer runs (rolled back, nothing kept).
+    for (const [name, text, args] of definers) {
+      await inTx(app, async () => {
+        await enter(app, users.owner, orgA);
+        await expect(app.query(text, [...args()]), name).resolves.toBeDefined();
+      });
+    }
+
+    const before = await state();
+    for (const patch of [{ org: orgB }, { user: users.other }, { org: orgB, user: users.other, role: 'owner' }]) {
+      for (const [name, text, args] of definers) {
+        // The transaction is committed when the call succeeds: a refusal must leave nothing behind.
+        await app.query('BEGIN');
+        try {
+          await enter(app, users.owner, orgA);
+          await forgeFields(app, patch);
+          await expect(app.query(text, [...args()]), name).rejects.toMatchObject(SEAL_INVALID);
+        } finally {
+          await app.query('COMMIT');
+        }
+      }
+    }
+    // Without any entry, a context written by hand is refused the same way.
+    for (const [name, text, args] of definers) {
+      await app.query('BEGIN');
+      try {
+        await setRaw(app, 'crove.ctx', JSON.stringify({ v: 1, org: orgB, actor: 'user', user: users.other, role: 'owner', le_scope: ['*'], flags: [] }));
+        await setRaw(app, 'crove.ctx_seal', '0'.repeat(64));
+        await expect(app.query(text, [...args()]), name).rejects.toMatchObject(SEAL_INVALID);
+      } finally {
+        await app.query('COMMIT');
+      }
+    }
+    expect(await state()).toEqual(before);
+  });
+
+  it('evaluates the context once per statement in the tenant policy (InitPlan, not a per-row call)', async () => {
+    const app = await connect(appUrl);
+    await inTx(app, async () => {
+      await enter(app, users.owner, orgA);
+      for (const table of ['crove_kernel.party', 'crove_kernel.file']) {
+        const { rows } = await app.query<{ 'QUERY PLAN': string }>(`EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ${table}`);
+        const plan = rows.map((r) => r['QUERY PLAN']);
+        expect(plan.some((line) => /InitPlan/.test(line)), plan.join('\n')).toBe(true);
+        expect(plan.some((line) => /Output: crove_kernel\.ctx_org_id\(\)/.test(line)), plan.join('\n')).toBe(true);
+        // The row filter compares against the InitPlan result; the helper itself never appears in a Filter.
+        expect(plan.filter((line) => /Filter:/.test(line) && /ctx_/.test(line)), plan.join('\n')).toEqual([]);
+      }
+    });
+  });
+
   it('fails closed after RESET ALL: no context, no access, and no second entry', async () => {
     const app = await connect(appUrl);
     await inTx(app, async () => {
