@@ -16,7 +16,7 @@ describe('e-invoice XML', () => {
     expect(invoice.series).toBe('C26TAB');
     expect(invoice.number).toBe('1234');
     expect(invoice.issueDate).toBe('2026-09-15');
-    expect(invoice.seller.taxCode).toBe('0101234565');
+    expect(invoice.seller.taxCode).toBe('0101234564');
     expect(invoice.buyer.name).toBe('CÔNG TY CỔ PHẦN NGƯỜI MUA MẪU');
     expect(invoice.lines).toHaveLength(4);
     expect(invoice.lines[2]?.nature).toBe('discount');

@@ -13,7 +13,7 @@ const invoice = {
   currency: 'VND',
   exchangeRate: null,
   paymentMethod: null,
-  seller: { name: 'Seller', taxCode: '0102030405', address: null, email: null, phone: null },
+  seller: { name: 'Seller', taxCode: '0102030406', address: null, email: null, phone: null },
   buyer: { name: 'Buyer', taxCode: null, address: null, email: null, phone: null },
   lines: [
     { lineNo: 1, nature: 'goods', code: null, description: 'x', unit: null, quantity: '1', unitPrice: '100', amount: '100', vatRate: '10%' },

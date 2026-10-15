@@ -10,14 +10,14 @@
   "paymentMethod": "TM/CK",
   "seller": {
     "name": "CÔNG TY TNHH DỊCH VỤ MẪU",
-    "taxCode": "0101234565",
+    "taxCode": "0101234564",
     "address": "1 Đường Mẫu, Quận Mẫu, Hà Nội",
     "email": "hoadon@example.com",
     "phone": null
   },
   "buyer": {
     "name": "CÔNG TY CỔ PHẦN NGƯỜI MUA MẪU",
-    "taxCode": "0309876547",
+    "taxCode": "0309876546",
     "address": "2 Đường Thử, TP Hồ Chí Minh",
     "email": null,
     "phone": null

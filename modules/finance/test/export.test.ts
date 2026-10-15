@@ -17,7 +17,7 @@ function entry(id: string, amount: string, overrides: Partial<JournalEntryView> 
       { lineNo: 1, accountCode: '6422', accountName: 'Chi phí quản lý', debit: amount, credit: '0' },
       { lineNo: 2, accountCode: '331', accountName: 'Phải trả người bán', debit: '0', credit: amount },
     ],
-    document: { series: '1C26TAA', number: '00000123', issueDate: '2026-09-30', partyName: 'Công ty TNHH ABC', partyTaxCode: '0101234565' },
+    document: { series: '1C26TAA', number: '00000123', issueDate: '2026-09-30', partyName: 'Công ty TNHH ABC', partyTaxCode: '0101234564' },
     ...overrides,
   };
 }
@@ -67,7 +67,7 @@ describe('csvSafeText', () => {
     }
   });
   it('leaves normal values unchanged', () => {
-    for (const value of ['Công ty TNHH ABC', '0101234565-001', '2026-10-01', 'a=b', ' =1', '']) {
+    for (const value of ['Công ty TNHH ABC', '0101234564-001', '2026-10-01', 'a=b', ' =1', '']) {
       expect(csvSafeText(value)).toBe(value);
     }
     expect(csvSafeText(null)).toBe('');
@@ -129,7 +129,7 @@ describe('buildJournalWorkbook', () => {
     expect(row.getCell(1).value).toBe('2026-10-01');
     expect(row.getCell(3).value).toBe('1C26TAA');
     expect(row.getCell(4).value).toBe('00000123');
-    expect(row.getCell(5).value).toBe('0101234565');
+    expect(row.getCell(5).value).toBe('0101234564');
     expect(row.getCell(6).value).toBe('Công ty TNHH ABC');
     expect(row.getCell(7).value).toBe('Mua văn phòng phẩm');
     expect(row.getCell(8).value).toBe('6422');
