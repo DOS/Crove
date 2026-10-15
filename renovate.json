@@ -1,0 +1,37 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests"
+  ],
+  "timezone": "Asia/Ho_Chi_Minh",
+  "schedule": ["before 6am every day"],
+  "rangeStrategy": "pin",
+  "minimumReleaseAge": "1 day",
+  "labels": ["tooling", "dependencies"],
+  "dependencyDashboard": true,
+  "platformAutomerge": true,
+  "prConcurrentLimit": 0,
+  "prHourlyLimit": 0,
+  "enabledManagers": ["npm", "github-actions", "dockerfile", "docker-compose"],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "minimumReleaseAge": null,
+    "schedule": ["at any time"],
+    "labels": ["tooling", "dependencies", "security"]
+  },
+  "packageRules": [
+    {
+      "description": "Patch, minor and digest updates: one grouped PR, automerged once all required checks pass",
+      "matchUpdateTypes": ["patch", "minor", "digest", "pin", "pinDigest"],
+      "groupName": "non-major dependencies",
+      "automerge": true
+    },
+    {
+      "description": "Majors: one PR per package, never automerged",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ]
+}
