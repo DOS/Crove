@@ -1,5 +1,6 @@
 // Context re-entry guard (plan §4.5 item 1, External-tenant gate T10) on a real PostgreSQL 17: a transaction enters
 // at most one context. Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
+// Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -9,7 +10,7 @@ import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove
 import { Runtime, toDomainError } from '@crove/kernel-runtime';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
-const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
+const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 // The context lock namespace in 20261015130000_crove_kernel_context_reentry_guard.sql ('CROV').
 const NAMESPACE = 1129467734;
 const REENTRY = { code: '42501', message: 'CONTEXT_REENTRY' };
