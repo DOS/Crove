@@ -118,6 +118,13 @@ describe('prober configuration', () => {
     ).toMatchObject({ instance: 'office', thresholds: { outboxAgeSeconds: 60, jobAgeSeconds: 61, heartbeatAgeSeconds: 62, deadLetters: 5 }, deadLetterWindowSeconds: 600 });
   });
 
+  it('counts dead letters over the --every interval plus 60 s unless the window is set', () => {
+    expect(loadProberConfig({}, 300).deadLetterWindowSeconds).toBe(360);
+    expect(loadProberConfig({ PROBER_DEAD_LETTER_WINDOW_SECONDS: '' }, 30).deadLetterWindowSeconds).toBe(90);
+    expect(loadProberConfig({ PROBER_DEAD_LETTER_WINDOW_SECONDS: '600' }, 30).deadLetterWindowSeconds).toBe(600);
+    expect(loadProberConfig({ PROBER_DEAD_LETTER_WINDOW_SECONDS: '' }).deadLetterWindowSeconds).toBe(3600);
+  });
+
   it('refuses a webhook that is not http(s) and limits that are not whole seconds', () => {
     expect(() => loadProberConfig({ ALERT_WEBHOOK_URL: 'file:///etc/passwd' })).toThrow(/ALERT_WEBHOOK_URL/);
     expect(() => loadProberConfig({ PROBER_MAX_JOB_AGE_SECONDS: '1.5' })).toThrow(/PROBER_MAX_JOB_AGE_SECONDS/);

@@ -28,8 +28,10 @@ const schema = z.object({
   PROBER_MAX_JOB_AGE_SECONDS: seconds(900),
   PROBER_MAX_HEARTBEAT_AGE_SECONDS: seconds(120),
   PROBER_MAX_DEAD_LETTERS: z.coerce.number().int().min(0).max(10_000).default(0),
-  // Failed jobs count for this long. Set it to the probe interval so each dead letter alerts once.
-  PROBER_DEAD_LETTER_WINDOW_SECONDS: z.coerce.number().int().min(60).max(604_800).default(3600),
+  // Failed jobs count for this long. Default: the probe interval plus 60 s with --every (each dead letter alerts
+  // once, or twice when it lands in the overlap, never zero times), 3600 otherwise. With cron, set it to the
+  // cron interval plus 60.
+  PROBER_DEAD_LETTER_WINDOW_SECONDS: optional.pipe(z.coerce.number<string | undefined>().int().min(60).max(604_800).optional()),
 });
 
 export interface ProberConfig {
@@ -47,7 +49,7 @@ export interface Thresholds {
   deadLetters: number;
 }
 
-export function loadProberConfig(env: NodeJS.ProcessEnv = process.env): ProberConfig {
+export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeconds: number | null = null): ProberConfig {
   const parsed = schema.safeParse(env);
   if (!parsed.success) {
     const fields = parsed.error.issues.map((i) => i.path.join('.')).join(', ');
@@ -64,7 +66,7 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env): ProberCo
       heartbeatAgeSeconds: raw.PROBER_MAX_HEARTBEAT_AGE_SECONDS,
       deadLetters: raw.PROBER_MAX_DEAD_LETTERS,
     },
-    deadLetterWindowSeconds: raw.PROBER_DEAD_LETTER_WINDOW_SECONDS,
+    deadLetterWindowSeconds: raw.PROBER_DEAD_LETTER_WINDOW_SECONDS ?? (everySeconds === null ? 3600 : Math.min(everySeconds + 60, 604_800)),
   };
 }
 
@@ -270,7 +272,7 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   let config: ProberConfig;
   try {
     args = parseProberArgs(argv);
-    config = loadProberConfig(env);
+    config = loadProberConfig(env, args.everySeconds);
   } catch (e) {
     error(`[prober] ${e instanceof Error ? e.message : String(e)}`);
     return EXIT.probeFailed;
@@ -278,6 +280,8 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   if (args.testAlert) return sendTestAlert(config, deps);
   if (args.everySeconds === null) return probeOnce(config, deps);
   const every = args.everySeconds;
+  // Under Docker this is PID 1, which gets no default SIGTERM handling: stop between probes at once.
+  process.once('SIGTERM', () => process.exit(EXIT.ok));
   (deps.log ?? console.log)(`[prober] probing every ${every} s, alerts to ${describeWebhook(config.webhookUrl)}`);
   for (;;) {
     await probeOnce(config, deps);

@@ -181,7 +181,8 @@ services:
       PROBER_MAX_JOB_AGE_SECONDS: ${PROBER_MAX_JOB_AGE_SECONDS:-900}
       PROBER_MAX_HEARTBEAT_AGE_SECONDS: ${PROBER_MAX_HEARTBEAT_AGE_SECONDS:-120}
       PROBER_MAX_DEAD_LETTERS: ${PROBER_MAX_DEAD_LETTERS:-0}
-      PROBER_DEAD_LETTER_WINDOW_SECONDS: ${PROBER_INTERVAL_SECONDS:-300}
+      # Unset: the probe interval plus 60 s, so each dead letter alerts once (twice at most).
+      PROBER_DEAD_LETTER_WINDOW_SECONDS: ${PROBER_DEAD_LETTER_WINDOW_SECONDS:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
