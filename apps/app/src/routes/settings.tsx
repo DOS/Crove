@@ -63,7 +63,15 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
           <Button variant="danger" disabled={busy} onClick={confirm}>
             {text.action}
           </Button>
-          <Button variant="ghost" disabled={busy} onClick={() => setPending(null)}>
+          <Button
+            variant="ghost"
+            disabled={busy}
+            onClick={() => {
+              changeRole.reset();
+              remove.reset();
+              setPending(null);
+            }}
+          >
             Hủy
           </Button>
         </div>

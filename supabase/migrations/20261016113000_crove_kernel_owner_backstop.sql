@@ -7,16 +7,17 @@
 --
 -- After: a deferred constraint trigger on tenant_member checks, at commit, every org whose owner row was deleted,
 -- demoted or moved to another org in the transaction, and refuses the commit (LAST_OWNER, P0001) when that org would
--- have no owner left. For every role, the database owner included.
+-- have no owner left. It holds for every DELETE and UPDATE, from any role, the database owner included (only a
+-- table owner disabling the trigger or a superuser in replica mode bypasses it; no Crove role may TRUNCATE).
 --   - Concurrency: the check first takes a transaction-level advisory lock on the org, so two transactions that each
 --     remove a different owner check one after the other; the second runs its count after the first committed (READ
 --     COMMITTED takes a new snapshot per statement, the level every Crove transaction uses) and sees zero owners.
 --     The lock is taken only at commit and only when an owner row changed, so it never meets the commands' row locks
 --     while they are still deciding.
 --   - No exception for closing or deleting an org: no path does either today. No command closes an org (status
---     'closed' exists only in the schema), and a tenant row cannot be deleted at all, since its ON DELETE CASCADE
---     reaches audit_event, which is append-only. Offboarding (§7.9) decides how the backstop treats a closed or
---     purged org when it is built; until then the check fails closed.
+--     'closed' exists only in the schema), and a tenant row cannot be deleted, since its ON DELETE CASCADE reaches
+--     audit_event, which is append-only, and every tenant commits with its kernel.org.create audit row. Offboarding
+--     (§7.9) decides how the backstop treats a closed or purged org when it is built; until then it fails closed.
 --   - Org creation (create_or_replay_org) and invite acceptance (invite_accept) only insert memberships, so they never
 --     fire it; an invite never makes an owner.
 SET LOCAL lock_timeout = '2s';
