@@ -22,8 +22,10 @@ export function OnboardingPage() {
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (attempt.current?.name !== name) attempt.current = { name, key: crypto.randomUUID() };
-    create.mutate({ name, idempotencyKey: attempt.current.key });
+    // The server trims the name, so the key follows the trimmed name.
+    const trimmed = name.trim();
+    if (attempt.current?.name !== trimmed) attempt.current = { name: trimmed, key: crypto.randomUUID() };
+    create.mutate({ name: trimmed, idempotencyKey: attempt.current.key });
   }
 
   return (
