@@ -2,7 +2,7 @@
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { contract } from '@crove/kernel-contract';
-import { createOrg, myOrgs, type OrgSummary } from '@crove/kernel';
+import { acceptInvite, createOrg, declineInvite, myInvites, myOrgs, type OrgSummary } from '@crove/kernel';
 import { DomainError, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { actorOf, type AuthUser } from './auth.ts';
 
@@ -62,6 +62,21 @@ export function createRpcHandler(runtime: Runtime) {
       addMember: os.org.addMember.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.member.add', input, { actor, orgId })),
       ),
+      invite: os.org.invite.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('kernel.member.invite', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+      invites: os.org.invites.handler(({ context }) =>
+        inOrg(context, (orgId, actor) => runtime.query('kernel.member.invites', {}, { actor, orgId })),
+      ),
+      revokeInvite: os.org.revokeInvite.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('kernel.member.invite_revoke', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
       rotateInbound: os.org.rotateInbound.handler(({ context, input }) =>
         inOrg(context, async (orgId, actor) => {
           await runtime.execute('kernel.inbound.rotate', {}, { actor, orgId, idempotencyKey: input.idempotencyKey });
@@ -83,6 +98,14 @@ export function createRpcHandler(runtime: Runtime) {
           return runtime.execute('kernel.member.remove', rest, { actor, orgId, idempotencyKey });
         }),
       ),
+    },
+    // Org-less: the invitee is not a member of the org yet, so no x-crove-org header is read.
+    invites: {
+      mine: os.invites.mine.handler(({ context }) => guard(() => myInvites(runtime, actorOf(context.user)))),
+      accept: os.invites.accept.handler(({ context, input }) =>
+        guard(() => acceptInvite(runtime, actorOf(context.user), { orgId: input.orgId, inviteId: input.inviteId }, input.idempotencyKey)),
+      ),
+      decline: os.invites.decline.handler(({ context, input }) => guard(() => declineInvite(runtime, actorOf(context.user), input))),
     },
     sessions: {
       list: os.sessions.list.handler(({ context, input }) =>

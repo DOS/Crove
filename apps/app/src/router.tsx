@@ -6,6 +6,7 @@ import { AuthPage } from './routes/auth.tsx';
 import { DocumentsPage } from './routes/documents.tsx';
 import { InboxDetailPage } from './routes/inbox-detail.tsx';
 import { InboxPage } from './routes/inbox.tsx';
+import { InvitesPage } from './routes/invites.tsx';
 import { JournalPage } from './routes/journal.tsx';
 import { OnboardingPage } from './routes/onboarding.tsx';
 import { OrgLayout } from './routes/org-layout.tsx';
@@ -60,6 +61,14 @@ const onboardingRoute = createRoute({
   component: OnboardingPage,
 });
 
+// The signed-in user's pending invites, outside any org: the invitee is not a member yet.
+const invitesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/invites',
+  beforeLoad: requireAuth,
+  component: InvitesPage,
+});
+
 export const orgRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/o/$slug',
@@ -93,6 +102,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
   onboardingRoute,
+  invitesRoute,
   orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, settingsRoute]),
 ]);
 

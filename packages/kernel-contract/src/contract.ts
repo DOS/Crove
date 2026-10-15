@@ -7,10 +7,14 @@ import {
   zId,
   zInboxDetail,
   zInboxItem,
+  zInviteEmail,
+  zInviteRole,
   zJournalEntry,
   zLocalDate,
   zMe,
+  zMyInvite,
   zOrgDetail,
+  zOrgInvite,
   zOrgSummary,
   zParty,
   zProposalStatus,
@@ -29,9 +33,18 @@ export const contract = {
     // A retry with the same idempotencyKey returns the org the first request created.
     create: oc.input(z.object({ name: z.string().trim().min(1).max(200), idempotencyKey: zId })).output(zOrgSummary),
     get: oc.output(zOrgDetail),
+    // Adds an existing account without asking them. The app invites instead; kept for the API until it is retired.
     addMember: oc
       .input(z.object({ email: z.email(), role: zRole.exclude(['owner']) }))
       .output(z.object({ userId: zId })),
+    // Owners and admins (R3; only owners invite admins). Replaces an open invite to the same address. The person
+    // becomes a member only when they accept (invites.accept). A retry with the same idempotencyKey returns the first result.
+    invite: oc
+      .input(z.object({ email: zInviteEmail, role: zInviteRole, idempotencyKey: zId }))
+      .output(z.object({ inviteId: zId, email: z.string(), role: zInviteRole, expiresAt: z.string() })),
+    // Open and recently declined invites of the org in the header (owners and admins).
+    invites: oc.output(z.array(zOrgInvite)),
+    revokeInvite: oc.input(z.object({ inviteId: zId, idempotencyKey: zId })).output(z.object({ inviteId: zId })),
     // Owner only. Retires the org's inbound email address for good and returns the new one (null when the server
     // has no inbound domain). A retry with the same idempotencyKey does not rotate again.
     rotateInbound: oc.input(z.object({ idempotencyKey: zId })).output(z.object({ inboundAddress: z.string().nullable() })),
@@ -40,6 +53,14 @@ export const contract = {
       .input(z.object({ userId: zId, role: zRole, idempotencyKey: zId }))
       .output(z.object({ userId: zId, role: zRole, previousRole: zRole })),
     removeMember: oc.input(z.object({ userId: zId, idempotencyKey: zId })).output(z.object({ userId: zId, previousRole: zRole })),
+  },
+  // The signed-in user's own pending invites, across orgs; no x-crove-org header (the user is not a member yet).
+  invites: {
+    mine: oc.output(z.array(zMyInvite)),
+    // Joins the org with the invited role. A retry with the same idempotencyKey returns the first result.
+    accept: oc.input(z.object({ orgId: zId, inviteId: zId, idempotencyKey: zId })).output(zOrgSummary),
+    // Declining again is a no-op.
+    decline: oc.input(z.object({ orgId: zId, inviteId: zId })).output(z.object({ ok: z.literal(true) })),
   },
   // Sessions (devices) of a member of the org in the header. API only; the screen is a follow-up.
   sessions: {

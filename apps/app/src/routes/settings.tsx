@@ -1,7 +1,9 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { Badge, Button, Card, ErrorText, Input, PageHeader, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { formatDateTime } from '../lib/format.ts';
+import { INVITE_ROLE_LABEL } from './invites.tsx';
 
 const ROLE_LABEL = { owner: 'Chủ sở hữu', admin: 'Quản trị', member: 'Thành viên', viewer: 'Chỉ xem' } as const;
 type Role = keyof typeof ROLE_LABEL;
@@ -39,7 +41,7 @@ function MemberControls({ member }: { member: MemberRow }) {
     return (
       <div className="max-w-xs space-y-2 rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-sm" role="alertdialog" aria-label={`Xác nhận xóa ${name}`}>
         <p className="font-medium text-fg">Xóa {name} khỏi tổ chức?</p>
-        <p className="text-fg-2">Người này mất quyền truy cập tổ chức ngay từ yêu cầu tiếp theo. Bạn có thể thêm lại họ sau.</p>
+        <p className="text-fg-2">Người này mất quyền truy cập tổ chức ngay từ yêu cầu tiếp theo. Bạn có thể mời lại họ sau.</p>
         <div className="flex gap-2">
           <Button variant="danger" disabled={busy} onClick={() => remove.mutate({ userId: member.userId, idempotencyKey: removeKey })}>
             Xác nhận xóa
@@ -142,29 +144,146 @@ function RotateInboundAddress() {
   );
 }
 
-export function SettingsPage() {
-  const org = useQuery(orpc.org.get.queryOptions());
-  const me = useQuery(orpc.me.get.queryOptions());
+const INVITE_STATUS = {
+  pending: { label: 'Đang chờ', tone: 'warn' },
+  expired: { label: 'Hết hạn', tone: 'neutral' },
+  declined: { label: 'Đã từ chối', tone: 'bad' },
+} as const;
+
+interface OrgInvite {
+  inviteId: string;
+  email: string;
+  role: keyof typeof INVITE_ROLE_LABEL;
+  status: keyof typeof INVITE_STATUS;
+  invitedBy: string | null;
+  expiresAt: string;
+}
+
+// One invite on the org's list. Owners revoke any invite and admins member and viewer invites; the server enforces
+// it, the screen hides only what can never succeed.
+function InviteListRow({ invite, isOwner }: { invite: OrgInvite; isOwner: boolean }) {
+  const [revokeKey] = useState(() => crypto.randomUUID());
+  const revoke = useMutation(orpc.org.revokeInvite.mutationOptions({ onSuccess: () => void queryClient.invalidateQueries() }));
+  const status = INVITE_STATUS[invite.status];
+  const canRevoke = invite.status !== 'declined' && (isOwner || invite.role !== 'admin');
+  return (
+    <li className="space-y-1 py-2 text-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-fg">{invite.email}</p>
+          <p className="text-xs text-fg-3">
+            {INVITE_ROLE_LABEL[invite.role]}
+            {invite.invitedBy ? ` · mời bởi ${invite.invitedBy}` : ''}
+            {invite.status === 'pending' ? ` · hết hạn ${formatDateTime(invite.expiresAt)}` : ''}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Badge tone={status.tone}>{status.label}</Badge>
+          {canRevoke && (
+            <Button
+              variant="ghost"
+              className="px-2.5 py-1"
+              disabled={revoke.isPending}
+              onClick={() => revoke.mutate({ inviteId: invite.inviteId, idempotencyKey: revokeKey })}
+            >
+              Thu hồi
+            </Button>
+          )}
+        </div>
+      </div>
+      {revoke.error && <ErrorText>{errorMessage(revoke.error)}</ErrorText>}
+    </li>
+  );
+}
+
+// Owners and admins invite by email; the person joins only after accepting, signed in with that email. Inviting an
+// address again replaces its open invite. One idempotency key per address and role, so a retried submit is replayed.
+function InviteMembers({ isOwner }: { isOwner: boolean }) {
+  const invites = useQuery(orpc.org.invites.queryOptions());
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<'admin' | 'member' | 'viewer'>('member');
-  const add = useMutation(
-    orpc.org.addMember.mutationOptions({
-      onSuccess: () => {
+  const [sent, setSent] = useState<string | null>(null);
+  const attempt = useRef<{ email: string; role: string; key: string } | null>(null);
+  const invite = useMutation(
+    orpc.org.invite.mutationOptions({
+      onSuccess: (result) => {
+        setSent(result.email);
         setEmail('');
+        attempt.current = null;
         void queryClient.invalidateQueries();
       },
     }),
   );
 
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const normalized = email.trim().toLowerCase();
+    if (attempt.current?.email !== normalized || attempt.current.role !== role) {
+      attempt.current = { email: normalized, role, key: crypto.randomUUID() };
+    }
+    setSent(null);
+    invite.mutate({ email: normalized, role, idempotencyKey: attempt.current.key });
+  }
+
+  return (
+    <div className="mt-4 space-y-3 border-t border-line pt-4">
+      <form className="space-y-2" onSubmit={submit}>
+        <p className="text-xs text-fg-3">
+          Mời bằng email. Người được mời chỉ trở thành thành viên sau khi đăng nhập bằng email này và chấp nhận lời mời (hết hạn sau 7 ngày).
+        </p>
+        <div className="flex gap-2">
+          <Input
+            type="email"
+            required
+            placeholder="email@congty.vn"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            aria-label="Email người được mời"
+          />
+          <select
+            className="rounded-lg border border-line bg-surface-2 px-2 text-sm text-fg"
+            value={role}
+            onChange={(e) => setRole(e.target.value as typeof role)}
+            aria-label="Vai trò"
+          >
+            {isOwner && <option value="admin">Quản trị</option>}
+            <option value="member">Thành viên</option>
+            <option value="viewer">Chỉ xem</option>
+          </select>
+          <Button type="submit" disabled={invite.isPending}>
+            Mời
+          </Button>
+        </div>
+        {sent && (
+          <p className="text-sm text-fg-2" role="status">
+            Đã gửi lời mời tới {sent}. Họ sẽ thấy lời mời khi đăng nhập vào Crove.
+          </p>
+        )}
+        {invite.error && <ErrorText>{errorMessage(invite.error)}</ErrorText>}
+      </form>
+      {invites.error && <ErrorText>{errorMessage(invites.error)}</ErrorText>}
+      {(invites.data?.length ?? 0) > 0 && (
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-fg-3">Lời mời</p>
+          <ul className="mt-1 divide-y divide-[var(--line)]">
+            {invites.data?.map((i) => (
+              <InviteListRow key={i.inviteId} invite={i} isOwner={isOwner} />
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function SettingsPage() {
+  const org = useQuery(orpc.org.get.queryOptions());
+  const me = useQuery(orpc.me.get.queryOptions());
+
   if (org.isLoading) return <Spinner />;
   if (org.error) return <ErrorText>{errorMessage(org.error)}</ErrorText>;
   const canManage = org.data?.role === 'owner' || org.data?.role === 'admin';
   const isOwner = org.data?.role === 'owner';
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    add.mutate({ email, role });
-  }
 
   return (
     <>
@@ -202,28 +321,7 @@ export function SettingsPage() {
               </li>
             ))}
           </ul>
-          {canManage && (
-            <form className="mt-4 space-y-2" onSubmit={submit}>
-              <p className="text-xs text-fg-3">Thêm người đã có tài khoản Crove</p>
-              <div className="flex gap-2">
-                <Input type="email" required placeholder="email@congty.vn" value={email} onChange={(e) => setEmail(e.target.value)} />
-                <select
-                  className="rounded-lg border border-line bg-surface-2 px-2 text-sm text-fg"
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as typeof role)}
-                  aria-label="Vai trò"
-                >
-                  <option value="admin">Quản trị</option>
-                  <option value="member">Thành viên</option>
-                  <option value="viewer">Chỉ xem</option>
-                </select>
-                <Button type="submit" disabled={add.isPending}>
-                  Thêm
-                </Button>
-              </div>
-              {add.error && <ErrorText>{errorMessage(add.error)}</ErrorText>}
-            </form>
-          )}
+          {canManage && <InviteMembers isOwner={isOwner} />}
         </Card>
       </div>
     </>

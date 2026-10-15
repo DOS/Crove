@@ -18,6 +18,7 @@ export function OrgLayout() {
   const me = useQuery(orpc.me.get.queryOptions());
   const pending = useQuery({ ...orpc.inbox.list.queryOptions({ input: { status: 'pending' } }), refetchInterval: 30_000 });
   const org = me.data?.orgs.find((o) => o.slug === slug);
+  const invites = useQuery({ ...orpc.invites.mine.queryOptions(), refetchInterval: 60_000 });
 
   return (
     <div className="flex min-h-full bg-canvas">
@@ -55,6 +56,12 @@ export function OrgLayout() {
             </Link>
           ))}
         </nav>
+        {(invites.data?.length ?? 0) > 0 && (
+          <Link to="/invites" className="mt-4 flex items-center justify-between rounded-lg px-3 py-2 text-sm text-fg-2 hover:bg-surface-2 hover:text-fg">
+            Lời mời tham gia
+            <span className="rounded-full bg-brand-600 px-1.5 text-xs text-white">{invites.data?.length}</span>
+          </Link>
+        )}
         <div className="mt-auto border-t border-line px-2 pt-3 text-xs text-fg-3">
           <p className="truncate">{me.data?.email}</p>
           <button className="mt-1 hover:text-fg-2" onClick={() => void auth().signOut()}>
@@ -63,8 +70,13 @@ export function OrgLayout() {
         </div>
       </aside>
       <div className="min-w-0 flex-1">
-        <header className="flex items-center justify-between border-b border-line bg-surface px-4 py-3 md:hidden">
+        <header className="flex items-center justify-between gap-2 border-b border-line bg-surface px-4 py-3 md:hidden">
           <Logo />
+          {(invites.data?.length ?? 0) > 0 && (
+            <Link to="/invites" className="ml-auto rounded-full bg-brand-600 px-2 py-0.5 text-xs text-white">
+              {invites.data?.length} lời mời
+            </Link>
+          )}
           <select
             className="rounded-lg border border-line bg-surface-2 px-2 py-1 text-sm text-fg"
             value={NAV.find((n) => window.location.pathname.endsWith(n.to.split('/').pop() ?? ''))?.to ?? NAV[0].to}

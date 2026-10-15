@@ -4,6 +4,7 @@ import { useRef, useState, type FormEvent } from 'react';
 import { Button, Card, ErrorText, Input, Logo } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { auth } from '../lib/auth.ts';
+import { MyInvites } from './invites.tsx';
 
 export function OnboardingPage() {
   const navigate = useNavigate();
@@ -29,7 +30,10 @@ export function OnboardingPage() {
   }
 
   return (
-    <main className="flex min-h-full items-center justify-center bg-canvas px-4 py-16">
+    <main className="flex min-h-full flex-col items-center justify-center gap-6 bg-canvas px-4 py-16">
+      <div className="w-full max-w-md">
+        <MyInvites />
+      </div>
       <Card className="w-full max-w-md p-6">
         <Logo />
         <h1 className="mt-6 text-lg font-semibold text-fg">Tạo tổ chức đầu tiên</h1>

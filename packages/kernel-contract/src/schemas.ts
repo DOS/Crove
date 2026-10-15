@@ -94,6 +94,33 @@ export const zOrgDetail = z.object({
   members: z.array(z.object({ userId: zId, email: z.string(), displayName: z.string().nullable(), role: zRole })),
 });
 
+// Invites (issue #35). The invited address is trimmed and lower-cased, the form invites are stored and matched in.
+export const zInviteEmail = z.string().trim().toLowerCase().max(320).pipe(z.email());
+export const zInviteRole = zRole.exclude(['owner']);
+
+// An invite as the org's owners and admins see it. `expired` and `declined` invites stay listed so the inviter knows
+// to send a new one; accepted and revoked invites are only in the audit trail.
+export const zOrgInvite = z.object({
+  inviteId: zId,
+  email: z.string(),
+  role: zInviteRole,
+  status: z.enum(['pending', 'expired', 'declined']),
+  invitedBy: z.string().nullable(),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+});
+
+// A pending invite as the invitee sees it: only what they need to decide.
+export const zMyInvite = z.object({
+  orgId: zId,
+  inviteId: zId,
+  orgName: z.string(),
+  role: zInviteRole,
+  invitedBy: z.string(),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+});
+
 // A Supabase Auth session as Crove tracks it (ADR-0028).
 export const zSession = z.object({
   sessionId: zId,

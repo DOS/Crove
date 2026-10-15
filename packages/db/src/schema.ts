@@ -41,6 +41,24 @@ export interface TenantMemberTable {
   created_at: DefaultTimestamp;
 }
 
+// A pending or closed invite to join an org (issue #35). In the org, code inserts invites and may update only
+// revoked_at and revoked_by; accepting and declining are definers of the invitee.
+export interface MemberInviteTable {
+  org_id: string;
+  id: Generated<string>;
+  email: string;
+  role: Exclude<MemberRole, 'owner'>;
+  invited_by: string;
+  created_at: DefaultTimestamp;
+  expires_at: DefaultTimestamp;
+  accepted_at: Date | null;
+  accepted_by: string | null;
+  declined_at: Date | null;
+  declined_by: string | null;
+  revoked_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  revoked_by: ColumnType<string | null, string | null | undefined, string | null>;
+}
+
 export interface IdempotencyKeyTable {
   org_id: string;
   actor_key: string;
@@ -244,6 +262,7 @@ export interface Database {
   'crove_kernel.user_account': UserAccountTable;
   'crove_kernel.tenant': TenantTable;
   'crove_kernel.tenant_member': TenantMemberTable;
+  'crove_kernel.member_invite': MemberInviteTable;
   'crove_kernel.idempotency_key': IdempotencyKeyTable;
   'crove_kernel.outbox_event': OutboxEventTable;
   'crove_kernel.audit_event': AuditEventTable;
