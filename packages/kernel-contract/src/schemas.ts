@@ -91,6 +91,8 @@ export const zOrgDetail = z.object({
   name: z.string(),
   role: zRole,
   inboundAddress: z.string().nullable(),
+  // Messages to the org's addresses retired in the last 30 days that were dropped (#139); null when inboundAddress is.
+  inboundDroppedCount: z.number().int().nonnegative().nullable(),
   members: z.array(z.object({ userId: zId, email: z.string(), displayName: z.string().nullable(), role: zRole })),
 });
 
