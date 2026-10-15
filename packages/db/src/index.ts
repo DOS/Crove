@@ -23,8 +23,76 @@ export interface PoolOptions {
   statementTimeoutMs?: number;
 }
 
+// Session state a checkout may leave on its connection, cleared before the connection goes back to the pool
+// (#117). A session-level set_config('crove.ctx' | 'crove.ctx_seal' | 'crove.org_id' | 'crove.user_id', ..., false)
+// survives COMMIT and makes every later enter_context on that backend raise CONTEXT_REENTRY and every helper raise
+// CONTEXT_SEAL_INVALID; a session-level pg_advisory_lock on the context key, a SET ROLE or a changed search_path
+// or default_transaction_read_only do the same kind of harm. One simple-protocol round trip resets all of it:
+// - RESET ALL: every setting back to its session default, which keeps the startup values pg sends
+//   (application_name, statement_timeout, idle_in_transaction_session_timeout). It does not reset the role.
+// - RESET ROLE: back to the login role (no Crove login role can change session_authorization).
+// - pg_advisory_unlock_all(): session-level advisory locks (transaction-level ones end with the transaction).
+// - CLOSE ALL and UNLISTEN *: held cursors and LISTEN registrations, which would otherwise outlive the checkout.
+// Not DISCARD ALL: it also runs DEALLOCATE ALL, which breaks pg's client-side cache of named prepared statements
+// on that connection, and DISCARD PLANS, which throws away the backend's cached PL/pgSQL plans; TEMP needs no
+// reset because no Crove role may create temporary objects (T17). Cost: one round trip per checkout, after
+// release, so the caller does not wait for it; the connection stays out of the pool for that round trip
+// (apps/kernel/test/context-cost.db.test.ts measures it).
+// Behind a transaction-mode pooler (PgBouncer, Supavisor; plan §3.3) this reset reaches whichever server backend
+// the pooler picks for it, not necessarily the one the checkout used, so it protects direct connections only; the
+// pooler's own reset decides there (PgBouncer runs server_reset_query only in session mode unless
+// server_reset_query_always is set).
+export const SESSION_RESET_SQL =
+  'CLOSE ALL; RESET ALL; RESET ROLE; UNLISTEN *; SELECT pg_catalog.pg_advisory_unlock_all()';
+
+type ConnectCallback = (err: Error | undefined, client: pg.PoolClient | undefined, done: (release?: Error | boolean) => void) => void;
+
+// Wraps release() of a checked-out client: the client returns to the pool only after SESSION_RESET_SQL has run on
+// it, so the next checkout can never see this one's session state. The caller does not wait for the reset. A
+// client released with an error, inside a transaction (status other than idle) or whose reset fails is destroyed
+// instead of pooled: RESET inside an open transaction would be undone by its ROLLBACK.
+function resetOnRelease(client: pg.PoolClient): pg.PoolClient {
+  const release = client.release.bind(client);
+  let released = false;
+  client.release = (err?: Error | boolean) => {
+    if (released) throw new Error('Release called on client which has already been released to the pool.');
+    released = true;
+    if (err) return release(err);
+    if (client.getTransactionStatus() !== 'I') return release(new Error('client released inside a transaction'));
+    // While the reset runs nobody holds the client, so a lost connection must not reach the process as an unhandled
+    // 'error' event; the reset query fails with the same error, and that destroys the client.
+    const ignore = () => {};
+    client.on('error', ignore);
+    client.query(SESSION_RESET_SQL).then(
+      () => {
+        client.removeListener('error', ignore);
+        release();
+      },
+      (error: unknown) => {
+        client.removeListener('error', ignore);
+        release(error instanceof Error ? error : new Error(String(error)));
+      },
+    ).catch((error: unknown) => console.error('[db] release after session reset failed', (error as Error)?.message));
+  };
+  return client;
+}
+
+// pg.Pool whose every checkout, including pool.query(), resets its session on release.
+class SessionResetPool extends pg.Pool {
+  connect(): Promise<pg.PoolClient>;
+  connect(callback: ConnectCallback): void;
+  connect(callback?: ConnectCallback): Promise<pg.PoolClient> | void {
+    if (!callback) return super.connect().then(resetOnRelease);
+    super.connect((err, client, done) => {
+      if (err || !client) return callback(err, client, done);
+      resetOnRelease(client);
+      callback(undefined, client, client.release);
+    });
+  }
+}
+
 export function createPool(options: PoolOptions): pg.Pool {
-  const pool = new pg.Pool({
+  const pool = new SessionResetPool({
     connectionString: options.connectionString,
     max: options.max ?? 10,
     application_name: options.applicationName ?? 'crove',
