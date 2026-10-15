@@ -193,6 +193,77 @@ suite('migrations with a runner that is not a superuser', () => {
     });
   });
 
+  // #100: functions outside crove_* schemas that crove_* objects reach without naming them, and TEMPORARY for
+  // non-Crove roles that can act as a Crove role. Each planted function is reached through exactly one path.
+  it('reports reachable functions outside crove_* schemas, and TEMPORARY for members of Crove roles', async () => {
+    const tag = dbName.replace(/^crove_/, 't100_');
+    await withClient(runnerUrl, async (runner) => {
+      await runner.query('BEGIN');
+      try {
+        await runner.query(`
+          CREATE SCHEMA crove_t100;
+          CREATE SCHEMA t100_ext;
+          CREATE FUNCTION t100_ext.trg_definer() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN RETURN NEW; END $$;
+          CREATE FUNCTION t100_ext.trg_pinned() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+            SET search_path = pg_catalog, pg_temp AS $$ BEGIN RETURN NEW; END $$;
+          CREATE FUNCTION t100_ext.trg_invoker() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+          CREATE FUNCTION t100_ext.dflt() RETURNS int LANGUAGE sql SET search_path = public AS $$ SELECT 1 $$;
+          CREATE FUNCTION t100_ext.op_fn(int, int) RETURNS boolean LANGUAGE sql SET search_path = '' AS $$ SELECT $1 = $2 $$;
+          CREATE OPERATOR t100_ext.=== (LEFTARG = int, RIGHTARG = int, FUNCTION = t100_ext.op_fn);
+          CREATE FUNCTION t100_ext.diff(float8, float8) RETURNS float8 LANGUAGE sql IMMUTABLE SECURITY DEFINER AS $$ SELECT $1 - $2 $$;
+          CREATE TYPE t100_ext.span AS RANGE (subtype = float8, subtype_diff = t100_ext.diff);
+          CREATE FUNCTION t100_ext.diff_elem(float8, float8) RETURNS float8 LANGUAGE sql IMMUTABLE SECURITY DEFINER AS $$ SELECT $1 - $2 $$;
+          CREATE TYPE t100_ext.span_elem AS RANGE (subtype = float8, subtype_diff = t100_ext.diff_elem);
+          CREATE FUNCTION t100_ext.diff_attr(float8, float8) RETURNS float8 LANGUAGE sql IMMUTABLE SECURITY DEFINER AS $$ SELECT $1 - $2 $$;
+          CREATE TYPE t100_ext.span_attr AS RANGE (subtype = float8, subtype_diff = t100_ext.diff_attr);
+          CREATE TYPE t100_ext.pair AS (a int, s t100_ext.span_attr);
+          CREATE FUNCTION t100_ext.pair_int(t100_ext.pair) RETURNS int LANGUAGE sql SET search_path = public, pg_temp AS $$ SELECT 1 $$;
+          CREATE CAST (t100_ext.pair AS int) WITH FUNCTION t100_ext.pair_int(t100_ext.pair);
+          CREATE FUNCTION t100_ext.unused() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;
+          CREATE TABLE crove_t100.t (
+            a int DEFAULT t100_ext.dflt() CONSTRAINT t_a_same CHECK (a OPERATOR(t100_ext.===) a),
+            s t100_ext.span,
+            sa t100_ext.span_elem[],
+            p t100_ext.pair);
+          CREATE TRIGGER t_definer BEFORE INSERT ON crove_t100.t FOR EACH ROW EXECUTE FUNCTION t100_ext.trg_definer();
+          CREATE TRIGGER t_pinned BEFORE INSERT ON crove_t100.t FOR EACH ROW EXECUTE FUNCTION t100_ext.trg_pinned();
+          CREATE TRIGGER t_invoker BEFORE INSERT ON crove_t100.t FOR EACH ROW EXECUTE FUNCTION t100_ext.trg_invoker();
+          CREATE ROLE ${tag}_member;
+          GRANT crove_tenant TO ${tag}_member;
+          CREATE ROLE ${tag}_group;
+          GRANT crove_definer_tenant TO ${tag}_group;
+          CREATE ROLE ${tag}_nested;
+          GRANT ${tag}_group TO ${tag}_nested;
+          CREATE ROLE ${tag}_admin;
+          GRANT crove_tenant TO ${tag}_admin WITH ADMIN TRUE;
+          CREATE ROLE ${tag}_outsider;
+          GRANT TEMPORARY ON DATABASE ${dbName} TO ${tag}_member, ${tag}_nested, ${tag}_admin, ${tag}_outsider;`);
+        const reached = (fn: string, via: string, setting: string) =>
+          `function ${fn} is reached from crove_* objects (${via}) and ${setting}, expected "search_path=pg_catalog, pg_temp"; ` +
+          `fix in a new migration as its owner: ALTER FUNCTION ${fn} SET search_path = pg_catalog, pg_temp, or stop using it from crove_* objects`;
+        const member = (role: string, via: string) =>
+          `role ${role} can create temporary objects (TEMPORARY on database ${dbName}) and can use or SET ROLE to ${via}; ` +
+          `fix as the database owner or a superuser: REVOKE ${via} FROM ${role}, or take TEMPORARY away from ${role} ` +
+          `(REVOKE TEMPORARY ON DATABASE ${dbName} FROM ${role}, and from PUBLIC or any role it inherits TEMPORARY from)`;
+        const definer = 'is SECURITY DEFINER with no search_path setting';
+        expect(await hardeningViolations(runner)).toEqual([
+          reached('t100_ext.dflt()', 'default value for column a of table crove_t100.t', 'sets "search_path=public"'),
+          reached('t100_ext.diff(double precision,double precision)', 'type t100_ext.span', definer),
+          reached('t100_ext.diff_attr(double precision,double precision)', 'type t100_ext.span_attr', definer),
+          reached('t100_ext.diff_elem(double precision,double precision)', 'type t100_ext.span_elem', definer),
+          reached('t100_ext.op_fn(integer,integer)', 'constraint t_a_same on table crove_t100.t', 'sets "search_path="""'),
+          reached('t100_ext.pair_int(t100_ext.pair)', 'cast from t100_ext.pair to integer', 'sets "search_path=public, pg_temp"'),
+          reached('t100_ext.trg_definer()', 'trigger t_definer on table crove_t100.t', definer),
+          member(`${tag}_member`, 'crove_tenant'),
+          member(`${tag}_nested`, 'crove_definer_tenant, crove_tenant'),
+        ]);
+      } finally {
+        await runner.query('ROLLBACK');
+      }
+      expect(await hardeningViolations(runner)).toEqual([]);
+    });
+  });
+
   it('fails the migration run loudly while an unpinned function exists', async () => {
     await withClient(runnerUrl, (runner) =>
       runner.query(`CREATE FUNCTION crove_finance.t17_unpinned() RETURNS int LANGUAGE sql SET search_path = '' AS $$ SELECT 1 $$`),
