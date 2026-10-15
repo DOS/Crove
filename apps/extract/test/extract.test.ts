@@ -459,8 +459,15 @@ describe('crove-extract configuration', () => {
     expect(() => loadExtractConfig({ EXTRACT_TIMEOUT_MS: 'forever' })).toThrow(/EXTRACT_TIMEOUT_MS/);
   });
 
-  it('never lets a queued request outlast the worker: queue wait plus parse fit in the client timeout', () => {
+  it('never lets a queued request outlast the worker: queue wait plus body read and parse fit in the client timeout', () => {
     expect(worstCaseCallMs(EXTRACT_TIMING)).toBeLessThanOrEqual(EXTRACT_CLIENT_TIMEOUT_MS);
+    // Every slot ahead and the request's own counts its body read as well as its parse, then the answer.
+    const { parseTimeoutMs, bodyTimeoutMs, answerSlackMs } = EXTRACT_TIMING;
+    expect(worstCaseCallMs(EXTRACT_TIMING)).toBe(2 * (bodyTimeoutMs + parseTimeoutMs) + answerSlackMs);
+    expect(EXTRACT_TIMING.bodyIdleTimeoutMs).toBeGreaterThan(0);
+    expect(EXTRACT_TIMING.bodyIdleTimeoutMs).toBeLessThanOrEqual(bodyTimeoutMs);
+    // The defaults use the whole budget: any longer parse does not fit.
+    expect(() => loadExtractConfig({ EXTRACT_TIMEOUT_MS: String(parseTimeoutMs + 1) })).toThrow(/longer than the worker waits/);
     expect(() => loadExtractConfig({ EXTRACT_MAX_QUEUE: '8' })).toThrow(/longer than the worker waits/);
     expect(() => loadExtractConfig({ EXTRACT_TIMEOUT_MS: '60000' })).toThrow(/longer than the worker waits/);
     // More parsers at a time shorten the wait.

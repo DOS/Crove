@@ -1,6 +1,7 @@
 // crove-extract through a real HTTP server (@hono/node-server), as in the image: a caller that goes away aborts
 // c.req.raw.signal, which kills its parse or drops it from the queue, and a caller that holds the single parser
-// slot with a body it never finishes sending frees the slot when it disconnects.
+// slot with a body it never finishes sending frees the slot when it disconnects, or, while it stays connected,
+// once its body has sent nothing for the idle limit or has taken longer than the body deadline.
 import { connect, type AddressInfo, type Socket } from 'node:net';
 import { serve } from '@hono/node-server';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -61,6 +62,23 @@ async function eventually<T>(check: () => Promise<T>, ok: (value: T) => boolean,
 }
 
 const quick: ExtractResponse = { ok: false, code: 'invalid', message: 'quick' };
+// Body limits long enough that only a disconnect ends a stalled body within a test.
+const PATIENT = { bodyIdleTimeoutMs: 30_000, bodyTimeoutMs: 30_000 } as const;
+
+// Everything the server sends back on a raw socket until it closes or `ms` pass.
+function replyOf(socket: Socket, ms = 5000): Promise<string> {
+  return new Promise((resolve) => {
+    let text = '';
+    const done = () => resolve(text);
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => {
+      text += chunk;
+      if (/\r\n\r\n[\s\S]*\}/.test(text)) done();
+    });
+    socket.on('close', done);
+    setTimeout(done, ms);
+  });
+}
 
 describe('crove-extract over HTTP', () => {
   it('aborts the parse when the caller disconnects, and the slot serves the next request', async () => {
@@ -95,7 +113,7 @@ describe('crove-extract over HTTP', () => {
       calls += 1;
       return quick;
     };
-    const url = await start({ run, concurrency: 1, maxQueue: 0 });
+    const url = await start({ run, concurrency: 1, maxQueue: 0, ...PATIENT });
     // Declares 1 MB, sends 10 bytes and then nothing: the slot waits on the body.
     const slow = await partialRequest(url, 1024 * 1024, new Uint8Array(10));
     expect(await eventually(() => post(url), (r) => r.status === 503)).toMatchObject({ status: 503, result: { code: 'busy' } });
@@ -107,9 +125,55 @@ describe('crove-extract over HTTP', () => {
     expect(calls).toBe(1);
   });
 
+  it('frees the single slot after the idle limit when a caller stays connected but stops sending', async () => {
+    let calls = 0;
+    const run: Runner = async () => {
+      calls += 1;
+      return quick;
+    };
+    const idleMs = 600;
+    const url = await start({ run, concurrency: 1, maxQueue: 0, bodyIdleTimeoutMs: idleMs, bodyTimeoutMs: 30_000 });
+    const began = Date.now();
+    // Declares 1 MB, sends 10 bytes and then nothing; the socket stays open throughout.
+    const stalled = await partialRequest(url, 1024 * 1024, new Uint8Array(10));
+    const reply = replyOf(stalled);
+    expect(await post(url)).toMatchObject({ status: 503, result: { code: 'busy' } });
+    // The stalled caller gets a typed failure, and the slot serves the next request.
+    const text = await reply;
+    expect(Date.now() - began).toBeGreaterThanOrEqual(idleMs - 50);
+    expect(text).toMatch(/^HTTP\/1\.1 400/);
+    expect(text).toContain('"code":"bad_request"');
+    expect(text).toContain(`sent nothing for ${idleMs} ms`);
+    expect(await eventually(() => post(url), (r) => r.status !== 503)).toMatchObject({ status: 422, result: quick });
+    // The stalled request never reached a parser.
+    expect(calls).toBe(1);
+    stalled.destroy();
+  });
+
+  it('frees the single slot at the body deadline when a caller keeps sending a byte now and then', async () => {
+    const run: Runner = async () => quick;
+    const deadlineMs = 800;
+    const url = await start({ run, concurrency: 1, maxQueue: 0, bodyIdleTimeoutMs: 500, bodyTimeoutMs: deadlineMs });
+    const began = Date.now();
+    const trickle = await partialRequest(url, 1024 * 1024, new Uint8Array(1));
+    const reply = replyOf(trickle);
+    // Never idle for the idle limit, but never finished either.
+    const drip = setInterval(() => trickle.write(new Uint8Array(1)), 100);
+    try {
+      const text = await reply;
+      expect(Date.now() - began).toBeGreaterThanOrEqual(deadlineMs - 50);
+      expect(text).toMatch(/^HTTP\/1\.1 400/);
+      expect(text).toContain(`took longer than ${deadlineMs} ms`);
+    } finally {
+      clearInterval(drip);
+      trickle.destroy();
+    }
+    expect(await eventually(() => post(url), (r) => r.status !== 503)).toMatchObject({ status: 422, result: quick });
+  });
+
   it('drops a queued caller that disconnects before its turn, freeing its queue place', async () => {
     const run: Runner = async () => quick;
-    const url = await start({ run, concurrency: 1, maxQueue: 1 });
+    const url = await start({ run, concurrency: 1, maxQueue: 1, ...PATIENT });
     const holder = await partialRequest(url, 1024 * 1024, new Uint8Array(10));
     await tick(100);
     // Waits in the queue; its body is not read until it gets the slot.
@@ -132,7 +196,7 @@ describe('crove-extract body read', () => {
       calls += 1;
       return quick;
     };
-    const app = createExtractApp({ run, concurrency: 1, maxQueue: 0 });
+    const app = createExtractApp({ run, concurrency: 1, maxQueue: 0, ...PATIENT });
     // Sends a few bytes and then nothing, forever; only the abort can end the read.
     const stalled = new ReadableStream<Uint8Array>({
       start(controller) {

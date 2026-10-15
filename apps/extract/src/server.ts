@@ -23,6 +23,9 @@ export interface ExtractAppOptions {
   // Requests that may wait for a free slot; beyond that the answer is 503 busy and the worker retries. A waiting
   // request holds no body yet (it is read once the slot is free), and leaves the queue when its caller gives up.
   maxQueue?: number;
+  // Body read limits once the slot is free (EXTRACT_TIMING by default; tests shorten them).
+  bodyIdleTimeoutMs?: number;
+  bodyTimeoutMs?: number;
   // Replaces the parser process (tests of the HTTP layer only).
   run?: Runner;
 }
@@ -31,37 +34,60 @@ function answer(c: Context, result: ExtractResponse) {
   return c.json(result, result.ok ? 200 : EXTRACT_ERROR_STATUS[result.code]);
 }
 
-// Reads at most `max` bytes; null when the body is larger, 'aborted' when the caller went away first. A declared
-// length over the limit is refused before anything is read, and a body without a length is cut off as soon as it
-// passes the limit. A caller that stops sending holds its slot only until it disconnects: the abort ends the read
-// even if the body stream itself never errors.
-async function readBody(request: Request, max: number, signal: AbortSignal): Promise<Uint8Array | null | 'aborted'> {
+// Why a body read ended without a body: larger than allowed, the caller went away, nothing arrived for the idle
+// limit, or the whole read took longer than its deadline.
+export type BodyFailure = 'too_large' | 'aborted' | 'idle' | 'deadline';
+
+export interface BodyLimits {
+  maxBytes: number;
+  idleTimeoutMs: number;
+  timeoutMs: number;
+}
+
+// Reads at most `maxBytes` bytes. A declared length over the limit is refused before anything is read, and a body
+// without a length is cut off as soon as it passes the limit. A caller that stops sending holds its slot only
+// until the first of: it disconnects (the abort ends the read even if the body stream itself never errors),
+// nothing arrives for `idleTimeoutMs`, or the read has taken `timeoutMs` in all.
+export async function readBody(request: Request, limits: BodyLimits, signal: AbortSignal): Promise<Uint8Array | BodyFailure> {
   const declared = Number(request.headers.get('content-length') ?? Number.NaN);
-  if (Number.isFinite(declared) && declared > max) return null;
+  if (Number.isFinite(declared) && declared > limits.maxBytes) return 'too_large';
   if (signal.aborted) return 'aborted';
   const reader = request.body?.getReader();
   if (!reader) return new Uint8Array(0);
+  let ended: 'idle' | 'deadline' | null = null;
+  const end = (reason: 'idle' | 'deadline') => {
+    ended ??= reason;
+    void reader.cancel().catch(() => {});
+  };
   const onAbort = () => void reader.cancel().catch(() => {});
   signal.addEventListener('abort', onAbort, { once: true });
+  const deadline = setTimeout(() => end('deadline'), limits.timeoutMs);
+  let idle = setTimeout(() => end('idle'), limits.idleTimeoutMs);
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       // A cancelled read ends like a finished body; what arrived is incomplete and never parsed.
+      if (ended) return ended;
       if (signal.aborted) return 'aborted';
       if (done) break;
+      clearTimeout(idle);
+      idle = setTimeout(() => end('idle'), limits.idleTimeoutMs);
       total += value.byteLength;
-      if (total > max) {
+      if (total > limits.maxBytes) {
         await reader.cancel().catch(() => {});
-        return null;
+        return 'too_large';
       }
       chunks.push(value);
     }
   } catch (error) {
+    if (ended) return ended;
     if (signal.aborted) return 'aborted';
     throw error;
   } finally {
+    clearTimeout(idle);
+    clearTimeout(deadline);
     signal.removeEventListener('abort', onAbort);
   }
   const bytes = new Uint8Array(total);
@@ -115,6 +141,8 @@ export function createExtractApp(options: ExtractAppOptions = {}) {
   const sandbox = options.sandbox ?? DEFAULT_SANDBOX;
   const run: Runner = options.run ?? ((kind, bytes, signal) => runSandboxed(kind, bytes, sandbox, signal));
   const limit = createLimiter(options.concurrency ?? EXTRACT_TIMING.concurrency, options.maxQueue ?? EXTRACT_TIMING.maxQueue);
+  const idleTimeoutMs = options.bodyIdleTimeoutMs ?? EXTRACT_TIMING.bodyIdleTimeoutMs;
+  const timeoutMs = options.bodyTimeoutMs ?? EXTRACT_TIMING.bodyTimeoutMs;
   const app = new Hono();
 
   app.get('/healthz', (c) => c.json({ ok: true }));
@@ -129,9 +157,12 @@ export function createExtractApp(options: ExtractAppOptions = {}) {
     // The body is read only once a slot is free, so waiting requests hold no bytes in memory.
     const signal = c.req.raw.signal;
     const result = await limit(signal, async () => {
-      const bytes = await readBody(c.req.raw, max, signal);
+      const bytes = await readBody(c.req.raw, { maxBytes: max, idleTimeoutMs, timeoutMs }, signal);
       if (bytes === 'aborted') return 'aborted' as const;
-      if (!bytes) return tooLarge;
+      if (bytes === 'too_large') return tooLarge;
+      // A stalled or slow body is a failure of the call, not of the file: the worker retries it.
+      if (bytes === 'idle') return failure('bad_request', `request body sent nothing for ${idleTimeoutMs} ms`);
+      if (bytes === 'deadline') return failure('bad_request', `request body took longer than ${timeoutMs} ms`);
       if (bytes.byteLength === 0) return failure('invalid', 'Tệp rỗng');
       return run(kind.data, bytes, signal);
     });
