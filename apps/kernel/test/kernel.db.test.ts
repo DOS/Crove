@@ -815,7 +815,7 @@ suite('kernel on PostgreSQL', () => {
       {
         actor_id: admin,
         outcome: 'ok',
-        detail: { revision: 1, aal: 'aal1', policy: { P12: 'pass', P10: 'pass' }, eligible_approvers: 2, self_approved: false },
+        detail: { revision: 1, aal: 'aal1', policy: { P12: 'pass', P10: 'pass' }, eligible_approvers: 2, self_approved: false, accept_failed_checks: false },
       },
     ]);
     expect(await view(orgId, admin, id)).toMatchObject({ canApprove: false, approveReason: 'not_pending', canEdit: false });

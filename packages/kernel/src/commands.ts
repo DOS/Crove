@@ -305,6 +305,7 @@ export const approveProposal = defineCommand({
       policy: { P12: 'pass', P10: decision.selfApproved ? 'self_approved' : 'pass' },
       eligible_approvers: decision.eligibleCount,
       self_approved: decision.selfApproved,
+      accept_failed_checks: input.acceptFailedChecks ?? false,
     });
     const result = await ctx.run<{ documentId: string; journalEntryId: string }>(
       proposal.command,
