@@ -117,6 +117,7 @@ suite('request context on a hot standby (#105)', () => {
     const pool = createPool({ connectionString: standbyAppUrl, max: 1 });
     try {
       const runtime = new Runtime(createDb(pool)).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+      // No session checks here (no session source, no sessionId): a first-seen session record would be a write.
       await expect(runtime.query('kernel.org.get', {}, { actor: asOwner(), orgId })).resolves.toMatchObject({ orgId });
       const c = await pool.connect();
       try {
