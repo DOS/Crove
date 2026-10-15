@@ -331,7 +331,8 @@ export interface AuthGrantsOptions {
 // The `auth-grants` one-shot step (ADR-0028, self-host db adapter). Waits until Supabase Auth has created its
 // tables, then lets crove_auth_reader select exactly the columns the session check reads (column grants plus a
 // SELECT policy, because Supabase Auth turns on row-level security): auth.sessions, auth.users and, for the MFA
-// check (issue #126), auth.mfa_factors (user_id, status), never the factor secrets. Supabase Auth creates
+// check (issue #126), auth.mfa_factors (user_id, status), never the factor secrets; plus
+// auth.users.email_confirmed_at for the invite definers when the column exists (#134). Supabase Auth creates
 // auth.mfa_factors before it adds auth.sessions.not_after, so all three exist together; without auth.mfa_factors
 // the session check fails closed with 503 (issue #180), so the wait covers it too. Needs a superuser or the owner of
 // the auth tables (supabase_auth_admin), so it runs with the admin URL, like `migrate`. Safe to run on every start:
@@ -374,6 +375,18 @@ export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void>
         GRANT SELECT (user_id, status) ON auth.mfa_factors TO crove_auth_reader;
         DROP POLICY IF EXISTS crove_auth_reader_select ON auth.mfa_factors;
         CREATE POLICY crove_auth_reader_select ON auth.mfa_factors AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);`);
+      // Invite acceptance in db mode also requires a confirmed email (#134). Every Supabase Auth release has the
+      // column; while it exists without this grant, invites answer 503 and the session check keeps working.
+      const { rows: confirmed } = await client.query<{ present: boolean }>(`
+        SELECT EXISTS (
+          SELECT 1 FROM pg_attribute a
+          WHERE a.attrelid = to_regclass('auth.users') AND a.attname = 'email_confirmed_at' AND a.attnum > 0 AND NOT a.attisdropped
+        ) AS present`);
+      if (confirmed[0]?.present === true) {
+        await client.query('GRANT SELECT (email_confirmed_at) ON auth.users TO crove_auth_reader');
+      } else {
+        log('WARNING: auth.users.email_confirmed_at does not exist, so accepting an invite cannot require a confirmed email; upgrade Supabase Auth and run auth-grants again');
+      }
       const { rows } = await client.query<{ ok: boolean }>('SELECT crove_kernel.auth_grants_ready() AS ok');
       if (!rows[0]?.ok) throw new Error('the session check still cannot read auth.sessions, auth.users and auth.mfa_factors after the grant');
       await client.query('COMMIT');

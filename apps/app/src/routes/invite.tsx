@@ -77,7 +77,7 @@ export function InvitePage() {
         <div className="mt-6 flex flex-wrap gap-2">
           {mismatch && (
             // The token stays in storage, so after signing in with the invited email the user comes back here.
-            <Button variant="primary" onClick={() => void signOut()}>
+            <Button variant="primary" onClick={() => void signOut({ keepInvite: true })}>
               Đăng xuất để dùng email khác
             </Button>
           )}

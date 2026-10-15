@@ -65,7 +65,7 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
 
   // What Supabase Auth does on sign-up and sign-in.
   async function signUp(account: Account) {
-    await sql('INSERT INTO auth.users (id, email) VALUES ($1, $2)', [account.subject, account.email]);
+    await sql('INSERT INTO auth.users (id, email, email_confirmed_at) VALUES ($1, $2, now())', [account.subject, account.email]);
     await signIn(account.subject, account.session);
   }
   const signIn = (subject: string, session: string) => sql('INSERT INTO auth.sessions (id, user_id) VALUES ($1, $2)', [session, subject]);
@@ -166,8 +166,8 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
       await c.query('SET ROLE supabase_auth_admin');
       await c.query(`
         CREATE TABLE auth.users (
-          id uuid PRIMARY KEY, email text, encrypted_password text, banned_until timestamptz, deleted_at timestamptz,
-          is_anonymous boolean NOT NULL DEFAULT false);
+          id uuid PRIMARY KEY, email text, encrypted_password text, email_confirmed_at timestamptz, banned_until timestamptz,
+          deleted_at timestamptz, is_anonymous boolean NOT NULL DEFAULT false);
         CREATE TABLE auth.sessions (
           id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
           created_at timestamptz NOT NULL DEFAULT now(), not_after timestamptz, aal text);
@@ -199,6 +199,8 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
       { table_name: 'sessions', column_name: 'user_id' },
       { table_name: 'users', column_name: 'banned_until' },
       { table_name: 'users', column_name: 'deleted_at' },
+      // Read by the invite definers in db mode (#134), granted when Supabase Auth has the column.
+      { table_name: 'users', column_name: 'email_confirmed_at' },
       { table_name: 'users', column_name: 'id' },
     ]);
     const secrets = await sql(

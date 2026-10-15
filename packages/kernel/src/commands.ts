@@ -89,7 +89,7 @@ export const changeMemberRole = defineCommand({
   access: ['owner'],
   target: (input) => ({ type: 'kernel.user', id: input.userId }),
   handler: async (ctx, input) => {
-    const { target, owners } = await lockForMemberChange(ctx, input.userId);
+    const { actorId, target, owners } = await lockForMemberChange(ctx, input.userId);
     const previousRole = target.role;
     // Every role or membership change records target_user, role and previous_role (#88): a demotion can make a
     // self-approval legal (P10), so role changes must be reviewable next to the approvals they enable.
@@ -102,6 +102,24 @@ export const changeMemberRole = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('user_id', '=', input.userId)
       .execute();
+    // Pending invites the member could no longer issue are revoked in the same transaction, after the membership locks
+    // (the order every invite path uses): an admin or owner who becomes a member or viewer loses every invite, an
+    // owner who becomes an admin loses their admin invites (only owners grant admin). Accepting re-checks the
+    // inviter's role as well, as a backstop for any other path (#134).
+    const lostRoles: Array<'admin' | 'member' | 'viewer'> = input.role === 'owner' ? [] : input.role === 'admin' ? ['admin'] : ['admin', 'member', 'viewer'];
+    const revokedInvites =
+      lostRoles.length === 0
+        ? []
+        : await ctx.trx
+            .updateTable('crove_kernel.member_invite')
+            .set({ status: 'revoked', revoked_at: ctx.now, revoked_by: actorId })
+            .where('org_id', '=', ctx.orgId)
+            .where('invited_by', '=', input.userId)
+            .where('status', '=', 'pending')
+            .where('role', 'in', lostRoles)
+            .returning('id')
+            .execute();
+    ctx.audit({ revoked_invites: revokedInvites.map((r) => r.id) });
     await ctx.activity('kernel.member', input.userId, 'member.role_changed', `Đổi vai trò ${target.email} từ ${previousRole} thành ${input.role}`);
     await ctx.emit('kernel.member.role_changed', { userId: input.userId, oldRole: previousRole, newRole: input.role });
     return { userId: input.userId, role: input.role, previousRole };

@@ -44,8 +44,15 @@ export interface CommandDef<I = unknown, O = unknown> {
   // org with the actor as a member, or returns the org an earlier request with the same idempotency key
   // created. executeOrgless() then enters that org as the actor, so membership is checked as on every other
   // command, and writes the handler's changes, the audit row and the idempotency key in one transaction.
-  bootstrap?: (trx: Transaction<Database>, actor: UserActor, input: I, idempotencyKey: string | null) => Promise<string>;
+  // `env` says how the runtime checks sessions, for definers that also read the upstream Auth records (invites).
+  bootstrap?: (trx: Transaction<Database>, actor: UserActor, input: I, idempotencyKey: string | null, env: BootstrapEnv) => Promise<string>;
   handler: (ctx: CommandContext, input: I) => Promise<O>;
+}
+
+export interface BootstrapEnv {
+  // The session check's mode, or null when the runtime checks no sessions (tests and tools). 'db' means the
+  // deployment reads Supabase Auth's own tables in the shared database.
+  sessionMode: SessionStatusSource['mode'] | null;
 }
 
 export interface QueryDef<I = unknown, O = unknown> {
@@ -203,6 +210,11 @@ export class Runtime {
     this.cells = isCellResolver(cells) ? cells : singleCell(cells);
     this.sessions = options.sessions ?? null;
     this.stepUp = options.stepUp ?? 'required';
+  }
+
+  // How sessions are checked (see BootstrapEnv), for org-less reads that apply the same upstream checks as a command.
+  get sessionMode(): SessionStatusSource['mode'] | null {
+    return this.sessions?.mode ?? null;
   }
 
   register(defs: { commands?: CommandDef<any, any>[]; queries?: QueryDef<any, any>[] }): this {
@@ -432,7 +444,7 @@ export class Runtime {
     const controlPlane = async () => this.cells.controlPlane();
     return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, controlPlane, async (trx) => {
       await this.checkSession(trx, options.actor, null);
-      return bootstrap(trx, options.actor, input, options.idempotencyKey ?? null);
+      return bootstrap(trx, options.actor, input, options.idempotencyKey ?? null, { sessionMode: this.sessionMode });
     });
   }
 
