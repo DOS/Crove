@@ -41,7 +41,10 @@ const udpDns = (host, port) =>
     const header = Buffer.from([id >> 8, id & 0xff, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
     const query = Buffer.concat([header, name, Buffer.from([0x00, 0x01, 0x00, 0x01])]);
     const socket = createSocket('udp4');
+    let closed = false;
     const finish = (error) => {
+      if (closed) return;
+      closed = true;
       clearTimeout(timer);
       socket.close();
       if (error) reject(error);

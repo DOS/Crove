@@ -137,7 +137,7 @@ describe('crove-extract over HTTP', () => {
     // Declares 1 MB, sends 10 bytes and then nothing; the socket stays open throughout.
     const stalled = await partialRequest(url, 1024 * 1024, new Uint8Array(10));
     const reply = replyOf(stalled);
-    expect(await post(url)).toMatchObject({ status: 503, result: { code: 'busy' } });
+    expect(await eventually(() => post(url), (r) => r.status === 503)).toMatchObject({ status: 503, result: { code: 'busy' } });
     // The stalled caller gets a typed failure, and the slot serves the next request.
     const text = await reply;
     expect(Date.now() - began).toBeGreaterThanOrEqual(idleMs - 50);
