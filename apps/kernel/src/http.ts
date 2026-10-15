@@ -218,8 +218,17 @@ function forwardable(source: Headers, extraDrop: ReadonlySet<string> = new Set()
   });
   return out;
 }
-// Client-supplied forwarding headers are dropped; the proxy sets X-Real-IP from the socket instead.
-const SPOOFABLE = new Set(['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'x-client-ip']);
+// Client-supplied forwarding headers are dropped; the proxy sets X-Real-IP from the socket instead. Supabase Auth keys
+// its rate limits on X-Real-IP, or on Sb-Forwarded-For when GOTRUE_SECURITY_SB_FORWARDED_FOR_ENABLED is on (#34).
+const SPOOFABLE = new Set([
+  'forwarded',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-real-ip',
+  'x-client-ip',
+  'sb-forwarded-for',
+]);
 // Public Supabase Auth endpoints the web app needs. Everything else (notably /admin) is not reachable.
 const AUTH_PUBLIC_PATHS =
   /^\/(?:token|signup|verify|recover|user|logout|otp|resend|settings|health|authorize|callback|reauthenticate|factors(?:\/[\w-]+(?:\/(?:challenge|verify))?)?|\.well-known\/jwks\.json)$/;
