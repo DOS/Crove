@@ -17,8 +17,13 @@ import { actorRef, addAuthor, eligibleApprovers, parseAuthors, type ActorRef } f
 // re-extraction changes a pending proposal's content as an edit does, and never approves anything.
 const REEXTRACT_ROLES: readonly MemberRole[] = ['owner', 'admin', 'member'];
 // A pending run older than this is presumed lost (the worker retries for a few minutes, then records a failure):
-// it no longer blocks decisions on the proposal, and a new request replaces it.
+// it no longer blocks decisions on the proposal, a new request replaces it, and if its job still finishes, the
+// result is kept in the file's history but never applied to a proposal. The rule uses only the database clock
+// (created_at against now() or clock_timestamp()), never the app server's, so clock skew between the two cannot
+// move it.
 export const REEXTRACT_STALE_MINUTES = 15;
+// What a pending run that went stale shows as its error.
+export const STALE_RUN_ERROR = 'Đọc lại quá lâu nên đã dừng; hãy bấm Đọc lại để thử lại';
 // Extraction runs one file may have. Each run can cost an AI call; one pending run at a time is the main limit.
 export const MAX_EXTRACTION_VERSIONS = 20;
 
@@ -30,6 +35,8 @@ export const zProposalDraft = z.object({
   duplicateOf: zId.nullable(),
 });
 
+// In flight: created within the stale window, measured at the start of the transaction (now()). A decision that
+// passes this check started after the run went stale.
 const pendingSince = sql<boolean>`created_at > pg_catalog.now() - pg_catalog.make_interval(mins => ${REEXTRACT_STALE_MINUTES}::int)`;
 
 export interface LatestExtraction {
@@ -52,7 +59,9 @@ export async function latestExtraction(ctx: QueryContext, fileId: string): Promi
     .limit(1)
     .executeTakeFirst();
   if (!row) return undefined;
-  return { id: row.id, version: row.version, status: row.status, error: row.error, inFlight: row.status === 'pending' && row.fresh };
+  const inFlight = row.status === 'pending' && row.fresh;
+  const error = row.status === 'pending' && !inFlight ? STALE_RUN_ERROR : row.error;
+  return { id: row.id, version: row.version, status: row.status, error, inFlight };
 }
 
 // Refuses a decision (approve, edit, reject) on a proposal whose file is being read again: the result would
@@ -118,7 +127,7 @@ export const reextractFile = defineCommand({
       throw new DomainError('EXTRACTION_PENDING', 409, 'Tệp đang được đọc lại; hãy chờ kết quả', { version: latest.version });
     }
     if (latest.version >= MAX_EXTRACTION_VERSIONS) {
-      throw new DomainError('REEXTRACT_LIMIT', 429, `Tệp này đã được đọc ${latest.version} lần, không đọc lại thêm được`, {
+      throw new DomainError('REEXTRACT_LIMIT', 409, `Tệp này đã được đọc ${latest.version} lần, không đọc lại thêm được`, {
         limit: MAX_EXTRACTION_VERSIONS,
       });
     }
@@ -148,6 +157,7 @@ export const reextractFile = defineCommand({
         result: null,
         checks: '[]',
         error: null,
+        // The trigger sets it from the sealed context anyway (a tenant role cannot name another requester).
         requested_by: ctx.actor.userId,
       })
       .returning(['id', 'version'])
@@ -193,7 +203,11 @@ export const recordExtraction = defineCommand({
       error: input.error,
       completed_at: ctx.now,
     };
-    let run: { id: string; version: number; requested_by: string | null; created_at: Date };
+    let run: { id: string; version: number; requested_by: string | null };
+    let current: Awaited<ReturnType<typeof lockFileProposal>>;
+    // Whether this run may change a proposal: always for the first extraction; for a re-extraction only while it is
+    // still in flight.
+    let applies = true;
     if (input.version === undefined) {
       const existing = await ctx.trx
         .selectFrom('crove_kernel.extraction')
@@ -206,18 +220,28 @@ export const recordExtraction = defineCommand({
       run = await ctx.trx
         .insertInto('crove_kernel.extraction')
         .values({ org_id: ctx.orgId, file_id: input.fileId, ...outcome })
-        .returning(['id', 'version', 'requested_by', 'created_at'])
+        .returning(['id', 'version', 'requested_by'])
         .executeTakeFirstOrThrow();
+      current = undefined;
     } else {
       const pending = await ctx.trx
         .selectFrom('crove_kernel.extraction')
-        .select(['id', 'version', 'status', 'requested_by', 'created_at'])
+        .select(['id', 'version', 'status', 'requested_by'])
         .where('org_id', '=', ctx.orgId)
         .where('file_id', '=', input.fileId)
         .where('version', '=', input.version)
         .forUpdate()
         .executeTakeFirst();
       if (!pending || pending.status !== 'pending') return { extractionId: pending?.id ?? null, proposalId: null, duplicate: true };
+      // The proposal is locked before the run's age is read, and the age is read on the clock at this moment
+      // (clock_timestamp()), not at the start of the transaction: a decision that went through because the run was
+      // stale either committed before this lock, and then the run is older still here, or waits for this command
+      // and then finds a newer revision (STALE_REVISION).
+      current = await lockFileProposal(ctx, input.fileId);
+      const { rows } = await sql<{ fresh: boolean }>`
+        SELECT created_at > pg_catalog.clock_timestamp() - pg_catalog.make_interval(mins => ${REEXTRACT_STALE_MINUTES}::int) AS fresh
+        FROM crove_kernel.extraction WHERE org_id = ${ctx.orgId}::uuid AND id = ${pending.id}::uuid`.execute(ctx.trx);
+      applies = rows[0]?.fresh === true;
       await ctx.trx
         .updateTable('crove_kernel.extraction')
         .set(outcome)
@@ -226,7 +250,7 @@ export const recordExtraction = defineCommand({
         .execute();
       run = pending;
     }
-    ctx.audit({ version: run.version, status: input.status });
+    ctx.audit({ version: run.version, status: input.status, applied: applies });
 
     // Authors (P10): the extraction itself, the user who uploaded the source file (the content is read from what
     // they supplied; a forwarded email has no authenticated sender, so it adds nobody) and, for a re-extraction,
@@ -236,12 +260,19 @@ export const recordExtraction = defineCommand({
     if (run.requested_by) readers.push({ type: 'user', id: run.requested_by });
     const withReaders = (authors: ActorRef[]) => readers.reduce(addAuthor, authors);
 
-    const current = input.version === undefined ? undefined : await lockFileProposal(ctx, input.fileId);
     if (!input.proposal) {
       await ctx.activity('kernel.file', input.fileId, 'extraction.failed', input.error ?? 'Không đọc được chứng từ');
-      if (current?.status === 'pending') {
+      if (applies && current?.status === 'pending') {
         await ctx.activity('kernel.proposal', current.id, 'proposal.reextract_failed', `Đọc lại không thành công (lần đọc ${run.version}); đề xuất giữ nguyên bản ${current.revision}`);
       }
+      return { extractionId: run.id, proposalId: null, duplicate: false };
+    }
+
+    // A run that went stale is presumed lost: decisions and edits may have happened since, so its late result stays
+    // in the file's history only. An executed proposal is never followed by a new one: the invoice is in the books,
+    // and a request on it is refused.
+    if (!applies || current?.status === 'executed') {
+      await ctx.activity('kernel.file', input.fileId, 'extraction.not_applied', `Kết quả đọc lại (lần đọc ${run.version}) đến quá muộn hoặc đề xuất đã được xử lý nên không được áp dụng`);
       return { extractionId: run.id, proposalId: null, duplicate: false };
     }
 
@@ -267,18 +298,9 @@ export const recordExtraction = defineCommand({
       await ctx.activity('kernel.proposal', current.id, 'proposal.reextracted', `Đọc lại chứng từ (lần đọc ${run.version}, bản ${revision}): ${input.proposal.title}`);
       return { extractionId: run.id, proposalId: current.id, duplicate: false };
     }
-    // The proposal was decided after this run was requested: the decision stands, and the new reading stays in the
-    // file's history only. Decisions are refused while a run is in flight, so such a decision came after the run went
-    // stale, which is how it is told apart from a rejection before the request (with the whole stale window as
-    // margin, not a race between two clocks). An executed proposal is never followed by a new one: the invoice is in
-    // the books, and a request on it is refused.
-    const staleAt = run.created_at.getTime() + REEXTRACT_STALE_MINUTES * 60_000;
-    if (current && (current.status === 'executed' || (current.decided_at !== null && current.decided_at.getTime() >= staleAt))) {
-      await ctx.activity('kernel.file', input.fileId, 'extraction.not_applied', `Kết quả đọc lại (lần đọc ${run.version}) không được áp dụng vì đề xuất đã được xử lý`);
-      return { extractionId: run.id, proposalId: null, duplicate: false };
-    }
 
     // The first proposal of the file, or a new one after a rejected proposal (the file was read again on purpose).
+    // A rejection while the run was in flight is refused, so this rejection came before the request.
     const proposal = await ctx.trx
       .insertInto('crove_kernel.proposal')
       .values({

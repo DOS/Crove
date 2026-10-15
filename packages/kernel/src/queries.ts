@@ -11,7 +11,7 @@ import {
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
 import { EDITOR_ROLES, decideApproval } from './approval.ts';
-import { MAX_EXTRACTION_VERSIONS, REEXTRACT_STALE_MINUTES, latestExtraction } from './extraction.ts';
+import { MAX_EXTRACTION_VERSIONS, REEXTRACT_STALE_MINUTES, STALE_RUN_ERROR, latestExtraction } from './extraction.ts';
 import { inviteQueries } from './invites.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -159,6 +159,18 @@ export const inboxGet = defineQuery({
           .executeTakeFirst()
       : undefined;
     const reading = latest?.inFlight === true;
+    // kernel.file.reextract acts on the file's newest proposal, so only that one offers it.
+    const newest = file
+      ? await ctx.trx
+          .selectFrom('crove_kernel.proposal')
+          .select(['id', 'status'])
+          .where('org_id', '=', ctx.orgId)
+          .where('source_file_id', '=', file.id)
+          .orderBy('created_at', 'desc')
+          .orderBy('id', 'desc')
+          .limit(1)
+          .executeTakeFirst()
+      : undefined;
     const canChange = row.status === 'pending' && editor && !reading;
     return {
       ...toInboxItem(row),
@@ -177,7 +189,13 @@ export const inboxGet = defineQuery({
         ? { version: latest.version, status: latest.status, error: latest.error, inFlight: reading, proposalVersion: own?.version ?? null }
         : null,
       // The same checks kernel.file.reextract makes.
-      canReextract: editor && latest !== undefined && !reading && row.status !== 'executed' && latest.version < MAX_EXTRACTION_VERSIONS,
+      canReextract:
+        editor &&
+        latest !== undefined &&
+        !reading &&
+        newest?.id === row.id &&
+        newest.status !== 'executed' &&
+        latest.version < MAX_EXTRACTION_VERSIONS,
     };
   },
 });
@@ -255,7 +273,7 @@ export const filesRecent = defineQuery({
         filename: r.filename,
         contentType: r.content_type,
         status,
-        error: r.extraction_status === 'failed' ? r.error : null,
+        error: r.extraction_status === 'failed' ? r.error : r.extraction_status === 'pending' && !r.in_flight ? STALE_RUN_ERROR : null,
         proposalId: r.proposal_id,
         version: r.version ?? null,
         // The same checks kernel.file.reextract makes.

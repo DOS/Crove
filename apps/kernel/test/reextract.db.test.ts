@@ -170,6 +170,31 @@ suite('re-extraction on PostgreSQL (issue #40)', () => {
     expect(await recent(fileId)).toMatchObject({ status: 'proposed', version: 2, proposalId, canReextract: true });
   });
 
+  it('shows a lost re-read of a file without a proposal as failed, with a message', async () => {
+    const fileId = await upload();
+    reads.push(null);
+    await extractAndPropose({ runtime: workerRuntime, store, extractor: ai, extract }, orgA, fileId);
+    await runtime.execute('kernel.file.reextract', { fileId }, { actor: asUser(owner), orgId: orgA });
+    const admin = new pg.Client({ connectionString: adminUrl });
+    await admin.connect();
+    try {
+      await admin.query(`SET session_replication_role = replica`);
+      await admin.query(`UPDATE crove_kernel.extraction SET created_at = now() - interval '1 hour' WHERE file_id = $1 AND status = 'pending'`, [fileId]);
+    } finally {
+      await admin.end();
+    }
+    expect(await recent(fileId)).toMatchObject({ status: 'failed', version: 2, error: expect.stringMatching(/quá lâu/), canReextract: true });
+    // Close the run and drop its queued event, so the worker test below does not read from the shared fake AI.
+    const closer = new pg.Client({ connectionString: adminUrl });
+    await closer.connect();
+    try {
+      await closer.query(`UPDATE crove_kernel.extraction SET status = 'failed', completed_at = now() WHERE file_id = $1 AND status = 'pending'`, [fileId]);
+      await closer.query(`DELETE FROM crove_kernel.outbox_pending WHERE org_id = $1`, [orgA]);
+    } finally {
+      await closer.end();
+    }
+  });
+
   it('caps the number of runs per file', async () => {
     const fileId = await upload();
     reads.push(invoice('7002', 'Giới hạn'));
@@ -188,7 +213,7 @@ suite('re-extraction on PostgreSQL (issue #40)', () => {
     expect(await recent(fileId)).toMatchObject({ version: MAX_EXTRACTION_VERSIONS, canReextract: false });
     await expect(runtime.execute('kernel.file.reextract', { fileId }, { actor: asUser(owner), orgId: orgA })).rejects.toMatchObject({
       code: 'REEXTRACT_LIMIT',
-      status: 429,
+      status: 409,
     });
   });
 

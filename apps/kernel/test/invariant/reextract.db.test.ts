@@ -48,7 +48,7 @@ interface Detail {
   canEdit: boolean;
   canReject: boolean;
   canReextract: boolean;
-  extraction: { version: number; status: string; inFlight: boolean; proposalVersion: number | null } | null;
+  extraction: { version: number; status: string; error: string | null; inFlight: boolean; proposalVersion: number | null } | null;
 }
 
 const suite = ADMIN ? describe : describe.skip;
@@ -250,8 +250,15 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     const { proposalId: replacement } = await extractAndPropose(deps(), orgA, second.fileId, version);
     expect(replacement).not.toBe(second.proposalId);
     expect(await get(second.proposalId)).toMatchObject({ status: 'rejected', revision: 1 });
-    expect(await get(replacement as string)).toMatchObject({ status: 'pending', revision: 1 });
+    expect(await get(replacement as string)).toMatchObject({ status: 'pending', revision: 1, canReextract: true });
     expect((await get(second.proposalId)).payload?.lines[0]?.description).toBe('Lần đọc đầu');
+    // The command acts on the file's newest proposal, so the rejected one no longer offers a re-read.
+    expect(await get(second.proposalId)).toMatchObject({ canReextract: false });
+    // Once the newest is booked, no proposal of the file offers it, and the command refuses.
+    await runtime.execute('kernel.proposal.approve', { id: replacement, revision: 1 }, { actor: asMfa(users.admin), orgId: orgA });
+    expect(await get(replacement as string)).toMatchObject({ canReextract: false });
+    expect(await get(second.proposalId)).toMatchObject({ canReextract: false });
+    await expect(reextract(second.fileId)).rejects.toMatchObject({ code: 'PROPOSAL_DECIDED' });
   });
 
   it('turns a re-read into a new revision, so an approval of the earlier revision never carries over', async () => {
@@ -343,9 +350,21 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     await expect(asApp(`UPDATE crove_kernel.extraction SET status = 'pending', completed_at = NULL WHERE file_id = '${fileId}'`)).rejects.toThrow(/EXTRACTION_IMMUTABLE/);
     await expect(asApp(`UPDATE crove_kernel.extraction SET version = 7 WHERE file_id = '${fileId}'`)).rejects.toThrow(/permission denied/);
     await expect(asApp(`DELETE FROM crove_kernel.extraction WHERE file_id = '${fileId}'`)).rejects.toThrow(/permission denied/);
-    await expect(
-      asApp(`INSERT INTO crove_kernel.extraction (org_id, file_id, version, status, method) VALUES ('${orgA}', '${fileId}', 1, 'done', 'image_ai')`),
-    ).rejects.toThrow(/extraction_version_uq/);
+    // A runtime role cannot choose a row's number or requester either: the trigger assigns both (rolled back).
+    const inserted = await db
+      .transaction()
+      .execute(async (trx) => {
+        await sql`SELECT crove_kernel.enter_context(${users.owner}::uuid, ${orgA}::uuid)`.execute(trx);
+        const { rows: made } = await sql<{ version: number; requested_by: string | null }>`
+          INSERT INTO crove_kernel.extraction (org_id, file_id, version, status, requested_by)
+          VALUES (${orgA}::uuid, ${fileId}::uuid, 1, 'pending', ${users.admin}::uuid) RETURNING version, requested_by`.execute(trx);
+        const { rows: done } = await sql<{ version: number; requested_by: string | null }>`
+          INSERT INTO crove_kernel.extraction (org_id, file_id, version, status, method, requested_by)
+          VALUES (${orgA}::uuid, ${fileId}::uuid, 1, 'done', 'image_ai', ${users.admin}::uuid) RETURNING version, requested_by`.execute(trx);
+        throw Object.assign(new Error('rollback'), { made: made[0], done: done[0] });
+      })
+      .catch((e: { made?: unknown; done?: unknown }) => e);
+    expect(inserted).toMatchObject({ made: { version: 3, requested_by: users.owner }, done: { version: 4, requested_by: null } });
     expect(await versions(fileId)).toEqual(rows);
   });
 
@@ -421,7 +440,11 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
       await admin.query(`UPDATE crove_kernel.extraction SET created_at = now() - interval '1 hour' WHERE file_id = $1 AND status = 'pending'`, [fileId]);
     });
     // A stale run no longer blocks decisions, and a new request closes it and takes the next number.
-    expect(await get(proposalId, users.admin)).toMatchObject({ canEdit: true, canReextract: true, extraction: { inFlight: false } });
+    expect(await get(proposalId, users.admin)).toMatchObject({
+      canEdit: true,
+      canReextract: true,
+      extraction: { inFlight: false, status: 'pending', error: expect.stringMatching(/quá lâu/) },
+    });
     const next = await reextract(fileId);
     expect(next.version).toBe(lost.version + 1);
     expect((await versions(fileId)).map((v) => [v.version, v.status])).toEqual([
@@ -433,5 +456,32 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     await expect(extractAndPropose(deps(), orgA, fileId, lost.version)).resolves.toEqual({ proposalId: null });
     reads.length = 0;
     expect((await get(proposalId)).payload?.lines[0]?.description).toBe('Trước khi mất');
+  });
+
+  it('never lets a late job overwrite what users did after its run went stale', async () => {
+    const { fileId, proposalId, number } = await proposed('Trước khi sửa');
+    const { version } = await reextract(fileId);
+    await withAdmin(async (admin) => {
+      await admin.query(`SET session_replication_role = replica`);
+      await admin.query(`UPDATE crove_kernel.extraction SET created_at = now() - interval '1 hour' WHERE file_id = $1 AND status = 'pending'`, [fileId]);
+    });
+    const line1 = (await get(proposalId)).payload?.lines[0];
+    if (!line1) throw new Error('no line');
+    const other = line1.debitAccount === '6422' ? '6421' : '6422';
+    // The run is stale, so the edit goes through.
+    await expect(
+      runtime.execute('kernel.proposal.edit', { id: proposalId, revision: 1, lineAccounts: [{ lineNo: 1, debitAccount: other }] }, { actor: asUser(users.member), orgId: orgA }),
+    ).resolves.toMatchObject({ revision: 2, changed: true });
+    // The late job finishes: its reading is kept as the version, the edit stays current.
+    reads.push(invoice(number, 'Kết quả muộn'));
+    await expect(extractAndPropose(deps(), orgA, fileId, version)).resolves.toMatchObject({ proposalId: null });
+    reads.length = 0;
+    expect((await versions(fileId)).map((v) => [v.version, v.status])).toEqual([
+      [1, 'done'],
+      [2, 'done'],
+    ]);
+    const detail = await get(proposalId);
+    expect(detail).toMatchObject({ revision: 2, extraction: { version: 2, status: 'done', proposalVersion: 1 } });
+    expect(detail.payload?.lines[0]).toMatchObject({ description: 'Trước khi sửa', debitAccount: other });
   });
 });

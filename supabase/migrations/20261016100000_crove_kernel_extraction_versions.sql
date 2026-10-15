@@ -2,12 +2,13 @@
 --
 -- A file can be read again (kernel.file.reextract). Every run is a new numbered version of the file's extraction;
 -- no version is ever overwritten, so the history of what was read, and when, stays:
---   version          1, 2, 3, ... per file, assigned by a trigger as the next number when the row is inserted.
+--   version          1, 2, 3, ... per file, always assigned by a trigger as the next number when the row is inserted.
 --                    UNIQUE (org_id, file_id, version): a file never has two rows with the same number.
 --   status pending   a re-extraction that was requested and not finished yet. At most one per file (partial
 --                    UNIQUE index), which is what dedupes repeated requests. The worker turns it into done or
 --                    failed once; a final row never changes again (guard trigger, plus column-level UPDATE).
---   requested_by     the user who asked for the run (NULL for the first extraction, which the upload started).
+--   requested_by     the user who asked for the run, taken by the trigger from the sealed context (NULL for the
+--                    first extraction, which the upload started).
 --   completed_at     when the run finished (NULL while pending).
 -- The tenant roles keep SELECT and INSERT, lose DELETE (nothing deletes an extraction; a file's deletion cascades
 -- as the owner) and may update only the columns that finish a pending run.
@@ -59,20 +60,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS extraction_pending_uq ON crove_kernel.extracti
 -- extraction_version_uq leads with the same columns.
 DROP INDEX IF EXISTS crove_kernel.extraction_file_idx;
 
--- Numbers a new row as the file's next version when the insert names none, and stamps a row inserted already
--- finished as completed now. Runs as the inserting role, under its RLS, so it sees only its own org's rows; the
--- UNIQUE index decides if two inserts ever race (the commands lock the file row first, so they do not).
+-- Fills the columns a new row may not choose itself: version is always the file's next number (a value in the
+-- insert is ignored), requested_by is the user in the sealed context for a pending re-extraction and NULL for a
+-- row inserted already finished (the first extraction, written by the worker), and a finished row is stamped as
+-- completed now. Runs as the inserting role, under its RLS, so it sees only its own org's rows; the UNIQUE index
+-- decides if two inserts ever race (the commands lock the file row first, so they do not).
 CREATE OR REPLACE FUNCTION crove_kernel.extraction_assign_version() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
-  IF NEW.status <> 'pending' AND NEW.completed_at IS NULL THEN
-    NEW.completed_at := pg_catalog.now();
+  IF NEW.status = 'pending' THEN
+    NEW.requested_by := crove_kernel.ctx_user_id();
+    NEW.completed_at := NULL;
+  ELSE
+    NEW.requested_by := NULL;
+    IF NEW.completed_at IS NULL THEN
+      NEW.completed_at := pg_catalog.now();
+    END IF;
   END IF;
-  IF NEW.version IS NULL THEN
-    SELECT COALESCE(pg_catalog.max(e.version), 0) + 1 INTO NEW.version
-    FROM crove_kernel.extraction e
-    WHERE e.org_id = NEW.org_id AND e.file_id = NEW.file_id;
-  END IF;
+  SELECT COALESCE(pg_catalog.max(e.version), 0) + 1 INTO NEW.version
+  FROM crove_kernel.extraction e
+  WHERE e.org_id = NEW.org_id AND e.file_id = NEW.file_id;
   RETURN NEW;
 END $$;
 
