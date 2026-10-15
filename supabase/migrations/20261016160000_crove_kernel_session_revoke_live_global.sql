@@ -7,10 +7,12 @@
 -- tokens.
 --
 -- p_current_session is the caller's own session (the request's session_id). The global sign-out now goes to an owned
--- session other than it, the most recently seen one first. When the caller's session is the user's only owned
--- session, that session gets a local sign-out instead: nothing else is left to sign out, and a local sign-out of a
--- session already gone counts as done. It only steers which of the user's own sessions carries the sign-out, so a
--- wrong value changes nothing else. Everything else is unchanged from 20261015090000_crove_kernel_auth_sessions.sql.
+-- session other than it, the most recently seen one first. When Supabase Auth's sessions are readable and the
+-- caller's session is the user's only one there, it gets a local sign-out instead: nothing else is left to sign out,
+-- and a local sign-out of a session already gone counts as done. Without that upstream list (only the sessions Crove
+-- has seen), a session Crove never saw may still exist, so the caller's session keeps the global sign-out. The value
+-- only steers which of the user's own sessions carries the sign-out, and whether that one is local or global.
+-- Everything else is unchanged from 20261015090000_crove_kernel_auth_sessions.sql.
 
 DROP FUNCTION IF EXISTS crove_kernel.session_revoke(uuid, uuid, text);
 
@@ -24,6 +26,8 @@ DECLARE
   v_subject text;
   v_targets uuid[];
   v_owned uuid[];
+  -- true when v_owned is every upstream session (auth.sessions), not only the ones Crove has seen.
+  v_complete boolean := false;
   v_global uuid;
   v_id uuid;
 BEGIN
@@ -54,6 +58,7 @@ BEGIN
   IF v_subject ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
      AND crove_kernel.auth_grants_ready() THEN
     v_owned := ARRAY(SELECT crove_kernel.auth_user_sessions(v_subject::uuid));
+    v_complete := true;
   ELSE
     v_owned := ARRAY(SELECT s.session_id FROM crove_kernel.auth_session s WHERE s.user_id = p_user_id AND s.status = 'active');
   END IF;
@@ -83,7 +88,7 @@ BEGIN
       WHEN NOT (v_id = ANY (v_owned)) THEN NULL
       WHEN p_session_id IS NOT NULL THEN 'local'
       WHEN v_id IS DISTINCT FROM v_global THEN NULL
-      WHEN v_id IS NOT DISTINCT FROM p_current_session THEN 'local'
+      WHEN v_id IS NOT DISTINCT FROM p_current_session AND v_complete THEN 'local'
       ELSE 'global'
     END;
     RETURN NEXT;
