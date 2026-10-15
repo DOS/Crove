@@ -14,6 +14,11 @@
 -- at the limit cannot both see room for one more (READ COMMITTED: the count after the lock sees the org the
 -- previous holder committed). The per-key lock it replaces is implied by it. A replay of an existing key
 -- returns its org before the count, so replays never count against the limit.
+--
+-- The per-user lock is taken under a 3s lock_timeout, set around the lock and restored after it (the hardening
+-- check allows no function setting beyond search_path). So one user firing many concurrent creations cannot park
+-- a pooled connection per request behind the lock: a wait past it is refused with ORG_CREATE_RATE_LIMITED (rule
+-- org_create_busy, retryAfterSeconds 1). The SET LOCAL below covers only this migration's DDL.
 SET LOCAL lock_timeout = '2s';
 
 -- The count reads orgs by creator and creation time.
@@ -33,6 +38,7 @@ DECLARE
   v_recent integer;
   v_all integer;
   v_oldest timestamptz;
+  v_lock_timeout text := pg_catalog.current_setting('lock_timeout');
 BEGIN
   IF (v_per_day_raw IS NOT NULL AND v_per_day_raw !~ '^[1-9][0-9]{0,5}$')
      OR (v_total_raw IS NOT NULL AND v_total_raw !~ '^[1-9][0-9]{0,5}$') THEN
@@ -42,7 +48,15 @@ BEGIN
   v_total := COALESCE(v_total_raw::integer, 20);
 
   -- One lock per user, taken before the replay lookup and the count, held until the transaction ends.
-  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('kernel.org.create:' || p_user_id::text, 0));
+  -- A transaction-level advisory lock taken in this block's subtransaction stays held after it commits.
+  PERFORM pg_catalog.set_config('lock_timeout', '3s', true);
+  BEGIN
+    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('kernel.org.create:' || p_user_id::text, 0));
+  EXCEPTION WHEN lock_not_available THEN
+    RAISE EXCEPTION 'ORG_CREATE_RATE_LIMITED' USING ERRCODE = 'P0001',
+      DETAIL = pg_catalog.json_build_object('rule', 'org_create_busy', 'retryAfterSeconds', 1)::text;
+  END;
+  PERFORM pg_catalog.set_config('lock_timeout', v_lock_timeout, true);
   IF p_idempotency_key IS NOT NULL THEN
     SELECT k.org_id INTO v_org
     FROM crove_kernel.idempotency_key k

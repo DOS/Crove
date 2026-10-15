@@ -46,6 +46,12 @@ describe('org creation limits', () => {
       message: 'Bạn đã tạo đủ số tổ chức tối đa cho một tài khoản (20)',
       details: { rule: 'org_create_total', limit: 20 },
     });
+    expect(toDomainError({ code: 'P0001', message: 'ORG_CREATE_RATE_LIMITED', detail: '{"rule" : "org_create_busy", "retryAfterSeconds" : 1}' })).toMatchObject({
+      code: 'RATE_LIMITED',
+      status: 429,
+      message: 'Bạn đang tạo nhiều tổ chức cùng lúc, hãy thử lại sau',
+      details: { rule: 'org_create_busy', retryAfterSeconds: 1 },
+    });
     // Any other raised exception stays an internal error.
     expect(toDomainError({ code: 'P0001', message: 'SOMETHING_ELSE' })).toMatchObject({ code: 'INTERNAL', status: 500 });
   });

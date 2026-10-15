@@ -176,6 +176,33 @@ suite('org creation rate limit on PostgreSQL (T4, #94)', () => {
     }
   });
 
+  it('refuses with 429 org_create_busy instead of waiting past the lock timeout behind the same user', async () => {
+    const user = await newUser('busy');
+    const holder = new pg.Client({ connectionString: adminUrl });
+    await holder.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query(`SELECT pg_advisory_xact_lock(hashtextextended('kernel.org.create:' || $1, 0))`, [user]);
+      const started = Date.now();
+      await expect(createOrg(runtime, asUser(user), 'Bận', randomUUID())).rejects.toMatchObject({
+        code: 'RATE_LIMITED',
+        status: 429,
+        details: { rule: 'org_create_busy', retryAfterSeconds: 1 },
+      });
+      const waited = Date.now() - started;
+      expect(waited).toBeGreaterThanOrEqual(2500);
+      expect(waited).toBeLessThan(10_000);
+      // Another user is not blocked by it.
+      await expect(createOrg(runtime, asUser(await newUser('free')), 'Rảnh')).resolves.toMatchObject({ role: 'owner' });
+    } finally {
+      await holder.query('ROLLBACK');
+      await holder.end();
+    }
+    expect(await footprint(user)).toEqual({ tenants: 0, audits: 0, keys: 0 });
+    // Once the lock is free the same user creates normally.
+    await expect(createOrg(runtime, asUser(user), 'Hết bận')).resolves.toMatchObject({ role: 'owner' });
+  });
+
   it('fails closed on a malformed limit setting', async () => {
     const user = await newUser('malformed');
     for (const value of ['0', '-1', 'abc', '1e3', '9999999']) {

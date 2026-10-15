@@ -22,7 +22,8 @@ interface PgLikeError {
 }
 
 // The JSON DETAIL of ORG_CREATE_RATE_LIMITED (crove_kernel.create_or_replay_org): which limit refused, and for the
-// rolling 24-hour limit, when the oldest org in the window leaves it.
+// rolling 24-hour limit, when the oldest org in the window leaves it. org_create_busy: the user's other creations held
+// the per-user lock past the definer's lock_timeout.
 function rateLimited(detail: string | undefined): DomainError {
   let parsed: { rule?: unknown; limit?: unknown; retryAfterSeconds?: unknown } = {};
   try {
@@ -31,6 +32,12 @@ function rateLimited(detail: string | undefined): DomainError {
     parsed = {};
   }
   const limit = typeof parsed.limit === 'number' ? parsed.limit : null;
+  if (parsed.rule === 'org_create_busy') {
+    return new DomainError('RATE_LIMITED', 429, 'Bạn đang tạo nhiều tổ chức cùng lúc, hãy thử lại sau', {
+      rule: 'org_create_busy',
+      retryAfterSeconds: 1,
+    });
+  }
   const details: Record<string, unknown> = { rule: parsed.rule === 'org_create_total' ? 'org_create_total' : 'org_create_per_day', limit };
   if (details.rule === 'org_create_total') {
     return new DomainError('RATE_LIMITED', 429, `Bạn đã tạo đủ số tổ chức tối đa cho một tài khoản${limit ? ` (${limit})` : ''}`, details);
