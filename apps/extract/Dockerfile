@@ -27,4 +27,5 @@ COPY --from=build /app/apps/extract /app/apps/extract
 USER node
 EXPOSE 8090
 HEALTHCHECK --interval=10s --timeout=3s --retries=6 CMD node -e "fetch('http://127.0.0.1:8090/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-ENTRYPOINT ["node", "apps/extract/src/main.ts"]
+# No inspector: SIGUSR1 must not open a debugger port on the service.
+ENTRYPOINT ["node", "--disable-sigusr1", "apps/extract/src/main.ts"]

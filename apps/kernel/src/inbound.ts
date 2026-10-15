@@ -100,10 +100,14 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
   if (raw.byteLength !== job.sizeBytes || sha256Hex(raw) !== rawSha256) {
     throw new DomainError('INBOUND_BLOB_MISMATCH', 422, 'Thư lưu không khớp với hàng đợi');
   }
-  // A message the sandbox cannot read is invalid content: dropped like any message no org can receive. A sandbox
-  // that cannot answer throws ExtractServiceError, and the job is retried.
+  // A message the sandbox finds invalid or too large is dropped like any message no org can receive. A timeout or
+  // memory limit can also come from load on the sandbox, so those are retried (after the last attempt the raw
+  // message is kept, never lost); a sandbox that cannot answer throws ExtractServiceError and is retried too.
   const parsed = await deps.extract.extract('mime', raw);
-  if (!parsed.ok) throw new DomainError('UNREADABLE_MESSAGE', 422, 'Không đọc được thư');
+  if (!parsed.ok) {
+    if (parsed.code === 'invalid' || parsed.code === 'too_large') throw new DomainError('UNREADABLE_MESSAGE', 422, 'Không đọc được thư');
+    throw new Error(`crove-extract could not read the message in time: ${parsed.code}`);
+  }
   const email = parsed.email;
   const recipients = [job.recipient, email.deliveredTo, ...email.to].filter((r): r is string => typeof r === 'string' && r !== '');
   const token = recipients.map((r) => tokenOf(r, domain)).find((t) => t !== null);

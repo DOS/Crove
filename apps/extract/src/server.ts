@@ -12,13 +12,15 @@ import {
 import { failure } from './parse.ts';
 import { DEFAULT_SANDBOX, runSandboxed, type SandboxOptions } from './sandbox.ts';
 
-export type Runner = (kind: ExtractKind, bytes: Uint8Array) => Promise<ExtractResponse>;
+// `signal` aborts when the caller disconnects; the parser process is then killed.
+export type Runner = (kind: ExtractKind, bytes: Uint8Array, signal: AbortSignal) => Promise<ExtractResponse>;
 
 export interface ExtractAppOptions {
   sandbox?: SandboxOptions;
   // Parser processes at a time; each may use up to sandbox.maxHeapMb (1 vCPU, 1 GiB: one at a time).
   concurrency?: number;
-  // Requests that may wait for a free slot; beyond that the answer is 503 busy and the worker retries.
+  // Requests that may wait for a free slot; beyond that the answer is 503 busy and the worker retries. A waiting
+  // request holds no body yet (it is read once the slot is free), and leaves the queue when its caller gives up.
   maxQueue?: number;
   // Replaces the parser process (tests of the HTTP layer only).
   run?: Runner;
@@ -56,28 +58,48 @@ async function readBody(request: Request, max: number): Promise<Uint8Array | nul
   return bytes;
 }
 
-function createLimiter(concurrency: number, maxQueue: number) {
+// At most `concurrency` tasks run; up to `maxQueue` wait in order. A finished task hands its slot straight to the
+// next waiter, so a new request can never slip in between. A waiter whose caller gives up leaves the queue.
+export function createLimiter(concurrency: number, maxQueue: number) {
   let active = 0;
   const waiting: Array<() => void> = [];
-  return async <T>(task: () => Promise<T>): Promise<T | null> => {
-    if (active >= concurrency) {
-      if (waiting.length >= maxQueue) return null;
-      await new Promise<void>((resolve) => waiting.push(resolve));
+  const release = () => {
+    const next = waiting.shift();
+    if (next) next();
+    else active -= 1;
+  };
+  return async <T>(signal: AbortSignal, task: () => Promise<T>): Promise<T | 'busy' | 'aborted'> => {
+    if (active < concurrency) {
+      active += 1;
+    } else {
+      if (waiting.length >= maxQueue || signal.aborted) return signal.aborted ? 'aborted' : 'busy';
+      const granted = await new Promise<boolean>((resolve) => {
+        const resume = () => {
+          signal.removeEventListener('abort', leave);
+          resolve(true);
+        };
+        const leave = () => {
+          const index = waiting.indexOf(resume);
+          if (index >= 0) waiting.splice(index, 1);
+          resolve(false);
+        };
+        waiting.push(resume);
+        signal.addEventListener('abort', leave, { once: true });
+      });
+      if (!granted) return 'aborted';
     }
-    active += 1;
     try {
       return await task();
     } finally {
-      active -= 1;
-      waiting.shift()?.();
+      release();
     }
   };
 }
 
 export function createExtractApp(options: ExtractAppOptions = {}) {
   const sandbox = options.sandbox ?? DEFAULT_SANDBOX;
-  const run: Runner = options.run ?? ((kind, bytes) => runSandboxed(kind, bytes, sandbox));
-  const limit = createLimiter(options.concurrency ?? 1, options.maxQueue ?? 8);
+  const run: Runner = options.run ?? ((kind, bytes, signal) => runSandboxed(kind, bytes, sandbox, signal));
+  const limit = createLimiter(options.concurrency ?? 1, options.maxQueue ?? 2);
   const app = new Hono();
 
   app.get('/healthz', (c) => c.json({ ok: true }));
@@ -86,11 +108,21 @@ export function createExtractApp(options: ExtractAppOptions = {}) {
     const kind = zExtractKind.safeParse(c.req.query('kind'));
     if (!kind.success) return answer(c, failure('bad_request', 'kind must be one of einvoice_xml, pdf_text, mime'));
     const max = maxRequestBytes(kind.data);
-    const bytes = await readBody(c.req.raw, max);
-    if (!bytes) return answer(c, failure('too_large', `input is larger than ${max} bytes`));
-    if (bytes.byteLength === 0) return answer(c, failure('invalid', 'Tệp rỗng'));
-    const result = await limit(() => run(kind.data, bytes));
-    return answer(c, result ?? failure('busy', 'all parser slots are busy'));
+    const tooLarge = failure('too_large', `input is larger than ${max} bytes`);
+    const declared = Number(c.req.header('content-length') ?? Number.NaN);
+    if (Number.isFinite(declared) && declared > max) return answer(c, tooLarge);
+    // The body is read only once a slot is free, so waiting requests hold no bytes in memory.
+    const signal = c.req.raw.signal;
+    const result = await limit(signal, async () => {
+      const bytes = await readBody(c.req.raw, max);
+      if (!bytes) return tooLarge;
+      if (bytes.byteLength === 0) return failure('invalid', 'Tệp rỗng');
+      return run(kind.data, bytes, signal);
+    });
+    if (result === 'busy') return answer(c, failure('busy', 'all parser slots are busy'));
+    // Nobody reads this answer; the caller has gone.
+    if (result === 'aborted') return answer(c, failure('internal', 'caller went away'));
+    return answer(c, result);
   });
 
   app.notFound((c) => answer(c, failure('bad_request', 'not found')));

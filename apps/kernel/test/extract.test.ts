@@ -50,6 +50,16 @@ describe('inbound email through crove-extract', () => {
     expect(seen).toEqual([{ kind: 'mime', bytes: raw }]);
   });
 
+  it('retries a message the sandbox ran out of time or memory on, instead of dropping it', async () => {
+    for (const code of ['timeout', 'memory'] as const) {
+      const extract: ExtractClient = { extract: async () => ({ ok: false, code, message: 'limit' }) as never };
+      const error = await processInboundEmail(deps(extract), job).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(Error);
+      // Not a DomainError: the worker drops only DomainErrors below 500.
+      expect(error).not.toBeInstanceOf(DomainError);
+    }
+  });
+
   it('lets a sandbox failure through, so the job is retried and the message kept', async () => {
     const extract: ExtractClient = {
       extract: async () => {

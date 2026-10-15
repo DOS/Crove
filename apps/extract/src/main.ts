@@ -10,7 +10,7 @@ const schema = z.object({
   // Loopback by default; the image sets 0.0.0.0 and compose keeps the port on an internal network.
   HOST: z.string().default('127.0.0.1'),
   EXTRACT_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(1),
-  EXTRACT_MAX_QUEUE: z.coerce.number().int().min(0).max(100).default(8),
+  EXTRACT_MAX_QUEUE: z.coerce.number().int().min(0).max(100).default(2),
   EXTRACT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(30_000),
   EXTRACT_MAX_HEAP_MB: z.coerce.number().int().min(64).max(4096).default(512),
 });

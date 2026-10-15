@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { EXTRACT_LIMITS, zExtractResponse, type ExtractResponse } from '@crove/extract-contract';
 import { credentialVariables, loadExtractConfig } from '../src/main.ts';
 import { DEFAULT_SANDBOX, PARSER_ENV, parserFlags, runSandboxed } from '../src/sandbox.ts';
-import { createExtractApp, type Runner } from '../src/server.ts';
+import { createExtractApp, createLimiter, type Runner } from '../src/server.ts';
 
 const FIXTURE = readFileSync(new URL('../../../packages/l10n-vn/test/fixtures/einvoice-basic.xml', import.meta.url));
 const encode = (text: string) => new TextEncoder().encode(text);
@@ -159,6 +159,60 @@ describe('crove-extract HTTP service', () => {
     expect(await answer(second)).toMatchObject({ code: 'busy' });
     release();
     expect((await first).status).toBe(422);
+  });
+});
+
+describe('crove-extract parser slots', () => {
+  const never = new AbortController().signal;
+
+  it('hands a finished slot to the next waiter, so a newcomer never runs alongside it', async () => {
+    const limit = createLimiter(1, 4);
+    let running = 0;
+    let most = 0;
+    const releases: Array<() => void> = [];
+    const task = () =>
+      new Promise<string>((resolve) => {
+        running += 1;
+        most = Math.max(most, running);
+        releases.push(() => {
+          running -= 1;
+          resolve('done');
+        });
+      });
+    const first = limit(never, task);
+    const second = limit(never, task);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releases.shift()?.();
+    // Arrives in the same tick the first slot is released.
+    const third = limit(never, task);
+    for (let i = 0; i < 3; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      releases.shift()?.();
+    }
+    expect(await Promise.all([first, second, third])).toEqual(['done', 'done', 'done']);
+    expect(most).toBe(1);
+  });
+
+  it('drops a waiter whose caller gave up, freeing its queue place', async () => {
+    const limit = createLimiter(1, 1);
+    let release = () => {};
+    const first = limit(never, () => new Promise<string>((resolve) => (release = () => resolve('first'))));
+    const gone = new AbortController();
+    const waiting = limit(gone.signal, async () => 'ran');
+    expect(await limit(never, async () => 'ran')).toBe('busy');
+    gone.abort();
+    expect(await waiting).toBe('aborted');
+    const next = limit(never, async () => 'next');
+    release();
+    expect(await first).toBe('first');
+    expect(await next).toBe('next');
+  });
+
+  it('kills the parser process when the caller goes away', async () => {
+    const gone = new AbortController();
+    const pending = runSandboxed('einvoice_xml', FIXTURE, DEFAULT_SANDBOX, gone.signal);
+    gone.abort();
+    expect(await pending).toEqual({ ok: false, code: 'internal', message: 'caller went away' });
   });
 });
 

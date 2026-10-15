@@ -80,7 +80,7 @@ async function main() {
   if ((role === 'worker' || role === 'all') && !workerUrl) {
     throw new Error('WORKER_DATABASE_URL is required for the worker; connect it as crove_worker');
   }
-  // Files and emails are parsed only in the sandbox (External-tenant gate T12); there is no in-process fallback.
+  // Files and emails are parsed only in the sandbox (External-tenant gate T12); the worker always passes this client.
   if ((role === 'worker' || role === 'all') && !config.EXTRACT_URL) {
     throw new Error('EXTRACT_URL is required for the worker; point it at the crove-extract service');
   }

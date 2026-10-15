@@ -63,6 +63,19 @@ describe('extraction through crove-extract', () => {
     expect(executed).toHaveLength(0);
   });
 
+  it('fails closed without a sandbox client outside the test runner', async () => {
+    const { deps, executed } = harness(async () => ({ ok: false, code: 'invalid', message: 'x' }));
+    const { extract: _unused, ...withoutClient } = deps;
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      await expect(extractAndPropose(withoutClient as typeof deps, ORG, FILE)).rejects.toThrow(/crove-extract client/);
+    } finally {
+      process.env.NODE_ENV = previous;
+    }
+    expect(executed).toHaveLength(0);
+  });
+
   it('does not call the sandbox for a PDF when AI is not configured', async () => {
     const { deps, executed, asked } = harness(async () => ({ ok: true, kind: 'pdf_text', text: 'x', pages: 1 }), {
       filename: 'hd.pdf',

@@ -105,8 +105,9 @@ type Method = 'einvoice_xml' | 'pdf_text_ai' | 'image_ai' | 'unsupported';
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 // Transitional, step 1 of 2 (External-tenant gate T12): the invariant suite on main still calls
-// extractAndPropose without a sandbox client, and CI runs that copy against this code. Only such a call parses in
-// process, exactly as before crove-extract; the worker always passes the client (EXTRACT_URL is required for it).
+// extractAndPropose without a sandbox client, and CI runs that copy against this code. Only such a call, and only
+// under the test runner (NODE_ENV=test), parses in process, exactly as before crove-extract; the worker always
+// passes the client (EXTRACT_URL is required for it).
 // Removed, with this module's parser dependencies, once main's invariant suite passes a client (#120).
 const legacyInProcess: ExtractClient = {
   async extract<K extends ExtractKind>(kind: K, bytes: Uint8Array): Promise<ExtractResult<K>> {
@@ -149,8 +150,11 @@ async function readInvoice(
   file: { filename: string; content_type: string },
   bytes: Uint8Array,
 ): Promise<{ method: Method; invoice: ParsedInvoice | null; error: string | null }> {
-  // Undefined only for callers written before crove-extract; see legacyInProcess.
-  const sandbox = (deps.extract as ExtractClient | undefined) ?? legacyInProcess;
+  // Undefined only for callers written before crove-extract; see legacyInProcess. Outside the test runner a
+  // missing client is a bug, and it fails closed instead of parsing in this process.
+  const client = deps.extract as ExtractClient | undefined;
+  if (!client && process.env.NODE_ENV !== 'test') throw new Error('extractAndPropose needs the crove-extract client');
+  const sandbox = client ?? legacyInProcess;
   const name = file.filename.toLowerCase();
   // A look at the first bytes picks the parser; nothing is parsed here.
   const isXml = file.content_type.includes('xml') || name.endsWith('.xml') || looksLikeEInvoiceXml(bytes);
