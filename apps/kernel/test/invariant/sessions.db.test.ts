@@ -1,7 +1,7 @@
 // ADR-0028 acceptance tests for the self-host `db` adapter, end to end through the HTTP API on a real
-// PostgreSQL 17. Supabase Auth's auth.users and auth.sessions are mirrored with the columns the check reads
-// (the GoTrue schema pinned in docker-compose.yml); each test changes them the way Supabase Auth does on sign-out,
-// expiry, ban and deletion. Set CROVE_TEST_ADMIN_URL to a superuser URL.
+// PostgreSQL 17. Supabase Auth's auth.users, auth.sessions and auth.mfa_factors are mirrored with the columns the
+// check reads (the GoTrue schema pinned in docker-compose.yml); each test changes them the way Supabase Auth does on
+// sign-out, expiry, ban and deletion. Set CROVE_TEST_ADMIN_URL to a superuser URL.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -172,10 +172,18 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
           id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
           created_at timestamptz NOT NULL DEFAULT now(), not_after timestamptz, aal text);
         CREATE TABLE auth.refresh_tokens (id bigserial PRIMARY KEY, token text, session_id uuid);
+        CREATE TYPE auth.factor_type AS ENUM ('totp', 'webauthn', 'phone', 'recovery_code');
+        CREATE TYPE auth.factor_status AS ENUM ('unverified', 'verified');
+        CREATE TABLE auth.mfa_factors (
+          id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE, friendly_name text,
+          factor_type auth.factor_type NOT NULL, status auth.factor_status NOT NULL, created_at timestamptz NOT NULL,
+          updated_at timestamptz NOT NULL, secret text, phone text, last_challenged_at timestamptz UNIQUE,
+          web_authn_credential jsonb, web_authn_aaguid uuid, last_webauthn_challenge_data jsonb);
         -- As Supabase Auth does: row-level security on, no policies.
         ALTER TABLE auth.users ENABLE ROW LEVEL SECURITY;
         ALTER TABLE auth.sessions ENABLE ROW LEVEL SECURITY;
-        ALTER TABLE auth.refresh_tokens ENABLE ROW LEVEL SECURITY;`);
+        ALTER TABLE auth.refresh_tokens ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE auth.mfa_factors ENABLE ROW LEVEL SECURITY;`);
     });
     await granting;
 
@@ -184,6 +192,8 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
        WHERE grantee = 'crove_auth_reader' AND table_schema = 'auth' ORDER BY 1, 2`,
     );
     expect(rows).toEqual([
+      { table_name: 'mfa_factors', column_name: 'status' },
+      { table_name: 'mfa_factors', column_name: 'user_id' },
       { table_name: 'sessions', column_name: 'id' },
       { table_name: 'sessions', column_name: 'not_after' },
       { table_name: 'sessions', column_name: 'user_id' },
@@ -194,9 +204,10 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
     const secrets = await sql(
       `SELECT has_table_privilege('crove_auth_reader', 'auth.refresh_tokens', 'SELECT') AS refresh,
               has_column_privilege('crove_auth_reader', 'auth.users', 'encrypted_password', 'SELECT') AS password,
+              has_column_privilege('crove_auth_reader', 'auth.mfa_factors', 'secret', 'SELECT') AS factor,
               has_schema_privilege('crove_app', 'auth', 'USAGE') AS app`,
     );
-    expect(secrets.rows[0]).toEqual({ refresh: false, password: false, app: false });
+    expect(secrets.rows[0]).toEqual({ refresh: false, password: false, factor: false, app: false });
     // Without the reader's row policy the check would see no rows; readiness says so instead of 401 for everyone.
     await sql('DROP POLICY crove_auth_reader_select ON auth.sessions');
     expect((await sql('SELECT crove_kernel.auth_grants_ready() AS ok')).rows).toEqual([{ ok: false }]);
