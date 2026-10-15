@@ -17,7 +17,6 @@ BEGIN
   ) THEN
     ALTER TABLE crove_kernel.proposal DROP CONSTRAINT IF EXISTS proposal_status_check;
     ALTER TABLE crove_kernel.proposal ADD CONSTRAINT proposal_status_check
-      CHECK (status IN ('pending', 'approved', 'executed', 'rejected', 'failed')) NOT VALID;
-    ALTER TABLE crove_kernel.proposal VALIDATE CONSTRAINT proposal_status_check;
+      CHECK (status IN ('pending', 'approved', 'executed', 'rejected', 'failed'));
   END IF;
 END $$;
