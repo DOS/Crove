@@ -175,7 +175,15 @@ suite('member invite flows on PostgreSQL', () => {
     expect(acceptAudit).toMatchObject({
       actor_id: invitee.userId,
       outcome: 'ok',
-      detail: { invite_id: created.body?.inviteId, invited_by: owner.userId, invited_role: 'admin', role: 'admin', already_member: false },
+      detail: {
+        invite_id: created.body?.inviteId,
+        invited_by: owner.userId,
+        invited_role: 'admin',
+        target_user: invitee.userId,
+        role: 'admin',
+        previous_role: null,
+        already_member: false,
+      },
     });
     const activity = await rows(org.orgId, 'activity', "kind IN ('invite.created', 'member.joined')");
     expect(activity.map((a) => [a.kind, a.summary])).toEqual([

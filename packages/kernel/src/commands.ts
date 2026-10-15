@@ -3,16 +3,15 @@ import { z } from 'zod';
 import { zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
-import { actorRef, addAuthor, decideApproval, parseAuthors } from './approval.ts';
+import { PROPOSAL_REVISERS, actorRef, addAuthor, decideApproval, parseAuthors } from './approval.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { createOrgCommand, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
 import { inviteCommands } from './invites.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
-// Commands a proposal may execute when approved (they must also declare access: 'proposal').
+// Commands a proposal may execute when approved (they must also declare access: 'proposal', which the runtime checks
+// against the proposal row: state 'approved' for that command, approved by the running kernel.proposal.approve).
 const PROPOSAL_COMMANDS = new Set(['finance.purchase.record']);
-// The module command that computes a new revision's payload when a user edits a proposal (access: 'proposal').
-const PROPOSAL_REVISERS: Record<string, string> = { 'finance.purchase.record': 'finance.purchase.revise' };
 const ADMINS = ['owner', 'admin'] as const;
 // Approving executes an R3 command that posts to the ledger, so only roles that may post approve.
 // The role model has no finance roles yet; owner and admin are the roles that may post today. This is the
@@ -83,7 +82,9 @@ export const changeMemberRole = defineCommand({
   handler: async (ctx, input) => {
     const { target, owners } = await lockForMemberChange(ctx, input.userId);
     const previousRole = target.role;
-    ctx.audit({ target_user_id: input.userId, old_role: previousRole, new_role: input.role, changed: previousRole !== input.role });
+    // Every role or membership change records target_user, role and previous_role (#88): a demotion can make a
+    // self-approval legal (P10), so role changes must be reviewable next to the approvals they enable.
+    ctx.audit({ target_user: input.userId, role: input.role, previous_role: previousRole, changed: previousRole !== input.role });
     if (previousRole === input.role) return { userId: input.userId, role: input.role, previousRole };
     if (previousRole === 'owner' && owners <= 1) throw LAST_OWNER();
     await ctx.trx
@@ -126,7 +127,7 @@ export const removeMember = defineCommand({
       .where('status', '=', 'pending')
       .returning('id')
       .execute();
-    ctx.audit({ target_user_id: input.userId, old_role: target.role, new_role: null, revoked_invites: revokedInvites.map((r) => r.id) });
+    ctx.audit({ target_user: input.userId, role: null, previous_role: target.role, revoked_invites: revokedInvites.map((r) => r.id) });
     await ctx.activity('kernel.member', input.userId, 'member.removed', `Xóa thành viên ${target.email} (${target.role})`);
     await ctx.emit('kernel.member.removed', { userId: input.userId, oldRole: target.role });
     return { userId: input.userId, previousRole: target.role };
@@ -302,7 +303,7 @@ export const editProposal = defineCommand({
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới chỉnh sửa được');
     const proposal = await lockPendingProposal(ctx, input.id, input.revision);
     await refuseWhileReextracting(ctx, proposal.source_file_id);
-    const reviser = PROPOSAL_REVISERS[proposal.command];
+    const reviser = Object.hasOwn(PROPOSAL_REVISERS, proposal.command) ? PROPOSAL_REVISERS[proposal.command] : undefined;
     if (!reviser) throw new DomainError('NOT_EDITABLE', 422, 'Loại đề xuất này không chỉnh sửa được');
     const authors = parseAuthors(proposal.authors);
     if (!authors) throw new DomainError('NOT_EDITABLE', 422, 'Đề xuất thiếu thông tin người soạn nên không chỉnh sửa được');
@@ -358,11 +359,19 @@ export const approveProposal = defineCommand({
     ctx.audit({
       revision: proposal.revision,
       aal: ctx.actor.aal,
-      policy: { P12: 'pass', P10: decision.selfApproved ? 'self_approved' : 'pass' },
+      policy: { P12: 'pass', P10: decision.fourEyes },
       eligible_approvers: decision.eligibleCount,
       self_approved: decision.selfApproved,
       accept_failed_checks: input.acceptFailedChecks ?? false,
     });
+    // Approved for its command by this command: the runtime's proposal state gate lets the command run only now.
+    // The same transaction ends 'executed', or rolls back to 'pending' if the command fails.
+    await ctx.trx
+      .updateTable('crove_kernel.proposal')
+      .set({ status: 'approved', decided_by: ctx.actor.userId, decided_at: ctx.now, executed_command_id: ctx.commandId })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', proposal.id)
+      .execute();
     const result = await ctx.run<{ documentId: string; journalEntryId: string }>(
       proposal.command,
       { payload: proposal.payload, acceptFailedChecks: input.acceptFailedChecks ?? false },
@@ -372,10 +381,7 @@ export const approveProposal = defineCommand({
       .updateTable('crove_kernel.proposal')
       .set({
         status: 'executed',
-        decided_by: ctx.actor.userId,
-        decided_at: ctx.now,
         decision_note: input.note ?? null,
-        executed_command_id: ctx.commandId,
         result: JSON.stringify(result),
       })
       .where('org_id', '=', ctx.orgId)

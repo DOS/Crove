@@ -148,7 +148,9 @@ export const zSessionRevoke = z
     message: 'Chọn một phiên (sessionId) hoặc tất cả (all)',
   });
 
-export const zProposalStatus = z.enum(['pending', 'executed', 'rejected', 'failed']);
+// 'approved' is not committed today: kernel.proposal.approve moves a proposal through it and ends 'executed' in the
+// same transaction (plan §8.3 states; P13 will keep approved proposals for system execution).
+export const zProposalStatus = z.enum(['pending', 'approved', 'executed', 'rejected', 'failed']);
 
 export const zExtractionStatus = z.enum(['pending', 'done', 'failed']);
 
