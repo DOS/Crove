@@ -281,6 +281,27 @@ suite('ledger checks independent of caller visibility (#76)', () => {
     });
   });
 
+  it('cannot run the commit trigger function directly, as a tenant role or even as the admin', async () => {
+    for (const [url, enterAs] of [
+      [appUrl, null],
+      [adminUrl, 'crove_definer_tenant'],
+    ] as const) {
+      const c = await connect(url);
+      await c.query('BEGIN');
+      try {
+        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.a, orgA]);
+        if (enterAs) await c.query(`SET LOCAL ROLE ${enterAs}`);
+        await expect(c.query('SELECT crove_finance.check_entry_balanced()')).rejects.toThrow(/permission denied/);
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    }
+    // With EXECUTE (a superuser), PostgreSQL still refuses to call a trigger function outside a trigger.
+    await withAdmin(async (a) => {
+      await expect(a.query('SELECT crove_finance.check_entry_balanced()')).rejects.toThrow(/trigger functions can only be called as triggers/);
+    });
+  });
+
   it('refuses lines for an entry whose xid8 stamp matches the current transaction but came from another cluster', async () => {
     // A logical restore copies created_xact_id from the old cluster; the new cluster reaches that xid8 again later.
     // Simulated in one transaction: the entry is written the way pg_restore --disable-triggers writes it, with the

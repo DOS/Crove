@@ -40,4 +40,5 @@ The comparison on `created_xact_start` holds only while the new cluster's clock 
 
 - A full restore (`pg_restore` of a whole dump) loads the data before it creates the triggers, so the stamps arrive as they were.
 - `pg_restore --data-only --disable-triggers` (superuser) also keeps the stamps.
+- A restore with the triggers in place and not disabled (for example `pg_restore --data-only` into a migrated database) is not a hole: the stamp trigger overwrites both columns with the restoring transaction, so no old-cluster `xid8` survives to match later.
 - A data-only restore with triggers on re-stamps every entry with the restoring transaction. Lines are then refused ("already posted") unless the whole restore runs as one transaction (`--single-transaction`); in that case the balance check also runs again at commit. Either way no entry is reopened, but the original stamps are lost.

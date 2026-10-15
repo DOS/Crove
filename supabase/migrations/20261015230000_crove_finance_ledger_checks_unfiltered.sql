@@ -47,6 +47,10 @@ END $$;
 -- The check itself: raises unless the entry has at least 2 lines and debits equal credits, counting every line of
 -- (p_org_id, p_entry_id) and nothing else. SECURITY DEFINER so it reads as its owner, never through the caller's
 -- RLS. Callable only by its owner: the two functions below call it, nobody else may.
+-- The error reports the difference, which sums lines the caller may not be able to see. That is safe only because
+-- reject_line_on_posted_entry() accepts lines only in the transaction that created the entry, so every summed line
+-- was supplied by this caller in this transaction. Any future feature that appends lines to an open or existing
+-- entry must first drop the amount (and the line count) from these errors.
 CREATE OR REPLACE FUNCTION crove_finance.require_entry_balanced(p_org_id uuid, p_entry_id uuid) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
