@@ -20,7 +20,25 @@ const schema = z.object({
   ADMIN_DATABASE_URL: optional,
   MIGRATIONS_DIR: z.string().default(here('../../../supabase/migrations')),
   WEB_DIST: z.string().default(here('../../app/dist')),
+  // Blob storage (External-tenant gate T7): local disk under STORAGE_DIR, or any S3-compatible store. The API
+  // and the worker must point at the same store; with s3 they need no shared volume.
+  STORAGE: z.enum(['local', 's3']).default('local'),
   STORAGE_DIR: z.string().default(here('../../../.data/files')),
+  // Unset for AWS S3; the server's URL for MinIO, Cloudflare R2 or GCS interoperability.
+  S3_ENDPOINT: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
+  // R2 uses auto.
+  S3_REGION: optional.transform((v) => v ?? 'us-east-1'),
+  S3_BUCKET: optional.pipe(
+    z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/)
+      .optional(),
+  ),
+  // Both or neither: without them the SDK's default chain applies (environment, instance or workload identity).
+  S3_ACCESS_KEY_ID: optional,
+  S3_SECRET_ACCESS_KEY: optional,
+  // Path-style URLs (endpoint/bucket/key), needed by MinIO and most self-hosted servers.
+  S3_FORCE_PATH_STYLE: z.enum(['true', 'false']).default('false'),
   // Supabase Auth (GoTrue). Self-host: the kernel proxies /auth/v1 to AUTH_UPSTREAM_URL.
   AUTH_UPSTREAM_URL: optional,
   PUBLIC_AUTH_URL: optional,
@@ -86,6 +104,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (config.INBOUND_SECRET && config.INBOUND_SECRET.length < 32) {
     throw new Error('INBOUND_SECRET must be at least 32 characters');
+  }
+  if (config.STORAGE === 's3' && !config.S3_BUCKET) throw new Error('STORAGE=s3 needs S3_BUCKET');
+  if (Boolean(config.S3_ACCESS_KEY_ID) !== Boolean(config.S3_SECRET_ACCESS_KEY)) {
+    throw new Error('set both S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or neither to use the default credential chain');
   }
   if (!isLocalUrl(config.PUBLIC_URL)) {
     if (config.AUTH_JWT_SECRET && SAMPLE_SECRETS.has(config.AUTH_JWT_SECRET)) {
