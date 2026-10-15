@@ -5,12 +5,13 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { sql, type Transaction } from 'kysely';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createDb, createPool, type Db } from '@crove/db';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createDb, createPool, type Database, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { DomainError, Runtime, fileKey, inboundKey, newInboundBlobId, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
+import { createOrg, createOrgCommand, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
+import { DomainError, Runtime, fileKey, type CommandDef, inboundKey, newInboundBlobId, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries, recordExtractionFailure } from '@crove/mod-finance';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
@@ -145,6 +146,148 @@ suite('kernel on PostgreSQL', () => {
     await admin.connect();
     await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
     await admin.end();
+  });
+
+  // A runtime whose first transaction (the command) is untouched and whose later ones (the refusal audit) first
+  // run `before` inside the transaction. Counts the transactions.
+  function refusalAuditHook(before: (trx: Transaction<Database>) => Promise<void>, extra: CommandDef<any, any>[] = []) {
+    const seen = { transactions: 0 };
+    const hooked = new Proxy(db, {
+      get(target, prop) {
+        if (prop !== 'transaction') return Reflect.get(target, prop, target);
+        return () => {
+          const builder = target.transaction();
+          seen.transactions += 1;
+          if (seen.transactions === 1) return builder;
+          return {
+            execute: <T,>(fn: (trx: Transaction<Database>) => Promise<T>) =>
+              builder.execute(async (trx) => {
+                await before(trx);
+                return fn(trx);
+              }),
+          };
+        };
+      },
+    }) as Db;
+    const hookedRuntime = new Runtime(hooked).register({
+      commands: [...kernelCommands, ...extra],
+      queries: kernelQueries({ inboundDomain: 'in.test' }),
+    });
+    return { runtime: hookedRuntime, seen };
+  }
+
+  const auditRows = (orgId: string, command: string, outcome: string) =>
+    withAdmin(async (admin) => {
+      const { rows } = await admin.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM crove_kernel.audit_event WHERE org_id = $1 AND command = $2 AND outcome = $3`,
+        [orgId, command, outcome],
+      );
+      return rows[0]?.n;
+    });
+
+  async function captureErrors<T>(fn: (logged: ReturnType<typeof vi.spyOn>) => Promise<T>): Promise<T> {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      return await fn(logged);
+    } finally {
+      logged.mockRestore();
+    }
+  }
+
+  it('logs a refusal whose audit row cannot be written and still returns the refusal (#102)', async () => {
+    const tag = randomUUID().slice(0, 8);
+    const founder = await upsertIdentity(db, { issuer: 'test', subject: `audit-loss-${tag}`, email: `audit-loss-${tag}@example.com`, name: null });
+    const key = randomUUID();
+    const created = await createOrg(runtime, asUser(founder), `Mất audit ${tag}`, key);
+    // The refusal audit runs read-only, so its INSERT fails in the database (SQLSTATE 25006).
+    const broken = refusalAuditHook(async (trx) => {
+      await sql`SET TRANSACTION READ ONLY`.execute(trx);
+    });
+
+    await captureErrors(async (logged) => {
+      // A refused replay into the existing org: the caller still gets the original 422, not a 500.
+      await expect(createOrg(broken.runtime, asUser(founder), `Tên khác ${tag}`, key)).rejects.toMatchObject({
+        code: 'IDEMPOTENCY_MISMATCH',
+        status: 422,
+      });
+      expect(broken.seen.transactions).toBe(2);
+      expect(await auditRows(created.orgId, 'kernel.org.create', 'failed')).toBe(0);
+      // The lost row is logged with ids and codes only.
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged).toHaveBeenCalledWith('[execute kernel.org.create] AUDIT_WRITE_FAILED', {
+        orgId: created.orgId,
+        commandId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        actorType: 'user',
+        actorId: founder,
+        outcome: 'failed',
+        refusal: 'IDEMPOTENCY_MISMATCH',
+        error: 'INTERNAL',
+        sqlState: '25006',
+      });
+      expect(JSON.stringify(logged.mock.calls)).not.toContain(`Tên khác ${tag}`);
+
+      // With a working database the same refusal is audited and nothing is logged.
+      logged.mockClear();
+      await expect(createOrg(runtime, asUser(founder), `Tên khác ${tag}`, key)).rejects.toMatchObject({ code: 'IDEMPOTENCY_MISMATCH' });
+      expect(await auditRows(created.orgId, 'kernel.org.create', 'failed')).toBe(1);
+      expect(logged).not.toHaveBeenCalled();
+    });
+  });
+
+  it('logs the lost refusal audit of an actor removed from the org before it is written (#102)', async () => {
+    const tag = randomUUID().slice(0, 8);
+    const owner = await upsertIdentity(db, { issuer: 'test', subject: `rm-owner-${tag}`, email: `rm-owner-${tag}@example.com`, name: null });
+    const member = await upsertIdentity(db, { issuer: 'test', subject: `rm-member-${tag}`, email: `rm-member-${tag}@example.com`, name: null });
+    const { orgId } = await createOrg(runtime, asUser(owner), `Xóa thành viên ${tag}`);
+    await runtime.execute('kernel.member.add', { email: `rm-member-${tag}@example.com`, role: 'member' }, { actor: asMfa(owner), orgId });
+    // The member is removed (committed) after the refused command rolled back and before its audit is written.
+    const removed = refusalAuditHook(async () => {
+      await withAdmin((admin) => admin.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [orgId, member]));
+    });
+
+    await captureErrors(async (logged) => {
+      await expect(
+        removed.runtime.execute('kernel.member.add', { email: `x-${tag}@example.com`, role: 'member' }, { actor: asMfa(member), orgId }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+      expect(removed.seen.transactions).toBe(2);
+      expect(await auditRows(orgId, 'kernel.member.add', 'denied')).toBe(0);
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged).toHaveBeenCalledWith('[execute kernel.member.add] AUDIT_WRITE_FAILED', {
+        orgId,
+        commandId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        actorType: 'user',
+        actorId: member,
+        outcome: 'denied',
+        refusal: 'FORBIDDEN',
+        error: 'NOT_A_MEMBER',
+        sqlState: '42501',
+      });
+    });
+  });
+
+  it('writes no refusal audit and logs nothing when a new org rolls back with its failed command (#102)', async () => {
+    const tag = randomUUID().slice(0, 8);
+    const founder = await upsertIdentity(db, { issuer: 'test', subject: `rollback-${tag}`, email: `rollback-${tag}@example.com`, name: null });
+    // kernel.org.create's definer and checks, with a handler that refuses after the org exists in the transaction.
+    const failing: CommandDef<any, any> = {
+      ...createOrgCommand,
+      name: 'test.org.create_then_fail',
+      handler: async () => {
+        throw new DomainError('INVALID', 422, 'refused after creation');
+      },
+    };
+    const hooked = refusalAuditHook(async () => {}, [failing]);
+
+    await captureErrors(async (logged) => {
+      await expect(
+        hooked.runtime.executeOrgless('test.org.create_then_fail', { name: `Hoàn tác ${tag}` }, { actor: asUser(founder) }),
+      ).rejects.toMatchObject({ code: 'INVALID', status: 422 });
+      // No refusal-audit transaction was opened: the org rolled back, there is nothing to audit in.
+      expect(hooked.seen.transactions).toBe(1);
+      expect(logged).not.toHaveBeenCalled();
+    });
+    const left = await withAdmin(async (admin) => (await admin.query('SELECT 1 FROM crove_kernel.tenant WHERE created_by = $1', [founder])).rows.length);
+    expect(left).toBe(0);
   });
 
   it('turns an e-invoice into a proposal, and records it once on approval', async () => {

@@ -341,11 +341,20 @@ export class Runtime {
     let orgId = '';
     let role: MemberRole | null = null;
     let entered = false;
+    // An org-less command's org was created by this transaction (not a replay into an org that already existed):
+    // the tenant row's xmin is this transaction's id (the definer inserts it outside any subtransaction).
+    let orgIsNew = false;
     try {
       return await this.db.transaction().execute(async (trx) => {
         orgId = await resolveOrg(trx);
         role = await this.enter(trx, actor, orgId);
         entered = true;
+        if (def.bootstrap) {
+          const { rows } = await sql<{ fresh: boolean }>`
+            SELECT COALESCE(t.xmin = pg_catalog.pg_current_xact_id_if_assigned()::xid, false) AS fresh
+            FROM crove_kernel.tenant t WHERE t.org_id = ${orgId}::uuid`.execute(trx);
+          orgIsNew = rows[0]?.fresh === true;
+        }
         this.authorize(def.access, actor, role, false);
         this.requireStepUp(def, actor);
 
@@ -386,34 +395,67 @@ export class Runtime {
       });
     } catch (error) {
       const domain = toDomainError(error);
-      // An org-less command that failed after creating its org rolled the org back, so entering it fails and
-      // no audit row is written; a refused replay into an org that already existed is audited there.
-      if (entered && (domain.status === 403 || domain.status === 409 || domain.status === 422)) {
-        await this.db
-          .transaction()
-          .execute(async (trx) => {
-            await this.enter(trx, actor, orgId);
-            await this.writeAudit(trx, {
-              orgId,
-              actor,
-              command: name,
-              commandId: uuidv7(),
-              outcome: domain.status === 403 ? 'denied' : 'failed',
-              inputSha256,
-              target: def.target?.(input) ?? null,
-              proposalId: null,
-              // The policy rule that refused, when the error names one (for example P10 or P12), and the session.
-              detail: {
-                code: domain.code,
-                ...(typeof domain.details?.rule === 'string' ? { rule: domain.details.rule } : {}),
-                ...(actor.type === 'user' ? this.sessionDetail(actor) : {}),
-              },
-            });
-          })
-          .catch(() => {});
+      // An org-less command that failed after creating its org rolled the org back, so there is no org to audit
+      // the refusal in; a refused replay into an org that already existed is audited there. Other statuses
+      // (404 included) are not audited today.
+      if (entered && !orgIsNew && (domain.status === 403 || domain.status === 409 || domain.status === 422)) {
+        await this.writeRefusalAudit(name, def, input, inputSha256, actor, orgId, domain);
       }
       if (domain.code === 'INTERNAL') console.error(`[execute ${name}]`, error);
       throw domain;
+    }
+  }
+
+  // Writes the denied/failed audit row of a refused command in a new short transaction (plan §4.4 step 14,
+  // §4.10). The command already rolled back, so a lost refusal row hides no change; the caller still gets the
+  // original refusal, never a 500 that would mask it. The loss is never silent: it is logged with ids and
+  // codes only (no input, no row content, no driver message, which can quote values).
+  private async writeRefusalAudit(
+    name: string,
+    def: CommandDef<unknown, unknown>,
+    input: unknown,
+    inputSha256: string,
+    actor: Actor,
+    orgId: string,
+    refusal: DomainError,
+  ): Promise<void> {
+    const commandId = uuidv7();
+    const outcome = refusal.status === 403 ? 'denied' : 'failed';
+    try {
+      await this.db.transaction().execute(async (trx) => {
+        await this.enter(trx, actor, orgId);
+        await this.writeAudit(trx, {
+          orgId,
+          actor,
+          command: name,
+          commandId,
+          outcome,
+          inputSha256,
+          target: def.target?.(input) ?? null,
+          proposalId: null,
+          // The policy rule that refused, when the error names one (for example P10 or P12), and the session.
+          detail: {
+            code: refusal.code,
+            ...(typeof refusal.details?.rule === 'string' ? { rule: refusal.details.rule } : {}),
+            ...(actor.type === 'user' ? this.sessionDetail(actor) : {}),
+          },
+        });
+      });
+    } catch (auditError) {
+      // Every loss is logged, including an actor removed from the org between the command and this write
+      // (NOT_A_MEMBER from enter()): the row goes into the org's audit only through the actor's own context.
+      const lost = toDomainError(auditError);
+      const sqlState = auditError instanceof DomainError ? null : (auditError as { code?: unknown } | null)?.code;
+      console.error(`[execute ${name}] AUDIT_WRITE_FAILED`, {
+        orgId,
+        commandId,
+        actorType: actor.type,
+        actorId: actor.type === 'user' ? actor.userId : actor.component,
+        outcome,
+        refusal: refusal.code,
+        error: lost.code,
+        sqlState: typeof sqlState === 'string' ? sqlState : null,
+      });
     }
   }
 
