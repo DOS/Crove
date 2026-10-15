@@ -294,6 +294,42 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     }
   });
 
+  // With three owners the owner count alone never refuses, so this isolates the re-check of the actor's own role:
+  // X demotes Y while Y, still an owner when its request began, demotes Z (or adds an admin). X's command takes the
+  // lock first, so Y's command must see its own demotion and change nothing.
+  it('refuses an owner demoted by a command that committed first, even when other owners remain', async () => {
+    for (const second of ['demote', 'remove', 'add'] as const) {
+      const { x, y, z, w } = await signInAll('x', 'y', 'z', 'w');
+      const { slug, orgId } = await orgWith(x, [
+        [y, 'owner'],
+        [z, 'owner'],
+      ]);
+      const [tokenX, tokenY] = await Promise.all([tokenFor(x, { mfa: true }), tokenFor(y, { mfa: true })]);
+      const holder = new pg.Client({ connectionString: adminUrl });
+      await holder.connect();
+      await holder.query('BEGIN');
+      await holder.query("SELECT 1 FROM crove_kernel.tenant_member WHERE org_id = $1 AND role = 'owner' FOR UPDATE", [orgId]);
+      const first = rpc('org/changeMemberRole', tokenX, { userId: y.userId, role: 'admin', idempotencyKey: randomUUID() }, slug);
+      await waitForLockWaiters(1);
+      const stale =
+        second === 'demote'
+          ? rpc('org/changeMemberRole', tokenY, { userId: z.userId, role: 'viewer', idempotencyKey: randomUUID() }, slug)
+          : second === 'remove'
+            ? rpc('org/removeMember', tokenY, { userId: z.userId, idempotencyKey: randomUUID() }, slug)
+            : rpc('org/addMember', tokenY, { email: w.email, role: 'admin' }, slug);
+      await waitForLockWaiters(2);
+      await holder.query('COMMIT');
+      await holder.end();
+
+      expect(await first).toMatchObject({ status: 200, body: { role: 'admin', previousRole: 'owner' } });
+      expect(await stale).toMatchObject({ status: 403, body: { code: 'FORBIDDEN' } });
+      const after = await roles(orgId);
+      expect(after[y.userId]).toBe('admin');
+      expect(after[z.userId]).toBe('owner');
+      expect(after[w.userId]).toBeUndefined();
+    }
+  });
+
   // Waits until `count` backends of this database wait on a row lock.
   async function waitForLockWaiters(count: number) {
     for (let i = 0; i < 100; i++) {

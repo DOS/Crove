@@ -26,22 +26,23 @@ export const addMember = defineCommand({
   risk: 'R3',
   access: ADMINS,
   handler: async (ctx, input) => {
-    // Only owners may grant or change admin rights; nobody can change an owner through this command.
-    if (input.role === 'admin' && ctx.role !== 'owner') {
-      throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới cấp được quyền quản trị');
-    }
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới quản lý được thành viên');
     const { rows } = await sql<{ id: string | null }>`SELECT crove_kernel.user_id_by_email(${input.email}) AS id`.execute(ctx.trx);
     const userId = rows[0]?.id;
     if (!userId) throw new DomainError('USER_NOT_FOUND', 404, 'Người này chưa có tài khoản, hãy nhờ họ đăng ký trước');
-    const existing = await ctx.trx
-      .selectFrom('crove_kernel.tenant_member')
-      .select('role')
-      .where('org_id', '=', ctx.orgId)
-      .where('user_id', '=', userId)
-      .forUpdate()
-      .executeTakeFirst();
+    // The actor's role as of now, under the same locks as role changes and removals: an owner or admin demoted or
+    // removed by a concurrent command is refused instead of acting on the role read when the context was entered.
+    const locked = await lockMembers(ctx, ctx.actor.userId, userId);
+    if (locked.actorRole !== 'owner' && locked.actorRole !== 'admin') {
+      throw new DomainError('FORBIDDEN', 403, 'Vai trò của bạn không được thực hiện việc này');
+    }
+    // Only owners may grant or change admin rights; nobody can change an owner through this command.
+    if (input.role === 'admin' && locked.actorRole !== 'owner') {
+      throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới cấp được quyền quản trị');
+    }
+    const existing = locked.target;
     if (existing?.role === 'owner') throw new DomainError('FORBIDDEN', 403, 'Không đổi được vai trò của chủ sở hữu');
-    if (existing?.role === 'admin' && ctx.role !== 'owner') {
+    if (existing?.role === 'admin' && locked.actorRole !== 'owner') {
       throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đổi được vai trò của quản trị viên');
     }
     await ctx.trx
