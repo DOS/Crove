@@ -1,5 +1,5 @@
-// Alert delivery for the prober (plan §4.13, issue #39). One generic adapter: POST a JSON body to ALERT_WEBHOOK_URL,
-// or print to stdout when no webhook is configured. The body carries `text` (Slack incoming webhooks, Mattermost,
+// Alert delivery for the prober (plan §4.13, issue #39), behind the AlertSink port (ADR-0030). One generic adapter:
+// POST a JSON body to ALERT_WEBHOOK_URL, or print to stdout when no webhook is configured. The body carries `text` (Slack incoming webhooks, Mattermost,
 // Google Chat), `content` (Discord) and a structured `crove` object for anything else. The webhook URL usually
 // embeds a secret, so it is never logged: only its host is.
 
@@ -104,4 +104,16 @@ export async function deliverAlert(alert: Alert, options: AlertSinkOptions): Pro
     log(payload.text);
     return { channel: 'webhook', ok: false, error: `${describeWebhook(options.webhookUrl)} failed: ${reason}` };
   }
+}
+
+// The alert port (ADR-0030): where the prober sends an alert. deliver never throws; a failed delivery is reported in
+// its result. describe names the destination for logs and never includes a secret.
+export interface AlertSink {
+  describe(): string;
+  deliver(alert: Alert): Promise<Delivery>;
+}
+
+// The open-source default: the generic webhook, or stdout without one.
+export function webhookAlertSink(options: AlertSinkOptions): AlertSink {
+  return { describe: () => describeWebhook(options.webhookUrl), deliver: (alert) => deliverAlert(alert, options) };
 }
