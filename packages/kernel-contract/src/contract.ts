@@ -45,6 +45,17 @@ export const contract = {
         }),
       )
       .output(z.object({ documentId: zId, journalEntryId: zId })),
+    // Saves changed line accounts as a new revision authored by the caller; it never approves.
+    edit: oc
+      .input(
+        z.object({
+          id: zId,
+          revision: z.number().int().positive(),
+          lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).min(1).max(1000),
+          idempotencyKey: zId,
+        }),
+      )
+      .output(z.object({ revision: z.number().int(), changed: z.boolean() })),
     reject: oc.input(z.object({ id: zId, reason: z.string().max(500).optional() })).output(z.object({ ok: z.literal(true) })),
   },
   files: {

@@ -417,11 +417,13 @@ suite('kernel on PostgreSQL', () => {
   });
 
   it('records an invoice with failed checks only after explicit confirmation, and never a foreign-currency one', async () => {
-    const asOwner = { actor: asUser(users.owner), orgId: orgA };
+    // The owner uploads these and org A has an admin by now, so four-eyes (P10) makes the admin approve.
+    const admin = await upsertIdentity(db, { issuer: 'test', subject: 'admin', email: 'admin@example.com', name: null });
+    const asAdmin = { actor: asUser(admin), orgId: orgA };
 
     const mismatch = await propose(variant('1235', (xml) => xml.replace('<TThue>180000</TThue>', '<TThue>170000</TThue>')));
-    await expect(runtime.execute('kernel.proposal.approve', mismatch, asOwner)).rejects.toMatchObject({ code: 'CHECKS_FAILED' });
-    await expect(runtime.execute('kernel.proposal.approve', { ...mismatch, acceptFailedChecks: true }, asOwner)).resolves.toMatchObject({
+    await expect(runtime.execute('kernel.proposal.approve', mismatch, asAdmin)).rejects.toMatchObject({ code: 'CHECKS_FAILED' });
+    await expect(runtime.execute('kernel.proposal.approve', { ...mismatch, acceptFailedChecks: true }, asAdmin)).resolves.toMatchObject({
       journalEntryId: expect.any(String),
     });
 
@@ -429,15 +431,15 @@ suite('kernel on PostgreSQL', () => {
     const pending = await runtime.query<Array<{ id: string; failedChecks: number; total: string | null }>>(
       'kernel.inbox.list',
       { status: 'pending' },
-      asOwner,
+      asAdmin,
     );
     expect(pending.find((p) => p.id === totalOff.id)).toMatchObject({ failedChecks: 1, total: '1979999' });
-    await expect(runtime.execute('kernel.proposal.approve', { ...totalOff, acceptFailedChecks: true }, asOwner)).rejects.toMatchObject({
+    await expect(runtime.execute('kernel.proposal.approve', { ...totalOff, acceptFailedChecks: true }, asAdmin)).rejects.toMatchObject({
       code: 'CHECKS_BLOCKING',
     });
 
     const usd = await propose(variant('1236', (xml) => xml.replace('<DVTTe>VND</DVTTe>', '<DVTTe>USD</DVTTe>')));
-    await expect(runtime.execute('kernel.proposal.approve', { ...usd, acceptFailedChecks: true }, asOwner)).rejects.toMatchObject({
+    await expect(runtime.execute('kernel.proposal.approve', { ...usd, acceptFailedChecks: true }, asAdmin)).rejects.toMatchObject({
       code: 'UNSUPPORTED_CURRENCY',
     });
   });
@@ -741,5 +743,181 @@ suite('kernel on PostgreSQL', () => {
         code: 'INBOUND_BLOB_MISMATCH',
       });
     }
+  });
+
+  // ---------------------------------------------------------------------------------------------------------
+  // Approval policy (plan §4.7 P10 and P12, §8.3; External-tenant gate T2). Each case runs in its own org.
+  // ---------------------------------------------------------------------------------------------------------
+  type Role = 'admin' | 'member' | 'viewer';
+  type Decision = { canApprove: boolean; approveReason: string; canEdit: boolean; revision: number };
+
+  async function policyOrg(name: string, roles: Role[]) {
+    const tag = randomUUID().slice(0, 8);
+    const owner = await upsertIdentity(db, { issuer: 'test', subject: `owner-${tag}`, email: `owner-${tag}@example.com`, name: null });
+    const orgId = (await createOrg(runtime, owner, `${name} ${tag}`)).orgId;
+    const people: string[] = [];
+    for (const [i, role] of roles.entries()) {
+      const email = `${role}${i}-${tag}@example.com`;
+      people.push(await upsertIdentity(db, { issuer: 'test', subject: `${role}${i}-${tag}`, email, name: null }));
+      await runtime.execute('kernel.member.add', { email, role }, { actor: asUser(owner), orgId });
+    }
+    const setRole = (userId: string, role: Role) => {
+      const index = people.indexOf(userId);
+      return runtime.execute('kernel.member.add', { email: `${roles[index]}${index}-${tag}@example.com`, role }, { actor: asUser(owner), orgId });
+    };
+    return { orgId, owner, people, setRole };
+  }
+
+  async function proposeIn(orgId: string, uploader: string, number: string) {
+    const bytes = variant(number);
+    const sha256 = sha256Hex(bytes);
+    const storageKey = fileKey(orgId, sha256);
+    await store.put(storageKey, bytes);
+    const { fileId } = await runtime.execute<{ fileId: string }>(
+      'kernel.file.ingest',
+      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, source: 'upload' },
+      { actor: asUser(uploader), orgId },
+    );
+    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, today: () => '2026-10-13' }, orgId, fileId);
+    if (!proposalId) throw new Error('no proposal');
+    return proposalId;
+  }
+
+  const view = (orgId: string, userId: string, id: string) =>
+    runtime.query<Decision & { payload: { lines: Array<{ lineNo: number; debitAccount: string }> } }>('kernel.inbox.get', { id }, { actor: asUser(userId), orgId });
+  const approveAs = (orgId: string, userId: string, id: string, revision: number) =>
+    runtime.execute<{ journalEntryId: string }>('kernel.proposal.approve', { id, revision }, { actor: asUser(userId), orgId });
+
+  async function approvalAudit(proposalId: string) {
+    return withAdmin(async (admin) => {
+      const { rows } = await admin.query<{ actor_id: string; outcome: string; detail: Record<string, unknown> }>(
+        `SELECT actor_id, outcome, detail FROM crove_kernel.audit_event
+         WHERE command = 'kernel.proposal.approve' AND target_id = $1 ORDER BY occurred_at, id`,
+        [proposalId],
+      );
+      return rows;
+    });
+  }
+
+  it('four-eyes (P10): with two eligible approvers the uploader cannot approve, the other approver can', async () => {
+    const { orgId, owner, people } = await policyOrg('Four eyes', ['admin']);
+    const admin = people[0] as string;
+    const id = await proposeIn(orgId, owner, '2001');
+
+    const asOwner = await view(orgId, owner, id);
+    expect(asOwner).toMatchObject({ canApprove: false, approveReason: 'four_eyes', canEdit: true });
+    expect(await view(orgId, admin, id)).toMatchObject({ canApprove: true, approveReason: 'ok' });
+    await expect(approveAs(orgId, owner, id, asOwner.revision)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED', status: 403 });
+    await expect(approveAs(orgId, admin, id, asOwner.revision)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
+
+    expect(await approvalAudit(id)).toEqual([
+      { actor_id: owner, outcome: 'denied', detail: { code: 'FOUR_EYES_REQUIRED', rule: 'P10' } },
+      {
+        actor_id: admin,
+        outcome: 'ok',
+        detail: { revision: 1, aal: 'aal1', policy: { P12: 'pass', P10: 'pass' }, eligible_approvers: 2, self_approved: false, accept_failed_checks: false },
+      },
+    ]);
+    expect(await view(orgId, admin, id)).toMatchObject({ canApprove: false, approveReason: 'not_pending', canEdit: false });
+  });
+
+  it('lets the only eligible approver (the owner alone) self-approve, flagged in the audit row', async () => {
+    const { orgId, owner, people } = await policyOrg('Solo', ['member']);
+    const id = await proposeIn(orgId, owner, '2002');
+    const detail = await view(orgId, owner, id);
+    expect(detail).toMatchObject({ canApprove: true, approveReason: 'ok' });
+    await expect(approveAs(orgId, owner, id, detail.revision)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
+    const [row] = await approvalAudit(id);
+    expect(row).toMatchObject({ actor_id: owner, outcome: 'ok', detail: { self_approved: true, eligible_approvers: 1, policy: { P10: 'self_approved' } } });
+
+    // A proposal uploaded by someone else is not a self-approval.
+    const other = await proposeIn(orgId, people[0] as string, '2003');
+    await approveAs(orgId, owner, other, 1);
+    expect((await approvalAudit(other))[0]).toMatchObject({ outcome: 'ok', detail: { self_approved: false, policy: { P10: 'pass' } } });
+  });
+
+  it('never lets members or viewers approve (P12), and hides Approve from them', async () => {
+    const { orgId, owner, people } = await policyOrg('Roles', ['member', 'viewer']);
+    const [member, viewer] = people as [string, string];
+    const id = await proposeIn(orgId, member, '2004');
+    expect(await view(orgId, member, id)).toMatchObject({ canApprove: false, approveReason: 'not_eligible', canEdit: true });
+    expect(await view(orgId, viewer, id)).toMatchObject({ canApprove: false, approveReason: 'not_eligible', canEdit: false });
+    await expect(approveAs(orgId, member, id, 1)).rejects.toMatchObject({ status: 403 });
+    await expect(approveAs(orgId, viewer, id, 1)).rejects.toMatchObject({ status: 403 });
+    await expect(
+      runtime.execute('kernel.proposal.edit', { id, revision: 1, lineAccounts: [{ lineNo: 1, debitAccount: '6421' }] }, { actor: asUser(viewer), orgId }),
+    ).rejects.toMatchObject({ status: 403 });
+    // The owner did not upload it, so they approve without self-approval.
+    expect(await view(orgId, owner, id)).toMatchObject({ canApprove: true, approveReason: 'ok' });
+  });
+
+  it('re-checks roles live: a demoted admin cannot approve, and an admin promoted later is not in the snapshot', async () => {
+    const { orgId, owner, people, setRole } = await policyOrg('Role changes', ['admin', 'member']);
+    const [adminA, laterAdmin] = people as [string, string];
+    const id = await proposeIn(orgId, owner, '2005');
+    expect(await view(orgId, adminA, id)).toMatchObject({ canApprove: true });
+
+    await setRole(adminA, 'member');
+    await setRole(laterAdmin, 'admin');
+    expect(await view(orgId, adminA, id)).toMatchObject({ canApprove: false, approveReason: 'not_eligible' });
+    await expect(approveAs(orgId, adminA, id, 1)).rejects.toMatchObject({ status: 403 });
+    expect(await view(orgId, laterAdmin, id)).toMatchObject({ canApprove: false, approveReason: 'not_eligible' });
+    await expect(approveAs(orgId, laterAdmin, id, 1)).rejects.toMatchObject({ code: 'NOT_ELIGIBLE', status: 403 });
+    expect((await approvalAudit(id)).at(-1)).toMatchObject({ actor_id: laterAdmin, outcome: 'denied', detail: { code: 'NOT_ELIGIBLE', rule: 'P12' } });
+
+    // Only the owner is still eligible from the snapshot, so the owner (the uploader) may self-approve.
+    expect(await view(orgId, owner, id)).toMatchObject({ canApprove: true, approveReason: 'ok' });
+    await approveAs(orgId, owner, id, 1);
+    expect((await approvalAudit(id)).at(-1)).toMatchObject({ actor_id: owner, outcome: 'ok', detail: { self_approved: true, eligible_approvers: 1 } });
+  });
+
+  it('turns an edit into a new revision authored by the editor; the old revision and unsaved changes cannot be approved', async () => {
+    const { orgId, owner, people } = await policyOrg('Edits', ['admin', 'member']);
+    const [admin, member] = people as [string, string];
+    const id = await proposeIn(orgId, member, '2006');
+    const before = await view(orgId, owner, id);
+    expect(before).toMatchObject({ revision: 1, canApprove: true });
+    const line = before.payload.lines[0] as { lineNo: number; debitAccount: string };
+    const account = line.debitAccount === '6421' ? '6422' : '6421';
+    const changed = [{ lineNo: line.lineNo, debitAccount: account }];
+
+    // Approve never carries an edit.
+    await expect(
+      runtime.execute('kernel.proposal.approve', { id, revision: 1, lineAccounts: changed }, { actor: asUser(owner), orgId }),
+    ).rejects.toMatchObject({ code: 'CONTENT_CHANGED' });
+    // An edit that changes nothing creates no revision.
+    await expect(
+      runtime.execute('kernel.proposal.edit', { id, revision: 1, lineAccounts: [line] }, { actor: asUser(owner), orgId }),
+    ).resolves.toEqual({ revision: 1, changed: false });
+    await expect(
+      runtime.execute('kernel.proposal.edit', { id, revision: 1, lineAccounts: [{ lineNo: line.lineNo, debitAccount: '99999' }] }, { actor: asUser(owner), orgId }),
+    ).rejects.toMatchObject({ code: 'UNKNOWN_ACCOUNT' });
+
+    await expect(
+      runtime.execute('kernel.proposal.edit', { id, revision: 1, lineAccounts: changed }, { actor: asUser(owner), orgId }),
+    ).resolves.toEqual({ revision: 2, changed: true });
+    await withAdmin(async (adminClient) => {
+      const { rows } = await adminClient.query('SELECT revision, authors FROM crove_kernel.proposal WHERE id = $1', [id]);
+      expect(rows[0]).toEqual({
+        revision: 2,
+        authors: [
+          { type: 'system', component: 'finance.extract' },
+          { type: 'user', id: member },
+          { type: 'user', id: owner },
+        ],
+      });
+    });
+
+    await expect(approveAs(orgId, admin, id, 1)).rejects.toMatchObject({ code: 'STALE_REVISION' });
+    const after = await view(orgId, owner, id);
+    expect(after).toMatchObject({ revision: 2, canApprove: false, approveReason: 'four_eyes', canEdit: true });
+    expect(after.payload.lines[0]).toMatchObject({ debitAccount: account, reason: 'Người dùng chọn' });
+    await expect(approveAs(orgId, owner, id, 2)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED' });
+    expect(await view(orgId, admin, id)).toMatchObject({ canApprove: true, approveReason: 'ok' });
+    const { journalEntryId } = await approveAs(orgId, admin, id, 2);
+
+    const journal = await runtime.query<Array<{ id: string; lines: Array<{ accountCode: string }> }>>('finance.journal.list', {}, { actor: asUser(admin), orgId });
+    expect(journal.find((j) => j.id === journalEntryId)?.lines.map((l) => l.accountCode)).toContain(account);
+    expect((await approvalAudit(id)).at(-1)).toMatchObject({ actor_id: admin, outcome: 'ok', detail: { revision: 2, self_approved: false } });
   });
 });

@@ -148,6 +148,9 @@ export interface ProposalTable {
   decision_note: string | null;
   executed_command_id: string | null;
   result: Json | null;
+  // Set on every new proposal; NULL only on proposals decided before the approval policy existed.
+  eligible_approvers: string[] | null;
+  authors: Json | null;
 }
 
 export interface ActivityTable {

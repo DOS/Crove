@@ -118,6 +118,12 @@ export const zInboxDetail = zInboxItem.extend({
   decidedAt: z.string().nullable(),
   decisionNote: z.string().nullable(),
   result: z.object({ documentId: zId, journalEntryId: zId }).nullable(),
+  // The server's approval decision for the caller (plan §4.7 P10, P12): 'four_eyes' means the caller wrote
+  // part of this revision and another eligible approver must approve it.
+  canApprove: z.boolean(),
+  approveReason: z.enum(['ok', 'not_pending', 'not_eligible', 'four_eyes']),
+  canEdit: z.boolean(),
+  canReject: z.boolean(),
 });
 
 export const zFileStatus = z.object({

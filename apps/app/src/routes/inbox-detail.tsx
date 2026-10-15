@@ -72,6 +72,17 @@ export function InboxDetailPage() {
   };
   const approve = useMutation(orpc.inbox.approve.mutationOptions({ onSuccess: done }));
   const reject = useMutation(orpc.inbox.reject.mutationOptions({ onSuccess: done }));
+  // Saving an edit creates a new revision authored by this user; the page then reloads the server's decision.
+  const edit = useMutation(
+    orpc.inbox.edit.mutationOptions({
+      onSuccess: async () => {
+        setLineAccounts({});
+        await queryClient.invalidateQueries();
+      },
+    }),
+  );
+  const dirty = (payload?.lines ?? []).some((l) => (lineAccounts[l.lineNo] ?? l.debitAccount) !== l.debitAccount);
+  const busy = approve.isPending || reject.isPending || edit.isPending;
 
   if (detail.isLoading) return <Spinner />;
   if (detail.error) return <ErrorText>{errorMessage(detail.error)}</ErrorText>;
@@ -95,33 +106,53 @@ export function InboxDetailPage() {
           actions={
             pending ? (
               <>
-                <Button
-                  variant="danger"
-                  disabled={reject.isPending || approve.isPending}
-                  onClick={() => {
-                    const reason = window.prompt('Lý do từ chối (không bắt buộc)');
-                    if (reason === null) return;
-                    reject.mutate({ id, ...(reason.trim() ? { reason: reason.trim().slice(0, 500) } : {}) });
-                  }}
-                >
-                  Từ chối
-                </Button>
-                <Button
-                  variant="primary"
-                  disabled={approve.isPending || reject.isPending || !payload || blocked || (failed > 0 && !acceptFailed)}
-                  onClick={() =>
-                    approve.mutate({
-                      id,
-                      revision: item.revision,
-                      idempotencyKey,
-                      lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
-                      ...(failed > 0 ? { acceptFailedChecks: acceptFailed } : {}),
-                    })
-                  }
-                >
-                  {approve.isPending ? <Spinner /> : null}
-                  Duyệt và ghi sổ
-                </Button>
+                {item.canReject && (
+                  <Button
+                    variant="danger"
+                    disabled={busy}
+                    onClick={() => {
+                      const reason = window.prompt('Lý do từ chối (không bắt buộc)');
+                      if (reason === null) return;
+                      reject.mutate({ id, ...(reason.trim() ? { reason: reason.trim().slice(0, 500) } : {}) });
+                    }}
+                  >
+                    Từ chối
+                  </Button>
+                )}
+                {item.canEdit && dirty && (
+                  <Button
+                    disabled={busy}
+                    onClick={() =>
+                      edit.mutate({
+                        id,
+                        revision: item.revision,
+                        idempotencyKey: crypto.randomUUID(),
+                        lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
+                      })
+                    }
+                  >
+                    {edit.isPending ? <Spinner /> : null}
+                    Lưu chỉnh sửa
+                  </Button>
+                )}
+                {item.canApprove && (
+                  <Button
+                    variant="primary"
+                    disabled={busy || dirty || !payload || blocked || (failed > 0 && !acceptFailed)}
+                    onClick={() =>
+                      approve.mutate({
+                        id,
+                        revision: item.revision,
+                        idempotencyKey,
+                        lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
+                        ...(failed > 0 ? { acceptFailedChecks: acceptFailed } : {}),
+                      })
+                    }
+                  >
+                    {approve.isPending ? <Spinner /> : null}
+                    Duyệt và ghi sổ
+                  </Button>
+                )}
               </>
             ) : (
               <Badge tone={item.status === 'executed' ? 'good' : 'neutral'}>
@@ -131,10 +162,21 @@ export function InboxDetailPage() {
           }
         />
       </div>
-      {(approve.error || reject.error) && (
+      {(approve.error || reject.error || edit.error) && (
         <div className="mb-4">
-          <ErrorText>{errorMessage(approve.error ?? reject.error)}</ErrorText>
+          <ErrorText>{errorMessage(approve.error ?? reject.error ?? edit.error)}</ErrorText>
         </div>
+      )}
+      {pending && dirty && (
+        <p className="mb-4 text-sm text-fg-2">
+          Bạn đã đổi tài khoản. Hãy lưu chỉnh sửa trước khi duyệt; người lưu chỉnh sửa được tính là người soạn đề xuất, nên nếu tổ chức có từ hai người duyệt thì một người khác phải duyệt.
+        </p>
+      )}
+      {pending && !dirty && item.approveReason === 'four_eyes' && (
+        <p className="mb-4 text-sm text-fg-2">Cần một người khác duyệt (bạn đã tải lên hoặc chỉnh sửa đề xuất này).</p>
+      )}
+      {pending && !dirty && item.approveReason === 'not_eligible' && (
+        <p className="mb-4 text-sm text-fg-3">Bạn không có quyền duyệt đề xuất này.</p>
       )}
       {pending && blocked && (
         <div className="mb-4">
@@ -223,7 +265,7 @@ export function InboxDetailPage() {
                       <td className="tabular py-2 pr-2 text-right text-fg">{money(l.amount)}</td>
                       <td className="py-2">
                         <select
-                          disabled={!pending}
+                          disabled={!item.canEdit || busy}
                           aria-label={`Tài khoản nợ cho dòng ${l.lineNo}`}
                           className="w-48 rounded-lg border border-line bg-surface-2 px-2 py-1 text-sm text-fg"
                           value={l.debitAccount}

@@ -74,6 +74,12 @@ export function createRpcHandler(runtime: Runtime) {
           return runtime.execute('kernel.proposal.approve', rest, { actor, orgId, idempotencyKey });
         }),
       ),
+      edit: os.inbox.edit.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('kernel.proposal.edit', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
       reject: os.inbox.reject.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.proposal.reject', input, { actor, orgId })),
       ),
