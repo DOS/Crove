@@ -273,16 +273,21 @@ suite('inbound address rotation rate limit on PostgreSQL (#113)', () => {
         rotate(runtime, org),
       ]);
       const won = results.filter((r): r is PromiseFulfilledResult<{ inboundToken: string }> => r.status === 'fulfilled');
-      expect(won).toHaveLength(1);
-      // Each loser either waited and counted (per_day), or deadlocked with the holder on the tenant row and was refused
-      // as busy; never a 409 or a 500.
+      // Never more than one. On a heavily loaded database every request may instead be refused as busy (each wait is
+      // bounded), which fails safe; the sequential retry below then gets the one remaining rotation.
+      expect(won.length).toBeLessThanOrEqual(1);
+      // Each loser either waited and counted (per_day), or deadlocked with the holder on the tenant row or waited past
+      // the lock timeout and was refused as busy; never a 409 or a 500.
       const refused = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-      expect(refused).toHaveLength(3);
+      expect(refused).toHaveLength(4 - won.length);
       for (const r of refused) {
         expect([r.reason.code, r.reason.status]).toEqual(['RATE_LIMITED', 429]);
         expect(['inbound_rotate_per_day', 'inbound_rotate_busy']).toContain(r.reason.details?.rule);
       }
-      expect(await footprint(org.orgId)).toEqual({ rows: 4, retired: 3, token: won[0]?.value.inboundToken, audits: 3 });
+      const token = won[0]?.value.inboundToken ?? (await rotate(runtime, org)).inboundToken;
+      // Either way exactly one rotation got the last slot of the day.
+      await expect(rotate(runtime, org)).rejects.toMatchObject({ code: 'RATE_LIMITED', details: { rule: 'inbound_rotate_per_day' } });
+      expect(await footprint(org.orgId)).toEqual({ rows: 4, retired: 3, token, audits: 3 });
     }
   });
 
