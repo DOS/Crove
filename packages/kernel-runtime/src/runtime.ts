@@ -3,7 +3,7 @@
 import { sql, type Transaction } from 'kysely';
 import { v7 as uuidv7 } from 'uuid';
 import type { z } from 'zod';
-import { contextTaint, type Database, type Db, type MemberRole } from '@crove/db';
+import { contextTaint, singleCell, type CellResolver, type Database, type Db, type MemberRole } from '@crove/db';
 import { DomainError, toDomainError } from './errors.ts';
 import { sha256Hex } from './storage.ts';
 
@@ -185,15 +185,22 @@ function logInternal(where: string, error: unknown, ids: { orgId?: string | null
   });
 }
 
+function isCellResolver(value: CellResolver | Db): value is CellResolver {
+  const candidate = value as Partial<CellResolver>;
+  return typeof candidate.resolveTenant === 'function' && typeof candidate.controlPlane === 'function';
+}
+
 export class Runtime {
   private readonly commands = new Map<string, CommandDef<unknown, unknown>>();
   private readonly queries = new Map<string, QueryDef<unknown, unknown>>();
-  readonly db: Db;
+  // Where each transaction opens (Decision 14): tenant work on the org's cell, org-less work on the control plane.
+  private readonly cells: CellResolver;
   private readonly sessions: SessionStatusSource | null;
   private readonly stepUp: 'required' | 'off';
 
-  constructor(db: Db, options: RuntimeOptions = {}) {
-    this.db = db;
+  // A plain Db is one cell that also holds the control plane (singleCell).
+  constructor(cells: CellResolver | Db, options: RuntimeOptions = {}) {
+    this.cells = isCellResolver(cells) ? cells : singleCell(cells);
     this.sessions = options.sessions ?? null;
     this.stepUp = options.stepUp ?? 'required';
   }
@@ -408,7 +415,8 @@ export class Runtime {
     const def = this.commands.get(name);
     if (!def || def.bootstrap) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
     const input = parseInput(def.input, rawInput);
-    return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, async () => options.orgId);
+    const orgId = options.orgId;
+    return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, () => this.cells.resolveTenant(orgId), async () => orgId);
   }
 
   // Runs an org-less command (see CommandDef.bootstrap). Only users run them; the org comes from the definer.
@@ -418,8 +426,11 @@ export class Runtime {
     if (!def || !bootstrap) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
     if (options.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Không có quyền thực hiện');
     const input = parseInput(def.input, rawInput);
-    // The session is checked before the definer runs (no org yet), and again for the org when it is entered.
-    return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, async (trx) => {
+    // The session is checked before the definer runs (no org yet), and again for the org when it is entered. There
+    // is no org to resolve a cell from, so the transaction opens on the control plane and the new org lives in
+    // the control plane's cell (plan §3.6).
+    const controlPlane = async () => this.cells.controlPlane();
+    return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, controlPlane, async (trx) => {
       await this.checkSession(trx, options.actor, null);
       return bootstrap(trx, options.actor, input, options.idempotencyKey ?? null);
     });
@@ -431,6 +442,7 @@ export class Runtime {
     input: unknown,
     actor: Actor,
     idempotencyKey: string | undefined,
+    cell: () => Promise<Db>,
     resolveOrg: (trx: Transaction<Database>) => Promise<string>,
   ): Promise<O> {
     const inputSha256 = sha256Hex(stableStringify(input));
@@ -441,7 +453,8 @@ export class Runtime {
     // the tenant row's xmin is this transaction's id (the definer inserts it outside any subtransaction).
     let orgIsNew = false;
     try {
-      return await this.db.transaction().execute(async (trx) => {
+      const db = await cell();
+      return await db.transaction().execute(async (trx) => {
         orgId = await resolveOrg(trx);
         role = await this.enter(trx, actor, orgId);
         entered = true;
@@ -521,7 +534,8 @@ export class Runtime {
     const commandId = uuidv7();
     const outcome = refusal.status === 403 ? 'denied' : 'failed';
     try {
-      await this.db.transaction().execute(async (trx) => {
+      const db = await this.cells.resolveTenant(orgId);
+      await db.transaction().execute(async (trx) => {
         await this.enter(trx, actor, orgId);
         await this.writeAudit(trx, {
           orgId,
@@ -559,7 +573,8 @@ export class Runtime {
     if (!def) throw new DomainError('QUERY_NOT_FOUND', 404, `Không có truy vấn ${name}`);
     const input = parseInput(def.input, rawInput);
     try {
-      return await this.db.transaction().execute(async (trx) => {
+      const db = await this.cells.resolveTenant(options.orgId);
+      return await db.transaction().execute(async (trx) => {
         // The session check may record a first-seen session, so it runs before the transaction turns read-only.
         await this.checkSession(trx, options.actor, options.orgId);
         await sql`SET TRANSACTION READ ONLY`.execute(trx);
@@ -578,11 +593,11 @@ export class Runtime {
     }
   }
 
-  // Org-less reads for a signed-in user (listing orgs): one transaction that starts with the session status
-  // check. Only definer functions are callable. Creating an org is a command: executeOrgless().
+  // Org-less reads for a signed-in user (listing orgs): one transaction on the control plane that starts with the
+  // session status check. Only definer functions are callable. Creating an org is a command: executeOrgless().
   async forUser<O>(actor: UserActor, fn: (db: Db) => Promise<O>): Promise<O> {
     try {
-      return await this.db.transaction().execute(async (trx) => {
+      return await this.cells.controlPlane().transaction().execute(async (trx) => {
         await this.checkSession(trx, actor, null);
         return fn(trx);
       });
@@ -593,10 +608,10 @@ export class Runtime {
     }
   }
 
-  // Org-less machinery work without a user (inbound email). User work goes through forUser().
+  // Org-less machinery work without a user (inbound email), on the control plane. User work goes through forUser().
   async orgless<O>(fn: (db: Db) => Promise<O>): Promise<O> {
     try {
-      return await fn(this.db);
+      return await fn(this.cells.controlPlane());
     } catch (error) {
       const domain = toDomainError(error);
       if (domain.code === 'INTERNAL') logInternal('orgless', error);
