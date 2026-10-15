@@ -470,6 +470,20 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
       await until(() => signOuts.some((t) => t.scope === 'global'));
       expect(signOuts.filter((t) => t.scope === 'global')).toHaveLength(1);
       expect(signOuts.find((t) => t.scope === 'global')?.subject).toBe(accounts.member.subject);
+      // Not from the caller's own session: the web app signs that one out locally at once, and a global sign-out
+      // from a session already gone leaves the others alive upstream (issue #163).
+      expect(signOuts.find((t) => t.scope === 'global')?.sessionId).not.toBe(two.session);
+
+      // Revoke all from the user's only session upstream: a local sign-out of it, never a global one.
+      const solo = { subject: randomUUID(), email: 'solo@sessions.test', session: randomUUID(), userId: '' };
+      await signUp(solo);
+      solo.userId = String((await me(solo)).body?.userId);
+      const soloOrg = await rpc('org/create', await tokenFor(solo), { name: 'Solo Org', idempotencyKey: randomUUID() }, null);
+      expect(soloOrg.status).toBe(200);
+      expect((await rpc('sessions/revoke', await tokenFor(solo), { userId: solo.userId, all: true }, String(soloOrg.body?.slug))).status).toBe(200);
+      await until(() => signOuts.some((t) => t.subject === solo.subject));
+      expect(signOuts.filter((t) => t.subject === solo.subject)).toEqual([{ subject: solo.subject, sessionId: solo.session, scope: 'local' }]);
+      expect(signOuts.filter((t) => t.scope === 'global')).toHaveLength(1);
     } finally {
       await stop();
     }
