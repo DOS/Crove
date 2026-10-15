@@ -45,6 +45,7 @@ suite('sessions on PostgreSQL with the jwt session check (ADR-0028, Crove Cloud)
   let pool: pg.Pool;
   let db: Db;
   let app: ReturnType<typeof createHttpApp>;
+  let runtime: Runtime;
   let auth: Server;
   let answer: Answer = 'live';
   const calls: Array<{ method: string; path: string; headers: IncomingHttpHeaders }> = [];
@@ -142,7 +143,7 @@ suite('sessions on PostgreSQL with the jwt session check (ADR-0028, Crove Cloud)
       WEB_DIST: '/nonexistent',
     });
     expect(config.AUTH_SESSION_CHECK).toBe('jwt');
-    const runtime = new Runtime(db, { sessions: createSessionStatusSource(config.AUTH_SESSION_CHECK), stepUp: 'required' }).register({
+    runtime = new Runtime(db, { sessions: createSessionStatusSource(config.AUTH_SESSION_CHECK), stepUp: 'required' }).register({
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });
@@ -294,5 +295,30 @@ suite('sessions on PostgreSQL with the jwt session check (ADR-0028, Crove Cloud)
     expect((await rpc('org/removeMember', await tokenFor(owner, { mfaAgeS: 10 }), { userId: leaver.userId, idempotencyKey: randomUUID() })).status).toBe(200);
     expect(calls).toHaveLength(1);
     expect(await rpc('inbox/list', token, {})).toMatchObject({ status: 403, body: { code: 'NOT_A_MEMBER' } });
+  });
+
+  it('confirms an idempotent R3 replay live too: a dead session cannot read back the stored result', async () => {
+    const target = account('replay');
+    target.userId = String((await rpc('me/get', await tokenFor(target), undefined, null)).body?.userId);
+    const invited = await rpc('org/invite', await tokenFor(owner, { mfaAgeS: 10 }), { email: target.email, role: 'member' });
+    const inviteToken = String(invited.body?.acceptPath).split('#')[1];
+    expect((await rpc('invites/accept', await tokenFor(target), { token: inviteToken }, null)).status).toBe(200);
+    const change = { userId: target.userId, role: 'admin', idempotencyKey: randomUUID() };
+    expect((await rpc('org/changeMemberRole', await tokenFor(owner, { mfaAgeS: 10 }), change)).status).toBe(200);
+    answer = 401;
+    expect(await rpc('org/changeMemberRole', await tokenFor(owner, { mfaAgeS: 10 }), change)).toMatchObject({ status: 401 });
+    answer = 'live';
+    expect(await rpc('org/changeMemberRole', await tokenFor(owner, { mfaAgeS: 10 }), change)).toMatchObject({ status: 200, body: { role: 'admin' } });
+  });
+
+  it('fails closed with 503 when an R3 actor carries no live check (an actor not built by the authenticator)', async () => {
+    const { rows } = await sql('SELECT org_id FROM crove_kernel.tenant WHERE slug = $1', [orgSlug]);
+    const orgId = String(rows[0]?.org_id);
+    const actor = { type: 'user' as const, userId: owner.userId, aal: 'aal2' as const, sessionId: owner.session, mfaAt: Math.floor(Date.now() / 1000) };
+    await expect(
+      runtime.execute('kernel.member.invite.create', { email: `bare-${randomUUID().slice(0, 8)}@jwt.test`, role: 'member' }, { actor, orgId }),
+    ).rejects.toMatchObject({ status: 503, code: 'AUTH_UNAVAILABLE' });
+    // Non-R3 work with the same actor is unaffected.
+    await expect(runtime.query('kernel.org.get', {}, { actor, orgId })).resolves.toBeTruthy();
   });
 });

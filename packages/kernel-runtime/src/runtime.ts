@@ -214,7 +214,8 @@ export class Runtime {
   // ADR-0028 section 5: R3 run by a user is confirmed with Supabase Auth at execution time when the per-request
   // check does not read Auth itself (jwt). After the role and step-up checks, so a user who may not run the command
   // or lacks fresh MFA is told so without a call to Auth. No cache. Fails closed: an actor without a bound live
-  // check gets 503.
+  // check gets 503. It runs inside the request transaction, so an R3 holds one pooled connection for at most the
+  // live check's timeout (5 s); R3 is rare and human-initiated.
   private async requireLiveSession(def: CommandDef<unknown, unknown>, actor: Actor): Promise<void> {
     if (def.risk !== 'R3' || actor.type !== 'user' || !this.sessions?.liveCheckForR3) return;
     if (!actor.confirmLive) {

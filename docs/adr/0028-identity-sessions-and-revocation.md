@@ -216,7 +216,7 @@ Crove Cloud (`jwt` adapter, through the HTTP API with a stand-in for Supabase Au
 
 - Valid tokens are accepted with no call to Supabase Auth outside R3; `/readyz` is ready without an `auth` schema.
 - R3 live check: a 200 for the token's user passes (token and publishable key sent, no cache); 400, 401, 403, 404 or a 200 for another user gives 401; 429, 5xx or a dropped connection gives 503; nothing is written in either case, and non-R3 requests keep working during the outage.
-- No call to Auth when the role or the step-up check refuses first.
+- No call to Auth when the role or the step-up check refuses first; an idempotent R3 replay is confirmed live too; an actor without a bound live check gets 503; boot fails for hosted Supabase without the publishable key.
 
 Both adapters:
 

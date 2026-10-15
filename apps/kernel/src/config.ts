@@ -139,11 +139,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       throw new Error('AUTH_STEP_UP=off lets a stolen session approve and change roles without MFA; set it to required');
     }
   }
+  // Hosted Supabase refuses requests without the project's publishable key, which would turn every R3 into a 401.
+  const live = config.AUTH_SESSION_CHECK === 'jwt' ? liveAuthUrl(config) : null;
+  if (live && !config.PUBLIC_AUTH_ANON_KEY && isHostedSupabase(live)) {
+    throw new Error('hosted Supabase Auth needs PUBLIC_AUTH_ANON_KEY (the publishable key) for the R3 live check');
+  }
   return config;
 }
 
 // Values shipped in docker-compose.yml and .env.example. Fine on localhost, never on a public URL.
 const SAMPLE_SECRETS = new Set(['local-only-jwt-secret-change-me-0123456789', 'change-me-to-a-long-random-string-0123456789']);
+
+function isHostedSupabase(url: string): boolean {
+  try {
+    return new URL(url).hostname.endsWith('.supabase.co');
+  } catch {
+    return false;
+  }
+}
 
 export function isLocalUrl(url: string): boolean {
   try {

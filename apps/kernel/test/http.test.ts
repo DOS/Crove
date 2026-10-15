@@ -65,6 +65,10 @@ describe('configuration guards', () => {
     expect(() => loadConfig({ ...publicUrl, AUTH_SESSION_CHECK: 'jwt' })).toThrow(/PUBLIC_AUTH_URL/);
     expect(loadConfig({ ...publicUrl, PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' }).AUTH_SESSION_CHECK).toBe('jwt');
     expect(loadConfig({ ...publicUrl, AUTH_UPSTREAM_URL: 'http://auth:9999' }).AUTH_SESSION_CHECK).toBe('db');
+    // Hosted Supabase answers only with the publishable key; without it every R3 would be a confusing 401.
+    const hosted = { ...publicUrl, PUBLIC_AUTH_URL: 'https://example.supabase.co/auth/v1' };
+    expect(() => loadConfig(hosted)).toThrow(/PUBLIC_AUTH_ANON_KEY/);
+    expect(loadConfig({ ...hosted, PUBLIC_AUTH_ANON_KEY: 'publishable' }).AUTH_SESSION_CHECK).toBe('jwt');
   });
 
   it('accepts the session check and MFA step-up turned off on localhost only', () => {
