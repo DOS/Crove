@@ -74,6 +74,17 @@ export async function acceptInboundEmail(
   return { accepted: true, sha256 };
 }
 
+// Counts a message dropped for an unknown recipient against the org whose address it was, when the token is an
+// address that org retired less than 30 days ago; any other token changes nothing (crove_kernel.inbound_drop_record).
+// Best effort: the message is dropped either way, so a failure to count is logged and does not retry the job.
+async function countDrop(runtime: Runtime, token: string): Promise<void> {
+  try {
+    await runtime.orgless((db) => sql`SELECT crove_kernel.inbound_drop_record(${token})`.execute(db));
+  } catch (error) {
+    console.error('[inbound] could not count a dropped message', error);
+  }
+}
+
 export interface InboundJob {
   blobId: string;
   sha256: string;
@@ -118,13 +129,16 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
 
   // The org is resolved now, when the message is processed, not when the API accepted it. So mail queued for a token
   // that the org rotated away in between is dropped here like mail to a token that never existed (plan §7.6, #113):
-  // right for a leaked address, but a supplier's legitimate mail in that window is lost without a bounce. Nothing
-  // records the drop for the org yet (only the worker log line).
+  // right for a leaked address, but a supplier's legitimate mail in that window is lost without a bounce. So the drop
+  // is counted for the org that owned a retired token (#139): only the count, nothing about the message.
   const orgId = await deps.runtime.orgless(async (db) => {
     const { rows } = await sql<{ org_id: string | null }>`SELECT crove_kernel.org_by_inbound_token(${token}) AS org_id`.execute(db);
     return rows[0]?.org_id ?? null;
   });
-  if (!orgId) throw unknownRecipient();
+  if (!orgId) {
+    await countDrop(deps.runtime, token);
+    throw unknownRecipient();
+  }
 
   const files = [];
   for (const attachment of email.attachments.slice(0, 20)) {

@@ -228,6 +228,16 @@ suite('inbound address rotation on PostgreSQL', () => {
   const pending = () => count('SELECT count(*) AS n FROM crove_kernel.inbound_pending', []);
   const emailFiles = () => count(`SELECT count(*) AS n FROM crove_kernel.file WHERE org_id = $1 AND source = 'email'`, [org.orgId]);
   const receiveAudits = () => count(`SELECT count(*) AS n FROM crove_kernel.audit_event WHERE command = 'kernel.inbound.receive'`, []);
+  const drops = () =>
+    withAdmin(async (admin) => {
+      const { rows } = await admin.query<{ org_id: string; token: string; dropped_count: string }>(
+        `SELECT d.org_id, a.token, d.dropped_count::text FROM crove_kernel.inbound_drop d
+         JOIN crove_kernel.inbound_address a ON a.org_id = d.org_id AND a.id = d.address_id ORDER BY d.first_dropped_at`,
+      );
+      return rows;
+    });
+  const droppedCount = async (userId: string) =>
+    (await runtime.query<{ inboundDroppedCount: number | null }>('kernel.org.get', {}, { actor: asUser(userId), orgId: org.orgId })).inboundDroppedCount;
   const until = async (check: () => Promise<boolean>) => {
     const deadline = Date.now() + 60_000;
     while (!(await check())) {
@@ -269,6 +279,7 @@ suite('inbound address rotation on PostgreSQL', () => {
     expect(await rotateAudits(org.orgId)).toMatchObject([{ actor_id: users.owner, outcome: 'ok', detail: { aal: 'aal2', sessionId: SESSION } }]);
     await expect(runtime.query('kernel.org.get', {}, { actor: asUser(users.owner), orgId: org.orgId })).resolves.toMatchObject({
       inboundAddress: `${newToken}@in.test`,
+      inboundDroppedCount: 0,
     });
 
     // A replayed key returns the same address and rotates nothing, also when the retries race.
@@ -317,6 +328,11 @@ suite('inbound address rotation on PostgreSQL', () => {
       expect(await messages('rot-7703@')).toBe(0);
       expect(await receiveAudits()).toBe(1);
     });
+    // The drop to the retired address is counted for the org (#139), the one to the unknown token nowhere. The owner
+    // sees the count with the address; a viewer sees neither.
+    expect(await drops()).toEqual([{ org_id: org.orgId, token: oldToken, dropped_count: '1' }]);
+    await expect(droppedCount(users.owner)).resolves.toBe(1);
+    await expect(droppedCount(users.viewer)).resolves.toBeNull();
 
     // The worker's resolver itself knows only the active token.
     const resolve = (token: string) =>
@@ -365,6 +381,9 @@ suite('inbound address rotation on PostgreSQL', () => {
     expect(await messages('rot-7801@')).toBe(0);
     expect(await emailFiles()).toBe(filesBefore);
     expect(await receiveAudits()).toBe(auditsBefore);
+    // Counted against the address it was sent to, which the org retired in between (#139).
+    expect((await drops()).find((d) => d.token === token)).toEqual({ org_id: org.orgId, token, dropped_count: '1' });
+    await expect(droppedCount(users.owner)).resolves.toBe(2);
   });
 
 });

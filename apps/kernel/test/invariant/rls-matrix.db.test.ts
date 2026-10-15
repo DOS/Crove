@@ -32,10 +32,7 @@ const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.inboun
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>([
-  // Drop counts per retired inbound address (issue #139).
-  'crove_kernel.inbound_drop',
-]);
+const PENDING_TABLES = new Set<string>();
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 

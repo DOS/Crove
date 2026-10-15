@@ -38,13 +38,21 @@ export function orgDetailQuery(options: OrgDetailOptions) {
         .where('m.org_id', '=', ctx.orgId)
         .orderBy('m.created_at')
         .execute();
+      // Owners and admins see the inbound address, and how many messages to the org's addresses retired in the last
+      // 30 days were dropped (#139).
+      const seesInbound = Boolean(options.inboundDomain) && (ctx.role === 'owner' || ctx.role === 'admin');
+      let inboundDroppedCount: number | null = null;
+      if (seesInbound) {
+        const { rows } = await sql<{ n: string }>`SELECT crove_kernel.inbound_drop_count() AS n`.execute(ctx.trx);
+        inboundDroppedCount = Number(rows[0]?.n ?? 0);
+      }
       return {
         orgId: tenant.org_id,
         slug: tenant.slug,
         name: tenant.name,
         role: ctx.role ?? 'viewer',
-        inboundAddress:
-          options.inboundDomain && (ctx.role === 'owner' || ctx.role === 'admin') ? `${tenant.inbound_token}@${options.inboundDomain}` : null,
+        inboundAddress: seesInbound ? `${tenant.inbound_token}@${options.inboundDomain}` : null,
+        inboundDroppedCount,
         members: members.map((m) => ({ userId: m.user_id, email: m.email, displayName: m.display_name, role: m.role })),
       };
     },

@@ -311,6 +311,13 @@ export function SettingsPage() {
             <div>
               <dt className="text-fg-3">Địa chỉ nhận hóa đơn qua email</dt>
               <dd className="break-all font-mono text-fg">{org.data?.inboundAddress ?? 'Máy chủ chưa bật nhận email'}</dd>
+              {/* Mail to an address retired in the last 30 days is dropped without a bounce; only the count is kept (#139). */}
+              {(org.data?.inboundDroppedCount ?? 0) > 0 && (
+                <dd className="mt-1 text-xs text-amber-300" role="status">
+                  {org.data?.inboundDroppedCount} thư gửi tới địa chỉ cũ đã bị bỏ qua (trong 30 ngày sau khi đổi địa chỉ). Hãy gửi địa chỉ mới cho các nhà
+                  cung cấp.
+                </dd>
+              )}
             </div>
           </dl>
           {org.data?.role === 'owner' && org.data.inboundAddress && <RotateInboundAddress />}
