@@ -1,7 +1,8 @@
 // Org-less identity operations: sign-in bookkeeping, listing orgs, creating an org.
 import { sql } from 'kysely';
+import { z } from 'zod';
 import type { Db, MemberRole } from '@crove/db';
-import { DomainError, type Runtime, type UserActor } from '@crove/kernel-runtime';
+import { DomainError, defineCommand, type Runtime, type UserActor } from '@crove/kernel-runtime';
 
 export interface VerifiedIdentity {
   issuer: string;
@@ -55,21 +56,32 @@ export function slugify(name: string): string {
   return base.length >= 3 ? base : `org-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export async function createOrg(runtime: Runtime, actor: UserActor, name: string): Promise<OrgSummary> {
-  const base = slugify(name);
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const slug = attempt === 0 ? base : `${base}-${Math.random().toString(36).slice(2, 6)}`;
-    try {
-      const orgId = await runtime.forUser(actor, async (db) => {
-        const { rows } = await sql<{ org_id: string }>`SELECT crove_kernel.create_org(${actor.userId}::uuid, ${slug}, ${name}) AS org_id`.execute(db);
-        return rows[0]?.org_id;
-      });
-      if (!orgId) throw new DomainError('INTERNAL', 500, 'Không tạo được tổ chức');
-      return { orgId, slug, name, role: 'owner' };
-    } catch (error) {
-      if (error instanceof DomainError && error.code === 'CONFLICT') continue;
-      throw error;
-    }
-  }
-  throw new DomainError('CONFLICT', 409, 'Không tìm được tên rút gọn cho tổ chức');
+// Creates an org with the caller as owner (External-tenant gate T4). The definer creates the tenant and the
+// owner membership, or returns the org an earlier request with the same idempotency key created; the runtime
+// then enters it as the caller and writes the audit row and the idempotency key in the same transaction.
+export const createOrgCommand = defineCommand({
+  name: 'kernel.org.create',
+  input: z.object({ name: z.string().trim().min(1).max(200) }),
+  risk: 'R1',
+  access: ['owner'],
+  bootstrap: async (trx, actor, input, idempotencyKey) => {
+    const { rows } = await sql<{ org_id: string | null }>`
+      SELECT crove_kernel.create_or_replay_org(${actor.userId}::uuid, ${slugify(input.name)}, ${input.name}, ${idempotencyKey}) AS org_id`.execute(trx);
+    const orgId = rows[0]?.org_id;
+    if (!orgId) throw new DomainError('INTERNAL', 500, 'Không tạo được tổ chức');
+    return orgId;
+  },
+  handler: async (ctx): Promise<OrgSummary> => {
+    const tenant = await ctx.trx
+      .selectFrom('crove_kernel.tenant')
+      .select(['org_id', 'slug', 'name'])
+      .where('org_id', '=', ctx.orgId)
+      .executeTakeFirstOrThrow();
+    ctx.audit({ slug: tenant.slug });
+    return { orgId: tenant.org_id, slug: tenant.slug, name: tenant.name, role: 'owner' };
+  },
+});
+
+export function createOrg(runtime: Runtime, actor: UserActor, name: string, idempotencyKey?: string): Promise<OrgSummary> {
+  return runtime.executeOrgless<OrgSummary>('kernel.org.create', { name }, { actor, ...(idempotencyKey ? { idempotencyKey } : {}) });
 }

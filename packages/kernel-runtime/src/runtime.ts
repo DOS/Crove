@@ -33,6 +33,11 @@ export interface CommandDef<I = unknown, O = unknown> {
   risk: Risk;
   access: Access;
   target?: (input: I) => { type: string; id: string } | null;
+  // Org-less commands (creating an org) start without an org. `bootstrap` calls a definer that creates the
+  // org with the actor as a member, or returns the org an earlier request with the same idempotency key
+  // created. executeOrgless() then enters that org as the actor, so membership is checked as on every other
+  // command, and writes the handler's changes, the audit row and the idempotency key in one transaction.
+  bootstrap?: (trx: Transaction<Database>, actor: UserActor, input: I, idempotencyKey: string | null) => Promise<string>;
   handler: (ctx: CommandContext, input: I) => Promise<O>;
 }
 
@@ -121,6 +126,11 @@ function parseInput<I>(schema: z.ZodType<I>, raw: unknown): I {
 export interface ExecuteOptions {
   actor: Actor;
   orgId: string;
+  idempotencyKey?: string;
+}
+
+export interface ExecuteOrglessOptions {
+  actor: UserActor;
   idempotencyKey?: string;
 }
 
@@ -269,7 +279,7 @@ export class Runtime {
       },
       run: async <R>(name: string, nestedInput: unknown, options?: { proposalId?: string }): Promise<R> => {
         const nested = this.commands.get(name);
-        if (!nested) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
+        if (!nested || nested.bootstrap) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
         const parsed = parseInput(nested.input, nestedInput);
         const proposalId = options?.proposalId ?? base.proposalId;
         this.authorize(nested.access, base.actor, base.role, proposalId !== null);
@@ -300,23 +310,50 @@ export class Runtime {
 
   async execute<O = unknown>(name: string, rawInput: unknown, options: ExecuteOptions): Promise<O> {
     const def = this.commands.get(name);
-    if (!def) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
+    if (!def || def.bootstrap) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
     const input = parseInput(def.input, rawInput);
+    return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, async () => options.orgId);
+  }
+
+  // Runs an org-less command (see CommandDef.bootstrap). Only users run them; the org comes from the definer.
+  async executeOrgless<O = unknown>(name: string, rawInput: unknown, options: ExecuteOrglessOptions): Promise<O> {
+    const def = this.commands.get(name);
+    const bootstrap = def?.bootstrap;
+    if (!def || !bootstrap) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
+    if (options.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Không có quyền thực hiện');
+    const input = parseInput(def.input, rawInput);
+    // The session is checked before the definer runs (no org yet), and again for the org when it is entered.
+    return this.executeIn<O>(name, def, input, options.actor, options.idempotencyKey, async (trx) => {
+      await this.checkSession(trx, options.actor, null);
+      return bootstrap(trx, options.actor, input, options.idempotencyKey ?? null);
+    });
+  }
+
+  private async executeIn<O>(
+    name: string,
+    def: CommandDef<unknown, unknown>,
+    input: unknown,
+    actor: Actor,
+    idempotencyKey: string | undefined,
+    resolveOrg: (trx: Transaction<Database>) => Promise<string>,
+  ): Promise<O> {
     const inputSha256 = sha256Hex(stableStringify(input));
+    let orgId = '';
     let role: MemberRole | null = null;
     let entered = false;
     try {
       return await this.db.transaction().execute(async (trx) => {
-        role = await this.enter(trx, options.actor, options.orgId);
+        orgId = await resolveOrg(trx);
+        role = await this.enter(trx, actor, orgId);
         entered = true;
-        this.authorize(def.access, options.actor, role, false);
-        this.requireStepUp(def, options.actor);
+        this.authorize(def.access, actor, role, false);
+        this.requireStepUp(def, actor);
 
-        if (options.idempotencyKey) {
-          const key = actorKey(options.actor);
+        if (idempotencyKey) {
+          const key = actorKey(actor);
           const claimed = await trx
             .insertInto('crove_kernel.idempotency_key')
-            .values({ org_id: options.orgId, actor_key: key, key: options.idempotencyKey, command: name, request_sha256: inputSha256, response: null })
+            .values({ org_id: orgId, actor_key: key, key: idempotencyKey, command: name, request_sha256: inputSha256, response: null })
             .onConflict((oc) => oc.doNothing())
             .returning('key')
             .executeTakeFirst();
@@ -324,9 +361,9 @@ export class Runtime {
             const existing = await trx
               .selectFrom('crove_kernel.idempotency_key')
               .select(['command', 'request_sha256', 'response'])
-              .where('org_id', '=', options.orgId)
+              .where('org_id', '=', orgId)
               .where('actor_key', '=', key)
-              .where('key', '=', options.idempotencyKey)
+              .where('key', '=', idempotencyKey)
               .executeTakeFirst();
             if (!existing || existing.command !== name || existing.request_sha256 !== inputSha256) {
               throw new DomainError('IDEMPOTENCY_MISMATCH', 422, 'Khóa idempotency đã dùng cho yêu cầu khác');
@@ -335,28 +372,30 @@ export class Runtime {
             if (stored !== null && typeof stored === 'object' && 'value' in stored) return stored.value as O;
             throw new DomainError('RETRY', 409, 'Yêu cầu đang được xử lý');
           }
-          const output = await this.runInTx<O>(trx, def, input, { orgId: options.orgId, actor: options.actor, role, proposalId: null });
+          const output = await this.runInTx<O>(trx, def, input, { orgId, actor, role, proposalId: null });
           await trx
             .updateTable('crove_kernel.idempotency_key')
             .set({ response: JSON.stringify({ value: output ?? null }) })
-            .where('org_id', '=', options.orgId)
+            .where('org_id', '=', orgId)
             .where('actor_key', '=', key)
-            .where('key', '=', options.idempotencyKey)
+            .where('key', '=', idempotencyKey)
             .execute();
           return output;
         }
-        return this.runInTx<O>(trx, def, input, { orgId: options.orgId, actor: options.actor, role, proposalId: null });
+        return this.runInTx<O>(trx, def, input, { orgId, actor, role, proposalId: null });
       });
     } catch (error) {
       const domain = toDomainError(error);
+      // An org-less command that failed after creating its org rolled the org back, so entering it fails and
+      // no audit row is written; a refused replay into an org that already existed is audited there.
       if (entered && (domain.status === 403 || domain.status === 409 || domain.status === 422)) {
         await this.db
           .transaction()
           .execute(async (trx) => {
-            await this.enter(trx, options.actor, options.orgId);
+            await this.enter(trx, actor, orgId);
             await this.writeAudit(trx, {
-              orgId: options.orgId,
-              actor: options.actor,
+              orgId,
+              actor,
               command: name,
               commandId: uuidv7(),
               outcome: domain.status === 403 ? 'denied' : 'failed',
@@ -367,7 +406,7 @@ export class Runtime {
               detail: {
                 code: domain.code,
                 ...(typeof domain.details?.rule === 'string' ? { rule: domain.details.rule } : {}),
-                ...(options.actor.type === 'user' ? this.sessionDetail(options.actor) : {}),
+                ...(actor.type === 'user' ? this.sessionDetail(actor) : {}),
               },
             });
           })
@@ -402,8 +441,8 @@ export class Runtime {
     }
   }
 
-  // Org-less work for a signed-in user (listing orgs, creating an org): one transaction that starts with the
-  // session status check. Only definer functions are callable.
+  // Org-less reads for a signed-in user (listing orgs): one transaction that starts with the session status
+  // check. Only definer functions are callable. Creating an org is a command: executeOrgless().
   async forUser<O>(actor: UserActor, fn: (db: Db) => Promise<O>): Promise<O> {
     try {
       return await this.db.transaction().execute(async (trx) => {

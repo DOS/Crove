@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
 import { DomainError, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors, type ActorRef } from './approval.ts';
+import { createOrgCommand } from './identity.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal').
@@ -383,4 +384,14 @@ export const revokeSession = defineCommand({
   },
 });
 
-export const kernelCommands = [addMember, ingestFile, receiveInbound, recordExtraction, editProposal, approveProposal, rejectProposal, revokeSession];
+export const kernelCommands = [
+  createOrgCommand,
+  addMember,
+  ingestFile,
+  receiveInbound,
+  recordExtraction,
+  editProposal,
+  approveProposal,
+  rejectProposal,
+  revokeSession,
+];

@@ -26,7 +26,8 @@ export const contract = {
     get: oc.output(zMe),
   },
   org: {
-    create: oc.input(z.object({ name: z.string().trim().min(1).max(200) })).output(zOrgSummary),
+    // A retry with the same idempotencyKey returns the org the first request created.
+    create: oc.input(z.object({ name: z.string().trim().min(1).max(200), idempotencyKey: zId })).output(zOrgSummary),
     get: oc.output(zOrgDetail),
     addMember: oc
       .input(z.object({ email: z.email(), role: zRole.exclude(['owner']) }))

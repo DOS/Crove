@@ -209,7 +209,7 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
     const first = await me(accounts.owner);
     expect(first.status).toBe(200);
     accounts.owner.userId = String(first.body?.userId);
-    const created = await rpc('org/create', await tokenFor(accounts.owner), { name: 'Session Org' }, null);
+    const created = await rpc('org/create', await tokenFor(accounts.owner), { name: 'Session Org', idempotencyKey: randomUUID() }, null);
     expect(created.status).toBe(200);
     orgSlug = String(created.body?.slug);
     for (const role of ['admin', 'member'] as const) {
@@ -274,7 +274,7 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
 
   // The member's own org, where nobody else is owner.
   async function memberOrg(): Promise<string> {
-    const created = await rpc('org/create', await tokenFor(accounts.member), { name: `Member Org ${randomUUID().slice(0, 6)}` }, null);
+    const created = await rpc('org/create', await tokenFor(accounts.member), { name: `Member Org ${randomUUID().slice(0, 6)}`, idempotencyKey: randomUUID() }, null);
     expect(created.status).toBe(200);
     return String(created.body?.slug);
   }
@@ -346,7 +346,7 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
     const attacker: Account = { subject: randomUUID(), email: 'attacker@sessions.test', session: randomUUID(), userId: '' };
     await signUp(attacker);
     attacker.userId = String((await me(attacker)).body?.userId);
-    const evil = await rpc('org/create', await tokenFor(attacker), { name: 'Evil Org' }, null);
+    const evil = await rpc('org/create', await tokenFor(attacker), { name: 'Evil Org', idempotencyKey: randomUUID() }, null);
     const evilOrg = String(evil.body?.slug);
     // Membership needs no consent from the victim; the attacker even has fresh MFA.
     expect((await rpc('org/addMember', await tokenFor(attacker, { mfaAgeS: 10 }), { email: victim.email, role: 'member' }, evilOrg)).status).toBe(200);

@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { Button, Card, ErrorText, Input, Logo } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { auth } from '../lib/auth.ts';
@@ -17,9 +17,15 @@ export function OnboardingPage() {
     }),
   );
 
+  // One idempotency key per name: a retried submit returns the org the first one created instead of a second.
+  const attempt = useRef<{ name: string; key: string } | null>(null);
+
   function submit(event: FormEvent) {
     event.preventDefault();
-    create.mutate({ name });
+    // The server trims the name, so the key follows the trimmed name.
+    const trimmed = name.trim();
+    if (attempt.current?.name !== trimmed) attempt.current = { name: trimmed, key: crypto.randomUUID() };
+    create.mutate({ name: trimmed, idempotencyKey: attempt.current.key });
   }
 
   return (
