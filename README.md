@@ -41,6 +41,35 @@ The defaults are for local use. Before anyone else can reach your instance, copy
 
 See [`.env.example`](./.env.example) for the full list.
 
+## Monitoring and alerts
+
+The image's `prober` role checks that background work is moving and alerts you when it is not. It connects as `crove_prober`, a login that can only call `crove_kernel.health()` (aggregate ages and counts, no tenant data), and alerts when:
+
+| Check | Default limit | Variable |
+|---|---|---|
+| Oldest unpublished outbox event or unrelayed inbound email | 300 s | `PROBER_MAX_OUTBOX_AGE_SECONDS` |
+| Oldest job waiting in the queue | 900 s | `PROBER_MAX_JOB_AGE_SECONDS` |
+| Jobs that failed after their last retry (dead letters) in the last `PROBER_DEAD_LETTER_WINDOW_SECONDS` (default: the `--every` interval plus 60 s, else 3600) | more than 0 | `PROBER_MAX_DEAD_LETTERS` |
+| Freshest worker heartbeat (the worker writes one every 30 s); none at all also alerts | 120 s | `PROBER_MAX_HEARTBEAT_AGE_SECONDS` |
+| The database cannot be reached or `health()` fails | always | |
+
+Alerts go to `ALERT_WEBHOOK_URL` as a JSON POST whose body has `text` (Slack and Mattermost incoming webhooks, Google Chat), `content` (Discord) and a structured `crove` object for anything else; without it they are printed to stdout. Name the deployment with `ALERT_INSTANCE` (default: the host of `PUBLIC_URL`). Exit codes: 0 healthy, 1 a limit was exceeded, 2 the check could not run, 3 the alert could not be delivered (it is printed instead). Use an `https` webhook: most webhook URLs carry their secret in the path.
+
+Set `CROVE_PROBER_DB_PASSWORD` (applied by `migrate`) and `ALERT_WEBHOOK_URL` in `.env`, then pick one way to run it:
+
+```bash
+# Check the alert path end to end: you should receive "[Crove] Test alert from ..."
+docker compose run --rm prober prober --test-alert
+
+# Compose: a long-running prober that checks every PROBER_INTERVAL_SECONDS (default 300)
+docker compose --profile prober up -d
+
+# Or cron on the host: one check every 5 minutes; a failed job counts for 360 s, so each one alerts once (twice at most)
+*/5 * * * * cd /path/to/Crove && docker compose run --rm -e PROBER_DEAD_LETTER_WINDOW_SECONDS=360 prober prober >> /var/log/crove-prober.log 2>&1
+```
+
+Without Compose, run `node apps/kernel/src/main.ts prober` from any scheduler with `PROBER_DATABASE_URL=postgres://crove_prober:<password>@<host>:5432/<db>`. The prober repeats an alert on every run while the problem lasts, and it cannot report its own absence or a whole-host outage: for those, add an external uptime check on `/healthz`.
+
 ## Development
 
 Node 26 and pnpm (any version; the pinned one is downloaded automatically).
@@ -58,7 +87,7 @@ CROVE_TEST_S3_URL=http://<key>:<secret>@localhost:9000/crove-test pnpm test   # 
 Layout:
 
 ```
-apps/kernel        API, worker and migrations runner (one image: migrate | api | worker | all)
+apps/kernel        API, worker, prober and migrations runner (one image: migrate | api | worker | all | prober)
 apps/app           web app (Vite + React + TanStack Router), served by the kernel
 apps/web           marketing site (Next.js)
 packages/db        PostgreSQL pool, Kysely types, migration runner

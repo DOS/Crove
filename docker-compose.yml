@@ -24,6 +24,7 @@ services:
     environment:
       CROVE_APP_DB_PASSWORD: ${CROVE_APP_DB_PASSWORD:-local-app-password}
       CROVE_WORKER_DB_PASSWORD: ${CROVE_WORKER_DB_PASSWORD:-local-worker-password}
+      CROVE_PROBER_DB_PASSWORD: ${CROVE_PROBER_DB_PASSWORD:-local-prober-password}
       AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-local-auth-password}
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
       AUTH_ISSUER: crove-auth
@@ -158,6 +159,33 @@ services:
     pids_limit: 128
     networks:
       - extract
+
+  # Health prober and alerts (plan §4.13), off by default: `docker compose --profile prober up -d`. Checks every
+  # PROBER_INTERVAL_SECONDS and posts to ALERT_WEBHOOK_URL (stdout when unset). Test the path with
+  # `docker compose run --rm prober prober --test-alert`; one check with `docker compose run --rm prober prober`.
+  prober:
+    build: .
+    image: crove:local
+    profiles: ['prober']
+    command: ['prober', '--every', '${PROBER_INTERVAL_SECONDS:-300}']
+    restart: unless-stopped
+    # The image's healthcheck probes the API port, which the prober does not open.
+    healthcheck:
+      disable: true
+    environment:
+      PROBER_DATABASE_URL: postgres://crove_prober:${CROVE_PROBER_DB_PASSWORD:-local-prober-password}@db:5432/postgres
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_INSTANCE: ${ALERT_INSTANCE:-}
+      PROBER_MAX_OUTBOX_AGE_SECONDS: ${PROBER_MAX_OUTBOX_AGE_SECONDS:-300}
+      PROBER_MAX_JOB_AGE_SECONDS: ${PROBER_MAX_JOB_AGE_SECONDS:-900}
+      PROBER_MAX_HEARTBEAT_AGE_SECONDS: ${PROBER_MAX_HEARTBEAT_AGE_SECONDS:-120}
+      PROBER_MAX_DEAD_LETTERS: ${PROBER_MAX_DEAD_LETTERS:-0}
+      # Unset: the probe interval plus 60 s, so each dead letter alerts once (twice at most).
+      PROBER_DEAD_LETTER_WINDOW_SECONDS: ${PROBER_DEAD_LETTER_WINDOW_SECONDS:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   mailpit:
     image: axllent/mailpit:v1.31.5@sha256:94f6b70c1436defae6799d9ac7ff0eeff9540465b842026d5cdb018f1c0234ea

@@ -902,6 +902,7 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
   - Cloud Scheduler runs the `crove-prober` job every minute. The prober calls `crove_kernel.health()` as `crove_prober` and reads: age of the oldest unpublished outbox row, longest-queued job, DLQ, relay/worker heartbeats, purge results.
   - Results become Cloud Monitoring metrics, with absence alerts.
   - SEV1 pages the owner's phone and also opens an issue for an agent to handle per runbook.
+  - Open-source core (issue #39): the image's `prober` role and `crove_kernel.health()` (outbox and inbound relay age, oldest queued job, dead letters, worker heartbeat), with a generic webhook or stdout alert and `--test-alert`. Self-hosters schedule it with cron or the Compose `prober` profile (README); Cloud Scheduler, Cloud Monitoring and paging stay in Crove Cloud.
 
 ## 5. Modules
 
