@@ -2,11 +2,12 @@
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify } from 'jose';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { hasFreshMfa } from '@crove/kernel-runtime';
 import { createTokenVerifier, mfaTimestamp } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createLiveCheck, createSessionStatusSource, createSupabaseLiveCheck, createSupabaseSessionRevoker } from '../src/sessions.ts';
+import { runSignOut } from '../src/worker.ts';
 
 const SECRET = 'unit-test-jwt-secret-0123456789abcdef';
 const KEY = new TextEncoder().encode(SECRET);
@@ -222,13 +223,20 @@ describe('Supabase Auth sign-out after a revoke (self-host)', () => {
   let upstream: Server;
   let url = '';
   let status = 204;
+  // Supabase Auth's error body carries an error_code; null sends no body.
+  let errorCode: string | null = null;
   let seen: { method: string; path: string; headers: IncomingHttpHeaders } | null = null;
 
   beforeAll(async () => {
     upstream = createServer((req, res) => {
       seen = { method: req.method ?? '', path: req.url ?? '', headers: req.headers };
       res.statusCode = status;
-      res.end();
+      if (errorCode === null) {
+        res.end();
+        return;
+      }
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ code: status, error_code: errorCode, msg: 'from the fake server' }));
     });
     await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
     url = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
@@ -254,12 +262,54 @@ describe('Supabase Auth sign-out after a revoke (self-host)', () => {
     expect(seen?.path).toBe('/logout?scope=global');
   });
 
-  it('treats an already removed session as done and retries anything else', async () => {
-    for (const gone of [401, 403, 404]) {
-      status = gone;
+  // Status codes and error codes as Supabase Auth v2.197.0 (the compose pin) answers /logout, checked live (#92).
+  it('treats an already removed session or user as done for a local sign-out', async () => {
+    status = 403;
+    for (const gone of ['session_not_found', 'user_not_found']) {
+      errorCode = gone;
       await expect(revoker().signOut({ subject: SUBJECT, sessionId: SESSION, scope: 'local' })).resolves.toBeUndefined();
     }
-    status = 503;
-    await expect(revoker().signOut({ subject: SUBJECT, sessionId: SESSION, scope: 'local' })).rejects.toThrow(/503/);
+  });
+
+  it('does not count a missing session as done for a global sign-out: the other sessions are still alive', async () => {
+    status = 403;
+    errorCode = 'session_not_found';
+    await expect(revoker().signOut({ subject: SUBJECT, sessionId: SESSION, scope: 'global' })).rejects.toThrow(
+      /global sign-out answered 403 session_not_found/,
+    );
+    // A deleted user has no session left in any scope.
+    errorCode = 'user_not_found';
+    await expect(revoker().signOut({ subject: SUBJECT, sessionId: SESSION, scope: 'global' })).resolves.toBeUndefined();
+  });
+
+  it('retries a rejected token, an unknown answer and an outage in either scope', async () => {
+    const cases: [number, string | null][] = [[403, 'bad_jwt'], [403, null], [401, null], [404, null], [429, null], [503, null]];
+    for (const [answer, code] of cases) {
+      status = answer;
+      errorCode = code;
+      for (const scope of ['local', 'global'] as const) {
+        await expect(revoker().signOut({ subject: SUBJECT, sessionId: SESSION, scope })).rejects.toThrow(new RegExp(`answered ${answer}`));
+      }
+    }
+    errorCode = null;
+  });
+});
+
+describe('Supabase Auth sign-out job', () => {
+  const target = { subject: SUBJECT, sessionId: SESSION, scope: 'global' } as const;
+  const failing = { signOut: async () => Promise.reject(new Error('Supabase Auth global sign-out answered 403 session_not_found')) };
+
+  it('rethrows a failed global sign-out so it is retried, then raises an ALERT after the last attempt', async () => {
+    const alerts = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(runSignOut(failing, target, 0)).rejects.toThrow(/session_not_found/);
+      await expect(runSignOut(failing, target, 4)).rejects.toThrow(/session_not_found/);
+      expect(alerts).not.toHaveBeenCalled();
+      await expect(runSignOut(failing, target, 5)).resolves.toBeUndefined();
+      expect(alerts).toHaveBeenCalledTimes(1);
+      expect(String(alerts.mock.calls[0]?.[0])).toMatch(/^\[signout\] ALERT global sign-out of session 2d0c6f1e: .*after 6 attempts/);
+    } finally {
+      alerts.mockRestore();
+    }
   });
 });

@@ -61,6 +61,26 @@ export async function beat(workerDb: Db, instance: string): Promise<void> {
   await sql`SELECT crove_kernel.worker_beat(${instance.slice(0, 128)})`.execute(workerDb);
 }
 
+/**
+ * One attempt of the Supabase Auth sign-out job. Best effort: the revoked record already blocks the session in
+ * Crove. A failure is rethrown so pg-boss retries it with backoff; the last one is logged as an ALERT for the
+ * operator, because the session's refresh tokens then live on upstream.
+ */
+export async function runSignOut(revoker: SessionRevoker | null | undefined, target: SignOutTarget, retryCount: number): Promise<void> {
+  const label = `${target.scope} sign-out of session ${target.sessionId.slice(0, 8)}`;
+  if (!revoker) {
+    console.warn(`[signout] ${label}: no Supabase Auth sign-out configured; revoked in Crove only`);
+    return;
+  }
+  try {
+    await revoker.signOut(target);
+    console.log(`[signout] ${label} done in Supabase Auth`);
+  } catch (error) {
+    if (retryCount < SIGN_OUT_RETRY_LIMIT) throw error;
+    console.error(`[signout] ALERT ${label}: Supabase Auth sign-out failed after ${retryCount + 1} attempts; revoked in Crove only`, error);
+  }
+}
+
 export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>> {
   const boss = new PgBoss({ connectionString: deps.connectionString, schema: JOB_SCHEMA, migrate: false, createSchema: false });
   boss.on('error', (error) => console.error('[pg-boss]', error));
@@ -108,22 +128,9 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await deps.store.delete(inboundKey(job.data.blobId));
   });
 
-  // Best effort: the revoked record already blocks the session in Crove. Retried with backoff; the last failure
-  // is logged as an error for the operator, because the session's refresh tokens then live on upstream.
   await boss.work<SignOutTarget>(QUEUES.signOut, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
-    const label = job.data.sessionId.slice(0, 8);
-    if (!deps.revoker) {
-      console.warn(`[signout] session ${label}: no Supabase Auth sign-out configured; revoked in Crove only`);
-      return;
-    }
-    try {
-      await deps.revoker.signOut(job.data);
-      console.log(`[signout] session ${label} signed out in Supabase Auth`);
-    } catch (error) {
-      if (job.retryCount < SIGN_OUT_RETRY_LIMIT) throw error;
-      console.error(`[signout] ALERT session ${label}: Supabase Auth sign-out failed after ${job.retryCount + 1} attempts; revoked in Crove only`, error);
-    }
+    await runSignOut(deps.revoker, job.data, job.retryCount);
   });
 
   let running = false;
