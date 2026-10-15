@@ -2,6 +2,7 @@
 // PostgreSQL 17. Supabase Auth's auth.users and auth.sessions are mirrored with the columns the check reads
 // (the GoTrue schema pinned in docker-compose.yml); each test changes them the way Supabase Auth does on sign-out,
 // expiry, ban and deletion. Set CROVE_TEST_ADMIN_URL to a superuser URL.
+// Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { SignJWT } from 'jose';
@@ -12,14 +13,14 @@ import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
 import { Runtime, type BlobStore } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
-import { createAuthenticator } from '../src/auth.ts';
-import { loadConfig } from '../src/config.ts';
-import { createHttpApp } from '../src/http.ts';
-import { createSessionStatusSource, type SignOutTarget } from '../src/sessions.ts';
-import { migrateJobs, startWorker } from '../src/worker.ts';
+import { createAuthenticator } from '../../src/auth.ts';
+import { loadConfig } from '../../src/config.ts';
+import { createHttpApp } from '../../src/http.ts';
+import { createSessionStatusSource, type SignOutTarget } from '../../src/sessions.ts';
+import { migrateJobs, startWorker } from '../../src/worker.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
-const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
+const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 const SECRET = 'test-only-jwt-secret-for-sessions-0123456789';
 const ISSUER = 'crove-auth';
 
