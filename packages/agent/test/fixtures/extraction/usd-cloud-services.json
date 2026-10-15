@@ -1,0 +1,18 @@
+{
+  "description": "Synthetic VAT invoice in USD with decimal amounts",
+  "expected": {
+    "series": "C26TEE",
+    "number": "00000901",
+    "issueDate": "2026-10-01",
+    "currency": "USD",
+    "seller": { "name": "CÔNG TY TNHH DỊCH VỤ ĐÁM MÂY MẪU EPSILON", "taxCode": "9900678910" },
+    "buyer": { "name": "CÔNG TY TNHH PHẦN MỀM MẪU THỬ ALPHA", "taxCode": "9900123450" },
+    "lines": [
+      { "description": "Cloud hosting gói tiêu chuẩn tháng 09/2026", "quantity": "1", "unitPrice": "120.50", "amount": "120.50", "vatRate": "10%" },
+      { "description": "Băng thông vượt mức", "quantity": "50", "unitPrice": "0.09", "amount": "4.50", "vatRate": "10%" }
+    ],
+    "subtotal": "125.00",
+    "vatTotal": "12.50",
+    "total": "137.50"
+  }
+}

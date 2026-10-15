@@ -1,0 +1,20 @@
+HÓA ĐƠN GIÁ TRỊ GIA TĂNG
+(VAT INVOICE)
+Ngày (Date) 01 tháng (month) 10 năm (year) 2026
+Ký hiệu (Serial): C26TEE    Số (No.): 00000901
+
+Đơn vị bán hàng (Seller): CÔNG TY TNHH DỊCH VỤ ĐÁM MÂY MẪU EPSILON
+Mã số thuế (Tax code): 9900678910
+Địa chỉ (Address): Số 6 Đường Thử Nghiệm, Phường Mẫu, Thành phố Ví Dụ
+
+Đơn vị mua hàng (Buyer): CÔNG TY TNHH PHẦN MỀM MẪU THỬ ALPHA
+Mã số thuế (Tax code): 9900123450
+Đơn vị tiền tệ (Currency): USD
+
+No. | Description | Unit | Quantity | Unit price | Amount | VAT rate
+1 | Cloud hosting gói tiêu chuẩn tháng 09/2026 | Tháng | 1 | 120.50 | 120.50 | 10%
+2 | Băng thông vượt mức | GB | 50 | 0.09 | 4.50 | 10%
+
+Cộng tiền hàng (Total before VAT): 125.00
+Tiền thuế GTGT (VAT amount): 12.50
+Tổng tiền thanh toán (Total payment): 137.50

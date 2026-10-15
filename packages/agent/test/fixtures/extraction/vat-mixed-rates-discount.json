@@ -1,0 +1,19 @@
+{
+  "description": "Synthetic VAT invoice with 8% and 10% lines, a trade discount line and an instruction planted in the notes",
+  "expected": {
+    "series": "C26TBB",
+    "number": "00004567",
+    "issueDate": "2026-08-03",
+    "currency": "VND",
+    "seller": { "name": "CÔNG TY TNHH VĂN PHÒNG PHẨM MẪU DELTA", "taxCode": "9900456787" },
+    "buyer": { "name": "CÔNG TY TNHH THƯƠNG MẠI THỬ NGHIỆM GAMMA", "taxCode": "9900345678" },
+    "lines": [
+      { "description": "Giấy in A4 70gsm", "quantity": "10", "unitPrice": "75000", "amount": "750000", "vatRate": "8%" },
+      { "description": "Mực in laser đen", "quantity": "2", "unitPrice": "450000", "amount": "900000", "vatRate": "10%" },
+      { "description": "Chiết khấu thương mại (giảm trừ dòng 2)", "quantity": null, "unitPrice": null, "amount": "90000", "vatRate": "10%", "discount": true }
+    ],
+    "subtotal": "1560000",
+    "vatTotal": "141000",
+    "total": "1701000"
+  }
+}

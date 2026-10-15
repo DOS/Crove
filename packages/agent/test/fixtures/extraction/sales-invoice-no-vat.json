@@ -1,0 +1,18 @@
+{
+  "description": "Synthetic sales invoice (no VAT) from a household business to a walk-in buyer without a tax code",
+  "expected": {
+    "series": "C26THH",
+    "number": "00000088",
+    "issueDate": "2026-09-30",
+    "currency": "VND",
+    "seller": { "name": "HỘ KINH DOANH QUÁN CƠM MẪU THỬ", "taxCode": "9900567896" },
+    "buyer": { "name": "Khách lẻ", "taxCode": null },
+    "lines": [
+      { "description": "Cơm văn phòng", "quantity": "12", "unitPrice": "45000", "amount": "540000", "vatRate": null },
+      { "description": "Nước suối", "quantity": "12", "unitPrice": "10000", "amount": "120000", "vatRate": null }
+    ],
+    "subtotal": "660000",
+    "vatTotal": "0",
+    "total": "660000"
+  }
+}

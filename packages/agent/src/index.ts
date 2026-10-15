@@ -6,6 +6,9 @@ import { generateText, Output } from 'ai';
 import { z } from 'zod';
 import { normalizeNumber, normalizeSeries, type ParsedInvoice } from '@crove/l10n-vn';
 
+export * from './errors.ts';
+export * from './eval.ts';
+
 export interface AiConfig {
   baseURL: string;
   apiKey: string | null;
@@ -52,6 +55,18 @@ const INSTRUCTIONS = [
 
 export class AiNotConfiguredError extends Error {}
 
+// The chat model for a deployment's endpoint. The extractor and the conformance suite both use it, so the suite
+// checks the exact client configuration production runs.
+export function chatModel(config: AiConfig) {
+  const provider = createOpenAICompatible({
+    name: 'crove-ai',
+    baseURL: config.baseURL,
+    ...(config.apiKey ? { apiKey: config.apiKey } : {}),
+    supportsStructuredOutputs: config.supportsStructuredOutputs ?? true,
+  });
+  return provider.chatModel(config.model);
+}
+
 export class InvoiceExtractor {
   private readonly config: AiConfig;
 
@@ -60,13 +75,7 @@ export class InvoiceExtractor {
   }
 
   private model() {
-    const provider = createOpenAICompatible({
-      name: 'crove-ai',
-      baseURL: this.config.baseURL,
-      ...(this.config.apiKey ? { apiKey: this.config.apiKey } : {}),
-      supportsStructuredOutputs: this.config.supportsStructuredOutputs ?? true,
-    });
-    return provider.chatModel(this.config.model);
+    return chatModel(this.config);
   }
 
   async fromText(text: string): Promise<ParsedInvoice | null> {

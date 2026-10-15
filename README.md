@@ -102,6 +102,19 @@ supabase/migrations  the only place for schema changes
 
 Architecture and roadmap: [`docs/plan/crove-os-kernel.md`](./docs/plan/crove-os-kernel.md) (concise Vietnamese decision page: [`docs/plan/crove-os-kernel.vi.html`](./docs/plan/crove-os-kernel.vi.html)). Design system: [`DESIGN.md`](./DESIGN.md).
 
+### AI endpoint conformance and evals
+
+Before enabling an AI endpoint or changing the extraction prompt or model, run both suites against it. They read the same variables as the kernel and are skipped when `AI_BASE_URL` or `AI_MODEL` is not set, so `pnpm test` and CI never call a model.
+
+```bash
+export AI_BASE_URL=http://localhost:11434/v1 AI_MODEL=<model> AI_API_KEY=<key-if-any>
+pnpm ai:conformance   # chat, tool calls, structured output (zod), streaming, error mapping
+pnpm ai:eval          # extraction accuracy on synthetic invoices; fails below AI_EVAL_THRESHOLD (default 0.9)
+                      # or when isInvoice or the total is wrong on any fixture
+```
+
+Fixtures live in `packages/agent/test/fixtures/extraction` (`<id>.txt` document text plus `<id>.json` expected fields). They are synthetic: use invented names and checksum-invalid tax codes only (a unit test rejects checksum-valid tax codes and 12-digit IDs). 429 and 5xx mapping is tested against a local fake server in `pnpm test`.
+
 ## License
 
 AGPL-3.0-only, see [`LICENSE`](./LICENSE). © Crove / DOS. See also [`CONTRIBUTING.md`](./CONTRIBUTING.md), [`SECURITY.md`](./SECURITY.md), [`TRADEMARKS.md`](./TRADEMARKS.md) and the draft [`CLA.md`](./CLA.md).

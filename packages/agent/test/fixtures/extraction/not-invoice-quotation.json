@@ -1,0 +1,4 @@
+{
+  "description": "Synthetic quotation: not an invoice, the extractor must return nothing",
+  "expected": null
+}
