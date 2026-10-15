@@ -1,6 +1,7 @@
 // Crove kernel entry point. One image, several roles:
 //   migrate      apply SQL migrations, set role passwords, create the job schema
-//   auth-grants  after Supabase Auth has started: let the session check read auth.sessions and auth.users
+//   auth-grants  after Supabase Auth has started: let the session check read auth.sessions, auth.users and
+//                auth.mfa_factors (user_id, status)
 //   api          HTTP API + web UI
 //   worker   outbox relay + jobs
 //   all      api + worker in one process (default for self-host)

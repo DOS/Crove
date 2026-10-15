@@ -5,6 +5,7 @@
 - Deciders: owner (JOY), after two blind reviews (Codex and Claude) that independently converged on design C
 - Builds on: ADR-0027 decision 3 (auth uses Supabase Auth only) and plan Decision 5
 - Tracking: issue #22 (implementation), plan Tracking Decision 16 and "External-tenant gate" row T1
+- Amended: 2026-10-15, issue #126: a user with a verified MFA factor needs `aal2` for every request, not only for R3 (sections 3 and 8)
 
 ## Context and problem statement
 
@@ -119,6 +120,7 @@ Setting `AUTH_SESSION_CHECK` selects the adapter: `db`, `jwt` or `off`. When it 
 - Valid means: the session row exists for that user; its `not_after`, when set, is in the future; the user exists, is not soft-deleted, and `banned_until` is null or past.
 - The grant needs a step after Supabase Auth's first start, because `auth.sessions` and `auth.users` do not exist until Supabase Auth has run its own migrations, and in the compose stack `auth` starts only after `migrate` completes. The image gets a one-shot role `auth-grants`: it waits (up to 2 minutes) until both tables exist, grants SELECT on exactly those two tables to `crove_auth_reader`, and exits. It connects with the admin database URL (`ADMIN_DATABASE_URL`, as `migrate` does), because only the owner of the `auth` tables (`supabase_auth_admin`) or a superuser can grant on them. Compose runs `migrate`, then `auth`, then `auth-grants` (depends on `auth` started), then `crove` (depends on `auth-grants` completed successfully). It runs on every `docker compose up`, so the grant is re-applied if Supabase Auth ever recreates a table. Installs without compose run `auth-grants` once after Supabase Auth's first start and after each Supabase Auth upgrade.
 - Until the grant exists the check fails closed: requests get 503 and `/readyz` reports not ready with reason `auth_grants`.
+- **MFA enrolled means MFA required (issue #126).** The same check reads whether the user has a verified factor in `auth.mfa_factors` (any factor type) through `crove_kernel.auth_user_has_verified_factor`, also owned by `crove_auth_reader`. If the user has one and the token is not `aal2`, every request is refused with 401 `MFA_REQUIRED`: reads, R1 and R2 commands, uploads, downloads and org-less calls alike, so a password or a recovery link alone gives no access to data. The SPA answers `MFA_REQUIRED` with the MFA challenge (issue #32), never with a sign-out; until that screen ships it shows the server's message. `auth-grants` grants exactly `auth.mfa_factors (user_id, status)` and a SELECT policy, never the factor secrets; `auth_grants_ready` requires that grant whenever the table exists, so a missing grant fails closed with 503 like the rest. Supabase Auth creates `auth.mfa_factors` in a migration that runs before the one adding `auth.sessions.not_after`, which `auth-grants` already waits for; a Supabase Auth without the table has no MFA, so no user there has a factor, and `auth-grants` logs a warning. A signed-out, expired, banned or deleted session still gets 401 `UNAUTHENTICATED` first. Two deliberate limits: `identity_resolve` still maps an `aal1` token to its account (it writes only the email and name the token itself carries, and grants no access), and `off` (local URLs only) reads nothing from Supabase Auth, so it does not enforce this rule.
 - Rejected alternative: `ALTER DEFAULT PRIVILEGES FOR ROLE supabase_auth_admin IN SCHEMA auth GRANT SELECT ON TABLES TO crove_auth_reader` in `migrate`. It needs no extra step, but it grants read access to every current and future `auth` table, including refresh tokens, MFA factor secrets and one-time tokens, far more than the check needs.
 
 **Crove Cloud adapter (`jwt`), owner decision 2026-10-15.**
@@ -126,6 +128,7 @@ Setting `AUTH_SESSION_CHECK` selects the adapter: `db`, `jwt` or `off`. When it 
 - Crove Cloud keeps Supabase Auth's default session behavior. A sign-out elsewhere (any scope), a ban or a deletion destroys the session's refresh tokens at once [9]; the access tokens already issued stay valid until their `exp` [2]. Crove does not poll Supabase Auth and needs no DOS-side change.
 - Every request: local verification (section 1), then `crove_kernel.session_check` with the Crove records only: a session revoked in Crove (globally or for the org in context) is 401, a disabled Crove user is 403, and `enter_context` checks membership. No call to Supabase Auth.
 - R3 commands confirm the session live with Supabase Auth (section 5), so a signed-out, banned or deleted user cannot approve, invite or change roles even while the access token is still valid.
+- **MFA enrolled (issue #126): requirement on the identity provider.** Crove cannot read the factors of a remote Supabase Auth, and an `aal1` access token does not say whether its user has a verified factor. For `jwt` to enforce the `db` rule (an `aal1` token of a user with a verified factor gets 401 `MFA_REQUIRED` on every request), the identity provider must state that fact in the access token it signs (for example a claim added by a custom access token hook), or not issue `aal1` tokens that reach Crove to such users. Until it does, `jwt` refuses those tokens only for R3 (`STEP_UP_REQUIRED`), and External-tenant gate T1 keeps this open for Crove Cloud.
 - **SLA:** for a sign-out, ban or deletion that happens outside Crove, reads and non-R3 writes stop when the access token expires: at most the JWT expiry of DOS's Supabase Auth project (Supabase default one hour; 15 minutes recommended to DOS, section 7). Crove-side revocation, a Crove disable and membership removal take effect on the next request; R3 is refused at once.
 - An Auth outage does not log anyone out (existing tokens keep working until they expire, as with Supabase itself); it stops new logins, token refresh and R3 (503).
 
@@ -172,6 +175,7 @@ Choice: the self-host compose stack sets `GOTRUE_JWT_EXP=900` (15 minutes) as de
 | Missing or invalid token, wrong `iss` or `aud`, missing `exp`, `sub` or `session_id`, expired, anonymous, wrong algorithm, empty `email` | 401 |
 | Crove session record `revoked`; self-host session row missing or past `not_after`; user banned or deleted upstream | 401 |
 | R3 live check (`GET /user`, Crove Cloud): any 4xx other than 429, or a 200 for a different user id | 401 |
+| User has a verified MFA factor and the token is not `aal2` (any request, not only R3; `db`, and `jwt` once the identity provider states the fact) | 401 `MFA_REQUIRED` |
 | `user_account.disabled_at` set | 403 |
 | Not a member of the org | 403 |
 | R3 without `aal2` or without an MFA timestamp in the last 5 minutes | 403 `STEP_UP_REQUIRED` |
@@ -211,6 +215,7 @@ Self-host (`db` adapter, Supabase Auth image pinned as in compose):
 - Fresh install: `docker compose up` on empty volumes; `auth-grants` completes; the first sign-up, sign-in and API call succeed with the `db` check active (not skipped). Before `auth-grants` has run: requests get 503 and `/readyz` reports `auth_grants`.
 - Old JWT after sign-out: sign in, call the API (200), sign out; the same token gets 401 on the next request.
 - Banned user: ban in Supabase Auth, next request 401. Deleted user: 401. `user_account.disabled_at` set: 403.
+- MFA enrolled (issue #126): for a user with a verified factor, an `aal1` token gets 401 `MFA_REQUIRED` on a read query, an R1 command, an upload and an org-less call, and writes nothing; an `aal2` token of the same session passes; a user without factors, or with only an unverified factor, keeps `aal1` access; removing the factor restores it on the next request. Without the `auth.mfa_factors` grant or its policy: 503 until `auth-grants` runs again.
 
 Crove Cloud (`jwt` adapter, through the HTTP API with a stand-in for Supabase Auth's `GET /user`):
 

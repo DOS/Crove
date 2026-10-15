@@ -195,9 +195,12 @@ export interface AuthGrantsOptions {
 
 // The `auth-grants` one-shot step (ADR-0028, self-host db adapter). Waits until Supabase Auth has created its
 // tables, then lets crove_auth_reader select exactly the columns the session check reads (column grants plus a
-// SELECT policy, because Supabase Auth turns on row-level security). Needs a superuser or the owner of the auth
-// tables (supabase_auth_admin), so it runs with the admin URL, like `migrate`. Safe to run on every start: it
-// re-applies the grant if Supabase Auth ever recreated a table.
+// SELECT policy, because Supabase Auth turns on row-level security): auth.sessions, auth.users and, for the MFA
+// check (issue #126), auth.mfa_factors (user_id, status), never the factor secrets. Supabase Auth creates
+// auth.mfa_factors before it adds auth.sessions.not_after, so the table exists once the wait below ends; a Supabase
+// Auth without it has no MFA. Needs a superuser or the owner of the auth tables (supabase_auth_admin), so it runs
+// with the admin URL, like `migrate`. Safe to run on every start: it re-applies the grant if Supabase Auth ever
+// recreated a table.
 export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void> {
   const log = options.log ?? (() => {});
   const deadline = Date.now() + (options.timeoutMs ?? 120_000);
@@ -218,6 +221,7 @@ export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void>
       log('waiting for Supabase Auth to create auth.sessions and auth.users');
       await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 2000));
     }
+    let factors = false;
     await client.query('BEGIN');
     try {
       await client.query(`
@@ -230,6 +234,14 @@ export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void>
         CREATE POLICY crove_auth_reader_select ON auth.sessions AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);
         DROP POLICY IF EXISTS crove_auth_reader_select ON auth.users;
         CREATE POLICY crove_auth_reader_select ON auth.users AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);`);
+      const { rows: mfa } = await client.query<{ present: boolean }>("SELECT to_regclass('auth.mfa_factors') IS NOT NULL AS present");
+      factors = mfa[0]?.present === true;
+      if (factors) {
+        await client.query(`
+          GRANT SELECT (user_id, status) ON auth.mfa_factors TO crove_auth_reader;
+          DROP POLICY IF EXISTS crove_auth_reader_select ON auth.mfa_factors;
+          CREATE POLICY crove_auth_reader_select ON auth.mfa_factors AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);`);
+      }
       const { rows } = await client.query<{ ok: boolean }>('SELECT crove_kernel.auth_grants_ready() AS ok');
       if (!rows[0]?.ok) throw new Error('the session check still cannot read auth.sessions and auth.users after the grant');
       await client.query('COMMIT');
@@ -237,7 +249,7 @@ export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void>
       await client.query('ROLLBACK');
       throw error;
     }
-    log('crove_auth_reader may read auth.sessions and auth.users');
+    log(`crove_auth_reader may read auth.sessions and auth.users${factors ? ' and auth.mfa_factors (user_id, status)' : ''}`);
   } finally {
     await client.end();
   }

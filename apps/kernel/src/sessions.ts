@@ -11,7 +11,8 @@ import { liveAuthUrl, type Config, type SessionCheckMode } from './config.ts';
 // and the user's Crove state, plus, for db, the Supabase Auth session and user rows in the shared database. Before
 // `auth-grants` has run, db raises 55000, answered with 503.
 //   db:  self-host with the bundled Supabase Auth. Its own tables are read on every request, so R3 needs no extra
-//        call: the per-request check already sees a sign-out, ban or deletion.
+//        call: the per-request check already sees a sign-out, ban or deletion. An aal1 token of a user with a
+//        verified MFA factor raises MFA_REQUIRED (401, issue #126).
 //   jwt: a remote Supabase Auth Crove cannot read (Crove Cloud). A verified token is trusted until its exp, as
 //        Supabase Auth does by default; a sign-out elsewhere destroys the refresh tokens at once, so access ends at
 //        the token's expiry. Crove's own revocation is immediate, and every R3 command is confirmed live.
@@ -22,7 +23,10 @@ function sqlSource(mode: SessionCheckMode): SessionStatusSource {
     mode,
     liveCheckForR3: mode === 'jwt',
     async check(trx, actor, orgId) {
-      await sql`SELECT crove_kernel.session_check(${actor.userId}::uuid, ${actor.sessionId}::uuid, ${upstream}, ${orgId}::uuid)`.execute(trx);
+      const aal = actor.aal === 'aal2' ? 'aal2' : 'aal1';
+      await sql`SELECT crove_kernel.session_check(${actor.userId}::uuid, ${actor.sessionId}::uuid, ${upstream}, ${orgId}::uuid, ${aal}::text)`.execute(
+        trx,
+      );
     },
   };
 }
