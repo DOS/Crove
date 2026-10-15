@@ -16,16 +16,19 @@ export async function signOutWithRevoke(deps: SignOutDeps): Promise<void> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const session = await deps.currentSession();
-    if (session) {
-      const timeout = new Promise<void>((resolve) => {
-        timer = setTimeout(() => {
-          controller.abort();
-          resolve();
-        }, deps.timeoutMs ?? REVOKE_TIMEOUT_MS);
-      });
-      await Promise.race([deps.revoke(session, controller.signal), timeout]);
-    }
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        resolve();
+      }, deps.timeoutMs ?? REVOKE_TIMEOUT_MS);
+    });
+    // The budget covers reading the session too: auth-js can retry a token refresh for a long time when offline.
+    const revoke = (async () => {
+      const session = await deps.currentSession();
+      if (session) await deps.revoke(session, controller.signal);
+    })();
+    revoke.catch(() => undefined);
+    await Promise.race([revoke, timeout]);
   } catch {
     // A failed revoke must not keep the user signed in; the token then lives until it expires, as before.
   } finally {

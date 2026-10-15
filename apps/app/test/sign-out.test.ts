@@ -57,4 +57,13 @@ describe('signOutWithRevoke', () => {
     await signOutWithRevoke({ currentSession: async () => Promise.reject(new Error('storage')), revoke: async () => undefined, signOut });
     expect(signOut).toHaveBeenCalledOnce();
   });
+
+  it('signs out at the timeout when reading the session hangs', async () => {
+    vi.useFakeTimers();
+    const signOut = vi.fn(async () => undefined);
+    const done = signOutWithRevoke({ currentSession: () => new Promise(() => undefined), revoke: async () => undefined, signOut, timeoutMs: 3000 });
+    await vi.advanceTimersByTimeAsync(3000);
+    await done;
+    expect(signOut).toHaveBeenCalledOnce();
+  });
 });
