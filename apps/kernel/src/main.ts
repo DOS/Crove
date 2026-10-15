@@ -23,7 +23,7 @@ type Role = 'migrate' | 'auth-grants' | 'api' | 'worker' | 'all';
 const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all'];
 
 function buildRuntime(config: Config, connectionString: string, applicationName: string) {
-  const pool = createPool({ connectionString, applicationName, max: 10 });
+  const pool = createPool({ connectionString, applicationName, max: 10, resetOnRelease: config.DB_RESET_ON_RELEASE === 'true' });
   const db = createDb(pool);
   const runtime = new Runtime(db, {
     // Every user request is checked against its session (ADR-0028); the config never resolves to "no check".

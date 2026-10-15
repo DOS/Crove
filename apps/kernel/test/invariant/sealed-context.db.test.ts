@@ -7,8 +7,9 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sql } from 'kysely';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
@@ -578,5 +579,363 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
     });
     expect(error).toMatchObject(SEAL_INVALID);
     expect(toDomainError(error)).toMatchObject({ code: 'INTERNAL', status: 500 });
+  });
+
+  // Session state that survives COMMIT and blocks the context for whoever gets the connection next (#117).
+  const POISON = [
+    `SELECT set_config('crove.ctx', '{"v":1}', false)`,
+    `SELECT set_config('crove.ctx_seal', '${'0'.repeat(64)}', false)`,
+    `SELECT set_config('crove.org_id', '00000000-0000-0000-0000-000000000000', false)`,
+    `SELECT set_config('crove.user_id', '00000000-0000-0000-0000-000000000000', false)`,
+    // The context lock of the re-entry guard (T10), held at session level.
+    'SELECT pg_advisory_lock(1129467734, pg_backend_pid())',
+    'SET ROLE crove_tenant',
+    'SET search_path = public',
+    'SET default_transaction_read_only = on',
+  ];
+
+  async function enterOnPooled(client: pg.PoolClient) {
+    await client.query('BEGIN');
+    try {
+      await enter(client, users.owner, orgA);
+      const { rows } = await client.query<{ name: string; who: string; org: string }>(
+        `SELECT p.name, current_user AS who, crove_kernel.ctx_org_id()::text AS org FROM crove_kernel.party p ORDER BY p.name`,
+      );
+      await client.query('COMMIT');
+      return rows;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    }
+  }
+
+  it('resets the session of a pooled connection on release, so leftover settings deny no later checkout (#117)', async () => {
+    const pid = async (c: pg.PoolClient) => (await c.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
+
+    // Without the reset (a plain pg.Pool), one session-level setting denies every later transaction on the backend.
+    const plain = new pg.Pool({ connectionString: appUrl, max: 1 });
+    try {
+      const first = await plain.connect();
+      await first.query(POISON[0] as string);
+      first.release();
+      const next = await plain.connect();
+      try {
+        await expect(enterOnPooled(next)).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_REENTRY' });
+        await expect(next.query('SELECT crove_kernel.ctx_org_id()')).rejects.toMatchObject(SEAL_INVALID);
+      } finally {
+        next.release(true);
+      }
+    } finally {
+      await plain.end();
+    }
+
+    // createPool resets on release: the same backend (max 1) enters normally after each kind of leftover state.
+    const pooled = createPool({ connectionString: appUrl, max: 1 });
+    try {
+      for (const poison of [...POISON, POISON.join('; ')]) {
+        const first = await pooled.connect();
+        const backend = await pid(first);
+        await first.query(poison);
+        first.release();
+        const next = await pooled.connect();
+        try {
+          expect(await pid(next), poison).toBe(backend);
+          const { rows } = await next.query<{ ctx: string; ro: string; sp: string; st: string; app: string }>(
+            `SELECT current_setting('crove.ctx', true) AS ctx, current_setting('default_transaction_read_only') AS ro,
+                    current_setting('search_path') AS sp, current_setting('statement_timeout') AS st,
+                    current_setting('application_name') AS app`,
+          );
+          // Startup values (statement_timeout, application_name) survive the reset.
+          expect(rows[0], poison).toEqual({ ctx: '', ro: 'off', sp: 'pg_catalog, pg_temp', st: '15s', app: 'crove' });
+          expect(await enterOnPooled(next), poison).toEqual([{ name: 'party of A', who: 'crove_app', org: orgA }]);
+        } finally {
+          next.release();
+        }
+      }
+
+      // pool.query() checks out and releases the same way.
+      await pooled.query(`SELECT set_config('crove.ctx', 'x', false)`);
+      const after = await pooled.connect();
+      try {
+        expect(await enterOnPooled(after)).toEqual([{ name: 'party of A', who: 'crove_app', org: orgA }]);
+      } finally {
+        after.release();
+      }
+
+      // A connection released inside a transaction is closed, not pooled: a RESET there would roll back with it.
+      const open = await pooled.connect();
+      const openPid = await pid(open);
+      await open.query('BEGIN');
+      await open.query(POISON[0] as string);
+      open.release();
+      const fresh = await pooled.connect();
+      try {
+        expect(await pid(fresh)).not.toBe(openPid);
+        expect(await enterOnPooled(fresh)).toEqual([{ name: 'party of A', who: 'crove_app', org: orgA }]);
+      } finally {
+        fresh.release();
+      }
+      // Releasing twice still throws, as pg.Pool does.
+      const twice = await pooled.connect();
+      twice.release();
+      expect(() => twice.release()).toThrow(/already been released/);
+    } finally {
+      await pooled.end();
+    }
+  });
+
+  it('closes a pooled connection whose reset fails or that a late BEGIN left in a transaction (#117)', async () => {
+    const pid = async (c: pg.PoolClient) => (await c.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
+    const pooled = createPool({ connectionString: appUrl, max: 1 });
+    try {
+      // The backend dies while the reset waits behind a running query: the reset fails, the client is destroyed,
+      // and the lost connection does not surface as an unhandled 'error' event (vitest fails the run on one).
+      const dying = await pooled.connect();
+      const dyingPid = await pid(dying);
+      const sleeping = dying.query('SELECT pg_sleep(5)').catch((error: unknown) => error);
+      dying.release();
+      await withAdmin((a) => a.query('SELECT pg_terminate_backend($1)', [dyingPid]));
+      expect(await sleeping).toBeInstanceOf(Error);
+      const afterDeath = await pooled.connect();
+      try {
+        expect(await pid(afterDeath)).not.toBe(dyingPid);
+        expect(await enterOnPooled(afterDeath)).toEqual([{ name: 'party of A', who: 'crove_app', org: orgA }]);
+      } finally {
+        afterDeath.release();
+      }
+
+      // A BEGIN still in flight at release runs before the reset; the check after the reset sees the open
+      // transaction and closes the connection instead of pooling it mid-transaction.
+      const late = await pooled.connect();
+      const latePid = await pid(late);
+      const begin = late.query('BEGIN');
+      late.release();
+      await begin;
+      const afterLate = await pooled.connect();
+      try {
+        expect(await pid(afterLate)).not.toBe(latePid);
+        expect(afterLate.getTransactionStatus()).toBe('I');
+        expect(await enterOnPooled(afterLate)).toEqual([{ name: 'party of A', who: 'crove_app', org: orgA }]);
+      } finally {
+        afterLate.release();
+      }
+    } finally {
+      await pooled.end();
+    }
+  });
+
+  it('closes a connection that hit a context error instead of pooling it, with the reset turned off (#117)', async () => {
+    const pid = async (c: pg.PoolClient) => (await c.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pooled = createPool({ connectionString: appUrl, max: 1, resetOnRelease: false });
+    const poison = async () => {
+      const c = await pooled.connect();
+      const backend = await pid(c);
+      await c.query(POISON[0] as string);
+      c.release();
+      return backend;
+    };
+    try {
+      // Without the reset a clean checkout goes back as is, and the poison reaches the next checkout.
+      const backend = await poison();
+      const second = await pooled.connect();
+      expect(await pid(second)).toBe(backend);
+      await expect(enterOnPooled(second)).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_REENTRY' });
+      second.release();
+      // That checkout was tainted: its connection is closed, logged once with the code only.
+      expect(logged.mock.calls.map((call) => String(call[0]))).toEqual(['[db] closing a pooled connection after CONTEXT_REENTRY']);
+      const third = await pooled.connect();
+      try {
+        expect(await pid(third)).not.toBe(backend);
+        expect(await enterOnPooled(third)).toEqual([{ name: 'party of A', who: 'crove_app', org: orgA }]);
+      } finally {
+        third.release();
+      }
+
+      // CONTEXT_SEAL_INVALID taints the same way, outside any transaction.
+      const sealBackend = await poison();
+      const reader = await pooled.connect();
+      expect(await pid(reader)).toBe(sealBackend);
+      await expect(reader.query('SELECT crove_kernel.ctx_org_id()')).rejects.toMatchObject(SEAL_INVALID);
+      reader.release();
+      const afterSeal = await pooled.connect();
+      try {
+        expect(await pid(afterSeal)).not.toBe(sealBackend);
+      } finally {
+        afterSeal.release();
+      }
+
+      // Through Kysely, which releases with no argument after its ROLLBACK.
+      const db = createDb(pooled);
+      const kyselyBackend = await poison();
+      await expect(
+        db.transaction().execute((trx) => sql`SELECT crove_kernel.enter_context(${users.owner}::uuid, ${orgA}::uuid)`.execute(trx)),
+      ).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_REENTRY' });
+      const afterKysely = await pooled.connect();
+      try {
+        expect(await pid(afterKysely)).not.toBe(kyselyBackend);
+        expect(await enterOnPooled(afterKysely)).toEqual([{ name: 'party of A', who: 'crove_app', org: orgA }]);
+      } finally {
+        afterKysely.release();
+      }
+      expect(logged.mock.calls.map((call) => String(call[0]))).toEqual([
+        '[db] closing a pooled connection after CONTEXT_REENTRY',
+        '[db] closing a pooled connection after CONTEXT_SEAL_INVALID',
+        '[db] closing a pooled connection after CONTEXT_REENTRY',
+      ]);
+    } finally {
+      logged.mockRestore();
+      await pooled.end();
+    }
+  });
+
+  // Documented residual (T11, T10): ROLLBACK TO SAVEPOINT restores whatever the settings held at the savepoint, and
+  // after it the re-entry lock taken since the savepoint is gone. What verifies afterwards can only be a context
+  // that enter_context itself derived and sealed in this same transaction, never an edited or foreign one.
+  it('lets ROLLBACK TO SAVEPOINT bring back only a context enter_context derived in the same transaction', async () => {
+    const app = await connect(appUrl);
+    const verified = async () => {
+      await app.query('SAVEPOINT v');
+      try {
+        const { rows } = await app.query<{ ctx: unknown }>('SELECT crove_kernel.ctx_verified() AS ctx');
+        await app.query('RELEASE SAVEPOINT v');
+        return rows[0]?.ctx ?? null;
+      } catch (error) {
+        await app.query('ROLLBACK TO SAVEPOINT v');
+        expect(error).toMatchObject(SEAL_INVALID);
+        return 'refused';
+      }
+    };
+    const derivedA = { v: 1, org: orgA, actor: 'user', user: users.owner, role: 'owner', le_scope: ['*'], flags: [] };
+    const derivedB = { v: 1, org: orgB, actor: 'user', user: users.other, role: 'owner', le_scope: ['*'], flags: [] };
+
+    // A forgery after a savepoint is refused, and rolling it back restores exactly the context entered before.
+    await inTx(app, async () => {
+      await enter(app, users.owner, orgA);
+      for (const forge of [
+        () => forgeFields(app, { org: orgB }),
+        () => setRaw(app, 'crove.ctx_seal', '0'.repeat(64)),
+        () => app.query('RESET ALL'),
+      ]) {
+        await app.query('SAVEPOINT s');
+        await forge();
+        expect(await verified()).not.toEqual(derivedA);
+        await app.query('ROLLBACK TO SAVEPOINT s');
+        expect(await verified()).toEqual(derivedA);
+      }
+    });
+
+    // Entered after the savepoint and rolled back: no context at all, then a clean first entry (T10 accepts this).
+    await inTx(app, async () => {
+      await app.query('SAVEPOINT s');
+      await enter(app, users.owner, orgA);
+      const sealedA = await settings(app);
+      await app.query('ROLLBACK TO SAVEPOINT s');
+      expect(await verified()).toBeNull();
+      // A non-member is never derived: enter_context refuses before it seals anything.
+      await app.query('SAVEPOINT n');
+      await expect(enter(app, users.other, orgA)).rejects.toMatchObject({ code: '42501', message: 'NOT_A_MEMBER' });
+      await app.query('ROLLBACK TO SAVEPOINT n');
+      expect(await verified()).toBeNull();
+      await enter(app, users.other, orgB);
+      expect(await verified()).toEqual(derivedB);
+      // Writing back the context sealed earlier in this transaction: at most that derived context verifies.
+      await app.query('SAVEPOINT w');
+      await setRaw(app, 'crove.ctx', sealedA.ctx);
+      await setRaw(app, 'crove.ctx_seal', sealedA.seal);
+      expect([derivedA, 'refused']).toContainEqual(await verified());
+      // Any edit of it is refused; the context written by the latest entry comes back with the savepoint.
+      await forgeFields(app, { org: orgB });
+      expect(await verified()).toBe('refused');
+      await app.query('ROLLBACK TO SAVEPOINT w');
+      expect(await verified()).toEqual(derivedB);
+    });
+
+    // A context derived in another transaction never verifies, whatever savepoints this one rolls back.
+    const earlier = await inTx(app, async () => {
+      await enter(app, users.owner, orgA);
+      return settings(app);
+    });
+    await inTx(app, async () => {
+      await app.query('SAVEPOINT s');
+      await setRaw(app, 'crove.ctx', earlier.ctx);
+      await setRaw(app, 'crove.ctx_seal', earlier.seal);
+      expect(await verified()).toBe('refused');
+      await app.query('ROLLBACK TO SAVEPOINT s');
+      expect(await verified()).toBeNull();
+    });
+  });
+
+  it('stops verifying seals made with the old key once the key is rotated (runbook context-key-rotation)', async () => {
+    const readKey = () =>
+      withAdmin(async (a) => {
+        const { rows } = await a.query<{ k_ipad: Buffer }>('SELECT k_ipad FROM crove_kernel.context_key');
+        expect(rows).toHaveLength(1);
+        return Buffer.from((rows[0] as { k_ipad: Buffer }).k_ipad.map((b) => b ^ 0x36));
+      });
+    const hmac = (key: Buffer, pid: number, us: string, ctx: string) =>
+      createHmac('sha256', key).update(['crove.ctx.v1', String(pid), us, ctx].join('\x1f'), 'utf8').digest('hex');
+
+    // No Crove login role can rotate.
+    for (const url of [appUrl, workerUrl]) {
+      const c = await connect(url);
+      await expect(c.query('SELECT crove_kernel.context_key_rotate()')).rejects.toThrow(/permission denied for function context_key_rotate/);
+    }
+
+    const oldKey = await readKey();
+    const app = await connect(appUrl);
+    await app.query('BEGIN');
+    try {
+      await enter(app, users.owner, orgA);
+      const { rows } = await app.query<{ pid: number; us: string }>(
+        `SELECT pg_backend_pid() AS pid, ((extract(epoch FROM transaction_timestamp()) * 1000000)::bigint)::text AS us`,
+      );
+      const { pid, us } = rows[0] as { pid: number; us: string };
+      const before = await settings(app);
+      expect(before.seal).toBe(hmac(oldKey, pid, us, before.ctx));
+      expect(await helpers(app)).toMatchObject({ org: orgA, user: users.owner });
+
+      // Rotation as the migration runner (the key's owner), committed while this transaction is still open.
+      await withAdmin((a) => a.query('SELECT crove_kernel.context_key_rotate()'));
+      const newKey = await readKey();
+      expect(newKey.equals(oldKey)).toBe(false);
+      expect(newKey.subarray(32).equals(Buffer.alloc(32))).toBe(true);
+      expect(before.seal).not.toBe(hmac(newKey, pid, us, before.ctx));
+
+      // The seal made with the old key no longer verifies: the next statement of the open transaction is refused.
+      await expectRefused(app, orgA);
+    } finally {
+      await app.query('ROLLBACK');
+    }
+
+    // New transactions seal with the new key, and a seal made with the old key does not verify in them either.
+    const fresh = await inTx(app, async () => {
+      await enter(app, users.owner, orgA);
+      const { rows } = await app.query<{ pid: number; us: string }>(
+        `SELECT pg_backend_pid() AS pid, ((extract(epoch FROM transaction_timestamp()) * 1000000)::bigint)::text AS us`,
+      );
+      const { pid, us } = rows[0] as { pid: number; us: string };
+      const s = await settings(app);
+      const ok = await helpers(app);
+      await setRaw(app, 'crove.ctx_seal', hmac(oldKey, pid, us, s.ctx));
+      await expectRefused(app, orgA);
+      return { s, ok, pid, us };
+    });
+    expect(fresh.s.seal).toBe(hmac(await readKey(), fresh.pid, fresh.us, fresh.s.ctx));
+    expect(fresh.ok).toMatchObject({ org: orgA, user: users.owner });
+
+    // A database restored without the key row (pg_dump --exclude-table-data) gets one from the same call.
+    await withAdmin(async (a) => {
+      await a.query('BEGIN');
+      try {
+        await a.query('DELETE FROM crove_kernel.context_key');
+        await a.query('SELECT crove_kernel.context_key_rotate()');
+        const { rows } = await a.query<{ n: string }>('SELECT count(*) AS n FROM crove_kernel.context_key');
+        expect(rows[0]?.n).toBe('1');
+        await expect(a.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [users.owner, orgA])).resolves.toBeDefined();
+      } finally {
+        await a.query('ROLLBACK');
+      }
+    });
   });
 });

@@ -61,6 +61,13 @@ describe('configuration guards', () => {
     expect(loadConfig(publicUrl).AUTH_STEP_UP).toBe('required');
     expect(loadConfig({ ...base, AUTH_STEP_UP: 'off' }).AUTH_STEP_UP).toBe('off');
   });
+
+  // #117: on by default (direct connections); off only behind a transaction-mode pooler.
+  it('resets pooled sessions on release unless DB_RESET_ON_RELEASE=false', () => {
+    expect(loadConfig(base).DB_RESET_ON_RELEASE).toBe('true');
+    expect(loadConfig({ ...base, DB_RESET_ON_RELEASE: 'false' }).DB_RESET_ON_RELEASE).toBe('false');
+    expect(() => loadConfig({ ...base, DB_RESET_ON_RELEASE: 'no' })).toThrow(/DB_RESET_ON_RELEASE/);
+  });
 });
 
 describe('auth proxy', () => {
