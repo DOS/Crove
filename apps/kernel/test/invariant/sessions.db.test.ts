@@ -473,6 +473,9 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
       // Not from the caller's own session: the web app signs that one out locally at once, and a global sign-out
       // from a session already gone leaves the others alive upstream (issue #163).
       expect(signOuts.find((t) => t.scope === 'global')?.sessionId).not.toBe(two.session);
+      // Nor from a session revoked in Crove a moment earlier (`one`, still upstream until its local sign-out lands, and
+      // seen more recently than `unseen`): that job deletes it first and the global sign-out would answer 403 (#176).
+      expect(signOuts.find((t) => t.scope === 'global')?.sessionId).not.toBe(one.session);
 
       // Revoke all from the user's only session upstream: a local sign-out of it, never a global one.
       const solo = { subject: randomUUID(), email: 'solo@sessions.test', session: randomUUID(), userId: '' };
