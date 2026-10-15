@@ -26,6 +26,7 @@
     "hono": "catalog:",
     "jose": "catalog:",
     "kysely": "catalog:",
+    "nodemailer": "catalog:",
     "pg": "catalog:",
     "pg-boss": "catalog:",
     "zod": "catalog:"

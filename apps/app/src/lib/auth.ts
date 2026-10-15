@@ -5,6 +5,8 @@ export interface PublicConfig {
   authAnonKey: string | null;
   aiEnabled: boolean;
   inboundEnabled: boolean;
+  // The server mails invites (SMTP configured).
+  mailEnabled: boolean;
 }
 
 let config: PublicConfig | null = null;

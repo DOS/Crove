@@ -78,6 +78,14 @@ const schema = z.object({
   // crove-extract, the parsing sandbox (plan §7.6, External-tenant gate T12), e.g. http://crove-extract:8090.
   // Required for the worker role: the worker never parses PDF, XML or MIME itself. The API role does not use it.
   EXTRACT_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
+  // Outbound mail (invites, issue #129), the same SMTP settings the bundled Supabase Auth uses. Unset SMTP_HOST: mail
+  // is off, and the inviter passes the link on. Port 465 is implicit TLS; with SMTP_USER and SMTP_PASS on any other
+  // port the server must offer STARTTLS.
+  SMTP_HOST: optional,
+  SMTP_PORT: z.coerce.number().int().min(1).max(65_535).default(587),
+  SMTP_USER: optional,
+  SMTP_PASS: optional,
+  SMTP_FROM: optional,
   // Inbound email: <token>@INBOUND_DOMAIN, delivered by a mail worker to POST /api/inbound/email.
   INBOUND_DOMAIN: optional,
   INBOUND_SECRET: optional,
@@ -124,6 +132,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (Boolean(config.S3_ACCESS_KEY_ID) !== Boolean(config.S3_SECRET_ACCESS_KEY)) {
     throw new Error('set both S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or neither to use the default credential chain');
   }
+  if (config.SMTP_HOST && !config.SMTP_FROM) throw new Error('SMTP_HOST needs SMTP_FROM, the sender address of Crove mails');
+  if (Boolean(config.SMTP_USER) !== Boolean(config.SMTP_PASS)) throw new Error('set both SMTP_USER and SMTP_PASS, or neither');
   if (!isLocalUrl(config.PUBLIC_URL)) {
     if (config.AUTH_JWT_SECRET && SAMPLE_SECRETS.has(config.AUTH_JWT_SECRET)) {
       throw new Error('AUTH_JWT_SECRET is a sample value; generate a random secret before exposing Crove');

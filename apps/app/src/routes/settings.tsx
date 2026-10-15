@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react';
 import { MemberSessions, MySessions } from '../components/sessions.tsx';
 import { Badge, Button, Card, ErrorText, Input, PageHeader, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { getConfig } from '../lib/auth.ts';
 import { formatDateTime } from '../lib/format.ts';
 import { ROLES, ROLE_LABEL, roleChangeConfirmation, type Role, type RoleChangeConfirmation } from '../lib/members.ts';
 
@@ -177,8 +178,11 @@ function CreatedInvite({ invite, onDone }: { invite: { email: string; expiresAt:
     <div className="mt-4 space-y-2 rounded-lg border border-line bg-surface-2 p-3 text-sm" role="status">
       <p className="text-fg">Đã tạo lời mời cho {invite.email}.</p>
       <p className="text-fg-2">
-        Crove chưa tự gửi email mời. Hãy gửi liên kết dưới đây cho người được mời; chỉ người đăng nhập bằng đúng email này mới chấp nhận được.
-        Liên kết chỉ hiện một lần, dùng được một lần và hết hạn lúc {formatDateTime(invite.expiresAt)}.
+        {getConfig().mailEnabled
+          ? 'Crove gửi email mời tới địa chỉ này. Nếu người được mời không nhận được, hãy gửi họ liên kết dưới đây.'
+          : 'Máy chủ chưa cấu hình gửi email, nên Crove không gửi email mời. Hãy gửi liên kết dưới đây cho người được mời.'}{' '}
+        Chỉ người đăng nhập bằng đúng email này mới chấp nhận được. Liên kết chỉ hiện một lần, dùng được một lần và hết hạn lúc{' '}
+        {formatDateTime(invite.expiresAt)}.
       </p>
       <p className="break-all rounded border border-line bg-surface px-2 py-1 font-mono text-xs text-fg">{link}</p>
       <div className="flex gap-2">

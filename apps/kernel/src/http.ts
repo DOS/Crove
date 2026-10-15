@@ -13,6 +13,7 @@ import { JOURNAL_EXPORT_LIMIT, buildJournalWorkbook, type JournalEntryView } fro
 import { actorOf, type Authenticate, type AuthUser } from './auth.ts';
 import { publicAuthUrl, type Config } from './config.ts';
 import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts';
+import type { SendInviteMail } from './invite-mail.ts';
 import { createRpcHandler, resolveMembership, resolveOrg } from './rpc.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 
@@ -23,6 +24,8 @@ export interface HttpDeps {
   authenticate: Authenticate;
   pool: pg.Pool;
   aiEnabled: boolean;
+  // Invite mail (issue #129). Unset: off, and the inviter passes the one-time link on.
+  sendInviteMail?: SendInviteMail;
 }
 
 // Store errors that are not server faults. A blob missing behind a file row, or a key holding other bytes, is
@@ -110,7 +113,7 @@ function clientIp(c: Context, trustedHops: number): string | null {
 export function createHttpApp(deps: HttpDeps) {
   const { config, runtime, store, authenticate } = deps;
   const app = new Hono<{ Variables: { user: AuthUser } }>();
-  const rpc = createRpcHandler(runtime);
+  const rpc = createRpcHandler(runtime, deps.sendInviteMail);
 
   app.use('*', secureHeaders({ crossOriginResourcePolicy: 'same-origin' }));
 
@@ -140,6 +143,7 @@ export function createHttpApp(deps: HttpDeps) {
       authAnonKey: config.PUBLIC_AUTH_ANON_KEY ?? null,
       aiEnabled: deps.aiEnabled,
       inboundEnabled: Boolean(config.INBOUND_DOMAIN && config.INBOUND_SECRET),
+      mailEnabled: Boolean(config.SMTP_HOST && deps.sendInviteMail),
     }),
   );
 
