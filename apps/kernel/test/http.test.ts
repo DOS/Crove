@@ -24,7 +24,7 @@ import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 
 const SECRET = 'x'.repeat(32);
-const FIXTURE = readFileSync(new URL('../../../packages/l10n-vn/test/fixtures/einvoice-basic.xml', import.meta.url));
+const FIXTURE = readFileSync(new URL('../../extract/test/fixtures/einvoice-basic.xml', import.meta.url));
 
 describe('configuration guards', () => {
   const base = { DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: 'crove-auth' };
