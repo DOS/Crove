@@ -1,6 +1,7 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
+import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors, type ActorRef } from './approval.ts';
 import { createOrgCommand, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
@@ -50,6 +51,105 @@ export const addMember = defineCommand({
       .execute();
     await ctx.activity('kernel.member', userId, 'member.added', `Thêm thành viên ${input.email} (${input.role})`);
     return { userId };
+  },
+});
+
+interface LockedMembers {
+  actorRole: MemberRole | null;
+  target: { role: MemberRole; email: string } | null;
+  owners: number;
+}
+
+// Locks the rows a membership change decides on, in user_id order: every owner of the org, the actor and the
+// target. Two owners changing each other at once serialize here; the one that waits re-reads the rows the other
+// changed (READ COMMITTED re-checks a locked row's newest version), so it sees its own demotion or the smaller
+// owner count and refuses. A row that became owner concurrently can only be missed, never counted twice, so the
+// count errs on the side of refusing. RLS and the org_id filter keep other orgs' members out of reach.
+async function lockMembers(ctx: CommandContext, actorId: string, targetId: string): Promise<LockedMembers> {
+  const rows = await ctx.trx
+    .selectFrom('crove_kernel.tenant_member')
+    .select(['user_id', 'role'])
+    .where('org_id', '=', ctx.orgId)
+    .where((eb) => eb.or([eb('role', '=', 'owner'), eb('user_id', 'in', [actorId, targetId])]))
+    .orderBy('user_id')
+    .forUpdate()
+    .execute();
+  const target = rows.find((r) => r.user_id === targetId);
+  let email = '';
+  if (target) {
+    const account = await ctx.trx.selectFrom('crove_kernel.user_account').select('email').where('id', '=', targetId).executeTakeFirst();
+    email = account?.email ?? '';
+  }
+  return {
+    actorRole: rows.find((r) => r.user_id === actorId)?.role ?? null,
+    target: target ? { role: target.role, email } : null,
+    owners: rows.filter((r) => r.role === 'owner').length,
+  };
+}
+
+// Only owners manage roles and remove members (plan §4.6: role management is an owner right). The role read when
+// the context was entered is re-checked under the lock, so an owner demoted by a concurrent command is refused.
+async function lockForMemberChange(ctx: CommandContext, targetId: string) {
+  if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới quản lý được thành viên');
+  const locked = await lockMembers(ctx, ctx.actor.userId, targetId);
+  if (locked.actorRole !== 'owner') {
+    throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đổi được vai trò hoặc xóa thành viên');
+  }
+  if (!locked.target) throw new DomainError('MEMBER_NOT_FOUND', 404, 'Không tìm thấy thành viên này trong tổ chức');
+  return { actorId: ctx.actor.userId, target: locked.target, owners: locked.owners };
+}
+
+const LAST_OWNER = () => new DomainError('LAST_OWNER', 409, 'Tổ chức phải còn ít nhất một chủ sở hữu');
+
+// Changes a member's role, owners included (promoting a member to owner makes a co-owner). R3 like every
+// membership change. The new role applies from the member's next request: enter_context reads it in every
+// transaction, and approvals re-check roles live (P12).
+export const changeMemberRole = defineCommand({
+  name: 'kernel.member.change_role',
+  input: z.object({ userId: zId, role: zRole }),
+  risk: 'R3',
+  access: ['owner'],
+  target: (input) => ({ type: 'kernel.user', id: input.userId }),
+  handler: async (ctx, input) => {
+    const { target, owners } = await lockForMemberChange(ctx, input.userId);
+    const previousRole = target.role;
+    ctx.audit({ target_user_id: input.userId, old_role: previousRole, new_role: input.role, changed: previousRole !== input.role });
+    if (previousRole === input.role) return { userId: input.userId, role: input.role, previousRole };
+    if (previousRole === 'owner' && owners <= 1) throw LAST_OWNER();
+    await ctx.trx
+      .updateTable('crove_kernel.tenant_member')
+      .set({ role: input.role })
+      .where('org_id', '=', ctx.orgId)
+      .where('user_id', '=', input.userId)
+      .execute();
+    await ctx.activity('kernel.member', input.userId, 'member.role_changed', `Đổi vai trò ${target.email} từ ${previousRole} thành ${input.role}`);
+    await ctx.emit('kernel.member.role_changed', { userId: input.userId, oldRole: previousRole, newRole: input.role });
+    return { userId: input.userId, role: input.role, previousRole };
+  },
+});
+
+// Removes a member. Deleting the tenant_member row is the revocation: enter_context and my_orgs read membership
+// in every transaction, so the member's next request is refused, with any token or session. An owner cannot
+// remove themselves, and the org always keeps an owner.
+export const removeMember = defineCommand({
+  name: 'kernel.member.remove',
+  input: z.object({ userId: zId }),
+  risk: 'R3',
+  access: ['owner'],
+  target: (input) => ({ type: 'kernel.user', id: input.userId }),
+  handler: async (ctx, input) => {
+    const { actorId, target, owners } = await lockForMemberChange(ctx, input.userId);
+    if (input.userId === actorId) throw new DomainError('CANNOT_REMOVE_SELF', 422, 'Bạn không thể tự xóa mình khỏi tổ chức');
+    if (target.role === 'owner' && owners <= 1) throw LAST_OWNER();
+    await ctx.trx
+      .deleteFrom('crove_kernel.tenant_member')
+      .where('org_id', '=', ctx.orgId)
+      .where('user_id', '=', input.userId)
+      .execute();
+    ctx.audit({ target_user_id: input.userId, old_role: target.role, new_role: null });
+    await ctx.activity('kernel.member', input.userId, 'member.removed', `Xóa thành viên ${target.email} (${target.role})`);
+    await ctx.emit('kernel.member.removed', { userId: input.userId, oldRole: target.role });
+    return { userId: input.userId, previousRole: target.role };
   },
 });
 
@@ -405,6 +505,8 @@ export const revokeSession = defineCommand({
 
 const otherKernelCommands = [
   addMember,
+  changeMemberRole,
+  removeMember,
   ingestFile,
   receiveInbound,
   rotateInbound,
