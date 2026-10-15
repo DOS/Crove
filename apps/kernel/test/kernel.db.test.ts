@@ -294,7 +294,23 @@ suite('kernel on PostgreSQL', () => {
     });
   });
 
+  it('gives the login roles no temporary schema to plant objects in', async () => {
+    for (const url of [appUrl, workerUrl]) {
+      const login = new pg.Client({ connectionString: url });
+      await login.connect();
+      try {
+        await expect(login.query('CREATE TEMP TABLE text (v pg_catalog.text)')).rejects.toThrow(/permission denied to create temporary tables/);
+        await expect(login.query('CREATE FUNCTION pg_temp.f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$')).rejects.toThrow(/permission denied/);
+      } finally {
+        await login.end();
+      }
+    }
+  });
+
   it("never resolves types or casts from the caller's temporary schema inside definer functions", async () => {
+    // Login roles have no TEMPORARY (previous test). Grant it back for this session so the pinned
+    // search_path is tested on its own, as the layer that still holds if TEMP is ever granted.
+    await withAdmin((admin) => admin.query(`GRANT TEMPORARY ON DATABASE ${dbName} TO crove_app`));
     const app = new pg.Client({ connectionString: appUrl });
     await app.connect();
     try {
@@ -323,6 +339,7 @@ suite('kernel on PostgreSQL', () => {
     } finally {
       await app.query('ROLLBACK').catch(() => {});
       await app.end();
+      await withAdmin((admin) => admin.query(`REVOKE TEMPORARY ON DATABASE ${dbName} FROM crove_app`));
     }
   });
 
@@ -892,6 +909,16 @@ suite('kernel on PostgreSQL', () => {
     expect(await pending()).toBe(1);
 
     await migrateJobs(adminUrl);
+    // pg-boss functions are SECURITY INVOKER, which is why the hardening guard skips them; a rerun of the
+    // runner (and its guard) passes with the job schema installed.
+    await withAdmin(async (admin) => {
+      const { rows } = await admin.query<{ total: number; definers: number }>(
+        `SELECT count(*)::int AS total, count(*) FILTER (WHERE prosecdef)::int AS definers FROM pg_proc WHERE pronamespace = 'crove_jobs'::regnamespace`,
+      );
+      expect(rows[0]?.total).toBeGreaterThan(0);
+      expect(rows[0]?.definers).toBe(0);
+    });
+    expect(await migrate({ adminUrl, dir: MIGRATIONS })).toEqual([]);
     const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: null, inboundDomain: 'in.test' });
     try {
       await until(async () => (await emailProposals()) === 1);
