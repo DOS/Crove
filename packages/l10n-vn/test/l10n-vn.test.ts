@@ -4,6 +4,7 @@ import {
   bookableLines,
   buildPurchaseJournal,
   checkInvoice,
+  enterpriseCheckDigit,
   isCalendarDate,
   journalIsBalanced,
   looksLikeEInvoiceXml,
@@ -20,13 +21,13 @@ const encode = (text: string) => new TextEncoder().encode(text);
 
 describe('tax codes', () => {
   it('accepts a 10-digit code with a valid check digit', () => {
-    expect(parseTaxCode('0101234565')).toEqual({ normalized: '0101234565', kind: 'enterprise', checksumValid: true });
+    expect(parseTaxCode('0101234565')).toEqual({ normalized: '0101234565', kind: 'enterprise', checksumValid: true }); // mst-guard: allow the checksum must accept a valid code (synthetic, not a known business)
   });
   it('flags a wrong check digit', () => {
     expect(parseTaxCode('0101234564')?.checksumValid).toBe(false);
   });
   it('normalizes branch codes and individual codes', () => {
-    expect(parseTaxCode('0101234565 001')?.normalized).toBe('0101234565-001');
+    expect(parseTaxCode('0101234564 001')?.normalized).toBe('0101234564-001');
     expect(parseTaxCode('001099012345')).toEqual({ normalized: '001099012345', kind: 'individual', checksumValid: null });
     expect(parseTaxCode('abc')).toBeNull();
   });
@@ -46,8 +47,16 @@ describe('invoice checks', () => {
   it('passes the deterministic checks', () => {
     const checks = checkInvoice(invoice(), '2026-10-13');
     const byId = Object.fromEntries(checks.map((c) => [c.id, c.status]));
-    expect(byId).toMatchObject({ lines_sum: 'pass', total: 'pass', vat_breakdown: 'pass', seller_tax_code: 'pass', issue_date: 'pass' });
+    expect(byId).toMatchObject({ lines_sum: 'pass', total: 'pass', vat_breakdown: 'pass', issue_date: 'pass' });
     expect(byId.signature).toBe('warn');
+    // The synthetic fixture seller has a checksum-invalid MST on purpose (see mst-fixture-guard.test.ts).
+    expect(byId.seller_tax_code).toBe('warn');
+  });
+
+  it('passes the seller tax code check when the check digit is right', () => {
+    const changed = invoice();
+    changed.seller.taxCode = `990000001${enterpriseCheckDigit('990000001')}`;
+    expect(checkInvoice(changed, '2026-10-13').find((c) => c.id === 'seller_tax_code')?.status).toBe('pass');
   });
 
   it('fails the lines check when amounts do not add up', () => {

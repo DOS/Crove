@@ -9,7 +9,7 @@ const base: Extracted = {
   number: '00001234',
   issueDate: '2026-09-15',
   currency: 'VND',
-  seller: { name: 'Người bán', taxCode: '0101234565', address: null },
+  seller: { name: 'Người bán', taxCode: '0101234564', address: null },
   buyer: { name: 'Người mua', taxCode: null, address: null },
   lines: [{ description: 'Dịch vụ', unit: null, quantity: '1', unitPrice: '250000', amount: '250000', vatRate: '10%', isDiscount: false }],
   subtotal: '250000',
