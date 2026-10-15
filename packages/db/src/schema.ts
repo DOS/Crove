@@ -24,6 +24,8 @@ export interface TenantTable {
   slug: string;
   name: string;
   status: Generated<'active' | 'closed'>;
+  // The active inbound token. Every token ever issued, retired ones included, is in crove_kernel.inbound_address,
+  // which only definers read and write; rotation is the command kernel.inbound.rotate.
   inbound_token: Generated<string>;
   base_currency: Generated<string>;
   created_by: string;

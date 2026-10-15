@@ -62,6 +62,15 @@ export function createRpcHandler(runtime: Runtime) {
       addMember: os.org.addMember.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.member.add', input, { actor, orgId })),
       ),
+      rotateInbound: os.org.rotateInbound.handler(({ context, input }) =>
+        inOrg(context, async (orgId, actor) => {
+          await runtime.execute('kernel.inbound.rotate', {}, { actor, orgId, idempotencyKey: input.idempotencyKey });
+          // The current address, not the token stored with the idempotency key: a key replayed after a later
+          // rotation must never show a retired address.
+          const org = await runtime.query<{ inboundAddress: string | null }>('kernel.org.get', {}, { actor, orgId });
+          return { inboundAddress: org.inboundAddress };
+        }),
+      ),
     },
     sessions: {
       list: os.sessions.list.handler(({ context, input }) =>

@@ -85,7 +85,7 @@ The body of this plan was rewritten on 2026-10-14 to describe these decisions; i
 3. Audit rows cannot be updated or deleted; the same document resent creates no duplicates.
 4. Playwright end-to-end run of exit criterion 1 is green.
 
-**Follow-ups from #8 (Phase 1 residual work):** move `enter_system_context` out of the API role (T5, #24; done in #78); a re-extract command for files read by AI (#40); pending invites with consent (#35); remove and update member (#36); inbound token rotation (#37); an end-to-end check of Supabase Auth rate limits (#34); CSV/Excel formula prefixing and exact decimals in the Excel export (T13, #29; done in #93); audit retention and offboarding (#38).
+**Follow-ups from #8 (Phase 1 residual work):** move `enter_system_context` out of the API role (T5, #24; done in #78); a re-extract command for files read by AI (#40); pending invites with consent (#35); remove and update member (#36); inbound token rotation (#37; done in #112); an end-to-end check of Supabase Auth rate limits (#34); CSV/Excel formula prefixing and exact decimals in the Excel export (T13, #29; done in #93); audit retention and offboarding (#38).
 
 **Deferred, with the trigger to revisit:**
 
@@ -1055,7 +1055,7 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 
 | Table (`crove_kernel`) | Key points | Phase |
 |---|---|---|
-| `tenant` | `org_id uuid PK` (issued by Crove, v7); `slug`, `name`; status `active\|offboarding\|closed`; `inbound_token`; locale, timezone, `base_currency`, `authz_version`; `external_org_id` (nullable, UNIQUE when set) for DOS org sync later. On `main`: status `active\|closed`, no `external_org_id` yet | v0 |
+| `tenant` | `org_id uuid PK` (issued by Crove, v7); `slug`, `name`; status `active\|offboarding\|closed`; `inbound_token` (the active inbound token; every token ever issued is in `inbound_address`); locale, timezone, `base_currency`, `authz_version`; `external_org_id` (nullable, UNIQUE when set) for DOS org sync later. On `main`: status `active\|closed`, no `external_org_id` yet | v0 |
 | `user_account` | `id uuid` (issued by Crove); UNIQUE `(issuer, subject)` from the verified Supabase token; email, name, `disabled_at` and `upstream_blocked_at` (ADR-0028), `last_seen_at`. Not named `user` because that is a Postgres keyword. A machinery table without `org_id`, on the conformance allowlist | v0 |
 | `tenant_member` | PK `(org_id, user_id)`; `role` (Crove base role); written only by commands (create org, add, invite, change role, remove; audited); deleting the row revokes (§7.3). With DOS org sync (later): `source`, `confirmed_at`, `source_seq` | v0 |
 | `auth_session` | PK `(user_id, session_id)`; `status` `active\|revoked`, `first_seen_at`, `revoked_at`, `revoked_by`, `reason`, `evidence_at` (Crove Cloud), `last_seen_at` (updated at most once a minute). Status only: sessions live in Supabase Auth and Crove issues no tokens (ADR-0027, ADR-0028). A machinery table without `org_id`, on the conformance allowlist | v0 |
@@ -1075,7 +1075,8 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 | `audit_event` / `security_event` | Partitioned by year / pre-membership rejections, 30-day TTL | v0 |
 | `proposal` / `inbox_item` | Proposals carry `revision`, `authors[]`, `eligible_approvers`; states in §8.3 | v0 |
 | `ai_run` / `ai_step` | Payloads in S3 `org/<org_id>/…`; `ai_step` kept 180 days | v0 |
-| `kill_switch`, `staff`, `support_grant`, `inbound_address` | §4.12, §7.6 | v0 |
+| `kill_switch`, `staff`, `support_grant` | §4.12 | v0 |
+| `inbound_address` | Ledger of every inbound email token ever issued (§7.6): `token` UNIQUE across active and retired rows, `retired_at` as the tombstone, at most one active row per org. Rows are never deleted or changed except to retire an active one, for every role. Only definers read or write it. On `main` (#112) the active token is also kept in `tenant.inbound_token`, which must match the org's active row at commit, so the resolver and the org query read one column | v0 |
 | `number_series`, `number_allocation`, `external_call`, `process_instance`, `connection_binding`, `credential`, `document`, `document_version`, `field_history` (yearly partitions, PII crypto-shredded), `subject_key` | | 2a |
 | `ai_thread`, `ai_message` (per-user RLS) | | 2b |
 | `usage_counter`, `feature_flag*` | | Before charging |
@@ -1209,6 +1210,8 @@ Superseded design (kept only so older references resolve): Crove-issued session 
 
 - **Inbound email:**
   - Opaque, rotatable addresses stored in `inbound_address`. Old addresses are tombstoned and never reissued. No slug-based routing.
+  - Rotation is the command `kernel.inbound.rotate` (R2: suppliers hold the address, so the change has an effect outside Crove and cannot be undone), owner only, run through `execute()` with an audit row and an idempotency key. The definer `inbound_rotate()` retires the active token and draws a new one from `random_token()`; the UNIQUE constraint on `inbound_address.token` decides, and a collision with any token that ever existed draws again.
+  - No grace period: from the moment of rotation, mail to the old token is dropped by the worker exactly like mail to a token that never existed. The API answers 202 to both, so a sender learns nothing about which tokens exist. The settings page (owner only) asks for confirmation and shows the new address.
   - SPF/DKIM results are taken only from the receiving MTA. Even so, every message is treated as untrusted.
   - Per-org size and rate limits are checked before any S3 or DB write.
   - Parties created from email are proposals, in the unverified state.

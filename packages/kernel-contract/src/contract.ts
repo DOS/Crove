@@ -32,6 +32,9 @@ export const contract = {
     addMember: oc
       .input(z.object({ email: z.email(), role: zRole.exclude(['owner']) }))
       .output(z.object({ userId: zId })),
+    // Owner only. Retires the org's inbound email address for good and returns the new one (null when the server
+    // has no inbound domain). A retry with the same idempotencyKey does not rotate again.
+    rotateInbound: oc.input(z.object({ idempotencyKey: zId })).output(z.object({ inboundAddress: z.string().nullable() })),
   },
   // Sessions (devices) of a member of the org in the header. API only; the screen is a follow-up.
   sessions: {
