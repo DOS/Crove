@@ -1,14 +1,15 @@
 // Hosted PostgreSQL runs migrations as a role that is not a superuser (CREATEROLE, owns the database).
 // The built-in runner must apply every migration as such a role, run again cleanly, and every file must be
 // re-applicable. Set CROVE_TEST_ADMIN_URL to a superuser URL; the test creates and drops its own database.
+// Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { hardeningViolations, migrate, readMigrations } from '../src/migrate.ts';
+import { hardeningViolations, migrate, readMigrations } from '../../src/migrate.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
-const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
+const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 const RUNNER = 'crove_test_runner';
 // Roles are cluster-wide. When an earlier run already created them, the runner gets the ADMIN OPTION it
 // would hold as their creator.

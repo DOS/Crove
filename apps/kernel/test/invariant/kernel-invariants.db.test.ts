@@ -21,7 +21,7 @@ import { loadConfig } from '../../src/config.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
-const FIXTURE = readFileSync(new URL('../../../../packages/l10n-vn/test/fixtures/einvoice-basic.xml', import.meta.url));
+const FIXTURE = readFileSync(new URL('./fixtures/einvoice-basic.xml', import.meta.url));
 
 class MemoryStore implements BlobStore {
   private readonly blobs = new Map<string, Uint8Array>();
