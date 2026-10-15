@@ -27,11 +27,15 @@ const RUNTIME_ROLES = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_defin
 // Tables with org_id that no role but their owner can touch: only SECURITY DEFINER functions owned by the
 // table owner read or write them. They need RLS enabled (so a later grant stays deny-all until a policy is
 // added) and must be listed here, so a new table cannot quietly become one.
-const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.outbox_pending']);
-// Tables whose row factory lands on main before the table itself. CI runs main's copy of this file on the PR that
-// adds a tenant table, so the factory has to be on main first; until the table exists, its factory is not stale.
-// Remove an entry once its table is on main.
-const PENDING_TABLES = new Set<string>();
+const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.inbound_drop', 'crove_kernel.outbox_pending']);
+// Tables whose row factory (and MACHINERY entry, for definer-only tables) lands on main before the table itself. CI
+// runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
+// until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
+// main.
+const PENDING_TABLES = new Set<string>([
+  // Drop counts per retired inbound address (issue #139).
+  'crove_kernel.inbound_drop',
+]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -132,6 +136,22 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     }),
   },
   'crove_kernel.auth_session_org': { make: (o) => ({ row: { org_id: o.id, user_id: o.owner, session_id: randomUUID() } }) },
+  // How many messages to a retired inbound address were dropped (issue #139): one row per retired address,
+  // definer-only machinery. The row points at a retired ledger row of the same org, added first.
+  'crove_kernel.inbound_drop': {
+    make: (o) => {
+      const address = randomUUID();
+      return {
+        setup: [
+          {
+            table: 'crove_kernel.inbound_address',
+            values: { org_id: o.id, id: address, token: randomBytes(12).toString('hex'), created_at: '2026-10-01T00:00:00Z', retired_at: '2026-10-02T00:00:00Z' },
+          },
+        ],
+        row: { org_id: o.id, address_id: address, dropped_count: 1 },
+      };
+    },
+  },
   // Pending member invites (issue #35). An open invite per (org, email), so every row gets its own address. Token
   // hash and expiry take their defaults (an unusable random hash, seven days). Tenant roles may update only status,
   // revoked_at and revoked_by (a column grant), so the update probes write status, which the guard trigger allows
@@ -486,7 +506,7 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
     expect(names).toContain('crove_finance.journal_line');
     const stale = Object.keys(ROW_FACTORIES).filter((t) => !names.includes(t) && !PENDING_TABLES.has(t));
     expect(stale, 'row factories for tables that no longer have org_id: remove them').toEqual([]);
-    const staleMachinery = [...MACHINERY].filter((t) => !names.includes(t));
+    const staleMachinery = [...MACHINERY].filter((t) => !names.includes(t) && !PENDING_TABLES.has(t));
     expect(staleMachinery, 'MACHINERY lists tables that no longer have org_id').toEqual([]);
   });
 
