@@ -7,7 +7,17 @@ export default defineConfig({
         test: {
           name: 'unit',
           include: ['packages/*/test/**/*.test.ts', 'modules/*/test/**/*.test.ts', 'apps/kernel/test/**/*.test.ts', 'apps/extract/test/**/*.test.ts', 'apps/app/test/**/*.test.ts', 'tools/test/**/*.test.ts'],
-          exclude: ['**/*.db.test.ts', '**/node_modules/**'],
+          exclude: ['**/*.db.test.ts', '**/*.ai.test.ts', '**/node_modules/**'],
+        },
+      },
+      {
+        // Live AI suites (conformance, extraction evals): `pnpm ai:conformance` / `pnpm ai:eval`. They call the
+        // endpoint in AI_BASE_URL / AI_MODEL and skip themselves when it is not set.
+        test: {
+          name: 'ai',
+          include: ['packages/agent/test/**/*.ai.test.ts'],
+          exclude: ['**/node_modules/**'],
+          testTimeout: 300_000,
         },
       },
       {

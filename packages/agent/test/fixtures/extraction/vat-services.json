@@ -1,0 +1,18 @@
+{
+  "description": "Synthetic VAT invoice for services, one 10% rate, dotted thousands separators",
+  "expected": {
+    "series": "C26TAA",
+    "number": "00000123",
+    "issueDate": "2026-09-15",
+    "currency": "VND",
+    "seller": { "name": "CÔNG TY TNHH PHẦN MỀM MẪU THỬ ALPHA", "taxCode": "9900123450" },
+    "buyer": { "name": "CÔNG TY CỔ PHẦN DỮ LIỆU GIẢ LẬP BETA", "taxCode": "9900234569" },
+    "lines": [
+      { "description": "Phí bản quyền phần mềm kế toán tháng 09/2026", "quantity": "1", "unitPrice": "1500000", "amount": "1500000", "vatRate": "10%" },
+      { "description": "Dịch vụ hỗ trợ kỹ thuật", "quantity": "4", "unitPrice": "250000", "amount": "1000000", "vatRate": "10%" }
+    ],
+    "subtotal": "2500000",
+    "vatTotal": "250000",
+    "total": "2750000"
+  }
+}

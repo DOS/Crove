@@ -1,0 +1,26 @@
+HÓA ĐƠN GIÁ TRỊ GIA TĂNG
+(VAT INVOICE)
+Ngày (Date) 15 tháng (month) 09 năm (year) 2026
+Mẫu số (Form): 1    Ký hiệu (Serial): C26TAA    Số (No.): 00000123
+
+Đơn vị bán hàng (Seller): CÔNG TY TNHH PHẦN MỀM MẪU THỬ ALPHA
+Mã số thuế (Tax code): 9900123450
+Địa chỉ (Address): Số 1 Đường Thử Nghiệm, Phường Mẫu, Thành phố Ví Dụ
+
+Đơn vị mua hàng (Buyer): CÔNG TY CỔ PHẦN DỮ LIỆU GIẢ LẬP BETA
+Mã số thuế (Tax code): 9900234569
+Địa chỉ (Address): Số 2 Đường Giả Định, Phường Mẫu, Thành phố Ví Dụ
+Hình thức thanh toán (Payment method): Chuyển khoản
+Đơn vị tiền tệ (Currency): VND
+
+STT | Tên hàng hóa, dịch vụ | Đơn vị tính | Số lượng | Đơn giá | Thành tiền | Thuế suất
+1 | Phí bản quyền phần mềm kế toán tháng 09/2026 | Tháng | 1 | 1.500.000 | 1.500.000 | 10%
+2 | Dịch vụ hỗ trợ kỹ thuật | Giờ | 4 | 250.000 | 1.000.000 | 10%
+
+Cộng tiền hàng (Total before VAT): 2.500.000
+Thuế suất GTGT (VAT rate): 10%    Tiền thuế GTGT (VAT amount): 250.000
+Tổng tiền thanh toán (Total payment): 2.750.000
+Số tiền viết bằng chữ (In words): Hai triệu bảy trăm năm mươi nghìn đồng chẵn.
+
+Người mua hàng (Buyer)                Người bán hàng (Seller)
+(Ký, ghi rõ họ tên)                   (Ký, ghi rõ họ tên)

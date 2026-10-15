@@ -1,0 +1,19 @@
+HÓA ĐƠN BÁN HÀNG
+(Dành cho tổ chức, cá nhân kê khai, tính thuế theo phương pháp trực tiếp)
+Ngày 30 tháng 09 năm 2026
+Ký hiệu: C26THH    Số: 00000088
+
+Người bán: HỘ KINH DOANH QUÁN CƠM MẪU THỬ
+Mã số thuế: 9900567896
+Địa chỉ: Số 5 Đường Ví Dụ, Phường Mẫu, Thành phố Ví Dụ
+
+Họ tên người mua hàng: Khách lẻ
+Hình thức thanh toán: Tiền mặt
+
+STT | Tên hàng hóa, dịch vụ | ĐVT | Số lượng | Đơn giá | Thành tiền
+1 | Cơm văn phòng | Suất | 12 | 45.000 | 540.000
+2 | Nước suối | Chai | 12 | 10.000 | 120.000
+
+Cộng tiền bán hàng hóa, dịch vụ: 660.000
+Tổng tiền thanh toán: 660.000
+Số tiền viết bằng chữ: Sáu trăm sáu mươi nghìn đồng.

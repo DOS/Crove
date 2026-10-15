@@ -17,6 +17,8 @@
     "lint": "oxlint --deny-warnings apps/kernel apps/extract apps/app packages modules",
     "test": "vitest run --project unit",
     "test:db": "vitest run --project db",
+    "ai:conformance": "vitest run --project ai conformance",
+    "ai:eval": "vitest run --project ai extraction-eval --silent=false",
     "docs:check": "node tools/docs-check.mjs",
     "db:migrate": "pnpm --filter @crove/db migrate",
     "db:auth-grants": "pnpm --filter @crove/kernel-server auth-grants",
