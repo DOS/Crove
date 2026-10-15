@@ -146,6 +146,9 @@ CREATE CONSTRAINT TRIGGER member_invite_requires_audit
 -- The invite p_user_id may act on: it exists, the org is active and the invite was sent to the user's account
 -- email. Anything else is INVITE_NOT_FOUND, so a wrong user learns nothing about the invite or the org. Locks the
 -- invite row: two accepts, or an accept and a revoke, serialize here and the second sees the first one's outcome.
+-- First it share-locks the inviter's membership row (invited_by never changes), in the same order as the commands in
+-- the org (member rows, then the invite), so a concurrent demotion or removal of the inviter cannot deadlock with an
+-- accept and the inviter's role read below is the committed one.
 CREATE OR REPLACE FUNCTION crove_kernel.member_invite_lock(p_user_id uuid, p_org_id uuid, p_invite_id uuid)
 RETURNS crove_kernel.member_invite LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
@@ -161,6 +164,10 @@ BEGIN
   IF v_disabled IS NOT NULL THEN
     RAISE EXCEPTION 'USER_DISABLED' USING ERRCODE = '42501';
   END IF;
+  PERFORM 1 FROM crove_kernel.tenant_member m
+  WHERE m.org_id = p_org_id
+    AND m.user_id = (SELECT i.invited_by FROM crove_kernel.member_invite i WHERE i.org_id = p_org_id AND i.id = p_invite_id)
+  FOR SHARE;
   SELECT i.* INTO v_invite
   FROM crove_kernel.member_invite i
   JOIN crove_kernel.tenant t ON t.org_id = i.org_id AND t.status = 'active'
@@ -187,6 +194,17 @@ BEGIN
   END IF;
 END $$;
 
+-- True while the inviter still holds the authority the invite needs: an owner for an admin invite, an owner or an
+-- admin otherwise. An inviter who was removed or demoted after inviting leaves the invite unusable.
+CREATE OR REPLACE FUNCTION crove_kernel.member_invite_inviter_ok(p_org_id uuid, p_invited_by uuid, p_role text)
+RETURNS boolean LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM crove_kernel.tenant_member m
+    WHERE m.org_id = p_org_id AND m.user_id = p_invited_by
+      AND (m.role = 'owner' OR (m.role = 'admin' AND p_role <> 'admin'))
+  )
+$$;
+
 -- Accepts an invite for p_user_id: creates the membership with the invited role and closes the invite, and returns
 -- the org. With an idempotency key the caller already used for kernel.member.invite_accept, returns that request's
 -- org instead, so execute() replays the stored response. The deferred trigger above refuses the commit unless
@@ -210,6 +228,9 @@ BEGIN
   END IF;
   v_invite := crove_kernel.member_invite_lock(p_user_id, p_org_id, p_invite_id);
   PERFORM crove_kernel.member_invite_assert_pending(v_invite);
+  IF NOT crove_kernel.member_invite_inviter_ok(v_invite.org_id, v_invite.invited_by, v_invite.role) THEN
+    RAISE EXCEPTION 'INVITE_STALE';
+  END IF;
   INSERT INTO crove_kernel.tenant_member (org_id, user_id, role)
   VALUES (v_invite.org_id, p_user_id, v_invite.role)
   ON CONFLICT (org_id, user_id) DO NOTHING
@@ -246,7 +267,7 @@ BEGIN
 END $$;
 
 -- The caller's pending invites: sent to the user's account email, not expired, in an active org the user is not a
--- member of yet. Only what the invitee needs to decide: the org's name, the role, who invited them and when.
+-- member of yet, from an inviter who may still send it. Only what the invitee needs to decide: the org's name, the role, who invited them and when.
 CREATE OR REPLACE FUNCTION crove_kernel.my_invites(p_user_id uuid)
 RETURNS TABLE (org_id uuid, invite_id uuid, org_name text, role text, invited_by_name text, created_at timestamptz, expires_at timestamptz)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -260,6 +281,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   JOIN crove_kernel.user_account inviter ON inviter.id = i.invited_by
   WHERE u.id = p_user_id AND u.disabled_at IS NULL
     AND NOT EXISTS (SELECT 1 FROM crove_kernel.tenant_member m WHERE m.org_id = i.org_id AND m.user_id = p_user_id)
+    AND crove_kernel.member_invite_inviter_ok(i.org_id, i.invited_by, i.role)
   ORDER BY i.created_at DESC
   LIMIT 50
 $$;
@@ -272,6 +294,7 @@ REVOKE ALL ON FUNCTION
   crove_kernel.member_invite_requires_audit(),
   crove_kernel.member_invite_lock(uuid, uuid, uuid),
   crove_kernel.member_invite_assert_pending(crove_kernel.member_invite),
+  crove_kernel.member_invite_inviter_ok(uuid, uuid, text),
   crove_kernel.member_invite_accept(uuid, uuid, uuid, text),
   crove_kernel.member_invite_decline(uuid, uuid, uuid),
   crove_kernel.my_invites(uuid)

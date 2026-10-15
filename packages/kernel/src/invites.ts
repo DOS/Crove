@@ -30,6 +30,8 @@ const INVITE_ERRORS: Record<string, () => DomainError> = {
   INVITE_REVOKED: () => new DomainError('INVITE_REVOKED', 409, 'Lời mời này đã bị thu hồi'),
   INVITE_CLOSED: () => new DomainError('INVITE_CLOSED', 409, 'Lời mời này đã được xử lý'),
   INVITE_EXPIRED: () => new DomainError('INVITE_EXPIRED', 409, 'Lời mời đã hết hạn, hãy nhờ người mời gửi lại'),
+  INVITE_STALE: () =>
+    new DomainError('INVITE_STALE', 409, 'Người gửi lời mời không còn quyền mời; hãy nhờ chủ sở hữu hoặc quản trị viên gửi lại'),
   ALREADY_MEMBER: () => new DomainError('ALREADY_MEMBER', 409, 'Bạn đã là thành viên của tổ chức này'),
 };
 

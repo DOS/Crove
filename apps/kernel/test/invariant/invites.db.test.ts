@@ -421,6 +421,30 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     expect(await rpc('org/invites', await tokenFor(member), undefined, orgA.slug)).toMatchObject({ status: 403 });
   });
 
+  it("refuses an invite whose inviter lost the authority to send it (removed or demoted)", async () => {
+    const { owner, coOwner, adminA, a, b, c } = await signInAll('owner', 'coOwner', 'adminA', 'a', 'b', 'c');
+    const { slug, orgId } = await orgWith(owner, [
+      [coOwner, 'admin'],
+      [adminA, 'admin'],
+    ]);
+    const promote = await rpc('org/changeMemberRole', await tokenFor(owner, { mfa: true }), { userId: coOwner.userId, role: 'owner', idempotencyKey: randomUUID() }, slug);
+    expect(promote.status).toBe(200);
+    const fromAdmin = await invite(adminA, slug, a.email, 'member');
+    const adminInvite = await invite(coOwner, slug, b.email, 'admin');
+    const memberInvite = await invite(coOwner, slug, c.email, 'member');
+    // The admin is removed, and the co-owner is demoted to admin.
+    expect((await rpc('org/removeMember', await tokenFor(owner, { mfa: true }), { userId: adminA.userId, idempotencyKey: randomUUID() }, slug)).status).toBe(200);
+    expect((await rpc('org/changeMemberRole', await tokenFor(owner, { mfa: true }), { userId: coOwner.userId, role: 'admin', idempotencyKey: randomUUID() }, slug)).status).toBe(200);
+    expect((await mine(a)).body).toEqual([]);
+    expect(await accept(a, orgId, fromAdmin.body.inviteId)).toMatchObject({ status: 409, body: { code: 'INVITE_STALE' } });
+    // An admin may not grant admin, so the demoted co-owner's admin invite is stale too; their member invite holds.
+    expect((await mine(b)).body).toEqual([]);
+    expect(await accept(b, orgId, adminInvite.body.inviteId)).toMatchObject({ status: 409, body: { code: 'INVITE_STALE' } });
+    expect(await accept(c, orgId, memberInvite.body.inviteId)).toMatchObject({ status: 200, body: { role: 'member' } });
+    const after = await roles(orgId);
+    expect([after[a.userId], after[b.userId], after[c.userId]]).toEqual([undefined, undefined, 'member']);
+  });
+
   it('refuses inviting or joining someone who is already a member', async () => {
     const { owner, member, late } = await signInAll('owner', 'member', 'late');
     const { slug, orgId } = await orgWith(owner, [[member, 'member']]);
@@ -440,6 +464,7 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
       'crove_kernel.my_invites(uuid)',
       'crove_kernel.member_invite_lock(uuid,uuid,uuid)',
       'crove_kernel.member_invite_assert_pending(crove_kernel.member_invite)',
+      'crove_kernel.member_invite_inviter_ok(uuid,uuid,text)',
       'crove_kernel.member_invite_guard()',
       'crove_kernel.member_invite_requires_audit()',
     ];
@@ -457,6 +482,7 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
       'crove_kernel.my_invites(uuid)': ['crove_app'],
       'crove_kernel.member_invite_lock(uuid,uuid,uuid)': [],
       'crove_kernel.member_invite_assert_pending(crove_kernel.member_invite)': [],
+      'crove_kernel.member_invite_inviter_ok(uuid,uuid,text)': [],
       'crove_kernel.member_invite_guard()': [],
       'crove_kernel.member_invite_requires_audit()': [],
     });
