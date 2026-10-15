@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -5,11 +7,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DomainError, LocalDiskStore, inboundKey, newInboundBlobId, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { ORG_HEADER } from '@crove/kernel-contract';
+import {
+  BlobConflictError,
+  BlobNotFoundError,
+  BlobStoreAccessError,
+  DomainError,
+  LocalDiskStore,
+  inboundKey,
+  newInboundBlobId,
+  type BlobStore,
+  type Runtime,
+} from '@crove/kernel-runtime';
+import type { AuthUser } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 
 const SECRET = 'x'.repeat(32);
+const FIXTURE = readFileSync(new URL('../../../packages/l10n-vn/test/fixtures/einvoice-basic.xml', import.meta.url));
 
 describe('configuration guards', () => {
   const base = { DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: 'crove-auth' };
@@ -194,5 +209,58 @@ describe('inbound email on the API', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('store errors on the file routes', () => {
+  const user: AuthUser = { userId: randomUUID(), email: 'owner@example.com', name: null, aal: 'aal1', sessionId: randomUUID(), mfaAt: null };
+  const orgId = randomUUID();
+  const storageKey = `org/${orgId}/${'a'.repeat(64)}`;
+  const headers = { authorization: 'Bearer t', [ORG_HEADER]: 'acme' };
+  let failure: Error = new Error('unset');
+  const failing: BlobStore = {
+    put: async () => {
+      throw failure;
+    },
+    get: async () => {
+      throw failure;
+    },
+    delete: async () => undefined,
+  };
+  const app = createHttpApp({
+    config: loadConfig({ DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: 'crove-auth', WEB_DIST: '/nonexistent' }),
+    runtime: {
+      forUser: async () => [{ orgId, slug: 'acme', name: 'Acme', role: 'owner' }],
+      query: async () => ({ filename: 'hd.xml', content_type: 'application/xml', storage_key: storageKey }),
+    } as unknown as Runtime,
+    store: failing,
+    authenticate: async () => user,
+    pool: {} as pg.Pool,
+    aiEnabled: false,
+  });
+  const download = () => app.request(`/api/files/${randomUUID()}`, { headers });
+  const upload = () => {
+    const form = new FormData();
+    form.append('file', new File([FIXTURE], 'hd.xml', { type: 'application/xml' }));
+    return app.request('/api/files', { method: 'POST', body: form, headers });
+  };
+
+  it('answers 404 for a missing blob and 409 for a key that holds other bytes', async () => {
+    failure = new BlobNotFoundError(storageKey);
+    const missing = await download();
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ code: 'NOT_FOUND', message: 'Không tìm thấy tệp' });
+
+    failure = new BlobConflictError(storageKey);
+    const conflict = await upload();
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toEqual({ code: 'CONFLICT', message: 'Tệp đã tồn tại với nội dung khác' });
+  });
+
+  it('keeps other store failures, such as a refused read, a 500 without details', async () => {
+    failure = new BlobStoreAccessError('crove-files', storageKey, new Error('AccessDenied'));
+    const denied = await download();
+    expect(denied.status).toBe(500);
+    expect(await denied.json()).toEqual({ code: 'INTERNAL', message: 'Lỗi hệ thống' });
   });
 });

@@ -1,7 +1,7 @@
 // LocalDiskStore writes are create-only, like the S3 store: the same bytes dedupe, different bytes conflict,
 // concurrent writers of one key never clobber each other, and no temporary file is left behind.
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -91,6 +91,77 @@ describe('LocalDiskStore', () => {
     expect(racing.deletes).toBe(1);
     expect(await store.get(key)).toEqual(bytes);
     expect((await filesNextTo(key)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('falls back to an exclusive create on a filesystem without hard links, warning once', async () => {
+    const warnings: string[] = [];
+    let links = 0;
+    const noLinks = new LocalDiskStore(root, {
+      link: async () => {
+        links++;
+        throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+      },
+      log: (message) => warnings.push(message),
+    });
+    // Concurrent writes (of different keys: without links a concurrent writer of the same key can read a half
+    // written file) all find out at once; there is still one warning.
+    const keys = Array.from({ length: 4 }, () => inboundKey(newInboundBlobId()));
+    await Promise.all(keys.map((k) => noLinks.put(k, encode(k))));
+    for (const k of keys) expect(await store.get(k)).toEqual(encode(k));
+    const bytes = encode(`<HDon>${randomUUID()}</HDon>`);
+    const key = fileKey(orgId, sha256Hex(bytes));
+    await noLinks.put(key, bytes);
+    await noLinks.put(key, bytes);
+    expect(await store.get(key)).toEqual(bytes);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/does not support hard links \(EPERM\)/);
+    // Once the store knows, it stops trying to link.
+    const linksBefore = links;
+    const inbound = inboundKey(newInboundBlobId());
+    await noLinks.put(inbound, encode('first delivery'));
+    expect(links).toBe(linksBefore);
+    // Still create-only: different bytes conflict and the original stays.
+    await expect(noLinks.put(inbound, encode('a different message'))).rejects.toBeInstanceOf(BlobConflictError);
+    expect(await store.get(inbound)).toEqual(encode('first delivery'));
+    expect((await filesNextTo(inbound)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+
+    // Any other link failure is an error, not a fallback.
+    const broken = new LocalDiskStore(root, {
+      link: async () => {
+        throw Object.assign(new Error('i/o error'), { code: 'EIO' });
+      },
+      log: (message) => warnings.push(message),
+    });
+    await expect(broken.put(inboundKey(newInboundBlobId()), encode('raw'))).rejects.toMatchObject({ code: 'EIO' });
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('sweeps temporary files older than the cutoff and nothing else', async () => {
+    const sweepRoot = await mkdtemp(join(tmpdir(), 'crove-local-sweep-'));
+    try {
+      const sweeper = new LocalDiskStore(sweepRoot);
+      const blob = encode('raw');
+      const key = inboundKey(newInboundBlobId());
+      await sweeper.put(key, blob);
+      const orgDir = join(sweepRoot, 'org', orgId);
+      await mkdir(orgDir, { recursive: true });
+      const tempName = () => `${'b'.repeat(64)}.123.${randomUUID()}.tmp`;
+      const stale = [join(sweepRoot, 'inbound', tempName()), join(orgDir, tempName())];
+      const fresh = join(orgDir, tempName());
+      // Old files that are not temporary files of put, or not where put writes, are left alone.
+      const kept = [join(sweepRoot, key), join(orgDir, 'notes.tmp'), join(sweepRoot, tempName())];
+      for (const file of [...stale, fresh, ...kept.slice(1)]) await writeFile(file, 'partial');
+      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      for (const file of [...stale, ...kept]) await utimes(file, old, old);
+
+      expect(await sweeper.sweepTempFiles()).toBe(2);
+      for (const file of stale) await expect(stat(file)).rejects.toMatchObject({ code: 'ENOENT' });
+      for (const file of [fresh, ...kept]) await expect(stat(file)).resolves.toBeDefined();
+      expect(await sweeper.get(key)).toEqual(blob);
+      expect(await new LocalDiskStore(join(sweepRoot, 'missing')).sweepTempFiles()).toBe(0);
+    } finally {
+      await rm(sweepRoot, { recursive: true, force: true });
+    }
   });
 
   it('maps a missing blob to BlobNotFoundError and deletes idempotently; a deleted key can be written again', async () => {

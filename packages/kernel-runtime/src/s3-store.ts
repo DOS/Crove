@@ -138,11 +138,11 @@ export class S3BlobStore implements BlobStore {
           try {
             return await this.assertHolds(key, sha256);
           } catch (readError) {
-            if (readError instanceof BlobNotFoundError && !retriedMissing) {
-              retriedMissing = true;
-              continue;
-            }
-            throw readError;
+            if (!(readError instanceof BlobNotFoundError)) throw readError;
+            // Vanished twice: the key is being written and deleted concurrently. That is not a missing blob.
+            if (retriedMissing) throw new Error(`object changed concurrently while it was written: ${key}`, { cause: readError });
+            retriedMissing = true;
+            continue;
           }
         }
         // Another conditional write to the same key is in flight; retry so one of them wins.

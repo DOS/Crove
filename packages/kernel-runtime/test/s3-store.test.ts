@@ -101,7 +101,9 @@ describe('S3BlobStore with a mocked client', () => {
       if (c instanceof PutObjectCommand) throw s3Error('PreconditionFailed', 412);
       throw s3Error('NoSuchKey', 404);
     });
-    await expect(flapping.store.put(key, bytes, 'application/xml')).rejects.toBeInstanceOf(BlobNotFoundError);
+    const failure = await flapping.store.put(key, bytes, 'application/xml').catch((e: unknown) => e);
+    expect(failure).not.toBeInstanceOf(BlobNotFoundError);
+    expect(failure).toMatchObject({ message: expect.stringMatching(/changed concurrently/) });
     expect(flapping.sent.map((c) => c.constructor.name)).toEqual(['PutObjectCommand', 'GetObjectCommand', 'PutObjectCommand', 'GetObjectCommand']);
   });
 

@@ -8,7 +8,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import type pg from 'pg';
 import { schemaMissing } from '@crove/db/migrate';
 import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES, ORG_HEADER } from '@crove/kernel-contract';
-import { DomainError, fileKey, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { BlobConflictError, BlobNotFoundError, DomainError, fileKey, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { JOURNAL_EXPORT_LIMIT, buildJournalWorkbook, type JournalEntryView } from '@crove/mod-finance';
 import { actorOf, type Authenticate, type AuthUser } from './auth.ts';
 import { publicAuthUrl, type Config } from './config.ts';
@@ -25,9 +25,18 @@ export interface HttpDeps {
   aiEnabled: boolean;
 }
 
+// Store errors that are not server faults. A blob missing behind a file row, or a key holding other bytes, is
+// still logged: either one means storage and database disagree. Other store errors (access, I/O) stay 500.
+function storeProblem(error: unknown): DomainError | null {
+  if (error instanceof BlobNotFoundError) return new DomainError('NOT_FOUND', 404, 'Không tìm thấy tệp');
+  if (error instanceof BlobConflictError) return new DomainError('CONFLICT', 409, 'Tệp đã tồn tại với nội dung khác');
+  return null;
+}
+
 function problem(c: Context, error: unknown) {
-  const domain = error instanceof DomainError ? error : new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
-  if (domain.status === 500) console.error('[http]', error);
+  const store = storeProblem(error);
+  const domain = error instanceof DomainError ? error : (store ?? new DomainError('INTERNAL', 500, 'Lỗi hệ thống'));
+  if (domain.status === 500 || store) console.error('[http]', error);
   return c.json({ code: domain.code, message: domain.message }, domain.status);
 }
 
