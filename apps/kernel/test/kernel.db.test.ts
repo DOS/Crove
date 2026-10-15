@@ -671,6 +671,129 @@ suite('kernel on PostgreSQL', () => {
     await expect(assertSystemContextAccess(workerPool, 'denied')).rejects.toThrow(/can enter system context \(crove_kernel.enter_system_context/);
   });
 
+  // ---------------------------------------------------------------------------------------------------------
+  // External-tenant gate T4: org creation is the org-less command kernel.org.create, run by execute().
+  // ---------------------------------------------------------------------------------------------------------
+  async function orgCreationRows(userId: string) {
+    return withAdmin(async (admin) => {
+      const tenants = await admin.query<{ org_id: string; slug: string; xid: string }>(
+        'SELECT org_id, slug, xmin::text AS xid FROM crove_kernel.tenant WHERE created_by = $1 ORDER BY created_at, org_id',
+        [userId],
+      );
+      const ids = tenants.rows.map((t) => t.org_id);
+      const members = await admin.query<{ org_id: string; user_id: string; role: string; xid: string }>(
+        'SELECT org_id, user_id, role, xmin::text AS xid FROM crove_kernel.tenant_member WHERE org_id = ANY($1::uuid[]) ORDER BY org_id, user_id',
+        [ids],
+      );
+      const audits = await admin.query<{ org_id: string; actor_id: string; outcome: string; detail: Record<string, unknown>; xid: string }>(
+        `SELECT org_id, actor_id, outcome, detail, xmin::text AS xid FROM crove_kernel.audit_event
+         WHERE command = 'kernel.org.create' AND org_id = ANY($1::uuid[]) ORDER BY occurred_at, id`,
+        [ids],
+      );
+      const keys = await admin.query<{ org_id: string; key: string; response: unknown; xid: string }>(
+        `SELECT org_id, key, response, xmin::text AS xid FROM crove_kernel.idempotency_key
+         WHERE command = 'kernel.org.create' AND org_id = ANY($1::uuid[]) ORDER BY created_at, key`,
+        [ids],
+      );
+      return { tenants: tenants.rows, members: members.rows, audits: audits.rows, keys: keys.rows };
+    });
+  }
+
+  it('creates an org through execute() with tenant, owner, audit row and idempotency key in one transaction', async () => {
+    const tag = randomUUID().slice(0, 8);
+    const founder = await upsertIdentity(db, { issuer: 'test', subject: `founder-${tag}`, email: `founder-${tag}@example.com`, name: null });
+    const key = randomUUID();
+    const created = await createOrg(runtime, asUser(founder), `  Công ty TNHH Bốn ${tag}  `, key);
+    expect(created).toEqual({ orgId: expect.any(String), slug: `cong-ty-tnhh-bon-${tag}`, name: `Công ty TNHH Bốn ${tag}`, role: 'owner' });
+
+    const first = await orgCreationRows(founder);
+    expect(first.tenants).toEqual([{ org_id: created.orgId, slug: created.slug, xid: expect.any(String) }]);
+    const xid = first.tenants[0]?.xid;
+    expect(first.members).toEqual([{ org_id: created.orgId, user_id: founder, role: 'owner', xid }]);
+    expect(first.audits).toEqual([{ org_id: created.orgId, actor_id: founder, outcome: 'ok', detail: { slug: created.slug }, xid }]);
+    expect(first.keys).toEqual([{ org_id: created.orgId, key, response: { value: created }, xid }]);
+
+    // A replayed request with the same key returns the same org and writes nothing.
+    await expect(createOrg(runtime, asUser(founder), `Công ty TNHH Bốn ${tag}`, key)).resolves.toEqual(created);
+    expect(await orgCreationRows(founder)).toEqual(first);
+
+    // The same key with another name is refused, and the refusal is audited in the org the key belongs to.
+    await expect(createOrg(runtime, asUser(founder), 'Another name', key)).rejects.toMatchObject({ code: 'IDEMPOTENCY_MISMATCH', status: 422 });
+    const refused = await orgCreationRows(founder);
+    expect(refused.tenants).toEqual(first.tenants);
+    expect(refused.audits.map((a) => [a.org_id, a.outcome, a.detail])).toEqual([
+      [created.orgId, 'ok', { slug: created.slug }],
+      [created.orgId, 'failed', { code: 'IDEMPOTENCY_MISMATCH', aal: 'aal1', sessionId: null, mfaAt: null }],
+    ]);
+
+    // Two concurrent requests with one key create one org.
+    const concurrentKey = randomUUID();
+    const [a, b] = await Promise.all([
+      createOrg(runtime, asUser(founder), `Song song ${tag}`, concurrentKey),
+      createOrg(runtime, asUser(founder), `Song song ${tag}`, concurrentKey),
+    ]);
+    expect(a).toEqual(b);
+    // Without a key every request is a new org; a taken slug gets a random suffix.
+    const again = await createOrg(runtime, asUser(founder), `Song song ${tag}`);
+    expect(again.orgId).not.toBe(a.orgId);
+    expect(again.slug).toMatch(new RegExp(`^song-song-${tag}-[0-9a-f]{4}$`));
+    const final = await orgCreationRows(founder);
+    expect(final.tenants.map((t) => t.org_id)).toEqual([created.orgId, a.orgId, again.orgId]);
+    expect(final.members.filter((m) => m.role === 'owner')).toHaveLength(3);
+    expect(final.audits.filter((x) => x.outcome === 'ok').map((x) => x.org_id)).toEqual([created.orgId, a.orgId, again.orgId]);
+
+    // The new owner works in the org like any member.
+    await expect(runtime.query('kernel.org.get', {}, { actor: asUser(founder), orgId: created.orgId })).resolves.toMatchObject({
+      slug: created.slug,
+    });
+  });
+
+  it('lets no login role create an org outside execute() (EXECUTE matrix, audit at commit)', async () => {
+    const functions = ['crove_kernel.create_or_replay_org(uuid,text,text,text)', 'crove_kernel.tenant_requires_audit()'];
+    const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant'];
+    const matrix = await withAdmin(async (admin) => {
+      const { rows } = await admin.query<{ fn: string; role: string; can: boolean }>(
+        `SELECT f AS fn, r AS role, has_function_privilege(r, f, 'EXECUTE') AS can
+         FROM unnest($1::text[]) f CROSS JOIN unnest($2::text[]) r`,
+        [functions, roles],
+      );
+      const raw = await admin.query<{ fn: string | null }>(`SELECT to_regprocedure('crove_kernel.create_org(uuid,text,text)')::text AS fn`);
+      return {
+        ...Object.fromEntries(functions.map((f) => [f, roles.filter((r) => rows.some((row) => row.fn === f && row.role === r && row.can))])),
+        raw: raw.rows[0]?.fn,
+      };
+    });
+    expect(matrix).toEqual({
+      'crove_kernel.create_or_replay_org(uuid,text,text,text)': ['crove_app'],
+      'crove_kernel.tenant_requires_audit()': [],
+      raw: null,
+    });
+
+    // The API role calling the definer directly gets no tenant: it cannot commit without its audit row.
+    await expect(
+      db.transaction().execute((trx) => sql`SELECT crove_kernel.create_or_replay_org(${users.owner}::uuid, 'raw-org', 'Raw', NULL)`.execute(trx)),
+    ).rejects.toThrow(/ORG_CREATE_UNAUDITED/);
+    await expect(
+      workerDb.transaction().execute((trx) => sql`SELECT crove_kernel.create_or_replay_org(${users.owner}::uuid, 'raw-org', 'Raw', NULL)`.execute(trx)),
+    ).rejects.toThrow(/permission denied for function create_or_replay_org/);
+    // Neither can the database owner insert a tenant on its own.
+    await withAdmin(async (admin) => {
+      await expect(
+        admin.query(`INSERT INTO crove_kernel.tenant (slug, name, created_by) VALUES ('raw-org', 'Raw', $1)`, [users.owner]),
+      ).rejects.toThrow(/ORG_CREATE_UNAUDITED/);
+      const { rows } = await admin.query(`SELECT 1 FROM crove_kernel.tenant WHERE slug = 'raw-org'`);
+      expect(rows).toEqual([]);
+    });
+
+    // Org-less commands only run through executeOrgless(), and org commands only through execute().
+    await expect(runtime.execute('kernel.org.create', { name: 'x' }, { actor: asUser(users.owner), orgId: orgA })).rejects.toMatchObject({
+      code: 'COMMAND_NOT_FOUND',
+    });
+    await expect(runtime.executeOrgless('kernel.member.add', {}, { actor: asUser(users.owner) })).rejects.toMatchObject({
+      code: 'COMMAND_NOT_FOUND',
+    });
+  });
+
   it('files a forwarded e-invoice through the worker: the API only stores and enqueues it', { timeout: 90_000 }, async () => {
     const inboundSecret = 'test-only-inbound-secret-0123456789abcdef';
     const config = loadConfig({

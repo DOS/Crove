@@ -55,7 +55,9 @@ export function createRpcHandler(runtime: Runtime) {
       ),
     },
     org: {
-      create: os.org.create.handler(({ context, input }) => guard(() => createOrg(runtime, actorOf(context.user), input.name))),
+      create: os.org.create.handler(({ context, input }) =>
+        guard(() => createOrg(runtime, actorOf(context.user), input.name, input.idempotencyKey)),
+      ),
       get: os.org.get.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.get', {}, { actor, orgId }))),
       addMember: os.org.addMember.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.member.add', input, { actor, orgId })),
