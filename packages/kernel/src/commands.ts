@@ -235,9 +235,10 @@ function assertRotateLimit(name: string, value: number): void {
 // Rotates the org's inbound email address (plan §7.6). The old token is tombstoned and never issued again; mail
 // to it is dropped by the worker like mail to an unknown token, including mail that was already queued for it
 // when the rotation ran (the worker resolves the org when it processes a message, not when the API accepts it), so
-// a supplier's mail in flight is lost without a bounce. R2: the address is shared with suppliers, so changing it
-// has an effect outside Crove (their mail to the old address stops arriving), and it cannot be undone, which rules
-// out R1. Owner only, enforced here and again in the definer. Over the limits the definer refuses with
+// a supplier's mail in flight is lost without a bounce. R3 (plan §4.7: irreversible), since #113: the old address
+// is tombstoned for good and the suppliers holding it are cut off, so a hijacked aal1 owner session must not be
+// able to do it. As R3 it needs a fresh second factor (P11, enforced by the runtime) and its audit row records the
+// assurance used. Owner only, enforced here and again in the definer. Over the limits the definer refuses with
 // INBOUND_ROTATE_RATE_LIMITED (429 RATE_LIMITED) before writing anything.
 export function inboundRotateCommand(limits: InboundRotateLimits = DEFAULT_INBOUND_ROTATE_LIMITS) {
   assertRotateLimit('perDay', limits.perDay);
@@ -245,7 +246,7 @@ export function inboundRotateCommand(limits: InboundRotateLimits = DEFAULT_INBOU
   return defineCommand({
     name: 'kernel.inbound.rotate',
     input: z.object({}),
-    risk: 'R2',
+    risk: 'R3',
     access: ['owner'],
     handler: async (ctx) => {
       if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đổi được địa chỉ nhận hóa đơn');

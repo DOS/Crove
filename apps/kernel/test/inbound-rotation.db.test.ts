@@ -163,8 +163,11 @@ suite('inbound address rotation on PostgreSQL', () => {
     await root.end();
   });
 
-  // The HTTP app as the API runs it; the RPC caller is whoever `caller` names.
+  // The HTTP app as the API runs it; the RPC caller is whoever `caller` names. Rotation is R3 (#113), so the caller
+  // has a fresh second factor unless `callerMfa` is false.
   let caller = '';
+  let callerMfa = true;
+  const SESSION = '5b0c1f2e-3d4a-4b5c-8d6e-7f8091a2b3c4';
   let app: ReturnType<typeof createHttpApp>;
   const httpApp = () =>
     (app ??= createHttpApp({
@@ -182,9 +185,9 @@ suite('inbound address rotation on PostgreSQL', () => {
         userId: caller,
         email: 'rot@example.com',
         name: null,
-        aal: 'aal1',
-        sessionId: randomUUID(),
-        mfaAt: null,
+        aal: callerMfa ? 'aal2' : 'aal1',
+        sessionId: SESSION,
+        mfaAt: callerMfa ? Math.floor(Date.now() / 1000) : null,
       }),
       pool,
       aiEnabled: false,
@@ -263,7 +266,7 @@ suite('inbound address rotation on PostgreSQL', () => {
       { token: oldToken, retired: true },
       { token: newToken, retired: false },
     ]);
-    expect(await rotateAudits(org.orgId)).toEqual([{ actor_id: users.owner, outcome: 'ok', detail: {} }]);
+    expect(await rotateAudits(org.orgId)).toMatchObject([{ actor_id: users.owner, outcome: 'ok', detail: { aal: 'aal2', sessionId: SESSION } }]);
     await expect(runtime.query('kernel.org.get', {}, { actor: asUser(users.owner), orgId: org.orgId })).resolves.toMatchObject({
       inboundAddress: `${newToken}@in.test`,
     });
@@ -281,6 +284,14 @@ suite('inbound address rotation on PostgreSQL', () => {
     // A viewer calling the procedure is refused.
     caller = users.viewer;
     expect((await rotate(randomUUID())).status).toBe(403);
+    expect(await tokenOf(org.orgId)).toBe(newToken);
+    // So is the owner without a fresh second factor (R3, #113): the SPA is told to run an MFA challenge.
+    caller = users.owner;
+    callerMfa = false;
+    const noMfa = await rotate(randomUUID());
+    expect(noMfa.status).toBe(403);
+    expect(JSON.stringify(await noMfa.json())).toContain('STEP_UP_REQUIRED');
+    callerMfa = true;
     expect(await tokenOf(org.orgId)).toBe(newToken);
 
     // Mail to the new address and to the retired one: the API answers 202 to both (no oracle).
@@ -326,7 +337,12 @@ suite('inbound address rotation on PostgreSQL', () => {
     const stale = await rotate(key);
     expect(await stale.json()).toEqual({ json: latest });
     expect(await ledger(org.orgId)).toHaveLength(3);
-    expect((await rotateAudits(org.orgId)).map((a) => a.outcome)).toEqual(['ok', 'denied', 'ok']);
+    expect((await rotateAudits(org.orgId)).map((a) => [a.outcome, a.detail.code ?? null])).toEqual([
+      ['ok', null],
+      ['denied', 'FORBIDDEN'],
+      ['denied', 'STEP_UP_REQUIRED'],
+      ['ok', null],
+    ]);
   });
 
   it('drops mail queued for a token that is rotated away before the worker processes it', { timeout: 90_000 }, async () => {
