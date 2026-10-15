@@ -100,9 +100,8 @@ BEGIN
 
   v_now := pg_catalog.clock_timestamp();
   SELECT (pg_catalog.count(*) FILTER (WHERE a.retired_at IS NOT NULL))::integer,
-         (pg_catalog.count(*) FILTER (WHERE a.retired_at > v_now - interval '24 hours'))::integer,
-         pg_catalog.min(a.retired_at) FILTER (WHERE a.retired_at > v_now - interval '24 hours')
-    INTO v_all, v_recent, v_oldest
+         (pg_catalog.count(*) FILTER (WHERE a.retired_at > v_now - interval '24 hours'))::integer
+    INTO v_all, v_recent
   FROM crove_kernel.inbound_address a
   WHERE a.org_id = v_org;
   IF v_all >= v_total THEN
@@ -110,6 +109,13 @@ BEGIN
       DETAIL = pg_catalog.json_build_object('rule', 'inbound_rotate_total', 'limit', v_total)::text;
   END IF;
   IF v_recent >= v_per_day THEN
+    -- Room for one more opens when the per_day-th newest rotation in the window leaves it (also right when the
+    -- limit was lowered below the number already in the window).
+    SELECT a.retired_at INTO v_oldest
+    FROM crove_kernel.inbound_address a
+    WHERE a.org_id = v_org AND a.retired_at > v_now - interval '24 hours'
+    ORDER BY a.retired_at DESC
+    OFFSET v_per_day - 1 LIMIT 1;
     RAISE EXCEPTION 'INBOUND_ROTATE_RATE_LIMITED' USING ERRCODE = 'P0001',
       DETAIL = pg_catalog.json_build_object(
         'rule', 'inbound_rotate_per_day',

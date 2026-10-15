@@ -177,6 +177,90 @@ suite('inbound address rotation rate limit on PostgreSQL (#113)', () => {
     expect(await footprint(org.orgId)).toEqual(atTotal);
   });
 
+  it('times the per-day retry from the rotation whose exit opens room, also when the limit was lowered', async () => {
+    const org = await newOrg('lowered');
+    for (let i = 0; i < 3; i++) await rotate(runtime, org);
+    // Spread the three rotations over the window: 20, 10 and 1 hours ago (each row keeps created_at <= retired_at).
+    await withAdmin(async (admin) => {
+      await admin.query('BEGIN');
+      await admin.query('SET LOCAL session_replication_role = replica');
+      await admin.query(
+        `WITH ranked AS (
+           SELECT id, (ARRAY[20, 10, 1])[row_number() OVER (ORDER BY retired_at)] AS hours
+           FROM crove_kernel.inbound_address WHERE org_id = $1 AND retired_at IS NOT NULL)
+         UPDATE crove_kernel.inbound_address a
+            SET created_at = a.created_at - make_interval(hours => r.hours), retired_at = a.retired_at - make_interval(hours => r.hours)
+           FROM ranked r WHERE a.org_id = $1 AND a.id = r.id`,
+        [org.orgId],
+      );
+      await admin.query('COMMIT');
+    });
+    // At 2 per day, room opens when the rotation 10 hours ago leaves the window, not the one 20 hours ago.
+    const lowered = new Runtime(db).register({
+      commands: buildKernelCommands({ inboundRotateLimits: { perDay: 2, total: 50 } }),
+      queries: kernelQueries({ inboundDomain: 'in.test' }),
+    });
+    const error = (await rotate(lowered, org).catch((e: unknown) => e)) as { code: string; details: { rule: string; retryAfterSeconds: number } };
+    expect(error).toMatchObject({ code: 'RATE_LIMITED', details: { rule: 'inbound_rotate_per_day', limit: 2 } });
+    expect(error.details.retryAfterSeconds).toBeGreaterThan(14 * 3600 - 120);
+    expect(error.details.retryAfterSeconds).toBeLessThanOrEqual(14 * 3600);
+  });
+
+  it('refuses as busy, not as a deadlock, when a keyed rotation waits while holding the tenant row KEY SHARE', async () => {
+    const org = await newOrg('deadlock');
+    const before = await footprint(org.orgId);
+    const appUrl = new URL(adminUrl);
+    appUrl.username = 'crove_app';
+    appUrl.password = 'test-app-pw';
+    const holder = new pg.Client({ connectionString: adminUrl });
+    const waiter = new pg.Client({ connectionString: appUrl.toString() });
+    await holder.connect();
+    await waiter.connect();
+    try {
+      // The holder takes the per-org lock, as a rotation in progress would.
+      await holder.query('BEGIN');
+      await holder.query(`SELECT pg_advisory_xact_lock(hashtextextended('kernel.inbound.rotate:' || $1, 0))`, [org.orgId]);
+      // The waiter does what the runtime does for a keyed command (the idempotency_key row takes a KEY SHARE lock on
+      // the tenant row through its foreign key), then calls the definer, which waits for the per-org lock.
+      await waiter.query('BEGIN');
+      await waiter.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [org.owner, org.orgId]);
+      await waiter.query(
+        `INSERT INTO crove_kernel.idempotency_key (org_id, actor_key, key, command, request_sha256) VALUES ($1, $2, $3, 'kernel.inbound.rotate', $4)`,
+        [org.orgId, `user:${org.owner}`, randomUUID(), '0'.repeat(64)],
+      );
+      const { rows: pid } = await waiter.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+      const started = Date.now();
+      const waiting = waiter.query('SELECT crove_kernel.inbound_rotate()').then(
+        () => null,
+        (e: unknown) => e as { code?: string; message?: string; detail?: string },
+      );
+      // Once the waiter is blocked, the holder asks for the tenant row as the definer does: a cycle.
+      for (let i = 0; i < 100; i++) {
+        const { rows } = await holder.query<{ waiting: boolean }>(
+          `SELECT wait_event_type = 'Lock' AS waiting FROM pg_stat_activity WHERE pid = $1`,
+          [pid[0]?.pid],
+        );
+        if (rows[0]?.waiting) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const holderRow = holder.query('SELECT 1 FROM crove_kernel.tenant WHERE org_id = $1 FOR UPDATE', [org.orgId]);
+      const refused = await waiting;
+      // The waiter, which waited first, detects the deadlock (deadlock_timeout, 1s by default, well under the 3s lock
+      // timeout) and the definer turns it into the busy refusal, never a raw 40P01.
+      expect(refused).toMatchObject({ code: 'P0001', message: 'INBOUND_ROTATE_RATE_LIMITED' });
+      expect(JSON.parse(refused?.detail ?? '{}')).toEqual({ rule: 'inbound_rotate_busy', retryAfterSeconds: 1 });
+      expect(Date.now() - started).toBeLessThan(2900);
+      await waiter.query('ROLLBACK');
+      await expect(holderRow).resolves.toMatchObject({ rowCount: 1 });
+    } finally {
+      await holder.query('ROLLBACK').catch(() => undefined);
+      await waiter.query('ROLLBACK').catch(() => undefined);
+      await holder.end();
+      await waiter.end();
+    }
+    expect(await footprint(org.orgId)).toEqual(before);
+  });
+
   it('lets exactly one of several concurrent rotations at the boundary win, across connections', async () => {
     for (let round = 0; round < 3; round++) {
       const org = await newOrg(`race${round}`);
