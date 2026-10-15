@@ -9,6 +9,7 @@ import { sql, type Transaction } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDb, createPool, type Database, type Db } from '@crove/db';
+import type { ExtractClient } from '@crove/extract-contract';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, createOrgCommand, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { DomainError, Runtime, fileKey, type CommandDef, inboundKey, newInboundBlobId, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
@@ -17,6 +18,7 @@ import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { processInboundEmail } from '../src/inbound.ts';
 import { migrateJobs, startWorker } from '../src/worker.ts';
+import { startExtractService } from './extract-service.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -56,6 +58,9 @@ suite('kernel on PostgreSQL', () => {
   // The worker login role (crove_worker): the only one that may run system actors.
   let workerRuntime: Runtime;
   const store = new MemoryStore();
+  // The real crove-extract service on a random port: worker code parses through HTTP and the sandbox.
+  let extract: ExtractClient;
+  let stopExtract: (() => Promise<void>) | undefined;
   const users: Record<'owner' | 'outsider' | 'viewer', string> = { owner: '', outsider: '', viewer: '' };
   let orgA = '';
 
@@ -86,7 +91,7 @@ suite('kernel on PostgreSQL', () => {
 
   async function propose(bytes: Uint8Array) {
     const { fileId } = await ingest(orgA, users.owner, bytes);
-    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, today: () => '2026-10-13' }, orgA, fileId);
+    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, orgA, fileId);
     const detail = await runtime.query<{ revision: number }>('kernel.inbox.get', { id: proposalId }, { actor: asUser(users.owner), orgId: orgA });
     return { id: proposalId, revision: detail.revision };
   }
@@ -102,6 +107,7 @@ suite('kernel on PostgreSQL', () => {
   }
 
   beforeAll(async () => {
+    ({ client: extract, stop: stopExtract } = await startExtractService());
     const base = new URL(ADMIN as string);
     const admin = new pg.Client({ connectionString: ADMIN });
     await admin.connect();
@@ -139,6 +145,7 @@ suite('kernel on PostgreSQL', () => {
   });
 
   afterAll(async () => {
+    await stopExtract?.();
     await pool?.end();
     await workerPool?.end();
     if (!ADMIN) return;
@@ -296,7 +303,7 @@ suite('kernel on PostgreSQL', () => {
     const again = await ingest(orgA, users.owner, FIXTURE);
     expect(again).toEqual({ fileId, duplicate: true });
 
-    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, today: () => '2026-10-13' }, orgA, fileId);
+    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, orgA, fileId);
     expect(proposalId).toBeTruthy();
     const detail = await runtime.query<{ revision: number; payload: { invoice: { total: string } } }>(
       'kernel.inbox.get',
@@ -503,7 +510,7 @@ suite('kernel on PostgreSQL', () => {
       expect(rows[0]?.definers).toBe(0);
     });
     expect(await migrate({ adminUrl, dir: MIGRATIONS })).toEqual([]);
-    const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: null, inboundDomain: 'in.test' });
+    const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: null, extract, inboundDomain: 'in.test' });
     try {
       await until(async () => (await emailProposals()) === 1);
       expect(await pending()).toBe(0);
@@ -529,7 +536,7 @@ suite('kernel on PostgreSQL', () => {
     await store.put(inboundKey(blobId), raw);
     const job = { blobId, sha256: sha256Hex(raw), sizeBytes: raw.byteLength, recipient: `${token}@in.test` };
     for (const tampered of [{ ...job, sizeBytes: raw.byteLength + 1 }, { ...job, sha256: sha256Hex('other') }]) {
-      await expect(processInboundEmail({ runtime: workerRuntime, store, domain: 'in.test' }, tampered)).rejects.toMatchObject({
+      await expect(processInboundEmail({ runtime: workerRuntime, store, domain: 'in.test', extract }, tampered)).rejects.toMatchObject({
         code: 'INBOUND_BLOB_MISMATCH',
       });
     }

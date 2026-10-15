@@ -15,6 +15,7 @@
   "dependencies": {
     "@crove/agent": "workspace:*",
     "@crove/db": "workspace:*",
+    "@crove/extract-contract": "workspace:*",
     "@crove/kernel": "workspace:*",
     "@crove/kernel-contract": "workspace:*",
     "@crove/kernel-runtime": "workspace:*",
@@ -27,11 +28,11 @@
     "kysely": "catalog:",
     "pg": "catalog:",
     "pg-boss": "catalog:",
-    "postal-mime": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "catalog:",
+    "@crove/extract": "workspace:*",
     "@types/pg": "catalog:"
   }
 }

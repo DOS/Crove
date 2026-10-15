@@ -2,11 +2,12 @@
 // /api/inbound/email with a shared secret. The recipient <token>@INBOUND_DOMAIN selects the org.
 //
 // The API only verifies the secret, limits the size, stores the raw bytes and enqueues them
-// (acceptInboundEmail). Parsing, resolving the org and kernel.inbound.receive run in the worker
-// (processInboundEmail), the only role that may enter system context (External-tenant gate T5).
+// (acceptInboundEmail). Resolving the org and kernel.inbound.receive run in the worker (processInboundEmail),
+// the only role that may enter system context (External-tenant gate T5). The worker does not parse the MIME
+// message itself: crove-extract does, and its answer is validated and treated as untrusted (gate T12).
 import { timingSafeEqual } from 'node:crypto';
-import PostalMime from 'postal-mime';
 import { sql } from 'kysely';
+import type { ExtractClient } from '@crove/extract-contract';
 import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '@crove/kernel-contract';
 import { DomainError, fileKey, inboundKey, newInboundBlobId, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { safeFilename, sniffType } from './sniff.ts';
@@ -84,9 +85,11 @@ export interface InboundProcessDeps {
   runtime: Runtime;
   store: BlobStore;
   domain: string | null;
+  // crove-extract parses the message.
+  extract: ExtractClient;
 }
 
-// Worker side: parses the stored message, resolves the org by token and records it in system context.
+// Worker side: has the stored message parsed, resolves the org by token and records it in system context.
 // Idempotent: kernel.inbound.receive ignores a messageId the org has already received. The blob must match
 // the hash and size the API enqueued; a mismatch is refused like any message no org can receive.
 export async function processInboundEmail(deps: InboundProcessDeps, job: InboundJob) {
@@ -97,10 +100,12 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
   if (raw.byteLength !== job.sizeBytes || sha256Hex(raw) !== rawSha256) {
     throw new DomainError('INBOUND_BLOB_MISMATCH', 422, 'Thư lưu không khớp với hàng đợi');
   }
-  const email = await PostalMime.parse(raw);
-  const recipients = [job.recipient, email.deliveredTo, ...(email.to ?? []).map((a) => ('address' in a ? a.address : undefined))].filter(
-    (r): r is string => typeof r === 'string' && r !== '',
-  );
+  // A message the sandbox cannot read is invalid content: dropped like any message no org can receive. A sandbox
+  // that cannot answer throws ExtractServiceError, and the job is retried.
+  const parsed = await deps.extract.extract('mime', raw);
+  if (!parsed.ok) throw new DomainError('UNREADABLE_MESSAGE', 422, 'Không đọc được thư');
+  const email = parsed.email;
+  const recipients = [job.recipient, email.deliveredTo, ...email.to].filter((r): r is string => typeof r === 'string' && r !== '');
   const token = recipients.map((r) => tokenOf(r, domain)).find((t) => t !== null);
   if (!token) throw unknownRecipient();
 
@@ -111,10 +116,9 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
   if (!orgId) throw unknownRecipient();
 
   const files = [];
-  for (const attachment of (email.attachments ?? []).slice(0, 20)) {
-    const content = attachment.content;
-    const bytes =
-      typeof content === 'string' ? new TextEncoder().encode(content) : content instanceof Uint8Array ? content : new Uint8Array(content);
+  for (const attachment of email.attachments.slice(0, 20)) {
+    const decoded = Buffer.from(attachment.content, 'base64');
+    const bytes = new Uint8Array(decoded.buffer, decoded.byteOffset, decoded.byteLength);
     if (bytes.byteLength === 0 || bytes.byteLength > MAX_UPLOAD_BYTES) continue;
     // Signatures, logos and other attachments that are not invoices are skipped by their content.
     const contentType = sniffType(bytes);
@@ -130,7 +134,7 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
     'kernel.inbound.receive',
     {
       messageId: messageId.slice(0, 500),
-      from: email.from && 'address' in email.from ? (email.from.address ?? null) : null,
+      from: email.from,
       subject: email.subject?.slice(0, 500) ?? null,
       files,
     },

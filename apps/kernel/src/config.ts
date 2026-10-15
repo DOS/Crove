@@ -65,6 +65,9 @@ const schema = z.object({
   AI_API_KEY: optional,
   AI_MODEL: optional,
   AI_STRUCTURED_OUTPUTS: z.enum(['true', 'false']).default('true'),
+  // crove-extract, the parsing sandbox (plan §7.6, External-tenant gate T12), e.g. http://crove-extract:8090.
+  // Required for the worker role: the worker never parses PDF, XML or MIME itself. The API role does not use it.
+  EXTRACT_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
   // Inbound email: <token>@INBOUND_DOMAIN, delivered by a mail worker to POST /api/inbound/email.
   INBOUND_DOMAIN: optional,
   INBOUND_SECRET: optional,

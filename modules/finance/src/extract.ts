@@ -1,6 +1,9 @@
 // Worker job: read a received file, extract the invoice, run deterministic checks and raise a proposal.
+// Files are parsed in crove-extract (plan §7.6, External-tenant gate T12); its answer is untrusted, validated
+// against @crove/extract-contract by the client and checked again here before it becomes a proposal.
 import { sql } from 'kysely';
 import { z } from 'zod';
+import type { ExtractClient, ExtractFailure, ExtractKind, ExtractResult } from '@crove/extract-contract';
 import { zId, zPurchaseProposal, type PurchaseProposal } from '@crove/kernel-contract';
 import { defineQuery, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { AiNotConfiguredError, AmountFormatError, type InvoiceExtractor } from '@crove/agent';
@@ -92,6 +95,8 @@ export interface ExtractDeps {
   runtime: Runtime;
   store: BlobStore;
   extractor: InvoiceExtractor | null;
+  // The crove-extract client. The worker never parses PDF or XML itself.
+  extract: ExtractClient;
   today?: () => string;
 }
 
@@ -99,12 +104,44 @@ type Method = 'einvoice_xml' | 'pdf_text_ai' | 'image_ai' | 'unsupported';
 
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
-async function pdfText(bytes: Uint8Array): Promise<string> {
-  const { extractText, getDocumentProxy } = await import('unpdf');
-  // Never let pdf.js evaluate code from the document.
-  const pdf = await getDocumentProxy(bytes, { isEvalSupported: false } as Parameters<typeof getDocumentProxy>[1]);
-  const { text } = await extractText(pdf, { mergePages: true });
-  return Array.isArray(text) ? text.join('\n') : text;
+// Transitional, step 1 of 2 (External-tenant gate T12): the invariant suite on main still calls
+// extractAndPropose without a sandbox client, and CI runs that copy against this code. Only such a call parses in
+// process, exactly as before crove-extract; the worker always passes the client (EXTRACT_URL is required for it).
+// Removed, with this module's parser dependencies, once main's invariant suite passes a client (#120).
+const legacyInProcess: ExtractClient = {
+  async extract<K extends ExtractKind>(kind: K, bytes: Uint8Array): Promise<ExtractResult<K>> {
+    if (kind === 'einvoice_xml') {
+      try {
+        return { ok: true, kind: 'einvoice_xml', invoice: { ...parseEInvoiceXml(bytes), source: 'einvoice_xml' } } as ExtractResult<K>;
+      } catch (error) {
+        if (error instanceof EInvoiceParseError) return { ok: false, code: 'invalid', message: error.message.slice(0, 500) };
+        throw error;
+      }
+    }
+    if (kind === 'pdf_text') {
+      const { extractText, getDocumentProxy } = await import('unpdf');
+      // Never let pdf.js evaluate code from the document.
+      const pdf = await getDocumentProxy(bytes, { isEvalSupported: false } as Parameters<typeof getDocumentProxy>[1]);
+      const { text, totalPages } = await extractText(pdf, { mergePages: true });
+      return { ok: true, kind: 'pdf_text', text, pages: totalPages } as ExtractResult<K>;
+    }
+    throw new Error(`no in-process parser for ${kind}`);
+  },
+};
+
+// Failures caused by the file itself are recorded and never retried; service failures throw and are retried.
+function unreadable(result: ExtractFailure): string {
+  switch (result.code) {
+    case 'too_large':
+      return 'Tệp quá lớn để đọc (tối đa 25 MB)';
+    case 'timeout':
+      return 'Đọc tệp quá lâu nên đã dừng; hãy kiểm tra lại tệp';
+    case 'memory':
+      return 'Tệp quá phức tạp để đọc; hãy kiểm tra lại tệp';
+    default:
+      // The sandbox says what is wrong with the file; the text stays plain data wherever it is shown.
+      return result.message || 'Không đọc được chứng từ';
+  }
 }
 
 async function readInvoice(
@@ -112,13 +149,22 @@ async function readInvoice(
   file: { filename: string; content_type: string },
   bytes: Uint8Array,
 ): Promise<{ method: Method; invoice: ParsedInvoice | null; error: string | null }> {
+  // Undefined only for callers written before crove-extract; see legacyInProcess.
+  const sandbox = (deps.extract as ExtractClient | undefined) ?? legacyInProcess;
   const name = file.filename.toLowerCase();
+  // A look at the first bytes picks the parser; nothing is parsed here.
   const isXml = file.content_type.includes('xml') || name.endsWith('.xml') || looksLikeEInvoiceXml(bytes);
   try {
-    if (isXml) return { method: 'einvoice_xml', invoice: parseEInvoiceXml(bytes), error: null };
+    if (isXml) {
+      const result = await sandbox.extract('einvoice_xml', bytes);
+      if (!result.ok) return { method: 'einvoice_xml', invoice: null, error: unreadable(result) };
+      return { method: 'einvoice_xml', invoice: result.invoice, error: null };
+    }
     if (file.content_type === 'application/pdf' || name.endsWith('.pdf')) {
       if (!deps.extractor) throw new AiNotConfiguredError('Chưa cấu hình AI nên chưa đọc được PDF; hãy gửi tệp XML hóa đơn điện tử');
-      const text = (await pdfText(bytes)).trim();
+      const result = await sandbox.extract('pdf_text', bytes);
+      if (!result.ok) return { method: 'pdf_text_ai', invoice: null, error: unreadable(result) };
+      const text = result.text.trim();
       if (text.length < 40) return { method: 'pdf_text_ai', invoice: null, error: 'PDF dạng ảnh scan chưa được hỗ trợ; hãy gửi ảnh chụp hoặc tệp XML' };
       const invoice = await deps.extractor.fromText(text);
       return { method: 'pdf_text_ai', invoice, error: invoice ? null : 'Tài liệu không phải hóa đơn mua vào' };
@@ -130,7 +176,7 @@ async function readInvoice(
     }
     return { method: 'unsupported', invoice: null, error: 'Định dạng tệp chưa được hỗ trợ (chỉ nhận XML, PDF, JPG, PNG, WEBP)' };
   } catch (error) {
-    if (error instanceof EInvoiceParseError || error instanceof AiNotConfiguredError || error instanceof AmountFormatError) {
+    if (error instanceof AiNotConfiguredError || error instanceof AmountFormatError) {
       return { method: isXml ? 'einvoice_xml' : 'unsupported', invoice: null, error: error.message };
     }
     throw error;

@@ -116,11 +116,16 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+      # Every PDF, XML and MIME parse happens in crove-extract (External-tenant gate T12).
+      EXTRACT_URL: http://crove-extract:8090
     volumes:
       - files:/data/files
     ports:
       # Loopback only. Put a TLS reverse proxy in front (and set PUBLIC_URL) to serve other machines.
       - '127.0.0.1:${PORT:-8080}:8080'
+    networks:
+      - default
+      - extract
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -128,11 +133,40 @@ services:
         condition: service_started
       auth-grants:
         condition: service_completed_successfully
+      crove-extract:
+        condition: service_healthy
+
+  # The parsing sandbox (plan §7.6). Bytes in, JSON out; only the worker calls it. No environment on purpose: it
+  # holds no credentials and refuses to start with any. Its only network is `extract`, which has no route out,
+  # and no port is published. Each parse also runs in a short-lived process with no network permission.
+  crove-extract:
+    build:
+      context: .
+      dockerfile: apps/extract/Dockerfile
+    image: crove-extract:local
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1
+    pids_limit: 128
+    networks:
+      - extract
 
   mailpit:
     image: axllent/mailpit:v1.31.5
     ports:
       - '127.0.0.1:8025:8025'
+
+networks:
+  default:
+  # Internal: containers on it reach each other, never the internet.
+  extract:
+    internal: true
 
 volumes:
   db-data:
