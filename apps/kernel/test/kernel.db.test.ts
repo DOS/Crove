@@ -225,8 +225,15 @@ suite('kernel on PostgreSQL', () => {
       });
       expect(broken.seen.transactions).toBe(2);
       expect(await auditRows(created.orgId, 'kernel.org.create', 'failed')).toBe(0);
-      // The lost row is logged with ids and codes only.
-      expect(logged).toHaveBeenCalledTimes(1);
+      // The lost row is logged with ids and codes only, after the refusal count (#162) that failed the same way.
+      expect(logged).toHaveBeenCalledTimes(2);
+      expect(logged).toHaveBeenNthCalledWith(1, '[execute kernel.org.create] REFUSAL_TALLY_FAILED', {
+        orgId: created.orgId,
+        actorType: 'user',
+        actorId: founder,
+        refusal: 'IDEMPOTENCY_MISMATCH',
+        sqlState: '25006',
+      });
       expect(logged).toHaveBeenCalledWith('[execute kernel.org.create] AUDIT_WRITE_FAILED', {
         orgId: created.orgId,
         commandId: expect.stringMatching(/^[0-9a-f-]{36}$/),

@@ -109,6 +109,11 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
       // Every user request is checked against its session (ADR-0028); the identity port never resolves to "no check".
       sessions: resolved.identity.sessions,
       stepUp: config.AUTH_STEP_UP,
+      refusalAudit: {
+        perActor: config.REFUSAL_AUDIT_LIMIT_PER_ACTOR,
+        perOrg: config.REFUSAL_AUDIT_LIMIT_PER_ORG,
+        windowSeconds: config.REFUSAL_AUDIT_WINDOW_SECONDS,
+      },
     }).register({
       commands: [
         ...buildKernelCommands({

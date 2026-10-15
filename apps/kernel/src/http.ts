@@ -17,6 +17,7 @@ import { publicAuthUrl, type Config } from './config.ts';
 import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts';
 import { createInviteMailSender } from './invite-mail.ts';
 import type { Mailer } from './mail.ts';
+import { RateLimiter } from './rate-limit.ts';
 import { createRpcHandler, resolveMembership, resolveOrg } from './rpc.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 
@@ -31,6 +32,8 @@ export interface HttpDeps {
   mailer?: Mailer;
   // Per-client budget for Supabase Auth's emails (#190). Unset: the database limiter on `pool`.
   emailLimiter?: EmailLimiter;
+  // Per-user request limit on /api (issue #162). Default: built from API_RATE_LIMIT_PER_MINUTE; null turns it off.
+  rateLimiter?: RateLimiter | null;
 }
 
 // Store errors that are not server faults. A blob missing behind a file row, or a key holding other bytes, is
@@ -138,6 +141,8 @@ export function createHttpApp(deps: HttpDeps) {
   const { config, runtime, store, authenticate } = deps;
   const app = new Hono<{ Variables: { user: AuthUser } }>();
   const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL) : undefined);
+  const perMinute = config.API_RATE_LIMIT_PER_MINUTE;
+  const limiter = deps.rateLimiter !== undefined ? deps.rateLimiter : perMinute > 0 ? new RateLimiter({ perMinute }) : null;
 
   app.use('*', secureHeaders({ crossOriginResourcePolicy: 'same-origin' }));
 
@@ -241,13 +246,25 @@ export function createHttpApp(deps: HttpDeps) {
     });
   }
 
-  // Everything below requires a signed-in user.
+  // Everything below requires a signed-in user, and is limited per user (plan §4.4 step 0) before any command or
+  // query runs. The token is verified first, so the key is a user the token proves; authenticate() writes to the
+  // database only when its identity cache misses (once per user and process every few minutes), never per request.
   app.use('/api/*', async (c, next) => {
+    let user: AuthUser;
     try {
-      c.set('user', await authenticate(c.req.header('authorization')));
+      user = await authenticate(c.req.header('authorization'));
     } catch (error) {
       return problem(c, error);
     }
+    const decision = limiter?.take(user.userId);
+    if (decision && !decision.allowed) {
+      c.header('retry-after', String(decision.retryAfterSeconds));
+      return c.json(
+        { code: 'RATE_LIMITED', message: 'Bạn gửi quá nhiều yêu cầu, hãy thử lại sau', retryAfterSeconds: decision.retryAfterSeconds },
+        429,
+      );
+    }
+    c.set('user', user);
     await next();
   });
 

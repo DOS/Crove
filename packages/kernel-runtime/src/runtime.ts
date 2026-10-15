@@ -101,11 +101,39 @@ export interface SessionStatusSource {
   check(trx: Transaction<Database>, actor: UserActor & { sessionId: string }, orgId: string | null): Promise<void>;
 }
 
+// Bound on denied/failed audit rows (issue #162, plan §4.10): per window of windowSeconds, an actor's refusals get an
+// audit row while the actor has fewer than perActor and the org fewer than perOrg refusals in the window; past that a
+// refusal is only counted in crove_kernel.refusal_tally. The first refusal of each (command, code) of an actor in a
+// window always gets its row.
+export interface RefusalAuditLimits {
+  perActor: number;
+  perOrg: number;
+  windowSeconds: number;
+}
+
+export const DEFAULT_REFUSAL_AUDIT_LIMITS: RefusalAuditLimits = { perActor: 50, perOrg: 500, windowSeconds: 3600 };
+export const MAX_REFUSAL_AUDIT_LIMIT = 999_999;
+export const MIN_REFUSAL_AUDIT_WINDOW_S = 60;
+export const MAX_REFUSAL_AUDIT_WINDOW_S = 86_400;
+
+// Same ranges as crove_kernel.refusal_tally_note, which refuses anything else.
+export function validateRefusalAuditLimits(limits: RefusalAuditLimits): RefusalAuditLimits {
+  const check = (name: string, value: number, min: number, max: number) => {
+    if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${name} must be an integer from ${min} to ${max}`);
+  };
+  check('refusal audit perActor', limits.perActor, 1, MAX_REFUSAL_AUDIT_LIMIT);
+  check('refusal audit perOrg', limits.perOrg, 1, MAX_REFUSAL_AUDIT_LIMIT);
+  check('refusal audit windowSeconds', limits.windowSeconds, MIN_REFUSAL_AUDIT_WINDOW_S, MAX_REFUSAL_AUDIT_WINDOW_S);
+  return { perActor: limits.perActor, perOrg: limits.perOrg, windowSeconds: limits.windowSeconds };
+}
+
 export interface RuntimeOptions {
   // null: no session check (tests and tools). The server always passes one (apps/kernel main.ts).
   sessions?: SessionStatusSource | null;
   // R3 commands run by a user need aal2 and a second factor in the last 5 minutes (policy P11). Default required.
   stepUp?: 'required' | 'off';
+  // Bound on refusal audit rows. Default DEFAULT_REFUSAL_AUDIT_LIMITS; 'unbounded' writes a row for every refusal.
+  refusalAudit?: RefusalAuditLimits | 'unbounded';
 }
 
 // Policy P11 (ADR-0028 section 5): a second factor used within the last 5 minutes.
@@ -212,12 +240,15 @@ export class Runtime {
   private readonly cells: CellResolver;
   private readonly sessions: SessionStatusSource | null;
   private readonly stepUp: 'required' | 'off';
+  private readonly refusalAudit: RefusalAuditLimits | 'unbounded';
 
   // A plain Db is one cell that also holds the control plane (singleCell).
   constructor(cells: CellResolver | Db, options: RuntimeOptions = {}) {
     this.cells = isCellResolver(cells) ? cells : singleCell(cells);
     this.sessions = options.sessions ?? null;
     this.stepUp = options.stepUp ?? 'required';
+    const refusalAudit = options.refusalAudit ?? DEFAULT_REFUSAL_AUDIT_LIMITS;
+    this.refusalAudit = refusalAudit === 'unbounded' ? 'unbounded' : validateRefusalAuditLimits(refusalAudit);
   }
 
   // How sessions are checked (see BootstrapEnv), for org-less reads that apply the same upstream checks as a command.
@@ -547,7 +578,8 @@ export class Runtime {
   // Writes the denied/failed audit row of a refused command in a new short transaction (plan §4.4 step 14,
   // §4.10). The command already rolled back, so a lost refusal row hides no change; the caller still gets the
   // original refusal, never a 500 that would mask it. The loss is never silent: it is logged with ids and
-  // codes only (no input, no row content, no driver message, which can quote values).
+  // codes only (no input, no row content, no driver message, which can quote values). The refusal is counted first
+  // (issue #162): past the per-actor or per-org bound it is only counted, and no row is written.
   private async writeRefusalAudit(
     name: string,
     def: CommandDef<unknown, unknown>,
@@ -563,6 +595,7 @@ export class Runtime {
       const db = await this.cells.resolveTenant(orgId);
       await db.transaction().execute(async (trx) => {
         await this.enter(trx, actor, orgId);
+        if (!(await this.countRefusal(trx, name, refusal.code, actor, orgId))) return;
         await this.writeAudit(trx, {
           orgId,
           actor,
@@ -591,6 +624,34 @@ export class Runtime {
         sqlState: typeof sqlState === 'string' ? sqlState : null,
       });
       if (contextTaint(auditError)) logInternal(`execute ${name} refusal audit`, auditError, { orgId, actor });
+    }
+  }
+
+  // Counts the refusal in crove_kernel.refusal_tally (in the refusal transaction, after the context is entered) and
+  // answers whether its audit row is written. A failing count never suppresses the row: the count is rolled back to
+  // a savepoint, logged with ids and codes only, and the row is written as without a bound.
+  private async countRefusal(trx: Transaction<Database>, name: string, code: string, actor: Actor, orgId: string): Promise<boolean> {
+    const limits = this.refusalAudit;
+    if (limits === 'unbounded') return true;
+    await sql`SAVEPOINT refusal_tally`.execute(trx);
+    try {
+      const { rows } = await sql<{ audit: boolean }>`
+        SELECT crove_kernel.refusal_tally_note(${name}, ${code}, ${limits.perActor}::integer, ${limits.perOrg}::integer,
+          ${limits.windowSeconds}::integer) AS audit`.execute(trx);
+      await sql`RELEASE SAVEPOINT refusal_tally`.execute(trx);
+      return rows[0]?.audit !== false;
+    } catch (tallyError) {
+      await sql`ROLLBACK TO SAVEPOINT refusal_tally`.execute(trx);
+      const sqlState = (tallyError as { code?: unknown } | null)?.code;
+      console.error(`[execute ${name}] REFUSAL_TALLY_FAILED`, {
+        orgId,
+        actorType: actor.type,
+        actorId: actor.type === 'user' ? actor.userId : actor.component,
+        refusal: code,
+        sqlState: typeof sqlState === 'string' ? sqlState : null,
+      });
+      if (contextTaint(tallyError)) logInternal(`execute ${name} refusal tally`, tallyError, { orgId, actor });
+      return true;
     }
   }
 

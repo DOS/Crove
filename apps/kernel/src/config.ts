@@ -81,6 +81,16 @@ const schema = z.object({
   // leaves a permanent tombstone, so the total bounds the ledger.
   INBOUND_ROTATE_LIMIT_PER_DAY: z.coerce.number().int().min(1).max(999_999).default(3),
   INBOUND_ROTATE_LIMIT_TOTAL: z.coerce.number().int().min(1).max(999_999).default(50),
+  // Bound on denied/failed audit rows (issue #162), counted in the database across API instances: in each fixed
+  // window of REFUSAL_AUDIT_WINDOW_SECONDS, an actor's refusals get an audit row until the actor has
+  // REFUSAL_AUDIT_LIMIT_PER_ACTOR or the org REFUSAL_AUDIT_LIMIT_PER_ORG refusals in it; later ones are only counted
+  // (crove_kernel.refusal_tally). The first refusal of each command and code of an actor in a window is always audited.
+  REFUSAL_AUDIT_LIMIT_PER_ACTOR: z.coerce.number().int().min(1).max(999_999).default(50),
+  REFUSAL_AUDIT_LIMIT_PER_ORG: z.coerce.number().int().min(1).max(999_999).default(500),
+  REFUSAL_AUDIT_WINDOW_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
+  // Requests per minute per signed-in user on /api (429 RATE_LIMITED with Retry-After past it), per API process; see
+  // rate-limit.ts. 0 turns it off, for a deployment whose edge (proxy, CDN or WAF) limits per user instead.
+  API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(0).max(999_999).default(600),
   // Any OpenAI-compatible endpoint. Without it, e-invoice XML still works; PDF/images do not.
   AI_BASE_URL: optional,
   AI_API_KEY: optional,
