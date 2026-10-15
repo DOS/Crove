@@ -27,6 +27,12 @@ interface InboundRow {
   recipient: string;
 }
 
+interface ExtractJob {
+  orgId: string;
+  fileId: string;
+  version?: number;
+}
+
 interface OutboxRow {
   seq: string;
   org_id: string;
@@ -60,15 +66,22 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   boss.on('error', (error) => console.error('[pg-boss]', error));
   await boss.start();
 
-  await boss.work<{ orgId: string; fileId: string }>(QUEUES.extract, { batchSize: 1 }, async ([job]) => {
+  // version: a requested re-extraction (kernel.file.reextract_requested); absent for the first read of a new file.
+  await boss.work<ExtractJob>(QUEUES.extract, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
-    const { orgId, fileId } = job.data;
+    const { orgId, fileId, version } = job.data;
     try {
-      await extractAndPropose({ runtime: deps.runtime, store: deps.store, extractor: deps.extractor, extract: deps.extract }, orgId, fileId);
+      await extractAndPropose({ runtime: deps.runtime, store: deps.store, extractor: deps.extractor, extract: deps.extract }, orgId, fileId, version);
     } catch (error) {
-      console.error(`[extract] file ${fileId} attempt ${job.retryCount + 1}`, error);
+      console.error(`[extract] file ${fileId}${version ? ` version ${version}` : ''} attempt ${job.retryCount + 1}`, error);
       if (job.retryCount < EXTRACT_RETRY_LIMIT) throw error;
-      await recordExtractionFailure(deps.runtime, orgId, fileId, 'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML');
+      await recordExtractionFailure(
+        deps.runtime,
+        orgId,
+        fileId,
+        'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML',
+        version,
+      );
     }
   });
 
@@ -131,6 +144,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   QUEUES.extract,
                   { orgId: row.org_id, fileId },
                   { singletonKey: `${row.org_id}:${fileId}`, retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
+                );
+              }
+              if (row.type === 'kernel.file.reextract_requested') {
+                const fileId = String(row.payload.fileId);
+                const version = Number(row.payload.version);
+                if (!Number.isInteger(version) || version < 1) return null;
+                return boss.send(
+                  QUEUES.extract,
+                  { orgId: row.org_id, fileId, version } satisfies ExtractJob,
+                  { singletonKey: `${row.org_id}:${fileId}:${version}`, retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
                 );
               }
               if (row.type === 'kernel.session.revoked') {

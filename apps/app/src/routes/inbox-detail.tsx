@@ -52,7 +52,11 @@ function FilePreview({ fileId, contentType, filename }: { fileId: string; conten
 export function InboxDetailPage() {
   const { slug, id } = useParams({ strict: false }) as { slug: string; id: string };
   const navigate = useNavigate();
-  const detail = useQuery(orpc.inbox.get.queryOptions({ input: { id } }));
+  // While the file is being read again, poll until the new reading (or its failure) arrives.
+  const detail = useQuery({
+    ...orpc.inbox.get.queryOptions({ input: { id } }),
+    refetchInterval: (query) => (query.state.data?.extraction?.inFlight ? 2000 : false),
+  });
   const accounts = useQuery(orpc.accounts.list.queryOptions());
   const [lineAccounts, setLineAccounts] = useState<Record<number, string>>({});
   const [idempotencyKey] = useState(() => crypto.randomUUID());
@@ -81,8 +85,18 @@ export function InboxDetailPage() {
       },
     }),
   );
+  // Reading the file again replaces the content with a new reading (a new revision), or makes a new proposal
+  // after a rejected one. Unsaved account changes are dropped.
+  const reextract = useMutation(
+    orpc.files.reextract.mutationOptions({
+      onSuccess: async () => {
+        setLineAccounts({});
+        await queryClient.invalidateQueries();
+      },
+    }),
+  );
   const dirty = (payload?.lines ?? []).some((l) => (lineAccounts[l.lineNo] ?? l.debitAccount) !== l.debitAccount);
-  const busy = approve.isPending || reject.isPending || edit.isPending;
+  const busy = approve.isPending || reject.isPending || edit.isPending || reextract.isPending;
 
   if (detail.isLoading) return <Spinner />;
   if (detail.error) return <ErrorText>{errorMessage(detail.error)}</ErrorText>;
@@ -93,6 +107,26 @@ export function InboxDetailPage() {
   const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
   const currency = payload?.invoice.currency ?? 'VND';
   const money = (value: string | null | undefined) => formatMoney(value, currency);
+  const reading = item.extraction?.inFlight ?? false;
+  const fileId = item.file?.id;
+  const reextractButton =
+    item.canReextract && fileId ? (
+      <Button
+        disabled={busy}
+        onClick={() => {
+          const ask = pending
+            ? 'Đọc lại chứng từ? Kết quả đọc mới sẽ thay nội dung đề xuất (thành một bản mới) và các tài khoản bạn đã chọn sẽ trở về mặc định. Người duyệt cần xem lại bản mới.'
+            : 'Đọc lại chứng từ? Nếu đọc được, một đề xuất mới sẽ được tạo; đề xuất đã từ chối giữ nguyên.';
+          if (!window.confirm(ask)) return;
+          reextract.mutate({ fileId, idempotencyKey: crypto.randomUUID() });
+        }}
+      >
+        {reextract.isPending ? <Spinner /> : null}
+        Đọc lại
+      </Button>
+    ) : null;
+  const lastRun = item.extraction;
+  const lastRunFailed = lastRun !== null && lastRun.status === 'failed' && lastRun.version !== lastRun.proposalVersion;
 
   return (
     <>
@@ -106,6 +140,7 @@ export function InboxDetailPage() {
           actions={
             pending ? (
               <>
+                {reextractButton}
                 {item.canReject && (
                   <Button
                     variant="danger"
@@ -155,16 +190,33 @@ export function InboxDetailPage() {
                 )}
               </>
             ) : (
-              <Badge tone={item.status === 'executed' ? 'good' : 'neutral'}>
-                {item.status === 'executed' ? `Đã ghi sổ ${formatDateTime(item.decidedAt)}` : item.status === 'rejected' ? 'Đã từ chối' : item.status}
-              </Badge>
+              <>
+                {reextractButton}
+                <Badge tone={item.status === 'executed' ? 'good' : 'neutral'}>
+                  {item.status === 'executed' ? `Đã ghi sổ ${formatDateTime(item.decidedAt)}` : item.status === 'rejected' ? 'Đã từ chối' : item.status}
+                </Badge>
+              </>
             )
           }
         />
       </div>
-      {(approve.error || reject.error || edit.error) && (
+      {(approve.error || reject.error || edit.error || reextract.error) && (
         <div className="mb-4">
-          <ErrorText>{errorMessage(approve.error ?? reject.error ?? edit.error)}</ErrorText>
+          <ErrorText>{errorMessage(approve.error ?? reject.error ?? edit.error ?? reextract.error)}</ErrorText>
+        </div>
+      )}
+      {reading && (
+        <p className="mb-4 flex items-center gap-2 text-sm text-brand-300">
+          <Spinner />
+          Đang đọc lại chứng từ (lần đọc {lastRun?.version}). Đề xuất sẽ được cập nhật khi đọc xong; trong lúc này chưa duyệt, sửa hay từ chối được.
+        </p>
+      )}
+      {!reading && lastRunFailed && (
+        <div className="mb-4">
+          <ErrorText>
+            Lần đọc lại gần nhất (lần {lastRun?.version}) không thành công: {lastRun?.error ?? 'không đọc được chứng từ'}.
+            {pending ? ' Đề xuất vẫn giữ kết quả đọc trước đó.' : ''}
+          </ErrorText>
         </div>
       )}
       {pending && dirty && (

@@ -39,6 +39,8 @@ export function InboxPage() {
     mutationFn: uploadFiles,
     onSuccess: () => void queryClient.invalidateQueries(),
   });
+  // Reads a file that could not be read again (for example after AI was configured).
+  const reextract = useMutation(orpc.files.reextract.mutationOptions({ onSuccess: () => void queryClient.invalidateQueries() }));
 
   function onDrop(event: DragEvent) {
     event.preventDefault();
@@ -129,9 +131,20 @@ export function InboxPage() {
               <span key={f.id} className="inline-flex max-w-full items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs" title={f.error ?? undefined}>
                 <span className="max-w-[16rem] truncate text-fg-2">{f.filename}</span>
                 <Badge tone={FILE_STATUS[f.status]?.tone ?? 'neutral'}>{FILE_STATUS[f.status]?.label ?? f.status}</Badge>
+                {f.status === 'failed' && f.canReextract && (
+                  <button
+                    type="button"
+                    disabled={reextract.isPending}
+                    className="text-brand-300 hover:underline disabled:opacity-50"
+                    onClick={() => reextract.mutate({ fileId: f.id, idempotencyKey: crypto.randomUUID() })}
+                  >
+                    Đọc lại
+                  </button>
+                )}
               </span>
             ))}
           </div>
+          {reextract.error && <p className="mt-2 text-xs text-rose-300">{errorMessage(reextract.error)}</p>}
           {files.data?.find((f) => f.status === 'failed')?.error && (
             <p className="mt-2 text-xs text-rose-300">{files.data.find((f) => f.status === 'failed')?.error}</p>
           )}

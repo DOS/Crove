@@ -17,9 +17,11 @@ import {
   type ParsedInvoice,
 } from '@crove/l10n-vn';
 
+// The file to read and whether this run should happen: `version` names a pending re-extraction (issue #40), which
+// runs only while that version is still pending; without it, the first extraction runs only if the file has none.
 export const fileForExtraction = defineQuery({
   name: 'finance.extraction.file',
-  input: z.object({ fileId: zId }),
+  input: z.object({ fileId: zId, version: z.number().int().positive().optional() }),
   access: 'system',
   handler: async (ctx, input) => {
     const file = await ctx.trx
@@ -28,19 +30,22 @@ export const fileForExtraction = defineQuery({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.fileId)
       .executeTakeFirst();
-    const extraction = await ctx.trx
+    let query = ctx.trx
       .selectFrom('crove_kernel.extraction')
-      .select('id')
+      .select('status')
       .where('org_id', '=', ctx.orgId)
-      .where('file_id', '=', input.fileId)
-      .executeTakeFirst();
-    return file ? { ...file, hasExtraction: Boolean(extraction) } : null;
+      .where('file_id', '=', input.fileId);
+    if (input.version !== undefined) query = query.where('version', '=', input.version);
+    const extraction = await query.limit(1).executeTakeFirst();
+    const due = input.version === undefined ? !extraction : extraction?.status === 'pending';
+    return file ? { ...file, hasExtraction: Boolean(extraction), due } : null;
   },
 });
 
 export const purchaseLookup = defineQuery({
   name: 'finance.extraction.lookup',
-  input: z.object({ sellerTaxCode: z.string().nullable(), sellerName: z.string(), series: z.string(), number: z.string() }),
+  // fileId: the file being read. Its own proposals are not duplicates of it (a re-extraction revises them).
+  input: z.object({ fileId: zId, sellerTaxCode: z.string().nullable(), sellerName: z.string(), series: z.string(), number: z.string() }),
   access: 'system',
   handler: async (ctx, input) => {
     const party = input.sellerTaxCode
@@ -75,6 +80,7 @@ export const purchaseLookup = defineQuery({
       .where('org_id', '=', ctx.orgId)
       .where('kind', '=', 'finance.purchase')
       .where('status', 'in', ['pending', 'executed'])
+      .where((eb) => eb.or([eb('source_file_id', 'is', null), eb('source_file_id', '!=', input.fileId)]))
       .where(sql`payload #>> '{invoice,series}'`, '=', input.series)
       .where(sql`payload #>> '{invoice,number}'`, '=', input.number)
       .where(input.sellerTaxCode ? sql`payload #>> '{seller,taxCode}'` : sql`payload #>> '{seller,name}'`, '=', input.sellerTaxCode ?? input.sellerName)
@@ -158,28 +164,39 @@ async function readInvoice(
   }
 }
 
-// Marks a file as unreadable so it leaves the "processing" state; a no-op if it already has a result.
-export async function recordExtractionFailure(runtime: Runtime, orgId: string, fileId: string, message: string): Promise<void> {
+interface ExtractionFile {
+  id: string;
+  filename: string;
+  content_type: string;
+  storage_key: string;
+  hasExtraction: boolean;
+  due: boolean;
+}
+
+// Marks a run as unreadable so the file leaves the "processing" state: the first extraction (no version) if the
+// file has none yet, or the pending re-extraction `version`. A no-op once that run has a result.
+export async function recordExtractionFailure(runtime: Runtime, orgId: string, fileId: string, message: string, version?: number): Promise<void> {
   const actor = { type: 'system' as const, component: 'finance.extract' };
-  const file = await runtime.query<{ hasExtraction: boolean } | null>('finance.extraction.file', { fileId }, { actor, orgId });
-  if (!file || file.hasExtraction) return;
+  const file = await runtime.query<ExtractionFile | null>('finance.extraction.file', { fileId, version }, { actor, orgId });
+  if (!file || !file.due) return;
   await runtime.execute(
     'kernel.extraction.record',
-    { fileId, method: 'unsupported', status: 'failed', result: null, checks: [], error: message, proposal: null },
+    { fileId, version, method: 'unsupported', status: 'failed', result: null, checks: [], error: message, proposal: null },
     { actor, orgId },
   );
 }
 
-export async function extractAndPropose(deps: ExtractDeps, orgId: string, fileId: string): Promise<{ proposalId: string | null }> {
+// Reads the file and records the run: the first extraction of a new file, or (with `version`) a requested
+// re-extraction, whose result becomes a new revision of the file's pending proposal (issue #40).
+export async function extractAndPropose(
+  deps: ExtractDeps,
+  orgId: string,
+  fileId: string,
+  version?: number,
+): Promise<{ proposalId: string | null }> {
   const actor = { type: 'system' as const, component: 'finance.extract' };
-  const file = await deps.runtime.query<{
-    id: string;
-    filename: string;
-    content_type: string;
-    storage_key: string;
-    hasExtraction: boolean;
-  } | null>('finance.extraction.file', { fileId }, { actor, orgId });
-  if (!file || file.hasExtraction) return { proposalId: null };
+  const file = await deps.runtime.query<ExtractionFile | null>('finance.extraction.file', { fileId, version }, { actor, orgId });
+  if (!file || !file.due) return { proposalId: null };
 
   const bytes = await deps.store.get(file.storage_key);
   const { method, invoice, error } = await readInvoice(deps, file, bytes);
@@ -187,7 +204,7 @@ export async function extractAndPropose(deps: ExtractDeps, orgId: string, fileId
   const fail = (message: string, checks: InvoiceCheck[] = []) =>
     deps.runtime.execute<{ proposalId: string | null }>(
       'kernel.extraction.record',
-      { fileId, method, status: 'failed', result: invoice ?? null, checks, error: message, proposal: null },
+      { fileId, version, method, status: 'failed', result: invoice ?? null, checks, error: message, proposal: null },
       { actor, orgId },
     );
 
@@ -196,7 +213,7 @@ export async function extractAndPropose(deps: ExtractDeps, orgId: string, fileId
   const sellerTaxCode = parseTaxCode(invoice.seller.taxCode)?.normalized ?? null;
   const lookup = await deps.runtime.query<{ vendorDefault: string | null; duplicateDocumentId: string | null; duplicateProposalId: string | null }>(
     'finance.extraction.lookup',
-    { sellerTaxCode, sellerName: invoice.seller.name, series: invoice.series, number: invoice.number },
+    { fileId, sellerTaxCode, sellerName: invoice.seller.name, series: invoice.series, number: invoice.number },
     { actor, orgId },
   );
 
@@ -238,6 +255,7 @@ export async function extractAndPropose(deps: ExtractDeps, orgId: string, fileId
     'kernel.extraction.record',
     {
       fileId,
+      version,
       method,
       status: 'done',
       result: invoice,

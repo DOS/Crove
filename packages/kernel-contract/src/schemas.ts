@@ -150,6 +150,8 @@ export const zSessionRevoke = z
 
 export const zProposalStatus = z.enum(['pending', 'executed', 'rejected', 'failed']);
 
+export const zExtractionStatus = z.enum(['pending', 'done', 'failed']);
+
 export const zInboxItem = z.object({
   id: zId,
   kind: z.string(),
@@ -178,6 +180,19 @@ export const zInboxDetail = zInboxItem.extend({
   approveReason: z.enum(['ok', 'not_pending', 'not_eligible', 'four_eyes']),
   canEdit: z.boolean(),
   canReject: z.boolean(),
+  // The source file's newest extraction run (issue #40). inFlight: a re-extraction is running, so approve, edit and
+  // reject wait for it. proposalVersion: the run this revision was read from; a newer failed run left it unchanged.
+  extraction: z
+    .object({
+      version: z.number().int(),
+      status: zExtractionStatus,
+      error: z.string().nullable(),
+      inFlight: z.boolean(),
+      proposalVersion: z.number().int().nullable(),
+    })
+    .nullable(),
+  // The caller may ask for the source file to be read again (files.reextract).
+  canReextract: z.boolean(),
 });
 
 export const zFileStatus = z.object({
@@ -185,8 +200,12 @@ export const zFileStatus = z.object({
   filename: z.string(),
   contentType: z.string(),
   status: z.enum(['processing', 'proposed', 'failed', 'duplicate']),
+  // The newest run's error, when that run failed.
   error: z.string().nullable(),
   proposalId: zId.nullable(),
+  // The newest extraction run's number (1 for the first read), null while the file has not been read yet.
+  version: z.number().int().nullable(),
+  canReextract: z.boolean(),
   createdAt: z.string(),
 });
 
