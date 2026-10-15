@@ -1659,6 +1659,10 @@ The MVP in Tracking replaces Phase 0 (ADR-0027): step 1 (open source, local) mer
 
 Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sample data (issue #58).
 
+**Status (2026-10-15):** the SQL half is done. [ADR-0021](../adr/0021-finance-kernel-support.md) (proposed) records the decisions, with measurements from a throwaway PostgreSQL 17 prototype in `docs/adr/0021/`.
+- Met in the prototype: every entry balances; reversal nets to zero; 1,000 parallel posts yield gapless numbers 1..1000. "Entries cannot be edited" was already on `main` (#71).
+- Still open in issue #154: the TS domain with fast-check, and TT133 B01/B02 on sample data matched against an accountant's hand calculation.
+
 **Exit criteria:**
 - Every entry balances; entries cannot be edited; reversal nets to zero; 1,000 parallel posts yield gapless numbers 1..1000.
 - Reports match an accountant's hand calculation.
@@ -1897,6 +1901,7 @@ ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this pla
 | [0027](../adr/0027-oss-core-and-crove-cloud.md) | Open-source core vs Crove Cloud; auth on Supabase Auth only; app shell (Vite + TanStack Router SPA); brand | Accepted 2026-10-13 and 2026-10-14 |
 | [0028](../adr/0028-identity-sessions-and-revocation.md) | Identity: Supabase Auth access tokens verified locally with required issuer, audience and expiry; design C: a Crove session status record checked in the request transaction, fed by `auth.sessions` (self-host); Crove Cloud keeps Supabase Auth's default token lifetime for sign-outs outside Crove (amended 2026-10-15, DOS-28 events optional); immediate owner revoke; disabled users; membership on every request; R3 with a live Auth check, `aal2` and MFA in the last 5 minutes | Accepted 2026-10-14 (owner) with conditions, amended 2026-10-15; its acceptance tests are External-tenant gate T1 (issue #22) |
 | [0029](../adr/0029-agents-positions-and-org-chart.md) | Agents as org members: positions held by humans or agents, module agent templates, tasks with delegation and escalation, wake-ups, budgets, R3 always ends at a human, runtimes as adapters | Accepted 2026-10-14 (direction); details proposed until the Phase 1 PR |
+| [0021](../adr/0021-finance-kernel-support.md) | Kernel support for Finance, from the Phase 0b spike (measured on PostgreSQL 17): <ul><li>money domains `amount numeric(20,4)`, `unit_amount numeric(24,8)`, `quantity numeric(20,6)`, `fx_rate numeric(24,10)` (direct quote), plus a per-currency scale check because `numeric(20,4)` rounds silently;</li><li>gapless numbering: a counter row per (org, legal entity, doc type, period key) allocated last in the posting transaction, voids as append-only facts; 1,000 parallel posts gave 1..1000;</li><li>period close: `FOR SHARE` guard in a `BEFORE INSERT` trigger, close in order, reopen newest first (R3, reason);</li><li>hash chain per legal entity, appended asynchronously from a pending queue, anchored by the WORM stream;</li><li>`source_revision` with a payload hash for replay and re-posting after reversal;</li><li>bank line keys: bank reference, else date + amount + running balance, else an Inbox exception.</li></ul> | Proposed 2026-10-15 (issue #58); the owner accepts it before the Phase 2a kernel additions |
 
 **To write** (the ones the External-tenant gate depends on first):
 
@@ -1918,7 +1923,6 @@ ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this pla
 | 0013 | Evidence storage and integrity: S3 adapter (T7), staging, generation preconditions, versioning, WORM bucket | Before Phase 1 features |
 | 0015 | Version and upgrade policy (including the Vite+/Oxfmt exception) | Before Phase 1 features |
 | 0017 | Data classification, PII, crypto-shredding, deletion map, PDPL | Before Phase 1 features |
-| 0021 | Kernel support for Finance: <ul><li>domains `amount numeric(20,4)`, `unit_amount numeric(24,8)`, `quantity numeric(20,6)`, `fx_rate numeric(24,10)`;</li><li>ledger immutability (T3); gapless numbering; period close; hash chain;</li><li>`source_revision`;</li><li>bank line keys.</li></ul> | Outcome of spike 0b |
 | DBOS | Process engine: DBOS Transact or the plan's own engine (spike result, Decision 14) | Before Phase 2a |
 | 0009 / 0012 | Agent runtime and chat (OpenAI-compatible provider) / SSE invalidation | 2b |
 | OAuth | OAuth 2.1 authorization server for self-host (Decision 14; issue #67) | Before Phase 3 |
