@@ -160,19 +160,34 @@ export interface ExtractClientOptions {
 }
 
 // Timing shared by the service defaults and the client (plan §7.6: 60 s per call). A request can wait for every
-// queued parse ahead of it and then run its own, so the client allows for all of them plus time to send the
-// body: a queued request is never abandoned in the middle of its parse.
+// queued call ahead of it and then run its own; each one holds its slot while its body is read and then while it
+// is parsed. The client allows for all of them plus time to send the answer: a queued request is never abandoned
+// in the middle of its parse.
 export const EXTRACT_TIMING = {
   parseTimeoutMs: 25_000,
   concurrency: 1,
   maxQueue: 1,
-  // Sending the body and the answer over the internal network.
-  transferSlackMs: 10_000,
+  // A body that sends nothing for this long ends with a typed failure and frees its slot.
+  bodyIdleTimeoutMs: 2_000,
+  // The whole body read, once the slot is free (25 MB or 40 MB over the internal network). A body that keeps
+  // sending a byte now and then cannot hold the slot longer than this.
+  bodyTimeoutMs: 3_000,
+  // Sending the answer over the internal network.
+  answerSlackMs: 4_000,
 } as const;
 
-// Worst case for one call: the parses queued ahead of it, then its own.
-export function worstCaseCallMs(timing: { parseTimeoutMs: number; concurrency: number; maxQueue: number; transferSlackMs: number }): number {
-  return (Math.ceil(timing.maxQueue / timing.concurrency) + 1) * timing.parseTimeoutMs + timing.transferSlackMs;
+export interface ExtractTiming {
+  parseTimeoutMs: number;
+  concurrency: number;
+  maxQueue: number;
+  bodyTimeoutMs: number;
+  answerSlackMs: number;
+}
+
+// Worst case for one call: the calls queued ahead of it, then its own, each reading its body and parsing it.
+export function worstCaseCallMs(timing: ExtractTiming): number {
+  const slotMs = timing.bodyTimeoutMs + timing.parseTimeoutMs;
+  return (Math.ceil(timing.maxQueue / timing.concurrency) + 1) * slotMs + timing.answerSlackMs;
 }
 
 export const EXTRACT_CLIENT_TIMEOUT_MS = 60_000;

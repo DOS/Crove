@@ -97,12 +97,14 @@ export function loadExtractConfig(
   const parsed = schema.safeParse(env);
   if (!parsed.success) throw new Error(`invalid configuration: ${parsed.error.issues.map((i) => i.path.join('.')).join(', ')}`);
   const config = parsed.data;
-  // The worker gives up after EXTRACT_CLIENT_TIMEOUT_MS; a queued request must finish its parse before that.
+  // The worker gives up after EXTRACT_CLIENT_TIMEOUT_MS; a queued request must read its body and finish its parse
+  // before that, after every call ahead of it has done the same.
   const worst = worstCaseCallMs({
     parseTimeoutMs: config.EXTRACT_TIMEOUT_MS,
     concurrency: config.EXTRACT_CONCURRENCY,
     maxQueue: config.EXTRACT_MAX_QUEUE,
-    transferSlackMs: EXTRACT_TIMING.transferSlackMs,
+    bodyTimeoutMs: EXTRACT_TIMING.bodyTimeoutMs,
+    answerSlackMs: EXTRACT_TIMING.answerSlackMs,
   });
   if (worst > EXTRACT_CLIENT_TIMEOUT_MS) {
     throw new Error(
