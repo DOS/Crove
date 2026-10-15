@@ -725,6 +725,10 @@ suite('kernel invariants on PostgreSQL', () => {
     await expect(runtime.executeOrgless('kernel.member.invite.create', {}, { actor: asUser(users.owner) })).rejects.toMatchObject({
       code: 'COMMAND_NOT_FOUND',
     });
+    // Nobody is added without consent (#35): there is no command that adds a member directly.
+    await expect(runtime.execute('kernel.member.add', { email: 'viewer@example.com', role: 'viewer' }, { actor: asMfa(users.owner), orgId: orgA })).rejects.toMatchObject({
+      code: 'COMMAND_NOT_FOUND',
+    });
     // Accepting an invite is org-less: the org comes from the invite, never from the caller.
     await expect(runtime.execute('kernel.member.invite.accept', { token: 'x'.repeat(43) }, { actor: asUser(users.owner), orgId: orgA })).rejects.toMatchObject({
       code: 'COMMAND_NOT_FOUND',

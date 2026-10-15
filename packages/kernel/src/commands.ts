@@ -20,57 +20,8 @@ const APPROVERS = ADMINS;
 
 const zLineAccounts = z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).max(1000);
 
-// Membership and role changes are R3 (plan §4.7): they need a fresh second factor (P11, ADR-0028).
-// Adds a member without their consent; members should join by accepting an invite (invites.ts, #35). Kept until
-// no test fixture depends on it, then removed (step 3 of #35).
-export const addMember = defineCommand({
-  name: 'kernel.member.add',
-  input: z.object({ email: z.email(), role: zRole.exclude(['owner']) }),
-  risk: 'R3',
-  access: ADMINS,
-  handler: async (ctx, input) => {
-    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới quản lý được thành viên');
-    const { rows } = await sql<{ id: string | null }>`SELECT crove_kernel.user_id_by_email(${input.email}) AS id`.execute(ctx.trx);
-    const userId = rows[0]?.id;
-    if (!userId) throw new DomainError('USER_NOT_FOUND', 404, 'Người này chưa có tài khoản, hãy nhờ họ đăng ký trước');
-    // The actor's role as of now, under the same locks as role changes and removals: an owner or admin demoted or
-    // removed by a concurrent command is refused instead of acting on the role read when the context was entered.
-    const locked = await lockMembers(ctx, ctx.actor.userId, userId);
-    if (locked.actorRole !== 'owner' && locked.actorRole !== 'admin') {
-      throw new DomainError('FORBIDDEN', 403, 'Vai trò của bạn không được thực hiện việc này');
-    }
-    // Only owners may grant or change admin rights; nobody can change an owner through this command.
-    if (input.role === 'admin' && locked.actorRole !== 'owner') {
-      throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới cấp được quyền quản trị');
-    }
-    const existing = locked.target;
-    if (existing?.role === 'owner') throw new DomainError('FORBIDDEN', 403, 'Không đổi được vai trò của chủ sở hữu');
-    if (existing?.role === 'admin' && locked.actorRole !== 'owner') {
-      throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đổi được vai trò của quản trị viên');
-    }
-    if (existing) {
-      // The row is locked above and its role was checked, so nothing can change it before this update.
-      await ctx.trx
-        .updateTable('crove_kernel.tenant_member')
-        .set({ role: input.role })
-        .where('org_id', '=', ctx.orgId)
-        .where('user_id', '=', userId)
-        .execute();
-    } else {
-      // Absent when locked: a concurrent command may insert the row first, with a role the checks above never saw
-      // (an owner adding them as admin). Never overwrite that row; the caller retries and is checked against it.
-      const inserted = await ctx.trx
-        .insertInto('crove_kernel.tenant_member')
-        .values({ org_id: ctx.orgId, user_id: userId, role: input.role })
-        .onConflict((oc) => oc.columns(['org_id', 'user_id']).doNothing())
-        .returning('user_id')
-        .executeTakeFirst();
-      if (!inserted) throw new DomainError('ALREADY_MEMBER', 409, 'Người này vừa được thêm vào tổ chức, hãy tải lại và thử lại');
-    }
-    await ctx.activity('kernel.member', userId, 'member.added', `Thêm thành viên ${input.email} (${input.role})`);
-    return { userId };
-  },
-});
+// Membership and role changes are R3 (plan §4.7): they need a fresh second factor (P11, ADR-0028). Nobody joins an
+// org without consent: members join by accepting an invite (invites.ts, #35); there is no direct add.
 
 interface LockedMembers {
   actorRole: MemberRole | null;
@@ -504,7 +455,7 @@ export const rejectProposal = defineCommand({
 // - the user themself revokes globally, and the worker then signs the session out in Supabase Auth
 //   (kernel.session.revoked; best effort and retried, correctness does not depend on it);
 // - the org owner revokes a member's session in that org only: no global record, no upstream sign-out, because
-//   sessions are global and membership needs no consent from the member;
+//   sessions are global and one org's owner has no say over the member's other orgs;
 // - nobody else, admins included.
 export const revokeSession = defineCommand({
   name: 'kernel.session.revoke',
@@ -532,7 +483,6 @@ export const revokeSession = defineCommand({
 });
 
 const otherKernelCommands = [
-  addMember,
   ...inviteCommands,
   changeMemberRole,
   removeMember,
