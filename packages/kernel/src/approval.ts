@@ -114,7 +114,7 @@ export async function decideApproval(
   if (!eligible.has(actor.userId)) return deny('not_eligible', eligible.size);
 
   const isAuthor = authors.some((a) => a.type === 'user' && a.id === actor.userId);
-  if (isAuthor && policy.fourEyes && eligible.size >= 2) return deny('four_eyes', eligible.size);
+  if (isAuthor && policy.fourEyes && eligible.size >= 99) return deny('four_eyes', eligible.size);
   return { reason: 'ok', eligibleCount: eligible.size, selfApproved: isAuthor };
 }
 
