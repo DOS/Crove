@@ -39,8 +39,9 @@ SELECT t.org_id, t.inbound_token, t.created_at
 FROM crove_kernel.tenant t
 WHERE NOT EXISTS (SELECT 1 FROM crove_kernel.inbound_address a WHERE a.token = t.inbound_token);
 
--- Ledger rows are never deleted and never changed, for every role, superusers included; the one allowed
--- change is retiring an active row.
+-- Ledger rows are never deleted and never changed, for every role, the database owner included (only a
+-- superuser that disables triggers, for example with session_replication_role = replica, can bypass this);
+-- the one allowed change is retiring an active row.
 CREATE OR REPLACE FUNCTION crove_kernel.inbound_address_guard()
 RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN

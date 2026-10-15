@@ -101,7 +101,7 @@ function clientIp(c: Context, trustedHops: number): string | null {
 export function createHttpApp(deps: HttpDeps) {
   const { config, runtime, store, authenticate } = deps;
   const app = new Hono<{ Variables: { user: AuthUser } }>();
-  const rpc = createRpcHandler(runtime, { inboundDomain: config.INBOUND_DOMAIN ?? null });
+  const rpc = createRpcHandler(runtime);
 
   app.use('*', secureHeaders({ crossOriginResourcePolicy: 'same-origin' }));
 

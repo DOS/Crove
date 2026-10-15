@@ -30,12 +30,7 @@ export async function resolveOrg(runtime: Runtime, user: AuthUser, slug: string 
   return (await resolveMembership(runtime, user, slug)).orgId;
 }
 
-export interface RpcOptions {
-  // <token>@inboundDomain is the org's inbound email address; null when the server does not receive email.
-  inboundDomain: string | null;
-}
-
-export function createRpcHandler(runtime: Runtime, options: RpcOptions = { inboundDomain: null }) {
+export function createRpcHandler(runtime: Runtime) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -69,12 +64,11 @@ export function createRpcHandler(runtime: Runtime, options: RpcOptions = { inbou
       ),
       rotateInbound: os.org.rotateInbound.handler(({ context, input }) =>
         inOrg(context, async (orgId, actor) => {
-          const { inboundToken } = await runtime.execute<{ inboundToken: string }>(
-            'kernel.inbound.rotate',
-            {},
-            { actor, orgId, idempotencyKey: input.idempotencyKey },
-          );
-          return { inboundAddress: options.inboundDomain ? `${inboundToken}@${options.inboundDomain}` : null };
+          await runtime.execute('kernel.inbound.rotate', {}, { actor, orgId, idempotencyKey: input.idempotencyKey });
+          // The current address, not the token stored with the idempotency key: a key replayed after a later
+          // rotation must never show a retired address.
+          const org = await runtime.query<{ inboundAddress: string | null }>('kernel.org.get', {}, { actor, orgId });
+          return { inboundAddress: org.inboundAddress };
         }),
       ),
     },

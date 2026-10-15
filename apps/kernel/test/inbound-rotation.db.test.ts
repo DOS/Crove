@@ -291,6 +291,17 @@ suite('inbound address rotation on PostgreSQL', () => {
     expect(await resolve(newToken)).toBe(org.orgId);
     expect(await resolve(newToken.toUpperCase())).toBe(org.orgId);
     expect(await resolve(oldToken)).toBeNull();
+
+    // After a later rotation, replaying the first key rotates nothing and shows the current address, never the
+    // retired one stored with the key.
+    caller = users.owner;
+    const later = await rotate(randomUUID());
+    const { json: latest } = (await later.json()) as { json: { inboundAddress: string } };
+    expect(latest.inboundAddress).not.toBe(result.inboundAddress);
+    const stale = await rotate(key);
+    expect(await stale.json()).toEqual({ json: latest });
+    expect(await ledger(org.orgId)).toHaveLength(3);
+    expect((await rotateAudits(org.orgId)).map((a) => a.outcome)).toEqual(['ok', 'denied', 'ok']);
   });
 
 });
