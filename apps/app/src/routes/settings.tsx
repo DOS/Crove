@@ -14,16 +14,44 @@ interface MemberRow {
   role: Role;
 }
 
-// Owner controls for one member: change the role, or remove them. The server enforces every rule (owners only,
-// the org keeps an owner, no self-removal); the screen only hides what can never succeed.
+// Owner controls for one member: change the role, or remove them after an inline confirmation. The server
+// enforces every rule (owners only, the org keeps an owner, no self-removal); the screen only hides what can never
+// succeed. One idempotency key per confirmed removal, so a retried request is replayed, not repeated.
 function MemberControls({ member }: { member: MemberRow }) {
+  const [confirming, setConfirming] = useState(false);
+  const [removeKey, setRemoveKey] = useState(() => crypto.randomUUID());
   const done = () => void queryClient.invalidateQueries();
   const changeRole = useMutation(orpc.org.changeMemberRole.mutationOptions({ onSuccess: done }));
-  const remove = useMutation(orpc.org.removeMember.mutationOptions({ onSuccess: done }));
+  const remove = useMutation(
+    orpc.org.removeMember.mutationOptions({
+      onSuccess: () => {
+        setConfirming(false);
+        setRemoveKey(crypto.randomUUID());
+        done();
+      },
+    }),
+  );
   const busy = changeRole.isPending || remove.isPending;
   const error = changeRole.error ?? remove.error;
   const name = member.displayName ?? member.email;
 
+  if (confirming) {
+    return (
+      <div className="max-w-xs space-y-2 rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-sm" role="alertdialog" aria-label={`Xác nhận xóa ${name}`}>
+        <p className="font-medium text-fg">Xóa {name} khỏi tổ chức?</p>
+        <p className="text-fg-2">Người này mất quyền truy cập tổ chức ngay từ yêu cầu tiếp theo. Bạn có thể thêm lại họ sau.</p>
+        <div className="flex gap-2">
+          <Button variant="danger" disabled={busy} onClick={() => remove.mutate({ userId: member.userId, idempotencyKey: removeKey })}>
+            Xác nhận xóa
+          </Button>
+          <Button variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
+            Hủy
+          </Button>
+        </div>
+        {remove.error && <ErrorText>{errorMessage(remove.error)}</ErrorText>}
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="flex items-center gap-2">
@@ -45,9 +73,8 @@ function MemberControls({ member }: { member: MemberRow }) {
           className="px-2.5 py-1"
           disabled={busy}
           onClick={() => {
-            if (window.confirm(`Xóa ${name} khỏi tổ chức? Người này sẽ mất quyền truy cập ngay từ yêu cầu tiếp theo.`)) {
-              remove.mutate({ userId: member.userId, idempotencyKey: crypto.randomUUID() });
-            }
+            remove.reset();
+            setConfirming(true);
           }}
         >
           Xóa
