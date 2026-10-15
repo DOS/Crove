@@ -14,7 +14,6 @@ import { Runtime, type BlobStore } from '@crove/kernel-runtime';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig, type Config } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
-import { createInviteMailSender, type SendInviteMail } from '../src/invite-mail.ts';
 import { createLogMailer, type Mailer, type OutboundMail } from '../src/mail.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 
@@ -51,11 +50,9 @@ suite('invite mail on PostgreSQL', () => {
       sent.push(mail);
     },
   };
-  const noSleep = async () => undefined;
-
-  function appWith(sendInviteMail?: SendInviteMail) {
-    const deps = { config, runtime, store: {} as BlobStore, authenticate: createAuthenticator(config, db), pool, aiEnabled: false };
-    return createHttpApp(sendInviteMail ? { ...deps, sendInviteMail } : deps);
+  function appWith(mailer?: Mailer, overrides: Partial<Config> = {}) {
+    const deps = { config: { ...config, PUBLIC_URL, ...overrides }, runtime, store: {} as BlobStore, authenticate: createAuthenticator(config, db), pool, aiEnabled: false };
+    return createHttpApp(mailer ? { ...deps, mailer } : deps);
   }
   let app: ReturnType<typeof createHttpApp>;
 
@@ -160,7 +157,7 @@ suite('invite mail on PostgreSQL', () => {
       commands: kernelCommands,
       queries: kernelQueries({ inboundDomain: null }),
     });
-    app = appWith(createInviteMailSender(capturing, PUBLIC_URL, { sleep: noSleep }));
+    app = appWith(capturing);
   });
 
   beforeEach(() => {
@@ -290,26 +287,27 @@ suite('invite mail on PostgreSQL', () => {
         throw Object.assign(new Error(`connect ECONNREFUSED while sending ${mail.text}`), { code: 'ECONNECTION' });
       },
     };
-    const failing = appWith(createInviteMailSender(down, PUBLIC_URL, { sleep: noSleep }));
+    // Real backoff (0.5 s, then 2 s) within the 10 s deadline.
+    const failing = appWith(down);
     const created = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: invitee.email, role: 'member' }, org.slug, failing);
     expect(created).toMatchObject({ status: 200, body: { email: invitee.email } });
     expect(attempts).toBe(3);
     const token = tokenOf(created.body?.acceptPath);
     expect(printed).toContain('[mail] invite mail not sent after 3 attempt(s): ECONNECTION');
 
-    // A sender that throws (a bug) does not fail the invite either.
-    const broken = appWith(async () => {
-      throw new Error(`boom ${token}`);
-    });
-    const again = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: `x-${randomUUID().slice(0, 6)}@mail.test`, role: 'member' }, org.slug, broken);
+    // A mailer that throws before returning a promise (a bug) does not fail the invite either.
+    const syncThrow: Mailer = {
+      enabled: true,
+      send: () => {
+        throw Object.assign(new TypeError(`sync ${token}`), { code: 'EMESSAGE' });
+      },
+    };
+    const again = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: `x-${randomUUID().slice(0, 6)}@mail.test`, role: 'member' }, org.slug, appWith(syncThrow));
     expect(again).toMatchObject({ status: 200 });
-    expect(printed).toContain('[mail] invite mail not sent: Error');
-    // Nor does one that throws before returning a promise.
-    const syncThrow = appWith((() => {
-      throw new TypeError(`sync ${token}`);
-    }) as SendInviteMail);
-    const third = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: `y-${randomUUID().slice(0, 6)}@mail.test`, role: 'member' }, org.slug, syncThrow);
-    expect(third).toMatchObject({ status: 200 });
+    expect(printed).toContain('[mail] invite mail not sent after 1 attempt(s): EMESSAGE');
+    // Nor does a template that cannot render (here: no PUBLIC_URL to build the link from): the API catches it.
+    const odd = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: `y-${randomUUID().slice(0, 6)}@mail.test`, role: 'member' }, org.slug, appWith(capturing, { PUBLIC_URL: undefined as unknown as string }));
+    expect(odd).toMatchObject({ status: 200 });
     expect(printed).toContain('[mail] invite mail not sent: TypeError');
 
     // The one-time link still works.
@@ -323,7 +321,7 @@ suite('invite mail on PostgreSQL', () => {
     const owner = await signIn('owner');
     const org = await orgOf(owner);
     const lines: string[] = [];
-    const off = appWith(createInviteMailSender(createLogMailer((l) => lines.push(l)), PUBLIC_URL));
+    const off = appWith(createLogMailer((l) => lines.push(l)));
     const created = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: 'someone@mail.test', role: 'viewer' }, org.slug, off);
     expect(created).toMatchObject({ status: 200 });
     expect(lines).toEqual([`[mail] not sent, SMTP_HOST is not set: "Lời mời tham gia ${org.name} trên Crove"`]);
@@ -336,9 +334,7 @@ suite('invite mail on PostgreSQL', () => {
     // The app tells the inviter whether the server mails invites.
     const mailEnabled = async (via: ReturnType<typeof createHttpApp>) => ((await (await via.request('/api/config')).json()) as { mailEnabled: boolean }).mailEnabled;
     expect(await mailEnabled(off)).toBe(false);
-    const smtpConfig = { ...config, SMTP_HOST: 'mailpit', SMTP_FROM: 'noreply@crove.local' };
-    const deps = { runtime, store: {} as BlobStore, authenticate: createAuthenticator(config, db), pool, aiEnabled: false };
-    expect(await mailEnabled(createHttpApp({ ...deps, config: smtpConfig, sendInviteMail: createInviteMailSender(capturing, PUBLIC_URL) }))).toBe(true);
-    expect(await mailEnabled(createHttpApp({ ...deps, config: smtpConfig }))).toBe(false);
+    expect(await mailEnabled(appWith(capturing))).toBe(true);
+    expect(await mailEnabled(appWith())).toBe(false);
   });
 });

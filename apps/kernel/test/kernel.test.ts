@@ -38,6 +38,23 @@ describe('defaultAdapters (the open-source wiring in main.ts)', () => {
     expect(defaultAdapters(loadConfig({ ...BASE, STORAGE: 's3', S3_BUCKET: 'crove-files' })).storage).toBeInstanceOf(S3BlobStore);
   });
 
+  it('mails through SMTP when SMTP_HOST is set, and only logs otherwise', async () => {
+    expect(defaultAdapters(loadConfig(BASE)).mail?.enabled).toBe(false);
+    expect(defaultAdapters(loadConfig({ ...BASE, SMTP_HOST: 'mailpit', SMTP_PORT: '1025', SMTP_FROM: 'noreply@crove.local' })).mail?.enabled).toBe(true);
+    // An entrypoint that passes no mail port gets the log fallback.
+    const config = loadConfig(BASE);
+    const { identity, storage } = defaultAdapters(config);
+    const kernel = createKernel(config, { identity, storage, ai: null });
+    expect(kernel.adapters.mail.enabled).toBe(false);
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await kernel.adapters.mail.send({ to: 'a@example.test', subject: 'S', text: 'secret', html: 'secret' });
+      expect(logged.mock.calls).toEqual([['[mail] not sent, SMTP_HOST is not set: "S"']]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
   it('leaves broker, connectors and billing to the no-op defaults', async () => {
     const config = loadConfig(BASE);
     const defaults = defaultAdapters(config);
