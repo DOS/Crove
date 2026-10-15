@@ -134,9 +134,23 @@ export function createSupabaseSessionRevoker(options: SupabaseRevokerOptions): S
         headers: { authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(10_000),
       });
-      // 204: signed out. 401, 403 and 404: the session or user is already gone, which is the goal.
-      if (response.ok || response.status === 401 || response.status === 403 || response.status === 404) return;
-      throw new Error(`Supabase Auth sign-out answered ${response.status}`);
+      if (response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        return;
+      }
+      // Supabase Auth answers 403 both when the target is already gone and when it rejects the token itself
+      // (`bad_jwt`, for example a wrong secret), so only the error code tells them apart. A deleted user has no
+      // sessions left in any scope. A missing session is the goal only for a local sign-out: for a global one it
+      // means the token's session was already gone, so the user's other sessions are still alive upstream. Any
+      // other answer (`user_banned` included: an unban would bring the refresh tokens back) is retried, then alerted.
+      let code: unknown;
+      try {
+        code = ((await response.json()) as { error_code?: unknown } | null)?.error_code;
+      } catch {
+        code = undefined;
+      }
+      if (response.status === 403 && (code === 'user_not_found' || (code === 'session_not_found' && scope === 'local'))) return;
+      throw new Error(`Supabase Auth ${scope} sign-out answered ${response.status}${typeof code === 'string' ? ` ${code}` : ''}`);
     },
   };
 }
