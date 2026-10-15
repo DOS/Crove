@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { sql } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { ExtractClient } from '@crove/extract-contract';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
@@ -17,6 +18,7 @@ import type { AuthUser } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { migrateJobs, startWorker } from '../src/worker.ts';
+import { startExtractService } from './extract-service.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -55,6 +57,9 @@ suite('inbound address rotation on PostgreSQL', () => {
   let workerDb: Db;
   let workerRuntime: Runtime;
   const store = new MemoryStore();
+  // The real crove-extract service on a random port: worker code parses through HTTP and the sandbox.
+  let extract: ExtractClient;
+  let stopExtract: (() => Promise<void>) | undefined;
   const users = { owner: '', viewer: '' };
   let org = { orgId: '', slug: '' };
 
@@ -105,6 +110,7 @@ suite('inbound address rotation on PostgreSQL', () => {
     withAdmin(async (admin) => Number((await admin.query<{ n: string }>(query, params)).rows[0]?.n ?? 0));
 
   beforeAll(async () => {
+    ({ client: extract, stop: stopExtract } = await startExtractService());
     const root = new pg.Client({ connectionString: ADMIN });
     await root.connect();
     await root.query(`CREATE DATABASE ${dbName}`);
@@ -141,6 +147,7 @@ suite('inbound address rotation on PostgreSQL', () => {
   });
 
   afterAll(async () => {
+    await stopExtract?.();
     await pool?.end();
     await workerPool?.end();
     if (!ADMIN) return;
@@ -226,7 +233,7 @@ suite('inbound address rotation on PostgreSQL', () => {
       await migrateJobs(adminUrl);
       jobsReady = true;
     }
-    const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: null, inboundDomain: 'in.test' });
+    const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: null, extract, inboundDomain: 'in.test' });
     try {
       await fn();
     } finally {

@@ -10,6 +10,8 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
+import { createExtractApp } from '@crove/extract';
+import { createExtractClient } from '@crove/extract-contract';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
 import { Runtime, type BlobStore } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
@@ -396,6 +398,7 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
       runtime: new Runtime(workerDb).register({ commands: kernelCommands, queries: [] }),
       store: {} as BlobStore,
       extractor: null,
+      extract: createExtractClient({ url: 'http://crove-extract.test', fetch: async (input, init) => createExtractApp().fetch(new Request(input, init)) }),
       inboundDomain: null,
       revoker: {
         async signOut(target) {

@@ -6,7 +6,7 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
-          include: ['packages/*/test/**/*.test.ts', 'modules/*/test/**/*.test.ts', 'apps/kernel/test/**/*.test.ts', 'apps/app/test/**/*.test.ts', 'tools/test/**/*.test.ts'],
+          include: ['packages/*/test/**/*.test.ts', 'modules/*/test/**/*.test.ts', 'apps/kernel/test/**/*.test.ts', 'apps/extract/test/**/*.test.ts', 'apps/app/test/**/*.test.ts', 'tools/test/**/*.test.ts'],
           exclude: ['**/*.db.test.ts', '**/node_modules/**'],
         },
       },

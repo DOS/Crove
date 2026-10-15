@@ -1,0 +1,17 @@
+{
+  "name": "@crove/extract-contract",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Wire contract of the crove-extract sandbox: limits, zod schemas of its JSON results and the worker's client. No parsers.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  }
+}

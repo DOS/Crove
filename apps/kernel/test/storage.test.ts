@@ -17,6 +17,7 @@ import { loadConfig, type Config } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { processInboundEmail } from '../src/inbound.ts';
 import { createBlobStore, describeStorage } from '../src/storage.ts';
+import { inProcessExtract } from './extract-service.ts';
 
 const FIXTURE = readFileSync(new URL('../../../packages/l10n-vn/test/fixtures/einvoice-basic.xml', import.meta.url));
 const S3_URL = process.env.CROVE_TEST_S3_URL;
@@ -201,7 +202,7 @@ describe.each(backends)('files survive a restart on $name, from the API and the 
     const workerStore = createBlobStore(config);
     orgless.push(orgId);
     const job = { blobId: key.slice('inbound/'.length), sha256, sizeBytes: new TextEncoder().encode(mime).byteLength, recipient: `${token}@in.test` };
-    const result = await processInboundEmail({ runtime, store: workerStore, domain: 'in.test' }, job);
+    const result = await processInboundEmail({ runtime, store: workerStore, domain: 'in.test', extract: inProcessExtract() }, job);
     expect(result.fileIds).toHaveLength(1);
     await workerStore.delete(inboundKey(job.blobId));
     await expect(createBlobStore(config).get(key)).rejects.toBeInstanceOf(BlobNotFoundError);

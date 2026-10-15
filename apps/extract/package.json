@@ -1,0 +1,25 @@
+{
+  "name": "@crove/extract",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "crove-extract: the file parsing sandbox (e-invoice XML, PDF text, MIME). Bytes in, JSON out; no secrets, no egress.",
+  "exports": {
+    ".": "./src/server.ts"
+  },
+  "scripts": {
+    "dev": "node --watch src/main.ts",
+    "start": "node src/main.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@crove/extract-contract": "workspace:*",
+    "@crove/l10n-vn": "workspace:*",
+    "@hono/node-server": "catalog:",
+    "hono": "catalog:",
+    "postal-mime": "catalog:",
+    "unpdf": "catalog:",
+    "zod": "catalog:"
+  }
+}

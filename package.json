@@ -10,11 +10,11 @@
     "node": ">=26"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @crove/kernel-server --filter @crove/app dev",
+    "dev": "pnpm --parallel --filter @crove/kernel-server --filter @crove/extract --filter @crove/app dev",
     "dev:web": "pnpm --filter @crove/web dev",
     "build": "pnpm -r --filter=!@crove/web build",
     "typecheck": "pnpm -r --filter=!@crove/web typecheck",
-    "lint": "oxlint --deny-warnings apps/kernel apps/app packages modules",
+    "lint": "oxlint --deny-warnings apps/kernel apps/extract apps/app packages modules",
     "test": "vitest run --project unit",
     "test:db": "vitest run --project db",
     "docs:check": "node tools/docs-check.mjs",

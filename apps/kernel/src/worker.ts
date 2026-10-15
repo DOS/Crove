@@ -5,6 +5,7 @@ import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
 import { DomainError, inboundKey, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import type { InvoiceExtractor } from '@crove/agent';
+import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
@@ -37,6 +38,8 @@ export interface WorkerDeps {
   runtime: Runtime;
   store: BlobStore;
   extractor: InvoiceExtractor | null;
+  // crove-extract (plan §7.6): every PDF, XML and MIME parse happens there, never in this process.
+  extract: ExtractClient;
   inboundDomain: string | null;
   // Supabase Auth sign-out after a Crove-side revoke (ADR-0028 section 4); null keeps revocation Crove-side only.
   revoker?: SessionRevoker | null;
@@ -51,7 +54,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (!job) return;
     const { orgId, fileId } = job.data;
     try {
-      await extractAndPropose({ runtime: deps.runtime, store: deps.store, extractor: deps.extractor }, orgId, fileId);
+      await extractAndPropose({ runtime: deps.runtime, store: deps.store, extractor: deps.extractor, extract: deps.extract }, orgId, fileId);
     } catch (error) {
       console.error(`[extract] file ${fileId} attempt ${job.retryCount + 1}`, error);
       if (job.retryCount < EXTRACT_RETRY_LIMIT) throw error;
@@ -65,7 +68,11 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (!job) return;
     const label = job.data.sha256.slice(0, 12);
     try {
-      const result = await processInboundEmail({ runtime: deps.runtime, store: deps.store, domain: deps.inboundDomain }, job.data);
+      const result = await processInboundEmail(
+        { runtime: deps.runtime, store: deps.store, domain: deps.inboundDomain, extract: deps.extract },
+        job.data,
+        job.retryCount,
+      );
       console.log(`[inbound] message ${label}: ${result.duplicate ? 'duplicate' : `${result.fileIds.length} file(s)`}`);
     } catch (error) {
       // A message no org can receive (unknown or closed recipient, invalid content) is dropped, not retried.

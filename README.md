@@ -61,6 +61,8 @@ apps/app           web app (Vite + React + TanStack Router), served by the kerne
 apps/web           marketing site (Next.js)
 packages/db        PostgreSQL pool, Kysely types, migration runner
 packages/kernel-*  contract (zod + oRPC), runtime (the single write path), kernel module
+apps/extract       crove-extract: the file parsing sandbox (bytes in, JSON out; no secrets, no egress)
+packages/extract-contract  limits, schemas and the worker's client for crove-extract
 packages/l10n-vn   Vietnamese e-invoice XML, tax codes, TT133 accounting rules
 packages/agent     AI extraction (only package that talks to a model)
 modules/finance    purchase invoices, journal entries, export

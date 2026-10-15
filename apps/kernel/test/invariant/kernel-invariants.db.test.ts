@@ -13,6 +13,8 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { assertSystemContextAccess, createDb, createPool, type Database, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
+import { createExtractApp } from '@crove/extract';
+import { createExtractClient } from '@crove/extract-contract';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
@@ -22,6 +24,9 @@ import { loadConfig } from '../../src/config.ts';
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 const FIXTURE = readFileSync(new URL('./fixtures/einvoice-basic.xml', import.meta.url));
+// crove-extract in process (app.fetch, no port); files are still parsed by its sandboxed parser process.
+const extractApp = createExtractApp({ concurrency: 2 });
+const extract = createExtractClient({ url: 'http://crove-extract.test', fetch: async (input, init) => extractApp.fetch(new Request(input, init)) });
 
 class MemoryStore implements BlobStore {
   private readonly blobs = new Map<string, Uint8Array>();
@@ -88,7 +93,7 @@ suite('kernel invariants on PostgreSQL', () => {
 
   async function propose(bytes: Uint8Array) {
     const { fileId } = await ingest(orgA, users.owner, bytes);
-    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, today: () => '2026-10-13' }, orgA, fileId);
+    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, orgA, fileId);
     const detail = await runtime.query<{ revision: number }>('kernel.inbox.get', { id: proposalId }, { actor: asUser(users.owner), orgId: orgA });
     return { id: proposalId, revision: detail.revision };
   }
@@ -784,7 +789,7 @@ suite('kernel invariants on PostgreSQL', () => {
       { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, source: 'upload' },
       { actor: asUser(uploader), orgId },
     );
-    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, today: () => '2026-10-13' }, orgId, fileId);
+    const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, orgId, fileId);
     if (!proposalId) throw new Error('no proposal');
     return proposalId;
   }

@@ -6,6 +6,7 @@
 //   all      api + worker in one process (default for self-host)
 import { serve } from '@hono/node-server';
 import { InvoiceExtractor } from '@crove/agent';
+import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool } from '@crove/db';
 import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { buildKernelCommands, kernelQueries } from '@crove/kernel';
@@ -79,6 +80,10 @@ async function main() {
   if ((role === 'worker' || role === 'all') && !workerUrl) {
     throw new Error('WORKER_DATABASE_URL is required for the worker; connect it as crove_worker');
   }
+  // Files and emails are parsed only in the sandbox (External-tenant gate T12); the worker always passes this client.
+  if ((role === 'worker' || role === 'all') && !config.EXTRACT_URL) {
+    throw new Error('EXTRACT_URL is required for the worker; point it at the crove-extract service');
+  }
 
   // API and worker build the same store from config; with STORAGE=s3 they share no volume (T7).
   const store = createBlobStore(config);
@@ -99,8 +104,10 @@ async function main() {
     });
   }
 
-  if ((role === 'worker' || role === 'all') && workerUrl) {
+  const extractUrl = config.EXTRACT_URL;
+  if ((role === 'worker' || role === 'all') && workerUrl && extractUrl) {
     const connectionString = workerUrl;
+    console.log(`[extract] parsing in crove-extract at ${new URL(extractUrl).host}`);
     const { pool, db, runtime } = buildRuntime(config, connectionString, 'crove-worker');
     await assertRlsEnforced(pool);
     await assertSystemContextAccess(pool, 'granted');
@@ -110,6 +117,7 @@ async function main() {
       runtime,
       store,
       extractor: buildExtractor(config),
+      extract: createExtractClient({ url: extractUrl }),
       inboundDomain: config.INBOUND_DOMAIN ?? null,
       revoker: createSessionRevoker(config),
     });
