@@ -241,6 +241,8 @@ export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void>
           GRANT SELECT (user_id, status) ON auth.mfa_factors TO crove_auth_reader;
           DROP POLICY IF EXISTS crove_auth_reader_select ON auth.mfa_factors;
           CREATE POLICY crove_auth_reader_select ON auth.mfa_factors AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);`);
+      } else {
+        log('WARNING: auth.mfa_factors does not exist, so the session check cannot require MFA for users who enrolled it; upgrade Supabase Auth and run auth-grants again');
       }
       const { rows } = await client.query<{ ok: boolean }>('SELECT crove_kernel.auth_grants_ready() AS ok');
       if (!rows[0]?.ok) throw new Error('the session check still cannot read auth.sessions and auth.users after the grant');

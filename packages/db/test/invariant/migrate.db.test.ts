@@ -109,10 +109,12 @@ suite('migrations with a runner that is not a superuser', () => {
                has_function_privilege('crove_app', p.oid, 'EXECUTE') AS app,
                EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0) AS public
         FROM pg_proc p
-        WHERE p.oid IN ('crove_kernel.auth_session_valid(uuid, uuid)'::regprocedure, 'crove_kernel.auth_user_sessions(uuid)'::regprocedure)
+        WHERE p.oid IN ('crove_kernel.auth_session_valid(uuid, uuid)'::regprocedure, 'crove_kernel.auth_user_sessions(uuid)'::regprocedure,
+                        'crove_kernel.auth_user_has_verified_factor(uuid)'::regprocedure)
         ORDER BY 1`);
       expect(rows).toEqual([
         { fn: 'crove_kernel.auth_session_valid(uuid,uuid)', owner: 'crove_auth_reader', app: false, public: false },
+        { fn: 'crove_kernel.auth_user_has_verified_factor(uuid)', owner: 'crove_auth_reader', app: false, public: false },
         { fn: 'crove_kernel.auth_user_sessions(uuid)', owner: 'crove_auth_reader', app: false, public: false },
       ]);
       const role = await runner.query(

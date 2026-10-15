@@ -4,7 +4,8 @@
 -- Without this, a password or a recovery link alone gives an aal1 token that reads every query and runs R1 and R2
 -- commands; only R3 asked for the second factor. On self-host (AUTH_SESSION_CHECK=db) the per-request session check
 -- now also reads whether the user has a verified factor in Supabase Auth's auth.mfa_factors and refuses an aal1
--- token for such a user with 28000 MFA_REQUIRED (401 MFA_REQUIRED, which the SPA answers with the MFA challenge).
+-- token for such a user with 28000 MFA_REQUIRED (401 MFA_REQUIRED: the SPA does not sign the user out; it sends them
+-- to the MFA challenge once that screen ships, issue #32, and shows the server's message until then).
 --
 -- auth_user_has_verified_factor()  owned by crove_auth_reader, reads auth.mfa_factors (user_id, status) only. The
 --                                  `auth-grants` step grants exactly those two columns and a SELECT policy, never the
@@ -126,7 +127,8 @@ BEGIN
        OR NOT crove_kernel.auth_session_valid(p_session_id, v_subject::uuid) THEN
       RAISE EXCEPTION 'SESSION_INVALID' USING ERRCODE = '28000';
     END IF;
-    -- A live session that has not passed MFA, for a user who has a second factor: finish signing in first.
+    -- A live session that has not passed MFA, for a user who has a second factor: finish signing in first. An absent
+    -- auth.mfa_factors means a Supabase Auth without MFA (see the header); auth-grants warns when it is absent.
     IF p_aal <> 'aal2'
        AND pg_catalog.to_regclass('auth.mfa_factors') IS NOT NULL
        AND crove_kernel.auth_user_has_verified_factor(v_subject::uuid) THEN
