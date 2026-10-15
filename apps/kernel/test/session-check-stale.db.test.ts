@@ -9,7 +9,7 @@ import { migrate } from '@crove/db/migrate';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
-const DROP_MIGRATION = '20261016000000_crove_kernel_session_check_drop_stale.sql';
+const DROP_MIGRATION = '20261016110000_crove_kernel_session_check_drop_stale.sql';
 
 const suite = ADMIN ? describe : describe.skip;
 
