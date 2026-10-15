@@ -30,12 +30,13 @@ export const PROTECTED_PATHS = [
   [/^CLAUDE\.md$/, 'agent policy'],
   [/^AGENTS\.md$/, 'agent policy'],
   // Dependencies and test runners: they decide what code and which tests run in CI.
-  // Workspace package.json files are not listed: a new dependency always changes the lockfile.
-  [/^package\.json$/, 'root package manifest'],
+  // Every package.json: `exports`/`main`/`imports` can repoint a package the invariant suite imports,
+  // and `scripts`/`pnpm` fields run code, all without touching the lockfile.
+  [/(^|\/)package\.json$/, 'package manifest'],
   [/^pnpm-lock\.yaml$/, 'lockfile'],
   [/^pnpm-workspace\.yaml$/, 'workspace and dependency catalog'],
   [/(^|\/)\.npmrc$/, 'package manager config'],
-  [/^vitest(\.[a-z]+)?\.config\.[cm]?[jt]s$/, 'test runner config'],
+  [/^vitest(\.[a-z]+)?\.(config|workspace)\.[cm]?[jt]s$/, 'test runner config'],
   // This gate itself: the detection script and the invariant suite.
   [/^tools\/ci\//, 'protected-path gate'],
   [/(^|\/)test\/invariant\//, 'invariant suite'],
