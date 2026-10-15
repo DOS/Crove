@@ -51,6 +51,39 @@ function rateLimited(detail: string | undefined): DomainError {
   );
 }
 
+// The JSON DETAIL of INBOUND_ROTATE_RATE_LIMITED (crove_kernel.inbound_rotate, #113): which per-org limit refused,
+// and for the rolling 24-hour limit, when the oldest rotation in the window leaves it. inbound_rotate_busy: another
+// rotation of the same org held the per-org lock past the definer's lock_timeout.
+function inboundRotateLimited(detail: string | undefined): DomainError {
+  let parsed: { rule?: unknown; limit?: unknown; retryAfterSeconds?: unknown } = {};
+  try {
+    parsed = JSON.parse(detail ?? '{}') as typeof parsed;
+  } catch {
+    parsed = {};
+  }
+  const limit = typeof parsed.limit === 'number' ? parsed.limit : null;
+  if (parsed.rule === 'inbound_rotate_busy') {
+    return new DomainError('RATE_LIMITED', 429, 'Địa chỉ nhận hóa đơn đang được đổi, hãy thử lại sau', {
+      rule: 'inbound_rotate_busy',
+      retryAfterSeconds: 1,
+    });
+  }
+  if (parsed.rule === 'inbound_rotate_total') {
+    return new DomainError('RATE_LIMITED', 429, `Tổ chức đã đổi địa chỉ nhận hóa đơn đủ số lần tối đa${limit ? ` (${limit})` : ''}`, {
+      rule: 'inbound_rotate_total',
+      limit,
+    });
+  }
+  const details: Record<string, unknown> = { rule: 'inbound_rotate_per_day', limit };
+  if (typeof parsed.retryAfterSeconds === 'number') details.retryAfterSeconds = parsed.retryAfterSeconds;
+  return new DomainError(
+    'RATE_LIMITED',
+    429,
+    `Tổ chức đã đổi địa chỉ nhận hóa đơn quá nhiều lần trong 24 giờ qua${limit ? ` (tối đa ${limit})` : ''}, hãy thử lại sau`,
+    details,
+  );
+}
+
 // Maps database errors to domain errors without leaking whether other tenants' rows exist.
 export function toDomainError(error: unknown): DomainError {
   if (error instanceof DomainError) return error;
@@ -80,6 +113,7 @@ export function toDomainError(error: unknown): DomainError {
       return new DomainError('INVALID', 422, 'Dữ liệu không hợp lệ');
     case 'P0001':
       if (pg.message === 'ORG_CREATE_RATE_LIMITED') return rateLimited(pg.detail);
+      if (pg.message === 'INBOUND_ROTATE_RATE_LIMITED') return inboundRotateLimited(pg.detail);
       return new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
     case '53400':
       return new DomainError('OVERLOADED', 503, 'Hệ thống đang quá tải, hãy thử lại sau');

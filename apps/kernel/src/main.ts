@@ -31,7 +31,10 @@ function buildRuntime(config: Config, connectionString: string, applicationName:
     stepUp: config.AUTH_STEP_UP,
   }).register({
     commands: [
-      ...buildKernelCommands({ orgCreateLimits: { perDay: config.ORG_CREATE_LIMIT_PER_DAY, total: config.ORG_CREATE_LIMIT_TOTAL } }),
+      ...buildKernelCommands({
+        orgCreateLimits: { perDay: config.ORG_CREATE_LIMIT_PER_DAY, total: config.ORG_CREATE_LIMIT_TOTAL },
+        inboundRotateLimits: { perDay: config.INBOUND_ROTATE_LIMIT_PER_DAY, total: config.INBOUND_ROTATE_LIMIT_TOTAL },
+      }),
       ...financeCommands,
     ],
     queries: [...kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null }), ...financeQueries],
