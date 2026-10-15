@@ -5,8 +5,9 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { sql } from 'kysely';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
@@ -145,6 +146,73 @@ suite('kernel on PostgreSQL', () => {
     await admin.connect();
     await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
     await admin.end();
+  });
+
+  it('logs a refusal whose audit row cannot be written and still returns the refusal (#102)', async () => {
+    const tag = randomUUID().slice(0, 8);
+    const founder = await upsertIdentity(db, { issuer: 'test', subject: `audit-loss-${tag}`, email: `audit-loss-${tag}@example.com`, name: null });
+    const key = randomUUID();
+    const created = await createOrg(runtime, asUser(founder), `Mất audit ${tag}`, key);
+
+    // The command runs in the first transaction; every later one (the refusal audit) is read-only, so the
+    // audit INSERT fails in the database (SQLSTATE 25006).
+    let transactions = 0;
+    const brokenAudit = new Proxy(db, {
+      get(target, prop) {
+        if (prop !== 'transaction') return Reflect.get(target, prop, target);
+        return () => {
+          const builder = target.transaction();
+          transactions += 1;
+          if (transactions === 1) return builder;
+          return {
+            execute: <T>(fn: (trx: Parameters<Parameters<typeof builder.execute>[0]>[0]) => Promise<T>) =>
+              builder.execute(async (trx) => {
+                await sql`SET TRANSACTION READ ONLY`.execute(trx);
+                return fn(trx);
+              }),
+          };
+        };
+      },
+    }) as Db;
+    const broken = new Runtime(brokenAudit).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+
+    const failedAudits = () =>
+      withAdmin(async (admin) => {
+        const { rows } = await admin.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.org.create' AND outcome = 'failed'`,
+          [created.orgId],
+        );
+        return rows[0]?.n;
+      });
+
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // A refused replay into the existing org: the caller still gets the original 422, not a 500.
+      await expect(createOrg(broken, asUser(founder), `Tên khác ${tag}`, key)).rejects.toMatchObject({ code: 'IDEMPOTENCY_MISMATCH', status: 422 });
+      expect(transactions).toBe(2);
+      expect(await failedAudits()).toBe(0);
+      // The lost row is logged with ids and codes only.
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged).toHaveBeenCalledWith('[execute kernel.org.create] AUDIT_WRITE_FAILED', {
+        orgId: created.orgId,
+        commandId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        actorType: 'user',
+        actorId: founder,
+        outcome: 'failed',
+        refusal: 'IDEMPOTENCY_MISMATCH',
+        error: 'INTERNAL',
+        sqlState: '25006',
+      });
+      expect(JSON.stringify(logged.mock.calls)).not.toContain(`Tên khác ${tag}`);
+
+      // With a working database the same refusal is audited and nothing is logged.
+      logged.mockClear();
+      await expect(createOrg(runtime, asUser(founder), `Tên khác ${tag}`, key)).rejects.toMatchObject({ code: 'IDEMPOTENCY_MISMATCH' });
+      expect(await failedAudits()).toBe(1);
+      expect(logged).not.toHaveBeenCalled();
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it('turns an e-invoice into a proposal, and records it once on approval', async () => {

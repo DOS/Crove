@@ -715,6 +715,44 @@ suite('kernel invariants on PostgreSQL', () => {
     });
   });
 
+  it('commits a tenant only with an ok kernel.org.create audit row naming its creator (#102)', async () => {
+    const tag = randomUUID().slice(0, 8);
+    const creator = await upsertIdentity(db, { issuer: 'test', subject: `creator-${tag}`, email: `creator-${tag}@example.com`, name: null });
+    // As the database owner, in one transaction: a tenant created by `creator` plus one audit row of our choosing.
+    const rigged = (slug: string, audit: { actorType: 'user' | 'system'; actorId: string | null; outcome: 'ok' | 'failed' }) =>
+      withAdmin(async (admin) => {
+        await admin.query('BEGIN');
+        try {
+          const { rows } = await admin.query<{ org_id: string }>(
+            `INSERT INTO crove_kernel.tenant (slug, name, created_by) VALUES ($1, 'Rigged', $2) RETURNING org_id`,
+            [slug, creator],
+          );
+          await admin.query(
+            `INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256)
+             VALUES ($1, $2, $3, 'kernel.org.create', gen_random_uuid(), $4, 'rigged')`,
+            [rows[0]?.org_id, audit.actorType, audit.actorId, audit.outcome],
+          );
+          await admin.query('COMMIT');
+        } catch (error) {
+          await admin.query('ROLLBACK').catch(() => {});
+          throw error;
+        }
+      });
+    const tenants = (slug: string) =>
+      withAdmin(async (admin) => (await admin.query(`SELECT 1 FROM crove_kernel.tenant WHERE slug = $1`, [slug])).rows.length);
+
+    // Another user's audit row, a system row and the creator's failed row do not satisfy the trigger.
+    await expect(rigged(`by-other-${tag}`, { actorType: 'user', actorId: users.outsider, outcome: 'ok' })).rejects.toThrow(/ORG_CREATE_UNAUDITED/);
+    await expect(rigged(`by-system-${tag}`, { actorType: 'system', actorId: null, outcome: 'ok' })).rejects.toThrow(/ORG_CREATE_UNAUDITED/);
+    await expect(rigged(`failed-${tag}`, { actorType: 'user', actorId: creator, outcome: 'failed' })).rejects.toThrow(/ORG_CREATE_UNAUDITED/);
+    expect(await tenants(`by-other-${tag}`)).toBe(0);
+    expect(await tenants(`by-system-${tag}`)).toBe(0);
+    expect(await tenants(`failed-${tag}`)).toBe(0);
+    // Control: the creator's own ok row does.
+    await rigged(`by-creator-${tag}`, { actorType: 'user', actorId: creator, outcome: 'ok' });
+    expect(await tenants(`by-creator-${tag}`)).toBe(1);
+  });
+
   // ---------------------------------------------------------------------------------------------------------
   // Approval policy (plan §4.7 P10 and P12, §8.3; External-tenant gate T2). Each case runs in its own org.
   // ---------------------------------------------------------------------------------------------------------
