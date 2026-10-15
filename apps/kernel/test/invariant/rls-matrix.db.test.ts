@@ -61,6 +61,9 @@ interface RowFactory {
   noInsertControl?: string;
   // The 42501 denial a privileged actor gets for another org's row, when a trigger refuses before RLS does.
   insertDenied?: RegExp;
+  // For a role that may update some columns but not org_id: the assignment (and extra row filter) the update
+  // probes use, when a no-op assignment would be refused by a trigger. Defaults to "<first column> = <itself>".
+  update?: { set: string; where?: string };
 }
 
 const hex64 = () => randomBytes(32).toString('hex');
@@ -111,6 +114,18 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   'crove_kernel.activity': {
     make: (o) => ({ row: { org_id: o.id, record_type: 'party', record_id: o.party, kind: 'rls.matrix', summary: 'RLS matrix' } }),
+  },
+  'crove_kernel.inbound_address': {
+    // The ledger of inbound tokens. Login roles hold nothing on it; crove_definer_tenant (inbound_rotate) holds
+    // SELECT, INSERT and UPDATE (retired_at) only. An org has at most one active address, so the rows the matrix
+    // adds are already retired. The guard trigger refuses every update except retiring an active row once, so
+    // the update probes retire (a no-op assignment would be refused by the trigger, not by RLS): for org B that
+    // must touch 0 rows, for org A it retires the active row. DELETE and TRUNCATE are refused by privilege before
+    // the guard trigger runs.
+    update: { set: 'retired_at = pg_catalog.now()', where: 'retired_at IS NULL' },
+    make: (o) => ({
+      row: { org_id: o.id, token: randomBytes(12).toString('hex'), created_at: '2026-10-01T00:00:00Z', retired_at: '2026-10-02T00:00:00Z' },
+    }),
   },
   'crove_kernel.auth_session_org': { make: (o) => ({ row: { org_id: o.id, user_id: o.owner, session_id: randomUUID() } }) },
   'crove_finance.purchase_document': {
@@ -292,6 +307,9 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
   }
 
   const can = (table: string, role: string, op: Op) => privileges.get(table)?.get(role)?.has(op) ?? false;
+  // updatable[table][role] = the columns the role may update (all of them for a table-level grant).
+  const updatable = new Map<string, Map<string, string[]>>();
+  const columnsToUpdate = (table: string, role: string) => updatable.get(table)?.get(role) ?? [];
 
   function expectDenied(outcome: Outcome, pattern: RegExp, where: string) {
     if (outcome.ok) throw new Error(`${where}: expected 42501 matching ${pattern}, but it succeeded (${outcome.rowCount} rows)`);
@@ -383,6 +401,20 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
       const ops = byRole.get(g.role) ?? new Set<Op>();
       byRole.set(g.role, ops);
       ops.add(g.op);
+    }
+
+    const { rows: columns } = await admin.query<{ tbl: string; role: string; col: string }>(
+      `SELECT t AS tbl, r AS role, a.attname::text AS col
+       FROM pg_catalog.unnest($1::text[]) t, pg_catalog.unnest($2::text[]) r, pg_catalog.pg_attribute a
+       WHERE a.attrelid = t::regclass AND a.attnum > 0 AND NOT a.attisdropped
+         AND pg_catalog.has_column_privilege(r, t, a.attname, 'UPDATE')
+       ORDER BY a.attnum`,
+      [relations.filter((r) => ['r', 'p'].includes(r.kind)).map((r) => r.name), roles],
+    );
+    for (const c of columns) {
+      const byRole = updatable.get(c.tbl) ?? new Map<string, string[]>();
+      updatable.set(c.tbl, byRole);
+      byRole.set(c.role, [...(byRole.get(c.role) ?? []), c.col]);
     }
 
     const app = await connect(loginUrl('crove_app', 'test-app-pw'));
@@ -486,10 +518,11 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
         // TRUNCATE ignores RLS; REFERENCES and TRIGGER let a role probe or intercept rows outside it.
         expect(grants.filter((g) => !['SELECT', 'INSERT', 'UPDATE', 'DELETE'].includes(g.op)), `privileges on ${table} that RLS does not govern`).toEqual([]);
         expect(grants.filter((g) => g.bypass), `roles with BYPASSRLS and privileges on ${table}`).toEqual([]);
-        // Column-level grants are invisible to has_table_privilege, so the probes below would not expect them.
+        // Column-level grants are invisible to has_table_privilege, so the read and insert probes would not expect
+        // them. Column-level UPDATE is allowed: the update probes read the updatable columns per role.
         const { rows: columnGrants } = await admin.query<{ role: string; op: string }>(
           `SELECT r.rolname AS role, p AS op
-           FROM pg_catalog.pg_roles r, pg_catalog.unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) p
+           FROM pg_catalog.pg_roles r, pg_catalog.unnest(ARRAY['SELECT', 'INSERT', 'REFERENCES']) p
            WHERE NOT r.rolsuper AND r.rolname NOT LIKE 'pg\\_%'
              AND NOT pg_catalog.pg_has_role(r.oid, (SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid = $1::regclass), 'MEMBER')
              AND pg_catalog.has_any_column_privilege(r.oid, $1::regclass, p)
@@ -575,27 +608,39 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
       });
 
       it('lets no actor update another org, or move its own rows there', async () => {
-        factoryFor(table);
+        const factory = factoryFor(table);
         for (const actor of actors) {
           const where = `${actor.name} updating ${table}`;
-          const others = await probe(actor, (c) => c.query(`UPDATE ${table} SET org_id = org_id WHERE org_id = $1`, [orgs.B.id]));
+          const cols = columnsToUpdate(table, actor.role);
+          const byOrg = cols.includes('org_id');
+          // The assignment the probes use: org_id itself when the role may update it (or may update nothing, so
+          // the probe must be refused), else a granted column.
+          const set = byOrg || cols.length === 0 ? 'org_id = org_id' : (factory.update?.set ?? `"${cols[0]}" = "${cols[0]}"`);
+          const filter = !byOrg && factory.update?.where ? ` AND (${factory.update.where})` : '';
+          const others = await probe(actor, (c) => c.query(`UPDATE ${table} SET ${set} WHERE org_id = $1${filter}`, [orgs.B.id]));
           const moved = await probe(actor, (c) => c.query(`UPDATE ${table} SET org_id = $1 WHERE org_id = $2`, [orgs.B.id, orgs.A.id]));
-          if (!(can(table, actor.role, 'UPDATE') && can(table, actor.role, 'SELECT'))) {
+          if (cols.length === 0 || !can(table, actor.role, 'SELECT')) {
             expectDenied(others, PRIVILEGE_DENIED, `${where} (org B rows)`);
             expectDenied(moved, PRIVILEGE_DENIED, `${where} (moving org A rows to org B)`);
             continue;
           }
           expect(expectRows(others, `${where} (org B rows)`).rowCount, `${where}: org B rows updated`).toBe(0);
-          // Pull every row into org A without reading a column: only rows the actor already sees may change.
-          const pulled = await sweep(actor, table, `UPDATE ${table} SET org_id = $1`, [orgs.A.id]);
-          if (pulled) expect(pulled.changed, `${where}: rows pulled into org A without a WHERE clause`).toBeLessThanOrEqual(pulled.visible);
-          if (actor.org === null) {
+          // Update every row without reading a column: only rows the actor already sees may change.
+          const pulled = byOrg
+            ? await sweep(actor, table, `UPDATE ${table} SET org_id = $1`, [orgs.A.id])
+            : await sweep(actor, table, `UPDATE ${table} SET ${set}`, []);
+          if (pulled) expect(pulled.changed, `${where}: rows updated without a WHERE clause`).toBeLessThanOrEqual(pulled.visible);
+          if (!byOrg) {
+            // The role may not touch org_id at all.
+            expectDenied(moved, PRIVILEGE_DENIED, `${where} (moving org A rows to org B)`);
+          } else if (actor.org === null) {
             expect(expectRows(moved, `${where} (moving org A rows to org B)`).rowCount, `${where}: rows moved without a context`).toBe(0);
-            continue;
+          } else {
+            expectDenied(moved, RLS_DENIED, `${where} (moving org A rows to org B)`);
           }
-          expectDenied(moved, RLS_DENIED, `${where} (moving org A rows to org B)`);
+          if (actor.org === null) continue;
           // Control: the same update on its own rows runs, so the zero above is the org filter.
-          const own = await probe(actor, (c) => c.query(`UPDATE ${table} SET org_id = org_id WHERE org_id = $1`, [orgs.A.id]));
+          const own = await probe(actor, (c) => c.query(`UPDATE ${table} SET ${set} WHERE org_id = $1${filter}`, [orgs.A.id]));
           expect(expectRows(own, `${where} (own rows, control)`).rowCount, `${where}: own rows updated`).toBeGreaterThan(0);
         }
       });
