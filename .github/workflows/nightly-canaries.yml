@@ -1,0 +1,120 @@
+name: nightly-canaries
+
+# Early warning for toolchain drift: the unit tests on Bun (latest stable) and the typecheck on typescript@next.
+# Scheduled only, so a red canary never blocks a PR. On failure, one tracking issue (label `tooling`) is opened or
+# updated; see the `report` job.
+
+on:
+  schedule:
+    # 02:00 Asia/Ho_Chi_Minh (UTC+7) is 19:00 UTC the day before.
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-canaries
+  cancel-in-progress: false
+
+jobs:
+  bun-unit:
+    name: Unit tests on Bun (latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Node and pnpm only install the locked dependencies, exactly as ci.yml does; the tests run on Bun.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.34.7 --no-fund --no-audit
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "@crove/app..." --filter "crove-monorepo"
+
+      - name: Bun version
+        run: bun --version
+
+      # --bun makes the vitest bin run under Bun instead of the Node in its shebang. S3 and database tests are not
+      # part of this canary (they need MinIO and PostgreSQL); the unit project skips what lacks its service.
+      - name: Unit tests (Bun runtime)
+        run: bun --bun run vitest run --project unit
+
+  typescript-next:
+    name: Typecheck on typescript@next
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.34.7 --no-fund --no-audit
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "@crove/app..." --filter "crove-monorepo"
+
+      # Installed outside the workspace, so package.json and pnpm-lock.yaml stay untouched.
+      - name: Install typescript@next
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ts-next" typescript@next --no-fund --no-audit
+          "$RUNNER_TEMP/ts-next/node_modules/.bin/tsc" --version
+
+      - name: Typecheck every package with typescript@next
+        run: pnpm -r --filter="!@crove/web" exec "$RUNNER_TEMP/ts-next/node_modules/.bin/tsc" --noEmit -p tsconfig.json
+
+      - name: Lockfile is unchanged
+        run: git diff --exit-code -- pnpm-lock.yaml package.json
+
+  # The only job with a write permission and the only one that touches issues. It runs only when a canary failed.
+  report:
+    name: Open or update the tracking issue
+    needs: [bun-unit, typescript-next]
+    if: ${{ always() && (needs.bun-unit.result == 'failure' || needs.typescript-next.result == 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          BUN_RESULT: ${{ needs.bun-unit.result }}
+          TS_RESULT: ${{ needs.typescript-next.result }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const title = 'Nightly canary failing: Bun runtime or typescript@next';
+            const lines = [
+              `- Unit tests on Bun (latest): ${process.env.BUN_RESULT}`,
+              `- Typecheck on typescript@next: ${process.env.TS_RESULT}`,
+            ];
+            const body = `Run ${runUrl}\n\n${lines.join('\n')}`;
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', labels: 'tooling', per_page: 100,
+            });
+            const existing = open.find((i) => !i.pull_request && i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body });
+            } else {
+              await github.rest.issues.create({
+                owner, repo, title, labels: ['tooling'],
+                body: `The nightly canary workflow failed. This issue is updated by each failing run and can be closed once the canaries are green again.\n\n${body}`,
+              });
+            }
