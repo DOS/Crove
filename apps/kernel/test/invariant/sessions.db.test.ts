@@ -468,8 +468,13 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
   });
 
   it('requires fresh MFA for membership changes through the API', async () => {
+    // A role change of an existing member (#36); adding someone new is covered by the org setup above.
     const add = async (mfaAgeS?: number) =>
-      rpc('org/addMember', await tokenFor(accounts.owner, mfaAgeS === undefined ? {} : { mfaAgeS }), { email: accounts.member.email, role: 'member' });
+      rpc('org/changeMemberRole', await tokenFor(accounts.owner, mfaAgeS === undefined ? {} : { mfaAgeS }), {
+        userId: accounts.member.userId,
+        role: 'member',
+        idempotencyKey: randomUUID(),
+      });
     expect(await add()).toMatchObject({ status: 403, body: { code: 'STEP_UP_REQUIRED' } });
     expect(await add(10 * 60)).toMatchObject({ status: 403, body: { code: 'STEP_UP_REQUIRED' } });
     expect((await add(20)).status).toBe(200);

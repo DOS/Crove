@@ -35,6 +35,11 @@ export const contract = {
     // Owner only. Retires the org's inbound email address for good and returns the new one (null when the server
     // has no inbound domain). A retry with the same idempotencyKey does not rotate again.
     rotateInbound: oc.input(z.object({ idempotencyKey: zId })).output(z.object({ inboundAddress: z.string().nullable() })),
+    // Owners only (R3). A retry with the same idempotencyKey returns the first result.
+    changeMemberRole: oc
+      .input(z.object({ userId: zId, role: zRole, idempotencyKey: zId }))
+      .output(z.object({ userId: zId, role: zRole, previousRole: zRole })),
+    removeMember: oc.input(z.object({ userId: zId, idempotencyKey: zId })).output(z.object({ userId: zId, previousRole: zRole })),
   },
   // Sessions (devices) of a member of the org in the header. API only; the screen is a follow-up.
   sessions: {

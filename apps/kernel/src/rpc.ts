@@ -71,6 +71,18 @@ export function createRpcHandler(runtime: Runtime) {
           return { inboundAddress: org.inboundAddress };
         }),
       ),
+      changeMemberRole: os.org.changeMemberRole.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('kernel.member.change_role', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+      removeMember: os.org.removeMember.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('kernel.member.remove', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
     },
     sessions: {
       list: os.sessions.list.handler(({ context, input }) =>

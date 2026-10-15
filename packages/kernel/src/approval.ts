@@ -106,7 +106,9 @@ export async function decideApproval(
     .selectFrom('crove_kernel.tenant_member')
     .select(['user_id', 'role'])
     .where('org_id', '=', orgId)
-    .where('user_id', 'in', snapshot);
+    .where('user_id', 'in', snapshot)
+    // user_id order, as membership changes lock, so the two never take the same rows in opposite orders.
+    .orderBy('user_id');
   if (options.lock) query = query.forShare();
   const live = await query.execute();
   // Eligible now: in the snapshot taken at creation AND still holding an approving role (re-checked live).
