@@ -20,6 +20,10 @@ export interface UserActor {
   sessionId?: string;
   // Unix seconds of the newest second-factor `amr` entry, or null. R3 needs it within STEP_UP_MAX_AGE_S.
   mfaAt?: number | null;
+  // Live check of this request's access token with Supabase Auth (ADR-0028 section 5), bound by the authenticator
+  // so the token itself never travels with the actor. Resolves when Auth confirms the session's user; throws 401
+  // or 503 otherwise.
+  confirmLive?: () => Promise<void>;
 }
 
 export type Actor = UserActor | { type: 'system'; component: string };
@@ -72,7 +76,10 @@ export interface CommandContext extends QueryContext {
 // before org-less work (orgId: null). Throws (or raises in SQL) 401, 403 or 503; never passes a session it cannot
 // vouch for.
 export interface SessionStatusSource {
-  readonly mode: 'db' | 'events' | 'off';
+  readonly mode: 'db' | 'jwt' | 'off';
+  // true when the per-request check does not read Supabase Auth (jwt): every R3 command run by a user then needs
+  // the actor's live check (UserActor.confirmLive), and fails closed without one.
+  readonly liveCheckForR3: boolean;
   check(trx: Transaction<Database>, actor: UserActor & { sessionId: string }, orgId: string | null): Promise<void>;
 }
 
@@ -204,6 +211,18 @@ export class Runtime {
     }
   }
 
+  // ADR-0028 section 5: R3 run by a user is confirmed with Supabase Auth at execution time when the per-request
+  // check does not read Auth itself (jwt). After the role and step-up checks, so a user who may not run the command
+  // or lacks fresh MFA is told so without a call to Auth. No cache. Fails closed: an actor without a bound live
+  // check gets 503.
+  private async requireLiveSession(def: CommandDef<unknown, unknown>, actor: Actor): Promise<void> {
+    if (def.risk !== 'R3' || actor.type !== 'user' || !this.sessions?.liveCheckForR3) return;
+    if (!actor.confirmLive) {
+      throw new DomainError('AUTH_UNAVAILABLE', 503, 'Chưa kiểm tra được phiên đăng nhập với máy chủ xác thực, hãy thử lại sau');
+    }
+    await actor.confirmLive();
+  }
+
   private sessionDetail(actor: UserActor): Record<string, unknown> {
     return { aal: actor.aal, sessionId: actor.sessionId ?? null, mfaAt: actor.mfaAt ?? null };
   }
@@ -284,6 +303,8 @@ export class Runtime {
         const proposalId = options?.proposalId ?? base.proposalId;
         this.authorize(nested.access, base.actor, base.role, proposalId !== null);
         this.requireStepUp(nested, base.actor);
+        // An R3 command already confirmed the session live for this execution.
+        if (def.risk !== 'R3') await this.requireLiveSession(nested, base.actor);
         return this.runInTx<R>(trx, nested, parsed, { ...base, proposalId });
       },
     };
@@ -357,6 +378,7 @@ export class Runtime {
         }
         this.authorize(def.access, actor, role, false);
         this.requireStepUp(def, actor);
+        await this.requireLiveSession(def, actor);
 
         if (idempotencyKey) {
           const key = actorKey(actor);

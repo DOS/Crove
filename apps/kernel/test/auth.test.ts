@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hasFreshMfa } from '@crove/kernel-runtime';
 import { createTokenVerifier, mfaTimestamp } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
-import { createSessionStatusSource, createSupabaseSessionRevoker } from '../src/sessions.ts';
+import { createLiveCheck, createSessionStatusSource, createSupabaseLiveCheck, createSupabaseSessionRevoker } from '../src/sessions.ts';
 
 const SECRET = 'unit-test-jwt-secret-0123456789abcdef';
 const KEY = new TextEncoder().encode(SECRET);
@@ -139,13 +139,82 @@ describe('MFA step-up freshness (policy P11)', () => {
 });
 
 describe('session status adapters', () => {
-  it('fails closed with 503 on the events adapter until the Cloud consumer exists', async () => {
-    const source = createSessionStatusSource('events');
-    expect(source.mode).toBe('events');
-    await expect(source.check({} as never, { type: 'user', userId: SUBJECT, aal: 'aal1', sessionId: SESSION }, null)).rejects.toMatchObject({
-      code: 'AUTH_STATUS_STALE',
-      status: 503,
+  it('maps each mode to its source; only jwt needs the live check for R3', () => {
+    expect(createSessionStatusSource('jwt')).toMatchObject({ mode: 'jwt', liveCheckForR3: true });
+    // db reads Supabase Auth's own tables on every request; off never consults Auth (local URLs only).
+    expect(createSessionStatusSource('db')).toMatchObject({ mode: 'db', liveCheckForR3: false });
+    expect(createSessionStatusSource('off')).toMatchObject({ mode: 'off', liveCheckForR3: false });
+  });
+
+  it('builds the live check for jwt with an Auth URL only', () => {
+    const jwt = { DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: ISSUER };
+    expect(createLiveCheck(loadConfig({ ...jwt, PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' }))).toBeTypeOf('function');
+    expect(createLiveCheck(loadConfig(jwt))).toBeNull();
+    expect(createLiveCheck(loadConfig({ ...jwt, AUTH_UPSTREAM_URL: 'http://auth:9999' }))).toBeNull();
+    expect(createLiveCheck(loadConfig({ ...jwt, AUTH_UPSTREAM_URL: 'http://auth:9999', AUTH_SESSION_CHECK: 'jwt' }))).toBeTypeOf('function');
+  });
+});
+
+describe('live check with Supabase Auth for R3 (GET /user)', () => {
+  let upstream: Server;
+  let url = '';
+  let answer: { status: number; body: string } | 'drop' | 'hang' = { status: 200, body: '{}' };
+  let seen: { method: string; path: string; headers: IncomingHttpHeaders } | null = null;
+
+  beforeAll(async () => {
+    upstream = createServer((req, res) => {
+      seen = { method: req.method ?? '', path: req.url ?? '', headers: req.headers };
+      if (answer === 'drop') {
+        req.socket.destroy();
+        return;
+      }
+      if (answer === 'hang') return;
+      res.writeHead(answer.status, { 'content-type': 'application/json' }).end(answer.body);
     });
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    url = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/auth/v1/`;
+  });
+
+  afterAll(async () => {
+    upstream.closeAllConnections();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  const confirm = (options: { apiKey?: string } = {}) => createSupabaseLiveCheck({ authUrl: url, timeoutMs: 300, ...options })('the-token', SUBJECT);
+  const user = (id: unknown) => ({ status: 200, body: JSON.stringify({ id, aud: 'authenticated' }) });
+
+  it('passes a 200 for the same user and sends the token and the publishable key', async () => {
+    answer = user(SUBJECT);
+    await expect(confirm({ apiKey: 'anon' })).resolves.toBeUndefined();
+    expect(seen).toMatchObject({ method: 'GET', path: '/auth/v1/user' });
+    expect(seen?.headers.authorization).toBe('Bearer the-token');
+    expect(seen?.headers.apikey).toBe('anon');
+    await confirm();
+    expect(seen?.headers.apikey).toBeUndefined();
+  });
+
+  it('answers 401 for any other 4xx and for a 200 that names someone else', async () => {
+    for (const status of [400, 401, 403, 404, 422]) {
+      answer = { status, body: '{"error_code":"session_not_found"}' };
+      await expect(confirm()).rejects.toMatchObject({ status: 401, code: 'UNAUTHENTICATED' });
+    }
+    for (const id of ['9a8b7c6d-0000-4a3b-8c2d-1e0f9a8b7c6d', undefined, 42]) {
+      answer = user(id);
+      await expect(confirm()).rejects.toMatchObject({ status: 401 });
+    }
+  });
+
+  it('answers 503 for 429, 5xx, an unreadable answer, a dropped connection and a timeout', async () => {
+    for (const status of [429, 500, 502, 503, 504]) {
+      answer = { status, body: '{}' };
+      await expect(confirm()).rejects.toMatchObject({ status: 503, code: 'AUTH_UNAVAILABLE' });
+    }
+    answer = { status: 200, body: 'not json' };
+    await expect(confirm()).rejects.toMatchObject({ status: 503 });
+    answer = 'drop';
+    await expect(confirm()).rejects.toMatchObject({ status: 503 });
+    answer = 'hang';
+    await expect(confirm()).rejects.toMatchObject({ status: 503 });
   });
 });
 

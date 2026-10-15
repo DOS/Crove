@@ -13,7 +13,7 @@ import { buildKernelCommands, kernelQueries } from '@crove/kernel';
 import { LocalDiskStore, Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from './auth.ts';
-import { loadConfig, type Config } from './config.ts';
+import { liveAuthUrl, loadConfig, type Config } from './config.ts';
 import { createHttpApp } from './http.ts';
 import { createSessionRevoker, createSessionStatusSource } from './sessions.ts';
 import { createBlobStore, describeStorage } from './storage.ts';
@@ -77,7 +77,11 @@ async function main() {
   const config = loadConfig();
   if (role === 'migrate') return runMigrate(config);
   if (role === 'auth-grants') return runAuthGrants(config);
-  console.log(`[auth] session check: ${config.AUTH_SESSION_CHECK}, step-up for R3: ${config.AUTH_STEP_UP}`);
+  const live = config.AUTH_SESSION_CHECK === 'jwt' ? liveAuthUrl(config) : null;
+  console.log(
+    `[auth] session check: ${config.AUTH_SESSION_CHECK}, step-up for R3: ${config.AUTH_STEP_UP}` +
+      (config.AUTH_SESSION_CHECK === 'jwt' ? `, live check for R3: ${live ? new URL(live).host : 'not configured (R3 answers 503)'}` : ''),
+  );
   // The worker alone enters system context, so it never shares the API's login role (External-tenant gate T5).
   const workerUrl = config.WORKER_DATABASE_URL;
   if ((role === 'worker' || role === 'all') && !workerUrl) {

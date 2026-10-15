@@ -126,7 +126,6 @@ export function createHttpApp(deps: HttpDeps) {
         const { rows } = await client.query<{ ok: boolean }>('SELECT crove_kernel.auth_grants_ready() AS ok');
         if (!rows[0]?.ok) return c.json({ ready: false, reason: 'auth_grants' }, 503);
       }
-      if (config.AUTH_SESSION_CHECK === 'events') return c.json({ ready: false, reason: 'auth_status' }, 503);
       return c.json({ ready: true });
     } catch {
       return c.json({ ready: false, reason: 'database' }, 503);

@@ -1,11 +1,13 @@
 // Verifies Supabase Auth (GoTrue) access tokens and maps them to Crove user accounts (ADR-0028 section 1).
 // Self-host signs with HS256 (shared secret); hosted Supabase publishes asymmetric keys via JWKS. Verification is
-// local; the session status check runs later, in the request transaction (Runtime + SessionStatusSource).
+// local; the session status check runs later, in the request transaction (Runtime + SessionStatusSource), and R3
+// commands confirm the token live with Supabase Auth when the session check does not read Auth (jwt).
 import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
 import type { Db } from '@crove/db';
 import { resolveIdentity } from '@crove/kernel';
 import { DomainError, toDomainError, type Aal, type UserActor } from '@crove/kernel-runtime';
 import type { Config } from './config.ts';
+import { createLiveCheck, type LiveCheck } from './sessions.ts';
 
 export interface AuthUser {
   userId: string;
@@ -17,6 +19,8 @@ export interface AuthUser {
   sessionId: string;
   // Unix seconds of the newest second-factor `amr` entry, or null.
   mfaAt: number | null;
+  // R3 live check of this request's token with Supabase Auth (jwt session check only); see UserActor.confirmLive.
+  confirmLive?: () => Promise<void>;
 }
 
 export interface VerifiedToken {
@@ -46,7 +50,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CLOCK_TOLERANCE_S = 30;
 
 export function actorOf(user: AuthUser): UserActor {
-  return { type: 'user', userId: user.userId, aal: user.aal, sessionId: user.sessionId, mfaAt: user.mfaAt };
+  const actor: UserActor = { type: 'user', userId: user.userId, aal: user.aal, sessionId: user.sessionId, mfaAt: user.mfaAt };
+  if (user.confirmLive) actor.confirmLive = user.confirmLive;
+  return actor;
 }
 
 // Newest timestamp of a second-factor `amr` entry (entries are { method, timestamp }).
@@ -118,7 +124,12 @@ async function withDomainErrors<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export function createAuthenticator(config: Config, db: Db, verify: TokenVerifier = createTokenVerifier(config)) {
+export function createAuthenticator(
+  config: Config,
+  db: Db,
+  verify: TokenVerifier = createTokenVerifier(config),
+  liveCheck: LiveCheck | null = createLiveCheck(config),
+) {
   // Caches only the identity mapping; no authorization decision. Assurance and session come from every token.
   const cache = new Map<string, { user: Pick<AuthUser, 'userId' | 'email' | 'name'>; expires: number }>();
 
@@ -126,11 +137,9 @@ export function createAuthenticator(config: Config, db: Db, verify: TokenVerifie
     const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : null;
     if (!token) throw new DomainError('UNAUTHENTICATED', 401, 'Bạn cần đăng nhập');
     const verified = await verify(token);
-    // Same fail-closed answer as the events adapter, before anything is written.
-    if (config.AUTH_SESSION_CHECK === 'events') {
-      throw new DomainError('AUTH_STATUS_STALE', 503, 'Chưa kiểm tra được trạng thái phiên đăng nhập (AUTH_SESSION_CHECK=events chưa được hỗ trợ)');
-    }
-    const perToken = { aal: verified.aal, sessionId: verified.sessionId, mfaAt: verified.mfaAt };
+    // Bound to this token; called only by the runtime, for R3 (ADR-0028 section 5). No call to Auth otherwise.
+    const confirmLive = liveCheck ? () => liveCheck(token, verified.subject) : undefined;
+    const perToken = { aal: verified.aal, sessionId: verified.sessionId, mfaAt: verified.mfaAt, ...(confirmLive ? { confirmLive } : {}) };
     const key = `${verified.issuer}|${verified.subject}`;
     const hit = cache.get(key);
     if (hit && hit.expires > Date.now() && hit.user.email === verified.email) return { ...hit.user, ...perToken };

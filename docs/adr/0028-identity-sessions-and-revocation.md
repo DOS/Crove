@@ -1,7 +1,7 @@
 # 0028. Identity: Supabase Auth access tokens, sessions and revocation
 
-- Status: accepted (2026-10-14, owner), with conditions: the acceptance tests below must pass before External-tenant gate T1 is green
-- Date: 2026-10-14
+- Status: accepted (2026-10-14, owner), with conditions: the acceptance tests below must pass before External-tenant gate T1 is green. Amended 2026-10-15 (owner): Crove Cloud uses Supabase Auth's default session behavior (`AUTH_SESSION_CHECK=jwt`, section 3); the DOS ID lifecycle events (DOS-28) become an optional later refinement
+- Date: 2026-10-14, amended 2026-10-15
 - Deciders: owner (JOY), after two blind reviews (Codex and Claude) that independently converged on design C
 - Builds on: ADR-0027 decision 3 (auth uses Supabase Auth only) and plan Decision 5
 - Tracking: issue #22 (implementation), plan Tracking Decision 16 and "External-tenant gate" row T1
@@ -59,7 +59,7 @@ Set the access token lifetime to a few minutes and add no per-request check.
 
 - Good: no per-request check, no coupling to Auth internals.
 - Bad: up to the token lifetime of reads after revocation (about 10 minutes with the settings discussed), and Crove Cloud cannot set the lifetime (DOS's Supabase Auth owns it). Supabase advises against very short lifetimes [3].
-- Rejected as a revocation mechanism. A shorter lifetime stays as defense in depth (Decision 7).
+- Rejected as the only revocation mechanism. A shorter lifetime stays as defense in depth (section 7). Amended 2026-10-15: on Crove Cloud the token lifetime does bound sign-outs that happen outside Crove (section 3), with Crove-side revocation, per-request membership and the R3 live check on top.
 
 ### Pure push (rejected alone)
 
@@ -67,7 +67,7 @@ DOS ID pushes sign-out, revocation, ban and deletion events to Crove, and Crove 
 
 - Good: no per-request call to Auth; revocation in seconds when events flow.
 - Bad: a lost or delayed event keeps access open indefinitely; nothing bounds the delay. Supabase Auth has no sign-out hook [11], so the events come from DOS-side code that can fail silently.
-- Rejected alone. Design C keeps push for speed and adds checkpoints and an evidence age limit so a lost event cannot keep access open past 60 s.
+- Rejected alone. The 2026-10-14 design C kept push for speed and added checkpoints and an evidence age limit so a lost event cannot keep access open past 60 s; since 2026-10-15 that is an optional later refinement (section 3).
 
 ### Crove-owned sessions through token exchange (rejected)
 
@@ -80,7 +80,7 @@ Exchange the Supabase token once for a Crove session (cookie or Crove-signed tok
 
 ### Design C: local verification plus a Crove session status record, with one status interface and two adapters (chosen)
 
-Described in Decision below. Self-host gets exact, next-request revocation from the shared database; Crove Cloud gets push-speed revocation with a hard 60 s bound and no per-request Auth call.
+Described in Decision below. Self-host gets exact, next-request revocation from the shared database. Crove Cloud (amended 2026-10-15) keeps Supabase Auth's default token lifetime for sign-outs outside Crove, Crove's own immediate revocation and a live Auth check for R3, with no per-request Auth call and no DOS-side change.
 
 ## Decision
 
@@ -91,14 +91,14 @@ Described in Decision below. Self-host gets exact, next-request revocation from 
 - Required claims: `iss`, `aud`, `exp`, `sub`, `session_id`, and `role = authenticated` (pass `requiredClaims` to `jose` so a token without `exp` fails). Reject `is_anonymous = true`. Clock tolerance at most 30 seconds. A missing `aal` means `aal1`.
 - `email` stays required and non-empty, as on `main`: Crove identifies and adds members by email. A Supabase Auth user who signs in with a phone number only (empty `email`) gets 401 until a later ADR supports phone-only accounts.
 - JWKS cache: at most 10 minutes. The runbook covers forcing a refresh after a key revocation.
-- Verification is local: no call to Supabase Auth on the request path, except the first-seen check of a new session on Crove Cloud (section 3) and R3 (section 5).
+- Verification is local: no call to Supabase Auth on the request path, except the live check of R3 commands on Crove Cloud (section 5).
 
 ### 2. Session status record and membership, in the request transaction
 
 Every request, after the token verifies, runs one check inside the same transaction as `enter_context`, so nothing changes between check and use:
 
-- **Crove session record.** `crove_kernel.auth_session`, keyed by `(user_id, session_id)`: `status` (`active` or `revoked`), `first_seen_at`, `revoked_at`, `revoked_by`, `reason`, and on Crove Cloud `evidence_at` (the time of the newest proof that the session was valid). A `revoked` row rejects the request. Crove never deletes a revoked row while a token from that session could still be valid or refreshed; because a refresh keeps the `session_id` [12], a revoked row keeps rejecting every token that session issues, refreshed or not. `last_seen_at` is updated at most once a minute, never on every request.
-- **Upstream status** through the `SessionStatusSource` interface (section 3): is the session still alive in Supabase Auth, and is the user neither banned nor deleted.
+- **Crove session record.** `crove_kernel.auth_session`, keyed by `(user_id, session_id)`: `status` (`active` or `revoked`), `first_seen_at`, `revoked_at`, `revoked_by`, `reason`, and `evidence_at` (unused today; reserved for the optional events refinement in section 3). A `revoked` row rejects the request. Crove never deletes a revoked row while a token from that session could still be valid or refreshed; because a refresh keeps the `session_id` [12], a revoked row keeps rejecting every token that session issues, refreshed or not. `last_seen_at` is updated at most once a minute, never on every request.
+- **Upstream status** through the `SessionStatusSource` interface (section 3): on self-host, is the session still alive in Supabase Auth, and is the user neither banned nor deleted. Crove Cloud has no per-request upstream status (section 3).
 - **Crove user state.** `user_account.disabled_at` (section 4).
 - **Membership.** `enter_context` reads `tenant_member` (and later `role_assignment`) as today. No claim and no cache decides membership; removal takes effect on the next request.
 
@@ -106,12 +106,12 @@ The `(issuer, subject) -> user_account` cache may stay because it holds no autho
 
 ### 3. Status source: one interface, two adapters
 
-Setting `AUTH_SESSION_CHECK` selects the adapter: `db`, `events` or `off`. When it is not set, the default is `db` if `AUTH_UPSTREAM_URL` is set (the bundled Supabase Auth on the same database) and `events` otherwise, so an unset value never means "no check". `off` is accepted only on a local `PUBLIC_URL`; on any other URL boot fails, like the existing `AUTH_AUTOCONFIRM` guard.
+Setting `AUTH_SESSION_CHECK` selects the adapter: `db`, `jwt` or `off`. When it is not set, the default is `db` if `AUTH_UPSTREAM_URL` is set (the bundled Supabase Auth on the same database) and `jwt` otherwise, so an unset value never means "no check". `off` (Crove's own records only, no Supabase Auth at all) is accepted only on a local `PUBLIC_URL`; on any other URL boot fails, like the existing `AUTH_AUTOCONFIRM` guard. `jwt` on a non-local URL needs the Supabase Auth URL for the R3 live check (`PUBLIC_AUTH_URL`, or `AUTH_UPSTREAM_URL`); boot fails without it.
 
-| Deployment | Adapter | Revocation delay |
-|---|---|---|
-| Self-host with the bundled Supabase Auth on the same database (`AUTH_SESSION_CHECK=db`) | Direct read of `auth.sessions` and `auth.users` | Next request |
-| Crove Cloud on DOS's Supabase Auth (`AUTH_SESSION_CHECK=events`) | Lifecycle events from DOS ID plus checkpoints, with an evidence age limit | Target under 5 s; design bound 60 s, also when events are lost |
+| Deployment | Adapter | Sign-out, ban or deletion outside Crove | Crove-side revoke, membership |
+|---|---|---|---|
+| Self-host with the bundled Supabase Auth on the same database (`AUTH_SESSION_CHECK=db`) | Direct read of `auth.sessions` and `auth.users` | Next request | Next request |
+| Crove Cloud on DOS's Supabase Auth (`AUTH_SESSION_CHECK=jwt`) | Verified token plus Crove's records; live check for R3 | Refresh tokens destroyed at once; access ends when the access token expires (SLA: the project's JWT expiry); R3 refused at once | Next request |
 
 **Self-host adapter (`db`).**
 
@@ -121,21 +121,25 @@ Setting `AUTH_SESSION_CHECK` selects the adapter: `db`, `events` or `off`. When 
 - Until the grant exists the check fails closed: requests get 503 and `/readyz` reports not ready with reason `auth_grants`.
 - Rejected alternative: `ALTER DEFAULT PRIVILEGES FOR ROLE supabase_auth_admin IN SCHEMA auth GRANT SELECT ON TABLES TO crove_auth_reader` in `migrate`. It needs no extra step, but it grants read access to every current and future `auth` table, including refresh tokens, MFA factor secrets and one-time tokens, far more than the check needs.
 
-**Crove Cloud adapter (`events`).**
+**Crove Cloud adapter (`jwt`), owner decision 2026-10-15.**
 
-- **Events.** DOS ID pushes session and user lifecycle events for Crove: `session.signed_out` (with scope), `session.revoked`, `user.banned`, `user.deleted`. Supabase Auth has no sign-out hook [11], so DOS ID derives them on its side. Delivery uses a durable outbox with an HMAC signature (a Crove-specific, rotatable secret), a global sequence number, `event_id`, `occurred_at`, and retries with backoff. This extends the planned DOS-27 org and member events (plan §11, item DOS-28). It is a DOS-side change: a cross-repo PR that needs owner approval.
-- **Apply.** Crove verifies signature and timestamp (±5 minutes), dedupes in `idp_event`, and applies events in sequence order: a revoked or signed-out session gets `status = revoked`; a banned or deleted user gets every session revoked and `user_account.upstream_blocked_at` set. A gap in the sequence is not skipped: Crove fetches the missing range (replay or the batch status endpoint) before it applies later events.
-- **Checkpoints.** DOS ID sends a signed checkpoint at least every 15 seconds: "every event up to sequence N has been delivered", with its issue time. When Crove has applied every event up to N, the checkpoint time becomes the evidence time for all sessions not revoked. Equivalent alternative, chosen in the implementation PR: a batch status endpoint that returns the status of a list of session ids.
-- **Evidence age limit.** A session's evidence is the newer of its own `evidence_at` and the last applied checkpoint. Crove blocks reads and writes for a session whose evidence is older than 60 s (503, `AUTH_STATUS_STALE`). So a lost event can keep a revoked session alive for at most 60 s: either the checkpoint certifies a sequence that includes the event (and Crove must have it) or the checkpoint stops advancing and evidence goes stale.
-- **Fallback.** When the checkpoint is late, Crove refreshes a session's evidence with one `getUser` call for that session (at most one call per session per 60 s, single flight, rate-limited). If the fallback cannot keep up or Auth does not answer, requests for that session fail closed.
-- **First-seen check.** A `session_id` Crove has not seen before is verified once against Auth with `getUser` [4] before the request proceeds. Only a 200 whose body `id` equals the token's `sub` creates the `active` record (with `evidence_at` = now). Any other 4xx is 401; a network error, timeout, 5xx or 429 is 503.
-- A deployment with a remote Supabase Auth and no event producer runs the `events` adapter on the fallback alone: one `getUser` per active session per 60 s. That suits small installs, not Crove Cloud's scale.
+- Crove Cloud keeps Supabase Auth's default session behavior. A sign-out elsewhere (any scope), a ban or a deletion destroys the session's refresh tokens at once [9]; the access tokens already issued stay valid until their `exp` [2]. Crove does not poll Supabase Auth and needs no DOS-side change.
+- Every request: local verification (section 1), then `crove_kernel.session_check` with the Crove records only: a session revoked in Crove (globally or for the org in context) is 401, a disabled Crove user is 403, and `enter_context` checks membership. No call to Supabase Auth.
+- R3 commands confirm the session live with Supabase Auth (section 5), so a signed-out, banned or deleted user cannot approve, invite or change roles even while the access token is still valid.
+- **SLA:** for a sign-out, ban or deletion that happens outside Crove, reads and non-R3 writes stop when the access token expires: at most the JWT expiry of DOS's Supabase Auth project (Supabase default one hour; 15 minutes recommended to DOS, section 7). Crove-side revocation, a Crove disable and membership removal take effect on the next request; R3 is refused at once.
+- An Auth outage does not log anyone out (existing tokens keep working until they expire, as with Supabase itself); it stops new logins, token refresh and R3 (503).
+
+**Later refinement, optional: DOS ID lifecycle events (DOS-28).** Trigger: a customer needs cross-app revocation faster than the JWT expiry. Then a fourth mode adds what the 2026-10-14 version of this ADR designed for Crove Cloud:
+
+- DOS ID pushes `session.signed_out` (with scope), `session.revoked`, `user.banned` and `user.deleted` from a durable outbox with an HMAC signature (a Crove-specific, rotatable secret), a global sequence number, `event_id`, `occurred_at`, and retries with backoff. Supabase Auth has no sign-out hook [11], so DOS ID derives them on its side; it is a cross-repo DOS change that needs owner approval.
+- Crove verifies signature and timestamp (±5 minutes), dedupes in `idp_event`, applies events in sequence order and fetches any gap before later events.
+- Signed checkpoints at least every 15 seconds (or a batch status endpoint) feed `evidence_at`; a session whose evidence is older than 60 s is blocked (503 `AUTH_STATUS_STALE`), with one rate-limited `getUser` fallback per session per 60 s and a first-seen `getUser` check of new sessions. That bounds revocation to 60 s even when an event is lost.
 
 ### 4. Revoke session or device, disabled, banned and deleted users
 
 - **Owner or admin revoke.** Crove adds commands, through `execute()` and audited: revoke one session or device of a member, and "revoke all sessions" of a user (the user themself, an org owner for a member of their org, or staff). The command sets the record to `revoked` in its transaction, so the next request with any token of that session is rejected (immediate, in both adapters).
-- **Upstream sign-out.** The command then asks Supabase Auth to sign the session out, which destroys its refresh tokens [9]. The admin sign-out takes the target session's access token, not an id [10], so the `SessionRevoker` interface has per-deployment adapters: self-host signs a 60-second token for that `sub` and `session_id` with the deployment's JWT signing key and calls the admin sign-out (scope `local`, or `global` for "revoke all"); Crove Cloud asks DOS ID to run the sign-out (part of the DOS-side change, §11 of the plan). A self-host with asymmetric keys whose signing key the kernel does not hold keeps Crove-side revocation only. Correctness does not depend on this call: the revoked record already blocks the session in Crove. A failed call is retried and alerted.
-- A Supabase Auth ban (`banned_until`) or a deleted user is rejected: in self-host by the `db` adapter on the next request, on Crove Cloud by the `user.banned` and `user.deleted` events, bounded by the 60 s evidence limit.
+- **Upstream sign-out.** The command then asks Supabase Auth to sign the session out, which destroys its refresh tokens [9]. The admin sign-out takes the target session's access token, not an id [10], so the `SessionRevoker` interface has per-deployment adapters: self-host signs a 60-second token for that `sub` and `session_id` with the deployment's JWT signing key and calls the admin sign-out (scope `local`, or `global` for "revoke all"). Crove Cloud has no admin access to DOS's Supabase Auth and keeps Crove-side revocation only (a DOS-side sign-out belongs to the optional events refinement), as does a self-host with asymmetric keys whose signing key the kernel does not hold. Correctness does not depend on this call: the revoked record already blocks the session in Crove. A failed call is retried and alerted.
+- A Supabase Auth ban (`banned_until`) or a deleted user is rejected: in self-host by the `db` adapter on the next request; on Crove Cloud at once for R3 (live check) and otherwise when the access token expires, since it can no longer be refreshed.
 - `user_account.disabled_at`, set by an audited staff command, is checked in `enter_context` and in org-less calls (`my_orgs`, org creation). It lets a self-hoster block a user in Crove without touching Supabase Auth, and lets Crove Cloud block an account it cannot ban in DOS's Supabase Auth.
 - `user_account` rows are never deleted; offboarding removes memberships (plan §7.9).
 
@@ -143,7 +147,7 @@ Setting `AUTH_SESSION_CHECK` selects the adapter: `db`, `events` or `off`. When 
 
 R3 covers posting, legal or money actions, membership and role changes (plan §4.7). For every R3 command run by a user:
 
-- A direct check against Supabase Auth at execution time (`getUser` with the token), on top of the per-request check. Answers map as in the first-seen check; no cache.
+- A live check against Supabase Auth at execution time, on top of the per-request check, after the role and step-up checks (so a refused role or a missing MFA never calls Auth). On Crove Cloud (`jwt`): `GET /user` with the token (and the project's publishable key); only a 200 whose `id` equals the token's `sub` passes; any other 4xx, or a 200 for another user, is 401; a network error, timeout, 429 or 5xx is 503. No cache. On self-host (`db`) the per-request check already reads `auth.sessions` and `auth.users`, the rows `GET /user` reads [5], in the same transaction, so it is the live check and no HTTP call is added. `off` (local only) has none.
 - `aal = aal2` in the verified token, and an `amr` entry for a second factor (`totp`, `phone` or WebAuthn) whose `timestamp` is within the last 5 minutes [1] [8]. Otherwise 403 `STEP_UP_REQUIRED`: the SPA runs an MFA challenge and retries with the new token.
 - R3 work that a job executes later (for example an approved proposal) re-checks before executing that the approver's session record is still `active`, that the approver is still a member holding the approval permission, and that the approval was recorded with `aal2` and fresh MFA. Otherwise the job stops and raises an Inbox item.
 - Policy P11 is on by default. An org owner can turn it off for that org; the change is audited. A single-user self-host can do the same.
@@ -154,13 +158,12 @@ R3 covers posting, legal or money actions, membership and role changes (plan §4
 ### 6. When Supabase Auth is down
 
 - No new logins and no token refresh (Supabase Auth serves them). No R3: the direct check fails closed (503).
-- New sessions cannot pass the first-seen check (Crove Cloud): 503.
-- Existing sessions with fresh evidence keep working. Self-host: as long as the database is up, because the `db` adapter reads the shared database, not Auth. Crove Cloud: while events and checkpoints from DOS ID keep the evidence under 60 s; if they also stop and the `getUser` fallback fails, requests fail closed once evidence is older than 60 s.
-- Alerts: Auth error rate, checkpoint lag over 30 s, fallback call rate, `AUTH_STATUS_STALE` responses. Runbook in plan §7.10.
+- Existing sessions keep working. Self-host: as long as the database is up, because the `db` adapter reads the shared database, not Auth. Crove Cloud: until each access token expires, since it cannot be refreshed while Auth is down.
+- Alerts: Auth error rate, R3 live check failures (`AUTH_UNAVAILABLE`). Runbook in plan §7.10.
 
 ### 7. Access token lifetime
 
-Choice: the self-host compose stack sets `GOTRUE_JWT_EXP=900` (15 minutes) as defense in depth, inside the 5 minutes to 1 hour range Supabase recommends [3]. Revocation does not rely on it. Crove Cloud uses whatever DOS's Supabase Auth sets (Crove cannot change it); 15 minutes is recommended to DOS but not required.
+Choice: the self-host compose stack sets `GOTRUE_JWT_EXP=900` (15 minutes) as defense in depth, inside the 5 minutes to 1 hour range Supabase recommends [3]. Self-host revocation does not rely on it. Crove Cloud uses whatever DOS's Supabase Auth sets (Crove cannot change it), and that value is the Cloud SLA for sign-outs outside Crove (section 3); 15 minutes is recommended to DOS but not required.
 
 ### 8. Error mapping
 
@@ -168,21 +171,20 @@ Choice: the self-host compose stack sets `GOTRUE_JWT_EXP=900` (15 minutes) as de
 |---|---|
 | Missing or invalid token, wrong `iss` or `aud`, missing `exp`, `sub` or `session_id`, expired, anonymous, wrong algorithm, empty `email` | 401 |
 | Crove session record `revoked`; self-host session row missing or past `not_after`; user banned or deleted upstream | 401 |
-| First-seen or R3 `getUser`: any 4xx, or a 200 for a different user id | 401 |
+| R3 live check (`GET /user`, Crove Cloud): any 4xx other than 429, or a 200 for a different user id | 401 |
 | `user_account.disabled_at` set | 403 |
 | Not a member of the org | 403 |
 | R3 without `aal2` or without an MFA timestamp in the last 5 minutes | 403 `STEP_UP_REQUIRED` |
 | Self-host before `auth-grants` has run | 503, `/readyz` reason `auth_grants` |
-| Crove Cloud evidence older than 60 s and the fallback unavailable | 503 `AUTH_STATUS_STALE` |
-| `getUser` network error, timeout, 5xx or 429 (first-seen, fallback or R3) | 503 |
+| R3 live check: network error, timeout, 429 or 5xx, or no Auth URL configured | 503 `AUTH_UNAVAILABLE` |
 
 ## Consequences
 
-- Good: self-host revokes on the next request with no Auth call on the request path; Crove Cloud revokes within seconds when events flow and within 60 s when they do not, with no per-request Auth call; an owner's revoke is immediate in both. An Auth outage no longer logs out every Cloud user at once.
-- Good: R3 needs a fresh second factor and a direct Auth check, so a token that is valid but stale cannot approve money or role changes.
+- Good: self-host revokes on the next request with no Auth call on the request path; Crove Cloud needs no DOS-side change and no per-request Auth call, and a revoke in Crove (self, owner) is immediate in both. An Auth outage does not log out every Cloud user at once.
+- Good: R3 needs a fresh second factor and a live Auth check, so a token that is valid but stale cannot approve money or role changes.
+- Bad: on Crove Cloud a sign-out, ban or deletion outside Crove leaves reads and non-R3 writes open until the access token expires (the project's JWT expiry), as in any Supabase app. Accepted by the owner on 2026-10-15; the events refinement in section 3 closes it when a customer needs it.
 - Bad: self-host gains a one-shot `auth-grants` step in the startup order (compose: `migrate` -> `auth` -> `auth-grants` -> `crove`); installs without compose must remember to run it.
-- Bad: Crove Cloud depends on a DOS-side event producer (session and user lifecycle events with checkpoints, extending DOS-27) that does not exist yet. Until it ships, Crove Cloud cannot accept an external tenant (gate T1).
-- Bad: one more kernel table (`auth_session`) and an event consumer in Crove Cloud.
+- Bad: one more kernel table (`auth_session`).
 - The earlier plan design for Crove-issued sessions (session JWTs and refresh tokens, a Crove `session` table, OIDC callbacks under `/auth/*`, the `dos-id` and `generic-oidc` adapters, `/.well-known/jwks.json`) stays superseded. `auth_session` records status only; Crove issues no tokens. `user_account` keeps `(issuer, subject)`, so a later identity adapter can replace Supabase Auth.
 
 ## Risks and mitigations
@@ -190,10 +192,10 @@ Choice: the self-host compose stack sets `GOTRUE_JWT_EXP=900` (15 minutes) as de
 | Risk | Mitigation |
 |---|---|
 | `auth.sessions` and `auth.users` are internal Supabase Auth (GoTrue) tables that Supabase Auth migrates | Supabase documents the `auth.sessions` lookup [3]; compose pins the Supabase Auth image version; a CI contract test runs the `db` adapter against that version (sign-out, `not_after`, ban, delete); a schema change breaks the check closed, not open |
-| The DOS-side event producer is late, loses events or stops | SLO for event delivery and checkpoint lag; HMAC and sequence numbers; gaps fetched before later events apply; per-session `getUser` fallback when the checkpoint is late; fail closed after 60 s without evidence |
+| A sign-out outside Crove leaves a copied access token working until it expires (Crove Cloud) | R3 checked live; owner and self revoke in Crove are immediate; 15-minute JWT expiry recommended to DOS; the events refinement (section 3) when a customer needs faster cross-app revocation |
 | A stolen phone that holds the TOTP app (attacker has the second factor) | Prefer passkeys; password re-entry for R3 (decided with the approval screen); owner "revoke all sessions" for the user; R3 audit shows `session_id` and device |
 | A read, export or download path skips the check | Every surface (API, SPA data calls, exports, file downloads, SSE later) goes through the same middleware and `enter_context`; a test enumerates routes and fails on any route without it |
-| The `getUser` fallback floods Auth during a DOS-side outage | Single flight, at most one call per session per 60 s, global rate limit; beyond it, fail closed and alert |
+| R3 live checks during an Auth outage | No retry loop: one call per R3 command, 5-second timeout, 503 to the user; R3 is rare and human-initiated |
 | A JWKS cache trusts a revoked signing key | JWKS cache at most 10 minutes; runbook to force a refresh |
 
 ## Acceptance tests (conditions before gate T1 is green)
@@ -201,7 +203,7 @@ Choice: the self-host compose stack sets `GOTRUE_JWT_EXP=900` (15 minutes) as de
 Unit (kernel auth):
 
 - 401 for a token with no `iss` or a wrong one, no `aud` or a wrong one, no `exp`, an expired `exp`, no `sub`, no `session_id`, `role` other than `authenticated`, `is_anonymous = true`, `alg: none`, and an HS256 token when JWKS is configured.
-- Boot fails without `AUTH_ISSUER`, and with `AUTH_SESSION_CHECK=off` on a public URL; an unset `AUTH_SESSION_CHECK` resolves to `db` or `events` as described above.
+- Boot fails without `AUTH_ISSUER`, with `AUTH_SESSION_CHECK=off` on a public URL, and with `jwt` on a public URL without an Auth URL; an unset `AUTH_SESSION_CHECK` resolves to `db` or `jwt` as described above.
 - A token with an empty `email` (phone-only user): 401.
 
 Self-host (`db` adapter, Supabase Auth image pinned as in compose):
@@ -210,18 +212,17 @@ Self-host (`db` adapter, Supabase Auth image pinned as in compose):
 - Old JWT after sign-out: sign in, call the API (200), sign out; the same token gets 401 on the next request.
 - Banned user: ban in Supabase Auth, next request 401. Deleted user: 401. `user_account.disabled_at` set: 403.
 
-Crove Cloud (`events` adapter, contract test against a Supabase Auth container and a test event producer in CI):
+Crove Cloud (`jwt` adapter, through the HTTP API with a stand-in for Supabase Auth's `GET /user`):
 
-- Old JWT after sign-out with events delivered: rejected within 5 s.
-- Old JWT after sign-out with the event dropped: rejected within 60 s (checkpoint gap or stale evidence), never later.
-- Banned and deleted users: rejected within 5 s with events, within 60 s with events dropped.
-- New session: verified once with `getUser`; a 400 or a 200 for another user id gives 401.
+- Valid tokens are accepted with no call to Supabase Auth outside R3; `/readyz` is ready without an `auth` schema.
+- R3 live check: a 200 for the token's user passes (token and publishable key sent, no cache); 400, 401, 403, 404 or a 200 for another user gives 401; 429, 5xx or a dropped connection gives 503; nothing is written in either case, and non-R3 requests keep working during the outage.
+- No call to Auth when the role or the step-up check refuses first.
 
 Both adapters:
 
 - Owner revoke is immediate: after an owner revokes a member's session, the next request with that token, and with a token refreshed from that session, gets 401; the upstream sign-out is called (or retried and alerted).
 - Removed member: the next request in that org gets 403.
-- Auth outage: new logins and R3 fail with 503; existing sessions keep working (self-host while the DB is up; Cloud until evidence is older than 60 s, then 503).
+- Auth outage: new logins and R3 fail with 503; existing sessions keep working (self-host while the DB is up; Cloud until the access token expires).
 - R3 without fresh MFA is refused: an `aal1` token gets 403 `STEP_UP_REQUIRED`; an `aal2` token whose MFA `amr` timestamp is older than 5 minutes gets 403 `STEP_UP_REQUIRED`; an `aal2` token with fresh MFA executes, and the audit row records `aal`, `session_id` and the MFA timestamp. A job that executes approved R3 work stops when the approver's session was revoked in between.
 - Every read, export and download route is covered by the check (route enumeration test).
 - `member` and `viewer` cannot approve (covered since #71).
