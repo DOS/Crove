@@ -108,6 +108,64 @@ export async function schemaMissing(client: pg.ClientBase, dir: string): Promise
   return files.filter((f) => !have.has(f.version)).map((f) => f.name);
 }
 
+export interface AuthGrantsOptions {
+  adminUrl: string;
+  // How long to wait for Supabase Auth to create auth.sessions and auth.users (ADR-0028: 2 minutes).
+  timeoutMs?: number;
+  pollMs?: number;
+  log?: (message: string) => void;
+}
+
+// The `auth-grants` one-shot step (ADR-0028, self-host db adapter). Waits until Supabase Auth has created its
+// tables, then lets crove_auth_reader select exactly the columns the session check reads (column grants plus a
+// SELECT policy, because Supabase Auth turns on row-level security). Needs a superuser or the owner of the auth
+// tables (supabase_auth_admin), so it runs with the admin URL, like `migrate`. Safe to run on every start: it
+// re-applies the grant if Supabase Auth ever recreated a table.
+export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void> {
+  const log = options.log ?? (() => {});
+  const deadline = Date.now() + (options.timeoutMs ?? 120_000);
+  const client = new pg.Client({ connectionString: options.adminUrl, application_name: 'crove-auth-grants' });
+  await client.connect();
+  try {
+    for (;;) {
+      // Every column the check reads, not just the tables: Supabase Auth adds some (not_after) in later migrations.
+      const { rows } = await client.query<{ ready: boolean }>(`
+        SELECT count(*) = 6 AS ready FROM pg_attribute a
+        WHERE a.attnum > 0 AND NOT a.attisdropped AND (
+          (a.attrelid = to_regclass('auth.sessions') AND a.attname IN ('id', 'user_id', 'not_after'))
+          OR (a.attrelid = to_regclass('auth.users') AND a.attname IN ('id', 'banned_until', 'deleted_at')))`);
+      if (rows[0]?.ready) break;
+      if (Date.now() >= deadline) {
+        throw new Error('auth.sessions and auth.users do not exist (or lack columns the session check reads); start Supabase Auth and run auth-grants again');
+      }
+      log('waiting for Supabase Auth to create auth.sessions and auth.users');
+      await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 2000));
+    }
+    await client.query('BEGIN');
+    try {
+      await client.query(`
+        GRANT USAGE ON SCHEMA auth TO crove_auth_reader;
+        GRANT SELECT (id, user_id, not_after) ON auth.sessions TO crove_auth_reader;
+        GRANT SELECT (id, banned_until, deleted_at) ON auth.users TO crove_auth_reader;
+        -- Supabase Auth enables row-level security on its tables without policies, so a grant alone shows no rows.
+        -- These policies let only the reader see rows (still only the granted columns).
+        DROP POLICY IF EXISTS crove_auth_reader_select ON auth.sessions;
+        CREATE POLICY crove_auth_reader_select ON auth.sessions AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);
+        DROP POLICY IF EXISTS crove_auth_reader_select ON auth.users;
+        CREATE POLICY crove_auth_reader_select ON auth.users AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);`);
+      const { rows } = await client.query<{ ok: boolean }>('SELECT crove_kernel.auth_grants_ready() AS ok');
+      if (!rows[0]?.ok) throw new Error('the session check still cannot read auth.sessions and auth.users after the grant');
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+    log('crove_auth_reader may read auth.sessions and auth.users');
+  } finally {
+    await client.end();
+  }
+}
+
 // Sets login-role passwords from configuration. Values never appear in migrations or logs.
 export async function setRolePasswords(adminUrl: string, passwords: Record<string, string | undefined>): Promise<void> {
   const client = new pg.Client({ connectionString: adminUrl, application_name: 'crove-migrate' });

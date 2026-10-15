@@ -20,7 +20,7 @@ export function toORPCError(error: unknown): ORPCError<string, unknown> {
 
 export async function resolveMembership(runtime: Runtime, user: AuthUser, slug: string | null): Promise<OrgSummary> {
   if (!slug) throw new DomainError('ORG_REQUIRED', 400, 'Thiếu tổ chức (header x-crove-org)');
-  const orgs = await runtime.orgless((db) => myOrgs(db, user.userId));
+  const orgs = await runtime.forUser(actorOf(user), (db) => myOrgs(db, user.userId));
   const org = orgs.find((o) => o.slug === slug);
   if (!org) throw new DomainError('NOT_A_MEMBER', 403, 'Bạn không thuộc tổ chức này');
   return org;
@@ -50,15 +50,23 @@ export function createRpcHandler(runtime: Runtime) {
           userId: context.user.userId,
           email: context.user.email,
           displayName: context.user.name,
-          orgs: await runtime.orgless((db) => myOrgs(db, context.user.userId)),
+          orgs: await runtime.forUser(actorOf(context.user), (db) => myOrgs(db, context.user.userId)),
         })),
       ),
     },
     org: {
-      create: os.org.create.handler(({ context, input }) => guard(() => createOrg(runtime, context.user.userId, input.name))),
+      create: os.org.create.handler(({ context, input }) => guard(() => createOrg(runtime, actorOf(context.user), input.name))),
       get: os.org.get.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.get', {}, { actor, orgId }))),
       addMember: os.org.addMember.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.member.add', input, { actor, orgId })),
+      ),
+    },
+    sessions: {
+      list: os.sessions.list.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.query('kernel.sessions.list', input, { actor, orgId })),
+      ),
+      revoke: os.sessions.revoke.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.session.revoke', input, { actor, orgId })),
       ),
     },
     inbox: {

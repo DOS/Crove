@@ -94,6 +94,27 @@ export const zOrgDetail = z.object({
   members: z.array(z.object({ userId: zId, email: z.string(), displayName: z.string().nullable(), role: zRole })),
 });
 
+// A Supabase Auth session as Crove tracks it (ADR-0028).
+export const zSession = z.object({
+  sessionId: zId,
+  status: z.enum(['active', 'revoked']),
+  firstSeenAt: z.string(),
+  lastSeenAt: z.string(),
+  revokedAt: z.string().nullable(),
+});
+
+// Revoke one session (device) of a user, or every session with all: true.
+export const zSessionRevoke = z
+  .object({
+    userId: zId,
+    sessionId: zId.optional(),
+    all: z.literal(true).optional(),
+    reason: z.string().trim().min(1).max(500).optional(),
+  })
+  .refine((input) => (input.sessionId === undefined) !== (input.all === undefined), {
+    message: 'Chọn một phiên (sessionId) hoặc tất cả (all)',
+  });
+
 export const zProposalStatus = z.enum(['pending', 'executed', 'rejected', 'failed']);
 
 export const zInboxItem = z.object({

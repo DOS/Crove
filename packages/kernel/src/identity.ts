@@ -1,7 +1,7 @@
 // Org-less identity operations: sign-in bookkeeping, listing orgs, creating an org.
 import { sql } from 'kysely';
 import type { Db, MemberRole } from '@crove/db';
-import { DomainError, type Runtime } from '@crove/kernel-runtime';
+import { DomainError, type Runtime, type UserActor } from '@crove/kernel-runtime';
 
 export interface VerifiedIdentity {
   issuer: string;
@@ -44,13 +44,13 @@ export function slugify(name: string): string {
   return base.length >= 3 ? base : `org-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export async function createOrg(runtime: Runtime, userId: string, name: string): Promise<OrgSummary> {
+export async function createOrg(runtime: Runtime, actor: UserActor, name: string): Promise<OrgSummary> {
   const base = slugify(name);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const slug = attempt === 0 ? base : `${base}-${Math.random().toString(36).slice(2, 6)}`;
     try {
-      const orgId = await runtime.orgless(async (db) => {
-        const { rows } = await sql<{ org_id: string }>`SELECT crove_kernel.create_org(${userId}::uuid, ${slug}, ${name}) AS org_id`.execute(db);
+      const orgId = await runtime.forUser(actor, async (db) => {
+        const { rows } = await sql<{ org_id: string }>`SELECT crove_kernel.create_org(${actor.userId}::uuid, ${slug}, ${name}) AS org_id`.execute(db);
         return rows[0]?.org_id;
       });
       if (!orgId) throw new DomainError('INTERNAL', 500, 'Không tạo được tổ chức');

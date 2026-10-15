@@ -61,6 +61,14 @@ suite('kernel on PostgreSQL', () => {
   let orgB = '';
 
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
+  // R3 (approve, membership changes) needs aal2 with a second factor in the last 5 minutes (policy P11).
+  const asMfa = (userId: string, mfaAgeS = 0) => ({
+    type: 'user' as const,
+    userId,
+    aal: 'aal2' as const,
+    sessionId: '0f6c3a52-8d3b-4c1e-9a77-5b2f0e9d1c00',
+    mfaAt: Math.floor(Date.now() / 1000) - mfaAgeS,
+  });
 
   async function ingest(orgId: string, userId: string, bytes: Uint8Array) {
     const sha256 = sha256Hex(bytes);
@@ -148,9 +156,9 @@ suite('kernel on PostgreSQL', () => {
     users.owner = await upsertIdentity(db, { issuer: 'test', subject: 'owner', email: 'owner@example.com', name: 'Owner' });
     users.outsider = await upsertIdentity(db, { issuer: 'test', subject: 'outsider', email: 'outsider@example.com', name: null });
     users.viewer = await upsertIdentity(db, { issuer: 'test', subject: 'viewer', email: 'viewer@example.com', name: null });
-    orgA = (await createOrg(runtime, users.owner, 'Org A')).orgId;
-    orgB = (await createOrg(runtime, users.outsider, 'Org B')).orgId;
-    await runtime.execute('kernel.member.add', { email: 'viewer@example.com', role: 'viewer' }, { actor: asUser(users.owner), orgId: orgA });
+    orgA = (await createOrg(runtime, asUser(users.owner), 'Org A')).orgId;
+    orgB = (await createOrg(runtime, asUser(users.outsider), 'Org B')).orgId;
+    await runtime.execute('kernel.member.add', { email: 'viewer@example.com', role: 'viewer' }, { actor: asMfa(users.owner), orgId: orgA });
   });
 
   afterAll(async () => {
@@ -344,12 +352,12 @@ suite('kernel on PostgreSQL', () => {
     const first = await runtime.execute<{ documentId: string; journalEntryId: string }>(
       'kernel.proposal.approve',
       { id: proposalId, revision: detail.revision, lineAccounts: [{ lineNo: 1, debitAccount: '6422' }] },
-      { actor: asUser(users.owner), orgId: orgA, idempotencyKey: approvalRequest },
+      { actor: asMfa(users.owner), orgId: orgA, idempotencyKey: approvalRequest },
     );
     const replay = await runtime.execute(
       'kernel.proposal.approve',
       { id: proposalId, revision: detail.revision, lineAccounts: [{ lineNo: 1, debitAccount: '6422' }] },
-      { actor: asUser(users.owner), orgId: orgA, idempotencyKey: approvalRequest },
+      { actor: asMfa(users.owner), orgId: orgA, idempotencyKey: approvalRequest },
     );
     expect(replay).toEqual(first);
     await withAdmin(async (admin) => {
@@ -360,7 +368,7 @@ suite('kernel on PostgreSQL', () => {
       expect(rows).toEqual([{ created_by: users.owner, stamped: true }]);
     });
     await expect(
-      runtime.execute('kernel.proposal.approve', { id: proposalId, revision: detail.revision }, { actor: asUser(users.owner), orgId: orgA }),
+      runtime.execute('kernel.proposal.approve', { id: proposalId, revision: detail.revision }, { actor: asMfa(users.owner), orgId: orgA }),
     ).rejects.toMatchObject({ code: 'PROPOSAL_DECIDED' });
 
     const journal = await runtime.query<Array<{ lines: Array<{ accountCode: string; debit: string; credit: string }> }>>(
@@ -405,8 +413,8 @@ suite('kernel on PostgreSQL', () => {
   it('lets only owners grant admin, and never changes an owner', async () => {
     const admin = await upsertIdentity(db, { issuer: 'test', subject: 'admin', email: 'admin@example.com', name: null });
     await upsertIdentity(db, { issuer: 'test', subject: 'member', email: 'member@example.com', name: null });
-    await runtime.execute('kernel.member.add', { email: 'admin@example.com', role: 'admin' }, { actor: asUser(users.owner), orgId: orgA });
-    const asAdmin = { actor: asUser(admin), orgId: orgA };
+    await runtime.execute('kernel.member.add', { email: 'admin@example.com', role: 'admin' }, { actor: asMfa(users.owner), orgId: orgA });
+    const asAdmin = { actor: asMfa(admin), orgId: orgA };
     await expect(runtime.execute('kernel.member.add', { email: 'member@example.com', role: 'admin' }, asAdmin)).rejects.toMatchObject({
       status: 403,
     });
@@ -419,7 +427,7 @@ suite('kernel on PostgreSQL', () => {
   it('records an invoice with failed checks only after explicit confirmation, and never a foreign-currency one', async () => {
     // The owner uploads these and org A has an admin by now, so four-eyes (P10) makes the admin approve.
     const admin = await upsertIdentity(db, { issuer: 'test', subject: 'admin', email: 'admin@example.com', name: null });
-    const asAdmin = { actor: asUser(admin), orgId: orgA };
+    const asAdmin = { actor: asMfa(admin), orgId: orgA };
 
     const mismatch = await propose(variant('1235', (xml) => xml.replace('<TThue>180000</TThue>', '<TThue>170000</TThue>')));
     await expect(runtime.execute('kernel.proposal.approve', mismatch, asAdmin)).rejects.toMatchObject({ code: 'CHECKS_FAILED' });
@@ -471,7 +479,7 @@ suite('kernel on PostgreSQL', () => {
   it('lets only roles that may post approve an R3 proposal, and records the approver', async () => {
     const member = await upsertIdentity(db, { issuer: 'test', subject: 'plain-member', email: 'plain-member@example.com', name: null });
     const approver = await upsertIdentity(db, { issuer: 'test', subject: 'approver', email: 'approver@example.com', name: null });
-    const asOwner = { actor: asUser(users.owner), orgId: orgA };
+    const asOwner = { actor: asMfa(users.owner), orgId: orgA };
     await runtime.execute('kernel.member.add', { email: 'plain-member@example.com', role: 'member' }, asOwner);
     await runtime.execute('kernel.member.add', { email: 'approver@example.com', role: 'admin' }, asOwner);
     const proposal = await propose(variant('1238'));
@@ -480,7 +488,7 @@ suite('kernel on PostgreSQL', () => {
       code: 'FORBIDDEN',
       status: 403,
     });
-    await expect(runtime.execute('kernel.proposal.approve', proposal, { actor: asUser(approver), orgId: orgA })).resolves.toMatchObject({
+    await expect(runtime.execute('kernel.proposal.approve', proposal, { actor: asMfa(approver), orgId: orgA })).resolves.toMatchObject({
       journalEntryId: expect.any(String),
     });
 
@@ -499,22 +507,66 @@ suite('kernel on PostgreSQL', () => {
     });
   });
 
-  it('reads the assurance level from every token, not from the identity cache', async () => {
+  it('reads the assurance level, session and MFA time from every token, not from the identity cache', async () => {
     const secret = 'test-only-jwt-secret-for-aal-0123456789';
-    const authenticate = createAuthenticator(loadConfig({ DATABASE_URL: appUrl, AUTH_JWT_SECRET: secret }), db);
+    const authenticate = createAuthenticator(loadConfig({ DATABASE_URL: appUrl, AUTH_JWT_SECRET: secret, AUTH_ISSUER: 'test-auth' }), db);
+    const session = '6b1f2a9e-3c4d-4e5f-8a9b-0c1d2e3f4a5b';
     const bearer = async (claims: Record<string, unknown>) =>
-      `Bearer ${await new SignJWT({ email: 'mfa@example.com', role: 'authenticated', ...claims })
+      `Bearer ${await new SignJWT({ email: 'mfa@example.com', role: 'authenticated', session_id: session, ...claims })
         .setProtectedHeader({ alg: 'HS256' })
         .setSubject('mfa-user')
+        .setIssuer('test-auth')
         .setAudience('authenticated')
         .setExpirationTime('5m')
         .sign(new TextEncoder().encode(secret))}`;
 
-    const stepUp = await authenticate(await bearer({ aal: 'aal2' }));
-    expect(stepUp.aal).toBe('aal2');
-    await expect(authenticate(await bearer({ aal: 'aal1' }))).resolves.toEqual({ ...stepUp, aal: 'aal1' });
-    await expect(authenticate(await bearer({}))).resolves.toEqual({ ...stepUp, aal: 'aal1' });
-    expect(actorOf(stepUp)).toEqual({ type: 'user', userId: stepUp.userId, aal: 'aal2' });
+    const mfaAt = Math.floor(Date.now() / 1000) - 10;
+    const stepUp = await authenticate(await bearer({ aal: 'aal2', amr: [{ method: 'totp', timestamp: mfaAt }, { method: 'password', timestamp: mfaAt - 60 }] }));
+    expect(stepUp).toMatchObject({ aal: 'aal2', sessionId: session, mfaAt });
+    await expect(authenticate(await bearer({ aal: 'aal1' }))).resolves.toEqual({ ...stepUp, aal: 'aal1', mfaAt: null });
+    await expect(authenticate(await bearer({}))).resolves.toEqual({ ...stepUp, aal: 'aal1', mfaAt: null });
+    expect(actorOf(stepUp)).toEqual({ type: 'user', userId: stepUp.userId, aal: 'aal2', sessionId: session, mfaAt });
+  });
+
+  // Policy P11 (ADR-0028 section 5): R3 needs aal2 and a second factor in the last 5 minutes.
+  it('refuses R3 without fresh MFA, and records the assurance used on the audit row', async () => {
+    const proposal = await propose(variant('1239'));
+    // The owner uploaded it and org A has other admins by now, so an admin approves (four-eyes, P10).
+    const admin = await upsertIdentity(db, { issuer: 'test', subject: 'admin', email: 'admin@example.com', name: null });
+    const approve = (actor: ReturnType<typeof asMfa> | ReturnType<typeof asUser>) =>
+      runtime.execute('kernel.proposal.approve', proposal, { actor, orgId: orgA });
+    await expect(approve(asUser(admin))).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED', status: 403 });
+    await expect(approve(asMfa(admin, 6 * 60))).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED', status: 403 });
+    await expect(approve({ ...asMfa(admin), aal: 'aal1' as const })).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED' });
+    await expect(
+      runtime.execute('kernel.member.add', { email: 'viewer@example.com', role: 'viewer' }, { actor: asUser(users.owner), orgId: orgA }),
+    ).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED' });
+    const fresh = asMfa(admin, 60);
+    await expect(approve(fresh)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
+    // A deployment that turned P11 off (local only) approves without MFA.
+    const relaxed = new Runtime(db, { stepUp: 'off' }).register({
+      commands: [...kernelCommands, ...financeCommands],
+      queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
+    });
+    const other = await propose(variant('1241'));
+    await expect(relaxed.execute('kernel.proposal.approve', other, { actor: asUser(admin), orgId: orgA })).resolves.toMatchObject({
+      journalEntryId: expect.any(String),
+    });
+
+    await withAdmin(async (admin) => {
+      const { rows } = await admin.query(
+        `SELECT outcome, detail FROM crove_kernel.audit_event
+         WHERE command = 'kernel.proposal.approve' AND target_id = $1 ORDER BY occurred_at`,
+        [proposal.id],
+      );
+      expect(rows.map((r) => [r.outcome, r.detail.code ?? null])).toEqual([
+        ['denied', 'STEP_UP_REQUIRED'],
+        ['denied', 'STEP_UP_REQUIRED'],
+        ['denied', 'STEP_UP_REQUIRED'],
+        ['ok', null],
+      ]);
+      expect(rows[3]?.detail).toMatchObject({ aal: 'aal2', sessionId: fresh.sessionId, mfaAt: fresh.mfaAt });
+    });
   });
 
   // External-tenant gate T5: system context is the worker's alone.
@@ -621,6 +673,7 @@ suite('kernel on PostgreSQL', () => {
     const config = loadConfig({
       DATABASE_URL: appUrl,
       AUTH_JWT_SECRET: 'test-only-jwt-secret-for-inbound-0123456789',
+      AUTH_ISSUER: 'test-auth',
       INBOUND_DOMAIN: 'in.test',
       INBOUND_SECRET: inboundSecret,
       WEB_DIST: '/nonexistent',
@@ -754,16 +807,16 @@ suite('kernel on PostgreSQL', () => {
   async function policyOrg(name: string, roles: Role[]) {
     const tag = randomUUID().slice(0, 8);
     const owner = await upsertIdentity(db, { issuer: 'test', subject: `owner-${tag}`, email: `owner-${tag}@example.com`, name: null });
-    const orgId = (await createOrg(runtime, owner, `${name} ${tag}`)).orgId;
+    const orgId = (await createOrg(runtime, asUser(owner), `${name} ${tag}`)).orgId;
     const people: string[] = [];
     for (const [i, role] of roles.entries()) {
       const email = `${role}${i}-${tag}@example.com`;
       people.push(await upsertIdentity(db, { issuer: 'test', subject: `${role}${i}-${tag}`, email, name: null }));
-      await runtime.execute('kernel.member.add', { email, role }, { actor: asUser(owner), orgId });
+      await runtime.execute('kernel.member.add', { email, role }, { actor: asMfa(owner), orgId });
     }
     const setRole = (userId: string, role: Role) => {
       const index = people.indexOf(userId);
-      return runtime.execute('kernel.member.add', { email: `${roles[index]}${index}-${tag}@example.com`, role }, { actor: asUser(owner), orgId });
+      return runtime.execute('kernel.member.add', { email: `${roles[index]}${index}-${tag}@example.com`, role }, { actor: asMfa(owner), orgId });
     };
     return { orgId, owner, people, setRole };
   }
@@ -786,7 +839,7 @@ suite('kernel on PostgreSQL', () => {
   const view = (orgId: string, userId: string, id: string) =>
     runtime.query<Decision & { payload: { lines: Array<{ lineNo: number; debitAccount: string }> } }>('kernel.inbox.get', { id }, { actor: asUser(userId), orgId });
   const approveAs = (orgId: string, userId: string, id: string, revision: number) =>
-    runtime.execute<{ journalEntryId: string }>('kernel.proposal.approve', { id, revision }, { actor: asUser(userId), orgId });
+    runtime.execute<{ journalEntryId: string }>('kernel.proposal.approve', { id, revision }, { actor: asMfa(userId), orgId });
 
   async function approvalAudit(proposalId: string) {
     return withAdmin(async (admin) => {
@@ -811,11 +864,24 @@ suite('kernel on PostgreSQL', () => {
     await expect(approveAs(orgId, admin, id, asOwner.revision)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
 
     expect(await approvalAudit(id)).toEqual([
-      { actor_id: owner, outcome: 'denied', detail: { code: 'FOUR_EYES_REQUIRED', rule: 'P10' } },
+      {
+        actor_id: owner,
+        outcome: 'denied',
+        detail: { code: 'FOUR_EYES_REQUIRED', rule: 'P10', aal: 'aal2', sessionId: asMfa(owner).sessionId, mfaAt: expect.any(Number) },
+      },
       {
         actor_id: admin,
         outcome: 'ok',
-        detail: { revision: 1, aal: 'aal1', policy: { P12: 'pass', P10: 'pass' }, eligible_approvers: 2, self_approved: false, accept_failed_checks: false },
+        detail: {
+          revision: 1,
+          aal: 'aal2',
+          sessionId: asMfa(admin).sessionId,
+          mfaAt: expect.any(Number),
+          policy: { P12: 'pass', P10: 'pass' },
+          eligible_approvers: 2,
+          self_approved: false,
+          accept_failed_checks: false,
+        },
       },
     ]);
     expect(await view(orgId, admin, id)).toMatchObject({ canApprove: false, approveReason: 'not_pending', canEdit: false });
@@ -883,7 +949,7 @@ suite('kernel on PostgreSQL', () => {
 
     // Approve never carries an edit.
     await expect(
-      runtime.execute('kernel.proposal.approve', { id, revision: 1, lineAccounts: changed }, { actor: asUser(owner), orgId }),
+      runtime.execute('kernel.proposal.approve', { id, revision: 1, lineAccounts: changed }, { actor: asMfa(owner), orgId }),
     ).rejects.toMatchObject({ code: 'CONTENT_CHANGED' });
     // An edit that changes nothing creates no revision.
     await expect(

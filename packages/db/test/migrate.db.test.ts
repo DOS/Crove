@@ -12,7 +12,7 @@ const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.
 const RUNNER = 'crove_test_runner';
 // Roles are cluster-wide. When an earlier run already created them, the runner gets the ADMIN OPTION it
 // would hold as their creator.
-const CROVE_ROLES = ['crove_tenant', 'crove_app', 'crove_worker', 'crove_definer_tenant'];
+const CROVE_ROLES = ['crove_tenant', 'crove_app', 'crove_worker', 'crove_definer_tenant', 'crove_auth_reader'];
 
 const suite = ADMIN ? describe : describe.skip;
 
@@ -98,6 +98,27 @@ suite('migrations with a runner that is not a superuser', () => {
                has_schema_privilege('crove_definer_tenant', 'crove_finance', 'CREATE') AS definer_create
         FROM pg_proc p WHERE p.oid = 'crove_finance.post_journal_entry(date, text, text, uuid, jsonb)'::regprocedure`);
       expect(rows).toEqual([{ owner: 'crove_definer_tenant', tenant: true, public: false, definer_create: false }]);
+    });
+  });
+
+  it('hands the Supabase Auth readers to crove_auth_reader, callable only through the session check', async () => {
+    await withClient(runnerUrl, async (runner) => {
+      const { rows } = await runner.query<{ fn: string; owner: string; app: boolean; public: boolean }>(`
+        SELECT p.oid::regprocedure::text AS fn, pg_get_userbyid(p.proowner) AS owner,
+               has_function_privilege('crove_app', p.oid, 'EXECUTE') AS app,
+               EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0) AS public
+        FROM pg_proc p
+        WHERE p.oid IN ('crove_kernel.auth_session_valid(uuid, uuid)'::regprocedure, 'crove_kernel.auth_user_sessions(uuid)'::regprocedure)
+        ORDER BY 1`);
+      expect(rows).toEqual([
+        { fn: 'crove_kernel.auth_session_valid(uuid,uuid)', owner: 'crove_auth_reader', app: false, public: false },
+        { fn: 'crove_kernel.auth_user_sessions(uuid)', owner: 'crove_auth_reader', app: false, public: false },
+      ]);
+      const role = await runner.query(
+        `SELECT rolcanlogin, rolsuper, rolbypassrls, has_schema_privilege('crove_auth_reader', 'crove_kernel', 'CREATE') AS can_create
+         FROM pg_roles WHERE rolname = 'crove_auth_reader'`,
+      );
+      expect(role.rows).toEqual([{ rolcanlogin: false, rolsuper: false, rolbypassrls: false, can_create: false }]);
     });
   });
 });

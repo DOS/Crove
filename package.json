@@ -19,6 +19,7 @@
     "test:db": "vitest run --project db",
     "docs:check": "node tools/docs-check.mjs",
     "db:migrate": "pnpm --filter @crove/db migrate",
+    "db:auth-grants": "pnpm --filter @crove/kernel-server auth-grants",
     "prepare": "node tools/install-git-hooks.mjs"
   },
   "devDependencies": {

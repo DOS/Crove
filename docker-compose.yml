@@ -26,6 +26,7 @@ services:
       CROVE_WORKER_DB_PASSWORD: ${CROVE_WORKER_DB_PASSWORD:-local-worker-password}
       AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-local-auth-password}
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
+      AUTH_ISSUER: crove-auth
       ADMIN_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-local-postgres-password}@db:5432/postgres
       DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
     depends_on:
@@ -44,7 +45,8 @@ services:
       GOTRUE_SITE_URL: ${PUBLIC_URL:-http://localhost:8080}
       GOTRUE_URI_ALLOW_LIST: ${PUBLIC_URL:-http://localhost:8080}/**
       GOTRUE_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
-      GOTRUE_JWT_EXP: '3600'
+      # 15 minutes, defense in depth (ADR-0028); revocation does not rely on it.
+      GOTRUE_JWT_EXP: '900'
       GOTRUE_JWT_AUD: authenticated
       GOTRUE_JWT_ISSUER: crove-auth
       GOTRUE_PASSWORD_MIN_LENGTH: '8'
@@ -65,6 +67,21 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # One-shot (ADR-0028): waits until Supabase Auth has created auth.sessions and auth.users, then lets the session
+  # check read exactly the columns it needs. Runs on every `up`, so the grant survives a recreated table.
+  auth-grants:
+    build: .
+    image: crove:local
+    command: ['auth-grants']
+    environment:
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
+      AUTH_ISSUER: crove-auth
+      ADMIN_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-local-postgres-password}@db:5432/postgres
+      DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
+    depends_on:
+      auth:
+        condition: service_started
+
   crove:
     build: .
     image: crove:local
@@ -74,6 +91,11 @@ services:
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
       AUTH_ISSUER: crove-auth
       AUTH_AUTOCONFIRM: ${AUTH_AUTOCONFIRM:-true}
+      # Revocation: read Supabase Auth's sessions in the shared database (needs the auth-grants step).
+      AUTH_SESSION_CHECK: db
+      # R3 (approve, membership changes) needs MFA in the last 5 minutes. off is accepted on localhost only, until
+      # the MFA enrollment screens ship (issue #32).
+      AUTH_STEP_UP: ${AUTH_STEP_UP:-off}
       DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
       WORKER_DATABASE_URL: postgres://crove_worker:${CROVE_WORKER_DB_PASSWORD:-local-worker-password}@db:5432/postgres
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
@@ -94,6 +116,8 @@ services:
         condition: service_completed_successfully
       auth:
         condition: service_started
+      auth-grants:
+        condition: service_completed_successfully
 
   mailpit:
     image: axllent/mailpit:v1.31.5

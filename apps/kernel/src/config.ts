@@ -27,8 +27,15 @@ const schema = z.object({
   PUBLIC_AUTH_ANON_KEY: optional,
   AUTH_JWT_SECRET: optional,
   AUTH_JWKS_URL: optional,
+  // Required (ADR-0028): the `iss` every access token must carry. Bundled Supabase Auth: GOTRUE_JWT_ISSUER.
   AUTH_ISSUER: optional,
   AUTH_AUDIENCE: z.string().default('authenticated'),
+  // Session status source (ADR-0028): db reads Supabase Auth's tables in the shared database (self-host), events
+  // consumes lifecycle events (Crove Cloud), off checks only Crove's own record (local URLs only). Unset: db when
+  // AUTH_UPSTREAM_URL is set (bundled Supabase Auth), events otherwise; never "no check".
+  AUTH_SESSION_CHECK: z.enum(['db', 'events', 'off']).optional(),
+  // Policy P11: R3 needs MFA in the last 5 minutes. off is accepted on local URLs only.
+  AUTH_STEP_UP: z.enum(['required', 'off']).default('required'),
   // Mirrors GOTRUE_MAILER_AUTOCONFIRM so the kernel can refuse unsafe public deployments.
   AUTH_AUTOCONFIRM: z.enum(['true', 'false']).default('false'),
   // Any OpenAI-compatible endpoint. Without it, e-invoice XML still works; PDF/images do not.
@@ -45,7 +52,12 @@ const schema = z.object({
   AUTH_DB_PASSWORD: optional,
 });
 
-export type Config = z.infer<typeof schema>;
+export type SessionCheckMode = 'db' | 'events' | 'off';
+
+export type Config = Omit<z.infer<typeof schema>, 'AUTH_ISSUER' | 'AUTH_SESSION_CHECK'> & {
+  AUTH_ISSUER: string;
+  AUTH_SESSION_CHECK: SessionCheckMode;
+};
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.safeParse(env);
@@ -53,7 +65,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     const fields = parsed.error.issues.map((i) => i.path.join('.')).join(', ');
     throw new Error(`invalid configuration: ${fields}`);
   }
-  const config = parsed.data;
+  const raw = parsed.data;
+  if (!raw.AUTH_ISSUER) {
+    throw new Error('set AUTH_ISSUER to the issuer of your Supabase Auth access tokens (bundled: GOTRUE_JWT_ISSUER)');
+  }
+  const config: Config = {
+    ...raw,
+    AUTH_ISSUER: raw.AUTH_ISSUER,
+    AUTH_SESSION_CHECK: raw.AUTH_SESSION_CHECK ?? (raw.AUTH_UPSTREAM_URL ? 'db' : 'events'),
+  };
   if (!config.AUTH_JWT_SECRET && !config.AUTH_JWKS_URL) {
     throw new Error('set AUTH_JWT_SECRET (self-hosted Supabase Auth) or AUTH_JWKS_URL (hosted Supabase Auth)');
   }
@@ -69,6 +89,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     }
     if (config.AUTH_AUTOCONFIRM === 'true') {
       throw new Error('AUTH_AUTOCONFIRM=true lets anyone claim any email address; set it to false and configure SMTP');
+    }
+    if (config.AUTH_SESSION_CHECK === 'off') {
+      throw new Error('AUTH_SESSION_CHECK=off keeps signed-out sessions working; use db (bundled Supabase Auth) or events');
+    }
+    if (config.AUTH_STEP_UP === 'off') {
+      throw new Error('AUTH_STEP_UP=off lets a stolen session approve and change roles without MFA; set it to required');
     }
   }
   return config;

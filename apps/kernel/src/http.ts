@@ -111,7 +111,16 @@ export function createHttpApp(deps: HttpDeps) {
     if (!client) return c.json({ ready: false, reason: 'database' }, 503);
     try {
       const missing = await schemaMissing(client, config.MIGRATIONS_DIR);
-      return missing.length === 0 ? c.json({ ready: true }) : c.json({ ready: false, reason: 'schema' }, 503);
+      if (missing.length > 0) return c.json({ ready: false, reason: 'schema' }, 503);
+      // The session check fails closed until it can read Supabase Auth's tables (ADR-0028).
+      if (config.AUTH_SESSION_CHECK === 'db') {
+        const { rows } = await client.query<{ ok: boolean }>('SELECT crove_kernel.auth_grants_ready() AS ok');
+        if (!rows[0]?.ok) return c.json({ ready: false, reason: 'auth_grants' }, 503);
+      }
+      if (config.AUTH_SESSION_CHECK === 'events') return c.json({ ready: false, reason: 'auth_status' }, 503);
+      return c.json({ ready: true });
+    } catch {
+      return c.json({ ready: false, reason: 'database' }, 503);
     } finally {
       client.release();
     }

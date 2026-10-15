@@ -15,6 +15,8 @@ export interface UserAccountTable {
   display_name: string | null;
   created_at: DefaultTimestamp;
   last_seen_at: DefaultTimestamp;
+  // Set by staff to block the user in Crove (ADR-0028): 403 on every request.
+  disabled_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
 
 export interface TenantTable {
