@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
 import { DomainError, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors, type ActorRef } from './approval.ts';
-import { createOrgCommand } from './identity.ts';
+import { createOrgCommand, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal').
@@ -384,8 +384,7 @@ export const revokeSession = defineCommand({
   },
 });
 
-export const kernelCommands = [
-  createOrgCommand,
+const otherKernelCommands = [
   addMember,
   ingestFile,
   receiveInbound,
@@ -395,3 +394,10 @@ export const kernelCommands = [
   rejectProposal,
   revokeSession,
 ];
+
+// The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS).
+export function buildKernelCommands(options: { orgCreateLimits?: OrgCreateLimits } = {}) {
+  return [options.orgCreateLimits ? orgCreateCommand(options.orgCreateLimits) : createOrgCommand, ...otherKernelCommands];
+}
+
+export const kernelCommands = buildKernelCommands();

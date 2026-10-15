@@ -8,7 +8,7 @@ import { serve } from '@hono/node-server';
 import { InvoiceExtractor } from '@crove/agent';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool } from '@crove/db';
 import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
-import { kernelCommands, kernelQueries } from '@crove/kernel';
+import { buildKernelCommands, kernelQueries } from '@crove/kernel';
 import { LocalDiskStore, Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from './auth.ts';
@@ -28,7 +28,10 @@ function buildRuntime(config: Config, connectionString: string, applicationName:
     sessions: createSessionStatusSource(config.AUTH_SESSION_CHECK),
     stepUp: config.AUTH_STEP_UP,
   }).register({
-    commands: [...kernelCommands, ...financeCommands],
+    commands: [
+      ...buildKernelCommands({ orgCreateLimits: { perDay: config.ORG_CREATE_LIMIT_PER_DAY, total: config.ORG_CREATE_LIMIT_TOTAL } }),
+      ...financeCommands,
+    ],
     queries: [...kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null }), ...financeQueries],
   });
   return { pool, db, runtime };

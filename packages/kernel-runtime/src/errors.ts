@@ -17,7 +17,31 @@ export class DomainError extends Error {
 interface PgLikeError {
   code?: string;
   message?: string;
+  detail?: string;
   constraint?: string;
+}
+
+// The JSON DETAIL of ORG_CREATE_RATE_LIMITED (crove_kernel.create_or_replay_org): which limit refused, and for the
+// rolling 24-hour limit, when the oldest org in the window leaves it.
+function rateLimited(detail: string | undefined): DomainError {
+  let parsed: { rule?: unknown; limit?: unknown; retryAfterSeconds?: unknown } = {};
+  try {
+    parsed = JSON.parse(detail ?? '{}') as typeof parsed;
+  } catch {
+    parsed = {};
+  }
+  const limit = typeof parsed.limit === 'number' ? parsed.limit : null;
+  const details: Record<string, unknown> = { rule: parsed.rule === 'org_create_total' ? 'org_create_total' : 'org_create_per_day', limit };
+  if (details.rule === 'org_create_total') {
+    return new DomainError('RATE_LIMITED', 429, `Bạn đã tạo đủ số tổ chức tối đa cho một tài khoản${limit ? ` (${limit})` : ''}`, details);
+  }
+  if (typeof parsed.retryAfterSeconds === 'number') details.retryAfterSeconds = parsed.retryAfterSeconds;
+  return new DomainError(
+    'RATE_LIMITED',
+    429,
+    `Bạn đã tạo quá nhiều tổ chức trong 24 giờ qua${limit ? ` (tối đa ${limit})` : ''}, hãy thử lại sau`,
+    details,
+  );
 }
 
 // Maps database errors to domain errors without leaking whether other tenants' rows exist.
@@ -45,6 +69,9 @@ export function toDomainError(error: unknown): DomainError {
     case '23502':
     case '22P02':
       return new DomainError('INVALID', 422, 'Dữ liệu không hợp lệ');
+    case 'P0001':
+      if (pg.message === 'ORG_CREATE_RATE_LIMITED') return rateLimited(pg.detail);
+      return new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
     case '53400':
       return new DomainError('OVERLOADED', 503, 'Hệ thống đang quá tải, hãy thử lại sau');
     case '40001':

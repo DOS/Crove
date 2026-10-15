@@ -38,6 +38,10 @@ const schema = z.object({
   AUTH_STEP_UP: z.enum(['required', 'off']).default('required'),
   // Mirrors GOTRUE_MAILER_AUTOCONFIRM so the kernel can refuse unsafe public deployments.
   AUTH_AUTOCONFIRM: z.enum(['true', 'false']).default('false'),
+  // Per-user limits on creating orgs (External-tenant gate T4), enforced in the database across API instances:
+  // at most ORG_CREATE_LIMIT_PER_DAY in any rolling 24 hours and ORG_CREATE_LIMIT_TOTAL ever (closed orgs count).
+  ORG_CREATE_LIMIT_PER_DAY: z.coerce.number().int().min(1).max(999_999).default(5),
+  ORG_CREATE_LIMIT_TOTAL: z.coerce.number().int().min(1).max(999_999).default(20),
   // Any OpenAI-compatible endpoint. Without it, e-invoice XML still works; PDF/images do not.
   AI_BASE_URL: optional,
   AI_API_KEY: optional,
