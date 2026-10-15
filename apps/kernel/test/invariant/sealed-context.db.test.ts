@@ -7,8 +7,9 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sql } from 'kysely';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
@@ -679,6 +680,111 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
       twice.release();
       expect(() => twice.release()).toThrow(/already been released/);
     } finally {
+      await pooled.end();
+    }
+  });
+
+  it('closes a pooled connection whose reset fails or that a late BEGIN left in a transaction (#117)', async () => {
+    const pid = async (c: pg.PoolClient) => (await c.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
+    const pooled = createPool({ connectionString: appUrl, max: 1 });
+    try {
+      // The backend dies while the reset waits behind a running query: the reset fails, the client is destroyed,
+      // and the lost connection does not surface as an unhandled 'error' event (vitest fails the run on one).
+      const dying = await pooled.connect();
+      const dyingPid = await pid(dying);
+      const sleeping = dying.query('SELECT pg_sleep(5)').catch((error: unknown) => error);
+      dying.release();
+      await withAdmin((a) => a.query('SELECT pg_terminate_backend($1)', [dyingPid]));
+      expect(await sleeping).toBeInstanceOf(Error);
+      const afterDeath = await pooled.connect();
+      try {
+        expect(await pid(afterDeath)).not.toBe(dyingPid);
+        expect(await enterOnPooled(afterDeath)).toEqual([{ name: 'party of A', who: 'crove_app', org: orgA }]);
+      } finally {
+        afterDeath.release();
+      }
+
+      // A BEGIN still in flight at release runs before the reset; the check after the reset sees the open
+      // transaction and closes the connection instead of pooling it mid-transaction.
+      const late = await pooled.connect();
+      const latePid = await pid(late);
+      const begin = late.query('BEGIN');
+      late.release();
+      await begin;
+      const afterLate = await pooled.connect();
+      try {
+        expect(await pid(afterLate)).not.toBe(latePid);
+        expect(afterLate.getTransactionStatus()).toBe('I');
+        expect(await enterOnPooled(afterLate)).toEqual([{ name: 'party of A', who: 'crove_app', org: orgA }]);
+      } finally {
+        afterLate.release();
+      }
+    } finally {
+      await pooled.end();
+    }
+  });
+
+  it('closes a connection that hit a context error instead of pooling it, with the reset turned off (#117)', async () => {
+    const pid = async (c: pg.PoolClient) => (await c.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pooled = createPool({ connectionString: appUrl, max: 1, resetOnRelease: false });
+    const poison = async () => {
+      const c = await pooled.connect();
+      const backend = await pid(c);
+      await c.query(POISON[0] as string);
+      c.release();
+      return backend;
+    };
+    try {
+      // Without the reset a clean checkout goes back as is, and the poison reaches the next checkout.
+      const backend = await poison();
+      const second = await pooled.connect();
+      expect(await pid(second)).toBe(backend);
+      await expect(enterOnPooled(second)).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_REENTRY' });
+      second.release();
+      // That checkout was tainted: its connection is closed, logged once with the code only.
+      expect(logged.mock.calls.map((call) => String(call[0]))).toEqual(['[db] closing a pooled connection after CONTEXT_REENTRY']);
+      const third = await pooled.connect();
+      try {
+        expect(await pid(third)).not.toBe(backend);
+        expect(await enterOnPooled(third)).toEqual([{ name: 'party of A', who: 'crove_app', org: orgA }]);
+      } finally {
+        third.release();
+      }
+
+      // CONTEXT_SEAL_INVALID taints the same way, outside any transaction.
+      const sealBackend = await poison();
+      const reader = await pooled.connect();
+      expect(await pid(reader)).toBe(sealBackend);
+      await expect(reader.query('SELECT crove_kernel.ctx_org_id()')).rejects.toMatchObject(SEAL_INVALID);
+      reader.release();
+      const afterSeal = await pooled.connect();
+      try {
+        expect(await pid(afterSeal)).not.toBe(sealBackend);
+      } finally {
+        afterSeal.release();
+      }
+
+      // Through Kysely, which releases with no argument after its ROLLBACK.
+      const db = createDb(pooled);
+      const kyselyBackend = await poison();
+      await expect(
+        db.transaction().execute((trx) => sql`SELECT crove_kernel.enter_context(${users.owner}::uuid, ${orgA}::uuid)`.execute(trx)),
+      ).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_REENTRY' });
+      const afterKysely = await pooled.connect();
+      try {
+        expect(await pid(afterKysely)).not.toBe(kyselyBackend);
+        expect(await enterOnPooled(afterKysely)).toEqual([{ name: 'party of A', who: 'crove_app', org: orgA }]);
+      } finally {
+        afterKysely.release();
+      }
+      expect(logged.mock.calls.map((call) => String(call[0]))).toEqual([
+        '[db] closing a pooled connection after CONTEXT_REENTRY',
+        '[db] closing a pooled connection after CONTEXT_SEAL_INVALID',
+        '[db] closing a pooled connection after CONTEXT_REENTRY',
+      ]);
+    } finally {
+      logged.mockRestore();
       await pooled.end();
     }
   });

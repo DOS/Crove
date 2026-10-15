@@ -17,6 +17,10 @@ const schema = z.object({
   PUBLIC_URL: z.string().default('http://localhost:8080'),
   DATABASE_URL: z.string().min(1),
   WORKER_DATABASE_URL: optional,
+  // Reset each pooled connection's session before it goes back to the pool (#117, plan §3.3). Keep true for direct
+  // connections (self-host); set false only behind a transaction-mode pooler (PgBouncer, Supavisor), where the reset
+  // would reach another server connection and the pooler's own reset governs.
+  DB_RESET_ON_RELEASE: z.enum(['true', 'false']).default('true'),
   ADMIN_DATABASE_URL: optional,
   MIGRATIONS_DIR: z.string().default(here('../../../supabase/migrations')),
   WEB_DIST: z.string().default(here('../../app/dist')),
