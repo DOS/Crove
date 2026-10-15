@@ -728,10 +728,10 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
     const pid = async (c: pg.PoolClient) => (await c.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     const pooled = createPool({ connectionString: appUrl, max: 1, resetOnRelease: false });
-    const poison = async () => {
+    const poison = async (statement = POISON[0] as string) => {
       const c = await pooled.connect();
       const backend = await pid(c);
-      await c.query(POISON[0] as string);
+      await c.query(statement);
       c.release();
       return backend;
     };
@@ -778,9 +778,25 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
       } finally {
         afterKysely.release();
       }
+
+      // A session-level lock on the re-entry guard's key (T10) left behind is recovered the same way (#105).
+      expect(POISON[4]).toContain('pg_advisory_lock(1129467734');
+      const lockBackend = await poison(POISON[4]);
+      const locked = await pooled.connect();
+      expect(await pid(locked)).toBe(lockBackend);
+      await expect(enterOnPooled(locked)).rejects.toMatchObject({ code: '42501', message: 'CONTEXT_REENTRY' });
+      locked.release();
+      const afterLock = await pooled.connect();
+      try {
+        expect(await pid(afterLock)).not.toBe(lockBackend);
+        expect(await enterOnPooled(afterLock)).toEqual([{ name: 'party of A', who: 'crove_app', org: orgA }]);
+      } finally {
+        afterLock.release();
+      }
       expect(logged.mock.calls.map((call) => String(call[0]))).toEqual([
         '[db] closing a pooled connection after CONTEXT_REENTRY',
         '[db] closing a pooled connection after CONTEXT_SEAL_INVALID',
+        '[db] closing a pooled connection after CONTEXT_REENTRY',
         '[db] closing a pooled connection after CONTEXT_REENTRY',
       ]);
     } finally {
