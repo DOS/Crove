@@ -509,7 +509,10 @@ suite('kernel on PostgreSQL', () => {
 
   it('reads the assurance level, session and MFA time from every token, not from the identity cache', async () => {
     const secret = 'test-only-jwt-secret-for-aal-0123456789';
-    const authenticate = createAuthenticator(loadConfig({ DATABASE_URL: appUrl, AUTH_JWT_SECRET: secret, AUTH_ISSUER: 'test-auth' }), db);
+    const authenticate = createAuthenticator(
+      loadConfig({ DATABASE_URL: appUrl, AUTH_JWT_SECRET: secret, AUTH_ISSUER: 'test-auth', AUTH_SESSION_CHECK: 'off' }),
+      db,
+    );
     const session = '6b1f2a9e-3c4d-4e5f-8a9b-0c1d2e3f4a5b';
     const bearer = async (claims: Record<string, unknown>) =>
       `Bearer ${await new SignJWT({ email: 'mfa@example.com', role: 'authenticated', session_id: session, ...claims })

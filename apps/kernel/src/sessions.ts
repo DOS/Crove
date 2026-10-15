@@ -13,8 +13,8 @@ function sqlSource(mode: 'db' | 'off'): SessionStatusSource {
   const upstream = mode === 'db';
   return {
     mode,
-    async check(trx, actor) {
-      await sql`SELECT crove_kernel.session_check(${actor.userId}::uuid, ${actor.sessionId}::uuid, ${upstream})`.execute(trx);
+    async check(trx, actor, orgId) {
+      await sql`SELECT crove_kernel.session_check(${actor.userId}::uuid, ${actor.sessionId}::uuid, ${upstream}, ${orgId}::uuid)`.execute(trx);
     },
   };
 }
@@ -42,7 +42,10 @@ export function createSessionStatusSource(mode: SessionCheckMode): SessionStatus
 export interface SignOutTarget {
   // Supabase Auth user id (the token's `sub`).
   subject: string;
+  // A session of that subject; Crove checked it belongs to the subject before asking for the sign-out.
   sessionId: string;
+  // local: that session; global: every session of the subject (the user's own "revoke all").
+  scope: 'local' | 'global';
 }
 
 // Asks Supabase Auth to sign a session out, which destroys its refresh tokens. Best effort: the revoked Crove
@@ -60,13 +63,14 @@ export interface SupabaseRevokerOptions {
 }
 
 // Self-host: the admin sign-out takes the target session's access token, not an id, so the kernel signs a
-// 60-second token for that subject and session with the deployment's JWT secret and calls /logout (scope local).
+// 60-second token for that subject and session with the deployment's JWT secret and calls /logout with the scope.
+// Only the user's own revocations reach it: an org owner's revoke stays inside that org.
 export function createSupabaseSessionRevoker(options: SupabaseRevokerOptions): SessionRevoker {
   const key = new TextEncoder().encode(options.secret);
   const doFetch = options.fetch ?? fetch;
   const base = options.upstreamUrl.replace(/\/$/, '');
   return {
-    async signOut({ subject, sessionId }) {
+    async signOut({ subject, sessionId, scope }) {
       const token = await new SignJWT({ role: 'authenticated', session_id: sessionId, aal: 'aal1' })
         .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
         .setSubject(subject)
@@ -75,7 +79,7 @@ export function createSupabaseSessionRevoker(options: SupabaseRevokerOptions): S
         .setIssuedAt()
         .setExpirationTime('60s')
         .sign(key);
-      const response = await doFetch(`${base}/logout?scope=local`, {
+      const response = await doFetch(`${base}/logout?scope=${scope === 'global' ? 'global' : 'local'}`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(10_000),

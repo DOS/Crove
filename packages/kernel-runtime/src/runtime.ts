@@ -63,11 +63,12 @@ export interface CommandContext extends QueryContext {
 }
 
 // Status of the session behind a user actor (ADR-0028), checked in the request transaction before the
-// tenant context is entered, and before org-less work. Throws (or raises in SQL) 401, 403 or 503; never passes
-// a session it cannot vouch for.
+// tenant context is entered (orgId: that org, where an owner may have revoked the session for this member), and
+// before org-less work (orgId: null). Throws (or raises in SQL) 401, 403 or 503; never passes a session it cannot
+// vouch for.
 export interface SessionStatusSource {
   readonly mode: 'db' | 'events' | 'off';
-  check(trx: Transaction<Database>, actor: UserActor & { sessionId: string }): Promise<void>;
+  check(trx: Transaction<Database>, actor: UserActor & { sessionId: string }, orgId: string | null): Promise<void>;
 }
 
 export interface RuntimeOptions {
@@ -150,15 +151,15 @@ export class Runtime {
 
   // The session status check, in the caller's transaction. Fails closed: a user actor without a session id is
   // refused whenever the runtime checks sessions.
-  private async checkSession(trx: Transaction<Database>, actor: Actor): Promise<void> {
+  private async checkSession(trx: Transaction<Database>, actor: Actor, orgId: string | null): Promise<void> {
     if (actor.type !== 'user' || !this.sessions) return;
     const sessionId = actor.sessionId;
     if (!sessionId) throw new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nhập không hợp lệ');
-    await this.sessions.check(trx, { ...actor, sessionId });
+    await this.sessions.check(trx, { ...actor, sessionId }, orgId);
   }
 
   private async enter(trx: Transaction<Database>, actor: Actor, orgId: string): Promise<MemberRole | null> {
-    await this.checkSession(trx, actor);
+    await this.checkSession(trx, actor, orgId);
     return this.enterContext(trx, actor, orgId);
   }
 
@@ -384,7 +385,7 @@ export class Runtime {
     try {
       return await this.db.transaction().execute(async (trx) => {
         // The session check may record a first-seen session, so it runs before the transaction turns read-only.
-        await this.checkSession(trx, options.actor);
+        await this.checkSession(trx, options.actor, options.orgId);
         await sql`SET TRANSACTION READ ONLY`.execute(trx);
         const role = await this.enterContext(trx, options.actor, options.orgId);
         if (def.access === 'system') {
@@ -406,7 +407,7 @@ export class Runtime {
   async forUser<O>(actor: UserActor, fn: (db: Db) => Promise<O>): Promise<O> {
     try {
       return await this.db.transaction().execute(async (trx) => {
-        await this.checkSession(trx, actor);
+        await this.checkSession(trx, actor, null);
         return fn(trx);
       });
     } catch (error) {

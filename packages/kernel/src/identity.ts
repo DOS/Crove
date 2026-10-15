@@ -18,6 +18,17 @@ export async function upsertIdentity(db: Db, identity: VerifiedIdentity): Promis
   return id;
 }
 
+// Maps a verified token to its user only after the session checks pass (crove_kernel.identity_resolve), so a
+// revoked or disabled session never creates or updates the account. upstream: the self-host db adapter.
+export async function resolveIdentity(db: Db, identity: VerifiedIdentity & { sessionId: string; upstream: boolean }): Promise<string> {
+  const { rows } = await sql<{ id: string }>`
+    SELECT crove_kernel.identity_resolve(${identity.issuer}, ${identity.subject}, ${identity.email}, ${identity.name},
+      ${identity.sessionId}::uuid, ${identity.upstream}) AS id`.execute(db);
+  const id = rows[0]?.id;
+  if (!id) throw new DomainError('INTERNAL', 500, 'Không tạo được tài khoản');
+  return id;
+}
+
 export interface OrgSummary {
   orgId: string;
   slug: string;

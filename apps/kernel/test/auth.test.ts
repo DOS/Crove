@@ -142,7 +142,7 @@ describe('session status adapters', () => {
   it('fails closed with 503 on the events adapter until the Cloud consumer exists', async () => {
     const source = createSessionStatusSource('events');
     expect(source.mode).toBe('events');
-    await expect(source.check({} as never, { type: 'user', userId: SUBJECT, aal: 'aal1', sessionId: SESSION })).rejects.toMatchObject({
+    await expect(source.check({} as never, { type: 'user', userId: SUBJECT, aal: 'aal1', sessionId: SESSION }, null)).rejects.toMatchObject({
       code: 'AUTH_STATUS_STALE',
       status: 503,
     });
@@ -173,21 +173,24 @@ describe('Supabase Auth sign-out after a revoke (self-host)', () => {
 
   it('signs that one session out with a short-lived token for it', async () => {
     status = 204;
-    await revoker().signOut({ subject: SUBJECT, sessionId: SESSION });
+    await revoker().signOut({ subject: SUBJECT, sessionId: SESSION, scope: 'local' });
     expect(seen?.method).toBe('POST');
     expect(seen?.path).toBe('/logout?scope=local');
     const bearer = String(seen?.headers.authorization ?? '').replace(/^Bearer /, '');
     const { payload } = await jwtVerify(bearer, KEY, { issuer: ISSUER, audience: 'authenticated' });
     expect(payload).toMatchObject({ sub: SUBJECT, session_id: SESSION, role: 'authenticated' });
     expect((payload.exp ?? 0) - (payload.iat ?? 0)).toBe(60);
+    // The user's own "revoke all" signs out every session of the subject.
+    await revoker().signOut({ subject: SUBJECT, sessionId: SESSION, scope: 'global' });
+    expect(seen?.path).toBe('/logout?scope=global');
   });
 
   it('treats an already removed session as done and retries anything else', async () => {
     for (const gone of [401, 403, 404]) {
       status = gone;
-      await expect(revoker().signOut({ subject: SUBJECT, sessionId: SESSION })).resolves.toBeUndefined();
+      await expect(revoker().signOut({ subject: SUBJECT, sessionId: SESSION, scope: 'local' })).resolves.toBeUndefined();
     }
     status = 503;
-    await expect(revoker().signOut({ subject: SUBJECT, sessionId: SESSION })).rejects.toThrow(/503/);
+    await expect(revoker().signOut({ subject: SUBJECT, sessionId: SESSION, scope: 'local' })).rejects.toThrow(/503/);
   });
 });

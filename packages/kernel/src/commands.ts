@@ -351,11 +351,13 @@ export const rejectProposal = defineCommand({
   },
 });
 
-// Revokes a session or every session of a user (ADR-0028 section 4). The record turns revoked in this
-// transaction, so the next request with any token of that session gets 401, refreshed or not. Who may revoke is
-// enforced by the definer: the user themself, the org owner for any member, an admin for members and viewers.
-// The Supabase Auth sign-out that destroys the refresh tokens runs afterwards in the worker
-// (kernel.session.revoked), best effort and retried; correctness does not depend on it.
+// Revokes a session or every session of a user (ADR-0028 section 4), effective on the next request with any
+// token of that session, refreshed or not. Enforced by the definer:
+// - the user themself revokes globally, and the worker then signs the session out in Supabase Auth
+//   (kernel.session.revoked; best effort and retried, correctness does not depend on it);
+// - the org owner revokes a member's session in that org only: no global record, no upstream sign-out, because
+//   sessions are global and membership needs no consent from the member;
+// - nobody else, admins included.
 export const revokeSession = defineCommand({
   name: 'kernel.session.revoke',
   input: zSessionRevoke,
@@ -363,11 +365,17 @@ export const revokeSession = defineCommand({
   access: ['owner', 'admin', 'member', 'viewer'],
   target: (input) => ({ type: 'kernel.user', id: input.userId }),
   handler: async (ctx, input) => {
-    const { rows } = await sql<{ revoked_session: string; auth_subject: string }>`
-      SELECT revoked_session, auth_subject
+    const { rows } = await sql<{ revoked_session: string; auth_subject: string | null; sign_out: 'local' | 'global' | null }>`
+      SELECT revoked_session, auth_subject, sign_out
       FROM crove_kernel.session_revoke(${input.userId}::uuid, ${input.sessionId ?? null}::uuid, ${input.reason ?? null})`.execute(ctx.trx);
     for (const row of rows) {
-      await ctx.emit('kernel.session.revoked', { userId: input.userId, subject: row.auth_subject, sessionId: row.revoked_session });
+      if (!row.sign_out || !row.auth_subject) continue;
+      await ctx.emit('kernel.session.revoked', {
+        userId: input.userId,
+        subject: row.auth_subject,
+        sessionId: row.revoked_session,
+        scope: row.sign_out,
+      });
     }
     const scope = input.all ? 'tất cả phiên đăng nhập' : 'một phiên đăng nhập';
     await ctx.activity('kernel.user', input.userId, 'session.revoked', `Thu hồi ${scope} (${rows.length})`);

@@ -3,8 +3,8 @@
 // local; the session status check runs later, in the request transaction (Runtime + SessionStatusSource).
 import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
 import type { Db } from '@crove/db';
-import { upsertIdentity } from '@crove/kernel';
-import { DomainError, type Aal, type UserActor } from '@crove/kernel-runtime';
+import { resolveIdentity } from '@crove/kernel';
+import { DomainError, toDomainError, type Aal, type UserActor } from '@crove/kernel-runtime';
 import type { Config } from './config.ts';
 
 export interface AuthUser {
@@ -109,6 +109,15 @@ export function createTokenVerifier(config: Config, keys: { jwks?: JWTVerifyGetK
 
 export type TokenVerifier = ReturnType<typeof createTokenVerifier>;
 
+// Database errors from the identity checks map to 401, 403 or 503 like the per-request check.
+async function withDomainErrors<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    throw toDomainError(error);
+  }
+}
+
 export function createAuthenticator(config: Config, db: Db, verify: TokenVerifier = createTokenVerifier(config)) {
   // Caches only the identity mapping; no authorization decision. Assurance and session come from every token.
   const cache = new Map<string, { user: Pick<AuthUser, 'userId' | 'email' | 'name'>; expires: number }>();
@@ -117,11 +126,25 @@ export function createAuthenticator(config: Config, db: Db, verify: TokenVerifie
     const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : null;
     if (!token) throw new DomainError('UNAUTHENTICATED', 401, 'Bạn cần đăng nhập');
     const verified = await verify(token);
+    // Same fail-closed answer as the events adapter, before anything is written.
+    if (config.AUTH_SESSION_CHECK === 'events') {
+      throw new DomainError('AUTH_STATUS_STALE', 503, 'Chưa kiểm tra được trạng thái phiên đăng nhập (AUTH_SESSION_CHECK=events chưa được hỗ trợ)');
+    }
     const perToken = { aal: verified.aal, sessionId: verified.sessionId, mfaAt: verified.mfaAt };
     const key = `${verified.issuer}|${verified.subject}`;
     const hit = cache.get(key);
     if (hit && hit.expires > Date.now() && hit.user.email === verified.email) return { ...hit.user, ...perToken };
-    const userId = await upsertIdentity(db, { issuer: verified.issuer, subject: verified.subject, email: verified.email, name: verified.name });
+    // Checked first: a revoked, signed-out or disabled session never updates the account's email or name.
+    const userId = await withDomainErrors(() =>
+      resolveIdentity(db, {
+        issuer: verified.issuer,
+        subject: verified.subject,
+        email: verified.email,
+        name: verified.name,
+        sessionId: verified.sessionId,
+        upstream: config.AUTH_SESSION_CHECK === 'db',
+      }),
+    );
     const user = { userId, email: verified.email, name: verified.name };
     cache.set(key, { user, expires: Date.now() + 5 * 60_000 });
     if (cache.size > 10_000) cache.clear();

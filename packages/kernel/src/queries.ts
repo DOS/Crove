@@ -210,8 +210,8 @@ export const fileGet = defineQuery({
   },
 });
 
-// Sessions Crove has seen for a user (ADR-0028), for the revoke-device screen. Who may list them is enforced by
-// the definer, with the same rule as kernel.session.revoke.
+// Sessions of a user (ADR-0028), for the revoke-device screen: the user's own sessions, or for the org owner the
+// member's sessions seen in that org only. Enforced by the definer, with the same rule as kernel.session.revoke.
 export const sessionsList = defineQuery({
   name: 'kernel.sessions.list',
   input: z.object({ userId: zId }),

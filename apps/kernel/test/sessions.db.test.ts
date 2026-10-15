@@ -91,8 +91,9 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
       },
       body: JSON.stringify(input === undefined ? {} : { json: input }),
     });
-    const body = (await response.json().catch(() => null)) as { json?: Record<string, unknown> } | null;
-    return { status: response.status, body: (body?.json ?? null) as Record<string, any> | null };
+    // oRPC answers in its envelope ({ json }); the auth middleware answers plain JSON before oRPC runs.
+    const body = (await response.json().catch(() => null)) as ({ json?: Record<string, unknown> } & Record<string, unknown>) | null;
+    return { status: response.status, body: (body && 'json' in body ? body.json : body) as Record<string, any> | null };
   }
 
   const me = async (account: Pick<Account, 'subject' | 'email' | 'session'>) => rpc('me/get', await tokenFor(account), undefined, null);
@@ -271,7 +272,121 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
     expect((await me(user)).status).toBe(401);
   });
 
-  it('applies an owner revoke immediately, also to tokens refreshed from that session', async () => {
+  // The member's own org, where nobody else is owner.
+  async function memberOrg(): Promise<string> {
+    const created = await rpc('org/create', await tokenFor(accounts.member), { name: `Member Org ${randomUUID().slice(0, 6)}` }, null);
+    expect(created.status).toBe(200);
+    return String(created.body?.slug);
+  }
+  const inboxIn = async (account: Pick<Account, 'subject' | 'email' | 'session'>, org: string) => rpc('inbox/list', await tokenFor(account), {}, org);
+  const outboxRevocations = () => sql(`SELECT payload FROM crove_kernel.outbox_event WHERE type = 'kernel.session.revoked' ORDER BY created_at, id`);
+
+  it("applies an owner revoke immediately in that org only, without touching the member's other orgs or Supabase Auth", async () => {
+    const ownOrg = await memberOrg();
+    const phone = { subject: accounts.member.subject, email: accounts.member.email, session: randomUUID() };
+    const laptop = { ...phone, session: randomUUID() };
+    await signIn(phone.subject, phone.session);
+    await signIn(laptop.subject, laptop.session);
+    const phoneToken = await tokenFor(phone);
+    expect((await rpc('inbox/list', phoneToken, {})).status).toBe(200);
+    expect((await inbox(laptop)).status).toBe(200);
+    // A session the member only ever used in their own org.
+    const privateSession = { ...phone, session: randomUUID() };
+    await signIn(privateSession.subject, privateSession.session);
+    expect((await inboxIn(privateSession, ownOrg)).status).toBe(200);
+    const eventsBefore = (await outboxRevocations()).rowCount;
+
+    const ownerToken = await tokenFor(accounts.owner);
+    const revoked = await rpc('sessions/revoke', ownerToken, { userId: accounts.member.userId, sessionId: phone.session, reason: 'Mất điện thoại' });
+    expect(revoked).toMatchObject({ status: 200, body: { revoked: [phone.session] } });
+
+    // Refused in this org, for the same token and one refreshed from the session (new iat, same session_id).
+    expect((await rpc('inbox/list', phoneToken, {})).status).toBe(401);
+    expect((await inbox(phone)).status).toBe(401);
+    // The member keeps the session everywhere else: org-less calls and their own org.
+    expect((await rpc('me/get', phoneToken, undefined, null)).status).toBe(200);
+    expect((await rpc('inbox/list', phoneToken, {}, ownOrg)).status).toBe(200);
+    // Other sessions in this org keep working.
+    expect((await inbox(laptop)).status).toBe(200);
+    // No global record, no sign-out in Supabase Auth.
+    expect((await outboxRevocations()).rowCount).toBe(eventsBefore);
+    expect((await sql(`SELECT status FROM crove_kernel.auth_session WHERE session_id = $1`, [phone.session])).rows).toEqual([{ status: 'active' }]);
+    expect((await sql('SELECT 1 FROM auth.sessions WHERE id = $1', [phone.session])).rowCount).toBe(1);
+
+    // The owner sees only the member's sessions seen in this org, never activity from other orgs.
+    const listed = await rpc('sessions/list', ownerToken, { userId: accounts.member.userId });
+    expect(listed.status).toBe(200);
+    const ids = (listed.body as unknown as Array<{ sessionId: string; status: string }>).map((s) => s.sessionId);
+    expect(ids).toEqual(expect.arrayContaining([phone.session, laptop.session]));
+    expect(ids).not.toContain(privateSession.session);
+    expect(listed.body).toEqual(expect.arrayContaining([expect.objectContaining({ sessionId: phone.session, status: 'revoked' })]));
+
+    const audit = await sql(
+      `SELECT actor_id, outcome FROM crove_kernel.audit_event WHERE command = 'kernel.session.revoke' AND target_id = $1`,
+      [accounts.member.userId],
+    );
+    expect(audit.rows).toContainEqual({ actor_id: accounts.owner.userId, outcome: 'ok' });
+
+    // "All" from the owner: every session of the member seen in this org, in this org only.
+    const all = await rpc('sessions/revoke', ownerToken, { userId: accounts.member.userId, all: true });
+    expect(all.status).toBe(200);
+    expect(all.body?.revoked).toEqual(expect.arrayContaining([laptop.session]));
+    expect(all.body?.revoked).not.toContain(privateSession.session);
+    expect((await inbox(laptop)).status).toBe(401);
+    expect((await inboxIn(laptop, ownOrg)).status).toBe(200);
+    expect((await inboxIn(privateSession, ownOrg)).status).toBe(200);
+  });
+
+  it('refuses a cross-org attack: a stranger who adds the victim to their own org cannot reach the victim elsewhere', async () => {
+    const victim = { subject: accounts.member.subject, email: accounts.member.email, session: randomUUID() };
+    await signIn(victim.subject, victim.session);
+    const victimOrg = await memberOrg();
+    expect((await inboxIn(victim, victimOrg)).status).toBe(200);
+
+    const attacker: Account = { subject: randomUUID(), email: 'attacker@sessions.test', session: randomUUID(), userId: '' };
+    await signUp(attacker);
+    attacker.userId = String((await me(attacker)).body?.userId);
+    const evil = await rpc('org/create', await tokenFor(attacker), { name: 'Evil Org' }, null);
+    const evilOrg = String(evil.body?.slug);
+    // Membership needs no consent from the victim; the attacker even has fresh MFA.
+    expect((await rpc('org/addMember', await tokenFor(attacker, { mfaAgeS: 10 }), { email: victim.email, role: 'member' }, evilOrg)).status).toBe(200);
+    const eventsBefore = (await outboxRevocations()).rowCount;
+
+    // Nothing about the victim's sessions outside the attacker's org.
+    const listed = await rpc('sessions/list', await tokenFor(attacker), { userId: accounts.member.userId }, evilOrg);
+    expect(listed).toMatchObject({ status: 200, body: [] });
+    // Revoking everything only reaches sessions seen in the attacker's org (none): no effect elsewhere.
+    const all = await rpc('sessions/revoke', await tokenFor(attacker, { mfaAgeS: 10 }), { userId: accounts.member.userId, all: true }, evilOrg);
+    expect(all).toMatchObject({ status: 200, body: { revoked: [] } });
+    // A named session is blocked in the attacker's org only.
+    expect((await rpc('sessions/revoke', await tokenFor(attacker), { userId: accounts.member.userId, sessionId: victim.session }, evilOrg)).status).toBe(200);
+    expect((await inboxIn(victim, evilOrg)).status).toBe(401);
+    expect((await inboxIn(victim, victimOrg)).status).toBe(200);
+    expect((await me(victim)).status).toBe(200);
+    expect((await outboxRevocations()).rowCount).toBe(eventsBefore);
+    expect((await sql('SELECT 1 FROM auth.sessions WHERE id = $1', [victim.session])).rowCount).toBe(1);
+  });
+
+  it('lets only the user and the org owner manage sessions: admins and members are refused', async () => {
+    const member = { ...accounts.member, session: randomUUID() };
+    await signIn(member.subject, member.session);
+    const memberToken = await tokenFor(member);
+    expect((await rpc('inbox/list', memberToken, {})).status).toBe(200);
+    const adminToken = await tokenFor(accounts.admin);
+    // An admin cannot revoke or list a member's sessions, nor the owner's.
+    expect((await rpc('sessions/revoke', adminToken, { userId: member.userId, sessionId: member.session })).status).toBe(403);
+    expect((await rpc('sessions/revoke', adminToken, { userId: member.userId, all: true })).status).toBe(403);
+    expect((await rpc('sessions/list', adminToken, { userId: member.userId })).status).toBe(403);
+    expect((await rpc('sessions/revoke', adminToken, { userId: accounts.owner.userId, all: true })).status).toBe(403);
+    expect((await rpc('inbox/list', memberToken, {})).status).toBe(200);
+    // A member cannot touch someone else's sessions.
+    expect((await rpc('sessions/revoke', memberToken, { userId: accounts.admin.userId, all: true })).status).toBe(403);
+    expect((await rpc('sessions/list', memberToken, { userId: accounts.admin.userId })).status).toBe(403);
+    // Exactly one of sessionId and all.
+    expect((await rpc('sessions/revoke', memberToken, { userId: member.userId })).status).toBe(400);
+  });
+
+  it("revokes the user's own session globally and signs it out in Supabase Auth; revoke-all signs out globally", async () => {
     const signOuts: SignOutTarget[] = [];
     await migrateJobs(adminUrl);
     const stop = await startWorker({
@@ -287,82 +402,68 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
         },
       },
     });
-    try {
-      const phone = { subject: accounts.member.subject, email: accounts.member.email, session: randomUUID() };
-      const laptop = { ...phone, session: randomUUID() };
-      await signIn(phone.subject, phone.session);
-      await signIn(laptop.subject, laptop.session);
-      const phoneToken = await tokenFor(phone);
-      expect((await rpc('inbox/list', phoneToken, {})).status).toBe(200);
-      expect((await inbox(laptop)).status).toBe(200);
-
-      const ownerToken = await tokenFor(accounts.owner);
-      const revoked = await rpc('sessions/revoke', ownerToken, { userId: accounts.member.userId, sessionId: phone.session, reason: 'Mất điện thoại' });
-      expect(revoked).toMatchObject({ status: 200, body: { revoked: [phone.session] } });
-
-      // The same token, and a token refreshed from the same session (new iat, same session_id), are refused.
-      expect((await rpc('inbox/list', phoneToken, {})).status).toBe(401);
-      expect((await inbox(phone)).status).toBe(401);
-      // Supabase Auth still has the row: the Crove record alone blocks it.
-      expect((await sql('SELECT 1 FROM auth.sessions WHERE id = $1', [phone.session])).rowCount).toBe(1);
-      // Other sessions of the member keep working.
-      expect((await inbox(laptop)).status).toBe(200);
-
-      const listed = await rpc('sessions/list', ownerToken, { userId: accounts.member.userId });
-      expect(listed.status).toBe(200);
-      expect(listed.body).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ sessionId: phone.session, status: 'revoked', revokedAt: expect.any(String) }),
-          expect.objectContaining({ sessionId: laptop.session, status: 'active', revokedAt: null }),
-        ]),
-      );
-
-      // Audited, and handed to the worker for the Supabase Auth sign-out.
-      const audit = await sql(
-        `SELECT actor_id, outcome FROM crove_kernel.audit_event WHERE command = 'kernel.session.revoke' AND target_id = $1`,
-        [accounts.member.userId],
-      );
-      expect(audit.rows).toEqual([{ actor_id: accounts.owner.userId, outcome: 'ok' }]);
+    const until = async (check: () => boolean) => {
       const deadline = Date.now() + 30_000;
-      while (!signOuts.some((t) => t.sessionId === phone.session)) {
-        if (Date.now() > deadline) throw new Error('the worker never asked Supabase Auth to sign the session out');
+      while (!check()) {
+        if (Date.now() > deadline) throw new Error('the worker never asked Supabase Auth to sign out');
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
-      expect(signOuts).toContainEqual({ subject: phone.subject, sessionId: phone.session });
+    };
+    try {
+      const ownOrg = await memberOrg();
+      const one = { subject: accounts.member.subject, email: accounts.member.email, session: randomUUID() };
+      const two = { ...one, session: randomUUID() };
+      const unseen = { ...one, session: randomUUID() };
+      for (const s of [one, two, unseen]) await signIn(s.subject, s.session);
+      expect((await inboxIn(one, ownOrg)).status).toBe(200);
+      expect((await inbox(two)).status).toBe(200);
 
-      // "Revoke all" also blocks a session Crove has never seen.
-      const unseen = { ...phone, session: randomUUID() };
-      await signIn(unseen.subject, unseen.session);
-      const all = await rpc('sessions/revoke', ownerToken, { userId: accounts.member.userId, all: true });
+      // One device: refused in every org and org-less, signed out locally upstream.
+      const oneToken = await tokenFor(one);
+      expect((await rpc('sessions/revoke', oneToken, { userId: accounts.member.userId, sessionId: one.session }, ownOrg)).status).toBe(200);
+      expect((await rpc('inbox/list', oneToken, {}, ownOrg)).status).toBe(401);
+      expect((await rpc('inbox/list', oneToken, {})).status).toBe(401);
+      expect((await rpc('me/get', oneToken, undefined, null)).status).toBe(401);
+      await until(() => signOuts.some((t) => t.sessionId === one.session));
+      expect(signOuts).toContainEqual({ subject: one.subject, sessionId: one.session, scope: 'local' });
+
+      // A session id that does not belong to the user is recorded but never sent to Supabase Auth.
+      const foreign = randomUUID();
+      const before = (await outboxRevocations()).rowCount;
+      expect((await rpc('sessions/revoke', await tokenFor(two), { userId: accounts.member.userId, sessionId: foreign })).status).toBe(200);
+      expect((await outboxRevocations()).rowCount).toBe(before);
+
+      // Revoke all: every session, also one Crove never saw, in every org; one global sign-out upstream.
+      const all = await rpc('sessions/revoke', await tokenFor(two), { userId: accounts.member.userId, all: true });
       expect(all.status).toBe(200);
-      expect(all.body?.revoked).toEqual(expect.arrayContaining([laptop.session, unseen.session]));
-      expect((await inbox(laptop)).status).toBe(401);
-      expect((await inbox(unseen)).status).toBe(401);
+      expect(all.body?.revoked).toEqual(expect.arrayContaining([two.session, unseen.session]));
+      for (const s of [two, unseen]) {
+        expect((await inbox(s)).status).toBe(401);
+        expect((await inboxIn(s, ownOrg)).status).toBe(401);
+        expect((await me(s)).status).toBe(401);
+      }
+      await until(() => signOuts.some((t) => t.scope === 'global'));
+      expect(signOuts.filter((t) => t.scope === 'global')).toHaveLength(1);
+      expect(signOuts.find((t) => t.scope === 'global')?.subject).toBe(accounts.member.subject);
     } finally {
       await stop();
     }
   });
 
-  it('lets users revoke their own sessions, admins only those of members, and nobody else', async () => {
-    const member = { ...accounts.member, session: randomUUID() };
-    await signIn(member.subject, member.session);
-    const memberToken = await tokenFor(member);
-    // A member cannot revoke or list someone else's sessions.
-    expect((await rpc('sessions/revoke', memberToken, { userId: accounts.admin.userId, all: true })).status).toBe(403);
-    expect((await rpc('sessions/list', memberToken, { userId: accounts.admin.userId })).status).toBe(403);
-    // An admin cannot revoke the owner's sessions.
-    expect((await rpc('sessions/revoke', await tokenFor(accounts.admin), { userId: accounts.owner.userId, all: true })).status).toBe(403);
-    expect((await me(accounts.owner)).status).toBe(200);
-    // Exactly one of sessionId and all.
-    expect((await rpc('sessions/revoke', memberToken, { userId: member.userId })).status).toBe(400);
-    // A user signs their own device out.
-    expect((await rpc('sessions/revoke', memberToken, { userId: member.userId, sessionId: member.session })).status).toBe(200);
-    expect((await rpc('inbox/list', memberToken, {})).status).toBe(401);
-    // An admin may revoke a member's session.
-    const another = { ...accounts.member, session: randomUUID() };
-    await signIn(another.subject, another.session);
-    expect((await rpc('sessions/revoke', await tokenFor(accounts.admin), { userId: member.userId, sessionId: another.session })).status).toBe(200);
-    expect((await inbox(another)).status).toBe(401);
+  it('never updates the account of a disabled user or a revoked session', async () => {
+    const subject = randomUUID();
+    const user = { subject, email: 'renamed-before@sessions.test', session: randomUUID() };
+    await sql('INSERT INTO auth.users (id, email) VALUES ($1, $2)', [subject, user.email]);
+    await signIn(subject, user.session);
+    expect((await me(user)).status).toBe(200);
+    await sql(`UPDATE crove_kernel.user_account SET disabled_at = now() WHERE subject = $1`, [subject]);
+    // A new email misses the identity cache, so the request reaches identity_resolve.
+    expect((await me({ ...user, email: 'renamed-disabled@sessions.test' })).status).toBe(403);
+    await sql(`UPDATE crove_kernel.user_account SET disabled_at = NULL WHERE subject = $1`, [subject]);
+    await sql(`DELETE FROM auth.sessions WHERE id = $1`, [user.session]);
+    expect((await me({ ...user, email: 'renamed-signed-out@sessions.test' })).status).toBe(401);
+    const { rows } = await sql('SELECT email FROM crove_kernel.user_account WHERE subject = $1', [subject]);
+    expect(rows).toEqual([{ email: 'renamed-before@sessions.test' }]);
   });
 
   it('requires fresh MFA for membership changes through the API', async () => {
@@ -385,7 +486,8 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
     // Still signed in: org-less calls keep working, without the org.
     const still = await me(member);
     expect(still.status).toBe(200);
-    expect(still.body?.orgs).toEqual([]);
+    const orgs = (still.body?.orgs ?? []) as Array<{ slug: string }>;
+    expect(orgs.map((o) => o.slug)).not.toContain(orgSlug);
   });
 
   it('keeps a revoked record revoked, even for the database owner', async () => {

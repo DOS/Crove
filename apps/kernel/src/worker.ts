@@ -117,9 +117,13 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 );
               }
               if (row.type === 'kernel.session.revoked') {
-                const target: SignOutTarget = { subject: String(row.payload.subject), sessionId: String(row.payload.sessionId) };
+                const target: SignOutTarget = {
+                  subject: String(row.payload.subject),
+                  sessionId: String(row.payload.sessionId),
+                  scope: row.payload.scope === 'global' ? 'global' : 'local',
+                };
                 return boss.send(QUEUES.signOut, target, {
-                  singletonKey: target.sessionId,
+                  singletonKey: `${target.sessionId}:${target.scope}`,
                   retryLimit: SIGN_OUT_RETRY_LIMIT,
                   retryDelay: 10,
                   retryBackoff: true,
