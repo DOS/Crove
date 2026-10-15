@@ -731,10 +731,8 @@ suite('kernel invariants on PostgreSQL', () => {
       people.push(await upsertIdentity(db, { issuer: 'test', subject: `${role}${i}-${tag}`, email, name: null }));
       await runtime.execute('kernel.member.add', { email, role }, { actor: asMfa(owner), orgId });
     }
-    const setRole = (userId: string, role: Role) => {
-      const index = people.indexOf(userId);
-      return runtime.execute('kernel.member.add', { email: `${roles[index]}${index}-${tag}@example.com`, role }, { actor: asMfa(owner), orgId });
-    };
+    // Role changes go through kernel.member.change_role (#36), not by adding an existing member again.
+    const setRole = (userId: string, role: Role) => runtime.execute('kernel.member.change_role', { userId, role }, { actor: asMfa(owner), orgId });
     return { orgId, owner, people, setRole };
   }
 

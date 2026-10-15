@@ -45,11 +45,25 @@ export const addMember = defineCommand({
     if (existing?.role === 'admin' && locked.actorRole !== 'owner') {
       throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đổi được vai trò của quản trị viên');
     }
-    await ctx.trx
-      .insertInto('crove_kernel.tenant_member')
-      .values({ org_id: ctx.orgId, user_id: userId, role: input.role })
-      .onConflict((oc) => oc.columns(['org_id', 'user_id']).doUpdateSet({ role: input.role }))
-      .execute();
+    if (existing) {
+      // The row is locked above and its role was checked, so nothing can change it before this update.
+      await ctx.trx
+        .updateTable('crove_kernel.tenant_member')
+        .set({ role: input.role })
+        .where('org_id', '=', ctx.orgId)
+        .where('user_id', '=', userId)
+        .execute();
+    } else {
+      // Absent when locked: a concurrent command may insert the row first, with a role the checks above never saw
+      // (an owner adding them as admin). Never overwrite that row; the caller retries and is checked against it.
+      const inserted = await ctx.trx
+        .insertInto('crove_kernel.tenant_member')
+        .values({ org_id: ctx.orgId, user_id: userId, role: input.role })
+        .onConflict((oc) => oc.columns(['org_id', 'user_id']).doNothing())
+        .returning('user_id')
+        .executeTakeFirst();
+      if (!inserted) throw new DomainError('ALREADY_MEMBER', 409, 'Người này vừa được thêm vào tổ chức, hãy tải lại và thử lại');
+    }
     await ctx.activity('kernel.member', userId, 'member.added', `Thêm thành viên ${input.email} (${input.role})`);
     return { userId };
   },

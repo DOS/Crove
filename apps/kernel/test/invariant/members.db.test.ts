@@ -330,6 +330,30 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     }
   });
 
+  // An admin adds someone as member while an owner's add of the same person as admin is still in flight. The admin's
+  // command saw no row when it locked, so it must not overwrite the row the owner's command inserted: an admin may
+  // never change an admin's role.
+  it("never overwrites a membership a concurrent add inserted first (an admin cannot demote the owner's new admin)", async () => {
+    const { owner, admin: adminA, target } = await signInAll('owner', 'admin', 'target');
+    const { slug, orgId } = await orgWith(owner, [[adminA, 'admin']]);
+    const adminToken = await tokenFor(adminA, { mfa: true });
+    // The owner's add, inserted and not yet committed, from a separate connection.
+    const holder = new pg.Client({ connectionString: adminUrl });
+    await holder.connect();
+    await holder.query('BEGIN');
+    await holder.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'admin')", [orgId, target.userId]);
+    const racing = rpc('org/addMember', adminToken, { email: target.email, role: 'member' }, slug);
+    await waitForLockWaiters(1);
+    await holder.query('COMMIT');
+    await holder.end();
+
+    expect(await racing).toMatchObject({ status: 409, body: { code: 'ALREADY_MEMBER' } });
+    expect((await roles(orgId))[target.userId]).toBe('admin');
+    // Retrying now sees the admin row under the lock and is refused.
+    expect(await rpc('org/addMember', adminToken, { email: target.email, role: 'member' }, slug)).toMatchObject({ status: 403 });
+    expect((await roles(orgId))[target.userId]).toBe('admin');
+  });
+
   // Waits until `count` backends of this database wait on a row lock.
   async function waitForLockWaiters(count: number) {
     for (let i = 0; i < 100; i++) {
