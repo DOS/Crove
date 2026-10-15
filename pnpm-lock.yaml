@@ -371,6 +371,9 @@ importers:
       '@hono/node-server':
         specifier: 'catalog:'
         version: 2.1.5(hono@4.13.13)
+      fast-xml-parser:
+        specifier: 'catalog:'
+        version: 5.11.2
       hono:
         specifier: 'catalog:'
         version: 4.13.13
@@ -517,9 +520,6 @@ importers:
       kysely:
         specifier: 'catalog:'
         version: 0.29.6
-      unpdf:
-        specifier: 'catalog:'
-        version: 1.8.1
       zod:
         specifier: 'catalog:'
         version: 4.6.7
@@ -608,9 +608,6 @@ importers:
       decimal.js:
         specifier: 'catalog:'
         version: 10.6.0
-      fast-xml-parser:
-        specifier: 'catalog:'
-        version: 5.11.2
 
 packages:
 

@@ -3,17 +3,15 @@
 // against @crove/extract-contract by the client and checked again here before it becomes a proposal.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import type { ExtractClient, ExtractFailure, ExtractKind, ExtractResult } from '@crove/extract-contract';
+import type { ExtractClient, ExtractFailure } from '@crove/extract-contract';
 import { zId, zPurchaseProposal, type PurchaseProposal } from '@crove/kernel-contract';
 import { defineQuery, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { AiNotConfiguredError, AmountFormatError, type InvoiceExtractor } from '@crove/agent';
 import {
-  EInvoiceParseError,
   bookableLines,
   buildPurchaseJournal,
   checkInvoice,
   looksLikeEInvoiceXml,
-  parseEInvoiceXml,
   parseTaxCode,
   type InvoiceCheck,
   type ParsedInvoice,
@@ -104,32 +102,6 @@ type Method = 'einvoice_xml' | 'pdf_text_ai' | 'image_ai' | 'unsupported';
 
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
-// Transitional, step 1 of 2 (External-tenant gate T12): the invariant suite on main still calls
-// extractAndPropose without a sandbox client, and CI runs that copy against this code. Only such a call, and only
-// under the test runner (NODE_ENV=test), parses in process, exactly as before crove-extract; the worker always
-// passes the client (EXTRACT_URL is required for it).
-// Removed, with this module's parser dependencies, once main's invariant suite passes a client (#120).
-const legacyInProcess: ExtractClient = {
-  async extract<K extends ExtractKind>(kind: K, bytes: Uint8Array): Promise<ExtractResult<K>> {
-    if (kind === 'einvoice_xml') {
-      try {
-        return { ok: true, kind: 'einvoice_xml', invoice: { ...parseEInvoiceXml(bytes), source: 'einvoice_xml' } } as ExtractResult<K>;
-      } catch (error) {
-        if (error instanceof EInvoiceParseError) return { ok: false, code: 'invalid', message: error.message.slice(0, 500) };
-        throw error;
-      }
-    }
-    if (kind === 'pdf_text') {
-      const { extractText, getDocumentProxy } = await import('unpdf');
-      // Never let pdf.js evaluate code from the document.
-      const pdf = await getDocumentProxy(bytes, { isEvalSupported: false } as Parameters<typeof getDocumentProxy>[1]);
-      const { text, totalPages } = await extractText(pdf, { mergePages: true });
-      return { ok: true, kind: 'pdf_text', text, pages: totalPages } as ExtractResult<K>;
-    }
-    throw new Error(`no in-process parser for ${kind}`);
-  },
-};
-
 // Failures caused by the file itself are recorded and never retried; service failures throw and are retried.
 function unreadable(result: ExtractFailure): string {
   switch (result.code) {
@@ -150,11 +122,10 @@ async function readInvoice(
   file: { filename: string; content_type: string },
   bytes: Uint8Array,
 ): Promise<{ method: Method; invoice: ParsedInvoice | null; error: string | null }> {
-  // Undefined only for callers written before crove-extract; see legacyInProcess. Outside the test runner a
-  // missing client is a bug, and it fails closed instead of parsing in this process.
-  const client = deps.extract as ExtractClient | undefined;
-  if (!client && process.env.NODE_ENV !== 'test') throw new Error('extractAndPropose needs the crove-extract client');
-  const sandbox = client ?? legacyInProcess;
+  // This process has no parser (External-tenant gate T12): without the crove-extract client it fails closed,
+  // in tests as everywhere else, and the job is retried.
+  const sandbox = deps.extract as ExtractClient | undefined;
+  if (!sandbox) throw new Error('extractAndPropose needs the crove-extract client');
   const name = file.filename.toLowerCase();
   // A look at the first bytes picks the parser; nothing is parsed here.
   const isXml = file.content_type.includes('xml') || name.endsWith('.xml') || looksLikeEInvoiceXml(bytes);

@@ -1,19 +1,22 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  EInvoiceParseError,
   bookableLines,
   buildPurchaseJournal,
   checkInvoice,
   isCalendarDate,
   journalIsBalanced,
   looksLikeEInvoiceXml,
-  parseEInvoiceXml,
   parseTaxCode,
   suggestDebitAccount,
+  type ParsedInvoice,
 } from '../src/index.ts';
 
-const fixture = readFileSync(new URL('./fixtures/einvoice-basic.xml', import.meta.url));
+// The parsed form of the e-invoice fixture. This package holds no parser (External-tenant gate T12); the parser's
+// own tests in apps/extract check that it turns the XML fixture into exactly this.
+const parsed = JSON.parse(readFileSync(new URL('./fixtures/einvoice-basic.parsed.json', import.meta.url), 'utf8')) as ParsedInvoice;
+const invoice = (): ParsedInvoice => structuredClone(parsed);
+const encode = (text: string) => new TextEncoder().encode(text);
 
 describe('tax codes', () => {
   it('accepts a 10-digit code with a valid check digit', () => {
@@ -29,88 +32,48 @@ describe('tax codes', () => {
   });
 });
 
-describe('e-invoice XML', () => {
-  it('detects and parses a Decree 123 invoice', () => {
-    expect(looksLikeEInvoiceXml(fixture)).toBe(true);
-    const invoice = parseEInvoiceXml(fixture);
-    expect(invoice.series).toBe('C26TAB');
-    expect(invoice.number).toBe('1234');
-    expect(invoice.issueDate).toBe('2026-09-15');
-    expect(invoice.seller.taxCode).toBe('0101234565');
-    expect(invoice.buyer.name).toBe('CÔNG TY CỔ PHẦN NGƯỜI MUA MẪU');
-    expect(invoice.lines).toHaveLength(4);
-    expect(invoice.lines[2]?.nature).toBe('discount');
-    expect(invoice.subtotal).toBe('1800000');
-    expect(invoice.vatTotal).toBe('180000');
-    expect(invoice.total).toBe('1980000');
-    expect(invoice.taxAuthorityCode).toBe('M2-26-ABCDE-00001234567');
-    expect(invoice.hasSignature).toBe(true);
+describe('e-invoice detection', () => {
+  it('recognizes an invoice or a tax authority message from its first bytes, without parsing', () => {
+    expect(looksLikeEInvoiceXml(encode('<?xml version="1.0" encoding="UTF-8"?>\n<HDon><DLHDon/></HDon>'))).toBe(true);
+    expect(looksLikeEInvoiceXml(encode('<inv:HDon xmlns:inv="urn:x">'))).toBe(true);
+    expect(looksLikeEInvoiceXml(encode('<TDiep><DLieu><HDon/></DLieu></TDiep>'))).toBe(true);
+    expect(looksLikeEInvoiceXml(encode('<root><a>1</a></root>'))).toBe(false);
+    expect(looksLikeEInvoiceXml(encode('%PDF-1.4'))).toBe(false);
   });
+});
 
+describe('invoice checks', () => {
   it('passes the deterministic checks', () => {
-    const checks = checkInvoice(parseEInvoiceXml(fixture), '2026-10-13');
+    const checks = checkInvoice(invoice(), '2026-10-13');
     const byId = Object.fromEntries(checks.map((c) => [c.id, c.status]));
     expect(byId).toMatchObject({ lines_sum: 'pass', total: 'pass', vat_breakdown: 'pass', seller_tax_code: 'pass', issue_date: 'pass' });
     expect(byId.signature).toBe('warn');
   });
 
   it('fails the lines check when amounts do not add up', () => {
-    const invoice = parseEInvoiceXml(fixture);
-    invoice.subtotal = '1900000';
-    expect(checkInvoice(invoice, '2026-10-13').find((c) => c.id === 'lines_sum')?.status).toBe('fail');
+    const changed = invoice();
+    changed.subtotal = '1900000';
+    expect(checkInvoice(changed, '2026-10-13').find((c) => c.id === 'lines_sum')?.status).toBe('fail');
   });
 
   it('requires amounts to match exactly, since the payable is posted at the invoice total', () => {
-    const invoice = parseEInvoiceXml(fixture);
-    invoice.total = '1979999';
-    expect(checkInvoice(invoice, '2026-10-13').find((c) => c.id === 'total')?.status).toBe('fail');
+    const changed = invoice();
+    changed.total = '1979999';
+    expect(checkInvoice(changed, '2026-10-13').find((c) => c.id === 'total')?.status).toBe('fail');
   });
 
   it.each(['2026-02-30', '2026-13-01', '0000-00-00', '13/10/2026', ''])('fails the date %j without throwing', (issueDate) => {
-    const invoice = parseEInvoiceXml(fixture);
-    invoice.issueDate = issueDate;
-    expect(checkInvoice(invoice, '2026-10-13').find((c) => c.id === 'issue_date')?.status).toBe('fail');
+    const changed = invoice();
+    changed.issueDate = issueDate;
+    expect(checkInvoice(changed, '2026-10-13').find((c) => c.id === 'issue_date')?.status).toBe('fail');
     expect(isCalendarDate(issueDate)).toBe(false);
   });
 
-  it('derives the subtotal from the lines when a sales invoice has no subtotal or rate table', () => {
-    const xml = fixture
-      .toString('utf8')
-      .replace(/<THTTLTSuat>[\s\S]*<\/THTTLTSuat>/, '')
-      .replace('<TgTCThue>1800000</TgTCThue>', '')
-      .replace('<TgTThue>180000</TgTThue>', '<TgTThue>0</TgTThue>')
-      .replace('<TgTTTBSo>1980000</TgTTTBSo>', '<TgTTTBSo>1800000</TgTTTBSo>');
-    const invoice = parseEInvoiceXml(new TextEncoder().encode(xml));
-    expect(invoice.subtotal).toBe('1800000');
-    const byId = Object.fromEntries(checkInvoice(invoice, '2026-10-13').map((c) => [c.id, c.status]));
-    expect(byId).toMatchObject({ lines_sum: 'pass', total: 'pass' });
-  });
-
-  it('rejects malformed or oversized amounts instead of guessing them', () => {
-    const variant = (from: string, to: string) => new TextEncoder().encode(fixture.toString('utf8').replace(from, to));
-    expect(() => parseEInvoiceXml(variant('<TgTTTBSo>1980000</TgTTTBSo>', `<TgTTTBSo>${'9'.repeat(40)}</TgTTTBSo>`))).toThrow(EInvoiceParseError);
-    expect(() => parseEInvoiceXml(variant('<TgTTTBSo>1980000</TgTTTBSo>', '<TgTTTBSo>1.980.000</TgTTTBSo>'))).toThrow(/TgTTTBSo/);
-  });
-
-  it('truncates oversized text from the XML', () => {
-    const xml = fixture.toString('utf8').replace('<Ten>CÔNG TY TNHH DỊCH VỤ MẪU</Ten>', `<Ten>${'A'.repeat(5000)}</Ten>`);
-    expect(parseEInvoiceXml(new TextEncoder().encode(xml)).seller.name).toHaveLength(2000);
-  });
-
   it('fails the currency check for foreign-currency invoices', () => {
-    const invoice = parseEInvoiceXml(fixture);
-    invoice.currency = 'USD';
-    expect(checkInvoice(invoice, '2026-10-13').find((c) => c.id === 'currency')?.status).toBe('fail');
-    expect(checkInvoice(parseEInvoiceXml(fixture), '2026-10-13').some((c) => c.id === 'currency')).toBe(false);
-  });
-
-  it('rejects DOCTYPE and entities', () => {
-    const evil = new TextEncoder().encode('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "b">]><HDon/>');
-    expect(() => parseEInvoiceXml(evil)).toThrow(EInvoiceParseError);
-  });
-
-  it('rejects XML that is not an invoice', () => {
-    expect(() => parseEInvoiceXml(new TextEncoder().encode('<root><a>1</a></root>'))).toThrow(/HDon/);
+    const changed = invoice();
+    changed.currency = 'USD';
+    expect(checkInvoice(changed, '2026-10-13').find((c) => c.id === 'currency')?.status).toBe('fail');
+    expect(checkInvoice(invoice(), '2026-10-13').some((c) => c.id === 'currency')).toBe(false);
   });
 });
 
@@ -124,14 +87,14 @@ describe('TT133 accounting', () => {
   });
 
   it('builds a balanced purchase entry with discount, VAT and payable', () => {
-    const invoice = parseEInvoiceXml(fixture);
-    const lines = bookableLines(invoice, null);
+    const source = invoice();
+    const lines = bookableLines(source, null);
     expect(lines.map((l) => [l.debitAccount, l.amount])).toEqual([
       ['6422', '1000000'],
       ['6421', '1000000'],
       ['6422', '-200000'],
     ]);
-    const journal = buildPurchaseJournal(lines, invoice.vatTotal, 'HĐ C26TAB-1234');
+    const journal = buildPurchaseJournal(lines, source.vatTotal, 'HĐ C26TAB-1234');
     expect(journal.map((j) => [j.accountCode, j.debit, j.credit])).toEqual([
       ['6421', '1000000', '0'],
       ['6422', '800000', '0'],

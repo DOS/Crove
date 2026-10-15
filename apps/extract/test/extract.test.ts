@@ -8,11 +8,11 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { EXTRACT_CLIENT_TIMEOUT_MS, EXTRACT_LIMITS, EXTRACT_TIMING, worstCaseCallMs, zExtractResponse, type ExtractResponse } from '@crove/extract-contract';
-import { credentialVariables, loadExtractConfig } from '../src/main.ts';
+import { credentialVariables, loadExtractConfig, unexpectedVariables } from '../src/main.ts';
 import { DEFAULT_SANDBOX, PARSER_ENV, classifyExit, parserFlags, runSandboxed } from '../src/sandbox.ts';
 import { createExtractApp, createLimiter, type Runner } from '../src/server.ts';
 
-const FIXTURE = readFileSync(new URL('../../../packages/l10n-vn/test/fixtures/einvoice-basic.xml', import.meta.url));
+const FIXTURE = readFileSync(new URL('./fixtures/einvoice-basic.xml', import.meta.url));
 const encode = (text: string) => new TextEncoder().encode(text);
 
 // A one-page PDF with a text layer.
@@ -380,13 +380,42 @@ describe('crove-extract configuration', () => {
     expect(() => loadExtractConfig(env)).not.toThrow(/hunter2|sk-secret-value/);
   });
 
+  it('in production, refuses any variable outside the allowlist, credential-like or not', () => {
+    // What the image and a container runtime set, plus every setting of the service.
+    const image = {
+      NODE_ENV: 'production',
+      HOST: '0.0.0.0',
+      PORT: '8090',
+      PATH: '/usr/local/bin:/usr/bin',
+      HOME: '/home/node',
+      HOSTNAME: 'a1b2c3',
+      NODE_VERSION: '26.0.0',
+      YARN_VERSION: '1.22.22',
+      EXTRACT_CONCURRENCY: '1',
+      EXTRACT_MAX_QUEUE: '1',
+      EXTRACT_TIMEOUT_MS: '25000',
+      EXTRACT_MAX_HEAP_MB: '512',
+      EXTRACT_MAX_RSS_MB: '768',
+    };
+    expect(unexpectedVariables(image)).toEqual([]);
+    expect(loadExtractConfig(image).PORT).toBe(8090);
+    for (const name of ['NODE_OPTIONS', 'HTTPS_PROXY', 'CROVE_EXTRA', 'KERNEL_SERVICE_HOST', 'MY_CONN']) {
+      expect(() => loadExtractConfig({ ...image, [name]: 'value-123' }), name).toThrow(new RegExp(`remove ${name} from`));
+      expect(() => loadExtractConfig({ ...image, [name]: 'value-123' })).not.toThrow(/value-123/);
+    }
+    // Set but empty still counts: the name alone says something was meant to reach the service.
+    expect(() => loadExtractConfig({ ...image, AI_API_KEY: '' })).toThrow(/AI_API_KEY/);
+    expect(unexpectedVariables({ ...image, B_VAR: 'x', A_VAR: 'y' })).toEqual(['A_VAR', 'B_VAR']);
+  });
+
   it('only warns about credentials outside production, still without values', () => {
     const warnings: string[] = [];
-    const config = loadExtractConfig({ GITHUB_TOKEN: 'ghp_value' }, (m) => warnings.push(m));
+    // A development shell holds many variables outside the allowlist; only credential-like names are mentioned.
+    const config = loadExtractConfig({ GITHUB_TOKEN: 'ghp_value', TERM_PROGRAM: 'vscode' }, (m) => warnings.push(m));
     expect(config.PORT).toBe(8090);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatch(/GITHUB_TOKEN/);
-    expect(warnings[0]).not.toMatch(/ghp_value/);
+    expect(warnings[0]).not.toMatch(/ghp_value|TERM_PROGRAM/);
   });
 
   it('starts with defaults and names a bad field without its value', () => {
