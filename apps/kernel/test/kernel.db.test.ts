@@ -74,6 +74,12 @@ suite('kernel on PostgreSQL', () => {
     mfaAt: Math.floor(Date.now() / 1000) - mfaAgeS,
   });
 
+  // Members join by accepting an invite (issue #35): the inviter invites the email, the user signed in with it accepts.
+  async function join(orgId: string, inviter: string, userId: string, email: string, role: 'admin' | 'member' | 'viewer') {
+    const { acceptPath } = await runtime.execute<{ acceptPath: string }>('kernel.member.invite.create', { email, role }, { actor: asMfa(inviter), orgId });
+    await runtime.executeOrgless('kernel.member.invite.accept', { token: acceptPath.split('#')[1] }, { actor: asUser(userId) });
+  }
+
   async function ingest(orgId: string, userId: string, bytes: Uint8Array) {
     const sha256 = sha256Hex(bytes);
     const storageKey = fileKey(orgId, sha256);
@@ -141,7 +147,7 @@ suite('kernel on PostgreSQL', () => {
     users.viewer = await upsertIdentity(db, { issuer: 'test', subject: 'viewer', email: 'viewer@example.com', name: null });
     orgA = (await createOrg(runtime, asUser(users.owner), 'Org A')).orgId;
     await createOrg(runtime, asUser(users.outsider), 'Org B');
-    await runtime.execute('kernel.member.add', { email: 'viewer@example.com', role: 'viewer' }, { actor: asMfa(users.owner), orgId: orgA });
+    await join(orgA, users.owner, users.viewer, 'viewer@example.com', 'viewer');
   });
 
   afterAll(async () => {
@@ -246,7 +252,7 @@ suite('kernel on PostgreSQL', () => {
     const owner = await upsertIdentity(db, { issuer: 'test', subject: `rm-owner-${tag}`, email: `rm-owner-${tag}@example.com`, name: null });
     const member = await upsertIdentity(db, { issuer: 'test', subject: `rm-member-${tag}`, email: `rm-member-${tag}@example.com`, name: null });
     const { orgId } = await createOrg(runtime, asUser(owner), `Xóa thành viên ${tag}`);
-    await runtime.execute('kernel.member.add', { email: `rm-member-${tag}@example.com`, role: 'member' }, { actor: asMfa(owner), orgId });
+    await join(orgId, owner, member, `rm-member-${tag}@example.com`, 'member');
     // The member is removed (committed) after the refused command rolled back and before its audit is written.
     const removed = refusalAuditHook(async () => {
       await withAdmin((admin) => admin.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [orgId, member]));
@@ -254,12 +260,12 @@ suite('kernel on PostgreSQL', () => {
 
     await captureErrors(async (logged) => {
       await expect(
-        removed.runtime.execute('kernel.member.add', { email: `x-${tag}@example.com`, role: 'member' }, { actor: asMfa(member), orgId }),
+        removed.runtime.execute('kernel.member.invite.create', { email: `x-${tag}@example.com`, role: 'member' }, { actor: asMfa(member), orgId }),
       ).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
       expect(removed.seen.transactions).toBe(2);
-      expect(await auditRows(orgId, 'kernel.member.add', 'denied')).toBe(0);
+      expect(await auditRows(orgId, 'kernel.member.invite.create', 'denied')).toBe(0);
       expect(logged).toHaveBeenCalledTimes(1);
-      expect(logged).toHaveBeenCalledWith('[execute kernel.member.add] AUDIT_WRITE_FAILED', {
+      expect(logged).toHaveBeenCalledWith('[execute kernel.member.invite.create] AUDIT_WRITE_FAILED', {
         orgId,
         commandId: expect.stringMatching(/^[0-9a-f-]{36}$/),
         actorType: 'user',
@@ -364,7 +370,7 @@ suite('kernel on PostgreSQL', () => {
   it('records an invoice with failed checks only after explicit confirmation, and never a foreign-currency one', async () => {
     // The owner uploads these and org A gets an admin, so four-eyes (P10) makes the admin approve.
     const admin = await upsertIdentity(db, { issuer: 'test', subject: 'admin', email: 'admin@example.com', name: null });
-    await runtime.execute('kernel.member.add', { email: 'admin@example.com', role: 'admin' }, { actor: asMfa(users.owner), orgId: orgA });
+    await join(orgA, users.owner, admin, 'admin@example.com', 'admin');
     const asAdmin = { actor: asMfa(admin), orgId: orgA };
 
     const mismatch = await propose(variant('1235', (xml) => xml.replace('<TThue>180000</TThue>', '<TThue>170000</TThue>')));

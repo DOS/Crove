@@ -2,6 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { Badge, Button, Card, ErrorText, Input, PageHeader, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { formatDateTime } from '../lib/format.ts';
 
 const ROLE_LABEL = { owner: 'Chủ sở hữu', admin: 'Quản trị', member: 'Thành viên', viewer: 'Chỉ xem' } as const;
 type Role = keyof typeof ROLE_LABEL;
@@ -142,29 +143,128 @@ function RotateInboundAddress() {
   );
 }
 
-export function SettingsPage() {
-  const org = useQuery(orpc.org.get.queryOptions());
-  const me = useQuery(orpc.me.get.queryOptions());
+type InviteRole = 'admin' | 'member' | 'viewer';
+
+// The accept link is shown once, right after the invite is created: the server keeps only a hash of its token.
+function CreatedInvite({ invite, onDone }: { invite: { email: string; expiresAt: string; acceptPath: string }; onDone: () => void }) {
+  const link = `${window.location.origin}${invite.acceptPath}`;
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="mt-4 space-y-2 rounded-lg border border-line bg-surface-2 p-3 text-sm" role="status">
+      <p className="text-fg">Đã tạo lời mời cho {invite.email}.</p>
+      <p className="text-fg-2">
+        Crove chưa tự gửi email mời. Hãy gửi liên kết dưới đây cho người được mời; chỉ người đăng nhập bằng đúng email này mới chấp nhận được.
+        Liên kết chỉ hiện một lần, dùng được một lần và hết hạn lúc {formatDateTime(invite.expiresAt)}.
+      </p>
+      <p className="break-all rounded border border-line bg-surface px-2 py-1 font-mono text-xs text-fg">{link}</p>
+      <div className="flex gap-2">
+        <Button
+          onClick={() =>
+            void navigator.clipboard.writeText(link).then(
+              () => setCopied(true),
+              () => setCopied(false),
+            )
+          }
+        >
+          {copied ? 'Đã sao chép' : 'Sao chép liên kết'}
+        </Button>
+        <Button variant="ghost" onClick={onDone}>
+          Đóng
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function InviteMember({ isOwner }: { isOwner: boolean }) {
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<'admin' | 'member' | 'viewer'>('member');
-  const add = useMutation(
-    orpc.org.addMember.mutationOptions({
+  const [role, setRole] = useState<InviteRole>('member');
+  const invite = useMutation(
+    orpc.org.invite.mutationOptions({
       onSuccess: () => {
         setEmail('');
-        void queryClient.invalidateQueries();
+        void queryClient.invalidateQueries({ queryKey: orpc.org.listInvites.key() });
       },
     }),
   );
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    invite.mutate({ email, role });
+  }
+
+  return (
+    <>
+      <form className="mt-4 space-y-2" onSubmit={submit}>
+        <p className="text-xs text-fg-3">Mời thành viên qua email. Người được mời phải chấp nhận thì mới vào tổ chức.</p>
+        <div className="flex gap-2">
+          <Input type="email" required maxLength={320} placeholder="email@congty.vn" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <select
+            className="rounded-lg border border-line bg-surface-2 px-2 text-sm text-fg"
+            value={role}
+            onChange={(e) => setRole(e.target.value as InviteRole)}
+            aria-label="Vai trò"
+          >
+            {isOwner && <option value="admin">Quản trị</option>}
+            <option value="member">Thành viên</option>
+            <option value="viewer">Chỉ xem</option>
+          </select>
+          <Button type="submit" disabled={invite.isPending}>
+            Mời
+          </Button>
+        </div>
+        {invite.error && <ErrorText>{errorMessage(invite.error)}</ErrorText>}
+      </form>
+      {invite.data && <CreatedInvite invite={invite.data} onDone={() => invite.reset()} />}
+    </>
+  );
+}
+
+function PendingInvites() {
+  const invites = useQuery(orpc.org.listInvites.queryOptions());
+  const revoke = useMutation(
+    orpc.org.revokeInvite.mutationOptions({
+      onSuccess: () => void queryClient.invalidateQueries({ queryKey: orpc.org.listInvites.key() }),
+    }),
+  );
+  if (invites.isLoading) return <Spinner />;
+  if (invites.error) return <ErrorText>{errorMessage(invites.error)}</ErrorText>;
+  if (!invites.data?.length) return null;
+  return (
+    <div className="mt-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-fg-3">Lời mời đang chờ</p>
+      <ul className="mt-2 divide-y divide-[var(--line)]">
+        {invites.data.map((i) => (
+          <li key={i.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+            <div className="min-w-0">
+              <p className="truncate text-fg">{i.email}</p>
+              <p className="text-xs text-fg-3">
+                {i.status === 'expired' ? 'Đã hết hạn' : `Hết hạn ${formatDateTime(i.expiresAt)}`}
+                {i.invitedBy ? ` · mời bởi ${i.invitedBy}` : ''}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Badge tone={i.status === 'expired' ? 'warn' : 'neutral'}>{ROLE_LABEL[i.role]}</Badge>
+              <Button variant="ghost" disabled={revoke.isPending} onClick={() => revoke.mutate({ inviteId: i.id })}>
+                Thu hồi
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {revoke.error && <ErrorText>{errorMessage(revoke.error)}</ErrorText>}
+    </div>
+  );
+}
+
+export function SettingsPage() {
+  const org = useQuery(orpc.org.get.queryOptions());
+  const me = useQuery(orpc.me.get.queryOptions());
 
   if (org.isLoading) return <Spinner />;
   if (org.error) return <ErrorText>{errorMessage(org.error)}</ErrorText>;
   const canManage = org.data?.role === 'owner' || org.data?.role === 'admin';
   const isOwner = org.data?.role === 'owner';
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    add.mutate({ email, role });
-  }
 
   return (
     <>
@@ -203,26 +303,10 @@ export function SettingsPage() {
             ))}
           </ul>
           {canManage && (
-            <form className="mt-4 space-y-2" onSubmit={submit}>
-              <p className="text-xs text-fg-3">Thêm người đã có tài khoản Crove</p>
-              <div className="flex gap-2">
-                <Input type="email" required placeholder="email@congty.vn" value={email} onChange={(e) => setEmail(e.target.value)} />
-                <select
-                  className="rounded-lg border border-line bg-surface-2 px-2 text-sm text-fg"
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as typeof role)}
-                  aria-label="Vai trò"
-                >
-                  <option value="admin">Quản trị</option>
-                  <option value="member">Thành viên</option>
-                  <option value="viewer">Chỉ xem</option>
-                </select>
-                <Button type="submit" disabled={add.isPending}>
-                  Thêm
-                </Button>
-              </div>
-              {add.error && <ErrorText>{errorMessage(add.error)}</ErrorText>}
-            </form>
+            <>
+              <InviteMember isOwner={isOwner} />
+              <PendingInvites />
+            </>
           )}
         </Card>
       </div>

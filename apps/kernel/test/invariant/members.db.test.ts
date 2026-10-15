@@ -91,7 +91,15 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     return Object.fromEntries(names.map((n, i) => [n, signedIn[i]])) as Record<N, Account>;
   }
 
-  // An org owned by `owner`, with the other accounts added in the given roles (owners are promoted after adding).
+  // Members join by accepting an invite (issue #35): the inviter invites the email, the invitee accepts signed in.
+  async function join(inviterToken: string, slug: string, who: Account, role: Exclude<Role, 'owner'>) {
+    const invited = await rpc('org/invite', inviterToken, { email: who.email, role }, slug);
+    expect(invited.status).toBe(200);
+    const token = String(invited.body?.acceptPath).split('#')[1];
+    expect(await rpc('invites/accept', await tokenFor(who), { token }, null)).toMatchObject({ status: 200, body: { slug } });
+  }
+
+  // An org owned by `owner`, with the other accounts joined in the given roles (owners are promoted after joining).
   async function orgWith(owner: Account, members: Array<[Account, Role]>) {
     const created = await rpc('org/create', await tokenFor(owner), { name: `Org ${randomUUID().slice(0, 6)}`, idempotencyKey: randomUUID() }, null);
     expect(created.status).toBe(200);
@@ -99,8 +107,7 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     const orgId = String(created.body?.orgId);
     const ownerToken = await tokenFor(owner, { mfa: true });
     for (const [who, role] of members) {
-      const added = await rpc('org/addMember', ownerToken, { email: who.email, role: role === 'owner' ? 'admin' : role }, slug);
-      expect(added.status).toBe(200);
+      await join(ownerToken, slug, who, role === 'owner' ? 'admin' : role);
       if (role === 'owner') expect((await changeRole(owner, slug, who, 'owner')).status).toBe(200);
     }
     return { slug, orgId };
@@ -237,7 +244,8 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
         await sql`SELECT crove_kernel.enter_context(${ownerB.userId}::uuid, ${b.orgId}::uuid)`.execute(trx);
         await sql`UPDATE crove_kernel.tenant_member SET org_id = ${a.orgId}::uuid WHERE user_id = ${memberB.userId}::uuid`.execute(trx);
       }),
-    ).rejects.toThrow(/row-level security/);
+      // Since #35 tenant roles may update only the role column, so the privilege check refuses before RLS would.
+    ).rejects.toThrow(/permission denied for table tenant_member|row-level security/);
     expect(await roles(a.orgId)).toEqual(beforeA);
   });
 
@@ -251,7 +259,7 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     expect((await roles(orgId))[owner.userId]).toBe('owner');
 
     // With a co-owner, an owner may step down, but the one left is again the last owner.
-    await rpc('org/addMember', await tokenFor(owner, { mfa: true }), { email: second.email, role: 'admin' }, slug);
+    await join(await tokenFor(owner, { mfa: true }), slug, second, 'admin');
     expect((await changeRole(owner, slug, second, 'owner')).status).toBe(200);
     expect(await remove(second, slug, second)).toMatchObject({ status: 422, body: { code: 'CANNOT_REMOVE_SELF' } });
     expect(await changeRole(second, slug, second, 'admin')).toMatchObject({ status: 200, body: { role: 'admin', previousRole: 'owner' } });
@@ -295,10 +303,10 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
   });
 
   // With three owners the owner count alone never refuses, so this isolates the re-check of the actor's own role:
-  // X demotes Y while Y, still an owner when its request began, demotes Z (or adds an admin). X's command takes the
+  // X demotes Y while Y, still an owner when its request began, demotes Z (or invites an admin). X's command takes the
   // lock first, so Y's command must see its own demotion and change nothing.
   it('refuses an owner demoted by a command that committed first, even when other owners remain', async () => {
-    for (const second of ['demote', 'remove', 'add'] as const) {
+    for (const second of ['demote', 'remove', 'invite'] as const) {
       const { x, y, z, w } = await signInAll('x', 'y', 'z', 'w');
       const { slug, orgId } = await orgWith(x, [
         [y, 'owner'],
@@ -316,7 +324,7 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
           ? rpc('org/changeMemberRole', tokenY, { userId: z.userId, role: 'viewer', idempotencyKey: randomUUID() }, slug)
           : second === 'remove'
             ? rpc('org/removeMember', tokenY, { userId: z.userId, idempotencyKey: randomUUID() }, slug)
-            : rpc('org/addMember', tokenY, { email: w.email, role: 'admin' }, slug);
+            : rpc('org/invite', tokenY, { email: w.email, role: 'admin' }, slug);
       await waitForLockWaiters(2);
       await holder.query('COMMIT');
       await holder.end();
@@ -327,30 +335,36 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
       expect(after[y.userId]).toBe('admin');
       expect(after[z.userId]).toBe('owner');
       expect(after[w.userId]).toBeUndefined();
+      // The stale owner's invite was not created either.
+      const invites = await admin((c) => c.query('SELECT 1 FROM crove_kernel.member_invite WHERE org_id = $1 AND email = $2', [orgId, w.email.toLowerCase()]));
+      expect(invites.rowCount).toBe(0);
     }
   });
 
-  // An admin adds someone as member while an owner's add of the same person as admin is still in flight. The admin's
-  // command saw no row when it locked, so it must not overwrite the row the owner's command inserted: an admin may
-  // never change an admin's role.
-  it("never overwrites a membership a concurrent add inserted first (an admin cannot demote the owner's new admin)", async () => {
+  // An admin's invite (as member) is accepted while a membership of the same person as admin, inserted by another
+  // transaction, is still in flight. Accepting waits for it and must not overwrite it: an invite never changes the
+  // role of an existing membership, so an admin can never demote someone through an invite.
+  it('never overwrites a membership a concurrent transaction inserted first', async () => {
     const { owner, admin: adminA, target } = await signInAll('owner', 'admin', 'target');
     const { slug, orgId } = await orgWith(owner, [[adminA, 'admin']]);
     const adminToken = await tokenFor(adminA, { mfa: true });
-    // The owner's add, inserted and not yet committed, from a separate connection.
+    const invited = await rpc('org/invite', adminToken, { email: target.email, role: 'member' }, slug);
+    expect(invited.status).toBe(200);
+    const token = String(invited.body?.acceptPath).split('#')[1];
+    // The other membership, inserted and not yet committed, from a separate connection.
     const holder = new pg.Client({ connectionString: adminUrl });
     await holder.connect();
     await holder.query('BEGIN');
     await holder.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'admin')", [orgId, target.userId]);
-    const racing = rpc('org/addMember', adminToken, { email: target.email, role: 'member' }, slug);
+    const racing = rpc('invites/accept', await tokenFor(target), { token }, null);
     await waitForLockWaiters(1);
     await holder.query('COMMIT');
     await holder.end();
 
-    expect(await racing).toMatchObject({ status: 409, body: { code: 'ALREADY_MEMBER' } });
+    expect(await racing).toMatchObject({ status: 200, body: { slug, role: 'admin' } });
     expect((await roles(orgId))[target.userId]).toBe('admin');
-    // Retrying now sees the admin row under the lock and is refused.
-    expect(await rpc('org/addMember', adminToken, { email: target.email, role: 'member' }, slug)).toMatchObject({ status: 403 });
+    // Once a member, nobody can invite them again, in any role.
+    expect(await rpc('org/invite', adminToken, { email: target.email, role: 'viewer' }, slug)).toMatchObject({ status: 409, body: { code: 'ALREADY_MEMBER' } });
     expect((await roles(orgId))[target.userId]).toBe('admin');
   });
 
@@ -382,25 +396,25 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     // The very next requests with the token that worked a moment ago: no org, no reads, no writes.
     expect(await rpc('inbox/list', memberToken, {}, slug)).toMatchObject({ status: 403, body: { code: 'NOT_A_MEMBER' } });
     expect(await rpc('org/get', memberToken, undefined, slug)).toMatchObject({ status: 403, body: { code: 'NOT_A_MEMBER' } });
-    expect(await rpc('org/addMember', memberToken, { email: owner.email, role: 'viewer' }, slug)).toMatchObject({ status: 403 });
+    expect(await rpc('org/invite', memberToken, { email: 'someone@members.test', role: 'viewer' }, slug)).toMatchObject({ status: 403 });
     expect((await rpc('me/get', memberToken, undefined, null)).body?.orgs).toEqual([]);
     // Below the API too: the runtime refuses the removed user for this org.
     const asMember = { type: 'user' as const, userId: member.userId, aal: 'aal2' as const, sessionId: member.session, mfaAt: Math.floor(Date.now() / 1000) };
     await expect(runtime.query('kernel.org.get', {}, { actor: asMember, orgId })).rejects.toMatchObject({ code: 'NOT_A_MEMBER' });
     await expect(
-      runtime.execute('kernel.member.add', { email: owner.email, role: 'viewer' }, { actor: asMember, orgId, idempotencyKey: randomUUID() }),
+      runtime.execute('kernel.member.invite.create', { email: 'someone@members.test', role: 'viewer' }, { actor: asMember, orgId }),
     ).rejects.toMatchObject({ code: 'NOT_A_MEMBER' });
     expect((await roles(orgId))[member.userId]).toBeUndefined();
   });
 
-  it('applies a demotion on the next request: a demoted admin can no longer add members', async () => {
+  it('applies a demotion on the next request: a demoted admin can no longer invite members', async () => {
     const { owner, admin: adminA, other } = await signInAll('owner', 'admin', 'other');
     const { slug } = await orgWith(owner, [[adminA, 'admin']]);
     const adminToken = await tokenFor(adminA, { mfa: true });
     expect((await rpc('org/get', adminToken, undefined, slug)).body?.role).toBe('admin');
     expect((await changeRole(owner, slug, adminA, 'viewer')).status).toBe(200);
     expect((await rpc('org/get', adminToken, undefined, slug)).body?.role).toBe('viewer');
-    expect(await rpc('org/addMember', adminToken, { email: other.email, role: 'member' }, slug)).toMatchObject({ status: 403 });
+    expect(await rpc('org/invite', adminToken, { email: other.email, role: 'member' }, slug)).toMatchObject({ status: 403 });
   });
 
   it('validates role values and ids', async () => {

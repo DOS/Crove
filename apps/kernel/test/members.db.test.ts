@@ -1,5 +1,5 @@
 // Member management flows (issue #36) against a real PostgreSQL 17: what an owner's role change or removal
-// records, idempotent retries, and re-adding a removed member. Who may do it, the last-owner rule, cross-org
+// records, idempotent retries, and re-inviting a removed member. Who may do it, the last-owner rule, cross-org
 // isolation and revocation on the next request are in test/invariant/members.db.test.ts.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
@@ -42,6 +42,12 @@ suite('member management on PostgreSQL', () => {
     }
   }
 
+  // Members join by accepting an invite (issue #35): the inviter invites the email, the user signed in with it accepts.
+  async function join(orgId: string, inviter: string, who: { id: string; email: string }, role: 'admin' | 'member' | 'viewer') {
+    const { acceptPath } = await runtime.execute<{ acceptPath: string }>('kernel.member.invite.create', { email: who.email, role }, { actor: asMfa(inviter), orgId });
+    await runtime.executeOrgless('kernel.member.invite.accept', { token: acceptPath.split('#')[1] }, { actor: asMfa(who.id) });
+  }
+
   async function person(name: string) {
     const email = `${name}-${randomUUID().slice(0, 8)}@example.com`;
     const id = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email, name: null });
@@ -52,7 +58,7 @@ suite('member management on PostgreSQL', () => {
     const owner = await person('owner');
     const member = await person('member');
     const { orgId } = await createOrg(runtime, asMfa(owner.id), `Org ${randomUUID().slice(0, 6)}`);
-    await runtime.execute('kernel.member.add', { email: member.email, role }, { actor: asMfa(owner.id), orgId });
+    await join(orgId, owner.id, member, role);
     return { orgId, owner, member };
   }
 
@@ -142,7 +148,7 @@ suite('member management on PostgreSQL', () => {
       status: 404,
     });
 
-    await runtime.execute('kernel.member.add', { email: member.email, role: 'member' }, { actor: asMfa(owner.id), orgId });
+    await join(orgId, owner.id, member, 'member');
     const detail = await runtime.query<{ members: Array<{ userId: string; role: string }> }>('kernel.org.get', {}, { actor: asMfa(member.id), orgId });
     expect(detail.members).toContainEqual(expect.objectContaining({ userId: member.id, role: 'member' }));
   });
@@ -173,7 +179,7 @@ suite('member management on PostgreSQL', () => {
     const { orgId, owner, member } = await orgWithMember('admin');
     await runtime.execute('kernel.member.change_role', { userId: member.id, role: 'owner' }, { actor: asMfa(owner.id), orgId });
     const third = await person('third');
-    await runtime.execute('kernel.member.add', { email: third.email, role: 'member' }, { actor: asMfa(member.id), orgId });
+    await join(orgId, member.id, third, 'member');
     await runtime.execute('kernel.member.change_role', { userId: third.id, role: 'viewer' }, { actor: asMfa(member.id), orgId });
     // The co-owner may demote the original owner, since an owner remains.
     await runtime.execute('kernel.member.change_role', { userId: owner.id, role: 'admin' }, { actor: asMfa(member.id), orgId });

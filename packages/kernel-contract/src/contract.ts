@@ -7,6 +7,11 @@ import {
   zId,
   zInboxDetail,
   zInboxItem,
+  zInvite,
+  zInviteCreated,
+  zInvitePreview,
+  zInviteRole,
+  zInviteToken,
   zJournalEntry,
   zLocalDate,
   zMe,
@@ -29,9 +34,16 @@ export const contract = {
     // A retry with the same idempotencyKey returns the org the first request created.
     create: oc.input(z.object({ name: z.string().trim().min(1).max(200), idempotencyKey: zId })).output(zOrgSummary),
     get: oc.output(zOrgDetail),
+    // Adds an existing account without its consent; removed once nothing depends on it (#35). Use invite.
     addMember: oc
       .input(z.object({ email: z.email(), role: zRole.exclude(['owner']) }))
       .output(z.object({ userId: zId })),
+    // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
+    // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
+    invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),
+    // Owners and admins: the org's invites that are still pending or expired, newest first.
+    listInvites: oc.output(z.array(zInvite)),
+    revokeInvite: oc.input(z.object({ inviteId: zId })).output(z.object({ ok: z.literal(true) })),
     // Owner only. Retires the org's inbound email address for good and returns the new one (null when the server
     // has no inbound domain). A retry with the same idempotencyKey does not rotate again.
     rotateInbound: oc.input(z.object({ idempotencyKey: zId })).output(z.object({ inboundAddress: z.string().nullable() })),
@@ -40,6 +52,11 @@ export const contract = {
       .input(z.object({ userId: zId, role: zRole, idempotencyKey: zId }))
       .output(z.object({ userId: zId, role: zRole, previousRole: zRole })),
     removeMember: oc.input(z.object({ userId: zId, idempotencyKey: zId })).output(z.object({ userId: zId, previousRole: zRole })),
+  },
+  // Org-less: the signed-in invitee previews and accepts an invite by its token. Only the invited email may.
+  invites: {
+    peek: oc.input(z.object({ token: zInviteToken })).output(zInvitePreview),
+    accept: oc.input(z.object({ token: zInviteToken })).output(zOrgSummary),
   },
   // Sessions (devices) of a member of the org in the header. API only; the screen is a follow-up.
   sessions: {
