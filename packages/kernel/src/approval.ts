@@ -41,6 +41,8 @@ interface CommandPolicy {
 // the command's approval permission and the proposal's legal-entity scope", read here instead of the role.
 const POLICIES: Record<string, CommandPolicy> = {
   'finance.purchase.record': { roles: ['owner', 'admin'], fourEyes: true },
+  // A reversal is itself a posting (#138): the same roles approve it, with four-eyes.
+  'finance.journal.reverse': { roles: ['owner', 'admin'], fourEyes: true },
 };
 
 const NOBODY: CommandPolicy = { roles: [], fourEyes: true };
