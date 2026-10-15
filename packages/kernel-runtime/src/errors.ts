@@ -1,16 +1,24 @@
 export type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 415 | 422 | 429 | 500 | 503;
 
+export interface DomainErrorOptions {
+  // Facts about the refusal for the denied/failed audit row only (plan §4.10), for example the roles a LAST_OWNER
+  // refusal was about. Never sent to the caller: details go to the caller, audit stays on the server.
+  audit?: Record<string, unknown>;
+}
+
 export class DomainError extends Error {
   readonly code: string;
   readonly status: ErrorStatus;
   readonly details: Record<string, unknown> | undefined;
+  readonly audit: Record<string, unknown> | undefined;
 
-  constructor(code: string, status: ErrorStatus, message: string, details?: Record<string, unknown>) {
+  constructor(code: string, status: ErrorStatus, message: string, details?: Record<string, unknown>, options: DomainErrorOptions = {}) {
     super(message);
     this.name = 'DomainError';
     this.code = code;
     this.status = status;
     this.details = details;
+    this.audit = options.audit;
   }
 }
 
@@ -114,6 +122,8 @@ export function toDomainError(error: unknown): DomainError {
     case 'P0001':
       if (pg.message === 'ORG_CREATE_RATE_LIMITED') return rateLimited(pg.detail);
       if (pg.message === 'INBOUND_ROTATE_RATE_LIMITED') return inboundRotateLimited(pg.detail);
+      // The owner backstop (crove_kernel.tenant_member_keeps_owner, at commit): the same refusal as the commands'.
+      if (pg.message === 'LAST_OWNER') return new DomainError('LAST_OWNER', 409, 'Tổ chức phải còn ít nhất một chủ sở hữu');
       return new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
     case '53400':
       return new DomainError('OVERLOADED', 503, 'Hệ thống đang quá tải, hãy thử lại sau');

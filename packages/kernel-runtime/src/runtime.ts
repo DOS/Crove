@@ -472,9 +472,11 @@ export class Runtime {
     } catch (error) {
       const domain = toDomainError(error);
       // An org-less command that failed after creating its org rolled the org back, so there is no org to audit
-      // the refusal in; a refused replay into an org that already existed is audited there. Other statuses
-      // (404 included) are not audited today.
-      if (entered && !orgIsNew && (domain.status === 403 || domain.status === 409 || domain.status === 422)) {
+      // the refusal in; a refused replay into an org that already existed is audited there. A 404 after the
+      // membership was established (plan §4.4 steps 7 and 14: a record the actor named is not in the org, such as
+      // MEMBER_NOT_FOUND for a member of another org) is audited as failed like 409 and 422. Other statuses are not
+      // audited today.
+      if (entered && !orgIsNew && (domain.status === 403 || domain.status === 404 || domain.status === 409 || domain.status === 422)) {
         await this.writeRefusalAudit(name, def, input, inputSha256, actor, orgId, domain);
       }
       if (domain.code === 'INTERNAL') logInternal(`execute ${name}`, error, { orgId, actor });
@@ -509,8 +511,11 @@ export class Runtime {
           inputSha256,
           target: def.target?.(input) ?? null,
           proposalId: null,
-          // The policy rule that refused, when the error names one (for example P10 or P12), and the session.
+          // The command's own facts about the refusal (DomainError audit, for example the roles of a LAST_OWNER), then
+          // the code, the policy rule that refused when the error names one (for example P10 or P12) and the session,
+          // which the command's facts can never overwrite.
           detail: {
+            ...refusal.audit,
             code: refusal.code,
             ...(typeof refusal.details?.rule === 'string' ? { rule: refusal.details.rule } : {}),
             ...(actor.type === 'user' ? this.sessionDetail(actor) : {}),
