@@ -6,7 +6,7 @@ import { InvoiceExtractor, type InvoiceReader } from '@crove/agent';
 import { LocalDiskStore, S3BlobStore, type BlobStore } from '@crove/kernel-runtime';
 import type { AlertSink } from '../src/alert.ts';
 import { loadConfig } from '../src/config.ts';
-import { createKernel, defaultAdapters, selfHostBilling, type Billing, type KernelAdapters } from '../src/kernel.ts';
+import { createKernel, defaultAdapters, selfHostBilling, type Billing, type IdentityPort, type KernelAdapters } from '../src/kernel.ts';
 import { sendTestAlert, type ProberConfig } from '../src/prober.ts';
 
 const BASE = { DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: 'x'.repeat(32), AUTH_ISSUER: 'crove-auth', WEB_DIST: '/nonexistent' };
@@ -71,6 +71,18 @@ describe('createKernel', () => {
     expect(() => createKernel(config, {} as KernelAdapters)).toThrow('createKernel: missing adapter(s) identity, ai, storage');
     // null is an explicit "no AI", not a missing port.
     expect(() => createKernel(config, { identity, storage, ai: null })).not.toThrow();
+    // Without a session source the runtime would skip the ADR-0028 check, so a partial identity port is refused too.
+    const partial = { authenticator: identity.authenticator } as unknown as IdentityPort;
+    expect(() => createKernel(config, { identity: partial, storage, ai: null })).toThrow(
+      'createKernel: missing adapter(s) identity.sessions, identity.revoker',
+    );
+  });
+
+  it('refuses to start a worker without its own login or the parsing sandbox', async () => {
+    const noWorker = loadConfig(BASE);
+    await expect(createKernel(noWorker, defaultAdapters(noWorker)).start('worker')).rejects.toThrow(/WORKER_DATABASE_URL is required/);
+    const noExtract = loadConfig({ ...BASE, WORKER_DATABASE_URL: 'postgres://localhost/w' });
+    await expect(createKernel(noExtract, defaultAdapters(noExtract)).start('all')).rejects.toThrow(/EXTRACT_URL is required/);
   });
 });
 

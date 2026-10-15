@@ -12,7 +12,7 @@ import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { ORG_HEADER } from '@crove/kernel-contract';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime, type BlobStore, type SessionStatusSource } from '@crove/kernel-runtime';
+import { DomainError, Runtime, type BlobStore, type SessionStatusSource } from '@crove/kernel-runtime';
 import type { ParsedInvoice } from '@crove/l10n-vn';
 import { financeQueries } from '@crove/mod-finance';
 import type { AuthUser } from '../src/auth.ts';
@@ -25,6 +25,7 @@ const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
 const FIXTURE = readFileSync(new URL('../../extract/test/fixtures/einvoice-basic.xml', import.meta.url));
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const SESSION = '0f6c3a52-8d3b-4c1e-9a77-5b2f0e9d1c01';
 
 class MemoryStore implements BlobStore {
   readonly blobs = new Map<string, Uint8Array>();
@@ -120,15 +121,25 @@ suite('composition root on PostgreSQL (ADR-0030)', () => {
       PORT: String(port),
     });
     const defaults = defaultAdapters(config);
-    // Identity: a fixed user for the one header this test sends, and no session records to check.
+    // Identity: a fixed user for the one header this test sends. The session source records each check and refuses
+    // a session listed in `revoked`, so the test sees that requests go through the port.
     const headers: string[] = [];
-    const sessions: SessionStatusSource = { mode: 'off', liveCheckForR3: false, check: async () => {} };
+    const checks: Array<{ sessionId: string; orgId: string | null }> = [];
+    const revoked = new Set<string>();
+    const sessions: SessionStatusSource = {
+      mode: 'off',
+      liveCheckForR3: false,
+      check: async (_trx, actor, checkedOrg) => {
+        checks.push({ sessionId: actor.sessionId, orgId: checkedOrg });
+        if (revoked.has(actor.sessionId)) throw new DomainError('UNAUTHENTICATED', 401, 'revoked');
+      },
+    };
     const identity: IdentityPort = {
       sessions,
       revoker: null,
       authenticator: () => async (header) => {
         headers.push(header ?? '');
-        const user: AuthUser = { userId: owner, email: 'root-owner@example.com', name: null, aal: 'aal1', sessionId: '0f6c3a52-8d3b-4c1e-9a77-5b2f0e9d1c01', mfaAt: null };
+        const user: AuthUser = { userId: owner, email: 'root-owner@example.com', name: null, aal: 'aal1', sessionId: SESSION, mfaAt: null };
         return user;
       },
     };
@@ -147,15 +158,21 @@ suite('composition root on PostgreSQL (ADR-0030)', () => {
       const origin = `http://127.0.0.1:${port}`;
       expect(await (await fetch(`${origin}/api/config`)).json()).toMatchObject({ aiEnabled: true });
 
-      const form = new FormData();
-      const bytes = new Uint8Array([...PNG, ...randomBytes(64)]);
-      form.append('file', new File([bytes], 'hd.png', { type: 'image/png' }));
-      const upload = await fetch(`${origin}/api/files`, {
-        method: 'POST',
-        headers: { authorization: 'Bearer fake-token', [ORG_HEADER]: slug },
-        body: form,
-      });
+      const send = () => {
+        const form = new FormData();
+        form.append('file', new File([new Uint8Array([...PNG, ...randomBytes(64)])], 'hd.png', { type: 'image/png' }));
+        return fetch(`${origin}/api/files`, { method: 'POST', headers: { authorization: 'Bearer fake-token', [ORG_HEADER]: slug }, body: form });
+      };
+      // A session the identity port refuses gets 401 and stores nothing.
+      revoked.add(SESSION);
+      expect((await send()).status).toBe(401);
+      expect(storage.blobs.size).toBe(0);
+      revoked.clear();
+      checks.length = 0;
+
+      const upload = await send();
       expect(upload.status).toBe(200);
+      expect(checks).toContainEqual({ sessionId: SESSION, orgId });
       const { files } = (await upload.json()) as { files: Array<{ fileId: string }> };
       const fileId = files[0]?.fileId as string;
       expect(headers).toContain('Bearer fake-token');

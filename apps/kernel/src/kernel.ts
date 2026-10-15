@@ -15,7 +15,9 @@ import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } 
 import { createBlobStore } from './storage.ts';
 import { startWorker } from './worker.ts';
 
-// Identity (ADR-0027, ADR-0028): who the caller is and whether their session still holds.
+// Identity (ADR-0027, ADR-0028): who the caller is and whether their session still holds. When
+// sessions.liveCheckForR3 is true, the authenticator must set confirmLive on each user, or every R3 command fails
+// closed with 503.
 export interface IdentityPort {
   // Checked in the transaction of every user request; never "no check" in a server.
   readonly sessions: SessionStatusSource;
@@ -76,7 +78,15 @@ const REQUIRED = ['identity', 'ai', 'storage'] as const;
 export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
   // Typed callers cannot omit a port, but an entrypoint assembled at runtime can: fail at boot, not on first use.
   // ai may be null (explicitly no AI), never undefined.
-  const missing = REQUIRED.filter((port) => (adapters as Partial<KernelAdapters>)[port] === undefined);
+  const given = adapters as Partial<KernelAdapters>;
+  const missing: string[] = REQUIRED.filter((port) => given[port] === undefined);
+  // A Runtime without a session source skips the ADR-0028 check, so the identity port must carry all three parts.
+  const identity = given.identity as Partial<IdentityPort> | undefined;
+  if (identity) {
+    if (typeof identity.sessions?.check !== 'function') missing.push('identity.sessions');
+    if (typeof identity.authenticator !== 'function') missing.push('identity.authenticator');
+    if (identity.revoker === undefined) missing.push('identity.revoker');
+  }
   if (missing.length > 0) throw new Error(`createKernel: missing adapter(s) ${missing.join(', ')}`);
   const resolved: ResolvedAdapters = {
     identity: adapters.identity,
@@ -125,8 +135,10 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
       if (removed > 0) console.log(`[storage] removed ${removed} stale temporary file(s)`);
     }
     const stops: Array<() => Promise<void>> = [];
+    // Safe to call twice (SIGTERM then SIGINT): the second call finds nothing left to stop.
     const stopAll = async () => {
-      for (const stop of stops.reverse()) await stop().catch((e) => console.error(e));
+      const pending = stops.splice(0).reverse();
+      for (const stop of pending) await stop().catch((e) => console.error(e));
     };
 
     try {
