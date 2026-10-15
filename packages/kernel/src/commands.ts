@@ -132,6 +132,25 @@ export const receiveInbound = defineCommand({
   },
 });
 
+// Rotates the org's inbound email address (plan §7.6). The old token is tombstoned and never issued again; mail
+// to it is dropped by the worker like mail to an unknown token. R2: the address is shared with suppliers, so
+// changing it has an effect outside Crove (their mail to the old address stops arriving), and it cannot be
+// undone, which rules out R1. Owner only, enforced here and again in the definer.
+export const rotateInbound = defineCommand({
+  name: 'kernel.inbound.rotate',
+  input: z.object({}),
+  risk: 'R2',
+  access: ['owner'],
+  handler: async (ctx) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đổi được địa chỉ nhận hóa đơn');
+    const { rows } = await sql<{ token: string | null }>`SELECT crove_kernel.inbound_rotate() AS token`.execute(ctx.trx);
+    const token = rows[0]?.token;
+    if (!token) throw new DomainError('INTERNAL', 500, 'Không đổi được địa chỉ nhận hóa đơn');
+    await ctx.activity('kernel.org', ctx.orgId, 'inbound.rotated', 'Đổi địa chỉ email nhận hóa đơn; địa chỉ cũ ngừng nhận thư');
+    return { inboundToken: token };
+  },
+});
+
 export const zProposalDraft = z.object({
   kind: z.string(),
   command: z.string(),
@@ -388,6 +407,7 @@ const otherKernelCommands = [
   addMember,
   ingestFile,
   receiveInbound,
+  rotateInbound,
   recordExtraction,
   editProposal,
   approveProposal,

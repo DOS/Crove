@@ -30,7 +30,12 @@ export async function resolveOrg(runtime: Runtime, user: AuthUser, slug: string 
   return (await resolveMembership(runtime, user, slug)).orgId;
 }
 
-export function createRpcHandler(runtime: Runtime) {
+export interface RpcOptions {
+  // <token>@inboundDomain is the org's inbound email address; null when the server does not receive email.
+  inboundDomain: string | null;
+}
+
+export function createRpcHandler(runtime: Runtime, options: RpcOptions = { inboundDomain: null }) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -61,6 +66,16 @@ export function createRpcHandler(runtime: Runtime) {
       get: os.org.get.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.get', {}, { actor, orgId }))),
       addMember: os.org.addMember.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.member.add', input, { actor, orgId })),
+      ),
+      rotateInbound: os.org.rotateInbound.handler(({ context, input }) =>
+        inOrg(context, async (orgId, actor) => {
+          const { inboundToken } = await runtime.execute<{ inboundToken: string }>(
+            'kernel.inbound.rotate',
+            {},
+            { actor, orgId, idempotencyKey: input.idempotencyKey },
+          );
+          return { inboundAddress: options.inboundDomain ? `${inboundToken}@${options.inboundDomain}` : null };
+        }),
       ),
     },
     sessions: {
