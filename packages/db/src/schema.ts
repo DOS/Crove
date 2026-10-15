@@ -137,17 +137,25 @@ export interface InboundMessageTable {
 
 export type ExtractionMethod = 'einvoice_xml' | 'pdf_text_ai' | 'image_ai' | 'unsupported';
 
+export type ExtractionStatus = 'pending' | 'done' | 'failed';
+
 export interface ExtractionTable {
   org_id: string;
   id: Generated<string>;
   file_id: string;
-  method: ExtractionMethod;
-  status: 'done' | 'failed';
+  // NULL only while a re-extraction is pending (or for one that timed out before it was read).
+  method: ExtractionMethod | null;
+  status: ExtractionStatus;
+  // 1, 2, 3, ... per file; assigned by the database on insert (trigger extraction_assign_version).
+  version: Generated<number>;
   result: Json | null;
   checks: ColumnType<unknown, string | undefined, string>;
   error: string | null;
   tainted: Generated<boolean>;
+  // The user who asked for a re-extraction; NULL for the first extraction.
+  requested_by: ColumnType<string | null, string | null | undefined, string | null>;
   created_at: DefaultTimestamp;
+  completed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
 
 export type ProposalStatus = 'pending' | 'executed' | 'rejected' | 'failed';

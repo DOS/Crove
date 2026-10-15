@@ -137,6 +137,12 @@ export function createRpcHandler(runtime: Runtime) {
       recent: os.files.recent.handler(({ context }) =>
         inOrg(context, (orgId, actor) => runtime.query('kernel.files.recent', {}, { actor, orgId })),
       ),
+      reextract: os.files.reextract.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('kernel.file.reextract', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
     },
     parties: {
       list: os.parties.list.handler(({ context, input }) =>

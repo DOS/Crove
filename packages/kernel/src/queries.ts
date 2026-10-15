@@ -11,6 +11,7 @@ import {
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
 import { EDITOR_ROLES, decideApproval } from './approval.ts';
+import { MAX_EXTRACTION_VERSIONS, REEXTRACT_STALE_MINUTES, STALE_RUN_ERROR, latestExtraction } from './extraction.ts';
 import { inviteQueries } from './invites.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -145,7 +146,32 @@ export const inboxGet = defineQuery({
     // The same decision kernel.proposal.approve makes (without its locks), so the Inbox shows Approve only
     // to users the server will accept.
     const approval = await decideApproval(ctx.trx, ctx.orgId, ctx.actor, row, { lock: false });
-    const canChange = row.status === 'pending' && ctx.actor.type === 'user' && ctx.role !== null && EDITOR_ROLES.includes(ctx.role);
+    const editor = ctx.actor.type === 'user' && ctx.role !== null && EDITOR_ROLES.includes(ctx.role);
+    // The file's newest extraction run, and the run this revision was read from (issue #40). While a re-extraction
+    // is in flight, approve, edit and reject are refused (EXTRACTION_PENDING), so they are not offered.
+    const latest = file ? await latestExtraction(ctx, file.id) : undefined;
+    const own = row.extraction_id
+      ? await ctx.trx
+          .selectFrom('crove_kernel.extraction')
+          .select('version')
+          .where('org_id', '=', ctx.orgId)
+          .where('id', '=', row.extraction_id)
+          .executeTakeFirst()
+      : undefined;
+    const reading = latest?.inFlight === true;
+    // kernel.file.reextract acts on the file's newest proposal, so only that one offers it.
+    const newest = file
+      ? await ctx.trx
+          .selectFrom('crove_kernel.proposal')
+          .select(['id', 'status'])
+          .where('org_id', '=', ctx.orgId)
+          .where('source_file_id', '=', file.id)
+          .orderBy('created_at', 'desc')
+          .orderBy('id', 'desc')
+          .limit(1)
+          .executeTakeFirst()
+      : undefined;
+    const canChange = row.status === 'pending' && editor && !reading;
     return {
       ...toInboxItem(row),
       revision: row.revision,
@@ -155,10 +181,21 @@ export const inboxGet = defineQuery({
       decidedAt: row.decided_at ? row.decided_at.toISOString() : null,
       decisionNote: row.decision_note,
       result: result?.documentId && result.journalEntryId ? { documentId: result.documentId, journalEntryId: result.journalEntryId } : null,
-      canApprove: approval.reason === 'ok',
+      canApprove: approval.reason === 'ok' && !reading,
       approveReason: approval.reason,
       canEdit: canChange,
       canReject: canChange,
+      extraction: latest
+        ? { version: latest.version, status: latest.status, error: latest.error, inFlight: reading, proposalVersion: own?.version ?? null }
+        : null,
+      // The same checks kernel.file.reextract makes.
+      canReextract:
+        editor &&
+        latest !== undefined &&
+        !reading &&
+        newest?.id === row.id &&
+        newest.status !== 'executed' &&
+        latest.version < MAX_EXTRACTION_VERSIONS,
     };
   },
 });
@@ -168,30 +205,83 @@ export const filesRecent = defineQuery({
   input: z.object({}),
   access: ALL,
   handler: async (ctx) => {
+    // Per file: its newest extraction run and its newest proposal (a file read again after a rejection has more
+    // than one).
     const rows = await ctx.trx
       .selectFrom('crove_kernel.file as f')
-      .leftJoin('crove_kernel.extraction as e', (join) => join.onRef('e.org_id', '=', 'f.org_id').onRef('e.file_id', '=', 'f.id'))
-      .leftJoin('crove_kernel.proposal as p', (join) => join.onRef('p.org_id', '=', 'e.org_id').onRef('p.extraction_id', '=', 'e.id'))
-      .select(['f.id', 'f.filename', 'f.content_type', 'f.created_at', 'e.status as extraction_status', 'e.error', 'p.id as proposal_id', 'p.duplicate_of'])
+      .leftJoinLateral(
+        (eb) =>
+          eb
+            .selectFrom('crove_kernel.extraction as x')
+            .select([
+              'x.status',
+              'x.error',
+              'x.version',
+              sql<boolean>`x.status = 'pending' AND x.created_at > pg_catalog.now() - pg_catalog.make_interval(mins => ${REEXTRACT_STALE_MINUTES}::int)`.as(
+                'in_flight',
+              ),
+            ])
+            .whereRef('x.org_id', '=', 'f.org_id')
+            .whereRef('x.file_id', '=', 'f.id')
+            .orderBy('x.version', 'desc')
+            .limit(1)
+            .as('e'),
+        (join) => join.onTrue(),
+      )
+      .leftJoinLateral(
+        (eb) =>
+          eb
+            .selectFrom('crove_kernel.proposal as q')
+            .select(['q.id', 'q.status', 'q.duplicate_of'])
+            .whereRef('q.org_id', '=', 'f.org_id')
+            .whereRef('q.source_file_id', '=', 'f.id')
+            .orderBy('q.created_at', 'desc')
+            .orderBy('q.id', 'desc')
+            .limit(1)
+            .as('p'),
+        (join) => join.onTrue(),
+      )
+      .select([
+        'f.id',
+        'f.filename',
+        'f.content_type',
+        'f.created_at',
+        'e.status as extraction_status',
+        'e.error',
+        'e.version',
+        'e.in_flight',
+        'p.id as proposal_id',
+        'p.status as proposal_status',
+        'p.duplicate_of',
+      ])
       .where('f.org_id', '=', ctx.orgId)
       .orderBy('f.created_at', 'desc')
       .limit(50)
       .execute();
-    return rows.map((r) => ({
-      id: r.id,
-      filename: r.filename,
-      contentType: r.content_type,
-      status: !r.extraction_status
-        ? ('processing' as const)
-        : r.proposal_id
-          ? r.duplicate_of
-            ? ('duplicate' as const)
-            : ('proposed' as const)
-          : ('failed' as const),
-      error: r.error,
-      proposalId: r.proposal_id,
-      createdAt: r.created_at.toISOString(),
-    }));
+    const editor = ctx.actor.type === 'user' && ctx.role !== null && EDITOR_ROLES.includes(ctx.role);
+    return rows.map((r) => {
+      const status =
+        !r.extraction_status || r.in_flight
+          ? ('processing' as const)
+          : r.proposal_id
+            ? r.duplicate_of
+              ? ('duplicate' as const)
+              : ('proposed' as const)
+            : ('failed' as const);
+      return {
+        id: r.id,
+        filename: r.filename,
+        contentType: r.content_type,
+        status,
+        error: r.extraction_status === 'failed' ? r.error : r.extraction_status === 'pending' && !r.in_flight ? STALE_RUN_ERROR : null,
+        proposalId: r.proposal_id,
+        version: r.version ?? null,
+        // The same checks kernel.file.reextract makes.
+        canReextract:
+          editor && Boolean(r.extraction_status) && !r.in_flight && r.proposal_status !== 'executed' && (r.version ?? 0) < MAX_EXTRACTION_VERSIONS,
+        createdAt: r.created_at.toISOString(),
+      };
+    });
   },
 });
 

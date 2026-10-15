@@ -86,7 +86,7 @@ The body of this plan was rewritten on 2026-10-14 to describe these decisions; i
 3. Audit rows cannot be updated or deleted; the same document resent creates no duplicates.
 4. Playwright end-to-end run of exit criterion 1 is green.
 
-**Follow-ups from #8 (Phase 1 residual work):** move `enter_system_context` out of the API role (T5, #24; done in #78); a re-extract command for files read by AI (#40); pending invites with consent (#35; done in #123, #125 and #132); remove and update member (#36; done in #115); inbound token rotation (#37; done in #112); an end-to-end check of Supabase Auth rate limits (#34); CSV/Excel formula prefixing and exact decimals in the Excel export (T13, #29; done in #93); audit retention and offboarding (#38).
+**Follow-ups from #8 (Phase 1 residual work):** move `enter_system_context` out of the API role (T5, #24; done in #78); a re-extract command for files read by AI (#40; done in #143, see §8.4); pending invites with consent (#35; done in #123, #125 and #132); remove and update member (#36; done in #115); inbound token rotation (#37; done in #112); an end-to-end check of Supabase Auth rate limits (#34); CSV/Excel formula prefixing and exact decimals in the Excel export (T13, #29; done in #93); audit retention and offboarding (#38).
 
 **Deferred, with the trigger to revisit:**
 
@@ -1369,6 +1369,12 @@ Data residency requirements are handled with a legal opinion plus a copy in Viet
 8. Emit `kernel.extraction.completed`; a module subscriber turns it into a proposal.
 
 Every extraction is tainted. A Vietnamese benchmark of 100-300 documents is needed before locking aliases or OCR.
+
+**Re-extraction, on `main` (#40, #143):**
+- `kernel.file.reextract` (R1, `owner`, `admin` or `member`, the roles that may edit a proposal) runs through `execute()` with an audit row and an idempotency key. It records a pending extraction run and emits `kernel.file.reextract_requested`; the worker relays it to the same extraction job as an upload. The API never parses.
+- Every run is a numbered version of the file's extraction (`extraction.version`, always numbered by the database, UNIQUE per file; the requester is taken from the sealed context, so no runtime role picks either). A finished version is never changed (guard trigger and column-level UPDATE; no DELETE for the runtime roles), so the history of readings stays.
+- The result becomes a new revision of the file's pending proposal, through the same mechanism as an edit (§8.3): approve refuses the older revision (`STALE_REVISION`) and accounts that differ from the new one (`CONTENT_CHANGED`). The requester is added to the revision's authors (P10): they chose to replace the content with a new reading. A failed re-read leaves the proposal unchanged. A booked invoice is never read again (`PROPOSAL_DECIDED`); after a rejection, a successful re-read creates a new proposal and the rejected one stays as it was.
+- One run per file at a time (partial UNIQUE index on pending runs; repeated requests get `EXTRACTION_PENDING`), and at most 20 runs per file. Every write locks the file row first, then the proposal; approve, edit and reject refuse while a run is in flight. A pending run older than 15 minutes (database clock only) is presumed lost: it stops blocking decisions, a new request closes it, and if its job still finishes, the result is kept as its version but never applied to a proposal, so an edit or decision made in the meantime stays current. The Inbox shows such a run as stopped and offers "Đọc lại" again, only on the file's newest proposal.
 
 ### 8.5 Prompt injection defenses
 

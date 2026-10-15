@@ -13,7 +13,7 @@ function harness(answer: () => Promise<ExtractResponse>, file = { filename: 'hd.
   const asked: string[] = [];
   const runtime = {
     query: async (name: string) => {
-      if (name === 'finance.extraction.file') return { id: FILE, ...file, storage_key: `org/${ORG}/abc`, hasExtraction: false };
+      if (name === 'finance.extraction.file') return { id: FILE, ...file, storage_key: `org/${ORG}/abc`, hasExtraction: false, due: true };
       return { vendorDefault: null, duplicateDocumentId: null, duplicateProposalId: null };
     },
     execute: async (name: string, input: Record<string, unknown>) => {

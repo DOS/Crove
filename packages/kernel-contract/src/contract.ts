@@ -89,6 +89,11 @@ export const contract = {
   },
   files: {
     recent: oc.output(z.array(zFileStatus)),
+    // Owners, admins and members: reads the file again (issue #40). The result is a new extraction version and,
+    // when it reads an invoice, a new revision of the file's pending proposal (or a new proposal after a rejected
+    // one). Refused while a run is in flight and once the invoice is booked. A retry with the same idempotencyKey
+    // returns the first result.
+    reextract: oc.input(z.object({ fileId: zId, idempotencyKey: zId })).output(z.object({ fileId: zId, version: z.number().int() })),
   },
   parties: {
     list: oc.input(z.object({ q: z.string().max(100).optional() })).output(z.array(zParty)),

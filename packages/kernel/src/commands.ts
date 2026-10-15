@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
-import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors, type ActorRef } from './approval.ts';
+import { actorRef, addAuthor, decideApproval, parseAuthors } from './approval.ts';
+import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { createOrgCommand, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
 import { inviteCommands } from './invites.ts';
 
@@ -264,88 +265,6 @@ export function inboundRotateCommand(limits: InboundRotateLimits = DEFAULT_INBOU
 
 export const rotateInbound = inboundRotateCommand();
 
-export const zProposalDraft = z.object({
-  kind: z.string(),
-  command: z.string(),
-  title: z.string().max(300),
-  payload: z.record(z.string(), z.unknown()),
-  duplicateOf: zId.nullable(),
-});
-
-export const recordExtraction = defineCommand({
-  name: 'kernel.extraction.record',
-  input: z.object({
-    fileId: zId,
-    method: z.enum(['einvoice_xml', 'pdf_text_ai', 'image_ai', 'unsupported']),
-    status: z.enum(['done', 'failed']),
-    result: z.unknown().nullable(),
-    checks: z.array(z.object({ id: z.string(), status: z.enum(['pass', 'warn', 'fail']), message: z.string() })),
-    error: z.string().max(2000).nullable(),
-    proposal: zProposalDraft.nullable(),
-  }),
-  risk: 'R1',
-  access: 'system',
-  target: (input) => ({ type: 'kernel.file', id: input.fileId }),
-  handler: async (ctx, input) => {
-    const existing = await ctx.trx
-      .selectFrom('crove_kernel.extraction')
-      .select('id')
-      .where('org_id', '=', ctx.orgId)
-      .where('file_id', '=', input.fileId)
-      .executeTakeFirst();
-    if (existing) return { extractionId: existing.id, proposalId: null, duplicate: true };
-    const extraction = await ctx.trx
-      .insertInto('crove_kernel.extraction')
-      .values({
-        org_id: ctx.orgId,
-        file_id: input.fileId,
-        method: input.method,
-        status: input.status,
-        result: input.result === null ? null : JSON.stringify(input.result),
-        checks: JSON.stringify(input.checks),
-        error: input.error,
-      })
-      .returning('id')
-      .executeTakeFirstOrThrow();
-    let proposalId: string | null = null;
-    if (input.proposal) {
-      // Authors (P10): the extraction itself, and the user who uploaded the source file, since the content
-      // is read from what they supplied. A forwarded email has no authenticated sender, so it adds nobody.
-      const file = await ctx.trx
-        .selectFrom('crove_kernel.file')
-        .select('created_by')
-        .where('org_id', '=', ctx.orgId)
-        .where('id', '=', input.fileId)
-        .executeTakeFirst();
-      const authors: ActorRef[] = [actorRef(ctx.actor)];
-      if (file?.created_by) authors.push({ type: 'user', id: file.created_by });
-      const proposal = await ctx.trx
-        .insertInto('crove_kernel.proposal')
-        .values({
-          org_id: ctx.orgId,
-          kind: input.proposal.kind,
-          command: input.proposal.command,
-          title: input.proposal.title,
-          payload: JSON.stringify(input.proposal.payload),
-          source_file_id: input.fileId,
-          extraction_id: extraction.id,
-          duplicate_of: input.proposal.duplicateOf,
-          // P12: who may approve this command right now; approval re-checks each one's role live.
-          eligible_approvers: await eligibleApprovers(ctx.trx, ctx.orgId, input.proposal.command),
-          authors: JSON.stringify(authors),
-        })
-        .returning('id')
-        .executeTakeFirstOrThrow();
-      proposalId = proposal.id;
-      await ctx.activity('kernel.proposal', proposal.id, 'proposal.created', input.proposal.title);
-      await ctx.emit('kernel.proposal.created', { proposalId: proposal.id, kind: input.proposal.kind });
-    } else {
-      await ctx.activity('kernel.file', input.fileId, 'extraction.failed', input.error ?? 'Không đọc được chứng từ');
-    }
-    return { extractionId: extraction.id, proposalId, duplicate: false };
-  },
-});
-
 async function lockPendingProposal(ctx: CommandContext, id: string, revision?: number) {
   const proposal = await ctx.trx
     .selectFrom('crove_kernel.proposal')
@@ -382,6 +301,7 @@ export const editProposal = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới chỉnh sửa được');
     const proposal = await lockPendingProposal(ctx, input.id, input.revision);
+    await refuseWhileReextracting(ctx, proposal.source_file_id);
     const reviser = PROPOSAL_REVISERS[proposal.command];
     if (!reviser) throw new DomainError('NOT_EDITABLE', 422, 'Loại đề xuất này không chỉnh sửa được');
     const authors = parseAuthors(proposal.authors);
@@ -421,6 +341,8 @@ export const approveProposal = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới duyệt được');
     const proposal = await lockPendingProposal(ctx, input.id, input.revision);
+    // A re-extraction in flight would replace this revision's content (issue #40).
+    await refuseWhileReextracting(ctx, proposal.source_file_id);
     if (!PROPOSAL_COMMANDS.has(proposal.command)) throw new DomainError('FORBIDDEN', 403, 'Loại đề xuất không được hỗ trợ');
     if (input.lineAccounts && changesContent(proposal.payload, input.lineAccounts)) {
       throw new DomainError('CONTENT_CHANGED', 409, 'Bạn đã đổi tài khoản nhưng chưa lưu; hãy lưu chỉnh sửa trước khi duyệt');
@@ -473,6 +395,7 @@ export const rejectProposal = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới từ chối được');
     const proposal = await lockPendingProposal(ctx, input.id);
+    await refuseWhileReextracting(ctx, proposal.source_file_id);
     await ctx.trx
       .updateTable('crove_kernel.proposal')
       .set({ status: 'rejected', decided_by: ctx.actor.userId, decided_at: ctx.now, decision_note: input.reason ?? null })
@@ -522,7 +445,7 @@ const otherKernelCommands = [
   removeMember,
   ingestFile,
   receiveInbound,
-  recordExtraction,
+  ...extractionCommands,
   editProposal,
   approveProposal,
   rejectProposal,
