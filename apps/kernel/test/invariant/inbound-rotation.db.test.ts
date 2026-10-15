@@ -1,6 +1,7 @@
-// Invariant suite (Decision 7): inbound address rotation (issue #37, plan §7.6). Only the owner rotates, only the
-// API login role may call the rotation definer, every token ever issued stays in the ledger, a retired token never
-// routes mail and is never issued again, even when the generator returns it. Keep this directory self-contained:
+// Invariant suite (Decision 7): inbound address rotation (issue #37, plan §7.6). Only the owner rotates, with a
+// fresh second factor (R3 since #113), only the API login role may call the rotation definer, every token ever
+// issued stays in the ledger, a retired token never routes mail and is never issued again, even when the generator
+// returns it. Keep this directory self-contained:
 // import package code under test, never helpers from outside test/invariant/. Set CROVE_TEST_ADMIN_URL to a
 // superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
@@ -244,6 +245,43 @@ suite('inbound address rotation invariants on PostgreSQL', () => {
     await expect(
       workerDb.transaction().execute((trx) => sql`SELECT crove_kernel.inbound_rotate()`.execute(trx)),
     ).rejects.toThrow(/permission denied for function inbound_rotate/);
+  });
+
+  it('needs a fresh second factor to rotate (R3, P11, #113): an aal1 or stale owner session is refused and audited', async () => {
+    const before = await tokenOf(org.orgId);
+    const ledgerBefore = await ledger(org.orgId);
+    const audits = (await rotateAudits(org.orgId)).length;
+    const stale = { ...asMfa(users.owner), mfaAt: Math.floor(Date.now() / 1000) - 600 };
+    const noTimestamp = { type: 'user' as const, userId: users.owner, aal: 'aal2' as const, sessionId: '0f6c3a52-8d3b-4c1e-9a77-5b2f0e9d1c00' };
+    for (const actor of [asUser(users.owner), stale, noTimestamp]) {
+      await expect(runtime.execute('kernel.inbound.rotate', {}, { actor, orgId: org.orgId, idempotencyKey: randomUUID() })).rejects.toMatchObject({
+        code: 'STEP_UP_REQUIRED',
+        status: 403,
+      });
+    }
+    // Nothing changed: same token, same ledger. Each refusal is audited with its code.
+    expect(await tokenOf(org.orgId)).toBe(before);
+    expect(await ledger(org.orgId)).toEqual(ledgerBefore);
+    const refused = (await rotateAudits(org.orgId)).slice(audits);
+    expect(refused.map((r) => [r.actor_id, r.outcome, r.detail.code])).toEqual([
+      [users.owner, 'denied', 'STEP_UP_REQUIRED'],
+      [users.owner, 'denied', 'STEP_UP_REQUIRED'],
+      [users.owner, 'denied', 'STEP_UP_REQUIRED'],
+    ]);
+
+    // With a second factor in the last 5 minutes the owner rotates, and the audit row records the assurance used.
+    const fresh = asMfa(users.owner);
+    const { inboundToken } = await runtime.execute<{ inboundToken: string }>('kernel.inbound.rotate', {}, {
+      actor: fresh,
+      orgId: org.orgId,
+      idempotencyKey: randomUUID(),
+    });
+    expect(await tokenOf(org.orgId)).toBe(inboundToken);
+    expect((await rotateAudits(org.orgId)).at(-1)).toEqual({
+      actor_id: users.owner,
+      outcome: 'ok',
+      detail: { aal: 'aal2', sessionId: fresh.sessionId, mfaAt: fresh.mfaAt },
+    });
   });
 
   it('never issues a token that ever existed, even when the generator returns one (forced collision)', async () => {

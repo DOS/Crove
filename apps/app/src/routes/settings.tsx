@@ -86,7 +86,10 @@ function MemberControls({ member }: { member: MemberRow }) {
   );
 }
 
-// Owner only. One idempotency key per confirmation, so a retried request never rotates twice.
+// Owner only. One idempotency key per confirmation, so a retried request never rotates twice. R3 (#113): without a
+// second factor in the last 5 minutes the server answers STEP_UP_REQUIRED, shown below the buttons like any error;
+// the key is kept until a rotation succeeds, so a retry after a refusal can still rotate at most once. The fresh
+// MFA challenge screen (StepUpPrompt) lands with the SPA MFA flows (#32).
 function RotateInboundAddress() {
   const [confirming, setConfirming] = useState(false);
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
@@ -130,6 +133,7 @@ function RotateInboundAddress() {
         Địa chỉ hiện tại sẽ ngừng nhận thư ngay lập tức và không bao giờ được cấp lại. Thư gửi tới địa chỉ cũ sẽ bị bỏ qua mà không báo lỗi cho
         người gửi, vì vậy hãy gửi địa chỉ mới cho các nhà cung cấp.
       </p>
+      <p className="text-fg-3">Việc này cần xác thực hai lớp (MFA) trong 5 phút gần nhất. Mỗi tổ chức chỉ đổi được vài lần mỗi ngày.</p>
       <div className="flex gap-2">
         <Button variant="danger" disabled={rotate.isPending} onClick={() => rotate.mutate({ idempotencyKey })}>
           Xác nhận đổi địa chỉ
