@@ -912,6 +912,44 @@ suite('kernel invariants on PostgreSQL', () => {
     expect((await approvalAudit(id)).at(-1)).toMatchObject({ actor_id: owner, outcome: 'ok', detail: { self_approved: true, eligible_approvers: 1 } });
   });
 
+  // #119: the snapshot is never rewritten when an approver leaves, so the count must filter it against membership.
+  it('stops counting a removed approver for four-eyes (P10): the snapshot is filtered against current membership', async () => {
+    const { orgId, owner, people } = await policyOrg('Removed approver', ['admin', 'admin']);
+    const [leaving, staying] = people as [string, string];
+    const first = await proposeIn(orgId, owner, '2007');
+    const second = await proposeIn(orgId, owner, '2008');
+    await withAdmin(async (admin) => {
+      const { rows } = await admin.query<{ n: number }>(
+        'SELECT min(cardinality(eligible_approvers))::int AS n FROM crove_kernel.proposal WHERE id = ANY($1::uuid[])',
+        [[first, second]],
+      );
+      expect(rows[0]?.n).toBe(3);
+    });
+    expect(await view(orgId, owner, first)).toMatchObject({ canApprove: false, approveReason: 'four_eyes' });
+
+    // One of the two other approvers is removed: the owner (the uploader) still has a second eligible approver.
+    await runtime.execute('kernel.member.remove', { userId: leaving }, { actor: asMfa(owner), orgId });
+    expect(await view(orgId, owner, first)).toMatchObject({ canApprove: false, approveReason: 'four_eyes' });
+    await expect(approveAs(orgId, owner, first, 1)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED' });
+
+    // The second one is removed too: the snapshot still names three people, but only the owner is a member, so four-eyes
+    // no longer holds and the owner approves alone, flagged as a self-approval with one eligible approver.
+    await runtime.execute('kernel.member.remove', { userId: staying }, { actor: asMfa(owner), orgId });
+    await withAdmin(async (admin) => {
+      const { rows } = await admin.query<{ n: number }>('SELECT cardinality(eligible_approvers)::int AS n FROM crove_kernel.proposal WHERE id = $1', [first]);
+      expect(rows[0]?.n).toBe(3);
+    });
+    expect(await view(orgId, owner, first)).toMatchObject({ canApprove: true, approveReason: 'ok' });
+    await approveAs(orgId, owner, first, 1);
+    expect((await approvalAudit(first)).at(-1)).toMatchObject({
+      actor_id: owner,
+      outcome: 'ok',
+      detail: { self_approved: true, eligible_approvers: 1, policy: { P10: 'self_approved' } },
+    });
+    // A removed approver cannot approve either: they are refused before any policy runs.
+    await expect(approveAs(orgId, staying, second, 1)).rejects.toMatchObject({ code: 'NOT_A_MEMBER', status: 403 });
+  });
+
   it('turns an edit into a new revision authored by the editor; the old revision and unsaved changes cannot be approved', async () => {
     const { orgId, owner, people } = await policyOrg('Edits', ['admin', 'member']);
     const [admin, member] = people as [string, string];

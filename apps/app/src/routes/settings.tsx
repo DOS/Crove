@@ -4,10 +4,7 @@ import { MemberSessions, MySessions } from '../components/sessions.tsx';
 import { Badge, Button, Card, ErrorText, Input, PageHeader, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { formatDateTime } from '../lib/format.ts';
-
-const ROLE_LABEL = { owner: 'Chủ sở hữu', admin: 'Quản trị', member: 'Thành viên', viewer: 'Chỉ xem' } as const;
-type Role = keyof typeof ROLE_LABEL;
-const ROLES = Object.keys(ROLE_LABEL) as Role[];
+import { ROLES, ROLE_LABEL, roleChangeConfirmation, type Role, type RoleChangeConfirmation } from '../lib/members.ts';
 
 interface MemberRow {
   userId: string;
@@ -16,41 +13,69 @@ interface MemberRow {
   role: Role;
 }
 
-// Owner controls for one member: change the role, or remove them after an inline confirmation. The server
-// enforces every rule (owners only, the org keeps an owner, no self-removal); the screen only hides what can never
-// succeed. One idempotency key per confirmed removal, so a retried request is replayed, not repeated.
-function MemberControls({ member }: { member: MemberRow }) {
-  const [confirming, setConfirming] = useState(false);
-  const [removeKey, setRemoveKey] = useState(() => crypto.randomUUID());
-  const done = () => void queryClient.invalidateQueries();
-  const changeRole = useMutation(orpc.org.changeMemberRole.mutationOptions({ onSuccess: done }));
-  const remove = useMutation(
-    orpc.org.removeMember.mutationOptions({
-      onSuccess: () => {
-        setConfirming(false);
-        setRemoveKey(crypto.randomUUID());
-        done();
-      },
-    }),
-  );
-  const busy = changeRole.isPending || remove.isPending;
-  const error = changeRole.error ?? remove.error;
-  const name = member.displayName ?? member.email;
+type Pending = { kind: 'remove' } | { kind: 'role'; role: Role; confirmation: RoleChangeConfirmation };
 
-  if (confirming) {
+// Owner controls for one member, the owner themself included: change the role, or remove another member. Removal and
+// every change that gives or takes owner rights (promotion to owner, demoting an owner, the owner's own role) wait
+// for an inline confirmation (#119). The server enforces every rule (owners only, the org keeps an owner, no
+// self-removal, fresh MFA); the screen only hides what can never succeed. One idempotency key per confirmation, so a
+// retried request is replayed, not repeated.
+function MemberControls({ member, self }: { member: MemberRow; self: boolean }) {
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [confirmKey, setConfirmKey] = useState(() => crypto.randomUUID());
+  const settled = () => {
+    setPending(null);
+    setConfirmKey(crypto.randomUUID());
+    void queryClient.invalidateQueries();
+  };
+  const changeRole = useMutation(orpc.org.changeMemberRole.mutationOptions({ onSuccess: settled }));
+  const remove = useMutation(orpc.org.removeMember.mutationOptions({ onSuccess: settled }));
+  const busy = changeRole.isPending || remove.isPending;
+  const name = self ? 'bạn' : (member.displayName ?? member.email);
+
+  const ask = (next: Pending) => {
+    changeRole.reset();
+    remove.reset();
+    setConfirmKey(crypto.randomUUID());
+    setPending(next);
+  };
+  const pickRole = (role: Role) => {
+    const confirmation = roleChangeConfirmation({ name, from: member.role, to: role, self });
+    if (confirmation) ask({ kind: 'role', role, confirmation });
+    else if (role !== member.role) changeRole.mutate({ userId: member.userId, role, idempotencyKey: crypto.randomUUID() });
+  };
+
+  if (pending) {
+    const text =
+      pending.kind === 'remove'
+        ? { title: `Xóa ${name} khỏi tổ chức?`, body: 'Người này mất quyền truy cập tổ chức ngay từ yêu cầu tiếp theo. Bạn có thể mời lại họ sau.', action: 'Xác nhận xóa' }
+        : pending.confirmation;
+    const confirm = () =>
+      pending.kind === 'remove'
+        ? remove.mutate({ userId: member.userId, idempotencyKey: confirmKey })
+        : changeRole.mutate({ userId: member.userId, role: pending.role, idempotencyKey: confirmKey });
+    const error = pending.kind === 'remove' ? remove.error : changeRole.error;
     return (
-      <div className="max-w-xs space-y-2 rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-sm" role="alertdialog" aria-label={`Xác nhận xóa ${name}`}>
-        <p className="font-medium text-fg">Xóa {name} khỏi tổ chức?</p>
-        <p className="text-fg-2">Người này mất quyền truy cập tổ chức ngay từ yêu cầu tiếp theo. Bạn có thể thêm lại họ sau.</p>
+      <div className="max-w-xs space-y-2 rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-sm" role="alertdialog" aria-label={text.title}>
+        <p className="font-medium text-fg">{text.title}</p>
+        <p className="text-fg-2">{text.body}</p>
         <div className="flex gap-2">
-          <Button variant="danger" disabled={busy} onClick={() => remove.mutate({ userId: member.userId, idempotencyKey: removeKey })}>
-            Xác nhận xóa
+          <Button variant="danger" disabled={busy} onClick={confirm}>
+            {text.action}
           </Button>
-          <Button variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
+          <Button
+            variant="ghost"
+            disabled={busy}
+            onClick={() => {
+              changeRole.reset();
+              remove.reset();
+              setPending(null);
+            }}
+          >
             Hủy
           </Button>
         </div>
-        {remove.error && <ErrorText>{errorMessage(remove.error)}</ErrorText>}
+        {error && <ErrorText>{errorMessage(error)}</ErrorText>}
       </div>
     );
   }
@@ -61,8 +86,8 @@ function MemberControls({ member }: { member: MemberRow }) {
           className="rounded-lg border border-line bg-surface-2 px-2 py-1 text-sm text-fg"
           value={member.role}
           disabled={busy}
-          onChange={(e) => changeRole.mutate({ userId: member.userId, role: e.target.value as Role, idempotencyKey: crypto.randomUUID() })}
-          aria-label={`Vai trò của ${name}`}
+          onChange={(e) => pickRole(e.target.value as Role)}
+          aria-label={self ? 'Vai trò của bạn' : `Vai trò của ${name}`}
         >
           {ROLES.map((r) => (
             <option key={r} value={r}>
@@ -70,19 +95,13 @@ function MemberControls({ member }: { member: MemberRow }) {
             </option>
           ))}
         </select>
-        <Button
-          variant="danger"
-          className="px-2.5 py-1"
-          disabled={busy}
-          onClick={() => {
-            remove.reset();
-            setConfirming(true);
-          }}
-        >
-          Xóa
-        </Button>
+        {!self && (
+          <Button variant="danger" className="px-2.5 py-1" disabled={busy} onClick={() => ask({ kind: 'remove' })}>
+            Xóa
+          </Button>
+        )}
       </div>
-      {error && <ErrorText>{errorMessage(error)}</ErrorText>}
+      {changeRole.error && <ErrorText>{errorMessage(changeRole.error)}</ErrorText>}
     </div>
   );
 }
@@ -270,6 +289,9 @@ export function SettingsPage() {
   if (org.error) return <ErrorText>{errorMessage(org.error)}</ErrorText>;
   const canManage = org.data?.role === 'owner' || org.data?.role === 'admin';
   const isOwner = org.data?.role === 'owner';
+  // An owner may change their own role only while another owner remains (otherwise the server refuses LAST_OWNER).
+  const owners = org.data?.members.filter((m) => m.role === 'owner').length ?? 0;
+  const controlsFor = (userId: string) => isOwner && !!me.data && (userId !== me.data.userId || owners > 1);
 
   return (
     <>
@@ -300,8 +322,8 @@ export function SettingsPage() {
               <li key={m.userId} className="py-2 text-sm">
                 <div className="flex items-center justify-between gap-3">
                   <span className="truncate text-fg">{m.displayName ?? m.email}</span>
-                  {isOwner && me.data && m.userId !== me.data.userId ? (
-                    <MemberControls member={m} />
+                  {controlsFor(m.userId) ? (
+                    <MemberControls member={m} self={m.userId === me.data?.userId} />
                   ) : (
                     <Badge tone={m.role === 'owner' ? 'brand' : 'neutral'}>{ROLE_LABEL[m.role]}</Badge>
                   )}

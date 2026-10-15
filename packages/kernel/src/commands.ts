@@ -68,7 +68,11 @@ async function lockForMemberChange(ctx: CommandContext, targetId: string) {
   return { actorId: ctx.actor.userId, target: locked.target, owners: locked.owners };
 }
 
-const LAST_OWNER = () => new DomainError('LAST_OWNER', 409, 'Tổ chức phải còn ít nhất một chủ sở hữu');
+// The refusal rolls the command back, so its audit row (written apart, plan §4.10) gets the roles from the error.
+const LAST_OWNER = (targetUserId: string, newRole: MemberRole | null) =>
+  new DomainError('LAST_OWNER', 409, 'Tổ chức phải còn ít nhất một chủ sở hữu', undefined, {
+    audit: { target_user: targetUserId, role: newRole, previous_role: 'owner' },
+  });
 
 // Changes a member's role, owners included (promoting a member to owner makes a co-owner). R3 like every
 // membership change. The new role applies from the member's next request: enter_context reads it in every
@@ -86,7 +90,7 @@ export const changeMemberRole = defineCommand({
     // self-approval legal (P10), so role changes must be reviewable next to the approvals they enable.
     ctx.audit({ target_user: input.userId, role: input.role, previous_role: previousRole, changed: previousRole !== input.role });
     if (previousRole === input.role) return { userId: input.userId, role: input.role, previousRole };
-    if (previousRole === 'owner' && owners <= 1) throw LAST_OWNER();
+    if (previousRole === 'owner' && owners <= 1) throw LAST_OWNER(input.userId, input.role);
     await ctx.trx
       .updateTable('crove_kernel.tenant_member')
       .set({ role: input.role })
@@ -111,7 +115,7 @@ export const removeMember = defineCommand({
   handler: async (ctx, input) => {
     const { actorId, target, owners } = await lockForMemberChange(ctx, input.userId);
     if (input.userId === actorId) throw new DomainError('CANNOT_REMOVE_SELF', 422, 'Bạn không thể tự xóa mình khỏi tổ chức');
-    if (target.role === 'owner' && owners <= 1) throw LAST_OWNER();
+    if (target.role === 'owner' && owners <= 1) throw LAST_OWNER(input.userId, null);
     await ctx.trx
       .deleteFrom('crove_kernel.tenant_member')
       .where('org_id', '=', ctx.orgId)

@@ -7,11 +7,12 @@ import { fileURLToPath } from 'node:url';
 import { SignJWT } from 'jose';
 import { sql } from 'kysely';
 import pg from 'pg';
+import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
-import { Runtime, type BlobStore } from '@crove/kernel-runtime';
+import { DomainError, Runtime, defineCommand, toDomainError, type BlobStore } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from '../../src/auth.ts';
 import { loadConfig } from '../../src/config.ts';
@@ -222,6 +223,23 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     expect(await changeRole(ownerB, b.slug, ownerA, 'viewer')).toMatchObject({ status: 404 });
     expect(await remove(ownerB, b.slug, memberA)).toMatchObject({ status: 404, body: { code: 'MEMBER_NOT_FOUND' } });
     expect(await remove(ownerB, b.slug, ownerA)).toMatchObject({ status: 404 });
+    // An id that belongs to nobody gets the same answer.
+    const nobody = { userId: randomUUID() };
+    expect(await changeRole(ownerB, b.slug, nobody, 'viewer')).toMatchObject({ status: 404, body: { code: 'MEMBER_NOT_FOUND' } });
+    expect(await remove(ownerB, b.slug, nobody)).toMatchObject({ status: 404, body: { code: 'MEMBER_NOT_FOUND' } });
+    // Each of these refusals is audited in B, as failed, naming the user that was asked for (#119), and a member of
+    // another org is recorded exactly like an id that belongs to nobody: same outcome, code and detail keys.
+    for (const command of ['kernel.member.change_role', 'kernel.member.remove']) {
+      const rows = await audit(b.orgId, command);
+      expect(rows.map((r) => [r.actor_id, r.outcome, r.detail.code, r.target_id])).toEqual([
+        [ownerB.userId, 'failed', 'MEMBER_NOT_FOUND', memberA.userId],
+        [ownerB.userId, 'failed', 'MEMBER_NOT_FOUND', ownerA.userId],
+        [ownerB.userId, 'failed', 'MEMBER_NOT_FOUND', nobody.userId],
+      ]);
+      const shapes = rows.map((r) => Object.keys(r.detail).sort());
+      expect(new Set(shapes.map((k) => k.join(','))).size).toBe(1);
+      expect(shapes[0]).toEqual(['aal', 'code', 'mfaAt', 'sessionId']);
+    }
     // Pointing the header at A does not help: B's owner is not a member of A.
     expect(await changeRole(ownerB, a.slug, memberA, 'viewer')).toMatchObject({ status: 403, body: { code: 'NOT_A_MEMBER' } });
     expect(await remove(ownerB, a.slug, memberA)).toMatchObject({ status: 403, body: { code: 'NOT_A_MEMBER' } });
@@ -247,6 +265,9 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
       // Since #35 tenant roles may update only the role column, so the privilege check refuses before RLS would.
     ).rejects.toThrow(/permission denied for table tenant_member|row-level security/);
     expect(await roles(a.orgId)).toEqual(beforeA);
+    // None of B's owner's refusals reached A's audit: the 404s are recorded only in the org the caller was in.
+    const inA = await admin((c) => c.query('SELECT 1 FROM crove_kernel.audit_event WHERE org_id = $1 AND actor_id = $2', [a.orgId, ownerB.userId]));
+    expect(inA.rowCount).toBe(0);
   });
 
   it('keeps at least one owner: the last owner cannot demote or remove themselves', async () => {
@@ -272,6 +293,13 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     const failed = (await audit(orgId, 'kernel.member.change_role')).filter((r) => r.outcome === 'failed');
     expect(failed.length).toBeGreaterThanOrEqual(4);
     expect(failed.every((r) => r.detail.code === 'LAST_OWNER')).toBe(true);
+    // The refusal row keeps what was refused: whose role, from owner to what (#119).
+    expect(failed.map((r) => [r.target_id, r.detail.target_user, r.detail.previous_role, r.detail.role])).toEqual([
+      [owner.userId, owner.userId, 'owner', 'admin'],
+      [owner.userId, owner.userId, 'owner', 'member'],
+      [owner.userId, owner.userId, 'owner', 'viewer'],
+      [owner.userId, owner.userId, 'owner', 'admin'],
+    ]);
   });
 
   it('two owners demoting or removing each other at the same moment leave exactly one owner', async () => {
@@ -366,6 +394,138 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     // Once a member, nobody can invite them again, in any role.
     expect(await rpc('org/invite', adminToken, { email: target.email, role: 'viewer' }, slug)).toMatchObject({ status: 409, body: { code: 'ALREADY_MEMBER' } });
     expect((await roles(orgId))[target.userId]).toBe('admin');
+  });
+
+  // The backstop's trigger function is callable by no Crove role, runs as a definer and pins search_path (#119).
+  it('keeps the owner backstop function out of reach of every runtime role', async () => {
+    const rows = await admin(async (c) => {
+      const { rows: found } = await c.query<{ role: string; can: boolean; definer: boolean; config: string[] }>(
+        `SELECT r AS role, has_function_privilege(r, p.oid, 'EXECUTE') AS can, p.prosecdef AS definer, p.proconfig AS config
+         FROM pg_proc p CROSS JOIN unnest($1::text[]) r
+         WHERE p.oid = 'crove_kernel.tenant_member_keeps_owner()'::regprocedure ORDER BY r`,
+        [['crove_app', 'crove_definer_tenant', 'crove_tenant', 'crove_worker']],
+      );
+      return found;
+    });
+    expect(rows).toEqual(
+      ['crove_app', 'crove_definer_tenant', 'crove_tenant', 'crove_worker'].map((role) => ({
+        role,
+        can: false,
+        definer: true,
+        config: ['search_path=pg_catalog, pg_temp'],
+      })),
+    );
+    const publicGrant = await admin((c) =>
+      c.query(`SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a WHERE p.oid = 'crove_kernel.tenant_member_keeps_owner()'::regprocedure AND a.grantee = 0`),
+    );
+    expect(publicGrant.rowCount).toBe(0);
+  });
+
+  // The database backstop (#119): whatever writes tenant_member, a transaction that would leave an org without an
+  // owner does not commit. The commands refuse first (LAST_OWNER above); these paths skip their checks on purpose.
+  it('refuses to commit an org without an owner, for a command without the checks and for the database owner', async () => {
+    const { owner, second, member } = await signInAll('owner', 'second', 'member');
+    const { orgId } = await orgWith(owner, [[member, 'member']]);
+    const ownerRows = async () =>
+      Object.entries(await roles(orgId))
+        .filter(([, r]) => r === 'owner')
+        .map(([id]) => id);
+
+    // A command that writes tenant_member without the commands' locks and LAST_OWNER checks, as a future one might.
+    const unchecked = new Runtime(db, { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+      commands: [
+        defineCommand({
+          name: 'test.member.write_unchecked',
+          input: z.object({ userId: z.uuid(), role: z.enum(['admin', 'member', 'viewer']).nullable() }),
+          risk: 'R1',
+          access: ['owner'],
+          handler: async (ctx, input) => {
+            if (input.role) {
+              await ctx.trx.updateTable('crove_kernel.tenant_member').set({ role: input.role }).where('org_id', '=', ctx.orgId).where('user_id', '=', input.userId).execute();
+            } else {
+              await ctx.trx.deleteFrom('crove_kernel.tenant_member').where('org_id', '=', ctx.orgId).where('user_id', '=', input.userId).execute();
+            }
+            return { ok: true };
+          },
+        }),
+      ],
+    });
+    const asOwner = { type: 'user' as const, userId: owner.userId, aal: 'aal2' as const, sessionId: owner.session, mfaAt: Math.floor(Date.now() / 1000) };
+    for (const role of ['admin', null] as const) {
+      await expect(unchecked.execute('test.member.write_unchecked', { userId: owner.userId, role }, { actor: asOwner, orgId })).rejects.toMatchObject({
+        code: 'LAST_OWNER',
+        status: 409,
+      });
+    }
+    expect(await ownerRows()).toEqual([owner.userId]);
+    // Refused at commit, and audited as failed like the commands' own refusal.
+    const refused = await audit(orgId, 'test.member.write_unchecked');
+    expect(refused.map((r) => [r.outcome, r.detail.code])).toEqual([
+      ['failed', 'LAST_OWNER'],
+      ['failed', 'LAST_OWNER'],
+    ]);
+
+    // The database owner is refused too: a demotion, a delete and a move to another org.
+    const other = await orgWith(second, []);
+    await admin(async (c) => {
+      const demote = "UPDATE crove_kernel.tenant_member SET role = 'viewer' WHERE org_id = $1 AND user_id = $2";
+      await expect(c.query(demote, [orgId, owner.userId])).rejects.toThrow(/LAST_OWNER/);
+      await expect(c.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [orgId, owner.userId])).rejects.toThrow(/LAST_OWNER/);
+      const move = 'UPDATE crove_kernel.tenant_member SET org_id = $1 WHERE org_id = $2 AND user_id = $3';
+      await expect(c.query(move, [other.orgId, orgId, owner.userId])).rejects.toThrow(/LAST_OWNER/);
+      // Checked at commit, not per statement: a transaction may hand the org to another owner.
+      await c.query('BEGIN');
+      await c.query("UPDATE crove_kernel.tenant_member SET role = 'admin' WHERE org_id = $1 AND user_id = $2", [orgId, owner.userId]);
+      await c.query("UPDATE crove_kernel.tenant_member SET role = 'owner' WHERE org_id = $1 AND user_id = $2", [orgId, member.userId]);
+      await c.query('COMMIT');
+    });
+    expect(await ownerRows()).toEqual([member.userId]);
+    // The refusal maps to the commands' answer.
+    const raw = await admin((c) => c.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1', [orgId]).catch((e: unknown) => e));
+    expect(toDomainError(raw)).toBeInstanceOf(DomainError);
+    expect(toDomainError(raw)).toMatchObject({ code: 'LAST_OWNER', status: 409 });
+    expect(Object.keys(await roles(orgId))).toHaveLength(2);
+  });
+
+  it('serializes the owner check: two transactions demoting the two owners at once leave exactly one', async () => {
+    const { x, y } = await signInAll('x', 'y');
+    const { orgId } = await orgWith(x, [[y, 'owner']]);
+    const tx = new pg.Client({ connectionString: adminUrl });
+    const ty = new pg.Client({ connectionString: adminUrl });
+    await Promise.all([tx.connect(), ty.connect()]);
+    try {
+      // Each transaction demotes a different owner, so neither waits on the other's row, and each still sees the
+      // other's owner as committed.
+      await tx.query('BEGIN');
+      await tx.query("UPDATE crove_kernel.tenant_member SET role = 'admin' WHERE org_id = $1 AND user_id = $2", [orgId, x.userId]);
+      await ty.query('BEGIN');
+      await ty.query("UPDATE crove_kernel.tenant_member SET role = 'admin' WHERE org_id = $1 AND user_id = $2", [orgId, y.userId]);
+      // Hold the org's check so both commits are certainly checking at the same time.
+      const holder = new pg.Client({ connectionString: adminUrl });
+      await holder.connect();
+      await holder.query('BEGIN');
+      await holder.query("SELECT pg_advisory_xact_lock(hashtextextended('kernel.tenant_member.owner:' || $1::text, 0))", [orgId]);
+      const commits = Promise.allSettled([tx.query('COMMIT'), ty.query('COMMIT')]);
+      await waitForLockWaiters(2);
+      await holder.query('COMMIT');
+      await holder.end();
+      const results = await commits;
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      expect(String(failed?.reason)).toMatch(/LAST_OWNER/);
+    } finally {
+      await Promise.all([tx.end(), ty.end()]);
+    }
+    expect(Object.values(await roles(orgId)).filter((r) => r === 'owner')).toHaveLength(1);
+  });
+
+  // The backstop has no exception for deleting an org because no deletion path exists: the cascade reaches the
+  // append-only audit. If this ever starts to pass, offboarding must decide how the backstop treats a deleted org.
+  it('has no org deletion the backstop would need to allow: deleting a tenant is refused', async () => {
+    const { owner } = await signInAll('owner');
+    const { orgId } = await orgWith(owner, []);
+    await expect(admin((c) => c.query('DELETE FROM crove_kernel.tenant WHERE org_id = $1', [orgId]))).rejects.toThrow(/append-only/);
+    expect(await roles(orgId)).toEqual({ [owner.userId]: 'owner' });
   });
 
   // Waits until `count` backends of this database wait on a row lock.

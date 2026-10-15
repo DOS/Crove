@@ -104,6 +104,27 @@ export function hasFreshMfa(actor: UserActor, nowMs: number = Date.now()): boole
   return actor.mfaAt <= now + CLOCK_TOLERANCE_S && now - actor.mfaAt <= STEP_UP_MAX_AGE_S;
 }
 
+function sessionDetail(actor: UserActor): Record<string, unknown> {
+  return { aal: actor.aal, sessionId: actor.sessionId ?? null, mfaAt: actor.mfaAt ?? null };
+}
+
+// Keys of a refusal audit row that only the runtime writes: the code, the policy rule and who refused with which
+// session. A command's own facts (DomainError audit) never set them, also when the error names no rule or the
+// actor is a system actor, which has no session.
+const RESERVED_REFUSAL_KEYS = ['code', 'rule', 'aal', 'sessionId', 'mfaAt', 'component'] as const;
+
+// The detail of a denied/failed audit row (plan §4.10): the command's facts about the refusal (for example the roles
+// of a LAST_OWNER), then the code, the rule that refused when the error names one (for example P10 or P12) and,
+// for a user, the session.
+export function refusalAuditDetail(refusal: DomainError, actor: Actor): Record<string, unknown> {
+  const detail: Record<string, unknown> = { ...refusal.audit };
+  for (const key of RESERVED_REFUSAL_KEYS) delete detail[key];
+  detail.code = refusal.code;
+  if (typeof refusal.details?.rule === 'string') detail.rule = refusal.details.rule;
+  if (actor.type === 'user') Object.assign(detail, sessionDetail(actor));
+  return detail;
+}
+
 export function defineCommand<I, O>(def: CommandDef<I, O>): CommandDef<I, O> {
   return def;
 }
@@ -275,7 +296,7 @@ export class Runtime {
   }
 
   private sessionDetail(actor: UserActor): Record<string, unknown> {
-    return { aal: actor.aal, sessionId: actor.sessionId ?? null, mfaAt: actor.mfaAt ?? null };
+    return sessionDetail(actor);
   }
 
   private async writeAudit(
@@ -472,9 +493,11 @@ export class Runtime {
     } catch (error) {
       const domain = toDomainError(error);
       // An org-less command that failed after creating its org rolled the org back, so there is no org to audit
-      // the refusal in; a refused replay into an org that already existed is audited there. Other statuses
-      // (404 included) are not audited today.
-      if (entered && !orgIsNew && (domain.status === 403 || domain.status === 409 || domain.status === 422)) {
+      // the refusal in; a refused replay into an org that already existed is audited there. A 404 after the
+      // membership was established (plan §4.4 steps 7 and 14: a record the actor named is not in the org, such as
+      // MEMBER_NOT_FOUND for a member of another org) is audited as failed like 409 and 422. Other statuses are not
+      // audited today.
+      if (entered && !orgIsNew && (domain.status === 403 || domain.status === 404 || domain.status === 409 || domain.status === 422)) {
         await this.writeRefusalAudit(name, def, input, inputSha256, actor, orgId, domain);
       }
       if (domain.code === 'INTERNAL') logInternal(`execute ${name}`, error, { orgId, actor });
@@ -509,12 +532,7 @@ export class Runtime {
           inputSha256,
           target: def.target?.(input) ?? null,
           proposalId: null,
-          // The policy rule that refused, when the error names one (for example P10 or P12), and the session.
-          detail: {
-            code: refusal.code,
-            ...(typeof refusal.details?.rule === 'string' ? { rule: refusal.details.rule } : {}),
-            ...(actor.type === 'user' ? this.sessionDetail(actor) : {}),
-          },
+          detail: refusalAuditDetail(refusal, actor),
         });
       });
     } catch (auditError) {

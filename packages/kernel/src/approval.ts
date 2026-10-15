@@ -118,7 +118,9 @@ export async function decideApproval(
     .orderBy('user_id');
   if (options.lock) query = query.forShare();
   const live = await query.execute();
-  // Eligible now: in the snapshot taken at creation AND still holding an approving role (re-checked live).
+  // Eligible now: in the snapshot taken at creation AND still holding an approving role (re-checked live). The
+  // snapshot is never rewritten; this filter is what keeps it current. A removed approver has no row and a demoted
+  // one no approving role, so neither is eligible nor counts toward the two that four-eyes (P10) needs.
   const eligible = new Set(live.filter((m) => policy.roles.includes(m.role)).map((m) => m.user_id));
   if (!eligible.has(actor.userId)) return deny('not_eligible', eligible.size);
 
