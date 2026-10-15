@@ -228,6 +228,18 @@ export interface PurchaseDocumentTable {
   proposal_id: string | null;
   created_by: string | null;
   created_at: DefaultTimestamp;
+  // The voided document of the same supplier invoice that this one replaces (#165), or null for the first one.
+  replaces_document_id: ColumnType<string | null, string | null | undefined, never>;
+}
+
+// A purchase document voided by reversing its journal entry (#165). Append-only; one per document.
+export interface PurchaseDocumentVoidTable {
+  org_id: string;
+  document_id: string;
+  reversal_entry_id: string;
+  reason: string;
+  voided_by: string | null;
+  created_at: DefaultTimestamp;
 }
 
 export interface PurchaseLineTable {
@@ -296,6 +308,7 @@ export interface Database {
   'crove_kernel.activity': ActivityTable;
   'crove_finance.account': AccountTable;
   'crove_finance.purchase_document': PurchaseDocumentTable;
+  'crove_finance.purchase_document_void': PurchaseDocumentVoidTable;
   'crove_finance.purchase_line': PurchaseLineTable;
   'crove_finance.journal_entry': JournalEntryTable;
   'crove_finance.journal_line': JournalLineTable;

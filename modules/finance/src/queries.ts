@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { zLocalDate } from '@crove/kernel-contract';
+import { zId, zLocalDate } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { defineQuery } from '@crove/kernel-runtime';
+import { DomainError, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const zRange = z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() });
@@ -50,6 +50,7 @@ export const documentsList = defineQuery({
       .leftJoin('crove_finance.journal_entry as j', (join) =>
         join.onRef('j.org_id', '=', 'd.org_id').onRef('j.source_id', '=', 'd.id').on('j.source_type', '=', 'finance.purchase_document'),
       )
+      .leftJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
       .select([
         'd.id',
         'd.party_id',
@@ -61,7 +62,11 @@ export const documentsList = defineQuery({
         'd.vat_amount',
         'd.total',
         'd.source_file_id',
+        'd.replaces_document_id',
         'j.id as journal_entry_id',
+        'v.reversal_entry_id as void_entry_id',
+        'v.reason as void_reason',
+        'v.created_at as voided_at',
       ])
       .where('d.org_id', '=', ctx.orgId)
       .orderBy('d.invoice_date', 'desc')
@@ -81,9 +86,19 @@ export const documentsList = defineQuery({
       total: r.total,
       journalEntryId: r.journal_entry_id,
       sourceFileId: r.source_file_id,
+      voided:
+        r.void_entry_id && r.voided_at
+          ? { reversalEntryId: r.void_entry_id, reason: r.void_reason ?? '', voidedAt: new Date(r.voided_at).toISOString() }
+          : null,
+      replacesDocumentId: r.replaces_document_id,
     }));
   },
 });
+
+interface EntryRef {
+  id: string;
+  entryDate: string;
+}
 
 export interface JournalEntryView {
   id: string;
@@ -92,80 +107,116 @@ export interface JournalEntryView {
   sourceType: string;
   sourceId: string;
   lines: Array<{ lineNo: number; accountCode: string; accountName: string; debit: string; credit: string }>;
-  document?: { series: string; number: string; issueDate: string; partyName: string; partyTaxCode: string | null };
+  // The reversal link, both ways (#138): the entry this one reverses, and the entry that reversed this one.
+  reverses: EntryRef | null;
+  reversedBy: EntryRef | null;
+  // The purchase document the entry records; voided once the entry is reversed (#165).
+  document?: { id: string; series: string; number: string; issueDate: string; partyName: string; partyTaxCode: string | null; voided: boolean };
 }
 
 export const JOURNAL_EXPORT_LIMIT = 20_000;
+
+// Entries with their lines, newest first: those in the date range, or the one entry `id`.
+async function loadEntries(
+  ctx: QueryContext,
+  filter: { from?: string | undefined; to?: string | undefined; limit?: number | undefined; id?: string },
+): Promise<JournalEntryView[]> {
+  let entries = ctx.trx
+    .selectFrom('crove_finance.journal_entry as j')
+    .leftJoin('crove_finance.purchase_document as d', (join) =>
+      join.onRef('d.org_id', '=', 'j.org_id').onRef('d.id', '=', 'j.source_id').on('j.source_type', '=', 'finance.purchase_document'),
+    )
+    .leftJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
+    .leftJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
+    // The original this entry reverses, and the reversal of this entry (at most one each, by the unique index).
+    .leftJoin('crove_finance.journal_entry as o', (join) => join.onRef('o.org_id', '=', 'j.org_id').onRef('o.id', '=', 'j.reverses_entry_id'))
+    .leftJoin('crove_finance.journal_entry as r', (join) => join.onRef('r.org_id', '=', 'j.org_id').onRef('r.reverses_entry_id', '=', 'j.id'))
+    .select([
+      'j.id',
+      'j.entry_date',
+      'j.description',
+      'j.source_type',
+      'j.source_id',
+      'd.id as document_id',
+      'd.invoice_series',
+      'd.invoice_number',
+      'd.invoice_date',
+      'p.name as party_name',
+      'p.tax_code as party_tax_code',
+      'v.document_id as voided_document_id',
+      'o.id as reverses_id',
+      'o.entry_date as reverses_date',
+      'r.id as reversed_by_id',
+      'r.entry_date as reversed_by_date',
+    ])
+    .where('j.org_id', '=', ctx.orgId)
+    .orderBy('j.entry_date', 'desc')
+    .orderBy('j.created_at', 'desc')
+    .limit(filter.limit ?? 1000);
+  if (filter.id) entries = entries.where('j.id', '=', filter.id);
+  if (filter.from) entries = entries.where('j.entry_date', '>=', filter.from);
+  if (filter.to) entries = entries.where('j.entry_date', '<=', filter.to);
+  const rows = await entries.execute();
+  if (rows.length === 0) return [];
+  const lines = await ctx.trx
+    .selectFrom('crove_finance.journal_line as l')
+    .innerJoin('crove_finance.account as a', 'a.code', 'l.account_code')
+    .select(['l.entry_id', 'l.line_no', 'l.account_code', 'a.name', 'l.debit', 'l.credit'])
+    .where('l.org_id', '=', ctx.orgId)
+    .where(
+      'l.entry_id',
+      'in',
+      rows.map((r) => r.id),
+    )
+    .orderBy('l.entry_id')
+    .orderBy('l.line_no')
+    .execute();
+  const byEntry = new Map<string, JournalEntryView['lines']>();
+  for (const l of lines) {
+    const list = byEntry.get(l.entry_id) ?? [];
+    list.push({ lineNo: l.line_no, accountCode: l.account_code, accountName: l.name, debit: l.debit, credit: l.credit });
+    byEntry.set(l.entry_id, list);
+  }
+  return rows.map((r) => ({
+    id: r.id,
+    entryDate: r.entry_date,
+    description: r.description,
+    sourceType: r.source_type,
+    sourceId: r.source_id,
+    lines: byEntry.get(r.id) ?? [],
+    reverses: r.reverses_id && r.reverses_date ? { id: r.reverses_id, entryDate: r.reverses_date } : null,
+    reversedBy: r.reversed_by_id && r.reversed_by_date ? { id: r.reversed_by_id, entryDate: r.reversed_by_date } : null,
+    ...(r.document_id && r.invoice_number && r.invoice_date && r.party_name
+      ? {
+          document: {
+            id: r.document_id,
+            series: r.invoice_series ?? '',
+            number: r.invoice_number,
+            issueDate: r.invoice_date,
+            partyName: r.party_name,
+            partyTaxCode: r.party_tax_code,
+            voided: r.voided_document_id !== null,
+          },
+        }
+      : {}),
+  }));
+}
 
 export const journalList = defineQuery({
   name: 'finance.journal.list',
   input: zRange.extend({ limit: z.number().int().positive().max(JOURNAL_EXPORT_LIMIT).optional() }),
   access: ALL,
-  handler: async (ctx, input): Promise<JournalEntryView[]> => {
-    let entries = ctx.trx
-      .selectFrom('crove_finance.journal_entry as j')
-      .leftJoin('crove_finance.purchase_document as d', (join) =>
-        join.onRef('d.org_id', '=', 'j.org_id').onRef('d.id', '=', 'j.source_id'),
-      )
-      .leftJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
-      .select([
-        'j.id',
-        'j.entry_date',
-        'j.description',
-        'j.source_type',
-        'j.source_id',
-        'd.invoice_series',
-        'd.invoice_number',
-        'd.invoice_date',
-        'p.name as party_name',
-        'p.tax_code as party_tax_code',
-      ])
-      .where('j.org_id', '=', ctx.orgId)
-      .orderBy('j.entry_date', 'desc')
-      .orderBy('j.created_at', 'desc')
-      .limit(input.limit ?? 1000);
-    if (input.from) entries = entries.where('j.entry_date', '>=', input.from);
-    if (input.to) entries = entries.where('j.entry_date', '<=', input.to);
-    const rows = await entries.execute();
-    if (rows.length === 0) return [];
-    const lines = await ctx.trx
-      .selectFrom('crove_finance.journal_line as l')
-      .innerJoin('crove_finance.account as a', 'a.code', 'l.account_code')
-      .select(['l.entry_id', 'l.line_no', 'l.account_code', 'a.name', 'l.debit', 'l.credit'])
-      .where('l.org_id', '=', ctx.orgId)
-      .where(
-        'l.entry_id',
-        'in',
-        rows.map((r) => r.id),
-      )
-      .orderBy('l.entry_id')
-      .orderBy('l.line_no')
-      .execute();
-    const byEntry = new Map<string, JournalEntryView['lines']>();
-    for (const l of lines) {
-      const list = byEntry.get(l.entry_id) ?? [];
-      list.push({ lineNo: l.line_no, accountCode: l.account_code, accountName: l.name, debit: l.debit, credit: l.credit });
-      byEntry.set(l.entry_id, list);
-    }
-    return rows.map((r) => ({
-      id: r.id,
-      entryDate: r.entry_date,
-      description: r.description,
-      sourceType: r.source_type,
-      sourceId: r.source_id,
-      lines: byEntry.get(r.id) ?? [],
-      ...(r.invoice_number && r.invoice_date && r.party_name
-        ? {
-            document: {
-              series: r.invoice_series ?? '',
-              number: r.invoice_number,
-              issueDate: r.invoice_date,
-              partyName: r.party_name,
-              partyTaxCode: r.party_tax_code,
-            },
-          }
-        : {}),
-    }));
+  handler: (ctx, input): Promise<JournalEntryView[]> => loadEntries(ctx, input),
+});
+
+export const journalGet = defineQuery({
+  name: 'finance.journal.get',
+  input: z.object({ id: zId }),
+  access: ALL,
+  handler: async (ctx, input): Promise<JournalEntryView> => {
+    const [entry] = await loadEntries(ctx, { id: input.id, limit: 1 });
+    if (!entry) throw new DomainError('ENTRY_NOT_FOUND', 404, 'Không tìm thấy bút toán');
+    return entry;
   },
 });
 

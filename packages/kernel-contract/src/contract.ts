@@ -13,6 +13,7 @@ import {
   zInviteRole,
   zInviteToken,
   zJournalEntry,
+  zJournalReversal,
   zLocalDate,
   zMe,
   zOrgDetail,
@@ -81,8 +82,9 @@ export const contract = {
           idempotencyKey: zId,
         }),
       )
-      // A purchase returns its document; a reversal (#138) returns the entry it reversed.
-      .output(z.object({ documentId: zId.optional(), journalEntryId: zId, reversedEntryId: zId.optional() })),
+      // A purchase returns its document; a reversal (#138) returns the entry it reversed and, when that entry recorded a
+      // purchase, the document it voided (#165).
+      .output(z.object({ documentId: zId.optional(), journalEntryId: zId, reversedEntryId: zId.optional(), voidedDocumentId: zId.optional() })),
     // Saves changed line accounts as a new revision authored by the caller; it never approves.
     edit: oc
       .input(
@@ -95,6 +97,13 @@ export const contract = {
       )
       .output(z.object({ revision: z.number().int(), changed: z.boolean() })),
     reject: oc.input(z.object({ id: zId, reason: z.string().max(500).optional() })).output(z.object({ ok: z.literal(true) })),
+    // Asks for a proposal that no file produced (kernel.proposal.request; owners, admins and members): today only
+    // reversing a posted journal entry (#138, #165). It posts nothing; the proposal is approved like any other (R3,
+    // P10 four-eyes, P11 step-up). Reversing a purchase entry also voids Crove's record of the document on approval.
+    // A retry with the same idempotencyKey returns the first proposal.
+    request: oc
+      .input(z.object({ command: z.literal('finance.journal.reverse'), input: zJournalReversal, idempotencyKey: zId }))
+      .output(z.object({ proposalId: zId })),
   },
   files: {
     recent: oc.output(z.array(zFileStatus)),
@@ -112,6 +121,8 @@ export const contract = {
   },
   journal: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zJournalEntry)),
+    // One entry, for example the one a reversal proposal names.
+    get: oc.input(z.object({ id: zId })).output(zJournalEntry),
   },
   accounts: {
     list: oc.output(z.array(zAccount)),

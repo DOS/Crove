@@ -60,7 +60,8 @@ export const vi = {
   },
   documents: {
     title: 'Chứng từ mua',
-    subtitle: 'Hóa đơn đầu vào đã được duyệt và ghi sổ.',
+    subtitle:
+      'Hóa đơn đầu vào đã được duyệt và ghi sổ. Chứng từ đã hủy là chứng từ có bút toán đã bị đảo: Crove không còn tính nó, còn hóa đơn của người bán không thay đổi.',
     empty: 'Chưa có chứng từ nào được ghi sổ',
     emptyHint: 'Duyệt đề xuất trong Hộp thư chứng từ để ghi sổ.',
     columns: {
@@ -70,7 +71,14 @@ export const vi = {
       subtotal: 'Trước thuế',
       vat: 'Thuế GTGT',
       total: 'Tổng',
+      status: 'Trạng thái',
     },
+    status: {
+      recorded: 'Đã ghi sổ',
+      voided: 'Đã hủy (đảo bút toán)',
+      rerecorded: 'Ghi sổ lại',
+    },
+    voidReason: 'Lý do: {reason}',
   },
   vendors: {
     title: 'Nhà cung cấp',
@@ -92,6 +100,32 @@ export const vi = {
     from: 'Từ ngày',
     to: 'Đến ngày',
     empty: 'Chưa có bút toán',
+    reversalBadge: 'Bút toán đảo',
+    reversedBadge: 'Đã đảo',
+    documentVoided: 'Chứng từ đã hủy',
+    reversesLink: 'Đảo bút toán ngày {date}',
+    reversedByLink: 'Đã được đảo bởi bút toán ngày {date}',
+    reverse: 'Đảo bút toán',
+  },
+  reversal: {
+    intro:
+      'Đảo bút toán ghi một bút toán mới với các dòng đối xứng (đổi Nợ và Có), không sửa bút toán gốc. Mỗi bút toán chỉ đảo được một lần và bút toán đảo không đảo lại được.',
+    documentNote:
+      'Bút toán này ghi chứng từ mua {document} của {vendor}. Khi đề xuất được duyệt, Crove hủy chứng từ này trong sổ của mình để có thể ghi sổ lại hóa đơn với tài khoản đúng. Hóa đơn điện tử của người bán không thay đổi.',
+    date: 'Ngày bút toán đảo',
+    reason: 'Lý do (bắt buộc)',
+    reasonPlaceholder: 'Ví dụ: hạch toán nhầm tài khoản chi phí',
+    submit: 'Gửi đề xuất đảo',
+    created: 'Đã tạo đề xuất đảo bút toán. Bút toán đảo chỉ được ghi khi chủ sở hữu hoặc quản trị duyệt.',
+    viewProposal: 'Xem đề xuất',
+    errors: {
+      date: 'Hãy chọn ngày ghi bút toán đảo',
+      dateBefore: 'Ngày bút toán đảo không được trước ngày của bút toán gốc ({date})',
+      reasonRequired: 'Hãy nhập lý do đảo bút toán',
+      reasonTooLong: 'Lý do tối đa {max} ký tự',
+      partialMirror:
+        'Không đảo được bút toán này vì người duyệt không được xem tất cả các dòng của nó, nên không tạo được bút toán đảo đầy đủ. Hãy nhờ người được xem toàn bộ bút toán duyệt đề xuất này.',
+    },
   },
   inbox: {
     fileTooLarge: '{name} vượt quá 25 MB',
@@ -135,6 +169,7 @@ export const vi = {
     failedChecks: '{count} lỗi',
     warnChecks: '{count} lưu ý',
     matched: 'Khớp',
+    reversalKind: 'Đảo bút toán',
   },
   inboxDetail: {
     back: '← Hộp thư chứng từ',
@@ -190,6 +225,29 @@ export const vi = {
     credit: 'Có',
     original: 'Chứng từ gốc',
     noFile: 'Không có tệp',
+    confirmRereadVoided:
+      'Đọc lại chứng từ? Chứng từ đã ghi sổ trước đây đã bị hủy do đảo bút toán; nếu đọc được, một đề xuất mới sẽ được tạo để ghi sổ lại hóa đơn.',
+    voidedBadge: 'Chứng từ đã hủy do đảo bút toán',
+    voidedNotice: 'Bút toán của hóa đơn này đã được đảo nên Crove đã hủy chứng từ trong sổ của mình.',
+    voidedReread: 'Bấm Đọc lại để tạo đề xuất mới và ghi sổ lại hóa đơn với tài khoản đúng.',
+    voidedNoReread:
+      'Tệp này không đọc lại được từ đề xuất này (đã có đề xuất mới hơn, hoặc tệp đã được đọc tối đa số lần); hãy xem đề xuất mới nhất của tệp trong Hộp thư.',
+    reversalSubtitle: 'Đề xuất đảo bút toán: khi được duyệt, Crove ghi một bút toán mới đối xứng với bút toán gốc.',
+    approveReversal: 'Duyệt và ghi bút toán đảo',
+    reversalFourEyes: 'Cần một người khác duyệt (bạn đã yêu cầu đảo bút toán này).',
+    reversalNotEligible: 'Chỉ chủ sở hữu hoặc quản trị duyệt được đề xuất đảo bút toán.',
+    reversalDate: 'Ngày bút toán đảo',
+    reason: 'Lý do',
+    originalEntry: 'Bút toán gốc ngày {date}: {description}',
+    mirrorHint: 'Bút toán đảo ghi các dòng này với Nợ và Có đổi chỗ, nên cặp bút toán triệt tiêu nhau.',
+    originalDebit: 'Nợ (gốc)',
+    originalCredit: 'Có (gốc)',
+    alreadyReversed: 'Bút toán này đã được đảo ngày {date}.',
+    purchaseDocument: 'Bút toán ghi chứng từ mua {document} của {vendor}.',
+    documentAlreadyVoided: 'Chứng từ này đã bị hủy trong sổ của Crove.',
+    documentWillVoid:
+      'Khi duyệt, Crove hủy chứng từ này trong sổ của mình để có thể ghi sổ lại hóa đơn với tài khoản đúng (đọc lại tệp trong Hộp thư). Đây chỉ là chỉnh sửa sổ sách của Crove; hóa đơn điện tử của người bán không thay đổi.',
+    viewInJournal: 'Xem trong sổ bút toán',
   },
   invite: {
     noInviteTitle: 'Không có lời mời',

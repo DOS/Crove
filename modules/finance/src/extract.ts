@@ -64,14 +64,18 @@ export const purchaseLookup = defineQuery({
           .where('party_id', '=', party.id)
           .executeTakeFirst()
       : undefined;
+    // A document voided by a reversal (#165) is no longer in the books, so it is not a duplicate.
     const document = party
       ? await ctx.trx
-          .selectFrom('crove_finance.purchase_document')
-          .select('id')
-          .where('org_id', '=', ctx.orgId)
-          .where('party_id', '=', party.id)
-          .where('invoice_series', '=', input.series)
-          .where('invoice_number', '=', input.number)
+          .selectFrom('crove_finance.purchase_document as d')
+          .select('d.id')
+          .where('d.org_id', '=', ctx.orgId)
+          .where('d.party_id', '=', party.id)
+          .where('d.invoice_series', '=', input.series)
+          .where('d.invoice_number', '=', input.number)
+          .where(({ not, exists, selectFrom }) =>
+            not(exists(selectFrom('crove_finance.purchase_document_void as v').select('v.document_id').whereRef('v.org_id', '=', 'd.org_id').whereRef('v.document_id', '=', 'd.id'))),
+          )
           .executeTakeFirst()
       : undefined;
     const duplicate = await ctx.trx
@@ -81,6 +85,18 @@ export const purchaseLookup = defineQuery({
       .where('kind', '=', 'finance.purchase')
       .where('status', 'in', ['pending', 'executed'])
       .where((eb) => eb.or([eb('source_file_id', 'is', null), eb('source_file_id', '!=', input.fileId)]))
+      // Nor is an executed proposal whose document was voided.
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom('crove_finance.purchase_document as d')
+              .innerJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
+              .select('d.id')
+              .whereRef('d.org_id', '=', 'crove_kernel.proposal.org_id')
+              .whereRef('d.proposal_id', '=', 'crove_kernel.proposal.id'),
+          ),
+        ),
+      )
       .where(sql`payload #>> '{invoice,series}'`, '=', input.series)
       .where(sql`payload #>> '{invoice,number}'`, '=', input.number)
       .where(input.sellerTaxCode ? sql`payload #>> '{seller,taxCode}'` : sql`payload #>> '{seller,name}'`, '=', input.sellerTaxCode ?? input.sellerName)

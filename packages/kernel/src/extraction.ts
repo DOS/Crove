@@ -64,6 +64,22 @@ export async function latestExtraction(ctx: QueryContext, fileId: string): Promi
   return { id: row.id, version: row.version, status: row.status, error, inFlight };
 }
 
+// An executed proposal whose recorded purchase document was voided by reversing its journal entry (#165). The invoice
+// is no longer in Crove's books, so its file may be read again into a new proposal and recorded anew; any other
+// executed proposal ends the file's reading for good.
+export async function executedButVoided(ctx: QueryContext, proposal: { id: string; status: string } | undefined): Promise<boolean> {
+  if (proposal?.status !== 'executed') return false;
+  const voided = await ctx.trx
+    .selectFrom('crove_finance.purchase_document as d')
+    .innerJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
+    .select('d.id')
+    .where('d.org_id', '=', ctx.orgId)
+    .where('d.proposal_id', '=', proposal.id)
+    .limit(1)
+    .executeTakeFirst();
+  return voided !== undefined;
+}
+
 // Refuses a decision (approve, edit, reject) on a proposal whose file is being read again: the result would
 // replace the content being decided on. Called after the proposal row is locked, so a re-extraction requested
 // first is seen here, and one requested later finds the decided proposal.
@@ -132,7 +148,7 @@ export const reextractFile = defineCommand({
       });
     }
     const proposal = await lockFileProposal(ctx, input.fileId);
-    if (proposal?.status === 'executed') {
+    if (proposal?.status === 'executed' && !(await executedButVoided(ctx, proposal))) {
       throw new DomainError('PROPOSAL_DECIDED', 409, 'Hóa đơn này đã được ghi sổ nên không đọc lại được');
     }
     let superseded: number | null = null;
@@ -269,9 +285,10 @@ export const recordExtraction = defineCommand({
     }
 
     // A run that went stale is presumed lost: decisions and edits may have happened since, so its late result stays
-    // in the file's history only. An executed proposal is never followed by a new one: the invoice is in the books,
-    // and a request on it is refused.
-    if (!applies || current?.status === 'executed') {
+    // in the file's history only. An executed proposal is never followed by a new one while the invoice is in the
+    // books, and a request on it is refused; once its document is voided by a reversal (#165), a new proposal
+    // follows, as after a rejection.
+    if (!applies || (current?.status === 'executed' && !(await executedButVoided(ctx, current)))) {
       await ctx.activity('kernel.file', input.fileId, 'extraction.not_applied', `Kết quả đọc lại (lần đọc ${run.version}) đến quá muộn hoặc đề xuất đã được xử lý nên không được áp dụng`);
       return { extractionId: run.id, proposalId: null, duplicate: false };
     }
@@ -299,8 +316,8 @@ export const recordExtraction = defineCommand({
       return { extractionId: run.id, proposalId: current.id, duplicate: false };
     }
 
-    // The first proposal of the file, or a new one after a rejected proposal (the file was read again on purpose).
-    // A rejection while the run was in flight is refused, so this rejection came before the request.
+    // The first proposal of the file, or a new one after a rejected proposal or a voided purchase (the file was read
+    // again on purpose). A rejection while the run was in flight is refused, so this rejection came before the request.
     const proposal = await ctx.trx
       .insertInto('crove_kernel.proposal')
       .values({

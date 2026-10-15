@@ -183,6 +183,12 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       reject: os.inbox.reject.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.proposal.reject', input, { actor, orgId })),
       ),
+      request: os.inbox.request.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('kernel.proposal.request', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
     },
     files: {
       recent: os.files.recent.handler(({ context }) =>
@@ -208,6 +214,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     journal: {
       list: os.journal.list.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.journal.list', input, { actor, orgId })),
+      ),
+      get: os.journal.get.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.query('finance.journal.get', input, { actor, orgId })),
       ),
     },
     accounts: {
