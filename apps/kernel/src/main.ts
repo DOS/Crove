@@ -8,7 +8,7 @@
 import { serve } from '@hono/node-server';
 import { InvoiceExtractor } from '@crove/agent';
 import { createExtractClient } from '@crove/extract-contract';
-import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool } from '@crove/db';
+import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell } from '@crove/db';
 import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { buildKernelCommands, kernelQueries } from '@crove/kernel';
 import { LocalDiskStore, Runtime } from '@crove/kernel-runtime';
@@ -27,7 +27,8 @@ const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all'
 function buildRuntime(config: Config, connectionString: string, applicationName: string) {
   const pool = createPool({ connectionString, applicationName, max: 10, resetOnRelease: config.DB_RESET_ON_RELEASE === 'true' });
   const db = createDb(pool);
-  const runtime = new Runtime(db, {
+  // One database is the control plane and the only cell (Decision 14, plan §3.6).
+  const runtime = new Runtime(singleCell(db), {
     // Every user request is checked against its session (ADR-0028); the config never resolves to "no check".
     sessions: createSessionStatusSource(config.AUTH_SESSION_CHECK),
     stepUp: config.AUTH_STEP_UP,
