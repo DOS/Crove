@@ -9,12 +9,13 @@ import { InvoiceExtractor } from '@crove/agent';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool } from '@crove/db';
 import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { buildKernelCommands, kernelQueries } from '@crove/kernel';
-import { LocalDiskStore, Runtime } from '@crove/kernel-runtime';
+import { Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from './auth.ts';
 import { loadConfig, type Config } from './config.ts';
 import { createHttpApp } from './http.ts';
 import { createSessionRevoker, createSessionStatusSource } from './sessions.ts';
+import { createBlobStore, describeStorage } from './storage.ts';
 import { migrateJobs, startWorker } from './worker.ts';
 
 type Role = 'migrate' | 'auth-grants' | 'api' | 'worker' | 'all';
@@ -79,7 +80,9 @@ async function main() {
     throw new Error('WORKER_DATABASE_URL is required for the worker; connect it as crove_worker');
   }
 
-  const store = new LocalDiskStore(config.STORAGE_DIR);
+  // API and worker build the same store from config; with STORAGE=s3 they share no volume (T7).
+  const store = createBlobStore(config);
+  console.log(`[storage] ${describeStorage(config)}`);
   const stops: Array<() => Promise<void>> = [];
 
   if (role === 'api' || role === 'all') {

@@ -48,7 +48,17 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Unit tests
+      # S3-compatible server for the S3BlobStore integration tests (External-tenant gate T7). minio/minio is no
+      # longer published on Docker Hub; pgsty/minio is a community build of the same server, pinned by digest.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 127.0.0.1:9000:9000 -e MINIO_ROOT_USER=crove-ci -e MINIO_ROOT_PASSWORD=crove-ci-minio \
+            pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372 server /data
+          curl --silent --fail --retry 30 --retry-all-errors --retry-delay 1 http://127.0.0.1:9000/minio/health/live
+
+      - name: Unit tests (S3 tests against MinIO)
+        env:
+          CROVE_TEST_S3_URL: http://crove-ci:crove-ci-minio@127.0.0.1:9000/crove-test
         run: pnpm exec vitest run --project unit
 
       - name: Database tests (PostgreSQL 17)
