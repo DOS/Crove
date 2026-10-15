@@ -104,6 +104,27 @@ export function hasFreshMfa(actor: UserActor, nowMs: number = Date.now()): boole
   return actor.mfaAt <= now + CLOCK_TOLERANCE_S && now - actor.mfaAt <= STEP_UP_MAX_AGE_S;
 }
 
+function sessionDetail(actor: UserActor): Record<string, unknown> {
+  return { aal: actor.aal, sessionId: actor.sessionId ?? null, mfaAt: actor.mfaAt ?? null };
+}
+
+// Keys of a refusal audit row that only the runtime writes: the code, the policy rule and who refused with which
+// session. A command's own facts (DomainError audit) never set them, also when the error names no rule or the
+// actor is a system actor, which has no session.
+const RESERVED_REFUSAL_KEYS = ['code', 'rule', 'aal', 'sessionId', 'mfaAt', 'component'] as const;
+
+// The detail of a denied/failed audit row (plan §4.10): the command's facts about the refusal (for example the roles
+// of a LAST_OWNER), then the code, the rule that refused when the error names one (for example P10 or P12) and,
+// for a user, the session.
+export function refusalAuditDetail(refusal: DomainError, actor: Actor): Record<string, unknown> {
+  const detail: Record<string, unknown> = { ...refusal.audit };
+  for (const key of RESERVED_REFUSAL_KEYS) delete detail[key];
+  detail.code = refusal.code;
+  if (typeof refusal.details?.rule === 'string') detail.rule = refusal.details.rule;
+  if (actor.type === 'user') Object.assign(detail, sessionDetail(actor));
+  return detail;
+}
+
 export function defineCommand<I, O>(def: CommandDef<I, O>): CommandDef<I, O> {
   return def;
 }
@@ -275,7 +296,7 @@ export class Runtime {
   }
 
   private sessionDetail(actor: UserActor): Record<string, unknown> {
-    return { aal: actor.aal, sessionId: actor.sessionId ?? null, mfaAt: actor.mfaAt ?? null };
+    return sessionDetail(actor);
   }
 
   private async writeAudit(
@@ -511,15 +532,7 @@ export class Runtime {
           inputSha256,
           target: def.target?.(input) ?? null,
           proposalId: null,
-          // The command's own facts about the refusal (DomainError audit, for example the roles of a LAST_OWNER), then
-          // the code, the policy rule that refused when the error names one (for example P10 or P12) and the session,
-          // which the command's facts can never overwrite.
-          detail: {
-            ...refusal.audit,
-            code: refusal.code,
-            ...(typeof refusal.details?.rule === 'string' ? { rule: refusal.details.rule } : {}),
-            ...(actor.type === 'user' ? this.sessionDetail(actor) : {}),
-          },
+          detail: refusalAuditDetail(refusal, actor),
         });
       });
     } catch (auditError) {

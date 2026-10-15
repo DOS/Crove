@@ -10,7 +10,9 @@ export class DomainError extends Error {
   readonly code: string;
   readonly status: ErrorStatus;
   readonly details: Record<string, unknown> | undefined;
-  readonly audit: Record<string, unknown> | undefined;
+  // Non-enumerable (set in the constructor), so JSON.stringify, spreads and loggers that walk own enumerable keys
+  // never carry it out of the server.
+  declare readonly audit: Record<string, unknown> | undefined;
 
   constructor(code: string, status: ErrorStatus, message: string, details?: Record<string, unknown>, options: DomainErrorOptions = {}) {
     super(message);
@@ -18,7 +20,7 @@ export class DomainError extends Error {
     this.code = code;
     this.status = status;
     this.details = details;
-    this.audit = options.audit;
+    Object.defineProperty(this, 'audit', { value: options.audit, enumerable: false, writable: false, configurable: false });
   }
 }
 

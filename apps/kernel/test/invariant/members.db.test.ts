@@ -223,13 +223,22 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     expect(await changeRole(ownerB, b.slug, ownerA, 'viewer')).toMatchObject({ status: 404 });
     expect(await remove(ownerB, b.slug, memberA)).toMatchObject({ status: 404, body: { code: 'MEMBER_NOT_FOUND' } });
     expect(await remove(ownerB, b.slug, ownerA)).toMatchObject({ status: 404 });
-    // Each of these refusals is audited in B, as failed, naming the user that was asked for (#119).
+    // An id that belongs to nobody gets the same answer.
+    const nobody = { userId: randomUUID() };
+    expect(await changeRole(ownerB, b.slug, nobody, 'viewer')).toMatchObject({ status: 404, body: { code: 'MEMBER_NOT_FOUND' } });
+    expect(await remove(ownerB, b.slug, nobody)).toMatchObject({ status: 404, body: { code: 'MEMBER_NOT_FOUND' } });
+    // Each of these refusals is audited in B, as failed, naming the user that was asked for (#119), and a member of
+    // another org is recorded exactly like an id that belongs to nobody: same outcome, code and detail keys.
     for (const command of ['kernel.member.change_role', 'kernel.member.remove']) {
       const rows = await audit(b.orgId, command);
       expect(rows.map((r) => [r.actor_id, r.outcome, r.detail.code, r.target_id])).toEqual([
         [ownerB.userId, 'failed', 'MEMBER_NOT_FOUND', memberA.userId],
         [ownerB.userId, 'failed', 'MEMBER_NOT_FOUND', ownerA.userId],
+        [ownerB.userId, 'failed', 'MEMBER_NOT_FOUND', nobody.userId],
       ]);
+      const shapes = rows.map((r) => Object.keys(r.detail).sort());
+      expect(new Set(shapes.map((k) => k.join(','))).size).toBe(1);
+      expect(shapes[0]).toEqual(['aal', 'code', 'mfaAt', 'sessionId']);
     }
     // Pointing the header at A does not help: B's owner is not a member of A.
     expect(await changeRole(ownerB, a.slug, memberA, 'viewer')).toMatchObject({ status: 403, body: { code: 'NOT_A_MEMBER' } });
@@ -256,6 +265,9 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
       // Since #35 tenant roles may update only the role column, so the privilege check refuses before RLS would.
     ).rejects.toThrow(/permission denied for table tenant_member|row-level security/);
     expect(await roles(a.orgId)).toEqual(beforeA);
+    // None of B's owner's refusals reached A's audit: the 404s are recorded only in the org the caller was in.
+    const inA = await admin((c) => c.query('SELECT 1 FROM crove_kernel.audit_event WHERE org_id = $1 AND actor_id = $2', [a.orgId, ownerB.userId]));
+    expect(inA.rowCount).toBe(0);
   });
 
   it('keeps at least one owner: the last owner cannot demote or remove themselves', async () => {
@@ -382,6 +394,31 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     // Once a member, nobody can invite them again, in any role.
     expect(await rpc('org/invite', adminToken, { email: target.email, role: 'viewer' }, slug)).toMatchObject({ status: 409, body: { code: 'ALREADY_MEMBER' } });
     expect((await roles(orgId))[target.userId]).toBe('admin');
+  });
+
+  // The backstop's trigger function is callable by no Crove role, runs as a definer and pins search_path (#119).
+  it('keeps the owner backstop function out of reach of every runtime role', async () => {
+    const rows = await admin(async (c) => {
+      const { rows: found } = await c.query<{ role: string; can: boolean; definer: boolean; config: string[] }>(
+        `SELECT r AS role, has_function_privilege(r, p.oid, 'EXECUTE') AS can, p.prosecdef AS definer, p.proconfig AS config
+         FROM pg_proc p CROSS JOIN unnest($1::text[]) r
+         WHERE p.oid = 'crove_kernel.tenant_member_keeps_owner()'::regprocedure ORDER BY r`,
+        [['crove_app', 'crove_definer_tenant', 'crove_tenant', 'crove_worker']],
+      );
+      return found;
+    });
+    expect(rows).toEqual(
+      ['crove_app', 'crove_definer_tenant', 'crove_tenant', 'crove_worker'].map((role) => ({
+        role,
+        can: false,
+        definer: true,
+        config: ['search_path=pg_catalog, pg_temp'],
+      })),
+    );
+    const publicGrant = await admin((c) =>
+      c.query(`SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a WHERE p.oid = 'crove_kernel.tenant_member_keeps_owner()'::regprocedure AND a.grantee = 0`),
+    );
+    expect(publicGrant.rowCount).toBe(0);
   });
 
   // The database backstop (#119): whatever writes tenant_member, a transaction that would leave an org without an
