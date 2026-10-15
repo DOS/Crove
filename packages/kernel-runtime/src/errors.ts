@@ -34,6 +34,8 @@ export function toDomainError(error: unknown): DomainError {
       }
       return new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
     case '42501':
+      // A second enter_context in one transaction (plan §4.5 item 1): a bug in the caller, never a user's 403.
+      if (pg.message?.includes('CONTEXT_REENTRY')) return new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
       if (pg.message?.includes('NOT_A_MEMBER')) return new DomainError('NOT_A_MEMBER', 403, 'Bạn không thuộc tổ chức này');
       if (pg.message?.includes('USER_DISABLED')) return new DomainError('USER_DISABLED', 403, 'Tài khoản của bạn đã bị khóa');
       return new DomainError('FORBIDDEN', 403, 'Không có quyền thực hiện');
