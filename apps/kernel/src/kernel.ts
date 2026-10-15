@@ -6,10 +6,18 @@ import { InvoiceExtractor, type InvoiceReader } from '@crove/agent';
 import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
 import { buildKernelCommands, kernelQueries } from '@crove/kernel';
-import { DomainError, LocalDiskStore, Runtime, type BlobStore, type SessionStatusSource } from '@crove/kernel-runtime';
+import {
+  DomainError,
+  LocalDiskStore,
+  Runtime,
+  type BlobStore,
+  type CommandDef,
+  type QueryDef,
+  type SessionStatusSource,
+} from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator, type Authenticate } from './auth.ts';
-import type { Config } from './config.ts';
+import type { Config, ModuleId } from './config.ts';
 import { createHttpApp } from './http.ts';
 import { createLogMailer, createMailer, type Mailer } from './mail.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
@@ -62,6 +70,8 @@ export type ServerRole = 'api' | 'worker' | 'all';
 
 export interface Kernel {
   readonly config: Config;
+  // The modules this deployment registers (CROVE_MODULES; kernel always).
+  readonly modules: readonly ModuleId[];
   readonly adapters: Readonly<ResolvedAdapters>;
   // Starts the role's servers and resolves to a function that stops them in reverse order.
   start(role: ServerRole): Promise<() => Promise<void>>;
@@ -77,6 +87,29 @@ export const noCredentialBroker: CredentialBroker = {
 export const selfHostBilling: Billing = { entitlements: async () => ['full'] };
 
 const REQUIRED = ['identity', 'ai', 'storage'] as const;
+
+export interface ModuleDefinitions {
+  commands: CommandDef<any, any>[];
+  queries: QueryDef<any, any>[];
+}
+
+// The commands and queries of the modules CROVE_MODULES enables (plan Decision 12, ADR-0031). A module left out has
+// none registered, so its commands answer COMMAND_NOT_FOUND, a ctx.query into it answers not_installed, and the
+// routes and jobs that ask Runtime.installed() are not registered either.
+export function moduleDefinitions(config: Config): ModuleDefinitions {
+  const all: Record<ModuleId, () => ModuleDefinitions> = {
+    kernel: () => ({
+      commands: buildKernelCommands({
+        orgCreateLimits: { perDay: config.ORG_CREATE_LIMIT_PER_DAY, total: config.ORG_CREATE_LIMIT_TOTAL },
+        inboundRotateLimits: { perDay: config.INBOUND_ROTATE_LIMIT_PER_DAY, total: config.INBOUND_ROTATE_LIMIT_TOTAL },
+      }),
+      queries: kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null }),
+    }),
+    finance: () => ({ commands: financeCommands, queries: financeQueries }),
+  };
+  const enabled = config.CROVE_MODULES.map((module) => all[module]());
+  return { commands: enabled.flatMap((m) => m.commands), queries: enabled.flatMap((m) => m.queries) };
+}
 
 export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
   // Typed callers cannot omit a port, but an entrypoint assembled at runtime can: fail at boot, not on first use.
@@ -115,16 +148,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
         reserve: config.REFUSAL_AUDIT_RESERVE_PER_ACTOR,
         windowSeconds: config.REFUSAL_AUDIT_WINDOW_SECONDS,
       },
-    }).register({
-      commands: [
-        ...buildKernelCommands({
-          orgCreateLimits: { perDay: config.ORG_CREATE_LIMIT_PER_DAY, total: config.ORG_CREATE_LIMIT_TOTAL },
-          inboundRotateLimits: { perDay: config.INBOUND_ROTATE_LIMIT_PER_DAY, total: config.INBOUND_ROTATE_LIMIT_TOTAL },
-        }),
-        ...financeCommands,
-      ],
-      queries: [...kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null }), ...financeQueries],
-    });
+    }).register(moduleDefinitions(config));
     return { pool, db, runtime };
   }
 
@@ -191,7 +215,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     return stopAll;
   }
 
-  return { config, adapters: resolved, start };
+  return { config, modules: config.CROVE_MODULES, adapters: resolved, start };
 }
 
 // The open-source defaults, built from configuration: Supabase Auth identity (ADR-0028), any OpenAI-compatible

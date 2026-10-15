@@ -106,6 +106,8 @@ services:
       WORKER_DATABASE_URL: postgres://crove_worker:${CROVE_WORKER_DB_PASSWORD:-local-worker-password}@db:5432/postgres
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
       AUTH_UPSTREAM_URL: http://auth:9999
+      # Modules to run (ADR-0031); empty runs every module.
+      CROVE_MODULES: ${CROVE_MODULES:-}
       AI_BASE_URL: ${AI_BASE_URL:-}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}

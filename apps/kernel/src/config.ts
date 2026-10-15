@@ -8,6 +8,27 @@ const optional = z
   .optional()
   .transform((v) => (v && v.trim() !== '' ? v.trim() : undefined));
 
+// Modules this build ships (plan Decision 12, ADR-0031). kernel is always on; the others are on unless CROVE_MODULES
+// leaves them out.
+export const AVAILABLE_MODULES = ['kernel', 'finance'] as const;
+export type ModuleId = (typeof AVAILABLE_MODULES)[number];
+
+// CROVE_MODULES: a comma-separated list such as `finance`. Unset or empty enables every available module; kernel is
+// added when missing. An unknown name stops the boot, so a typo never silently turns a module off.
+const modules = optional.transform((value, ctx): readonly ModuleId[] => {
+  if (value === undefined) return AVAILABLE_MODULES;
+  const names = value
+    .split(',')
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  const unknown = names.filter((name) => !(AVAILABLE_MODULES as readonly string[]).includes(name));
+  if (unknown.length > 0) {
+    ctx.addIssue({ code: 'custom', message: `unknown module(s) ${unknown.join(', ')}; available: ${AVAILABLE_MODULES.join(', ')}` });
+    return z.NEVER;
+  }
+  return AVAILABLE_MODULES.filter((module) => module === 'kernel' || names.includes(module));
+});
+
 const schema = z.object({
   PORT: z.coerce.number().int().positive().default(8080),
   // Loopback by default; the Docker image sets 0.0.0.0 and compose publishes the port on loopback.
@@ -15,6 +36,9 @@ const schema = z.object({
   // Number of reverse proxies in front of Crove whose X-Forwarded-For entries are trusted (0 = none).
   TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   PUBLIC_URL: z.string().default('http://localhost:8080'),
+  // Which modules' commands, queries, jobs, routes and menus this deployment registers. Migrations still apply to
+  // every schema (one linear ledger); per-org access is entitlements (Decision 10), not this setting.
+  CROVE_MODULES: modules,
   DATABASE_URL: z.string().min(1),
   WORKER_DATABASE_URL: optional,
   // Reset each pooled connection's session before it goes back to the pool (#117, plan §3.3). Keep true for direct
@@ -134,7 +158,7 @@ export type Config = Omit<z.infer<typeof schema>, 'AUTH_ISSUER' | 'AUTH_SESSION_
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.safeParse(env);
   if (!parsed.success) {
-    const fields = parsed.error.issues.map((i) => i.path.join('.')).join(', ');
+    const fields = parsed.error.issues.map((i) => (i.code === 'custom' ? `${i.path.join('.')} (${i.message})` : i.path.join('.'))).join(', ');
     throw new Error(`invalid configuration: ${fields}`);
   }
   const raw = parsed.data;

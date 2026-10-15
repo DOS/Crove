@@ -47,6 +47,16 @@ describe('configuration guards', () => {
     expect(() => loadConfig({ ...base, AUTH_ISSUER: '  ' })).toThrow(/AUTH_ISSUER/);
   });
 
+  // Plan Decision 12, ADR-0031.
+  it('enables every module by default, always keeps kernel and refuses an unknown module', () => {
+    expect(loadConfig(base).CROVE_MODULES).toEqual(['kernel', 'finance']);
+    expect(loadConfig({ ...base, CROVE_MODULES: '  ' }).CROVE_MODULES).toEqual(['kernel', 'finance']);
+    expect(loadConfig({ ...base, CROVE_MODULES: 'kernel' }).CROVE_MODULES).toEqual(['kernel']);
+    expect(loadConfig({ ...base, CROVE_MODULES: ' Finance ' }).CROVE_MODULES).toEqual(['kernel', 'finance']);
+    expect(loadConfig({ ...base, CROVE_MODULES: 'finance,kernel' }).CROVE_MODULES).toEqual(['kernel', 'finance']);
+    expect(() => loadConfig({ ...base, CROVE_MODULES: 'kernel,crm' })).toThrow(/CROVE_MODULES \(unknown module\(s\) crm; available: kernel, finance\)/);
+  });
+
   it('never resolves the session check to "no check" by default', () => {
     expect(loadConfig({ ...base, AUTH_UPSTREAM_URL: 'http://auth:9999' }).AUTH_SESSION_CHECK).toBe('db');
     // Crove Cloud: no bundled Supabase Auth, so the verified token plus Crove's records, and a live check for R3.
@@ -109,7 +119,7 @@ describe('auth proxy', () => {
     });
     app = createHttpApp({
       config,
-      runtime: {} as Runtime,
+      runtime: { installed: () => true, modules: () => ['kernel', 'finance'] } as unknown as Runtime,
       store: {} as BlobStore,
       authenticate: async () => {
         throw new Error('not used');
@@ -159,6 +169,8 @@ describe('inbound email on the API', () => {
       WEB_DIST: '/nonexistent',
     }),
     runtime: {
+      installed: () => true,
+      modules: () => ['kernel', 'finance'],
       orgless: async () => {
         touched.push('enqueue');
         return enqueue();
@@ -254,6 +266,8 @@ describe('store errors on the file routes', () => {
   const app = createHttpApp({
     config: loadConfig({ DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: 'crove-auth', WEB_DIST: '/nonexistent' }),
     runtime: {
+      installed: () => true,
+      modules: () => ['kernel', 'finance'],
       forUser: async () => [{ orgId, slug: 'acme', name: 'Acme', role: 'owner' }],
       query: async () => ({ filename: 'hd.xml', content_type: 'application/xml', storage_key: storageKey }),
     } as unknown as Runtime,

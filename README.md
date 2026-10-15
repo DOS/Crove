@@ -31,6 +31,7 @@ The defaults are for local use. Before anyone else can reach your instance, copy
 
 | Feature | Variables |
 |---|---|
+| Modules | `CROVE_MODULES`: comma-separated modules to run, such as `finance` (default: every module; `kernel` is always on). A module left out registers no commands, routes, jobs or menus; migrations still apply to every schema (ADR-0031) |
 | AI for PDFs and photos | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` (any OpenAI-compatible endpoint: OpenAI, Ollama, vLLM, ...) |
 | Inbound email | `INBOUND_DOMAIN`, `INBOUND_SECRET`; your mail worker POSTs raw MIME to `/api/inbound/email` |
 | Email delivery | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `AUTH_AUTOCONFIRM=false`. Supabase Auth and Crove's member invites use the same server; port 465 is implicit TLS, other ports with credentials require STARTTLS. Without `SMTP_HOST` Crove sends no invite mail and the inviter passes the one-time link on |

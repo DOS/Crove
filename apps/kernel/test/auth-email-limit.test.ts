@@ -168,7 +168,7 @@ describe('auth proxy email budget', () => {
         WEB_DIST: '/nonexistent',
         ...env,
       }),
-      runtime: {} as Runtime,
+      runtime: { installed: () => true, modules: () => ['kernel', 'finance'] } as unknown as Runtime,
       store: {} as BlobStore,
       authenticate: async () => {
         throw new Error('not used');
@@ -254,7 +254,7 @@ describe('auth proxy email budget', () => {
         AUTH_UPSTREAM_URL: 'http://127.0.0.1:1',
         WEB_DIST: '/nonexistent',
       }),
-      runtime: {} as Runtime,
+      runtime: { installed: () => true, modules: () => ['kernel', 'finance'] } as unknown as Runtime,
       store: {} as BlobStore,
       authenticate: async () => {
         throw new Error('not used');

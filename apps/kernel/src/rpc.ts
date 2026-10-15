@@ -52,6 +52,13 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
   };
   const inOrg = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor) => Promise<T>) =>
     guard(async () => fn(await resolveOrg(runtime, context.user, context.orgSlug), actorOf(context.user)));
+  // A procedure of a module this deployment leaves out (CROVE_MODULES, plan Decision 12) answers like a route that
+  // does not exist, before any database work. The contract is shared, so the procedure stays in the router.
+  const finance = runtime.installed('finance');
+  const inFinance = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor) => Promise<T>) => {
+    if (!finance) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun tài chính chưa được bật' });
+    return inOrg(context, fn);
+  };
 
   const router = os.router({
     me: {
@@ -186,22 +193,22 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     },
     parties: {
       list: os.parties.list.handler(({ context, input }) =>
-        inOrg(context, (orgId, actor) => runtime.query('finance.vendors.list', input, { actor, orgId })),
+        inFinance(context, (orgId, actor) => runtime.query('finance.vendors.list', input, { actor, orgId })),
       ),
     },
     documents: {
       list: os.documents.list.handler(({ context, input }) =>
-        inOrg(context, (orgId, actor) => runtime.query('finance.documents.list', input, { actor, orgId })),
+        inFinance(context, (orgId, actor) => runtime.query('finance.documents.list', input, { actor, orgId })),
       ),
     },
     journal: {
       list: os.journal.list.handler(({ context, input }) =>
-        inOrg(context, (orgId, actor) => runtime.query('finance.journal.list', input, { actor, orgId })),
+        inFinance(context, (orgId, actor) => runtime.query('finance.journal.list', input, { actor, orgId })),
       ),
     },
     accounts: {
       list: os.accounts.list.handler(({ context }) =>
-        inOrg(context, (orgId, actor) => runtime.query('finance.accounts.list', {}, { actor, orgId })),
+        inFinance(context, (orgId, actor) => runtime.query('finance.accounts.list', {}, { actor, orgId })),
       ),
     },
   });

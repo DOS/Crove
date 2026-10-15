@@ -120,8 +120,12 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   boss.on('error', (error) => console.error('[pg-boss]', error));
   await boss.start();
 
+  // Jobs of a module this deployment leaves out are not worked and never queued (CROVE_MODULES, plan Decision 12).
+  // Reading files is the finance module's job today: without it an uploaded file is stored and stays unread.
+  const finance = deps.runtime.installed('finance');
+
   // version: a requested re-extraction (kernel.file.reextract_requested); absent for the first read of a new file.
-  await boss.work<ExtractJob>(QUEUES.extract, { batchSize: 1 }, async ([job]) => {
+  if (finance) await boss.work<ExtractJob>(QUEUES.extract, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
     const { orgId, fileId, version } = job.data;
     try {
@@ -202,6 +206,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           // A failed send rolls back the claim; singletonKey makes the retry idempotent.
           await Promise.all(
             rows.map((row) => {
+              if (!finance && (row.type === 'kernel.file.ingested' || row.type === 'kernel.file.reextract_requested')) return null;
               if (row.type === 'kernel.file.ingested') {
                 const fileId = String(row.payload.fileId);
                 return boss.send(

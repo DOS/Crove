@@ -123,7 +123,7 @@ describe('per-user request limit on /api', () => {
     let calls = 0;
     const built = createHttpApp({
       config: loadConfig({ ...base, ...(options.perMinute ? { API_RATE_LIMIT_PER_MINUTE: options.perMinute } : {}) }),
-      runtime: {} as Runtime,
+      runtime: { installed: () => true, modules: () => ['kernel', 'finance'] } as unknown as Runtime,
       store: {} as BlobStore,
       authenticate: async (header) => {
         calls++;
