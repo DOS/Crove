@@ -1,7 +1,8 @@
 # Crove kernel + web app in one image. Roles: migrate | api | worker | all (default).
 # The image holds no PDF, XML or MIME parser (plan §7.6, External-tenant gate T12): files are parsed in
 # crove-extract (apps/extract/Dockerfile). tools/test/parser-imports.test.ts checks the dependency tree.
-FROM node:26-slim AS base
+# Base images are pinned by digest (Node 26.11.1 here); see "Updating pinned images" in AGENTS.md.
+FROM node:26-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0 AS base
 WORKDIR /app
 ENV CI=true
 # pnpm 10 is plain JavaScript; it downloads the pnpm version pinned in package.json (packageManager).
@@ -20,7 +21,7 @@ FROM base AS kernel
 RUN pnpm install --frozen-lockfile --prod --filter-prod "@crove/kernel-server..." \
  && rm -rf apps/extract apps/app apps/web
 
-FROM node:26-slim
+FROM node:26-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     STORAGE_DIR=/data/files \

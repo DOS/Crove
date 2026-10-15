@@ -3,7 +3,8 @@
 # Parsing libraries only (fast-xml-parser, unpdf, postal-mime): no database client, no AI or storage SDK, no
 # credentials. Bytes in, JSON out; only the worker calls it. docker-compose.yml runs it on an internal network
 # with no egress, a read-only root file system, no capabilities, 1 vCPU and 1 GiB.
-FROM node:26-slim AS build
+# Base images are pinned by digest (Node 26.11.1 here); see "Updating pinned images" in AGENTS.md.
+FROM node:26-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0 AS build
 WORKDIR /app
 ENV CI=true
 # pnpm 10 is plain JavaScript; it downloads the pnpm version pinned in package.json (packageManager).
@@ -13,7 +14,7 @@ COPY . .
 RUN pnpm install --frozen-lockfile --prod --filter "@crove/extract..." \
  && rm -rf apps/extract/test packages/extract-contract/test packages/l10n-vn/test
 
-FROM node:26-slim
+FROM node:26-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8090
