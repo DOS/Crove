@@ -111,6 +111,14 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
       expect(created.acceptPath).toMatch(/^\/-\/invite#[A-Za-z0-9_-]{43}$/);
     }
     expect(JSON.stringify(toKnown)).not.toContain(known.id);
+    // There is no command that adds a member directly, and no definer that looks a user up by email.
+    await expect(runtime.execute('kernel.member.add', { email: known.email, role: 'member' }, { actor: asMfa(owner.id), orgId })).rejects.toMatchObject({
+      code: 'COMMAND_NOT_FOUND',
+    });
+    await admin(async (c) => {
+      const { rows } = await c.query(`SELECT pg_catalog.to_regprocedure('crove_kernel.user_id_by_email(text)') AS fn`);
+      expect(rows).toEqual([{ fn: null }]);
+    });
     // Nobody joined: the invitee is not a member until they accept.
     expect(await memberships(known.id)).toEqual([]);
     await expect(runtime.query('kernel.org.get', {}, { actor: asUser(known.id), orgId })).rejects.toMatchObject({ code: 'NOT_A_MEMBER' });
@@ -308,7 +316,7 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     expect(audit).toEqual([{ org_id: orgA, actor_id: invitee.id, detail: expect.objectContaining({ invite_id: created.inviteId, role: 'member' }) }]);
   });
 
-  it('lets only the definer accept: the API role cannot accept, retarget or delete an invite by hand', async () => {
+  it('lets only definers create memberships: the API role cannot insert members, nor accept, retarget or delete an invite by hand', async () => {
     const owner = await person('owner');
     const outsider = await person('outsider');
     const orgId = await orgOf(owner);
@@ -318,6 +326,12 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
         await sql`SELECT crove_kernel.enter_context(${owner.id}::uuid, ${orgId}::uuid)`.execute(trx);
         return fn(trx);
       });
+    await expect(asApp((trx) => sql`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES (${orgId}::uuid, ${outsider.id}::uuid, 'member')`.execute(trx))).rejects.toThrow(
+      /permission denied for table tenant_member/,
+    );
+    await expect(asApp((trx) => sql`UPDATE crove_kernel.tenant_member SET user_id = ${outsider.id}::uuid WHERE user_id = ${owner.id}::uuid`.execute(trx))).rejects.toThrow(
+      /permission denied for table tenant_member/,
+    );
     await expect(
       asApp((trx) => sql`UPDATE crove_kernel.member_invite SET accepted_at = now(), accepted_by = ${outsider.id}::uuid WHERE id = ${created.inviteId}::uuid`.execute(trx)),
     ).rejects.toThrow(/permission denied for table member_invite/);
@@ -355,6 +369,23 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
       'crove_kernel.member_invite_guard()': [],
       'crove_kernel.member_invite_requires_audit()': [],
     });
+    // Table privileges on membership: no runtime role inserts, and only the role column is updatable.
+    const privileges = await admin(async (c) => {
+      const { rows } = await c.query(
+        `SELECT r AS role,
+                has_table_privilege(r, 'crove_kernel.tenant_member', 'INSERT') AS insert,
+                has_table_privilege(r, 'crove_kernel.tenant_member', 'UPDATE') AS update_any,
+                has_column_privilege(r, 'crove_kernel.tenant_member', 'role', 'UPDATE') AS update_role,
+                has_column_privilege(r, 'crove_kernel.tenant_member', 'user_id', 'UPDATE') AS update_user,
+                has_column_privilege(r, 'crove_kernel.tenant_member', 'org_id', 'UPDATE') AS update_org
+         FROM unnest($1::text[]) r ORDER BY 1`,
+        [roles],
+      );
+      return rows;
+    });
+    expect(privileges.filter((p) => p.insert || p.update_any || p.update_user || p.update_org)).toEqual([]);
+    // Role changes (kernel.member.change_role) still update the role column.
+    expect(privileges.filter((p) => ['crove_app', 'crove_tenant'].includes(p.role)).map((p) => p.update_role)).toEqual([true, true]);
   });
 
   it('commits an accepted invite only with its audit row, and never changes an answered invite, even for the database owner', async () => {

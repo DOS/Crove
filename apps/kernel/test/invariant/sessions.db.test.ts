@@ -344,8 +344,9 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
   });
 
   // The attack from the #90 review: a stranger makes the victim a member of their own org without consent, then acts
-  // on the victim's sessions as that org's owner. With invites (#35) the stranger's invite makes nobody a member.
-  it("refuses a cross-org attack: a stranger's invite makes the victim no member and reaches none of the victim's sessions", async () => {
+  // on the victim's sessions as that org's owner. Since #35 membership needs the victim's consent: there is no direct
+  // add, and the stranger's invite makes nobody a member.
+  it("refuses a cross-org attack: a stranger cannot make the victim a member, nor reach the victim's sessions", async () => {
     const victim = { subject: accounts.member.subject, email: accounts.member.email, session: randomUUID() };
     await signIn(victim.subject, victim.session);
     const victimOrg = await memberOrg();
@@ -356,7 +357,9 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
     attacker.userId = String((await me(attacker)).body?.userId);
     const evil = await rpc('org/create', await tokenFor(attacker), { name: 'Evil Org', idempotencyKey: randomUUID() }, null);
     const evilOrg = String(evil.body?.slug);
-    // The attacker, even with fresh MFA, can only invite: the answer says nothing about the victim's account.
+    // The direct add is gone, even with fresh MFA.
+    expect(await rpc('org/addMember', await tokenFor(attacker, { mfaAgeS: 10 }), { email: victim.email, role: 'member' }, evilOrg)).toMatchObject({ status: 404 });
+    // The attacker can only invite: the answer says nothing about the victim's account.
     const invited = await rpc('org/invite', await tokenFor(attacker, { mfaAgeS: 10 }), { email: victim.email, role: 'member' }, evilOrg);
     expect(invited.status).toBe(200);
     expect(Object.keys(invited.body ?? {}).sort()).toEqual(['acceptPath', 'email', 'expiresAt', 'inviteId', 'role']);

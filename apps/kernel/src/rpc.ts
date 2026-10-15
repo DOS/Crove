@@ -59,9 +59,6 @@ export function createRpcHandler(runtime: Runtime) {
         guard(() => createOrg(runtime, actorOf(context.user), input.name, input.idempotencyKey)),
       ),
       get: os.org.get.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.get', {}, { actor, orgId }))),
-      addMember: os.org.addMember.handler(({ context, input }) =>
-        inOrg(context, (orgId, actor) => runtime.execute('kernel.member.add', input, { actor, orgId })),
-      ),
       // No idempotency key: the answer carries the invite token, which must never be stored with a key.
       invite: os.org.invite.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.member.invite.create', input, { actor, orgId })),
