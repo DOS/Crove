@@ -420,7 +420,9 @@ export const rejectProposal = defineCommand({
 // Revokes a session or every session of a user (ADR-0028 section 4), effective on the next request with any
 // token of that session, refreshed or not. Enforced by the definer:
 // - the user themself revokes globally, and the worker then signs the session out in Supabase Auth
-//   (kernel.session.revoked; best effort and retried, correctness does not depend on it);
+//   (kernel.session.revoked; best effort and retried, correctness does not depend on it). For "every session" the
+//   caller's own session id lets the definer run the global sign-out from another session, still alive when the
+//   worker runs: the web app signs the caller's session out locally right away (issue #163);
 // - the org owner revokes a member's session in that org only: no global record, no upstream sign-out, because
 //   sessions are global and one org's owner has no say over the member's other orgs;
 // - nobody else, admins included.
@@ -431,9 +433,10 @@ export const revokeSession = defineCommand({
   access: ['owner', 'admin', 'member', 'viewer'],
   target: (input) => ({ type: 'kernel.user', id: input.userId }),
   handler: async (ctx, input) => {
+    const current = ctx.actor.type === 'user' ? (ctx.actor.sessionId ?? null) : null;
     const { rows } = await sql<{ revoked_session: string; auth_subject: string | null; sign_out: 'local' | 'global' | null }>`
       SELECT revoked_session, auth_subject, sign_out
-      FROM crove_kernel.session_revoke(${input.userId}::uuid, ${input.sessionId ?? null}::uuid, ${input.reason ?? null})`.execute(ctx.trx);
+      FROM crove_kernel.session_revoke(${input.userId}::uuid, ${input.sessionId ?? null}::uuid, ${input.reason ?? null}, ${current}::uuid)`.execute(ctx.trx);
     for (const row of rows) {
       if (!row.sign_out || !row.auth_subject) continue;
       await ctx.emit('kernel.session.revoked', {
