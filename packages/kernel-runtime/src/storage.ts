@@ -1,10 +1,14 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 
 // Object storage adapter. Local disk is the default; S3-compatible stores implement the same interface.
+// Bodies are buffered in memory as a Uint8Array in both directions, so a blob costs its full size in RAM while
+// it is read or written. Streaming bodies are a later change (#109).
 export interface BlobStore {
   // An org key must end in the sha256 of the bytes (a content address); any other key is refused.
+  // Writes are create-only: a key that already holds the same bytes is accepted (a re-upload dedupes), and a key
+  // that holds different bytes raises BlobConflictError. A stored blob is never replaced.
   put(key: string, bytes: Uint8Array, contentType: string): Promise<void>;
   // Throws BlobNotFoundError when nothing is stored under the key.
   get(key: string): Promise<Uint8Array>;
@@ -78,13 +82,40 @@ export class LocalDiskStore implements BlobStore {
     return full;
   }
 
+  // Create-only, like the S3 store: the bytes go to a temporary file in the same directory, which is then hard
+  // linked to the key. link() is atomic and fails with EEXIST when the key already exists, so a reader never sees
+  // a partial file and of two concurrent writers exactly one creates the key. The other compares bytes: the same
+  // bytes dedupe, different bytes raise BlobConflictError. The temporary file is removed on every path. The
+  // storage directory must be on a filesystem with hard links (ext4, xfs, overlayfs, APFS, NTFS).
   async put(key: string, bytes: Uint8Array): Promise<void> {
     const target = this.path(key);
-    assertContentAddress(key, sha256Hex(bytes));
+    const sha256 = sha256Hex(bytes);
+    assertContentAddress(key, sha256);
     await mkdir(dirname(target), { recursive: true });
     const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(tmp, bytes);
-    await rename(tmp, target);
+    try {
+      await writeFile(tmp, bytes, { flag: 'wx' });
+      // A key deleted between EEXIST and the read-back is created once more; a second disappearance is an error.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await link(tmp, target);
+          return;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+        let stored: Uint8Array;
+        try {
+          stored = await this.get(key);
+        } catch (error) {
+          if (error instanceof BlobNotFoundError && attempt < 2) continue;
+          throw error;
+        }
+        if (sha256Hex(stored) !== sha256) throw new BlobConflictError(key);
+        return;
+      }
+    } finally {
+      await rm(tmp, { force: true });
+    }
   }
 
   async get(key: string): Promise<Uint8Array> {

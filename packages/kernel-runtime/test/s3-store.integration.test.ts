@@ -1,7 +1,7 @@
 // Integration tests against a real S3-compatible server (CI: MinIO). Set CROVE_TEST_S3_URL to
 // http://<access key>:<secret>@<host>:<port>/<bucket>; the bucket is created if missing.
 import { createHash, randomUUID } from 'node:crypto';
-import { ChecksumMode, CreateBucketCommand, HeadObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
+import { ChecksumMode, CreateBucketCommand, DeleteObjectCommand, HeadObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   BlobConflictError,
@@ -98,6 +98,28 @@ describe.skipIf(!URL_ENV)('S3BlobStore against a real S3-compatible server', () 
     await store.put(inbound, original, 'message/rfc822');
     await expect(store.put(inbound, encode('a different message'), 'message/rfc822')).rejects.toBeInstanceOf(BlobConflictError);
     expect(await store.get(inbound)).toEqual(original);
+  });
+
+  it('writes once more when the existing object is deleted between the 412 and the read-back', async () => {
+    const key = inboundKey(newInboundBlobId());
+    const bytes = encode('raw message');
+    await S3BlobStore.connect(options).put(key, bytes, 'message/rfc822');
+    // The first read-back finds the object gone, as if a worker deleted it right after the 412.
+    const sent: string[] = [];
+    let raced = false;
+    const sender = {
+      send: async (command: { constructor: { name: string } }) => {
+        sent.push(command.constructor.name);
+        if (command.constructor.name === 'GetObjectCommand' && !raced) {
+          raced = true;
+          await client.send(new DeleteObjectCommand({ Bucket: options.bucket, Key: key }));
+        }
+        return (client.send as (c: unknown) => Promise<unknown>)(command);
+      },
+    } as unknown as S3Sender;
+    await new S3BlobStore(sender, options.bucket).put(key, bytes, 'message/rfc822');
+    expect(sent).toEqual(['PutObjectCommand', 'GetObjectCommand', 'PutObjectCommand']);
+    expect(await S3BlobStore.connect(options).get(key)).toEqual(bytes);
   });
 
   it('maps a missing object to BlobNotFoundError and deletes idempotently', async () => {

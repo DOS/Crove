@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BlobConflictError,
   BlobNotFoundError,
+  BlobStoreAccessError,
   S3BlobStore,
   createS3Client,
   fileKey,
@@ -85,6 +86,25 @@ describe('S3BlobStore with a mocked client', () => {
     expect(other.sent.map((c) => c.constructor.name)).toEqual(['PutObjectCommand', 'GetObjectCommand']);
   });
 
+  it('writes once more when the existing object is deleted between the 412 and the read-back', async () => {
+    let puts = 0;
+    const raced = fakeStore((c) => {
+      if (c instanceof PutObjectCommand && ++puts === 1) throw s3Error('PreconditionFailed', 412);
+      if (c instanceof GetObjectCommand) throw s3Error('NoSuchKey', 404);
+      return { ChecksumSHA256: checksum };
+    });
+    await expect(raced.store.put(key, bytes, 'application/xml')).resolves.toBeUndefined();
+    expect(raced.sent.map((c) => c.constructor.name)).toEqual(['PutObjectCommand', 'GetObjectCommand', 'PutObjectCommand']);
+
+    // Only once: an object that keeps reappearing and vanishing is not retried forever.
+    const flapping = fakeStore((c) => {
+      if (c instanceof PutObjectCommand) throw s3Error('PreconditionFailed', 412);
+      throw s3Error('NoSuchKey', 404);
+    });
+    await expect(flapping.store.put(key, bytes, 'application/xml')).rejects.toBeInstanceOf(BlobNotFoundError);
+    expect(flapping.sent.map((c) => c.constructor.name)).toEqual(['PutObjectCommand', 'GetObjectCommand', 'PutObjectCommand', 'GetObjectCommand']);
+  });
+
   it('retries a write that raced another conditional write to the same key', async () => {
     let puts = 0;
     const { store } = fakeStore((c) => {
@@ -121,6 +141,19 @@ describe('S3BlobStore with a mocked client', () => {
       throw s3Error('NoSuchBucket', 404);
     });
     await expect(store.get(key)).rejects.toMatchObject({ name: 'NoSuchBucket' });
+  });
+
+  it('explains a 403 on read (missing s3:ListBucket hides a missing key) without exposing credentials', async () => {
+    const denied = s3Error('AccessDenied', 403);
+    const { store } = fakeStore(() => {
+      throw denied;
+    });
+    const failure = await store.get(key).catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(BlobStoreAccessError);
+    expect(failure).not.toBeInstanceOf(BlobNotFoundError);
+    expect(failure).toMatchObject({ key, cause: denied });
+    expect((failure as Error).message).toMatch(/s3:ListBucket/);
+    expect((failure as Error).message).toContain('crove-files');
   });
 
   it('deletes idempotently', async () => {

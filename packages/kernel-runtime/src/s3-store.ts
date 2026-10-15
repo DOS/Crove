@@ -52,6 +52,22 @@ export function createS3Client(options: S3StoreOptions): S3Client {
   return client;
 }
 
+// A read was refused with 403. Either the credentials lack s3:GetObject, or the key is missing and the bucket
+// policy lacks s3:ListBucket (S3 then hides a missing key behind 403). The message names the bucket and key, never
+// credentials.
+export class BlobStoreAccessError extends Error {
+  readonly key: string;
+  constructor(bucket: string, key: string, cause: unknown) {
+    super(
+      `access denied reading ${key} from bucket ${bucket}: the credentials need s3:GetObject on the objects and ` +
+        's3:ListBucket on the bucket (without ListBucket a missing key is reported as 403, not 404)',
+      { cause },
+    );
+    this.name = 'BlobStoreAccessError';
+    this.key = key;
+  }
+}
+
 function httpStatus(error: unknown): number | undefined {
   return (error as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata?.httpStatusCode;
 }
@@ -73,6 +89,11 @@ function isMissingObject(error: unknown): boolean {
 // an object is never overwritten. Writing the same bytes again succeeds, which is how a re-uploaded file
 // dedupes; different bytes raise BlobConflictError. Every write carries the sha256 of its bytes, which the
 // server verifies; when a server does not confirm it, the store reads the object back and compares.
+//
+// The bucket policy must grant s3:ListBucket on the bucket as well as s3:GetObject, s3:PutObject and
+// s3:DeleteObject on its objects. Without ListBucket, S3 answers a read of a missing key with 403 instead of 404,
+// so the store cannot tell a missing blob from a permission problem; get then raises BlobStoreAccessError, not
+// BlobNotFoundError.
 export class S3BlobStore implements BlobStore {
   private readonly client: S3Sender;
   private readonly bucket: string;
@@ -93,6 +114,7 @@ export class S3BlobStore implements BlobStore {
     assertContentAddress(key, sha256);
     const checksum = digest.toString('base64');
 
+    let retriedMissing = false;
     for (let attempt = 1; ; attempt++) {
       let confirmed: string | undefined;
       try {
@@ -110,8 +132,19 @@ export class S3BlobStore implements BlobStore {
         confirmed = out.ChecksumSHA256;
       } catch (error) {
         const status = httpStatus(error);
-        // The key already holds an object: accept it only if it has exactly these bytes.
-        if (status === 412) return this.assertHolds(key, sha256);
+        // The key already holds an object: accept it only if it has exactly these bytes. If it was deleted
+        // between the 412 and the read-back, write it once more.
+        if (status === 412) {
+          try {
+            return await this.assertHolds(key, sha256);
+          } catch (readError) {
+            if (readError instanceof BlobNotFoundError && !retriedMissing) {
+              retriedMissing = true;
+              continue;
+            }
+            throw readError;
+          }
+        }
         // Another conditional write to the same key is in flight; retry so one of them wins.
         if (status === 409 && attempt < CONFLICT_RETRIES) {
           await sleep(100 * attempt);
@@ -140,6 +173,7 @@ export class S3BlobStore implements BlobStore {
       return await out.Body.transformToByteArray();
     } catch (error) {
       if (isMissingObject(error)) throw new BlobNotFoundError(key);
+      if (httpStatus(error) === 403) throw new BlobStoreAccessError(this.bucket, key, error);
       throw error;
     }
   }
