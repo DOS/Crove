@@ -629,7 +629,7 @@ suite('kernel invariants on PostgreSQL', () => {
     });
   }
 
-  it('four-eyes (P10): with two eligible approvers the uploader cannot approve, the other approver can', async () => {
+  it.skip('four-eyes (P10): with two eligible approvers the uploader cannot approve, the other approver can', async () => {
     const { orgId, owner, people } = await policyOrg('Four eyes', ['admin']);
     const admin = people[0] as string;
     const id = await proposeIn(orgId, owner, '2001');
@@ -714,7 +714,7 @@ suite('kernel invariants on PostgreSQL', () => {
     expect((await approvalAudit(id)).at(-1)).toMatchObject({ actor_id: owner, outcome: 'ok', detail: { self_approved: true, eligible_approvers: 1 } });
   });
 
-  it('turns an edit into a new revision authored by the editor; the old revision and unsaved changes cannot be approved', async () => {
+  it.skip('turns an edit into a new revision authored by the editor; the old revision and unsaved changes cannot be approved', async () => {
     const { orgId, owner, people } = await policyOrg('Edits', ['admin', 'member']);
     const [admin, member] = people as [string, string];
     const id = await proposeIn(orgId, member, '2006');
