@@ -3,7 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { Button, Card, ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
-import { auth } from '../lib/auth.ts';
+import { signOut } from '../lib/session-actions.ts';
 import { formatDateTime } from '../lib/format.ts';
 import { forgetInvite, pendingInvite } from '../lib/invite.ts';
 
@@ -77,7 +77,7 @@ export function InvitePage() {
         <div className="mt-6 flex flex-wrap gap-2">
           {mismatch && (
             // The token stays in storage, so after signing in with the invited email the user comes back here.
-            <Button variant="primary" onClick={() => void auth().signOut({ scope: 'local' })}>
+            <Button variant="primary" onClick={() => void signOut()}>
               Đăng xuất để dùng email khác
             </Button>
           )}

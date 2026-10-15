@@ -2,6 +2,7 @@ import { Outlet, createRootRoute, createRoute, createRouter, redirect, type Erro
 import { Button } from './components/ui.tsx';
 import { getCurrentOrg, isUnauthenticated, orpc, queryClient, setCurrentOrg } from './lib/api.ts';
 import { accessToken, auth } from './lib/auth.ts';
+import { signOut } from './lib/session-actions.ts';
 import { pendingInvite, rememberInvite, takeTokenFromHash } from './lib/invite.ts';
 import { AuthPage } from './routes/auth.tsx';
 import { DocumentsPage } from './routes/documents.tsx';
@@ -26,7 +27,7 @@ function ErrorPage({ error }: ErrorComponentProps) {
         <p className="mt-2 text-sm text-fg-2">{error instanceof Error ? error.message : 'Lỗi không xác định'}</p>
         <div className="mt-6 flex justify-center gap-2">
           <Button onClick={() => window.location.reload()}>Tải lại</Button>
-          <Button variant="ghost" onClick={() => void auth().signOut({ scope: 'local' }).then(() => window.location.assign('/login'))}>
+          <Button variant="ghost" onClick={() => void signOut().then(() => window.location.assign('/login'))}>
             Đăng xuất
           </Button>
         </div>
