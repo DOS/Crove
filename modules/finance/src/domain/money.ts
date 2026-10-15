@@ -34,13 +34,13 @@ export const FX_RATE_LIMIT = '1e14';
 
 export type MoneyErrorCode = 'UNKNOWN_CURRENCY' | 'NOT_A_DECIMAL' | 'AMOUNT_SCALE' | 'AMOUNT_OVERFLOW' | 'INVALID_FX_RATE';
 
+// No parameter properties: the kernel image runs TypeScript in Node's strip-only mode.
 export class MoneyError extends Error {
-  constructor(
-    readonly code: MoneyErrorCode,
-    message: string,
-  ) {
+  readonly code: MoneyErrorCode;
+  constructor(code: MoneyErrorCode, message: string) {
     super(`${code}: ${message}`);
     this.name = 'MoneyError';
+    this.code = code;
   }
 }
 
