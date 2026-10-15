@@ -21,5 +21,8 @@
     "exceljs": "catalog:",
     "kysely": "catalog:",
     "zod": "catalog:"
+  },
+  "devDependencies": {
+    "fast-check": "catalog:"
   }
 }

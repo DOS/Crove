@@ -28,6 +28,7 @@ catalog:
   clsx: 2.1.1
   decimal.js: 10.6.0
   exceljs: 4.4.0
+  fast-check: 4.10.2
   fast-xml-parser: 5.11.2
   hono: 4.13.13
   jose: 6.2.12
