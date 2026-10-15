@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const MIGRATIONS = fileURLToPath(new URL('../../supabase/migrations', import.meta.url));
+// The naming rule the runner enforces (packages/db/src/migrate.ts): <14-digit UTC>_crove_<module>_<desc>.sql.
+const FILE_PATTERN = /^(\d{14})_crove_[a-z0-9]+_[a-z0-9_]+\.sql$/;
 
 describe('supabase/migrations', () => {
   it('gives every file its own 14-digit version', () => {
@@ -13,9 +15,10 @@ describe('supabase/migrations', () => {
     expect(files.length).toBeGreaterThan(0);
     const byVersion = new Map<string, string[]>();
     for (const name of files) {
-      const version = /^(\d{14})_/.exec(name)?.[1];
-      expect(version, `${name} does not start with a 14-digit version`).toBeDefined();
-      byVersion.set(version as string, [...(byVersion.get(version as string) ?? []), name]);
+      const version = FILE_PATTERN.exec(name)?.[1];
+      expect(version, `${name} does not follow the migration naming rule`).toBeDefined();
+      if (!version) continue;
+      byVersion.set(version, [...(byVersion.get(version) ?? []), name]);
     }
     const shared = [...byVersion.values()].filter((names) => names.length > 1);
     expect(shared).toEqual([]);
