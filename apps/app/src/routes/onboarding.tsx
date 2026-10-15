@@ -3,7 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useRef, useState, type FormEvent } from 'react';
 import { Button, Card, ErrorText, Input, Logo } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
-import { auth } from '../lib/auth.ts';
+import { signOut } from '../lib/session-actions.ts';
 
 export function OnboardingPage() {
   const navigate = useNavigate();
@@ -44,7 +44,7 @@ export function OnboardingPage() {
             {create.isPending ? 'Đang tạo…' : 'Tạo tổ chức'}
           </Button>
         </form>
-        <button className="mt-4 text-sm text-fg-3 hover:text-fg-2" onClick={() => void auth().signOut()}>
+        <button className="mt-4 text-sm text-fg-3 hover:text-fg-2" onClick={() => void signOut()}>
           Đăng xuất
         </button>
       </Card>

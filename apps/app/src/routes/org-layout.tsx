@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate, useParams } from '@tanstack/react-router';
 import { Logo, cx } from '../components/ui.tsx';
 import { orpc } from '../lib/api.ts';
-import { auth } from '../lib/auth.ts';
+import { signOut } from '../lib/session-actions.ts';
 
 const NAV = [
   { to: '/o/$slug/inbox', label: 'Hộp thư chứng từ' },
@@ -57,7 +57,7 @@ export function OrgLayout() {
         </nav>
         <div className="mt-auto border-t border-line px-2 pt-3 text-xs text-fg-3">
           <p className="truncate">{me.data?.email}</p>
-          <button className="mt-1 hover:text-fg-2" onClick={() => void auth().signOut()}>
+          <button className="mt-1 hover:text-fg-2" onClick={() => void signOut()}>
             Đăng xuất
           </button>
         </div>
