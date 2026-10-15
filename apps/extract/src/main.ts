@@ -2,17 +2,20 @@
 // it refuses to start when its environment holds anything that looks like one.
 import { serve } from '@hono/node-server';
 import { z } from 'zod';
-import { EXTRACT_LIMITS } from '@crove/extract-contract';
+import { EXTRACT_CLIENT_TIMEOUT_MS, EXTRACT_LIMITS, EXTRACT_TIMING, worstCaseCallMs } from '@crove/extract-contract';
+import { DEFAULT_SANDBOX } from './sandbox.ts';
 import { createExtractApp } from './server.ts';
 
 const schema = z.object({
   PORT: z.coerce.number().int().positive().max(65_535).default(8090),
   // Loopback by default; the image sets 0.0.0.0 and compose keeps the port on an internal network.
   HOST: z.string().default('127.0.0.1'),
-  EXTRACT_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(1),
-  EXTRACT_MAX_QUEUE: z.coerce.number().int().min(0).max(100).default(2),
-  EXTRACT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(30_000),
-  EXTRACT_MAX_HEAP_MB: z.coerce.number().int().min(64).max(4096).default(512),
+  EXTRACT_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(EXTRACT_TIMING.concurrency),
+  EXTRACT_MAX_QUEUE: z.coerce.number().int().min(0).max(100).default(EXTRACT_TIMING.maxQueue),
+  EXTRACT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(EXTRACT_TIMING.parseTimeoutMs),
+  EXTRACT_MAX_HEAP_MB: z.coerce.number().int().min(64).max(4096).default(DEFAULT_SANDBOX.maxHeapMb),
+  // Resident memory of one parser process, Buffers and wasm included (the heap limit does not cover them).
+  EXTRACT_MAX_RSS_MB: z.coerce.number().int().min(64).max(8192).default(DEFAULT_SANDBOX.maxRssMb),
 });
 
 export type ExtractConfig = z.infer<typeof schema>;
@@ -38,7 +41,20 @@ export function loadExtractConfig(env: NodeJS.ProcessEnv = process.env, warn: (m
   }
   const parsed = schema.safeParse(env);
   if (!parsed.success) throw new Error(`invalid configuration: ${parsed.error.issues.map((i) => i.path.join('.')).join(', ')}`);
-  return parsed.data;
+  const config = parsed.data;
+  // The worker gives up after EXTRACT_CLIENT_TIMEOUT_MS; a queued request must finish its parse before that.
+  const worst = worstCaseCallMs({
+    parseTimeoutMs: config.EXTRACT_TIMEOUT_MS,
+    concurrency: config.EXTRACT_CONCURRENCY,
+    maxQueue: config.EXTRACT_MAX_QUEUE,
+    transferSlackMs: EXTRACT_TIMING.transferSlackMs,
+  });
+  if (worst > EXTRACT_CLIENT_TIMEOUT_MS) {
+    throw new Error(
+      `EXTRACT_TIMEOUT_MS, EXTRACT_MAX_QUEUE and EXTRACT_CONCURRENCY allow a call of ${worst} ms, longer than the worker waits (${EXTRACT_CLIENT_TIMEOUT_MS} ms)`,
+    );
+  }
+  return config;
 }
 
 function main() {
@@ -49,6 +65,7 @@ function main() {
     sandbox: {
       timeoutMs: config.EXTRACT_TIMEOUT_MS,
       maxHeapMb: config.EXTRACT_MAX_HEAP_MB,
+      maxRssMb: config.EXTRACT_MAX_RSS_MB,
       maxOutputBytes: EXTRACT_LIMITS.maxResponseBytes,
     },
   });

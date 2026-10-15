@@ -5,10 +5,11 @@ import { readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { EXTRACT_LIMITS, zExtractResponse, type ExtractResponse } from '@crove/extract-contract';
+import { EXTRACT_CLIENT_TIMEOUT_MS, EXTRACT_LIMITS, EXTRACT_TIMING, worstCaseCallMs, zExtractResponse, type ExtractResponse } from '@crove/extract-contract';
 import { credentialVariables, loadExtractConfig } from '../src/main.ts';
-import { DEFAULT_SANDBOX, PARSER_ENV, parserFlags, runSandboxed } from '../src/sandbox.ts';
+import { DEFAULT_SANDBOX, PARSER_ENV, classifyExit, parserFlags, runSandboxed } from '../src/sandbox.ts';
 import { createExtractApp, createLimiter, type Runner } from '../src/server.ts';
 
 const FIXTURE = readFileSync(new URL('../../../packages/l10n-vn/test/fixtures/einvoice-basic.xml', import.meta.url));
@@ -260,6 +261,23 @@ describe('crove-extract parser process', () => {
     expect(result).toMatchObject({ ok: false, code: 'memory' });
   }, 30_000);
 
+  // Buffers are outside the V8 heap limit; the resident memory watchdog reads /proc, so it runs on Linux (CI).
+  it.runIf(process.platform === 'linux')('stops a parse whose resident memory passes the limit, Buffers included', async () => {
+    const big = Buffer.alloc(20 * 1024 * 1024, 7);
+    const result = await runSandboxed('mime', email(big, 'big.bin'), { ...DEFAULT_SANDBOX, maxRssMb: 64 });
+    expect(result).toEqual({ ok: false, code: 'memory', message: 'parsing needed more than 64 MB of memory' });
+  }, 30_000);
+
+  it('reports a kill it did not send (the kernel OOM killer) as memory, other crashes as internal', () => {
+    expect(classifyExit(null, 'SIGKILL', '')).toMatchObject({ code: 'memory' });
+    expect(classifyExit(137, null, '')).toMatchObject({ code: 'memory' });
+    expect(classifyExit(134, 'SIGABRT', 'FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory')).toMatchObject({
+      code: 'memory',
+    });
+    expect(classifyExit(1, null, 'TypeError: boom')).toMatchObject({ code: 'internal' });
+    expect(classifyExit(0, null, '')).toBeNull();
+  });
+
   it('refuses an answer larger than the output limit', async () => {
     const result = await runSandboxed('mime', email(FIXTURE), { ...DEFAULT_SANDBOX, maxOutputBytes: 64 });
     expect(result).toMatchObject({ ok: false, code: 'invalid' });
@@ -324,6 +342,27 @@ describe('crove-extract parser process isolation', () => {
     const results = JSON.parse(out.trim().split('\n').pop() ?? '{}') as { env: string[]; write: string; spawn: string };
     expect(results).toEqual({ env: [], write: 'ERR_ACCESS_DENIED', spawn: 'ERR_ACCESS_DENIED' });
   });
+
+  it('cannot read outside its own code or start worker threads', async () => {
+    const outside = [
+      // The checkout around the app in development: secrets and data live there.
+      fileURLToPath(new URL('../../../.env', import.meta.url)),
+      fileURLToPath(new URL('../../../package.json', import.meta.url)),
+      process.platform === 'win32' ? 'C:\\Windows\\win.ini' : '/etc/passwd',
+    ];
+    const { out } = await underSandbox(`
+      import fs from 'node:fs';
+      import { Worker } from 'node:worker_threads';
+      const results = { reads: [] };
+      for (const path of ${JSON.stringify(outside)}) {
+        try { fs.readFileSync(path); results.reads.push('read'); } catch (e) { results.reads.push(e.code); }
+      }
+      try { new Worker('setTimeout(() => {}, 10)', { eval: true }); results.worker = 'started'; } catch (e) { results.worker = e.code; }
+      console.log(JSON.stringify(results));
+    `);
+    const results = JSON.parse(out.trim().split('\n').pop() ?? '{}') as { reads: string[]; worker: string };
+    expect(results).toEqual({ reads: ['ERR_ACCESS_DENIED', 'ERR_ACCESS_DENIED', 'ERR_ACCESS_DENIED'], worker: 'ERR_ACCESS_DENIED' });
+  });
 });
 
 describe('crove-extract configuration', () => {
@@ -351,7 +390,20 @@ describe('crove-extract configuration', () => {
   });
 
   it('starts with defaults and names a bad field without its value', () => {
-    expect(loadExtractConfig({ PATH: '/usr/bin', HOSTNAME: 'x' })).toMatchObject({ PORT: 8090, EXTRACT_CONCURRENCY: 1, EXTRACT_TIMEOUT_MS: 30_000 });
+    expect(loadExtractConfig({ PATH: '/usr/bin', HOSTNAME: 'x' })).toMatchObject({
+      PORT: 8090,
+      EXTRACT_CONCURRENCY: EXTRACT_TIMING.concurrency,
+      EXTRACT_MAX_QUEUE: EXTRACT_TIMING.maxQueue,
+      EXTRACT_TIMEOUT_MS: EXTRACT_TIMING.parseTimeoutMs,
+    });
     expect(() => loadExtractConfig({ EXTRACT_TIMEOUT_MS: 'forever' })).toThrow(/EXTRACT_TIMEOUT_MS/);
+  });
+
+  it('never lets a queued request outlast the worker: queue wait plus parse fit in the client timeout', () => {
+    expect(worstCaseCallMs(EXTRACT_TIMING)).toBeLessThanOrEqual(EXTRACT_CLIENT_TIMEOUT_MS);
+    expect(() => loadExtractConfig({ EXTRACT_MAX_QUEUE: '8' })).toThrow(/longer than the worker waits/);
+    expect(() => loadExtractConfig({ EXTRACT_TIMEOUT_MS: '60000' })).toThrow(/longer than the worker waits/);
+    // More parsers at a time shorten the wait.
+    expect(loadExtractConfig({ EXTRACT_MAX_QUEUE: '2', EXTRACT_CONCURRENCY: '2', EXTRACT_TIMEOUT_MS: '20000' }).EXTRACT_MAX_QUEUE).toBe(2);
   });
 });

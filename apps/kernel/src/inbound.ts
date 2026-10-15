@@ -7,7 +7,7 @@
 // message itself: crove-extract does, and its answer is validated and treated as untrusted (gate T12).
 import { timingSafeEqual } from 'node:crypto';
 import { sql } from 'kysely';
-import type { ExtractClient } from '@crove/extract-contract';
+import { EXTRACT_LIMIT_RETRIES, type ExtractClient } from '@crove/extract-contract';
 import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '@crove/kernel-contract';
 import { DomainError, fileKey, inboundKey, newInboundBlobId, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { safeFilename, sniffType } from './sniff.ts';
@@ -92,7 +92,8 @@ export interface InboundProcessDeps {
 // Worker side: has the stored message parsed, resolves the org by token and records it in system context.
 // Idempotent: kernel.inbound.receive ignores a messageId the org has already received. The blob must match
 // the hash and size the API enqueued; a mismatch is refused like any message no org can receive.
-export async function processInboundEmail(deps: InboundProcessDeps, job: InboundJob) {
+// `attempt` is the job's retry count (0 on the first run).
+export async function processInboundEmail(deps: InboundProcessDeps, job: InboundJob, attempt = 0) {
   if (!deps.domain) throw new Error('INBOUND_DOMAIN is not set on the worker');
   const domain = deps.domain;
   const rawSha256 = job.sha256;
@@ -101,12 +102,14 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
     throw new DomainError('INBOUND_BLOB_MISMATCH', 422, 'Thư lưu không khớp với hàng đợi');
   }
   // A message the sandbox finds invalid or too large is dropped like any message no org can receive. A timeout or
-  // memory limit can also come from load on the sandbox, so those are retried (after the last attempt the raw
-  // message is kept, never lost); a sandbox that cannot answer throws ExtractServiceError and is retried too.
+  // memory limit can also come from load on the sandbox, so it is retried, but only EXTRACT_LIMIT_RETRIES times:
+  // a hostile message must not hold the single parser slot, which every tenant shares, again and again. After
+  // that it is dropped too. A sandbox that cannot answer throws ExtractServiceError and is retried as before.
   const parsed = await deps.extract.extract('mime', raw);
   if (!parsed.ok) {
-    if (parsed.code === 'invalid' || parsed.code === 'too_large') throw new DomainError('UNREADABLE_MESSAGE', 422, 'Không đọc được thư');
-    throw new Error(`crove-extract could not read the message in time: ${parsed.code}`);
+    const limitHit = parsed.code === 'timeout' || parsed.code === 'memory';
+    if (limitHit && attempt < EXTRACT_LIMIT_RETRIES) throw new Error(`crove-extract stopped at a limit: ${parsed.code}`);
+    throw new DomainError('UNREADABLE_MESSAGE', 422, 'Không đọc được thư');
   }
   const email = parsed.email;
   const recipients = [job.recipient, email.deliveredTo, ...email.to].filter((r): r is string => typeof r === 'string' && r !== '');

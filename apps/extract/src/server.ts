@@ -4,6 +4,7 @@
 import { Hono, type Context } from 'hono';
 import {
   EXTRACT_ERROR_STATUS,
+  EXTRACT_TIMING,
   maxRequestBytes,
   zExtractKind,
   type ExtractKind,
@@ -99,7 +100,7 @@ export function createLimiter(concurrency: number, maxQueue: number) {
 export function createExtractApp(options: ExtractAppOptions = {}) {
   const sandbox = options.sandbox ?? DEFAULT_SANDBOX;
   const run: Runner = options.run ?? ((kind, bytes, signal) => runSandboxed(kind, bytes, sandbox, signal));
-  const limit = createLimiter(options.concurrency ?? 1, options.maxQueue ?? 2);
+  const limit = createLimiter(options.concurrency ?? EXTRACT_TIMING.concurrency, options.maxQueue ?? EXTRACT_TIMING.maxQueue);
   const app = new Hono();
 
   app.get('/healthz', (c) => c.json({ ok: true }));

@@ -37,10 +37,22 @@ describe('parsers stay in crove-extract', () => {
   });
 
   it('the parsing libraries are dependencies of crove-extract only (and of l10n-vn for the e-invoice parser)', () => {
-    const manifests = ['apps/kernel/package.json', 'packages/extract-contract/package.json', 'packages/kernel-runtime/package.json', 'packages/kernel/package.json'];
+    // Step 1 of 2: the finance module keeps unpdf for its in-process fallback until #120.
+    const allowed: Record<string, string[]> = { 'modules/finance/package.json': ['unpdf'] };
+    const manifests = [
+      'apps/kernel/package.json',
+      'modules/finance/package.json',
+      'packages/agent/package.json',
+      'packages/db/package.json',
+      'packages/extract-contract/package.json',
+      'packages/kernel-contract/package.json',
+      'packages/kernel-runtime/package.json',
+      'packages/kernel/package.json',
+    ];
     for (const manifest of manifests) {
       const { dependencies = {} } = JSON.parse(readFileSync(join(ROOT, manifest), 'utf8')) as { dependencies?: Record<string, string> };
-      expect(Object.keys(dependencies).filter((d) => /^(fast-xml-parser|unpdf|pdfjs-dist|postal-mime)$/.test(d)), manifest).toEqual([]);
+      const parsers = Object.keys(dependencies).filter((d) => /^(fast-xml-parser|unpdf|pdfjs-dist|postal-mime|mailparser|xml2js|sax|@xmldom\/xmldom|xml-crypto)$/.test(d));
+      expect(parsers, manifest).toEqual(allowed[manifest] ?? []);
     }
   });
 });

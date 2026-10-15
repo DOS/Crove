@@ -71,6 +71,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const result = await processInboundEmail(
         { runtime: deps.runtime, store: deps.store, domain: deps.inboundDomain, extract: deps.extract },
         job.data,
+        job.retryCount,
       );
       console.log(`[inbound] message ${label}: ${result.duplicate ? 'duplicate' : `${result.fileIds.length} file(s)`}`);
     } catch (error) {

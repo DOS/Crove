@@ -2,14 +2,17 @@
 // another one. The process runs under the Node permission model with read access to the parser code only: no
 // network (Node 26 denies sockets without --allow-net; the tests check it), no file writes, no child processes,
 // no worker threads, no native addons. It gets an empty environment, a capped V8 heap, no code generation from
-// strings, and is killed at the time limit or when the caller goes away.
+// strings, and is killed at the time limit or when the caller goes away. The heap limit does not cover Buffers,
+// ArrayBuffers or wasm memory (a decompression bomb lives there), so on Linux a watchdog reads the process's
+// resident memory and kills it above maxRssMb, below the container's limit.
 // The permission model is not a boundary against code that has already escaped JavaScript, and the process runs
 // as the same user as the server; that is why the server holds no credentials either, answers are validated by
 // the worker as untrusted, and the container adds the outer limits (no egress, read-only root, no capabilities,
 // 1 vCPU, 1 GiB; see docker-compose.yml).
 import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { EXTRACT_LIMITS, zExtractResponse, type ExtractKind, type ExtractResponse } from '@crove/extract-contract';
+import { EXTRACT_LIMITS, EXTRACT_TIMING, zExtractResponse, type ExtractKind, type ExtractResponse } from '@crove/extract-contract';
 import { failure } from './parse.ts';
 
 export interface SandboxOptions {
@@ -17,14 +20,39 @@ export interface SandboxOptions {
   timeoutMs: number;
   // V8 old-space limit of the parser process.
   maxHeapMb: number;
+  // Resident memory limit of the parser process (Linux), Buffers and wasm included. Below the container's 1 GiB.
+  maxRssMb: number;
   maxOutputBytes: number;
 }
 
 export const DEFAULT_SANDBOX: SandboxOptions = {
-  timeoutMs: 30_000,
+  timeoutMs: EXTRACT_TIMING.parseTimeoutMs,
   maxHeapMb: 512,
+  maxRssMb: 768,
   maxOutputBytes: EXTRACT_LIMITS.maxResponseBytes,
 };
+
+const RSS_POLL_MS = 100;
+
+// Resident memory of a process in MB from /proc (Linux), or null where that is not available.
+export async function residentMb(pid: number): Promise<number | null> {
+  try {
+    const status = await readFile(`/proc/${pid}/status`, 'utf8');
+    const kb = /^VmRSS:\s+(\d+)\s+kB/m.exec(status)?.[1];
+    return kb === undefined ? null : Number(kb) / 1024;
+  } catch {
+    return null;
+  }
+}
+
+// How a parser process that ended without an answer from us is reported. A kill we did not send (SIGKILL, or exit
+// 137 when a shell reports it) is the kernel's OOM killer: the file needed more memory than the container has.
+export function classifyExit(code: number | null, signal: NodeJS.Signals | null, stderr: string): ExtractResponse | null {
+  if (/heap out of memory|allocation failed/i.test(stderr)) return failure('memory', 'parsing needed more memory than allowed');
+  if (signal === 'SIGKILL' || code === 137) return failure('memory', 'parser process was killed for memory');
+  if (code !== 0) return failure('internal', `parser process exited with ${signal ?? code}`);
+  return null;
+}
 
 const at = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const CHILD = at('./child.ts');
@@ -71,6 +99,7 @@ export function runSandboxed(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearInterval(watchdog);
       signal?.removeEventListener('abort', onAbort);
       resolve(answer);
     };
@@ -80,6 +109,18 @@ export function runSandboxed(
     };
 
     const timer = setTimeout(() => stop(failure('timeout', `parsing took longer than ${options.timeoutMs} ms`)), options.timeoutMs);
+    // Resident memory watchdog (Linux /proc). Where /proc is missing it stops at the first read; the container's
+    // memory limit and classifyExit still apply.
+    let polling = false;
+    const watchdog = setInterval(() => {
+      if (polling || child.pid === undefined || settled) return;
+      polling = true;
+      void residentMb(child.pid).then((mb) => {
+        polling = false;
+        if (mb === null) return clearInterval(watchdog);
+        if (mb > options.maxRssMb) stop(failure('memory', `parsing needed more than ${options.maxRssMb} MB of memory`));
+      });
+    }, RSS_POLL_MS);
     if (signal?.aborted) onAbort();
     else signal?.addEventListener('abort', onAbort, { once: true });
 
@@ -96,10 +137,8 @@ export function runSandboxed(
     child.on('error', () => finish(failure('internal', 'parser process could not start')));
     child.on('close', (code, killedBy) => {
       if (verdict) return finish(verdict);
-      if (/heap out of memory|allocation failed/i.test(err)) return finish(failure('memory', 'parsing needed more memory than allowed'));
-      // A kill we did not send, for example the container's OOM killer under load: not the file's fault, so
-      // it is answered as a service failure and the worker retries.
-      if (code !== 0) return finish(failure('internal', `parser process exited with ${killedBy ?? code}`));
+      const exit = classifyExit(code, killedBy, err);
+      if (exit) return finish(exit);
       let json: unknown;
       try {
         json = JSON.parse(Buffer.concat(out).toString('utf8'));

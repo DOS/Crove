@@ -159,7 +159,27 @@ export interface ExtractClientOptions {
   fetch?: typeof fetch;
 }
 
+// Timing shared by the service defaults and the client (plan §7.6: 60 s per call). A request can wait for every
+// queued parse ahead of it and then run its own, so the client allows for all of them plus time to send the
+// body: a queued request is never abandoned in the middle of its parse.
+export const EXTRACT_TIMING = {
+  parseTimeoutMs: 25_000,
+  concurrency: 1,
+  maxQueue: 1,
+  // Sending the body and the answer over the internal network.
+  transferSlackMs: 10_000,
+} as const;
+
+// Worst case for one call: the parses queued ahead of it, then its own.
+export function worstCaseCallMs(timing: { parseTimeoutMs: number; concurrency: number; maxQueue: number; transferSlackMs: number }): number {
+  return (Math.ceil(timing.maxQueue / timing.concurrency) + 1) * timing.parseTimeoutMs + timing.transferSlackMs;
+}
+
 export const EXTRACT_CLIENT_TIMEOUT_MS = 60_000;
+
+// A timeout or memory answer can come from load as well as from the file, so a caller may retry it, but at most
+// this many times for the same input: a hostile file must not hold the single parser slot again and again.
+export const EXTRACT_LIMIT_RETRIES = 1;
 
 async function readCapped(response: Response, max: number): Promise<string> {
   const declared = Number(response.headers.get('content-length') ?? Number.NaN);

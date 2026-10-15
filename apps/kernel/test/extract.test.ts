@@ -1,7 +1,7 @@
 // The worker side of crove-extract (External-tenant gate T12): configuration, and how an inbound email is handed
 // to the sandbox instead of being parsed here.
 import { describe, expect, it } from 'vitest';
-import { ExtractServiceError, type ExtractClient } from '@crove/extract-contract';
+import { EXTRACT_LIMIT_RETRIES, ExtractServiceError, type ExtractClient } from '@crove/extract-contract';
 import { DomainError, inboundKey, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { loadConfig } from '../src/config.ts';
 import { processInboundEmail } from '../src/inbound.ts';
@@ -50,13 +50,17 @@ describe('inbound email through crove-extract', () => {
     expect(seen).toEqual([{ kind: 'mime', bytes: raw }]);
   });
 
-  it('retries a message the sandbox ran out of time or memory on, instead of dropping it', async () => {
+  it('retries a message that hit a time or memory limit once, then drops it so it cannot hold the parser slot', async () => {
+    expect(EXTRACT_LIMIT_RETRIES).toBe(1);
     for (const code of ['timeout', 'memory'] as const) {
       const extract: ExtractClient = { extract: async () => ({ ok: false, code, message: 'limit' }) as never };
-      const error = await processInboundEmail(deps(extract), job).catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(Error);
-      // Not a DomainError: the worker drops only DomainErrors below 500.
-      expect(error).not.toBeInstanceOf(DomainError);
+      const first = await processInboundEmail(deps(extract), job, 0).catch((e: unknown) => e);
+      // Not a DomainError: the worker drops only DomainErrors below 500, so this attempt is retried.
+      expect(first).toBeInstanceOf(Error);
+      expect(first).not.toBeInstanceOf(DomainError);
+      const second = await processInboundEmail(deps(extract), job, 1).catch((e: unknown) => e);
+      expect(second).toBeInstanceOf(DomainError);
+      expect(second).toMatchObject({ code: 'UNREADABLE_MESSAGE', status: 422 });
     }
   });
 
