@@ -210,6 +210,30 @@ export const fileGet = defineQuery({
   },
 });
 
+// Sessions of a user (ADR-0028), for the revoke-device screen: the user's own sessions, or for the org owner the
+// member's sessions seen in that org only. Enforced by the definer, with the same rule as kernel.session.revoke.
+export const sessionsList = defineQuery({
+  name: 'kernel.sessions.list',
+  input: z.object({ userId: zId }),
+  access: ALL,
+  handler: async (ctx, input) => {
+    const { rows } = await sql<{
+      session_id: string;
+      status: 'active' | 'revoked';
+      first_seen_at: Date;
+      last_seen_at: Date;
+      revoked_at: Date | null;
+    }>`SELECT session_id, status, first_seen_at, last_seen_at, revoked_at FROM crove_kernel.session_list(${input.userId}::uuid)`.execute(ctx.trx);
+    return rows.map((r) => ({
+      sessionId: r.session_id,
+      status: r.status,
+      firstSeenAt: r.first_seen_at.toISOString(),
+      lastSeenAt: r.last_seen_at.toISOString(),
+      revokedAt: r.revoked_at ? r.revoked_at.toISOString() : null,
+    }));
+  },
+});
+
 export function kernelQueries(options: OrgDetailOptions) {
-  return [orgDetailQuery(options), inboxList, inboxGet, filesRecent, fileGet];
+  return [orgDetailQuery(options), inboxList, inboxGet, filesRecent, fileGet, sessionsList];
 }

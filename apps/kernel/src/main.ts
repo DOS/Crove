@@ -1,26 +1,33 @@
 // Crove kernel entry point. One image, several roles:
-//   migrate  apply SQL migrations, set role passwords, create the job schema
-//   api      HTTP API + web UI
+//   migrate      apply SQL migrations, set role passwords, create the job schema
+//   auth-grants  after Supabase Auth has started: let the session check read auth.sessions and auth.users
+//   api          HTTP API + web UI
 //   worker   outbox relay + jobs
 //   all      api + worker in one process (default for self-host)
 import { serve } from '@hono/node-server';
 import { InvoiceExtractor } from '@crove/agent';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool } from '@crove/db';
-import { migrate, setRolePasswords } from '@crove/db/migrate';
+import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
 import { LocalDiskStore, Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from './auth.ts';
 import { loadConfig, type Config } from './config.ts';
 import { createHttpApp } from './http.ts';
+import { createSessionRevoker, createSessionStatusSource } from './sessions.ts';
 import { migrateJobs, startWorker } from './worker.ts';
 
-type Role = 'migrate' | 'api' | 'worker' | 'all';
+type Role = 'migrate' | 'auth-grants' | 'api' | 'worker' | 'all';
+const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all'];
 
 function buildRuntime(config: Config, connectionString: string, applicationName: string) {
   const pool = createPool({ connectionString, applicationName, max: 10 });
   const db = createDb(pool);
-  const runtime = new Runtime(db).register({
+  const runtime = new Runtime(db, {
+    // Every user request is checked against its session (ADR-0028); the config never resolves to "no check".
+    sessions: createSessionStatusSource(config.AUTH_SESSION_CHECK),
+    stepUp: config.AUTH_STEP_UP,
+  }).register({
     commands: [...kernelCommands, ...financeCommands],
     queries: [...kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null }), ...financeQueries],
   });
@@ -50,11 +57,19 @@ async function runMigrate(config: Config) {
   console.log(`[migrate] done, ${applied.length} new migration(s)`);
 }
 
+async function runAuthGrants(config: Config) {
+  const adminUrl = config.ADMIN_DATABASE_URL;
+  if (!adminUrl) throw new Error('ADMIN_DATABASE_URL is required for auth-grants');
+  await applyAuthGrants({ adminUrl, log: (m) => console.log(`[auth-grants] ${m}`) });
+}
+
 async function main() {
   const role = (process.argv[2] ?? 'all') as Role;
-  if (!['migrate', 'api', 'worker', 'all'].includes(role)) throw new Error(`unknown role ${role}`);
+  if (!ROLES.includes(role)) throw new Error(`unknown role ${role}`);
   const config = loadConfig();
   if (role === 'migrate') return runMigrate(config);
+  if (role === 'auth-grants') return runAuthGrants(config);
+  console.log(`[auth] session check: ${config.AUTH_SESSION_CHECK}, step-up for R3: ${config.AUTH_STEP_UP}`);
   // The worker alone enters system context, so it never shares the API's login role (External-tenant gate T5).
   const workerUrl = config.WORKER_DATABASE_URL;
   if ((role === 'worker' || role === 'all') && !workerUrl) {
@@ -90,6 +105,7 @@ async function main() {
       store,
       extractor: buildExtractor(config),
       inboundDomain: config.INBOUND_DOMAIN ?? null,
+      revoker: createSessionRevoker(config),
     });
     stops.push(async () => {
       await stop();

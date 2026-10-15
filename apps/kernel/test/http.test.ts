@@ -12,7 +12,7 @@ import { createHttpApp } from '../src/http.ts';
 const SECRET = 'x'.repeat(32);
 
 describe('configuration guards', () => {
-  const base = { DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: SECRET };
+  const base = { DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: 'crove-auth' };
 
   it('refuses a short JWT secret', () => {
     expect(() => loadConfig({ ...base, AUTH_JWT_SECRET: 'short' })).toThrow(/32 characters/);
@@ -24,6 +24,27 @@ describe('configuration guards', () => {
     expect(() => loadConfig({ ...local, PUBLIC_URL: 'https://books.example.com' })).toThrow(/sample value/);
     expect(() => loadConfig({ ...base, AUTH_AUTOCONFIRM: 'true', PUBLIC_URL: 'https://books.example.com' })).toThrow(/AUTH_AUTOCONFIRM/);
     expect(() => loadConfig({ ...base, PUBLIC_URL: 'https://books.example.com' })).not.toThrow();
+  });
+
+  // ADR-0028 section 1 and 3.
+  it('refuses to boot without an issuer', () => {
+    expect(() => loadConfig({ ...base, AUTH_ISSUER: undefined })).toThrow(/AUTH_ISSUER/);
+    expect(() => loadConfig({ ...base, AUTH_ISSUER: '  ' })).toThrow(/AUTH_ISSUER/);
+  });
+
+  it('never resolves the session check to "no check" by default', () => {
+    expect(loadConfig({ ...base, AUTH_UPSTREAM_URL: 'http://auth:9999' }).AUTH_SESSION_CHECK).toBe('db');
+    expect(loadConfig(base).AUTH_SESSION_CHECK).toBe('events');
+    expect(loadConfig({ ...base, AUTH_SESSION_CHECK: 'off' }).AUTH_SESSION_CHECK).toBe('off');
+    expect(() => loadConfig({ ...base, AUTH_SESSION_CHECK: 'maybe' })).toThrow(/AUTH_SESSION_CHECK/);
+  });
+
+  it('accepts the session check and MFA step-up turned off on localhost only', () => {
+    const publicUrl = { ...base, PUBLIC_URL: 'https://books.example.com' };
+    expect(() => loadConfig({ ...publicUrl, AUTH_SESSION_CHECK: 'off' })).toThrow(/AUTH_SESSION_CHECK=off/);
+    expect(() => loadConfig({ ...publicUrl, AUTH_STEP_UP: 'off' })).toThrow(/AUTH_STEP_UP=off/);
+    expect(loadConfig(publicUrl).AUTH_STEP_UP).toBe('required');
+    expect(loadConfig({ ...base, AUTH_STEP_UP: 'off' }).AUTH_STEP_UP).toBe('off');
   });
 });
 
@@ -43,6 +64,7 @@ describe('auth proxy', () => {
     const config = loadConfig({
       DATABASE_URL: 'postgres://localhost/x',
       AUTH_JWT_SECRET: SECRET,
+      AUTH_ISSUER: 'crove-auth',
       AUTH_UPSTREAM_URL: `http://127.0.0.1:${port}`,
       WEB_DIST: '/nonexistent',
     });
@@ -92,6 +114,7 @@ describe('inbound email on the API', () => {
     config: loadConfig({
       DATABASE_URL: 'postgres://localhost/x',
       AUTH_JWT_SECRET: SECRET,
+      AUTH_ISSUER: 'crove-auth',
       INBOUND_DOMAIN: 'in.test',
       INBOUND_SECRET,
       WEB_DIST: '/nonexistent',

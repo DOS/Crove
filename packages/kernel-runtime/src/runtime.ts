@@ -10,13 +10,16 @@ import { sha256Hex } from './storage.ts';
 export type Risk = 'R0' | 'R1' | 'R2' | 'R3';
 
 // Authenticator assurance level of the user's access token: aal2 means the session passed MFA.
-// Carried on every user actor so R3 approval can require aal2 (plan §4.7 P11); not enforced yet.
 export type Aal = 'aal1' | 'aal2';
 
 export interface UserActor {
   type: 'user';
   userId: string;
   aal: Aal;
+  // Supabase Auth session of the access token (`session_id`). Required when the runtime checks sessions.
+  sessionId?: string;
+  // Unix seconds of the newest second-factor `amr` entry, or null. R3 needs it within STEP_UP_MAX_AGE_S.
+  mfaAt?: number | null;
 }
 
 export type Actor = UserActor | { type: 'system'; component: string };
@@ -59,6 +62,33 @@ export interface CommandContext extends QueryContext {
   run<O>(name: string, input: unknown, options?: { proposalId?: string }): Promise<O>;
 }
 
+// Status of the session behind a user actor (ADR-0028), checked in the request transaction before the
+// tenant context is entered (orgId: that org, where an owner may have revoked the session for this member), and
+// before org-less work (orgId: null). Throws (or raises in SQL) 401, 403 or 503; never passes a session it cannot
+// vouch for.
+export interface SessionStatusSource {
+  readonly mode: 'db' | 'events' | 'off';
+  check(trx: Transaction<Database>, actor: UserActor & { sessionId: string }, orgId: string | null): Promise<void>;
+}
+
+export interface RuntimeOptions {
+  // null: no session check (tests and tools). The server always passes one (apps/kernel main.ts).
+  sessions?: SessionStatusSource | null;
+  // R3 commands run by a user need aal2 and a second factor in the last 5 minutes (policy P11). Default required.
+  stepUp?: 'required' | 'off';
+}
+
+// Policy P11 (ADR-0028 section 5): a second factor used within the last 5 minutes.
+export const STEP_UP_MAX_AGE_S = 300;
+// Clock tolerance for an MFA timestamp from the future, as for token verification.
+const CLOCK_TOLERANCE_S = 30;
+
+export function hasFreshMfa(actor: UserActor, nowMs: number = Date.now()): boolean {
+  if (actor.aal !== 'aal2' || typeof actor.mfaAt !== 'number' || !Number.isFinite(actor.mfaAt)) return false;
+  const now = nowMs / 1000;
+  return actor.mfaAt <= now + CLOCK_TOLERANCE_S && now - actor.mfaAt <= STEP_UP_MAX_AGE_S;
+}
+
 export function defineCommand<I, O>(def: CommandDef<I, O>): CommandDef<I, O> {
   return def;
 }
@@ -98,9 +128,13 @@ export class Runtime {
   private readonly commands = new Map<string, CommandDef<unknown, unknown>>();
   private readonly queries = new Map<string, QueryDef<unknown, unknown>>();
   readonly db: Db;
+  private readonly sessions: SessionStatusSource | null;
+  private readonly stepUp: 'required' | 'off';
 
-  constructor(db: Db) {
+  constructor(db: Db, options: RuntimeOptions = {}) {
     this.db = db;
+    this.sessions = options.sessions ?? null;
+    this.stepUp = options.stepUp ?? 'required';
   }
 
   register(defs: { commands?: CommandDef<any, any>[]; queries?: QueryDef<any, any>[] }): this {
@@ -115,7 +149,21 @@ export class Runtime {
     return this;
   }
 
+  // The session status check, in the caller's transaction. Fails closed: a user actor without a session id is
+  // refused whenever the runtime checks sessions.
+  private async checkSession(trx: Transaction<Database>, actor: Actor, orgId: string | null): Promise<void> {
+    if (actor.type !== 'user' || !this.sessions) return;
+    const sessionId = actor.sessionId;
+    if (!sessionId) throw new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nhập không hợp lệ');
+    await this.sessions.check(trx, { ...actor, sessionId }, orgId);
+  }
+
   private async enter(trx: Transaction<Database>, actor: Actor, orgId: string): Promise<MemberRole | null> {
+    await this.checkSession(trx, actor, orgId);
+    return this.enterContext(trx, actor, orgId);
+  }
+
+  private async enterContext(trx: Transaction<Database>, actor: Actor, orgId: string): Promise<MemberRole | null> {
     if (actor.type === 'system') {
       await sql`SELECT crove_kernel.enter_system_context(${orgId}::uuid)`.execute(trx);
       return null;
@@ -135,6 +183,19 @@ export class Runtime {
     }
     if (actor.type === 'system') return;
     if (!role || !access.includes(role)) throw new DomainError('FORBIDDEN', 403, 'Vai trò của bạn không được thực hiện việc này');
+  }
+
+  // Policy P11: R3 run by a user needs aal2 with a second factor in the last 5 minutes. Checked after the role,
+  // so a user who may not run the command at all is told so instead of being sent to an MFA challenge.
+  private requireStepUp(def: CommandDef<unknown, unknown>, actor: Actor): void {
+    if (def.risk !== 'R3' || actor.type !== 'user' || this.stepUp === 'off') return;
+    if (!hasFreshMfa(actor)) {
+      throw new DomainError('STEP_UP_REQUIRED', 403, 'Cần xác thực hai lớp (MFA) trong 5 phút gần nhất để thực hiện việc này');
+    }
+  }
+
+  private sessionDetail(actor: UserActor): Record<string, unknown> {
+    return { aal: actor.aal, sessionId: actor.sessionId ?? null, mfaAt: actor.mfaAt ?? null };
   }
 
   private async writeAudit(
@@ -212,10 +273,17 @@ export class Runtime {
         const parsed = parseInput(nested.input, nestedInput);
         const proposalId = options?.proposalId ?? base.proposalId;
         this.authorize(nested.access, base.actor, base.role, proposalId !== null);
+        this.requireStepUp(nested, base.actor);
         return this.runInTx<R>(trx, nested, parsed, { ...base, proposalId });
       },
     };
     const output = (await def.handler(ctx, input)) as O;
+    // R3 rows record the assurance used: aal, session_id and the MFA timestamp (ADR-0028 section 5).
+    const assurance = def.risk === 'R3' && base.actor.type === 'user' ? this.sessionDetail(base.actor) : undefined;
+    const detail =
+      auditDetail || assurance
+        ? { ...(base.actor.type === 'system' ? { component: base.actor.component } : {}), ...assurance, ...auditDetail }
+        : undefined;
     await this.writeAudit(trx, {
       orgId: base.orgId,
       actor: base.actor,
@@ -225,9 +293,7 @@ export class Runtime {
       inputSha256: sha256Hex(stableStringify(input)),
       target: def.target?.(input) ?? null,
       proposalId: base.proposalId,
-      ...(auditDetail
-        ? { detail: { ...(base.actor.type === 'system' ? { component: base.actor.component } : {}), ...auditDetail } }
-        : {}),
+      ...(detail ? { detail } : {}),
     });
     return output;
   }
@@ -244,6 +310,7 @@ export class Runtime {
         role = await this.enter(trx, options.actor, options.orgId);
         entered = true;
         this.authorize(def.access, options.actor, role, false);
+        this.requireStepUp(def, options.actor);
 
         if (options.idempotencyKey) {
           const key = actorKey(options.actor);
@@ -296,8 +363,12 @@ export class Runtime {
               inputSha256,
               target: def.target?.(input) ?? null,
               proposalId: null,
-              // The policy rule that refused, when the error names one (for example P10 or P12).
-              detail: { code: domain.code, ...(typeof domain.details?.rule === 'string' ? { rule: domain.details.rule } : {}) },
+              // The policy rule that refused, when the error names one (for example P10 or P12), and the session.
+              detail: {
+                code: domain.code,
+                ...(typeof domain.details?.rule === 'string' ? { rule: domain.details.rule } : {}),
+                ...(options.actor.type === 'user' ? this.sessionDetail(options.actor) : {}),
+              },
             });
           })
           .catch(() => {});
@@ -313,8 +384,10 @@ export class Runtime {
     const input = parseInput(def.input, rawInput);
     try {
       return await this.db.transaction().execute(async (trx) => {
+        // The session check may record a first-seen session, so it runs before the transaction turns read-only.
+        await this.checkSession(trx, options.actor, options.orgId);
         await sql`SET TRANSACTION READ ONLY`.execute(trx);
-        const role = await this.enter(trx, options.actor, options.orgId);
+        const role = await this.enterContext(trx, options.actor, options.orgId);
         if (def.access === 'system') {
           if (options.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Không có quyền thực hiện');
         } else if (options.actor.type === 'user' && (!role || !def.access.includes(role))) {
@@ -329,7 +402,22 @@ export class Runtime {
     }
   }
 
-  // Org-less work (sign-in bookkeeping, listing orgs, creating an org). Only definer functions are callable.
+  // Org-less work for a signed-in user (listing orgs, creating an org): one transaction that starts with the
+  // session status check. Only definer functions are callable.
+  async forUser<O>(actor: UserActor, fn: (db: Db) => Promise<O>): Promise<O> {
+    try {
+      return await this.db.transaction().execute(async (trx) => {
+        await this.checkSession(trx, actor, null);
+        return fn(trx);
+      });
+    } catch (error) {
+      const domain = toDomainError(error);
+      if (domain.code === 'INTERNAL') console.error('[forUser]', error);
+      throw domain;
+    }
+  }
+
+  // Org-less machinery work without a user (inbound email). User work goes through forUser().
   async orgless<O>(fn: (db: Db) => Promise<O>): Promise<O> {
     try {
       return await fn(this.db);

@@ -1,6 +1,6 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zAccountCode, zId, zPurchaseProposal, zRole } from '@crove/kernel-contract';
+import { zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
 import { DomainError, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors, type ActorRef } from './approval.ts';
 
@@ -17,10 +17,11 @@ const APPROVERS = ADMINS;
 
 const zLineAccounts = z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).max(1000);
 
+// Membership and role changes are R3 (plan §4.7): they need a fresh second factor (P11, ADR-0028).
 export const addMember = defineCommand({
   name: 'kernel.member.add',
   input: z.object({ email: z.email(), role: zRole.exclude(['owner']) }),
-  risk: 'R1',
+  risk: 'R3',
   access: ADMINS,
   handler: async (ctx, input) => {
     // Only owners may grant or change admin rights; nobody can change an owner through this command.
@@ -350,4 +351,36 @@ export const rejectProposal = defineCommand({
   },
 });
 
-export const kernelCommands = [addMember, ingestFile, receiveInbound, recordExtraction, editProposal, approveProposal, rejectProposal];
+// Revokes a session or every session of a user (ADR-0028 section 4), effective on the next request with any
+// token of that session, refreshed or not. Enforced by the definer:
+// - the user themself revokes globally, and the worker then signs the session out in Supabase Auth
+//   (kernel.session.revoked; best effort and retried, correctness does not depend on it);
+// - the org owner revokes a member's session in that org only: no global record, no upstream sign-out, because
+//   sessions are global and membership needs no consent from the member;
+// - nobody else, admins included.
+export const revokeSession = defineCommand({
+  name: 'kernel.session.revoke',
+  input: zSessionRevoke,
+  risk: 'R1',
+  access: ['owner', 'admin', 'member', 'viewer'],
+  target: (input) => ({ type: 'kernel.user', id: input.userId }),
+  handler: async (ctx, input) => {
+    const { rows } = await sql<{ revoked_session: string; auth_subject: string | null; sign_out: 'local' | 'global' | null }>`
+      SELECT revoked_session, auth_subject, sign_out
+      FROM crove_kernel.session_revoke(${input.userId}::uuid, ${input.sessionId ?? null}::uuid, ${input.reason ?? null})`.execute(ctx.trx);
+    for (const row of rows) {
+      if (!row.sign_out || !row.auth_subject) continue;
+      await ctx.emit('kernel.session.revoked', {
+        userId: input.userId,
+        subject: row.auth_subject,
+        sessionId: row.revoked_session,
+        scope: row.sign_out,
+      });
+    }
+    const scope = input.all ? 'tất cả phiên đăng nhập' : 'một phiên đăng nhập';
+    await ctx.activity('kernel.user', input.userId, 'session.revoked', `Thu hồi ${scope} (${rows.length})`);
+    return { revoked: rows.map((r) => r.revoked_session) };
+  },
+});
+
+export const kernelCommands = [addMember, ingestFile, receiveInbound, recordExtraction, editProposal, approveProposal, rejectProposal, revokeSession];

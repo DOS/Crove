@@ -7,11 +7,13 @@ import { DomainError, inboundKey, type BlobStore, type Runtime } from '@crove/ke
 import type { InvoiceExtractor } from '@crove/agent';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
+import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 
 export const JOB_SCHEMA = 'crove_jobs';
-export const QUEUES = { extract: 'finance-file-extract', inbound: 'kernel-inbound-email' } as const;
+export const QUEUES = { extract: 'finance-file-extract', inbound: 'kernel-inbound-email', signOut: 'kernel-session-signout' } as const;
 const EXTRACT_RETRY_LIMIT = 3;
 const INBOUND_RETRY_LIMIT = 3;
+const SIGN_OUT_RETRY_LIMIT = 5;
 
 interface InboundRow {
   seq: string;
@@ -36,6 +38,8 @@ export interface WorkerDeps {
   store: BlobStore;
   extractor: InvoiceExtractor | null;
   inboundDomain: string | null;
+  // Supabase Auth sign-out after a Crove-side revoke (ADR-0028 section 4); null keeps revocation Crove-side only.
+  revoker?: SessionRevoker | null;
 }
 
 export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>> {
@@ -74,6 +78,24 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await deps.store.delete(inboundKey(job.data.blobId));
   });
 
+  // Best effort: the revoked record already blocks the session in Crove. Retried with backoff; the last failure
+  // is logged as an error for the operator, because the session's refresh tokens then live on upstream.
+  await boss.work<SignOutTarget>(QUEUES.signOut, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const label = job.data.sessionId.slice(0, 8);
+    if (!deps.revoker) {
+      console.warn(`[signout] session ${label}: no Supabase Auth sign-out configured; revoked in Crove only`);
+      return;
+    }
+    try {
+      await deps.revoker.signOut(job.data);
+      console.log(`[signout] session ${label} signed out in Supabase Auth`);
+    } catch (error) {
+      if (job.retryCount < SIGN_OUT_RETRY_LIMIT) throw error;
+      console.error(`[signout] ALERT session ${label}: Supabase Auth sign-out failed after ${job.retryCount + 1} attempts; revoked in Crove only`, error);
+    }
+  });
+
   let running = false;
   let stopped = false;
   const relay = async () => {
@@ -85,16 +107,30 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           const { rows } = await sql<OutboxRow>`SELECT * FROM crove_kernel.outbox_claim(100)`.execute(trx);
           // A failed send rolls back the claim; singletonKey makes the retry idempotent.
           await Promise.all(
-            rows
-              .filter((row) => row.type === 'kernel.file.ingested')
-              .map((row) => {
+            rows.map((row) => {
+              if (row.type === 'kernel.file.ingested') {
                 const fileId = String(row.payload.fileId);
                 return boss.send(
                   QUEUES.extract,
                   { orgId: row.org_id, fileId },
                   { singletonKey: `${row.org_id}:${fileId}`, retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
                 );
-              }),
+              }
+              if (row.type === 'kernel.session.revoked') {
+                const target: SignOutTarget = {
+                  subject: String(row.payload.subject),
+                  sessionId: String(row.payload.sessionId),
+                  scope: row.payload.scope === 'global' ? 'global' : 'local',
+                };
+                return boss.send(QUEUES.signOut, target, {
+                  singletonKey: `${target.sessionId}:${target.scope}`,
+                  retryLimit: SIGN_OUT_RETRY_LIMIT,
+                  retryDelay: 10,
+                  retryBackoff: true,
+                });
+              }
+              return null;
+            }),
           );
           return rows.length;
         });

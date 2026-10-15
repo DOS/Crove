@@ -34,6 +34,7 @@ The defaults are for local use. Before anyone else can reach your instance, copy
 | AI for PDFs and photos | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` (any OpenAI-compatible endpoint: OpenAI, Ollama, vLLM, ...) |
 | Inbound email | `INBOUND_DOMAIN`, `INBOUND_SECRET`; your mail worker POSTs raw MIME to `/api/inbound/email` |
 | Email delivery | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `AUTH_AUTOCONFIRM=false` |
+| Sessions and MFA | `AUTH_ISSUER` (required), `AUTH_SESSION_CHECK`, `AUTH_STEP_UP`; without Compose, run the image's `auth-grants` role after Supabase Auth's first start and after each Supabase Auth upgrade |
 
 See [`.env.example`](./.env.example) for the full list.
 
@@ -43,7 +44,7 @@ Node 26 and pnpm (any version; the pinned one is downloaded automatically).
 
 ```bash
 pnpm install
-docker compose up -d db auth mailpit   # or point .env at your own PostgreSQL 17
+docker compose up -d db auth auth-grants mailpit   # or point .env at your own PostgreSQL 17
 pnpm db:migrate
 pnpm dev                                # kernel on :8080, web app on :5173
 pnpm test                               # unit tests

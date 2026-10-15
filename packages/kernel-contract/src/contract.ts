@@ -16,6 +16,8 @@ import {
   zProposalStatus,
   zPurchaseDocument,
   zRole,
+  zSession,
+  zSessionRevoke,
 } from './schemas.ts';
 
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
@@ -29,6 +31,11 @@ export const contract = {
     addMember: oc
       .input(z.object({ email: z.email(), role: zRole.exclude(['owner']) }))
       .output(z.object({ userId: zId })),
+  },
+  // Sessions (devices) of a member of the org in the header. API only; the screen is a follow-up.
+  sessions: {
+    list: oc.input(z.object({ userId: zId })).output(z.array(zSession)),
+    revoke: oc.input(zSessionRevoke).output(z.object({ revoked: z.array(zId) })),
   },
   inbox: {
     list: oc.input(z.object({ status: zProposalStatus.optional() })).output(z.array(zInboxItem)),

@@ -25,8 +25,17 @@ export function toDomainError(error: unknown): DomainError {
   if (error instanceof DomainError) return error;
   const pg = error as PgLikeError;
   switch (pg?.code) {
+    // Raised by crove_kernel.session_check (ADR-0028): signed out, revoked, expired upstream, banned or deleted.
+    case '28000':
+      return new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nhập đã hết hiệu lực, hãy đăng nhập lại');
+    case '55000':
+      if (pg.message?.includes('AUTH_GRANTS_MISSING')) {
+        return new DomainError('AUTH_NOT_READY', 503, 'Hệ thống đăng nhập chưa sẵn sàng (bước auth-grants chưa chạy)');
+      }
+      return new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
     case '42501':
       if (pg.message?.includes('NOT_A_MEMBER')) return new DomainError('NOT_A_MEMBER', 403, 'Bạn không thuộc tổ chức này');
+      if (pg.message?.includes('USER_DISABLED')) return new DomainError('USER_DISABLED', 403, 'Tài khoản của bạn đã bị khóa');
       return new DomainError('FORBIDDEN', 403, 'Không có quyền thực hiện');
     case '23505':
       return new DomainError('CONFLICT', 409, 'Bản ghi đã tồn tại', pg.constraint ? { constraint: pg.constraint } : undefined);
