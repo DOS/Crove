@@ -5,11 +5,13 @@
 // - Money is exact. A numeric cell is used only when the double Excel stores shows the same decimal
 //   (at most 15 significant digits, and the shortest double string equals the amount); otherwise the
 //   amount is written as a text cell holding the exact decimal string. See `moneyCell`.
-// - No text cell is read as a formula. Every text value that starts with a formula trigger is prefixed
-//   with a single quote (OWASP "CSV Injection"), and text columns carry the Text number format. See
-//   `safeText`.
+// - No text cell is read as a formula. ExcelJS writes a string as a string cell (only `{ formula }`
+//   values become formulas), and text columns carry the Text number format, so a value such as
+//   `=HYPERLINK(...)` stays inert text. No apostrophe is added: in xlsx it would become part of the
+//   data (a vendor named `-ABC` or a phone `+84...` would read back as `'-ABC`). See `textCell`.
 //
-// There is no CSV export. If one is added, it must use `safeText` and `moneyCell` (or the same rules).
+// There is no CSV export. CSV has no cell types, so one must prefix trigger characters with
+// `csvSafeText` (OWASP "CSV Injection") and use `moneyCell` (or the same rules).
 import ExcelJS from 'exceljs';
 import { Decimal, money, toMoney } from '@crove/l10n-vn';
 import type { JournalEntryView } from './queries.ts';
@@ -17,8 +19,8 @@ import type { JournalEntryView } from './queries.ts';
 // Excel keeps 15 significant digits of a number; anything longer is silently changed on entry.
 const EXCEL_SIGNIFICANT_DIGITS = 15;
 
-// OWASP CSV Injection: cells starting with these characters may be interpreted as formulas.
-const FORMULA_TRIGGERS = new Set(['=', '+', '-', '@', '\t', '\r']);
+// OWASP CSV Injection: in CSV, cells starting with these characters may be interpreted as formulas.
+const FORMULA_TRIGGERS = new Set(['=', '+', '-', '@', '\t', '\r', '\n']);
 
 export type MoneyCell =
   | { kind: 'number'; value: number; numFmt: string }
@@ -43,10 +45,15 @@ export function moneyCell(amount: string): MoneyCell {
   return { kind: 'text', value: canonical };
 }
 
-/** Neutralizes spreadsheet formula injection in a user- or vendor-controlled text value. */
-export function safeText(value: string | null | undefined): string {
+/** CSV only: neutralizes formula injection by prefixing a single quote to trigger-led values. */
+export function csvSafeText(value: string | null | undefined): string {
   const text = value ?? '';
   return text.length > 0 && FORMULA_TRIGGERS.has(text.charAt(0)) ? `'${text}` : text;
+}
+
+/** xlsx: the value as a plain string; a string cell with the Text format is never evaluated. */
+export function textCell(value: string | null | undefined): string {
+  return value ?? '';
 }
 
 const TEXT_FORMAT = '@';
@@ -84,15 +91,15 @@ export async function buildJournalWorkbook(entries: JournalEntryView[], orgName:
     for (const pair of pairs) {
       const amount = moneyCell(pair.amount);
       const row = sheet.addRow({
-        entryDate: safeText(entry.entryDate),
-        invoiceDate: safeText(entry.document?.issueDate),
-        series: safeText(entry.document?.series),
-        number: safeText(entry.document?.number),
-        taxCode: safeText(entry.document?.partyTaxCode),
-        partyName: safeText(entry.document?.partyName),
-        memo: safeText(entry.description),
-        debitAccount: safeText(pair.debitAccount),
-        creditAccount: safeText(pair.creditAccount),
+        entryDate: textCell(entry.entryDate),
+        invoiceDate: textCell(entry.document?.issueDate),
+        series: textCell(entry.document?.series),
+        number: textCell(entry.document?.number),
+        taxCode: textCell(entry.document?.partyTaxCode),
+        partyName: textCell(entry.document?.partyName),
+        memo: textCell(entry.description),
+        debitAccount: textCell(pair.debitAccount),
+        creditAccount: textCell(pair.creditAccount),
         amount: amount.value,
       });
       for (const key of textKeys) row.getCell(key).numFmt = TEXT_FORMAT;

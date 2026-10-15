@@ -1,7 +1,7 @@
 import ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
 import { Decimal, type DecimalValue } from '@crove/l10n-vn';
-import { buildJournalWorkbook, moneyCell, safeText } from '../src/export.ts';
+import { buildJournalWorkbook, csvSafeText, moneyCell } from '../src/export.ts';
 import type { JournalEntryView } from '../src/queries.ts';
 
 const AMOUNT_COLUMN = 10;
@@ -54,20 +54,24 @@ describe('moneyCell', () => {
     expect(moneyCell('1234567890123456')).toEqual({ kind: 'text', value: '1234567890123456' });
     expect(moneyCell('-1234567890123456.7891')).toEqual({ kind: 'text', value: '-1234567890123456.7891' });
   });
+
+  it('writes every zero form as numeric 0', () => {
+    for (const zero of ['0', '0.0000', '-0', '-0.0000']) expect(moneyCell(zero)).toEqual({ kind: 'number', value: 0, numFmt: '#,##0' });
+  });
 });
 
-describe('safeText', () => {
+describe('csvSafeText', () => {
   it('prefixes values that start with a formula trigger', () => {
-    for (const payload of ['=1+1', '+SUM(A1)', '-2+3', '@SUM(A1:A2)', '\t=1', '\r=1', '=HYPERLINK("http://x","y")']) {
-      expect(safeText(payload)).toBe(`'${payload}`);
+    for (const payload of ['=1+1', '+SUM(A1)', '-2+3', '@SUM(A1:A2)', '\t=1', '\r=1', '\n=1', '=HYPERLINK("http://x","y")']) {
+      expect(csvSafeText(payload)).toBe(`'${payload}`);
     }
   });
   it('leaves normal values unchanged', () => {
     for (const value of ['Công ty TNHH ABC', '0101234565-001', '2026-10-01', 'a=b', ' =1', '']) {
-      expect(safeText(value)).toBe(value);
+      expect(csvSafeText(value)).toBe(value);
     }
-    expect(safeText(null)).toBe('');
-    expect(safeText(undefined)).toBe('');
+    expect(csvSafeText(null)).toBe('');
+    expect(csvSafeText(undefined)).toBe('');
   });
 });
 
@@ -101,7 +105,7 @@ describe('buildJournalWorkbook', () => {
     expect(cell.numFmt).toBe('#,##0.00');
   });
 
-  it('neutralizes formula payloads in descriptions, party names and invoice numbers', async () => {
+  it('keeps formula payloads as inert text, unchanged, in descriptions, party names and invoice numbers', async () => {
     const hostile = entry('h', '1000', {
       description: '=HYPERLINK("http://evil.example","click")',
       document: { series: '+1C26', number: '@123', issueDate: '2026-09-30', partyName: '-2+3+cmd|"/C calc"!A0', partyTaxCode: '\t=1' },
@@ -111,11 +115,12 @@ describe('buildJournalWorkbook', () => {
     const texts = [3, 4, 5, 6, 7].map((c) => row.getCell(c));
     for (const cell of texts) {
       expect(cell.type).toBe(ExcelJS.ValueType.String);
-      expect(String(cell.value).startsWith("'")).toBe(true);
       expect(cell.formula).toBeUndefined();
+      expect(cell.numFmt).toBe('@');
     }
-    expect(row.getCell(7).value).toBe(`'=HYPERLINK("http://evil.example","click")`);
-    expect(row.getCell(6).value).toBe(`'-2+3+cmd|"/C calc"!A0`);
+    expect(row.getCell(7).value).toBe('=HYPERLINK("http://evil.example","click")');
+    expect(row.getCell(6).value).toBe('-2+3+cmd|"/C calc"!A0');
+    expect(row.getCell(3).value).toBe('+1C26');
   });
 
   it('leaves normal values unchanged', async () => {
