@@ -3,6 +3,8 @@
 // structural check and a read, insert, update and delete probe for each runtime actor, each probe in its own
 // transaction as the real login roles (and as the NOLOGIN definer owner the ledger writes run as), never as a
 // superuser. A new table with org_id fails here until it has RLS in the expected shape and a row factory below.
+// Scope: tables found by an org_id column. Global tables without org_id (user_account, auth_session) and a tenant
+// column under another name are not covered; AGENTS.md requires org_id on every tenant table.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -127,7 +129,10 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   'crove_finance.journal_line': {
     // A line can only join an entry created in the same transaction. The BEFORE INSERT trigger that checks this
-    // reads the entry through RLS, so for another org's entry it refuses (42501) before the policy check runs.
+    // reads the entry through RLS, so for another org's entry it refuses (42501) before the policy check runs: no
+    // actor can see an org B entry, so this probe can never reach the WITH CHECK of journal_line. The behavioral
+    // probe therefore rests on journal_entry's RLS, and the structural check (exactly tenant_isolation) covers the
+    // WITH CHECK of journal_line itself.
     insertDenied: /row-level security policy|is already posted/,
     make: (o) => {
       const entry = randomUUID();
@@ -481,6 +486,18 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
         // TRUNCATE ignores RLS; REFERENCES and TRIGGER let a role probe or intercept rows outside it.
         expect(grants.filter((g) => !['SELECT', 'INSERT', 'UPDATE', 'DELETE'].includes(g.op)), `privileges on ${table} that RLS does not govern`).toEqual([]);
         expect(grants.filter((g) => g.bypass), `roles with BYPASSRLS and privileges on ${table}`).toEqual([]);
+        // Column-level grants are invisible to has_table_privilege, so the probes below would not expect them.
+        const { rows: columnGrants } = await admin.query<{ role: string; op: string }>(
+          `SELECT r.rolname AS role, p AS op
+           FROM pg_catalog.pg_roles r, pg_catalog.unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) p
+           WHERE NOT r.rolsuper AND r.rolname NOT LIKE 'pg\\_%'
+             AND NOT pg_catalog.pg_has_role(r.oid, (SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid = $1::regclass), 'MEMBER')
+             AND pg_catalog.has_any_column_privilege(r.oid, $1::regclass, p)
+             AND NOT pg_catalog.has_table_privilege(r.oid, $1::regclass, p)
+           ORDER BY 1, 2`,
+          [table],
+        );
+        expect(columnGrants, `column-level privileges on ${table}: grant on the table instead, so the matrix probes them`).toEqual([]);
 
         const { rows: policies } = await admin.query<{ name: string; permissive: boolean; cmd: string; roles: string[]; qual: string | null; check: string | null }>(
           `SELECT p.polname AS name, p.polpermissive AS permissive, p.polcmd::text AS cmd,
