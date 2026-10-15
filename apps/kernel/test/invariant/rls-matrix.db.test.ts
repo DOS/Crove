@@ -32,7 +32,7 @@ const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.inboun
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>();
+const PENDING_TABLES = new Set<string>(['crove_finance.purchase_document_void']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -180,6 +180,33 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => {
       const entry = randomUUID();
       return { setup: [journalEntry(o.id, entry)], row: balancingLine(o.id, entry, 1, 'debit').values, complete: [balancingLine(o.id, entry, 2, 'credit')] };
+    },
+  },
+  // Voids of purchase documents (#165): a void names the reversal of its document's journal entry, which only the
+  // posting definer writes, so the own-org insert control cannot build its setup as a login role. Seeding (as the
+  // database owner) inserts a document, its entry, the entry's reversal, the void, then the mirrored lines.
+  'crove_finance.purchase_document_void': {
+    noInsertControl: 'its setup needs a journal entry and its reversal, which only the posting definer writes',
+    make: (o) => {
+      const document = randomUUID();
+      const entry = randomUUID();
+      const reversal = randomUUID();
+      const line = (entryId: string, n: number, account: string, debit: string, credit: string): Row => ({
+        table: 'crove_finance.journal_line',
+        values: { org_id: o.id, entry_id: entryId, line_no: n, account_code: account, debit, credit },
+      });
+      return {
+        setup: [
+          {
+            table: 'crove_finance.purchase_document',
+            values: { org_id: o.id, id: document, party_id: o.party, invoice_number: tag(), invoice_date: '2026-10-01', subtotal: '100', vat_amount: '10', total: '110' },
+          },
+          { table: 'crove_finance.journal_entry', values: { ...journalEntry(o.id, entry).values, source_type: 'finance.purchase_document', source_id: document } },
+          { table: 'crove_finance.journal_entry', values: { ...journalEntry(o.id, reversal).values, reverses_entry_id: entry } },
+        ],
+        row: { org_id: o.id, document_id: document, reversal_entry_id: reversal, reason: 'RLS matrix' },
+        complete: [line(entry, 1, '6422', '100', '0'), line(entry, 2, '331', '0', '100'), line(reversal, 1, '6422', '0', '100'), line(reversal, 2, '331', '100', '0')],
+      };
     },
   },
   'crove_finance.vendor_account_rule': {
