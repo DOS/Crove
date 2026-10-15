@@ -29,8 +29,16 @@ const link = new RPCLink({ url: `${window.location.origin}/api/rpc`, headers });
 export const client: ContractRouterClient<typeof contract> = createORPCClient(link);
 export const orpc = createTanstackQueryUtils(client);
 
+// The session is valid but has not passed the user's second factor yet (issue #126): the kernel refuses every
+// call until it has. Not a sign-out: the server's message tells the user to enter their MFA code, and the MFA
+// challenge screen (issue #32) takes over once it ships.
+export function isMfaRequired(error: unknown): boolean {
+  return (error as { code?: string } | null)?.code === 'MFA_REQUIRED';
+}
+
 export function isUnauthenticated(error: unknown): boolean {
   const e = error as { status?: number; code?: string } | null;
+  if (isMfaRequired(error)) return false;
   return e?.status === 401 || e?.code === 'UNAUTHORIZED' || e?.code === 'UNAUTHENTICATED';
 }
 
@@ -43,7 +51,11 @@ export const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError }),
   mutationCache: new MutationCache({ onError }),
   defaultOptions: {
-    queries: { staleTime: 10_000, refetchOnWindowFocus: true, retry: (count, error) => !isUnauthenticated(error) && count < 1 },
+    queries: {
+      staleTime: 10_000,
+      refetchOnWindowFocus: true,
+      retry: (count, error) => !isUnauthenticated(error) && !isMfaRequired(error) && count < 1,
+    },
   },
 });
 

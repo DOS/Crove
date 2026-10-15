@@ -100,7 +100,12 @@ export function toDomainError(error: unknown): DomainError {
   const pg = error as PgLikeError;
   switch (pg?.code) {
     // Raised by crove_kernel.session_check (ADR-0028): signed out, revoked, expired upstream, banned or deleted.
+    // MFA_REQUIRED: the session is valid but has not passed the user's second factor yet (issue #126); the SPA
+    // answers it with the MFA challenge instead of signing out.
     case '28000':
+      if (pg.message === 'MFA_REQUIRED') {
+        return new DomainError('MFA_REQUIRED', 401, 'Tài khoản này đã bật xác thực hai lớp (MFA): hãy nhập mã xác thực để tiếp tục');
+      }
       return new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nhập đã hết hiệu lực, hãy đăng nhập lại');
     case '55000':
       if (pg.message?.includes('AUTH_GRANTS_MISSING')) {

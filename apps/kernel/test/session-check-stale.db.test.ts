@@ -49,9 +49,10 @@ suite('stale session_check overload', () => {
     await root.end();
   });
 
-  it('is absent on a fresh install, next to the current 4-argument check', async () => {
+  it('is absent on a fresh install, next to the current check (5 arguments since #126)', async () => {
     expect(await exists('crove_kernel.session_check(uuid, uuid, boolean)')).toBe(false);
-    expect(await exists('crove_kernel.session_check(uuid, uuid, boolean, uuid)')).toBe(true);
+    expect(await exists('crove_kernel.session_check(uuid, uuid, boolean, uuid)')).toBe(false);
+    expect(await exists('crove_kernel.session_check(uuid, uuid, boolean, uuid, text)')).toBe(true);
   });
 
   it('is dropped from a database that applied the draft, and the drop is idempotent', async () => {
@@ -67,7 +68,7 @@ suite('stale session_check overload', () => {
     expect(await exists('crove_kernel.session_check(uuid, uuid, boolean)')).toBe(true);
     expect(await migrate({ adminUrl, dir: MIGRATIONS })).toEqual([DROP_MIGRATION]);
     expect(await exists('crove_kernel.session_check(uuid, uuid, boolean)')).toBe(false);
-    expect(await exists('crove_kernel.session_check(uuid, uuid, boolean, uuid)')).toBe(true);
+    expect(await exists('crove_kernel.session_check(uuid, uuid, boolean, uuid, text)')).toBe(true);
     // Applied again where the overload is already gone: a no-op, not an error.
     await admin((c) => c.query(`DELETE FROM crove_meta.schema_migrations WHERE name = '${DROP_MIGRATION}'`));
     expect(await migrate({ adminUrl, dir: MIGRATIONS })).toEqual([DROP_MIGRATION]);
