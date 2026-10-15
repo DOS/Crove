@@ -341,11 +341,20 @@ export class Runtime {
     let orgId = '';
     let role: MemberRole | null = null;
     let entered = false;
+    // An org-less command's org was created by this transaction (not a replay into an org that already existed):
+    // the tenant row's xmin is this transaction's id (the definer inserts it outside any subtransaction).
+    let orgIsNew = false;
     try {
       return await this.db.transaction().execute(async (trx) => {
         orgId = await resolveOrg(trx);
         role = await this.enter(trx, actor, orgId);
         entered = true;
+        if (def.bootstrap) {
+          const { rows } = await sql<{ fresh: boolean }>`
+            SELECT COALESCE(t.xmin = pg_catalog.pg_current_xact_id_if_assigned()::xid, false) AS fresh
+            FROM crove_kernel.tenant t WHERE t.org_id = ${orgId}::uuid`.execute(trx);
+          orgIsNew = rows[0]?.fresh === true;
+        }
         this.authorize(def.access, actor, role, false);
         this.requireStepUp(def, actor);
 
@@ -386,9 +395,10 @@ export class Runtime {
       });
     } catch (error) {
       const domain = toDomainError(error);
-      // An org-less command that failed after creating its org rolled the org back, so entering it fails and
-      // no audit row is written; a refused replay into an org that already existed is audited there.
-      if (entered && (domain.status === 403 || domain.status === 409 || domain.status === 422)) {
+      // An org-less command that failed after creating its org rolled the org back, so there is no org to audit
+      // the refusal in; a refused replay into an org that already existed is audited there. Other statuses
+      // (404 included) are not audited today.
+      if (entered && !orgIsNew && (domain.status === 403 || domain.status === 409 || domain.status === 422)) {
         await this.writeRefusalAudit(name, def, input, inputSha256, actor, orgId, domain);
       }
       if (domain.code === 'INTERNAL') console.error(`[execute ${name}]`, error);
@@ -432,10 +442,9 @@ export class Runtime {
         });
       });
     } catch (auditError) {
+      // Every loss is logged, including an actor removed from the org between the command and this write
+      // (NOT_A_MEMBER from enter()): the row goes into the org's audit only through the actor's own context.
       const lost = toDomainError(auditError);
-      // An org-less command whose org was created in the failed transaction: the org rolled back with it, so
-      // there is no org to audit in (expected, see executeIn). A refused replay into an existing org is logged.
-      if (def.bootstrap && lost.code === 'NOT_A_MEMBER') return;
       const sqlState = auditError instanceof DomainError ? null : (auditError as { code?: unknown } | null)?.code;
       console.error(`[execute ${name}] AUDIT_WRITE_FAILED`, {
         orgId,

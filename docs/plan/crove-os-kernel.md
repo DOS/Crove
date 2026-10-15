@@ -826,7 +826,7 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
   - `audit_event` (security and compliance):
     - Written via the definer `audit_write()`, which stamps from the context and checks `approved_by` against `proposal`.
     - Success and pending are written in the command's transaction; denied/failed in a new transaction.
-    - If the denied/failed write fails, the caller still gets the original refusal: the command rolled back, so no change is left unaudited, and a 500 would only hide why it was refused. The loss is never silent: the runtime logs `AUDIT_WRITE_FAILED` with ids and codes only (on `main` since #102).
+    - If the denied/failed write fails, the caller still gets the original refusal: the command rolled back, so no change is left unaudited, and a 500 would only hide why it was refused. The loss is never silent: the runtime logs `AUDIT_WRITE_FAILED` with ids and codes only, also when the actor was removed from the org in between (the row is written only through the actor's own context; a guaranteed record of that case belongs to `security_event`). An org-less command whose new org rolled back with it has no org to audit in and writes nothing (on `main` since #102).
     - Sensitive reads are audited before the read.
   - `outbox_event`: business facts.
   - `activity`: user-facing projection; the system kind is written only via a definer.
