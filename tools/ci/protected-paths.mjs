@@ -37,6 +37,10 @@ export const PROTECTED_PATHS = [
   [/^pnpm-workspace\.yaml$/, 'workspace and dependency catalog'],
   [/(^|\/)\.npmrc$/, 'package manager config'],
   [/^vitest(\.[a-z]+)?\.(config|workspace)\.[cm]?[jt]s$/, 'test runner config'],
+  // The Playwright config and global setup decide which e2e tests run (`testIgnore`, `grep`, a setup that exits
+  // early), so they count as test runner config in any directory.
+  [/(^|\/)playwright(\.[a-z]+)?\.config\.[cm]?[jt]s$/, 'test runner config'],
+  [/(^|\/)global-(setup|teardown)\.[cm]?[jt]s$/, 'test runner global setup'],
   // This gate itself: the detection script and the invariant suite.
   [/^tools\/ci\//, 'protected-path gate'],
   [/(^|\/)test\/invariant\//, 'invariant suite'],

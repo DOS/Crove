@@ -30,6 +30,11 @@ describe('protected-path detection (G6)', () => {
       '.npmrc',
       'vitest.config.ts',
       'vitest.invariant.config.ts',
+      'e2e/playwright.config.ts',
+      'playwright.config.mjs',
+      'apps/app/playwright.ci.config.cts',
+      'e2e/global-setup.ts',
+      'e2e/global-teardown.mjs',
       'tools/ci/protected-paths.mjs',
       'apps/kernel/test/invariant/kernel-invariants.db.test.ts',
       'apps/kernel/test/invariant/fixtures/einvoice-basic.xml',
@@ -68,6 +73,10 @@ describe('protected-path detection (G6)', () => {
       'tools/docs-check.mjs',
       '.claude/worktrees/x/AGENTS.md',
       'apps/kernel/src/authority-notes.md',
+      'e2e/tests/inbox.spec.ts',
+      'e2e/lib/db.ts',
+      'e2e/playwright-report/index.html',
+      'docs/playwright.config.md',
     ];
     expect(classify(ordinary)).toEqual([]);
   });
