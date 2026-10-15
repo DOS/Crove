@@ -33,7 +33,10 @@ SELECT crove_kernel.apply_tenant_rls('crove_kernel.inbound_address');
 -- Tenant roles neither read nor write the ledger; only the definers below do.
 REVOKE ALL ON crove_kernel.inbound_address FROM PUBLIC, crove_tenant;
 
--- Existing orgs: their current token becomes their active ledger row.
+-- Existing orgs: their current token becomes their active ledger row. The lock (held until this file commits)
+-- keeps any tenant from being inserted, or its token changed, between the backfill's snapshot and the triggers
+-- below, so no tenant can commit without its ledger row. It still allows reads, so running mail and queries go on.
+LOCK TABLE crove_kernel.tenant IN SHARE ROW EXCLUSIVE MODE;
 INSERT INTO crove_kernel.inbound_address (org_id, token, created_at)
 SELECT t.org_id, t.inbound_token, t.created_at
 FROM crove_kernel.tenant t

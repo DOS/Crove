@@ -150,18 +150,19 @@ suite('inbound address rotation on PostgreSQL', () => {
     await root.end();
   });
 
-  it('rotates as owner through the RPC procedure, once per idempotency key, and only the new address receives mail', { timeout: 90_000 }, async () => {
-    const config = loadConfig({
-      DATABASE_URL: 'postgres://unused@localhost/unused',
-      AUTH_JWT_SECRET: 'test-only-jwt-secret-for-rotation-0123456789',
-      AUTH_ISSUER: 'test-auth',
-      INBOUND_DOMAIN: 'in.test',
-      INBOUND_SECRET,
-      WEB_DIST: '/nonexistent',
-    });
-    let caller = users.owner;
-    const app = createHttpApp({
-      config,
+  // The HTTP app as the API runs it; the RPC caller is whoever `caller` names.
+  let caller = '';
+  let app: ReturnType<typeof createHttpApp>;
+  const httpApp = () =>
+    (app ??= createHttpApp({
+      config: loadConfig({
+        DATABASE_URL: 'postgres://unused@localhost/unused',
+        AUTH_JWT_SECRET: 'test-only-jwt-secret-for-rotation-0123456789',
+        AUTH_ISSUER: 'test-auth',
+        INBOUND_DOMAIN: 'in.test',
+        INBOUND_SECRET,
+        WEB_DIST: '/nonexistent',
+      }),
       runtime,
       store,
       authenticate: async (): Promise<AuthUser> => ({
@@ -174,14 +175,67 @@ suite('inbound address rotation on PostgreSQL', () => {
       }),
       pool,
       aiEnabled: false,
+    }));
+  const rotate = (idempotencyKey: string) =>
+    httpApp().request('/api/rpc/org/rotateInbound', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-crove-org': org.slug },
+      body: JSON.stringify({ json: { idempotencyKey } }),
     });
-    const rotate = (idempotencyKey: string) =>
-      app.request('/api/rpc/org/rotateInbound', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-crove-org': org.slug },
-        body: JSON.stringify({ json: { idempotencyKey } }),
-      });
+  const mime = (token: string, number: string) =>
+    [
+      'From: Nha cung cap <ketoan@vendor.example>',
+      `To: ${token}@in.test`,
+      `Subject: Hoa don ${number}`,
+      `Message-ID: <rot-${number}@vendor.example>`,
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary="b1"',
+      '',
+      '--b1',
+      'Content-Type: application/xml; name="hd.xml"',
+      'Content-Disposition: attachment; filename="hd.xml"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      Buffer.from(FIXTURE.replace('<SHDon>1234</SHDon>', `<SHDon>${number}</SHDon>`))
+        .toString('base64')
+        .replace(/.{76}/g, '$&\r\n'),
+      '--b1--',
+      '',
+    ].join('\r\n');
+  const deliver = (token: string, number: string) =>
+    httpApp().request('/api/inbound/email', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${INBOUND_SECRET}`, 'content-type': 'message/rfc822', 'x-crove-recipient': `${token}@in.test` },
+      body: mime(token, number),
+    });
+  const messages = (id: string) => count('SELECT count(*) AS n FROM crove_kernel.inbound_message WHERE message_id LIKE $1', [`%${id}%`]);
+  const pending = () => count('SELECT count(*) AS n FROM crove_kernel.inbound_pending', []);
+  const emailFiles = () => count(`SELECT count(*) AS n FROM crove_kernel.file WHERE org_id = $1 AND source = 'email'`, [org.orgId]);
+  const receiveAudits = () => count(`SELECT count(*) AS n FROM crove_kernel.audit_event WHERE command = 'kernel.inbound.receive'`, []);
+  const until = async (check: () => Promise<boolean>) => {
+    const deadline = Date.now() + 60_000;
+    while (!(await check())) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for the worker');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  };
+  // Starts the real worker, runs fn, stops it. The job schema is installed once.
+  let jobsReady = false;
+  async function withWorker(fn: () => Promise<void>) {
+    if (!jobsReady) {
+      await migrateJobs(adminUrl);
+      jobsReady = true;
+    }
+    const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: null, inboundDomain: 'in.test' });
+    try {
+      await fn();
+    } finally {
+      await stop();
+    }
+  }
 
+  it('rotates as owner through the RPC procedure, once per idempotency key, and only the new address receives mail', { timeout: 90_000 }, async () => {
+    caller = users.owner;
     const oldToken = await tokenOf(org.orgId);
     const key = randomUUID();
     const first = await rotate(key);
@@ -217,50 +271,12 @@ suite('inbound address rotation on PostgreSQL', () => {
     expect(await tokenOf(org.orgId)).toBe(newToken);
 
     // Mail to the new address and to the retired one: the API answers 202 to both (no oracle).
-    const mime = (token: string, number: string) =>
-      [
-        'From: Nha cung cap <ketoan@vendor.example>',
-        `To: ${token}@in.test`,
-        `Subject: Hoa don ${number}`,
-        `Message-ID: <rot-${number}@vendor.example>`,
-        'MIME-Version: 1.0',
-        'Content-Type: multipart/mixed; boundary="b1"',
-        '',
-        '--b1',
-        'Content-Type: application/xml; name="hd.xml"',
-        'Content-Disposition: attachment; filename="hd.xml"',
-        'Content-Transfer-Encoding: base64',
-        '',
-        Buffer.from(FIXTURE.replace('<SHDon>1234</SHDon>', `<SHDon>${number}</SHDon>`))
-          .toString('base64')
-          .replace(/.{76}/g, '$&\r\n'),
-        '--b1--',
-        '',
-      ].join('\r\n');
-    const deliver = (token: string, number: string) =>
-      app.request('/api/inbound/email', {
-        method: 'POST',
-        headers: { authorization: `Bearer ${INBOUND_SECRET}`, 'content-type': 'message/rfc822', 'x-crove-recipient': `${token}@in.test` },
-        body: mime(token, number),
-      });
     expect((await deliver(oldToken, '7701')).status).toBe(202);
     expect((await deliver(newToken, '7702')).status).toBe(202);
     // A token that never existed gets the same answer.
     expect((await deliver('0123456789abcdef01234567', '7703')).status).toBe(202);
 
-    const messages = (id: string) => count('SELECT count(*) AS n FROM crove_kernel.inbound_message WHERE message_id LIKE $1', [`%${id}%`]);
-    const pending = () => count('SELECT count(*) AS n FROM crove_kernel.inbound_pending', []);
-    const until = async (check: () => Promise<boolean>) => {
-      const deadline = Date.now() + 60_000;
-      while (!(await check())) {
-        if (Date.now() > deadline) throw new Error('timed out waiting for the worker');
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-    };
-
-    await migrateJobs(adminUrl);
-    const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: null, inboundDomain: 'in.test' });
-    try {
+    await withWorker(async () => {
       // The new address files the invoice, and its extraction job turns it into a proposal in the org.
       const emailProposals = () =>
         count(
@@ -275,12 +291,8 @@ suite('inbound address rotation on PostgreSQL', () => {
       // The retired address is dropped exactly like the unknown one: no message, no audit, blob deleted.
       expect(await messages('rot-7701@')).toBe(0);
       expect(await messages('rot-7703@')).toBe(0);
-      expect(
-        await count(`SELECT count(*) AS n FROM crove_kernel.audit_event WHERE command = 'kernel.inbound.receive'`, []),
-      ).toBe(1);
-    } finally {
-      await stop();
-    }
+      expect(await receiveAudits()).toBe(1);
+    });
 
     // The worker's resolver itself knows only the active token.
     const resolve = (token: string) =>
@@ -302,6 +314,28 @@ suite('inbound address rotation on PostgreSQL', () => {
     expect(await stale.json()).toEqual({ json: latest });
     expect(await ledger(org.orgId)).toHaveLength(3);
     expect((await rotateAudits(org.orgId)).map((a) => a.outcome)).toEqual(['ok', 'denied', 'ok']);
+  });
+
+  it('drops mail queued for a token that is rotated away before the worker processes it', { timeout: 90_000 }, async () => {
+    caller = users.owner;
+    const token = await tokenOf(org.orgId);
+    const filesBefore = await emailFiles();
+    const auditsBefore = await receiveAudits();
+    // Accepted and queued while the token is still active; no worker runs yet.
+    expect((await deliver(token, '7801')).status).toBe(202);
+    expect(await pending()).toBe(1);
+    expect(store.keys('inbound/')).toHaveLength(1);
+    // The org rotates before the message is processed.
+    const rotated = await rotate(randomUUID());
+    expect(rotated.status).toBe(200);
+    expect(await tokenOf(org.orgId)).not.toBe(token);
+    // The org is resolved when the worker processes the message, so it is dropped with its blob.
+    await withWorker(async () => {
+      await until(async () => (await pending()) === 0 && store.keys('inbound/').length === 0);
+    });
+    expect(await messages('rot-7801@')).toBe(0);
+    expect(await emailFiles()).toBe(filesBefore);
+    expect(await receiveAudits()).toBe(auditsBefore);
   });
 
 });

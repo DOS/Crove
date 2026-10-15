@@ -5,7 +5,7 @@
 // superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { sql } from 'kysely';
+import { sql, type RawBuilder } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
@@ -266,6 +266,37 @@ suite('inbound address rotation invariants on PostgreSQL', () => {
       }
     });
     expect(await tokenOf(otherOrg)).toBe(active);
+
+    // The same attempts by the API login role, inside a valid context as the org's owner. Tenant roles may update
+    // their tenant row, so pointing it elsewhere is stopped by the constraints; the ledger is not theirs at all.
+    const ownToken = await tokenOf(org.orgId);
+    const asOwnerApp = (statement: RawBuilder<unknown>) =>
+      db.transaction().execute(async (trx) => {
+        await sql`SELECT crove_kernel.enter_context(${users.owner}::uuid, ${org.orgId}::uuid)`.execute(trx);
+        await statement.execute(trx);
+      });
+    const attempts: Array<[string, RawBuilder<unknown>, string]> = [
+      // Checked at commit by the deferred constraint trigger (INBOUND_TOKEN_NOT_ISSUED).
+      ['tenant -> own retired token', sql`UPDATE crove_kernel.tenant SET inbound_token = ${retired} WHERE org_id = ${org.orgId}::uuid`, '42501'],
+      ['tenant -> unissued token', sql`UPDATE crove_kernel.tenant SET inbound_token = '00000000000000000000000c' WHERE org_id = ${org.orgId}::uuid`, '42501'],
+      // Another org's active token collides with the tenant's own UNIQUE (inbound_token).
+      ['tenant -> other org token', sql`UPDATE crove_kernel.tenant SET inbound_token = ${active} WHERE org_id = ${org.orgId}::uuid`, '23505'],
+      ['delete tombstone', sql`DELETE FROM crove_kernel.inbound_address WHERE token = ${retired}`, '42501'],
+      ['truncate ledger', sql`TRUNCATE crove_kernel.inbound_address`, '42501'],
+      ['un-retire tombstone', sql`UPDATE crove_kernel.inbound_address SET retired_at = NULL WHERE token = ${retired}`, '42501'],
+      ['insert ledger row', sql`INSERT INTO crove_kernel.inbound_address (org_id, token) VALUES (${org.orgId}::uuid, '00000000000000000000000d')`, '42501'],
+    ];
+    const outcomes: Array<[string, string | undefined]> = [];
+    for (const [name, statement] of attempts) {
+      const error = await asOwnerApp(statement).then(
+        () => undefined,
+        (e: unknown) => e as { code?: string },
+      );
+      outcomes.push([name, error?.code]);
+    }
+    expect(outcomes).toEqual(attempts.map(([name, , code]) => [name, code]));
+    expect(await tokenOf(org.orgId)).toBe(ownToken);
+    expect(await count('SELECT count(*) AS n FROM crove_kernel.inbound_address WHERE token = $1 AND retired_at IS NOT NULL', [retired])).toBe(1);
 
     // Replace the generator (rolled back) so its first draws return tokens that exist: the retired one, and another
     // org's active one, which tenant RLS hides inside the rotation definer. Rotation and org creation both skip the
