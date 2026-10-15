@@ -17,6 +17,7 @@ export interface ReportLineInput {
 }
 
 export interface ReportEntry {
+  legalEntityId: string;
   entryDate: string;
   currency: string;
   // A reversal (it has `reverses_id`). Its lines count as negative amounts on the side of the line they
@@ -150,7 +151,7 @@ export const CLOSING_ACCOUNT = '911';
 
 // Report input from ledger entries; a reversal is an entry with `reversesId`.
 export function reportEntries(entries: ReadonlyArray<PostedEntry>): ReportEntry[] {
-  return entries.map((e) => ({ entryDate: e.entryDate, currency: e.currency, reversal: e.reversesId !== null, lines: e.lines }));
+  return entries.map((e) => ({ legalEntityId: e.legalEntityId, entryDate: e.entryDate, currency: e.currency, reversal: e.reversesId !== null, lines: e.lines }));
 }
 
 // Debit and credit totals of one account, or of one (account, party).
@@ -227,10 +228,21 @@ function readersOf(rules: readonly AccountRule[], accountCode: string): AccountR
   return { debit: debit[0], credit: credit[0], byParty };
 }
 
-// B01 at `asOf` (inclusive), from every entry dated on or before it.
-export function buildB01(entries: ReadonlyArray<ReportEntry>, asOf: string, bookCurrency = 'VND'): Report & { balanced: boolean } {
-  checkCurrency(entries, bookCurrency);
-  const upTo = entries.filter((e) => e.entryDate <= asOf);
+// The entries of one legal entity: a statement is per legal entity, never a sum over several.
+function ofEntity(entries: ReadonlyArray<ReportEntry>, legalEntityId: string, bookCurrency: string): ReportEntry[] {
+  const own = entries.filter((e) => e.legalEntityId === legalEntityId);
+  checkCurrency(own, bookCurrency);
+  return own;
+}
+
+// B01 of one legal entity at `asOf` (inclusive), from every entry dated on or before it.
+export function buildB01(
+  entries: ReadonlyArray<ReportEntry>,
+  legalEntityId: string,
+  asOf: string,
+  bookCurrency = 'VND',
+): Report & { balanced: boolean } {
+  const upTo = ofEntity(entries, legalEntityId, bookCurrency).filter((e) => e.entryDate <= asOf);
   const rules = B01_LINES.flatMap((d) => d.rules ?? []);
   const perParty = buckets(upTo, true);
   const perAccount = buckets(upTo, false);
@@ -270,10 +282,10 @@ export function buildB01(entries: ReadonlyArray<ReportEntry>, asOf: string, book
   return { lines, unmapped, balanced: total('200').equals(total('500')) };
 }
 
-// B02 for the period [from, to] (inclusive), leaving out the year-end closing entries (any line on 911).
-export function buildB02(entries: ReadonlyArray<ReportEntry>, from: string, to: string, bookCurrency = 'VND'): Report {
-  checkCurrency(entries, bookCurrency);
-  const inPeriod = entries.filter(
+// B02 of one legal entity for the period [from, to] (inclusive), leaving out the year-end closing entries
+// (any line on 911).
+export function buildB02(entries: ReadonlyArray<ReportEntry>, legalEntityId: string, from: string, to: string, bookCurrency = 'VND'): Report {
+  const inPeriod = ofEntity(entries, legalEntityId, bookCurrency).filter(
     (e) => e.entryDate >= from && e.entryDate <= to && !e.lines.some((l) => l.accountCode.startsWith(CLOSING_ACCOUNT)),
   );
   const activity = buckets(inPeriod, false);

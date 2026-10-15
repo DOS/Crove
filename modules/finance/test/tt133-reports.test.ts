@@ -17,7 +17,10 @@ import {
 type Leg = [account: string, debit: number | string, credit: number | string, party?: string];
 
 // Synthetic sample: a small trading company founded on 2 January 2026, VND books. Amounts are whole dong.
+const LE = 'le-sample';
+
 class Journal {
+  constructor(private readonly legalEntityId = LE) {}
   state: LedgerState = emptyLedger;
   private seq = 0;
   private newId = () => `E${++this.seq}`;
@@ -26,7 +29,7 @@ class Journal {
     const outcome = postEntry(
       this.state,
       {
-        legalEntityId: 'le-sample',
+        legalEntityId: this.legalEntityId,
         entryDate: date,
         currency: 'VND',
         docType: 'NVK',
@@ -147,7 +150,7 @@ const B02_YEAR: Record<string, number> = {
 
 describe('TT133 B01-DNN (draft)', () => {
   it('matches the hand calculation at year end and balances', () => {
-    const report = buildB01(sampleYear().entries, '2026-12-31');
+    const report = buildB01(sampleYear().entries, LE, '2026-12-31');
     expect(amounts(report)).toEqual(asText(B01_YEAR_END));
     expect(report.unmapped).toEqual([]);
     expect(report.balanced).toBe(true);
@@ -155,7 +158,7 @@ describe('TT133 B01-DNN (draft)', () => {
 
   it('matches the hand calculation at 31 January 2026', () => {
     // 1121: 500 -220 -15 = 265M. 331: V1 66M credit, V3 15M debit. 1561 200M, 211 60M, 133 26M.
-    const report = buildB01(sampleYear().entries, '2026-01-31');
+    const report = buildB01(sampleYear().entries, LE, '2026-01-31');
     const nonZero = Object.fromEntries(Object.entries(amounts(report)).filter(([, v]) => v !== '0'));
     expect(nonZero).toEqual(asText({
       '110': 265_000_000, '132': 15_000_000, '130': 15_000_000, '141': 200_000_000, '140': 200_000_000, '151': 60_000_000, '150': 60_000_000,
@@ -165,7 +168,7 @@ describe('TT133 B01-DNN (draft)', () => {
   });
 
   it('is empty and balanced before the first entry', () => {
-    const report = buildB01(sampleYear().entries, '2025-12-31');
+    const report = buildB01(sampleYear().entries, LE, '2025-12-31');
     expect(report.lines.every((l) => l.amount === '0')).toBe(true);
     expect(report.balanced).toBe(true);
   });
@@ -173,7 +176,7 @@ describe('TT133 B01-DNN (draft)', () => {
   it('does not change when the year is closed through 911 into 421', () => {
     const j = sampleYear();
     closeYear(j);
-    const report = buildB01(j.entries, '2026-12-31');
+    const report = buildB01(j.entries, LE, '2026-12-31');
     expect(amounts(report)).toEqual(asText(B01_YEAR_END));
     expect(report.unmapped).toEqual([]);
   });
@@ -182,7 +185,7 @@ describe('TT133 B01-DNN (draft)', () => {
     const j = sampleYear();
     j.post('2026-12-31', [['1121', 30_000_000, 0], ['1331', 0, 30_000_000]]); // 1331 ends 8.8M on the credit side
     j.post('2026-12-31', [['999', 1_000_000, 0], ['1121', 0, 1_000_000]]); // not a TT133 account
-    const report = buildB01(j.entries, '2026-12-31');
+    const report = buildB01(j.entries, LE, '2026-12-31');
     expect(report.unmapped).toEqual([
       { accountCode: '1331', partyId: null, amount: String(-8_800_000) },
       { accountCode: '999', partyId: null, amount: String(1_000_000) },
@@ -205,26 +208,34 @@ describe('TT133 B01-DNN (draft)', () => {
       j.post('2026-01-01', [[account, 1, 0], ['1121', 0, 1]]);
       j.post('2026-01-01', [['1121', 1, 0], [account, 0, 1]]);
     }
-    const report = buildB01(j.entries, '2026-12-31');
+    const report = buildB01(j.entries, LE, '2026-12-31');
     expect(report.unmapped).toEqual([]);
     expect(report.lines.every((l) => l.amount === '0')).toBe(true);
   });
 
   it('refuses entries in another currency', () => {
-    expect(() => buildB01([{ entryDate: '2026-01-01', currency: 'USD', reversal: false, lines: [] }], '2026-12-31')).toThrow(/book currency/);
+    expect(() => buildB01([{ legalEntityId: LE, entryDate: '2026-01-01', currency: 'USD', reversal: false, lines: [] }], LE, '2026-12-31')).toThrow(/book currency/);
+  });
+  it('reports one legal entity, never the sum of several', () => {
+    const sample = sampleYear();
+    const other = new Journal('le-other');
+    other.post('2026-01-02', [['1121', 7_000_000, 0], ['4111', 0, 7_000_000]]);
+    const report = buildB01([...sample.entries, ...other.entries], LE, '2026-12-31');
+    expect(amounts(report)).toEqual(asText(B01_YEAR_END));
+    expect(amounts(buildB01(other.entries, 'le-other', '2026-12-31'))['411']).toBe('7000000');
   });
 });
 
 describe('TT133 B02-DNN (draft)', () => {
   it('matches the hand calculation for the year', () => {
-    const report = buildB02(sampleYear().entries, '2026-01-01', '2026-12-31');
+    const report = buildB02(sampleYear().entries, LE, '2026-01-01', '2026-12-31');
     expect(amounts(report)).toEqual(asText(B02_YEAR));
     expect(report.unmapped).toEqual([]);
   });
 
   it('matches the hand calculation for the first quarter', () => {
     // 01 300M, 02 10M, 11 150M; 24: 6422 12 +40 (the wrong expense nets out) and 6421 3 = 55M.
-    const report = buildB02(sampleYear().entries, '2026-01-01', '2026-03-31');
+    const report = buildB02(sampleYear().entries, LE, '2026-01-01', '2026-03-31');
     expect(amounts(report)).toEqual(asText({
       '01': 300_000_000, '02': 10_000_000, '10': 290_000_000, '11': 150_000_000, '20': 140_000_000, '21': 0, '22': 0, '23': 0, '24': 55_000_000,
       '30': 85_000_000, '31': 0, '32': 0, '40': 0, '50': 85_000_000, '51': 0, '60': 85_000_000,
@@ -234,19 +245,19 @@ describe('TT133 B02-DNN (draft)', () => {
   it('leaves out the closing entries, so it is the same after the year is closed', () => {
     const j = sampleYear();
     closeYear(j);
-    expect(amounts(buildB02(j.entries, '2026-01-01', '2026-12-31'))).toEqual(asText(B02_YEAR));
+    expect(amounts(buildB02(j.entries, LE, '2026-01-01', '2026-12-31'))).toEqual(asText(B02_YEAR));
   });
 
   it('reports activity on an account no line reads', () => {
     const j = sampleYear();
     j.post('2026-12-31', [['521', 1_000_000, 0], ['131', 0, 1_000_000, 'C1']]); // a TT200 account, not in TT133
-    expect(buildB02(j.entries, '2026-01-01', '2026-12-31').unmapped).toEqual([{ accountCode: '521', partyId: null, amount: String(1_000_000) }]);
+    expect(buildB02(j.entries, LE, '2026-01-01', '2026-12-31').unmapped).toEqual([{ accountCode: '521', partyId: null, amount: String(1_000_000) }]);
   });
 
   it('agrees with B01: profit after tax equals the change in retained earnings', () => {
     const entries = sampleYear().entries;
-    const b01 = amounts(buildB01(entries, '2026-12-31'));
-    const b02 = amounts(buildB02(entries, '2026-01-01', '2026-12-31'));
+    const b01 = amounts(buildB01(entries, LE, '2026-12-31'));
+    const b02 = amounts(buildB02(entries, LE, '2026-01-01', '2026-12-31'));
     expect(b01['417']).toBe(b02['60']);
   });
 });
