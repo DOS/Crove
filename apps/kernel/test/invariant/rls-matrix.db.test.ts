@@ -1,0 +1,607 @@
+// Generated cross-org RLS matrix (MVP exit criterion 2, External-tenant gate T8) on a real PostgreSQL 17.
+// The cases come from the catalog: every relation in any non-system schema with an org_id column gets a
+// structural check and a read, insert, update and delete probe for each runtime actor, each probe in its own
+// transaction as the real login roles (and as the NOLOGIN definer owner the ledger writes run as), never as a
+// superuser. A new table with org_id fails here until it has RLS in the expected shape and a row factory below.
+// Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
+// Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
+import { randomBytes, randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import pg from 'pg';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createDb, createPool } from '@crove/db';
+import { migrate, setRolePasswords } from '@crove/db/migrate';
+import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
+import { Runtime } from '@crove/kernel-runtime';
+
+const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
+const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
+
+// The one tenant policy crove_kernel.apply_tenant_rls creates, as pg_get_expr prints it.
+const TENANT_PREDICATE = '(org_id = ( SELECT crove_kernel.ctx_org_id() AS ctx_org_id))';
+// Roles that run tenant code. None may own, or inherit the ownership of, a tenant table: RLS is enabled but not
+// forced, so the owner bypasses it.
+const RUNTIME_ROLES = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader'];
+// Tables with org_id that no role but their owner can touch: only SECURITY DEFINER functions owned by the
+// table owner read or write them. They need RLS enabled (so a later grant stays deny-all until a policy is
+// added) and must be listed here, so a new table cannot quietly become one.
+const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.outbox_pending']);
+const RLS_DENIED = /new row violates row-level security policy/;
+const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
+
+type Values = Record<string, string | number>;
+interface Row {
+  table: string;
+  values: Values;
+}
+interface OrgFixture {
+  id: string;
+  owner: string;
+  party: string;
+  file: string;
+  document: string;
+  entry: string;
+  // A user who is not yet a member of any org, for membership rows.
+  freshUser: () => string;
+}
+interface Built {
+  // Rows the target row needs in the same transaction (inserted first, when seeding and in the own-org control).
+  setup?: Row[];
+  row: Values;
+  // Rows that must follow before commit (only when seeding), for example the lines that balance an entry.
+  complete?: Row[];
+}
+interface RowFactory {
+  make: (org: OrgFixture) => Built;
+  // false when the rows already exist for both orgs (tenant), so seeding adds none.
+  seed?: false;
+  // Why the own-org insert control cannot run, when it cannot.
+  noInsertControl?: string;
+  // The 42501 denial a privileged actor gets for another org's row, when a trigger refuses before RLS does.
+  insertDenied?: RegExp;
+}
+
+const hex64 = () => randomBytes(32).toString('hex');
+const tag = () => randomUUID().slice(0, 8);
+let lineNo = 100;
+const balancingLine = (org: string, entry: string, lineNo: number, side: 'debit' | 'credit'): Row => ({
+  table: 'crove_finance.journal_line',
+  values: { org_id: org, entry_id: entry, line_no: lineNo, account_code: side === 'debit' ? '6422' : '331', debit: side === 'debit' ? '100' : '0', credit: side === 'credit' ? '100' : '0' },
+});
+const journalEntry = (org: string, id: string): Row => ({
+  table: 'crove_finance.journal_entry',
+  values: { org_id: org, id, entry_date: '2026-10-01', description: 'rls matrix', source_type: 'rls.matrix', source_id: randomUUID() },
+});
+
+// One factory per table with org_id. Each builds a valid row for the given org; the probes use the same factory
+// for the actor's own org (which must be accepted where the role may write) and for the other org (which must be
+// refused), so a denial cannot come from a malformed row.
+const ROW_FACTORIES: Record<string, RowFactory> = {
+  'crove_kernel.tenant': {
+    seed: false,
+    noInsertControl: 'the only tenant row an actor may write is its own org, which already exists',
+    make: (o) => ({ row: { org_id: o.id, slug: `rls-${tag()}`, name: 'RLS matrix', created_by: o.owner } }),
+  },
+  'crove_kernel.tenant_member': { make: (o) => ({ row: { org_id: o.id, user_id: o.freshUser(), role: 'member' } }) },
+  'crove_kernel.idempotency_key': {
+    make: (o) => ({ row: { org_id: o.id, actor_key: `user:${o.owner}`, key: randomUUID(), command: 'rls.matrix', request_sha256: hex64() } }),
+  },
+  'crove_kernel.outbox_event': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), type: 'rls.matrix', payload: '{}' } }) },
+  'crove_kernel.outbox_pending': { make: (o) => ({ row: { org_id: o.id, event_id: randomUUID() } }) },
+  'crove_kernel.audit_event': {
+    make: (o) => ({
+      row: { org_id: o.id, actor_type: 'system', command: 'rls.matrix', command_id: randomUUID(), outcome: 'ok', input_sha256: hex64() },
+    }),
+  },
+  'crove_kernel.party': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), name: 'RLS matrix party' } }) },
+  'crove_kernel.file': {
+    make: (o) => {
+      const sha256 = hex64();
+      return {
+        row: { org_id: o.id, id: randomUUID(), sha256, storage_key: `files/${o.id}/${sha256}`, filename: 'probe.xml', content_type: 'application/xml', size_bytes: 1, source: 'upload' },
+      };
+    },
+  },
+  'crove_kernel.inbound_message': { make: (o) => ({ row: { org_id: o.id, message_id: `<${randomUUID()}@rls.test>` } }) },
+  'crove_kernel.extraction': { make: (o) => ({ row: { org_id: o.id, file_id: o.file, method: 'unsupported', status: 'failed' } }) },
+  'crove_kernel.proposal': {
+    make: (o) => ({ row: { org_id: o.id, kind: 'rls.matrix', command: 'rls.matrix', status: 'rejected', title: 'RLS matrix', payload: '{}' } }),
+  },
+  'crove_kernel.activity': {
+    make: (o) => ({ row: { org_id: o.id, record_type: 'party', record_id: o.party, kind: 'rls.matrix', summary: 'RLS matrix' } }),
+  },
+  'crove_kernel.auth_session_org': { make: (o) => ({ row: { org_id: o.id, user_id: o.owner, session_id: randomUUID() } }) },
+  'crove_finance.purchase_document': {
+    make: (o) => ({
+      row: { org_id: o.id, party_id: o.party, invoice_number: tag(), invoice_date: '2026-10-01', subtotal: '100', vat_amount: '10', total: '110' },
+    }),
+  },
+  'crove_finance.purchase_line': {
+    make: (o) => ({ row: { org_id: o.id, document_id: o.document, line_no: lineNo++, description: 'RLS matrix', amount: '100', debit_account: '6422' } }),
+  },
+  'crove_finance.journal_entry': {
+    make: (o) => {
+      const id = randomUUID();
+      return { row: journalEntry(o.id, id).values, complete: [balancingLine(o.id, id, 1, 'debit'), balancingLine(o.id, id, 2, 'credit')] };
+    },
+  },
+  'crove_finance.journal_line': {
+    // A line can only join an entry created in the same transaction. The BEFORE INSERT trigger that checks this
+    // reads the entry through RLS, so for another org's entry it refuses (42501) before the policy check runs.
+    insertDenied: /row-level security policy|is already posted/,
+    make: (o) => {
+      const entry = randomUUID();
+      return { setup: [journalEntry(o.id, entry)], row: balancingLine(o.id, entry, 1, 'debit').values, complete: [balancingLine(o.id, entry, 2, 'credit')] };
+    },
+  },
+  'crove_finance.vendor_account_rule': {
+    make: (o) => {
+      const party = randomUUID();
+      return {
+        setup: [{ table: 'crove_kernel.party', values: { org_id: o.id, id: party, name: 'RLS matrix vendor' } }],
+        row: { org_id: o.id, party_id: party, debit_account: '6422' },
+      };
+    },
+  },
+};
+
+function insertSql(row: Row): { text: string; values: Array<string | number> } {
+  const columns = Object.keys(row.values);
+  return {
+    text: `INSERT INTO ${row.table} (${columns.map((c) => `"${c}"`).join(', ')}) VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})`,
+    values: Object.values(row.values),
+  };
+}
+
+interface Relation {
+  name: string;
+  kind: string;
+  rls: boolean;
+  owner: string;
+}
+
+// Creates the database, applies the migrations and reads the catalog before the cases are collected, so every
+// relation with org_id becomes its own describe block.
+async function prepare() {
+  const dbName = `crove_test_rls_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  const root = new pg.Client({ connectionString: ADMIN });
+  await root.connect();
+  await root.query(`CREATE DATABASE ${dbName}`);
+  await root.end();
+  const url = new URL(ADMIN as string);
+  url.pathname = `/${dbName}`;
+  const adminUrl = url.toString();
+  const admin = new pg.Client({ connectionString: adminUrl });
+  try {
+    await migrate({ adminUrl, dir: MIGRATIONS });
+    await setRolePasswords(adminUrl, { crove_app: 'test-app-pw', crove_worker: 'test-worker-pw' });
+    await admin.connect();
+    const { rows } = await admin.query<Relation>(
+      `SELECT pg_catalog.format('%I.%I', n.nspname, c.relname) AS name, c.relkind::text AS kind, c.relrowsecurity AS rls,
+              pg_catalog.pg_get_userbyid(c.relowner) AS owner
+       FROM pg_catalog.pg_class c
+       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+       WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+         AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%'
+         AND EXISTS (
+           SELECT 1 FROM pg_catalog.pg_attribute a
+           WHERE a.attrelid = c.oid AND a.attname = 'org_id' AND a.attnum > 0 AND NOT a.attisdropped)
+       ORDER BY 1`,
+    );
+    return { dbName, adminUrl, relations: rows };
+  } catch (error) {
+    const cleanup = new pg.Client({ connectionString: ADMIN });
+    await cleanup.connect();
+    await cleanup.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`).catch(() => {});
+    await cleanup.end();
+    throw error;
+  } finally {
+    await admin.end().catch(() => {});
+  }
+}
+
+const setup = ADMIN ? await prepare() : undefined;
+const suite = setup ? describe : describe.skip;
+const relations = setup?.relations ?? [];
+
+type Op = 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE';
+type Outcome = { ok: true; rows: Array<{ org: string }>; rowCount: number } | { ok: false; code: string; message: string };
+
+suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
+  const { dbName, adminUrl } = setup ?? { dbName: '', adminUrl: '' };
+  const clients: pg.Client[] = [];
+  let pool: pg.Pool | undefined;
+  const orgs: Record<'A' | 'B', OrgFixture> = {} as Record<'A' | 'B', OrgFixture>;
+  let admin: pg.Client;
+
+  interface Actor {
+    name: string;
+    role: string;
+    client: pg.Client;
+    // The org whose context the actor runs in, or null for no context.
+    org: 'A' | null;
+    enter: (c: pg.Client) => Promise<void>;
+  }
+  const actors: Actor[] = [];
+  // privileges[table][role] = the table privileges the role holds.
+  const privileges = new Map<string, Map<string, Set<Op>>>();
+
+  async function connect(url: string) {
+    const client = new pg.Client({ connectionString: url });
+    await client.connect();
+    clients.push(client);
+    return client;
+  }
+
+  async function adminTx(rows: Row[]) {
+    await admin.query('BEGIN');
+    try {
+      for (const row of rows) {
+        const q = insertSql(row);
+        await admin.query(q.text, q.values);
+      }
+      await admin.query('COMMIT');
+    } catch (error) {
+      await admin.query('ROLLBACK');
+      throw error;
+    }
+  }
+
+  // Runs one probe in its own transaction as the actor and always rolls back.
+  async function probe(actor: Actor, run: (c: pg.Client) => Promise<pg.QueryResult>): Promise<Outcome> {
+    const c = actor.client;
+    await c.query('BEGIN');
+    try {
+      await actor.enter(c);
+      try {
+        const result = await run(c);
+        return { ok: true, rows: result.rows as Array<{ org: string }>, rowCount: result.rowCount ?? 0 };
+      } catch (error) {
+        const e = error as { code?: string; message: string };
+        return { ok: false, code: e.code ?? '', message: e.message };
+      }
+    } finally {
+      await c.query('ROLLBACK');
+    }
+  }
+
+  // Runs a statement with no WHERE clause that reads no column, so only the policies of its own command apply (a
+  // WHERE clause would also apply the SELECT policies and hide a leak in an UPDATE or DELETE policy). Returns how
+  // many rows it changed next to how many the actor could see, or null when the statement failed (nothing changed:
+  // an append-only trigger or a foreign key may refuse it).
+  async function sweep(actor: Actor, table: string, statement: string, params: string[]) {
+    const c = actor.client;
+    await c.query('BEGIN');
+    try {
+      await actor.enter(c);
+      const { rows } = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`);
+      try {
+        const result = await c.query(statement, params);
+        return { visible: rows[0]?.n ?? 0, changed: result.rowCount ?? 0 };
+      } catch {
+        return null;
+      }
+    } finally {
+      await c.query('ROLLBACK');
+    }
+  }
+
+  const can = (table: string, role: string, op: Op) => privileges.get(table)?.get(role)?.has(op) ?? false;
+
+  function expectDenied(outcome: Outcome, pattern: RegExp, where: string) {
+    if (outcome.ok) throw new Error(`${where}: expected 42501 matching ${pattern}, but it succeeded (${outcome.rowCount} rows)`);
+    // A 23xxx error would mean the probe row is malformed, so the denial would prove nothing.
+    expect(outcome, `${where}: expected 42501 matching ${pattern}`).toMatchObject({ code: '42501', message: expect.stringMatching(pattern) });
+  }
+
+  function expectRows(outcome: Outcome, where: string): { rows: Array<{ org: string }>; rowCount: number } {
+    if (!outcome.ok) throw new Error(`${where}: expected the statement to run, got ${outcome.code} ${outcome.message}`);
+    return outcome;
+  }
+
+  function factoryFor(table: string): RowFactory {
+    const factory = ROW_FACTORIES[table];
+    if (!factory) {
+      throw new Error(`${table} has org_id but no row factory: add one to ROW_FACTORIES in apps/kernel/test/invariant/rls-matrix.db.test.ts`);
+    }
+    return factory;
+  }
+
+  beforeAll(async () => {
+    admin = await connect(adminUrl);
+    const loginUrl = (username: string, password: string) => {
+      const url = new URL(adminUrl);
+      url.username = username;
+      url.password = password;
+      return url.toString();
+    };
+    pool = createPool({ connectionString: loginUrl('crove_app', 'test-app-pw'), max: 2 });
+    const db = createDb(pool);
+    const runtime = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+    const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
+
+    // Users who belong to no org yet, for membership rows.
+    const { rows: pooled } = await admin.query<{ id: string }>(
+      `INSERT INTO crove_kernel.user_account (issuer, subject, email)
+       SELECT 'rls-matrix', 'pool-' || g, 'pool-' || g || '@rls.test' FROM pg_catalog.generate_series(1, 40) g RETURNING id`,
+    );
+    const free = pooled.map((r) => r.id);
+    const freshUser = () => {
+      const id = free.pop();
+      if (!id) throw new Error('the RLS matrix ran out of pooled users');
+      return id;
+    };
+
+    for (const key of ['A', 'B'] as const) {
+      const owner = await upsertIdentity(db, { issuer: 'rls-matrix', subject: `owner-${key}`, email: `owner-${key}@rls.test`, name: null });
+      const { orgId } = await createOrg(runtime, asUser(owner), `RLS matrix ${key}`);
+      const org: OrgFixture = { id: orgId, owner, party: randomUUID(), file: randomUUID(), document: randomUUID(), entry: randomUUID(), freshUser };
+      const sha256 = hex64();
+      // Parents the factories point at, one set per org.
+      await adminTx([
+        { table: 'crove_kernel.party', values: { org_id: orgId, id: org.party, name: `Vendor ${key}` } },
+        {
+          table: 'crove_kernel.file',
+          values: { org_id: orgId, id: org.file, sha256, storage_key: `files/${orgId}/${sha256}`, filename: 'hd.xml', content_type: 'application/xml', size_bytes: 1, source: 'upload' },
+        },
+        {
+          table: 'crove_finance.purchase_document',
+          values: { org_id: orgId, id: org.document, party_id: org.party, invoice_number: `base-${key}`, invoice_date: '2026-10-01', subtotal: '100', vat_amount: '10', total: '110' },
+        },
+        journalEntry(orgId, org.entry),
+        balancingLine(orgId, org.entry, 1, 'debit'),
+        balancingLine(orgId, org.entry, 2, 'credit'),
+      ]);
+      orgs[key] = org;
+    }
+
+    // Seed one row per org in every table that has a factory, as the database owner.
+    for (const relation of relations) {
+      const factory = ROW_FACTORIES[relation.name];
+      if (!factory || factory.seed === false || !['r', 'p'].includes(relation.kind)) continue;
+      for (const org of [orgs.A, orgs.B]) {
+        const built = factory.make(org);
+        await adminTx([...(built.setup ?? []), { table: relation.name, values: built.row }, ...(built.complete ?? [])]);
+      }
+    }
+
+    const roles = ['crove_app', 'crove_worker', 'crove_definer_tenant'];
+    const { rows: grants } = await admin.query<{ tbl: string; role: string; op: Op }>(
+      `SELECT t AS tbl, r AS role, p AS op
+       FROM pg_catalog.unnest($1::text[]) t, pg_catalog.unnest($2::text[]) r, pg_catalog.unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) p
+       WHERE pg_catalog.has_table_privilege(r, t, p)`,
+      [relations.map((r) => r.name), roles],
+    );
+    for (const g of grants) {
+      const byRole = privileges.get(g.tbl) ?? new Map<string, Set<Op>>();
+      privileges.set(g.tbl, byRole);
+      const ops = byRole.get(g.role) ?? new Set<Op>();
+      byRole.set(g.role, ops);
+      ops.add(g.op);
+    }
+
+    const app = await connect(loginUrl('crove_app', 'test-app-pw'));
+    const worker = await connect(loginUrl('crove_worker', 'test-worker-pw'));
+    const definer = await connect(adminUrl);
+    const none = async () => {};
+    actors.push(
+      {
+        name: 'crove_app as a member of org A',
+        role: 'crove_app',
+        client: app,
+        org: 'A',
+        enter: async (c) => {
+          await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [orgs.A.owner, orgs.A.id]);
+        },
+      },
+      {
+        name: 'crove_worker in the system context of org A',
+        role: 'crove_worker',
+        client: worker,
+        org: 'A',
+        enter: async (c) => {
+          await c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgs.A.id]);
+        },
+      },
+      {
+        // The NOLOGIN owner of the definers that write the ledger, in the context a definer inherits.
+        name: 'crove_definer_tenant in the context of org A',
+        role: 'crove_definer_tenant',
+        client: definer,
+        org: 'A',
+        enter: async (c) => {
+          await c.query(`SELECT pg_catalog.set_config('crove.org_id', $1, true), pg_catalog.set_config('crove.user_id', $2, true)`, [
+            orgs.A.id,
+            orgs.A.owner,
+          ]);
+          await c.query('SET LOCAL ROLE crove_definer_tenant');
+          const { rows } = await c.query<{ who: string }>('SELECT current_user AS who');
+          if (rows[0]?.who !== 'crove_definer_tenant') throw new Error('SET ROLE crove_definer_tenant did not take effect');
+        },
+      },
+      { name: 'crove_app with no context', role: 'crove_app', client: app, org: null, enter: none },
+      { name: 'crove_worker with no context', role: 'crove_worker', client: worker, org: null, enter: none },
+    );
+  });
+
+  afterAll(async () => {
+    for (const c of clients) await c.end().catch(() => {});
+    await pool?.end();
+    const root = new pg.Client({ connectionString: ADMIN });
+    await root.connect();
+    await root.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+    await root.end();
+  });
+
+  it('finds the tenant tables in the catalog, and every row factory names one of them', () => {
+    const names = relations.map((r) => r.name);
+    expect(names).toContain('crove_kernel.party');
+    expect(names).toContain('crove_finance.journal_line');
+    const stale = Object.keys(ROW_FACTORIES).filter((t) => !names.includes(t));
+    expect(stale, 'row factories for tables that no longer have org_id: remove them').toEqual([]);
+    const staleMachinery = [...MACHINERY].filter((t) => !names.includes(t));
+    expect(staleMachinery, 'MACHINERY lists tables that no longer have org_id').toEqual([]);
+  });
+
+  it('runs no runtime role as a superuser or with BYPASSRLS', async () => {
+    const { rows } = await admin.query<{ rolname: string; rolsuper: boolean; rolbypassrls: boolean }>(
+      'SELECT rolname, rolsuper, rolbypassrls FROM pg_catalog.pg_roles WHERE rolname = ANY($1::text[]) ORDER BY rolname',
+      [RUNTIME_ROLES],
+    );
+    expect(rows.map((r) => r.rolname)).toEqual([...RUNTIME_ROLES].sort());
+    expect(rows.filter((r) => r.rolsuper || r.rolbypassrls)).toEqual([]);
+  });
+
+  for (const relation of relations) {
+    const table = relation.name;
+    describe(table, () => {
+      it('has RLS enabled, the tenant policy or no access at all, a safe owner and a row factory', async () => {
+        expect(['r', 'p'], `${table} is a relation of kind '${relation.kind}' with org_id; the RLS matrix covers tables only`).toContain(relation.kind);
+        expect(relation.rls, `${table} has org_id but row-level security is not enabled; in a new migration run SELECT crove_kernel.apply_tenant_rls('${table}') ` +
+            `(tenant table) or ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY (definer-only machinery, listed in MACHINERY)`).toBe(true);
+        factoryFor(table);
+
+        // RLS is enabled, not forced, so the owner bypasses it: no runtime role may own the table or act as its owner.
+        const { rows: owners } = await admin.query<{ role: string }>(
+          `SELECT r AS role FROM pg_catalog.unnest($1::text[]) r WHERE pg_catalog.pg_has_role(r, $2::text, 'MEMBER')`,
+          [RUNTIME_ROLES, relation.owner],
+        );
+        expect(owners.map((o) => o.role), `runtime roles that own ${table} (owner ${relation.owner})`).toEqual([]);
+
+        // Every role other than the owner (and roles acting as it) and superusers.
+        const { rows: grants } = await admin.query<{ role: string; op: string; bypass: boolean }>(
+          `SELECT r.rolname AS role, p AS op, r.rolbypassrls AS bypass
+           FROM pg_catalog.pg_roles r, pg_catalog.unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) p
+           WHERE NOT r.rolsuper AND r.rolname NOT LIKE 'pg\\_%'
+             AND NOT pg_catalog.pg_has_role(r.oid, (SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid = $1::regclass), 'MEMBER')
+             AND pg_catalog.has_table_privilege(r.oid, $1::regclass, p)
+           ORDER BY 1, 2`,
+          [table],
+        );
+        // TRUNCATE ignores RLS; REFERENCES and TRIGGER let a role probe or intercept rows outside it.
+        expect(grants.filter((g) => !['SELECT', 'INSERT', 'UPDATE', 'DELETE'].includes(g.op)), `privileges on ${table} that RLS does not govern`).toEqual([]);
+        expect(grants.filter((g) => g.bypass), `roles with BYPASSRLS and privileges on ${table}`).toEqual([]);
+
+        const { rows: policies } = await admin.query<{ name: string; permissive: boolean; cmd: string; roles: string[]; qual: string | null; check: string | null }>(
+          `SELECT p.polname AS name, p.polpermissive AS permissive, p.polcmd::text AS cmd,
+                  ARRAY(SELECT CASE WHEN o = 0 THEN 'public' ELSE pg_catalog.pg_get_userbyid(o) END FROM pg_catalog.unnest(p.polroles) o ORDER BY 1)::text[] AS roles,
+                  pg_catalog.pg_get_expr(p.polqual, p.polrelid) AS qual, pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid) AS check
+           FROM pg_catalog.pg_policy p WHERE p.polrelid = $1::regclass ORDER BY 1`,
+          [table],
+        );
+        const permissive = policies.filter((p) => p.permissive);
+        if (MACHINERY.has(table)) {
+          expect(grants, `${table} is listed as definer-only machinery, but these roles hold privileges on it`).toEqual([]);
+          expect(permissive, `${table} is definer-only machinery and needs no permissive policy`).toEqual([]);
+          return;
+        }
+        expect(grants.length, `${table} has org_id, no role may access it and it is not listed in MACHINERY`).toBeGreaterThan(0);
+        // Exactly the tenant policy; any other permissive policy would widen it (policies are OR-ed).
+        expect(permissive, `${table} must have exactly the tenant_isolation policy of crove_kernel.apply_tenant_rls`).toEqual([
+          { name: 'tenant_isolation', permissive: true, cmd: '*', roles: ['crove_tenant'], qual: TENANT_PREDICATE, check: TENANT_PREDICATE },
+        ]);
+      });
+
+      it('lets no actor read another org, and no context reads nothing', async () => {
+        factoryFor(table);
+        const { rows: seeded } = await admin.query<{ org: string; n: number }>(`SELECT org_id::text AS org, count(*)::int AS n FROM ${table} GROUP BY 1`);
+        const count = (org: OrgFixture) => seeded.find((s) => s.org === org.id)?.n ?? 0;
+        expect(count(orgs.B), `${table} has no org B rows to probe`).toBeGreaterThan(0);
+        expect(count(orgs.A), `${table} has no org A rows to probe`).toBeGreaterThan(0);
+        for (const actor of actors) {
+          const where = `${actor.name} reading ${table}`;
+          const outcome = await probe(actor, (c) => c.query(`SELECT org_id::text AS org FROM ${table}`));
+          if (!can(table, actor.role, 'SELECT')) {
+            expectDenied(outcome, PRIVILEGE_DENIED, where);
+            continue;
+          }
+          const { rows } = expectRows(outcome, where);
+          if (actor.org === null) {
+            expect(rows, `${where}: no context must read no rows`).toEqual([]);
+          } else {
+            expect(rows.filter((r) => r.org !== orgs.A.id), `${where}: rows of other orgs`).toEqual([]);
+            // Control: the same query sees the actor's own rows, so the empty result for org B is the org filter.
+            expect(rows.length, `${where}: its own org's rows`).toBe(count(orgs.A));
+          }
+          // Asking for org B by name changes nothing.
+          const byOrg = expectRows(await probe(actor, (c) => c.query(`SELECT org_id::text AS org FROM ${table} WHERE org_id = $1`, [orgs.B.id])), where);
+          expect(byOrg.rows, `${where}: org B rows by org_id`).toEqual([]);
+        }
+      });
+
+      it('lets no actor insert a row for another org, and no context inserts nothing', async () => {
+        const factory = factoryFor(table);
+        for (const actor of actors) {
+          const where = `${actor.name} inserting into ${table} for org B`;
+          const outcome = await probe(actor, (c) => {
+            const q = insertSql({ table, values: factory.make(orgs.B).row });
+            return c.query(q.text, q.values);
+          });
+          if (!can(table, actor.role, 'INSERT')) {
+            expectDenied(outcome, PRIVILEGE_DENIED, where);
+            continue;
+          }
+          expectDenied(outcome, factory.insertDenied ?? RLS_DENIED, where);
+          if (actor.org === null || factory.noInsertControl) continue;
+          // Control: the same factory's row for the actor's own org is accepted, so the refusal above is about the org.
+          const control = await probe(actor, async (c) => {
+            const built = factory.make(orgs.A);
+            for (const row of built.setup ?? []) {
+              const s = insertSql(row);
+              await c.query(s.text, s.values);
+            }
+            const q = insertSql({ table, values: built.row });
+            return c.query(q.text, q.values);
+          });
+          expect(expectRows(control, `${actor.name} inserting into ${table} for its own org (control)`).rowCount).toBe(1);
+        }
+      });
+
+      it('lets no actor update another org, or move its own rows there', async () => {
+        factoryFor(table);
+        for (const actor of actors) {
+          const where = `${actor.name} updating ${table}`;
+          const others = await probe(actor, (c) => c.query(`UPDATE ${table} SET org_id = org_id WHERE org_id = $1`, [orgs.B.id]));
+          const moved = await probe(actor, (c) => c.query(`UPDATE ${table} SET org_id = $1 WHERE org_id = $2`, [orgs.B.id, orgs.A.id]));
+          if (!(can(table, actor.role, 'UPDATE') && can(table, actor.role, 'SELECT'))) {
+            expectDenied(others, PRIVILEGE_DENIED, `${where} (org B rows)`);
+            expectDenied(moved, PRIVILEGE_DENIED, `${where} (moving org A rows to org B)`);
+            continue;
+          }
+          expect(expectRows(others, `${where} (org B rows)`).rowCount, `${where}: org B rows updated`).toBe(0);
+          // Pull every row into org A without reading a column: only rows the actor already sees may change.
+          const pulled = await sweep(actor, table, `UPDATE ${table} SET org_id = $1`, [orgs.A.id]);
+          if (pulled) expect(pulled.changed, `${where}: rows pulled into org A without a WHERE clause`).toBeLessThanOrEqual(pulled.visible);
+          if (actor.org === null) {
+            expect(expectRows(moved, `${where} (moving org A rows to org B)`).rowCount, `${where}: rows moved without a context`).toBe(0);
+            continue;
+          }
+          expectDenied(moved, RLS_DENIED, `${where} (moving org A rows to org B)`);
+          // Control: the same update on its own rows runs, so the zero above is the org filter.
+          const own = await probe(actor, (c) => c.query(`UPDATE ${table} SET org_id = org_id WHERE org_id = $1`, [orgs.A.id]));
+          expect(expectRows(own, `${where} (own rows, control)`).rowCount, `${where}: own rows updated`).toBeGreaterThan(0);
+        }
+      });
+
+      it('lets no actor delete or truncate another org', async () => {
+        factoryFor(table);
+        for (const actor of actors) {
+          const where = `${actor.name} deleting from ${table}`;
+          const outcome = await probe(actor, (c) => c.query(`DELETE FROM ${table} WHERE org_id = $1`, [orgs.B.id]));
+          if (!(can(table, actor.role, 'DELETE') && can(table, actor.role, 'SELECT'))) {
+            expectDenied(outcome, PRIVILEGE_DENIED, where);
+          } else {
+            expect(expectRows(outcome, where).rowCount, `${where}: org B rows deleted`).toBe(0);
+            // Delete every row without reading a column: only rows the actor already sees may go.
+            const swept = await sweep(actor, table, `DELETE FROM ${table}`, []);
+            if (swept) expect(swept.changed, `${where}: rows deleted without a WHERE clause`).toBeLessThanOrEqual(swept.visible);
+          }
+          // TRUNCATE ignores RLS, so it must be refused outright.
+          expectDenied(await probe(actor, (c) => c.query(`TRUNCATE ${table} CASCADE`)), PRIVILEGE_DENIED, `${actor.name} truncating ${table}`);
+        }
+        const { rows } = await admin.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table} WHERE org_id = $1`, [orgs.B.id]);
+        expect(rows[0]?.n, `${table} still has its org B rows`).toBeGreaterThan(0);
+      });
+    });
+  }
+});
