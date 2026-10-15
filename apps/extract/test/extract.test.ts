@@ -1,19 +1,21 @@
 // crove-extract (External-tenant gate T12): the HTTP limits, the parser process limits, what the parser process
 // cannot do (network, file writes, child processes, environment) and the credential guard at startup.
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { EXTRACT_CLIENT_TIMEOUT_MS, EXTRACT_LIMITS, EXTRACT_TIMING, worstCaseCallMs, zExtractResponse, type ExtractResponse } from '@crove/extract-contract';
-import { credentialVariables, loadExtractConfig, unexpectedVariables } from '../src/main.ts';
+import { IMAGE_MARKER, credentialVariables, enforcesAllowlist, loadExtractConfig, unexpectedVariables } from '../src/main.ts';
 import { DEFAULT_SANDBOX, PARSER_ENV, classifyExit, parserFlags, runSandboxed } from '../src/sandbox.ts';
 import { createExtractApp, createLimiter, type Runner } from '../src/server.ts';
 
 const FIXTURE = readFileSync(new URL('./fixtures/einvoice-basic.xml', import.meta.url));
 const encode = (text: string) => new TextEncoder().encode(text);
+// A marker path that never exists, so the tests do not depend on the machine they run on.
+const NO_MARKER = join(tmpdir(), `crove-extract-no-marker-${process.pid}`, 'none');
 
 // A one-page PDF with a text layer.
 function pdf(text: string): Uint8Array<ArrayBuffer> {
@@ -408,14 +410,43 @@ describe('crove-extract configuration', () => {
     expect(unexpectedVariables({ ...image, B_VAR: 'x', A_VAR: 'y' })).toEqual(['A_VAR', 'B_VAR']);
   });
 
-  it('only warns about credentials outside production, still without values', () => {
-    const warnings: string[] = [];
-    // A development shell holds many variables outside the allowlist; only credential-like names are mentioned.
-    const config = loadExtractConfig({ GITHUB_TOKEN: 'ghp_value', TERM_PROGRAM: 'vscode' }, (m) => warnings.push(m));
-    expect(config.PORT).toBe(8090);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/GITHUB_TOKEN/);
-    expect(warnings[0]).not.toMatch(/ghp_value|TERM_PROGRAM/);
+  it('only warns about credentials in an explicit development or test run, still without values', () => {
+    for (const nodeEnv of ['development', 'test']) {
+      const warnings: string[] = [];
+      // A development shell holds many variables outside the allowlist; only credential-like names are mentioned.
+      const config = loadExtractConfig({ NODE_ENV: nodeEnv, GITHUB_TOKEN: 'ghp_value', TERM_PROGRAM: 'vscode' }, (m) => warnings.push(m), {
+        markerPath: NO_MARKER,
+      });
+      expect(config.PORT).toBe(8090);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/GITHUB_TOKEN/);
+      expect(warnings[0]).not.toMatch(/ghp_value|TERM_PROGRAM/);
+    }
+  });
+
+  it('enforces the allowlist when NODE_ENV is unset, empty or anything but development or test', () => {
+    for (const nodeEnv of [undefined, '', 'staging', 'prod', 'Development', 'production']) {
+      const env = { ...(nodeEnv === undefined ? {} : { NODE_ENV: nodeEnv }), GITHUB_TOKEN: 'ghp_value' };
+      expect(enforcesAllowlist(env, NO_MARKER), String(nodeEnv)).toBe(true);
+      expect(() => loadExtractConfig(env, () => {}, { markerPath: NO_MARKER }), String(nodeEnv)).toThrow(/remove GITHUB_TOKEN from/);
+    }
+  });
+
+  it('inside the image (marker file present), NODE_ENV=development or test cannot switch the allowlist off', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'crove-extract-marker-'));
+    const marker = join(dir, 'crove-extract-image');
+    try {
+      writeFileSync(marker, 'test');
+      for (const nodeEnv of ['development', 'test']) {
+        const env = { NODE_ENV: nodeEnv, AI_API_KEY: 'sk-secret-value' };
+        expect(enforcesAllowlist(env, marker)).toBe(true);
+        expect(() => loadExtractConfig(env, () => {}, { markerPath: marker })).toThrow(/remove AI_API_KEY from/);
+        expect(() => loadExtractConfig(env, () => {}, { markerPath: marker })).not.toThrow(/sk-secret-value/);
+      }
+      expect(IMAGE_MARKER).toBe('/etc/crove-extract-image');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('starts with defaults and names a bad field without its value', () => {

@@ -1,5 +1,7 @@
 // crove-extract entry point (plan §7.6, External-tenant gate T12). The service must run with no credentials: in
-// production it refuses to start when its environment holds any variable outside an explicit allowlist.
+// its image, and wherever NODE_ENV is not explicitly development or test, it refuses to start when its
+// environment holds any variable outside an explicit allowlist. `pnpm dev` starts it through dev.ts.
+import { existsSync } from 'node:fs';
 import { serve } from '@hono/node-server';
 import { z } from 'zod';
 import { EXTRACT_CLIENT_TIMEOUT_MS, EXTRACT_LIMITS, EXTRACT_TIMING, worstCaseCallMs } from '@crove/extract-contract';
@@ -54,11 +56,32 @@ export function unexpectedVariables(env: NodeJS.ProcessEnv): string[] {
     .sort();
 }
 
-// In production (NODE_ENV=production, set by the image) any variable outside the allowlist refuses the start. In
-// development the shell holds many unrelated variables and often tokens; the parser processes never see them
-// (empty environment), so credential-like names only warn there.
-export function loadExtractConfig(env: NodeJS.ProcessEnv = process.env, warn: (message: string) => void = console.warn): ExtractConfig {
-  if (env.NODE_ENV === 'production') {
+// Written into the crove-extract image at build time (apps/extract/Dockerfile). Where it exists the allowlist
+// always applies, whatever NODE_ENV says: an env_file with NODE_ENV=development cannot switch the guard off.
+export const IMAGE_MARKER = '/etc/crove-extract-image';
+
+// Only an explicit development or test run, outside the image, relaxes the guard; an unset, empty or unknown
+// NODE_ENV enforces it.
+const RELAXED_NODE_ENV = new Set(['development', 'test']);
+
+export function enforcesAllowlist(env: NodeJS.ProcessEnv, markerPath: string = IMAGE_MARKER): boolean {
+  return existsSync(markerPath) || !RELAXED_NODE_ENV.has(env.NODE_ENV ?? '');
+}
+
+export interface LoadOptions {
+  // Where the image marker is looked for (tests point it at a temporary file).
+  markerPath?: string;
+}
+
+// In the image, and anywhere NODE_ENV is not explicitly development or test, any variable outside the allowlist
+// refuses the start. In development the shell holds many unrelated variables and often tokens; the parser
+// processes never see them (empty environment), so credential-like names only warn there.
+export function loadExtractConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  warn: (message: string) => void = console.warn,
+  options: LoadOptions = {},
+): ExtractConfig {
+  if (enforcesAllowlist(env, options.markerPath)) {
     const unexpected = unexpectedVariables(env);
     if (unexpected.length > 0) {
       throw new Error(`crove-extract runs with its own settings only; remove ${unexpected.join(', ')} from its environment`);
@@ -108,7 +131,7 @@ function main() {
   process.on('SIGINT', shutdown);
 }
 
-if (import.meta.main) {
+export function start() {
   try {
     main();
   } catch (error) {
@@ -116,3 +139,5 @@ if (import.meta.main) {
     process.exit(1);
   }
 }
+
+if (import.meta.main) start();

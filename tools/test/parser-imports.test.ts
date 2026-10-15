@@ -30,9 +30,12 @@ const PARSER_PACKAGES = [
   'libxmljs2',
 ];
 const PARSER_NAME = new RegExp(`^(${PARSER_PACKAGES.map((p) => p.replace(/[/.]/g, '\\$&')).join('|')})$`);
-const PARSER_IMPORT = new RegExp(
-  `\\bfrom\\s+['"](${PARSER_PACKAGES.join('|').replace(/\//g, '\\/')})(\\/[^'"]*)?['"]|import\\(\\s*['"](${PARSER_PACKAGES.join('|').replace(/\//g, '\\/')})(\\/[^'"]*)?['"]\\s*\\)|\\bparseEInvoiceXml\\b`,
-);
+// Any string literal naming a parser package (or a path inside one) counts, whatever loads it: `import ... from`,
+// `export ... from`, a side-effect `import 'x'`, a dynamic `import('x')`, `require('x')`, `require.resolve('x')`
+// or a `createRequire(...)('x')`. A false alarm (the name in an ordinary string) is fixed by rewording; a missed
+// import is not caught anywhere else. Calling the e-invoice parser by name counts too.
+const PARSER_SPECIFIER = PARSER_PACKAGES.map((p) => p.replace(/[/.]/g, '\\$&')).join('|');
+const PARSER_IMPORT = new RegExp(`(['"\`])(${PARSER_SPECIFIER})(\\/[^'"\`]*)?\\1|\\bparseEInvoiceXml\\b`);
 
 // Workspace packages the kernel image runs; their manifests must not list a parser.
 const KERNEL_MANIFESTS = [
@@ -124,10 +127,32 @@ describe('parsers stay in crove-extract', () => {
       "import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';",
       "import { DOMParser } from '@xmldom/xmldom';",
       'const invoice = parseEInvoiceXml(bytes);',
+      // Side-effect, re-export and dynamic imports.
+      "import 'postal-mime';",
+      'import "fast-xml-parser/src/fxp.js";',
+      "export { XMLParser } from 'fast-xml-parser';",
+      "export * from 'unpdf';",
+      "const pdf = await import( 'unpdf' );",
+      'const mod = await import(`pdfjs-dist`);',
+      // CommonJS and createRequire.
+      "const { XMLParser } = require('fast-xml-parser');",
+      'const sax = require("sax");',
+      "const where = require.resolve('postal-mime');",
+      "const xml2js = createRequire(import.meta.url)('xml2js');",
+      "const load = createRequire(import.meta.url);\nconst parser = load('mailparser');",
     ]) {
       expect(PARSER_IMPORT.test(line), line).toBe(true);
     }
-    expect(PARSER_IMPORT.test("import { z } from 'zod';")).toBe(false);
+    for (const line of [
+      "import { z } from 'zod';",
+      // exceljs's XML reader and look-alike names are not on the list.
+      "import 'saxes';",
+      "require('fast-xml-parser-plus');",
+      "import { x } from 'my-unpdf';",
+      '// fast-xml-parser runs only in crove-extract.',
+    ]) {
+      expect(PARSER_IMPORT.test(line), line).toBe(false);
+    }
   });
 
   it('no manifest of the kernel image lists a parsing library', () => {

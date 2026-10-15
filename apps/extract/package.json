@@ -9,7 +9,7 @@
     ".": "./src/server.ts"
   },
   "scripts": {
-    "dev": "node --watch src/main.ts",
+    "dev": "node --watch src/dev.ts",
     "start": "node src/main.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
