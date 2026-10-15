@@ -10,7 +10,7 @@ import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool } from '@crove/db';
 import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { buildKernelCommands, kernelQueries } from '@crove/kernel';
-import { Runtime } from '@crove/kernel-runtime';
+import { LocalDiskStore, Runtime } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from './auth.ts';
 import { loadConfig, type Config } from './config.ts';
@@ -88,6 +88,11 @@ async function main() {
   // API and worker build the same store from config; with STORAGE=s3 they share no volume (T7).
   const store = createBlobStore(config);
   console.log(`[storage] ${describeStorage(config)}`);
+  if (store instanceof LocalDiskStore) {
+    // Temporary files a crashed write left behind; a fresh one may belong to a write in another process.
+    const removed = await store.sweepTempFiles();
+    if (removed > 0) console.log(`[storage] removed ${removed} stale temporary file(s)`);
+  }
   const stops: Array<() => Promise<void>> = [];
 
   if (role === 'api' || role === 'all') {
