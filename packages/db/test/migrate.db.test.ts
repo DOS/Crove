@@ -161,16 +161,27 @@ suite('migrations with a runner that is not a superuser', () => {
           CREATE FUNCTION crove_t17.t17_ok() RETURNS int LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ SELECT 1 $$;
           CREATE SCHEMA IF NOT EXISTS crove_jobs;
           CREATE FUNCTION crove_jobs.t17_invoker() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;
-          CREATE FUNCTION crove_jobs.t17_definer() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;`);
+          CREATE FUNCTION crove_jobs.t17_definer() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;
+          GRANT CREATE ON SCHEMA crove_jobs TO crove_worker;`);
         await runner.query(`GRANT TEMPORARY ON DATABASE ${dbName} TO crove_app`);
+        const unpinned = (fn: string, settings: string, fix: string) =>
+          `function ${fn} has settings ${settings}, expected "search_path=pg_catalog, pg_temp"; fix in a new migration: ${fix}`;
+        const pin = (fn: string, kind = 'FUNCTION') => `ALTER ${kind} ${fn} SET search_path = pg_catalog, pg_temp`;
         expect(await hardeningViolations(runner)).toEqual([
-          'function crove_finance.t17_empty() has settings "search_path=""", expected "search_path=pg_catalog, pg_temp"',
-          'function crove_finance.t17_none() has settings (none), expected "search_path=pg_catalog, pg_temp"',
-          'function crove_jobs.t17_definer() has settings (none), expected "search_path=pg_catalog, pg_temp"',
-          'function crove_t17.t17_extra() has settings "search_path=pg_catalog, pg_temp; work_mem=64kB", expected "search_path=pg_catalog, pg_temp"',
-          'function crove_t17.t17_partial() has settings "search_path=pg_catalog", expected "search_path=pg_catalog, pg_temp"',
-          'function crove_t17.t17_proc() has settings (none), expected "search_path=pg_catalog, pg_temp"',
-          'role crove_app can create temporary objects (TEMPORARY on the database)',
+          unpinned('crove_finance.t17_empty()', '"search_path="""', pin('crove_finance.t17_empty()')),
+          unpinned('crove_finance.t17_none()', '(none)', pin('crove_finance.t17_none()')),
+          unpinned('crove_jobs.t17_definer()', '(none)', pin('crove_jobs.t17_definer()')),
+          unpinned(
+            'crove_t17.t17_extra()',
+            '"search_path=pg_catalog, pg_temp; work_mem=64kB"',
+            `ALTER FUNCTION crove_t17.t17_extra() RESET ALL; ${pin('crove_t17.t17_extra()')}`,
+          ),
+          unpinned('crove_t17.t17_partial()', '"search_path=pg_catalog"', pin('crove_t17.t17_partial()')),
+          unpinned('crove_t17.t17_proc()', '(none)', pin('crove_t17.t17_proc()', 'PROCEDURE')),
+          'role crove_worker may CREATE in schema crove_jobs, so functions there cannot stay exempt; fix: REVOKE CREATE ON SCHEMA crove_jobs FROM crove_worker',
+          `role crove_app can create temporary objects (TEMPORARY on database ${dbName}); fix as the database owner or a superuser: ` +
+            `GRANT TEMPORARY ON DATABASE ${dbName} directly to any non-Crove role that needs it, then ` +
+            `REVOKE TEMPORARY ON DATABASE ${dbName} FROM PUBLIC, crove_app`,
         ]);
       } finally {
         await runner.query('ROLLBACK');
@@ -191,5 +202,29 @@ suite('migrations with a runner that is not a superuser', () => {
       await withClient(runnerUrl, (runner) => runner.query('DROP FUNCTION crove_finance.t17_unpinned()'));
     }
     expect(await migrate({ adminUrl: runnerUrl, dir: MIGRATIONS })).toEqual([]);
+  });
+
+  // GRANT and REVOKE on a database by a role that does not own it only warn, so the file must refuse
+  // instead of landing in the ledger with nothing revoked.
+  it('refuses the TEMP revoke for a runner that does not own the database, until the owner has done it', async () => {
+    const file = (await readMigrations(MIGRATIONS)).find((f) => f.name.endsWith('_crove_kernel_revoke_temp.sql'));
+    expect(file).toBeDefined();
+    const other = `${dbName}_notowner`;
+    await withClient(ADMIN as string, (admin) => admin.query(`CREATE DATABASE ${other}`));
+    try {
+      const url = new URL(runnerUrl);
+      url.pathname = `/${other}`;
+      await withClient(url.toString(), async (runner) => {
+        await expect(runner.query(file?.sql ?? '')).rejects.toThrow(
+          new RegExp(`neither a superuser nor a member of the owner of database ${other}[\\s\\S]*Run migrate as the database owner`),
+        );
+        const adminUrl = new URL(ADMIN as string);
+        adminUrl.pathname = `/${other}`;
+        await withClient(adminUrl.toString(), (owner) => owner.query(`REVOKE TEMPORARY ON DATABASE ${other} FROM PUBLIC`));
+        await runner.query(file?.sql ?? '');
+      });
+    } finally {
+      await withClient(ADMIN as string, (admin) => admin.query(`DROP DATABASE IF EXISTS ${other} WITH (FORCE)`));
+    }
   });
 });

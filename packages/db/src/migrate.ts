@@ -91,11 +91,11 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
         EXECUTE format('REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC', s);
       END LOOP;
     END $$;`);
-    // Fails the run (and so the deploy) when a function or a role grant reopens the pg_temp hijack. The
-    // files are already committed, so the fix is a new forward migration.
+    // Fails the run (and so the deploy) when a function or a privilege reopens the pg_temp hijack. The
+    // files are already committed, so a function fix is a new forward migration; each item names its fix.
     const violations = await hardeningViolations(client);
     if (violations.length > 0) {
-      throw new Error(`database hardening check failed; add a migration that fixes:\n  - ${violations.join('\n  - ')}`);
+      throw new Error(`database hardening check failed (External-tenant gate T17):\n  - ${violations.join('\n  - ')}`);
     }
   } finally {
     await client.query("SELECT pg_advisory_unlock(hashtext('crove_migrate'))").catch(() => {});
@@ -118,13 +118,17 @@ export const PINNED_SEARCH_PATH = 'search_path=pg_catalog, pg_temp';
  *   Excluded: extension members (their scripts own them; extensions live in `extensions` anyway) and the
  *   pg-boss schema `crove_jobs`, which pg-boss creates and versions itself (and checks for drift); its
  *   functions are SECURITY INVOKER, so a SECURITY DEFINER function appearing there is still reported.
+ * - the `crove_jobs` exemption holds only while no role but the runner (and superusers) may CREATE in that
+ *   schema; otherwise such a role could plant an unscanned function there.
  * - no Crove role (every role named `crove_*`: login, group, definer-owner and module roles) other than the
  *   one running the check can create temporary objects in this database. Without TEMPORARY a session has no
  *   temporary schema to plant types, casts or functions in.
  */
 export async function hardeningViolations(client: pg.ClientBase): Promise<string[]> {
-  const { rows: functions } = await client.query<{ fn: string; config: string | null }>(
-    `SELECT p.oid::pg_catalog.regprocedure::text AS fn, pg_catalog.array_to_string(p.proconfig, '; ') AS config
+  const { rows: functions } = await client.query<{ fn: string; kind: string; config: string | null; extra: boolean }>(
+    `SELECT p.oid::pg_catalog.regprocedure::text AS fn, p.prokind::text AS kind,
+            pg_catalog.array_to_string(p.proconfig, '; ') AS config,
+            EXISTS (SELECT 1 FROM pg_catalog.unnest(p.proconfig) c WHERE c NOT LIKE 'search\\_path=%') AS extra
      FROM pg_catalog.pg_proc p
      JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname LIKE 'crove\\_%'
@@ -143,9 +147,31 @@ export async function hardeningViolations(client: pg.ClientBase): Promise<string
        AND pg_catalog.has_database_privilege(r.oid, pg_catalog.current_database(), 'TEMPORARY')
      ORDER BY 1`,
   );
+  const { rows: jobCreators } = await client.query<{ rolname: string }>(
+    `SELECT r.rolname FROM pg_catalog.pg_roles r
+     WHERE pg_catalog.to_regnamespace('crove_jobs') IS NOT NULL
+       AND r.rolname <> current_user AND NOT r.rolsuper
+       AND pg_catalog.has_schema_privilege(r.oid, 'crove_jobs', 'CREATE')
+     ORDER BY 1`,
+  );
+  const { rows: dbRows } = await client.query<{ name: string }>('SELECT pg_catalog.quote_ident(pg_catalog.current_database()) AS name');
+  const dbName = dbRows[0]?.name ?? 'current_database';
   return [
-    ...functions.map((f) => `function ${f.fn} has settings ${f.config === null ? '(none)' : `"${f.config}"`}, expected "${PINNED_SEARCH_PATH}"`),
-    ...roles.map((r) => `role ${r.rolname} can create temporary objects (TEMPORARY on the database)`),
+    ...functions.map((f) => {
+      const alter = `ALTER ${f.kind === 'p' ? 'PROCEDURE' : 'FUNCTION'} ${f.fn}`;
+      const fix = `${f.extra ? `${alter} RESET ALL; ` : ''}${alter} SET search_path = pg_catalog, pg_temp`;
+      return `function ${f.fn} has settings ${f.config === null ? '(none)' : `"${f.config}"`}, expected "${PINNED_SEARCH_PATH}"; fix in a new migration: ${fix}`;
+    }),
+    ...jobCreators.map(
+      (r) =>
+        `role ${r.rolname} may CREATE in schema crove_jobs, so functions there cannot stay exempt; fix: REVOKE CREATE ON SCHEMA crove_jobs FROM ${r.rolname}`,
+    ),
+    ...roles.map(
+      (r) =>
+        `role ${r.rolname} can create temporary objects (TEMPORARY on database ${dbName}); fix as the database owner or a superuser: ` +
+        `GRANT TEMPORARY ON DATABASE ${dbName} directly to any non-Crove role that needs it, then ` +
+        `REVOKE TEMPORARY ON DATABASE ${dbName} FROM PUBLIC, ${r.rolname}`,
+    ),
   ];
 }
 
