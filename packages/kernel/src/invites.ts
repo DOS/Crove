@@ -229,7 +229,17 @@ export const acceptInvite = defineCommand({
       .executeTakeFirstOrThrow();
     // A user who already belonged to the org keeps their role; the membership row then predates this transaction.
     const alreadyMember = invite.accepted_at !== null && membership.created_at.getTime() < invite.accepted_at.getTime();
-    ctx.audit({ invite_id: invite.id, invited_by: invite.invited_by, invited_role: invite.role, role: membership.role, already_member: alreadyMember });
+    // A membership change records target_user, role and previous_role like a role change (#88). The target is the
+    // actor: a user only ever joins through their own consent.
+    ctx.audit({
+      invite_id: invite.id,
+      invited_by: invite.invited_by,
+      invited_role: invite.role,
+      target_user: userId,
+      role: membership.role,
+      previous_role: alreadyMember ? membership.role : null,
+      already_member: alreadyMember,
+    });
     await ctx.activity(
       'kernel.member',
       userId,

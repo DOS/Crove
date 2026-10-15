@@ -66,12 +66,19 @@ export async function eligibleApprovers(trx: Transaction<Database>, orgId: strin
 
 export type ApproveReason = 'ok' | 'not_pending' | 'not_eligible' | 'four_eyes';
 
+// The P10 outcome recorded in the approval audit row:
+// pass            the approver is not an author;
+// self_approved   the approver is an author and the only eligible approver;
+// owner_override  every eligible approver is an author, so four-eyes can never be met, and an owner approves.
+export type FourEyesOutcome = 'pass' | 'self_approved' | 'owner_override';
+
 export interface ApprovalDecision {
   reason: ApproveReason;
   // Snapshot members who still hold an approving role now.
   eligibleCount: number;
-  // The approver is an author and is allowed only because fewer than 2 eligible humans exist (P10).
+  // The approver is an author (P10 outcome self_approved or owner_override).
   selfApproved: boolean;
+  fourEyes: FourEyesOutcome;
 }
 
 export interface ProposalPolicyInput {
@@ -91,7 +98,7 @@ export async function decideApproval(
   proposal: ProposalPolicyInput,
   options: { lock: boolean },
 ): Promise<ApprovalDecision> {
-  const deny = (reason: ApproveReason, eligibleCount = 0): ApprovalDecision => ({ reason, eligibleCount, selfApproved: false });
+  const deny = (reason: ApproveReason, eligibleCount = 0): ApprovalDecision => ({ reason, eligibleCount, selfApproved: false, fourEyes: 'pass' });
   if (proposal.status !== 'pending') return deny('not_pending');
   // R3 and anything a proposal executes needs a human approver (P12); system actors never approve.
   if (actor.type !== 'user') return deny('not_eligible');
@@ -115,10 +122,31 @@ export async function decideApproval(
   const eligible = new Set(live.filter((m) => policy.roles.includes(m.role)).map((m) => m.user_id));
   if (!eligible.has(actor.userId)) return deny('not_eligible', eligible.size);
 
-  const isAuthor = authors.some((a) => a.type === 'user' && a.id === actor.userId);
-  if (isAuthor && policy.fourEyes && eligible.size >= 2) return deny('four_eyes', eligible.size);
-  return { reason: 'ok', eligibleCount: eligible.size, selfApproved: isAuthor };
+  const userAuthors = new Set(authors.flatMap((a) => (a.type === 'user' ? [a.id] : [])));
+  if (!userAuthors.has(actor.userId)) return { reason: 'ok', eligibleCount: eligible.size, selfApproved: false, fourEyes: 'pass' };
+  if (!policy.fourEyes || eligible.size < 2) {
+    // P10: a sole eligible approver may approve their own work, flagged.
+    return { reason: 'ok', eligibleCount: eligible.size, selfApproved: true, fourEyes: 'self_approved' };
+  }
+  // Liveness (#88): when every eligible approver wrote part of this revision, four-eyes can never be met and the
+  // proposal could only be rejected. An owner among them may approve, flagged. The owner is the trust root and could
+  // reach the same result by demoting the others (audited), so this grants no new power; an admin may not.
+  const allAuthors = [...eligible].every((id) => userAuthors.has(id));
+  const actorRole = live.find((m) => m.user_id === actor.userId)?.role;
+  if (allAuthors && actorRole === 'owner') {
+    return { reason: 'ok', eligibleCount: eligible.size, selfApproved: true, fourEyes: 'owner_override' };
+  }
+  return deny('four_eyes', eligible.size);
 }
 
 // Users of the org in context who may edit a pending proposal (an edit is R1; the approval stays R3).
 export const EDITOR_ROLES: readonly MemberRole[] = ['owner', 'admin', 'member'];
+
+// The module command that computes a new revision's payload when a user edits a proposal (access: 'proposal_revision').
+export const PROPOSAL_REVISERS: Readonly<Record<string, string>> = { 'finance.purchase.record': 'finance.purchase.revise' };
+
+// Whether kernel.proposal.edit can edit this proposal's content at all: its command has a reviser and its authors
+// are recorded (an edit adds the editor to them). kernel.inbox.get reports the same through canEdit.
+export function proposalEditable(proposal: { command: string; authors: unknown }): boolean {
+  return Object.hasOwn(PROPOSAL_REVISERS, proposal.command) && parseAuthors(proposal.authors) !== null;
+}

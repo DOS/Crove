@@ -10,7 +10,7 @@ import {
 } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
-import { EDITOR_ROLES, decideApproval } from './approval.ts';
+import { EDITOR_ROLES, decideApproval, proposalEditable } from './approval.ts';
 import { MAX_EXTRACTION_VERSIONS, REEXTRACT_STALE_MINUTES, STALE_RUN_ERROR, latestExtraction } from './extraction.ts';
 import { inviteQueries } from './invites.ts';
 
@@ -183,7 +183,8 @@ export const inboxGet = defineQuery({
       result: result?.documentId && result.journalEntryId ? { documentId: result.documentId, journalEntryId: result.journalEntryId } : null,
       canApprove: approval.reason === 'ok' && !reading,
       approveReason: approval.reason,
-      canEdit: canChange,
+      // The same checks kernel.proposal.edit makes before it edits (NOT_EDITABLE otherwise).
+      canEdit: canChange && proposalEditable(row),
       canReject: canChange,
       extraction: latest
         ? { version: latest.version, status: latest.status, error: latest.error, inFlight: reading, proposalVersion: own?.version ?? null }

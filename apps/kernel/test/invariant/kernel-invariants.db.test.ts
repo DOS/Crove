@@ -11,12 +11,13 @@ import { SignJWT } from 'jose';
 import { sql, type Transaction } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { assertSystemContextAccess, createDb, createPool, type Database, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createExtractApp } from '@crove/extract';
 import { createExtractClient } from '@crove/extract-contract';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
+import { Runtime, defineCommand, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { actorOf, createAuthenticator } from '../../src/auth.ts';
 import { loadConfig } from '../../src/config.ts';
@@ -959,5 +960,128 @@ suite('kernel invariants on PostgreSQL', () => {
     const journal = await runtime.query<Array<{ id: string; lines: Array<{ accountCode: string }> }>>('finance.journal.list', {}, { actor: asUser(admin), orgId });
     expect(journal.find((j) => j.id === journalEntryId)?.lines.map((l) => l.accountCode)).toContain(account);
     expect((await approvalAudit(id)).at(-1)).toMatchObject({ actor_id: admin, outcome: 'ok', detail: { revision: 2, self_approved: false } });
+  });
+
+  it('lets an owner approve when every eligible approver is an author, flagged owner_override, and never an admin (#88)', async () => {
+    const { orgId, owner, people } = await policyOrg('All authors', ['admin']);
+    const admin = people[0] as string;
+    const id = await proposeIn(orgId, owner, '2101');
+    const line = (await view(orgId, admin, id)).payload.lines[0] as { lineNo: number; debitAccount: string };
+    const account = line.debitAccount === '6421' ? '6422' : '6421';
+    await runtime.execute('kernel.proposal.edit', { id, revision: 1, lineAccounts: [{ lineNo: line.lineNo, debitAccount: account }] }, { actor: asUser(admin), orgId });
+
+    // Both eligible approvers wrote revision 2 (the owner uploaded it, the admin edited it): four-eyes cannot be met.
+    expect(await view(orgId, admin, id)).toMatchObject({ revision: 2, canApprove: false, approveReason: 'four_eyes' });
+    await expect(approveAs(orgId, admin, id, 2)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED', status: 403 });
+    expect(await view(orgId, owner, id)).toMatchObject({ revision: 2, canApprove: true, approveReason: 'ok' });
+    await expect(approveAs(orgId, owner, id, 2)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
+    expect((await approvalAudit(id)).at(-1)).toMatchObject({
+      actor_id: owner,
+      outcome: 'ok',
+      detail: { revision: 2, policy: { P12: 'pass', P10: 'owner_override' }, eligible_approvers: 2, self_approved: true },
+    });
+  });
+
+  it('keeps four-eyes for the owner while another eligible approver is not an author (#88)', async () => {
+    const { orgId, owner, people } = await policyOrg('One non-author', ['admin', 'admin']);
+    const [editor, other] = people as [string, string];
+    const id = await proposeIn(orgId, owner, '2102');
+    const line = (await view(orgId, editor, id)).payload.lines[0] as { lineNo: number; debitAccount: string };
+    const account = line.debitAccount === '6421' ? '6422' : '6421';
+    await runtime.execute('kernel.proposal.edit', { id, revision: 1, lineAccounts: [{ lineNo: line.lineNo, debitAccount: account }] }, { actor: asUser(editor), orgId });
+
+    expect(await view(orgId, owner, id)).toMatchObject({ canApprove: false, approveReason: 'four_eyes' });
+    await expect(approveAs(orgId, owner, id, 2)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED' });
+    await expect(approveAs(orgId, editor, id, 2)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED' });
+    await approveAs(orgId, other, id, 2);
+    expect((await approvalAudit(id)).at(-1)).toMatchObject({ actor_id: other, outcome: 'ok', detail: { policy: { P10: 'pass' }, self_approved: false } });
+  });
+
+  it('reports canEdit exactly when kernel.proposal.edit would edit (#88)', async () => {
+    const { orgId, owner, people } = await policyOrg('Editable', ['member']);
+    const uploader = people[0] as string;
+    const id = await proposeIn(orgId, uploader, '2103');
+    const detail = await view(orgId, owner, id);
+    expect(detail).toMatchObject({ canEdit: true });
+    const line = detail.payload.lines[0] as { lineNo: number; debitAccount: string };
+    const edit = () =>
+      runtime.execute(
+        'kernel.proposal.edit',
+        { id, revision: 1, lineAccounts: [{ lineNo: line.lineNo, debitAccount: line.debitAccount === '6421' ? '6422' : '6421' }] },
+        { actor: asUser(owner), orgId },
+      );
+    const setColumn = (column: 'authors' | 'command', value: string) =>
+      withAdmin((admin) => admin.query(`UPDATE crove_kernel.proposal SET ${column} = $2 WHERE id = $1`, [id, value]));
+
+    // Authors that cannot be read: the edit refuses, so the Inbox offers no edit.
+    await setColumn('authors', JSON.stringify([{ type: 'robot' }]));
+    expect(await view(orgId, owner, id)).toMatchObject({ canEdit: false, canReject: true });
+    await expect(edit()).rejects.toMatchObject({ code: 'NOT_EDITABLE' });
+    // A command without a reviser: the same.
+    await setColumn('authors', JSON.stringify([{ type: 'user', id: uploader }]));
+    await setColumn('command', 'finance.unknown.record');
+    expect(await view(orgId, owner, id)).toMatchObject({ canEdit: false, canReject: true });
+    await expect(edit()).rejects.toMatchObject({ code: 'NOT_EDITABLE' });
+  });
+
+  it('runs a proposal command only for a proposal approved for it by the calling command (#88)', async () => {
+    const { orgId, owner, people } = await policyOrg('Proposal gate', ['admin']);
+    const admin = people[0] as string;
+    const id = await proposeIn(orgId, owner, '2104');
+    const { payload } = await view(orgId, admin, id);
+    const lineNo = payload.lines[0]?.lineNo ?? 1;
+    // A command with a bug: it runs a proposal's command with a proposal id it did not approve.
+    const rogue = defineCommand({
+      name: 'kernel.test_rogue_execute',
+      input: z.object({ proposalId: z.uuid(), command: z.string() }),
+      risk: 'R1',
+      access: ['owner', 'admin', 'member'],
+      handler: async (ctx, input) =>
+        ctx.run(
+          input.command,
+          input.command === 'finance.purchase.revise'
+            ? { payload, lineAccounts: [{ lineNo, debitAccount: '6422' }] }
+            : { payload, acceptFailedChecks: true },
+          { proposalId: input.proposalId },
+        ),
+    });
+    const gated = new Runtime(db).register({ commands: [...kernelCommands, ...financeCommands, rogue] });
+    const runRogue = (command: string) => gated.execute('kernel.test_rogue_execute', { proposalId: id, command }, { actor: asMfa(admin), orgId });
+    const refused = { code: 'FORBIDDEN', status: 403, details: { rule: 'proposal_state' } };
+    const documents = () =>
+      withAdmin(async (a) => (await a.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_finance.purchase_document WHERE proposal_id = $1', [id])).rows[0]?.n);
+    const setState = (status: string, executedBy: string | null) =>
+      withAdmin((a) => a.query('UPDATE crove_kernel.proposal SET status = $2, executed_command_id = $3 WHERE id = $1', [id, status, executedBy]));
+
+    // A pending proposal is not approved, so its command does not run.
+    await expect(runRogue('finance.purchase.record')).rejects.toMatchObject(refused);
+    // An approved state left by another command (not the caller) does not count either.
+    await setState('approved', randomUUID());
+    await expect(runRogue('finance.purchase.record')).rejects.toMatchObject(refused);
+    // Nor may a reviser run on a proposal that is not pending.
+    await expect(runRogue('finance.purchase.revise')).rejects.toMatchObject(refused);
+    await setState('pending', null);
+    expect(await documents()).toBe(0);
+    await withAdmin(async (a) => {
+      const { rows } = await a.query<{ outcome: string; detail: { code?: string; rule?: string } }>(
+        `SELECT outcome, detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.test_rogue_execute' ORDER BY occurred_at, id`,
+        [orgId],
+      );
+      expect(rows).toHaveLength(3);
+      expect(rows.every((r) => r.outcome === 'denied' && r.detail.code === 'FORBIDDEN' && r.detail.rule === 'proposal_state')).toBe(true);
+    });
+
+    // The approval itself runs it, once; afterwards the executed proposal runs nothing again.
+    await approveAs(orgId, admin, id, 1);
+    expect(await documents()).toBe(1);
+    await withAdmin(async (a) => {
+      const { rows } = await a.query('SELECT status FROM crove_kernel.proposal WHERE id = $1', [id]);
+      expect(rows).toEqual([{ status: 'executed' }]);
+    });
+    await expect(runRogue('finance.purchase.record')).rejects.toMatchObject(refused);
+    await expect(runRogue('finance.purchase.revise')).rejects.toMatchObject(refused);
+    expect(await documents()).toBe(1);
+    // Called directly, a proposal command is refused outright.
+    await expect(gated.execute('finance.purchase.record', { payload }, { actor: asMfa(owner), orgId })).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });

@@ -28,8 +28,11 @@ export interface UserActor {
 
 export type Actor = UserActor | { type: 'system'; component: string };
 
-// 'members' = owner/admin/member; 'system' = system actor only; 'proposal' = only via an approved proposal.
-export type Access = readonly MemberRole[] | 'system' | 'proposal';
+// 'members' = owner/admin/member; 'system' = system actor only;
+// 'proposal' = only run by the command that approved the proposal: the proposal is in state 'approved' for this
+//   command, and its executed_command_id is the calling command (kernel.proposal.approve), checked in the database;
+// 'proposal_revision' = only run inside an edit of a pending proposal (a module reviser computing the next revision).
+export type Access = readonly MemberRole[] | 'system' | 'proposal' | 'proposal_revision';
 
 export interface CommandDef<I = unknown, O = unknown> {
   name: string;
@@ -213,7 +216,7 @@ export class Runtime {
   }
 
   private authorize(access: Access, actor: Actor, role: MemberRole | null, viaProposal: boolean): void {
-    if (access === 'proposal') {
+    if (access === 'proposal' || access === 'proposal_revision') {
       if (!viaProposal) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt');
       return;
     }
@@ -245,6 +248,30 @@ export class Runtime {
       throw new DomainError('AUTH_UNAVAILABLE', 503, 'Chưa kiểm tra được phiên đăng nhập với máy chủ xác thực, hãy thử lại sau');
     }
     await actor.confirmLive();
+  }
+
+  // The proposal state gate (#88). A command that only runs through a proposal is checked against the proposal row
+  // in the database, not against the caller's say-so: 'proposal' needs the proposal in state 'approved' for exactly
+  // this command, approved by the calling command (executed_command_id), so no other path (an edit, a bug, a replay)
+  // can reach a posting command; 'proposal_revision' needs a pending proposal. The caller holds the row lock.
+  private async requireProposalState(
+    trx: Transaction<Database>,
+    orgId: string,
+    def: CommandDef<unknown, unknown>,
+    proposalId: string,
+    callerCommandId: string,
+  ): Promise<void> {
+    const proposal = await trx
+      .selectFrom('crove_kernel.proposal')
+      .select(['status', 'command', 'executed_command_id'])
+      .where('org_id', '=', orgId)
+      .where('id', '=', proposalId)
+      .executeTakeFirst();
+    const allowed =
+      def.access === 'proposal'
+        ? proposal?.status === 'approved' && proposal.command === def.name && proposal.executed_command_id === callerCommandId
+        : proposal?.status === 'pending';
+    if (!allowed) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt', { rule: 'proposal_state' });
   }
 
   private sessionDetail(actor: UserActor): Record<string, unknown> {
@@ -326,6 +353,9 @@ export class Runtime {
         const parsed = parseInput(nested.input, nestedInput);
         const proposalId = options?.proposalId ?? base.proposalId;
         this.authorize(nested.access, base.actor, base.role, proposalId !== null);
+        if (proposalId !== null && (nested.access === 'proposal' || nested.access === 'proposal_revision')) {
+          await this.requireProposalState(trx, base.orgId, nested, proposalId, commandId);
+        }
         this.requireStepUp(nested, base.actor);
         // An R3 command already confirmed the session live for this execution.
         if (def.risk !== 'R3') await this.requireLiveSession(nested, base.actor);

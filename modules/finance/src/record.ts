@@ -63,7 +63,7 @@ export const revisePurchase = defineCommand({
     lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).min(1).max(1000),
   }),
   risk: 'R1',
-  access: 'proposal',
+  access: 'proposal_revision',
   handler: async (ctx, { payload, lineAccounts }) => {
     const lineNos = new Set(payload.lines.map((l) => l.lineNo));
     if (lineAccounts.some((l) => !lineNos.has(l.lineNo))) throw new DomainError('UNKNOWN_LINE', 422, 'Có dòng không thuộc hóa đơn này');

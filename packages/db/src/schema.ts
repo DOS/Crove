@@ -158,7 +158,9 @@ export interface ExtractionTable {
   completed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
 
-export type ProposalStatus = 'pending' | 'executed' | 'rejected' | 'failed';
+// 'approved' exists only inside the transaction of kernel.proposal.approve today: it marks the proposal approved for
+// its command while that command runs (the runtime's proposal state gate), and the same transaction ends 'executed'.
+export type ProposalStatus = 'pending' | 'approved' | 'executed' | 'rejected' | 'failed';
 
 export interface ProposalTable {
   org_id: string;

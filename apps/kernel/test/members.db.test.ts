@@ -107,7 +107,7 @@ suite('member management on PostgreSQL', () => {
       outcome: 'ok',
       target_type: 'kernel.user',
       target_id: member.id,
-      detail: { target_user_id: member.id, old_role: 'member', new_role: 'admin', changed: true, aal: 'aal2', sessionId: asMfa(owner.id).sessionId },
+      detail: { target_user: member.id, role: 'admin', previous_role: 'member', changed: true, aal: 'aal2', sessionId: asMfa(owner.id).sessionId },
     });
     expect(await rows(orgId, 'activity', "kind = 'member.role_changed'")).toEqual([
       expect.objectContaining({ record_id: member.id, actor_id: owner.id, summary: `Đổi vai trò ${member.email} từ member thành admin` }),
@@ -119,7 +119,7 @@ suite('member management on PostgreSQL', () => {
     // Setting the role a member already has changes nothing, but is still audited.
     await runtime.execute('kernel.member.change_role', { userId: member.id, role: 'admin' }, { actor: asMfa(owner.id), orgId });
     const audits = await rows(orgId, 'audit_event', "command = 'kernel.member.change_role'");
-    expect(audits.at(-1)?.detail).toMatchObject({ old_role: 'admin', new_role: 'admin', changed: false });
+    expect(audits.at(-1)?.detail).toMatchObject({ target_user: member.id, role: 'admin', previous_role: 'admin', changed: false });
     expect(await rows(orgId, 'outbox_event', "type = 'kernel.member.role_changed'")).toHaveLength(1);
   });
 
@@ -134,7 +134,7 @@ suite('member management on PostgreSQL', () => {
       actor_id: owner.id,
       outcome: 'ok',
       target_id: member.id,
-      detail: { target_user_id: member.id, old_role: 'viewer', new_role: null, aal: 'aal2' },
+      detail: { target_user: member.id, role: null, previous_role: 'viewer', aal: 'aal2' },
     });
     expect(await rows(orgId, 'activity', "kind = 'member.removed'")).toEqual([
       expect.objectContaining({ record_id: member.id, summary: `Xóa thành viên ${member.email} (viewer)` }),
