@@ -38,7 +38,7 @@ describe('configuration guards', () => {
     expect(() => loadConfig(local)).not.toThrow();
     expect(() => loadConfig({ ...local, PUBLIC_URL: 'https://books.example.com' })).toThrow(/sample value/);
     expect(() => loadConfig({ ...base, AUTH_AUTOCONFIRM: 'true', PUBLIC_URL: 'https://books.example.com' })).toThrow(/AUTH_AUTOCONFIRM/);
-    expect(() => loadConfig({ ...base, PUBLIC_URL: 'https://books.example.com' })).not.toThrow();
+    expect(() => loadConfig({ ...base, PUBLIC_URL: 'https://books.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' })).not.toThrow();
   });
 
   // ADR-0028 section 1 and 3.
@@ -49,13 +49,30 @@ describe('configuration guards', () => {
 
   it('never resolves the session check to "no check" by default', () => {
     expect(loadConfig({ ...base, AUTH_UPSTREAM_URL: 'http://auth:9999' }).AUTH_SESSION_CHECK).toBe('db');
-    expect(loadConfig(base).AUTH_SESSION_CHECK).toBe('events');
+    // Crove Cloud: no bundled Supabase Auth, so the verified token plus Crove's records, and a live check for R3.
+    expect(loadConfig(base).AUTH_SESSION_CHECK).toBe('jwt');
+    expect(loadConfig({ ...base, AUTH_UPSTREAM_URL: 'http://auth:9999', AUTH_SESSION_CHECK: 'jwt' }).AUTH_SESSION_CHECK).toBe('jwt');
     expect(loadConfig({ ...base, AUTH_SESSION_CHECK: 'off' }).AUTH_SESSION_CHECK).toBe('off');
     expect(() => loadConfig({ ...base, AUTH_SESSION_CHECK: 'maybe' })).toThrow(/AUTH_SESSION_CHECK/);
+    // The events adapter (DOS ID lifecycle events) is not a mode until a later refinement builds it.
+    expect(() => loadConfig({ ...base, AUTH_SESSION_CHECK: 'events' })).toThrow(/AUTH_SESSION_CHECK/);
+  });
+
+  // ADR-0028 section 5: on a public URL, jwt needs an Auth URL for the R3 live check.
+  it('refuses jwt on a public URL without an Auth URL for the R3 live check', () => {
+    const publicUrl = { ...base, PUBLIC_URL: 'https://books.example.com' };
+    expect(() => loadConfig(publicUrl)).toThrow(/PUBLIC_AUTH_URL/);
+    expect(() => loadConfig({ ...publicUrl, AUTH_SESSION_CHECK: 'jwt' })).toThrow(/PUBLIC_AUTH_URL/);
+    expect(loadConfig({ ...publicUrl, PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' }).AUTH_SESSION_CHECK).toBe('jwt');
+    expect(loadConfig({ ...publicUrl, AUTH_UPSTREAM_URL: 'http://auth:9999' }).AUTH_SESSION_CHECK).toBe('db');
+    // Hosted Supabase answers only with the publishable key; without it every R3 would be a confusing 401.
+    const hosted = { ...publicUrl, PUBLIC_AUTH_URL: 'https://example.supabase.co/auth/v1' };
+    expect(() => loadConfig(hosted)).toThrow(/PUBLIC_AUTH_ANON_KEY/);
+    expect(loadConfig({ ...hosted, PUBLIC_AUTH_ANON_KEY: 'publishable' }).AUTH_SESSION_CHECK).toBe('jwt');
   });
 
   it('accepts the session check and MFA step-up turned off on localhost only', () => {
-    const publicUrl = { ...base, PUBLIC_URL: 'https://books.example.com' };
+    const publicUrl = { ...base, PUBLIC_URL: 'https://books.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' };
     expect(() => loadConfig({ ...publicUrl, AUTH_SESSION_CHECK: 'off' })).toThrow(/AUTH_SESSION_CHECK=off/);
     expect(() => loadConfig({ ...publicUrl, AUTH_STEP_UP: 'off' })).toThrow(/AUTH_STEP_UP=off/);
     expect(loadConfig(publicUrl).AUTH_STEP_UP).toBe('required');
