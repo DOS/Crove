@@ -41,6 +41,24 @@ export interface TenantMemberTable {
   created_at: DefaultTimestamp;
 }
 
+// A pending, accepted or revoked invite (issue #35). Tenant roles insert invites and may only set status,
+// revoked_at and revoked_by; crove_kernel.invite_accept() is the only writer of accepted_at and accepted_by.
+export interface MemberInviteTable {
+  org_id: string;
+  id: Generated<string>;
+  email: string;
+  role: 'admin' | 'member' | 'viewer';
+  token_sha256: string;
+  status: Generated<'pending' | 'accepted' | 'revoked'>;
+  invited_by: string;
+  created_at: DefaultTimestamp;
+  expires_at: Timestamp;
+  accepted_at: ColumnType<Date | null, never, never>;
+  accepted_by: ColumnType<string | null, never, never>;
+  revoked_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  revoked_by: ColumnType<string | null, string | null | undefined, string | null>;
+}
+
 export interface IdempotencyKeyTable {
   org_id: string;
   actor_key: string;
@@ -244,6 +262,7 @@ export interface Database {
   'crove_kernel.user_account': UserAccountTable;
   'crove_kernel.tenant': TenantTable;
   'crove_kernel.tenant_member': TenantMemberTable;
+  'crove_kernel.member_invite': MemberInviteTable;
   'crove_kernel.idempotency_key': IdempotencyKeyTable;
   'crove_kernel.outbox_event': OutboxEventTable;
   'crove_kernel.audit_event': AuditEventTable;

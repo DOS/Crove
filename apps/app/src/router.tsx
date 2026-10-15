@@ -2,10 +2,12 @@ import { Outlet, createRootRoute, createRoute, createRouter, redirect, type Erro
 import { Button } from './components/ui.tsx';
 import { getCurrentOrg, isUnauthenticated, orpc, queryClient, setCurrentOrg } from './lib/api.ts';
 import { accessToken, auth } from './lib/auth.ts';
+import { pendingInvite, rememberInvite, takeTokenFromHash } from './lib/invite.ts';
 import { AuthPage } from './routes/auth.tsx';
 import { DocumentsPage } from './routes/documents.tsx';
 import { InboxDetailPage } from './routes/inbox-detail.tsx';
 import { InboxPage } from './routes/inbox.tsx';
+import { InvitePage } from './routes/invite.tsx';
 import { JournalPage } from './routes/journal.tsx';
 import { OnboardingPage } from './routes/onboarding.tsx';
 import { OrgLayout } from './routes/org-layout.tsx';
@@ -40,6 +42,8 @@ const indexRoute = createRoute({
   path: '/',
   beforeLoad: async () => {
     await requireAuth();
+    // An invite opened before signing in (or signing up) is answered first.
+    if (pendingInvite()) throw redirect({ to: '/-/invite' });
     const me = await queryClient.fetchQuery(orpc.me.get.queryOptions()).catch(async (error: unknown) => {
       if (!isUnauthenticated(error)) throw error;
       await auth().signOut({ scope: 'local' });
@@ -52,6 +56,19 @@ const indexRoute = createRoute({
 });
 
 const loginRoute = createRoute({ getParentRoute: () => rootRoute, path: '/login', component: AuthPage });
+
+// Accept links are /-/invite#<token>. The token is moved from the address bar to storage before the sign-in
+// check, so it survives the detour through /login (and email confirmation after signing up).
+const inviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/-/invite',
+  beforeLoad: async () => {
+    const token = takeTokenFromHash();
+    if (token) rememberInvite(token);
+    await requireAuth();
+  },
+  component: InvitePage,
+});
 
 const onboardingRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -92,6 +109,7 @@ const settingsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'setti
 const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
+  inviteRoute,
   onboardingRoute,
   orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, settingsRoute]),
 ]);

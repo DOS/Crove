@@ -11,6 +11,7 @@ import {
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
 import { EDITOR_ROLES, decideApproval } from './approval.ts';
+import { inviteQueries } from './invites.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
@@ -235,5 +236,5 @@ export const sessionsList = defineQuery({
 });
 
 export function kernelQueries(options: OrgDetailOptions) {
-  return [orgDetailQuery(options), inboxList, inboxGet, filesRecent, fileGet, sessionsList];
+  return [orgDetailQuery(options), inboxList, inboxGet, filesRecent, fileGet, sessionsList, ...inviteQueries];
 }

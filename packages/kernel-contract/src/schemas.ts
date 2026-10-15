@@ -94,6 +94,39 @@ export const zOrgDetail = z.object({
   members: z.array(z.object({ userId: zId, email: z.string(), displayName: z.string().nullable(), role: zRole })),
 });
 
+// Member invites (issue #35). The token is 32 random bytes in base64url; only its SHA-256 is stored.
+export const zInviteToken = z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'invite token');
+export const zInviteRole = zRole.exclude(['owner']);
+export const zInviteStatus = z.enum(['pending', 'expired', 'accepted', 'revoked']);
+
+// What the inviter gets back. Never says whether the email has an account. acceptPath (a path on this server,
+// with the token in the fragment so it stays out of server logs and Referer headers) is shown once, to the inviter.
+export const zInviteCreated = z.object({
+  inviteId: zId,
+  email: z.string(),
+  role: zInviteRole,
+  expiresAt: z.string(),
+  acceptPath: z.string(),
+});
+
+export const zInvite = z.object({
+  id: zId,
+  email: z.string(),
+  role: zInviteRole,
+  status: zInviteStatus,
+  invitedBy: z.string().nullable(),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+});
+
+// What the invitee consents to before accepting.
+export const zInvitePreview = z.object({
+  orgName: z.string(),
+  role: zInviteRole,
+  invitedBy: z.string(),
+  expiresAt: z.string(),
+});
+
 // A Supabase Auth session as Crove tracks it (ADR-0028).
 export const zSession = z.object({
   sessionId: zId,

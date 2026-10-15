@@ -5,6 +5,7 @@ import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors, type ActorRef } from './approval.ts';
 import { createOrgCommand, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
+import { inviteCommands } from './invites.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal').
@@ -20,6 +21,8 @@ const APPROVERS = ADMINS;
 const zLineAccounts = z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).max(1000);
 
 // Membership and role changes are R3 (plan §4.7): they need a fresh second factor (P11, ADR-0028).
+// Adds a member without their consent; members should join by accepting an invite (invites.ts, #35). Kept until
+// no test fixture depends on it, then removed (step 3 of #35).
 export const addMember = defineCommand({
   name: 'kernel.member.add',
   input: z.object({ email: z.email(), role: zRole.exclude(['owner']) }),
@@ -161,7 +164,17 @@ export const removeMember = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('user_id', '=', input.userId)
       .execute();
-    ctx.audit({ target_user_id: input.userId, old_role: target.role, new_role: null });
+    // The removed member's pending invites go with them (they already stop working at acceptance while the inviter is
+    // not a member; revoking them keeps them from coming back if the person is invited again later).
+    const revokedInvites = await ctx.trx
+      .updateTable('crove_kernel.member_invite')
+      .set({ status: 'revoked', revoked_at: ctx.now, revoked_by: actorId })
+      .where('org_id', '=', ctx.orgId)
+      .where('invited_by', '=', input.userId)
+      .where('status', '=', 'pending')
+      .returning('id')
+      .execute();
+    ctx.audit({ target_user_id: input.userId, old_role: target.role, new_role: null, revoked_invites: revokedInvites.map((r) => r.id) });
     await ctx.activity('kernel.member', input.userId, 'member.removed', `Xóa thành viên ${target.email} (${target.role})`);
     await ctx.emit('kernel.member.removed', { userId: input.userId, oldRole: target.role });
     return { userId: input.userId, previousRole: target.role };
@@ -520,6 +533,7 @@ export const revokeSession = defineCommand({
 
 const otherKernelCommands = [
   addMember,
+  ...inviteCommands,
   changeMemberRole,
   removeMember,
   ingestFile,

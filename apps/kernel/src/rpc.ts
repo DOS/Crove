@@ -2,7 +2,7 @@
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { contract } from '@crove/kernel-contract';
-import { createOrg, myOrgs, type OrgSummary } from '@crove/kernel';
+import { createOrg, myOrgs, previewInvite, type AcceptedInvite, type OrgSummary } from '@crove/kernel';
 import { DomainError, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { actorOf, type AuthUser } from './auth.ts';
 
@@ -62,6 +62,16 @@ export function createRpcHandler(runtime: Runtime) {
       addMember: os.org.addMember.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.member.add', input, { actor, orgId })),
       ),
+      // No idempotency key: the answer carries the invite token, which must never be stored with a key.
+      invite: os.org.invite.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.member.invite.create', input, { actor, orgId })),
+      ),
+      listInvites: os.org.listInvites.handler(({ context }) =>
+        inOrg(context, (orgId, actor) => runtime.query('kernel.member.invites.list', {}, { actor, orgId })),
+      ),
+      revokeInvite: os.org.revokeInvite.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.member.invite.revoke', input, { actor, orgId })),
+      ),
       rotateInbound: os.org.rotateInbound.handler(({ context, input }) =>
         inOrg(context, async (orgId, actor) => {
           await runtime.execute('kernel.inbound.rotate', {}, { actor, orgId, idempotencyKey: input.idempotencyKey });
@@ -82,6 +92,17 @@ export function createRpcHandler(runtime: Runtime) {
           const { idempotencyKey, ...rest } = input;
           return runtime.execute('kernel.member.remove', rest, { actor, orgId, idempotencyKey });
         }),
+      ),
+    },
+    // Org-less: the invite names the org, so the x-crove-org header is ignored here.
+    invites: {
+      peek: os.invites.peek.handler(({ context, input }) =>
+        guard(() => runtime.forUser(actorOf(context.user), (db) => previewInvite(db, context.user.userId, input.token))),
+      ),
+      accept: os.invites.accept.handler(({ context, input }) =>
+        guard(() =>
+          runtime.executeOrgless<AcceptedInvite>('kernel.member.invite.accept', { token: input.token }, { actor: actorOf(context.user) }),
+        ),
       ),
     },
     sessions: {

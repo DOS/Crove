@@ -72,6 +72,12 @@ suite('inbound address rotation on PostgreSQL', () => {
     mfaAt: Math.floor(Date.now() / 1000),
   });
 
+  // Members join by accepting an invite (issue #35): the inviter invites the email, the user signed in with it accepts.
+  async function join(orgId: string, inviter: string, userId: string, email: string, role: 'admin' | 'member' | 'viewer') {
+    const { acceptPath } = await runtime.execute<{ acceptPath: string }>('kernel.member.invite.create', { email, role }, { actor: asMfa(inviter), orgId });
+    await runtime.executeOrgless('kernel.member.invite.accept', { token: acceptPath.split('#')[1] }, { actor: asUser(userId) });
+  }
+
   async function withAdmin<T>(fn: (admin: pg.Client) => Promise<T>): Promise<T> {
     const admin = new pg.Client({ connectionString: adminUrl });
     await admin.connect();
@@ -143,7 +149,7 @@ suite('inbound address rotation on PostgreSQL', () => {
     }
     const created = await createOrg(runtime, asUser(users.owner), 'Rotation Org');
     org = { orgId: created.orgId, slug: created.slug };
-    await runtime.execute('kernel.member.add', { email: 'rot-viewer@example.com', role: 'viewer' }, { actor: asMfa(users.owner), orgId: org.orgId });
+    await join(org.orgId, users.owner, users.viewer, 'rot-viewer@example.com', 'viewer');
   });
 
   afterAll(async () => {

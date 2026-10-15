@@ -217,8 +217,11 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
     orgSlug = String(created.body?.slug);
     for (const role of ['admin', 'member'] as const) {
       accounts[role].userId = String((await me(accounts[role])).body?.userId);
-      const added = await rpc('org/addMember', await tokenFor(accounts.owner, { mfaAgeS: 30 }), { email: accounts[role].email, role });
-      expect(added.status).toBe(200);
+      // Members join by accepting an invite (issue #35).
+      const invited = await rpc('org/invite', await tokenFor(accounts.owner, { mfaAgeS: 30 }), { email: accounts[role].email, role });
+      expect(invited.status).toBe(200);
+      const token = String(invited.body?.acceptPath).split('#')[1];
+      expect((await rpc('invites/accept', await tokenFor(accounts[role]), { token }, null)).status).toBe(200);
     }
     expect((await inbox(accounts.member)).status).toBe(200);
     // The check recorded the session it vouched for.
@@ -340,7 +343,9 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
     expect((await inboxIn(privateSession, ownOrg)).status).toBe(200);
   });
 
-  it('refuses a cross-org attack: a stranger who adds the victim to their own org cannot reach the victim elsewhere', async () => {
+  // The attack from the #90 review: a stranger makes the victim a member of their own org without consent, then acts
+  // on the victim's sessions as that org's owner. With invites (#35) the stranger's invite makes nobody a member.
+  it("refuses a cross-org attack: a stranger's invite makes the victim no member and reaches none of the victim's sessions", async () => {
     const victim = { subject: accounts.member.subject, email: accounts.member.email, session: randomUUID() };
     await signIn(victim.subject, victim.session);
     const victimOrg = await memberOrg();
@@ -351,20 +356,33 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
     attacker.userId = String((await me(attacker)).body?.userId);
     const evil = await rpc('org/create', await tokenFor(attacker), { name: 'Evil Org', idempotencyKey: randomUUID() }, null);
     const evilOrg = String(evil.body?.slug);
-    // Membership needs no consent from the victim; the attacker even has fresh MFA.
-    expect((await rpc('org/addMember', await tokenFor(attacker, { mfaAgeS: 10 }), { email: victim.email, role: 'member' }, evilOrg)).status).toBe(200);
+    // The attacker, even with fresh MFA, can only invite: the answer says nothing about the victim's account.
+    const invited = await rpc('org/invite', await tokenFor(attacker, { mfaAgeS: 10 }), { email: victim.email, role: 'member' }, evilOrg);
+    expect(invited.status).toBe(200);
+    expect(Object.keys(invited.body ?? {}).sort()).toEqual(['acceptPath', 'email', 'expiresAt', 'inviteId', 'role']);
+    const nobody = await rpc('org/invite', await tokenFor(attacker, { mfaAgeS: 10 }), { email: 'no-account@sessions.test', role: 'member' }, evilOrg);
+    expect(Object.keys(nobody.body ?? {}).sort()).toEqual(Object.keys(invited.body ?? {}).sort());
+    // The attacker holds the link but cannot accept it for the victim: the invite is bound to the victim's email.
+    const token = String(invited.body?.acceptPath).split('#')[1];
+    expect(await rpc('invites/accept', await tokenFor(attacker), { token }, null)).toMatchObject({ status: 403, body: { code: 'INVITE_EMAIL_MISMATCH' } });
+    const memberships = await sql(
+      `SELECT 1 FROM crove_kernel.tenant_member m JOIN crove_kernel.tenant t ON t.org_id = m.org_id WHERE t.slug = $1 AND m.user_id = $2`,
+      [evilOrg, accounts.member.userId],
+    );
+    expect(memberships.rowCount).toBe(0);
     const eventsBefore = (await outboxRevocations()).rowCount;
 
-    // Nothing about the victim's sessions outside the attacker's org.
-    const listed = await rpc('sessions/list', await tokenFor(attacker), { userId: accounts.member.userId }, evilOrg);
-    expect(listed).toMatchObject({ status: 200, body: [] });
-    // Revoking everything only reaches sessions seen in the attacker's org (none): no effect elsewhere.
-    const all = await rpc('sessions/revoke', await tokenFor(attacker, { mfaAgeS: 10 }), { userId: accounts.member.userId, all: true }, evilOrg);
-    expect(all).toMatchObject({ status: 200, body: { revoked: [] } });
-    // A named session is blocked in the attacker's org only.
-    expect((await rpc('sessions/revoke', await tokenFor(attacker), { userId: accounts.member.userId, sessionId: victim.session }, evilOrg)).status).toBe(200);
-    expect((await inboxIn(victim, evilOrg)).status).toBe(401);
+    // Without membership the attacker can neither list nor revoke the victim's sessions, named or all.
+    expect((await rpc('sessions/list', await tokenFor(attacker), { userId: accounts.member.userId }, evilOrg)).status).toBe(403);
+    expect((await rpc('sessions/revoke', await tokenFor(attacker, { mfaAgeS: 10 }), { userId: accounts.member.userId, all: true }, evilOrg)).status).toBe(403);
+    expect((await rpc('sessions/revoke', await tokenFor(attacker), { userId: accounts.member.userId, sessionId: victim.session }, evilOrg)).status).toBe(403);
+    // The victim was never in the attacker's org, and keeps working in their own.
+    expect(await inboxIn(victim, evilOrg)).toMatchObject({ status: 403, body: { code: 'NOT_A_MEMBER' } });
     expect((await inboxIn(victim, victimOrg)).status).toBe(200);
+    expect(
+      (await sql(`SELECT 1 FROM crove_kernel.auth_session_org WHERE user_id = $1 AND session_id = $2 AND status = 'revoked'`, [accounts.member.userId, victim.session]))
+        .rowCount,
+    ).toBe(0);
     expect((await me(victim)).status).toBe(200);
     expect((await outboxRevocations()).rowCount).toBe(eventsBefore);
     expect((await sql('SELECT 1 FROM auth.sessions WHERE id = $1', [victim.session])).rowCount).toBe(1);
@@ -471,7 +489,13 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
   });
 
   it('requires fresh MFA for membership changes through the API', async () => {
-    // A role change of an existing member (#36); adding someone new is covered by the org setup above.
+    // Inviting (#35) needs it too, for every role.
+    for (const mfaAgeS of [undefined, 10 * 60]) {
+      const token = await tokenFor(accounts.owner, mfaAgeS === undefined ? {} : { mfaAgeS });
+      expect(await rpc('org/invite', token, { email: 'step-up@sessions.test', role: 'viewer' })).toMatchObject({ status: 403, body: { code: 'STEP_UP_REQUIRED' } });
+    }
+    expect((await rpc('org/invite', await tokenFor(accounts.owner, { mfaAgeS: 20 }), { email: 'step-up@sessions.test', role: 'viewer' })).status).toBe(200);
+    // A role change of an existing member (#36).
     const add = async (mfaAgeS?: number) =>
       rpc('org/changeMemberRole', await tokenFor(accounts.owner, mfaAgeS === undefined ? {} : { mfaAgeS }), {
         userId: accounts.member.userId,

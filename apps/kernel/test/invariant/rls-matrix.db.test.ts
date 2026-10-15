@@ -31,7 +31,7 @@ const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.outbox
 // Tables whose row factory lands on main before the table itself. CI runs main's copy of this file on the PR that
 // adds a tenant table, so the factory has to be on main first; until the table exists, its factory is not stale.
 // Remove an entry once its table is on main.
-const PENDING_TABLES = new Set(['crove_kernel.member_invite']);
+const PENDING_TABLES = new Set<string>();
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -132,7 +132,10 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     }),
   },
   'crove_kernel.auth_session_org': { make: (o) => ({ row: { org_id: o.id, user_id: o.owner, session_id: randomUUID() } }) },
-  // Pending member invites (issue #35). An open invite per (org, email), so every row gets its own address.
+  // Pending member invites (issue #35). An open invite per (org, email), so every row gets its own address. Token
+  // hash and expiry take their defaults (an unusable random hash, seven days). Tenant roles may update only status,
+  // revoked_at and revoked_by (a column grant), so the update probes write status, which the guard trigger allows
+  // on a pending invite.
   'crove_kernel.member_invite': {
     make: (o) => ({ row: { org_id: o.id, email: `invite-${tag()}@rls.test`, role: 'member', invited_by: o.owner } }),
   },

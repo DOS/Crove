@@ -76,6 +76,12 @@ suite('kernel invariants on PostgreSQL', () => {
     mfaAt: Math.floor(Date.now() / 1000) - mfaAgeS,
   });
 
+  // Members join by accepting an invite (issue #35): the inviter invites the email, the user signed in with it accepts.
+  async function join(orgId: string, inviter: string, userId: string, email: string, role: 'admin' | 'member' | 'viewer') {
+    const { acceptPath } = await runtime.execute<{ acceptPath: string }>('kernel.member.invite.create', { email, role }, { actor: asMfa(inviter), orgId });
+    await runtime.executeOrgless('kernel.member.invite.accept', { token: acceptPath.split('#')[1] }, { actor: asUser(userId) });
+  }
+
   async function ingest(orgId: string, userId: string, bytes: Uint8Array) {
     const sha256 = sha256Hex(bytes);
     const storageKey = fileKey(orgId, sha256);
@@ -164,7 +170,7 @@ suite('kernel invariants on PostgreSQL', () => {
     users.viewer = await upsertIdentity(db, { issuer: 'test', subject: 'viewer', email: 'viewer@example.com', name: null });
     orgA = (await createOrg(runtime, asUser(users.owner), 'Org A')).orgId;
     orgB = (await createOrg(runtime, asUser(users.outsider), 'Org B')).orgId;
-    await runtime.execute('kernel.member.add', { email: 'viewer@example.com', role: 'viewer' }, { actor: asMfa(users.owner), orgId: orgA });
+    await join(orgA, users.owner, users.viewer, 'viewer@example.com', 'viewer');
   });
 
   afterAll(async () => {
@@ -376,18 +382,19 @@ suite('kernel invariants on PostgreSQL', () => {
     expect(await db.selectFrom('crove_kernel.user_account').select('id').execute()).toHaveLength(0);
   });
 
-  it('lets only owners grant admin, and never changes an owner', async () => {
+  it('lets only owners invite admins, and never changes an owner through an invite', async () => {
     const admin = await upsertIdentity(db, { issuer: 'test', subject: 'admin', email: 'admin@example.com', name: null });
     await upsertIdentity(db, { issuer: 'test', subject: 'member', email: 'member@example.com', name: null });
-    await runtime.execute('kernel.member.add', { email: 'admin@example.com', role: 'admin' }, { actor: asMfa(users.owner), orgId: orgA });
+    await join(orgA, users.owner, admin, 'admin@example.com', 'admin');
     const asAdmin = { actor: asMfa(admin), orgId: orgA };
-    await expect(runtime.execute('kernel.member.add', { email: 'member@example.com', role: 'admin' }, asAdmin)).rejects.toMatchObject({
+    await expect(runtime.execute('kernel.member.invite.create', { email: 'member@example.com', role: 'admin' }, asAdmin)).rejects.toMatchObject({
       status: 403,
     });
-    await expect(runtime.execute('kernel.member.add', { email: 'owner@example.com', role: 'viewer' }, asAdmin)).rejects.toMatchObject({
-      status: 403,
+    // The owner is a member already: an invite can never touch an existing membership.
+    await expect(runtime.execute('kernel.member.invite.create', { email: 'owner@example.com', role: 'viewer' }, asAdmin)).rejects.toMatchObject({
+      code: 'ALREADY_MEMBER',
     });
-    await expect(runtime.execute('kernel.member.add', { email: 'member@example.com', role: 'member' }, asAdmin)).resolves.toBeTruthy();
+    await expect(runtime.execute('kernel.member.invite.create', { email: 'member@example.com', role: 'member' }, asAdmin)).resolves.toBeTruthy();
   });
 
   it("refuses a storage key that belongs to another org", async () => {
@@ -406,8 +413,8 @@ suite('kernel invariants on PostgreSQL', () => {
     const member = await upsertIdentity(db, { issuer: 'test', subject: 'plain-member', email: 'plain-member@example.com', name: null });
     const approver = await upsertIdentity(db, { issuer: 'test', subject: 'approver', email: 'approver@example.com', name: null });
     const asOwner = { actor: asMfa(users.owner), orgId: orgA };
-    await runtime.execute('kernel.member.add', { email: 'plain-member@example.com', role: 'member' }, asOwner);
-    await runtime.execute('kernel.member.add', { email: 'approver@example.com', role: 'admin' }, asOwner);
+    await join(asOwner.orgId, users.owner, member, 'plain-member@example.com', 'member');
+    await join(asOwner.orgId, users.owner, approver, 'approver@example.com', 'admin');
     const proposal = await propose(variant('1238'));
 
     await expect(runtime.execute('kernel.proposal.approve', proposal, { actor: asUser(member), orgId: orgA })).rejects.toMatchObject({
@@ -468,7 +475,7 @@ suite('kernel invariants on PostgreSQL', () => {
     await expect(approve(asMfa(admin, 6 * 60))).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED', status: 403 });
     await expect(approve({ ...asMfa(admin), aal: 'aal1' as const })).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED' });
     await expect(
-      runtime.execute('kernel.member.add', { email: 'viewer@example.com', role: 'viewer' }, { actor: asUser(users.owner), orgId: orgA }),
+      runtime.execute('kernel.member.invite.create', { email: 'someone@example.com', role: 'viewer' }, { actor: asUser(users.owner), orgId: orgA }),
     ).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED' });
     const fresh = asMfa(admin, 60);
     await expect(approve(fresh)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
@@ -715,7 +722,11 @@ suite('kernel invariants on PostgreSQL', () => {
     await expect(runtime.execute('kernel.org.create', { name: 'x' }, { actor: asUser(users.owner), orgId: orgA })).rejects.toMatchObject({
       code: 'COMMAND_NOT_FOUND',
     });
-    await expect(runtime.executeOrgless('kernel.member.add', {}, { actor: asUser(users.owner) })).rejects.toMatchObject({
+    await expect(runtime.executeOrgless('kernel.member.invite.create', {}, { actor: asUser(users.owner) })).rejects.toMatchObject({
+      code: 'COMMAND_NOT_FOUND',
+    });
+    // Accepting an invite is org-less: the org comes from the invite, never from the caller.
+    await expect(runtime.execute('kernel.member.invite.accept', { token: 'x'.repeat(43) }, { actor: asUser(users.owner), orgId: orgA })).rejects.toMatchObject({
       code: 'COMMAND_NOT_FOUND',
     });
   });
@@ -771,8 +782,9 @@ suite('kernel invariants on PostgreSQL', () => {
     const people: string[] = [];
     for (const [i, role] of roles.entries()) {
       const email = `${role}${i}-${tag}@example.com`;
-      people.push(await upsertIdentity(db, { issuer: 'test', subject: `${role}${i}-${tag}`, email, name: null }));
-      await runtime.execute('kernel.member.add', { email, role }, { actor: asMfa(owner), orgId });
+      const person = await upsertIdentity(db, { issuer: 'test', subject: `${role}${i}-${tag}`, email, name: null });
+      people.push(person);
+      await join(orgId, owner, person, email, role);
     }
     // Role changes go through kernel.member.change_role (#36), not by adding an existing member again.
     const setRole = (userId: string, role: Role) => runtime.execute('kernel.member.change_role', { userId, role }, { actor: asMfa(owner), orgId });
