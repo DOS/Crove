@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { ExtractClient, ExtractFailure } from '@crove/extract-contract';
 import { zId, zPurchaseProposal, type PurchaseProposal } from '@crove/kernel-contract';
 import { defineQuery, type BlobStore, type Runtime } from '@crove/kernel-runtime';
-import { AiNotConfiguredError, AmountFormatError, type InvoiceExtractor } from '@crove/agent';
+import { AiNotConfiguredError, AmountFormatError, type InvoiceReader } from '@crove/agent';
 import {
   bookableLines,
   buildPurchaseJournal,
@@ -98,7 +98,7 @@ export const purchaseLookup = defineQuery({
 export interface ExtractDeps {
   runtime: Runtime;
   store: BlobStore;
-  extractor: InvoiceExtractor | null;
+  extractor: InvoiceReader | null;
   // The crove-extract client. The worker never parses PDF or XML itself.
   extract: ExtractClient;
   today?: () => string;

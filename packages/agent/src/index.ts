@@ -117,6 +117,10 @@ function cleanDecimal(value: string | null): string | null {
   return /^-?\d+(\.\d+)?$/.test(cleaned) ? cleaned : null;
 }
 
+// What the rest of Crove needs from an AI extractor: InvoiceExtractor, or another adapter with the same two reads
+// (the kernel's `ai` port, ADR-0030).
+export type InvoiceReader = Pick<InvoiceExtractor, 'fromText' | 'fromImage'>;
+
 export class AmountFormatError extends Error {}
 
 function requiredAmount(value: string | null, field: string, currency: string): string {

@@ -7,7 +7,7 @@
 import { hostname } from 'node:os';
 import pg from 'pg';
 import { z } from 'zod';
-import { deliverAlert, describeWebhook, type Alert, type AlertSinkOptions, type Finding } from './alert.ts';
+import { webhookAlertSink, type Alert, type AlertSink, type AlertSinkOptions, type Finding } from './alert.ts';
 
 export const EXIT = { ok: 0, unhealthy: 1, probeFailed: 2, deliveryFailed: 3 } as const;
 
@@ -183,6 +183,12 @@ export interface ProbeDeps {
   log?: (line: string) => void;
   error?: (line: string) => void;
   now?: () => Date;
+  // Replaces the default webhook sink (ADR-0030); fetch is then unused.
+  sink?: AlertSink;
+}
+
+function alertSink(config: ProberConfig, deps: ProbeDeps): AlertSink {
+  return deps.sink ?? webhookAlertSink({ webhookUrl: config.webhookUrl, fetch: deps.fetch, log: deps.log ?? ((line: string) => console.log(line)) });
 }
 
 /** One probe: returns the exit code. Never throws. */
@@ -190,7 +196,7 @@ export async function probeOnce(config: ProberConfig, deps: ProbeDeps = {}): Pro
   const log = deps.log ?? ((line: string) => console.log(line));
   const error = deps.error ?? ((line: string) => console.error(line));
   const at = (deps.now ?? (() => new Date()))().toISOString();
-  const sink = { webhookUrl: config.webhookUrl, fetch: deps.fetch, log };
+  const sink = alertSink(config, deps);
 
   let alert: Alert;
   let code: number;
@@ -224,12 +230,12 @@ export async function probeOnce(config: ProberConfig, deps: ProbeDeps = {}): Pro
     };
     code = EXIT.probeFailed;
   }
-  const delivery = await deliverAlert(alert, sink);
+  const delivery = await sink.deliver(alert);
   if (!delivery.ok) {
     error(`[prober] alert delivery: ${delivery.error}`);
     return EXIT.deliveryFailed;
   }
-  log(`[prober] alert sent to ${describeWebhook(config.webhookUrl)}`);
+  log(`[prober] alert sent to ${sink.describe()}`);
   return code;
 }
 
@@ -237,12 +243,13 @@ export async function sendTestAlert(config: ProberConfig, deps: ProbeDeps = {}):
   const log = deps.log ?? ((line: string) => console.log(line));
   const error = deps.error ?? ((line: string) => console.error(line));
   const at = (deps.now ?? (() => new Date()))().toISOString();
-  const delivery = await deliverAlert({ kind: 'test', instance: config.instance, at, findings: [] }, { webhookUrl: config.webhookUrl, fetch: deps.fetch, log });
+  const sink = alertSink(config, deps);
+  const delivery = await sink.deliver({ kind: 'test', instance: config.instance, at, findings: [] });
   if (!delivery.ok) {
     error(`[prober] test alert: ${delivery.error}`);
     return EXIT.deliveryFailed;
   }
-  log(`[prober] test alert sent to ${describeWebhook(config.webhookUrl)}`);
+  log(`[prober] test alert sent to ${sink.describe()}`);
   return EXIT.ok;
 }
 
@@ -282,7 +289,7 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   const every = args.everySeconds;
   // Under Docker this is PID 1, which gets no default SIGTERM handling: stop between probes at once.
   process.once('SIGTERM', () => process.exit(EXIT.ok));
-  (deps.log ?? console.log)(`[prober] probing every ${every} s, alerts to ${describeWebhook(config.webhookUrl)}`);
+  (deps.log ?? console.log)(`[prober] probing every ${every} s, alerts to ${alertSink(config, deps).describe()}`);
   for (;;) {
     await probeOnce(config, deps);
     await new Promise((resolve) => setTimeout(resolve, every * 1000));

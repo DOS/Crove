@@ -1,0 +1,207 @@
+// The composition root (plan Decision 12, ADR-0030). createKernel takes the configuration and one adapter per port
+// and starts the server roles; it builds no adapter itself. main.ts wires the open-source defaults from
+// configuration (defaultAdapters); a Crove Cloud entrypoint wires its own adapters into the same factory.
+import { serve } from '@hono/node-server';
+import { InvoiceExtractor, type InvoiceReader } from '@crove/agent';
+import { createExtractClient } from '@crove/extract-contract';
+import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
+import { buildKernelCommands, kernelQueries } from '@crove/kernel';
+import { DomainError, LocalDiskStore, Runtime, type BlobStore, type SessionStatusSource } from '@crove/kernel-runtime';
+import { financeCommands, financeQueries } from '@crove/mod-finance';
+import { createAuthenticator, type Authenticate } from './auth.ts';
+import type { Config } from './config.ts';
+import { createHttpApp } from './http.ts';
+import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
+import { createBlobStore } from './storage.ts';
+import { startWorker } from './worker.ts';
+
+// Identity (ADR-0027, ADR-0028): who the caller is and whether their session still holds. When
+// sessions.liveCheckForR3 is true, the authenticator must set confirmLive on each user, or every R3 command fails
+// closed with 503.
+export interface IdentityPort {
+  // Checked in the transaction of every user request; never "no check" in a server.
+  readonly sessions: SessionStatusSource;
+  // The API's request authenticator, bound to the API role's database.
+  authenticator(db: Db): Authenticate;
+  // Upstream sign-out after a Crove-side revoke; null keeps revocation in Crove only.
+  readonly revoker: SessionRevoker | null;
+}
+
+// Third-party credentials behind a connection binding (plan §7.4). No core feature uses one yet.
+export interface CredentialBroker {
+  readonly id: string;
+  credential(orgId: string, bindingId: string): Promise<string>;
+}
+
+// A connector to an outside system (e-invoice issuing, banks). The core ships none; Crove Cloud adds its own.
+export interface Connector {
+  readonly id: string;
+}
+
+// Which module entitlements an org holds (plan Decision 10). Self-host grants every module.
+export interface Billing {
+  entitlements(orgId: string): Promise<readonly string[]>;
+}
+
+export interface KernelAdapters {
+  identity: IdentityPort;
+  // The AI invoice reader; null runs without AI (e-invoice XML still works, PDF and images do not).
+  ai: InvoiceReader | null;
+  storage: BlobStore;
+  broker?: CredentialBroker;
+  connectors?: readonly Connector[];
+  billing?: Billing;
+}
+
+export type ResolvedAdapters = Required<KernelAdapters>;
+
+export type ServerRole = 'api' | 'worker' | 'all';
+
+export interface Kernel {
+  readonly config: Config;
+  readonly adapters: Readonly<ResolvedAdapters>;
+  // Starts the role's servers and resolves to a function that stops them in reverse order.
+  start(role: ServerRole): Promise<() => Promise<void>>;
+}
+
+// No-op defaults for the optional ports: nothing can be bound, no connector is installed, every module is on.
+export const noCredentialBroker: CredentialBroker = {
+  id: 'none',
+  async credential() {
+    throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình kho thông tin kết nối');
+  },
+};
+export const selfHostBilling: Billing = { entitlements: async () => ['full'] };
+
+const REQUIRED = ['identity', 'ai', 'storage'] as const;
+
+export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
+  // Typed callers cannot omit a port, but an entrypoint assembled at runtime can: fail at boot, not on first use.
+  // ai may be null (explicitly no AI), never undefined.
+  const given = adapters as Partial<KernelAdapters>;
+  const missing: string[] = REQUIRED.filter((port) => given[port] === undefined);
+  // A Runtime without a session source skips the ADR-0028 check, so the identity port must carry all three parts.
+  const identity = given.identity as Partial<IdentityPort> | undefined;
+  if (identity) {
+    if (typeof identity.sessions?.check !== 'function') missing.push('identity.sessions');
+    if (typeof identity.authenticator !== 'function') missing.push('identity.authenticator');
+    if (identity.revoker === undefined) missing.push('identity.revoker');
+  }
+  if (missing.length > 0) throw new Error(`createKernel: missing adapter(s) ${missing.join(', ')}`);
+  const resolved: ResolvedAdapters = {
+    identity: adapters.identity,
+    ai: adapters.ai,
+    storage: adapters.storage,
+    broker: adapters.broker ?? noCredentialBroker,
+    connectors: adapters.connectors ?? [],
+    billing: adapters.billing ?? selfHostBilling,
+  };
+
+  function buildRuntime(connectionString: string, applicationName: string) {
+    const pool = createPool({ connectionString, applicationName, max: 10, resetOnRelease: config.DB_RESET_ON_RELEASE === 'true' });
+    const db = createDb(pool);
+    // One database is the control plane and the only cell (Decision 14, plan §3.6).
+    const runtime = new Runtime(singleCell(db), {
+      // Every user request is checked against its session (ADR-0028); the identity port never resolves to "no check".
+      sessions: resolved.identity.sessions,
+      stepUp: config.AUTH_STEP_UP,
+    }).register({
+      commands: [
+        ...buildKernelCommands({
+          orgCreateLimits: { perDay: config.ORG_CREATE_LIMIT_PER_DAY, total: config.ORG_CREATE_LIMIT_TOTAL },
+          inboundRotateLimits: { perDay: config.INBOUND_ROTATE_LIMIT_PER_DAY, total: config.INBOUND_ROTATE_LIMIT_TOTAL },
+        }),
+        ...financeCommands,
+      ],
+      queries: [...kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null }), ...financeQueries],
+    });
+    return { pool, db, runtime };
+  }
+
+  async function start(role: ServerRole): Promise<() => Promise<void>> {
+    const api = role === 'api' || role === 'all';
+    const worker = role === 'worker' || role === 'all';
+    // The worker alone enters system context, so it never shares the API's login role (External-tenant gate T5).
+    const workerUrl = config.WORKER_DATABASE_URL;
+    if (worker && !workerUrl) throw new Error('WORKER_DATABASE_URL is required for the worker; connect it as crove_worker');
+    // Files and emails are parsed only in the sandbox (External-tenant gate T12); the worker always passes this client.
+    const extractUrl = config.EXTRACT_URL;
+    if (worker && !extractUrl) throw new Error('EXTRACT_URL is required for the worker; point it at the crove-extract service');
+
+    const store = resolved.storage;
+    if (store instanceof LocalDiskStore) {
+      // Temporary files a crashed write left behind; a fresh one may belong to a write in another process.
+      const removed = await store.sweepTempFiles();
+      if (removed > 0) console.log(`[storage] removed ${removed} stale temporary file(s)`);
+    }
+    const stops: Array<() => Promise<void>> = [];
+    // Safe to call twice (SIGTERM then SIGINT): the second call finds nothing left to stop.
+    const stopAll = async () => {
+      const pending = stops.splice(0).reverse();
+      for (const stop of pending) await stop().catch((e) => console.error(e));
+    };
+
+    try {
+      if (api) {
+        const { pool, db, runtime } = buildRuntime(config.DATABASE_URL, 'crove-api');
+        stops.push(() => pool.end());
+        await assertRlsEnforced(pool);
+        await assertSystemContextAccess(pool, 'denied');
+        const authenticate = resolved.identity.authenticator(db);
+        const app = createHttpApp({ config, runtime, store, authenticate, pool, aiEnabled: resolved.ai !== null });
+        const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });
+        console.log(`[api] listening on ${config.HOST}:${config.PORT}`);
+        stops.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+      }
+
+      if (worker && workerUrl && extractUrl) {
+        console.log(`[extract] parsing in crove-extract at ${new URL(extractUrl).host}`);
+        const { pool, db, runtime } = buildRuntime(workerUrl, 'crove-worker');
+        stops.push(() => pool.end());
+        await assertRlsEnforced(pool);
+        await assertSystemContextAccess(pool, 'granted');
+        stops.push(
+          await startWorker({
+            connectionString: workerUrl,
+            workerDb: db,
+            runtime,
+            store,
+            extractor: resolved.ai,
+            extract: createExtractClient({ url: extractUrl }),
+            inboundDomain: config.INBOUND_DOMAIN ?? null,
+            revoker: resolved.identity.revoker,
+          }),
+        );
+      }
+    } catch (error) {
+      await stopAll();
+      throw error;
+    }
+    return stopAll;
+  }
+
+  return { config, adapters: resolved, start };
+}
+
+// The open-source defaults, built from configuration: Supabase Auth identity (ADR-0028), any OpenAI-compatible
+// endpoint for AI, local disk or S3-compatible storage. No DOS service.
+export function defaultAdapters(config: Config): KernelAdapters {
+  return {
+    identity: {
+      sessions: createSessionStatusSource(config.AUTH_SESSION_CHECK),
+      authenticator: (db) => createAuthenticator(config, db),
+      revoker: createSessionRevoker(config),
+    },
+    ai:
+      config.AI_BASE_URL && config.AI_MODEL
+        ? new InvoiceExtractor({
+            baseURL: config.AI_BASE_URL,
+            apiKey: config.AI_API_KEY ?? null,
+            model: config.AI_MODEL,
+            supportsStructuredOutputs: config.AI_STRUCTURED_OUTPUTS === 'true',
+          })
+        : null,
+    // API and worker build the same store from config; with STORAGE=s3 they share no volume (T7).
+    storage: createBlobStore(config),
+  };
+}

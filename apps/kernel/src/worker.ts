@@ -5,7 +5,7 @@ import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
 import { DomainError, inboundKey, type BlobStore, type Runtime } from '@crove/kernel-runtime';
-import type { InvoiceExtractor } from '@crove/agent';
+import type { InvoiceReader } from '@crove/agent';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
@@ -46,7 +46,7 @@ export interface WorkerDeps {
   workerDb: Db;
   runtime: Runtime;
   store: BlobStore;
-  extractor: InvoiceExtractor | null;
+  extractor: InvoiceReader | null;
   // crove-extract (plan §7.6): every PDF, XML and MIME parse happens there, never in this process.
   extract: ExtractClient;
   inboundDomain: string | null;
