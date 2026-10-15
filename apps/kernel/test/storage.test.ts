@@ -19,7 +19,7 @@ import { processInboundEmail } from '../src/inbound.ts';
 import { createBlobStore, describeStorage } from '../src/storage.ts';
 import { inProcessExtract } from './extract-service.ts';
 
-const FIXTURE = readFileSync(new URL('../../../packages/l10n-vn/test/fixtures/einvoice-basic.xml', import.meta.url));
+const FIXTURE = readFileSync(new URL('../../extract/test/fixtures/einvoice-basic.xml', import.meta.url));
 const S3_URL = process.env.CROVE_TEST_S3_URL;
 const BASE = { DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: 'x'.repeat(32), AUTH_ISSUER: 'crove-auth', WEB_DIST: '/nonexistent' };
 

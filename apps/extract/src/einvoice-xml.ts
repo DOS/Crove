@@ -1,8 +1,21 @@
 // Parser for Vietnamese e-invoice XML (Decree 123/2020/ND-CP, Circular 78/2021/TT-BTC, format of
 // Decision 1450/QD-TCT). Deterministic, no LLM. Entity expansion is disabled and DOCTYPE is rejected.
+// It runs only inside a crove-extract parser process (plan §7.6, External-tenant gate T12). The invoice types,
+// money helpers and checks it shares with the worker stay in @crove/l10n-vn, which holds no parser.
 import { XMLParser } from 'fast-xml-parser';
-import { money, sum, toMoney } from './money.ts';
-import { lineContribution, normalizeNumber, normalizeSeries, type InvoiceLine, type InvoiceParty, type LineNature, type ParsedInvoice, type TaxBreakdown } from './invoice.ts';
+import {
+  lineContribution,
+  money,
+  normalizeNumber,
+  normalizeSeries,
+  sum,
+  toMoney,
+  type InvoiceLine,
+  type InvoiceParty,
+  type LineNature,
+  type ParsedInvoice,
+  type TaxBreakdown,
+} from '@crove/l10n-vn';
 
 export class EInvoiceParseError extends Error {}
 
@@ -74,11 +87,6 @@ function nature(code: string | null): LineNature {
     default:
       return 'goods';
   }
-}
-
-export function looksLikeEInvoiceXml(bytes: Uint8Array): boolean {
-  const head = new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, 4096));
-  return /<\s*(\w+:)?HDon[\s>]/.test(head) || /<\s*(\w+:)?TDiep[\s>]/.test(head);
 }
 
 export function parseEInvoiceXml(bytes: Uint8Array): ParsedInvoice {

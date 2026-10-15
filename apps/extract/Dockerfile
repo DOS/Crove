@@ -24,6 +24,9 @@ COPY --from=build /app/node_modules /app/node_modules
 COPY --from=build /app/packages/extract-contract /app/packages/extract-contract
 COPY --from=build /app/packages/l10n-vn /app/packages/l10n-vn
 COPY --from=build /app/apps/extract /app/apps/extract
+# Marker (apps/extract/src/main.ts, IMAGE_MARKER): in this image the environment allowlist always applies, even
+# when NODE_ENV is overridden. Owned by root, so the service user cannot remove it.
+RUN echo 'crove-extract image: the environment allowlist always applies' > /etc/crove-extract-image
 USER node
 EXPOSE 8090
 HEALTHCHECK --interval=10s --timeout=3s --retries=6 CMD node -e "fetch('http://127.0.0.1:8090/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

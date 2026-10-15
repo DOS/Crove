@@ -9,7 +9,7 @@
     ".": "./src/server.ts"
   },
   "scripts": {
-    "dev": "node --watch src/main.ts",
+    "dev": "node --watch src/dev.ts",
     "start": "node src/main.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
@@ -17,6 +17,7 @@
     "@crove/extract-contract": "workspace:*",
     "@crove/l10n-vn": "workspace:*",
     "@hono/node-server": "catalog:",
+    "fast-xml-parser": "catalog:",
     "hono": "catalog:",
     "postal-mime": "catalog:",
     "unpdf": "catalog:",

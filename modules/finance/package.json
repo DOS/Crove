@@ -20,7 +20,6 @@
     "@crove/l10n-vn": "workspace:*",
     "exceljs": "catalog:",
     "kysely": "catalog:",
-    "unpdf": "catalog:",
     "zod": "catalog:"
   }
 }

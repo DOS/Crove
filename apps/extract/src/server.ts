@@ -31,24 +31,38 @@ function answer(c: Context, result: ExtractResponse) {
   return c.json(result, result.ok ? 200 : EXTRACT_ERROR_STATUS[result.code]);
 }
 
-// Reads at most `max` bytes; null when the body is larger. A declared length over the limit is refused before
-// anything is read, and a body without a length is cut off as soon as it passes the limit.
-async function readBody(request: Request, max: number): Promise<Uint8Array | null> {
+// Reads at most `max` bytes; null when the body is larger, 'aborted' when the caller went away first. A declared
+// length over the limit is refused before anything is read, and a body without a length is cut off as soon as it
+// passes the limit. A caller that stops sending holds its slot only until it disconnects: the abort ends the read
+// even if the body stream itself never errors.
+async function readBody(request: Request, max: number, signal: AbortSignal): Promise<Uint8Array | null | 'aborted'> {
   const declared = Number(request.headers.get('content-length') ?? Number.NaN);
   if (Number.isFinite(declared) && declared > max) return null;
+  if (signal.aborted) return 'aborted';
   const reader = request.body?.getReader();
   if (!reader) return new Uint8Array(0);
+  const onAbort = () => void reader.cancel().catch(() => {});
+  signal.addEventListener('abort', onAbort, { once: true });
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > max) {
-      await reader.cancel().catch(() => {});
-      return null;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      // A cancelled read ends like a finished body; what arrived is incomplete and never parsed.
+      if (signal.aborted) return 'aborted';
+      if (done) break;
+      total += value.byteLength;
+      if (total > max) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+  } catch (error) {
+    if (signal.aborted) return 'aborted';
+    throw error;
+  } finally {
+    signal.removeEventListener('abort', onAbort);
   }
   const bytes = new Uint8Array(total);
   let offset = 0;
@@ -115,7 +129,8 @@ export function createExtractApp(options: ExtractAppOptions = {}) {
     // The body is read only once a slot is free, so waiting requests hold no bytes in memory.
     const signal = c.req.raw.signal;
     const result = await limit(signal, async () => {
-      const bytes = await readBody(c.req.raw, max);
+      const bytes = await readBody(c.req.raw, max, signal);
+      if (bytes === 'aborted') return 'aborted' as const;
       if (!bytes) return tooLarge;
       if (bytes.byteLength === 0) return failure('invalid', 'Tệp rỗng');
       return run(kind.data, bytes, signal);

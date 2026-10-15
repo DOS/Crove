@@ -1,12 +1,24 @@
 # Crove kernel + web app in one image. Roles: migrate | api | worker | all (default).
-FROM node:26-slim AS build
+# The image holds no PDF, XML or MIME parser (plan §7.6, External-tenant gate T12): files are parsed in
+# crove-extract (apps/extract/Dockerfile). tools/test/parser-imports.test.ts checks the dependency tree.
+FROM node:26-slim AS base
 WORKDIR /app
 ENV CI=true
 # pnpm 10 is plain JavaScript; it downloads the pnpm version pinned in package.json (packageManager).
 RUN npm install -g pnpm@10.34.7 --no-fund --no-audit
 COPY . .
-RUN pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "@crove/app..." \
+
+# The web app is built with its development dependencies; only its static output reaches the image.
+FROM base AS web
+RUN pnpm install --frozen-lockfile --filter "@crove/app..." \
  && pnpm --filter @crove/app build
+
+# The kernel with production dependencies only. --filter-prod follows dependencies, never devDependencies, when
+# it selects workspace projects: with --filter, crove-extract (a devDependency the database tests start) would be
+# selected too and its parsers installed. Neither they nor the source of the other apps reach the image.
+FROM base AS kernel
+RUN pnpm install --frozen-lockfile --prod --filter-prod "@crove/kernel-server..." \
+ && rm -rf apps/extract apps/app apps/web
 
 FROM node:26-slim
 ENV NODE_ENV=production \
@@ -15,7 +27,8 @@ ENV NODE_ENV=production \
     WEB_DIST=/app/apps/app/dist \
     MIGRATIONS_DIR=/app/supabase/migrations
 WORKDIR /app
-COPY --from=build --chown=node:node /app /app
+COPY --from=kernel --chown=node:node /app /app
+COPY --from=web --chown=node:node /app/apps/app/dist /app/apps/app/dist
 RUN mkdir -p /data/files && chown node:node /data/files
 USER node
 EXPOSE 8080

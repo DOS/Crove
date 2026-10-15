@@ -4,7 +4,7 @@
 import PostalMime from 'postal-mime';
 import type { Address } from 'postal-mime';
 import { EXTRACT_LIMITS, zExtractSuccess, type ExtractFailure, type ExtractKind, type ExtractResponse, type ExtractSuccess } from '@crove/extract-contract';
-import { EInvoiceParseError, parseEInvoiceXml } from '@crove/l10n-vn';
+import { EInvoiceParseError, parseEInvoiceXml } from './einvoice-xml.ts';
 
 const MiB = 1024 * 1024;
 

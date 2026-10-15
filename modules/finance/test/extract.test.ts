@@ -63,15 +63,17 @@ describe('extraction through crove-extract', () => {
     expect(executed).toHaveLength(0);
   });
 
-  it('fails closed without a sandbox client outside the test runner', async () => {
+  it('fails without a sandbox client, under the test runner too, instead of parsing in the worker', async () => {
     const { deps, executed } = harness(async () => ({ ok: false, code: 'invalid', message: 'x' }));
     const { extract: _unused, ...withoutClient } = deps;
-    const previous = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
-    try {
-      await expect(extractAndPropose(withoutClient as typeof deps, ORG, FILE)).rejects.toThrow(/crove-extract client/);
-    } finally {
-      process.env.NODE_ENV = previous;
+    for (const nodeEnv of ['test', 'production']) {
+      const previous = process.env.NODE_ENV;
+      process.env.NODE_ENV = nodeEnv;
+      try {
+        await expect(extractAndPropose(withoutClient as typeof deps, ORG, FILE)).rejects.toThrow(/crove-extract client/);
+      } finally {
+        process.env.NODE_ENV = previous;
+      }
     }
     expect(executed).toHaveLength(0);
   });

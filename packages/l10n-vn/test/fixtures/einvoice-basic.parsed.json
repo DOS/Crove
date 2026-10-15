@@ -1,0 +1,84 @@
+{
+  "source": "einvoice_xml",
+  "invoiceType": "HÓA ĐƠN GIÁ TRỊ GIA TĂNG",
+  "template": "1",
+  "series": "C26TAB",
+  "number": "1234",
+  "issueDate": "2026-09-15",
+  "currency": "VND",
+  "exchangeRate": "1",
+  "paymentMethod": "TM/CK",
+  "seller": {
+    "name": "CÔNG TY TNHH DỊCH VỤ MẪU",
+    "taxCode": "0101234565",
+    "address": "1 Đường Mẫu, Quận Mẫu, Hà Nội",
+    "email": "hoadon@example.com",
+    "phone": null
+  },
+  "buyer": {
+    "name": "CÔNG TY CỔ PHẦN NGƯỜI MUA MẪU",
+    "taxCode": "0309876547",
+    "address": "2 Đường Thử, TP Hồ Chí Minh",
+    "email": null,
+    "phone": null
+  },
+  "lines": [
+    {
+      "lineNo": 1,
+      "nature": "goods",
+      "code": "INT-01",
+      "description": "Cước dịch vụ internet tháng 9/2026",
+      "unit": "Tháng",
+      "quantity": "1",
+      "unitPrice": "1000000",
+      "amount": "1000000",
+      "vatRate": "10%"
+    },
+    {
+      "lineNo": 2,
+      "nature": "goods",
+      "code": null,
+      "description": "Phí quảng cáo Facebook",
+      "unit": "Gói",
+      "quantity": "2",
+      "unitPrice": "500000",
+      "amount": "1000000",
+      "vatRate": "10%"
+    },
+    {
+      "lineNo": 3,
+      "nature": "discount",
+      "code": null,
+      "description": "Chiết khấu thương mại",
+      "unit": null,
+      "quantity": null,
+      "unitPrice": null,
+      "amount": "200000",
+      "vatRate": "10%"
+    },
+    {
+      "lineNo": 4,
+      "nature": "note",
+      "code": null,
+      "description": "Ghi chú: thanh toán trong 30 ngày",
+      "unit": null,
+      "quantity": null,
+      "unitPrice": null,
+      "amount": "0",
+      "vatRate": null
+    }
+  ],
+  "taxBreakdown": [
+    {
+      "rate": "10%",
+      "taxableAmount": "1800000",
+      "vatAmount": "180000"
+    }
+  ],
+  "subtotal": "1800000",
+  "vatTotal": "180000",
+  "total": "1980000",
+  "totalInWords": "Một triệu chín trăm tám mươi nghìn đồng",
+  "taxAuthorityCode": "M2-26-ABCDE-00001234567",
+  "hasSignature": true
+}

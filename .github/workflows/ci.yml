@@ -66,3 +66,97 @@ jobs:
 
       - name: Build web app
         run: pnpm --filter @crove/app build
+
+  # The kernel image (External-tenant gate T12): it builds, every kernel module loads, the entry point starts, and
+  # no PDF, XML or MIME parser package is anywhere in it.
+  kernel-image:
+    name: Kernel image (boots, no parser packages)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      IMAGE: crove:ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the kernel image
+        run: docker build -t "$IMAGE" .
+
+      - name: Modules load and no parser package is in the image
+        run: |
+          docker run --rm --read-only -v "$PWD/apps/kernel/test/container:/c:ro" --entrypoint node "$IMAGE" /c/image-check.mjs /app
+
+      - name: The entry point starts and stops at the missing configuration
+        run: |
+          # Without DATABASE_URL the migrate role exits after every module of main.ts has loaded.
+          if docker run --rm "$IMAGE" migrate > boot.txt 2>&1; then
+            cat boot.txt; echo "::error::the kernel started without a database configuration"; exit 1
+          fi
+          cat boot.txt
+          grep -q 'invalid configuration: DATABASE_URL' boot.txt
+
+  # The crove-extract image as compose runs it (External-tenant gate T12): files are parsed inside the real
+  # container (the image's pnpm layout under the parser process's permission model), the service refuses an
+  # environment outside its allowlist, and nothing inside it reaches the outside.
+  extract-image:
+    name: crove-extract image (parse in the container, no egress)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      IMAGE: crove-extract:ci
+      NET: crove-extract-ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the crove-extract image
+        run: docker build -f apps/extract/Dockerfile -t "$IMAGE" .
+
+      - name: Refuses to start with a variable outside its allowlist, whatever NODE_ENV says
+        run: |
+          # The image marker keeps the allowlist on even when NODE_ENV is overridden to development, test or empty.
+          for node_env in production development test ''; do
+            if docker run --rm -e NODE_ENV="$node_env" -e EXTRA_SETTING=1 "$IMAGE" > refused.txt 2>&1; then
+              cat refused.txt; echo "::error::crove-extract started with EXTRA_SETTING (NODE_ENV='$node_env')"; exit 1
+            fi
+            cat refused.txt
+            grep -q 'remove EXTRA_SETTING' refused.txt
+          done
+
+      - name: Start it as compose does, on an internal network
+        run: |
+          docker network create --internal "$NET"
+          docker run -d --name crove-extract --network "$NET" --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --memory 1g --memory-swap 1g --cpus 1 --pids-limit 128 "$IMAGE"
+          for i in $(seq 1 60); do
+            if [ "$(docker inspect --format '{{.State.Health.Status}}' crove-extract)" = healthy ]; then exit 0; fi
+            sleep 1
+          done
+          docker logs crove-extract
+          echo "::error::crove-extract did not become healthy"; exit 1
+
+      - name: Parse files inside the real container
+        run: |
+          docker run --rm --network "$NET" --read-only --cap-drop ALL -v "$PWD/apps/extract/test:/t:ro" \
+            --entrypoint node "$IMAGE" /t/container/smoke.mjs http://crove-extract:8090 /t/fixtures
+
+      - name: No egress from the container
+        run: |
+          # In the network namespace of the running service: every probe must fail.
+          docker run --rm --network container:crove-extract -v "$PWD/apps/extract/test:/t:ro" \
+            --entrypoint node "$IMAGE" /t/container/egress.mjs blocked
+          # Control on an ordinary network: the same probes succeed, so the check above is not vacuous.
+          docker run --rm -v "$PWD/apps/extract/test:/t:ro" --entrypoint node "$IMAGE" /t/container/egress.mjs control
+
+      - name: Service log and cleanup
+        if: always()
+        run: |
+          docker logs crove-extract || true
+          docker rm -f crove-extract || true
+          docker network rm "$NET" || true
