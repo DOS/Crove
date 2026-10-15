@@ -3,7 +3,7 @@
 import { sql, type Transaction } from 'kysely';
 import { v7 as uuidv7 } from 'uuid';
 import type { z } from 'zod';
-import type { Database, Db, MemberRole } from '@crove/db';
+import { contextTaint, type Database, type Db, type MemberRole } from '@crove/db';
 import { DomainError, toDomainError } from './errors.ts';
 import { sha256Hex } from './storage.ts';
 
@@ -141,6 +141,26 @@ export interface ExecuteOrglessOptions {
   idempotencyKey?: string;
 }
 
+// Logs a failure that maps to INTERNAL 500. A context error means a caller bug or an attack, never a user's mistake:
+// CONTEXT_REENTRY is a second enter_context in one transaction (T10), CONTEXT_SEAL_INVALID a context or seal that
+// does not verify (T11). Each gets its own alert line, `[alert] <code>`, naming the request with ids only, to alert
+// on. The db layer's `[db] closing a pooled connection after <code>` is a separate line about the connection; it
+// names no request.
+function logInternal(where: string, error: unknown, ids: { orgId?: string | null; actor?: Actor } = {}): void {
+  const code = contextTaint(error);
+  if (!code) {
+    console.error(`[${where}]`, error);
+    return;
+  }
+  const actor = ids.actor;
+  console.error(`[alert] ${code}`, {
+    where,
+    orgId: ids.orgId || null,
+    actorType: actor?.type ?? null,
+    actorId: actor ? (actor.type === 'user' ? actor.userId : actor.component) : null,
+  });
+}
+
 export class Runtime {
   private readonly commands = new Map<string, CommandDef<unknown, unknown>>();
   private readonly queries = new Map<string, QueryDef<unknown, unknown>>();
@@ -180,6 +200,9 @@ export class Runtime {
     return this.enterContext(trx, actor, orgId);
   }
 
+  // Works on a hot standby too: the re-entry guard's advisory lock and pg_locks read are allowed during recovery
+  // (PostgreSQL 17, probed in #105). What a standby refuses is every write (25006, INTERNAL 500): commands, a session
+  // check that records a first-seen session, refusal audits. Replica reads are not wired up (plan §3.3).
   private async enterContext(trx: Transaction<Database>, actor: Actor, orgId: string): Promise<MemberRole | null> {
     if (actor.type === 'system') {
       await sql`SELECT crove_kernel.enter_system_context(${orgId}::uuid)`.execute(trx);
@@ -424,7 +447,7 @@ export class Runtime {
       if (entered && !orgIsNew && (domain.status === 403 || domain.status === 409 || domain.status === 422)) {
         await this.writeRefusalAudit(name, def, input, inputSha256, actor, orgId, domain);
       }
-      if (domain.code === 'INTERNAL') console.error(`[execute ${name}]`, error);
+      if (domain.code === 'INTERNAL') logInternal(`execute ${name}`, error, { orgId, actor });
       throw domain;
     }
   }
@@ -479,6 +502,7 @@ export class Runtime {
         error: lost.code,
         sqlState: typeof sqlState === 'string' ? sqlState : null,
       });
+      if (contextTaint(auditError)) logInternal(`execute ${name} refusal audit`, auditError, { orgId, actor });
     }
   }
 
@@ -501,7 +525,7 @@ export class Runtime {
       });
     } catch (error) {
       const domain = toDomainError(error);
-      if (domain.code === 'INTERNAL') console.error(`[query ${name}]`, error);
+      if (domain.code === 'INTERNAL') logInternal(`query ${name}`, error, options);
       throw domain;
     }
   }
@@ -516,7 +540,7 @@ export class Runtime {
       });
     } catch (error) {
       const domain = toDomainError(error);
-      if (domain.code === 'INTERNAL') console.error('[forUser]', error);
+      if (domain.code === 'INTERNAL') logInternal('forUser', error, { actor });
       throw domain;
     }
   }
@@ -527,7 +551,7 @@ export class Runtime {
       return await fn(this.db);
     } catch (error) {
       const domain = toDomainError(error);
-      if (domain.code === 'INTERNAL') console.error('[orgless]', error);
+      if (domain.code === 'INTERNAL') logInternal('orgless', error);
       throw domain;
     }
   }

@@ -303,6 +303,51 @@ suite('kernel on PostgreSQL', () => {
     expect(left).toBe(0);
   });
 
+  // A session-level lock on the re-entry guard's key (T10) left on a pooled connection, by a caller bug or an attack,
+  // makes every enter_context on that backend raise CONTEXT_REENTRY. The pool recovers either way (#117), and the
+  // runtime logs the request that hit it on its own alert line (#105).
+  it('alerts on CONTEXT_REENTRY and recovers a pooled connection left holding the context lock (#105)', async () => {
+    const leak = async (target: pg.Pool) => {
+      const c = await target.connect();
+      const { rows } = await c.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+      await c.query('SELECT pg_advisory_lock(1129467734, pg_backend_pid())');
+      c.release();
+      return rows[0]?.pid;
+    };
+    const backendOf = async (target: pg.Pool) => (await target.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
+    const getOrg = (r: Runtime) => r.query<{ orgId: string }>('kernel.org.get', {}, { actor: asUser(users.owner), orgId: orgA });
+
+    for (const resetOnRelease of [true, false]) {
+      const single = createPool({ connectionString: appUrl, max: 1, resetOnRelease });
+      const r = new Runtime(createDb(single)).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: 'in.test' }) });
+      try {
+        await captureErrors(async (logged) => {
+          const backend = await leak(single);
+          if (resetOnRelease) {
+            // The reset on release dropped the lock: the same backend serves the next request, nothing to alert on.
+            await expect(getOrg(r)).resolves.toMatchObject({ orgId: orgA });
+            expect(await backendOf(single)).toBe(backend);
+            expect(logged).not.toHaveBeenCalled();
+            return;
+          }
+          // Without the reset the next request on that backend fails closed, as a 500 that names nothing.
+          await expect(getOrg(r)).rejects.toMatchObject({ code: 'INTERNAL', status: 500 });
+          // The connection is released (and closed) before the runtime sees the error, so the db line comes first.
+          expect(logged.mock.calls).toEqual([
+            ['[db] closing a pooled connection after CONTEXT_REENTRY'],
+            ['[alert] CONTEXT_REENTRY', { where: 'query kernel.org.get', orgId: orgA, actorType: 'user', actorId: users.owner }],
+          ]);
+          // The tainted connection was closed, so the next request gets a new backend and succeeds.
+          await expect(getOrg(r)).resolves.toMatchObject({ orgId: orgA });
+          expect(await backendOf(single)).not.toBe(backend);
+          expect(logged).toHaveBeenCalledTimes(2);
+        });
+      } finally {
+        await single.end();
+      }
+    }
+  });
+
   it('turns an e-invoice into a proposal, and records it once on approval', async () => {
     const { fileId, duplicate } = await ingest(orgA, users.owner, FIXTURE);
     expect(duplicate).toBe(false);

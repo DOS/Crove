@@ -1,5 +1,6 @@
-// Micro-benchmark, not a test (issue #117): what the pool reset on release costs, and what re-checking current
-// membership on every context helper call (plan §4.5) would cost compared with today's seal-only check. Skipped
+// Micro-benchmark, not a test (issues #117, #105): what the pool reset on release costs, what re-checking current
+// membership on every context helper call (plan §4.5) would cost compared with today's seal-only check, and what
+// the pg_locks read of the re-entry guard (T10) costs under concurrency and with many unrelated locks held. Skipped
 // unless CROVE_BENCH=1, so CI never runs it. Run it with
 //   CROVE_BENCH=1 CROVE_TEST_ADMIN_URL=<superuser url> pnpm exec vitest run --project db apps/kernel/test/context-cost.db.test.ts
 // It creates and drops its own database and prints a table; the numbers depend on the machine and the network.
@@ -227,4 +228,101 @@ suite('context cost micro-benchmark (#117)', () => {
       await c.end();
     }
   }, 600_000);
+
+  // The re-entry guard reads pg_locks, i.e. pg_lock_status(): it takes every lock-manager partition lock (and each
+  // backend's fast-path lock) in shared mode and copies the whole lock table, so its cost grows with the locks held
+  // server-wide and it briefly holds off advisory and other non-fast-path lock acquisitions everywhere. Compared
+  // with the guard minus that read (the settings and seal check alone, the only cheaper marker; plan §4.5 item 1
+  // says why it is not enough on its own), at 1, 8 and 32 concurrent connections, with and without thousands of
+  // unrelated advisory locks held by another session.
+  it('measures the pg_locks read of the re-entry guard under concurrency and lock load (#105)', async () => {
+    const CONCURRENCY = [1, 8, 32];
+    const BACKGROUND_LOCKS = [0, 1000, 4000];
+    const { rows: def } = await withAdmin((a) =>
+      a.query<{ def: string }>(`SELECT pg_get_functiondef('crove_kernel.context_reentry_guard()'::regprocedure) AS def`),
+    );
+    const original = def[0]?.def as string;
+    expect(original).toContain('pg_locks');
+    // Same function minus the pg_locks read: the settings check and the transaction lock stay.
+    const withoutRead = original.replace(/IF EXISTS \(\s*SELECT 1 FROM pg_catalog\.pg_locks[\s\S]*?END IF;/, '');
+    expect(withoutRead).not.toContain('pg_locks');
+
+    // Server-side loop, no round trips: one transaction per iteration, each one enter_context and COMMIT.
+    const loop = (n: number) => `DO $d$ BEGIN FOR i IN 1..${n} LOOP
+        PERFORM crove_kernel.enter_context('${owner}'::uuid, '${orgId}'::uuid); COMMIT; END LOOP; END $d$`;
+    // A request-shaped transaction with round trips; its latency in microseconds.
+    const timedTransaction = async (c: pg.Client) => {
+      const start = process.hrtime.bigint();
+      await transaction(c);
+      return Number(process.hrtime.bigint() - start) / 1000;
+    };
+    const pct = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.floor((values.length - 1) * p)] as number;
+
+    const clients = await Promise.all(
+      Array.from({ length: Math.max(...CONCURRENCY) }, async () => {
+        const c = new pg.Client({ connectionString: appUrl });
+        await c.connect();
+        return c;
+      }),
+    );
+    const holder = new pg.Client({ connectionString: adminUrl });
+    await holder.connect();
+    const lines: string[] = [];
+    try {
+      for (const background of BACKGROUND_LOCKS) {
+        if (background > 0) {
+          await holder.query(`SELECT count(pg_advisory_lock(42, g)) FROM generate_series(1, ${background}) g`);
+        }
+        const { rows: held } = await holder.query<{ n: number }>('SELECT count(*)::int AS n FROM pg_locks');
+        // In-database cost of the guard's lookup alone, one PERFORM per iteration minus an empty loop. Not
+        // perCall(): a correlated subquery over pg_locks rescans the function's cached result instead of calling it.
+        const lookupLoop = (statement: string) =>
+          time(1, () => holder.query(`DO $d$ BEGIN FOR i IN 1..2000 LOOP ${statement}; END LOOP; END $d$`));
+        const lookup =
+          ((await lookupLoop(`PERFORM 1 FROM pg_catalog.pg_locks l WHERE l.locktype = 'advisory'
+              AND l.classid = 1129467734::oid AND l.objid = pg_backend_pid()::oid AND l.objsubid = 2
+              AND l.pid = pg_backend_pid() AND l.granted`)) -
+            (await lookupLoop('PERFORM 1'))) /
+          2000;
+        lines.push(`  ${held[0]?.n} locks in pg_locks: the guard's pg_locks lookup alone ${lookup.toFixed(1)} us per call`);
+        for (const [variant, body] of [
+          ['with pg_locks', original],
+          ['without      ', withoutRead],
+        ] as const) {
+          await withAdmin((a) => a.query(body));
+          for (const n of CONCURRENCY) {
+            const active = clients.slice(0, n);
+            const iterations = 2000;
+            await Promise.all(active.map((c) => c.query(loop(200))));
+            const rates: number[] = [];
+            for (let round = 0; round < 3; round++) {
+              const start = process.hrtime.bigint();
+              await Promise.all(active.map((c) => c.query(loop(iterations))));
+              rates.push((n * iterations) / (Number(process.hrtime.bigint() - start) / 1e9));
+            }
+            const latencies: number[] = [];
+            const until = Date.now() + 1500;
+            await Promise.all(
+              active.map(async (c) => {
+                while (Date.now() < until) latencies.push(await timedTransaction(c));
+              }),
+            );
+            const rate = median(rates);
+            lines.push(
+              `  ${variant} ${String(n).padStart(2)} conns: server loop ${rate.toFixed(0).padStart(6)} enters/s ` +
+                `(${((n * 1e6) / rate).toFixed(1)} us each); request transaction p50 ${pct(latencies, 0.5).toFixed(0)} us, ` +
+                `p95 ${pct(latencies, 0.95).toFixed(0)} us`,
+            );
+          }
+        }
+        await withAdmin((a) => a.query(original));
+        if (background > 0) await holder.query('SELECT pg_advisory_unlock_all()');
+      }
+    } finally {
+      await withAdmin((a) => a.query(original));
+      await holder.end();
+      await Promise.all(clients.map((c) => c.end()));
+    }
+    report.push('re-entry guard (#105), enter_context with and without the pg_locks read:', ...lines);
+  }, 900_000);
 });
