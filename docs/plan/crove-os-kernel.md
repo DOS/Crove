@@ -85,7 +85,7 @@ The body of this plan was rewritten on 2026-10-14 to describe these decisions; i
 3. Audit rows cannot be updated or deleted; the same document resent creates no duplicates.
 4. Playwright end-to-end run of exit criterion 1 is green.
 
-**Follow-ups from #8 (Phase 1 residual work):** move `enter_system_context` out of the API role (T5, #24; done in #78); a re-extract command for files read by AI (#40); pending invites with consent (#35); remove and update member (#36); inbound token rotation (#37); an end-to-end check of Supabase Auth rate limits (#34); CSV/Excel formula prefixing and exact decimals in the Excel export (T13, #29; done in #93); audit retention and offboarding (#38).
+**Follow-ups from #8 (Phase 1 residual work):** move `enter_system_context` out of the API role (T5, #24; done in #78); a re-extract command for files read by AI (#40); pending invites with consent (#35); remove and update member (#36); inbound token rotation (#37; done in #112); an end-to-end check of Supabase Auth rate limits (#34); CSV/Excel formula prefixing and exact decimals in the Excel export (T13, #29; done in #93); audit retention and offboarding (#38).
 
 **Deferred, with the trigger to revisit:**
 
@@ -1076,7 +1076,7 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 | `proposal` / `inbox_item` | Proposals carry `revision`, `authors[]`, `eligible_approvers`; states in §8.3 | v0 |
 | `ai_run` / `ai_step` | Payloads in S3 `org/<org_id>/…`; `ai_step` kept 180 days | v0 |
 | `kill_switch`, `staff`, `support_grant` | §4.12 | v0 |
-| `inbound_address` | Ledger of every inbound email token ever issued (§7.6): `token` UNIQUE across active and retired rows, `retired_at` as the tombstone, at most one active row per org. Rows are never deleted or changed except to retire an active one, for every role. Only definers read or write it. On `main` (#37) the active token is also kept in `tenant.inbound_token`, which must match the org's active row at commit, so the resolver and the org query read one column | v0 |
+| `inbound_address` | Ledger of every inbound email token ever issued (§7.6): `token` UNIQUE across active and retired rows, `retired_at` as the tombstone, at most one active row per org. Rows are never deleted or changed except to retire an active one, for every role. Only definers read or write it. On `main` (#112) the active token is also kept in `tenant.inbound_token`, which must match the org's active row at commit, so the resolver and the org query read one column | v0 |
 | `number_series`, `number_allocation`, `external_call`, `process_instance`, `connection_binding`, `credential`, `document`, `document_version`, `field_history` (yearly partitions, PII crypto-shredded), `subject_key` | | 2a |
 | `ai_thread`, `ai_message` (per-user RLS) | | 2b |
 | `usage_counter`, `feature_flag*` | | Before charging |
