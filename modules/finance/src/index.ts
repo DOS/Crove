@@ -4,6 +4,9 @@ import { accountsList, documentsList, journalList, vendorsList } from './queries
 
 export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
 export { buildJournalWorkbook } from './export.ts';
+export * from './domain/money.ts';
+export * from './domain/ledger.ts';
+export * from './domain/tt133-reports.ts';
 export { JOURNAL_EXPORT_LIMIT, type JournalEntryView } from './queries.ts';
 
 export const financeCommands = [recordPurchase, revisePurchase];
