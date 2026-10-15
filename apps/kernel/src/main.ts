@@ -4,6 +4,7 @@
 //   api          HTTP API + web UI
 //   worker   outbox relay + jobs
 //   all      api + worker in one process (default for self-host)
+//   prober   health check and alert (plan §4.13): once, or `--every <seconds>`; `--test-alert` sends a test alert
 import { serve } from '@hono/node-server';
 import { InvoiceExtractor } from '@crove/agent';
 import { createExtractClient } from '@crove/extract-contract';
@@ -15,12 +16,13 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from './auth.ts';
 import { loadConfig, type Config } from './config.ts';
 import { createHttpApp } from './http.ts';
+import { runProber } from './prober.ts';
 import { createSessionRevoker, createSessionStatusSource } from './sessions.ts';
 import { createBlobStore, describeStorage } from './storage.ts';
 import { migrateJobs, startWorker } from './worker.ts';
 
-type Role = 'migrate' | 'auth-grants' | 'api' | 'worker' | 'all';
-const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all'];
+type Role = 'migrate' | 'auth-grants' | 'api' | 'worker' | 'all' | 'prober';
+const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober'];
 
 function buildRuntime(config: Config, connectionString: string, applicationName: string) {
   const pool = createPool({ connectionString, applicationName, max: 10, resetOnRelease: config.DB_RESET_ON_RELEASE === 'true' });
@@ -59,6 +61,7 @@ async function runMigrate(config: Config) {
   await setRolePasswords(adminUrl, {
     crove_app: config.CROVE_APP_DB_PASSWORD,
     crove_worker: config.CROVE_WORKER_DB_PASSWORD,
+    crove_prober: config.CROVE_PROBER_DB_PASSWORD,
     supabase_auth_admin: config.AUTH_DB_PASSWORD,
   });
   await migrateJobs(adminUrl);
@@ -74,6 +77,8 @@ async function runAuthGrants(config: Config) {
 async function main() {
   const role = (process.argv[2] ?? 'all') as Role;
   if (!ROLES.includes(role)) throw new Error(`unknown role ${role}`);
+  // The prober needs only its own settings (no auth, storage or AI configuration), so it reads them itself.
+  if (role === 'prober') process.exit(await runProber(process.argv.slice(3)));
   const config = loadConfig();
   if (role === 'migrate') return runMigrate(config);
   if (role === 'auth-grants') return runAuthGrants(config);

@@ -1,4 +1,5 @@
 // Worker: relays the outbox into pg-boss queues and runs jobs.
+import { hostname } from 'node:os';
 import { sql } from 'kysely';
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
@@ -15,6 +16,8 @@ export const QUEUES = { extract: 'finance-file-extract', inbound: 'kernel-inboun
 const EXTRACT_RETRY_LIMIT = 3;
 const INBOUND_RETRY_LIMIT = 3;
 const SIGN_OUT_RETRY_LIMIT = 5;
+// The prober alerts when the freshest heartbeat is older than PROBER_MAX_HEARTBEAT_AGE_SECONDS (default 120).
+export const HEARTBEAT_INTERVAL_MS = 30_000;
 
 interface InboundRow {
   seq: string;
@@ -43,6 +46,13 @@ export interface WorkerDeps {
   inboundDomain: string | null;
   // Supabase Auth sign-out after a Crove-side revoke (ADR-0028 section 4); null keeps revocation Crove-side only.
   revoker?: SessionRevoker | null;
+  // Names this worker in crove_kernel.worker_heartbeat (default: the host name, the container id under Docker).
+  instance?: string;
+}
+
+/** Records that this worker is alive (crove_kernel.worker_beat, crove_worker only). */
+export async function beat(workerDb: Db, instance: string): Promise<void> {
+  await sql`SELECT crove_kernel.worker_beat(${instance.slice(0, 128)})`.execute(workerDb);
 }
 
 export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>> {
@@ -179,11 +189,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   listener.on('notification', () => void relay());
   const timer = setInterval(() => void relay(), 1000);
   void relay();
+  const instance = deps.instance ?? hostname();
+  const heartbeat = () => beat(deps.workerDb, instance).catch((error) => console.error('[heartbeat]', error));
+  const heartbeatTimer = setInterval(() => void heartbeat(), HEARTBEAT_INTERVAL_MS);
+  await heartbeat();
   console.log('[worker] started');
 
   return async () => {
     stopped = true;
     clearInterval(timer);
+    clearInterval(heartbeatTimer);
     await listener.end().catch(() => {});
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});
   };
