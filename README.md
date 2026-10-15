@@ -110,6 +110,7 @@ Before enabling an AI endpoint or changing the extraction prompt or model, run b
 export AI_BASE_URL=http://localhost:11434/v1 AI_MODEL=<model> AI_API_KEY=<key-if-any>
 pnpm ai:conformance   # chat, tool calls, structured output (zod), streaming, error mapping
 pnpm ai:eval          # extraction accuracy on synthetic invoices; fails below AI_EVAL_THRESHOLD (default 0.9)
+                      # or when isInvoice or the total is wrong on any fixture
 ```
 
 Fixtures live in `packages/agent/test/fixtures/extraction` (`<id>.txt` document text plus `<id>.json` expected fields). They are synthetic: use invented names and checksum-invalid tax codes only (a unit test rejects checksum-valid tax codes and 12-digit IDs). 429 and 5xx mapping is tested against a local fake server in `pnpm test`.

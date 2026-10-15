@@ -111,6 +111,8 @@ describe.skipIf(!config)('AI endpoint conformance', () => {
     expect(info).toMatchObject({ kind: 'auth', retryable: false });
   });
 
+  // Required: an endpoint that answers any model name (some single-model servers do) could silently serve the wrong
+  // model behind an alias, so it does not conform.
   it('maps an unknown model to a 4xx that is not retried', async () => {
     const unknown = chatModel({ ...cfg, model: 'crove-conformance-no-such-model' });
     const info = await failure(() => generateText({ model: unknown, prompt: 'ping', maxRetries: 0 }));

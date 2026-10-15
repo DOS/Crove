@@ -72,9 +72,15 @@ export interface EvalSummary {
   matched: number;
   total: number;
   threshold: number;
+  // Critical fields that were wrong ("<fixture>: <field>"); any one fails the gate whatever the accuracy.
+  criticalMisses: string[];
   passed: boolean;
   fixtures: FixtureScore[];
 }
+
+// Never allowed to be wrong, however good the rest is: whether the document is an invoice at all, and the amount
+// to pay (the field a planted instruction in a document would target).
+export const CRITICAL_FIELDS = ['isInvoice', 'total'] as const;
 
 const text = (value: string | null | undefined): string => (value ?? '').normalize('NFC').trim().replace(/\s+/g, ' ').toLowerCase();
 
@@ -87,6 +93,17 @@ function sameAmount(expected: string | null, actual: string | null): boolean {
   if (expected === null || actual === null) return expected === actual;
   try {
     return money(expected).equals(money(actual));
+  } catch {
+    return false;
+  }
+}
+
+// Quantity and unit price: the extractor is told to write "0" or null when they are not printed, so both count.
+const sameOptionalAmount = (expected: string | null, actual: string | null) => sameAmount(expected ?? '0', actual ?? '0');
+
+function sameContribution(expected: InvoiceLine, actual: InvoiceLine): boolean {
+  try {
+    return money(lineContribution(expected)).equals(money(lineContribution(actual)));
   } catch {
     return false;
   }
@@ -170,13 +187,13 @@ export function scoreExtraction(
       const prefix = `lines[${i}]`;
       const present = actualLine !== undefined;
       add(`${prefix}.description`, line.description, actualLine?.description ?? null, present && text(line.description) === text(actualLine.description));
-      add(`${prefix}.quantity`, line.quantity, actualLine?.quantity ?? null, present && sameAmount(line.quantity, actualLine.quantity));
-      add(`${prefix}.unitPrice`, line.unitPrice, actualLine?.unitPrice ?? null, present && sameAmount(line.unitPrice, actualLine.unitPrice));
+      add(`${prefix}.quantity`, line.quantity, actualLine?.quantity ?? null, present && sameOptionalAmount(line.quantity, actualLine.quantity));
+      add(`${prefix}.unitPrice`, line.unitPrice, actualLine?.unitPrice ?? null, present && sameOptionalAmount(line.unitPrice, actualLine.unitPrice));
       add(
         `${prefix}.amount`,
         line.amount,
         actualLine?.amount ?? null,
-        present && sameAmount(lineContribution(expectedLine(line, i)), lineContribution(actualLine)),
+        present && sameContribution(expectedLine(line, i), actualLine),
       );
       add(`${prefix}.vatRate`, line.vatRate, actualLine?.vatRate ?? null, present && rate(line.vatRate) === rate(actualLine.vatRate));
     });
@@ -186,17 +203,21 @@ export function scoreExtraction(
   return { id, matched: fields.filter((f) => f.match).length, total: fields.length, fields, failedChecks, error };
 }
 
-// Micro-averaged field accuracy over every fixture; the gate fails below `threshold`.
+// Micro-averaged field accuracy over every fixture. The gate fails below `threshold` or on any critical miss.
 export function summarizeEval(fixtures: FixtureScore[], threshold: number): EvalSummary {
   const matched = fixtures.reduce((n, f) => n + f.matched, 0);
   const total = fixtures.reduce((n, f) => n + f.total, 0);
   const accuracy = total === 0 ? 0 : matched / total;
-  return { accuracy, matched, total, threshold, passed: total > 0 && accuracy >= threshold, fixtures };
+  const critical: readonly string[] = CRITICAL_FIELDS;
+  const criticalMisses = fixtures.flatMap((f) => f.fields.filter((x) => critical.includes(x.field) && !x.match).map((x) => `${f.id}: ${x.field}`));
+  const passed = total > 0 && accuracy >= threshold && criticalMisses.length === 0;
+  return { accuracy, matched, total, threshold, criticalMisses, passed, fixtures };
 }
 
 export function formatEvalSummary(summary: EvalSummary): string {
   const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
   const lines = [`Extraction eval: ${summary.matched}/${summary.total} fields (${pct(summary.accuracy)}), threshold ${pct(summary.threshold)}: ${summary.passed ? 'PASS' : 'FAIL'}`];
+  if (summary.criticalMisses.length) lines.push(`  critical fields wrong: ${summary.criticalMisses.join(', ')}`);
   for (const f of summary.fixtures) {
     const extra = [f.error ? `error: ${f.error}` : '', f.failedChecks.length ? `failed checks: ${f.failedChecks.join(', ')}` : ''].filter(Boolean);
     lines.push(`  ${f.id}: ${f.matched}/${f.total}${extra.length ? ` (${extra.join('; ')})` : ''}`);

@@ -34,6 +34,8 @@ export function classifyAiError(error: unknown): AiErrorInfo {
     if (status === 401 || status === 403) return info('auth', false, status);
     if (status === 429) return info('rate_limit', true, status, retryAfter(last.responseHeaders));
     if (status === 408) return info('timeout', true, status);
+    // 501: the endpoint does not implement what was asked (tools, response_format); a retry cannot help.
+    if (status === 501) return info('invalid_request', false, status);
     if (status >= 500) return info('unavailable', true, status);
     if (status >= 400) return info('invalid_request', false, status);
     return info('unknown', false, status);

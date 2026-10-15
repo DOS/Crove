@@ -52,6 +52,7 @@ describe('AI error mapping', () => {
     ['status-429', { kind: 'rate_limit', retryable: true, status: 429, retryAfterMs: 1 }],
     ['status-500', { kind: 'unavailable', retryable: true, status: 500 }],
     ['status-503', { kind: 'unavailable', retryable: true, status: 503 }],
+    ['status-501', { kind: 'invalid_request', retryable: false, status: 501 }],
     ['status-400', { kind: 'invalid_request', retryable: false, status: 400 }],
     ['status-404', { kind: 'invalid_request', retryable: false, status: 404 }],
   ] as const)('maps %s', async (model, want) => {

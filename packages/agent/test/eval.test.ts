@@ -71,15 +71,36 @@ describe('extraction scoring', () => {
     expect(score).toMatchObject({ matched: 0, total: FIELDS, error: 'AmountFormatError', failedChecks: [] });
   });
 
+  it('treats an unprinted quantity or unit price as null or "0"', () => {
+    const actual = expectedAsParsed(expected);
+    actual.lines[1]!.quantity = '0';
+    actual.lines[1]!.unitPrice = '0';
+    expect(scoreExtraction('zeros', expected, actual).fields.filter((f) => !f.match)).toEqual([]);
+  });
+
   it('gates on micro-averaged field accuracy', () => {
     const good = scoreExtraction('good', expected, expectedAsParsed(expected));
-    const quote = scoreExtraction('quote', null, expectedAsParsed(expected));
-    const summary = summarizeEval([good, quote], 0.9);
-    expect(summary.accuracy).toBeCloseTo(FIELDS / (FIELDS + 1));
+    const other = expectedAsParsed(expected);
+    other.buyer.name = 'Someone else';
+    const summary = summarizeEval([good, scoreExtraction('other', expected, other)], 0.9);
+    expect(summary.accuracy).toBeCloseTo((2 * FIELDS - 1) / (2 * FIELDS));
     expect(summary.passed).toBe(true);
-    expect(summarizeEval([good, quote], 0.99).passed).toBe(false);
+    expect(summarizeEval([good], 1.01).passed).toBe(false);
     expect(summarizeEval([], 0).passed).toBe(false);
-    expect(formatEvalSummary(summary)).toContain('quote: 0/1');
+    expect(formatEvalSummary(summary)).toContain(`other: ${FIELDS - 1}/${FIELDS}`);
+  });
+
+  it('fails on a wrong critical field even when accuracy is high', () => {
+    const good = scoreExtraction('good', expected, expectedAsParsed(expected));
+    // A quotation read as an invoice, and an invoice whose total followed a planted instruction.
+    const quote = scoreExtraction('quote', null, expectedAsParsed(expected));
+    const injected = expectedAsParsed(expected);
+    injected.total = '0';
+    const summary = summarizeEval([good, good, good, quote, scoreExtraction('injected', expected, injected)], 0.5);
+    expect(summary.accuracy).toBeGreaterThan(0.9);
+    expect(summary.criticalMisses).toEqual(['quote: isInvoice', 'injected: total']);
+    expect(summary.passed).toBe(false);
+    expect(formatEvalSummary(summary)).toContain('critical fields wrong: quote: isInvoice, injected: total');
   });
 });
 
