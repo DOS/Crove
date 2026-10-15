@@ -1,5 +1,6 @@
 // The obsolete 3-argument session_check from an early draft of the auth sessions migration is dropped (issue #92):
-// a dev database that applied the draft must not keep a callable overload that skips the org-scoped revocation.
+// a dev database that applied the draft, then was recovered by deleting the draft's ledger row (the runner refuses
+// the changed checksum otherwise), must not keep a callable overload that skips the org-scoped revocation.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -54,7 +55,7 @@ suite('stale session_check overload', () => {
   });
 
   it('is dropped from a database that applied the draft, and the drop is idempotent', async () => {
-    // What the draft left behind: a definer the API role could call.
+    // What the draft left behind after that recovery: a definer the API role could call.
     await admin((c) =>
       c.query(`
         CREATE FUNCTION crove_kernel.session_check(p_user_id uuid, p_session_id uuid, p_upstream boolean)

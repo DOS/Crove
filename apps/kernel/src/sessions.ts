@@ -139,9 +139,10 @@ export function createSupabaseSessionRevoker(options: SupabaseRevokerOptions): S
         return;
       }
       // Supabase Auth answers 403 both when the target is already gone and when it rejects the token itself
-      // (`bad_jwt`, a wrong secret or issuer), so only the error code tells them apart. A deleted user has no
+      // (`bad_jwt`, for example a wrong secret), so only the error code tells them apart. A deleted user has no
       // sessions left in any scope. A missing session is the goal only for a local sign-out: for a global one it
-      // means the token's session was already gone, so the user's other sessions are still alive upstream.
+      // means the token's session was already gone, so the user's other sessions are still alive upstream. Any
+      // other answer (`user_banned` included: an unban would bring the refresh tokens back) is retried, then alerted.
       let code: unknown;
       try {
         code = ((await response.json()) as { error_code?: unknown } | null)?.error_code;

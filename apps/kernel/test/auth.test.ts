@@ -2,7 +2,7 @@
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify } from 'jose';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hasFreshMfa } from '@crove/kernel-runtime';
 import { createTokenVerifier, mfaTimestamp } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
@@ -246,6 +246,11 @@ describe('Supabase Auth sign-out after a revoke (self-host)', () => {
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   });
 
+  beforeEach(() => {
+    status = 204;
+    errorCode = null;
+  });
+
   const revoker = () => createSupabaseSessionRevoker({ upstreamUrl: url, secret: SECRET, issuer: ISSUER, audience: 'authenticated' });
 
   it('signs that one session out with a short-lived token for it', async () => {
@@ -291,7 +296,6 @@ describe('Supabase Auth sign-out after a revoke (self-host)', () => {
         await expect(revoker().signOut({ subject: SUBJECT, sessionId: SESSION, scope })).rejects.toThrow(new RegExp(`answered ${answer}`));
       }
     }
-    errorCode = null;
   });
 });
 
@@ -310,6 +314,19 @@ describe('Supabase Auth sign-out job', () => {
       expect(String(alerts.mock.calls[0]?.[0])).toMatch(/^\[signout\] ALERT global sign-out of session 2d0c6f1e: .*after 6 attempts/);
     } finally {
       alerts.mockRestore();
+    }
+  });
+
+  it('finishes without a retry when the sign-out succeeds or no revoker is configured', async () => {
+    const quiet = [vi.spyOn(console, 'log').mockImplementation(() => undefined), vi.spyOn(console, 'warn').mockImplementation(() => undefined)];
+    try {
+      const calls: unknown[] = [];
+      await expect(runSignOut({ signOut: async (t) => void calls.push(t) }, target, 0)).resolves.toBeUndefined();
+      expect(calls).toEqual([target]);
+      await expect(runSignOut(null, target, 0)).resolves.toBeUndefined();
+      expect(String(quiet[1]?.mock.calls[0]?.[0])).toMatch(/no Supabase Auth sign-out configured; revoked in Crove only/);
+    } finally {
+      for (const spy of quiet) spy.mockRestore();
     }
   });
 });
