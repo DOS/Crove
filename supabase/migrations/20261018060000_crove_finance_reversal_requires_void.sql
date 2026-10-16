@@ -7,7 +7,8 @@
 -- document still counts as recorded.
 -- Deferred to commit, so the void may follow the reversal within the transaction (it must: the void names the
 -- reversal's id). A writer that fires it early (SET CONSTRAINTS ... IMMEDIATE) before writing the void is refused.
--- Only new rows are checked: purchase entries reversed before 20261018000000 got their voids from its backfill.
+-- Only new rows are checked: purchase entries reversed before 20261018000000 got their voids from its backfill (which
+-- skips a reversal with an empty description or whose document row is missing; neither is written by the command).
 -- Idempotent.
 SET LOCAL lock_timeout = '2s';
 

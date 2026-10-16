@@ -162,7 +162,7 @@ export function JournalPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   {entry.reverses && <Badge variant="secondary">{t('reversalBadge')}</Badge>}
                   {entry.reversedBy && <Badge variant="warning">{t('reversedBadge')}</Badge>}
-                  {entry.pendingReversalId && <Badge variant="secondary">{t('reversalPendingBadge')}</Badge>}
+                  {entry.pendingReversalId && !entry.reversedBy && <Badge variant="secondary">{t('reversalPendingBadge')}</Badge>}
                   {entry.document?.voided && <Badge variant="destructive">{t('documentVoided')}</Badge>}
                   <p className="text-xs text-subtle-foreground">{f.date(entry.entryDate)}</p>
                 </div>
@@ -196,7 +196,7 @@ export function JournalPage() {
                 </TableBody>
               </Table>
               {/* A reversal waiting for approval (#204): the request is not offered again; the proposal is one click away. */}
-              {entry.pendingReversalId && (
+              {entry.pendingReversalId && !entry.reversedBy && (
                 <p className="mt-2 text-right text-xs">
                   <Link to="/o/$slug/inbox/$id" params={{ slug, id: entry.pendingReversalId }} className="text-link hover:underline">
                     {t('reversalPendingLink')}

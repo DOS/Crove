@@ -115,7 +115,7 @@ function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDa
           </table>
           {/* The lines are the ones this viewer may see. A posted entry balances, so visible lines that do not mean some
               are hidden from this viewer; the approval then reverses every line or is refused (partial_mirror). */}
-          {!linesBalance(entry.data.lines) && <p className="mt-3 text-sm text-warning">{t('hiddenLines')}</p>}
+          {(entry.data.lines.length === 0 || !linesBalance(entry.data.lines)) && <p className="mt-3 text-sm text-warning">{t('hiddenLines')}</p>}
           {entry.data.reversedBy && <p className="mt-3 text-sm text-warning">{t('alreadyReversed', { date: f.date(entry.data.reversedBy.entryDate) })}</p>}
           {document && (
             <p className="mt-3 text-sm text-warning">
