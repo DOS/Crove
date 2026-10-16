@@ -1,0 +1,20 @@
+{
+  "name": "@crove/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Playwright end-to-end tests against the docker compose stack (MVP exit criterion 4)",
+  "scripts": {
+    "stack:up": "docker compose -p crove-e2e -f ../docker-compose.yml up -d --build",
+    "stack:logs": "docker compose -p crove-e2e -f ../docker-compose.yml logs --no-color",
+    "stack:down": "docker compose -p crove-e2e -f ../docker-compose.yml down -v",
+    "test": "playwright test",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@playwright/test": "catalog:",
+    "decimal.js": "catalog:",
+    "exceljs": "catalog:"
+  }
+}

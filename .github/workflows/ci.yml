@@ -41,7 +41,7 @@ jobs:
 
       # Every module, also one the kernel does not import yet: typecheck and unit tests run over all of them.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "@crove/app..." --filter "./modules/*" --filter "crove-monorepo"
+        run: pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "@crove/app..." --filter "./modules/*" --filter "@crove/e2e" --filter "crove-monorepo"
 
       - name: Lint
         run: pnpm lint

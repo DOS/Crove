@@ -42,3 +42,7 @@ next-env.d.ts
 # Local artifacts
 .data
 .playwright-mcp
+
+# Playwright output
+e2e/test-results
+e2e/playwright-report
