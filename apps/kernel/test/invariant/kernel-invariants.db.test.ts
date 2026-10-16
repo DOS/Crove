@@ -376,24 +376,40 @@ suite('kernel invariants on PostgreSQL', () => {
     }
   });
 
-  // Tenant code reads user accounts only through crove_kernel.member_profiles (#169, plan §3.6). Step 2 (#222)
-  // revokes the direct SELECT; until then a direct read still sees only the org's accounts. Both are accepted here.
-  it('only shows user accounts of the org in context', async () => {
-    const direct = async (enter: boolean): Promise<string[] | 'denied'> => {
-      try {
-        return await db.transaction().execute(async (trx) => {
-          if (enter) await sql`SELECT crove_kernel.enter_context(${users.outsider}::uuid, ${orgB}::uuid)`.execute(trx);
-          return (await sql<{ id: string }>`SELECT id FROM crove_kernel.user_account`.execute(trx)).rows.map((r) => r.id);
-        });
-      } catch (e) {
-        expect(e).toMatchObject({ code: '42501', message: 'permission denied for table user_account' });
-        return 'denied';
-      }
-    };
-    const inContext = await direct(true);
-    if (inContext !== 'denied') expect(inContext).toEqual([users.outsider]);
-    const outside = await direct(false);
-    if (outside !== 'denied') expect(outside).toHaveLength(0);
+  // Tenant code reads user accounts only through crove_kernel.member_profiles (#169, plan §3.6); since step 2 (#222)
+  // the database refuses every direct access by a Crove role, with or without a context.
+  it('refuses direct access to user accounts to every Crove role', async () => {
+    const DENIED = { code: '42501', message: 'permission denied for table user_account' };
+    const read = (target: Db, enter?: (trx: Transaction<Database>) => Promise<unknown>) =>
+      target.transaction().execute(async (trx) => {
+        if (enter) await enter(trx);
+        return sql`SELECT id FROM crove_kernel.user_account`.execute(trx);
+      });
+    await expect(read(db)).rejects.toMatchObject(DENIED);
+    await expect(read(db, (trx) => sql`SELECT crove_kernel.enter_context(${users.outsider}::uuid, ${orgB}::uuid)`.execute(trx))).rejects.toMatchObject(
+      DENIED,
+    );
+    await expect(read(workerDb)).rejects.toMatchObject(DENIED);
+    await expect(read(workerDb, (trx) => sql`SELECT crove_kernel.enter_system_context(${orgB}::uuid)`.execute(trx))).rejects.toMatchObject(DENIED);
+
+    const { granted, policies } = await withAdmin(async (admin) => {
+      const g = await admin.query<{ role: string; privilege: string }>(
+        `SELECT r.rolname AS role, p AS privilege
+         FROM pg_roles r CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) p
+         WHERE r.rolname LIKE 'crove\\_%' AND NOT r.rolsuper
+           AND r.oid <> (SELECT relowner FROM pg_class WHERE oid = 'crove_kernel.user_account'::regclass)
+           AND (has_table_privilege(r.oid, 'crove_kernel.user_account', p)
+                OR (p IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES')
+                    AND has_any_column_privilege(r.oid, 'crove_kernel.user_account', p)))
+         ORDER BY 1, 2`,
+      );
+      const p = await admin.query<{ polname: string }>(
+        `SELECT polname FROM pg_policy WHERE polrelid = 'crove_kernel.user_account'::regclass`,
+      );
+      return { granted: g.rows, policies: p.rows };
+    });
+    expect(granted).toEqual([]);
+    expect(policies).toEqual([]);
   });
 
   it('lets only owners invite admins, and never changes an owner through an invite', async () => {
