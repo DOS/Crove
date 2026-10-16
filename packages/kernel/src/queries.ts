@@ -14,6 +14,7 @@ import { EDITOR_ROLES, decideApproval, proposalEditable } from './approval.ts';
 import { MAX_EXTRACTION_VERSIONS, REEXTRACT_STALE_MINUTES, STALE_RUN_ERROR, latestExtraction } from './extraction.ts';
 import { inviteQueries } from './invites.ts';
 import { offboardingQueries } from './offboarding.ts';
+import { memberProfiles } from './profiles.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
@@ -32,13 +33,18 @@ export function orgDetailQuery(options: OrgDetailOptions) {
         .select(['org_id', 'slug', 'name', 'inbound_token'])
         .where('org_id', '=', ctx.orgId)
         .executeTakeFirstOrThrow();
-      const members = await ctx.trx
-        .selectFrom('crove_kernel.tenant_member as m')
-        .innerJoin('crove_kernel.user_account as u', 'u.id', 'm.user_id')
-        .select(['m.user_id', 'u.email', 'u.display_name', 'm.role'])
-        .where('m.org_id', '=', ctx.orgId)
-        .orderBy('m.created_at')
+      const memberRows = await ctx.trx
+        .selectFrom('crove_kernel.tenant_member')
+        .select(['user_id', 'role'])
+        .where('org_id', '=', ctx.orgId)
+        .orderBy('created_at')
         .execute();
+      // Names and emails come from the control plane through a definer (plan §3.6, #169), never a join.
+      const profiles = await memberProfiles(ctx.trx, memberRows.map((m) => m.user_id));
+      const members = memberRows.flatMap((m) => {
+        const profile = profiles.get(m.user_id);
+        return profile ? [{ user_id: m.user_id, email: profile.email, display_name: profile.displayName, role: m.role }] : [];
+      });
       // Owners and admins see the inbound address, and how many messages to the org's addresses retired in the last
       // 30 days were dropped (#139).
       const seesInbound = Boolean(options.inboundDomain) && (ctx.role === 'owner' || ctx.role === 'admin');

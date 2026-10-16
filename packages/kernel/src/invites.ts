@@ -8,6 +8,7 @@ import { z } from 'zod';
 import type { Db, MemberRole } from '@crove/db';
 import { zId, zInviteRole, zInviteToken } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type SessionStatusSource } from '@crove/kernel-runtime';
+import { memberProfiles } from './profiles.ts';
 
 // How long an invite stays valid. The table allows at most 30 days.
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -127,15 +128,14 @@ export const createInvite = defineCommand({
     if (input.role === 'admin' && role !== 'owner') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới mời được quản trị viên');
     const email = normalizeEmail(input.email);
 
-    // Members of this org are visible to the inviter anyway (kernel.org.get), so this reveals nothing new.
-    const member = await ctx.trx
-      .selectFrom('crove_kernel.tenant_member as m')
-      .innerJoin('crove_kernel.user_account as u', 'u.id', 'm.user_id')
-      .select('m.user_id')
-      .where('m.org_id', '=', ctx.orgId)
-      .where(sql<string>`pg_catalog.lower(pg_catalog.btrim(u.email))`, '=', email)
-      .executeTakeFirst();
-    if (member) throw new DomainError('ALREADY_MEMBER', 409, 'Người này đã là thành viên của tổ chức');
+    // Members of this org are visible to the inviter anyway (kernel.org.get), so this reveals nothing new. Their
+    // emails come through the definer (plan §3.6, #169), never a join on user_account.
+    const { rows: member } = await sql<{ user_id: string }>`
+      SELECT p.user_id FROM crove_kernel.member_profiles(
+        ARRAY(SELECT m.user_id FROM crove_kernel.tenant_member m WHERE m.org_id = ${ctx.orgId}::uuid)) p
+      WHERE pg_catalog.lower(pg_catalog.btrim(p.email)) = ${email}
+      LIMIT 1`.execute(ctx.trx);
+    if (member.length > 0) throw new DomainError('ALREADY_MEMBER', 409, 'Người này đã là thành viên của tổ chức');
 
     // The pending invite this one replaces, locked after the membership rows. An admin's invite refuses to replace a
     // current owner's unexpired one (#134): the owner's invite stays and the admin is told why. Revoking it silently
@@ -374,21 +374,22 @@ export const invitesList = defineQuery({
   access: ADMINS,
   handler: async (ctx) => {
     const rows = await ctx.trx
-      .selectFrom('crove_kernel.member_invite as i')
-      .leftJoin('crove_kernel.user_account as u', 'u.id', 'i.invited_by')
-      .select(['i.id', 'i.email', 'i.role', 'i.status', 'i.expires_at', 'i.created_at', 'u.email as inviter_email', 'u.display_name as inviter_name'])
-      .where('i.org_id', '=', ctx.orgId)
-      .where('i.status', '=', 'pending')
-      .orderBy('i.created_at', 'desc')
+      .selectFrom('crove_kernel.member_invite')
+      .select(['id', 'email', 'role', 'status', 'expires_at', 'created_at', 'invited_by'])
+      .where('org_id', '=', ctx.orgId)
+      .where('status', '=', 'pending')
+      .orderBy('created_at', 'desc')
       .limit(MAX_PENDING_INVITES * 2)
       .execute();
+    // Inviters through the definer (plan §3.6, #169). An inviter who left the org has no profile here: null, as before.
+    const inviters = await memberProfiles(ctx.trx, rows.map((r) => r.invited_by));
     const now = Date.now();
     return rows.map((r) => ({
       id: r.id,
       email: r.email,
       role: r.role,
       status: r.expires_at.getTime() <= now ? ('expired' as const) : ('pending' as const),
-      invitedBy: r.inviter_name ?? r.inviter_email ?? null,
+      invitedBy: inviters.get(r.invited_by)?.displayName ?? inviters.get(r.invited_by)?.email ?? null,
       createdAt: r.created_at.toISOString(),
       expiresAt: r.expires_at.toISOString(),
     }));
