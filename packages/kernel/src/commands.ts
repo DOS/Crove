@@ -5,7 +5,6 @@ import type { MemberRole } from '@crove/db';
 import {
   DomainError,
   GENERATION_PATTERN,
-  PROPOSAL_EDIT_COMMAND,
   contentGeneration,
   defineCommand,
   fileKey,
@@ -14,7 +13,7 @@ import {
   type Runtime,
   type UserActor,
 } from '@crove/kernel-runtime';
-import { PROPOSAL_REVISERS, actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
+import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
 import { inviteCommands } from './invites.ts';
@@ -442,9 +441,11 @@ function changesContent(payload: unknown, lineAccounts: z.infer<typeof zLineAcco
 
 // Edits a pending proposal: the new content becomes a new revision authored by the editor (plan §8.3), and
 // the approval policy runs again on it. An edit never approves; kernel.proposal.approve does, separately.
-// The runtime runs a reviser only for this command (PROPOSAL_EDIT_COMMAND, #161).
+//
+// It declares proposalEditor: the runtime runs a reviser only for the command that declares it (#161, #216).
 export const editProposal = defineCommand({
-  name: PROPOSAL_EDIT_COMMAND,
+  name: 'kernel.proposal.edit',
+  proposalEditor: true,
   input: z.object({ id: zId, revision: z.number().int().positive(), lineAccounts: zLineAccounts.min(1) }),
   risk: 'R1',
   access: MEMBERS,
@@ -453,7 +454,8 @@ export const editProposal = defineCommand({
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới chỉnh sửa được');
     const proposal = await lockPendingProposal(ctx, input.id, input.revision);
     await refuseWhileReextracting(ctx, proposal.source_file_id);
-    const reviser = Object.hasOwn(PROPOSAL_REVISERS, proposal.command) ? PROPOSAL_REVISERS[proposal.command] : undefined;
+    // The module's reviser for this proposal's command, from the registered definitions (their `revises`).
+    const reviser = ctx.reviserOf(proposal.command);
     if (!reviser) throw new DomainError('NOT_EDITABLE', 422, 'Loại đề xuất này không chỉnh sửa được');
     const authors = parseAuthors(proposal.authors);
     if (!authors) throw new DomainError('NOT_EDITABLE', 422, 'Đề xuất thiếu thông tin người soạn nên không chỉnh sửa được');

@@ -3,7 +3,7 @@
 import type { Transaction } from 'kysely';
 import { z } from 'zod';
 import type { Database, MemberRole } from '@crove/db';
-import type { Actor } from '@crove/kernel-runtime';
+import type { Actor, QueryContext } from '@crove/kernel-runtime';
 
 // Who produced (part of) a revision's content. Only user entries are humans; system entries (and, later,
 // agents) never count as approvers or for four-eyes (ADR-0029 §6).
@@ -146,11 +146,9 @@ export async function decideApproval(
 // Users of the org in context who may edit a pending proposal (an edit is R1; the approval stays R3).
 export const EDITOR_ROLES: readonly MemberRole[] = ['owner', 'admin', 'member'];
 
-// The module command that computes a new revision's payload when a user edits a proposal (access: 'proposal_revision').
-export const PROPOSAL_REVISERS: Readonly<Record<string, string>> = { 'finance.purchase.record': 'finance.purchase.revise' };
-
-// Whether kernel.proposal.edit can edit this proposal's content at all: its command has a reviser and its authors
-// are recorded (an edit adds the editor to them). kernel.inbox.get reports the same through canEdit.
-export function proposalEditable(proposal: { command: string; authors: unknown }): boolean {
-  return Object.hasOwn(PROPOSAL_REVISERS, proposal.command) && parseAuthors(proposal.authors) !== null;
+// Whether kernel.proposal.edit can edit this proposal's content at all: its command has a registered reviser (the
+// module command, access 'proposal_revision', whose `revises` names it) and its authors are recorded (an edit adds
+// the editor to them). kernel.inbox.get reports the same through canEdit.
+export function proposalEditable(ctx: Pick<QueryContext, 'reviserOf'>, proposal: { command: string; authors: unknown }): boolean {
+  return ctx.reviserOf(proposal.command) !== null && parseAuthors(proposal.authors) !== null;
 }

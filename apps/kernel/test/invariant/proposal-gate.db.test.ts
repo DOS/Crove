@@ -1,6 +1,7 @@
 // Proposal gate follow-ups (#161 from #88) on a real PostgreSQL 17:
 // - a reviser (access 'proposal_revision') runs only from the proposal edit command, on a pending proposal of the
-//   command it revises; no other command, nor a reviser nested in a reviser, reaches it;
+//   command it revises; no other command, nor a reviser nested in a reviser, reaches it; the runtime recognizes the
+//   edit by the declaration on its definition (proposalEditor), not by its name (#216);
 // - every proposal command and the proposal query refuse another org's proposal id exactly like an id that does not
 //   exist, whatever that proposal's state, so a foreign id reveals nothing;
 // - co-owners: four-eyes (P10) and the owner_override liveness rule hold when an org has more than one owner;
@@ -310,6 +311,42 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     await approveAs(orgId, owner, id, 2);
     expect(await proposalRow(id)).toMatchObject({ status: 'executed' });
     await expect(runEditor(id)).rejects.toMatchObject(refused);
+  });
+
+  it("binds a reviser to the editor's declaration on the calling definition, never to the edit command's name (#216)", async () => {
+    const { orgId, owner, people } = await orgWith('Reviser declaration', ['admin']);
+    const admin = people[0] as string;
+    const id = await proposeIn(orgId, owner);
+    const { payload } = await view(orgId, owner, id);
+    const line = payload.lines[0] as Line;
+    const reviserInput = { payload, lineAccounts: [{ lineNo: line.lineNo, debitAccount: line.debitAccount === '6421' ? '6422' : '6421' }] };
+    const realEdit: CommandDef<any, any> | undefined = kernelCommands.find((c) => c.name === EDIT);
+    if (!realEdit) throw new Error(`${EDIT} is not a kernel command`);
+    const input = z.object({ proposalId: z.uuid() });
+    // The edit command's name without its declaration: what a module that took the name would get.
+    const namesake = defineCommand({
+      name: EDIT,
+      input,
+      risk: 'R1',
+      access: ['owner', 'admin', 'member'],
+      handler: async (ctx, { proposalId }) => ctx.run('finance.purchase.revise', reviserInput, { proposalId }),
+    });
+    // The declaration under another name. It writes nothing.
+    const renamed = defineCommand({
+      ...realEdit,
+      name: 'kernel.test_renamed_editor',
+      input,
+      target: () => null,
+      handler: async (ctx, { proposalId }: z.infer<typeof input>) => ctx.run('finance.purchase.revise', reviserInput, { proposalId }),
+    });
+    const bound = new Runtime(db).register({ commands: [...kernelCommands.filter((c) => c.name !== EDIT), ...financeCommands, namesake, renamed] });
+    const actor = { actor: asUser(admin), orgId };
+    await expect(bound.execute(EDIT, { proposalId: id }, actor)).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403, details: { rule: 'proposal_state' } });
+    await expect(bound.execute('kernel.test_renamed_editor', { proposalId: id }, actor)).resolves.toMatchObject({ changed: true });
+    expect(await proposalRow(id)).toEqual({ status: 'pending', revision: 1 });
+    // The real edit finds the reviser from the registered `revises` and still writes the revision.
+    expect(await view(orgId, admin, id)).toMatchObject({ canEdit: true });
+    expect(await editAs(orgId, admin, id)).toBe(2);
   });
 
   it("refuses another org's proposal id in every proposal command and query, exactly like an unknown id (#161)", async () => {

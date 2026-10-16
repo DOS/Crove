@@ -17,7 +17,7 @@ import {
 } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator, type Authenticate } from './auth.ts';
-import type { Config, ModuleId } from './config.ts';
+import { AVAILABLE_MODULES, type Config, type ModuleId } from './config.ts';
 import { createHttpApp } from './http.ts';
 import { createLogMailer, createMailer, type Mailer } from './mail.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
@@ -149,6 +149,9 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
         windowSeconds: config.REFUSAL_AUDIT_WINDOW_SECONDS,
       },
     }).register(moduleDefinitions(config));
+    // A command registry that does not fit together (a reviser naming no proposal command, two revisers for one
+    // command) fails the boot (#216). Revisers of commands in modules this deployment leaves out are not checked.
+    runtime.validate({ absentModules: AVAILABLE_MODULES.filter((module) => !config.CROVE_MODULES.includes(module)) });
     return { pool, db, runtime };
   }
 

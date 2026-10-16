@@ -199,7 +199,7 @@ export const inboxGet = defineQuery({
       canApprove: approval.reason === 'ok' && !reading,
       approveReason: approval.reason,
       // The same checks kernel.proposal.edit makes before it edits (NOT_EDITABLE otherwise).
-      canEdit: canChange && proposalEditable(row),
+      canEdit: canChange && proposalEditable(ctx, row),
       canReject: canChange,
       extraction: latest
         ? { version: latest.version, status: latest.status, error: latest.error, inFlight: reading, proposalVersion: own?.version ?? null }
