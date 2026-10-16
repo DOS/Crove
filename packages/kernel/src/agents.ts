@@ -796,6 +796,14 @@ export const delegateTask = defineCommand({
     if (input.assigneePositionId === agent.positionId || !(await inSubtree(ctx.trx, ctx.orgId, agent.positionId, input.assigneePositionId))) {
       throw new DomainError('OUTSIDE_SUBTREE', 403, 'Tác tử AI chỉ giao việc cho vị trí cấp dưới của mình', { rule: 'delegation_subtree' });
     }
+    // Read without a row lock: the run already holds the task, and chart commands lock positions before tasks.
+    const target = await ctx.trx
+      .selectFrom('crove_kernel.position')
+      .select('status')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.assigneePositionId)
+      .executeTakeFirst();
+    if (target?.status === 'archived') throw new DomainError('POSITION_ARCHIVED', 409, 'Vị trí này đã ngừng sử dụng');
     if (parent.request_depth >= MAX_REQUEST_DEPTH) throw depthLimit();
     const child = await ctx.trx
       .insertInto('crove_kernel.task')
