@@ -7,7 +7,7 @@
 //   reverses_entry_id. It never appends lines to an existing entry.
 // The database enforces the rules for every writer (20261016210000): one reversal per entry, a reversal cannot be
 // reversed (post a new entry instead), no reversal dated before the original, and an exact mirror over every line.
-// Reversing the entry of a purchase document also voids Crove's record of that document (#165, 20261017120000): an
+// Reversing the entry of a purchase document also voids Crove's record of that document (#165, 20261017160000): an
 // append-only void row naming the reversal, in the same transaction, so the same supplier invoice can be recorded
 // again with the right accounts. It corrects Crove's records only, never the supplier's e-invoice.
 import { z } from 'zod';
