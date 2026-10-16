@@ -160,3 +160,42 @@ jobs:
           docker logs crove-extract || true
           docker rm -f crove-extract || true
           docker network rm "$NET" || true
+
+  # External-tenant gate T7 (#108): `api` and `worker` as separate containers of the same image, STORAGE=s3 against
+  # MinIO and no shared files volume (docker-compose.split.yml). tools/e2e/split-stack.mjs drives the real HTTP API:
+  # an uploaded e-invoice and an inbound email are both read by the worker into proposals, and every blob is in the
+  # bucket, none on a local path.
+  split-stack:
+    name: Split api and worker on S3 (end to end)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      COMPOSE: docker compose -p crove-split -f docker-compose.yml -f docker-compose.split.yml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Build the images
+        run: $COMPOSE build
+
+      # The one-shot migrate and auth-grants services must exit 0 before api and worker start.
+      - name: Start the split stack (applies the migrations)
+        run: $COMPOSE up -d
+
+      - name: Upload and inbound email through the API, filed by the worker, blobs in MinIO
+        run: node tools/e2e/split-stack.mjs
+
+      - name: Stack logs
+        if: failure()
+        run: $COMPOSE logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: $COMPOSE down -v
