@@ -34,6 +34,9 @@ function ReversalForm({ entry, slug, onClose }: { entry: Entry; slug: string; on
   // Refreshes after a refusal too: one for a request already pending (REVERSAL_PENDING) makes the journal show it.
   const request = useMutation(orpc.inbox.request.mutationOptions({ onSettled: () => void queryClient.invalidateQueries() }));
   const problem = reversalFormError({ entryDate, reason }, entry.entryDate, root, f.date);
+  // Refused because another request for the entry is pending: its proposal, one click away.
+  const refusal = request.error as { code?: unknown; data?: { proposalId?: unknown } } | null;
+  const pendingId = refusal?.code === 'REVERSAL_PENDING' && typeof refusal.data?.proposalId === 'string' ? refusal.data.proposalId : null;
 
   if (request.data) {
     return (
@@ -84,6 +87,11 @@ function ReversalForm({ entry, slug, onClose }: { entry: Entry; slug: string; on
       </label>
       {touched && problem && <ErrorText>{problem}</ErrorText>}
       {request.error && <ErrorText>{reversalErrorMessage(request.error, root, locale)}</ErrorText>}
+      {pendingId && (
+        <Link to="/o/$slug/inbox/$id" params={{ slug, id: pendingId }} className="block text-sm text-link hover:underline">
+          {t('viewProposal')}
+        </Link>
+      )}
       <div className="flex gap-2">
         <Button type="submit" disabled={request.isPending}>
           {request.isPending ? <Spinner className="text-current" /> : null}
