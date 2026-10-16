@@ -18,6 +18,16 @@ import {
   zTaskStatus,
   zAccountCode,
   zChannelConnection,
+  zSocialDecide,
+  zSocialPost,
+  zSocialPostCreate,
+  zSocialPostUpdate,
+  zSocialQueue,
+  zSocialQueueSet,
+  zSocialSchedule,
+  zSocialVariantUpdate,
+  zSocialChannelInput,
+  SOCIAL_POST_STATUSES,
   zFileStatus,
   zId,
   zInboxDetail,
@@ -92,6 +102,35 @@ export const contract = {
       .input(z.object({ displayName: z.string().trim().min(1).max(200), key: zId }))
       .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
     disconnect: oc.input(z.object({ connectionId: zId, idempotencyKey: zId })).output(z.object({ connectionId: zId, status: z.literal('revoked') })),
+  },
+  // Crove Social (Social plan §3.3), when the deployment runs the social module.
+  social: {
+    posts: {
+      list: oc
+        .input(z.object({ from: z.iso.datetime({ offset: true }).optional(), to: z.iso.datetime({ offset: true }).optional(), status: z.enum(SOCIAL_POST_STATUSES).optional(), limit: z.number().int().min(1).max(200).optional() }))
+        .output(z.array(zSocialPost)),
+      get: oc.input(z.object({ postId: zId })).output(zSocialPost),
+      // A retry with the same idempotencyKey returns the first result instead of a second post.
+      create: oc
+        .input(zSocialPostCreate.extend({ idempotencyKey: zId }))
+        .output(z.object({ postId: zId, revision: z.number().int(), variants: z.array(z.object({ variantId: zId, connectionId: zId })) })),
+      update: oc.input(zSocialPostUpdate).output(z.object({ postId: zId, revision: z.number().int(), changedVariants: z.array(zId) })),
+      addChannels: oc
+        .input(z.strictObject({ postId: zId, channels: z.array(zSocialChannelInput).min(1).max(20) }))
+        .output(z.object({ postId: zId, variants: z.array(z.object({ variantId: zId, connectionId: zId })) })),
+      submit: oc.input(z.strictObject({ postId: zId, variantIds: z.array(zId).min(1).max(20).optional() })).output(z.object({ postId: zId, submitted: z.array(zId) })),
+    },
+    variants: {
+      update: oc.input(zSocialVariantUpdate).output(z.object({ variantId: zId, revision: z.number().int(), changed: z.boolean() })),
+      decide: oc.input(zSocialDecide).output(z.object({ postId: zId, decision: z.string(), variants: z.array(zId) })),
+      schedule: oc.input(zSocialSchedule).output(z.object({ postId: zId, scheduled: z.array(z.object({ variantId: zId, at: z.string() })) })),
+      unschedule: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
+      cancel: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
+    },
+    queues: {
+      get: oc.input(z.object({ connectionId: zId })).output(zSocialQueue),
+      set: oc.input(zSocialQueueSet).output(z.object({ queueId: zId, moved: z.array(z.object({ variantId: zId, at: z.string().nullable() })) })),
+    },
   },
   inbox: {
     list: oc.input(z.object({ status: zProposalStatus.optional() })).output(z.array(zInboxItem)),
