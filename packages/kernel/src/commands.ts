@@ -7,6 +7,7 @@ import { PROPOSAL_REVISERS, actorRef, addAuthor, decideApproval, eligibleApprove
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { createOrgCommand, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
 import { inviteCommands } from './invites.ts';
+import { offboardingCommands } from './offboarding.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal', which the runtime checks
@@ -504,6 +505,7 @@ const otherKernelCommands = [
   approveProposal,
   rejectProposal,
   revokeSession,
+  ...offboardingCommands,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),

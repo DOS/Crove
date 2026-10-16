@@ -9,13 +9,22 @@ import type { InvoiceReader } from '@crove/agent';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
+import { runOrgExport } from './org-export.ts';
+import { RETENTION_CRON, RETENTION_TZ, runRetention } from './retention.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 
 export const JOB_SCHEMA = 'crove_jobs';
-export const QUEUES = { extract: 'finance-file-extract', inbound: 'kernel-inbound-email', signOut: 'kernel-session-signout' } as const;
+export const QUEUES = {
+  extract: 'finance-file-extract',
+  inbound: 'kernel-inbound-email',
+  signOut: 'kernel-session-signout',
+  orgExport: 'kernel-org-export',
+  retention: 'kernel-retention-purge',
+} as const;
 const EXTRACT_RETRY_LIMIT = 3;
 const INBOUND_RETRY_LIMIT = 3;
 const SIGN_OUT_RETRY_LIMIT = 5;
+const ORG_EXPORT_RETRY_LIMIT = 3;
 // The prober alerts when the freshest heartbeat is older than PROBER_MAX_HEARTBEAT_AGE_SECONDS (default 120).
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 
@@ -31,6 +40,10 @@ interface ExtractJob {
   orgId: string;
   fileId: string;
   version?: number;
+}
+
+interface OrgExportJob {
+  orgId: string;
 }
 
 interface OutboxRow {
@@ -133,6 +146,26 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await runSignOut(deps.revoker, job.data, job.retryCount);
   });
 
+  // Org export after kernel.org.offboard (issue #38). After the last failed attempt the owner can ask again (the same
+  // command while the org is offboarding).
+  await boss.work<OrgExportJob>(QUEUES.orgExport, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const { orgId } = job.data;
+    try {
+      const record = await runOrgExport({ runtime: deps.runtime, store: deps.store }, orgId);
+      console.log(`[org-export] org ${orgId}: ${record.parts.length} table(s), ${record.fileCount} file(s)`);
+    } catch (error) {
+      if (job.retryCount < ORG_EXPORT_RETRY_LIMIT) throw error;
+      console.error(`[org-export] ALERT export of org ${orgId} failed after ${job.retryCount + 1} attempts`, error);
+    }
+  });
+
+  // Retention purges (plan §4.9), on a schedule registered idempotently at boot; pg_cron is not required.
+  await boss.work(QUEUES.retention, { batchSize: 1 }, async () => {
+    await runRetention(deps.workerDb);
+  });
+  await boss.schedule(QUEUES.retention, RETENTION_CRON, null, { tz: RETENTION_TZ, missed: 'once' });
+
   let running = false;
   let stopped = false;
   const relay = async () => {
@@ -162,6 +195,15 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   { orgId: row.org_id, fileId, version } satisfies ExtractJob,
                   { singletonKey: `${row.org_id}:${fileId}:${version}`, retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
                 );
+              }
+              if (row.type === 'kernel.org.export_requested') {
+                return boss.send(QUEUES.orgExport, { orgId: row.org_id } satisfies OrgExportJob, {
+                  // One export per org queued or running at a time; a request while one runs is not queued twice.
+                  singletonKey: `${row.org_id}:org-export`,
+                  retryLimit: ORG_EXPORT_RETRY_LIMIT,
+                  retryDelay: 60,
+                  retryBackoff: true,
+                });
               }
               if (row.type === 'kernel.session.revoked') {
                 const target: SignOutTarget = {

@@ -23,7 +23,8 @@ export interface TenantTable {
   org_id: Generated<string>;
   slug: string;
   name: string;
-  status: Generated<'active' | 'closed'>;
+  // 'offboarding': only owners may enter (kernel.org.offboard, issue #38); 'closed' is set by staff.
+  status: Generated<'active' | 'offboarding' | 'closed'>;
   // The active inbound token. Every token ever issued, retired ones included, is in crove_kernel.inbound_address,
   // which only definers read and write; rotation is the command kernel.inbound.rotate.
   inbound_token: Generated<string>;

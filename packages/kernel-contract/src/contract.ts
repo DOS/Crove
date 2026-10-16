@@ -16,6 +16,7 @@ import {
   zLocalDate,
   zMe,
   zOrgDetail,
+  zOrgExport,
   zOrgSummary,
   zParty,
   zProposalStatus,
@@ -48,6 +49,13 @@ export const contract = {
       .input(z.object({ userId: zId, role: zRole, idempotencyKey: zId }))
       .output(z.object({ userId: zId, role: zRole, previousRole: zRole })),
     removeMember: oc.input(z.object({ userId: zId, idempotencyKey: zId })).output(z.object({ userId: zId, previousRole: zRole })),
+    // Owner only (R3, issue #38): the owner types the org's slug to confirm. The org moves to 'offboarding', where only
+    // owners can enter it, and the worker exports its data. Run again while offboarding, it asks for a new export.
+    offboard: oc
+      .input(z.object({ confirmSlug: z.string().max(48), idempotencyKey: zId }))
+      .output(z.object({ status: z.literal('offboarding'), exportRequested: z.literal(true) })),
+    // Owner only: the offboarding state and the newest finished export.
+    export: oc.output(zOrgExport),
   },
   // Org-less: the signed-in invitee previews and accepts an invite by its token. Only the invited email may.
   invites: {

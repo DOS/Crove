@@ -9,6 +9,7 @@ import type pg from 'pg';
 import { schemaMissing } from '@crove/db/migrate';
 import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES, ORG_HEADER } from '@crove/kernel-contract';
 import { BlobConflictError, BlobNotFoundError, DomainError, fileKey, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import type { OrgExportView } from '@crove/kernel';
 import { JOURNAL_EXPORT_LIMIT, buildJournalWorkbook, type JournalEntryView } from '@crove/mod-finance';
 import { actorOf, type Authenticate, type AuthUser } from './auth.ts';
 import { publicAuthUrl, type Config } from './config.ts';
@@ -285,6 +286,32 @@ export function createHttpApp(deps: HttpDeps) {
         headers: {
           'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
           'content-disposition': `attachment; filename="crove-but-toan-${orgSlug}.xlsx"`,
+          'cache-control': 'private, no-store',
+        },
+      });
+    } catch (error) {
+      return problem(c, error);
+    }
+  });
+
+  // The org export (issue #38), owners only: GET /api/org-export/manifest or /api/org-export/<table>, from the newest
+  // export kernel.org.export.get reports. The key comes from that export's audit row, never from the request.
+  app.get('/api/org-export/:part', async (c) => {
+    try {
+      const user = c.get('user');
+      const orgSlug = c.req.header(ORG_HEADER) ?? null;
+      const orgId = await resolveOrg(runtime, user, orgSlug);
+      const view = await runtime.query<OrgExportView>('kernel.org.export.get', {}, { actor: actorOf(user), orgId });
+      const part = c.req.param('part');
+      const key = part === 'manifest' ? view.export?.manifestKey : view.export?.parts.find((p) => p.table === part)?.key;
+      // The key must be under this org's prefix whatever wrote the audit row (kernel.org.export.record checks it too).
+      if (!view.export || !key || !key.startsWith(`org/${orgId}/`)) throw new DomainError('NOT_FOUND', 404, 'Chưa có bản xuất dữ liệu này');
+      const bytes = await store.get(key);
+      return new Response(body(bytes), {
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'content-disposition': `attachment; filename="crove-${orgSlug}-${part}.json"`,
+          'x-content-type-options': 'nosniff',
           'cache-control': 'private, no-store',
         },
       });
