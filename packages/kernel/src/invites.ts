@@ -3,7 +3,7 @@
 // definers (the org's first owner by create_or_replay_org, everyone else by invite_accept): the runtime roles hold
 // no INSERT on tenant_member.
 import { createHash, randomBytes } from 'node:crypto';
-import { sql } from 'kysely';
+import { sql, type RawBuilder } from 'kysely';
 import { z } from 'zod';
 import type { Db, MemberRole } from '@crove/db';
 import { zId, zInviteRole, zInviteToken } from '@crove/kernel-contract';
@@ -18,6 +18,14 @@ export const MAX_PENDING_INVITES = 100;
 // sends a mail (#129), and replacing or revoking frees pending slots, so these bound the mail an org can send.
 export const MAX_INVITES_PER_DAY = 50;
 export const MAX_INVITES_PER_EMAIL_PER_DAY = 3;
+
+// Invite mails one address may get in any 24 hours from all orgs together (#185): one account may create several
+// orgs, so the per-org limits alone let it mail one address several times a day.
+export interface InviteLimits {
+  perRecipientPerDay: number;
+}
+
+export const DEFAULT_INVITE_LIMITS: InviteLimits = { perRecipientPerDay: 5 };
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -59,6 +67,41 @@ const INVITE_ERRORS: Record<string, DomainError> = {
   INVITE_EXPIRED: new DomainError('INVITE_EXPIRED', 409, 'Lời mời này đã hết hạn, hãy nhờ người mời gửi lại'),
 };
 
+// The JSON DETAIL of INVITE_RATE_LIMITED (crove_kernel.invite_mail_gate, #185): which limit refused. The refusal for
+// a recipient says only that this address got too many invites, which the inviter chose to send; it is the same
+// whether or not the address has an account, and it tells nothing about who else invited it or when.
+const RATE_LIMIT_MESSAGES: Record<string, string> = {
+  invite_busy: 'Tổ chức đang gửi nhiều lời mời cùng lúc; hãy thử lại sau',
+  invite_org_per_day: 'Tổ chức đã gửi quá nhiều lời mời trong 24 giờ qua; hãy thử lại sau',
+  invite_email_per_day: 'Tổ chức đã mời email này quá nhiều lần trong 24 giờ qua; hãy thử lại sau',
+  invite_recipient_per_day: 'Email này đã nhận quá nhiều lời mời trong 24 giờ qua; hãy thử lại sau',
+};
+
+function inviteRateLimited(error: unknown): DomainError | null {
+  const pg = error as { code?: string; message?: string; detail?: string } | null;
+  if (pg?.code !== 'P0001' || pg.message !== 'INVITE_RATE_LIMITED') return null;
+  let parsed: { rule?: unknown; limit?: unknown } = {};
+  try {
+    parsed = JSON.parse(pg.detail ?? '{}') as typeof parsed;
+  } catch {
+    parsed = {};
+  }
+  const rule = typeof parsed.rule === 'string' && Object.hasOwn(RATE_LIMIT_MESSAGES, parsed.rule) ? parsed.rule : 'invite_org_per_day';
+  const details: Record<string, unknown> =
+    rule === 'invite_busy' ? { rule, retryAfterSeconds: 1 } : { rule, limit: typeof parsed.limit === 'number' ? parsed.limit : null };
+  return new DomainError('INVITE_RATE_LIMITED', 429, RATE_LIMIT_MESSAGES[rule] as string, details);
+}
+
+// Runs one of the invite mail definers. Thrown, not returned: the failed statement aborted this transaction, which
+// then rolls back.
+async function inviteMailCheck(ctx: CommandContext, query: RawBuilder<unknown>): Promise<void> {
+  try {
+    await query.execute(ctx.trx);
+  } catch (error) {
+    throw inviteRateLimited(error) ?? error;
+  }
+}
+
 async function withInviteErrors<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
@@ -86,8 +129,10 @@ interface LockedRoles {
 // Takes FOR SHARE on the org's owner rows and the actor's row in user_id order, the rows and order role changes and
 // removals lock FOR UPDATE (commands.ts), so a demotion or removal of the actor (or of an owner) that commits first
 // is seen (READ COMMITTED re-reads a locked row's newest version) and one that starts later waits for this command.
-// Invites do not block each other. Membership rows are locked before invite rows on every path (these commands, the
-// member commands, invite_accept), so the two never deadlock.
+// These row locks do not block other invites; invite creation is serialized afterwards by invite_mail_gate's advisory
+// locks (#185), which only invite creation takes, always after these rows, so they never close a deadlock cycle.
+// Membership rows are locked before invite rows on every path (these commands, the member commands, invite_accept),
+// so the two never deadlock.
 async function lockRoles(ctx: CommandContext, userId: string): Promise<LockedRoles> {
   const rows = await ctx.trx
     .selectFrom('crove_kernel.tenant_member')
@@ -113,119 +158,126 @@ function ownersInvite(invite: { invited_by: string; expires_at: Date }, locked: 
 // It never looks the email up among accounts, so the answer is the same whether or not one exists. The token is
 // returned once, inside the accept path, and never stored (only its SHA-256), so callers must not pass an
 // idempotency key (a stored response would keep it); the API offers none. A new invite for the same email replaces
-// the pending one, which is also how an inviter gets a fresh link.
-export const createInvite = defineCommand({
-  name: 'kernel.member.invite.create',
-  input: z.object({ email: z.email().max(320), role: zInviteRole }),
-  risk: 'R3',
-  access: ADMINS,
-  handler: async (ctx, input) => {
-    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới mời được thành viên');
-    const actorId = ctx.actor.userId;
-    const locked = await lockRoles(ctx, actorId);
-    const role = locked.role;
-    if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Vai trò của bạn không được mời thành viên');
-    // Only owners may grant admin rights.
-    if (input.role === 'admin' && role !== 'owner') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới mời được quản trị viên');
-    const email = normalizeEmail(input.email);
+// the pending one, which is also how an inviter gets a fresh link. limits.perRecipientPerDay caps the invites one
+// address gets from all orgs together (default DEFAULT_INVITE_LIMITS).
+export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS) {
+  if (!Number.isInteger(limits.perRecipientPerDay) || limits.perRecipientPerDay < 1 || limits.perRecipientPerDay > 1000) {
+    throw new Error('perRecipientPerDay must be an integer from 1 to 1000');
+  }
+  return defineCommand({
+    name: 'kernel.member.invite.create',
+    input: z.object({ email: z.email().max(320), role: zInviteRole }),
+    risk: 'R3',
+    access: ADMINS,
+    handler: async (ctx, input) => {
+      if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới mời được thành viên');
+      const actorId = ctx.actor.userId;
+      const locked = await lockRoles(ctx, actorId);
+      const role = locked.role;
+      if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Vai trò của bạn không được mời thành viên');
+      // Only owners may grant admin rights.
+      if (input.role === 'admin' && role !== 'owner') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới mời được quản trị viên');
+      const email = normalizeEmail(input.email);
 
-    // Members of this org are visible to the inviter anyway (kernel.org.get), so this reveals nothing new. Their
-    // emails come through the definer (plan §3.6, #169), never a join on user_account.
-    const { rows: member } = await sql<{ user_id: string }>`
-      SELECT p.user_id FROM crove_kernel.member_profiles(
-        ARRAY(SELECT m.user_id FROM crove_kernel.tenant_member m WHERE m.org_id = ${ctx.orgId}::uuid)) p
-      WHERE pg_catalog.lower(pg_catalog.btrim(p.email)) = ${email}
-      LIMIT 1`.execute(ctx.trx);
-    if (member.length > 0) throw new DomainError('ALREADY_MEMBER', 409, 'Người này đã là thành viên của tổ chức');
+      // Members of this org are visible to the inviter anyway (kernel.org.get), so this reveals nothing new. Their
+      // emails come through the definer (plan §3.6, #169), never a join on user_account.
+      const { rows: member } = await sql<{ user_id: string }>`
+        SELECT p.user_id FROM crove_kernel.member_profiles(
+          ARRAY(SELECT m.user_id FROM crove_kernel.tenant_member m WHERE m.org_id = ${ctx.orgId}::uuid)) p
+        WHERE pg_catalog.lower(pg_catalog.btrim(p.email)) = ${email}
+        LIMIT 1`.execute(ctx.trx);
+      if (member.length > 0) throw new DomainError('ALREADY_MEMBER', 409, 'Người này đã là thành viên của tổ chức');
 
-    // The pending invite this one replaces, locked after the membership rows. An admin's invite refuses to replace a
-    // current owner's unexpired one (#134): the owner's invite stays and the admin is told why. Revoking it silently
-    // would let an admin undo an owner's invite, or change its role, without the owner noticing.
-    const previous = await ctx.trx
-      .selectFrom('crove_kernel.member_invite')
-      .select(['id', 'invited_by', 'expires_at'])
-      .where('org_id', '=', ctx.orgId)
-      .where('email', '=', email)
-      .where('status', '=', 'pending')
-      .forUpdate()
-      .execute();
-    const byOwner = role === 'owner' ? [] : previous.filter((p) => ownersInvite(p, locked, ctx.now));
-    if (byOwner.length > 0) {
-      throw new DomainError(
-        'INVITE_PENDING_BY_OWNER',
-        409,
-        'Chủ sở hữu đã mời email này và lời mời vẫn còn hiệu lực. Hãy nhờ chủ sở hữu thu hồi hoặc gửi lại lời mời',
-        undefined,
-        { audit: { pending_invites: byOwner.map((p) => p.id) } },
+      // A lock per org and one per recipient (#185), taken before the pending invite is read: invites of one org, and
+      // invites of one address from any org, run one at a time from here on, so the daily counts below are exact under
+      // concurrency and the replacement always sees the previous invite. A wait past 3 seconds is 429 invite_busy.
+      await inviteMailCheck(ctx, sql`SELECT crove_kernel.invite_mail_lock(${email})`);
+
+      // The pending invite this one replaces, locked after the membership rows. An admin's invite refuses to replace a
+      // current owner's unexpired one (#134): the owner's invite stays and the admin is told why. Revoking it silently
+      // would let an admin undo an owner's invite, or change its role, without the owner noticing.
+      const previous = await ctx.trx
+        .selectFrom('crove_kernel.member_invite')
+        .select(['id', 'invited_by', 'expires_at'])
+        .where('org_id', '=', ctx.orgId)
+        .where('email', '=', email)
+        .where('status', '=', 'pending')
+        .forUpdate()
+        .execute();
+      const byOwner = role === 'owner' ? [] : previous.filter((p) => ownersInvite(p, locked, ctx.now));
+      if (byOwner.length > 0) {
+        throw new DomainError(
+          'INVITE_PENDING_BY_OWNER',
+          409,
+          'Chủ sở hữu đã mời email này và lời mời vẫn còn hiệu lực. Hãy nhờ chủ sở hữu thu hồi hoặc gửi lại lời mời',
+          undefined,
+          { audit: { pending_invites: byOwner.map((p) => p.id) } },
+        );
+      }
+      const replaced =
+        previous.length === 0
+          ? []
+          : await ctx.trx
+              .updateTable('crove_kernel.member_invite')
+              .set({ status: 'revoked', revoked_at: ctx.now, revoked_by: actorId })
+              .where('org_id', '=', ctx.orgId)
+              .where(
+                'id',
+                'in',
+                previous.map((p) => p.id),
+              )
+              .where('status', '=', 'pending')
+              .returning('id')
+              .execute();
+
+      const pending = await ctx.trx
+        .selectFrom('crove_kernel.member_invite')
+        .select(sql<number>`pg_catalog.count(*)::int`.as('n'))
+        .where('org_id', '=', ctx.orgId)
+        .where('status', '=', 'pending')
+        .where('expires_at', '>', ctx.now)
+        .executeTakeFirstOrThrow();
+      if (pending.n >= MAX_PENDING_INVITES) {
+        throw new DomainError('TOO_MANY_INVITES', 429, `Tổ chức đang có quá nhiều lời mời chờ (tối đa ${MAX_PENDING_INVITES}); hãy thu hồi bớt`);
+      }
+
+      // The daily limits, counted in the database under the locks above: this org's invites in total and for this
+      // email, and every org's invites of this email, which reveals nothing about accounts (#185).
+      await inviteMailCheck(
+        ctx,
+        sql`SELECT crove_kernel.invite_mail_gate(${email}, ${MAX_INVITES_PER_DAY}::int, ${MAX_INVITES_PER_EMAIL_PER_DAY}::int,
+          ${limits.perRecipientPerDay}::int)`,
       );
-    }
-    const replaced =
-      previous.length === 0
-        ? []
-        : await ctx.trx
-            .updateTable('crove_kernel.member_invite')
-            .set({ status: 'revoked', revoked_at: ctx.now, revoked_by: actorId })
-            .where('org_id', '=', ctx.orgId)
-            .where(
-              'id',
-              'in',
-              previous.map((p) => p.id),
-            )
-            .where('status', '=', 'pending')
-            .returning('id')
-            .execute();
 
-    const pending = await ctx.trx
-      .selectFrom('crove_kernel.member_invite')
-      .select(sql<number>`pg_catalog.count(*)::int`.as('n'))
-      .where('org_id', '=', ctx.orgId)
-      .where('status', '=', 'pending')
-      .where('expires_at', '>', ctx.now)
-      .executeTakeFirstOrThrow();
-    if (pending.n >= MAX_PENDING_INVITES) {
-      throw new DomainError('TOO_MANY_INVITES', 429, `Tổ chức đang có quá nhiều lời mời chờ (tối đa ${MAX_PENDING_INVITES}); hãy thu hồi bớt`);
-    }
-
-    const since = new Date(ctx.now.getTime() - 24 * 60 * 60 * 1000);
-    const recent = await ctx.trx
-      .selectFrom('crove_kernel.member_invite')
-      .select([
-        sql<number>`pg_catalog.count(*)::int`.as('n'),
-        sql<number>`(pg_catalog.count(*) FILTER (WHERE email = ${email}))::int`.as('same'),
-      ])
-      .where('org_id', '=', ctx.orgId)
-      .where('created_at', '>', since)
-      .executeTakeFirstOrThrow();
-    if (recent.n >= MAX_INVITES_PER_DAY || recent.same >= MAX_INVITES_PER_EMAIL_PER_DAY) {
-      throw new DomainError('INVITE_RATE_LIMITED', 429, 'Tổ chức đã gửi quá nhiều lời mời trong 24 giờ qua; hãy thử lại sau');
-    }
-
-    const token = newInviteToken();
-    const expiresAt = new Date(ctx.now.getTime() + INVITE_TTL_MS);
-    const invite = await ctx.trx
-      .insertInto('crove_kernel.member_invite')
-      .values({
-        org_id: ctx.orgId,
+      const token = newInviteToken();
+      const expiresAt = new Date(ctx.now.getTime() + INVITE_TTL_MS);
+      const invite = await ctx.trx
+        .insertInto('crove_kernel.member_invite')
+        .values({
+          org_id: ctx.orgId,
+          email,
+          role: input.role,
+          token_sha256: inviteTokenHash(token),
+          invited_by: actorId,
+          created_at: ctx.now,
+          expires_at: expiresAt,
+        })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      ctx.audit({ invite_id: invite.id, role: input.role, replaced: replaced.map((r) => r.id) });
+      await ctx.activity('kernel.member_invite', invite.id, 'invite.created', `Mời ${email} tham gia với vai trò ${ROLE_LABEL[input.role]}`);
+      return {
+        inviteId: invite.id,
         email,
         role: input.role,
-        token_sha256: inviteTokenHash(token),
-        invited_by: actorId,
-        created_at: ctx.now,
-        expires_at: expiresAt,
-      })
-      .returning('id')
-      .executeTakeFirstOrThrow();
-    ctx.audit({ invite_id: invite.id, role: input.role, replaced: replaced.map((r) => r.id) });
-    await ctx.activity('kernel.member_invite', invite.id, 'invite.created', `Mời ${email} tham gia với vai trò ${ROLE_LABEL[input.role]}`);
-    return {
-      inviteId: invite.id,
-      email,
-      role: input.role,
-      expiresAt: expiresAt.toISOString(),
-      acceptPath: `${INVITE_ACCEPT_PATH}#${token}`,
-    };
-  },
-});
+        expiresAt: expiresAt.toISOString(),
+        acceptPath: `${INVITE_ACCEPT_PATH}#${token}`,
+      };
+    },
+  });
+}
+
+export const createInvite = inviteCreateCommand();
 
 // Revokes a pending invite of the org in context. R1: it only takes away a way in. The actor's role is re-checked
 // under the membership locks (an admin demoted meanwhile cannot revoke), and an admin cannot revoke a current
