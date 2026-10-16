@@ -43,12 +43,12 @@ export function JournalPage() {
         }
       />
       <div className="mb-4 flex flex-wrap items-end gap-3">
-        <label className="text-xs text-subtle-foreground">
-          {t('from')}
+        <label className="text-xs">
+          <span className="text-subtle-foreground">{t('from')}</span>
           <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="mt-1 w-44" />
         </label>
-        <label className="text-xs text-subtle-foreground">
-          {t('to')}
+        <label className="text-xs">
+          <span className="text-subtle-foreground">{t('to')}</span>
           <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="mt-1 w-44" />
         </label>
       </div>

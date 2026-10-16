@@ -34,8 +34,8 @@ export function OrgLayout() {
         <div className="px-2">
           <Logo />
         </div>
-        <label className="mt-6 block px-2 text-xs text-subtle-foreground">
-          {t('org')}
+        <label className="mt-6 block px-2 text-xs">
+          <span className="text-subtle-foreground">{t('org')}</span>
           <NativeSelect
             className="mt-1 w-full"
             value={slug}

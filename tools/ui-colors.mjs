@@ -12,13 +12,13 @@ export const SCAN_DIRS = ['apps/app/src', 'packages/ui/src'];
 const SKIP_DIRS = ['apps/app/src/i18n/messages'];
 
 const PALETTE =
-  'red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|slate|gray|zinc|neutral|stone';
+  'red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|slate|gray|zinc|neutral|stone|mauve|olive|mist|taupe';
 const UTILITY =
-  'bg|text|border(?:-[xytrblse])?|ring(?:-offset)?|inset-ring|outline|divide|from|via|to|fill|stroke|shadow|inset-shadow|drop-shadow|decoration|accent|caret|placeholder';
+  'bg|text|text-shadow|border(?:-[xytrblse])?|ring(?:-offset)?|inset-ring|outline|divide|from|via|to|fill|stroke|shadow|inset-shadow|drop-shadow|decoration|accent|caret|placeholder';
 const RULES = [
   { re: new RegExp(`(?<![\\w-])(?:${UTILITY})-(?:${PALETTE})-(?:50|[1-9]00|950)(?![\\w-])`, 'g'), what: 'Tailwind palette color' },
   { re: new RegExp(`(?<![\\w-])(?:${UTILITY})-(?:white|black)(?![\\w-])`, 'g'), what: 'Tailwind palette color' },
-  { re: /#[0-9a-fA-F]{3,8}(?![\w-])/g, what: 'literal color' },
+  { re: /(?<!&)#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-])/g, what: 'literal color' },
   { re: /(?<![\w-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(/g, what: 'literal color' },
 ];
 

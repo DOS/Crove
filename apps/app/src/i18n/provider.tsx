@@ -61,7 +61,7 @@ export function LocaleSwitcher({ className }: { className?: string }) {
   return (
     <NativeSelect
       size="sm"
-      className={className}
+      className={className ?? 'text-muted-foreground'}
       value={locale}
       aria-label={t('language')}
       onChange={(e) => setLocale(e.target.value as Locale)}

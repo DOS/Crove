@@ -13,6 +13,13 @@ describe('design-token lint (ui-colors)', () => {
       'ring-violet-950',
     ]);
     expect(matches("cn('bg-white', 'stroke-black', '!text-amber-400')")).toEqual(['bg-white', 'stroke-black', 'text-amber-400']);
+    expect(matches('bg-mauve-500 text-olive-300 border-mist-200 fill-taupe-900 text-shadow-rose-500')).toEqual([
+      'bg-mauve-500',
+      'text-olive-300',
+      'border-mist-200',
+      'fill-taupe-900',
+      'text-shadow-rose-500',
+    ]);
   });
 
   it('flags literal colors in classes, styles and attributes', () => {
@@ -30,6 +37,7 @@ describe('design-token lint (ui-colors)', () => {
       '// Owner only (#113): fresh MFA, see #89',
       '/* issue #139, bg-rose-500 in a comment */',
       'text-red-ish bg-blue-gray text-roses-300',
+      '<span>&#123; #12345 #1234567</span>',
     ];
     for (const text of ok) expect(matches(text), text).toEqual([]);
   });

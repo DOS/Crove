@@ -335,8 +335,8 @@ function MemberSessionsPanel({ userId, name, onClose }: { userId: string; name: 
               }
             >
               <p className="text-muted-foreground">{t('memberRevokeBody')}</p>
-              <label className="block text-xs text-subtle-foreground">
-                {t('reason')}
+              <label className="block text-xs">
+                <span className="text-subtle-foreground">{t('reason')}</span>
                 <Input className="mt-1" maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t('reasonPlaceholder')} />
               </label>
             </ConfirmBox>
