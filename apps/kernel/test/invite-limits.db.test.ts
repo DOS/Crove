@@ -1,7 +1,7 @@
 // Invite mail limits (#185) on a real PostgreSQL 17: the per-org and per-(org, email) counts of the last 24 hours are
 // exact under concurrency (crove_kernel.invite_mail_gate counts under a lock per org and one per recipient), a busy
 // lock answers 429 instead of parking a connection, and one address gets at most the configured number of invites
-// from all orgs together. That the cap reveals nothing about accounts is in test/invariant/invites.db.test.ts. Set
+// from all orgs together, except an org's first invite of it, which other orgs cannot block. That the cap reveals nothing about accounts is in test/invariant/invites.db.test.ts. Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +17,7 @@ import { toORPCError } from '../src/rpc.ts';
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
 // The per-recipient cap of the configured runtime below.
-const TIGHT = 3;
+const TIGHT = 6;
 
 const suite = ADMIN ? describe : describe.skip;
 
@@ -161,16 +161,18 @@ suite('invite mail limits on PostgreSQL (#185)', () => {
     expect(await invitesOf(`org_id = $1 AND email = $2 AND status = 'pending'`, [orgId, email])).toBe(1);
   });
 
-  it('caps the invites one address gets from all orgs together, exactly under concurrency', async () => {
+  it('caps the repeat invites one address gets from all orgs together, exactly under concurrency', async () => {
     const email = `wanted-${randomUUID().slice(0, 8)}@limits.test`;
-    const inviters = await Promise.all(Array.from({ length: 5 }, () => person('owner')));
+    const inviters = await Promise.all(Array.from({ length: 4 }, () => person('owner')));
     const orgs = [];
     for (const inviter of inviters) orgs.push({ orgId: await orgOf(inviter), inviter: inviter.id });
+    // Each org invited the address once already: 4 of the TIGHT invites in the window are used.
+    for (const o of orgs) await sent(o.orgId, o.inviter, [email]);
     const results = await Promise.allSettled(orgs.map((o) => invite(tight, o.orgId, o.inviter, email)));
     const { ok, refused } = outcomes(results);
-    expect(ok).toBe(TIGHT);
+    expect(ok).toBe(TIGHT - orgs.length);
     expect(refused.map((e) => [e.code, e.status, e.message, e.details])).toEqual(
-      Array.from({ length: orgs.length - TIGHT }, () => [
+      Array.from({ length: orgs.length - (TIGHT - orgs.length) }, () => [
         'INVITE_RATE_LIMITED',
         429,
         'Email này đã nhận quá nhiều lời mời trong 24 giờ qua; hãy thử lại sau',
@@ -179,11 +181,26 @@ suite('invite mail limits on PostgreSQL (#185)', () => {
     );
     expect(toORPCError(refused[0])).toMatchObject({ code: 'INVITE_RATE_LIMITED', status: 429, data: { rule: 'invite_recipient_per_day', limit: TIGHT } });
     expect(await invitesOf('email = $1', [email])).toBe(TIGHT);
-    // Another address is not affected, and neither is the default runtime's higher cap.
-    expect(await invite(tight, orgs[4]!.orgId, orgs[4]!.inviter, `other-${randomUUID().slice(0, 8)}@limits.test`)).toMatchObject({
+    // Another address is not affected.
+    expect(await invite(tight, orgs[0]!.orgId, orgs[0]!.inviter, `other-${randomUUID().slice(0, 8)}@limits.test`)).toMatchObject({
       inviteId: expect.any(String),
     });
-    expect(await invite(runtime, orgs[4]!.orgId, orgs[4]!.inviter, email)).toMatchObject({ inviteId: expect.any(String) });
+  });
+
+  it("never lets other orgs use up an address's cap against an org's first invite of it", async () => {
+    const email = `employee-${randomUUID().slice(0, 8)}@limits.test`;
+    // A stranger's orgs used up the cap (and more) for the address today.
+    const stranger = await person('stranger');
+    for (let i = 0; i < 2; i++) await sent(await orgOf(stranger), stranger.id, Array.from({ length: TIGHT }, () => email));
+    // The employer's first invite of it goes through, and counts; its repeat is refused.
+    const employer = await person('employer');
+    const orgId = await orgOf(employer);
+    expect(await invite(tight, orgId, employer.id, email)).toMatchObject({ inviteId: expect.any(String) });
+    await expect(invite(tight, orgId, employer.id, email)).rejects.toMatchObject({
+      code: 'INVITE_RATE_LIMITED',
+      details: { rule: 'invite_recipient_per_day', limit: TIGHT },
+    });
+    expect(await invitesOf('email = $1 AND org_id = $2', [email, orgId])).toBe(1);
   });
 
   it('counts every invite the address got, revoked ones too, but only those of the last 24 hours', async () => {
@@ -194,16 +211,57 @@ suite('invite mail limits on PostgreSQL (#185)', () => {
     const email = `counted-${randomUUID().slice(0, 8)}@limits.test`;
     // Older than the window: never counted.
     await sent(otherOrg, elsewhere.id, Array.from({ length: 10 }, () => email), 25);
-    await sent(otherOrg, elsewhere.id, Array.from({ length: TIGHT - 1 }, () => email));
-    const last = await invite(tight, orgId, owner.id, email);
-    expect(last.inviteId).toEqual(expect.any(String));
+    await sent(otherOrg, elsewhere.id, Array.from({ length: TIGHT - 2 }, () => email));
+    // The first invite (always allowed) and one repeat fill the window up to TIGHT.
+    const first = await invite(tight, orgId, owner.id, email);
+    const repeat = await invite(tight, orgId, owner.id, email);
+    expect([first.inviteId, repeat.inviteId]).toEqual([expect.any(String), expect.any(String)]);
     await expect(invite(tight, orgId, owner.id, email)).rejects.toMatchObject({
       code: 'INVITE_RATE_LIMITED',
       details: { rule: 'invite_recipient_per_day', limit: TIGHT },
     });
-    // The refusal changed nothing: the pending invite stays the one that was sent.
+    // The refusal changed nothing: the pending invite stays the last one that was sent.
     expect(await invitesOf(`org_id = $1 AND email = $2 AND status = 'pending'`, [orgId, email])).toBe(1);
-    expect(await invitesOf(`org_id = $1 AND email = $2`, [orgId, email])).toBe(1);
+    expect(await invitesOf(`org_id = $1 AND email = $2`, [orgId, email])).toBe(2);
+  });
+
+  it('keeps the other refusals ahead of the daily limits', async () => {
+    const owner = await person('owner');
+    const adminP = await person('admin');
+    const member = await person('member');
+    const orgId = await orgOf(owner);
+    for (const [who, role] of [
+      [adminP, 'admin'],
+      [member, 'member'],
+    ] as const) {
+      const created = await invite(runtime, orgId, owner.id, who.email, role);
+      await runtime.executeOrgless('kernel.member.invite.accept', { token: created.acceptPath.slice(created.acceptPath.indexOf('#') + 1) }, { actor: asUser(who.id) });
+    }
+    const elsewhere = await person('elsewhere');
+    const otherOrg = await orgOf(elsewhere);
+    // A current member at the recipient cap and this org's per-email limit: still ALREADY_MEMBER.
+    await sent(orgId, owner.id, Array.from({ length: MAX_INVITES_PER_EMAIL_PER_DAY }, () => member.email));
+    await sent(otherOrg, elsewhere.id, Array.from({ length: 10 }, () => member.email));
+    await expect(invite(runtime, orgId, owner.id, member.email)).rejects.toMatchObject({ code: 'ALREADY_MEMBER', status: 409 });
+    // An admin re-inviting an owner's pending invitee at the limits: still INVITE_PENDING_BY_OWNER.
+    const invitee = `pending-${randomUUID().slice(0, 8)}@limits.test`;
+    await invite(runtime, orgId, owner.id, invitee);
+    await sent(orgId, owner.id, Array.from({ length: MAX_INVITES_PER_EMAIL_PER_DAY }, () => invitee));
+    await sent(otherOrg, elsewhere.id, Array.from({ length: 10 }, () => invitee));
+    await expect(invite(runtime, orgId, adminP.id, invitee)).rejects.toMatchObject({ code: 'INVITE_PENDING_BY_OWNER', status: 409 });
+    // At the pending cap and the org's daily limit: still TOO_MANY_INVITES.
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.member_invite (org_id, email, role, token_sha256, invited_by)
+         SELECT $1::uuid, 'held-' || g || '-' || $1::text || '@limits.test', 'member', encode(sha256(convert_to(gen_random_uuid()::text, 'UTF8')), 'hex'), $2::uuid
+         FROM generate_series(1, 100 - (SELECT count(*)::int FROM crove_kernel.member_invite WHERE org_id = $1 AND status = 'pending')) g`,
+        [orgId, owner.id],
+      ),
+    );
+    await expect(invite(runtime, orgId, owner.id, `one-more-${randomUUID().slice(0, 8)}@limits.test`)).rejects.toMatchObject({
+      code: 'TOO_MANY_INVITES',
+      status: 429,
+    });
   });
 
   it('answers 429 invite_busy instead of waiting past the lock timeout, for the org and for the recipient', async () => {
@@ -227,7 +285,7 @@ suite('invite mail limits on PostgreSQL (#185)', () => {
         expect(await refusal).toMatchObject({
           code: 'INVITE_RATE_LIMITED',
           status: 429,
-          message: 'Tổ chức đang gửi nhiều lời mời cùng lúc; hãy thử lại sau',
+          message: 'Hệ thống đang bận gửi lời mời; hãy thử lại sau',
           details: { rule: 'invite_busy', retryAfterSeconds: 1 },
         });
         const waited = Date.now() - started;

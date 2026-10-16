@@ -32,6 +32,12 @@
 -- other orgs' invites is bounded by the limit (LIMIT), and the index below keeps it to one address. The caller must
 -- be an owner or admin of the org in the sealed context, the only members who may invite, so nobody else can ask
 -- or hold up the invites of an org or an address. Only the API login role may execute either.
+--
+-- The cap per recipient applies to an org's repeat invites of an address only: an org's first invite of it in the
+-- window is always counted but never refused by it. Otherwise any stranger could sign up, create two orgs and use
+-- up an address's cap every day, so that the address's real employer could not invite it at all. One account still
+-- mails one address at most max(cap, orgs it runs) times a day (the org creation limits bound the orgs), down from
+-- 3 per org.
 SET LOCAL lock_timeout = '2s';
 
 -- Every org's invites of one address, newest first: the per-recipient count reads only that address's recent rows.
@@ -87,9 +93,9 @@ DECLARE
   v_recipient_count integer;
 BEGIN
   -- Limits from the command's configuration; anything else is a bug in the caller.
-  IF p_org_per_day IS NULL OR p_org_per_day NOT BETWEEN 1 AND 100000
-     OR p_email_per_day IS NULL OR p_email_per_day NOT BETWEEN 1 AND 100000
-     OR p_recipient_per_day IS NULL OR p_recipient_per_day NOT BETWEEN 1 AND 100000 THEN
+  IF p_org_per_day IS NULL OR p_org_per_day NOT BETWEEN 1 AND 1000
+     OR p_email_per_day IS NULL OR p_email_per_day NOT BETWEEN 1 AND 1000
+     OR p_recipient_per_day IS NULL OR p_recipient_per_day NOT BETWEEN 1 AND 1000 THEN
     RAISE EXCEPTION 'INVITE_LIMIT_INVALID' USING ERRCODE = '22023';
   END IF;
   -- The context, email and role checks, and the locks (at once when this transaction holds them already).
@@ -110,7 +116,11 @@ BEGIN
       DETAIL = pg_catalog.json_build_object('rule', 'invite_email_per_day', 'limit', p_email_per_day)::text;
   END IF;
 
-  -- Every org's invites of this address, counted up to the limit only.
+  -- An org's first invite of the address in the window passes (see the header). Its repeats are counted with every
+  -- org's invites of this address, up to the limit only.
+  IF v_email_count = 0 THEN
+    RETURN;
+  END IF;
   SELECT pg_catalog.count(*)::integer INTO v_recipient_count
   FROM (
     SELECT 1 FROM crove_kernel.member_invite i

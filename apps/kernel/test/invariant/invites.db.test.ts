@@ -142,9 +142,10 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     });
   });
 
-  // The cap on invites one address gets from all orgs together (#185, default 5 in any 24 hours) counts invite rows
-  // only, never accounts: its answer is the same for an address with an account, one without and one that belongs
-  // to another org, and the refusal names only the rule and the limit, never who else invited the address or when.
+  // The cap on invites one address gets from all orgs together (#185, default 5 in any 24 hours; an org's first invite
+  // of an address always passes, its repeats are capped) counts invite rows only, never accounts: its answer is the
+  // same for an address with an account, one without and one that belongs to another org, and the refusal names only
+  // the rule and the limit, never who else invited the address or when.
   it('caps invites per recipient across orgs with the same answer whether or not the address has an account', async () => {
     const CAP = 5;
     const owner = await person('owner');
@@ -157,9 +158,18 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     const nobody = `nobody-${randomUUID().slice(0, 8)}@invites.test`;
     const nearKnown = await person('near');
     const nearNobody = `near-nobody-${randomUUID().slice(0, 8)}@invites.test`;
+    const capped = [known.email, memberElsewhere.email, nobody];
+    const near = [nearKnown.email, nearNobody];
 
-    // Invites another org sent in the last 24 hours, as revoked rows: CAP for the first three addresses, one fewer
-    // for the last two.
+    // The inviting org's first invites: the same shape for every address, whatever other orgs sent.
+    const first = [];
+    for (const email of [...capped, ...near]) first.push(await invite(orgId, owner.id, email));
+    expect(first.map((a) => Object.keys(a).sort())).toEqual(first.map(() => ['acceptPath', 'email', 'expiresAt', 'inviteId', 'role']));
+    expect(JSON.stringify(first)).not.toContain(known.id);
+    expect(JSON.stringify(first)).not.toContain(memberElsewhere.id);
+
+    // Invites another org sent in the last 24 hours, as revoked rows: up to CAP in all for the capped addresses, one
+    // fewer for the others.
     const topUp = async (email: string, total: number) =>
       admin((c) =>
         c.query(
@@ -169,11 +179,11 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
           [otherOrg, elsewhere.id, email, total],
         ),
       );
-    for (const email of [known.email, memberElsewhere.email, nobody]) await topUp(email, CAP);
-    for (const email of [nearKnown.email, nearNobody]) await topUp(email, CAP - 1);
+    for (const email of capped) await topUp(email, CAP);
+    for (const email of near) await topUp(email, CAP - 1);
 
     const refusals = [];
-    for (const email of [known.email, memberElsewhere.email, nobody]) {
+    for (const email of capped) {
       const error = (await invite(orgId, owner.id, email).catch((e: unknown) => e)) as Record<string, unknown>;
       refusals.push({ type: error?.constructor?.name, keys: Object.keys(error).sort(), code: error.code, status: error.status, message: error.message, details: error.details });
     }
@@ -184,18 +194,21 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     expect(JSON.stringify(refusals)).not.toContain(otherOrg);
     expect(JSON.stringify(refusals)).not.toContain(elsewhere.id);
 
-    // Below the cap both addresses get an invite of the same shape.
-    const allowed = [await invite(orgId, owner.id, nearKnown.email), await invite(orgId, owner.id, nearNobody)];
-    expect(allowed.map((a) => Object.keys(a).sort())).toEqual([
-      ['acceptPath', 'email', 'expiresAt', 'inviteId', 'role'],
-      ['acceptPath', 'email', 'expiresAt', 'inviteId', 'role'],
-    ]);
+    // Below the cap both addresses get a repeat invite of the same shape.
+    const allowed = [];
+    for (const email of near) allowed.push(await invite(orgId, owner.id, email));
+    expect(allowed.map((a) => Object.keys(a).sort())).toEqual(allowed.map(() => ['acceptPath', 'email', 'expiresAt', 'inviteId', 'role']));
     expect(JSON.stringify(allowed[0])).not.toContain(nearKnown.id);
 
-    // The refused invites wrote nothing in the inviting org.
+    // The refused invites wrote nothing in the inviting org: one invite per capped address, two per other one.
     await admin(async (c) => {
-      const { rows } = await c.query(`SELECT email FROM crove_kernel.member_invite WHERE org_id = $1 ORDER BY email`, [orgId]);
-      expect(rows.map((r) => r.email)).toEqual([nearKnown.email, nearNobody].sort());
+      const { rows } = await c.query<{ email: string; n: number }>(
+        `SELECT email, count(*)::int AS n FROM crove_kernel.member_invite WHERE org_id = $1 GROUP BY email ORDER BY email`,
+        [orgId],
+      );
+      expect(rows).toEqual(
+        [...capped.map((email) => ({ email, n: 1 })), ...near.map((email) => ({ email, n: 2 }))].sort((x, y) => (x.email < y.email ? -1 : 1)),
+      );
     });
 
     // The definers that lock and count other orgs' invites: only the API login role may call them, pinned, never

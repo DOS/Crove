@@ -134,7 +134,8 @@ const schema = z.object({
   INBOUND_ROTATE_LIMIT_PER_DAY: z.coerce.number().int().min(1).max(999_999).default(3),
   INBOUND_ROTATE_LIMIT_TOTAL: z.coerce.number().int().min(1).max(999_999).default(50),
   // Member invite mails one address may get in any 24 hours from all orgs together (#185), enforced in the database
-  // across API instances, on top of the per-org limits (50 invites per org and 3 per email in any 24 hours).
+  // across API instances, on top of the per-org limits (50 invites per org and 3 per email in any 24 hours). An
+  // org's first invite of an address in the window always passes; only repeats are refused.
   INVITE_LIMIT_PER_RECIPIENT_PER_DAY: z.coerce.number().int().min(1).max(1000).default(5),
   // Bound on denied/failed audit rows (issue #162), counted in the database across API instances: in each fixed
   // window of REFUSAL_AUDIT_WINDOW_SECONDS, an actor's refusals get an audit row until the actor has

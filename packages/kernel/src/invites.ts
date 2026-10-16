@@ -20,7 +20,9 @@ export const MAX_INVITES_PER_DAY = 50;
 export const MAX_INVITES_PER_EMAIL_PER_DAY = 3;
 
 // Invite mails one address may get in any 24 hours from all orgs together (#185): one account may create several
-// orgs, so the per-org limits alone let it mail one address several times a day.
+// orgs, so the per-org limits alone let it mail one address several times a day. An org's first invite of an
+// address in the window is never refused by this cap (only its repeats are), so nobody can use up an address's cap
+// to keep its real employer from inviting it.
 export interface InviteLimits {
   perRecipientPerDay: number;
 }
@@ -71,7 +73,7 @@ const INVITE_ERRORS: Record<string, DomainError> = {
 // a recipient says only that this address got too many invites, which the inviter chose to send; it is the same
 // whether or not the address has an account, and it tells nothing about who else invited it or when.
 const RATE_LIMIT_MESSAGES: Record<string, string> = {
-  invite_busy: 'Tổ chức đang gửi nhiều lời mời cùng lúc; hãy thử lại sau',
+  invite_busy: 'Hệ thống đang bận gửi lời mời; hãy thử lại sau',
   invite_org_per_day: 'Tổ chức đã gửi quá nhiều lời mời trong 24 giờ qua; hãy thử lại sau',
   invite_email_per_day: 'Tổ chức đã mời email này quá nhiều lần trong 24 giờ qua; hãy thử lại sau',
   invite_recipient_per_day: 'Email này đã nhận quá nhiều lời mời trong 24 giờ qua; hãy thử lại sau',
