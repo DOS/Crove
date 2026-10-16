@@ -94,6 +94,29 @@ docker compose --profile prober up -d
 
 Without Compose, run `node apps/kernel/src/main.ts prober` from any scheduler with `PROBER_DATABASE_URL=postgres://crove_prober:<password>@<host>:5432/<db>`. The prober cannot report its own absence or a whole-host outage: for those, add an external uptime check on `/healthz`.
 
+## Weekly usage report
+
+The image's `usage-report` role prints the counts that measure the MVP goal ([backlog review](./docs/plan/backlog-review-2026-10-17.md), section 3), per ISO week from Monday 00:00 in `--time-zone` (default `Asia/Ho_Chi_Minh`). It is for the operator of the deployment, not a tenant screen: it connects as `crove_reporter`, a login that can only call `crove_kernel.usage_weekly()`, which returns counts and no tenant content (no file names, titles, amounts, emails or user ids). With `--by-org` it adds one row per org that was active that week, by org id and name.
+
+| Column | What it counts that week |
+|---|---|
+| `active_orgs`, `active_users` | users with at least one successful command (upload, approve, edit, export, ...), and the orgs they acted in. Reads leave no audit row, so a user who only looked is not counted |
+| `uploaded`, `emailed` | new documents by source; a duplicate of a document the org already has is not counted again |
+| `approved`, `approved_unedited`, `unedited_pct` | approved proposals, and those approved with no edit of their accounts first (a re-extraction is not an edit) |
+| `rejected` | rejected proposals |
+| `median_upload_to_approval_h` | median hours from a document's upload or arrival to the approval of its proposal |
+| `journal_exports`, `org_exports` | Excel journal downloads (each download counts, also of the same range) and full org exports |
+
+Set `CROVE_REPORTER_DB_PASSWORD` (applied by `migrate`) in `.env`, then:
+
+```bash
+docker compose run --rm usage usage-report                      # the last 8 weeks, deployment totals
+docker compose run --rm usage usage-report --weeks 12 --by-org --csv > usage.csv
+pnpm usage:report --weeks 4                                     # from a checkout: set REPORTER_DATABASE_URL in .env
+```
+
+Options: `--weeks <1-104>` (default 8, the current week included), `--by-org`, `--csv` (RFC 4180; an org name a spreadsheet would read as a formula gets a leading `'`), `--time-zone <name>`. Exit codes: 0 printed, 2 the report could not run. Without Compose, run `node apps/kernel/src/main.ts usage-report` with `REPORTER_DATABASE_URL=postgres://crove_reporter:<password>@<host>:5432/<db>`; it refuses a superuser or BYPASSRLS login. For a Monday summary, schedule it with cron and mail or post the output yourself.
+
 ## Development
 
 Node 26 and pnpm (any version; the pinned one is downloaded automatically).
@@ -111,7 +134,7 @@ CROVE_TEST_S3_URL=http://<key>:<secret>@localhost:9000/crove-test pnpm test   # 
 Layout:
 
 ```
-apps/kernel        API, worker, prober and migrations runner (one image: migrate | api | worker | all | prober)
+apps/kernel        API, worker, prober, usage report and migrations runner (one image: migrate | api | worker | all | prober | usage-report)
 apps/app           web app (Vite + React + TanStack Router), served by the kernel
 apps/web           marketing site (Next.js)
 packages/db        PostgreSQL pool, Kysely types, migration runner

@@ -47,6 +47,8 @@ Desk research on 2026-10-17. Most sources are vendor blogs and legal-summary sit
 4. the firm reports at least 30% less time per client per month than its current process (interview before and after);
 5. at least 1 firm (the partner or a second firm) pays for the next month or signs a paid order.
 
+How it is measured (M1-11, #311): the operator runs the weekly usage report ([README, "Weekly usage report"](../../README.md#weekly-usage-report); `docker compose run --rm usage usage-report --by-org`). Per week and per org it gives active orgs and users, documents received (uploaded and emailed), proposals approved and approved without edits (item 2 directly), the median time from upload to approval, and journal and org exports (item 3: that exports happen, not that nothing is re-typed). Item 1 compares the received and approved counts with the firm's own count of the month's invoices; items 4 and 5 come from the interviews and the payment, not from the database.
+
 If the partner's interviews (M0) show that a different first job matters more (for example household businesses, see section 2), the owner changes the goal in writing and the milestones follow; the shape (a named user, a weekly job, a measured saving, a payment) stays.
 
 **What the MVP is not:** a general ERP, a MISA replacement on day one, a self-serve product for strangers, Social, CRM, agents with their own budgets, a public API, or a mobile app.
