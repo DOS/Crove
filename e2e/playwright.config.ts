@@ -14,6 +14,8 @@ export default defineConfig({
   reporter: process.env.CI ? [['list'], ['github']] : 'list',
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:8080',
+    // The SPA takes its language from the browser (#47); the tests read the Vietnamese screens.
+    locale: 'vi-VN',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
