@@ -9,8 +9,8 @@
 //     since one host usually holds a whole /64), and
 //   - per recipient: at most one every AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS.
 // The count lives in PostgreSQL (crove_kernel.auth_email_reserve), so it holds across API instances and restarts.
-// Keys are SHA-256 hashes; neither the address nor the email is stored. A request Supabase Auth refuses (4xx/5xx)
-// sent no email, so its slot is released.
+// Keys are SHA-256 hashes; neither the address nor the email is stored. A request Supabase Auth answers with 4xx or
+// 5xx sent no email, so its slot is released; one it did not answer in time keeps it (it may still have sent).
 import { createHash } from 'node:crypto';
 import { isIPv4, isIPv6 } from 'node:net';
 import type pg from 'pg';
@@ -32,6 +32,11 @@ export interface EmailLimits {
 // The paths (after /auth/v1) whose success makes Supabase Auth send an email or a code. `null`: not one of them.
 // Sign-up sends one only while confirmations are on. The recipient is the email (or phone) in the JSON body, or
 // for PUT /user the new email; GET /reauthenticate mails the signed-in user, whom the proxy does not resolve.
+//
+// Supabase Auth decodes the body with Go's encoding/json whatever the Content-Type, and Go matches keys without
+// regard to case ({"EMAIL": ...} sets the email) with the last match winning. So keys are matched the same way here,
+// and whatever this parser cannot read with certainty fails closed: an unparseable body still counts per client
+// (Supabase Auth refuses it, which gives the slot back), and conflicting recipients count with no recipient.
 export function emailSendRequest(method: string, path: string, body: Uint8Array | null, autoconfirm: boolean): { target: string | null } | null {
   const verb = method.toUpperCase();
   const sends =
@@ -42,14 +47,34 @@ export function emailSendRequest(method: string, path: string, body: Uint8Array 
   if (!sends) return null;
   if (path === '/reauthenticate') return { target: null };
   const fields = jsonFields(body);
-  const email = typeof fields?.email === 'string' ? fields.email.trim().toLowerCase() : '';
-  const phone = typeof fields?.phone === 'string' ? fields.phone.replace(/[^\d]/g, '') : '';
-  // A user update without a new email (password, metadata) sends nothing.
-  if (path === '/user') return email ? { target: `email:${email}` } : null;
-  if (email) return { target: `email:${email}` };
-  if (phone) return { target: `phone:${phone}` };
-  // Unparseable or empty: Supabase Auth refuses it (and the slot is released), but it still counts per client.
+  if (!fields) return { target: null };
+  const emails = fieldValues(fields, 'email');
+  const phones = fieldValues(fields, 'phone');
+  // A user update without an email key (password, metadata) and a sign-up with neither email nor phone (anonymous
+  // sign-in) send nothing.
+  if (path === '/user' && emails.length === 0) return null;
+  if (path === '/signup' && emails.length === 0 && phones.length === 0) return null;
+  const email = recipient(emails, (v) => v.trim().toLowerCase());
+  if (email !== undefined) return { target: email ? `email:${email}` : null };
+  const phone = recipient(phones, (v) => v.replace(/[^\d]/g, ''));
+  if (phone !== undefined) return { target: phone ? `phone:${phone}` : null };
   return { target: null };
+}
+
+// Values of every key equal to `name` ignoring case, as Go's decoder matches struct fields.
+function fieldValues(fields: Record<string, unknown>, name: string): unknown[] {
+  return Object.entries(fields)
+    .filter(([key]) => key.toLowerCase() === name)
+    .map(([, value]) => value);
+}
+
+// undefined: no such key, or only empty values. '': the key is there but not one clear string, so no recipient.
+function recipient(values: unknown[], normalize: (value: string) => string): string | undefined {
+  const present = values.filter((v) => v !== null && v !== '');
+  if (present.length === 0) return undefined;
+  const normalized = new Set(present.map((v) => (typeof v === 'string' ? normalize(v) : '')));
+  const [only] = normalized;
+  return normalized.size === 1 && only ? only : '';
 }
 
 function jsonFields(body: Uint8Array | null): Record<string, unknown> | null {

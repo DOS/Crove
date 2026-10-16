@@ -38,6 +38,25 @@ describe('emailSendRequest', () => {
     expect(emailSendRequest('GET', '/recover', null, false)).toBeNull();
   });
 
+  // Supabase Auth's Go decoder matches keys ignoring case, so {"EMAIL": ...} sets the email there.
+  it('reads keys the way Supabase Auth does: any case, conflicting values with no recipient', () => {
+    expect(emailSendRequest('PUT', '/user', json({ Email: 'New@Example.com' }), false)).toEqual({ target: 'email:new@example.com' });
+    expect(emailSendRequest('POST', '/recover', json({ EMAIL: 'a@b.co' }), false)).toEqual({ target: 'email:a@b.co' });
+    expect(emailSendRequest('POST', '/otp', json({ PHONE: '+84 901' }), false)).toEqual({ target: 'phone:84901' });
+    const conflicting = new TextEncoder().encode('{"email":"a@b.co","Email":"b@b.co","email":"c@b.co"}');
+    expect(emailSendRequest('PUT', '/user', conflicting, false)).toEqual({ target: null });
+    expect(emailSendRequest('POST', '/recover', conflicting, false)).toEqual({ target: null });
+    expect(emailSendRequest('POST', '/recover', json({ email: 'A@b.co', EMAIL: 'a@B.co' }), false)).toEqual({ target: 'email:a@b.co' });
+    // An email key Supabase Auth would reject still counts; an unparseable update counts with no recipient.
+    expect(emailSendRequest('PUT', '/user', json({ eMaIl: 42 }), false)).toEqual({ target: null });
+    expect(emailSendRequest('PUT', '/user', new TextEncoder().encode('{"email":'), false)).toEqual({ target: null });
+  });
+
+  it('does not count an anonymous sign-up, which sends nothing', () => {
+    expect(emailSendRequest('POST', '/signup', json({ data: {} }), false)).toBeNull();
+    expect(emailSendRequest('POST', '/signup', json({ phone: '+84901', password: 'pw' }), false)).toEqual({ target: 'phone:84901' });
+  });
+
   it('still counts per client when the body has no recipient or is not JSON', () => {
     expect(emailSendRequest('POST', '/recover', new TextEncoder().encode('not json'), false)).toEqual({ target: null });
     expect(emailSendRequest('POST', '/recover', json(['a@b.co']), false)).toEqual({ target: null });
@@ -223,6 +242,30 @@ describe('auth proxy email budget', () => {
     upstreamStatus = 200;
     for (const n of [1, 2]) expect((await send(app, '/signup', { email: `s${n}@example.com`, password: 'pw' }, '198.51.100.3')).status).toBe(200);
     expect(limiter.released).toEqual(['1']);
+  });
+
+  it('keeps the slot when Supabase Auth does not answer (it may still have sent the email)', async () => {
+    const app = createHttpApp({
+      config: loadConfig({
+        DATABASE_URL: 'postgres://localhost/x',
+        AUTH_JWT_SECRET: SECRET,
+        AUTH_ISSUER: 'crove-auth',
+        // Nothing listens on port 1.
+        AUTH_UPSTREAM_URL: 'http://127.0.0.1:1',
+        WEB_DIST: '/nonexistent',
+      }),
+      runtime: {} as Runtime,
+      store: {} as BlobStore,
+      authenticate: async () => {
+        throw new Error('not used');
+      },
+      pool: {} as pg.Pool,
+      aiEnabled: false,
+      emailLimiter: limiter,
+    });
+    expect((await send(app, '/recover', { email: 'k@example.com' }, '198.51.100.6')).status).toBe(503);
+    expect(limiter.released).toEqual([]);
+    expect(limiter.reserved.size).toBe(1);
   });
 
   it('answers 503 when the limiter cannot decide, and leaves other paths alone', async () => {

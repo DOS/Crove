@@ -54,7 +54,7 @@ function body(bytes: Uint8Array): ArrayBuffer {
 
 // The shape Supabase Auth uses for its own email limit, so the SPA (auth-js) reads the same error code.
 function emailRateLimited(retryAfterSeconds: number): Response {
-  const error = { code: 429, error_code: 'over_email_send_rate_limit', msg: 'Đã gửi quá nhiều email từ địa chỉ này; vui lòng thử lại sau' };
+  const error = { code: 429, error_code: 'over_email_send_rate_limit', msg: 'Đã gửi quá nhiều email; vui lòng thử lại sau' };
   return new Response(JSON.stringify(error), {
     status: 429,
     headers: { 'content-type': 'application/json', 'retry-after': String(retryAfterSeconds) },
@@ -211,8 +211,9 @@ export function createHttpApp(deps: HttpDeps) {
         redirect: 'manual',
         signal: AbortSignal.timeout(15_000),
       }).catch(() => null);
-      // A refused (or unanswered) request sent no email, so it gives its slot back.
-      if (reservation && (!response || response.status >= 400)) {
+      // A refused request sent no email, so it gives its slot back. One left unanswered (timeout, dropped connection)
+      // keeps it: Supabase Auth may still have sent the email.
+      if (reservation && response && response.status >= 400) {
         await emailLimiter.release(reservation, client).catch((error: unknown) => {
           console.error('[auth-proxy] email reservation not released:', error instanceof Error ? error.message : error);
         });

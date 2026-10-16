@@ -14,12 +14,12 @@
 --                                    last hour (rule auth_email_per_client) or the recipient got one within
 --                                    p_target_interval_seconds (rule auth_email_per_address); otherwise writes a row
 --                                    and returns its id. retry_after_seconds says when the oldest slot frees up.
--- crove_kernel.auth_email_release()  deletes a reservation of the same client bucket.
+-- crove_kernel.auth_email_release()  deletes a reservation of the same client bucket (no lock: it only frees a slot).
 --
--- Both run under per-client and per-recipient advisory locks (always in that order, so two calls never wait on
--- each other in a cycle), taken under a 3 s lock_timeout set around the lock and restored after it (the hardening
--- check allows no function setting beyond search_path): of concurrent requests at the limit exactly one wins, the
--- limit holds across API instances, and a wait past the timeout is refused (rule auth_email_busy, retry after 1 s)
+-- auth_email_reserve() runs under per-client and per-recipient advisory locks (always in that order, so two calls
+-- never wait on each other in a cycle), taken under a 3 s lock_timeout set around the lock and restored after it (the
+-- hardening check allows no function setting beyond search_path): of concurrent requests no more than the limit
+-- win, the limit holds across API instances, and a wait past the timeout is refused (rule auth_email_busy, retry after 1 s)
 -- instead of parking a pooled connection. Only crove_app may execute them; it already chooses the limits, which
 -- come from the kernel's configuration (AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR, AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS).
 SET LOCAL lock_timeout = '2s';
