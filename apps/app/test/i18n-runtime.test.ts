@@ -118,6 +118,9 @@ describe('startLocaleSync', () => {
 
     tab.dispatchEvent(storageEvent('crove-auth', 'token'));
     expect(runtime.activeLocale()).toBe('vi');
+    // The same key in sessionStorage is not the saved choice.
+    tab.dispatchEvent(Object.assign(storageEvent('crove-locale', 'en'), { storageArea: new MemoryStorage() }));
+    expect(runtime.activeLocale()).toBe('vi');
 
     tab.dispatchEvent(storageEvent('crove-locale', 'en'));
     expect(runtime.activeLocale()).toBe('en');

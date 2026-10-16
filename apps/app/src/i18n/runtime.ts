@@ -11,6 +11,14 @@ import { vi, type Messages } from './messages/vi.ts';
 // message types use-intl is configured with.
 export const CATALOGS: Record<Locale, Messages> = { vi, en: en satisfies CatalogShape<Messages> as unknown as Messages };
 
+function localStorageOrNull(): Storage | null {
+  try {
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
 function readStoredLocale(): string | null {
   try {
     return localStorage.getItem(LOCALE_STORAGE_KEY);
@@ -68,8 +76,9 @@ export function subscribeLocale(listener: () => void): () => void {
 export function startLocaleSync(target: Pick<Window, 'addEventListener' | 'removeEventListener'> = window): () => void {
   applyLocale(activeLocale());
   const onStorage = (event: StorageEvent) => {
-    // key null: the whole storage was cleared.
+    // key null: the whole storage was cleared. sessionStorage fires the same event; only localStorage holds the choice.
     if (event.key !== LOCALE_STORAGE_KEY && event.key !== null) return;
+    if (event.storageArea && event.storageArea !== localStorageOrNull()) return;
     applyLocale(isLocale(event.newValue) ? event.newValue : resolveLocale(null, browserLanguages()));
   };
   target.addEventListener('storage', onStorage);
