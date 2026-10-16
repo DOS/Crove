@@ -551,7 +551,7 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     const reversal = randomUUID();
     await admin(async (c) => {
       // A purchase entry and its reversal, written as they were before voids existed (no void row). The rule that such
-      // a reversal commits only with its void (20261018060000) came later, so it is switched off for this legacy write.
+      // a reversal commits only with its void (20261018090000) came later, so it is switched off for this legacy write.
       await c.query('BEGIN');
       await c.query('ALTER TABLE crove_finance.journal_entry DISABLE TRIGGER journal_entry_reversal_voids');
       await c.query(
