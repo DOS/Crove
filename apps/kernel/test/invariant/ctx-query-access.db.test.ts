@@ -15,7 +15,13 @@ import { Runtime, defineCommand, defineQuery, type Lookup } from '@crove/kernel-
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 
-// The targets: one only owners and admins may read, one only the system actor may read.
+// The targets: one every member may read, one only owners and admins may read, one only the system actor may read.
+const anyMember = defineQuery({
+  name: 'probe.any_member',
+  input: z.object({}),
+  access: ['owner', 'admin', 'member', 'viewer'],
+  handler: async () => 'open',
+});
 const adminOnly = defineQuery({
   name: 'probe.admin_only',
   input: z.object({}),
@@ -73,7 +79,7 @@ suite('ctx.query access (ADR-0031, #199)', () => {
     // finance is a module the deployment ships but leaves out here.
     runtime = new Runtime(db, { absentModules: ['finance'] }).register({
       commands: [...kernelCommands, viaCommand],
-      queries: [...kernelQueries({ inboundDomain: null }), adminOnly, systemOnly, viaQuery],
+      queries: [...kernelQueries({ inboundDomain: null }), anyMember, adminOnly, systemOnly, viaQuery],
     });
     users.owner = await upsertIdentity(db, { issuer: 'test', subject: 'cq-owner', email: 'owner@cq.test', name: null });
     users.member = await upsertIdentity(db, { issuer: 'test', subject: 'cq-member', email: 'member@cq.test', name: null });
@@ -104,6 +110,10 @@ suite('ctx.query access (ADR-0031, #199)', () => {
     runtime.execute<Lookup<string>>('probe.via_command', { name }, { actor: asUser(userId), orgId });
 
   it('lets a role read through ctx.query only what it may read directly', async () => {
+    // Controls: the callers themselves are allowed, so each FORBIDDEN below comes from the lookup.
+    expect(await lookupFromQuery(users.viewer, 'probe.any_member')).toEqual({ status: 'ok', value: 'open' });
+    expect(await lookupFromQuery(users.member, 'probe.any_member')).toEqual({ status: 'ok', value: 'open' });
+    expect(await lookupFromCommand(users.member, 'probe.any_member')).toEqual({ status: 'ok', value: 'open' });
     expect(await lookupFromQuery(users.owner, 'probe.admin_only')).toEqual({ status: 'ok', value: 'secret' });
     await expect(runtime.query('probe.admin_only', {}, { actor: asUser(users.viewer), orgId })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(lookupFromQuery(users.viewer, 'probe.admin_only')).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });

@@ -89,7 +89,8 @@ export interface ModuleDefinitions {
 }
 
 // The commands and queries of the modules CROVE_MODULES enables (plan Decision 12, ADR-0031). A module left out has
-// none registered, so its commands answer COMMAND_NOT_FOUND, a ctx.query into it answers not_installed, and the
+// none registered, so its commands answer COMMAND_NOT_FOUND, a ctx.query into it answers not_installed (with the
+// absentModules buildRuntime passes), and the
 // routes and jobs that ask Runtime.installed() are not registered either.
 export function moduleDefinitions(config: Config): ModuleDefinitions {
   const all: Record<ModuleId, () => ModuleDefinitions> = {
