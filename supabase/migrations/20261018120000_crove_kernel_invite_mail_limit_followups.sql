@@ -33,7 +33,8 @@
 --    invites of that address into invite_busy. The command now calls invite_mail_precheck first: the same counts and
 --    refusals as invite_mail_gate, without the locks, before invite_mail_lock. It sees only committed invites, so it
 --    can only miss a refusal (the gate, which counts under the locks, stays the authority), never refuse an invite
---    the gate would let through at that moment. The command runs its other refusals before it too, in the same order
+--    the gate would let through at that moment (an invite that would age out of the window during the lock wait,
+--    at most 3 seconds, may be refused that much early). The command runs its other refusals before it too, in the same order
 --    (ALREADY_MEMBER, INVITE_PENDING_BY_OWNER, TOO_MANY_INVITES), so the answer and its shape do not change.
 --
 -- The checks the definers share live in two internal functions no role but their owner may execute:

@@ -246,13 +246,22 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
       );
       const { rows: key } = await c.query(
         `SELECT p.prosecdef AS definer, p.provolatile AS volatility, p.proconfig AS config,
-                EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x WHERE x.grantee = 0) AS public
+                EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x WHERE x.grantee = 0) AS public,
+                md5(replace(p.prosrc, E'\r', '')) AS body
          FROM pg_proc p WHERE p.oid = 'crove_kernel.invite_cap_key(text)'::regprocedure`,
       );
       return { internal: rows, key: key[0] };
     });
     expect(helpers.internal).toEqual([]);
-    expect(helpers.key).toEqual({ definer: false, volatility: 'i', config: ['search_path=pg_catalog, pg_temp'], public: false });
+    // Its body is pinned: member_invite_cap_key_created_idx holds its results, so a definition changed in place would
+    // leave the index wrong. A new folding rule is a new function and a new index.
+    expect(helpers.key).toEqual({
+      definer: false,
+      volatility: 'i',
+      config: ['search_path=pg_catalog, pg_temp'],
+      public: false,
+      body: '7865910c563df4d13d6b49fa99c6881f',
+    });
     // A member who may not invite can neither ask nor hold the locks.
     for (const call of [
       sql`SELECT crove_kernel.invite_mail_gate(${nobody}, 50, 3, 1)`,
