@@ -248,6 +248,9 @@ catalogs:
     next:
       specifier: 16.4.0
       version: 16.4.0
+    nodemailer:
+      specifier: 10.1.1
+      version: 10.1.1
     oxlint:
       specifier: 1.88.0
       version: 1.88.0
@@ -431,6 +434,9 @@ importers:
       kysely:
         specifier: 'catalog:'
         version: 0.29.6
+      nodemailer:
+        specifier: 'catalog:'
+        version: 10.1.1
       pg:
         specifier: 'catalog:'
         version: 8.23.1
@@ -2354,6 +2360,10 @@ packages:
         optional: true
       sass:
         optional: true
+
+  nodemailer@10.1.1:
+    resolution: {integrity: sha512-pbqZRoeYUO+1E8TJ/11WeY4D2EVujj1hsYjz3qff/vUFDtGnmi7p3iqzTFslYOfQ6PnjVcWxx/CIUSHCSrO/QA==}
+    engines: {node: '>=20.0.0'}
 
   non-error@0.1.0:
     resolution: {integrity: sha512-TMB1uHiGsHRGv1uYclfhivcnf0/PdFp2pNqRxXjncaAsjYMoisaQJI+SSZCqRq+VliwRTC8tsMQfmrWjDMhkPQ==}
@@ -4564,6 +4574,8 @@ snapshots:
       - '@babel/core'
       - '@types/node'
       - babel-plugin-macros
+
+  nodemailer@10.1.1: {}
 
   non-error@0.1.0: {}
 

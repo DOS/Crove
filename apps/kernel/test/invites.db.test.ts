@@ -10,7 +10,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { MAX_PENDING_INVITES, kernelCommands, kernelQueries } from '@crove/kernel';
+import { MAX_INVITES_PER_DAY, MAX_INVITES_PER_EMAIL_PER_DAY, MAX_PENDING_INVITES, kernelCommands, kernelQueries } from '@crove/kernel';
 import { Runtime, type BlobStore } from '@crove/kernel-runtime';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
@@ -228,8 +228,10 @@ suite('member invite flows on PostgreSQL', () => {
     const org = await orgOf(owner);
     await admin((c) =>
       c.query(
-        `INSERT INTO crove_kernel.member_invite (org_id, email, role, token_sha256, invited_by, expires_at)
-         SELECT $1::uuid, 'cap-' || g || '@flows.test', 'member', encode(sha256(convert_to('cap-' || g || $1::text, 'UTF8')), 'hex'), $2::uuid, now() + interval '7 days'
+        // Created two days ago, so the daily limits (below) do not apply.
+        `INSERT INTO crove_kernel.member_invite (org_id, email, role, token_sha256, invited_by, created_at, expires_at)
+         SELECT $1::uuid, 'cap-' || g || '@flows.test', 'member', encode(sha256(convert_to('cap-' || g || $1::text, 'UTF8')), 'hex'), $2::uuid,
+                now() - interval '2 days', now() + interval '5 days'
          FROM generate_series(1, $3::int) g`,
         [org.orgId, owner.userId, MAX_PENDING_INVITES],
       ),
@@ -240,6 +242,35 @@ suite('member invite flows on PostgreSQL', () => {
     });
     // Replacing the invite of an email that already has one is not a new pending invite.
     expect((await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: 'cap-1@flows.test', role: 'viewer' }, org.slug)).status).toBe(200);
+  });
+
+  it('limits the invites one org creates in 24 hours, in total and per email', async () => {
+    const owner = await signIn('owner');
+    const org = await orgOf(owner);
+    const ownerMfa = await tokenFor(owner, { mfa: true });
+    const email = `again-${randomUUID().slice(0, 8)}@flows.test`;
+    for (let i = 0; i < MAX_INVITES_PER_EMAIL_PER_DAY; i++) {
+      expect((await rpc('org/invite', ownerMfa, { email, role: 'member' }, org.slug)).status).toBe(200);
+    }
+    expect(await rpc('org/invite', ownerMfa, { email, role: 'member' }, org.slug)).toMatchObject({ status: 429, body: { code: 'INVITE_RATE_LIMITED' } });
+
+    // Revoked invites count too: revoking frees a pending slot, not the daily budget.
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.member_invite (org_id, email, role, token_sha256, invited_by, status, revoked_at, revoked_by)
+         SELECT $1::uuid, 'day-' || g || '@flows.test', 'member', encode(sha256(convert_to('day-' || g || $1::text, 'UTF8')), 'hex'), $2::uuid,
+                'revoked', now(), $2::uuid
+         FROM generate_series(1, $3::int) g`,
+        [org.orgId, owner.userId, MAX_INVITES_PER_DAY - MAX_INVITES_PER_EMAIL_PER_DAY],
+      ),
+    );
+    expect(await rpc('org/invite', ownerMfa, { email: 'fresh@flows.test', role: 'member' }, org.slug)).toMatchObject({
+      status: 429,
+      body: { code: 'INVITE_RATE_LIMITED' },
+    });
+    // Another org has its own budget.
+    const other = await orgOf(owner);
+    expect((await rpc('org/invite', ownerMfa, { email, role: 'member' }, other.slug)).status).toBe(200);
   });
 
   it('answers a stale or foreign link with a clear refusal', async () => {
