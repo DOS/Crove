@@ -1,0 +1,13 @@
+# Test-only settings on top of ../docker-compose.yml. Sign-up needs the confirmation email, as in production
+# (the tests read it from Mailpit), the email rate limit does not trip on repeated local runs, and orgs get an
+# inbound address (nothing delivers to it) so Settings shows the rotation.
+services:
+  auth:
+    environment:
+      GOTRUE_MAILER_AUTOCONFIRM: 'false'
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: '1000'
+  crove:
+    environment:
+      AUTH_AUTOCONFIRM: 'false'
+      INBOUND_DOMAIN: in.e2e.test
+      INBOUND_SECRET: e2e-only-inbound-secret-0123456789abcdef

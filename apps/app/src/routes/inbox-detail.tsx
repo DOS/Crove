@@ -9,8 +9,9 @@ import { Card } from '@crove/ui/components/card';
 import { Checkbox } from '@crove/ui/components/checkbox';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { StepUpPrompt } from '../components/two-factor.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
-import { errorMessage, fetchFile, orpc, queryClient } from '../lib/api.ts';
+import { errorMessage, fetchFile, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal } from '../lib/decimal.ts';
 import { useFormat } from '../i18n/provider.tsx';
@@ -167,6 +168,7 @@ export function InboxDetailPage() {
     await navigate({ to: '/o/$slug/inbox', params: { slug } });
   };
   const approve = useMutation(orpc.inbox.approve.mutationOptions({ onSuccess: done }));
+  const stepUp = isStepUpRequired(approve.error);
   const reject = useMutation(orpc.inbox.reject.mutationOptions({ onSuccess: done }));
   // Saving an edit creates a new revision authored by this user; the page then reloads the server's decision.
   const edit = useMutation(
@@ -220,6 +222,20 @@ export function InboxDetailPage() {
     ) : null;
   const lastRun = item.extraction;
   const lastRunFailed = lastRun !== null && lastRun.status === 'failed' && lastRun.version !== lastRun.proposalVersion;
+  const submitApproval = () =>
+    approve.mutate({
+      id,
+      revision: item.revision,
+      idempotencyKey,
+      lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
+      ...(failed > 0 ? { acceptFailedChecks: acceptFailed } : {}),
+    });
+  // After a fresh code the step-up prompt repeats the refused request as sent, not the page as it is now: if someone
+  // saved a new revision meanwhile, the kernel answers STALE_REVISION instead of approving what this user never saw.
+  // The same idempotency key keeps it one approval.
+  const retryApproval = () => {
+    if (approve.variables) approve.mutate(approve.variables);
+  };
 
   return (
     <>
@@ -281,19 +297,7 @@ export function InboxDetailPage() {
                   </Button>
                 )}
                 {item.canApprove && !reversal && (
-                  <Button
-                    size="lg"
-                    disabled={busy || dirty || !payload || blocked || (failed > 0 && !acceptFailed)}
-                    onClick={() =>
-                      approve.mutate({
-                        id,
-                        revision: item.revision,
-                        idempotencyKey,
-                        lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
-                        ...(failed > 0 ? { acceptFailedChecks: acceptFailed } : {}),
-                      })
-                    }
-                  >
+                  <Button size="lg" disabled={busy || dirty || !payload || blocked || (failed > 0 && !acceptFailed)} onClick={submitApproval}>
                     {approve.isPending ? <Spinner className="text-current" /> : null}
                     {t('approve')}
                   </Button>
@@ -315,10 +319,17 @@ export function InboxDetailPage() {
           }
         />
       </div>
-      {(approve.error || reject.error || edit.error || reextract.error) && (
+      {stepUp && (
+        <div className="mb-4">
+          <StepUpPrompt action={t('stepUpApprove')} onVerified={retryApproval} onCancel={() => approve.reset()} />
+        </div>
+      )}
+      {((approve.error && !stepUp) || reject.error || edit.error || reextract.error) && (
         <div className="mb-4">
           <ErrorText>
-            {reversal && approve.error ? reversalErrorMessage(approve.error, root, locale) : errorMessage(approve.error ?? reject.error ?? edit.error ?? reextract.error)}
+            {reversal && approve.error && !stepUp
+              ? reversalErrorMessage(approve.error, root, locale)
+              : errorMessage((stepUp ? null : approve.error) ?? reject.error ?? edit.error ?? reextract.error)}
           </ErrorText>
         </div>
       )}

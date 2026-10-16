@@ -65,6 +65,15 @@ export function OrgLeftNotice() {
   );
 }
 
+// Something that worked and the user should read (an email link confirmed, a setting saved); a status, not an alert.
+export function Notice({ children }: { children: ReactNode }) {
+  return (
+    <Alert role="status" className="border-success/30 bg-success/10 text-success">
+      {children}
+    </Alert>
+  );
+}
+
 export function Spinner({ className }: { className?: string }) {
   const t = useTranslations('common');
   return <SpinnerIcon className={cn('text-ring', className)} aria-label={t('loading')} />;
