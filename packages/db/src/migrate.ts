@@ -158,6 +158,21 @@ export const PINNED_SEARCH_PATH = 'search_path=pg_catalog, pg_temp';
  * escalation open in that database, and a warning nobody acts on is the same as no check.
  */
 export async function hardeningViolations(client: pg.ClientBase): Promise<string[]> {
+  // The catalog queries below cost enough to start JIT compilation, which took 0.8-0.9 s per call on the postgres:17
+  // image (30-45 ms without it, issue #179) and gains nothing for a one-off query. Off for this session while the
+  // check runs, then restored. In a transaction that an error here aborted, the restore fails too, but the caller's
+  // rollback undoes the change anyway, so that failure is ignored and the original error propagates. A caller's
+  // `SET LOCAL jit` is restored as a session value, so it outlives that transaction; that affects speed only.
+  const { rows } = await client.query<{ jit: string }>("SELECT pg_catalog.current_setting('jit') AS jit");
+  await client.query("SELECT pg_catalog.set_config('jit', 'off', false)");
+  try {
+    return await listHardeningViolations(client);
+  } finally {
+    await client.query("SELECT pg_catalog.set_config('jit', $1, false)", [rows[0]?.jit ?? 'on']).catch(() => {});
+  }
+}
+
+async function listHardeningViolations(client: pg.ClientBase): Promise<string[]> {
   const { rows: functions } = await client.query<{ fn: string; kind: string; config: string | null; extra: boolean }>(
     `SELECT p.oid::pg_catalog.regprocedure::text AS fn, p.prokind::text AS kind,
             pg_catalog.array_to_string(p.proconfig, '; ') AS config,

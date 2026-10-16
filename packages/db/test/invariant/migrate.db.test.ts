@@ -150,6 +150,23 @@ suite('migrations with a runner that is not a superuser', () => {
     });
   });
 
+  // #179: the guard turns JIT off while it runs (it cost about 0.8 s per call) and gives the session its setting back.
+  it('leaves the caller with its own jit setting', async () => {
+    await withClient(runnerUrl, async (runner) => {
+      const jit = async () => (await runner.query<{ jit: string }>("SELECT current_setting('jit') AS jit")).rows[0]?.jit;
+      for (const setting of ['on', 'off']) {
+        await runner.query(`SET jit = ${setting}`);
+        expect(await hardeningViolations(runner)).toEqual([]);
+        expect(await jit()).toBe(setting);
+        await runner.query('BEGIN');
+        expect(await hardeningViolations(runner)).toEqual([]);
+        expect(await jit()).toBe(setting);
+        await runner.query('COMMIT');
+        expect(await jit()).toBe(setting);
+      }
+    });
+  });
+
   it('reports planted functions that do not pin search_path, and TEMPORARY granted back', async () => {
     await withClient(runnerUrl, async (runner) => {
       await runner.query('BEGIN');
