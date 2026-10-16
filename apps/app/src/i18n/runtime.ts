@@ -35,7 +35,6 @@ export function activeLocale(): Locale {
 export function setActiveLocale(locale: Locale): void {
   active = locale;
   storeLocale(locale);
-  document.documentElement.lang = locale;
 }
 
 export function translatorFor(locale: Locale) {

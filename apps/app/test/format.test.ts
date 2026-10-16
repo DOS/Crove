@@ -51,8 +51,9 @@ describe('formatDate', () => {
 
 describe('formatDateTime', () => {
   it('formats a timestamp in each locale', () => {
-    expect(formatDateTime('2026-10-16T08:05:00.000Z', 'vi')).toMatch(/16\/10\/2026|\d{2}:\d{2}/);
-    expect(formatDateTime('2026-10-16T08:05:00.000Z', 'en')).toMatch(/\d{2}\/10\/2026/);
+    // vi-VN short style writes a two-digit year ("15:05 16/10/26"), as before i18n.
+    expect(formatDateTime('2026-10-16T08:05:00.000Z', 'vi')).toMatch(/16\/10\/26/);
+    expect(formatDateTime('2026-10-16T08:05:00.000Z', 'en')).toMatch(/16\/10\/2026/);
     expect(formatDateTime(null, 'en')).toBe('');
   });
 });

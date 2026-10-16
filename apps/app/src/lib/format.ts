@@ -3,6 +3,7 @@ import { FORMAT_LOCALE, type Locale } from '../i18n/locale.ts';
 
 const DECIMAL = /^-?\d+(\.\d+)?$/;
 const numberFormats = new Map<string, Intl.NumberFormat>();
+const dateFormats = new Map<Locale, Intl.DateTimeFormat>();
 
 function numberFormat(locale: Locale, currency?: string): Intl.NumberFormat {
   const key = `${locale}|${currency ?? ''}`;
@@ -15,7 +16,8 @@ function numberFormat(locale: Locale, currency?: string): Intl.NumberFormat {
 }
 
 // Formats a decimal string (e.g. "1980000.0000") as money in the currency's usual precision (no decimals for VND).
-// The string is passed to Intl.NumberFormat as is, which formats it as an exact decimal (ES2023), never as a float.
+// The string is passed to Intl.NumberFormat as is, which formats it as an exact decimal (Intl.NumberFormat v3:
+// Chrome 106, Firefox 116, Safari 15.4). Older engines read it as a float, exact up to 15 significant digits.
 export function formatMoney(value: string | null | undefined, locale: Locale, currency = 'VND'): string {
   if (value === null || value === undefined || value === '') return '';
   if (!DECIMAL.test(value)) return value;
@@ -40,9 +42,12 @@ export function formatDate(value: string | null | undefined, locale: Locale): st
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
   if (!match) return value;
   const [, y, m, d] = match;
-  return new Intl.DateTimeFormat(FORMAT_LOCALE[locale], { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' }).format(
-    Date.UTC(Number(y), Number(m) - 1, Number(d)),
-  );
+  let format = dateFormats.get(locale);
+  if (!format) {
+    format = new Intl.DateTimeFormat(FORMAT_LOCALE[locale], { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
+    dateFormats.set(locale, format);
+  }
+  return format.format(Date.UTC(Number(y), Number(m) - 1, Number(d)));
 }
 
 // A point in time in the browser's time zone.

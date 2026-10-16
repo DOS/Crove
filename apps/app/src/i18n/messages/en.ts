@@ -132,7 +132,7 @@ export const en: Messages = {
     maybeDuplicate: 'Possible duplicate',
     failedChecks: '{count, plural, one {# error} other {# errors}}',
     warnChecks: '{count, plural, one {# warning} other {# warnings}}',
-    matched: 'Matches',
+    matched: 'All checks pass',
   },
   inboxDetail: {
     back: '← Document inbox',
