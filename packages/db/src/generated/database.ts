@@ -148,6 +148,7 @@ export interface KernelActivityTable {
   summary: ColumnType<string, string, NotGranted>;
   actor_id: ColumnType<string | null, string | null, NotGranted>;
   occurred_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  agent_id: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_kernel.agent */

@@ -239,11 +239,14 @@ function checkInvariants(model: Model, real: Real): void {
 }
 
 class PostCommand implements fc.Command<Model, Real> {
-  constructor(
-    readonly source: string,
-    readonly revisionShift: number,
-    readonly payload: number,
-  ) {}
+  readonly source: string;
+  readonly revisionShift: number;
+  readonly payload: number;
+  constructor(source: string, revisionShift: number, payload: number) {
+    this.source = source;
+    this.revisionShift = revisionShift;
+    this.payload = payload;
+  }
   check(): boolean {
     return true;
   }
@@ -276,10 +279,12 @@ class PostCommand implements fc.Command<Model, Real> {
 }
 
 class ReverseCommand implements fc.Command<Model, Real> {
-  constructor(
-    readonly source: string,
-    readonly date: string,
-  ) {}
+  readonly source: string;
+  readonly date: string;
+  constructor(source: string, date: string) {
+    this.source = source;
+    this.date = date;
+  }
   check(model: Readonly<Model>): boolean {
     return (model.sources.get(this.source)?.length ?? 0) > 0;
   }

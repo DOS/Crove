@@ -20,7 +20,10 @@ type Leg = [account: string, debit: number | string, credit: number | string, pa
 const LE = 'le-sample';
 
 class Journal {
-  constructor(private readonly legalEntityId = LE) {}
+  private readonly legalEntityId: string;
+  constructor(legalEntityId = LE) {
+    this.legalEntityId = legalEntityId;
+  }
   state: LedgerState = emptyLedger;
   private seq = 0;
   private newId = () => `E${++this.seq}`;

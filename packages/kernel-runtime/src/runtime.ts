@@ -63,8 +63,32 @@ export interface AgentAccess {
   taint?: 'propagate';
 }
 
-// A built-in agent program (ADR-0029 section 8): what one run of a template does, only through the runtime.
-export type AgentProgram = (run: { runtime: Runtime; orgId: string; actor: AgentActor }) => Promise<void>;
+// What a built-in agent program gets for one run (ADR-0029 section 8): commands and queries bound to the run's agent
+// actor and org. It holds no Runtime, so a program (and later a model or tool runner behind it) cannot act as another
+// actor, in another org or as another run.
+export interface AgentRuntime {
+  readonly orgId: string;
+  readonly agentId: string;
+  readonly runId: string;
+  execute<O = unknown>(name: string, input: unknown, options?: { idempotencyKey?: string }): Promise<O>;
+  query<O = unknown>(name: string, input: unknown): Promise<O>;
+}
+
+// A built-in agent program (ADR-0029 section 8): what one run of a template does, only through its AgentRuntime.
+export type AgentProgram = (agent: AgentRuntime) => Promise<void>;
+
+// The AgentRuntime of one run: a frozen object whose methods close over the runtime and a copy of the actor.
+export function agentRuntime(runtime: Runtime, orgId: string, actor: AgentActor): AgentRuntime {
+  const bound: AgentActor = Object.freeze({ type: 'agent', agentId: actor.agentId, runId: actor.runId });
+  return Object.freeze({
+    orgId,
+    agentId: bound.agentId,
+    runId: bound.runId,
+    execute: <O = unknown>(name: string, input: unknown, options?: { idempotencyKey?: string }) =>
+      runtime.execute<O>(name, input, { actor: bound, orgId, ...(options?.idempotencyKey !== undefined ? { idempotencyKey: options.idempotencyKey } : {}) }),
+    query: <O = unknown>(name: string, input: unknown) => runtime.query<O>(name, input, { actor: bound, orgId }),
+  });
+}
 
 const RISK_RANK: Record<Risk, number> = { R0: 0, R1: 1, R2: 2, R3: 3 };
 
@@ -144,6 +168,8 @@ export interface QueryContext {
   reviserOf(command: string): string | null;
   // Set exactly when the actor is an agent.
   agent: AgentGrant | null;
+  // Whether this runtime registered the module (CROVE_MODULES, ADR-0031), as Runtime.installed().
+  installed(module: string): boolean;
 }
 
 export interface CommandContext extends QueryContext {
@@ -444,6 +470,7 @@ export class Runtime {
       agent: entered.agent,
       query: (name, input) => this.lookup(trx, orgId, actor, entered, name, input),
       reviserOf: (command) => this.reviserOf(command),
+      installed: (module) => this.installed(module),
     };
   }
 
@@ -726,6 +753,8 @@ export class Runtime {
             kind,
             summary,
             actor_id: base.actor.type === 'user' ? base.actor.userId : null,
+            // The database stamps it from the sealed context too (activity_stamp_agent).
+            agent_id: base.actor.type === 'agent' ? base.actor.agentId : null,
           })
           .execute();
       },

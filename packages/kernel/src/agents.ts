@@ -20,6 +20,7 @@ import {
   type AgentGrant,
   type AgentProgram,
   type CommandContext,
+  agentRuntime,
   type QueryContext,
   type Runtime,
 } from '@crove/kernel-runtime';
@@ -69,7 +70,7 @@ async function lockAgent(trx: Trx, orgId: string, id: string) {
     .selectFrom('crove_kernel.agent as a')
     .innerJoin('crove_kernel.agent_template as t', 't.key', 'a.template_key')
     .selectAll('a')
-    .select(['t.role_key as template_role_key'])
+    .select(['t.role_key as template_role_key', 't.module as template_module'])
     .where('a.org_id', '=', orgId)
     .where('a.id', '=', id)
     .forUpdate('a')
@@ -116,13 +117,15 @@ async function stopAgentRuns(trx: Trx, orgId: string, agentIds: string[], reason
 // one pending row, which collects the reasons. The event goes out on every request: the worker's queue keeps at most
 // one queued and one active job per agent, so repeats cost nothing, and a pending row whose run was refused earlier
 // (daily cap, kill switch, budget) is picked up again. A tainted task makes the wake-up, and so the run that claims
-// it, tainted.
+// it, tainted. An agent of a module this deployment does not enable (CROVE_MODULES) keeps its pending request but is
+// not woken: no run starts until the module is enabled again, when the sweep finds the request.
 async function requestWakeup(ctx: CommandContext, positionId: string | null, reason: { taskId: string; why: string }, tainted: boolean, depth: number) {
   if (!positionId) return null;
   const holder = await ctx.trx
     .selectFrom('crove_kernel.position as p')
     .innerJoin('crove_kernel.agent as a', (j) => j.onRef('a.org_id', '=', 'p.org_id').onRef('a.id', '=', 'p.holder_agent_id'))
-    .select('a.id')
+    .innerJoin('crove_kernel.agent_template as t', 't.key', 'a.template_key')
+    .select(['a.id', 't.module'])
     .where('p.org_id', '=', ctx.orgId)
     .where('p.id', '=', positionId)
     .where('p.status', '=', 'active')
@@ -138,7 +141,7 @@ async function requestWakeup(ctx: CommandContext, positionId: string | null, rea
       tainted = w.tainted OR EXCLUDED.tainted,
       request_depth = GREATEST(w.request_depth, EXCLUDED.request_depth),
       updated_at = pg_catalog.now()`.execute(ctx.trx);
-  await ctx.emit('kernel.agent.wakeup_requested', { agentId: holder.id });
+  if (ctx.installed(holder.module)) await ctx.emit('kernel.agent.wakeup_requested', { agentId: holder.id });
   return holder.id;
 }
 
@@ -146,9 +149,17 @@ async function requestWakeup(ctx: CommandContext, positionId: string | null, rea
 // let a refused run start: a kill switch released, an agent reactivated or placed, a budget changed.
 async function rewakePending(ctx: CommandContext, agentIds?: string[]): Promise<void> {
   if (agentIds && agentIds.length === 0) return;
-  let query = ctx.trx.selectFrom('crove_kernel.agent_wakeup').select('agent_id').where('org_id', '=', ctx.orgId).where('status', '=', 'pending');
-  if (agentIds) query = query.where('agent_id', 'in', agentIds);
-  for (const row of await query.execute()) await ctx.emit('kernel.agent.wakeup_requested', { agentId: row.agent_id });
+  let query = ctx.trx
+    .selectFrom('crove_kernel.agent_wakeup as w')
+    .innerJoin('crove_kernel.agent as a', (j) => j.onRef('a.org_id', '=', 'w.org_id').onRef('a.id', '=', 'w.agent_id'))
+    .innerJoin('crove_kernel.agent_template as t', 't.key', 'a.template_key')
+    .select(['w.agent_id', 't.module'])
+    .where('w.org_id', '=', ctx.orgId)
+    .where('w.status', '=', 'pending');
+  if (agentIds) query = query.where('w.agent_id', 'in', agentIds);
+  for (const row of await query.execute()) {
+    if (ctx.installed(row.module)) await ctx.emit('kernel.agent.wakeup_requested', { agentId: row.agent_id });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -279,17 +290,22 @@ export const assignPosition = defineCommand({
       .where('id', '=', position.id)
       .execute();
     if (holderAgent) {
+      // One wake-up for the open tasks, as tainted as the most tainted of them, so the run that takes them over can
+      // read every one (an untainted run sees only untainted tasks).
       const open = await ctx.trx
         .selectFrom('crove_kernel.task')
-        .select(['id', 'tainted', 'request_depth'])
+        .select((eb) => [
+          eb.fn.min<string>(sql`id::text`).as('first_id'),
+          eb.fn<boolean>('bool_or', ['tainted']).as('tainted'),
+          eb.fn.max('request_depth').as('request_depth'),
+        ])
         .where('org_id', '=', ctx.orgId)
         .where('assignee_position_id', '=', position.id)
         .where('status', 'in', ['todo', 'in_progress'])
-        .orderBy('created_at')
-        .limit(1)
         .executeTakeFirst();
-      if (open) await requestWakeup(ctx, position.id, { taskId: open.id, why: 'holder_changed' }, open.tainted, open.request_depth);
-      else await rewakePending(ctx, [holderAgent]);
+      if (open?.first_id) {
+        await requestWakeup(ctx, position.id, { taskId: open.first_id, why: 'holder_changed' }, open.tainted === true, Number(open.request_depth ?? 0));
+      } else await rewakePending(ctx, [holderAgent]);
     }
     await ctx.activity('kernel.position', position.id, 'position.assigned', `Đổi người giữ vị trí ${position.title}`);
     await ctx.emit('kernel.position.assigned', { positionId: position.id });
@@ -297,7 +313,8 @@ export const assignPosition = defineCommand({
   },
 });
 
-// Installs a module's agent template: an agent and a position it holds, from the template's data.
+// Installs a module's agent template: an agent and a position it holds, from the template's data. Refused when this
+// deployment does not enable the template's module (CROVE_MODULES, ADR-0031): its program and role keys are not here.
 export const installAgentTemplate = defineCommand({
   name: 'kernel.agent.template.install',
   input: z.object({ templateKey: z.string().min(1).max(100), reportsTo: zId.nullable().optional(), displayName: z.string().trim().min(1).max(200).optional() }),
@@ -307,6 +324,9 @@ export const installAgentTemplate = defineCommand({
     const userId = requireUser(ctx);
     const template = await ctx.trx.selectFrom('crove_kernel.agent_template').selectAll().where('key', '=', input.templateKey).executeTakeFirst();
     if (!template) throw new DomainError('TEMPLATE_NOT_FOUND', 404, 'Không có mẫu tác tử AI này');
+    if (!ctx.installed(template.module)) {
+      throw new DomainError('MODULE_DISABLED', 409, 'Phân hệ của mẫu tác tử AI này chưa được bật', { module: template.module });
+    }
     if (input.reportsTo) await lockPosition(ctx.trx, ctx.orgId, input.reportsTo);
     const agent = await ctx.trx
       .insertInto('crove_kernel.agent')
@@ -807,7 +827,8 @@ const zProposalRef = z.object({ type: z.literal('kernel.proposal'), id: zId });
 const zChecksPayload = z.object({ checks: z.array(zCheck).max(50) });
 
 // Inbox triage: a subscribed event creates a task for every active agent position whose template subscribes to it,
-// and wakes the agent. The event is read from the outbox in the database, never taken from the job payload.
+// and wakes the agent. The event is read from the outbox in the database, never taken from the job payload. Agents
+// of a module this deployment does not enable get no task.
 export const dispatchAgentEvent = defineCommand({
   name: 'kernel.agent.dispatch_event',
   input: z.object({ eventId: zId }),
@@ -837,14 +858,14 @@ export const dispatchAgentEvent = defineCommand({
       .selectFrom('crove_kernel.agent as a')
       .innerJoin('crove_kernel.agent_template as t', 't.key', 'a.template_key')
       .innerJoin('crove_kernel.position as p', (j) => j.onRef('p.org_id', '=', 'a.org_id').onRef('p.holder_agent_id', '=', 'a.id'))
-      .select(['p.id as position_id'])
+      .select(['p.id as position_id', 't.module'])
       .where('a.org_id', '=', ctx.orgId)
       .where('a.status', '=', 'active')
       .where('p.status', '=', 'active')
       .where(sql<boolean>`t.subscribes @> ARRAY[${event.type}]::text[]`)
       .execute();
     let created = 0;
-    for (const seat of seats) {
+    for (const seat of seats.filter((s) => ctx.installed(s.module))) {
       const task = await ctx.trx
         .insertInto('crove_kernel.task')
         .values({
@@ -872,7 +893,7 @@ export const dispatchAgentEvent = defineCommand({
 
 export type RunStartResult =
   | { runId: string; templateKey: string; tainted: boolean }
-  | { runId: null; reason: 'not_runnable' | 'kill_switch' | 'budget' | 'daily_cap' | 'busy' | 'idle' };
+  | { runId: null; reason: 'not_runnable' | 'module_disabled' | 'kill_switch' | 'budget' | 'daily_cap' | 'busy' | 'idle' };
 
 // Starts a run for an agent with pending wake-ups: one running run per agent (the agent row lock here, a unique index
 // in the database), within its daily run cap, budgets and kill switches. Runs past their expiry are closed first and
@@ -897,6 +918,7 @@ export const startAgentRun = defineCommand({
       return { runId: null, reason };
     };
     if (agent.status !== 'active' || !position || position.role_key !== agent.template_role_key) return done('not_runnable');
+    if (!ctx.installed(agent.template_module)) return done('module_disabled');
     const { rows: gates } = await sql<{ killed: boolean; spent: boolean; today: number }>`
       SELECT
         EXISTS (SELECT 1 FROM crove_kernel.kill_switch k WHERE k.org_id = ${ctx.orgId}::uuid AND k.released_at IS NULL
@@ -1022,7 +1044,8 @@ export async function runAgentWake(
   try {
     const program = Object.hasOwn(deps.programs, started.templateKey) ? deps.programs[started.templateKey] : undefined;
     if (!program) throw new DomainError('AGENT_PROGRAM_MISSING', 500, `No program for ${started.templateKey}`);
-    await program({ runtime: deps.runtime, orgId, actor });
+    // The program gets only a facade bound to this run's agent actor, never the Runtime.
+    await program(agentRuntime(deps.runtime, orgId, actor));
   } catch (e) {
     outcome = 'failed';
     // Codes only: messages can quote tainted content.
@@ -1139,8 +1162,9 @@ function taskView(t: {
   };
 }
 
-// Tasks of the org; an agent sees only its own position's tasks. mine: the positions the user holds, plus the root
-// tasks for an owner.
+// Tasks of the org; an agent sees only its own position's tasks, and an untainted run only untainted ones (tainted
+// content never reaches a run that would write it untainted; a tainted task wakes the agent with a tainted run). mine:
+// the positions the user holds, plus the root tasks for an owner.
 export const taskList = defineQuery({
   name: 'kernel.task.list',
   input: z.object({ positionId: zId.optional(), mine: z.boolean().optional(), status: z.array(zTaskStatus).max(6).optional() }),
@@ -1150,6 +1174,7 @@ export const taskList = defineQuery({
     let query = ctx.trx.selectFrom('crove_kernel.task').selectAll().where('org_id', '=', ctx.orgId).orderBy('created_at').limit(200);
     if (ctx.agent) {
       query = query.where('assignee_position_id', '=', ctx.agent.positionId);
+      if (!ctx.agent.tainted) query = query.where('tainted', '=', false);
     } else if (input.positionId) {
       query = query.where('assignee_position_id', '=', input.positionId);
     } else if (input.mine && ctx.actor.type === 'user') {
@@ -1171,7 +1196,8 @@ export const taskList = defineQuery({
   },
 });
 
-// One task with its comments and, for a proposal review, what the proposal's deterministic checks found.
+// One task with its comments and, for a proposal review, what the proposal's deterministic checks found. Agents read
+// as in kernel.task.list: their own position's tasks, and untainted runs untainted tasks only.
 export const taskGet = defineQuery({
   name: 'kernel.task.get',
   input: z.object({ id: zId }),
@@ -1179,7 +1205,10 @@ export const taskGet = defineQuery({
   agent: { roles: 'any' },
   handler: async (ctx, input) => {
     let query = ctx.trx.selectFrom('crove_kernel.task').selectAll().where('org_id', '=', ctx.orgId).where('id', '=', input.id);
-    if (ctx.agent) query = query.where('assignee_position_id', '=', ctx.agent.positionId);
+    if (ctx.agent) {
+      query = query.where('assignee_position_id', '=', ctx.agent.positionId);
+      if (!ctx.agent.tainted) query = query.where('tainted', '=', false);
+    }
     const task = await query.executeTakeFirst();
     if (!task) throw new DomainError('TASK_NOT_FOUND', 404, 'Không tìm thấy việc này');
     const comments = await ctx.trx

@@ -43,30 +43,25 @@ export function reviewText(proposal: TaskDetail['proposal']): string {
   return lines.join('\n');
 }
 
-export const chiefAccountantReview: AgentProgram = async ({ runtime, orgId, actor }) => {
-  const as = { actor, orgId };
-  const { tasks } = await runtime.query<{ tasks: TaskSummary[] }>('kernel.task.list', { status: ['todo', 'in_progress'] }, as);
+export const chiefAccountantReview: AgentProgram = async (agent) => {
+  const { tasks } = await agent.query<{ tasks: TaskSummary[] }>('kernel.task.list', { status: ['todo', 'in_progress'] });
   for (const task of tasks.filter((t) => t.kind === 'proposal_review').slice(0, TASKS_PER_RUN)) {
     let fence: string;
     try {
-      ({ fence } = await runtime.execute<{ fence: string }>('kernel.task.checkout', { id: task.id }, as));
+      ({ fence } = await agent.execute<{ fence: string }>('kernel.task.checkout', { id: task.id }));
     } catch (error) {
       // Held by someone else or no longer open: not this run's work.
       if (error instanceof DomainError && error.status === 409) continue;
       throw error;
     }
-    const detail = await runtime.query<TaskDetail>('kernel.task.get', { id: task.id }, as);
+    const detail = await agent.query<TaskDetail>('kernel.task.get', { id: task.id });
     const review = reviewText(detail.proposal);
-    await runtime.execute('kernel.task.comment', { id: task.id, fence, body: review }, as);
+    await agent.execute('kernel.task.comment', { id: task.id, fence, body: review });
     if (!detail.proposal || detail.proposal.status !== 'pending') {
-      await runtime.execute('kernel.task.set_status', { id: task.id, fence, status: 'done' }, as);
+      await agent.execute('kernel.task.set_status', { id: task.id, fence, status: 'done' });
       continue;
     }
-    await runtime.execute(
-      'kernel.task.escalate',
-      { id: task.id, fence, title: `Duyệt đề xuất: ${detail.proposal.title}`.slice(0, 300), reason: review },
-      as,
-    );
+    await agent.execute('kernel.task.escalate', { id: task.id, fence, title: `Duyệt đề xuất: ${detail.proposal.title}`.slice(0, 300), reason: review });
   }
 };
 

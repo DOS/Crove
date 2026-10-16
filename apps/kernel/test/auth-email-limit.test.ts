@@ -133,7 +133,10 @@ class MemoryLimiter implements EmailLimiter {
   released: string[] = [];
   fail = false;
   private next = 0;
-  constructor(private readonly perClient: number) {}
+  private readonly perClient: number;
+  constructor(perClient: number) {
+    this.perClient = perClient;
+  }
 
   async reserve(request: { client: string; target: string | null }): Promise<EmailVerdict> {
     this.calls.push(request);
