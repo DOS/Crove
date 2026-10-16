@@ -15,7 +15,7 @@ export type AlertKind = 'alert' | 'resolved' | 'test';
 export type AlertState = 'new' | 'changed' | 'repeat';
 
 export interface Finding {
-  check: 'outbox' | 'inbound' | 'jobs_schema' | 'job_age' | 'dead_letters' | 'heartbeat' | 'probe';
+  check: 'outbox' | 'inbound' | 'jobs_schema' | 'job_age' | 'dead_letters' | 'heartbeat' | 'notify_queue' | 'probe';
   message: string;
   value: number | null;
   threshold: number | null;

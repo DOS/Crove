@@ -17,6 +17,7 @@ const healthy: HealthSnapshot = {
   job_oldest_queued_age_seconds: null,
   dead_letter_count: 0,
   worker_heartbeat_age_seconds: 12,
+  notify_queue_usage: 0,
 };
 const workerDown = { ...healthy, worker_heartbeat_age_seconds: 900 };
 const workerAndRelayDown = { ...workerDown, outbox_pending: 3, outbox_oldest_age_seconds: 1200 };
@@ -28,7 +29,7 @@ const config = (overrides: Partial<ProberConfig> = {}): ProberConfig => ({
   telegramChatId: undefined,
   repeatSeconds: 3600,
   instance: 'office',
-  thresholds: { outboxAgeSeconds: 300, jobAgeSeconds: 900, heartbeatAgeSeconds: 120, deadLetters: 0 },
+  thresholds: { outboxAgeSeconds: 300, jobAgeSeconds: 900, heartbeatAgeSeconds: 120, deadLetters: 0, notifyQueuePercent: 50 },
   deadLetterWindowSeconds: 360,
   ...overrides,
 });

@@ -18,8 +18,9 @@ const healthy: HealthSnapshot = {
   job_oldest_queued_age_seconds: null,
   dead_letter_count: 0,
   worker_heartbeat_age_seconds: 12,
+  notify_queue_usage: 0,
 };
-const limits = { outboxAgeSeconds: 300, jobAgeSeconds: 900, heartbeatAgeSeconds: 120, deadLetters: 0 };
+const limits = { outboxAgeSeconds: 300, jobAgeSeconds: 900, heartbeatAgeSeconds: 120, deadLetters: 0, notifyQueuePercent: 50 };
 
 function config(overrides: Partial<ProberConfig> = {}): ProberConfig {
   return {
@@ -96,6 +97,14 @@ describe('health thresholds', () => {
     expect(findings[1]?.message).toMatch(/no worker heartbeat recorded/);
   });
 
+  it('reports a NOTIFY queue fuller than its limit (issue #281)', () => {
+    expect(evaluateHealth({ ...healthy, notify_queue_usage: 0.5 }, limits, 300)).toEqual([]);
+    const findings = evaluateHealth({ ...healthy, notify_queue_usage: 0.634 }, limits, 300);
+    expect(findings.map((f) => [f.check, f.value, f.threshold])).toEqual([['notify_queue', 0.634, 0.5]]);
+    expect(findings[0]?.message).toMatch(/^the NOTIFY queue is 63\.4% full \(limit 50%\): a listening session has stopped reading/);
+    expect(loadProberConfig({ PROBER_MAX_NOTIFY_QUEUE_PERCENT: '80' }).thresholds.notifyQueuePercent).toBe(80);
+  });
+
   it('honors the dead letter limit', () => {
     expect(evaluateHealth({ ...healthy, dead_letter_count: 2 }, { ...limits, deadLetters: 2 }, 300)).toEqual([]);
     expect(evaluateHealth({ ...healthy, dead_letter_count: 3 }, { ...limits, deadLetters: 2 }, 300).map((f) => f.check)).toEqual(['dead_letters']);
@@ -151,7 +160,7 @@ describe('prober exit codes', () => {
     const hook = webhook();
     expect(await probeOnce(config(), { ...io, fetch: hook.fetch, readHealth: async () => healthy })).toBe(EXIT.ok);
     expect(hook.calls).toEqual([]);
-    expect(io.out).toEqual(['[prober] ok: outbox 0 pending, inbound 0 pending, jobs 0 queued, dead letters 0, heartbeat 12 s ago']);
+    expect(io.out).toEqual(['[prober] ok: outbox 0 pending, inbound 0 pending, jobs 0 queued, dead letters 0, heartbeat 12 s ago, notify queue 0%']);
   });
 
   it('exits 1 with a clear message and one alert when a threshold is exceeded', async () => {

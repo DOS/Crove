@@ -2,9 +2,18 @@
 // of their org, a failed re-check closes the stream with its reason, hints wait while a check runs, and a stream ends
 // when its token expires, its client stops reading, or the process loses its LISTEN connection.
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import type pg from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DomainError } from '@crove/kernel-runtime';
+import { Semaphore } from '../src/concurrency.ts';
 import {
+  LISTEN_STABLE_MS,
+  PROBE_INTERVAL_MS,
+  PROBE_TIMEOUT_MS,
+  createPgNotificationSource,
+  isProbePayload,
+  sseEvent,
   PENDING_HINT_LIMIT,
   RECHECK_EVERY_HINTS,
   StreamConnection,
@@ -291,5 +300,235 @@ describe('StreamConnection', () => {
     await conn.recheck();
     expect(conn.isClosed).toBe(true);
     expect(events().at(-1)).toEqual({ event: 'close', data: { reason: 'unavailable' } });
+  });
+});
+
+describe('re-checks share a bounded gate (issue #281)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('runs at most the gate limit at once, delays the rest with their hints, and skips a stream that closed meanwhile', async () => {
+    const gate = new Semaphore(2);
+    const answers: Array<() => void> = [];
+    const checks: number[] = [];
+    const sent: string[][] = [[], [], [], []];
+    const streams = [0, 1, 2, 3].map(
+      (i) =>
+        new StreamConnection({
+          orgId: ORG_A,
+          check: () =>
+            new Promise<void>((resolve) => {
+              checks.push(i);
+              answers.push(resolve);
+            }),
+          gate,
+          recheckMs: 3_600_000,
+          endsAt: Date.now() + 3_600_000,
+          write: (chunk) => {
+            sent[i]?.push(chunk);
+            return true;
+          },
+          end: () => {},
+        }),
+    );
+    for (const stream of streams) void stream.recheck();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(checks).toEqual([0, 1]);
+    // A hint for a waiting stream is held until its check has answered.
+    const id = randomUUID();
+    streams[2]?.hint({ type: 'file', id });
+    // The fourth stream leaves while it waits: its check never runs.
+    streams[3]?.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent[2]).toEqual([]);
+    answers.shift()?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(checks).toEqual([0, 1, 2]);
+    expect(sent[2]).toEqual([]);
+    answers.shift()?.();
+    answers.shift()?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(checks).toEqual([0, 1, 2]);
+    expect(sent[2]).toEqual([sseEvent('invalidate', { type: 'file', id })]);
+    expect([gate.running, gate.queued]).toEqual([0, 0]);
+    for (const stream of streams) stream.finish();
+  });
+});
+
+describe('a re-check that never answers (issue #281)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('closes its stream as unavailable after the deadline and frees the gate for the others', async () => {
+    const gate = new Semaphore(1);
+    const closes: string[] = [];
+    const make = (check: () => Promise<void>) =>
+      new StreamConnection({
+        orgId: ORG_A,
+        check,
+        gate,
+        checkTimeoutMs: 5_000,
+        recheckMs: 3_600_000,
+        endsAt: Date.now() + 3_600_000,
+        write: (chunk) => {
+          if (chunk.startsWith('event: close')) closes.push(chunk);
+          return true;
+        },
+        end: () => {},
+      });
+    const stuck = make(() => new Promise<void>(() => {}));
+    const healthyCheck = vi.fn(async () => {});
+    const healthy = make(healthyCheck);
+    void stuck.recheck();
+    void healthy.recheck();
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(healthyCheck).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stuck.isClosed).toBe(true);
+    expect(closes).toEqual([sseEvent('close', { reason: 'unavailable' })]);
+    expect(healthyCheck).toHaveBeenCalledTimes(1);
+    expect(healthy.isClosed).toBe(false);
+    healthy.finish();
+  });
+});
+
+// A stand-in for pg.Client: `answer` decides whether the self-probe NOTIFY comes back, `failConnect` whether connect()
+// fails.
+class FakeListenClient extends EventEmitter {
+  answer = true;
+  failConnect = false;
+  ended = false;
+  readonly queries: string[] = [];
+
+  async connect(): Promise<void> {
+    if (this.failConnect) throw new Error('connection refused');
+  }
+
+  async query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }> {
+    this.queries.push(text);
+    if (text.includes('pg_notify') && this.answer) {
+      const [channel, payload] = values as [string, string];
+      queueMicrotask(() => this.emit('notification', { channel, payload }));
+    }
+    return { rows: [] };
+  }
+
+  async end(): Promise<void> {
+    this.ended = true;
+  }
+
+  // A NOTIFY from another session.
+  deliver(payload: string): void {
+    this.emit('notification', { channel: 'crove_stream', payload });
+  }
+}
+
+describe('the LISTEN connection (issue #281)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // No jitter: every backoff delay is its full value.
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  // Every client the source creates is kept, newest last, with the time it was created.
+  function harness(setup: (client: FakeListenClient, index: number) => void = () => {}) {
+    const clients: FakeListenClient[] = [];
+    const createdAt: number[] = [];
+    const events: string[] = [];
+    const notified: string[] = [];
+    const source = createPgNotificationSource({
+      connectionString: 'postgres://listen.test/db',
+      minDelayMs: 1_000,
+      maxDelayMs: 64_000,
+      log: () => {},
+      createClient: () => {
+        const client = new FakeListenClient();
+        setup(client, clients.length);
+        clients.push(client);
+        createdAt.push(Date.now());
+        return client as unknown as pg.Client;
+      },
+    });
+    source.start({
+      notify: (payload) => void notified.push(payload),
+      ready: () => void events.push('ready'),
+      lost: () => void events.push('lost'),
+    });
+    return { source, clients, createdAt, events, notified };
+  }
+
+  it('is ready only after its first self-probe came back, and hands no probe on', async () => {
+    const h = harness();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.events).toEqual(['ready']);
+    expect(h.clients[0]?.queries).toEqual(['LISTEN crove_stream', 'SELECT pg_catalog.pg_notify($1, $2)']);
+    const hint = `${ORG_A} file ${randomUUID()}`;
+    h.clients[0]?.deliver(hint);
+    // Another instance's probe is dropped too; it would not parse as a hint either.
+    h.clients[0]?.deliver('probe someone-else');
+    await vi.advanceTimersByTimeAsync(PROBE_INTERVAL_MS * 3);
+    expect(h.events).toEqual(['ready']);
+    expect(h.notified).toEqual([hint]);
+    expect(isProbePayload('probe someone-else')).toBe(true);
+    expect(parseHint('probe someone-else')).toBeNull();
+    expect(h.clients[0]?.queries.filter((q) => q.includes('pg_notify'))).toHaveLength(4);
+    await h.source.stop();
+  });
+
+  it('never becomes ready on a connection that does not deliver notifications, such as a transaction pooler', async () => {
+    const h = harness((client) => (client.answer = false));
+    await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
+    expect(h.events).toEqual(['lost']);
+    expect(h.clients[0]?.ended).toBe(true);
+    // It keeps trying, with backoff.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.clients).toHaveLength(2);
+    await h.source.stop();
+  });
+
+  it('drops a connection whose probe stops coming back, so the streams close, and reconnects', async () => {
+    const h = harness();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.events).toEqual(['ready']);
+    const first = h.clients[0] as FakeListenClient;
+    first.answer = false;
+    await vi.advanceTimersByTimeAsync(PROBE_INTERVAL_MS + PROBE_TIMEOUT_MS);
+    expect(h.events).toEqual(['ready', 'lost']);
+    expect(first.ended).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.clients).toHaveLength(2);
+    expect(h.events).toEqual(['ready', 'lost', 'ready']);
+    // The dropped client's late notifications go nowhere.
+    first.deliver(`${ORG_A} file ${randomUUID()}`);
+    expect(h.notified).toEqual([]);
+    await h.source.stop();
+  });
+
+  it('resets the reconnect backoff only after a connection stayed up for a while', async () => {
+    // Clients 0 to 2 fail to connect; 3 comes up and drops after 10 s; 4 comes up and drops after the stable period.
+    const h = harness((client, index) => {
+      if (index < 3) client.failConnect = true;
+    });
+    const gaps = () => h.createdAt.slice(1).map((at, i) => at - (h.createdAt[i] as number));
+    await vi.advanceTimersByTimeAsync(1_000 + 2_000 + 4_000);
+    expect(gaps()).toEqual([1_000, 2_000, 4_000]);
+    expect(h.events).toEqual(['lost', 'lost', 'lost', 'ready']);
+    await vi.advanceTimersByTimeAsync(10_000);
+    h.clients[3]?.emit('end');
+    // Up for 10 s only: the backoff goes on doubling.
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(h.clients).toHaveLength(5);
+    expect((h.createdAt[4] as number) - (h.createdAt[3] as number)).toBe(10_000 + 8_000);
+    await vi.advanceTimersByTimeAsync(LISTEN_STABLE_MS);
+    h.clients[4]?.emit('error', new Error('server closed the connection'));
+    // Up for the stable period: back to the shortest delay.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.clients).toHaveLength(6);
+    expect((h.createdAt[5] as number) - (h.createdAt[4] as number)).toBe(LISTEN_STABLE_MS + 1_000);
+    await h.source.stop();
   });
 });

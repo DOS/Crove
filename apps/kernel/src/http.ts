@@ -25,7 +25,7 @@ import type { OrgExportView } from '@crove/kernel';
 import { JOURNAL_EXPORT_LIMIT, buildJournalWorkbook, type JournalEntryView } from '@crove/mod-finance';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
 import { actorOf, bearerIssuedToOAuthClient, oauthClientRefused, type Authenticate, type AuthUser } from './auth.ts';
-import { ConcurrencyLimiter } from './concurrency.ts';
+import { ConcurrencyLimiter, type Semaphore } from './concurrency.ts';
 import { publicAuthUrl, type Config } from './config.ts';
 import { exportAad, exportSealer } from './export-seal.ts';
 import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts';
@@ -78,10 +78,26 @@ export interface StreamDeps {
   // Open streams in this process, and per user (STREAM_MAX_CONNECTIONS, STREAM_MAX_PER_USER).
   slots: ConcurrencyLimiter;
   recheckSeconds: number;
+  // Background re-checks running at once in this process (STREAM_RECHECK_CONCURRENCY). Unset: unbounded.
+  rechecks?: Semaphore;
+  // Failed ticket redeems per client address (issue #281). Default: STREAM_REDEEM_FAILURES_PER_MINUTE.
+  redeemFailures?: RateLimiter;
+  // Ticket redeems in flight in this process. Default: STREAM_REDEEMS_IN_FLIGHT.
+  redeems?: ConcurrencyLimiter;
 }
 
 // What a refused stream tells the client to wait before it tries again (it polls meanwhile).
 export const STREAM_RETRY_SECONDS = 15;
+// GET /api/stream redeems its ticket before any user is known, so the redeem is capped by client address instead
+// (issue #281). Only failures count: the SPA redeems each fresh ticket once, so a client that keeps presenting unknown,
+// spent or expired tickets is probing, and is refused (429) before the database is asked. Per process, like the
+// request rate limit; with TRUSTED_PROXY_HOPS unset behind a reverse proxy every client shares the proxy's address and
+// so this budget. The budget is peeked before and spent after the redeem, so one burst of concurrent failures may pass
+// it by up to the per-address in-flight cap. The in-flight cap bounds the database work of many addresses at once (503 STREAM_BUSY past it), and
+// one address may hold only a quarter of it.
+export const STREAM_REDEEM_FAILURES_PER_MINUTE = 20;
+export const STREAM_REDEEMS_IN_FLIGHT = 32;
+export const STREAM_REDEEMS_IN_FLIGHT_PER_CLIENT = 8;
 
 // Store errors that are not server faults. A blob missing behind a file row, or a key holding other bytes, is
 // still logged: either one means storage and database disagree. Other store errors (access, I/O) stay 500.
@@ -123,13 +139,14 @@ function oauthClientTokenRefused(): Response {
   return new Response(JSON.stringify(error), { status: refused.status, headers: { 'content-type': 'application/json' } });
 }
 
-// With TRUSTED_PROXY_HOPS=0 behind a reverse proxy, every client shares the proxy's address and so one email budget.
+// With TRUSTED_PROXY_HOPS=0 behind a reverse proxy, every client shares the proxy's address and so one email budget
+// and one budget of failed stream ticket redeems.
 let proxyWarned = false;
 function warnIfUntrustedProxy(c: Context, trustedHops: number): void {
   if (proxyWarned || trustedHops > 0 || !c.req.header('x-forwarded-for')) return;
   proxyWarned = true;
   console.warn(
-    '[auth-proxy] requests carry X-Forwarded-For but TRUSTED_PROXY_HOPS=0: behind a reverse proxy every client shares its address, and so one email budget; set TRUSTED_PROXY_HOPS',
+    '[http] requests carry X-Forwarded-For but TRUSTED_PROXY_HOPS=0: behind a reverse proxy every client shares its address, and so one email budget and one budget of failed stream ticket redeems; set TRUSTED_PROXY_HOPS',
   );
 }
 
@@ -323,13 +340,20 @@ export function createHttpApp(deps: HttpDeps) {
 
   // The invalidation stream (issue #69). EventSource sends no Authorization header, so this route runs before the
   // bearer middleware below and authenticates with a one-time ticket instead (POST /api/stream/tickets, which does go
-  // through it): the ticket is redeemed once, then come the same per-user request limit, a connection slot, and the
-  // session check and membership of the ticket's org, all before the stream opens.
+  // through it): the ticket is redeemed once (capped per client address and per process, issue #281), then come the
+  // same per-user request limit, a connection slot, and the session check and membership of the ticket's org, all
+  // before the stream opens.
   const stream = deps.stream;
   if (stream) {
+    const redeemFailures = stream.redeemFailures ?? new RateLimiter({ perMinute: STREAM_REDEEM_FAILURES_PER_MINUTE });
+    const redeems = stream.redeems ?? new ConcurrencyLimiter({ total: STREAM_REDEEMS_IN_FLIGHT, perKey: STREAM_REDEEMS_IN_FLIGHT_PER_CLIENT });
     const unavailable = (c: Context) => {
       c.header('retry-after', String(STREAM_RETRY_SECONDS));
       return c.json({ code: 'STREAM_UNAVAILABLE', message: 'Kênh cập nhật tạm thời không hoạt động' }, 503);
+    };
+    const rateLimited = (c: Context, retryAfterSeconds: number) => {
+      c.header('retry-after', String(retryAfterSeconds));
+      return c.json({ code: 'RATE_LIMITED', message: 'Bạn gửi quá nhiều yêu cầu, hãy thử lại sau', retryAfterSeconds }, 429);
     };
     app.get('/api/stream', async (c) => {
       // Hono answers HEAD with this route and drops the body: a stream nobody reads would hold a slot.
@@ -339,22 +363,31 @@ export function createHttpApp(deps: HttpDeps) {
       if (!wellFormedTicket(ticket)) return refused();
       // Checked before the redeem: a stream this process cannot feed is refused without using the ticket.
       if (!stream.hub.ready) return unavailable(c);
+      // The address the email budget uses too (the socket, or the entry the trusted proxies appended; IPv6 by /64).
+      const client = clientBucket(clientIp(c, config.TRUSTED_PROXY_HOPS));
+      const budget = redeemFailures.peek(client);
+      if (!budget.allowed) return rateLimited(c, budget.retryAfterSeconds);
+      const inFlight = redeems.tryAcquire(client);
+      if (!inFlight) {
+        c.header('retry-after', String(STREAM_RETRY_SECONDS));
+        return c.json({ code: 'STREAM_BUSY', message: 'Quá nhiều kết nối cập nhật đang mở' }, 503);
+      }
       let binding: TicketBinding | null;
       try {
         binding = await stream.tickets.redeem(ticketHash(ticket));
       } catch (error) {
         console.error('[stream] ticket not redeemed:', error instanceof Error ? error.message : error);
         return unavailable(c);
+      } finally {
+        inFlight();
       }
-      if (!binding) return refused();
+      if (!binding) {
+        warnIfUntrustedProxy(c, config.TRUSTED_PROXY_HOPS);
+        redeemFailures.take(client);
+        return refused();
+      }
       const decision = limiter?.take(binding.userId);
-      if (decision && !decision.allowed) {
-        c.header('retry-after', String(decision.retryAfterSeconds));
-        return c.json(
-          { code: 'RATE_LIMITED', message: 'Bạn gửi quá nhiều yêu cầu, hãy thử lại sau', retryAfterSeconds: decision.retryAfterSeconds },
-          429,
-        );
-      }
+      if (decision && !decision.allowed) return rateLimited(c, decision.retryAfterSeconds);
       const release = stream.slots.tryAcquire(binding.userId);
       if (!release) {
         c.header('retry-after', String(STREAM_RETRY_SECONDS));
@@ -380,6 +413,7 @@ export function createHttpApp(deps: HttpDeps) {
       const connection = new StreamConnection({
         orgId,
         check,
+        ...(stream.rechecks ? { gate: stream.rechecks } : {}),
         recheckMs: stream.recheckSeconds * 1000,
         endsAt: Math.min(binding.tokenExp * 1000, Date.now() + MAX_STREAM_LIFETIME_MS),
         write: (chunk) => {
@@ -474,7 +508,9 @@ export function createHttpApp(deps: HttpDeps) {
           mfaAt: user.mfaAt,
           tokenExp,
         });
-        if (!issued) {
+        // The token expired between its check above and the database's: sign in again (401), not wait (429).
+        if (issued === 'expired') throw new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn');
+        if (issued === 'limit') {
           c.header('retry-after', String(STREAM_TICKET_TTL_SECONDS));
           throw new DomainError('RATE_LIMITED', 429, 'Quá nhiều yêu cầu mở kênh cập nhật, hãy thử lại sau');
         }

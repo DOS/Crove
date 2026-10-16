@@ -66,6 +66,18 @@ export class RateLimiter {
     return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((1 - tokens) / rate / 1000)) };
   }
 
+  // What take(key) would answer now, without spending or recording anything. For limits that charge only some
+  // requests, such as failed stream ticket redeems (issue #281): peek before the work, take after a failure. An
+  // unknown key is allowed (its take may still be refused while the map is full).
+  peek(key: string): RateLimitDecision {
+    const known = this.buckets.get(key);
+    if (!known) return { allowed: true, retryAfterSeconds: 0 };
+    const rate = this.perMinute / MINUTE_MS;
+    const tokens = Math.min(this.perMinute, known.tokens + Math.max(0, this.now() - known.at) * rate);
+    if (tokens >= 1) return { allowed: true, retryAfterSeconds: 0 };
+    return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((1 - tokens) / rate / 1000)) };
+  }
+
   // Drops every bucket that is full again. Returns false, and records when the first one fills, if none could go.
   private makeRoom(now: number, rate: number): boolean {
     if (now < this.fullUntil) return false;

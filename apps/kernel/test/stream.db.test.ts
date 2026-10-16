@@ -1,7 +1,8 @@
 // The invalidation stream (issue #69) through the HTTP API against a real PostgreSQL 17: the NOTIFY triggers, one
-// LISTEN connection, tickets and the re-check of membership and session. A removed member's stream closes within the
-// re-check interval, a revoked session's too; hints of org A never reach org B and carry ids only; a ticket works
-// once and not after it expires. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its database.
+// LISTEN connection and tickets. The security rules (org isolation, single-use tickets, closing on removal and revoke,
+// the EXECUTE matrix, the redeem cap) are in test/invariant/stream.db.test.ts (#281); this file keeps the product
+// flows: rolled-back writes send nothing, the per-user caps, the ticket outcomes, and the listener's self-probe.
+// Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its database.
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
@@ -19,7 +20,7 @@ import { ConcurrencyLimiter } from '../src/concurrency.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp, type HttpDeps, type StreamDeps } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
-import { StreamHub, createDbTicketStore, createPgNotificationSource } from '../src/stream.ts';
+import { StreamHub, createDbTicketStore, createPgNotificationSource, newTicket } from '../src/stream.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -91,16 +92,6 @@ suite('invalidation stream on PostgreSQL', () => {
     const org = { slug: String(created.body.slug), orgId: String(created.body.orgId) };
     orgs.set(name, org);
     return org;
-  }
-
-  async function join(slug: string, owner: string, name: string) {
-    await token(name);
-    const invited = await rpc('org/invite', owner, { email: accounts.get(name)?.email, role: 'member' }, slug, true);
-    expect(invited.status).toBe(200);
-    const accepted = await rpc('invites/accept', name, { token: String(invited.body.acceptPath).split('#')[1] }, null);
-    expect(accepted.status).toBe(200);
-    const me = await rpc('me/get', name, undefined, null);
-    userIds.set(name, String(me.body.userId));
   }
 
   async function ticket(name: string, slug: string): Promise<{ status: number; ticket?: string; body: Record<string, unknown> }> {
@@ -259,29 +250,6 @@ suite('invalidation stream on PostgreSQL', () => {
     expect(await response.json()).toMatchObject({ stream: true });
   });
 
-  it('hands org A hints to org A only, as {type, id}', async () => {
-    const a = orgs.get('ownerA') as { slug: string; orgId: string };
-    const b = orgs.get('ownerB') as { slug: string; orgId: string };
-    const streamA = await streamFor('ownerA', a.slug);
-    const streamB = await streamFor('ownerB', b.slug);
-    try {
-      const fileA = await ingest(a.orgId, 'ownerA');
-      await streamA.waitFor((e) => e.some((x) => x.event === 'invalidate' && x.data.id === fileA), 5_000);
-      const hint = streamA.events.find((x) => x.event === 'invalidate' && x.data.id === fileA);
-      expect(hint?.data).toEqual({ type: 'file', id: fileA });
-
-      const fileB = await ingest(b.orgId, 'ownerB');
-      await streamB.waitFor((e) => e.some((x) => x.event === 'invalidate' && x.data.id === fileB), 5_000);
-      // Give a stray delivery time to arrive, then check neither stream saw the other org's file.
-      await new Promise((r) => setTimeout(r, 300));
-      expect(streamB.events.some((x) => x.data.id === fileA)).toBe(false);
-      expect(streamA.events.some((x) => x.data.id === fileB)).toBe(false);
-    } finally {
-      await streamA.cancel();
-      await streamB.cancel();
-    }
-  });
-
   it('sends nothing for a rolled-back write', async () => {
     const a = orgs.get('ownerA') as { slug: string; orgId: string };
     const s = await streamFor('ownerA', a.slug);
@@ -302,76 +270,6 @@ suite('invalidation stream on PostgreSQL', () => {
     } finally {
       await s.cancel();
     }
-  });
-
-  it("closes a removed member's stream within the re-check interval", async () => {
-    const a = orgs.get('ownerA') as { slug: string; orgId: string };
-    await join(a.slug, 'ownerA', 'leaver');
-    const s = await streamFor('leaver', a.slug);
-    const removed = await rpc('org/removeMember', 'ownerA', { userId: userIds.get('leaver'), idempotencyKey: randomUUID() }, a.slug, true);
-    expect(removed.status).toBe(200);
-    const at = Date.now();
-    await s.waitFor((e) => e.some((x) => x.event === 'close'), RECHECK_SECONDS * 1000 * 2 + 1_000);
-    expect(Date.now() - at).toBeLessThanOrEqual(RECHECK_SECONDS * 1000 + 1_000);
-    expect(s.events.at(-1)).toEqual({ event: 'close', data: { reason: 'membership' } });
-    await s.waitFor(() => s.ended(), 2_000);
-    // The ex-member gets no new ticket for that org.
-    expect((await ticket('leaver', a.slug)).status).toBe(403);
-  });
-
-  it("closes a stream whose session the owner revoked in the org", async () => {
-    const a = orgs.get('ownerA') as { slug: string; orgId: string };
-    await join(a.slug, 'ownerA', 'revoked');
-    const s = await streamFor('revoked', a.slug);
-    const revoked = await rpc(
-      'sessions/revoke',
-      'ownerA',
-      { userId: userIds.get('revoked'), sessionId: accounts.get('revoked')?.session, reason: 'lost laptop' },
-      a.slug,
-      true,
-    );
-    expect(revoked.status).toBe(200);
-    await s.waitFor((e) => e.some((x) => x.event === 'close'), RECHECK_SECONDS * 1000 * 2 + 1_000);
-    expect(s.events.at(-1)).toEqual({ event: 'close', data: { reason: 'session_revoked_in_org' } });
-  });
-
-  it('accepts a ticket once', async () => {
-    const a = orgs.get('ownerA') as { slug: string; orgId: string };
-    const t = await ticket('ownerA', a.slug);
-    expect(t.status).toBe(200);
-    expect(t.body).toEqual({ ticket: t.ticket, expiresInSeconds: 30 });
-    const first = await open(t.ticket as string);
-    expect(first.response.status).toBe(200);
-    const second = await open(t.ticket as string);
-    expect(second.response.status).toBe(401);
-    expect(await second.response.json()).toMatchObject({ code: 'STREAM_TICKET_INVALID' });
-    await first.cancel();
-    // Only its hash was stored, and the row is gone.
-    const rows = await admin(async (c) => (await c.query('SELECT ticket_hash FROM crove_kernel.stream_ticket')).rows);
-    expect(rows.map((r) => r.ticket_hash)).not.toContain(t.ticket);
-  });
-
-  it('refuses an expired ticket, a malformed one and a stream without one', async () => {
-    const a = orgs.get('ownerA') as { slug: string; orgId: string };
-    const shortLived = createHttpApp({ ...deps, stream: { ...(deps.stream as StreamDeps), tickets: createDbTicketStore(pool, { ttlSeconds: 1 }) } });
-    const response = await shortLived.request('/api/stream/tickets', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${await token('ownerA')}`, 'x-crove-org': a.slug },
-    });
-    const { ticket: value } = (await response.json()) as { ticket: string };
-    await new Promise((r) => setTimeout(r, 1_500));
-    expect((await open(value, shortLived)).response.status).toBe(401);
-    expect((await app.request('/api/stream?ticket=short')).status).toBe(401);
-    expect((await app.request('/api/stream')).status).toBe(401);
-    // The bearer token alone does not open a stream.
-    expect((await app.request('/api/stream', { headers: { authorization: `Bearer ${await token('ownerA')}`, 'x-crove-org': a.slug } })).status).toBe(401);
-  });
-
-  it('issues tickets only to members of the org, with a valid token', async () => {
-    const b = orgs.get('ownerB') as { slug: string; orgId: string };
-    expect((await ticket('ownerA', b.slug)).status).toBe(403);
-    const anonymous = await app.request('/api/stream/tickets', { method: 'POST', headers: { 'x-crove-org': b.slug } });
-    expect(anonymous.status).toBe(401);
   });
 
   it('bounds the open streams per user and frees the slot when one closes', async () => {
@@ -396,27 +294,76 @@ suite('invalidation stream on PostgreSQL', () => {
     expect(statuses[10]).toBe(429);
   });
 
-  it('lets only crove_app issue and redeem tickets, and no role read the table', async () => {
-    const rows = await admin(async (c) =>
-      (
-        await c.query<{ fn: string; role: string; can: boolean }>(
-          `SELECT f AS fn, r AS role, has_function_privilege(r, f, 'EXECUTE') AS can
-           FROM unnest(ARRAY['crove_kernel.stream_ticket_issue(text, uuid, uuid, uuid, text, bigint, timestamptz, integer, integer)',
-                             'crove_kernel.stream_ticket_redeem(text)', 'crove_kernel.stream_notify()']) f,
-                unnest(ARRAY['crove_app', 'crove_tenant', 'crove_worker', 'crove_definer_tenant', 'crove_prober']) r`,
-        )
-      ).rows,
-    );
-    const granted = rows.filter((r) => r.can).map((r) => `${r.fn.split('(')[0]}:${r.role}`);
-    expect(granted.sort()).toEqual(['crove_kernel.stream_ticket_issue:crove_app', 'crove_kernel.stream_ticket_redeem:crove_app']);
-    const table = await admin(async (c) =>
-      (
-        await c.query<{ role: string; can: boolean }>(
-          `SELECT r AS role, has_table_privilege(r, 'crove_kernel.stream_ticket', 'SELECT') AS can
-           FROM unnest(ARRAY['crove_app', 'crove_tenant', 'crove_worker', 'crove_definer_tenant', 'crove_prober']) r`,
-        )
-      ).rows,
-    );
-    expect(table.filter((r) => r.can)).toEqual([]);
+  it('tells an expired token apart from the per-user limit when issuing (issue #281)', async () => {
+    const b = orgs.get('ownerB') as { slug: string; orgId: string };
+    await admin((c) => c.query('DELETE FROM crove_kernel.stream_ticket'));
+    const store = createDbTicketStore(pool, { perUser: 1 });
+    const binding = {
+      userId: userIds.get('ownerB') as string,
+      orgId: b.orgId,
+      sessionId: accounts.get('ownerB')?.session as string,
+      aal: 'aal1' as const,
+      mfaAt: null,
+      tokenExp: Math.floor(Date.now() / 1000) + 600,
+    };
+    // By the database's clock: a token that expired a second ago, and one that is still valid.
+    expect(await store.issue(newTicket().hash, { ...binding, tokenExp: Math.floor(Date.now() / 1000) - 1 })).toBe('expired');
+    expect(await store.issue(newTicket().hash, binding)).toBe('issued');
+    expect(await store.issue(newTicket().hash, binding)).toBe('limit');
+    // Expired wins over the limit: the client must sign in again, not wait.
+    expect(await store.issue(newTicket().hash, { ...binding, tokenExp: Math.floor(Date.now() / 1000) - 1 })).toBe('expired');
+    await admin((c) => c.query('DELETE FROM crove_kernel.stream_ticket'));
+  });
+
+  it("probes the LISTEN connection and drops it when its own NOTIFY stops coming back (issue #281)", async () => {
+    const appUrl = new URL(adminUrl);
+    appUrl.username = 'crove_app';
+    appUrl.password = 'test-app-pw';
+    let deaf = false;
+    const clients: pg.Client[] = [];
+    const source = createPgNotificationSource({
+      connectionString: appUrl.toString(),
+      probeIntervalMs: 200,
+      probeTimeoutMs: 500,
+      minDelayMs: 100,
+      log: () => {},
+      // A real client whose notifications stop arriving once `deaf` is set, as behind a transaction pooler.
+      createClient: (config) => {
+        const client = new pg.Client(config);
+        const emit = client.emit.bind(client);
+        client.emit = ((event: string, ...args: unknown[]) => (deaf && event === 'notification' ? false : emit(event, ...args))) as typeof client.emit;
+        clients.push(client);
+        return client;
+      },
+    });
+    const events: string[] = [];
+    const payloads: string[] = [];
+    source.start({ notify: (p) => void payloads.push(p), ready: () => void events.push('ready'), lost: () => void events.push('lost') });
+    const waitFor = async (predicate: () => boolean, ms: number) => {
+      const until = Date.now() + ms;
+      while (!predicate()) {
+        if (Date.now() > until) throw new Error(`timed out; events: ${JSON.stringify(events)}`);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    try {
+      await waitFor(() => events.includes('ready'), 5_000);
+      // Several probes come and go, none reaches the hub, and the connection stays.
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect(events).toEqual(['ready']);
+      expect(payloads.filter((p) => p.startsWith('probe '))).toEqual([]);
+      const id = randomUUID();
+      const a = orgs.get('ownerA') as { slug: string; orgId: string };
+      await admin((c) => c.query(`SELECT pg_notify('crove_stream', $1)`, [`${a.orgId} file ${id}`]));
+      await waitFor(() => payloads.includes(`${a.orgId} file ${id}`), 2_000);
+      // The connection goes deaf: the next probe is not answered, it is dropped, and a new one comes back.
+      deaf = true;
+      await waitFor(() => events.includes('lost'), 3_000);
+      deaf = false;
+      await waitFor(() => events.filter((e) => e === 'ready').length === 2, 5_000);
+      expect(clients.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      await source.stop();
+    }
   });
 });

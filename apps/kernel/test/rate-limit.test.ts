@@ -29,6 +29,22 @@ describe('RateLimiter', () => {
     expect(limiter.take('a').allowed).toBe(false);
   });
 
+  it('peeks without spending or tracking: unknown keys pass, an empty bucket answers like take (issue #281)', () => {
+    const time = clock();
+    const limiter = new RateLimiter({ perMinute: 2, now: time.now });
+    expect(limiter.peek('a')).toEqual({ allowed: true, retryAfterSeconds: 0 });
+    expect(limiter.size).toBe(0);
+    limiter.take('a');
+    expect(limiter.peek('a').allowed).toBe(true);
+    limiter.take('a');
+    expect(limiter.peek('a')).toEqual({ allowed: false, retryAfterSeconds: 30 });
+    expect(limiter.peek('a')).toEqual({ allowed: false, retryAfterSeconds: 30 });
+    time.advance(30_000);
+    expect(limiter.peek('a').allowed).toBe(true);
+    expect(limiter.take('a').allowed).toBe(true);
+    expect(limiter.peek('a').allowed).toBe(false);
+  });
+
   it('keeps each key on its own bucket', () => {
     const limiter = new RateLimiter({ perMinute: 1, now: clock().now });
     expect(limiter.take('a').allowed).toBe(true);
