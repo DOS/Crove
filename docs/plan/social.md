@@ -60,17 +60,20 @@ Mostly yes. The module lives in new paths that no other stream edits; a small se
 
 Every table has `org_id`, `PRIMARY KEY (org_id, id)` and RLS via `apply_tenant_rls`; FKs are composite and only point into `crove_social` or `crove_kernel`.
 
+Revised on 2026-10-16 after reading Postiz, OpenPost and BrightBean schemas first-hand ([research §5](social-research.md)).
+
 | Table | Key columns |
 |---|---|
-| `post` | `status`, `origin` (`human` or `ai`), `actor_origin` (`ui`, `api`, `mcp`, `agent`), `tainted`, `body`, `author_user_id`, `submitted_at`, `scheduled_at`, `queue_id`, `queue_slot_at`, `time_zone`, `revision` |
-| `post_variant` | `post_id`, `channel_connection_id` -> `crove_kernel.channel_connection`, `body`, `link_url`, `media` (file refs, later), `settings` (typed per provider, validated by zod), `content_hash`, `status`, `external_post_id`, `external_url`, `published_at`, `error_kind`, `error_code`, `error_retry_at`, `next_check_at` |
-| `post_approval` | `post_id`, `revision`, `content_hash` (all variants' text, media and settings), `approved_by`, `approved_at`, `actor_origin`. Append-only; a publish needs an approval whose revision and hash match the post as it is |
-| `queue` | `name`, `time_zone`, `slots` (weekday + local time list), `paused`; one queue may cover several channels |
-| `metric_snapshot` | `post_variant_id`, `captured_at`, `views`, `reach`, `reactions`, `comments`, `shares`, `clicks`, `extra` (jsonb; platforms rename metrics, for example Meta's 2026 Page Insights change) |
+| `post` | base content: `body`, `title`, `link_url`; `origin` (`human` or `ai`), `actor_origin` (`ui`, `api`, `mcp`, `agent`), `tainted`, `author_user_id`, `time_zone`, `scheduled_at` (default for its variants), `revision`; `status` is a summary derived from the variants |
+| `post_variant` | `post_id`, `channel_connection_id` -> `crove_kernel.channel_connection` (one per post), `position`; nullable overrides `body`, `title`, `link_url` (null inherits the post); `settings` (typed per provider, zod); `content_hash` of the effective content; `status`; `scheduled_at` override; `queue_slot_at`; `attempt`; `external_post_id`, `external_url`, `published_at`; `error_kind`, `error_code`, `error_http_status`, `error_retry_at`, `error_action`; `next_check_at` |
+| `post_approval` | append-only, one row per variant decision: `variant_id`, `revision`, `content_hash`, `decision` (`approved`, `changes_requested`, `rejected`), `comment`, `decided_by`, `actor_origin`, `snapshot` (what the reviewer saw). A publish needs a latest decision `approved` whose revision and hash match the variant as it is |
+| `queue` | one per channel connection: `time_zone`, `paused` |
+| `queue_slot` | `queue_id`, `weekday`, `minute`, `label`, `active`; unique per (queue, weekday, minute) |
+| `metric_snapshot` | `post_variant_id`, `captured_at`, `capture_key` (unique per variant), `metrics` (jsonb, normalized names), `raw_names` (jsonb, the platform's own) |
 
-**Post states:** `draft` -> `in_review` -> `approved` -> `scheduled` -> `publishing` -> `published` | `partially_published` | `failed`; `rejected` returns to `draft`; `cancelled` from any state before `publishing`. An edit after approval returns the post to `draft`: the approval covers a revision and its content hash, not the post (OpenPost binds approval the same way). A post with any variant in `publishing` cannot be edited or cancelled (Postiz's edit restarts an in-flight publish, a duplicate risk).
+**Variant states:** `draft` -> `in_review` -> `approved` -> `scheduled` -> `publishing` -> `published`; review can answer `changes_requested` (back to `draft` for an edit) or `rejected`; publishing can end in `processing` (the platform accepted it and is still processing, for example an Instagram container), `failed`, `ambiguous` (outcome unknown, being reconciled), `needs_attention` (a human decides) or `paused` (its channel's token expired or its quota is spent); `cancelled` from any state before `publishing`. An edit of a variant, or of base content it inherits, returns it to `draft`: an approval covers a revision and its content hash. A variant in `publishing` cannot be edited or cancelled (Postiz's edit restarts an in-flight publish, a duplicate risk).
 
-**Variant states:** `pending`, `scheduled`, `publishing`, `processing` (the platform accepted it and is still processing, for example an Instagram container), `published`, `failed`, `ambiguous` (outcome unknown, being reconciled), `needs_attention` (a human decides), `cancelled`, `paused` (its channel's token expired or its quota is spent).
+**Post status** (derived): `draft` while any variant is not yet approved, `scheduled`, `publishing`, `published`, `partially_published`, `failed` or `cancelled`, from the variants' states.
 
 **Queue rules** (from TryPost's written rules): a queued post keeps its slot while the slot exists, and the queue is never repacked; "add to queue" takes the first free slot; posts waiting for approval hold their slots; after a time-zone change a post keeps the same local clock time when it can; every queue change locks the queue row (`SELECT … FOR UPDATE`).
 
@@ -79,8 +82,8 @@ Every table has `org_id`, `PRIMARY KEY (org_id, id)` and RLS via `apply_tenant_r
 | Command | Risk | Who |
 |---|---|---|
 | `social.post.create_draft`, `social.post.update_draft` | R1 | members; an agent creates drafts with `origin = ai` |
-| `social.post.submit` | R1 | members |
-| `social.post.approve`, `social.post.reject` | R2 | owner, admin (v1 roles); never an agent; an author may approve their own post unless the org turns on four-eyes |
+| `social.post.submit` (all or some variants) | R1 | members |
+| `social.variant.decide` (`approved`, `changes_requested`, `rejected`; one variant, or all variants of a post in one command) | R2 | owner, admin (v1 roles); never an agent; an author may approve their own post unless the org turns on four-eyes |
 | `social.post.schedule` (time or queue), `social.post.cancel` | R2 / R1 | owner, admin |
 | `social.queue.upsert`, `social.queue.pause` | R1 | owner, admin |
 | `social.variant.record_result` | system | publish and reconcile jobs only |
@@ -93,7 +96,7 @@ Queries: `social.post.list` (calendar range, status), `social.post.get`, `social
 No platform except Bluesky has an idempotency key (research §4), and duplicate posts are the incident Postiz hit hardest (#1321, #832). The design follows OpenPost's write fence and Postiz's "run the visible call at most once":
 
 1. Scheduling enqueues one `social-publish` job per variant, `startAfter = scheduled_at`, singleton key `<org>:<variant>:<revision>:<attempt>` (the attempt starts at 1; a human retry of a failed or `needs_attention` variant bumps it). A sweep every 15 minutes re-enqueues due variants that have no job (Postiz's missed-post sweep, without its Temporal dependency).
-2. The job re-reads the variant in a kernel transaction: still `scheduled`, an approval matching the post's revision and content hash, channel `active`, quota left. Otherwise it stops.
+2. The job re-reads the variant in a kernel transaction: still `scheduled`, a latest decision `approved` matching the variant's revision and content hash, channel `active`, quota left. Otherwise it stops.
 3. It writes `crove_kernel.external_call` with the deterministic key `social.publish:<variant>:<revision>:<attempt>:<step>` in state `started` (a partial unique index allows one in-flight call per key), commits, then makes the visible provider call.
 4. The adapter returns a typed result: submission `accepted` (with the external id), `pending` (accepted, still processing, for example an Instagram container or a Zalo article token), `rejected` (with an error kind), or `unknown`. Each step of each adapter declares its retry safety: `safe` (nothing visible happened, for example creating an Instagram container), `idempotent` (the provider dedupes, Bluesky's record key), `reconcile_only` or `never`.
 5. `accepted`: `social.variant.record_result` stores the id and URL, the call becomes `succeeded`. `pending`: the variant becomes `processing` and a status job polls (`next_check_at`) until `published` or `failed`; a step that already went through is never repeated (an Instagram container in state `PUBLISHED` means the publish went through).

@@ -235,6 +235,14 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <li>Zalo OA lên thứ 3: không dự án nào hỗ trợ, là điểm khác biệt ở Việt Nam.</li>
 </ul>
 
+<h3>So sánh schema (tự đọc mã nguồn, 16/10/2026)</h3>
+<p>Đọc trực tiếp <code>schema.prisma</code> của Postiz (fork DOS/Crove-Post), model Go của OpenPost và model Django của BrightBean. Bảng chi tiết: <a href="social-research.md">social-research.md §5</a>.</p>
+<ul>
+<li><strong>Token:</strong> Postiz lưu <code>token</code> và <code>refreshToken</code> dạng <strong>plaintext</strong>; hàm mã hóa của nó chỉ dùng cho API key. OpenPost và BrightBean có mã hóa. Crove mã hóa và khóa nằm ngoài DB.</li>
+<li><strong>Lỗ hổng thiết kế của S2:</strong> OpenPost tách "lần đăng nhập" (grant) khỏi "trang" (account). Một token LinkedIn phủ cả trang cá nhân lẫn các trang công ty; một tài khoản Google phủ nhiều kênh YouTube. Crove đang lưu mỗi kênh 1 token, nên trường hợp này sẽ sinh ra nhiều bản sao của cùng một token. Facebook Page và Zalo OA không bị ảnh hưởng (mỗi page hoặc OA có token riêng). Sửa trước khi làm adapter LinkedIn và YouTube.</li>
+<li><strong>Đổi thiết kế S3:</strong> duyệt và trạng thái theo <strong>từng kênh</strong> (BrightBean và OpenPost đều làm vậy), trạng thái bài tính ra từ các kênh; bản cho từng kênh thừa hưởng nội dung gốc trừ khi sửa riêng; lưu snapshot đúng bản người duyệt đã thấy; thêm "yêu cầu sửa" bên cạnh "từ chối"; mỗi kênh hẹn giờ riêng được; slot hàng đợi lưu thành dòng; số liệu lưu jsonb vì nền tảng hay đổi tên metric.</li>
+</ul>
+
 <h2 id="pham-vi">Phạm vi v1</h2>
 <div class="grid">
   <div class="card c-reuse"><p class="col-title">Có trong v1</p><ul>
