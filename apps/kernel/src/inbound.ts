@@ -9,7 +9,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { sql } from 'kysely';
 import { EXTRACT_LIMIT_RETRIES, type ExtractClient } from '@crove/extract-contract';
 import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '@crove/kernel-contract';
-import { DomainError, fileKey, inboundKey, newInboundBlobId, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { DomainError, fileKey, inboundKey, newInboundBlobId, putFile, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { safeFilename, sniffType } from './sniff.ts';
 
 export const MAX_EMAIL_BYTES = 40 * 1024 * 1024;
@@ -151,8 +151,8 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
     const filename = safeFilename(attachment.filename ?? 'tep-dinh-kem', contentType);
     const sha256 = sha256Hex(bytes);
     const storageKey = fileKey(orgId, sha256);
-    await deps.store.put(storageKey, bytes, contentType);
-    files.push({ filename, contentType, sizeBytes: bytes.byteLength, sha256, storageKey, source: 'email' as const });
+    const generation = await putFile(deps.store, storageKey, bytes, contentType, sha256);
+    files.push({ filename, contentType, sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'email' as const });
   }
   const messageId = email.messageId ?? `sha256:${rawSha256}`;
   return deps.runtime.execute<{ duplicate: boolean; fileIds: string[] }>(

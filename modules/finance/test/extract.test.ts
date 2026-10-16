@@ -2,18 +2,20 @@
 // recorded on the file and never retried; a sandbox that cannot answer throws, so the job is retried.
 import { describe, expect, it } from 'vitest';
 import { ExtractServiceError, type ExtractClient, type ExtractResponse } from '@crove/extract-contract';
-import type { BlobStore, Runtime } from '@crove/kernel-runtime';
+import { sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { extractAndPropose } from '../src/extract.ts';
 
 const ORG = '00000000-0000-4000-8000-000000000001';
 const FILE = '00000000-0000-4000-8000-000000000002';
+const BYTES = new TextEncoder().encode('<HDon/>');
+const SHA256 = sha256Hex(BYTES);
 
 function harness(answer: () => Promise<ExtractResponse>, file = { filename: 'hd.xml', content_type: 'application/xml' }) {
   const executed: Array<{ name: string; input: Record<string, unknown> }> = [];
   const asked: string[] = [];
   const runtime = {
     query: async (name: string) => {
-      if (name === 'finance.extraction.file') return { id: FILE, ...file, storage_key: `org/${ORG}/abc`, hasExtraction: false, due: true };
+      if (name === 'finance.extraction.file') return { id: FILE, ...file, storage_key: `org/${ORG}/${SHA256}`, generation: `content:${SHA256}`, sha256: SHA256, hasExtraction: false, due: true };
       return { vendorDefault: null, duplicateDocumentId: null, duplicateProposalId: null };
     },
     execute: async (name: string, input: Record<string, unknown>) => {
@@ -21,7 +23,7 @@ function harness(answer: () => Promise<ExtractResponse>, file = { filename: 'hd.
       return { proposalId: null };
     },
   } as unknown as Runtime;
-  const store = { get: async () => new TextEncoder().encode('<HDon/>') } as unknown as BlobStore;
+  const store = { get: async () => BYTES } as unknown as BlobStore;
   const extract: ExtractClient = {
     extract: async (kind) => {
       asked.push(kind);

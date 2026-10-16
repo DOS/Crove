@@ -12,7 +12,7 @@ import type { ExtractClient } from '@crove/extract-contract';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime, type BlobStore } from '@crove/kernel-runtime';
+import { Runtime, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import type { AuthUser } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
@@ -28,8 +28,10 @@ const INBOUND_SECRET = 'test-only-inbound-secret-0123456789abcdef';
 
 class MemoryStore implements BlobStore {
   private readonly blobs = new Map<string, Uint8Array>();
+  // Memory has no object versions: the generation is the content address (ADR-0013).
   async put(key: string, bytes: Uint8Array) {
     this.blobs.set(key, bytes);
+    return `content:${sha256Hex(bytes)}`;
   }
   async get(key: string) {
     const b = this.blobs.get(key);

@@ -54,6 +54,10 @@ async function main() {
   console.log(`[storage] ${describeStorage(config)}`);
   console.log(`[mail] ${describeMailer(config)}`);
   console.log(`[modules] ${config.CROVE_MODULES.join(', ')}`);
+  if (config.STORAGE === 's3' && config.S3_VERSIONING === 'off') {
+    // ADR-0013: without object versions a replaced object is detected (sha256 on read) but the original is gone.
+    console.warn('[storage] S3_VERSIONING=off: evidence objects have no versions; enable bucket versioning for production');
+  }
 
   const kernel = createKernel(config, defaultAdapters(config));
   const stop = await kernel.start(role);

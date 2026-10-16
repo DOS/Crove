@@ -61,7 +61,10 @@ jobs:
           CROVE_TEST_S3_URL: http://crove-ci:crove-ci-minio@127.0.0.1:9000/crove-test
         run: pnpm exec vitest run --project unit
 
-      - name: Database tests (PostgreSQL 17)
+      # The staged upload tests (#109) run on MinIO too: the database decides single use, the bucket holds the bytes.
+      - name: Database tests (PostgreSQL 17, S3 tests against MinIO)
+        env:
+          CROVE_TEST_S3_URL: http://crove-ci:crove-ci-minio@127.0.0.1:9000/crove-test
         run: pnpm exec vitest run --project db
 
       - name: Build web app

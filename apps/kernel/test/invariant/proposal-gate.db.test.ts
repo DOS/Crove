@@ -33,8 +33,10 @@ const extract = createExtractClient({ url: 'http://crove-extract.test', fetch: a
 
 class MemoryStore implements BlobStore {
   private readonly blobs = new Map<string, Uint8Array>();
+  // Memory has no object versions: the generation is the content address (ADR-0013).
   async put(key: string, bytes: Uint8Array) {
     this.blobs.set(key, bytes);
+    return `content:${sha256Hex(bytes)}`;
   }
   async get(key: string) {
     const b = this.blobs.get(key);
@@ -108,9 +110,7 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     const bytes = new TextEncoder().encode(FIXTURE.toString('utf8').replace('<SHDon>1234</SHDon>', `<SHDon>${invoiceNo}</SHDon>`));
     const sha256 = sha256Hex(bytes);
     const storageKey = fileKey(orgId, sha256);
-    await store.put(storageKey, bytes);
-    // The generation a file reference carries (ADR-0013): memory has no versions, so the content address.
-    const generation = `content:${sha256}`;
+    const generation = await store.put(storageKey, bytes);
     const { fileId } = await runtime.execute<{ fileId: string }>(
       'kernel.file.ingest',
       { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },

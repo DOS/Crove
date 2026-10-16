@@ -20,8 +20,10 @@ const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.
 
 class MemoryStore implements BlobStore {
   readonly blobs = new Map<string, Uint8Array>();
+  // Memory has no object versions: the generation is the content address (ADR-0013).
   async put(key: string, bytes: Uint8Array) {
     this.blobs.set(key, bytes);
+    return `content:${sha256Hex(bytes)}`;
   }
   async get(key: string) {
     const b = this.blobs.get(key);
@@ -84,10 +86,10 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     await runtime.executeOrgless('kernel.member.invite.accept', { token: acceptPath.split('#')[1] }, { actor: asUser(member.id) });
     const bytes = new TextEncoder().encode(`<xml>${name}</xml>`);
     const sha256 = sha256Hex(bytes);
-    await store.put(fileKey(org.orgId, sha256), bytes);
+    const generation = await store.put(fileKey(org.orgId, sha256), bytes);
     await runtime.execute(
       'kernel.file.ingest',
-      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey: fileKey(org.orgId, sha256), source: 'upload' },
+      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey: fileKey(org.orgId, sha256), generation, source: 'upload' },
       { actor: asUser(member.id), orgId: org.orgId },
     );
     return { org, owner, member };
@@ -232,7 +234,9 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     expect((await rowsOf('kernel.audit_event')).some((r) => r.command === 'kernel.org.offboard')).toBe(true);
     const manifest = (await read(record.manifestKey)) as unknown as OrgExportManifest;
     expect(manifest).toMatchObject({ orgId: org.orgId, generatedAt: '2026-10-16T00:00:00.000Z', parts: record.parts });
-    expect(manifest.files).toEqual([expect.objectContaining({ filename: 'hd.xml', contentType: 'application/xml', storageKey: expect.stringMatching(`^org/${org.orgId}/`) })]);
+    expect(manifest.files).toEqual([
+      expect.objectContaining({ filename: 'hd.xml', contentType: 'application/xml', storageKey: expect.stringMatching(`^org/${org.orgId}/`), generation: expect.stringMatching(/^content:/) }),
+    ]);
 
     // Recorded and visible to owners.
     const view = await runtime.query<OrgExportView>('kernel.org.export.get', {}, { actor: asUser(owner.id), orgId: org.orgId });

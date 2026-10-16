@@ -1,0 +1,140 @@
+# 0013. Evidence storage and integrity: generations, staged uploads and presigned transfers
+
+- Status: accepted (2026-10-16), as the acceptance criteria of issue #109 require; the owner may amend it
+- Date: 2026-10-16
+- Deciders: owner (JOY), through issue #109
+- Builds on: plan §7.6 (file upload), §4.11 (surfaces: presigned URLs with S3, streaming with local disk), red-team S25 ("evidence swapped after approval"), External-tenant gate T7 (the S3 adapter, #110, #133)
+- Tracking: issue #109; plan "External-tenant gate" row T7
+
+## Context and problem statement
+
+A file in Crove is evidence: an invoice is approved and booked on the strength of what the file says. Red-team S25 asked what happens when the bytes behind a file change after a human approved the proposal made from it. Before this ADR:
+
+- `crove_kernel.file` kept `storage_key` and `sha256`. The key is the content address `org/<org_id>/<sha256>`, and `S3BlobStore` writes create-only (`If-None-Match: *`, on GCS `x-goog-if-generation-match: 0`) with an `x-amz-checksum-sha256` the server verifies, so Crove itself never replaces an object.
+- Nothing stopped anyone else with write access to the bucket (an operator, a leaked key, a backup restore) from replacing the object under a key. Reads took whatever the key held at the time and never checked it against the recorded sha256. The download, the worker's extraction and a later re-extraction could all read different bytes from the ones that were approved.
+- Uploads and downloads streamed through the kernel on every store, and `BlobStore.put` returned nothing, so no version could be recorded.
+- Tenant roles could `UPDATE` a file row, so a reference could also change in the database.
+
+Plan §7.6 lists the target: (1) upload to a random staging key through a single-use presigned URL (5-minute TTL, size-limited); (2) the server streams the file and computes the sha256; (3) copy to `org/<org_id>/<sha256>` create-only and record the `generation`; (4) bucket versioning and a retention hold; (5) every reference uses the triple (key, generation, sha256).
+
+## Decision drivers
+
+- Fail closed: a read never returns bytes other than the ones the row recorded. When it cannot prove that, it refuses.
+- The sha256 the server computed is the only identity of a file. A client-supplied hash or a staged object never becomes a file on its own.
+- One design for every S3-compatible store (AWS S3, MinIO, Cloudflare R2, GCS interoperability) and for local disk, without a second code path for evidence.
+- The API and the worker run as separate containers (T7); browsers move file bytes directly to and from the bucket when the store is S3, so the kernel does not carry 25 MB bodies it does not need to.
+- The database enforces what it can (immutability, single use, clocks) for every role, not only the TypeScript path.
+
+## Decision
+
+### 1. Every file reference is the triple (key, generation, sha256)
+
+`crove_kernel.file` gains `generation text`. `BlobStore.put` returns the generation of the object it created or found, and `kernel.file.ingest` and `kernel.inbound.receive` require it. The value is tagged by where it lives:
+
+| Generation | Meaning | Written by |
+|---|---|---|
+| `s3:<VersionId>` | The S3 object version (bucket versioning on) | `S3BlobStore` on AWS S3, MinIO and any server that returns `x-amz-version-id` |
+| `gcs:<generation>` | The GCS object generation (`x-goog-generation`) | `S3BlobStore` against `storage.googleapis.com` |
+| `content:<sha256>` | No native version: the object is known by its content address only | `LocalDiskStore`; `S3BlobStore` with `S3_VERSIONING=off` |
+
+Why tagged: the row stays unambiguous when an org's files move between stores, and the read path knows from the value alone whether it can pin a version. A `CHECK` constraint accepts only these forms, and a `content:` generation must be the row's own sha256.
+
+Why `content:<sha256>` on local disk, and not an inode number, a modification time or a counter: local disk has one copy per key, and the store only ever creates a key once (hard link, #111). Nothing can be pinned, so the honest value is "the content address"; an inode or a timestamp would change on a backup restore while the bytes stay the same, and a counter would have to live somewhere shared by the API and the worker for no gain. The sha256 check on read (below) is the whole guarantee there.
+
+Rows written before this ADR keep `generation` NULL. Their reads are checked by sha256 alone, and they are downloaded through the kernel, never presigned. Nothing backfills them, because the version they were written as was never recorded, and a re-upload of the same bytes dedupes to the existing row without pinning it (the guard trigger refuses the change). A one-time migration that reads each legacy object, verifies its sha256 and records the version it read is a possible follow-up.
+
+A file row never changes: a `BEFORE UPDATE` trigger (`crove_kernel.file_guard`) refuses any change to it, for every role, the database owner included (only a superuser can skip triggers, with `session_replication_role = replica`). A `NOT VALID` check ties `storage_key` to `org/<org_id>/<sha256>` for every new row. Tenant roles keep the `UPDATE` privilege only because the commands lock the file row (`SELECT ... FOR UPDATE` needs it). Everything that points at a file (extractions, proposals, documents) points at the row by id, so it points at the triple.
+
+### 2. Reads request the recorded version and verify the sha256
+
+`readVerified(store, ref)` is the only way kernel code reads a file: the download path, the extraction job and re-extraction. It asks the store for the exact version (`GetObject` with `VersionId`; on GCS the same request with `generation`), hashes the bytes and raises `BlobIntegrityError` when they differ from the recorded sha256. A missing version is a missing blob, never "the current object instead". The API answers `500 BLOB_INTEGRITY` and logs an `ALERT`; the worker retries and then records the extraction as failed. Nothing is served or parsed.
+
+What this gives against S25, by store:
+
+- Versioned bucket: an overwrite creates a new version; Crove keeps reading the recorded one, so the original evidence is still what is served and parsed. Deleting the recorded version makes reads fail closed. With a retention hold (below), neither is possible within the retention period.
+- Unversioned bucket (`S3_VERSIONING=off`) and local disk: an overwrite is detected by the sha256 check and the file is refused. The original is gone; recovery is from backups.
+
+### 3. Bucket versioning is required by default
+
+`S3_VERSIONING=required` (the default) makes `S3BlobStore.put` fail with `BlobStoreVersioningError` when the bucket answers without a version id (or with `null`, the id of an object written while versioning was off or suspended). That makes a misconfigured production bucket fail on the first upload instead of silently storing evidence without versions.
+
+`S3_VERSIONING=off` is an explicit operator choice for stores without versioning (Cloudflare R2 has none today). The kernel logs a warning at startup, and generations are `content:<sha256>`.
+
+Not a hard production refusal: a production deployment on R2 is legitimate, and the sha256 check still detects a swap. The trade-off (detection without recovery) is stated in `.env.example` and here.
+
+Operator requirements for an evidence bucket (S3 terms; GCS and others have equivalents):
+
+- Versioning enabled before the first write.
+- A retention hold on `org/` objects (S3 Object Lock in governance or compliance mode, or a GCS retention policy) for the legal retention period of plan §7.9. Crove does not set it per object today; the bucket default applies.
+- IAM: `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`, `s3:DeleteObject` on objects, `s3:ListBucket` on the bucket.
+- A lifecycle rule that expires `staging/` objects, their noncurrent versions and delete markers after one day.
+- With presigned transfers, a CORS rule allowing `POST` and `GET` from `PUBLIC_URL`.
+
+### 4. Staged uploads with presigned POST (STORAGE=s3)
+
+1. `POST /api/files/uploads`: after the same membership check as a direct upload (viewers refused), the command `kernel.file.upload.begin` creates a row in `crove_kernel.file_upload` with a random staging key `staging/<64 hex>` and returns it; the API signs an S3 **POST policy** for it. The policy pins the bucket and the exact key, sets `content-length-range` to 1 byte .. 25 MB and expires after 5 minutes.
+2. The browser posts the file to the bucket with the form fields, without any Crove credentials.
+3. `POST /api/files/uploads/:id/complete`: the command `kernel.file.upload.claim` uses the grant (sets `used_at`), and only then does the server stream the staged object through sha256 with the size cap, sniff its type from the content, write those exact bytes create-only to `org/<org_id>/<sha256>` with `put`, record the triple with `kernel.file.ingest`, and delete the staging object.
+
+Why POST and not PUT: a presigned PUT URL cannot bound the size; the signed `Content-Length` header is a single exact value the client chooses before signing, and some servers ignore it. A POST policy's `content-length-range` is enforced by the store. The server checks the size again while it streams, so a store that ignores the condition still cannot pass a larger file.
+
+Why the server re-writes the bytes instead of a server-side `CopyObject`: within its 5 minutes the same form can be posted again, replacing the staging object. A `CopyObject` would copy whatever the staging key holds at copy time, possibly not the bytes that were hashed; pinning it (`CopySourceVersionId`, `CopySourceIfMatch`) and conditional copies (`If-None-Match` on the destination) are not supported the same way across S3-compatible servers. Writing the buffered bytes the server just hashed has no window at all, uses the same create-only `put` and checksum as every other write, and costs at most 25 MB of memory for one request, as a direct upload already does.
+
+Single use is enforced by the database, not by the URL: a presigned POST can be replayed until it expires, so the grant row is what is used once.
+
+`crove_kernel.file_upload` (`org_id`, `id`, `staging_key`, `created_by`, `max_bytes`, `created_at`, `expires_at`, `used_at`), a tenant table with the standard RLS policy:
+
+- A `BEFORE INSERT` trigger sets `created_at` and `expires_at` (5 minutes) from the database clock, clears `used_at`, and takes `created_by` from the sealed context whenever a user is in it, so no runtime role picks any of them.
+- A `BEFORE UPDATE` trigger allows exactly one change: claiming an unused, unexpired grant, by its creator (when a user is in the context), with `used_at` from the database clock. A second claim (`UPLOAD_USED`), a claim after expiry (`UPLOAD_EXPIRED`), another user's claim (`UPLOAD_NOT_YOURS`) and any other change (`UPLOAD_IMMUTABLE`) are refused for every role, the owner included (short of a superuser skipping triggers). Without a user in the context (the worker's system context) the creator checks do not apply; no system command creates or claims grants.
+- Tenant roles hold `SELECT`, `INSERT` and `UPDATE (used_at)` only; no `DELETE`.
+- The claim command locks the row, so of concurrent completions exactly one proceeds; the others get `409 UPLOAD_USED`. Another user's grant reads as `404`.
+- `kernel.file.upload.begin` refuses a user with 20 open grants in the org (`429 RATE_LIMITED`), counted under a per-user advisory lock so concurrent requests cannot pass the cap together.
+
+The staging object never becomes a file: no file row points at a `staging/` key (the ingest command accepts only the org content address), and a write to the staging key after the claim is never read. A grant that is begun and never completed leaves at most one staging object, removed by the lifecycle rule.
+
+Clock note: the database decides the grant's expiry; the API's clock signs the POST policy's expiration. Both are 5 minutes; a skew between them shifts which of the two refuses first, never lets a late upload become a file.
+
+The direct `POST /api/files` stays available with S3 (scripts, API clients, `S3_PRESIGNED_URLS=false`); it takes the same server-side hash and create-only write.
+
+### 5. Presigned downloads of the exact version
+
+`GET /api/files/:id` runs the same authorization as before (membership, `kernel.file.get` under RLS). With S3 and a versioned generation it answers `302` to a presigned `GET` for that `VersionId`, valid 60 seconds, with `response-content-disposition: attachment` (RFC 6266 filename), the sniffed content type and `cache-control: private, no-store`. The version is inside the signature, so the URL cannot be pointed at another version. `?link=1` returns the same URL as JSON, which the app uses so that its `Authorization` and org headers never follow a redirect to the bucket.
+
+A generation that cannot be pinned (`content:`, or NULL) is never presigned: the kernel streams it through `readVerified`, so an unversioned object is still checked before it is served. Local disk always streams through the kernel, as before.
+
+With a GCS endpoint presigned transfers stay off (the POST policy fields `@aws-sdk/s3-presigned-post` signs have not been verified against GCS), so transfers stream through the kernel there.
+
+The SPA adds the bucket's origin to `connect-src` in its Content-Security-Policy only when presigned transfers are on.
+
+## Considered options
+
+- **Rely on create-only writes alone.** Rejected: it stops Crove from overwriting, not anyone else with bucket access, and reads still took the current object.
+- **Check the sha256 on read without versions.** Kept as the floor (local disk, `S3_VERSIONING=off`, legacy rows), but alone it only detects; versions let Crove keep serving the original.
+- **ETag as the generation on unversioned buckets.** Rejected: an ETag is not a version (it is an MD5 for single-part uploads and opaque otherwise), `If-Match` only detects a change, which the sha256 check already does, and it would add a fourth generation form.
+- **Presigned PUT.** Rejected: cannot bound the size (section 4).
+- **Server-side `CopyObject` from staging.** Rejected: copies what the key holds at copy time (section 4).
+- **A signed, stateless upload token instead of a table.** Rejected: single use needs state somewhere; the idempotency table could replay a response but not refuse a second upload with new bytes before the copy, and a new secret would have to be distributed to every API instance. One small tenant table with triggers is simpler to reason about and is covered by the generated RLS matrix.
+- **Hard refusal of unversioned buckets in production.** Rejected: excludes stores without versioning (R2) for a guarantee that the sha256 check partly gives anyway; the default is `required`, and opting out is explicit and logged.
+
+## Consequences
+
+- A swapped object after approval is detected on every read, and on a versioned bucket the original is what is served and parsed (tests below).
+- Evidence buckets need versioning (default), `s3:GetObjectVersion`, a lifecycle rule for `staging/` and, for presigned transfers, CORS. A bucket without versioning fails the first upload until the operator enables it or sets `S3_VERSIONING=off`.
+- Two new dependencies in `@crove/kernel-runtime`: `@aws-sdk/s3-presigned-post` and `@aws-sdk/s3-request-presigner`, the same release as `@aws-sdk/client-s3`.
+- With presigned transfers the kernel no longer carries download bodies; uploads are still read back once by the API to hash them (bounded at 25 MB).
+- Not done here, follow-ups: setting a per-object retention or legal hold from Crove (bucket defaults apply today); a sweep of `staging/` objects for stores without lifecycle rules; pruning old `file_upload` rows; running the presigned and generation paths against GCS and R2 (T7 lists them as not yet run).
+
+## Tests
+
+- Unit, mocked S3 client and offline signing (`packages/kernel-runtime/test/s3-store.test.ts`): generations from `VersionId` (also on the 412 dedupe path, read back with the bytes), refusal without a version unless versioning is off, version-pinned reads, missing version is not the current object, sha256 mismatch fails closed, staged reads capped by declared length and while streaming, POST policy (exact key, no `starts-with`, bucket, `content-length-range`, 5-minute expiration, public endpoint), GET presign (version id, 60 s, attachment, content type), no presign without a version, GCS `generation` parameter.
+- MinIO with versioning enabled (`packages/kernel-runtime/test/s3-store.integration.test.ts`): the full presigned POST, size limit, key pinning and expiry refused by the server, overwrite of a recorded key still reads and downloads the original, deleted version fails closed, unversioned bucket refused unless off, tampered version id refused.
+- PostgreSQL plus an in-memory versioned store, and MinIO when `CROVE_TEST_S3_URL` is set (`apps/kernel/test/upload.db.test.ts`, through the HTTP API): staged upload end to end with the triple recorded and the staging object deleted, single use (also after new bytes reach the staging key), expiry, other users, viewers, missing bytes, unsupported content, the generation-pinned 302 after an overwrite, fail closed for a row without a version, the open-grant cap.
+- Invariant suite (`apps/kernel/test/invariant/file-upload.db.test.ts`): the triple required and checked, file rows immutable for every role, grant columns set by the database, single use under concurrency, expiry, creator-only claims, no delete; plus the generated RLS matrix row factory for `crove_kernel.file_upload`.
+- Local disk (`apps/kernel/test/storage.test.ts`): `content:` generations, a file replaced on disk is refused.
+
+## References
+
+- AWS: [Browser-based uploads using POST (Signature Version 4)](https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-HTTPPOSTConstructPolicy.html), `content-length-range` condition
+- AWS: [Retaining multiple versions of objects with S3 Versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html); objects written while unversioned have the version id `null`
+- AWS: [Locking objects with Object Lock](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html)
+- Google Cloud: [Object versioning](https://cloud.google.com/storage/docs/object-versioning) and [generation numbers](https://cloud.google.com/storage/docs/metadata#generation-number)

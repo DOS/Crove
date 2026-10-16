@@ -26,8 +26,10 @@ const FIXTURE = readFileSync(new URL('../../extract/test/fixtures/einvoice-basic
 
 class MemoryStore implements BlobStore {
   private readonly blobs = new Map<string, Uint8Array>();
+  // Memory has no object versions: the generation is the content address (ADR-0013).
   async put(key: string, bytes: Uint8Array) {
     this.blobs.set(key, bytes);
+    return `content:${sha256Hex(bytes)}`;
   }
   async get(key: string) {
     const b = this.blobs.get(key);
@@ -83,10 +85,10 @@ suite('kernel on PostgreSQL', () => {
   async function ingest(orgId: string, userId: string, bytes: Uint8Array) {
     const sha256 = sha256Hex(bytes);
     const storageKey = fileKey(orgId, sha256);
-    await store.put(storageKey, bytes);
+    const generation = await store.put(storageKey, bytes);
     return runtime.execute<{ fileId: string; duplicate: boolean }>(
       'kernel.file.ingest',
-      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, source: 'upload' },
+      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },
       { actor: asUser(userId), orgId },
     );
   }

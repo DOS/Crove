@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Badge, Button, Card, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
-import { apiFetch, errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { errorMessage, fetchFile, orpc, queryClient } from '../lib/api.ts';
 import { previewPurchaseJournal } from '../lib/decimal.ts';
 import { useFormat } from '../i18n/provider.tsx';
 
@@ -17,8 +17,7 @@ function FilePreview({ fileId, contentType, filename }: { fileId: string; conten
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let revoked: string | null = null;
-    apiFetch(`/api/files/${fileId}`)
-      .then((r) => r.blob())
+    fetchFile(fileId)
       .then((blob) => {
         revoked = URL.createObjectURL(blob);
         setUrl(revoked);

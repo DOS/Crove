@@ -5,7 +5,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import type { ExtractClient, ExtractFailure } from '@crove/extract-contract';
 import { zId, zPurchaseProposal, type PurchaseProposal } from '@crove/kernel-contract';
-import { defineQuery, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { defineQuery, readVerified, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { AiNotConfiguredError, AmountFormatError, type InvoiceReader } from '@crove/agent';
 import {
   bookableLines,
@@ -26,7 +26,7 @@ export const fileForExtraction = defineQuery({
   handler: async (ctx, input) => {
     const file = await ctx.trx
       .selectFrom('crove_kernel.file')
-      .select(['id', 'filename', 'content_type', 'storage_key'])
+      .select(['id', 'filename', 'content_type', 'storage_key', 'generation', 'sha256'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.fileId)
       .executeTakeFirst();
@@ -169,6 +169,8 @@ interface ExtractionFile {
   filename: string;
   content_type: string;
   storage_key: string;
+  generation: string | null;
+  sha256: string;
   hasExtraction: boolean;
   due: boolean;
 }
@@ -198,7 +200,8 @@ export async function extractAndPropose(
   const file = await deps.runtime.query<ExtractionFile | null>('finance.extraction.file', { fileId, version }, { actor, orgId });
   if (!file || !file.due) return { proposalId: null };
 
-  const bytes = await deps.store.get(file.storage_key);
+  // The exact version the file row recorded, checked against its sha256 (ADR-0013): a swapped object is never parsed.
+  const bytes = await readVerified(deps.store, { key: file.storage_key, generation: file.generation, sha256: file.sha256 });
   const { method, invoice, error } = await readInvoice(deps, file, bytes);
 
   const fail = (message: string, checks: InvoiceCheck[] = []) =>

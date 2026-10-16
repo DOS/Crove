@@ -1,8 +1,19 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
+import { MAX_UPLOAD_BYTES, zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { DomainError, PROPOSAL_EDIT_COMMAND, defineCommand, fileKey, type CommandContext, type Runtime, type UserActor } from '@crove/kernel-runtime';
+import {
+  DomainError,
+  GENERATION_PATTERN,
+  PROPOSAL_EDIT_COMMAND,
+  contentGeneration,
+  defineCommand,
+  fileKey,
+  newStagingKey,
+  type CommandContext,
+  type Runtime,
+  type UserActor,
+} from '@crove/kernel-runtime';
 import { PROPOSAL_REVISERS, actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
@@ -162,12 +173,15 @@ export const removeMember = defineCommand({
   },
 });
 
+// A file reference is the triple (storageKey, generation, sha256) of plan §7.6 (ADR-0013): generation is what the
+// store's put returned for the bytes it wrote.
 const zIngestFile = z.object({
   filename: z.string().min(1).max(255),
   contentType: z.string().min(1).max(100),
   sizeBytes: z.number().int().nonnegative(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   storageKey: z.string().min(1),
+  generation: z.string().regex(GENERATION_PATTERN),
   source: z.enum(['upload', 'email']),
 });
 
@@ -178,12 +192,16 @@ export const ingestFile = defineCommand({
   access: MEMBERS,
   handler: async (ctx, input) => {
     if (input.storageKey !== fileKey(ctx.orgId, input.sha256)) throw new DomainError('INVALID_STORAGE_KEY', 400, 'Khóa lưu trữ không hợp lệ');
+    if (input.generation.startsWith('content:') && input.generation !== contentGeneration(input.sha256)) {
+      throw new DomainError('INVALID_GENERATION', 400, 'Phiên bản lưu trữ không khớp nội dung tệp');
+    }
     const inserted = await ctx.trx
       .insertInto('crove_kernel.file')
       .values({
         org_id: ctx.orgId,
         sha256: input.sha256,
         storage_key: input.storageKey,
+        generation: input.generation,
         filename: input.filename,
         content_type: input.contentType,
         size_bytes: String(input.sizeBytes),
@@ -205,6 +223,73 @@ export const ingestFile = defineCommand({
     await ctx.activity('kernel.file', inserted.id, 'file.received', `Nhận chứng từ ${input.filename}`);
     await ctx.emit('kernel.file.ingested', { fileId: inserted.id });
     return { fileId: inserted.id, duplicate: false };
+  },
+});
+
+// Staged uploads (plan §7.6, ADR-0013). At most this many open (unused, unexpired) grants per user and org.
+export const MAX_OPEN_UPLOADS = 20;
+
+// Opens a single-use grant for one presigned upload to a random staging key. The database sets the 5-minute expiry
+// and the creator (the user in the sealed context). The API signs the upload form for the returned key.
+export const beginUpload = defineCommand({
+  name: 'kernel.file.upload.begin',
+  input: z.object({}),
+  risk: 'R1',
+  access: MEMBERS,
+  handler: async (ctx) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới tải tệp lên được');
+    const userId = ctx.actor.userId;
+    // Serializes begins of one user in one org, so concurrent requests cannot pass the cap together.
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove.file_upload:${ctx.orgId}:${userId}`}, 0))`.execute(ctx.trx);
+    const open = await ctx.trx
+      .selectFrom('crove_kernel.file_upload')
+      .select((eb) => eb.fn.countAll<string>().as('n'))
+      .where('org_id', '=', ctx.orgId)
+      .where('created_by', '=', userId)
+      .where('used_at', 'is', null)
+      .where(sql<boolean>`expires_at > pg_catalog.now()`)
+      .executeTakeFirstOrThrow();
+    if (Number(open.n) >= MAX_OPEN_UPLOADS) {
+      throw new DomainError('RATE_LIMITED', 429, 'Quá nhiều lượt tải lên đang mở; hãy chờ vài phút rồi thử lại');
+    }
+    const row = await ctx.trx
+      .insertInto('crove_kernel.file_upload')
+      .values({ org_id: ctx.orgId, staging_key: newStagingKey(), created_by: userId, max_bytes: String(MAX_UPLOAD_BYTES) })
+      .returning(['id', 'staging_key', 'max_bytes', 'expires_at'])
+      .executeTakeFirstOrThrow();
+    ctx.audit({ upload_id: row.id });
+    return { uploadId: row.id, stagingKey: row.staging_key, maxBytes: Number(row.max_bytes), expiresAt: row.expires_at.toISOString() };
+  },
+});
+
+// Uses a grant, once: only its creator, only before it expires (database clock). The API reads the staging object
+// only after this commits, so a second completion of the same upload never reads it again.
+export const claimUpload = defineCommand({
+  name: 'kernel.file.upload.claim',
+  input: z.object({ uploadId: zId }),
+  risk: 'R1',
+  access: MEMBERS,
+  target: (input) => ({ type: 'kernel.file_upload', id: input.uploadId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới tải tệp lên được');
+    const row = await ctx.trx
+      .selectFrom('crove_kernel.file_upload')
+      .select(['staging_key', 'created_by', 'max_bytes', 'used_at', sql<boolean>`expires_at <= pg_catalog.now()`.as('expired')])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.uploadId)
+      .forUpdate()
+      .executeTakeFirst();
+    // Another user's grant reads as missing.
+    if (!row || row.created_by !== ctx.actor.userId) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy lượt tải lên');
+    if (row.used_at) throw new DomainError('UPLOAD_USED', 409, 'Lượt tải lên này đã được dùng');
+    if (row.expired) throw new DomainError('UPLOAD_EXPIRED', 409, 'Lượt tải lên đã hết hạn; hãy tải lại tệp');
+    await ctx.trx
+      .updateTable('crove_kernel.file_upload')
+      .set({ used_at: sql`pg_catalog.now()` })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.uploadId)
+      .execute();
+    return { stagingKey: row.staging_key, maxBytes: Number(row.max_bytes) };
   },
 });
 
@@ -551,6 +636,8 @@ const otherKernelCommands = [
   changeMemberRole,
   removeMember,
   ingestFile,
+  beginUpload,
+  claimUpload,
   receiveInbound,
   ...extractionCommands,
   requestProposal,

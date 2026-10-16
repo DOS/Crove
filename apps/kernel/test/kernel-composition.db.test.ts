@@ -12,7 +12,7 @@ import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { ORG_HEADER } from '@crove/kernel-contract';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { DomainError, Runtime, type BlobStore, type SessionStatusSource } from '@crove/kernel-runtime';
+import { DomainError, Runtime, contentGeneration, sha256Hex, type BlobStore, type SessionStatusSource } from '@crove/kernel-runtime';
 import type { ParsedInvoice } from '@crove/l10n-vn';
 import { financeQueries } from '@crove/mod-finance';
 import type { AuthUser } from '../src/auth.ts';
@@ -31,6 +31,7 @@ class MemoryStore implements BlobStore {
   readonly blobs = new Map<string, Uint8Array>();
   async put(key: string, bytes: Uint8Array) {
     this.blobs.set(key, bytes);
+    return contentGeneration(sha256Hex(bytes));
   }
   async get(key: string) {
     const b = this.blobs.get(key);

@@ -302,7 +302,7 @@ export const fileGet = defineQuery({
   handler: async (ctx, input) => {
     const file = await ctx.trx
       .selectFrom('crove_kernel.file')
-      .select(['id', 'filename', 'content_type', 'storage_key', 'size_bytes'])
+      .select(['id', 'filename', 'content_type', 'storage_key', 'generation', 'sha256', 'size_bytes'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.id)
       .executeTakeFirst();
