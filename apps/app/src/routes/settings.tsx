@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { useTranslations } from 'use-intl';
+import { useLocale, useTranslations } from 'use-intl';
 import { MemberSessions, MySessions } from '../components/sessions.tsx';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -11,7 +11,7 @@ import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
-import { ROLES, roleChangeConfirmation, type Role, type RoleChangeConfirmation } from '../lib/members.ts';
+import { ROLES, roleChangeConfirmation, roleChangeKind, type Role, type RoleChangeKind } from '../lib/members.ts';
 import { exportFileName, exportPhase, formatBytes, offboardErrorMessage, slugConfirmed } from '../lib/offboarding.ts';
 
 interface MemberRow {
@@ -21,7 +21,8 @@ interface MemberRow {
   role: Role;
 }
 
-type Pending = { kind: 'remove' } | { kind: 'role'; role: Role; confirmation: RoleChangeConfirmation };
+// What waits for confirmation. It holds the change, not its words, which are made at render (issue #215).
+type Pending = { kind: 'remove' } | { kind: 'role'; role: Role; reason: RoleChangeKind };
 
 // Owner controls for one member, the owner themself included: change the role, or remove another member. Removal and
 // every change that gives or takes owner rights (promotion to owner, demoting an owner, the owner's own role) wait
@@ -50,8 +51,8 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
     setPending(next);
   };
   const pickRole = (role: Role) => {
-    const confirmation = roleChangeConfirmation({ name, from: member.role, to: role, self }, root);
-    if (confirmation) ask({ kind: 'role', role, confirmation });
+    const reason = roleChangeKind({ from: member.role, to: role, self });
+    if (reason) ask({ kind: 'role', role, reason });
     else if (role !== member.role) changeRole.mutate({ userId: member.userId, role, idempotencyKey: crypto.randomUUID() });
   };
 
@@ -59,7 +60,7 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
     const text =
       pending.kind === 'remove'
         ? { title: t('removeTitle', { name }), body: t('removeBody'), action: t('confirmRemove') }
-        : pending.confirmation;
+        : roleChangeConfirmation(pending.reason, { name, to: pending.role }, root);
     const confirm = () =>
       pending.kind === 'remove'
         ? remove.mutate({ userId: member.userId, idempotencyKey: confirmKey })
@@ -182,6 +183,7 @@ function RotateInboundAddress() {
 // Then shows the export's state, polling while it is made, and the downloads of the manifest and of each table.
 function Offboarding({ name, slug }: { name: string; slug: string }) {
   const root = useTranslations();
+  const locale = useLocale();
   const t = useTranslations('offboarding');
   const tc = useTranslations('common');
   const f = useFormat();
@@ -309,7 +311,7 @@ function Offboarding({ name, slug }: { name: string; slug: string }) {
               {tc('cancel')}
             </Button>
           </div>
-          {offboard.error && <ErrorText>{offboardErrorMessage(offboard.error, root)}</ErrorText>}
+          {offboard.error && <ErrorText>{offboardErrorMessage(offboard.error, root, locale)}</ErrorText>}
         </form>
       )}
     </Card>

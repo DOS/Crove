@@ -1,5 +1,7 @@
 // Pure helpers for the device sessions screens (ADR-0028 section 4). No browser or API imports, so they are unit tested.
+import type { Locale } from '../i18n/locale.ts';
 import type { Translate } from '../i18n/runtime.ts';
+import { describeError } from './errors.ts';
 
 export interface SessionRow {
   sessionId: string;
@@ -73,17 +75,14 @@ export type SessionScope = 'self' | 'member';
 
 // Clear messages for the answers this screen can get. STEP_UP_REQUIRED is the R3 answer (ADR-0028 section 5); a
 // session revoke is R1 today, but a deployment may tighten it, so the screen explains it instead of a raw code.
-export function sessionErrorMessage(error: unknown, scope: SessionScope, t: Translate): string {
+export function sessionErrorMessage(error: unknown, scope: SessionScope, t: Translate, locale: Locale): string {
   const e = (error ?? {}) as { status?: unknown; code?: unknown; message?: unknown };
   if (e.code === 'STEP_UP_REQUIRED') {
     return t('sessions.errors.stepUp');
   }
-  if (e.code === 'NOT_A_MEMBER' || e.code === 'USER_DISABLED') {
-    return typeof e.message === 'string' && e.message ? e.message : t('sessions.errors.notAllowed');
-  }
+  if (e.code === 'NOT_A_MEMBER' || e.code === 'USER_DISABLED') return describeError(error, t, locale);
   if (e.status === 403 || e.code === 'FORBIDDEN') {
     return scope === 'member' ? t('sessions.errors.forbiddenMember') : t('sessions.errors.forbiddenSelf');
   }
-  if (typeof e.message === 'string' && e.message) return e.message;
-  return t('common.error');
+  return describeError(error, t, locale);
 }

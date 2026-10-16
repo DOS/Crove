@@ -37,12 +37,12 @@ describe('offboarding helpers', () => {
   });
 
   it('explains the refusals in both languages', () => {
-    expect(offboardErrorMessage({ code: 'STEP_UP_REQUIRED', message: 'raw' }, vi)).toContain('xác thực hai lớp');
-    expect(offboardErrorMessage({ code: 'STEP_UP_REQUIRED' }, en)).toContain('two-factor');
-    expect(offboardErrorMessage({ code: 'SLUG_MISMATCH' }, vi)).toContain('Mã rút gọn');
-    expect(offboardErrorMessage({ code: 'EXPORT_PENDING' }, en)).toContain('being exported');
-    expect(offboardErrorMessage({ code: 'OTHER', message: 'Lỗi riêng' }, vi)).toBe('Lỗi riêng');
-    expect(offboardErrorMessage(null, en)).toBe(en('common.error'));
+    expect(offboardErrorMessage({ code: 'STEP_UP_REQUIRED', message: 'raw' }, vi, 'vi')).toContain('xác thực hai lớp');
+    expect(offboardErrorMessage({ code: 'STEP_UP_REQUIRED' }, en, 'en')).toContain('two-factor');
+    expect(offboardErrorMessage({ code: 'SLUG_MISMATCH' }, vi, 'vi')).toContain('Mã rút gọn');
+    expect(offboardErrorMessage({ code: 'EXPORT_PENDING' }, en, 'en')).toContain('being exported');
+    expect(offboardErrorMessage({ code: 'OTHER', message: 'Lỗi riêng' }, vi, 'vi')).toBe('Lỗi riêng');
+    expect(offboardErrorMessage(null, en, 'en')).toBe(en('common.error'));
   });
 
   it('formats sizes and file names', () => {

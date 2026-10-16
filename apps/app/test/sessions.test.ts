@@ -99,24 +99,27 @@ describe('labels', () => {
 
 describe('sessionErrorMessage', () => {
   it('explains STEP_UP_REQUIRED', () => {
-    expect(sessionErrorMessage({ status: 403, code: 'STEP_UP_REQUIRED', message: 'x' }, 'self', vi)).toContain('xác thực hai lớp');
+    expect(sessionErrorMessage({ status: 403, code: 'STEP_UP_REQUIRED', message: 'x' }, 'self', vi, 'vi')).toContain('xác thực hai lớp');
   });
 
   it('explains a 403 by scope', () => {
     const forbidden = { status: 403, code: 'FORBIDDEN', message: 'Không có quyền thực hiện' };
-    expect(sessionErrorMessage(forbidden, 'member', vi)).toContain('Chỉ chủ sở hữu');
-    expect(sessionErrorMessage(forbidden, 'member', vi)).toContain('Quản trị viên không có quyền này');
-    expect(sessionErrorMessage(forbidden, 'self', vi)).toContain('Bạn không có quyền');
+    expect(sessionErrorMessage(forbidden, 'member', vi, 'vi')).toContain('Chỉ chủ sở hữu');
+    expect(sessionErrorMessage(forbidden, 'member', vi, 'vi')).toContain('Quản trị viên không có quyền này');
+    expect(sessionErrorMessage(forbidden, 'self', vi, 'vi')).toContain('Bạn không có quyền');
   });
 
   it('keeps the server message for membership and disabled accounts', () => {
-    expect(sessionErrorMessage({ status: 403, code: 'NOT_A_MEMBER', message: 'Bạn không thuộc tổ chức này' }, 'member', vi)).toBe(
+    expect(sessionErrorMessage({ status: 403, code: 'NOT_A_MEMBER', message: 'Bạn không thuộc tổ chức này' }, 'member', vi, 'vi')).toBe(
       'Bạn không thuộc tổ chức này',
     );
   });
 
-  it('falls back to the message, then a generic text', () => {
-    expect(sessionErrorMessage({ status: 503, code: 'OVERLOADED', message: 'Hệ thống đang quá tải' }, 'self', vi)).toBe('Hệ thống đang quá tải');
-    expect(sessionErrorMessage(null, 'self', vi)).toBe('Đã có lỗi xảy ra');
+  it('falls back to the kernel error wording, then a generic text', () => {
+    expect(sessionErrorMessage({ status: 503, code: 'OVERLOADED', message: 'Hệ thống đang quá tải' }, 'self', vi, 'vi')).toBe('Hệ thống đang quá tải');
+    expect(sessionErrorMessage({ status: 503, code: 'OVERLOADED', message: 'Hệ thống đang quá tải' }, 'self', translatorFor('en'), 'en')).toBe(
+      'The server is busy. Try again later.',
+    );
+    expect(sessionErrorMessage(null, 'self', vi, 'vi')).toBe('Đã có lỗi xảy ra');
   });
 });

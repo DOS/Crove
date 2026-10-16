@@ -2,7 +2,9 @@
 // checks every rule again (kernel.proposal.request, finance.journal.prepare_reversal, then the approval); these
 // helpers only keep the screens from offering what the server will refuse and explain its refusals.
 import { isCalendarDate } from '@crove/kernel-contract';
+import type { Locale } from '../i18n/locale.ts';
 import type { Translate } from '../i18n/runtime.ts';
+import { describeError } from './errors.ts';
 
 export const REVERSAL_KIND = 'finance.journal_reversal';
 // The roles that may ask for a proposal (kernel.proposal.request). Approving needs owner or admin.
@@ -48,12 +50,11 @@ export function reversalFormError(
 }
 
 // A refusal of a reversal (asking or approving) in words the user can act on. The partial mirror refusal (the
-// approver cannot see every line of the entry) is explained from its code and reason; other refusals show the
-// server's message.
-export function reversalErrorMessage(error: unknown, t: Translate): string {
+// approver cannot see every line of the entry) is explained from its code and reason; other refusals are worded like
+// any kernel error (describeError).
+export function reversalErrorMessage(error: unknown, t: Translate, locale: Locale): string {
   const e = error as { code?: unknown; message?: unknown; data?: unknown } | null;
   const data = e?.data as { reason?: unknown } | null | undefined;
   if (e?.code === 'INVALID' && data?.reason === 'partial_mirror') return t('reversal.errors.partialMirror');
-  if (typeof e?.message === 'string' && e.message) return e.message;
-  return t('common.error');
+  return describeError(error, t, locale);
 }

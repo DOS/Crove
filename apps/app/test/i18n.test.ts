@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_LOCALE, LOCALES, resolveLocale } from '../src/i18n/locale.ts';
 import { en } from '../src/i18n/messages/en.ts';
 import { vi } from '../src/i18n/messages/vi.ts';
-import { CATALOGS } from '../src/i18n/runtime.ts';
+import { CATALOGS, translatorFor } from '../src/i18n/runtime.ts';
+import { authErrorText, authFailure } from '../src/lib/auth.ts';
 
 type Tree = { [key: string]: string | Tree };
 
@@ -94,5 +95,20 @@ describe('resolveLocale', () => {
     expect(resolveLocale('xx', ['fr-FR', 'en-US', 'vi'])).toBe('en');
     expect(resolveLocale(null, ['vi-VN', 'en'])).toBe('vi');
     expect(resolveLocale(null, ['EN-gb'])).toBe('en');
+  });
+});
+
+// Issue #215: screens keep codes, not words, so a language switch rewords what is already on screen.
+describe('auth errors', () => {
+  it('keeps the Supabase code and words it at render', () => {
+    const failure = authFailure({ code: 'invalid_credentials', message: 'Invalid login credentials' });
+    expect(failure).toEqual({ code: 'invalid_credentials' });
+    expect(authErrorText(failure, translatorFor('vi'))).toBe('Email hoặc mật khẩu không đúng');
+    expect(authErrorText(failure, translatorFor('en'))).toBe(en.auth.errors.invalid_credentials);
+  });
+
+  it('keeps the server message for other codes', () => {
+    const failure = authFailure({ code: 'unexpected_failure', message: 'Database error' });
+    expect(authErrorText(failure, translatorFor('en'))).toBe('Database error');
   });
 });

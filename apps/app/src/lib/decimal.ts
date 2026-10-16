@@ -1,11 +1,25 @@
-// Exact decimal arithmetic on strings for client-side previews (4 decimal places, BigInt based).
+// Exact decimal arithmetic on strings for client-side previews (BigInt based). Amounts arrive with up to 8 decimals
+// (zMoney); the ledger keeps 4 (NUMERIC(20,4)), rounded half away from zero like decimal.js ROUND_HALF_UP in
+// @crove/l10n-vn's toMoney. Sums are taken exactly at 8 decimals and rounded once, where the server rounds.
 const SCALE = 10_000n;
+const EXACT = 100_000_000n;
+const TO_LEDGER = EXACT / SCALE;
 
-export function toUnits(value: string): bigint {
+function parse(value: string, scale: bigint, digits: number): bigint {
   const negative = value.startsWith('-');
   const [i = '0', f = ''] = (negative ? value.slice(1) : value).split('.');
-  const units = BigInt(i || '0') * SCALE + BigInt((f + '0000').slice(0, 4));
+  const units = BigInt(i || '0') * scale + BigInt((f + '0'.repeat(digits)).slice(0, digits));
   return negative ? -units : units;
+}
+
+// A decimal string in ledger units (4 decimals); digits past the fourth are dropped.
+export function toUnits(value: string): bigint {
+  return parse(value, SCALE, 4);
+}
+
+// A decimal string in exact units (8 decimals, the most the API carries).
+function toExact(value: string): bigint {
+  return parse(value, EXACT, 8);
 }
 
 export function fromUnits(units: bigint): string {
@@ -34,15 +48,16 @@ function vatPercent(rate: string | null): bigint {
   return match ? BigInt(match[1] ?? '0') : 0n;
 }
 
-// Mirrors fixedAssetVat in @crove/l10n-vn: 1332 for fixed assets, estimated per line on mixed invoices.
+// Mirrors fixedAssetVat in @crove/l10n-vn: 1332 for fixed assets, estimated per line on mixed invoices and rounded
+// to whole VND. Exact units in and out.
 function fixedAssetVat(lines: PreviewLine[], vat: bigint): bigint {
   const assets = lines.filter((l) => l.debitAccount === '211');
   if (assets.length === 0 || vat === 0n) return 0n;
   if (assets.length === lines.length) return vat;
   const estimate = divRound(
-    assets.reduce((acc, l) => acc + toUnits(l.amount) * vatPercent(l.vatRate), 0n),
-    100n * SCALE,
-  ) * SCALE;
+    assets.reduce((acc, l) => acc + toExact(l.amount) * vatPercent(l.vatRate), 0n),
+    100n * EXACT,
+  ) * EXACT;
   const clamp = (v: bigint, lo: bigint, hi: bigint) => (v < lo ? lo : v > hi ? hi : v);
   return vat > 0n ? clamp(estimate, 0n, vat) : clamp(estimate, vat, 0n);
 }
@@ -53,20 +68,23 @@ export interface PreviewJournalLine {
   credit: string;
 }
 
-// Mirrors @crove/l10n-vn buildPurchaseJournal for the approval preview; the server recomputes on approve.
+// Mirrors @crove/l10n-vn buildPurchaseJournal for the approval preview; the server recomputes on approve. Each
+// account's amount is summed exactly and rounded once to the ledger's 4 decimals, as toMoney does, and the payable
+// (331) balances the rounded lines, so the preview shows the very amounts the ledger will hold.
 export function previewPurchaseJournal(lines: PreviewLine[], vatTotal: string): PreviewJournalLine[] {
+  const ledger = (exact: bigint) => fromUnits(divRound(exact, TO_LEDGER));
   const byAccount = new Map<string, bigint>();
-  for (const l of lines) byAccount.set(l.debitAccount, (byAccount.get(l.debitAccount) ?? 0n) + toUnits(l.amount));
+  for (const l of lines) byAccount.set(l.debitAccount, (byAccount.get(l.debitAccount) ?? 0n) + toExact(l.amount));
   const out: PreviewJournalLine[] = [];
-  for (const [account, units] of [...byAccount.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    if (units === 0n) continue;
-    out.push(units < 0n ? { accountCode: account, debit: '0', credit: fromUnits(-units) } : { accountCode: account, debit: fromUnits(units), credit: '0' });
+  for (const [account, exact] of [...byAccount.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    if (exact === 0n) continue;
+    out.push(exact < 0n ? { accountCode: account, debit: '0', credit: ledger(-exact) } : { accountCode: account, debit: ledger(exact), credit: '0' });
   }
-  const vat = toUnits(vatTotal);
+  const vat = toExact(vatTotal);
   const assetVat = fixedAssetVat(lines, vat);
   for (const [accountCode, value] of [['1331', vat - assetVat], ['1332', assetVat]] as const) {
     if (value === 0n) continue;
-    out.push(value < 0n ? { accountCode, debit: '0', credit: fromUnits(-value) } : { accountCode, debit: fromUnits(value), credit: '0' });
+    out.push(value < 0n ? { accountCode, debit: '0', credit: ledger(-value) } : { accountCode, debit: ledger(value), credit: '0' });
   }
   const net = out.reduce((acc, l) => acc + toUnits(l.debit) - toUnits(l.credit), 0n);
   if (net !== 0n) out.push(net > 0n ? { accountCode: '331', debit: '0', credit: fromUnits(net) } : { accountCode: '331', debit: fromUnits(-net), credit: '0' });

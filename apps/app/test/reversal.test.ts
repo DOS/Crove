@@ -62,13 +62,17 @@ describe('reversalErrorMessage', () => {
   const partial = { code: 'INVALID', status: 422, message: 'Dữ liệu không hợp lệ', data: { reason: 'partial_mirror' } };
 
   it('explains the partial mirror refusal from its code and reason, in the user language', () => {
-    expect(reversalErrorMessage(partial, vi)).toContain('không được xem tất cả các dòng');
-    expect(reversalErrorMessage(partial, en)).toContain('cannot see all of its lines');
+    expect(reversalErrorMessage(partial, vi, 'vi')).toContain('không được xem tất cả các dòng');
+    expect(reversalErrorMessage(partial, en, 'en')).toContain('cannot see all of its lines');
   });
 
   it("shows the server's message for other refusals, and a fallback without one", () => {
-    expect(reversalErrorMessage({ code: 'ALREADY_REVERSED', message: 'Bút toán này đã được đảo' }, vi)).toBe('Bút toán này đã được đảo');
-    expect(reversalErrorMessage({ code: 'INVALID', message: 'Dữ liệu không hợp lệ' }, vi)).toBe('Dữ liệu không hợp lệ');
-    expect(reversalErrorMessage(null, vi)).toBe('Đã có lỗi xảy ra');
+    expect(reversalErrorMessage({ code: 'ALREADY_REVERSED', message: 'Bút toán này đã được đảo' }, vi, 'vi')).toBe('Bút toán này đã được đảo');
+    expect(reversalErrorMessage({ code: 'INVALID', message: 'Dữ liệu không hợp lệ' }, vi, 'vi')).toBe('Dữ liệu không hợp lệ');
+    expect(reversalErrorMessage(null, vi, 'vi')).toBe('Đã có lỗi xảy ra');
+  });
+
+  it('words known kernel codes in English instead of the Vietnamese message', () => {
+    expect(reversalErrorMessage({ code: 'ALREADY_REVERSED', message: 'Bút toán này đã được đảo' }, en, 'en')).toBe('This journal entry was already reversed.');
   });
 });

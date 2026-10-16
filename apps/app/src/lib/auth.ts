@@ -1,5 +1,6 @@
 import { AuthClient, type Session } from '@supabase/auth-js';
-import { translator, type Translate } from '../i18n/runtime.ts';
+import type { Translate } from '../i18n/runtime.ts';
+import { ClientError } from './errors.ts';
 
 export interface PublicConfig {
   authUrl: string;
@@ -21,7 +22,7 @@ let client: Client | null = null;
 export async function loadConfig(): Promise<PublicConfig> {
   if (config) return config;
   const response = await fetch('/api/config');
-  if (!response.ok) throw new Error(translator()('common.configLoadFailed'));
+  if (!response.ok) throw new ClientError('common.configLoadFailed', (t) => t('common.configLoadFailed'));
   config = (await response.json()) as PublicConfig;
   return config;
 }
@@ -56,8 +57,15 @@ export type { Session };
 const AUTH_ERRORS = ['invalid_credentials', 'user_already_exists', 'email_not_confirmed', 'weak_password', 'over_email_send_rate_limit'] as const;
 type AuthErrorCode = (typeof AUTH_ERRORS)[number];
 
-export function authErrorMessage(error: { code?: string | undefined; message: string } | null, t: Translate): string | null {
-  if (!error) return null;
+// What the sign-in screen keeps of a Supabase Auth error: the code when the SPA words it, else the server's message.
+// It is put in words at render (authErrorText), so a language switch rewords it.
+export type AuthFailure = { code: AuthErrorCode } | { message: string };
+
+export function authFailure(error: { code?: string | undefined; message: string }): AuthFailure {
   const code = AUTH_ERRORS.find((c): c is AuthErrorCode => c === error.code);
-  return code ? t(`auth.errors.${code}`) : error.message;
+  return code ? { code } : { message: error.message };
+}
+
+export function authErrorText(failure: AuthFailure, t: Translate): string {
+  return 'code' in failure ? t(`auth.errors.${failure.code}`) : failure.message;
 }

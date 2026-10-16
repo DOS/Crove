@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
 import { useState } from 'react';
-import { useTranslations } from 'use-intl';
+import { useLocale, useTranslations } from 'use-intl';
 import { Alert, AlertDescription } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -22,6 +22,7 @@ interface Entry {
 // Asks for a reversal (#165): a proposal that an owner or admin approves like any posting (R3, four-eyes, fresh MFA).
 function ReversalForm({ entry, slug, onClose }: { entry: Entry; slug: string; onClose: () => void }) {
   const root = useTranslations();
+  const locale = useLocale();
   const t = useTranslations('reversal');
   const f = useFormat();
   const [entryDate, setEntryDate] = useState(() => defaultReversalDate(entry.entryDate));
@@ -80,7 +81,7 @@ function ReversalForm({ entry, slug, onClose }: { entry: Entry; slug: string; on
         />
       </label>
       {touched && problem && <ErrorText>{problem}</ErrorText>}
-      {request.error && <ErrorText>{reversalErrorMessage(request.error, root)}</ErrorText>}
+      {request.error && <ErrorText>{reversalErrorMessage(request.error, root, locale)}</ErrorText>}
       <div className="flex gap-2">
         <Button type="submit" disabled={request.isPending}>
           {request.isPending ? <Spinner /> : null}

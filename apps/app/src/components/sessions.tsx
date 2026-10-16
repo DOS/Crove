@@ -2,7 +2,7 @@
 // for a member. The server enforces who may see and revoke what; these screens only explain it.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
-import { useTranslations } from 'use-intl';
+import { useLocale, useTranslations } from 'use-intl';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, orpc, queryClient } from '../lib/api.ts';
 import { accessToken, auth } from '../lib/auth.ts';
@@ -86,6 +86,7 @@ type MyConfirm = { kind: 'one'; sessionId: string } | { kind: 'others' } | { kin
 // session out in Supabase Auth. Revoking the current session, or every session, signs this browser out.
 export function MySessions({ userId }: { userId: string }) {
   const root = useTranslations();
+  const locale = useLocale();
   const t = useTranslations('sessions');
   const sessions = useQuery(orpc.sessions.list.queryOptions({ input: { userId } }));
   const current = useCurrentSessionId();
@@ -160,7 +161,7 @@ export function MySessions({ userId }: { userId: string }) {
         </div>
       ) : sessions.error ? (
         <div className="mt-3">
-          <ErrorText>{sessionErrorMessage(sessions.error, 'self', root)}</ErrorText>
+          <ErrorText>{sessionErrorMessage(sessions.error, 'self', root, locale)}</ErrorText>
         </div>
       ) : (
         <>
@@ -244,7 +245,7 @@ export function MySessions({ userId }: { userId: string }) {
           )}
           {error && (
             <div className="mt-2">
-              <ErrorText>{sessionErrorMessage(error, 'self', root)}</ErrorText>
+              <ErrorText>{sessionErrorMessage(error, 'self', root, locale)}</ErrorText>
             </div>
           )}
         </>
@@ -257,6 +258,7 @@ type MemberTarget = { sessionId: string } | 'all' | null;
 
 function MemberSessionsPanel({ userId, name, onClose }: { userId: string; name: string; onClose: () => void }) {
   const root = useTranslations();
+  const locale = useLocale();
   const t = useTranslations('sessions');
   const sessions = useQuery(orpc.sessions.list.queryOptions({ input: { userId } }));
   const [target, setTarget] = useState<MemberTarget>(null);
@@ -299,7 +301,7 @@ function MemberSessionsPanel({ userId, name, onClose }: { userId: string; name: 
         </div>
       ) : sessions.error ? (
         <div className="mt-2">
-          <ErrorText>{sessionErrorMessage(sessions.error, 'member', root)}</ErrorText>
+          <ErrorText>{sessionErrorMessage(sessions.error, 'member', root, locale)}</ErrorText>
         </div>
       ) : (
         <>
@@ -351,7 +353,7 @@ function MemberSessionsPanel({ userId, name, onClose }: { userId: string; name: 
           )}
           {revoke.error && (
             <div className="mt-2">
-              <ErrorText>{sessionErrorMessage(revoke.error, 'member', root)}</ErrorText>
+              <ErrorText>{sessionErrorMessage(revoke.error, 'member', root, locale)}</ErrorText>
             </div>
           )}
         </>

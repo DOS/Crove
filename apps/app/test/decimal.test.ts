@@ -28,6 +28,17 @@ const CASES: Array<[string, PreviewLine[], string]> = [
     { debitAccount: '211', amount: '33333333', vatRate: '8%' },
     { debitAccount: '6422', amount: '1000001', vatRate: '10%' },
   ], '2766767'],
+  // Amounts past the ledger's 4 decimals (the API carries 8): summed exactly per account, rounded once, half up.
+  ['fractional amounts summed before rounding', [
+    { debitAccount: '6422', amount: '100.00005', vatRate: '10%' },
+    { debitAccount: '6422', amount: '100.00005', vatRate: '10%' },
+    { debitAccount: '6421', amount: '0.33333333', vatRate: '10%' },
+  ], '20.00001'],
+  ['half up away from zero on a credit', [{ debitAccount: '6422', amount: '-1000.00005', vatRate: '10%' }], '-100.00005'],
+  ['fractional mixed asset invoice', [
+    { debitAccount: '211', amount: '33333333.33335', vatRate: '10%' },
+    { debitAccount: '6422', amount: '1000.5', vatRate: '8%' },
+  ], '3333413.37'],
   ['untaxed asset line', [
     { debitAccount: '211', amount: '40000000', vatRate: 'KCT' },
     { debitAccount: '6422', amount: '500000', vatRate: '10%' },
