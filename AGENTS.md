@@ -55,6 +55,7 @@ Every container image is pinned by digest as `image:tag@sha256:<digest>`: `docke
 - **One write path.** Every state change is a command executed through `Runtime.execute()` (`packages/kernel-runtime`). No other code writes tenant tables.
 - **Schema only via migrations** in `supabase/migrations/<14-digit UTC>_crove_<module>_<desc>.sql`. Idempotent statements, never edit an applied file, never DDL at runtime. Every function sets `search_path = pg_catalog, pg_temp`, never `''`. The hardening guard the runner applies after every run (`hardeningViolations`) has no bypass flag or warn mode, and must not get one: a deploy that fails it is fixed with a forward migration, never skipped.
 - **Tenancy:** every tenant table has `org_id`, `PRIMARY KEY (org_id, id)` and RLS via `crove_kernel.apply_tenant_rls`. Login roles own nothing.
+- **Erasable TypeScript only.** Node runs the kernel's and packages' `.ts` by type stripping, so `tsconfig.lib.json` sets `erasableSyntaxOnly` and typecheck refuses parameter properties, enums, namespaces and `import =` (use explicit fields, const objects with a union type, and modules).
 - **Money** is NUMERIC in SQL and a decimal string everywhere else; arithmetic through `decimal.js` (`@crove/l10n-vn` money helpers). Never JS numbers for amounts.
 - **AI** calls only in `packages/agent`, through an OpenAI-compatible endpoint. AI output is tainted: deterministic checks decide, humans approve.
 - **Public repo:** no secrets, Supabase project refs, internal URLs or real customer data. gitleaks + G1 run in CI and in the pre-commit hook.

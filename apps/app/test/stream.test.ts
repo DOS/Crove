@@ -108,7 +108,10 @@ class FakeEventSource implements EventSourceLike {
   readonly listeners = new Map<string, (event: { data?: string }) => void>();
   closed = false;
   onerror: ((event: unknown) => void) | null = null;
-  constructor(readonly url: string) {}
+  readonly url: string;
+  constructor(url: string) {
+    this.url = url;
+  }
   addEventListener(type: string, listener: (event: { data?: string }) => void) {
     this.listeners.set(type, listener);
   }
