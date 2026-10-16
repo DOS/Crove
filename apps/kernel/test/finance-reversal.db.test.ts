@@ -32,8 +32,10 @@ const HIDDEN = 'outside-legal-entity-scope-165';
 
 class MemoryStore implements BlobStore {
   private readonly blobs = new Map<string, Uint8Array>();
+  // Memory has no object versions: the generation is the content address (ADR-0013).
   async put(key: string, bytes: Uint8Array) {
     this.blobs.set(key, bytes);
+    return `content:${sha256Hex(bytes)}`;
   }
   async get(key: string) {
     const b = this.blobs.get(key);
@@ -120,10 +122,10 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
   async function ingest(bytes: Uint8Array) {
     const sha256 = sha256Hex(bytes);
     const storageKey = fileKey(org.orgId, sha256);
-    await store.put(storageKey, bytes);
+    const generation = await store.put(storageKey, bytes);
     const { fileId } = await runtime.execute<{ fileId: string }>(
       'kernel.file.ingest',
-      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, source: 'upload' },
+      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },
       { actor: asUser(owner.userId), orgId: org.orgId },
     );
     return fileId;
