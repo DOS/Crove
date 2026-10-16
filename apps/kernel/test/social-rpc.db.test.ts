@@ -138,7 +138,10 @@ suite('social posts through the API', () => {
     const key = randomUUID();
     const first = await rpc('social/posts/create', owner_, { body: 'Một lần thôi', channels: [{ connectionId }], idempotencyKey: key });
     const again = await rpc('social/posts/create', owner_, { body: 'Một lần thôi', channels: [{ connectionId }], idempotencyKey: key });
+    expect([first.status, again.status]).toEqual([200, 200]);
     expect(again.body?.postId).toBe(first.body?.postId);
+    const all = await rpc('social/posts/list', owner_, {});
+    expect(all.body.filter((p: { body: string }) => p.body === 'Một lần thôi')).toHaveLength(1);
 
     expect((await rpc('social/posts/submit', owner_, { postId })).status).toBe(200);
     const seen = await rpc('social/posts/get', await tokenFor(viewer), { postId });
@@ -152,6 +155,22 @@ suite('social posts through the API', () => {
     expect(scheduled).toMatchObject({ status: 200, body: { scheduled: [{ at }] } });
     const list = await rpc('social/posts/list', owner_, { from: new Date().toISOString(), to: new Date(Date.now() + 7_200_000).toISOString() });
     expect(list.body.map((p: { id: string }) => p.id)).toEqual([postId]);
+    // Every other procedure once, so each output passes the contract's schema at runtime.
+    const approved = await rpc('social/posts/get', owner_, { postId });
+    expect(approved.body.variants[0]).toMatchObject({ status: 'scheduled', latestDecision: { decision: 'approved', current: true } });
+    const variantId = String(approved.body.variants[0].id);
+    expect((await rpc('social/variants/unschedule', owner_, { variantIds: [variantId] })).status).toBe(200);
+    expect((await rpc('social/queues/set', owner_, { connectionId, timeZone: 'Asia/Ho_Chi_Minh', slots: [{ weekday: 1, minute: 540, label: 'Sáng' }] })).status).toBe(200);
+    const queue = await rpc('social/queues/get', owner_, { connectionId });
+    expect(queue).toMatchObject({ status: 200, body: { slots: [{ weekday: 1, minute: 540, label: 'Sáng', active: true }] } });
+    expect(queue.body.nextFree.length).toBeGreaterThan(0);
+    const updated = await rpc('social/posts/update', owner_, { postId, revision: approved.body.revision, body: 'Đã sửa' });
+    expect(updated).toMatchObject({ status: 200, body: { changedVariants: [variantId] } });
+    const v = (await rpc('social/posts/get', owner_, { postId })).body.variants[0];
+    expect((await rpc('social/variants/update', owner_, { variantId, revision: v.revision, body: 'Bản riêng' })).body).toMatchObject({ changed: true });
+    const second = await rpc('channels/connectSandbox', owner_, { displayName: 'Trang 2', key: randomUUID() });
+    expect((await rpc('social/posts/addChannels', owner_, { postId, channels: [{ connectionId: String(second.body?.connectionId) }] })).status).toBe(200);
+    expect((await rpc('social/variants/cancel', owner_, { variantIds: [variantId] })).status).toBe(200);
   });
 
   it('answers 404 when the deployment leaves the social module out', async () => {

@@ -409,7 +409,8 @@ export const zTaskDetail = z.object({
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Crove Social (Social plan §3.3). The commands in @crove/mod-social check every input again, strictly.
+// Crove Social (Social plan §3.3). The commands in @crove/mod-social check every input again, strictly: time zones
+// (IANA names), channel rules and the choice of a time or the queue are checked there, not here.
 // ---------------------------------------------------------------------------------------------------------------------
 
 export const SOCIAL_VARIANT_STATUSES = [
