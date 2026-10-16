@@ -31,7 +31,7 @@ import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts
 import { createInviteMailSender } from './invite-mail.ts';
 import type { Mailer } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
-import { createRpcHandler, resolveMembership, resolveOrg } from './rpc.ts';
+import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels } from './rpc.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 import { directTransferOrigin } from './storage.ts';
 
@@ -50,6 +50,9 @@ export interface HttpDeps {
   rateLimiter?: RateLimiter | null;
   // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
   uploadCompletes?: ConcurrencyLimiter;
+  // Channel connections (ADR-0025): the broker that seals tokens, and whether the sandbox channel is on. Unset: no
+  // channel can be connected through the API.
+  channels?: RpcChannels;
 }
 
 // Store errors that are not server faults. A blob missing behind a file row, or a key holding other bytes, is
@@ -163,7 +166,7 @@ function clientIp(c: Context, trustedHops: number): string | null {
 export function createHttpApp(deps: HttpDeps) {
   const { config, runtime, store, authenticate } = deps;
   const app = new Hono<{ Variables: { user: AuthUser } }>();
-  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL) : undefined);
+  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL) : undefined, deps.channels);
   const perMinute = config.API_RATE_LIMIT_PER_MINUTE;
   const limiter = deps.rateLimiter !== undefined ? deps.rateLimiter : perMinute > 0 ? new RateLimiter({ perMinute }) : null;
 

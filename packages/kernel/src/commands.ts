@@ -14,6 +14,7 @@ import {
   type UserActor,
 } from '@crove/kernel-runtime';
 import { agentCommands } from './agents.ts';
+import { channelCommands } from './channels.ts';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
@@ -701,6 +702,7 @@ const otherKernelCommands = [
   revokeSession,
   ...offboardingCommands,
   ...agentCommands,
+  ...channelCommands,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),

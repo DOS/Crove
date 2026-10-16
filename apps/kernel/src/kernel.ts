@@ -7,17 +7,18 @@ import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
 import { buildKernelCommands, kernelQueries } from '@crove/kernel';
 import {
-  DomainError,
   LocalDiskStore,
   Runtime,
   type BlobStore,
   type CommandDef,
+  type CredentialBroker,
   type QueryDef,
   type SessionStatusSource,
 } from '@crove/kernel-runtime';
 import { financeAgentPrograms, financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, type Config, type ModuleId } from './config.ts';
+import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
 import { createHttpApp } from './http.ts';
 import { createLogMailer, createMailer, type Mailer } from './mail.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
@@ -36,11 +37,8 @@ export interface IdentityPort {
   readonly revoker: SessionRevoker | null;
 }
 
-// Third-party credentials behind a connection binding (plan §7.4). No core feature uses one yet.
-export interface CredentialBroker {
-  readonly id: string;
-  credential(orgId: string, bindingId: string): Promise<string>;
-}
+export type { CredentialBroker } from '@crove/kernel-runtime';
+export { noCredentialBroker } from './credentials.ts';
 
 // A connector to an outside system (e-invoice issuing, banks). The core ships none; Crove Cloud adds its own.
 export interface Connector {
@@ -78,12 +76,6 @@ export interface Kernel {
 }
 
 // No-op defaults for the optional ports: nothing can be bound, no connector is installed, every module is on.
-export const noCredentialBroker: CredentialBroker = {
-  id: 'none',
-  async credential() {
-    throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình kho thông tin kết nối');
-  },
-};
 export const selfHostBilling: Billing = { entitlements: async () => ['full'] };
 
 const REQUIRED = ['identity', 'ai', 'storage'] as const;
@@ -186,7 +178,16 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
         await assertRlsEnforced(pool);
         await assertSystemContextAccess(pool, 'denied');
         const authenticate = resolved.identity.authenticator(db);
-        const app = createHttpApp({ config, runtime, store, authenticate, pool, aiEnabled: resolved.ai !== null, mailer: resolved.mail });
+        const app = createHttpApp({
+          config,
+          runtime,
+          store,
+          authenticate,
+          pool,
+          aiEnabled: resolved.ai !== null,
+          mailer: resolved.mail,
+          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true' },
+        });
         const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });
         console.log(`[api] listening on ${config.HOST}:${config.PORT}`);
         stops.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -245,5 +246,7 @@ export function defaultAdapters(config: Config): KernelAdapters {
     storage: createBlobStore(config),
     // SMTP from SMTP_*; without SMTP_HOST, the log fallback.
     mail: createMailer(config),
+    // crove-local: the vault keyed by CREDENTIAL_KEY or CREDENTIAL_KEY_FILE; none without a key (ADR-0025).
+    broker: createCredentialBroker(config),
   };
 }

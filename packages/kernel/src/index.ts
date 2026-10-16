@@ -5,4 +5,5 @@ export * from './invites.ts';
 export * from './extraction.ts';
 export * from './offboarding.ts';
 export * from './agents.ts';
+export * from './channels.ts';
 export { decideApproval, eligibleApprovers } from './approval.ts';

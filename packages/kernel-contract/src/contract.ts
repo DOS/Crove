@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   zAccount,
   zAccountCode,
+  zChannelConnection,
   zFileStatus,
   zId,
   zInboxDetail,
@@ -67,6 +68,16 @@ export const contract = {
   sessions: {
     list: oc.input(z.object({ userId: zId })).output(z.array(zSession)),
     revoke: oc.input(zSessionRevoke).output(z.object({ revoked: z.array(zId) })),
+  },
+  // Connected channel accounts (ADR-0025). Every member lists them; owners and admins connect and disconnect.
+  channels: {
+    list: oc.input(z.object({ includeRevoked: z.boolean().optional() })).output(z.array(zChannelConnection)),
+    // The offline sandbox channel, when the deployment enables it. Connecting again with the same key reconnects the
+    // same sandbox account.
+    connectSandbox: oc
+      .input(z.object({ displayName: z.string().trim().min(1).max(200), key: zId }))
+      .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
+    disconnect: oc.input(z.object({ connectionId: zId, idempotencyKey: zId })).output(z.object({ connectionId: zId, status: z.literal('revoked') })),
   },
   inbox: {
     list: oc.input(z.object({ status: zProposalStatus.optional() })).output(z.array(zInboxItem)),

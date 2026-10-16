@@ -425,6 +425,9 @@ importers:
       '@crove/agent':
         specifier: workspace:*
         version: link:../../packages/agent
+      '@crove/channel':
+        specifier: workspace:*
+        version: link:../../packages/channel
       '@crove/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -587,6 +590,8 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 4.6.7
+
+  packages/channel: {}
 
   packages/db:
     dependencies:

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 // The composition root (ADR-0030): which adapters main.ts wires by default, that an entrypoint can replace any
 // port, and that a missing required port stops the boot. The end-to-end run of overridden ports is in
 // kernel-composition.db.test.ts.
@@ -55,17 +56,27 @@ describe('defaultAdapters (the open-source wiring in main.ts)', () => {
     }
   });
 
-  it('leaves broker, connectors and billing to the no-op defaults', async () => {
+  it('leaves broker (without a credential key), connectors and billing to the no-op defaults', async () => {
     const config = loadConfig(BASE);
     const defaults = defaultAdapters(config);
-    expect(defaults.broker).toBeUndefined();
+    expect(defaults.broker?.id).toBe('none');
     const kernel = createKernel(config, defaults);
     expect(kernel.adapters.identity).toBe(defaults.identity);
     expect(kernel.adapters.storage).toBe(defaults.storage);
     expect(kernel.adapters.connectors).toEqual([]);
     expect(kernel.adapters.billing).toBe(selfHostBilling);
     expect(await kernel.adapters.billing.entitlements('org')).toEqual(['full']);
-    await expect(kernel.adapters.broker.credential('org', 'binding')).rejects.toMatchObject({ code: 'BROKER_NOT_CONFIGURED' });
+    const binding = { orgId: 'org', provider: 'sandbox', externalAccountId: 'a' };
+    expect(() => kernel.adapters.broker.seal('token', binding)).toThrow(expect.objectContaining({ code: 'BROKER_NOT_CONFIGURED' }));
+  });
+
+  it('builds the crove-local broker from CREDENTIAL_KEY', () => {
+    const config = loadConfig({ ...BASE, CREDENTIAL_KEY: randomBytes(32).toString('base64') });
+    const broker = defaultAdapters(config).broker;
+    expect(broker?.id).toBe('crove-local');
+    const binding = { orgId: 'org', provider: 'sandbox', externalAccountId: 'a' };
+    const sealed = broker!.seal('token', binding);
+    expect(broker!.open(sealed, binding)).toBe('token');
   });
 });
 

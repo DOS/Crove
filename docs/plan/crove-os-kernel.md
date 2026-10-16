@@ -1992,7 +1992,7 @@ ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this pla
 | 0020 | Clean-room process for using the archived forks as references | Before Phase 3 |
 | 0014 / 0019 / 0016 | Freezing public names + the `com.crove` prefix / MCP grants / egress, SSRF and NAT | Phase 3, or when the first provider requires an IP allowlist |
 | 0024 | Kernel `calendar` service: events, availability, external calendar sync, double-booking prevention | Before Phase 3 |
-| [0025](../adr/0025-channel-layer.md) | `channel` layer: social and email connections shared by Service and Social, Cloud apps vs self-host | Proposed 2026-10-16; before Social step S2 |
+| [0025](../adr/0025-channel-layer.md) | `channel` layer: social and email connections shared by Service and Social, Cloud apps vs self-host | Accepted 2026-10-16 (owner); implemented in Social step S2 (#232) |
 
 0023 (federated identity: DOS ID via OIDC, `IdentityProvider` adapter, Crove sessions) will not be written: ADR-0027 and ADR-0028 replace it.
 
