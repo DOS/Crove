@@ -32,7 +32,11 @@ const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.inboun
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>(['crove_finance.purchase_document_void']);
+const PENDING_TABLES = new Set<string>([
+  'crove_finance.purchase_document_void',
+  // Single-use staged upload grants (issue #109).
+  'crove_kernel.file_upload',
+]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -108,9 +112,17 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => {
       const sha256 = hex64();
       return {
-        row: { org_id: o.id, id: randomUUID(), sha256, storage_key: `files/${o.id}/${sha256}`, filename: 'probe.xml', content_type: 'application/xml', size_bytes: 1, source: 'upload' },
+        row: { org_id: o.id, id: randomUUID(), sha256, storage_key: `org/${o.id}/${sha256}`, filename: 'probe.xml', content_type: 'application/xml', size_bytes: 1, source: 'upload' },
       };
     },
+  },
+  // Staged upload grants (issue #109, ADR-0013): one row per presigned upload, used at most once. Created, expiry
+  // and used times come from the database clock (a trigger), and the creator from the sealed context when a user
+  // is in it. Tenant roles may update only used_at (a column grant), and only to claim an unused, unexpired grant
+  // once, so the update probes claim (a no-op assignment would be refused by the guard trigger, not by RLS).
+  'crove_kernel.file_upload': {
+    update: { set: 'used_at = pg_catalog.now()', where: 'used_at IS NULL' },
+    make: (o) => ({ row: { org_id: o.id, staging_key: `staging/${hex64()}`, created_by: o.owner, max_bytes: 1 } }),
   },
   'crove_kernel.inbound_message': { make: (o) => ({ row: { org_id: o.id, message_id: `<${randomUUID()}@rls.test>` } }) },
   'crove_kernel.extraction': { make: (o) => ({ row: { org_id: o.id, file_id: o.file, method: 'unsupported', status: 'failed' } }) },
@@ -427,7 +439,7 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
         { table: 'crove_kernel.party', values: { org_id: orgId, id: org.party, name: `Vendor ${key}` } },
         {
           table: 'crove_kernel.file',
-          values: { org_id: orgId, id: org.file, sha256, storage_key: `files/${orgId}/${sha256}`, filename: 'hd.xml', content_type: 'application/xml', size_bytes: 1, source: 'upload' },
+          values: { org_id: orgId, id: org.file, sha256, storage_key: `org/${orgId}/${sha256}`, filename: 'hd.xml', content_type: 'application/xml', size_bytes: 1, source: 'upload' },
         },
         {
           table: 'crove_finance.purchase_document',

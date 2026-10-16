@@ -107,9 +107,11 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     const sha256 = sha256Hex(bytes);
     const storageKey = fileKey(orgId, sha256);
     await store.put(storageKey, bytes);
+    // The generation a file reference carries (ADR-0013): memory has no versions, so the content address.
+    const generation = `content:${sha256}`;
     const { fileId } = await runtime.execute<{ fileId: string }>(
       'kernel.file.ingest',
-      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, source: 'upload' },
+      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },
       { actor: asUser(uploader), orgId },
     );
     const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-16' }, orgId, fileId);
