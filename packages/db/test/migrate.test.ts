@@ -35,4 +35,15 @@ describe('migration files', () => {
     const files = await readMigrations(dir);
     expect(new Set(files.map((f) => f.version)).size).toBe(files.length);
   });
+
+  it('the repository migrations are not copies of each other', async () => {
+    // Two parallel renames once left the same migration under two versions, so it ran twice.
+    const dir = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
+    const files = await readMigrations(dir);
+    const byHash = new Map<string, string>();
+    for (const f of files) {
+      expect(byHash.get(f.sha256), `${f.name} repeats ${byHash.get(f.sha256)}`).toBeUndefined();
+      byHash.set(f.sha256, f.name);
+    }
+  });
 });
