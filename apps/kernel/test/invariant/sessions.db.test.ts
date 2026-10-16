@@ -199,7 +199,7 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
       { table_name: 'sessions', column_name: 'user_id' },
       { table_name: 'users', column_name: 'banned_until' },
       { table_name: 'users', column_name: 'deleted_at' },
-      // Read by the invite definers in db mode (#134), granted when Supabase Auth has the column.
+      // Read by the invite definers in db mode (#134); auth-grants waits for it and always grants it (#208).
       { table_name: 'users', column_name: 'email_confirmed_at' },
       { table_name: 'users', column_name: 'id' },
     ]);

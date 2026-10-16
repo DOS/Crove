@@ -565,8 +565,8 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
   });
 
   // Self-host (AUTH_SESSION_CHECK=db): accepting and previewing also need a confirmed email in Supabase Auth's own
-  // record (#134), and fail closed (503) while the column exists but the reader cannot see it. Runs last: it creates
-  // the auth tables.
+  // record (#134), and fail closed (503) while the reader cannot see the column or it does not exist (#208). Runs
+  // last: it creates the auth tables.
   it('requires a confirmed email in Supabase Auth on self-host, and fails closed without the grant', async () => {
     await admin(async (c) => {
       await c.query('CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_auth_admin');
@@ -646,24 +646,52 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     await expect(acceptUp(token, invitee)).resolves.toMatchObject({ orgId, role: 'member' });
     expect(await memberships(invitee.id)).toEqual([{ org_id: orgId, role: 'member' }]);
 
-    // A Supabase Auth without the column: every Supabase Auth release has it, and every fake auth.users in this suite
-    // now carries it (#208). Until the second step lands the check is skipped (auth-grants warns); after it, invites
-    // fail closed with 503. Both are accepted here, so this copy of the suite can gate either.
-    const late = await signedIn('no-column', false);
+    // A Supabase Auth without the column (for example an upgrade that renamed it) fails closed too (#208): preview
+    // and accept answer 503 for everyone, confirmed or not, instead of skipping the check, while the session check of
+    // other requests keeps working; auth-grants refuses to finish until the column is back.
+    const late = await signedIn('no-column', true);
     const lateToken = tokenOf(await upstream.execute<Created>('kernel.member.invite.create', { email: late.email, role: 'viewer' }, { actor: owner.actor, orgId }));
-    await admin(async (c) => {
-      await c.query('SET ROLE supabase_auth_admin');
-      await c.query('ALTER TABLE auth.users DROP COLUMN email_confirmed_at');
-    });
-    const outcome = await acceptUp(lateToken, late).then(
-      (accepted) => ({ accepted }),
-      (refused: unknown) => ({ refused }),
+    const unconfirmed = await signedIn('no-column-unconfirmed', false);
+    const unconfirmedToken = tokenOf(
+      await upstream.execute<Created>('kernel.member.invite.create', { email: unconfirmed.email, role: 'viewer' }, { actor: owner.actor, orgId }),
     );
-    if ('accepted' in outcome) {
-      expect(outcome.accepted).toMatchObject({ orgId, role: 'viewer' });
-    } else {
-      expect(outcome.refused).toMatchObject({ code: 'AUTH_NOT_READY', status: 503 });
-      expect(await memberships(late.id)).toEqual([]);
+    // Without the reader's row policy on auth.users the reader would see no rows, so a confirmed email would look
+    // unconfirmed: preview and accept answer 503 instead, and the invite definer itself refuses (55000) even when
+    // called past the request's session check.
+    await admin((c) => c.query('DROP POLICY crove_auth_reader_select ON auth.users'));
+    await expect(peekUp(lateToken, late)).rejects.toMatchObject({ code: 'AUTH_NOT_READY', status: 503 });
+    await expect(acceptUp(lateToken, late)).rejects.toMatchObject({ code: 'AUTH_NOT_READY', status: 503 });
+    await expect(admin((c) => c.query('SELECT * FROM crove_kernel.invite_peek($1::uuid, $2, true)', [late.id, lateToken]))).rejects.toMatchObject({
+      code: '55000',
+    });
+    expect(await memberships(late.id)).toEqual([]);
+    await applyAuthGrants({ adminUrl, timeoutMs: 5000 });
+
+    const renameColumn = (from: string, to: string) =>
+      admin(async (c) => {
+        await c.query('SET ROLE supabase_auth_admin');
+        await c.query(`ALTER TABLE auth.users RENAME COLUMN ${from} TO ${to}`);
+      });
+    await renameColumn('email_confirmed_at', 'email_confirmed_at_renamed');
+    for (const who of [
+      { token: lateToken, user: late },
+      { token: unconfirmedToken, user: unconfirmed },
+    ]) {
+      await expect(peekUp(who.token, who.user)).rejects.toMatchObject({ code: 'AUTH_NOT_READY', status: 503 });
+      await expect(acceptUp(who.token, who.user)).rejects.toMatchObject({ code: 'AUTH_NOT_READY', status: 503 });
+      expect(await memberships(who.user.id)).toEqual([]);
     }
+    // Someone else still learns only "not for you", and requests other than invites are unaffected.
+    await expect(acceptUp(lateToken, stranger)).rejects.toMatchObject({ code: 'INVITE_EMAIL_MISMATCH' });
+    await expect(upstream.query('kernel.org.get', {}, { actor: owner.actor, orgId })).resolves.toBeTruthy();
+    await expect(applyAuthGrants({ adminUrl, timeoutMs: 300, pollMs: 100 })).rejects.toThrow(/auth\.users\.email_confirmed_at do not exist/);
+
+    // Back: auth-grants completes, the confirmed invitee joins and the unconfirmed one is refused as before.
+    await renameColumn('email_confirmed_at_renamed', 'email_confirmed_at');
+    await applyAuthGrants({ adminUrl, timeoutMs: 5000 });
+    await expect(peekUp(lateToken, late)).resolves.toMatchObject({ role: 'viewer' });
+    await expect(acceptUp(lateToken, late)).resolves.toMatchObject({ orgId, role: 'viewer' });
+    expect(await memberships(late.id)).toEqual([{ org_id: orgId, role: 'viewer' }]);
+    await expect(acceptUp(unconfirmedToken, unconfirmed)).rejects.toMatchObject({ code: 'INVITE_EMAIL_UNCONFIRMED', status: 403 });
   });
 });
