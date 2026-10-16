@@ -335,23 +335,32 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     const gated = new Runtime(db).register({ commands: [...kernelCommands, ...financeCommands, rogue] });
     const lineAccounts = [{ lineNo: 1, debitAccount: '6421' }];
     const owner = a.owner;
-    const attempts: Array<[string, (id: string) => Promise<unknown>]> = [
-      ['kernel.proposal.edit', (id) => runtime.execute('kernel.proposal.edit', { id, revision: 1, lineAccounts }, { actor: asUser(owner), orgId: a.orgId })],
-      ['kernel.proposal.approve', (id) => runtime.execute('kernel.proposal.approve', { id, revision: 1 }, { actor: asMfa(owner), orgId: a.orgId })],
-      ['kernel.proposal.reject', (id) => runtime.execute('kernel.proposal.reject', { id }, { actor: asUser(owner), orgId: a.orgId })],
-      ['kernel.inbox.get', (id) => runtime.query('kernel.inbox.get', { id }, { actor: asUser(owner), orgId: a.orgId })],
+    // The refusal an unknown id gets from each, pinned so an attempt that starts failing for another reason (input,
+    // step-up) cannot pass by refusing every id alike. The proposal commands and the query find no row (404); the
+    // runtime gate refuses (proposal_state). For access 'proposal' the gate also needs executed_command_id to be the
+    // calling command, which no other org's row can be, so those two rows pin the outcome rather than the org filter;
+    // the reviser binding test covers the org filter with another org's pending proposal of the right command.
+    const notFound = { code: 'NOT_FOUND', status: 404 };
+    const gate = { code: 'FORBIDDEN', status: 403, details: { rule: 'proposal_state' } };
+    const attempts: Array<[string, Record<string, unknown>, (id: string) => Promise<unknown>]> = [
+      ['kernel.proposal.edit', notFound, (id) => runtime.execute('kernel.proposal.edit', { id, revision: 1, lineAccounts }, { actor: asUser(owner), orgId: a.orgId })],
+      ['kernel.proposal.approve', notFound, (id) => runtime.execute('kernel.proposal.approve', { id, revision: 1 }, { actor: asMfa(owner), orgId: a.orgId })],
+      ['kernel.proposal.reject', notFound, (id) => runtime.execute('kernel.proposal.reject', { id }, { actor: asUser(owner), orgId: a.orgId })],
+      ['kernel.inbox.get', notFound, (id) => runtime.query('kernel.inbox.get', { id }, { actor: asUser(owner), orgId: a.orgId })],
       [
         'finance.purchase.record (gate)',
+        gate,
         (id) => gated.execute('kernel.test_rogue_record', { proposalId: id, command: 'finance.purchase.record' }, { actor: asUser(owner), orgId: a.orgId }),
       ],
       [
         'finance.journal.reverse (gate)',
+        gate,
         (id) => gated.execute('kernel.test_rogue_record', { proposalId: id, command: 'finance.journal.reverse' }, { actor: asUser(owner), orgId: a.orgId }),
       ],
     ];
-    for (const [name, attempt] of attempts) {
+    for (const [name, expected, attempt] of attempts) {
       const unknown = await refusal(attempt(randomUUID()));
-      expect(unknown.status, name).toBeGreaterThanOrEqual(400);
+      expect(unknown, name).toMatchObject(expected);
       for (const id of [pending, executed, rejected, failed]) {
         expect(await refusal(attempt(id)), `${name} with org B's proposal`).toEqual(unknown);
       }
@@ -435,19 +444,27 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
       expect(await editAs(orgId, coOwner, id)).toBe(2);
       expect(await view(orgId, owner, id)).toMatchObject({ canApprove: true, approveReason: 'ok' });
 
-      const holder = new pg.Client({ connectionString: adminUrl });
-      await holder.connect();
-      await holder.query('BEGIN');
-      await holder.query("SELECT 1 FROM crove_kernel.tenant_member WHERE org_id = $1 AND role = 'owner' ORDER BY user_id FOR UPDATE", [orgId]);
       const demote = () => runtime.execute('kernel.member.change_role', { userId: owner, role: 'admin' }, { actor: asMfa(coOwner), orgId });
       const approve = () => approveAs(orgId, owner, id, 2);
       const settle = <T>(p: Promise<T>) => p.then((value) => ({ ok: true as const, value }), (error: unknown) => ({ ok: false as const, error }));
-      const firstRun = settle(first === 'demotion' ? demote() : approve());
-      await waitForLockWaiters(1);
-      const secondRun = settle(first === 'demotion' ? approve() : demote());
-      await waitForLockWaiters(2);
-      await holder.query('COMMIT');
-      await holder.end();
+      const holder = new pg.Client({ connectionString: adminUrl });
+      // A failure below must not leave the owner rows locked (the racers would hang) or crash the run when the
+      // database is dropped under the holder.
+      holder.on('error', () => {});
+      await holder.connect();
+      let firstRun: ReturnType<typeof settle<unknown>>;
+      let secondRun: ReturnType<typeof settle<unknown>>;
+      try {
+        await holder.query('BEGIN');
+        await holder.query("SELECT 1 FROM crove_kernel.tenant_member WHERE org_id = $1 AND role = 'owner' ORDER BY user_id FOR UPDATE", [orgId]);
+        firstRun = settle<unknown>(first === 'demotion' ? demote() : approve());
+        await waitForLockWaiters(1);
+        secondRun = settle<unknown>(first === 'demotion' ? approve() : demote());
+        await waitForLockWaiters(2);
+      } finally {
+        await holder.query('COMMIT').catch(() => {});
+        await holder.end().catch(() => {});
+      }
       const [demotion, approval] = first === 'demotion' ? [await firstRun, await secondRun] : [await secondRun, await firstRun];
 
       // The demotion succeeds either way: it does not depend on the proposal.
