@@ -12,6 +12,7 @@ import {
   PROVIDERS,
   publishCallKey,
   publishJobKey,
+  startsNewAttempt,
   transitionPost,
   transitionVariant,
   validateVariant,
@@ -252,6 +253,19 @@ describe('variant lifecycle', () => {
     expect(transitionVariant('publishing', { type: 'pause' })).toEqual({ ok: true, status: 'paused' });
     expect(transitionVariant('processing', { type: 'rate_limited' }).ok).toBe(false);
     expect(transitionVariant('processing', { type: 'pause' }).ok).toBe(false);
+  });
+
+  it('starts a new attempt on every return to scheduled after a publish began', () => {
+    // A same-attempt return to scheduled would meet its own failed call in the ledger and never call again.
+    for (const from of VARIANT_STATUSES) {
+      if (from === 'pending') continue;
+      for (const e of events) {
+        const t = transitionVariant(from, e);
+        if (t.ok && t.status === 'scheduled') expect(startsNewAttempt(e)).toBe(true);
+      }
+    }
+    expect(startsNewAttempt({ type: 'schedule' })).toBe(false);
+    expect(startsNewAttempt({ type: 'unknown' })).toBe(false);
   });
 
   it('hands an outcome nobody can find out to a human', () => {

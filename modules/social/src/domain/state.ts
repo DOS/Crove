@@ -127,6 +127,15 @@ const VARIANT_TABLE: Readonly<Record<VariantEvent['type'], Partial<Record<Varian
   drop: { needs_attention: 'cancelled' },
 };
 
+// Events that send a variant back to scheduled start a new publish attempt (fresh external_call keys): the earlier
+// attempt's calls keep their outcome as history, and the next job calls the provider again. Each is safe: a rate
+// limit or an expired token is a refusal before anything was posted, and a retry is a human's decision.
+const NEW_ATTEMPT: ReadonlySet<VariantEvent['type']> = new Set(['rate_limited', 'resume', 'retry']);
+
+export function startsNewAttempt(event: VariantEvent): boolean {
+  return NEW_ATTEMPT.has(event.type);
+}
+
 export function transitionVariant(from: VariantStatus, event: VariantEvent): Transition<VariantStatus> {
   if (event.type === 'reconciled') {
     if (from !== 'ambiguous') return refuse(from, event.type);
