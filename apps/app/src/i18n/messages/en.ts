@@ -207,6 +207,7 @@ export const en = {
     saveEdit: 'Save changes',
     approve: 'Approve and post',
     stepUpApprove: 'approve and post this document',
+    stepUpApproveReversal: 'approve and post this reversal',
     executedAt: 'Posted {at}',
     rejected: 'Rejected',
     reading:
@@ -369,6 +370,7 @@ export const en = {
     download: 'Download',
     downloading: 'Downloading...',
     tableRows: '{rows} rows, {size}',
+    stepUpAction: 'close {name} and export its data',
     errors: {
       stepUp: 'This action needs two-factor authentication in the last 5 minutes. Verify your two-factor code again, then retry.',
       slug: 'The short name does not match. Type the organization short name exactly.',

@@ -321,7 +321,7 @@ export function InboxDetailPage() {
       </div>
       {stepUp && (
         <div className="mb-4">
-          <StepUpPrompt action={t('stepUpApprove')} onVerified={retryApproval} onCancel={() => approve.reset()} />
+          <StepUpPrompt action={reversal ? t('stepUpApproveReversal') : t('stepUpApprove')} onVerified={retryApproval} onCancel={() => approve.reset()} />
         </div>
       )}
       {((approve.error && !stepUp) || reject.error || edit.error || reextract.error) && (

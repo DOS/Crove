@@ -212,8 +212,8 @@ function RotateInboundAddress() {
 }
 
 // Owner only (issue #212). Starts offboarding (kernel.org.offboard, R3): the owner types the org's slug, and without a
-// second factor in the last 5 minutes the server answers STEP_UP_REQUIRED, shown below the buttons with a plain
-// message; the fresh MFA challenge screen lands with the SPA MFA flows (#32). One idempotency key per confirmation.
+// second factor in the last 5 minutes the server answers STEP_UP_REQUIRED and the step-up prompt asks for one (#32);
+// after the code the refused request runs again as sent, with its key. One idempotency key per confirmation.
 // Then shows the export's state, polling while it is made, and the downloads of the manifest and of each table.
 function Offboarding({ name, slug }: { name: string; slug: string }) {
   const root = useTranslations();
@@ -341,12 +341,31 @@ function Offboarding({ name, slug }: { name: string; slug: string }) {
             <Button type="submit" variant="destructive" disabled={offboard.isPending || !slugConfirmed(typed, slug)}>
               {t('confirm')}
             </Button>
-            <Button type="button" variant="ghost" disabled={offboard.isPending} onClick={() => setConfirming(false)}>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={offboard.isPending}
+              onClick={() => {
+                offboard.reset();
+                setConfirming(false);
+              }}
+            >
               {tc('cancel')}
             </Button>
           </div>
-          {offboard.error && <ErrorText>{offboardErrorMessage(offboard.error, root, locale)}</ErrorText>}
+          {offboard.error && !isStepUpRequired(offboard.error) && <ErrorText>{offboardErrorMessage(offboard.error, root, locale)}</ErrorText>}
         </form>
+      )}
+      {confirming && isStepUpRequired(offboard.error) && (
+        // Outside the form above: the prompt has a form of its own.
+        <div className="mt-4">
+          <StepUpPrompt
+            enroll={false}
+            action={t('stepUpAction', { name })}
+            onVerified={() => offboard.variables && offboard.mutate(offboard.variables)}
+            onCancel={() => offboard.reset()}
+          />
+        </div>
       )}
     </Card>
   );

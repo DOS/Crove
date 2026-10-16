@@ -217,3 +217,23 @@ test('rotating the inbound address asks for two-factor first', async ({ page }) 
   await expect(rotated).toContainText(/@in\.e2e\.test/);
   await expect(rotated).not.toContainText(before);
 });
+
+test('closing the organization asks for two-factor first', async ({ page }) => {
+  await signUp(page, newEmail('offboard'));
+  const slug = await createOrg(page, 'Công ty đóng cửa');
+  await page.getByRole('navigation').getByRole('link', { name: 'Cài đặt' }).click();
+
+  // Offboarding is R3 (#212): without a second factor the confirmation turns into the step-up prompt.
+  await page.getByRole('button', { name: 'Bắt đầu đóng tổ chức' }).click();
+  await page.getByPlaceholder('Nhập mã rút gọn').fill(slug);
+  await page.getByRole('button', { name: 'Xác nhận đóng tổ chức' }).click();
+  await expect(page.getByText('Đang chờ: đóng tổ chức Công ty đóng cửa và xuất dữ liệu.')).toBeVisible();
+  await page.getByRole('button', { name: 'Bật xác thực hai lớp' }).click();
+  const secret = (await page.getByLabel('Khóa thiết lập').textContent())?.trim() ?? '';
+  await page.getByLabel('Mã xác thực').fill((await nextTotp(secret)).code);
+  await page.getByRole('button', { name: 'Xác nhận', exact: true }).click();
+  await expect(page.getByText('Đang bật')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Xác nhận đóng tổ chức' }).click();
+  await expect(page.getByText('Tổ chức đang được đóng. Chỉ chủ sở hữu còn truy cập được.')).toBeVisible();
+});

@@ -205,6 +205,7 @@ export const vi = {
     saveEdit: 'Lưu chỉnh sửa',
     approve: 'Duyệt và ghi sổ',
     stepUpApprove: 'duyệt và ghi sổ chứng từ này',
+    stepUpApproveReversal: 'duyệt và ghi sổ bút toán đảo này',
     executedAt: 'Đã ghi sổ {at}',
     rejected: 'Đã từ chối',
     reading:
@@ -368,6 +369,7 @@ export const vi = {
     download: 'Tải về',
     downloading: 'Đang tải...',
     tableRows: '{rows} dòng, {size}',
+    stepUpAction: 'đóng tổ chức {name} và xuất dữ liệu',
     errors: {
       stepUp: 'Thao tác này cần xác thực hai lớp trong 5 phút gần nhất. Hãy xác minh lại mã hai lớp rồi thử lại.',
       slug: 'Mã rút gọn nhập vào không khớp. Hãy nhập đúng mã của tổ chức.',
