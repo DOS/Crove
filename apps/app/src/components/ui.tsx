@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from 'react';
+import { useTranslations } from 'use-intl';
 
 export function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(' ');
@@ -84,7 +85,8 @@ export function ErrorText({ children }: { children: ReactNode }) {
 }
 
 export function Spinner() {
-  return <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" aria-label="Đang tải" />;
+  const t = useTranslations('common');
+  return <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" aria-label={t('loading')} />;
 }
 
 export function Table({ head, children }: { head: string[]; children: ReactNode }) {

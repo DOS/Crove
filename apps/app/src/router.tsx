@@ -1,4 +1,5 @@
 import { Outlet, createRootRoute, createRoute, createRouter, redirect, type ErrorComponentProps } from '@tanstack/react-router';
+import { useTranslations } from 'use-intl';
 import { Button } from './components/ui.tsx';
 import { getCurrentOrg, isUnauthenticated, orpc, queryClient, setCurrentOrg } from './lib/api.ts';
 import { accessToken, auth } from './lib/auth.ts';
@@ -20,15 +21,16 @@ async function requireAuth() {
 }
 
 function ErrorPage({ error }: ErrorComponentProps) {
+  const t = useTranslations('common');
   return (
     <main className="flex min-h-full items-center justify-center bg-canvas px-4">
       <div className="max-w-md text-center">
-        <h1 className="text-lg font-semibold text-fg">Đã có lỗi xảy ra</h1>
-        <p className="mt-2 text-sm text-fg-2">{error instanceof Error ? error.message : 'Lỗi không xác định'}</p>
+        <h1 className="text-lg font-semibold text-fg">{t('error')}</h1>
+        <p className="mt-2 text-sm text-fg-2">{error instanceof Error ? error.message : t('unknownError')}</p>
         <div className="mt-6 flex justify-center gap-2">
-          <Button onClick={() => window.location.reload()}>Tải lại</Button>
+          <Button onClick={() => window.location.reload()}>{t('reload')}</Button>
           <Button variant="ghost" onClick={() => void signOut().then(() => window.location.assign('/login'))}>
-            Đăng xuất
+            {t('signOut')}
           </Button>
         </div>
       </div>

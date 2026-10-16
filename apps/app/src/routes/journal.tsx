@@ -1,10 +1,13 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useTranslations } from 'use-intl';
 import { Button, Card, Empty, ErrorText, Input, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc } from '../lib/api.ts';
-import { formatDate, formatMoney } from '../lib/format.ts';
+import { useFormat } from '../i18n/provider.tsx';
 
 export function JournalPage() {
+  const t = useTranslations('journal');
+  const f = useFormat();
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const range = { ...(from ? { from } : {}), ...(to ? { to } : {}) };
@@ -17,7 +20,7 @@ export function JournalPage() {
       const url = URL.createObjectURL(await response.blob());
       const a = document.createElement('a');
       a.href = url;
-      a.download = `crove-but-toan-${getCurrentOrg() ?? 'org'}.xlsx`;
+      a.download = t('exportFile', { org: getCurrentOrg() ?? 'org' });
       a.click();
       URL.revokeObjectURL(url);
     },
@@ -26,22 +29,22 @@ export function JournalPage() {
   return (
     <>
       <PageHeader
-        title="Bút toán"
-        subtitle="Sổ nhật ký chung theo TT133. Xuất Excel dạng Nợ/Có từng dòng cho kế toán."
+        title={t('title')}
+        subtitle={t('subtitle')}
         actions={
           <Button variant="primary" onClick={() => exportXlsx.mutate()} disabled={exportXlsx.isPending || (journal.data?.length ?? 0) === 0}>
             {exportXlsx.isPending ? <Spinner /> : null}
-            Xuất Excel
+            {t('export')}
           </Button>
         }
       />
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <label className="text-xs text-fg-3">
-          Từ ngày
+          {t('from')}
           <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="mt-1 w-44" />
         </label>
         <label className="text-xs text-fg-3">
-          Đến ngày
+          {t('to')}
           <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="mt-1 w-44" />
         </label>
       </div>
@@ -55,14 +58,14 @@ export function JournalPage() {
       ) : journal.error ? (
         <ErrorText>{errorMessage(journal.error)}</ErrorText>
       ) : (journal.data?.length ?? 0) === 0 ? (
-        <Empty title="Chưa có bút toán" />
+        <Empty title={t('empty')} />
       ) : (
         <div className="space-y-3">
           {journal.data?.map((entry) => (
             <Card key={entry.id} className="p-4">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <p className="text-sm font-medium text-fg">{entry.description}</p>
-                <p className="text-xs text-fg-3">{formatDate(entry.entryDate)}</p>
+                <p className="text-xs text-fg-3">{f.date(entry.entryDate)}</p>
               </div>
               <table className="mt-2 w-full text-sm">
                 <tbody className="divide-y divide-[var(--line)]">
@@ -71,8 +74,8 @@ export function JournalPage() {
                       <td className="py-1.5 text-fg-2">
                         <span className="font-mono text-fg">{l.accountCode}</span> {l.accountName}
                       </td>
-                      <td className="tabular w-36 py-1.5 text-right text-fg">{l.debit !== '0' && l.debit !== '0.0000' ? formatMoney(l.debit) : ''}</td>
-                      <td className="tabular w-36 py-1.5 text-right text-fg">{l.credit !== '0' && l.credit !== '0.0000' ? formatMoney(l.credit) : ''}</td>
+                      <td className="tabular w-36 py-1.5 text-right text-fg">{l.debit !== '0' && l.debit !== '0.0000' ? f.money(l.debit) : ''}</td>
+                      <td className="tabular w-36 py-1.5 text-right text-fg">{l.credit !== '0' && l.credit !== '0.0000' ? f.money(l.credit) : ''}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -9,6 +9,9 @@ import {
   sortSessions,
   type SessionRow,
 } from '../src/lib/sessions.ts';
+import { translatorFor } from '../src/i18n/runtime.ts';
+
+const vi = translatorFor('vi');
 
 function token(claims: Record<string, unknown>): string {
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -71,44 +74,49 @@ describe('labels', () => {
     expect(shortSessionId(OTHER)).toBe('222222');
   });
 
+  it('describes the browser in the given locale', () => {
+    expect(describeUserAgent('Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0', translatorFor('en'))).toBe('Firefox on Linux');
+  });
+
   it('describes common browsers', () => {
     expect(
-      describeUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'),
+      describeUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36', vi),
     ).toBe('Chrome trên Windows');
     expect(
       describeUserAgent(
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0',
+        vi,
       ),
     ).toBe('Edge trên Windows');
     expect(
-      describeUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'),
+      describeUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1', vi),
     ).toBe('Safari trên iOS');
-    expect(describeUserAgent('Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0')).toBe('Firefox trên Linux');
-    expect(describeUserAgent('curl/8.0')).toBeNull();
-    expect(describeUserAgent(null)).toBeNull();
+    expect(describeUserAgent('Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0', vi)).toBe('Firefox trên Linux');
+    expect(describeUserAgent('curl/8.0', vi)).toBeNull();
+    expect(describeUserAgent(null, vi)).toBeNull();
   });
 });
 
 describe('sessionErrorMessage', () => {
   it('explains STEP_UP_REQUIRED', () => {
-    expect(sessionErrorMessage({ status: 403, code: 'STEP_UP_REQUIRED', message: 'x' }, 'self')).toContain('xác thực hai lớp');
+    expect(sessionErrorMessage({ status: 403, code: 'STEP_UP_REQUIRED', message: 'x' }, 'self', vi)).toContain('xác thực hai lớp');
   });
 
   it('explains a 403 by scope', () => {
     const forbidden = { status: 403, code: 'FORBIDDEN', message: 'Không có quyền thực hiện' };
-    expect(sessionErrorMessage(forbidden, 'member')).toContain('Chỉ chủ sở hữu');
-    expect(sessionErrorMessage(forbidden, 'member')).toContain('Quản trị viên không có quyền này');
-    expect(sessionErrorMessage(forbidden, 'self')).toContain('Bạn không có quyền');
+    expect(sessionErrorMessage(forbidden, 'member', vi)).toContain('Chỉ chủ sở hữu');
+    expect(sessionErrorMessage(forbidden, 'member', vi)).toContain('Quản trị viên không có quyền này');
+    expect(sessionErrorMessage(forbidden, 'self', vi)).toContain('Bạn không có quyền');
   });
 
   it('keeps the server message for membership and disabled accounts', () => {
-    expect(sessionErrorMessage({ status: 403, code: 'NOT_A_MEMBER', message: 'Bạn không thuộc tổ chức này' }, 'member')).toBe(
+    expect(sessionErrorMessage({ status: 403, code: 'NOT_A_MEMBER', message: 'Bạn không thuộc tổ chức này' }, 'member', vi)).toBe(
       'Bạn không thuộc tổ chức này',
     );
   });
 
   it('falls back to the message, then a generic text', () => {
-    expect(sessionErrorMessage({ status: 503, code: 'OVERLOADED', message: 'Hệ thống đang quá tải' }, 'self')).toBe('Hệ thống đang quá tải');
-    expect(sessionErrorMessage(null, 'self')).toBe('Đã có lỗi xảy ra');
+    expect(sessionErrorMessage({ status: 503, code: 'OVERLOADED', message: 'Hệ thống đang quá tải' }, 'self', vi)).toBe('Hệ thống đang quá tải');
+    expect(sessionErrorMessage(null, 'self', vi)).toBe('Đã có lỗi xảy ra');
   });
 });

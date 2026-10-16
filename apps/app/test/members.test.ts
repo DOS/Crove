@@ -1,8 +1,10 @@
 // Which role changes the settings screen confirms inline before sending them (#119).
 import { describe, expect, it } from 'vitest';
+import { translatorFor } from '../src/i18n/runtime.ts';
 import { ROLES, roleChangeConfirmation, type Role } from '../src/lib/members.ts';
 
-const change = (from: Role, to: Role, self = false) => roleChangeConfirmation({ name: 'An', from, to, self });
+const vi = translatorFor('vi');
+const change = (from: Role, to: Role, self = false) => roleChangeConfirmation({ name: 'An', from, to, self }, vi);
 
 describe('roleChangeConfirmation', () => {
   it("confirms every change of the owner's own role", () => {
@@ -24,5 +26,12 @@ describe('roleChangeConfirmation', () => {
     const plain = ['admin', 'member', 'viewer'] as const;
     for (const from of plain) for (const to of plain) expect(change(from, to)).toBeNull();
     for (const role of ROLES) expect(change(role, role, role === 'owner')).toBeNull();
+  });
+
+  it('speaks the given locale', () => {
+    expect(roleChangeConfirmation({ name: 'An', from: 'member', to: 'owner', self: false }, translatorFor('en'))).toMatchObject({
+      title: 'Make An an owner?',
+      action: 'Confirm new owner',
+    });
   });
 });

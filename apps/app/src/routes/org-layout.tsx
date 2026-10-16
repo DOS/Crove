@@ -1,20 +1,24 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate, useParams } from '@tanstack/react-router';
+import { useTranslations } from 'use-intl';
 import { Logo, cx } from '../components/ui.tsx';
+import { LocaleSwitcher } from '../i18n/provider.tsx';
 import { orpc } from '../lib/api.ts';
 import { signOut } from '../lib/session-actions.ts';
 
 const NAV = [
-  { to: '/o/$slug/inbox', label: 'Hộp thư chứng từ' },
-  { to: '/o/$slug/documents', label: 'Chứng từ mua' },
-  { to: '/o/$slug/vendors', label: 'Nhà cung cấp' },
-  { to: '/o/$slug/journal', label: 'Bút toán' },
-  { to: '/o/$slug/settings', label: 'Cài đặt' },
+  { to: '/o/$slug/inbox', label: 'inbox' },
+  { to: '/o/$slug/documents', label: 'documents' },
+  { to: '/o/$slug/vendors', label: 'vendors' },
+  { to: '/o/$slug/journal', label: 'journal' },
+  { to: '/o/$slug/settings', label: 'settings' },
 ] as const;
 
 export function OrgLayout() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const navigate = useNavigate();
+  const t = useTranslations('nav');
+  const tc = useTranslations('common');
   const me = useQuery(orpc.me.get.queryOptions());
   const pending = useQuery({ ...orpc.inbox.list.queryOptions({ input: { status: 'pending' } }), refetchInterval: 30_000 });
   const org = me.data?.orgs.find((o) => o.slug === slug);
@@ -26,7 +30,7 @@ export function OrgLayout() {
           <Logo />
         </div>
         <label className="mt-6 block px-2 text-xs text-fg-3">
-          Tổ chức
+          {t('org')}
           <select
             className="mt-1 w-full rounded-lg border border-line bg-surface-2 px-2 py-1.5 text-sm text-fg"
             value={slug}
@@ -48,7 +52,7 @@ export function OrgLayout() {
               className="flex items-center justify-between rounded-lg px-3 py-2 text-sm text-fg-2 hover:bg-surface-2 hover:text-fg"
               activeProps={{ className: 'bg-brand-600/15 !text-fg' }}
             >
-              {item.label}
+              {t(item.label)}
               {item.to === '/o/$slug/inbox' && (pending.data?.length ?? 0) > 0 && (
                 <span className="rounded-full bg-brand-600 px-1.5 text-xs text-white">{pending.data?.length}</span>
               )}
@@ -57,14 +61,18 @@ export function OrgLayout() {
         </nav>
         <div className="mt-auto border-t border-line px-2 pt-3 text-xs text-fg-3">
           <p className="truncate">{me.data?.email}</p>
-          <button className="mt-1 hover:text-fg-2" onClick={() => void signOut()}>
-            Đăng xuất
-          </button>
+          <div className="mt-1 flex items-center justify-between gap-2">
+            <button className="hover:text-fg-2" onClick={() => void signOut()}>
+              {tc('signOut')}
+            </button>
+            <LocaleSwitcher />
+          </div>
         </div>
       </aside>
       <div className="min-w-0 flex-1">
         <header className="flex items-center justify-between border-b border-line bg-surface px-4 py-3 md:hidden">
           <Logo />
+          <LocaleSwitcher />
           <select
             className="rounded-lg border border-line bg-surface-2 px-2 py-1 text-sm text-fg"
             value={NAV.find((n) => window.location.pathname.endsWith(n.to.split('/').pop() ?? ''))?.to ?? NAV[0].to}
@@ -72,13 +80,13 @@ export function OrgLayout() {
           >
             {NAV.map((n) => (
               <option key={n.to} value={n.to}>
-                {n.label}
+                {t(n.label)}
               </option>
             ))}
           </select>
         </header>
         <main className={cx('mx-auto w-full max-w-6xl px-4 py-6 md:px-8 md:py-8')}>
-          {me.isSuccess && !org ? <p className="text-sm text-rose-300">Bạn không thuộc tổ chức này.</p> : <Outlet />}
+          {me.isSuccess && !org ? <p className="text-sm text-rose-300">{t('notMember')}</p> : <Outlet />}
         </main>
       </div>
     </div>

@@ -4,6 +4,7 @@ import type { ContractRouterClient } from '@orpc/contract';
 import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
 import { ORG_HEADER, type contract } from '@crove/kernel-contract';
+import { translator } from '../i18n/runtime.ts';
 import { accessToken, auth } from './auth.ts';
 import { apiErrorFromResponse, isMfaRequired, isUnauthenticated } from './errors.ts';
 
@@ -51,14 +52,14 @@ export const queryClient = new QueryClient({
 
 export function errorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message;
-  return 'Đã có lỗi xảy ra';
+  return translator()('common.error');
 }
 
 // Authenticated fetch for non-RPC endpoints (files, export). A refusal throws ApiError with the kernel's code and
 // the HTTP status, like the RPC path, so MFA_REQUIRED and a dead session are recognised here too.
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const response = await fetch(path, { ...init, headers: { ...(await headers()), ...(init.headers as Record<string, string> | undefined) } });
-  if (!response.ok) throw await apiErrorFromResponse(response);
+  if (!response.ok) throw await apiErrorFromResponse(response, translator());
   return response;
 }
 

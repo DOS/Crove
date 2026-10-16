@@ -47,6 +47,7 @@ catalog:
   tailwindcss: 4.3.3
   typescript: 7.0.2
   unpdf: 1.8.1
+  use-intl: 4.14.9
   uuid: 14.0.3
   vite: 8.3.4
   vitest: 5.0.4

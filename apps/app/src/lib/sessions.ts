@@ -1,4 +1,5 @@
 // Pure helpers for the device sessions screens (ADR-0028 section 4). No browser or API imports, so they are unit tested.
+import type { Translate } from '../i18n/runtime.ts';
 
 export interface SessionRow {
   sessionId: string;
@@ -39,8 +40,8 @@ export function shortSessionId(sessionId: string): string {
   return sessionId.replace(/-/g, '').slice(-6).toUpperCase();
 }
 
-// "Chrome trên Windows" for this browser. The API does not record user agents, so only the current device gets one.
-export function describeUserAgent(userAgent: string | null | undefined): string | null {
+// "Chrome on Windows" for this browser. The API does not record user agents, so only the current device gets one.
+export function describeUserAgent(userAgent: string | null | undefined, t: Translate): string | null {
   if (!userAgent) return null;
   const browser = /Edg\//.test(userAgent)
     ? 'Edge'
@@ -64,7 +65,7 @@ export function describeUserAgent(userAgent: string | null | undefined): string 
           : /Linux/.test(userAgent)
             ? 'Linux'
             : null;
-  if (browser && os) return `${browser} trên ${os}`;
+  if (browser && os) return t('sessions.device', { browser, os });
   return browser ?? os;
 }
 
@@ -72,19 +73,17 @@ export type SessionScope = 'self' | 'member';
 
 // Clear messages for the answers this screen can get. STEP_UP_REQUIRED is the R3 answer (ADR-0028 section 5); a
 // session revoke is R1 today, but a deployment may tighten it, so the screen explains it instead of a raw code.
-export function sessionErrorMessage(error: unknown, scope: SessionScope): string {
+export function sessionErrorMessage(error: unknown, scope: SessionScope, t: Translate): string {
   const e = (error ?? {}) as { status?: unknown; code?: unknown; message?: unknown };
   if (e.code === 'STEP_UP_REQUIRED') {
-    return 'Thao tác này cần xác thực hai lớp trong 5 phút gần nhất. Hãy xác minh lại mã hai lớp rồi thử lại.';
+    return t('sessions.errors.stepUp');
   }
   if (e.code === 'NOT_A_MEMBER' || e.code === 'USER_DISABLED') {
-    return typeof e.message === 'string' && e.message ? e.message : 'Không có quyền thực hiện';
+    return typeof e.message === 'string' && e.message ? e.message : t('sessions.errors.notAllowed');
   }
   if (e.status === 403 || e.code === 'FORBIDDEN') {
-    return scope === 'member'
-      ? 'Chỉ chủ sở hữu tổ chức mới xem và thu hồi được phiên đăng nhập của thành viên. Quản trị viên không có quyền này.'
-      : 'Bạn không có quyền xem hoặc thu hồi các phiên đăng nhập này.';
+    return scope === 'member' ? t('sessions.errors.forbiddenMember') : t('sessions.errors.forbiddenSelf');
   }
   if (typeof e.message === 'string' && e.message) return e.message;
-  return 'Đã có lỗi xảy ra';
+  return t('common.error');
 }
