@@ -90,7 +90,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
 // header, so the stream opens with this ticket, valid for seconds and bound to this session and org.
 export async function fetchStreamTicket(slug: string): Promise<string> {
   const response = await fetch('/api/stream/tickets', { method: 'POST', headers: requestHeaders(await accessToken(), slug) });
-  if (!response.ok) throw await apiErrorFromResponse(response, translator());
+  if (!response.ok) throw await apiErrorFromResponse(response);
   return ((await response.json()) as { ticket: string }).ticket;
 }
 

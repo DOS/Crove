@@ -1,7 +1,7 @@
 // Realtime invalidation over SSE (issue #69, plan §2 Realtime, §4.11 and §9).
 //
 // Writes to the records the SPA shows send `NOTIFY crove_stream, '<org_id> <type> <id>'` from a trigger
-// (20261018130000_crove_kernel_stream_invalidation.sql). Each API process LISTENs on one dedicated connection
+// (20261018140000_crove_kernel_stream_invalidation.sql). Each API process LISTENs on one dedicated connection
 // (StreamHub with a NotificationSource) and hands a hint only to the open streams of that org. A stream sends ids,
 // never row data: the SPA re-fetches through the normal authorized queries, so a hint can never show a record its
 // reader may not see. A stream also re-runs the session check and membership of its org every STREAM_RECHECK_SECONDS
