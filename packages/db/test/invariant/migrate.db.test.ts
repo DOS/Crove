@@ -2,7 +2,7 @@
 // The built-in runner must apply every migration as such a role, run again cleanly, and every file must be
 // re-applicable. Set CROVE_TEST_ADMIN_URL to a superuser URL; the test creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -14,6 +14,11 @@ const RUNNER = 'crove_test_runner';
 // Roles are cluster-wide. When an earlier run already created them, the runner gets the ADMIN OPTION it
 // would hold as their creator.
 const CROVE_ROLES = ['crove_tenant', 'crove_app', 'crove_worker', 'crove_definer_tenant', 'crove_auth_reader'];
+
+// A run's database is crove_test_runner_<id> (plus <id>_notowner) and its roles t100_test_runner_<id>_*, with
+// <id> = <Date.now()>_<random>. Another run's leftovers are swept once they are this old and unused.
+const STALE_MS = 10 * 60_000;
+const RUN_ID = /^(?:crove|t100)_test_runner_(\d+)_(\d+)(?:_|$)/;
 
 const suite = ADMIN ? describe : describe.skip;
 
@@ -27,12 +32,94 @@ async function withClient<T>(url: string, fn: (client: pg.Client) => Promise<T>)
   }
 }
 
+function adminUrlFor(db: string): string {
+  const url = new URL(ADMIN as string);
+  url.pathname = `/${db}`;
+  return url.toString();
+}
+
+// Roles are cluster-wide. A run that dies before its cleanup leaves its roles behind, and the next migrate of any
+// database on the cluster grants them TEMPORARY (20261015120000_crove_kernel_revoke_temp keeps it for every
+// non-Crove role that holds it through PUBLIC); a proxy that can act as Crove roles then fails the T17 check
+// there. Such a grant also blocks a plain DROP ROLE. So: DROP OWNED in every database where the role owns or
+// holds something (it also revokes privileges on shared objects such as databases), then DROP ROLE.
+async function dropRoles(prefix: string): Promise<void> {
+  await withClient(ADMIN as string, async (admin) => {
+    const { rows } = await admin.query<{ rolname: string; dbs: string[] }>(
+      `SELECT r.rolname, COALESCE(array_agg(DISTINCT d.datname::text) FILTER (WHERE d.datname IS NOT NULL), '{}') AS dbs
+       FROM pg_roles r
+       LEFT JOIN pg_shdepend s ON s.refclassid = 'pg_authid'::regclass AND s.refobjid = r.oid
+       LEFT JOIN pg_database d ON d.oid = s.dbid AND d.datallowconn AND d.datname <> current_database()
+       WHERE starts_with(r.rolname, $1)
+       GROUP BY r.rolname`,
+      [prefix],
+    );
+    // A concurrent sweep may drop the same role or database first.
+    const gone = (error: unknown) => ['42704', '3D000'].includes((error as { code?: string }).code ?? '');
+    for (const { rolname, dbs } of rows) {
+      const role = admin.escapeIdentifier(rolname);
+      for (const db of dbs) {
+        await withClient(adminUrlFor(db), (c) => c.query(`DROP OWNED BY ${role}`)).catch((error: unknown) => {
+          if (!gone(error)) throw error;
+        });
+      }
+      await admin.query(`DROP OWNED BY ${role}`).catch((error: unknown) => {
+        if (!gone(error)) throw error;
+      });
+      await admin.query(`DROP ROLE IF EXISTS ${role}`);
+    }
+  });
+}
+
+// Drops the databases and roles of earlier runs that are older than STALE_MS and have no session in their
+// databases, so an aborted run stops breaking migrate on a shared cluster. A live concurrent run is younger
+// or connected, so it keeps its own.
+async function dropStaleRuns(): Promise<void> {
+  const ids = await withClient(ADMIN as string, async (admin) => {
+    const { rows } = await admin.query<{ name: string }>(
+      `SELECT rolname::text AS name FROM pg_roles WHERE rolname LIKE 't100\\_test\\_runner\\_%'
+       UNION SELECT datname::text FROM pg_database WHERE datname LIKE 'crove\\_test\\_runner\\_%'`,
+    );
+    const stale = new Set<string>();
+    for (const { name } of rows) {
+      const match = RUN_ID.exec(name);
+      if (match && Date.now() - Number(match[1]) > STALE_MS) stale.add(`${match[1]}_${match[2]}`);
+    }
+    const idle: string[] = [];
+    for (const id of stale) {
+      const { rows: busy } = await admin.query('SELECT 1 FROM pg_stat_activity WHERE datname = ANY($1::text[])', [
+        [`crove_test_runner_${id}`, `crove_test_runner_${id}_notowner`],
+      ]);
+      if (busy.length === 0) idle.push(id);
+    }
+    return idle;
+  });
+  for (const id of ids) {
+    // No FORCE: a session that connected since the check above (55006) means the run is not dead after all.
+    const dropped = await withClient(ADMIN as string, async (admin) => {
+      try {
+        await admin.query(`DROP DATABASE IF EXISTS crove_test_runner_${id}_notowner`);
+        await admin.query(`DROP DATABASE IF EXISTS crove_test_runner_${id}`);
+        return true;
+      } catch (error) {
+        if ((error as { code?: string }).code === '55006') return false;
+        throw error;
+      }
+    });
+    if (dropped) await dropRoles(`t100_test_runner_${id}_`);
+  }
+}
+
 suite('migrations with a runner that is not a superuser', () => {
   const dbName = `crove_test_runner_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  const tag = dbName.replace(/^crove_/, 't100_');
   let runnerUrl = '';
 
   beforeAll(async () => {
-    const password = randomUUID();
+    await dropStaleRuns();
+    // The runner role is shared by every run on the cluster, so concurrent runs must set the same password. It is
+    // derived from the superuser credentials, which already grant everything the runner has.
+    const password = createHash('sha256').update(`${RUNNER}:${ADMIN as string}`).digest('hex');
     await withClient(ADMIN as string, async (admin) => {
       await admin.query(`DO $$ BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${RUNNER}') THEN
@@ -64,9 +151,17 @@ suite('migrations with a runner that is not a superuser', () => {
     runnerUrl = url.toString();
   });
 
+  // Runs when a test fails too; a killed run is swept by a later run (dropStaleRuns).
   afterAll(async () => {
     if (!ADMIN) return;
-    await withClient(ADMIN, (admin) => admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`));
+    try {
+      await withClient(ADMIN, async (admin) => {
+        await admin.query(`DROP DATABASE IF EXISTS ${dbName}_notowner WITH (FORCE)`);
+        await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+      });
+    } finally {
+      await dropRoles(`${tag}_`);
+    }
   });
 
   it('applies every migration, runs again cleanly, and every file can be re-applied', async () => {
@@ -213,10 +308,13 @@ suite('migrations with a runner that is not a superuser', () => {
   // #100: functions outside crove_* schemas that crove_* objects reach without naming them, and TEMPORARY for
   // non-Crove roles that can act as a Crove role. Each planted function is reached through exactly one path.
   it('reports reachable functions outside crove_* schemas, and TEMPORARY for members of Crove roles', async () => {
-    const tag = dbName.replace(/^crove_/, 't100_');
     // Acts as every owner of a crove_* definer (through the runner), so TEMPORARY gains it nothing. Granting the
-    // runner role needs a superuser, and the runner's transaction cannot see an uncommitted role.
-    await withClient(ADMIN as string, (admin) => admin.query(`CREATE ROLE ${tag}_proxy; GRANT ${RUNNER} TO ${tag}_proxy`));
+    // runner role needs a superuser, and the runner's transaction cannot see an uncommitted role. The role is
+    // committed, so a concurrent run of this file on the same cluster sees it: INHERIT FALSE (it still acts as the
+    // runner through SET) keeps it from holding CREATE on the crove_jobs schema that run's runner owns.
+    await withClient(ADMIN as string, (admin) =>
+      admin.query(`CREATE ROLE ${tag}_proxy; GRANT ${RUNNER} TO ${tag}_proxy WITH INHERIT FALSE`),
+    );
     try {
       await withClient(runnerUrl, async (runner) => {
         await runner.query('BEGIN');
@@ -315,7 +413,9 @@ suite('migrations with a runner that is not a superuser', () => {
         expect(await hardeningViolations(runner)).toEqual([]);
       });
     } finally {
-      await withClient(ADMIN as string, (admin) => admin.query(`DROP ROLE ${tag}_proxy`));
+      // Not a plain DROP ROLE: a migrate of another database on the cluster may have granted the proxy TEMPORARY
+      // there in the meantime.
+      await dropRoles(`${tag}_`);
     }
   });
 

@@ -19,10 +19,12 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createExtractApp } from '@crove/extract';
 import { createExtractClient } from '@crove/extract-contract';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { PROPOSAL_EDIT_COMMAND, Runtime, defineCommand, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
+import { Runtime, defineCommand, fileKey, sha256Hex, type BlobStore, type CommandDef } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
+// The kernel's proposal edit command: the only command that runs a reviser.
+const EDIT = 'kernel.proposal.edit';
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 const FIXTURE = readFileSync(new URL('./fixtures/einvoice-basic.xml', import.meta.url));
 
@@ -107,9 +109,11 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     const sha256 = sha256Hex(bytes);
     const storageKey = fileKey(orgId, sha256);
     await store.put(storageKey, bytes);
+    // The generation a file reference carries (ADR-0013): memory has no versions, so the content address.
+    const generation = `content:${sha256}`;
     const { fileId } = await runtime.execute<{ fileId: string }>(
       'kernel.file.ingest',
-      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, source: 'upload' },
+      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },
       { actor: asUser(uploader), orgId },
     );
     const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-16' }, orgId, fileId);
@@ -254,19 +258,21 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
       revises: 'finance.purchase.record',
       handler: async (ctx) => ctx.run('finance.purchase.revise', reviserInput),
     });
-    // Stands in for the edit command (the same name, so the runtime treats it as the editor), to drive the reviser
-    // with proposals the real edit would refuse before reaching it. It writes nothing.
+    // Stands in for the edit command, to drive the reviser with proposals the real edit would refuse before reaching
+    // it. It is the real edit's definition with another input and handler, so it keeps whatever makes the runtime
+    // treat that definition as the editor. It writes nothing.
+    const realEdit: CommandDef<any, any> | undefined = kernelCommands.find((c) => c.name === EDIT);
+    if (!realEdit) throw new Error(`${EDIT} is not a kernel command`);
     const editor = defineCommand({
-      name: PROPOSAL_EDIT_COMMAND,
+      ...realEdit,
       input: z.object({ proposalId: z.uuid(), reviser: z.string() }),
-      risk: 'R1',
-      access: ['owner', 'admin', 'member'],
+      target: () => null,
       handler: async (ctx, input) => ctx.run(input.reviser, input.reviser === 'finance.purchase.revise' ? reviserInput : {}, { proposalId: input.proposalId }),
     });
-    const gated = new Runtime(db).register({ commands: [...kernelCommands.filter((c) => c.name !== PROPOSAL_EDIT_COMMAND), ...financeCommands, rogue, nested, editor] });
+    const gated = new Runtime(db).register({ commands: [...kernelCommands.filter((c) => c.name !== EDIT), ...financeCommands, rogue, nested, editor] });
     const refused = { code: 'FORBIDDEN', status: 403, details: { rule: 'proposal_state' } };
     const runEditor = (proposalId: string, reviser = 'finance.purchase.revise') =>
-      gated.execute<{ changed: boolean }>(PROPOSAL_EDIT_COMMAND, { proposalId, reviser }, { actor: asUser(admin), orgId });
+      gated.execute<{ changed: boolean }>(EDIT, { proposalId, reviser }, { actor: asUser(admin), orgId });
     const setCommand = (command: string) => withAdmin((a) => a.query('UPDATE crove_kernel.proposal SET command = $2 WHERE id = $1', [id, command]));
 
     // Control: the editor runs the reviser on a pending proposal of the command it revises.
@@ -290,9 +296,9 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
       const { rows } = await a.query<{ command: string; outcome: string; detail: { code?: string; rule?: string } }>(
         `SELECT command, outcome, detail FROM crove_kernel.audit_event
          WHERE org_id = $1 AND command IN ('kernel.test_rogue_revise', $2) AND outcome <> 'ok' ORDER BY occurred_at, id`,
-        [orgId, PROPOSAL_EDIT_COMMAND],
+        [orgId, EDIT],
       );
-      expect(rows.map((r) => r.command)).toEqual(['kernel.test_rogue_revise', PROPOSAL_EDIT_COMMAND, PROPOSAL_EDIT_COMMAND, PROPOSAL_EDIT_COMMAND, PROPOSAL_EDIT_COMMAND]);
+      expect(rows.map((r) => r.command)).toEqual(['kernel.test_rogue_revise', EDIT, EDIT, EDIT, EDIT]);
       expect(rows.every((r) => r.outcome === 'denied' && r.detail.code === 'FORBIDDEN' && r.detail.rule === 'proposal_state')).toBe(true);
     });
 
