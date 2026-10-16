@@ -1162,6 +1162,9 @@ function taskView(t: {
   };
 }
 
+// At most this many tasks per list: the oldest first for an agent (its work queue), the newest first for a person.
+export const TASK_LIST_LIMIT = 200;
+
 // Tasks of the org; an agent sees only its own position's tasks, and an untainted run only untainted ones (tainted
 // content never reaches a run that would write it untainted; a tainted task wakes the agent with a tainted run). mine:
 // the positions the user holds, plus the root tasks for an owner.
@@ -1171,7 +1174,14 @@ export const taskList = defineQuery({
   access: ALL,
   agent: { roles: 'any' },
   handler: async (ctx, input) => {
-    let query = ctx.trx.selectFrom('crove_kernel.task').selectAll().where('org_id', '=', ctx.orgId).orderBy('created_at').limit(200);
+    const order = ctx.agent ? 'asc' : 'desc';
+    let query = ctx.trx
+      .selectFrom('crove_kernel.task')
+      .selectAll()
+      .where('org_id', '=', ctx.orgId)
+      .orderBy('created_at', order)
+      .orderBy('id', order)
+      .limit(TASK_LIST_LIMIT);
     if (ctx.agent) {
       query = query.where('assignee_position_id', '=', ctx.agent.positionId);
       if (!ctx.agent.tainted) query = query.where('tainted', '=', false);

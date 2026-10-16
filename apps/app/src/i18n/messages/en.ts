@@ -420,7 +420,6 @@ export const en = {
     killSwitchReason: 'Reason: {reason}',
     release: 'Turn AI back on',
     releaseHint: 'Only owners can turn it back on, with two-factor authentication in the last 5 minutes.',
-    scopeOrg: 'Whole organization',
     scopeModule: 'Module {module}',
     scopeAgent: 'AI agent {name}',
     chart: 'Org chart',
@@ -442,7 +441,6 @@ export const en = {
     positionRoleKey: 'Role key',
     reportsTo: 'Reports to',
     reportsToOwners: 'The owners',
-    create: 'Create',
     save: 'Save',
     agentsTitle: 'AI agents',
     noAgents: 'No AI agents yet',
@@ -484,6 +482,8 @@ export const en = {
     budgetLimit: 'Monthly limit',
     setBudget: 'Set budget',
     budgetAmountInvalid: 'The limit is a non-negative number with at most 6 decimals',
+    warnPercentInvalid: 'The warning level is a whole number from 1 to 100',
+    budgetTargetMissing: 'Choose what the budget applies to',
     scope: {
       org: 'Whole organization',
       module: 'Module',
@@ -534,7 +534,7 @@ export const en = {
     proposal: 'Related proposal: {title}',
     openProposal: 'Open proposal',
     checkedOut: 'An AI agent is working on this task',
-    notFound: 'Task not found',
+    truncated: 'Showing only the {count} newest tasks.',
   },
   // Kernel errors worded by the SPA (lib/kernel-errors.ts). Shown instead of the kernel's Vietnamese message.
   kernelErrors: {

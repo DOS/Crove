@@ -14,7 +14,7 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { OPEN_TASK_STATUSES, TASK_STATUSES, agentPermissions, type TaskStatus } from '../lib/agents.ts';
+import { OPEN_TASK_STATUSES, TASK_LIST_LIMIT, TASK_STATUSES, agentPermissions, type TaskStatus } from '../lib/agents.ts';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 
 type Filter = 'all' | 'mine' | 'open';
@@ -117,27 +117,30 @@ export function TasksPage() {
       ) : tasks.data.length === 0 ? (
         <Empty title={t('empty')} />
       ) : (
-        <DataTable head={[t('colTitle'), t('colAssignee'), t('colStatus'), t('colCreated')]}>
-          {tasks.data.map((task) => (
-            <TableRow key={task.id} data-testid="task-row">
-              <TableCell className="px-4">
-                <Link to="/o/$slug/tasks/$id" params={{ slug, id: task.id }} className="font-medium text-link hover:underline">
-                  {task.title}
-                </Link>
-                {task.tainted && (
-                  <Badge variant="warning" className="ml-2" title={t('taintedHint')}>
-                    {t('tainted')}
-                  </Badge>
-                )}
-              </TableCell>
-              <TableCell className="px-4 text-sm text-muted-foreground">{positionTitle(chart.data, task.assigneePositionId, t('rootAssignee'), t('unknownPosition'))}</TableCell>
-              <TableCell className="px-4">
-                <Badge variant={statusVariant(task.status)}>{t(`status.${task.status}`)}</Badge>
-              </TableCell>
-              <TableCell className="px-4 text-xs text-muted-foreground">{f.dateTime(task.createdAt)}</TableCell>
-            </TableRow>
-          ))}
-        </DataTable>
+        <>
+          {tasks.data.length >= TASK_LIST_LIMIT && <p className="mb-2 text-xs text-muted-foreground">{t('truncated', { count: String(TASK_LIST_LIMIT) })}</p>}
+          <DataTable head={[t('colTitle'), t('colAssignee'), t('colStatus'), t('colCreated')]}>
+            {tasks.data.map((task) => (
+              <TableRow key={task.id} data-testid="task-row">
+                <TableCell className="px-4">
+                  <Link to="/o/$slug/tasks/$id" params={{ slug, id: task.id }} className="font-medium text-link hover:underline">
+                    {task.title}
+                  </Link>
+                  {task.tainted && (
+                    <Badge variant="warning" className="ml-2" title={t('taintedHint')}>
+                      {t('tainted')}
+                    </Badge>
+                  )}
+                </TableCell>
+                <TableCell className="px-4 text-sm text-muted-foreground">{positionTitle(chart.data, task.assigneePositionId, t('rootAssignee'), t('unknownPosition'))}</TableCell>
+                <TableCell className="px-4">
+                  <Badge variant={statusVariant(task.status)}>{t(`status.${task.status}`)}</Badge>
+                </TableCell>
+                <TableCell className="px-4 text-xs text-muted-foreground">{f.dateTime(task.createdAt)}</TableCell>
+              </TableRow>
+            ))}
+          </DataTable>
+        </>
       )}
     </div>
   );

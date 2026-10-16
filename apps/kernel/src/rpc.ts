@@ -14,6 +14,8 @@ import {
   type ChannelConnectInput,
   type OrgSummary,
 } from '@crove/kernel';
+import type { z } from 'zod';
+import type { zAgentBudget, zAgentTemplate, zTask } from '@crove/kernel-contract';
 import { DomainError, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { actorOf, type AuthUser } from './auth.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
@@ -288,14 +290,14 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       updatePosition: os.chart.updatePosition.handler(({ context, input }) => keyed(context, 'kernel.position.update', input)),
       assign: os.chart.assign.handler(({ context, input }) => keyed(context, 'kernel.position.assign', input)),
       templates: os.chart.templates.handler(({ context }) =>
-        inOrg(context, async (orgId, actor) => (await runtime.query<{ templates: never[] }>('kernel.agent.templates.list', {}, { actor, orgId })).templates),
+        inOrg(context, async (orgId, actor) => (await runtime.query<{ templates: z.infer<typeof zAgentTemplate>[] }>('kernel.agent.templates.list', {}, { actor, orgId })).templates),
       ),
       installTemplate: os.chart.installTemplate.handler(({ context, input }) => keyed(context, 'kernel.agent.template.install', input)),
     },
     agents: {
       update: os.agents.update.handler(({ context, input }) => keyed(context, 'kernel.agent.update', input)),
       budgets: os.agents.budgets.handler(({ context }) =>
-        inOrg(context, async (orgId, actor) => (await runtime.query<{ budgets: never[] }>('kernel.agent.budgets.list', {}, { actor, orgId })).budgets),
+        inOrg(context, async (orgId, actor) => (await runtime.query<{ budgets: z.infer<typeof zAgentBudget>[] }>('kernel.agent.budgets.list', {}, { actor, orgId })).budgets),
       ),
       setBudget: os.agents.setBudget.handler(({ context, input }) => keyed(context, 'kernel.agent.budget.set', input)),
       stop: os.agents.stop.handler(({ context, input }) => keyed(context, 'kernel.agent.kill_switch.engage', input)),
@@ -303,7 +305,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     },
     tasks: {
       list: os.tasks.list.handler(({ context, input }) =>
-        inOrg(context, async (orgId, actor) => (await runtime.query<{ tasks: never[] }>('kernel.task.list', input, { actor, orgId })).tasks),
+        inOrg(context, async (orgId, actor) => (await runtime.query<{ tasks: z.infer<typeof zTask>[] }>('kernel.task.list', input, { actor, orgId })).tasks),
       ),
       get: os.tasks.get.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.task.get', input, { actor, orgId }))),
       create: os.tasks.create.handler(({ context, input }) => keyed(context, 'kernel.task.create', input)),

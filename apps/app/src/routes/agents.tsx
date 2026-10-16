@@ -92,7 +92,7 @@ function KillSwitches({ switches, agents, perms }: { switches: KillSwitch[]; age
   if (switches.length === 0) return null;
   const scopeText = (k: KillSwitch) =>
     k.scope === 'org'
-      ? t('scopeOrg')
+      ? t('scope.org')
       : k.scope === 'module'
         ? t('scopeModule', { module: k.target })
         : t('scopeAgent', { name: agents.find((a) => a.id === k.target)?.displayName ?? k.target });
@@ -461,6 +461,8 @@ function BudgetForm({ agents }: { agents: Agent[] }) {
           {t('setBudget')}
         </Button>
         {touched && !amountOk && <span className="text-xs text-destructive">{t('budgetAmountInvalid')}</span>}
+        {touched && !warnOk && <span className="text-xs text-destructive">{t('warnPercentInvalid')}</span>}
+        {touched && !target && <span className="text-xs text-destructive">{t('budgetTargetMissing')}</span>}
         {set.error && <span className="text-xs text-destructive">{errorMessage(set.error)}</span>}
       </div>
     </form>
@@ -491,9 +493,9 @@ function Budgets({ agents, perms }: { agents: Agent[]; perms: AgentPermissions }
               <TableRow key={b.id} data-testid="budget-row">
                 <TableCell className="px-4">{targetText(b.scope, b.target)}</TableCell>
                 <TableCell className="px-4 tabular-nums">
-                  {f.number(b.monthlyLimit)} <span className="text-xs text-subtle-foreground">({b.hardStop ? t('hardStop') : t('softLimit')})</span>
+                  {f.aiAmount(b.monthlyLimit)} <span className="text-xs text-subtle-foreground">({b.hardStop ? t('hardStop') : t('softLimit')})</span>
                 </TableCell>
-                <TableCell className="px-4 tabular-nums">{f.number(b.spent)}</TableCell>
+                <TableCell className="px-4 tabular-nums">{f.aiAmount(b.spent)}</TableCell>
                 <TableCell className="px-4">
                   <Badge variant={usage.state === 'spent' ? 'destructive' : usage.state === 'warn' ? 'warning' : 'success'}>
                     {t('usage', { percent: String(usage.percent) })} {t(`usageState.${usage.state}`)}

@@ -72,6 +72,9 @@ export function budgetUsage(spent: string, limit: string, warnPercent: number): 
   return { percent, state };
 }
 
+// The most tasks one list answers (kernel.task.list), newest first.
+export const TASK_LIST_LIMIT = 200;
+
 export const TASK_STATUSES = ['todo', 'in_progress', 'waiting', 'in_review', 'done', 'cancelled'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 // Statuses a task can still move from.

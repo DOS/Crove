@@ -421,7 +421,6 @@ export const vi = {
     killSwitchReason: 'Lý do: {reason}',
     release: 'Bật lại AI',
     releaseHint: 'Chỉ chủ sở hữu bật lại được, và cần xác thực hai lớp trong 5 phút gần nhất.',
-    scopeOrg: 'Toàn tổ chức',
     scopeModule: 'Phân hệ {module}',
     scopeAgent: 'Tác tử AI {name}',
     chart: 'Sơ đồ tổ chức',
@@ -443,7 +442,6 @@ export const vi = {
     positionRoleKey: 'Mã vai trò',
     reportsTo: 'Báo cáo cho',
     reportsToOwners: 'Chủ sở hữu',
-    create: 'Tạo',
     save: 'Lưu',
     agentsTitle: 'Tác tử AI',
     noAgents: 'Chưa có tác tử AI nào',
@@ -465,7 +463,7 @@ export const vi = {
     installed: 'Đã cài tác tử AI và vị trí của nó.',
     moduleDisabled: 'Phân hệ {module} chưa được bật trên máy chủ này (MODULE_DISABLED), nên chưa cài được mẫu này.',
     budgetsTitle: 'Ngân sách AI hằng tháng',
-    budgetsHint: 'Chi phí các lượt chạy AI trong tháng (theo giờ Việt Nam). Ngân sách chặn cứng sẽ dừng mọi lượt chạy nó bao gồm khi đã dùng hết.',
+    budgetsHint: 'Chi phí các lượt chạy AI trong tháng (theo giờ Việt Nam). Ngân sách chặn cứng sẽ dừng mọi lượt chạy thuộc phạm vi của nó khi đã dùng hết.',
     noBudgets: 'Chưa đặt ngân sách nào',
     colScope: 'Phạm vi',
     colLimit: 'Hạn mức',
@@ -485,6 +483,8 @@ export const vi = {
     budgetLimit: 'Hạn mức mỗi tháng',
     setBudget: 'Đặt ngân sách',
     budgetAmountInvalid: 'Hạn mức là số không âm, tối đa 6 chữ số thập phân',
+    warnPercentInvalid: 'Mức cảnh báo là số nguyên từ 1 đến 100',
+    budgetTargetMissing: 'Hãy chọn đối tượng áp dụng',
     scope: {
       org: 'Toàn tổ chức',
       module: 'Phân hệ',
@@ -535,7 +535,7 @@ export const vi = {
     proposal: 'Đề xuất liên quan: {title}',
     openProposal: 'Mở đề xuất',
     checkedOut: 'Tác tử AI đang xử lý việc này',
-    notFound: 'Không tìm thấy việc này',
+    truncated: 'Chỉ hiển thị {count} việc mới nhất.',
   },
   // Kernel errors worded by the SPA (lib/kernel-errors.ts). The kernel sends the same text with the
   // code, and Vietnamese screens show the kernel's own message; these are used when an answer has none.

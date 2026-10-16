@@ -41,6 +41,18 @@ suite('AI agents through the API (ADR-0029, #258)', () => {
     (['owner', 'admin', 'member', 'viewer'] as const).map((who) => [who, { subject: randomUUID(), email: `${who}@agents-api.test`, session: randomUUID(), userId: '' }]),
   ) as Record<Who, Account>;
   let slug = '';
+  let orgId = '';
+  let adminUrl = '';
+
+  async function admin<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
+    const client = new pg.Client({ connectionString: adminUrl });
+    await client.connect();
+    try {
+      return await fn(client);
+    } finally {
+      await client.end();
+    }
+  }
 
   async function tokenFor(who: Who, options: { mfa?: boolean } = {}) {
     const account = accounts[who];
@@ -78,7 +90,7 @@ suite('AI agents through the API (ADR-0029, #258)', () => {
     await root.end();
     const base = new URL(ADMIN as string);
     base.pathname = `/${dbName}`;
-    const adminUrl = base.toString();
+    adminUrl = base.toString();
     await migrate({ adminUrl, dir: MIGRATIONS });
     await setRolePasswords(adminUrl, { crove_app: 'test-app-pw' });
     const appUrl = new URL(adminUrl);
@@ -112,6 +124,7 @@ suite('AI agents through the API (ADR-0029, #258)', () => {
     const created = await rpc('org/create', 'owner', { name: 'Công ty Tác tử', idempotencyKey: randomUUID() }, { org: null });
     expect(created.status).toBe(200);
     slug = String(created.body?.slug);
+    orgId = String(created.body?.orgId);
     for (const who of ['admin', 'member', 'viewer'] as const) {
       const invite = await rpc('org/invite', 'owner', { email: accounts[who].email, role: who }, { mfa: true });
       expect(invite.status).toBe(200);
@@ -226,6 +239,28 @@ suite('AI agents through the API (ADR-0029, #258)', () => {
     for (const who of ['member', 'viewer'] as const) expect((await rpc('agents/budgets', who, undefined)).status, who).toBe(403);
   });
 
+  it('counts the AI run costs of this month per budget scope, exactly', async () => {
+    // Runs the worker would have recorded: this month in two modules, and one last month that no budget counts.
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.ai_run (org_id, agent_id, module, status, cost, started_at, expires_at, finished_at) VALUES
+           ($1, $2, 'finance', 'succeeded', 10.25, now(), now() + interval '1 minute', now()),
+           ($1, $2, 'crm', 'succeeded', 1.5, now(), now() + interval '1 minute', now()),
+           ($1, $2, 'finance', 'succeeded', 99, now() - interval '40 days', now() - interval '40 days' + interval '1 minute', now() - interval '40 days')`,
+        [orgId, agentId],
+      ),
+    );
+    for (const budget of [
+      { scope: 'module', target: 'finance', monthlyLimit: '10.25' },
+      { scope: 'agent', target: agentId, monthlyLimit: '50' },
+    ]) {
+      expect((await rpc('agents/setBudget', 'owner', { ...budget, warnPercent: 50, idempotencyKey: randomUUID() }, { mfa: true })).status).toBe(200);
+    }
+    const listed = await rpc('agents/budgets', 'admin', undefined);
+    const spent = Object.fromEntries((listed.body as Array<{ scope: string; spent: string }>).map((b) => [b.scope, b.spent]));
+    expect(spent).toEqual({ org: '11.750000', module: '10.250000', agent: '11.750000' });
+  });
+
   it('stops AI for owners and admins without a second factor; only the owner with fresh MFA turns it back on', async () => {
     const input = { scope: 'org', target: '*', reason: 'Kiểm tra', idempotencyKey: randomUUID() };
     for (const who of ['member', 'viewer'] as const) expect(await rpc('agents/stop', who, { ...input, idempotencyKey: randomUUID() }), who).toMatchObject({ status: 403 });
@@ -280,5 +315,36 @@ suite('AI agents through the API (ADR-0029, #258)', () => {
     expect(detail.body.comments).toEqual([expect.objectContaining({ id: commented.body.commentId, body: comment.body, authorType: 'user', authorId: accounts.member.userId })]);
     expect(detail.body.proposal).toBeNull();
     expect(await rpc('tasks/get', 'viewer', { id: randomUUID() })).toMatchObject({ status: 404, body: { code: 'TASK_NOT_FOUND' } });
+
+    // A key replayed with other input is refused, never answered with the first result.
+    expect(await rpc('tasks/create', 'admin', { ...input, title: 'Việc khác' })).toMatchObject({ status: 422, body: { code: 'IDEMPOTENCY_MISMATCH' } });
+    // People see the newest tasks first.
+    const newer = await rpc('tasks/create', 'member', { title: 'Việc mới hơn', assigneePositionId: null, idempotencyKey: randomUUID() });
+    expect(newer.status).toBe(200);
+    expect((await rpc('tasks/list', 'viewer', {})).body.map((t: { id: string }) => t.id)).toEqual([newer.body.taskId, taskId]);
+  });
+
+  it('never reaches the chart, agents, kill switches or tasks of another org', async () => {
+    // The viewer of this org owns another one.
+    const other = await rpc('org/create', 'viewer', { name: 'Công ty Khác', idempotencyKey: randomUUID() }, { org: null });
+    expect(other.status).toBe(200);
+    const org = String(other.body.slug);
+    const killed = await rpc('agents/stop', 'owner', { scope: 'org', target: '*', idempotencyKey: randomUUID() });
+    expect(killed.status).toBe(200);
+    expect(await rpc('tasks/get', 'viewer', { id: taskId }, { org })).toMatchObject({ status: 404, body: { code: 'TASK_NOT_FOUND' } });
+    expect(await rpc('agents/release', 'viewer', { id: killed.body.killSwitchId, idempotencyKey: randomUUID() }, { org, mfa: true })).toMatchObject({ status: 404 });
+    expect(await rpc('agents/update', 'viewer', { id: agentId, maxRisk: 'R2', idempotencyKey: randomUUID() }, { org, mfa: true })).toMatchObject({
+      status: 404,
+      body: { code: 'AGENT_NOT_FOUND' },
+    });
+    expect(await rpc('chart/assign', 'viewer', { id: memberPosition, holder: null, idempotencyKey: randomUUID() }, { org, mfa: true })).toMatchObject({
+      status: 404,
+      body: { code: 'POSITION_NOT_FOUND' },
+    });
+    expect(await rpc('tasks/comment', 'viewer', { id: taskId, body: 'x', idempotencyKey: randomUUID() }, { org })).toMatchObject({ status: 404 });
+    const theirs = await rpc('chart/get', 'viewer', undefined, { org });
+    expect(theirs.body).toMatchObject({ positions: [], agents: [], killSwitches: [] });
+    expect((await rpc('tasks/list', 'viewer', {}, { org })).body).toEqual([]);
+    expect((await rpc('agents/budgets', 'viewer', undefined, { org })).body).toEqual([]);
   });
 });

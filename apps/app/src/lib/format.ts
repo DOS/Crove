@@ -30,6 +30,13 @@ function numberFormat(locale: Locale, currency?: string): Intl.NumberFormat {
   return format;
 }
 
+// A decimal string with up to `digits` decimals, exactly as given up to there (AI budgets and costs keep 6). A value
+// that is not a decimal string is shown as is.
+export function formatDecimal(value: string, locale: Locale, digits: number): string {
+  if (!DECIMAL.test(value)) return value;
+  return new Intl.NumberFormat(FORMAT_LOCALE[locale], { maximumFractionDigits: digits }).format(value as `${number}`);
+}
+
 // Formats a decimal string (e.g. "1980000.0000") as money: the currency's usual decimals (none for VND), more only
 // when the amount has them, up to the 4 the ledger keeps (issue #215). So an amount the ledger holds is shown exactly
 // and the lines of an entry always add up to its totals on screen; rounding each line to whole đồng could show a line
