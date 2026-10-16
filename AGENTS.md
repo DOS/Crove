@@ -9,7 +9,7 @@ Crove is the open-source Business OS (AGPL). It must run with `docker compose up
 - Any number of agents may run; nobody owns a fixed area. When priorities tie, prefer an issue with the same area label (`kernel`, `security`, `auth`, `finance`, `web`, `infra`, `tooling`, `cloud`) as your previous task, so each agent naturally stays in one area and the owner can see who works where.
 - To claim it: set Status to `In progress` and comment `Claimed by <session or agent name>, branch <branch>`. All agents share one GitHub account, so the comment is the lock. Never take over a claimed issue.
 - The PR body says `Closes #<n>`; merging moves the issue to Done. If a task needs work in another area (for example UI for a new kernel API), open a follow-up issue instead of growing the PR.
-- New migrations: rebase on `origin/main` right before merging and keep your migration timestamp greater than every file on `main`.
+- New migrations: rebase on `origin/main` right before merging and keep your migration timestamp greater than every file on `main`. The "Migration order" step of the Docs check job fails a PR that adds an older or equal version (`tools/ci/migration-order.mjs`); re-run it after `main` moves.
 
 ## Worktrees (several agents work on this repo at once)
 
