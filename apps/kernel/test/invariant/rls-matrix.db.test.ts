@@ -27,12 +27,19 @@ const RUNTIME_ROLES = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_defin
 // Tables with org_id that no role but their owner can touch: only SECURITY DEFINER functions owned by the
 // table owner read or write them. They need RLS enabled (so a later grant stays deny-all until a policy is
 // added) and must be listed here, so a new table cannot quietly become one.
-const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.inbound_drop', 'crove_kernel.outbox_pending', 'crove_kernel.refusal_tally']);
+const MACHINERY = new Set([
+  'crove_kernel.auth_session_org',
+  'crove_kernel.credential',
+  'crove_kernel.inbound_drop',
+  'crove_kernel.outbox_pending',
+  'crove_kernel.refusal_tally',
+]);
 // Tables whose row factory (and MACHINERY entry, for definer-only tables) lands on main before the table itself. CI
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>();
+// Channel connections and their sealed credentials (ADR-0025, Social plan step S2, issue #232).
+const PENDING_TABLES = new Set<string>(['crove_kernel.channel_connection', 'crove_kernel.credential']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -84,6 +91,16 @@ const agentRow = (o: { id: string; owner: string }) => ({
   template_key: 'finance.chief_accountant',
   display_name: 'RLS matrix agent',
   created_by: o.owner,
+});
+// A connected channel account (ADR-0025). One live connection per (org, provider, account), so every row gets its
+// own account id.
+const channelConnectionRow = (o: { id: string; owner: string }) => ({
+  org_id: o.id,
+  id: randomUUID(),
+  provider: 'sandbox',
+  external_account_id: `rls-${tag()}`,
+  display_name: 'RLS matrix channel',
+  connected_by: o.owner,
 });
 const journalEntry = (org: string, id: string): Row => ({
   table: 'crove_finance.journal_entry',
@@ -224,6 +241,18 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.kill_switch': { make: (o) => ({ row: { org_id: o.id, scope: 'agent', target: randomUUID(), engaged_by: o.owner } }) },
   'crove_kernel.budget_policy': {
     make: (o) => ({ row: { org_id: o.id, scope: 'agent', target: randomUUID(), monthly_limit: '100', updated_by: o.owner } }),
+  },
+  'crove_kernel.channel_connection': { make: (o) => ({ row: channelConnectionRow(o) }) },
+  // Definer-only machinery: the sealed token of a connection, one row per connection. The envelope is opaque bytes
+  // here; only the vault in the worker opens a real one.
+  'crove_kernel.credential': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, connection_id: connection.id, key_id: 'rls-matrix', envelope: '\\x00' },
+      };
+    },
   },
   'crove_finance.purchase_document': {
     make: (o) => ({
