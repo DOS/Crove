@@ -1,13 +1,14 @@
 // Migration order check for pull requests (AGENTS.md: a new migration's version is greater than every file on main).
 // The runner records each file under its 14-digit version, so a PR that adds a version equal to or older than the
 // base's newest either collides with a file already on main or applies out of order on databases that are already
-// migrated. Parallel PRs hit this often; re-running the check after main moves catches a PR that fell behind.
+// migrated. Parallel PRs hit this often. GitHub does not re-run PR checks when the base moves, so
+// tools/ci/migration-recheck.mjs re-runs this check on open PRs after every push to main.
 //
 // Usage: node tools/ci/migration-order.mjs <base-ref> [since-ref]
 //   Compares the migration files HEAD adds since <since-ref> (default: the merge base of <base-ref> and HEAD) with
 //   the newest version on <base-ref>. CI passes the live base branch as <base-ref> and the merge commit's first
-//   parent as <since-ref>. Exits 1 and names each offending file when one is not newer. Renames count as
-//   additions, so renaming a file to a newer version is the fix.
+//   parent as <since-ref>. Exits 1 and names each offending file with a free version to rename it to. Renames
+//   count as additions, so renaming a file to a newer version is the fix.
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
@@ -28,31 +29,51 @@ export function findStale(basePaths, addedPaths) {
   return { newest, stale };
 }
 
-// The next free version after `newest`: the current UTC time, or newest + 1 minute when the clock is behind.
-export function nextVersion(newest, now = new Date()) {
-  const stamp = now.toISOString().replace(/\D/g, '').slice(0, 14);
-  if (stamp > newest) return stamp;
-  const d = new Date(Date.UTC(+newest.slice(0, 4), +newest.slice(4, 6) - 1, +newest.slice(6, 8), +newest.slice(8, 10), +newest.slice(10, 12) + 1));
-  return d.toISOString().replace(/\D/g, '').slice(0, 12) + '00';
+// `count` free versions on whole hours, each later than `after` (a 14-digit version, or '' for none).
+export function nextVersions(after, count = 1) {
+  const start = after
+    ? Date.UTC(+after.slice(0, 4), +after.slice(4, 6) - 1, +after.slice(6, 8), +after.slice(8, 10))
+    : Date.UTC(1970, 0, 1);
+  const hour = 3_600_000;
+  return Array.from({ length: count }, (_, i) =>
+    new Date(start + (i + 1) * hour).toISOString().replace(/\D/g, '').slice(0, 10).concat('0000'),
+  );
 }
 
-function git(args) {
+// The rename for each stale file: whole hours after the base's newest and after every file the PR adds, so the
+// suggestions collide neither with main nor with each other nor with the PR's other migrations.
+export function suggestRenames(newest, addedPaths, stale) {
+  const after = [newest, ...addedPaths.map(versionOf).filter(Boolean)].sort().at(-1) ?? '';
+  const versions = nextVersions(after, stale.length);
+  return stale.map((path, i) => ({ from: path, to: `${DIR}${versions[i]}${path.slice(DIR.length + 14)}` }));
+}
+
+export function git(args) {
   return execFileSync('git', args, { encoding: 'utf8' }).split('\n').filter(Boolean);
+}
+
+export function migrationPaths(ref) {
+  return git(['ls-tree', '--name-only', ref, DIR]);
+}
+
+// Files under supabase/migrations that `head` adds since `since`. --no-renames: a renamed file shows as deleted
+// plus added, so it is checked under its new name.
+export function addedMigrations(since, head) {
+  return git(['diff', '--name-only', '--no-renames', '--diff-filter=A', since, head, '--', DIR]);
 }
 
 function main() {
   const [base, sinceArg] = process.argv.slice(2);
   if (!base) throw new Error('usage: node tools/ci/migration-order.mjs <base-ref> [since-ref]');
   const since = sinceArg ?? git(['merge-base', base, 'HEAD'])[0];
-  const basePaths = git(['ls-tree', '--name-only', base, DIR]);
-  const addedPaths = git(['diff', '--name-only', '--no-renames', '--diff-filter=A', since, 'HEAD', '--', DIR]);
-  const { newest, stale } = findStale(basePaths, addedPaths);
+  const addedPaths = addedMigrations(since, 'HEAD');
+  const { newest, stale } = findStale(migrationPaths(base), addedPaths);
   if (stale.length === 0) {
     console.log(`migration order OK: ${addedPaths.length} new file(s), base newest ${newest || 'none'}`);
     return;
   }
-  for (const path of stale) {
-    console.error(`::error file=${path}::${path} is not newer than the base's newest migration ${newest}; rename it (for example to ${nextVersion(newest)}_...).`);
+  for (const { from, to } of suggestRenames(newest, addedPaths, stale)) {
+    console.error(`::error file=${from}::${from} is not newer than the base's newest migration ${newest}; rename it to ${to} (git mv) and push.`);
   }
   process.exitCode = 1;
 }
