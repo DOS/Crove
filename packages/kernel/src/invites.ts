@@ -40,7 +40,8 @@ export function normalizeEmail(email: string): string {
 
 // Errors raised by crove_kernel.invite_for_user (invite_accept, invite_peek). The invitee holds the token, so the
 // outcome is theirs to know; anyone signed in with another email learns only that the invite is not for them.
-// AUTH_GRANTS_MISSING (55000, db mode without the email_confirmed_at grant) is mapped by the runtime (503).
+// AUTH_GRANTS_MISSING (55000, db mode without auth.users.email_confirmed_at or its grant) is mapped by the runtime
+// (503).
 const INVITE_ERRORS: Record<string, DomainError> = {
   INVITE_NOT_FOUND: new DomainError('INVITE_NOT_FOUND', 404, 'Không tìm thấy lời mời, hãy kiểm tra lại liên kết'),
   INVITE_EMAIL_MISMATCH: new DomainError(
