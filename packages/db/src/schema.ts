@@ -9,7 +9,7 @@ type Json = ColumnType<unknown, string, string>;
 
 // crove_kernel.user_account (identity) is a control-plane table (plan §3.6, Decision 14) and has no Kysely type on
 // purpose: tenant code reaches it only through definers (crove_kernel.member_profiles, identity_resolve, my_orgs and
-// the like), so a direct selectFrom does not compile. tools/test/control-plane-reads.test.ts also catches raw SQL.
+// the like), so a direct selectFrom does not compile. The invariant test control-plane-reads.test.ts catches raw SQL.
 
 export interface TenantTable {
   org_id: Generated<string>;
