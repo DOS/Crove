@@ -183,8 +183,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       reject: os.inbox.reject.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.proposal.reject', input, { actor, orgId })),
       ),
+      // Today only a journal reversal can be asked for, a finance command.
       request: os.inbox.request.handler(({ context, input }) =>
-        inOrg(context, (orgId, actor) => {
+        inFinance(context, (orgId, actor) => {
           const { idempotencyKey, ...rest } = input;
           return runtime.execute('kernel.proposal.request', rest, { actor, orgId, idempotencyKey });
         }),
@@ -216,7 +217,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         inFinance(context, (orgId, actor) => runtime.query('finance.journal.list', input, { actor, orgId })),
       ),
       get: os.journal.get.handler(({ context, input }) =>
-        inOrg(context, (orgId, actor) => runtime.query('finance.journal.get', input, { actor, orgId })),
+        inFinance(context, (orgId, actor) => runtime.query('finance.journal.get', input, { actor, orgId })),
       ),
     },
     accounts: {
