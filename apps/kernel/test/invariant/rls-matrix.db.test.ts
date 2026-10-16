@@ -38,14 +38,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-// Crove Social posts, variants, review decisions and queues (Social plan step S3, issue #233).
-const PENDING_TABLES = new Set<string>([
-  'crove_social.post',
-  'crove_social.post_variant',
-  'crove_social.post_approval',
-  'crove_social.queue',
-  'crove_social.queue_slot',
-]);
+const PENDING_TABLES = new Set<string>();
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 

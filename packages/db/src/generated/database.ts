@@ -3,8 +3,8 @@
 
 import type { ColumnType, Generated } from 'kysely';
 
-/** Every table of crove_kernel and crove_finance that crove_tenant may read. */
-export type Database = CroveKernelSchema & CroveFinanceSchema;
+/** Every table of crove_kernel, crove_finance, crove_social that crove_tenant may read. */
+export type Database = CroveKernelSchema & CroveFinanceSchema & CroveSocialSchema;
 
 /**
  * The insert or update type of a column crove_tenant may not insert or update: no value but undefined, which
@@ -46,6 +46,14 @@ export interface CroveKernelSchema {
   'crove_kernel.task_comment': KernelTaskCommentTable;
   'crove_kernel.tenant': KernelTenantTable;
   'crove_kernel.tenant_member': KernelTenantMemberTable;
+}
+
+export interface CroveSocialSchema {
+  'crove_social.post': SocialPostTable;
+  'crove_social.post_approval': SocialPostApprovalTable;
+  'crove_social.post_variant': SocialPostVariantTable;
+  'crove_social.queue': SocialQueueTable;
+  'crove_social.queue_slot': SocialQueueSlotTable;
 }
 
 /** crove_finance.account */
@@ -479,4 +487,94 @@ export interface KernelTenantTable {
   base_currency: Generated<string>;
   created_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.post_approval */
+export interface SocialPostApprovalTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  post_id: ColumnType<string, string, NotGranted>;
+  variant_id: ColumnType<string, string, NotGranted>;
+  revision: ColumnType<number, number, NotGranted>;
+  content_hash: ColumnType<string, string, NotGranted>;
+  decision: ColumnType<string, string, NotGranted>;
+  comment: ColumnType<string | null, string | null, NotGranted>;
+  decided_by: ColumnType<string, string, NotGranted>;
+  actor_origin: ColumnType<string, string | undefined, NotGranted>;
+  snapshot: ColumnType<unknown, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.post */
+export interface SocialPostTable {
+  org_id: string;
+  id: Generated<string>;
+  body: Generated<string>;
+  title: string | null;
+  link_url: string | null;
+  origin: Generated<string>;
+  actor_origin: Generated<string>;
+  tainted: Generated<boolean>;
+  author_user_id: string | null;
+  time_zone: Generated<string>;
+  scheduled_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  revision: Generated<number>;
+  status: Generated<string>;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.post_variant */
+export interface SocialPostVariantTable {
+  org_id: string;
+  id: Generated<string>;
+  post_id: string;
+  channel_connection_id: string;
+  provider: string;
+  position: Generated<number>;
+  body: string | null;
+  title: string | null;
+  link_url: string | null;
+  settings: ColumnType<unknown, string | undefined, string>;
+  revision: Generated<number>;
+  content_hash: string;
+  status: Generated<string>;
+  scheduled_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  queue_slot_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  attempt: Generated<number>;
+  external_post_id: string | null;
+  external_url: string | null;
+  published_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  error_kind: string | null;
+  error_code: string | null;
+  error_http_status: number | null;
+  error_message: string | null;
+  error_action: string | null;
+  error_retry_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  next_check_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.queue_slot */
+export interface SocialQueueSlotTable {
+  org_id: string;
+  id: Generated<string>;
+  queue_id: string;
+  weekday: number;
+  minute: number;
+  label: string | null;
+  active: Generated<boolean>;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.queue */
+export interface SocialQueueTable {
+  org_id: string;
+  id: Generated<string>;
+  channel_connection_id: string;
+  time_zone: Generated<string>;
+  paused: Generated<boolean>;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }

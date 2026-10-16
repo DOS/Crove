@@ -1,21 +1,14 @@
-// Post and variant lifecycles (Social plan §3.2). Pure transition functions: each returns the next state or a
-// refusal, never throws, so commands map refusals to domain errors and the property tests can drive them freely.
-
-export const POST_STATUSES = [
-  'draft',
-  'in_review',
-  'approved',
-  'scheduled',
-  'publishing',
-  'published',
-  'partially_published',
-  'failed',
-  'cancelled',
-] as const;
-export type PostStatus = (typeof POST_STATUSES)[number];
+// Variant lifecycle and the post status derived from it (Social plan §3.2, revised after the schema comparison in
+// docs/plan/social-research.md §5): each channel variant is reviewed, scheduled and published on its own, as in
+// BrightBean and OpenPost; the post's status is a summary. Pure transition functions: each returns the next state or
+// a refusal, never throws, so commands map refusals to domain errors and property tests can drive them freely.
 
 export const VARIANT_STATUSES = [
-  'pending',
+  'draft',
+  'in_review',
+  'changes_requested',
+  'rejected',
+  'approved',
   'scheduled',
   'publishing',
   'processing',
@@ -23,136 +16,115 @@ export const VARIANT_STATUSES = [
   'failed',
   'ambiguous',
   'needs_attention',
-  'cancelled',
   'paused',
+  'cancelled',
 ] as const;
 export type VariantStatus = (typeof VARIANT_STATUSES)[number];
 
-export type PostEvent =
+export const POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled'] as const;
+export type PostStatus = (typeof POST_STATUSES)[number];
+
+export type VariantEvent =
+  // Content changed (the variant's own overrides, or base content it inherits).
   | { type: 'edit' }
   | { type: 'submit' }
+  // Review decisions (owners and admins).
   | { type: 'approve' }
+  | { type: 'request_changes' }
   | { type: 'reject' }
   | { type: 'schedule' }
   | { type: 'unschedule' }
   | { type: 'cancel' }
-  | { type: 'start_publishing' }
-  // A human retried a failed variant of a post that already has an outcome (a new attempt, same revision).
-  | { type: 'resume_publishing' }
-  // The post's outcome once publishing ends, from its variants (postOutcome).
-  | { type: 'finish'; outcome: 'published' | 'partially_published' | 'failed' };
-
-export type Refusal = { ok: false; code: 'INVALID_TRANSITION'; from: string; event: string };
-export type Transition<S> = { ok: true; status: S } | Refusal;
-
-const refuse = (from: string, event: string): Refusal => ({ ok: false, code: 'INVALID_TRANSITION', from, event });
-
-// Editing content is allowed before publishing starts; it always lands in draft, because an approval covers one
-// revision and its content hash (post_approval), not the post. A post with a variant in flight is never edited or
-// cancelled: an edit then could restart a publish that already reached the platform.
-const EDITABLE: ReadonlySet<PostStatus> = new Set(['draft', 'in_review', 'approved', 'scheduled', 'failed']);
-const CANCELLABLE: ReadonlySet<PostStatus> = new Set(['draft', 'in_review', 'approved', 'scheduled']);
-
-export function transitionPost(from: PostStatus, event: PostEvent): Transition<PostStatus> {
-  const to = ((): PostStatus | null => {
-    switch (event.type) {
-      case 'edit':
-        return EDITABLE.has(from) ? 'draft' : null;
-      case 'submit':
-        return from === 'draft' ? 'in_review' : null;
-      case 'approve':
-        return from === 'in_review' ? 'approved' : null;
-      case 'reject':
-        return from === 'in_review' ? 'draft' : null;
-      case 'schedule':
-        return from === 'approved' ? 'scheduled' : null;
-      case 'unschedule':
-        return from === 'scheduled' ? 'approved' : null;
-      case 'cancel':
-        return CANCELLABLE.has(from) ? 'cancelled' : null;
-      case 'start_publishing':
-        return from === 'scheduled' ? 'publishing' : null;
-      case 'resume_publishing':
-        return from === 'failed' || from === 'partially_published' ? 'publishing' : null;
-      case 'finish':
-        return from === 'publishing' ? event.outcome : null;
-    }
-  })();
-  return to === null ? refuse(from, event.type) : { ok: true, status: to };
-}
-
-export function canEditPost(status: PostStatus): boolean {
-  return EDITABLE.has(status);
-}
-
-export type VariantEvent =
-  | { type: 'schedule' }
-  | { type: 'unschedule' }
-  | { type: 'cancel' }
+  // The channel lost its token or quota; resume reschedules.
   | { type: 'pause' }
   | { type: 'resume' }
+  // Publishing (the publish and reconcile jobs).
   | { type: 'start' }
   | { type: 'accepted' }
   | { type: 'pending' }
-  | { type: 'rejected' }
+  // The provider refused the post for good (bad request, permission).
+  | { type: 'failed' }
   // The provider refused the call for a rate limit before anything was posted; it runs again at error_retry_at.
   | { type: 'rate_limited' }
   | { type: 'unknown' }
   // nextAction said 'manual': the outcome cannot be found out, a human decides.
   | { type: 'needs_human' }
   | { type: 'reconciled'; found: boolean }
+  // A human's call on a failed or needs_attention variant.
   | { type: 'retry' }
   | { type: 'drop' };
 
-// pending -> scheduled -> publishing -> published | processing | failed | ambiguous.
-// ambiguous -> published (found) | needs_attention (not found, or nothing to ask); needs_attention -> scheduled (a
-// human retries, as a new attempt) or cancelled (a human drops it). paused holds a variant whose channel lost its
-// token or quota, before or instead of the call (the provider refused it); resume reschedules. A variant in
-// processing was accepted by the provider, so it never pauses or reschedules: its status checks continue.
-const VARIANT_TABLE: Readonly<Record<VariantEvent['type'], Partial<Record<VariantStatus, VariantStatus>>>> = {
-  schedule: { pending: 'scheduled' },
-  unschedule: { scheduled: 'pending', paused: 'pending' },
-  cancel: { pending: 'cancelled', scheduled: 'cancelled', paused: 'cancelled' },
+export type Refusal = { ok: false; code: 'INVALID_TRANSITION'; from: string; event: string };
+export type Transition<S> = { ok: true; status: S } | Refusal;
+
+const refuse = (from: string, event: string): Refusal => ({ ok: false, code: 'INVALID_TRANSITION', from, event });
+
+// Content may change while nothing reached the platform: an edit always lands in draft, because an approval covers one
+// revision and its content hash. Never while the variant is in flight or its outcome is unknown (an edit then could
+// restart a publish that already reached the platform), and never once it is history.
+const EDITABLE: ReadonlySet<VariantStatus> = new Set(['draft', 'in_review', 'changes_requested', 'rejected', 'approved', 'scheduled', 'paused', 'failed']);
+const CANCELLABLE: ReadonlySet<VariantStatus> = new Set(['draft', 'in_review', 'changes_requested', 'rejected', 'approved', 'scheduled', 'paused', 'failed']);
+// In flight, or waiting for a human to say what happened: a base edit that reaches such a variant is refused.
+export const IN_FLIGHT: ReadonlySet<VariantStatus> = new Set(['publishing', 'processing', 'ambiguous', 'needs_attention']);
+// History: their content is frozen (materialized) before base content changes.
+export const FROZEN: ReadonlySet<VariantStatus> = new Set(['published', 'cancelled']);
+
+const TABLE: Readonly<Record<Exclude<VariantEvent['type'], 'edit' | 'cancel' | 'reconciled'>, Partial<Record<VariantStatus, VariantStatus>>>> = {
+  submit: { draft: 'in_review', changes_requested: 'in_review', rejected: 'in_review' },
+  approve: { in_review: 'approved' },
+  request_changes: { in_review: 'changes_requested' },
+  reject: { in_review: 'rejected' },
+  schedule: { approved: 'scheduled' },
+  unschedule: { scheduled: 'approved', paused: 'approved' },
   pause: { scheduled: 'paused', publishing: 'paused' },
   resume: { paused: 'scheduled' },
   start: { scheduled: 'publishing' },
   accepted: { publishing: 'published', processing: 'published' },
   pending: { publishing: 'processing' },
-  rejected: { publishing: 'failed', processing: 'failed' },
+  failed: { publishing: 'failed', processing: 'failed' },
   rate_limited: { publishing: 'scheduled' },
   unknown: { publishing: 'ambiguous', processing: 'ambiguous' },
   needs_human: { publishing: 'needs_attention', ambiguous: 'needs_attention' },
-  reconciled: {},
   retry: { needs_attention: 'scheduled', failed: 'scheduled' },
   drop: { needs_attention: 'cancelled' },
 };
 
-// Events that send a variant back to scheduled start a new publish attempt (fresh external_call keys): the earlier
-// attempt's calls keep their outcome as history, and the next job calls the provider again. Each is safe: a rate
-// limit or an expired token is a refusal before anything was posted, and a retry is a human's decision.
+export function transitionVariant(from: VariantStatus, event: VariantEvent): Transition<VariantStatus> {
+  if (event.type === 'edit') return EDITABLE.has(from) ? { ok: true, status: 'draft' } : refuse(from, event.type);
+  if (event.type === 'cancel') return CANCELLABLE.has(from) ? { ok: true, status: 'cancelled' } : refuse(from, event.type);
+  if (event.type === 'reconciled') {
+    if (from !== 'ambiguous') return refuse(from, event.type);
+    return { ok: true, status: event.found ? 'published' : 'needs_attention' };
+  }
+  const to = TABLE[event.type][from];
+  return to === undefined ? refuse(from, event.type) : { ok: true, status: to };
+}
+
+export function canEditVariant(status: VariantStatus): boolean {
+  return EDITABLE.has(status);
+}
+
+// Events that send a variant back to scheduled after a publish began start a new publish attempt (fresh external_call
+// keys): the earlier attempt's calls keep their outcome as history, and the next job calls the provider again. Each is
+// safe: a rate limit or an expired token is a refusal before anything was posted, and a retry is a human's decision.
 const NEW_ATTEMPT: ReadonlySet<VariantEvent['type']> = new Set(['rate_limited', 'resume', 'retry']);
 
 export function startsNewAttempt(event: VariantEvent): boolean {
   return NEW_ATTEMPT.has(event.type);
 }
 
-export function transitionVariant(from: VariantStatus, event: VariantEvent): Transition<VariantStatus> {
-  if (event.type === 'reconciled') {
-    if (from !== 'ambiguous') return refuse(from, event.type);
-    return { ok: true, status: event.found ? 'published' : 'needs_attention' };
-  }
-  const to = VARIANT_TABLE[event.type][from];
-  return to === undefined ? refuse(from, event.type) : { ok: true, status: to };
-}
+const OUTCOME: ReadonlySet<VariantStatus> = new Set(['published', 'failed']);
+const WAITING: ReadonlySet<VariantStatus> = new Set(['scheduled', 'paused']);
 
-const FINAL_VARIANT: ReadonlySet<VariantStatus> = new Set(['published', 'failed', 'cancelled']);
-
-// The post's outcome once every variant has one; null while any variant is still in flight or waiting on a human.
-// Cancelled variants do not count: a post whose other variants all published is published.
-export function postOutcome(variants: readonly VariantStatus[]): 'published' | 'partially_published' | 'failed' | null {
-  if (variants.some((v) => !FINAL_VARIANT.has(v))) return null;
+// The post's status from its variants' statuses. Cancelled variants do not count, unless all are cancelled.
+export function postStatus(variants: readonly VariantStatus[]): PostStatus {
+  if (variants.length === 0) return 'draft';
   const live = variants.filter((v) => v !== 'cancelled');
+  if (live.length === 0) return 'cancelled';
+  if (live.some((v) => IN_FLIGHT.has(v))) return 'publishing';
   const published = live.filter((v) => v === 'published').length;
-  if (live.length === 0 || published === 0) return 'failed';
-  return published === live.length ? 'published' : 'partially_published';
+  if (live.every((v) => OUTCOME.has(v))) return published === live.length ? 'published' : published === 0 ? 'failed' : 'partially_published';
+  if (published > 0) return 'partially_published';
+  if (live.every((v) => WAITING.has(v) || OUTCOME.has(v))) return 'scheduled';
+  return 'draft';
 }

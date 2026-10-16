@@ -16,6 +16,7 @@ import {
   type SessionStatusSource,
 } from '@crove/kernel-runtime';
 import { financeAgentPrograms, financeCommands, financeQueries } from '@crove/mod-finance';
+import { socialCommands, socialQueries } from '@crove/mod-social';
 import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, assertExportKey, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
@@ -104,6 +105,7 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
       queries: kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null }),
     }),
     finance: () => ({ commands: financeCommands, queries: financeQueries }),
+    social: () => ({ commands: socialCommands, queries: socialQueries }),
   };
   const enabled = config.CROVE_MODULES.map((module) => all[module]());
   return { commands: enabled.flatMap((m) => m.commands), queries: enabled.flatMap((m) => m.queries) };
