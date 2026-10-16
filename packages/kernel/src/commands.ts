@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
-import { PROPOSAL_REVISERS, actorRef, addAuthor, decideApproval, parseAuthors } from './approval.ts';
+import { PROPOSAL_REVISERS, actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { createOrgCommand, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
 import { inviteCommands } from './invites.ts';
@@ -11,7 +11,12 @@ import { inviteCommands } from './invites.ts';
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal', which the runtime checks
 // against the proposal row: state 'approved' for that command, approved by the running kernel.proposal.approve).
-const PROPOSAL_COMMANDS = new Set(['finance.purchase.record']);
+const PROPOSAL_COMMANDS = new Set(['finance.purchase.record', 'finance.journal.reverse']);
+// Proposals a user may ask for (kernel.proposal.request), and the module command that checks the request and builds
+// the proposal from the database; it writes nothing. The title and payload come from it, never from the requester.
+const PROPOSAL_PREPARERS = { 'finance.journal.reverse': 'finance.journal.prepare_reversal' } as const;
+type RequestableCommand = keyof typeof PROPOSAL_PREPARERS;
+const REQUESTABLE = Object.keys(PROPOSAL_PREPARERS) as [RequestableCommand, ...RequestableCommand[]];
 const ADMINS = ['owner', 'admin'] as const;
 // Approving executes an R3 command that posts to the ledger, so only roles that may post approve.
 // The role model has no finance roles yet; owner and admin are the roles that may post today. This is the
@@ -270,6 +275,41 @@ export function inboundRotateCommand(limits: InboundRotateLimits = DEFAULT_INBOU
 
 export const rotateInbound = inboundRotateCommand();
 
+const zPreparedProposal = z.object({ kind: z.string().min(1), command: z.string().min(1), title: z.string().min(1).max(300), payload: z.record(z.string(), z.unknown()) });
+
+// A user asks for a proposal that is not read from a file, for example reversing a posted journal entry (#138). The
+// requester is its author, so with two or more eligible approvers someone else approves it (P10), and the approval
+// runs the command at its own risk level (R3 for a posting, with step-up, P11). Asking is R1 and posts nothing.
+export const requestProposal = defineCommand({
+  name: 'kernel.proposal.request',
+  input: z.object({ command: z.enum(REQUESTABLE), input: z.record(z.string(), z.unknown()) }),
+  risk: 'R1',
+  access: MEMBERS,
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới tạo được đề xuất');
+    const draft = zPreparedProposal.parse(await ctx.run(PROPOSAL_PREPARERS[input.command], input.input));
+    if (draft.command !== input.command) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
+    const proposal = await ctx.trx
+      .insertInto('crove_kernel.proposal')
+      .values({
+        org_id: ctx.orgId,
+        kind: draft.kind,
+        command: draft.command,
+        title: draft.title,
+        payload: JSON.stringify(draft.payload),
+        // P12: who may approve this command right now; approval re-checks each one's role live.
+        eligible_approvers: await eligibleApprovers(ctx.trx, ctx.orgId, draft.command),
+        authors: JSON.stringify([actorRef(ctx.actor)]),
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    ctx.audit({ proposal_id: proposal.id, proposal_command: draft.command });
+    await ctx.activity('kernel.proposal', proposal.id, 'proposal.created', draft.title);
+    await ctx.emit('kernel.proposal.created', { proposalId: proposal.id, kind: draft.kind });
+    return { proposalId: proposal.id };
+  },
+});
+
 async function lockPendingProposal(ctx: CommandContext, id: string, revision?: number) {
   const proposal = await ctx.trx
     .selectFrom('crove_kernel.proposal')
@@ -376,7 +416,7 @@ export const approveProposal = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', proposal.id)
       .execute();
-    const result = await ctx.run<{ documentId: string; journalEntryId: string }>(
+    const result = await ctx.run<Record<string, unknown>>(
       proposal.command,
       { payload: proposal.payload, acceptFailedChecks: input.acceptFailedChecks ?? false },
       { proposalId: proposal.id },
@@ -459,6 +499,7 @@ const otherKernelCommands = [
   ingestFile,
   receiveInbound,
   ...extractionCommands,
+  requestProposal,
   editProposal,
   approveProposal,
   rejectProposal,

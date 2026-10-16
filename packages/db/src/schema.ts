@@ -249,6 +249,8 @@ export interface JournalEntryTable {
   created_xact_id: ColumnType<string | null, never, never>;
   // Start of that transaction, stamped by the same trigger: xid8 alone repeats after a logical restore.
   created_xact_start: ColumnType<Date | null, never, never>;
+  // The entry this one reverses (its mirror), or null; set only by the posting function.
+  reverses_entry_id: ColumnType<string | null, never, never>;
 }
 
 export interface JournalLineTable {
