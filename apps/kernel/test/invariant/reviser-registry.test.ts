@@ -33,6 +33,9 @@ describe('reviser registry (#216)', () => {
     const revisers = [...all.values()].filter((c) => c.access === 'proposal_revision');
     expect(revisers.length).toBeGreaterThan(0);
     for (const r of revisers) expect(all.get(r.revises ?? '')?.access).toBe('proposal');
+    // With finance left out (CROVE_MODULES=kernel) the kernel alone validates: an editor, no reviser.
+    expect(() => runtime().register({ commands: kernelCommands }).validate({ absentModules: ['finance'] })).not.toThrow();
+    expect(() => runtime().register({ commands: kernelCommands }).validate()).not.toThrow();
   });
 
   it('refuses a proposal editor that users do not run, a malformed declaration and a second editor', () => {
@@ -74,6 +77,18 @@ describe('reviser registry (#216)', () => {
     // Every problem is reported at once.
     expect(invalid([list, reviser('test.thing.revise', list.name), reviser('test.other.revise', 'test.missing')])).toThrow(
       /does not run through a proposal[\s\S]*not a registered command[\s\S]*no proposal editor/,
+    );
+    // A reviser of a command in a module the deployment leaves out (CROVE_MODULES) never runs and does not fail the
+    // boot; the same name fails when that module is not declared absent, and a typo in the module part still fails.
+    const crossModule = [editor(), reviser('test.thing.revise', 'other.thing.record')];
+    expect(() => runtime().register({ commands: crossModule }).validate({ absentModules: ['other'] })).not.toThrow();
+    expect(() => runtime().register({ commands: crossModule }).validate()).toThrow(/revises other\.thing\.record, which is not a registered command/);
+    expect(() => runtime().register({ commands: [editor(), reviser('test.thing.revise', 'othr.thing.record')] }).validate({ absentModules: ['other'] })).toThrow(
+      /revises othr\.thing\.record, which is not a registered command/,
+    );
+    // An absent module does not excuse a missing command of a module that is installed.
+    expect(() => runtime().register({ commands: [record, editor(), reviser('test.thing.revise', 'test.thing.recrod')] }).validate({ absentModules: ['other'] })).toThrow(
+      /not a registered command/,
     );
     // A consistent registry validates, with or without revisers.
     expect(() => runtime().register({ commands: [record, list, editor(), reviser('test.thing.revise', record.name)] }).validate()).not.toThrow();
