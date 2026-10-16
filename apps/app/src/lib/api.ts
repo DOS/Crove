@@ -86,6 +86,14 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   return response;
 }
 
+// A one-time ticket for the invalidation stream of `slug` (issue #69): EventSource cannot send the Authorization
+// header, so the stream opens with this ticket, valid for seconds and bound to this session and org.
+export async function fetchStreamTicket(slug: string): Promise<string> {
+  const response = await fetch('/api/stream/tickets', { method: 'POST', headers: requestHeaders(await accessToken(), slug) });
+  if (!response.ok) throw await apiErrorFromResponse(response);
+  return ((await response.json()) as { ticket: string }).ticket;
+}
+
 // A stored file's bytes. With presigned transfers the kernel hands out a short-lived URL for the exact version it
 // recorded (after the same authorization), fetched without Crove's headers; otherwise the kernel streams it.
 export async function fetchFile(fileId: string): Promise<Blob> {

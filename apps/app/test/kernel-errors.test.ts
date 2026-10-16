@@ -49,6 +49,12 @@ const NOT_SHOWN: Record<string, string> = {
   UNKNOWN_RECIPIENT: 'inbound mail',
   UNREADABLE_MESSAGE: 'inbound mail',
   INBOUND_BLOB_MISMATCH: 'inbound mail',
+  // The invalidation stream (issue #69): the stream client (lib/stream.ts) handles these silently, backs off and
+  // keeps polling; nothing is shown to the user. METHOD_NOT_ALLOWED answers a HEAD on /api/stream, never sent by the SPA.
+  STREAM_BUSY: 'stream',
+  STREAM_TICKET_INVALID: 'stream',
+  STREAM_UNAVAILABLE: 'stream',
+  METHOD_NOT_ALLOWED: 'stream',
   // A bug in the caller or the worker, never a user's mistake: the kernel's message is enough for a bug report.
   COMMAND_NOT_FOUND: 'bug',
   QUERY_NOT_FOUND: 'bug',

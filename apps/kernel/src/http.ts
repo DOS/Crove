@@ -35,6 +35,20 @@ import { RateLimiter } from './rate-limit.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels } from './rpc.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 import { directTransferOrigin } from './storage.ts';
+import {
+  MAX_BUFFERED_BYTES,
+  MAX_STREAM_LIFETIME_MS,
+  STREAM_CHECK_QUERY,
+  STREAM_TICKET_TTL_SECONDS,
+  StreamConnection,
+  newTicket,
+  ticketActor,
+  ticketHash,
+  wellFormedTicket,
+  type StreamHub,
+  type TicketBinding,
+  type TicketStore,
+} from './stream.ts';
 
 export interface HttpDeps {
   config: Config;
@@ -54,7 +68,20 @@ export interface HttpDeps {
   // Channel connections (ADR-0025): the broker that seals tokens, and whether the sandbox channel is on. Unset: no
   // channel can be connected through the API.
   channels?: RpcChannels;
+  // Realtime invalidation (issue #69). Unset: /api/stream answers 404 and the app keeps polling.
+  stream?: StreamDeps;
 }
+
+export interface StreamDeps {
+  hub: StreamHub;
+  tickets: TicketStore;
+  // Open streams in this process, and per user (STREAM_MAX_CONNECTIONS, STREAM_MAX_PER_USER).
+  slots: ConcurrencyLimiter;
+  recheckSeconds: number;
+}
+
+// What a refused stream tells the client to wait before it tries again (it polls meanwhile).
+export const STREAM_RETRY_SECONDS = 15;
 
 // Store errors that are not server faults. A blob missing behind a file row, or a key holding other bytes, is
 // still logged: either one means storage and database disagree. Other store errors (access, I/O) stay 500.
@@ -204,6 +231,8 @@ export function createHttpApp(deps: HttpDeps) {
       mailEnabled: deps.mailer?.enabled ?? false,
       // The SPA shows the menus of these modules only (plan Decision 12).
       modules: runtime.modules(),
+      // The app subscribes to /api/stream and polls only while it is down (issue #69).
+      stream: Boolean(deps.stream),
     }),
   );
 
@@ -277,6 +306,117 @@ export function createHttpApp(deps: HttpDeps) {
     });
   }
 
+  // The invalidation stream (issue #69). EventSource sends no Authorization header, so this route runs before the
+  // bearer middleware below and authenticates with a one-time ticket instead (POST /api/stream/tickets, which does go
+  // through it): the ticket is redeemed once, then come the same per-user request limit, a connection slot, and the
+  // session check and membership of the ticket's org, all before the stream opens.
+  const stream = deps.stream;
+  if (stream) {
+    const unavailable = (c: Context) => {
+      c.header('retry-after', String(STREAM_RETRY_SECONDS));
+      return c.json({ code: 'STREAM_UNAVAILABLE', message: 'Kênh cập nhật tạm thời không hoạt động' }, 503);
+    };
+    app.get('/api/stream', async (c) => {
+      // Hono answers HEAD with this route and drops the body: a stream nobody reads would hold a slot.
+      if (c.req.method !== 'GET') return c.json({ code: 'METHOD_NOT_ALLOWED' }, 405);
+      const ticket = c.req.query('ticket');
+      const refused = () => c.json({ code: 'STREAM_TICKET_INVALID', message: 'Vé kết nối không hợp lệ hoặc đã hết hạn' }, 401);
+      if (!wellFormedTicket(ticket)) return refused();
+      // Checked before the redeem: a stream this process cannot feed is refused without using the ticket.
+      if (!stream.hub.ready) return unavailable(c);
+      let binding: TicketBinding | null;
+      try {
+        binding = await stream.tickets.redeem(ticketHash(ticket));
+      } catch (error) {
+        console.error('[stream] ticket not redeemed:', error instanceof Error ? error.message : error);
+        return unavailable(c);
+      }
+      if (!binding) return refused();
+      const decision = limiter?.take(binding.userId);
+      if (decision && !decision.allowed) {
+        c.header('retry-after', String(decision.retryAfterSeconds));
+        return c.json(
+          { code: 'RATE_LIMITED', message: 'Bạn gửi quá nhiều yêu cầu, hãy thử lại sau', retryAfterSeconds: decision.retryAfterSeconds },
+          429,
+        );
+      }
+      const release = stream.slots.tryAcquire(binding.userId);
+      if (!release) {
+        c.header('retry-after', String(STREAM_RETRY_SECONDS));
+        return c.json({ code: 'STREAM_BUSY', message: 'Quá nhiều kết nối cập nhật đang mở' }, 503);
+      }
+      const actor = ticketActor(binding);
+      const orgId = binding.orgId;
+      const check = () => runtime.query(STREAM_CHECK_QUERY, {}, { actor, orgId }).then(() => undefined);
+      try {
+        await check();
+      } catch (error) {
+        release();
+        return problem(c, error);
+      }
+      // The listener may have dropped, or the process begun to stop, while the checks ran.
+      if (!stream.hub.ready) {
+        release();
+        return unavailable(c);
+      }
+      const encoder = new TextEncoder();
+      let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+      let unsubscribe = () => {};
+      const connection = new StreamConnection({
+        orgId,
+        check,
+        recheckMs: stream.recheckSeconds * 1000,
+        endsAt: Math.min(binding.tokenExp * 1000, Date.now() + MAX_STREAM_LIFETIME_MS),
+        write: (chunk) => {
+          if (!controller) return false;
+          try {
+            controller.enqueue(encoder.encode(chunk));
+          } catch {
+            return false;
+          }
+          // Negative once more than the queue's high-water mark (0) is unread.
+          return (controller.desiredSize ?? 0) > -MAX_BUFFERED_BYTES;
+        },
+        end: () => {
+          try {
+            controller?.close();
+          } catch {
+            // Already closed, or cancelled by the client.
+          }
+        },
+        onClosed: () => {
+          unsubscribe();
+          release();
+        },
+      });
+      const body = new ReadableStream<Uint8Array>(
+        {
+          start(ctrl) {
+            controller = ctrl;
+          },
+          // The client went away.
+          cancel() {
+            connection.finish();
+          },
+        },
+        new ByteLengthQueuingStrategy({ highWaterMark: 0 }),
+      );
+      c.req.raw.signal.addEventListener('abort', () => connection.finish(), { once: true });
+      unsubscribe = stream.hub.subscribe(connection);
+      connection.open(stream.recheckSeconds);
+      // A client that left during the checks above never fires abort again, and its body is never cancelled.
+      if (c.req.raw.signal.aborted) connection.finish();
+      return new Response(body, {
+        headers: {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-store',
+          'x-accel-buffering': 'no',
+          'x-content-type-options': 'nosniff',
+        },
+      });
+    });
+  }
+
   // Everything below requires a signed-in user, and is limited per user (plan §4.4 step 0) before any command or
   // query runs. The token is verified first, so the key is a user the token proves; authenticate() writes to the
   // database only when its identity cache misses (once per user and process every few minutes), never per request.
@@ -298,6 +438,38 @@ export function createHttpApp(deps: HttpDeps) {
     c.set('user', user);
     await next();
   });
+
+  // A one-time ticket for GET /api/stream (issue #69), bound to this token's user, session, assurance and expiry and to
+  // the org of the request, issued after that org's session check and membership. No body is read.
+  if (stream) {
+    app.post('/api/stream/tickets', bodyLimit({ maxSize: 1024 }), async (c) => {
+      try {
+        const user = c.get('user');
+        // Fail closed: without the token's exp a stream could outlive the token (jwt mode trusts it until then).
+        const tokenExp = user.tokenExp;
+        if (tokenExp === undefined) throw new DomainError('STREAM_UNAVAILABLE', 503, 'Kênh cập nhật tạm thời không hoạt động');
+        const orgId = await resolveOrg(runtime, user, c.req.header(ORG_HEADER) ?? null);
+        await runtime.query(STREAM_CHECK_QUERY, {}, { actor: actorOf(user), orgId });
+        const { ticket, hash } = newTicket();
+        const issued = await stream.tickets.issue(hash, {
+          userId: user.userId,
+          orgId,
+          sessionId: user.sessionId,
+          aal: user.aal,
+          mfaAt: user.mfaAt,
+          tokenExp,
+        });
+        if (!issued) {
+          c.header('retry-after', String(STREAM_TICKET_TTL_SECONDS));
+          throw new DomainError('RATE_LIMITED', 429, 'Quá nhiều yêu cầu mở kênh cập nhật, hãy thử lại sau');
+        }
+        c.header('cache-control', 'no-store');
+        return c.json({ ticket, expiresInSeconds: STREAM_TICKET_TTL_SECONDS });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+  }
 
   app.all('/api/rpc/*', bodyLimit({ maxSize: 1024 * 1024 }), async (c) => {
     const { matched, response } = await rpc.handle(c.req.raw, {

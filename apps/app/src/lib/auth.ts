@@ -13,6 +13,8 @@ export interface PublicConfig {
   modules: string[];
   // presigned: files go to the bucket through a staging upload (plan §7.6); direct: through the kernel.
   uploads?: 'presigned' | 'direct';
+  // The kernel serves /api/stream (issue #69); without it the screens poll.
+  stream?: boolean;
 }
 
 let config: PublicConfig | null = null;

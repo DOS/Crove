@@ -13,6 +13,7 @@ import { errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
+import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 type Tab = 'pending' | 'executed' | 'rejected';
 
@@ -35,11 +36,13 @@ export function InboxPage() {
   const config = getConfig();
 
   const org = useQuery(orpc.org.get.queryOptions());
+  // Polled only while the invalidation stream is down; with it, hints refresh them and a slow poll is the safety net.
+  const live = useStreamLive();
   const files = useQuery({
     ...orpc.files.recent.queryOptions(),
-    refetchInterval: (query) => ((query.state.data ?? []).some((f) => f.status === 'processing') ? 2000 : 30_000),
+    refetchInterval: (query) => pollEvery(live, (query.state.data ?? []).some((f) => f.status === 'processing') ? 2000 : 30_000, SAFETY_POLL_MS),
   });
-  const items = useQuery({ ...orpc.inbox.list.queryOptions({ input: { status: tab } }), refetchInterval: 5000 });
+  const items = useQuery({ ...orpc.inbox.list.queryOptions({ input: { status: tab } }), refetchInterval: pollEvery(live, 5000, SAFETY_POLL_MS) });
 
   const upload = useMutation({
     mutationFn: uploadFiles,

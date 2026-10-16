@@ -19,6 +19,9 @@ export interface AuthUser {
   sessionId: string;
   // Unix seconds of the newest second-factor `amr` entry, or null.
   mfaAt: number | null;
+  // Unix seconds of this request's token `exp`. The invalidation stream (issue #69) ends then, since it outlives the
+  // request; unset (tests, embedders) the stream ends after its maximum lifetime.
+  tokenExp?: number;
   // R3 live check of this request's token with Supabase Auth (jwt session check only); see UserActor.confirmLive.
   confirmLive?: () => Promise<void>;
 }
@@ -31,6 +34,8 @@ export interface VerifiedToken {
   aal: Aal;
   sessionId: string;
   mfaAt: number | null;
+  // The token's `exp` (unix seconds); verified and required.
+  expiresAt: number;
 }
 
 interface SupabaseClaims extends JWTPayload {
@@ -127,6 +132,7 @@ export function createTokenVerifier(config: Config, keys: { jwks?: JWTVerifyGetK
     // Crove identifies and adds members by email, so phone-only accounts are refused until a later ADR.
     if (typeof email !== 'string' || email.trim() === '') throw invalid();
     if (typeof sessionId !== 'string' || !UUID.test(sessionId)) throw invalid();
+    if (typeof claims.exp !== 'number' || !Number.isFinite(claims.exp)) throw invalid();
     const meta = claims.user_metadata;
     const name = typeof meta?.full_name === 'string' ? meta.full_name : typeof meta?.name === 'string' ? meta.name : null;
     return {
@@ -138,6 +144,7 @@ export function createTokenVerifier(config: Config, keys: { jwks?: JWTVerifyGetK
       aal: claims.aal === 'aal2' ? 'aal2' : 'aal1',
       sessionId: sessionId.toLowerCase(),
       mfaAt: mfaTimestamp(claims.amr),
+      expiresAt: claims.exp,
     };
   };
 }
@@ -168,7 +175,13 @@ export function createAuthenticator(
     const verified = await verify(token);
     // Bound to this token; called only by the runtime, for R3 (ADR-0028 section 5). No call to Auth otherwise.
     const confirmLive = liveCheck ? () => liveCheck(token, verified.subject) : undefined;
-    const perToken = { aal: verified.aal, sessionId: verified.sessionId, mfaAt: verified.mfaAt, ...(confirmLive ? { confirmLive } : {}) };
+    const perToken = {
+      aal: verified.aal,
+      sessionId: verified.sessionId,
+      mfaAt: verified.mfaAt,
+      tokenExp: verified.expiresAt,
+      ...(confirmLive ? { confirmLive } : {}),
+    };
     const key = `${verified.issuer}|${verified.subject}`;
     const hit = cache.get(key);
     if (hit && hit.expires > Date.now() && hit.user.email === verified.email) return { ...hit.user, ...perToken };

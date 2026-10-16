@@ -14,6 +14,7 @@ import { errorMessage, fetchFile, orpc, queryClient } from '../lib/api.ts';
 import { previewPurchaseJournal } from '../lib/decimal.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { reversalErrorMessage } from '../lib/reversal.ts';
+import { pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 const CHECK_TONE = { pass: 'success', warn: 'warning', fail: 'destructive' } as const;
 const CHECK_ICON = { pass: '✓', warn: '!', fail: '✕' } as const;
@@ -136,10 +137,12 @@ export function InboxDetailPage() {
   const root = useTranslations();
   const t = useTranslations('inboxDetail');
   const f = useFormat();
-  // While the file is being read again, poll until the new reading (or its failure) arrives.
+  // While the file is being read again, poll until the new reading (or its failure) arrives; with the invalidation
+  // stream up, its extraction hint refreshes the page instead.
+  const live = useStreamLive();
   const detail = useQuery({
     ...orpc.inbox.get.queryOptions({ input: { id } }),
-    refetchInterval: (query) => (query.state.data?.extraction?.inFlight ? 2000 : false),
+    refetchInterval: (query) => (query.state.data?.extraction?.inFlight ? pollEvery(live, 2000) : false),
   });
   const accounts = useQuery(orpc.accounts.list.queryOptions());
   const [lineAccounts, setLineAccounts] = useState<Record<number, string>>({});

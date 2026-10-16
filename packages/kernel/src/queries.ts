@@ -385,6 +385,15 @@ export const sessionsList = defineQuery({
   },
 });
 
+// The re-check of an open invalidation stream (issue #69): the same session check (for the org), context entry and
+// membership as every other read, returning only the caller's role. Runs every STREAM_RECHECK_SECONDS per stream.
+export const streamCheck = defineQuery({
+  name: 'kernel.stream.check',
+  input: z.object({}),
+  access: ALL,
+  handler: async (ctx) => ({ role: ctx.role }),
+});
+
 export function kernelQueries(options: OrgDetailOptions) {
-  return [orgDetailQuery(options), inboxList, inboxGet, filesRecent, fileGet, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries];
+  return [orgDetailQuery(options), streamCheck, inboxList, inboxGet, filesRecent, fileGet, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries];
 }

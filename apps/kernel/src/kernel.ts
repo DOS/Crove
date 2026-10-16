@@ -20,10 +20,12 @@ import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, assertExportKey, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
 import { exportSealer } from './export-seal.ts';
-import { createHttpApp } from './http.ts';
+import { ConcurrencyLimiter } from './concurrency.ts';
+import { createHttpApp, type StreamDeps } from './http.ts';
 import { createLogMailer, createMailer, type Mailer } from './mail.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
 import { createBlobStore } from './storage.ts';
+import { StreamHub, createDbTicketStore, createPgNotificationSource } from './stream.ts';
 import { startWorker } from './worker.ts';
 
 // Identity (ADR-0027, ADR-0028): who the caller is and whether their session still holds. When
@@ -182,6 +184,18 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
         await assertRlsEnforced(pool);
         await assertSystemContextAccess(pool, 'denied');
         const authenticate = resolved.identity.authenticator(db);
+        // Realtime invalidation (issue #69): one LISTEN connection per process; STREAM_MAX_CONNECTIONS=0 turns it off.
+        let stream: StreamDeps | undefined;
+        if (config.STREAM_MAX_CONNECTIONS > 0) {
+          const listenUrl = config.DATABASE_LISTEN_URL ?? config.DATABASE_URL;
+          const hub = new StreamHub(createPgNotificationSource({ connectionString: listenUrl }));
+          stream = {
+            hub,
+            tickets: createDbTicketStore(pool),
+            slots: new ConcurrencyLimiter({ total: config.STREAM_MAX_CONNECTIONS, perKey: config.STREAM_MAX_PER_USER }),
+            recheckSeconds: config.STREAM_RECHECK_SECONDS,
+          };
+        }
         const app = createHttpApp({
           config,
           runtime,
@@ -191,10 +205,17 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           aiEnabled: resolved.ai !== null,
           mailer: resolved.mail,
           channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true' },
+          ...(stream ? { stream } : {}),
         });
         const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });
         console.log(`[api] listening on ${config.HOST}:${config.PORT}`);
         stops.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+        // Stopped before the server (stops run in reverse): open streams would keep server.close() waiting.
+        const hub = stream?.hub;
+        if (hub) {
+          stops.push(() => hub.stop());
+          hub.start();
+        }
       }
 
       if (worker && workerUrl && extractUrl) {
