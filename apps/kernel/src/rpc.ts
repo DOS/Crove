@@ -2,7 +2,7 @@
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { contract } from '@crove/kernel-contract';
-import { createOrg, myOrgs, previewInvite, type AcceptedInvite, type OrgSummary } from '@crove/kernel';
+import { createOrg, myOrgs, previewInvite, upstreamAuth, type AcceptedInvite, type OrgSummary } from '@crove/kernel';
 import { DomainError, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { actorOf, type AuthUser } from './auth.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
@@ -123,7 +123,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     // Org-less: the invite names the org, so the x-crove-org header is ignored here.
     invites: {
       peek: os.invites.peek.handler(({ context, input }) =>
-        guard(() => runtime.forUser(actorOf(context.user), (db) => previewInvite(db, context.user.userId, input.token))),
+        guard(() =>
+          runtime.forUser(actorOf(context.user), (db) =>
+            previewInvite(db, context.user.userId, input.token, { upstream: upstreamAuth(runtime.sessionMode) }),
+          ),
+        ),
       ),
       accept: os.invites.accept.handler(({ context, input }) =>
         guard(() =>

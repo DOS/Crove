@@ -7,7 +7,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import type { Db, MemberRole } from '@crove/db';
 import { zId, zInviteRole, zInviteToken } from '@crove/kernel-contract';
-import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
+import { DomainError, defineCommand, defineQuery, type CommandContext, type SessionStatusSource } from '@crove/kernel-runtime';
 
 // How long an invite stays valid. The table allows at most 30 days.
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -39,12 +39,18 @@ export function normalizeEmail(email: string): string {
 
 // Errors raised by crove_kernel.invite_for_user (invite_accept, invite_peek). The invitee holds the token, so the
 // outcome is theirs to know; anyone signed in with another email learns only that the invite is not for them.
+// AUTH_GRANTS_MISSING (55000, db mode without the email_confirmed_at grant) is mapped by the runtime (503).
 const INVITE_ERRORS: Record<string, DomainError> = {
   INVITE_NOT_FOUND: new DomainError('INVITE_NOT_FOUND', 404, 'Không tìm thấy lời mời, hãy kiểm tra lại liên kết'),
   INVITE_EMAIL_MISMATCH: new DomainError(
     'INVITE_EMAIL_MISMATCH',
     403,
     'Lời mời này dành cho một địa chỉ email khác. Hãy đăng nhập bằng đúng email được mời',
+  ),
+  INVITE_EMAIL_UNCONFIRMED: new DomainError(
+    'INVITE_EMAIL_UNCONFIRMED',
+    403,
+    'Email của bạn chưa được xác nhận. Hãy mở thư xác nhận rồi mở lại liên kết mời',
   ),
   INVITE_USED: new DomainError('INVITE_USED', 409, 'Lời mời này đã được sử dụng'),
   INVITE_REVOKED: new DomainError('INVITE_REVOKED', 409, 'Lời mời này đã bị thu hồi'),
@@ -62,11 +68,25 @@ async function withInviteErrors<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-// The actor's role now, not the one read when the context was entered. Takes FOR SHARE on the org's owner rows and
-// the actor's row in user_id order, the rows and order role changes and removals lock FOR UPDATE (commands.ts), so a
-// demotion or removal of the actor that commits first is seen (READ COMMITTED re-reads a locked row's newest
-// version) and one that starts later waits for this command. Invites do not block each other.
-async function currentRole(ctx: CommandContext, userId: string): Promise<MemberRole | null> {
+// Whether the deployment reads Supabase Auth's own tables (AUTH_SESSION_CHECK=db): the invite definers then also
+// require a confirmed email in auth.users (defense in depth, #134).
+export function upstreamAuth(mode: SessionStatusSource['mode'] | null): boolean {
+  return mode === 'db';
+}
+
+interface LockedRoles {
+  // The actor's role now, not the one read when the context was entered.
+  role: MemberRole | null;
+  // The org's owners now. They stay owners until this command commits: a demotion needs the FOR UPDATE lock.
+  owners: ReadonlySet<string>;
+}
+
+// Takes FOR SHARE on the org's owner rows and the actor's row in user_id order, the rows and order role changes and
+// removals lock FOR UPDATE (commands.ts), so a demotion or removal of the actor (or of an owner) that commits first
+// is seen (READ COMMITTED re-reads a locked row's newest version) and one that starts later waits for this command.
+// Invites do not block each other. Membership rows are locked before invite rows on every path (these commands, the
+// member commands, invite_accept), so the two never deadlock.
+async function lockRoles(ctx: CommandContext, userId: string): Promise<LockedRoles> {
   const rows = await ctx.trx
     .selectFrom('crove_kernel.tenant_member')
     .select(['user_id', 'role'])
@@ -75,7 +95,16 @@ async function currentRole(ctx: CommandContext, userId: string): Promise<MemberR
     .orderBy('user_id')
     .forShare()
     .execute();
-  return rows.find((r) => r.user_id === userId)?.role ?? null;
+  return {
+    role: rows.find((r) => r.user_id === userId)?.role ?? null,
+    owners: new Set(rows.filter((r) => r.role === 'owner').map((r) => r.user_id)),
+  };
+}
+
+// An admin never takes away what an owner decided (#134): a pending, unexpired invite created by a current owner is
+// revoked or replaced only by an owner. Expired invites may be cleaned up by any admin.
+function ownersInvite(invite: { invited_by: string; expires_at: Date }, locked: LockedRoles, now: Date): boolean {
+  return locked.owners.has(invite.invited_by) && invite.expires_at.getTime() > now.getTime();
 }
 
 // Invites an email to the org in context. R3 (plan §4.7: membership and role changes) needs fresh MFA (P11).
@@ -91,7 +120,8 @@ export const createInvite = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới mời được thành viên');
     const actorId = ctx.actor.userId;
-    const role = await currentRole(ctx, actorId);
+    const locked = await lockRoles(ctx, actorId);
+    const role = locked.role;
     if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Vai trò của bạn không được mời thành viên');
     // Only owners may grant admin rights.
     if (input.role === 'admin' && role !== 'owner') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới mời được quản trị viên');
@@ -107,14 +137,42 @@ export const createInvite = defineCommand({
       .executeTakeFirst();
     if (member) throw new DomainError('ALREADY_MEMBER', 409, 'Người này đã là thành viên của tổ chức');
 
-    const replaced = await ctx.trx
-      .updateTable('crove_kernel.member_invite')
-      .set({ status: 'revoked', revoked_at: ctx.now, revoked_by: actorId })
+    // The pending invite this one replaces, locked after the membership rows. An admin's invite refuses to replace a
+    // current owner's unexpired one (#134): the owner's invite stays and the admin is told why. Revoking it silently
+    // would let an admin undo an owner's invite, or change its role, without the owner noticing.
+    const previous = await ctx.trx
+      .selectFrom('crove_kernel.member_invite')
+      .select(['id', 'invited_by', 'expires_at'])
       .where('org_id', '=', ctx.orgId)
       .where('email', '=', email)
       .where('status', '=', 'pending')
-      .returning('id')
+      .forUpdate()
       .execute();
+    const byOwner = role === 'owner' ? [] : previous.filter((p) => ownersInvite(p, locked, ctx.now));
+    if (byOwner.length > 0) {
+      throw new DomainError(
+        'INVITE_PENDING_BY_OWNER',
+        409,
+        'Chủ sở hữu đã mời email này và lời mời vẫn còn hiệu lực. Hãy nhờ chủ sở hữu thu hồi hoặc gửi lại lời mời',
+        undefined,
+        { audit: { pending_invites: byOwner.map((p) => p.id) } },
+      );
+    }
+    const replaced =
+      previous.length === 0
+        ? []
+        : await ctx.trx
+            .updateTable('crove_kernel.member_invite')
+            .set({ status: 'revoked', revoked_at: ctx.now, revoked_by: actorId })
+            .where('org_id', '=', ctx.orgId)
+            .where(
+              'id',
+              'in',
+              previous.map((p) => p.id),
+            )
+            .where('status', '=', 'pending')
+            .returning('id')
+            .execute();
 
     const pending = await ctx.trx
       .selectFrom('crove_kernel.member_invite')
@@ -168,7 +226,9 @@ export const createInvite = defineCommand({
   },
 });
 
-// Revokes a pending invite of the org in context. R1: it only takes away a way in.
+// Revokes a pending invite of the org in context. R1: it only takes away a way in. The actor's role is re-checked
+// under the membership locks (an admin demoted meanwhile cannot revoke), and an admin cannot revoke a current
+// owner's unexpired invite (#134), as for replacing one.
 export const revokeInvite = defineCommand({
   name: 'kernel.member.invite.revoke',
   input: z.object({ inviteId: zId }),
@@ -177,15 +237,22 @@ export const revokeInvite = defineCommand({
   target: (input) => ({ type: 'kernel.member_invite', id: input.inviteId }),
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thu hồi được lời mời');
+    const locked = await lockRoles(ctx, ctx.actor.userId);
+    if (locked.role !== 'owner' && locked.role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Vai trò của bạn không được thu hồi lời mời');
     const invite = await ctx.trx
       .selectFrom('crove_kernel.member_invite')
-      .select(['id', 'email', 'status'])
+      .select(['id', 'email', 'status', 'invited_by', 'expires_at'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.inviteId)
       .forUpdate()
       .executeTakeFirst();
     if (!invite) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy lời mời');
     if (invite.status !== 'pending') throw new DomainError('INVITE_NOT_PENDING', 409, 'Lời mời này đã được dùng hoặc đã bị thu hồi');
+    if (locked.role !== 'owner' && ownersInvite(invite, locked, ctx.now)) {
+      throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới thu hồi được lời mời do chủ sở hữu tạo', undefined, {
+        audit: { invite_id: invite.id },
+      });
+    }
     await ctx.trx
       .updateTable('crove_kernel.member_invite')
       .set({ status: 'revoked', revoked_at: ctx.now, revoked_by: ctx.actor.userId })
@@ -215,10 +282,10 @@ export const acceptInvite = defineCommand({
   input: z.object({ token: zInviteToken }),
   risk: 'R1',
   access: ALL,
-  bootstrap: async (trx, actor, input) =>
+  bootstrap: async (trx, actor, input, _idempotencyKey, env) =>
     withInviteErrors(async () => {
       const { rows } = await sql<{ org_id: string | null }>`
-        SELECT crove_kernel.invite_accept(${actor.userId}::uuid, ${input.token}) AS org_id`.execute(trx);
+        SELECT crove_kernel.invite_accept(${actor.userId}::uuid, ${input.token}, ${upstreamAuth(env.sessionMode)}) AS org_id`.execute(trx);
       const orgId = rows[0]?.org_id;
       if (!orgId) throw new DomainError('INTERNAL', 500, 'Không chấp nhận được lời mời');
       return orgId;
@@ -278,7 +345,9 @@ export interface InvitePreview {
 }
 
 // What the invitee consents to, under the same token and email checks as accepting. Org-less read (forUser).
-export async function previewInvite(db: Db, userId: string, token: string): Promise<InvitePreview> {
+// `upstream` as for accepting: upstreamAuth(runtime.sessionMode). Required, so no caller skips the db-mode check
+// by leaving it out.
+export async function previewInvite(db: Db, userId: string, token: string, options: { upstream: boolean }): Promise<InvitePreview> {
   return withInviteErrors(async () => {
     const { rows } = await sql<{
       org_name: string;
@@ -286,7 +355,7 @@ export async function previewInvite(db: Db, userId: string, token: string): Prom
       invited_by_email: string;
       invited_by_name: string | null;
       expires_at: Date;
-    }>`SELECT org_name, role, invited_by_email, invited_by_name, expires_at FROM crove_kernel.invite_peek(${userId}::uuid, ${token})`.execute(db);
+    }>`SELECT org_name, role, invited_by_email, invited_by_name, expires_at FROM crove_kernel.invite_peek(${userId}::uuid, ${token}, ${options.upstream})`.execute(db);
     const row = rows[0];
     if (!row) throw new DomainError('INVITE_NOT_FOUND', 404, 'Không tìm thấy lời mời, hãy kiểm tra lại liên kết');
     return {

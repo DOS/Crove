@@ -1,7 +1,9 @@
-// Security properties of member invites (issue #35, plan §7.3 item 2): an invite adds nobody until the invitee
-// accepts; it reveals nothing about accounts, is bound to the invited email, single-use, revocable and expires; an
-// accepted invite commits only with its audit row. Against a real PostgreSQL 17. These are ordinary DB tests: adding
-// a file under test/invariant/ is a protected-path change, left to a later step of #35. Set CROVE_TEST_ADMIN_URL to a
+// Security properties of member invites (issue #35, plan §7.3 item 2, follow-ups #134): an invite adds nobody until
+// the invitee accepts; it reveals nothing about accounts, is bound to the invited email (confirmed in Supabase Auth
+// on self-host), single-use, revocable and expires; it dies with its inviter's right to issue it; an admin never
+// undoes an owner's invite; an accepted invite commits only with its audit row. Against a real PostgreSQL 17.
+// Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md). The flows
+// (what the inviter sees, lists, the HTTP API) are in test/invites.db.test.ts. Set CROVE_TEST_ADMIN_URL to a
 // superuser URL; each run creates and drops its own database.
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -9,12 +11,13 @@ import { sql, type Transaction } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDb, createPool, type Database, type Db } from '@crove/db';
-import { migrate, setRolePasswords } from '@crove/db/migrate';
+import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, previewInvite, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
+import { createSessionStatusSource } from '../../src/sessions.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
-const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
+const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 
 const suite = ADMIN ? describe : describe.skip;
 
@@ -149,9 +152,9 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
 
     // Another signed-in user holding the link: refused, before learning anything about the invite's state.
     await expect(accept(token, stranger.id)).rejects.toMatchObject({ code: 'INVITE_EMAIL_MISMATCH', status: 403 });
-    await expect(runtime.forUser(asUser(stranger.id), (trx) => previewInvite(trx, stranger.id, token))).rejects.toMatchObject({ code: 'INVITE_EMAIL_MISMATCH' });
+    await expect(runtime.forUser(asUser(stranger.id), (trx) => previewInvite(trx, stranger.id, token, { upstream: false }))).rejects.toMatchObject({ code: 'INVITE_EMAIL_MISMATCH' });
     // The invitee sees what they consent to.
-    await expect(runtime.forUser(asUser(invitee.id), (trx) => previewInvite(trx, invitee.id, token))).resolves.toMatchObject({ role: 'viewer', invitedBy: owner.email });
+    await expect(runtime.forUser(asUser(invitee.id), (trx) => previewInvite(trx, invitee.id, token, { upstream: false }))).resolves.toMatchObject({ role: 'viewer', invitedBy: owner.email });
     // The org owner cannot accept on the invitee's behalf either.
     await expect(accept(token, owner.id)).rejects.toMatchObject({ code: 'INVITE_EMAIL_MISMATCH' });
     expect(await memberships(stranger.id)).toEqual([]);
@@ -246,7 +249,20 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     expect(denied.map((r) => r.detail.code).sort()).toEqual(['FORBIDDEN', 'FORBIDDEN', 'FORBIDDEN', 'STEP_UP_REQUIRED']);
   });
 
-  it('stops an invite when its inviter is removed or loses the right to grant its role', async () => {
+  async function inviteStatus(id: string) {
+    return admin(async (c) => (await c.query<{ status: string; revoked_by: string | null }>('SELECT status, revoked_by FROM crove_kernel.member_invite WHERE id = $1', [id])).rows[0]);
+  }
+  async function lastAudit(orgId: string, command: string) {
+    return admin(
+      async (c) =>
+        (await c.query<{ outcome: string; detail: Record<string, unknown> }>(
+          'SELECT outcome, detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = $2 ORDER BY id DESC LIMIT 1',
+          [orgId, command],
+        )).rows[0],
+    );
+  }
+
+  it('stops an invite when its inviter is removed or loses the right to grant its role, and revokes it right then', async () => {
     const owner = await person('owner');
     const orgId = await orgOf(owner);
     const [inviterAdmin, coOwner] = [await person('admin'), await person('co-owner')];
@@ -254,17 +270,42 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     await accept(tokenOf(await invite(orgId, owner.id, coOwner.email, 'admin')), coOwner.id);
     await runtime.execute('kernel.member.change_role', { userId: coOwner.id, role: 'owner' }, { actor: asMfa(owner.id), orgId });
 
-    // An admin's member invite dies with the admin's demotion.
-    const a = await person('a');
+    // An admin demoted to member loses every pending invite, in the same transaction as the demotion (#134).
+    const [a, a2] = [await person('a'), await person('a2')];
     const byAdmin = await invite(orgId, inviterAdmin.id, a.email, 'member');
+    const byAdminViewer = await invite(orgId, inviterAdmin.id, a2.email, 'viewer');
     await runtime.execute('kernel.member.change_role', { userId: inviterAdmin.id, role: 'member' }, { actor: asMfa(owner.id), orgId });
+    for (const id of [byAdmin.inviteId, byAdminViewer.inviteId]) expect(await inviteStatus(id)).toEqual({ status: 'revoked', revoked_by: owner.id });
+    expect((await lastAudit(orgId, 'kernel.member.change_role'))?.detail).toMatchObject({
+      target_user: inviterAdmin.id,
+      role: 'member',
+      previous_role: 'admin',
+      revoked_invites: expect.arrayContaining([byAdmin.inviteId, byAdminViewer.inviteId]),
+    });
     await expect(accept(tokenOf(byAdmin), a.id)).rejects.toMatchObject({ code: 'INVITE_REVOKED' });
+    // Promoting them back does not revive the invites.
+    await runtime.execute('kernel.member.change_role', { userId: inviterAdmin.id, role: 'admin' }, { actor: asMfa(owner.id), orgId });
+    await expect(accept(tokenOf(byAdminViewer), a2.id)).rejects.toMatchObject({ code: 'INVITE_REVOKED' });
 
-    // A co-owner's admin invite dies when the co-owner becomes an admin (only owners grant admin).
-    const b = await person('b');
+    // A co-owner who becomes an admin loses the admin invites only (only owners grant admin); the member invite stays.
+    const [b, b2] = [await person('b'), await person('b2')];
     const byCoOwner = await invite(orgId, coOwner.id, b.email, 'admin');
+    const byCoOwnerMember = await invite(orgId, coOwner.id, b2.email, 'member');
     await runtime.execute('kernel.member.change_role', { userId: coOwner.id, role: 'admin' }, { actor: asMfa(owner.id), orgId });
+    expect(await inviteStatus(byCoOwner.inviteId)).toEqual({ status: 'revoked', revoked_by: owner.id });
+    expect(await inviteStatus(byCoOwnerMember.inviteId)).toEqual({ status: 'pending', revoked_by: null });
+    expect((await lastAudit(orgId, 'kernel.member.change_role'))?.detail).toMatchObject({ revoked_invites: [byCoOwner.inviteId] });
     await expect(accept(tokenOf(byCoOwner), b.id)).rejects.toMatchObject({ code: 'INVITE_REVOKED' });
+    await expect(accept(tokenOf(byCoOwnerMember), b2.id)).resolves.toMatchObject({ orgId, role: 'member' });
+    // A role change that takes nothing away revokes nothing.
+    const keep = await person('keep');
+    const kept = await invite(orgId, coOwner.id, keep.email, 'viewer');
+    await runtime.execute('kernel.member.change_role', { userId: coOwner.id, role: 'owner' }, { actor: asMfa(owner.id), orgId });
+    expect((await lastAudit(orgId, 'kernel.member.change_role'))?.detail).toMatchObject({ revoked_invites: [] });
+    expect(await inviteStatus(kept.inviteId)).toEqual({ status: 'pending', revoked_by: null });
+    await runtime.execute('kernel.member.change_role', { userId: coOwner.id, role: 'admin' }, { actor: asMfa(owner.id), orgId });
+    expect(await inviteStatus(kept.inviteId)).toEqual({ status: 'pending', revoked_by: null });
+    await runtime.execute('kernel.member.invite.revoke', { inviteId: kept.inviteId }, { actor: asUser(owner.id), orgId });
 
     // Any invite dies with its inviter's removal.
     const c2 = await person('c');
@@ -275,7 +316,104 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     const status = await admin(async (c) => (await c.query('SELECT status, revoked_by FROM crove_kernel.member_invite WHERE id = $1', [byRemoved.inviteId])).rows);
     expect(status).toEqual([{ status: 'revoked', revoked_by: owner.id }]);
 
-    for (const who of [a, b, c2]) expect(await memberships(who.id)).toEqual([]);
+    for (const who of [a, a2, b, c2]) expect(await memberships(who.id)).toEqual([]);
+  });
+
+  // Acceptance locks the inviter's membership row before the invite row, the order the member commands use, so an
+  // acceptance racing its inviter's demotion never deadlocks: either the invitee joined first, or the invite is
+  // revoked. Never both, never neither, never a 500.
+  it('serializes an acceptance with its inviter\'s demotion, without deadlocks', async () => {
+    const owner = await person('owner');
+    const orgId = await orgOf(owner);
+    for (let round = 0; round < 8; round++) {
+      const inviter = await person(`inviter-${round}`);
+      await accept(tokenOf(await invite(orgId, owner.id, inviter.email, 'admin')), inviter.id);
+      const invitee = await person(`racer-${round}`);
+      const created = await invite(orgId, inviter.id, invitee.email, 'member');
+      const [accepted, demoted] = await Promise.allSettled([
+        accept(tokenOf(created), invitee.id),
+        runtime.execute('kernel.member.change_role', { userId: inviter.id, role: 'viewer' }, { actor: asMfa(owner.id), orgId }),
+      ]);
+      expect(demoted.status).toBe('fulfilled');
+      const status = await inviteStatus(created.inviteId);
+      if (accepted.status === 'fulfilled') {
+        expect(status?.status).toBe('accepted');
+        expect(await memberships(invitee.id)).toEqual([{ org_id: orgId, role: 'member' }]);
+      } else {
+        expect(accepted.reason).toMatchObject({ code: 'INVITE_REVOKED' });
+        expect(status?.status).toBe('revoked');
+        expect(await memberships(invitee.id)).toEqual([]);
+      }
+    }
+  });
+
+  it("never lets an admin's invite silently replace an owner's pending invite, nor an admin revoke one", async () => {
+    const owner = await person('owner');
+    const orgId = await orgOf(owner);
+    const [adminP, otherAdmin] = [await person('admin'), await person('admin-2')];
+    for (const who of [adminP, otherAdmin]) await accept(tokenOf(await invite(orgId, owner.id, who.email, 'admin')), who.id);
+
+    // The owner invited someone as admin; an admin inviting the same email (as member) is refused, the owner's invite
+    // stays pending and still works, and the refusal is audited with the invite it protected.
+    const target = await person('target');
+    const byOwner = await invite(orgId, owner.id, target.email, 'admin');
+    await expect(invite(orgId, adminP.id, target.email, 'member')).rejects.toMatchObject({ code: 'INVITE_PENDING_BY_OWNER', status: 409 });
+    expect(await inviteStatus(byOwner.inviteId)).toEqual({ status: 'pending', revoked_by: null });
+    expect(await lastAudit(orgId, 'kernel.member.invite.create')).toMatchObject({
+      outcome: 'failed',
+      detail: expect.objectContaining({ code: 'INVITE_PENDING_BY_OWNER', pending_invites: [byOwner.inviteId] }),
+    });
+    // Nor may the admin revoke it explicitly.
+    await expect(runtime.execute('kernel.member.invite.revoke', { inviteId: byOwner.inviteId }, { actor: asUser(adminP.id), orgId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      status: 403,
+    });
+    expect(await inviteStatus(byOwner.inviteId)).toEqual({ status: 'pending', revoked_by: null });
+    await expect(accept(tokenOf(byOwner), target.id)).resolves.toMatchObject({ orgId, role: 'admin' });
+
+    // An owner replaces any invite; an admin replaces another admin's invite, and an owner's expired one.
+    const second = await person('second');
+    const byOther = await invite(orgId, otherAdmin.id, second.email, 'viewer');
+    const byAdmin = await invite(orgId, adminP.id, second.email, 'member');
+    expect(await inviteStatus(byOther.inviteId)).toEqual({ status: 'revoked', revoked_by: adminP.id });
+    const byOwner2 = await invite(orgId, owner.id, second.email, 'viewer');
+    expect(await inviteStatus(byAdmin.inviteId)).toEqual({ status: 'revoked', revoked_by: owner.id });
+    await expect(invite(orgId, otherAdmin.id, second.email, 'member')).rejects.toMatchObject({ code: 'INVITE_PENDING_BY_OWNER' });
+    await runtime.execute('kernel.member.invite.revoke', { inviteId: byOwner2.inviteId }, { actor: asUser(owner.id), orgId });
+
+    const third = await person('third');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    let stale: Created;
+    try {
+      vi.setSystemTime(Date.now() - 8 * 24 * 60 * 60 * 1000);
+      stale = await invite(orgId, owner.id, third.email, 'viewer');
+    } finally {
+      vi.useRealTimers();
+    }
+    const fresh = await invite(orgId, adminP.id, third.email, 'member');
+    expect(await inviteStatus(stale.inviteId)).toEqual({ status: 'revoked', revoked_by: adminP.id });
+    await expect(accept(tokenOf(fresh), third.id)).resolves.toMatchObject({ role: 'member' });
+
+    // An invite whose owner was demoted to admin is an admin's invite from then on.
+    const fourth = await person('fourth');
+    const coOwner = await person('co-owner');
+    await accept(tokenOf(await invite(orgId, owner.id, coOwner.email, 'admin')), coOwner.id);
+    await runtime.execute('kernel.member.change_role', { userId: coOwner.id, role: 'owner' }, { actor: asMfa(owner.id), orgId });
+    const byCoOwner = await invite(orgId, coOwner.id, fourth.email, 'member');
+    await expect(runtime.execute('kernel.member.invite.revoke', { inviteId: byCoOwner.inviteId }, { actor: asUser(adminP.id), orgId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await runtime.execute('kernel.member.change_role', { userId: coOwner.id, role: 'admin' }, { actor: asMfa(owner.id), orgId });
+    await expect(runtime.execute('kernel.member.invite.revoke', { inviteId: byCoOwner.inviteId }, { actor: asUser(adminP.id), orgId })).resolves.toEqual({ ok: true });
+
+    // A demoted admin can no longer revoke at all, even with a context entered before the demotion was read.
+    const fifth = await person('fifth');
+    const byOtherAdmin = await invite(orgId, otherAdmin.id, fifth.email, 'viewer');
+    await runtime.execute('kernel.member.change_role', { userId: adminP.id, role: 'member' }, { actor: asMfa(owner.id), orgId });
+    await expect(runtime.execute('kernel.member.invite.revoke', { inviteId: byOtherAdmin.inviteId }, { actor: asUser(adminP.id), orgId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(await inviteStatus(byOtherAdmin.inviteId)).toEqual({ status: 'pending', revoked_by: null });
   });
 
   it('keeps invites inside their org: another org can neither see, revoke nor redirect them', async () => {
@@ -348,9 +486,11 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
 
     // EXECUTE matrix: only the API login role accepts and previews; the helper and the triggers are nobody's.
     const functions = [
-      'crove_kernel.invite_accept(uuid,text)',
-      'crove_kernel.invite_peek(uuid,text)',
-      'crove_kernel.invite_for_user(uuid,text,boolean)',
+      'crove_kernel.invite_accept(uuid,text,boolean)',
+      'crove_kernel.invite_peek(uuid,text,boolean)',
+      'crove_kernel.invite_for_user(uuid,text,boolean,boolean)',
+      'crove_kernel.auth_email_confirmed(uuid)',
+      'crove_kernel.auth_email_check_ready()',
       'crove_kernel.member_invite_guard()',
       'crove_kernel.member_invite_requires_audit()',
     ];
@@ -363,11 +503,22 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
       return Object.fromEntries(functions.map((f) => [f, roles.filter((r) => rows.some((row) => row.fn === f && row.role === r && row.can))]));
     });
     expect(matrix).toEqual({
-      'crove_kernel.invite_accept(uuid,text)': ['crove_app'],
-      'crove_kernel.invite_peek(uuid,text)': ['crove_app'],
-      'crove_kernel.invite_for_user(uuid,text,boolean)': [],
+      'crove_kernel.invite_accept(uuid,text,boolean)': ['crove_app'],
+      'crove_kernel.invite_peek(uuid,text,boolean)': ['crove_app'],
+      'crove_kernel.invite_for_user(uuid,text,boolean,boolean)': [],
+      'crove_kernel.auth_email_confirmed(uuid)': [],
+      'crove_kernel.auth_email_check_ready()': [],
       'crove_kernel.member_invite_guard()': [],
       'crove_kernel.member_invite_requires_audit()': [],
+    });
+    // The variants without the confirmed-email flag are gone, so no caller can skip that check.
+    await admin(async (c) => {
+      const { rows } = await c.query(
+        `SELECT pg_catalog.to_regprocedure('crove_kernel.invite_accept(uuid,text)') AS accept,
+                pg_catalog.to_regprocedure('crove_kernel.invite_peek(uuid,text)') AS peek,
+                pg_catalog.to_regprocedure('crove_kernel.invite_for_user(uuid,text,boolean)') AS helper`,
+      );
+      expect(rows).toEqual([{ accept: null, peek: null, helper: null }]);
     });
     // Table privileges on membership: no runtime role inserts, and only the role column is updatable.
     const privileges = await admin(async (c) => {
@@ -396,7 +547,7 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     await admin(async (c) => {
       // Calling the definer outside execute(): no audit row, so the commit is refused and nothing stays.
       await c.query('BEGIN');
-      await c.query('SELECT crove_kernel.invite_accept($1::uuid, $2)', [invitee.id, tokenOf(created)]);
+      await c.query('SELECT crove_kernel.invite_accept($1::uuid, $2, false)', [invitee.id, tokenOf(created)]);
       await expect(c.query('COMMIT')).rejects.toThrow(/INVITE_ACCEPT_UNAUDITED/);
     });
     expect(await memberships(invitee.id)).toEqual([]);
@@ -411,5 +562,98 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
         await expect(c.query(`UPDATE crove_kernel.member_invite SET ${change} WHERE id = $1`, [other.inviteId])).rejects.toThrow(/INVITE_IMMUTABLE/);
       }
     });
+  });
+
+  // Self-host (AUTH_SESSION_CHECK=db): accepting and previewing also need a confirmed email in Supabase Auth's own
+  // record (#134), and fail closed (503) while the column exists but the reader cannot see it. Runs last: it creates
+  // the auth tables.
+  it('requires a confirmed email in Supabase Auth on self-host, and fails closed without the grant', async () => {
+    await admin(async (c) => {
+      await c.query('CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_auth_admin');
+      await c.query('SET ROLE supabase_auth_admin');
+      await c.query(`
+        CREATE TABLE auth.users (
+          id uuid PRIMARY KEY, email text, email_confirmed_at timestamptz, banned_until timestamptz, deleted_at timestamptz);
+        CREATE TABLE auth.sessions (
+          id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE, not_after timestamptz);
+        CREATE TABLE auth.mfa_factors (
+          id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE, status text NOT NULL);
+        ALTER TABLE auth.users ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE auth.sessions ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE auth.mfa_factors ENABLE ROW LEVEL SECURITY;`);
+    });
+    await applyAuthGrants({ adminUrl, timeoutMs: 5000 });
+    const upstream = new Runtime(db, { sessions: createSessionStatusSource('db'), stepUp: 'off' }).register({
+      commands: kernelCommands,
+      queries: kernelQueries({ inboundDomain: null }),
+    });
+
+    // A signed-in Supabase Auth user: an account row (confirmed or not) and one session.
+    async function signedIn(name: string, confirmed: boolean) {
+      const subject = randomUUID();
+      const email = `${name}-${randomUUID().slice(0, 8)}@invites.test`;
+      const session = randomUUID();
+      await admin(async (c) => {
+        await c.query('INSERT INTO auth.users (id, email, email_confirmed_at) VALUES ($1, $2, $3)', [subject, email, confirmed ? new Date() : null]);
+        await c.query('INSERT INTO auth.sessions (id, user_id) VALUES ($1, $2)', [session, subject]);
+      });
+      const id = await upsertIdentity(db, { issuer: 'test', subject, email, name: null });
+      return { id, email, subject, actor: { type: 'user' as const, userId: id, aal: 'aal2' as const, sessionId: session, mfaAt: Math.floor(Date.now() / 1000) } };
+    }
+    const acceptUp = (token: string, who: { actor: ReturnType<typeof asMfa> }) =>
+      upstream.executeOrgless<{ orgId: string; role: string }>('kernel.member.invite.accept', { token }, { actor: who.actor });
+    const peekUp = (token: string, who: { id: string; actor: ReturnType<typeof asMfa> }) =>
+      upstream.forUser(who.actor, (trx) => previewInvite(trx, who.id, token, { upstream: true }));
+
+    const owner = await signedIn('owner', true);
+    const orgId = (await createOrg(upstream, owner.actor, `Org ${randomUUID().slice(0, 6)}`)).orgId;
+    const invitee = await signedIn('unconfirmed', false);
+    const stranger = await signedIn('stranger', false);
+    const created = await upstream.execute<Created>('kernel.member.invite.create', { email: invitee.email, role: 'member' }, { actor: owner.actor, orgId });
+    const token = tokenOf(created);
+
+    // Unconfirmed: refused for the invitee (who learns why), while anyone else still learns only "not for you".
+    await expect(peekUp(token, invitee)).rejects.toMatchObject({ code: 'INVITE_EMAIL_UNCONFIRMED', status: 403 });
+    await expect(acceptUp(token, invitee)).rejects.toMatchObject({ code: 'INVITE_EMAIL_UNCONFIRMED', status: 403 });
+    await expect(acceptUp(token, stranger)).rejects.toMatchObject({ code: 'INVITE_EMAIL_MISMATCH' });
+    // The same user passes where the deployment does not read Supabase Auth (jwt, or no session check).
+    await expect(runtime.forUser(asUser(invitee.id), (trx) => previewInvite(trx, invitee.id, token, { upstream: false }))).resolves.toMatchObject({ role: 'member' });
+    // A confirmation dated in the future is not a confirmation.
+    await admin((c) => c.query(`UPDATE auth.users SET email_confirmed_at = now() + interval '1 day' WHERE id = $1`, [invitee.subject]));
+    await expect(acceptUp(token, invitee)).rejects.toMatchObject({ code: 'INVITE_EMAIL_UNCONFIRMED' });
+    expect(await memberships(invitee.id)).toEqual([]);
+
+    // Without the column grant the session check still passes, but invites fail closed (503) instead of skipping it.
+    await admin((c) => c.query(`UPDATE auth.users SET email_confirmed_at = now() WHERE id = $1`, [invitee.subject]));
+    await admin((c) => c.query('REVOKE SELECT (email_confirmed_at) ON auth.users FROM crove_auth_reader'));
+    await expect(upstream.query('kernel.org.get', {}, { actor: owner.actor, orgId })).resolves.toBeTruthy();
+    await expect(peekUp(token, invitee)).rejects.toMatchObject({ code: 'AUTH_NOT_READY', status: 503 });
+    await expect(acceptUp(token, invitee)).rejects.toMatchObject({ code: 'AUTH_NOT_READY', status: 503 });
+    expect(await memberships(invitee.id)).toEqual([]);
+    // auth-grants (every `docker compose up`) grants it again, and exactly that column more than the session check.
+    await applyAuthGrants({ adminUrl, timeoutMs: 5000 });
+    const granted = await admin(
+      async (c) =>
+        (await c.query(
+          `SELECT column_name FROM information_schema.column_privileges
+           WHERE grantee = 'crove_auth_reader' AND table_schema = 'auth' AND table_name = 'users' ORDER BY 1`,
+        )).rows,
+    );
+    expect(granted.map((r) => r.column_name)).toEqual(['banned_until', 'deleted_at', 'email_confirmed_at', 'id']);
+
+    // Confirmed: the invitee joins.
+    await expect(peekUp(token, invitee)).resolves.toMatchObject({ role: 'member' });
+    await expect(acceptUp(token, invitee)).resolves.toMatchObject({ orgId, role: 'member' });
+    expect(await memberships(invitee.id)).toEqual([{ org_id: orgId, role: 'member' }]);
+
+    // Today a Supabase Auth without the column skips the check (auth-grants warns); every Supabase Auth release has
+    // it. Failing closed here is the second step (#134), once every fixture's fake auth.users carries the column.
+    const late = await signedIn('no-column', false);
+    const lateToken = tokenOf(await upstream.execute<Created>('kernel.member.invite.create', { email: late.email, role: 'viewer' }, { actor: owner.actor, orgId }));
+    await admin(async (c) => {
+      await c.query('SET ROLE supabase_auth_admin');
+      await c.query('ALTER TABLE auth.users DROP COLUMN email_confirmed_at');
+    });
+    await expect(acceptUp(lateToken, late)).resolves.toMatchObject({ orgId, role: 'viewer' });
   });
 });

@@ -5,6 +5,7 @@ import { useState, type ReactNode } from 'react';
 import { client, orpc, queryClient } from '../lib/api.ts';
 import { accessToken, auth } from '../lib/auth.ts';
 import { formatDateTime } from '../lib/format.ts';
+import { forgetInvite } from '../lib/invite.ts';
 import {
   describeUserAgent,
   otherActiveSessionIds,
@@ -18,6 +19,7 @@ import { Badge, Button, Card, ErrorText, Input, Spinner } from './ui.tsx';
 
 // Signs this tab out; auth-js tells the other tabs, and main.tsx sends every tab to /login.
 function signOutHere(): void {
+  forgetInvite();
   void auth().signOut({ scope: 'local' });
 }
 
