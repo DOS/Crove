@@ -67,6 +67,58 @@ jobs:
       - name: Build web app
         run: pnpm --filter @crove/app build
 
+  # The migrations and the definer hardening guard (External-tenant gate T17) on the Supabase Postgres image that
+  # hosted Supabase runs (issue #179): its extensions, its roles and the supautils hooks, with migrations run as
+  # `postgres`, which is not a superuser there. Nothing here touches a hosted project.
+  supabase-stack:
+    name: Migrations and hardening guard on the Supabase Postgres image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    services:
+      supabase-db:
+        image: supabase/postgres:17.11.0.002@sha256:0450166354dc9c1d25f0322ac8b580774d4fb0184d2b087f6e4fe9499c66cf53
+        env:
+          POSTGRES_PASSWORD: ci-supabase
+        ports: ['5432:5432']
+        # TCP, so the check waits for the server that starts after the image's init scripts, not the one they run on.
+        options: >-
+          --health-cmd "pg_isready -U postgres -h 127.0.0.1" --health-interval 2s --health-timeout 3s --health-retries 60
+    env:
+      SUPABASE_DB_URL: postgres://postgres:ci-supabase@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.34.7 --no-fund --no-audit
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "crove-monorepo"
+
+      - name: Migrate with the extensions enabled and run the guard (as postgres, not a superuser)
+        env:
+          CROVE_TEST_SUPABASE_URL: ${{ env.SUPABASE_DB_URL }}
+          CROVE_REQUIRE_SUPABASE_TEST: "1"
+        run: pnpm exec vitest run --project db packages/db/test/supabase.db.test.ts
+
+      - name: The kernel migrate role, twice, so the guard also checks pg-boss's crove_jobs schema
+        env:
+          DATABASE_URL: ${{ env.SUPABASE_DB_URL }}
+          ADMIN_DATABASE_URL: ${{ env.SUPABASE_DB_URL }}
+          # Required by the configuration check only; migrate never calls them.
+          AUTH_ISSUER: http://127.0.0.1:9999/auth/v1
+          AUTH_JWKS_URL: http://127.0.0.1:9999/auth/v1/.well-known/jwks.json
+        run: |
+          node apps/kernel/src/main.ts migrate
+          node apps/kernel/src/main.ts migrate
+
   # The kernel image (External-tenant gate T12): it builds, every kernel module loads, the entry point starts, and
   # no PDF, XML or MIME parser package is anywhere in it.
   kernel-image:
