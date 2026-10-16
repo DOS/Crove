@@ -11,6 +11,7 @@ import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES, ORG_HEADER } from '@crove/kern
 import { BlobConflictError, BlobNotFoundError, DomainError, fileKey, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import type { OrgExportView } from '@crove/kernel';
 import { JOURNAL_EXPORT_LIMIT, buildJournalWorkbook, type JournalEntryView } from '@crove/mod-finance';
+import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
 import { actorOf, type Authenticate, type AuthUser } from './auth.ts';
 import { publicAuthUrl, type Config } from './config.ts';
 import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts';
@@ -28,6 +29,8 @@ export interface HttpDeps {
   aiEnabled: boolean;
   // Outbound mail for invites (issue #129). Unset: off, and the inviter passes the one-time link on.
   mailer?: Mailer;
+  // Per-client budget for Supabase Auth's emails (#190). Unset: the database limiter on `pool`.
+  emailLimiter?: EmailLimiter;
 }
 
 // Store errors that are not server faults. A blob missing behind a file row, or a key holding other bytes, is
@@ -47,6 +50,25 @@ function problem(c: Context, error: unknown) {
 
 function body(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+// The shape Supabase Auth uses for its own email limit, so the SPA (auth-js) reads the same error code.
+function emailRateLimited(retryAfterSeconds: number): Response {
+  const error = { code: 429, error_code: 'over_email_send_rate_limit', msg: 'Đã gửi quá nhiều email; vui lòng thử lại sau' };
+  return new Response(JSON.stringify(error), {
+    status: 429,
+    headers: { 'content-type': 'application/json', 'retry-after': String(retryAfterSeconds) },
+  });
+}
+
+// With TRUSTED_PROXY_HOPS=0 behind a reverse proxy, every client shares the proxy's address and so one email budget.
+let proxyWarned = false;
+function warnIfUntrustedProxy(c: Context, trustedHops: number): void {
+  if (proxyWarned || trustedHops > 0 || !c.req.header('x-forwarded-for')) return;
+  proxyWarned = true;
+  console.warn(
+    '[auth-proxy] requests carry X-Forwarded-For but TRUSTED_PROXY_HOPS=0: behind a reverse proxy every client shares its address, and so one email budget; set TRUSTED_PROXY_HOPS',
+  );
 }
 
 const HOP_BY_HOP = new Set([
@@ -152,6 +174,13 @@ export function createHttpApp(deps: HttpDeps) {
   // Self-hosted Supabase Auth behind the same origin.
   if (config.AUTH_UPSTREAM_URL) {
     const upstream = config.AUTH_UPSTREAM_URL.replace(/\/$/, '');
+    const emailLimiter =
+      deps.emailLimiter ??
+      createDbEmailLimiter(deps.pool, {
+        perClientPerHour: config.AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR,
+        addressIntervalSeconds: config.AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS,
+      });
+    const autoconfirm = config.AUTH_AUTOCONFIRM === 'true';
     app.all('/auth/v1/*', bodyLimit({ maxSize: 1024 * 1024 }), async (c) => {
       const url = new URL(c.req.url);
       const path = url.pathname.replace(/^\/auth\/v1/, '');
@@ -160,13 +189,35 @@ export function createHttpApp(deps: HttpDeps) {
       const ip = clientIp(c, config.TRUSTED_PROXY_HOPS);
       if (ip) headers.set('x-real-ip', ip);
       const method = c.req.method;
+      const payload = method === 'GET' || method === 'HEAD' ? null : new Uint8Array(await c.req.arrayBuffer());
+      // A request that makes Supabase Auth send an email takes a slot of its client's budget first (#190).
+      const sends = emailSendRequest(method, path, payload, autoconfirm);
+      const client = clientBucket(ip);
+      let reservation: string | null = null;
+      if (sends) {
+        warnIfUntrustedProxy(c, config.TRUSTED_PROXY_HOPS);
+        const verdict = await emailLimiter.reserve({ client, target: sends.target }).catch((error: unknown) => {
+          console.error('[auth-proxy] email limiter unavailable:', error instanceof Error ? error.message : error);
+          return null;
+        });
+        if (!verdict) return c.json({ code: 'AUTH_UNAVAILABLE', message: 'Dịch vụ đăng nhập không phản hồi' }, 503);
+        if (!verdict.allowed) return emailRateLimited(verdict.retryAfterSeconds);
+        reservation = verdict.reservation;
+      }
       const response = await fetch(`${upstream}${path}${url.search}`, {
         method,
         headers,
-        body: method === 'GET' || method === 'HEAD' ? null : await c.req.arrayBuffer(),
+        body: payload ? body(payload) : null,
         redirect: 'manual',
         signal: AbortSignal.timeout(15_000),
       }).catch(() => null);
+      // A refused request sent no email, so it gives its slot back. One left unanswered (timeout, dropped connection)
+      // keeps it: Supabase Auth may still have sent the email.
+      if (reservation && response && response.status >= 400) {
+        await emailLimiter.release(reservation, client).catch((error: unknown) => {
+          console.error('[auth-proxy] email reservation not released:', error instanceof Error ? error.message : error);
+        });
+      }
       if (!response) return c.json({ code: 'AUTH_UNAVAILABLE', message: 'Dịch vụ đăng nhập không phản hồi' }, 503);
       // fetch() already decoded the body, so the upstream content-encoding no longer applies.
       const out = forwardable(response.headers, new Set(['content-encoding']));
