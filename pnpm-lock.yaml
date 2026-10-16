@@ -567,6 +567,12 @@ importers:
         specifier: 'catalog:'
         version: 4.10.2
 
+  modules/social:
+    devDependencies:
+      fast-check:
+        specifier: 'catalog:'
+        version: 4.10.2
+
   packages/agent:
     dependencies:
       '@ai-sdk/openai-compatible':
