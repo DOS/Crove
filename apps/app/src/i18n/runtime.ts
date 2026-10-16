@@ -1,11 +1,15 @@
 // The active locale and its messages, kept outside React so non-component code (API errors, the startup screen)
-// translates too. The preference is stored in this browser only; it is a display setting, not account data.
+// translates too, and React follows it through useSyncExternalStore (provider.tsx). The preference is stored in this
+// browser only; it is a display setting, not account data.
 import { createTranslator } from 'use-intl/core';
-import { LOCALE_STORAGE_KEY, resolveLocale, type Locale } from './locale.ts';
+import type { CatalogShape } from './catalog.ts';
+import { LOCALE_STORAGE_KEY, isLocale, resolveLocale, type Locale } from './locale.ts';
 import { en } from './messages/en.ts';
 import { vi, type Messages } from './messages/vi.ts';
 
-export const CATALOGS: Record<Locale, Messages> = { vi, en };
+// en.ts is checked against vi.ts key by key and argument by argument (catalog.ts), so it stands in for the Vietnamese
+// message types use-intl is configured with.
+export const CATALOGS: Record<Locale, Messages> = { vi, en: en satisfies CatalogShape<Messages> as unknown as Messages };
 
 function readStoredLocale(): string | null {
   try {
@@ -23,18 +27,53 @@ function storeLocale(locale: Locale): void {
   }
 }
 
+function browserLanguages(): readonly string[] {
+  return typeof navigator === 'undefined' ? [] : navigator.languages;
+}
+
 // Resolved on first use, so importing this module (in tests, for example) touches no browser storage.
 let active: Locale | null = null;
+const listeners = new Set<() => void>();
 
 export function activeLocale(): Locale {
-  active ??= resolveLocale(readStoredLocale(), typeof navigator === 'undefined' ? [] : navigator.languages);
+  active ??= resolveLocale(readStoredLocale(), browserLanguages());
   return active;
 }
 
-// Saves the user's choice and makes it the active locale. The React tree re-renders through I18nProvider.
-export function setActiveLocale(locale: Locale): void {
+// <html lang> follows the active locale, so screen readers and the browser's own UI use it.
+function applyLocale(locale: Locale): void {
+  if (typeof document !== 'undefined') document.documentElement.lang = locale;
+  if (locale === active) return;
   active = locale;
+  for (const listener of listeners) listener();
+}
+
+// Saves the user's choice and makes it the active locale; every subscriber (the React tree) re-renders.
+export function setActiveLocale(locale: Locale): void {
   storeLocale(locale);
+  applyLocale(locale);
+}
+
+// Calls `listener` after every change of the active locale. Returns the unsubscribe function.
+export function subscribeLocale(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+// Sets <html lang> and follows the choice made in other tabs of this browser: localStorage fires `storage` in every
+// other tab when one tab saves `crove-locale`. A removed or unknown value falls back to the browser languages.
+// Returns the function that stops listening.
+export function startLocaleSync(target: Pick<Window, 'addEventListener' | 'removeEventListener'> = window): () => void {
+  applyLocale(activeLocale());
+  const onStorage = (event: StorageEvent) => {
+    // key null: the whole storage was cleared.
+    if (event.key !== LOCALE_STORAGE_KEY && event.key !== null) return;
+    applyLocale(isLocale(event.newValue) ? event.newValue : resolveLocale(null, browserLanguages()));
+  };
+  target.addEventListener('storage', onStorage);
+  return () => target.removeEventListener('storage', onStorage);
 }
 
 export function translatorFor(locale: Locale) {
@@ -46,7 +85,7 @@ export type Translate = ReturnType<typeof translatorFor>;
 
 const translators = new Map<Locale, Translate>();
 
-// A translator for the active locale, for code outside React components.
+// A translator for the active locale, for code outside React components. One per locale, made on first use.
 export function translator(): Translate {
   const locale = activeLocale();
   let t = translators.get(locale);

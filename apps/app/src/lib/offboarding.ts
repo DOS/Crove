@@ -1,5 +1,7 @@
 // Pure helpers for the offboarding card in settings (issue #212). No browser or API imports, so they are unit tested.
+import type { Locale } from '../i18n/locale.ts';
 import type { Translate } from '../i18n/runtime.ts';
+import { describeError } from './errors.ts';
 
 export interface OrgExportState {
   status: 'active' | 'offboarding' | 'closed';
@@ -27,14 +29,13 @@ export function slugConfirmed(typed: string, slug: string): boolean {
 
 // Clear messages for the answers kernel.org.offboard can give. STEP_UP_REQUIRED is the R3 answer (P11): a second
 // factor in the last 5 minutes; the challenge screen lands with the SPA MFA flows.
-export function offboardErrorMessage(error: unknown, t: Translate): string {
+export function offboardErrorMessage(error: unknown, t: Translate, locale: Locale): string {
   const e = (error ?? {}) as { code?: unknown; message?: unknown };
   if (e.code === 'STEP_UP_REQUIRED') return t('offboarding.errors.stepUp');
   if (e.code === 'SLUG_MISMATCH') return t('offboarding.errors.slug');
   if (e.code === 'EXPORT_PENDING') return t('offboarding.errors.pending');
   if (e.code === 'FORBIDDEN') return t('offboarding.errors.forbidden');
-  if (typeof e.message === 'string' && e.message) return e.message;
-  return t('common.error');
+  return describeError(error, t, locale);
 }
 
 // 1536 -> "1,5 KB" style sizes for the table list.

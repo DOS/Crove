@@ -2,7 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { BLOCKING_CHECK_IDS } from '@crove/kernel-contract';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
-import { useTranslations } from 'use-intl';
+import { useLocale, useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -21,7 +21,8 @@ const CHECK_ICON = { pass: '✓', warn: '!', fail: '✕' } as const;
 function FilePreview({ fileId, contentType, filename }: { fileId: string; contentType: string; filename: string }) {
   const t = useTranslations('inboxDetail');
   const [url, setUrl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // The error itself, worded at render (issue #215).
+  const [error, setError] = useState<unknown>(null);
   useEffect(() => {
     let revoked: string | null = null;
     fetchFile(fileId)
@@ -29,12 +30,12 @@ function FilePreview({ fileId, contentType, filename }: { fileId: string; conten
         revoked = URL.createObjectURL(blob);
         setUrl(revoked);
       })
-      .catch((e: unknown) => setError(errorMessage(e)));
+      .catch((e: unknown) => setError(e ?? new Error()));
     return () => {
       if (revoked) URL.revokeObjectURL(revoked);
     };
   }, [fileId]);
-  if (error) return <ErrorText>{error}</ErrorText>;
+  if (error) return <ErrorText>{errorMessage(error)}</ErrorText>;
   if (!url) return <Spinner />;
   if (contentType.startsWith('image/')) return <img src={url} alt={filename} className="w-full rounded-lg border" />;
   if (contentType === 'application/pdf')
@@ -123,6 +124,7 @@ function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDa
 }
 
 export function InboxDetailPage() {
+  const locale = useLocale();
   const { slug, id } = useParams({ strict: false }) as { slug: string; id: string };
   const navigate = useNavigate();
   const root = useTranslations();
@@ -302,7 +304,7 @@ export function InboxDetailPage() {
       {(approve.error || reject.error || edit.error || reextract.error) && (
         <div className="mb-4">
           <ErrorText>
-            {reversal && approve.error ? reversalErrorMessage(approve.error, root) : errorMessage(approve.error ?? reject.error ?? edit.error ?? reextract.error)}
+            {reversal && approve.error ? reversalErrorMessage(approve.error, root, locale) : errorMessage(approve.error ?? reject.error ?? edit.error ?? reextract.error)}
           </ErrorText>
         </div>
       )}
@@ -324,13 +326,13 @@ export function InboxDetailPage() {
       {reading && (
         <p className="mb-4 flex items-center gap-2 text-sm text-link">
           <Spinner />
-          {t('reading', { version: lastRun?.version ?? '' })}
+          {t('reading', { version: String(lastRun?.version ?? '') })}
         </p>
       )}
       {!reading && lastRunFailed && (
         <div className="mb-4">
           <ErrorText>
-            {t('lastRunFailed', { version: lastRun?.version ?? '', error: lastRun?.error ?? t('lastRunUnknownError') })}
+            {t('lastRunFailed', { version: String(lastRun?.version ?? ''), error: lastRun?.error ?? t('lastRunUnknownError') })}
             {pending ? ` ${t('lastRunKept')}` : ''}
           </ErrorText>
         </div>
@@ -431,7 +433,7 @@ export function InboxDetailPage() {
                         <NativeSelect
                           size="sm"
                           disabled={!item.canEdit || busy}
-                          aria-label={t('debitAccountFor', { line: l.lineNo })}
+                          aria-label={t('debitAccountFor', { line: String(l.lineNo) })}
                           className="w-48"
                           value={l.debitAccount}
                           onChange={(e) => setLineAccounts((prev) => ({ ...prev, [l.lineNo]: e.target.value }))}

@@ -4,9 +4,9 @@ import type { ContractRouterClient } from '@orpc/contract';
 import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
 import { MAX_UPLOAD_BYTES, type contract } from '@crove/kernel-contract';
-import { translator } from '../i18n/runtime.ts';
+import { activeLocale, translator } from '../i18n/runtime.ts';
 import { accessToken, auth, getConfig } from './auth.ts';
-import { apiErrorFromResponse, isMfaRequired, isOrgAccessRevoked, isUnauthenticated, retryWhileBusy } from './errors.ts';
+import { ClientError, apiErrorFromResponse, describeError, isMfaRequired, isOrgAccessRevoked, isUnauthenticated, retryWhileBusy } from './errors.ts';
 import { createSessionErrorHandler, rememberOrgLeft, requestHeaders, takeOrgLeft } from './org-access.ts';
 
 let currentOrg: string | null = null;
@@ -32,7 +32,7 @@ export const orpc = createTanstackQueryUtils(client);
 const orglessLink = new RPCLink({ url: `${window.location.origin}/api/rpc`, headers: async () => requestHeaders(await accessToken(), null) });
 export const orglessClient: ContractRouterClient<typeof contract> = createORPCClient(orglessLink);
 
-export { ApiError, isMfaRequired, isOrgAccessRevoked, isUnauthenticated } from './errors.ts';
+export { ApiError, ClientError, isMfaRequired, isOrgAccessRevoked, isUnauthenticated } from './errors.ts';
 
 function sessionStore(): Storage | undefined {
   try {
@@ -68,9 +68,10 @@ export const queryClient = new QueryClient({
   },
 });
 
+// An error in words, in the active locale. Call it while rendering, never when the error is caught, so the text
+// follows a language switch (the components that show it re-render through I18nProvider).
 export function errorMessage(error: unknown): string {
-  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message;
-  return translator()('common.error');
+  return describeError(error, translator(), activeLocale());
 }
 
 // Authenticated fetch for non-RPC endpoints (files, export). A refusal throws ApiError with the kernel's code and
@@ -81,7 +82,7 @@ export function takeOrgLeftNotice() {
 
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const response = await fetch(path, { ...init, headers: { ...(await headers()), ...(init.headers as Record<string, string> | undefined) } });
-  if (!response.ok) throw await apiErrorFromResponse(response, translator());
+  if (!response.ok) throw await apiErrorFromResponse(response);
   return response;
 }
 
@@ -92,7 +93,7 @@ export async function fetchFile(fileId: string): Promise<Blob> {
     const { url } = (await (await apiFetch(`/api/files/${fileId}?link=1`)).json()) as { url: string | null };
     if (url) {
       const response = await fetch(url, { credentials: 'omit' }).catch(() => null);
-      if (!response?.ok) throw new Error(translator()('inbox.storageDownloadFailed'));
+      if (!response?.ok) throw new ClientError('inbox.storageDownloadFailed', (t) => t('inbox.storageDownloadFailed'));
       return response.blob();
     }
   }
@@ -104,7 +105,7 @@ type Uploaded = { fileId: string; duplicate: boolean };
 // One file through a presigned staging upload (plan §7.6): a single-use form from the kernel, the bytes straight to
 // the bucket, then the kernel reads them back, hashes them and records the file.
 async function uploadStaged(file: File): Promise<Uploaded> {
-  if (file.size > MAX_UPLOAD_BYTES) throw new Error(translator()('inbox.fileTooLarge', { name: file.name }));
+  if (file.size > MAX_UPLOAD_BYTES) throw new ClientError('inbox.fileTooLarge', (t) => t('inbox.fileTooLarge', { name: file.name }));
   const grant = (await (await apiFetch('/api/files/uploads', { method: 'POST' })).json()) as {
     uploadId: string;
     url: string;
@@ -116,7 +117,7 @@ async function uploadStaged(file: File): Promise<Uploaded> {
   form.append('file', file);
   // No credentials or Crove headers: the form's signature is the only authorization the bucket sees.
   const stored = await fetch(grant.url, { method: 'POST', body: form, credentials: 'omit' }).catch(() => null);
-  if (!stored?.ok) throw new Error(translator()('inbox.storageUploadFailed', { name: file.name }));
+  if (!stored?.ok) throw new ClientError('inbox.storageUploadFailed', (t) => t('inbox.storageUploadFailed', { name: file.name }));
   // A busy kernel refuses the completion without using the grant, so the same completion is retried.
   const response = await retryWhileBusy(() =>
     apiFetch(`/api/files/uploads/${grant.uploadId}/complete`, {

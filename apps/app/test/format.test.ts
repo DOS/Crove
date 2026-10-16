@@ -1,5 +1,6 @@
 // Locale-aware money, number and date formatting (issue #47).
 import { describe, expect, it } from 'vitest';
+import { previewPurchaseJournal, toUnits } from '../src/lib/decimal.ts';
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '../src/lib/format.ts';
 
 // Intl separates the amount and the currency symbol with a no-break space.
@@ -20,6 +21,37 @@ describe('formatMoney', () => {
   it('uses the precision of other currencies', () => {
     expect(plain(formatMoney('1234.5000', 'vi', 'USD'))).toBe('1.234,50 US$');
     expect(plain(formatMoney('1234.5', 'en', 'USD'))).toBe('US$1,234.50');
+  });
+
+  it('shows the decimals an amount has, up to the 4 the ledger keeps, never rounding to whole đồng', () => {
+    expect(plain(formatMoney('100.5', 'vi'))).toBe('100,5 ₫');
+    expect(plain(formatMoney('100.5000', 'en'))).toBe('₫100.5');
+    expect(plain(formatMoney('-0.0001', 'vi'))).toBe('-0,0001 ₫');
+    expect(plain(formatMoney('1234.5678', 'en', 'USD'))).toBe('US$1,234.5678');
+    // Past the fourth decimal (an invoice line read with 8): half away from zero, as the ledger rounds.
+    expect(plain(formatMoney('100.00005', 'vi'))).toBe('100,0001 ₫');
+    expect(plain(formatMoney('-100.00005', 'vi'))).toBe('-100,0001 ₫');
+  });
+
+  // Issue #215: rounding each line to whole đồng could show two 100.5 lines as 101 + 101 next to a 201 total. Shown
+  // exactly, the lines of an entry always add up to its totals on screen.
+  it('never shows a journal line 1 ₫ off the total it adds up to', () => {
+    const parse = (shown: string) => toUnits(plain(shown).replace(' ₫', '').replace(/\./g, '').replace(',', '.'));
+    const cases: Array<[string, string[], string]> = [
+      ['two half đồng lines', ['100.5', '100.5'], '0'],
+      ['many fractional lines', ['0.4', '0.4', '0.4', '1000000.3333', '2.6667'], '100000.3'],
+      ['negative adjustment', ['-100.5', '-0.5'], '-10.1'],
+    ];
+    for (const [name, amounts, vat] of cases) {
+      const lines = amounts.map((amount, i) => ({ debitAccount: String(6000 + i), amount, vatRate: '10%' }));
+      const entry = previewPurchaseJournal(lines, vat);
+      const shown = entry.map((l) => ({ debit: parse(formatMoney(l.debit, 'vi')), credit: parse(formatMoney(l.credit, 'vi')) }));
+      const debits = shown.reduce((acc, l) => acc + l.debit, 0n);
+      const credits = shown.reduce((acc, l) => acc + l.credit, 0n);
+      expect(debits, name).toBe(credits);
+      // Each line on screen is the amount the ledger holds.
+      expect(shown.map((l) => l.debit - l.credit), name).toEqual(entry.map((l) => toUnits(l.debit) - toUnits(l.credit)));
+    }
   });
 
   it('keeps empty and unparseable values, and an unknown currency code', () => {

@@ -5,19 +5,38 @@ const DECIMAL = /^-?\d+(\.\d+)?$/;
 const numberFormats = new Map<string, Intl.NumberFormat>();
 const dateFormats = new Map<Locale, Intl.DateTimeFormat>();
 
+// The ledger keeps amounts with 4 decimals (NUMERIC(20,4)); money is shown with up to as many.
+const LEDGER_DECIMALS = 4;
+
 function numberFormat(locale: Locale, currency?: string): Intl.NumberFormat {
   const key = `${locale}|${currency ?? ''}`;
   let format = numberFormats.get(key);
   if (!format) {
-    format = new Intl.NumberFormat(FORMAT_LOCALE[locale], currency ? { style: 'currency', currency } : { maximumFractionDigits: 4 });
+    if (currency) {
+      // The currency's usual decimals as the minimum (none for VND, 2 for USD), up to the ledger's 4 when the amount has
+      // them: never rounded to whole đồng.
+      const usual = new Intl.NumberFormat(FORMAT_LOCALE[locale], { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 0;
+      format = new Intl.NumberFormat(FORMAT_LOCALE[locale], {
+        style: 'currency',
+        currency,
+        minimumFractionDigits: usual,
+        maximumFractionDigits: Math.max(usual, LEDGER_DECIMALS),
+      });
+    } else {
+      format = new Intl.NumberFormat(FORMAT_LOCALE[locale], { maximumFractionDigits: LEDGER_DECIMALS });
+    }
     numberFormats.set(key, format);
   }
   return format;
 }
 
-// Formats a decimal string (e.g. "1980000.0000") as money in the currency's usual precision (no decimals for VND).
-// The string is passed to Intl.NumberFormat as is, which formats it as an exact decimal (Intl.NumberFormat v3:
-// Chrome 106, Firefox 116, Safari 15.4). Older engines read it as a float, exact up to 15 significant digits.
+// Formats a decimal string (e.g. "1980000.0000") as money: the currency's usual decimals (none for VND), more only
+// when the amount has them, up to the 4 the ledger keeps (issue #215). So an amount the ledger holds is shown exactly
+// and the lines of an entry always add up to its totals on screen; rounding each line to whole đồng could show a line
+// 1 ₫ off the total it adds up to. Digits past the fourth (an invoice line read with more) round half away from zero,
+// as the ledger rounds them. The string is passed to Intl.NumberFormat as is, which formats it as an exact decimal
+// (Intl.NumberFormat v3: Chrome 106, Firefox 116, Safari 15.4). Older engines read it as a float, exact up to 15
+// significant digits.
 export function formatMoney(value: string | null | undefined, locale: Locale, currency = 'VND'): string {
   if (value === null || value === undefined || value === '') return '';
   if (!DECIMAL.test(value)) return value;
