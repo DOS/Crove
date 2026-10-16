@@ -53,6 +53,7 @@ async function main() {
   );
   console.log(`[storage] ${describeStorage(config)}`);
   console.log(`[mail] ${describeMailer(config)}`);
+  console.log(`[modules] ${config.CROVE_MODULES.join(', ')}`);
 
   const kernel = createKernel(config, defaultAdapters(config));
   const stop = await kernel.start(role);

@@ -83,7 +83,7 @@ suite('email budget through the /auth/v1 proxy (#190)', () => {
     });
     app = createHttpApp({
       config,
-      runtime: {} as Runtime,
+      runtime: { installed: () => true, modules: () => ['kernel', 'finance'] } as unknown as Runtime,
       store: {} as BlobStore,
       authenticate: async () => {
         throw new Error('not used');
@@ -150,7 +150,7 @@ suite('email budget through the /auth/v1 proxy (#190)', () => {
         AUTH_AUTOCONFIRM: 'false',
         WEB_DIST: '/nonexistent',
       }),
-      runtime: {} as Runtime,
+      runtime: { installed: () => true, modules: () => ['kernel', 'finance'] } as unknown as Runtime,
       store: {} as BlobStore,
       authenticate: async () => {
         throw new Error('not used');

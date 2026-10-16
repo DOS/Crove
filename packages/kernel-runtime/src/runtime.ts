@@ -70,11 +70,19 @@ export interface QueryDef<I = unknown, O = unknown> {
   handler: (ctx: QueryContext, input: I) => Promise<O>;
 }
 
+// The answer of a lookup into another module (plan Decision 12, ADR-0031). A deployment may leave a module out
+// (CROVE_MODULES), so a module that is not installed is an expected answer, not an error.
+export type Lookup<O> = { status: 'ok'; value: O } | { status: 'not_installed'; module: string };
+
 export interface QueryContext {
   trx: Transaction<Database>;
   orgId: string;
   actor: Actor;
   role: MemberRole | null;
+  // Runs another registered query in the same transaction, with the same access check as Runtime.query(). A query
+  // of a module this runtime does not have answers not_installed; an unknown query of an installed module is still
+  // QUERY_NOT_FOUND (a caller bug).
+  query<O>(name: string, input: unknown): Promise<Lookup<O>>;
 }
 
 export interface CommandContext extends QueryContext {
@@ -249,6 +257,12 @@ function logInternal(where: string, error: unknown, ids: { orgId?: string | null
   });
 }
 
+// The module a command, query or event belongs to: the part of its name before the first dot.
+function moduleOf(name: string): string {
+  const dot = name.indexOf('.');
+  return dot === -1 ? name : name.slice(0, dot);
+}
+
 function isCellResolver(value: CellResolver | Db): value is CellResolver {
   const candidate = value as Partial<CellResolver>;
   return typeof candidate.resolveTenant === 'function' && typeof candidate.controlPlane === 'function';
@@ -257,6 +271,8 @@ function isCellResolver(value: CellResolver | Db): value is CellResolver {
 export class Runtime {
   private readonly commands = new Map<string, CommandDef<unknown, unknown>>();
   private readonly queries = new Map<string, QueryDef<unknown, unknown>>();
+  // Modules with at least one registered command or query: the part of a name before its first dot.
+  private readonly installedModules = new Set<string>();
   // Where each transaction opens (Decision 14): tenant work on the org's cell, org-less work on the control plane.
   private readonly cells: CellResolver;
   private readonly sessions: SessionStatusSource | null;
@@ -284,12 +300,59 @@ export class Runtime {
         throw new Error(`command ${c.name}: a reviser (access 'proposal_revision') names the command it revises, and only a reviser does`);
       }
       this.commands.set(c.name, c as CommandDef<unknown, unknown>);
+      this.installedModules.add(moduleOf(c.name));
     }
     for (const q of defs.queries ?? []) {
       if (this.queries.has(q.name)) throw new Error(`duplicate query ${q.name}`);
       this.queries.set(q.name, q as QueryDef<unknown, unknown>);
+      this.installedModules.add(moduleOf(q.name));
     }
     return this;
+  }
+
+  // Whether this runtime registered any command or query of the module (plan Decision 12). The server asks it
+  // before registering a module's routes and jobs, so the registry is the one source of what is installed.
+  installed(module: string): boolean {
+    return this.installedModules.has(module);
+  }
+
+  // The installed modules, sorted.
+  modules(): string[] {
+    return [...this.installedModules].sort();
+  }
+
+  // A query context for a handler: the transaction, the entered org and role, and ctx.query for lookups.
+  private queryContext(trx: Transaction<Database>, orgId: string, actor: Actor, role: MemberRole | null): QueryContext {
+    return { trx, orgId, actor, role, query: (name, input) => this.lookup(trx, orgId, actor, role, name, input) };
+  }
+
+  // ctx.query: another query in the caller's transaction and context, checked as Runtime.query() checks it.
+  private async lookup<O>(
+    trx: Transaction<Database>,
+    orgId: string,
+    actor: Actor,
+    role: MemberRole | null,
+    name: string,
+    rawInput: unknown,
+  ): Promise<Lookup<O>> {
+    const def = this.queries.get(name);
+    if (!def) {
+      const module = moduleOf(name);
+      if (!this.installedModules.has(module)) return { status: 'not_installed', module };
+      throw new DomainError('QUERY_NOT_FOUND', 404, `Không có truy vấn ${name}`);
+    }
+    const input = parseInput(def.input, rawInput);
+    this.authorizeQuery(def, actor, role);
+    const value = (await def.handler(this.queryContext(trx, orgId, actor, role), input)) as O;
+    return { status: 'ok', value };
+  }
+
+  private authorizeQuery(def: QueryDef<unknown, unknown>, actor: Actor, role: MemberRole | null): void {
+    if (def.access === 'system') {
+      if (actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Không có quyền thực hiện');
+    } else if (actor.type === 'user' && (!role || !def.access.includes(role))) {
+      throw new DomainError('FORBIDDEN', 403, 'Không có quyền xem');
+    }
   }
 
   // The session status check, in the caller's transaction. Fails closed: a user actor without a session id is
@@ -425,10 +488,7 @@ export class Runtime {
     const commandId = uuidv7();
     let auditDetail: Record<string, unknown> | undefined;
     const ctx: CommandContext = {
-      trx,
-      orgId: base.orgId,
-      actor: base.actor,
-      role: base.role,
+      ...this.queryContext(trx, base.orgId, base.actor, base.role),
       commandId,
       proposalId: base.proposalId,
       now: new Date(),
@@ -689,12 +749,8 @@ export class Runtime {
         await this.checkSession(trx, options.actor, options.orgId);
         await sql`SET TRANSACTION READ ONLY`.execute(trx);
         const role = await this.enterContext(trx, options.actor, options.orgId);
-        if (def.access === 'system') {
-          if (options.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Không có quyền thực hiện');
-        } else if (options.actor.type === 'user' && (!role || !def.access.includes(role))) {
-          throw new DomainError('FORBIDDEN', 403, 'Không có quyền xem');
-        }
-        return (await def.handler({ trx, orgId: options.orgId, actor: options.actor, role }, input)) as O;
+        this.authorizeQuery(def, options.actor, role);
+        return (await def.handler(this.queryContext(trx, options.orgId, options.actor, role), input)) as O;
       });
     } catch (error) {
       const domain = toDomainError(error);

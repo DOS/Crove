@@ -107,6 +107,8 @@ describe.each(backends)('files survive a restart on $name, from the API and the 
   // Answers to Runtime.orgless, in order (the enqueue definer, then the org lookup by inbound token).
   const orgless: unknown[] = [];
   const runtime = {
+    installed: () => true,
+    modules: () => ['kernel', 'finance'],
     forUser: async () => [{ orgId, slug: 'acme', name: 'Acme', role: 'owner' }],
     orgless: async () => orgless.shift(),
     execute: async (command: string, input: Record<string, unknown>) => {

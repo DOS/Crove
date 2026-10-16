@@ -2,7 +2,7 @@ import { Outlet, createRootRoute, createRoute, createRouter, redirect, type Erro
 import { useTranslations } from 'use-intl';
 import { Button } from './components/ui.tsx';
 import { getCurrentOrg, isUnauthenticated, orpc, queryClient, setCurrentOrg } from './lib/api.ts';
-import { accessToken, auth } from './lib/auth.ts';
+import { accessToken, auth, getConfig } from './lib/auth.ts';
 import { signOut } from './lib/session-actions.ts';
 import { pendingInvite, rememberInvite, takeTokenFromHash } from './lib/invite.ts';
 import { AuthPage } from './routes/auth.tsx';
@@ -104,9 +104,13 @@ const orgIndexRoute = createRoute({
 
 export const inboxRoute = createRoute({ getParentRoute: () => orgRoute, path: 'inbox', component: InboxPage });
 export const inboxDetailRoute = createRoute({ getParentRoute: () => orgRoute, path: 'inbox/$id', component: InboxDetailPage });
-const documentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'documents', component: DocumentsPage });
-const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendors', component: VendorsPage });
-const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', component: JournalPage });
+// Screens of the finance module; a deployment without it (CROVE_MODULES) sends them to the inbox.
+const requireFinance = ({ params }: { params: { slug: string } }) => {
+  if (!getConfig().modules.includes('finance')) throw redirect({ to: '/o/$slug/inbox', params: { slug: params.slug } });
+};
+const documentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'documents', beforeLoad: requireFinance, component: DocumentsPage });
+const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendors', beforeLoad: requireFinance, component: VendorsPage });
+const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, component: JournalPage });
 const settingsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'settings', component: SettingsPage });
 
 const routeTree = rootRoute.addChildren([

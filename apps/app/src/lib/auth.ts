@@ -8,6 +8,8 @@ export interface PublicConfig {
   inboundEnabled: boolean;
   // The server mails invites (SMTP configured).
   mailEnabled: boolean;
+  // The modules this deployment runs (CROVE_MODULES); kernel is always one of them.
+  modules: string[];
 }
 
 let config: PublicConfig | null = null;

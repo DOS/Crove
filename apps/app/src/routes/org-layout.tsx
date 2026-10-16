@@ -4,17 +4,21 @@ import { useTranslations } from 'use-intl';
 import { Logo, cx } from '../components/ui.tsx';
 import { LocaleSwitcher } from '../i18n/provider.tsx';
 import { orpc } from '../lib/api.ts';
+import { getConfig } from '../lib/auth.ts';
+import { installedItems } from '../lib/modules.ts';
 import { signOut } from '../lib/session-actions.ts';
 
-const NAV = [
-  { to: '/o/$slug/inbox', label: 'inbox' },
-  { to: '/o/$slug/documents', label: 'documents' },
-  { to: '/o/$slug/vendors', label: 'vendors' },
-  { to: '/o/$slug/journal', label: 'journal' },
-  { to: '/o/$slug/settings', label: 'settings' },
+// Each item belongs to a module; the menu shows only the modules this deployment runs (CROVE_MODULES).
+const ALL_NAV = [
+  { to: '/o/$slug/inbox', label: 'inbox', module: 'kernel' },
+  { to: '/o/$slug/documents', label: 'documents', module: 'finance' },
+  { to: '/o/$slug/vendors', label: 'vendors', module: 'finance' },
+  { to: '/o/$slug/journal', label: 'journal', module: 'finance' },
+  { to: '/o/$slug/settings', label: 'settings', module: 'kernel' },
 ] as const;
 
 export function OrgLayout() {
+  const NAV = installedItems(getConfig().modules, ALL_NAV);
   const { slug } = useParams({ strict: false }) as { slug: string };
   const navigate = useNavigate();
   const t = useTranslations('nav');
@@ -75,8 +79,8 @@ export function OrgLayout() {
           <LocaleSwitcher />
           <select
             className="rounded-lg border border-line bg-surface-2 px-2 py-1 text-sm text-fg"
-            value={NAV.find((n) => window.location.pathname.endsWith(n.to.split('/').pop() ?? ''))?.to ?? NAV[0].to}
-            onChange={(e) => void navigate({ to: e.target.value as (typeof NAV)[number]['to'], params: { slug } })}
+            value={NAV.find((n) => window.location.pathname.endsWith(n.to.split('/').pop() ?? ''))?.to ?? '/o/$slug/inbox'}
+            onChange={(e) => void navigate({ to: e.target.value as (typeof ALL_NAV)[number]['to'], params: { slug } })}
           >
             {NAV.map((n) => (
               <option key={n.to} value={n.to}>

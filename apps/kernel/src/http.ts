@@ -173,6 +173,8 @@ export function createHttpApp(deps: HttpDeps) {
       aiEnabled: deps.aiEnabled,
       inboundEnabled: Boolean(config.INBOUND_DOMAIN && config.INBOUND_SECRET),
       mailEnabled: deps.mailer?.enabled ?? false,
+      // The SPA shows the menus of these modules only (plan Decision 12).
+      modules: runtime.modules(),
     }),
   );
 
@@ -336,31 +338,34 @@ export function createHttpApp(deps: HttpDeps) {
     }
   });
 
-  app.get('/api/export/journal.xlsx', async (c) => {
-    try {
-      const user = c.get('user');
-      const orgSlug = c.req.header(ORG_HEADER) ?? null;
-      const orgId = await resolveOrg(runtime, user, orgSlug);
-      const range = { from: c.req.query('from') || undefined, to: c.req.query('to') || undefined, limit: JOURNAL_EXPORT_LIMIT };
-      const entries = await runtime.query<JournalEntryView[]>('finance.journal.list', range, {
-        actor: actorOf(user),
-        orgId,
-      });
-      if (entries.length >= JOURNAL_EXPORT_LIMIT) {
-        throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều bút toán để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
+  // Finance routes exist only when the finance module is installed (CROVE_MODULES); otherwise they are 404 below.
+  if (runtime.installed('finance')) {
+    app.get('/api/export/journal.xlsx', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const range = { from: c.req.query('from') || undefined, to: c.req.query('to') || undefined, limit: JOURNAL_EXPORT_LIMIT };
+        const entries = await runtime.query<JournalEntryView[]>('finance.journal.list', range, {
+          actor: actorOf(user),
+          orgId,
+        });
+        if (entries.length >= JOURNAL_EXPORT_LIMIT) {
+          throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều bút toán để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
+        }
+        const bytes = await buildJournalWorkbook([...entries].reverse(), orgSlug ?? '');
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': `attachment; filename="crove-but-toan-${orgSlug}.xlsx"`,
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
       }
-      const bytes = await buildJournalWorkbook([...entries].reverse(), orgSlug ?? '');
-      return new Response(body(bytes), {
-        headers: {
-          'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          'content-disposition': `attachment; filename="crove-but-toan-${orgSlug}.xlsx"`,
-          'cache-control': 'private, no-store',
-        },
-      });
-    } catch (error) {
-      return problem(c, error);
-    }
-  });
+    });
+  }
 
   // The org export (issue #38), owners only: GET /api/org-export/manifest or /api/org-export/<table>, from the newest
   // export kernel.org.export.get reports. The key comes from that export's audit row, never from the request.
