@@ -317,3 +317,94 @@ export const zJournalEntry = z.object({
 });
 
 export const zAccount = z.object({ code: z.string(), name: z.string(), parentCode: z.string().nullable() });
+
+// AI agents as org members (ADR-0029): the chart, the agents, their tasks, budgets and the "Stop AI" kill switch.
+export const zModuleId = z.string().regex(/^[a-z][a-z0-9_]*$/).max(50);
+export const zAgentRoleKey = z.string().regex(/^[a-z][a-z0-9_.]*$/).max(100);
+export const zAgentRisk = z.enum(['R0', 'R1', 'R2']);
+export const zAgentStatus = z.enum(['active', 'paused', 'retired']);
+export const zPositionStatus = z.enum(['active', 'paused', 'archived']);
+export const zAgentScope = z.enum(['org', 'module', 'agent']);
+export const zTaskStatus = z.enum(['todo', 'in_progress', 'waiting', 'in_review', 'done', 'cancelled']);
+// A non-negative amount with up to 6 decimals (ai_run cost), as a decimal string.
+export const zAiAmount = z.string().regex(/^\d{1,12}(\.\d{1,6})?$/, 'decimal string');
+export const zJobDescription = z.record(z.string(), z.unknown());
+
+// Who holds a position: a member, or an agent, which the chart always labels as AI (ADR-0029 section 9).
+export const zPositionHolder = z
+  .discriminatedUnion('type', [
+    z.object({ type: z.literal('user'), userId: zId, email: z.string().nullable(), displayName: z.string().nullable(), ai: z.literal(false) }),
+    z.object({ type: z.literal('agent'), agentId: zId, name: z.string().nullable(), status: z.string().nullable(), ai: z.literal(true) }),
+  ])
+  .nullable();
+
+export const zChart = z.object({
+  // The owners, at the root of the chart: positions without reportsTo report to them.
+  root: z.array(z.object({ userId: zId, email: z.string().nullable(), displayName: z.string().nullable() })),
+  positions: z.array(
+    z.object({
+      id: zId,
+      title: z.string(),
+      module: z.string(),
+      roleKey: z.string(),
+      reportsTo: zId.nullable(),
+      status: zPositionStatus,
+      jobDescription: z.unknown(),
+      holder: zPositionHolder,
+    }),
+  ),
+  agents: z.array(
+    z.object({ id: zId, templateKey: z.string(), displayName: z.string(), status: zAgentStatus, maxRisk: zAgentRisk, dailyRunCap: z.number().int() }),
+  ),
+  // Kill switches that are on.
+  killSwitches: z.array(z.object({ id: zId, scope: zAgentScope, target: z.string(), reason: z.string().nullable(), engagedAt: z.string() })),
+});
+
+export const zAgentTemplate = z.object({
+  key: z.string(),
+  module: z.string(),
+  title: z.string(),
+  roleKey: z.string(),
+  maxRisk: zAgentRisk,
+  dailyRunCap: z.number().int(),
+  jobDescription: z.unknown(),
+  // false: this deployment does not enable the template's module (CROVE_MODULES), so installing it answers MODULE_DISABLED.
+  moduleEnabled: z.boolean(),
+});
+
+export const zAgentBudget = z.object({
+  id: zId,
+  scope: zAgentScope,
+  target: z.string(),
+  monthlyLimit: z.string(),
+  warnPercent: z.number().int(),
+  hardStop: z.boolean(),
+  // What this month's runs it covers cost so far.
+  spent: z.string(),
+  updatedAt: z.string(),
+});
+
+export const zTask = z.object({
+  id: zId,
+  title: z.string(),
+  kind: z.string(),
+  status: zTaskStatus,
+  assigneePositionId: zId.nullable(),
+  parentTaskId: zId.nullable(),
+  source: z.string(),
+  sourceRef: z.unknown(),
+  requestDepth: z.number().int(),
+  // Made from untrusted content (an email, an AI run that read one).
+  tainted: z.boolean(),
+  createdByType: z.string(),
+  due: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+export const zTaskDetail = z.object({
+  task: zTask.extend({ description: z.string().nullable(), fence: z.string(), checkedOut: z.boolean() }),
+  comments: z.array(z.object({ id: zId, body: z.string(), authorType: z.string(), authorId: zId.nullable(), tainted: z.boolean(), createdAt: z.string() })),
+  // The proposal a review task is about, with what its deterministic checks found (null when none are readable).
+  proposal: z.object({ id: zId, title: z.string(), status: z.string(), checks: z.array(zCheck).nullable() }).nullable(),
+});
+

@@ -12,13 +12,8 @@ const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 
 // Codes the SPA never receives, so it keeps the kernel's message for them.
 const NOT_SHOWN: Record<string, string> = {
-  // AI agents and their runs, positions and tasks: worker and agent paths, no SPA screen yet.
-  AGENT_ALREADY_PLACED: 'agents',
-  AGENT_NOT_ACTIVE: 'agents',
-  AGENT_NOT_FOUND: 'agents',
+  // AI agents: codes only the worker and agent runs get; the agents screens (issue #258) word the others.
   AGENT_PROGRAM_MISSING: 'agents',
-  AGENT_RETIRED: 'agents',
-  AGENT_ROLE_MISMATCH: 'agents',
   AGENT_RUN_NOT_LIVE: 'agents',
   AGENT_FORBIDDEN: 'agents',
   AGENT_CONTEXT_WORKER_ONLY: 'agents',
@@ -28,20 +23,13 @@ const NOT_SHOWN: Record<string, string> = {
   AGENT_TASK_KIND: 'agents',
   AGENT_DELEGATION_SUBTREE: 'agents',
   AGENT_ESCALATION_TARGET: 'agents',
-  MODULE_DISABLED: 'agents',
   KILL_SWITCH_ON: 'agents',
   BUDGET_EXHAUSTED: 'agents',
   LEASE_LOST: 'agents',
   TASK_CHECKED_OUT: 'agents',
   TASK_CLOSED: 'agents',
-  TASK_NOT_FOUND: 'agents',
-  TEMPLATE_NOT_FOUND: 'agents',
-  POSITION_ARCHIVED: 'agents',
-  POSITION_CYCLE: 'agents',
-  POSITION_NOT_FOUND: 'agents',
   OUTSIDE_SUBTREE: 'agents',
   DEPTH_LIMIT: 'agents',
-  INVALID_TARGET: 'agents',
   // Connected channels: no SPA screen yet.
   CHANNEL_NOT_ACTIVE: 'channels',
   CHANNEL_NOT_FOUND: 'channels',

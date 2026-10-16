@@ -2,6 +2,20 @@ import { oc } from '@orpc/contract';
 import { z } from 'zod';
 import {
   zAccount,
+  zAgentBudget,
+  zAgentRisk,
+  zAgentRoleKey,
+  zAgentScope,
+  zAgentStatus,
+  zAgentTemplate,
+  zAiAmount,
+  zChart,
+  zJobDescription,
+  zModuleId,
+  zPositionStatus,
+  zTask,
+  zTaskDetail,
+  zTaskStatus,
   zAccountCode,
   zChannelConnection,
   zFileStatus,
@@ -137,6 +151,115 @@ export const contract = {
   },
   accounts: {
     list: oc.output(z.array(zAccount)),
+  },
+  // The org chart (ADR-0029): positions shared by members and AI agents. Every member reads it; changing it is the
+  // owner's (R3: role keys, holders and reporting lines decide what agents may do). A retry with the same
+  // idempotencyKey returns the first result.
+  chart: {
+    get: oc.output(zChart),
+    createPosition: oc
+      .input(
+        z.object({
+          title: z.string().trim().min(1).max(200),
+          module: zModuleId,
+          roleKey: zAgentRoleKey,
+          reportsTo: zId.nullable().optional(),
+          jobDescription: zJobDescription.optional(),
+          idempotencyKey: zId,
+        }),
+      )
+      .output(z.object({ positionId: zId })),
+    updatePosition: oc
+      .input(
+        z.object({
+          id: zId,
+          title: z.string().trim().min(1).max(200).optional(),
+          reportsTo: zId.nullable().optional(),
+          status: zPositionStatus.optional(),
+          idempotencyKey: zId,
+        }),
+      )
+      .output(z.object({ positionId: zId })),
+    // Gives the position to a member or an active agent of a matching template, or vacates it (holder null).
+    assign: oc
+      .input(
+        z.object({
+          id: zId,
+          holder: z.discriminatedUnion('type', [z.object({ type: z.literal('user'), userId: zId }), z.object({ type: z.literal('agent'), agentId: zId })]).nullable(),
+          idempotencyKey: zId,
+        }),
+      )
+      .output(z.object({ positionId: zId })),
+    // The agent templates modules declare; moduleEnabled false means installing it answers MODULE_DISABLED.
+    templates: oc.output(z.array(zAgentTemplate)),
+    // Owner (R3): an agent and the position it holds, from a template. MODULE_DISABLED when the deployment does not
+    // enable the template's module.
+    installTemplate: oc
+      .input(
+        z.object({
+          templateKey: z.string().min(1).max(100),
+          reportsTo: zId.nullable().optional(),
+          displayName: z.string().trim().min(1).max(200).optional(),
+          idempotencyKey: zId,
+        }),
+      )
+      .output(z.object({ agentId: zId, positionId: zId })),
+  },
+  agents: {
+    // Owner (R3): status (pausing or retiring stops its runs at once), max_risk, name and daily run cap.
+    update: oc
+      .input(
+        z.object({
+          id: zId,
+          status: zAgentStatus.optional(),
+          maxRisk: zAgentRisk.optional(),
+          displayName: z.string().trim().min(1).max(200).optional(),
+          dailyRunCap: z.number().int().min(1).max(10000).optional(),
+          idempotencyKey: zId,
+        }),
+      )
+      .output(z.object({ agentId: zId })),
+    // Owners and admins: the monthly budgets and this month's spend.
+    budgets: oc.output(z.array(zAgentBudget)),
+    // Owner (R3): sets the monthly budget of the org (target '*'), a module or an agent.
+    setBudget: oc
+      .input(
+        z.object({
+          scope: zAgentScope,
+          target: z.string().min(1).max(100),
+          monthlyLimit: zAiAmount,
+          warnPercent: z.number().int().min(1).max(100).optional(),
+          hardStop: z.boolean().optional(),
+          idempotencyKey: zId,
+        }),
+      )
+      .output(z.object({ budgetId: zId })),
+    // "Stop AI": owners and admins, R1, so it never waits for a second factor. Engaging a switch that is already on
+    // is a no-op that returns it.
+    stop: oc
+      .input(z.object({ scope: zAgentScope, target: z.string().min(1).max(100), reason: z.string().max(500).optional(), idempotencyKey: zId }))
+      .output(z.object({ killSwitchId: zId, stoppedRuns: z.number().int() })),
+    // Owner (R3, fresh MFA): turns a kill switch off again.
+    release: oc.input(z.object({ id: zId, idempotencyKey: zId })).output(z.object({ ok: z.literal(true) })),
+  },
+  // Work given to positions, held by members or agents (ADR-0029). Every member reads; owners, admins and members
+  // create, comment and change status.
+  tasks: {
+    list: oc.input(z.object({ positionId: zId.optional(), mine: z.boolean().optional(), status: z.array(zTaskStatus).max(6).optional() })).output(z.array(zTask)),
+    get: oc.input(z.object({ id: zId })).output(zTaskDetail),
+    create: oc
+      .input(
+        z.object({
+          title: z.string().trim().min(1).max(300),
+          description: z.string().max(10000).optional(),
+          assigneePositionId: zId.nullable(),
+          due: z.iso.datetime().optional(),
+          idempotencyKey: zId,
+        }),
+      )
+      .output(z.object({ taskId: zId })),
+    comment: oc.input(z.object({ id: zId, body: z.string().trim().min(1).max(10000), idempotencyKey: zId })).output(z.object({ commentId: zId })),
+    setStatus: oc.input(z.object({ id: zId, status: zTaskStatus, idempotencyKey: zId })).output(z.object({ taskId: zId, status: zTaskStatus })),
   },
 };
 

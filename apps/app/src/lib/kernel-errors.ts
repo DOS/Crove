@@ -88,6 +88,19 @@ export const KERNEL_ERROR_CODES = [
   'EXPORT_PENDING',
   'EXPORT_TOO_LARGE',
   'SLUG_MISMATCH',
+  // AI agents: the chart, templates, agents, budgets and tasks (ADR-0029, issue #258).
+  'MODULE_DISABLED',
+  'TEMPLATE_NOT_FOUND',
+  'POSITION_NOT_FOUND',
+  'POSITION_ARCHIVED',
+  'POSITION_CYCLE',
+  'AGENT_NOT_FOUND',
+  'AGENT_NOT_ACTIVE',
+  'AGENT_ROLE_MISMATCH',
+  'AGENT_ALREADY_PLACED',
+  'AGENT_RETIRED',
+  'INVALID_TARGET',
+  'TASK_NOT_FOUND',
 ] as const;
 
 export type KernelErrorCode = (typeof KERNEL_ERROR_CODES)[number];
