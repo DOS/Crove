@@ -16,7 +16,9 @@ Back up the key apart from database backups: a thief with both has every token. 
 
 ## Losing the key
 
-Nothing opens without it. Every connection keeps its row, but no job can use its token: owners reconnect each channel (Social > Channels > Reconnect), which seals a new token on the same connection. Posts and history keep pointing at the same connections.
+When the key file is missing at start, a new key is created and the process logs a warning: if channels were connected before, the file was lost (for example a deleted `keys` volume) and their tokens no longer open.
+
+Nothing opens without it. Every connection keeps its row, but no job can use its token: owners or admins reconnect each channel, which seals a new token on the same connection. Posts and history keep pointing at the same connections.
 
 ## Rotating the key
 
@@ -32,5 +34,7 @@ Rotate when someone who could read the key loses that access, when the key may h
 
    (run as the database owner; no Crove role can read the table).
 4. When no envelope uses the old key id any more, remove `CREDENTIAL_KEY_PREVIOUS` and restart.
+
+Only one previous key is kept: finish one rotation (step 4) before starting the next, or envelopes sealed with the oldest key stop opening.
 
 A leaked key and a leaked database together expose every token sealed with that key: rotate, then reconnect the channels so the platforms issue new tokens, and revoke the old ones on each platform where it offers that.

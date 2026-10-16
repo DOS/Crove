@@ -32,7 +32,7 @@ function credentialError(error: unknown): never {
     case 'CHANNEL_NOT_ACTIVE':
       throw new DomainError('CHANNEL_NOT_ACTIVE', 409, 'Kênh này không còn hoạt động, hãy kết nối lại');
     case 'CHANNEL_OWNER_LEFT':
-      throw new DomainError('CHANNEL_OWNER_LEFT', 409, 'Người đã kết nối kênh này không còn trong tổ chức, hãy kết nối lại');
+      throw new DomainError('CHANNEL_OWNER_LEFT', 409, 'Người đã kết nối kênh này không còn quyền quản lý kênh trong tổ chức, hãy kết nối lại');
     case 'CREDENTIAL_FORBIDDEN':
       throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới quản lý được kênh kết nối');
     default:
@@ -71,7 +71,11 @@ export const channelConnect = defineCommand({
       connected_by: userId,
       updated_at: ctx.now,
     };
-    // Reconnecting a live connection of the same account keeps its row; a revoked one is history and stays.
+    // Two connects of one account at once serialize here, so the second finds the first's row and reconnects
+    // instead of failing on the unique index (no row exists yet for FOR UPDATE to lock).
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove.channel:${ctx.orgId}:${input.provider}:${input.externalAccountId}`}, 0))`.execute(ctx.trx);
+    // Reconnecting a live connection of the same account keeps its row; a revoked one is history and stays. The
+    // member who reconnects becomes its connector, so the credential lives on their membership from now on.
     const existing = await ctx.trx
       .selectFrom('crove_kernel.channel_connection')
       .select(['id'])

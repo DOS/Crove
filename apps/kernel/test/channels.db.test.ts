@@ -43,6 +43,16 @@ suite('channel connections through the API (ADR-0025)', () => {
   const viewer: Account = { subject: randomUUID(), email: 'viewer@channels-api.test', session: randomUUID(), userId: '' };
   let org = { slug: '', orgId: '' };
 
+  async function admin<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
+    const client = new pg.Client({ connectionString: adminUrl });
+    await client.connect();
+    try {
+      return await fn(client);
+    } finally {
+      await client.end();
+    }
+  }
+
   async function tokenFor(who: Account, options: { mfa?: boolean } = {}) {
     const now = Math.floor(Date.now() / 1000);
     const mfa = options.mfa ? { aal: 'aal2', amr: [{ method: 'totp', timestamp: now }] } : {};
@@ -151,7 +161,25 @@ suite('channel connections through the API (ADR-0025)', () => {
     // The worker opens the sealed sandbox token for this org and account.
     const sealed = await worker.query<SealedChannelCredential>('kernel.channel.credential', { connectionId }, { actor: { type: 'system', component: 'test' }, orgId: org.orgId });
     const token = vault.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, { orgId: org.orgId, provider: sealed.provider, externalAccountId: sealed.externalAccountId });
-    expect(JSON.parse(token)).toMatchObject({ accessToken: expect.stringMatching(/^sbx_/) });
+    const accessToken = (JSON.parse(token) as { accessToken: string }).accessToken;
+    expect(accessToken).toMatch(/^sbx_/);
+    // The token the server made never left the envelope: not in audit rows, events, idempotency records or rows.
+    const dump = await admin(async (c) => {
+      const parts: string[] = [];
+      for (const q of [
+        'SELECT detail::text || coalesce(input_sha256, \'\') AS t FROM crove_kernel.audit_event WHERE org_id = $1',
+        'SELECT payload::text AS t FROM crove_kernel.outbox_event WHERE org_id = $1',
+        "SELECT coalesce(response::text, '') AS t FROM crove_kernel.idempotency_key WHERE org_id = $1",
+        'SELECT row_to_json(c)::text AS t FROM crove_kernel.channel_connection c WHERE org_id = $1',
+      ]) {
+        const { rows } = await c.query<{ t: string }>(q, [org.orgId]);
+        parts.push(...rows.map((r) => r.t));
+      }
+      return parts.join('\n');
+    });
+    expect(dump).toContain(connectionId);
+    expect(dump).not.toContain(accessToken);
+    expect(dump).not.toContain(sealed.envelope);
   });
 
   it('reconnects the same sandbox account with the same key', async () => {

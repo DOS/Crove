@@ -26,6 +26,7 @@ Social (publishing) starts now (plan Decision 17), and Service (inbound messages
 - `crove_kernel.credential` is definer-only machinery: no Crove role holds a grant on it. `credential_put` and `credential_drop` accept owners and admins of the org in context or the system; `credential_get` is granted to `crove_worker` only, answers in a system context only, and refuses once the member who connected the account has left the org.
 - `kernel.channel.connect` (R2, owners and admins) receives the envelope, never the token, and takes no idempotency key: every seal differs, and connecting a connected account again is already a reconnect of the same row. `kernel.channel.disconnect` revokes the row and drops the credential; `kernel.channel.list` never returns a credential; `kernel.channel.credential` is the system query provider jobs use.
 - `@crove/channel` holds the provider list and the offline `sandbox` provider; the RPC `channels.connectSandbox` makes and seals a sandbox token (on unless `CHANNEL_SANDBOX=false`).
+- A reconnect by another owner or admin replaces the token and makes them the connector; the credential then lives on their membership. `credential_get` also refuses once the connector is no longer an owner or admin, or is disabled.
 - Deferred to the steps that need them: `oauth_state` and the OAuth routes (S6), `external_call` and the refresh schedule (S4), a reseal command for rotations.
 
 ## Consequences

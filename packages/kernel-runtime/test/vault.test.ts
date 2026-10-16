@@ -16,6 +16,13 @@ describe('parseVaultKey', () => {
     expect(parseVaultKey(generateVaultKey()).key).toHaveLength(32);
   });
 
+  it('refuses a placeholder key', () => {
+    for (const weak of [Buffer.alloc(32, 0), Buffer.alloc(32, 7)]) {
+      expect(() => parseVaultKey(weak.toString('base64'))).toThrow(/random/);
+      expect(() => parseVaultKey(weak.toString('hex'))).toThrow(/random/);
+    }
+  });
+
   it('refuses a key of the wrong size or format', () => {
     for (const bad of ['', 'short', randomBytes(16).toString('base64'), randomBytes(31).toString('hex'), `${randomBytes(32).toString('hex')}00`]) {
       expect(() => parseVaultKey(bad)).toThrow(CredentialError);

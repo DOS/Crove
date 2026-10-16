@@ -11,7 +11,8 @@
 --                       credential_put   seals in (connect, refresh): owners and admins of the org in context, or
 --                                        the system (the worker refreshing a token);
 --                       credential_get   reads out: the worker only, in the system context of the org, and only
---                                        while the member who connected the account is still in the org (plan §7.4);
+--                                        while the member who connected the account is still an owner or admin of
+--                                        the org and not disabled (plan §7.4);
 --                       credential_drop  forgets it (disconnect).
 SET LOCAL lock_timeout = '2s';
 
@@ -90,8 +91,8 @@ END $$;
 -- The sealed credential of an active connection, for the worker in the system context of its org. Raises
 -- NO_CONTEXT (42501) outside a system context, CHANNEL_NOT_FOUND (P0002) when the org has no such connection or it
 -- has no credential, CHANNEL_NOT_ACTIVE (55000) when the connection is expired, revoked or in error, and
--- CHANNEL_OWNER_LEFT (42501) when the member who connected it has left the org (plan §7.4: the job stops and the
--- connection needs reconnecting).
+-- CHANNEL_OWNER_LEFT (42501) when the member who connected it has left the org, is no longer an owner or admin, or is
+-- disabled (plan §7.4: the job stops and the connection needs reconnecting by someone who may connect it).
 CREATE OR REPLACE FUNCTION crove_kernel.credential_get(p_connection_id uuid)
 RETURNS TABLE (key_id text, envelope bytea, provider text, external_account_id text)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -109,7 +110,10 @@ BEGIN
   IF v_connection.status <> 'active' THEN
     RAISE EXCEPTION 'CHANNEL_NOT_ACTIVE' USING ERRCODE = '55000';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM crove_kernel.tenant_member m WHERE m.org_id = v_org AND m.user_id = v_connection.connected_by) THEN
+  IF NOT EXISTS (
+    SELECT 1 FROM crove_kernel.tenant_member m JOIN crove_kernel.user_account u ON u.id = m.user_id
+    WHERE m.org_id = v_org AND m.user_id = v_connection.connected_by AND m.role IN ('owner', 'admin') AND u.disabled_at IS NULL
+  ) THEN
     RAISE EXCEPTION 'CHANNEL_OWNER_LEFT' USING ERRCODE = '42501';
   END IF;
   RETURN QUERY

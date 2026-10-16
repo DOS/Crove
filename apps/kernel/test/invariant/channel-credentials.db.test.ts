@@ -87,6 +87,26 @@ suite('channel credentials on PostgreSQL (ADR-0025)', () => {
     }
   }
 
+  // Runs and commits SQL as crove_worker in the system context of an org, as a provider job would.
+  async function asWorkerSql(orgId: string, text: string, values: unknown[]): Promise<void> {
+    const u = new URL(adminUrl);
+    u.username = 'crove_worker';
+    u.password = 'test-worker-pw';
+    const client = new pg.Client({ connectionString: u.toString() });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgId]);
+      await client.query(text, values);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
+
   const connect = (orgId: string, userId: string, input: ChannelConnectInput) =>
     api.execute<{ connectionId: string; reconnected: boolean }>('kernel.channel.connect', input, { actor: asUser(userId), orgId });
   const sealedOf = (orgId: string, connectionId: string) => worker.query<SealedChannelCredential>('kernel.channel.credential', { connectionId }, { actor: system, orgId });
@@ -172,7 +192,10 @@ suite('channel credentials on PostgreSQL (ADR-0025)', () => {
     const { connectionId } = await connect(orgId, owner, connectInput(orgId, 'secret-a'));
     // The query is system-only, and the API's login role may neither enter system context nor run credential_get.
     await expect(api.query('kernel.channel.credential', { connectionId }, { actor: asUser(owner), orgId })).rejects.toMatchObject({ status: 403 });
-    await expect(api.query('kernel.channel.credential', { connectionId }, { actor: system, orgId })).rejects.toBeDefined();
+    await expect(api.query('kernel.channel.credential', { connectionId }, { actor: system, orgId })).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    await expect(
+      admin(async (c) => (await c.query<{ can: boolean }>("SELECT has_function_privilege('crove_app', 'crove_kernel.enter_system_context(uuid)', 'EXECUTE') AS can")).rows[0]?.can),
+    ).resolves.toBe(false);
     // A worker connection in a user context (not system) is refused by the definer itself.
     await expect(worker.query('kernel.channel.credential', { connectionId }, { actor: asUser(owner), orgId })).rejects.toMatchObject({ status: 403 });
   });
@@ -238,12 +261,51 @@ suite('channel credentials on PostgreSQL (ADR-0025)', () => {
     expect(openFor(orgId, await sealedOf(orgId, first.connectionId))).toBe('new-token');
   });
 
-  it('stops handing out a credential once the member who connected it leaves', async () => {
-    const { orgId, others } = await orgWith(['admin']);
-    const [adminUser] = others as [string];
-    const { connectionId } = await connect(orgId, adminUser, connectInput(orgId, 'admin-token'));
-    await admin((c) => c.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [orgId, adminUser]));
-    await expect(sealedOf(orgId, connectionId)).rejects.toMatchObject({ code: 'CHANNEL_OWNER_LEFT' });
+  it('stops handing out a credential once the member who connected it leaves, is demoted or is disabled', async () => {
+    const { orgId, others } = await orgWith(['admin', 'admin', 'admin']);
+    const [leaves, demoted, disabled] = others as [string, string, string];
+    const conns: Record<string, string> = {};
+    for (const who of [leaves, demoted, disabled]) conns[who] = (await connect(orgId, who, connectInput(orgId, `token-${who}`))).connectionId;
+    for (const who of [leaves, demoted, disabled]) expect(openFor(orgId, await sealedOf(orgId, conns[who] as string))).toBe(`token-${who}`);
+    await admin(async (c) => {
+      await c.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [orgId, leaves]);
+      await c.query("UPDATE crove_kernel.tenant_member SET role = 'member' WHERE org_id = $1 AND user_id = $2", [orgId, demoted]);
+      await c.query('UPDATE crove_kernel.user_account SET disabled_at = now() WHERE id = $1', [disabled]);
+    });
+    for (const who of [leaves, demoted, disabled]) {
+      await expect(sealedOf(orgId, conns[who] as string)).rejects.toMatchObject({ code: 'CHANNEL_OWNER_LEFT' });
+    }
+  });
+
+  it('lets the worker reseal a token (the refresh path), never into a revoked connection', async () => {
+    const { orgId, owner } = await orgWith([]);
+    const account = `acct-${randomUUID().slice(0, 8)}`;
+    const { connectionId } = await connect(orgId, owner, connectInput(orgId, 'before-refresh', account));
+    const refreshed = vault.seal('after-refresh', { orgId, provider: 'sandbox', externalAccountId: account });
+    await asWorkerSql(orgId, 'SELECT crove_kernel.credential_put($1::uuid, $2, $3::bytea)', [connectionId, refreshed.keyId, refreshed.envelope]);
+    expect(openFor(orgId, await sealedOf(orgId, connectionId))).toBe('after-refresh');
+    await api.execute('kernel.channel.disconnect', { connectionId }, { actor: asUser(owner), orgId });
+    await expect(asMemberSql(owner, orgId, 'SELECT crove_kernel.credential_put($1::uuid, $2, $3::bytea)', [connectionId, 'k', Buffer.from([1])])).rejects.toThrow(
+      'CHANNEL_NOT_FOUND',
+    );
+  });
+
+  it('refuses to disconnect another org’s connection', async () => {
+    const a = await orgWith([]);
+    const b = await orgWith([]);
+    const { connectionId } = await connect(a.orgId, a.owner, connectInput(a.orgId, 'a-token'));
+    await expect(api.execute('kernel.channel.disconnect', { connectionId }, { actor: asUser(b.owner), orgId: b.orgId })).rejects.toMatchObject({
+      code: 'CHANNEL_NOT_FOUND',
+    });
+    expect(openFor(a.orgId, await sealedOf(a.orgId, connectionId))).toBe('a-token');
+  });
+
+  it('turns two connects of one new account at once into a connect and a reconnect', async () => {
+    const { orgId, owner } = await orgWith([]);
+    const account = `acct-${randomUUID().slice(0, 8)}`;
+    const results = await Promise.all([connect(orgId, owner, connectInput(orgId, 'one', account)), connect(orgId, owner, connectInput(orgId, 'two', account))]);
+    expect(new Set(results.map((r) => r.connectionId)).size).toBe(1);
+    expect(results.map((r) => r.reconnected).sort()).toEqual([false, true]);
   });
 
   it('forgets the token on disconnect and keeps the connection as history', async () => {

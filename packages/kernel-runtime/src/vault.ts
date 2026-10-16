@@ -49,6 +49,8 @@ export function parseVaultKey(text: string): VaultKey {
   else if (/^[A-Za-z0-9_-]{43}=?$/.test(t)) key = Buffer.from(t, 'base64url');
   else throw new CredentialError('a credential key must be 32 bytes, as base64 or 64 hex characters');
   if (key.length !== KEY) throw new CredentialError('a credential key must be 32 bytes, as base64 or 64 hex characters');
+  // A placeholder (all zeros, one repeated byte) is not a key.
+  if (key.every((b) => b === key[0])) throw new CredentialError('a credential key must be random: generate one with `openssl rand -base64 32`');
   return { id: vaultKeyId(key), key };
 }
 

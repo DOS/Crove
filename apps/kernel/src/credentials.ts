@@ -1,7 +1,8 @@
 // The open-source credential broker (crove-local, ADR-0025 decision 2): the vault, keyed from configuration. The key
 // stays outside the database: in CREDENTIAL_KEY, or in the file CREDENTIAL_KEY_FILE names (created with a fresh key
 // when missing, for the all-in-one container). docs/runbooks/credential-key.md has rotation and loss.
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { CredentialVault, DomainError, generateVaultKey, parseVaultKey, type CredentialBroker } from '@crove/kernel-runtime';
 import type { Config } from './config.ts';
@@ -20,12 +21,21 @@ export const noCredentialBroker: CredentialBroker = {
 function keyFromFile(path: string): string {
   if (!existsSync(path)) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    // wx: never overwrite a key another process wrote first.
+    // Written whole to a temporary file, then linked into place: a process starting at the same time (api and worker
+    // in one container) sees either no file or a complete one, and a link never replaces a key another process
+    // published first.
+    const tmp = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    writeFileSync(tmp, `${generateVaultKey()}\n`, { flag: 'wx', mode: 0o600 });
     try {
-      writeFileSync(path, `${generateVaultKey()}\n`, { flag: 'wx', mode: 0o600 });
-      console.log(`[credentials] created a credential key at ${path}; back it up: losing it means reconnecting every channel`);
+      linkSync(tmp, path);
+      console.warn(
+        `[credentials] created a new credential key at ${path}. If this deployment had connected channels, its key file was lost and ` +
+          'every channel must be reconnected; back the key up apart from the database (docs/runbooks/credential-key.md)',
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    } finally {
+      unlinkSync(tmp);
     }
   }
   try {

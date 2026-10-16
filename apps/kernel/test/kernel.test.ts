@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 // The composition root (ADR-0030): which adapters main.ts wires by default, that an entrypoint can replace any
 // port, and that a missing required port stops the boot. The end-to-end run of overridden ports is in
 // kernel-composition.db.test.ts.
@@ -70,7 +71,7 @@ describe('defaultAdapters (the open-source wiring in main.ts)', () => {
   });
 
   it('builds the crove-local broker from CREDENTIAL_KEY', () => {
-    const config = loadConfig({ ...BASE, CREDENTIAL_KEY: Buffer.alloc(32, 7).toString('base64') });
+    const config = loadConfig({ ...BASE, CREDENTIAL_KEY: randomBytes(32).toString('base64') });
     const broker = defaultAdapters(config).broker;
     expect(broker?.id).toBe('crove-local');
     const binding = { orgId: 'org', provider: 'sandbox', externalAccountId: 'a' };
