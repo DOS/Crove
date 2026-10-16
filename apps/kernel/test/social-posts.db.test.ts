@@ -322,6 +322,23 @@ suite('social posts on PostgreSQL (S3)', () => {
     expect(new Set(at).size).toBe(3);
   });
 
+  it('serializes a queue edit with edits of the posts it moves, without a deadlock', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const daily = (minute: number) => [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, minute }));
+    await exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots: [...daily(540), ...daily(1200)] });
+    const posts = await Promise.all([1, 2, 3, 4].map((i) => approved(o, [conn], `Bài ${i}`)));
+    for (const p of posts) await exec(o, o.owner, 'social.variant.schedule', { postId: p.id, queue: true });
+    const views = await Promise.all(posts.map((p) => get(o, o.owner, p.id)));
+    for (let round = 0; round < 3; round++) {
+      const results = await Promise.allSettled([
+        exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots: round % 2 === 0 ? daily(600) : [...daily(540), ...daily(1200)] }),
+        ...views.map((v, i) => exec(o, o.member, 'social.post.update', { postId: v.id, revision: v.revision + round, body: `Bài ${i} vòng ${round}` })),
+      ]);
+      expect(results.filter((r) => r.status === 'rejected').map((r) => (r as PromiseRejectedResult).reason)).toEqual([]);
+    }
+  });
+
   it('updates the post status when a queue edit takes its variant out, and handles two first sets at once', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);

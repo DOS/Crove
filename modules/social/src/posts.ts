@@ -742,6 +742,33 @@ export const queueSet = defineCommand({
         .execute();
     }
     const spec: QueueSpec = { timeZone: input.timeZone, slots: input.slots };
+    // Lock order: queue row, then the posts of the variants holding its slots (sorted), then those variants, as every
+    // post command locks a post before its variants. No new slot holder appears meanwhile: only schedule assigns
+    // slots, and it waits for the queue row this command holds.
+    const holderPosts = await ctx.trx
+      .selectFrom('crove_social.post_variant')
+      .select('post_id')
+      .distinct()
+      .where('org_id', '=', ctx.orgId)
+      .where('channel_connection_id', '=', input.connectionId)
+      .where('queue_slot_at', 'is not', null)
+      .where('status', 'not in', [...SLOT_FREED])
+      .orderBy('post_id')
+      .execute();
+    if (holderPosts.length > 0) {
+      await ctx.trx
+        .selectFrom('crove_social.post')
+        .select('id')
+        .where('org_id', '=', ctx.orgId)
+        .where(
+          'id',
+          'in',
+          holderPosts.map((h) => h.post_id),
+        )
+        .orderBy('id')
+        .forUpdate()
+        .execute();
+    }
     const holders = await ctx.trx
       .selectFrom('crove_social.post_variant')
       .select(['id', 'post_id', 'status', 'queue_slot_at'])
