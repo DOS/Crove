@@ -156,12 +156,60 @@ function ownersInvite(invite: { invited_by: string; expires_at: Date }, locked: 
   return locked.owners.has(invite.invited_by) && invite.expires_at.getTime() > now.getTime();
 }
 
+interface PendingInvite {
+  id: string;
+  invited_by: string;
+  expires_at: Date;
+}
+
+// The refusals between ALREADY_MEMBER and the daily limits, in this order: an admin's invite for an email with a
+// current owner's pending, unexpired invite (#134), then the org's cap on pending invites. Returns the org's pending
+// invites of this email, which the new invite replaces. Run twice: once before the locks, on what has committed,
+// so a refusal does not wait for them (#270), and once under them (lock), which decides. Either way the cap counts
+// the pending invites other than this email's, the number left once they are replaced.
+async function pendingRefusals(ctx: CommandContext, email: string, locked: LockedRoles, lock: boolean): Promise<PendingInvite[]> {
+  const query = ctx.trx
+    .selectFrom('crove_kernel.member_invite')
+    .select(['id', 'invited_by', 'expires_at'])
+    .where('org_id', '=', ctx.orgId)
+    .where('email', '=', email)
+    .where('status', '=', 'pending');
+  const previous = await (lock ? query.forUpdate() : query).execute();
+  // An admin's invite refuses to replace a current owner's unexpired one (#134): the owner's invite stays and the
+  // admin is told why. Revoking it silently would let an admin undo an owner's invite, or change its role, without
+  // the owner noticing.
+  const byOwner = locked.role === 'owner' ? [] : previous.filter((p) => ownersInvite(p, locked, ctx.now));
+  if (byOwner.length > 0) {
+    throw new DomainError(
+      'INVITE_PENDING_BY_OWNER',
+      409,
+      'Chủ sở hữu đã mời email này và lời mời vẫn còn hiệu lực. Hãy nhờ chủ sở hữu thu hồi hoặc gửi lại lời mời',
+      undefined,
+      { audit: { pending_invites: byOwner.map((p) => p.id) } },
+    );
+  }
+  const pending = await ctx.trx
+    .selectFrom('crove_kernel.member_invite')
+    .select(sql<number>`pg_catalog.count(*)::int`.as('n'))
+    .where('org_id', '=', ctx.orgId)
+    .where('status', '=', 'pending')
+    .where('email', '<>', email)
+    .where('expires_at', '>', ctx.now)
+    .executeTakeFirstOrThrow();
+  if (pending.n >= MAX_PENDING_INVITES) {
+    throw new DomainError('TOO_MANY_INVITES', 429, `Tổ chức đang có quá nhiều lời mời chờ (tối đa ${MAX_PENDING_INVITES}); hãy thu hồi bớt`);
+  }
+  return previous;
+}
+
 // Invites an email to the org in context. R3 (plan §4.7: membership and role changes) needs fresh MFA (P11).
 // It never looks the email up among accounts, so the answer is the same whether or not one exists. The token is
 // returned once, inside the accept path, and never stored (only its SHA-256), so callers must not pass an
 // idempotency key (a stored response would keep it); the API offers none. A new invite for the same email replaces
 // the pending one, which is also how an inviter gets a fresh link. limits.perRecipientPerDay caps the invites one
-// address gets from all orgs together (default DEFAULT_INVITE_LIMITS).
+// address gets from all orgs together (default DEFAULT_INVITE_LIMITS). The limits that key on an address count its
+// inbox (crove_kernel.invite_cap_key: no +tag, no dots at Gmail, #270); the invite itself stays bound to the email
+// as given.
 export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS) {
   if (!Number.isInteger(limits.perRecipientPerDay) || limits.perRecipientPerDay < 1 || limits.perRecipientPerDay > 1000) {
     throw new Error('perRecipientPerDay must be an integer from 1 to 1000');
@@ -190,32 +238,22 @@ export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS
         LIMIT 1`.execute(ctx.trx);
       if (member.length > 0) throw new DomainError('ALREADY_MEMBER', 409, 'Người này đã là thành viên của tổ chức');
 
-      // A lock per org and one per recipient (#185), taken before the pending invite is read: invites of one org, and
-      // invites of one address from any org, run one at a time from here on, so the daily counts below are exact under
+      // The daily limits (#185), counted in the database: this org's invites in total and for this inbox, and every
+      // org's invites of this inbox, which reveals nothing about accounts. First without the locks, on what has
+      // committed, after the refusals that come before them: an invite already over a limit is refused here at once
+      // instead of waiting for the locks (and holding up other invites of the address meanwhile, #270).
+      const limitArgs = sql`${email}, ${MAX_INVITES_PER_DAY}::int, ${MAX_INVITES_PER_EMAIL_PER_DAY}::int, ${limits.perRecipientPerDay}::int`;
+      await pendingRefusals(ctx, email, locked, false);
+      await inviteMailCheck(ctx, sql`SELECT crove_kernel.invite_mail_precheck(${limitArgs})`);
+
+      // A lock per org and one per inbox (#185), taken before the pending invite is read: invites of one org, and
+      // invites of one inbox from any org, run one at a time from here on, so the counts below are exact under
       // concurrency and the replacement always sees the previous invite. A wait past 3 seconds is 429 invite_busy.
       await inviteMailCheck(ctx, sql`SELECT crove_kernel.invite_mail_lock(${email})`);
 
-      // The pending invite this one replaces, locked after the membership rows. An admin's invite refuses to replace a
-      // current owner's unexpired one (#134): the owner's invite stays and the admin is told why. Revoking it silently
-      // would let an admin undo an owner's invite, or change its role, without the owner noticing.
-      const previous = await ctx.trx
-        .selectFrom('crove_kernel.member_invite')
-        .select(['id', 'invited_by', 'expires_at'])
-        .where('org_id', '=', ctx.orgId)
-        .where('email', '=', email)
-        .where('status', '=', 'pending')
-        .forUpdate()
-        .execute();
-      const byOwner = role === 'owner' ? [] : previous.filter((p) => ownersInvite(p, locked, ctx.now));
-      if (byOwner.length > 0) {
-        throw new DomainError(
-          'INVITE_PENDING_BY_OWNER',
-          409,
-          'Chủ sở hữu đã mời email này và lời mời vẫn còn hiệu lực. Hãy nhờ chủ sở hữu thu hồi hoặc gửi lại lời mời',
-          undefined,
-          { audit: { pending_invites: byOwner.map((p) => p.id) } },
-        );
-      }
+      // The same refusals under the locks, which decide; the pending invite this one replaces is locked after the
+      // membership rows.
+      const previous = await pendingRefusals(ctx, email, locked, true);
       const replaced =
         previous.length === 0
           ? []
@@ -231,25 +269,7 @@ export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS
               .where('status', '=', 'pending')
               .returning('id')
               .execute();
-
-      const pending = await ctx.trx
-        .selectFrom('crove_kernel.member_invite')
-        .select(sql<number>`pg_catalog.count(*)::int`.as('n'))
-        .where('org_id', '=', ctx.orgId)
-        .where('status', '=', 'pending')
-        .where('expires_at', '>', ctx.now)
-        .executeTakeFirstOrThrow();
-      if (pending.n >= MAX_PENDING_INVITES) {
-        throw new DomainError('TOO_MANY_INVITES', 429, `Tổ chức đang có quá nhiều lời mời chờ (tối đa ${MAX_PENDING_INVITES}); hãy thu hồi bớt`);
-      }
-
-      // The daily limits, counted in the database under the locks above: this org's invites in total and for this
-      // email, and every org's invites of this email, which reveals nothing about accounts (#185).
-      await inviteMailCheck(
-        ctx,
-        sql`SELECT crove_kernel.invite_mail_gate(${email}, ${MAX_INVITES_PER_DAY}::int, ${MAX_INVITES_PER_EMAIL_PER_DAY}::int,
-          ${limits.perRecipientPerDay}::int)`,
-      );
+      await inviteMailCheck(ctx, sql`SELECT crove_kernel.invite_mail_gate(${limitArgs})`);
 
       const token = newInviteToken();
       const expiresAt = new Date(ctx.now.getTime() + INVITE_TTL_MS);
@@ -261,7 +281,10 @@ export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS
           role: input.role,
           token_sha256: inviteTokenHash(token),
           invited_by: actorId,
-          created_at: ctx.now,
+          // The database's clock, the clock of the daily window (#270), not ctx.now. The expiry stays ctx.now plus the
+          // TTL; only an API clock more than the TTL behind would make it precede the database's clock, and then the
+          // invite is born expired and dated just before its expiry, so the row stays valid (expires_at > created_at).
+          created_at: sql<Date>`LEAST(pg_catalog.clock_timestamp(), ${expiresAt}::timestamptz - interval '1 millisecond')`,
           expires_at: expiresAt,
         })
         .returning('id')
