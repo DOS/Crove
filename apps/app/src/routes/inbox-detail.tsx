@@ -25,13 +25,19 @@ function FilePreview({ fileId, contentType, filename }: { fileId: string; conten
   const [error, setError] = useState<unknown>(null);
   useEffect(() => {
     let revoked: string | null = null;
+    let cancelled = false;
     fetchFile(fileId)
       .then((blob) => {
+        // Unmounted (or another file) before the bytes came: no object URL to leak.
+        if (cancelled) return;
         revoked = URL.createObjectURL(blob);
         setUrl(revoked);
       })
-      .catch((e: unknown) => setError(e ?? new Error()));
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e ?? new Error());
+      });
     return () => {
+      cancelled = true;
       if (revoked) URL.revokeObjectURL(revoked);
     };
   }, [fileId]);
