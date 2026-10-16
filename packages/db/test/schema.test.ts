@@ -31,7 +31,8 @@ describe('Database', () => {
       | 'inbound_drop'
       | 'outbox_pending'
       | 'refusal_tally'
-      | 'worker_heartbeat';
+      | 'worker_heartbeat'
+      | 'prober_alert_state';
     expectTypeOf<Extract<keyof Database, `crove_kernel.${ControlPlane | DefinerOnly}`>>().toBeNever();
     expectTypeOf<Extract<keyof G.Database, `crove_kernel.${ControlPlane | DefinerOnly}`>>().toBeNever();
   });
