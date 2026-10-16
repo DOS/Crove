@@ -1,0 +1,87 @@
+{
+  "A_waitersOnUnlimitedQueue": {
+    "waiters": 1000,
+    "enqueueMs": 4842,
+    "msUntilAllWaiting": 5852,
+    "idleBaseline": {
+      "transactionsPerSecond": 13,
+      "runnerConnections": {
+        "maxTotal": 7,
+        "maxActive": 1,
+        "maxIdleInTransaction": 1
+      },
+      "mem": "MEM rss=95 heapUsed=15"
+    },
+    "whileWaiting": {
+      "transactionsPerSecond": 209,
+      "runnerConnections": {
+        "maxTotal": 8,
+        "maxActive": 1,
+        "maxIdleInTransaction": 0
+      },
+      "mem": "MEM rss=115 heapUsed=23"
+    },
+    "statuses": {
+      "PENDING": 1000
+    },
+    "twentyThreeStepJobsOnWorkQueueMs": 5208,
+    "recordedDeadline": [
+      {
+        "function_name": "DBOS.sleep",
+        "days_after_start": "7.000"
+      }
+    ]
+  },
+  "B_waitersOnQueueWithGlobalConcurrency5": {
+    "statuses": {
+      "ENQUEUED": 5,
+      "PENDING": 5
+    }
+  },
+  "C_approveAll": {
+    "sendMs": 4766,
+    "msFromFirstSendToAllSuccess": 5298,
+    "outputs": {
+      "proposed_or_armed": 1000,
+      "executed_or_fired": 1000,
+      "approval_domain_write": 1000
+    },
+    "rolledBackSendReachedWorkflow": false
+  },
+  "A2_timersOnly": {
+    "beforeTimers": {
+      "transactionsPerSecond": 13,
+      "runnerConnections": {
+        "maxTotal": 7,
+        "maxActive": 1,
+        "maxIdleInTransaction": 1
+      }
+    },
+    "whileTimersWait": {
+      "transactionsPerSecond": 13,
+      "runnerConnections": {
+        "maxTotal": 7,
+        "maxActive": 0,
+        "maxIdleInTransaction": 0
+      },
+      "mem": "MEM rss=132 heapUsed=22"
+    }
+  },
+  "D_sevenDaysAcrossACrash": {
+    "msFromRestartToAllExpiredOrFired": 7575,
+    "approvalsByFinalStep": {
+      "proposed_or_armed": 50,
+      "expired": 50
+    },
+    "timersByFinalStep": {
+      "proposed_or_armed": 50,
+      "executed_or_fired": 50
+    },
+    "msFromRestartUntil1000LongerWaitersRedispatched": 7577,
+    "longerWaitersStillWaiting": {
+      "PENDING": 1000
+    },
+    "reExecutedStepsAfterRecovery": 0,
+    "memAfterRecovery": "MEM rss=223 heapUsed=92"
+  }
+}

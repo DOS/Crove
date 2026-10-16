@@ -1,0 +1,89 @@
+{
+  "phase1_noSweeper": {
+    "orphanedAtKill": [
+      {
+        "executor_id": "exec-01e7726f",
+        "n": 4
+      },
+      {
+        "executor_id": "exec-cc8a4f3e",
+        "n": 4
+      }
+    ],
+    "stillPendingOnDeadExecutors15sAfterQueueDrained": 8,
+    "statuses": {
+      "PENDING": 8,
+      "SUCCESS": 32
+    }
+  },
+  "phase2_sweeper": {
+    "msFromSweeperStartToAllSuccess": 6616,
+    "msFromKillToAllSuccess": 52328,
+    "recoveryLog": [
+      {
+        "swept_by": "exec-86faa11c",
+        "dead_executor": "exec-cc8a4f3e",
+        "workflows": 4
+      },
+      {
+        "swept_by": "exec-86faa11c",
+        "dead_executor": "exec-01e7726f",
+        "workflows": 4
+      }
+    ],
+    "effects": 408,
+    "distinctSteps": 400,
+    "reExecutedSteps": 8,
+    "expectedEffects": 400
+  },
+  "phase3_sameExecutorId": {
+    "pendingOnKilledExecutor": 4,
+    "msToAllSuccessAfterRestart": 11719,
+    "effects": 124,
+    "distinctSteps": 120,
+    "reExecutedSteps": 4
+  },
+  "phase4_zombie": {
+    "effectsByExecutor": [
+      {
+        "executor_id": "exec-59bc65ef",
+        "effects": 28
+      },
+      {
+        "executor_id": "zombie-8199960c",
+        "effects": 16
+      }
+    ],
+    "effects": 44,
+    "distinctSteps": 40,
+    "reExecutedSteps": 4,
+    "expectedEffects": 40,
+    "zombieConflictLogLines": 4,
+    "zombieConflictSample": [
+      "Workflow p4-1 is no longer owned by this execution. Waiting for the owner's recorded outcome",
+      "Workflow p4-3 is no longer owned by this execution. Waiting for the owner's recorded outcome"
+    ],
+    "finalOwner": [
+      {
+        "workflow_uuid": "p4-0",
+        "status": "SUCCESS",
+        "executor_id": "exec-59bc65ef"
+      },
+      {
+        "workflow_uuid": "p4-1",
+        "status": "SUCCESS",
+        "executor_id": "exec-59bc65ef"
+      },
+      {
+        "workflow_uuid": "p4-2",
+        "status": "SUCCESS",
+        "executor_id": "exec-59bc65ef"
+      },
+      {
+        "workflow_uuid": "p4-3",
+        "status": "SUCCESS",
+        "executor_id": "exec-59bc65ef"
+      }
+    ]
+  }
+}

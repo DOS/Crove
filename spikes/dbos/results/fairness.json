@@ -1,0 +1,20 @@
+{
+  "org_plain_fifo": {
+    "totalMs": 42893,
+    "secondsAfterSmallEnqueue": {
+      "smallOrgsFirstStartMax": 40.9,
+      "smallOrgsLastStartMax": 41.5,
+      "bigOrgLastStart": 34.8
+    },
+    "bigOrgMaxConcurrentStarts": 4
+  },
+  "org_fair_partitioned": {
+    "totalMs": 212101,
+    "secondsAfterSmallEnqueue": {
+      "smallOrgsFirstStartMax": 5.9,
+      "smallOrgsLastStartMax": 14.4,
+      "bigOrgLastStart": 210.8
+    },
+    "bigOrgMaxConcurrentStarts": 1
+  }
+}

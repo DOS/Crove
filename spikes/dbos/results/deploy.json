@@ -1,0 +1,53 @@
+{
+  "a_sameVersionChangedCode": {
+    "statuses": {
+      "ERROR": 3
+    },
+    "stepsAfterChange": [
+      {
+        "step": 0,
+        "n": 3
+      }
+    ],
+    "workerErrors": [
+      " Error: During execution of workflow same-0 step 0, function propose was recorded when audit was expected. Check that your workflow is deterministic.",
+      " Error: During execution of workflow same-2 step 0, function propose was recorded when audit was expected. Check that your workflow is deterministic.",
+      " Error: During execution of workflow same-1 step 0, function propose was recorded when audit was expected. Check that your workflow is deterministic."
+    ]
+  },
+  "b_newApplicationVersion": {
+    "statuses": {
+      "ENQUEUED": 3
+    },
+    "rows": [
+      {
+        "workflow_uuid": "ver-0",
+        "status": "ENQUEUED",
+        "application_version": "spike-v1",
+        "on_new_worker": false
+      },
+      {
+        "workflow_uuid": "ver-1",
+        "status": "ENQUEUED",
+        "application_version": "spike-v1",
+        "on_new_worker": false
+      },
+      {
+        "workflow_uuid": "ver-2",
+        "status": "ENQUEUED",
+        "application_version": "spike-v1",
+        "on_new_worker": false
+      }
+    ],
+    "recoveryLog": [
+      {
+        "dead_executor": "exec-84dfcca2",
+        "workflows": 3
+      },
+      {
+        "dead_executor": "exec-4ac4f36f",
+        "workflows": 3
+      }
+    ]
+  }
+}
