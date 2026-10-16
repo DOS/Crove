@@ -15,7 +15,7 @@ import {
   type QueryDef,
   type SessionStatusSource,
 } from '@crove/kernel-runtime';
-import { financeCommands, financeQueries } from '@crove/mod-finance';
+import { financeAgentPrograms, financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, type Config, type ModuleId } from './config.ts';
 import { createHttpApp } from './http.ts';
@@ -208,6 +208,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             inboundDomain: config.INBOUND_DOMAIN ?? null,
             revoker: resolved.identity.revoker,
             refusalTallyRetentionDays: config.REFUSAL_TALLY_RETENTION_DAYS,
+            agentPrograms: financeAgentPrograms,
           }),
         );
       }

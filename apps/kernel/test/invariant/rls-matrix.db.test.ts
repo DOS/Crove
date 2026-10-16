@@ -32,17 +32,7 @@ const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.inboun
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>([
-  // ADR-0029 Phase 1 (#79), landing in the PR that closes #79.
-  'crove_kernel.agent',
-  'crove_kernel."position"',
-  'crove_kernel.ai_run',
-  'crove_kernel.task',
-  'crove_kernel.task_comment',
-  'crove_kernel.agent_wakeup',
-  'crove_kernel.kill_switch',
-  'crove_kernel.budget_policy',
-]);
+const PENDING_TABLES = new Set<string>();
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 

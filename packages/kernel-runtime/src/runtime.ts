@@ -26,7 +26,47 @@ export interface UserActor {
   confirmLive?: () => Promise<void>;
 }
 
-export type Actor = UserActor | { type: 'system'; component: string };
+// A position-holding agent acting in one of its runs (ADR-0029). It enters only in the worker, through
+// crove_kernel.enter_agent_context, which checks the run is live and derives everything else from the database.
+export interface AgentActor {
+  type: 'agent';
+  agentId: string;
+  runId: string;
+}
+
+export type SystemActor = { type: 'system'; component: string };
+
+export type Actor = UserActor | AgentActor | SystemActor;
+
+// What enter_agent_context derived for this transaction: the agent's position, its role key (permissions come from
+// it, never from tenant_member), the effective max_risk (the lower of the agent's and its template's) and whether
+// the run is tainted. Never taken from the caller.
+export interface AgentGrant {
+  agentId: string;
+  runId: string;
+  positionId: string;
+  roleKey: string;
+  module: string;
+  maxRisk: Exclude<Risk, 'R3'>;
+  tainted: boolean;
+}
+
+// Which agents may run a command or query (ADR-0029 section 2). Absent means no agent may: the default for every
+// command, so user-only commands (the chart, templates, budgets, kill switches, approvals, membership) never declare
+// it. roles: the role keys of positions whose agent may run it, or 'any' position-holding agent (the handler then
+// confines it to its own position's work).
+export interface AgentAccess {
+  roles: readonly string[] | 'any';
+  // 'propagate': the command writes only kernel collaboration data (tasks, comments, wake-ups) whose rows carry the
+  // run's taint forward, never a business record. A tainted run may run such a command at R1; every other command
+  // refuses a tainted run at R1 and above (P03).
+  taint?: 'propagate';
+}
+
+// A built-in agent program (ADR-0029 section 8): what one run of a template does, only through the runtime.
+export type AgentProgram = (run: { runtime: Runtime; orgId: string; actor: AgentActor }) => Promise<void>;
+
+const RISK_RANK: Record<Risk, number> = { R0: 0, R1: 1, R2: 2, R3: 3 };
 
 // 'members' = owner/admin/member; 'system' = system actor only;
 // 'proposal' = only run by the command that approved the proposal: the proposal is in state 'approved' for this
@@ -56,6 +96,8 @@ export interface CommandDef<I = unknown, O = unknown> {
   // declares it: it locks the pending proposal and writes the revision the reviser computes. The runtime checks this
   // declaration on the calling definition, never a command name, and registers at most one editor, run by users.
   proposalEditor?: true;
+  // Agents that may run it (absent: none).
+  agent?: AgentAccess;
   handler: (ctx: CommandContext, input: I) => Promise<O>;
 }
 
@@ -69,6 +111,8 @@ export interface QueryDef<I = unknown, O = unknown> {
   name: string;
   input: z.ZodType<I>;
   access: readonly MemberRole[] | 'system';
+  // Agents that may read it (absent: none).
+  agent?: Pick<AgentAccess, 'roles'>;
   handler: (ctx: QueryContext, input: I) => Promise<O>;
 }
 
@@ -88,6 +132,8 @@ export interface QueryContext {
   // The registered reviser of a proposal command (the one command whose `revises` names it), or null when there is
   // none or more than one (Runtime.validate() refuses the latter at startup).
   reviserOf(command: string): string | null;
+  // Set exactly when the actor is an agent.
+  agent: AgentGrant | null;
 }
 
 export interface CommandContext extends QueryContext {
@@ -188,7 +234,7 @@ function sessionDetail(actor: UserActor): Record<string, unknown> {
 // Keys of a refusal audit row that only the runtime writes: the code, the policy rule and who refused with which
 // session. A command's own facts (DomainError audit) never set them, also when the error names no rule or the
 // actor is a system actor, which has no session.
-const RESERVED_REFUSAL_KEYS = ['code', 'rule', 'aal', 'sessionId', 'mfaAt', 'component'] as const;
+const RESERVED_REFUSAL_KEYS = ['code', 'rule', 'aal', 'sessionId', 'mfaAt', 'component', 'agentRun'] as const;
 
 // The detail of a denied/failed audit row (plan §4.10): the command's facts about the refusal (for example the roles
 // of a LAST_OWNER), then the code, the rule that refused when the error names one (for example P10 or P12) and,
@@ -199,7 +245,15 @@ export function refusalAuditDetail(refusal: DomainError, actor: Actor): Record<s
   detail.code = refusal.code;
   if (typeof refusal.details?.rule === 'string') detail.rule = refusal.details.rule;
   if (actor.type === 'user') Object.assign(detail, sessionDetail(actor));
+  if (actor.type === 'agent') detail.agentRun = actor.runId;
   return detail;
+}
+
+// The id an actor is recorded and logged under: the user, the agent, or the system component.
+export function actorId(actor: Actor): string {
+  if (actor.type === 'user') return actor.userId;
+  if (actor.type === 'agent') return actor.agentId;
+  return actor.component;
 }
 
 export function defineCommand<I, O>(def: CommandDef<I, O>): CommandDef<I, O> {
@@ -208,6 +262,20 @@ export function defineCommand<I, O>(def: CommandDef<I, O>): CommandDef<I, O> {
 
 export function defineQuery<I, O>(def: QueryDef<I, O>): QueryDef<I, O> {
   return def;
+}
+
+// What enter() established: the member role of a user, or the grant of an agent; neither for a system actor.
+interface Entered {
+  role: MemberRole | null;
+  agent: AgentGrant | null;
+}
+
+// The detail an audit row of this actor carries when the command adds none: the system component, or the agent's
+// run (the run ties the row to its wake-up and causal chain).
+function actorDetail(actor: Actor): Record<string, unknown> {
+  if (actor.type === 'system') return { component: actor.component };
+  if (actor.type === 'agent') return { agentRun: actor.runId };
+  return {};
 }
 
 function stableStringify(value: unknown): string {
@@ -219,8 +287,10 @@ function stableStringify(value: unknown): string {
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(',')}}`;
 }
 
+// Idempotency keys are per user, per agent run (a key never replays another run's answer, such as an old fencing
+// token) or per system component.
 function actorKey(actor: Actor): string {
-  return actor.type === 'user' ? `user:${actor.userId}` : `system:${actor.component}`;
+  return actor.type === 'agent' ? `agent:${actor.agentId}:${actor.runId}` : `${actor.type}:${actorId(actor)}`;
 }
 
 function parseInput<I>(schema: z.ZodType<I>, raw: unknown): I {
@@ -258,7 +328,7 @@ function logInternal(where: string, error: unknown, ids: { orgId?: string | null
     where,
     orgId: ids.orgId || null,
     actorType: actor?.type ?? null,
-    actorId: actor ? (actor.type === 'user' ? actor.userId : actor.component) : null,
+    actorId: actor ? actorId(actor) : null,
   });
 }
 
@@ -337,15 +407,16 @@ export class Runtime {
     return [...this.installedModules].sort();
   }
 
-  // A query context for a handler: the transaction, the entered org and role, ctx.query for lookups and the reviser
-  // registry.
-  private queryContext(trx: Transaction<Database>, orgId: string, actor: Actor, role: MemberRole | null): QueryContext {
+  // A query context for a handler: the transaction, the entered org and role (or agent grant), ctx.query for lookups
+  // and the reviser registry.
+  private queryContext(trx: Transaction<Database>, orgId: string, actor: Actor, entered: Entered): QueryContext {
     return {
       trx,
       orgId,
       actor,
-      role,
-      query: (name, input) => this.lookup(trx, orgId, actor, role, name, input),
+      role: entered.role,
+      agent: entered.agent,
+      query: (name, input) => this.lookup(trx, orgId, actor, entered, name, input),
       reviserOf: (command) => this.reviserOf(command),
     };
   }
@@ -355,7 +426,7 @@ export class Runtime {
     trx: Transaction<Database>,
     orgId: string,
     actor: Actor,
-    role: MemberRole | null,
+    entered: Entered,
     name: string,
     rawInput: unknown,
   ): Promise<Lookup<O>> {
@@ -366,12 +437,21 @@ export class Runtime {
       throw new DomainError('QUERY_NOT_FOUND', 404, `Không có truy vấn ${name}`);
     }
     const input = parseInput(def.input, rawInput);
-    this.authorizeQuery(def, actor, role);
-    const value = (await def.handler(this.queryContext(trx, orgId, actor, role), input)) as O;
+    this.authorizeQuery(def, actor, entered);
+    const value = (await def.handler(this.queryContext(trx, orgId, actor, entered), input)) as O;
     return { status: 'ok', value };
   }
 
-  private authorizeQuery(def: QueryDef<unknown, unknown>, actor: Actor, role: MemberRole | null): void {
+  private authorizeQuery(def: QueryDef<unknown, unknown>, actor: Actor, entered: Entered): void {
+    const { role, agent } = entered;
+    if (actor.type === 'agent') {
+      // Agents read only what a query declares for their role key (ADR-0029); never a system query.
+      const roles = def.agent?.roles;
+      if (!agent || def.access === 'system' || !roles || (roles !== 'any' && !roles.includes(agent.roleKey))) {
+        throw new DomainError('FORBIDDEN', 403, 'Tác tử AI không được xem nội dung này', { rule: 'agent_access' });
+      }
+      return;
+    }
     if (def.access === 'system') {
       if (actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Không có quyền thực hiện');
     } else if (actor.type === 'user' && (!role || !def.access.includes(role))) {
@@ -426,7 +506,7 @@ export class Runtime {
     await this.sessions.check(trx, { ...actor, sessionId }, orgId);
   }
 
-  private async enter(trx: Transaction<Database>, actor: Actor, orgId: string): Promise<MemberRole | null> {
+  private async enter(trx: Transaction<Database>, actor: Actor, orgId: string): Promise<Entered> {
     await this.checkSession(trx, actor, orgId);
     return this.enterContext(trx, actor, orgId);
   }
@@ -434,16 +514,65 @@ export class Runtime {
   // Works on a hot standby too: the re-entry guard's advisory lock and pg_locks read are allowed during recovery
   // (PostgreSQL 17, probed in #105). What a standby refuses is every write (25006, INTERNAL 500): commands, a session
   // check that records a first-seen session, refusal audits. Replica reads are not wired up (plan §3.3).
-  private async enterContext(trx: Transaction<Database>, actor: Actor, orgId: string): Promise<MemberRole | null> {
+  private async enterContext(trx: Transaction<Database>, actor: Actor, orgId: string): Promise<Entered> {
     if (actor.type === 'system') {
       await sql`SELECT crove_kernel.enter_system_context(${orgId}::uuid)`.execute(trx);
-      return null;
+      return { role: null, agent: null };
+    }
+    if (actor.type === 'agent') {
+      // Worker only; the database checks the run is live and derives the rest (ADR-0029 section 2).
+      const { rows } = await sql<{ entered: { role: string; position: string; module: string; maxRisk: string; tainted: boolean } }>`
+        SELECT crove_kernel.enter_agent_context(${orgId}::uuid, ${actor.agentId}::uuid, ${actor.runId}::uuid) AS entered`.execute(trx);
+      const entered = rows[0]?.entered;
+      const maxRisk = entered?.maxRisk;
+      if (!entered || (maxRisk !== 'R0' && maxRisk !== 'R1' && maxRisk !== 'R2')) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
+      return {
+        role: null,
+        agent: {
+          agentId: actor.agentId,
+          runId: actor.runId,
+          positionId: entered.position,
+          roleKey: entered.role,
+          module: entered.module,
+          maxRisk,
+          tainted: entered.tainted !== false,
+        },
+      };
     }
     const { rows } = await sql<{ role: MemberRole }>`SELECT crove_kernel.enter_context(${actor.userId}::uuid, ${orgId}::uuid) AS role`.execute(trx);
-    return rows[0]?.role ?? null;
+    return { role: rows[0]?.role ?? null, agent: null };
   }
 
-  private authorize(access: Access, actor: Actor, role: MemberRole | null, viaProposal: boolean): void {
+  // An agent runs a command only when the command declares agent access for its position's role key, the command is
+  // below R2 (R2 and R3 by an agent need review, P05 and P06; agent proposals do not exist yet, so they are refused),
+  // the risk is within the agent's max_risk (P02), and, for a tainted run at R1 or above, the command only propagates
+  // the taint (P03). Never a system or proposal-only command.
+  private authorizeAgent(def: { access: Access; risk: Risk; agent?: AgentAccess | undefined }, agent: AgentGrant | null): void {
+    const refuse = (rule: string, message = 'Tác tử AI không được thực hiện việc này') => {
+      throw new DomainError('FORBIDDEN', 403, message, { rule });
+    };
+    if (!agent) refuse('agent_context');
+    const grant = agent as AgentGrant;
+    if (typeof def.access === 'string' || !def.agent) refuse('agent_access');
+    const access = def.agent as AgentAccess;
+    if (access.roles !== 'any' && !access.roles.includes(grant.roleKey)) refuse('agent_access');
+    if (def.risk === 'R3') refuse('P05');
+    if (def.risk === 'R2') refuse('P06');
+    if (RISK_RANK[def.risk] > RISK_RANK[grant.maxRisk]) refuse('P02');
+    if (grant.tainted && RISK_RANK[def.risk] >= 1 && access.taint !== 'propagate') refuse('P03');
+  }
+
+  private authorize(def: CommandDef<unknown, unknown>, actor: Actor, entered: Entered, viaProposal: boolean): void {
+    if (actor.type === 'agent') {
+      this.authorizeAgent(def, entered.agent);
+      return;
+    }
+    const { access } = def;
+    const role = entered.role;
+    // access [] grants no member role; a system actor does not pass it either (agent-only commands).
+    if (actor.type === 'system' && Array.isArray(access) && access.length === 0) {
+      throw new DomainError('FORBIDDEN', 403, 'Không có quyền thực hiện');
+    }
     if (access === 'proposal' || access === 'proposal_revision') {
       if (!viaProposal) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt');
       return;
@@ -528,7 +657,7 @@ export class Runtime {
       .values({
         org_id: row.orgId,
         actor_type: row.actor.type,
-        actor_id: row.actor.type === 'user' ? row.actor.userId : null,
+        actor_id: row.actor.type === 'user' ? row.actor.userId : row.actor.type === 'agent' ? row.actor.agentId : null,
         command: row.command,
         command_id: row.commandId,
         outcome: row.outcome,
@@ -536,7 +665,7 @@ export class Runtime {
         target_id: row.target?.id ?? null,
         input_sha256: row.inputSha256,
         proposal_id: row.proposalId,
-        detail: JSON.stringify(row.detail ?? (row.actor.type === 'system' ? { component: row.actor.component } : {})),
+        detail: JSON.stringify(row.detail ?? actorDetail(row.actor)),
       })
       .execute();
   }
@@ -545,12 +674,12 @@ export class Runtime {
     trx: Transaction<Database>,
     def: CommandDef<unknown, unknown>,
     input: unknown,
-    base: { orgId: string; actor: Actor; role: MemberRole | null; proposalId: string | null },
+    base: { orgId: string; actor: Actor; entered: Entered; proposalId: string | null },
   ): Promise<O> {
     const commandId = uuidv7();
     let auditDetail: Record<string, unknown> | undefined;
     const ctx: CommandContext = {
-      ...this.queryContext(trx, base.orgId, base.actor, base.role),
+      ...this.queryContext(trx, base.orgId, base.actor, base.entered),
       commandId,
       proposalId: base.proposalId,
       now: new Date(),
@@ -580,7 +709,7 @@ export class Runtime {
         if (!nested || nested.bootstrap) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
         const parsed = parseInput(nested.input, nestedInput);
         const proposalId = options?.proposalId ?? base.proposalId;
-        this.authorize(nested.access, base.actor, base.role, proposalId !== null);
+        this.authorize(nested, base.actor, base.entered, proposalId !== null);
         if (proposalId !== null && (nested.access === 'proposal' || nested.access === 'proposal_revision')) {
           await this.requireProposalState(trx, base.orgId, nested, proposalId, { def, commandId });
         }
@@ -595,7 +724,7 @@ export class Runtime {
     const assurance = def.risk === 'R3' && base.actor.type === 'user' ? this.sessionDetail(base.actor) : undefined;
     const detail =
       auditDetail || assurance
-        ? { ...(base.actor.type === 'system' ? { component: base.actor.component } : {}), ...assurance, ...auditDetail }
+        ? { ...actorDetail(base.actor), ...assurance, ...auditDetail }
         : undefined;
     await this.writeAudit(trx, {
       orgId: base.orgId,
@@ -647,7 +776,7 @@ export class Runtime {
   ): Promise<O> {
     const inputSha256 = sha256Hex(stableStringify(input));
     let orgId = '';
-    let role: MemberRole | null = null;
+    let context: Entered = { role: null, agent: null };
     let entered = false;
     // An org-less command's org was created by this transaction (not a replay into an org that already existed):
     // the tenant row's xmin is this transaction's id (the definer inserts it outside any subtransaction).
@@ -656,7 +785,7 @@ export class Runtime {
       const db = await cell();
       return await db.transaction().execute(async (trx) => {
         orgId = await resolveOrg(trx);
-        role = await this.enter(trx, actor, orgId);
+        context = await this.enter(trx, actor, orgId);
         entered = true;
         if (def.bootstrap) {
           const { rows } = await sql<{ fresh: boolean }>`
@@ -664,7 +793,7 @@ export class Runtime {
             FROM crove_kernel.tenant t WHERE t.org_id = ${orgId}::uuid`.execute(trx);
           orgIsNew = rows[0]?.fresh === true;
         }
-        this.authorize(def.access, actor, role, false);
+        this.authorize(def, actor, context, false);
         this.requireStepUp(def, actor);
         await this.requireLiveSession(def, actor);
 
@@ -691,7 +820,7 @@ export class Runtime {
             if (stored !== null && typeof stored === 'object' && 'value' in stored) return stored.value as O;
             throw new DomainError('RETRY', 409, 'Yêu cầu đang được xử lý');
           }
-          const output = await this.runInTx<O>(trx, def, input, { orgId, actor, role, proposalId: null });
+          const output = await this.runInTx<O>(trx, def, input, { orgId, actor, entered: context, proposalId: null });
           await trx
             .updateTable('crove_kernel.idempotency_key')
             .set({ response: JSON.stringify({ value: output ?? null }) })
@@ -701,7 +830,7 @@ export class Runtime {
             .execute();
           return output;
         }
-        return this.runInTx<O>(trx, def, input, { orgId, actor, role, proposalId: null });
+        return this.runInTx<O>(trx, def, input, { orgId, actor, entered: context, proposalId: null });
       });
     } catch (error) {
       const domain = toDomainError(error);
@@ -760,7 +889,7 @@ export class Runtime {
         orgId,
         commandId,
         actorType: actor.type,
-        actorId: actor.type === 'user' ? actor.userId : actor.component,
+        actorId: actorId(actor),
         outcome,
         refusal: refusal.code,
         error: lost.code,
@@ -791,7 +920,7 @@ export class Runtime {
       console.error(`[execute ${name}] REFUSAL_TALLY_FAILED`, {
         orgId,
         actorType: actor.type,
-        actorId: actor.type === 'user' ? actor.userId : actor.component,
+        actorId: actorId(actor),
         refusal: code,
         sqlState: typeof sqlState === 'string' ? sqlState : null,
       });
@@ -810,9 +939,9 @@ export class Runtime {
         // The session check may record a first-seen session, so it runs before the transaction turns read-only.
         await this.checkSession(trx, options.actor, options.orgId);
         await sql`SET TRANSACTION READ ONLY`.execute(trx);
-        const role = await this.enterContext(trx, options.actor, options.orgId);
-        this.authorizeQuery(def, options.actor, role);
-        return (await def.handler(this.queryContext(trx, options.orgId, options.actor, role), input)) as O;
+        const entered = await this.enterContext(trx, options.actor, options.orgId);
+        this.authorizeQuery(def, options.actor, entered);
+        return (await def.handler(this.queryContext(trx, options.orgId, options.actor, entered), input)) as O;
       });
     } catch (error) {
       const domain = toDomainError(error);

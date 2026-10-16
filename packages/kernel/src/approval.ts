@@ -5,16 +5,19 @@ import { z } from 'zod';
 import type { Database, MemberRole } from '@crove/db';
 import type { Actor, QueryContext } from '@crove/kernel-runtime';
 
-// Who produced (part of) a revision's content. Only user entries are humans; system entries (and, later,
-// agents) never count as approvers or for four-eyes (ADR-0029 §6).
+// Who produced (part of) a revision's content. Only user entries are humans; system and agent entries never count
+// as approvers or for four-eyes (ADR-0029 §6).
 export const zActorRef = z.discriminatedUnion('type', [
   z.object({ type: z.literal('user'), id: z.uuid() }),
   z.object({ type: z.literal('system'), component: z.string() }),
+  z.object({ type: z.literal('agent'), id: z.uuid(), run: z.uuid() }),
 ]);
 export type ActorRef = z.infer<typeof zActorRef>;
 
 export function actorRef(actor: Actor): ActorRef {
-  return actor.type === 'user' ? { type: 'user', id: actor.userId } : { type: 'system', component: actor.component };
+  if (actor.type === 'user') return { type: 'user', id: actor.userId };
+  if (actor.type === 'agent') return { type: 'agent', id: actor.agentId, run: actor.runId };
+  return { type: 'system', component: actor.component };
 }
 
 export function parseAuthors(raw: unknown): ActorRef[] | null {
@@ -22,7 +25,7 @@ export function parseAuthors(raw: unknown): ActorRef[] | null {
   return result.success ? result.data : null;
 }
 
-const refKey = (a: ActorRef) => (a.type === 'user' ? `user:${a.id}` : `system:${a.component}`);
+const refKey = (a: ActorRef) => (a.type === 'system' ? `system:${a.component}` : `${a.type}:${a.id}`);
 
 // Authors only accumulate: an edit adds the editor, and nobody who wrote part of the content is removed.
 export function addAuthor(authors: readonly ActorRef[], author: ActorRef): ActorRef[] {

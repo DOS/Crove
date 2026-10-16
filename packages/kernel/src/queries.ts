@@ -14,6 +14,7 @@ import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
 import { EDITOR_ROLES, decideApproval, proposalEditable } from './approval.ts';
 import { MAX_EXTRACTION_VERSIONS, REEXTRACT_STALE_MINUTES, STALE_RUN_ERROR, executedButVoided, latestExtraction } from './extraction.ts';
+import { agentQueries } from './agents.ts';
 import { inviteQueries } from './invites.ts';
 import { offboardingQueries } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
@@ -384,5 +385,5 @@ export const sessionsList = defineQuery({
 });
 
 export function kernelQueries(options: OrgDetailOptions) {
-  return [orgDetailQuery(options), inboxList, inboxGet, filesRecent, fileGet, sessionsList, ...inviteQueries, ...offboardingQueries];
+  return [orgDetailQuery(options), inboxList, inboxGet, filesRecent, fileGet, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries];
 }
