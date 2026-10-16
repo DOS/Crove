@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="vi" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Crove Social: plan module</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+/* Layout: trang đọc ngắn một cột theo house style báo cáo DOS (nền tối trước), mục lục dính bên trái từ 1180px. */
+:root{
+  --bg:#101114; --surface:#16181d; --card:#1b1e25; --line:#2c303a; --fg:#eef0f4; --muted:#a3a9b6;
+  --accent:#ff2e29; --accent-ink:#ff8a85; --org:#8b93ff;
+  --ok:#34d399; --ok-bg:#0f2a21; --warn:#fbbf24; --warn-bg:#2a2110; --bad:#f87171; --bad-bg:#2d1515; --info:#60a5fa; --info-bg:#121f35;
+  --code-bg:#23262e;
+  --font-body:"Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f5f5f7; --surface:#ffffff; --card:#ffffff; --line:#dcdfe6; --fg:#15171c; --muted:#596070;
+    --accent:#d61f1a; --accent-ink:#b02420; --org:#4f46e5;
+    --ok:#047857; --ok-bg:#e6f5ee; --warn:#9a5b06; --warn-bg:#fcf1d9; --bad:#b91c1c; --bad-bg:#fcebeb; --info:#1d4ed8; --info-bg:#e7eefc;
+    --code-bg:#eceef2; color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f5f5f7; --surface:#ffffff; --card:#ffffff; --line:#dcdfe6; --fg:#15171c; --muted:#596070;
+  --accent:#d61f1a; --accent-ink:#b02420; --org:#4f46e5;
+  --ok:#047857; --ok-bg:#e6f5ee; --warn:#9a5b06; --warn-bg:#fcf1d9; --bad:#b91c1c; --bad-bg:#fcebeb; --info:#1d4ed8; --info-bg:#e7eefc;
+  --code-bg:#eceef2; color-scheme:light;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased}
+.page{padding-block:32px 72px;padding-inline:clamp(16px,4vw,40px)}
+.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:32px;max-width:1260px;margin-inline:auto}
+@media (min-width:1180px){.layout{grid-template-columns:230px minmax(0,1fr)}}
+main{min-width:0;max-width:980px}
+a{color:var(--accent-ink);text-decoration:none;overflow-wrap:anywhere}a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+/* Mục lục */
+nav.toc{font-size:14px;line-height:1.5}
+nav.toc .toc-title{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:0 0 8px}
+nav.toc ol{list-style:none;margin:0;padding:0 0 6px;display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px}
+nav.toc li{flex:0 0 auto}
+nav.toc a{display:block;color:var(--muted);padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface)}
+nav.toc a:hover{color:var(--fg);text-decoration:none;border-color:var(--muted)}
+@media (min-width:1180px){
+  nav.toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 24px);align-self:start;max-height:calc(100vh - 48px);overflow:auto;padding-right:4px}
+  nav.toc ol{display:block;overflow:visible;padding:0}
+  nav.toc a{border:0;background:none;border-left:2px solid var(--line);border-radius:0;padding:5px 12px}
+  nav.toc a:hover{border-left-color:var(--accent)}
+}
+
+/* Chữ */
+.eyebrow{color:var(--accent-ink);font-weight:600;letter-spacing:.08em;text-transform:uppercase;font-size:13px;margin:0}
+h1{font-size:clamp(30px,4.6vw,44px);line-height:1.15;letter-spacing:-.015em;margin:10px 0 12px;text-wrap:balance}
+h2{font-size:24px;line-height:1.3;margin:56px 0 14px;padding-top:20px;border-top:1px solid var(--line);text-wrap:balance;scroll-margin-top:16px}
+h3{font-size:18px;line-height:1.4;margin:28px 0 10px;color:var(--accent-ink);text-wrap:balance}
+h4{font-size:16px;margin:22px 0 8px;text-wrap:balance}
+p{margin:0 0 12px;max-width:72ch}
+.lede{font-size:18px;color:var(--muted);max-width:68ch}
+.muted{color:var(--muted)}
+.small{font-size:14px}
+ul,ol{padding-left:22px;margin:0 0 12px}
+li{margin:5px 0}
+li>ul,li>ol{margin:4px 0 0}
+code{font-family:var(--font-mono);font-size:.86em;background:var(--code-bg);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
+pre{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--font-mono);font-size:12.5px;line-height:1.55;margin:12px 0}
+pre code{background:none;padding:0;font-size:inherit;overflow-wrap:normal}
+strong{font-weight:600}
+.meta{display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted);font-size:14px;margin:6px 0 24px}
+.meta span{display:inline-flex;gap:6px;align-items:baseline}
+
+/* Khối */
+.callout{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;background:var(--card);padding:16px 20px;margin:18px 0}
+.callout.info{border-left-color:var(--info)}
+.callout.warn{border-left-color:var(--warn)}
+.callout>*:last-child{margin-bottom:0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:20px 0}
+.tile{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:2px}
+.tile b{font-size:26px;line-height:1.2;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.tile span{font-size:13.5px;color:var(--muted);line-height:1.45}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:16px 0}
+.grid>*{min-width:0}
+.card{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:16px 18px}
+.card h4{margin:0 0 8px;font-size:16px}
+.card p:last-child,.card ul:last-child{margin-bottom:0}
+.card .num{font-family:var(--font-mono);font-size:12px;color:var(--muted);letter-spacing:.04em}
+.card .pick{margin:8px 0 0;font-size:14.5px}
+.col-title{font-size:13px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;margin:0 0 8px}
+.c-reuse .col-title{color:var(--ok)} .c-lib .col-title{color:var(--info)} .c-new .col-title{color:var(--accent-ink)}
+
+/* Bảng */
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;margin:16px 0;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14.5px;line-height:1.55}
+table.fit{min-width:0}table.fit td:first-child{width:30%}
+th,td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}
+th{background:var(--surface);font-weight:600;font-size:13.5px;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td ul{margin:0;padding-left:18px}
+td li{margin:2px 0}
+.tnum{font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* Nhãn */
+.b{display:inline-block;padding:0 8px;border-radius:999px;font-size:12px;font-weight:600;line-height:20px;border:1px solid currentColor;white-space:nowrap;vertical-align:1px}
+.b-ok{color:var(--ok);background:var(--ok-bg)} .b-warn{color:var(--warn);background:var(--warn-bg)}
+.b-bad{color:var(--bad);background:var(--bad-bg)} .b-info{color:var(--info);background:var(--info-bg)}
+.b-mute{color:var(--muted);background:var(--surface)}
+td.m-allow{background:var(--ok-bg);color:var(--ok);font-weight:500}
+td.m-review{background:var(--warn-bg);color:var(--warn);font-weight:500}
+td.m-deny{background:var(--bad-bg);color:var(--bad);font-weight:500}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 14px}
+.chip{font-family:var(--font-mono);font-size:12.5px;border:1px solid var(--line);background:var(--surface);padding:2px 8px;border-radius:6px;line-height:1.6}
+.chip.later{color:var(--muted);border-style:dashed}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:14px 0}
+.flow .st{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:6px 12px;font-size:14px}
+.flow .st.hl{border-color:var(--accent)}
+.flow .ar{color:var(--muted)}
+
+/* Hình */
+figure{margin:20px 0}
+.fig-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:8px}
+.fig-scroll svg{display:block;width:100%;min-width:860px;height:auto}
+figcaption{font-size:14px;color:var(--muted);margin-top:10px;max-width:80ch}
+.d-group{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:6 5}
+.d-box{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+.d-hl{stroke:var(--accent);stroke-width:2}
+.d-dashbox{stroke-dasharray:6 4}
+.d-t{fill:var(--fg);font:600 13px var(--font-body)}
+.d-s{fill:var(--muted);font:400 11.5px var(--font-body)}
+.d-m{font-family:var(--font-mono);font-size:11px}
+.d-a{fill:var(--accent-ink)}
+.d-ln{fill:none;stroke:var(--muted);stroke-width:1.5}
+.d-acc{stroke:var(--accent);stroke-width:2.2}
+.d-dash{stroke-dasharray:5 4}
+.d-mk{fill:var(--muted)} .d-mk-acc{fill:var(--accent)}
+
+/* Lộ trình */
+.gantt{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:14px 16px;margin:16px 0}
+.g-row{display:grid;grid-template-columns:minmax(118px,200px) minmax(0,1fr);gap:12px;align-items:center;padding:5px 0}
+.g-label{font-size:13.5px;line-height:1.3}
+.g-label small{display:block;color:var(--muted);font-size:12px}
+.g-track{position:relative;height:22px;background:var(--surface);border-radius:5px}
+.g-bar{position:absolute;top:3px;bottom:3px;border-radius:4px;min-width:6px}
+.g-base{background:var(--muted)} .g-fin{background:var(--accent)} .g-mod{background:var(--org)} .g-ppl{background:var(--info)}
+.g-axis{position:relative;height:18px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.g-axis span{position:absolute;top:0;transform:translateX(-50%);white-space:nowrap}
+.g-axis span:first-child{transform:none}
+.g-axis span:last-child{transform:translateX(-100%)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin:16px 0}
+.phase{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:14px 16px;min-width:0}
+.phase header{display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:6px}
+.phase h4{margin:0;font-size:15.5px}
+.phase .dur{font-size:12.5px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.phase p{font-size:14.5px;margin-bottom:8px}
+.phase ul{font-size:14px;margin:0;padding-left:18px}
+.phase .ex{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:8px 0 2px}
+
+/* Bản đầy đủ */
+.ref-tools{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 14px}
+button{font:500 14px var(--font-body);color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 14px;cursor:pointer}
+button:hover{border-color:var(--muted)}
+details.ref{border:1px solid var(--line);border-radius:10px;background:var(--card);margin:10px 0}
+details.ref>summary{cursor:pointer;padding:12px 18px;font-weight:600;list-style-position:inside}
+details.ref[open]>summary{border-bottom:1px solid var(--line)}
+details.ref .body{padding:8px 20px 18px;min-width:0}
+details.ref .body h4{color:var(--accent-ink)}
+details.ref blockquote{margin:12px 0;padding:10px 16px;border-left:3px solid var(--info);background:var(--surface);border-radius:6px}
+footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-size:14px;color:var(--muted)}
+@media (prefers-reduced-motion: reduce){*{scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<div class="page">
+<div class="layout">
+<nav class="toc" aria-label="Mục lục">
+  <p class="toc-title">Mục lục</p>
+  <ol>
+    <li><a href="#tom-tat">Tóm tắt</a></li>
+    <li><a href="#tham-khao">Tham khảo đã research</a></li>
+    <li><a href="#pham-vi">Phạm vi v1</a></li>
+    <li><a href="#phu-thuoc">Có độc lập được không</a></li>
+    <li><a href="#kien-truc">Kiến trúc</a></li>
+    <li><a href="#dang-1-lan">Đăng đúng 1 lần</a></li>
+    <li><a href="#kenh">Kênh và ràng buộc</a></li>
+    <li><a href="#buoc">Các bước</a></li>
+    <li><a href="#exit">Tiêu chí xong</a></li>
+    <li><a href="#rui-ro">Rủi ro</a></li>
+  </ol>
+</nav>
+<main>
+<p class="eyebrow">Crove OS · Plan module</p>
+<h1>Crove Social</h1>
+<p class="lede">Viết bài một lần, chỉnh theo từng kênh, duyệt, rồi tự đăng đúng giờ lên mọi trang đã kết nối. AI soạn và viết lại, người duyệt. Tham khảo: Postiz (và fork DOS/Crove-Post), OpenPost, BrightBean Studio, TryPost, Mixpost, cùng docs chính thức của từng nền tảng.</p>
+<div class="meta"><span>Ngày: 16/10/2026</span><span>Quyết định: D17 (owner chốt 16/10)</span><span>Nguồn chuẩn: <a href="social.md"><code>docs/plan/social.md</code></a></span></div>
+
+<div class="callout warn"><p><strong>Trang tóm tắt cho owner.</strong> Nguồn chuẩn là bản tiếng Anh <a href="social.md"><code>docs/plan/social.md</code></a> và <a href="../adr/0025-channel-layer.md">ADR-0025</a>. Khi hai bản khác nhau, bản tiếng Anh thắng.</p></div>
+
+<h2 id="tom-tat">Tóm tắt</h2>
+<div class="tiles">
+  <div class="tile"><b>Phần lớn</b><span>làm độc lập được: module, adapter, UI nằm ở thư mục mới, không agent nào khác đụng</span></div>
+  <div class="tile"><b>3 phần</b><span>kernel còn thiếu và chưa ai làm: kho credential mã hóa, lớp <code>channel</code>, sổ <code>external_call</code>. Stream Social tự làm</span></div>
+  <div class="tile"><b>2 PR</b><span>đang mở cần chờ: #198 (bật/tắt module) để đăng ký Social; #220 (upload) chỉ cho thư viện media</span></div>
+  <div class="tile"><b>Sandbox</b><span>kênh giả chạy offline, nên <code>docker compose up</code> demo được cả luồng mà không cần tài khoản Facebook</span></div>
+</div>
+<div class="callout info"><p><strong>Quyết định D17.</strong> Plan gốc (D2) để Social chờ khách wedge đòi. Owner chốt 16/10/2026: Social làm ngay, song song với Kế toán, như một ngoại lệ chỉ cho Social. CRM, Service, Sign, HRM vẫn chờ. Social không lấy việc kernel mà Finance đang chờ.</p></div>
+
+<h2 id="tham-khao">Tham khảo đã research</h2>
+<p>3 lượt research chỉ đọc (không chạy code nào): Postiz và fork DOS/Crove-Post, các dự án open source khác, docs chính thức của nền tảng. Nguồn và link: <a href="social-research.md"><code>social-research.md</code></a>.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Dự án</th><th>Stack, license</th><th>Học được gì</th></tr></thead>
+<tbody>
+<tr><td><strong>Postiz</strong> (37k sao)</td><td>NestJS, Next.js 16, Prisma, Redis, Temporal (bỏ BullMQ từ 01/2026); AGPL</td><td>Khoảng 36 kênh, không có Zalo. Mô hình đăng 2 pha (tạo container, chờ, chốt). Sau sự cố đăng trùng (#1321, #832), lời gọi đăng chỉ chạy tối đa 1 lần; không chắc thì báo người dùng tự kiểm. <strong>Không có luồng duyệt</strong> (chỉ superadmin/admin/user). Self-host nặng: 8 container, 32 worker Temporal chạy không tải tốn khoảng 27% CPU. Fork của mình lệch 185 commit, thiếu 73 commit so với upstream.</td></tr>
+<tr><td><strong>OpenPost</strong></td><td>Go, SvelteKit; AGPL; rất active (v7.21, 14/10)</td><td>Thiết kế đăng đúng 1 lần kỹ nhất: chặn ghi trước lời gọi ra ngoài, mỗi bước khai báo retry có an toàn không, chỉ 1 lần gọi đang chạy cho mỗi thao tác, không chắc thì chuyển cho người xử lý. Duyệt gắn với revision và hash nội dung.</td></tr>
+<tr><td><strong>BrightBean Studio</strong></td><td>Django, Postgres, không Redis; AGPL; 2,5k sao, mới từ 03/2026</td><td>Chứng minh chỉ cần Postgres (giống pg-boss của mình). Bài kẹt "đang đăng" thì hỏi lại nền tảng chứ không đăng lại. Duyệt nhiều bước, slot cộng hàng đợi đặt tên.</td></tr>
+<tr><td><strong>TryPost</strong></td><td>Laravel; AGPL</td><td>Luật slot hàng đợi viết rõ; agent qua MCP theo cùng luật, giới hạn và duyệt như người.</td></tr>
+<tr><td><strong>Mixpost</strong> Lite</td><td>Laravel; MIT</td><td>Khai báo năng lực từng kênh (giới hạn, media), dùng chung cho kiểm tra và xem trước; rate limit theo app và theo tài khoản.</td></tr>
+<tr><td>Zernio, Ayrshare</td><td>API đóng</td><td>Mẫu API công khai: 1 bài có trạng thái riêng từng kênh, idempotency key, trả 409 khi cùng nội dung vào cùng tài khoản trong 24 giờ.</td></tr>
+</tbody></table></div>
+<div class="callout warn"><p><strong>Chỉ học thiết kế, không copy code.</strong> CLA của Crove cho owner quyền đổi license (kể cả license thương mại). Code của người khác, kể cả Postiz trong fork của mình, mình không có quyền đổi license, nên adapter viết mới từ docs của nền tảng.</p></div>
+<p><strong>Những chỗ plan đổi nhờ research:</strong></p>
+<ul>
+<li>Thêm bảng <code>post_approval</code>: duyệt gắn với revision và hash nội dung; sửa bài là mất duyệt.</li>
+<li>Không cho sửa hay hủy bài khi có kênh đang đăng (Postiz sửa bài thì khởi động lại luồng đang đăng, dễ trùng).</li>
+<li>Adapter chia thành interface nhỏ theo năng lực, mỗi bước đăng khai báo retry có an toàn không; lỗi có phân loại.</li>
+<li>Theo dõi quota trước khi gọi (Instagram 100 bài/ngày, Threads 250, YouTube 100 lần upload/ngày).</li>
+<li>Worker chỉ chạy cho kênh đã cấu hình; không cần Temporal, Redis hay Elasticsearch.</li>
+<li>Zalo OA lên thứ 3: không dự án nào hỗ trợ, là điểm khác biệt ở Việt Nam.</li>
+</ul>
+
+<h2 id="pham-vi">Phạm vi v1</h2>
+<div class="grid">
+  <div class="card c-reuse"><p class="col-title">Có trong v1</p><ul>
+    <li>Kết nối kênh: Facebook Page, Instagram trước, rồi Zalo OA; kênh <code>sandbox</code> để chạy local và test.</li>
+    <li>Soạn bài: 1 bài, mỗi kênh 1 biến thể (variant), kiểm tra ngay theo luật từng kênh (độ dài, số và loại media, link), xem trước.</li>
+    <li>Duyệt: nháp, gửi duyệt, duyệt hoặc trả lại. Đăng bài là R2: ở v1 bài nào cũng cần người duyệt, chưa có tự đăng.</li>
+    <li>Lên lịch: giờ cụ thể, hoặc slot trống kế tiếp của hàng đợi (slot theo tuần, theo múi giờ của org).</li>
+    <li>Đăng đúng 1 lần mỗi kênh, kể cả khi worker chết giữa chừng.</li>
+    <li>Lịch (calendar), danh sách, chi tiết bài với trạng thái từng kênh.</li>
+    <li>AI: soạn từ brief, viết lại theo kênh, rút gọn, đổi giọng. Kết quả AI luôn là bản nháp.</li>
+    <li>Số liệu: like, comment, share, reach, impression do job kéo về; màn hình phân tích đơn giản.</li>
+  </ul></div>
+  <div class="card c-lib"><p class="col-title">Sau v1 (cùng plan)</p><ul>
+    <li>Thư viện media (sau #220).</li>
+    <li>Đăng lại bài evergreen (bài dùng lại được nhiều lần).</li>
+    <li>Duyệt nhiều bước.</li>
+    <li>Thêm kênh: TikTok, YouTube, Threads, LinkedIn, X, Bluesky.</li>
+    <li>Link xem trước công khai để khách hàng góp ý (giống Postiz).</li>
+    <li>Hành động sau khi đăng: tự đăng lại, tự trả lời khi bài đủ số like.</li>
+    <li>API công khai và MCP: agent bên ngoài tạo nháp, đi chung hàng duyệt và giới hạn như người.</li>
+    <li>Gợi ý giờ đăng từ lịch sử.</li>
+    <li>Agent "Chuyên viên nội dung (AI)" trong sơ đồ tổ chức (ADR-0029).</li>
+    <li>Tự đăng cho bài không bị taint (tùy chọn của org).</li>
+  </ul></div>
+  <div class="card c-new"><p class="col-title">Không thuộc Social</p><ul>
+    <li>Comment và tin nhắn: thuộc inbox của module Service (plan §5.7). Trước khi có Service, Social chỉ hiện số comment.</li>
+  </ul></div>
+</div>
+
+<h2 id="phu-thuoc">Có làm độc lập với core được không</h2>
+<p>Phần lớn được. Bảng dưới là từng thứ Social cần, core hiện có gì, và cách xử lý.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Social cần</th><th>Core hiện tại</th><th>Cách làm</th></tr></thead>
+<tbody>
+<tr><td><code>execute()</code>, RLS, audit, outbox, idempotency, migration runner</td><td><span class="b b-ok">Có</span></td><td>Dùng lại nguyên.</td></tr>
+<tr><td>Đăng ký module, bật/tắt theo deployment</td><td><span class="b b-warn">PR #198 đang mở</span></td><td>Module build và test riêng trước; đăng ký vào kernel sau khi #198 merge.</td></tr>
+<tr><td>Contract oRPC và router</td><td><span class="b b-ok">Có</span>, nhưng là 1 file chung</td><td>Thêm namespace <code>social</code> kiểu cộng thêm, PR nhỏ, rebase ngay trước merge.</td></tr>
+<tr><td>Job trong worker</td><td><span class="b b-ok">Có</span>, queue liệt kê cứng</td><td>Thêm queue <code>social-*</code>.</td></tr>
+<tr><td>File cho media</td><td><span class="b b-warn">Upload là PR #220 đang mở</span></td><td>Thư viện media chờ #220; bài chữ và link không cần.</td></tr>
+<tr><td>AI</td><td><span class="b b-ok">Có</span> (<code>packages/agent</code>, endpoint OpenAI-compatible)</td><td>Thêm <code>SocialWriter</code>, file mới.</td></tr>
+<tr><td>Proposal và AI Inbox</td><td><span class="b b-warn">Đang viết cứng cho Finance</span></td><td>v1 dùng trạng thái duyệt riêng của Social; nối vào Inbox chung khi registry proposal cho module cắm vào.</td></tr>
+<tr><td>Lưu token bên thứ ba</td><td><span class="b b-bad">Thiếu</span> (chỉ có interface <code>CredentialBroker</code>)</td><td>Stream Social làm: token mã hóa envelope trong <code>crove_kernel.credential</code>.</td></tr>
+<tr><td>Kết nối kênh, OAuth, refresh token</td><td><span class="b b-bad">Thiếu</span> (plan để "trước Phase 4")</td><td>Làm ngay trong kernel, sau này Service dùng chung (ADR-0025).</td></tr>
+<tr><td>Sổ <code>external_call</code> (gọi ra ngoài không trùng)</td><td><span class="b b-bad">Thiếu</span></td><td>Làm ngay; connector của Finance dùng lại được.</td></tr>
+<tr><td>Allowlist domain khi gọi ra ngoài (egress)</td><td><span class="b b-bad">Thiếu</span></td><td>v1: mỗi adapter tự khóa danh sách domain; chính sách egress đầy đủ (ADR-0016) để sau.</td></tr>
+</tbody></table></div>
+<div class="callout"><p><strong>Hệ quả:</strong></p><ul>
+<li><strong>Độc lập hoàn toàn:</strong> <code>modules/social</code>, <code>packages/channel</code> (adapter từng nền tảng), các màn hình Social trong <code>apps/app</code>.</li>
+<li><strong>Phần kernel stream Social tự làm:</strong> kho credential, lớp channel, <code>external_call</code>. Đây là protected path (migration, kernel), nên mỗi PR có security review độc lập và chạy invariant suite từ base.</li>
+<li><strong>File chung đụng nhẹ:</strong> <code>kernel.ts</code>, <code>rpc.ts</code>, <code>contract.ts</code>, <code>worker.ts</code>, <code>router.tsx</code>, i18n. Chỉ thêm dòng, xung đột nhỏ, rebase trước merge.</li>
+</ul></div>
+
+<h2 id="kien-truc">Kiến trúc</h2>
+<div class="table-wrap"><table class="fit">
+<thead><tr><th>Phần</th><th>Nội dung</th></tr></thead>
+<tbody>
+<tr><td><code>modules/social</code></td><td>Domain thuần TS: kiểu bài và variant, luật từng kênh, máy trạng thái bài, tính slot hàng đợi, khóa idempotency. Command, query, job đăng bài và kéo số liệu.</td></tr>
+<tr><td><code>packages/channel</code></td><td>Interface <code>ChannelProvider</code> và adapter: <code>sandbox</code>, <code>meta</code>, <code>linkedin</code>, sau đó các kênh khác. Mỗi adapter khóa danh sách domain được gọi. Chỉ job và route OAuth gọi adapter; command handler không gọi mạng.</td></tr>
+<tr><td><code>crove_kernel</code></td><td>Bảng <code>credential</code>, <code>channel_connection</code>, <code>oauth_state</code>, <code>external_call</code>.</td></tr>
+<tr><td><code>crove_social</code></td><td>Bảng <code>post</code>, <code>post_variant</code>, <code>queue</code>, <code>metric_snapshot</code>. Mọi bảng có <code>org_id</code> và RLS.</td></tr>
+</tbody></table></div>
+<p><strong>Trạng thái bài:</strong></p>
+<div class="flow"><span class="st">draft</span><span class="ar">→</span><span class="st">in_review</span><span class="ar">→</span><span class="st hl">approved</span><span class="ar">→</span><span class="st">scheduled</span><span class="ar">→</span><span class="st">publishing</span><span class="ar">→</span><span class="st">published / partially_published / failed</span></div>
+<p>Bị trả lại thì về <code>draft</code>. Sửa bài sau khi đã duyệt cũng về <code>draft</code>: lần duyệt gắn với một revision cụ thể, không gắn với cả bài.</p>
+<p><strong>Token:</strong> mã hóa AES-256-GCM bằng data key riêng cho từng token, data key được bọc bởi khóa của deployment <code>CREDENTIAL_KEY</code> (Cloud dùng KMS). Chỉ job gọi nền tảng và route OAuth callback giải mã được. Token không bao giờ tới SPA, log, audit, event hay kết quả API. Token hết hạn hoặc bị thu hồi thì kết nối chuyển <code>expired</code>, các bài đã lên lịch cho kênh đó tạm dừng (không mất bài), owner được báo.</p>
+<p><strong>Self-host và Cloud:</strong> người tự host đăng ký app của chính họ trên từng nền tảng và đặt credential trong env; kênh nào thiếu credential thì ẩn. Crove Cloud dùng cùng adapter với app đã được nền tảng duyệt do DOS sở hữu, cấu hình ở <code>crove-cloud</code>. Core không phụ thuộc DOS.</p>
+<p><strong>AI:</strong> kết quả AI, và mọi bài soạn từ nội dung không tin cậy (email gửi vào, trang web), bị đánh dấu taint. Bài taint luôn cần người duyệt, kể cả khi sau này có tự đăng.</p>
+
+<h2 id="dang-1-lan">Đăng đúng 1 lần mỗi kênh</h2>
+<p>Ngoài Bluesky, không nền tảng nào có idempotency key, nên nếu gọi lại mù quáng khi timeout thì dễ đăng trùng (lỗi Postiz dính nặng nhất). Cách làm ghép cách chặn ghi của OpenPost với nguyên tắc "lời gọi đăng chạy tối đa 1 lần" của Postiz:</p>
+<ol>
+<li>Lên lịch thì tạo 1 job cho mỗi variant, chạy đúng giờ, khóa trùng theo <code>org:variant:revision</code>.</li>
+<li>Job đọc lại: variant vẫn <code>scheduled</code>, có lần duyệt khớp revision và hash nội dung, kênh vẫn <code>active</code>, còn quota. Sai một điều thì dừng. Cứ 15 phút có job quét lại bài tới giờ mà chưa có job.</li>
+<li>Ghi <code>external_call</code> trạng thái <code>started</code> với khóa cố định, commit, rồi mới gọi nền tảng.</li>
+<li>Thành công: lưu id và link bài. Nền tảng nhận nhưng còn xử lý (container Instagram, bài Zalo): chuyển <code>processing</code> và job khác hỏi trạng thái tới khi xong; bước nào đã chạy thì không chạy lại.</li>
+<li>Timeout hoặc crash sau bước 3: lần chạy sau thấy <code>started</code> thì <strong>không gọi lại</strong>, chuyển <code>ambiguous</code> và chạy job đối soát: hỏi nền tảng các bài gần đây của tài khoản, khớp theo hash nội dung và khung giờ. Tìm thấy thì ghi là đã đăng. Không thấy sau thời gian đối soát thì <code>needs_attention</code>, người quyết định đăng lại hay bỏ.</li>
+<li>Lỗi rõ ràng: sai nội dung hoặc thiếu quyền thì <code>failed</code> kèm lý do; vượt rate limit thì hẹn giờ thử lại; token hết hạn thì tạm dừng kênh. Với app LinkedIn chỉ có quyền cá nhân, nền tảng không cho liệt kê bài để đối soát, nên trường hợp không chắc luôn chuyển cho người quyết.</li>
+</ol>
+
+<h2 id="kenh">Kênh: thứ tự và ràng buộc (đã kiểm docs 16/10/2026)</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Kênh</th><th>Vì sao ở vị trí này</th><th>Ràng buộc chính</th></tr></thead>
+<tbody>
+<tr><td class="tnum">1</td><td>Facebook Page</td><td>Phủ lớn nhất với SME Việt Nam; người tự host dùng app của chính họ ở development mode đăng được lên page họ quản lý</td><td>Người dùng khác cần App Review và Business Verification (việc của Crove Cloud, owner làm sau)</td></tr>
+<tr><td class="tnum">2</td><td>Instagram</td><td>Cùng app Meta, cùng lần review</td><td>Đăng qua container; ảnh chỉ JPEG; 100 bài qua API mỗi 24 giờ</td></tr>
+<tr><td class="tnum">3</td><td>Zalo OA</td><td>Riêng cho Việt Nam; không dự án tham khảo nào có</td><td>Refresh token dùng 1 lần là đổi; điều kiện loại OA và số liệu bài viết chưa xác nhận</td></tr>
+<tr><td class="tnum">4</td><td>TikTok</td><td>Rất lớn ở Việt Nam</td><td>App chưa audit chỉ đăng riêng tư; muốn audit phải làm đúng UX bắt buộc của TikTok</td></tr>
+<tr><td class="tnum">5</td><td>YouTube</td><td>Video; có hẹn giờ sẵn</td><td>100 lần upload/ngày mỗi project; cần Google xác minh OAuth</td></tr>
+<tr><td class="tnum">6</td><td>Threads</td><td>Cùng app Meta</td><td>500 ký tự, tối đa 5 link</td></tr>
+<tr><td class="tnum">7</td><td>LinkedIn</td><td>Founder và B2B</td><td>Đăng lên trang công ty cần LinkedIn duyệt; không có refresh token nên 60 ngày phải kết nối lại</td></tr>
+<tr><td class="tnum">8</td><td>X</td><td>Ít dùng ở Việt Nam</td><td>Trả tiền mỗi bài: 0,015 USD, có link thì 0,20 USD</td></tr>
+<tr><td class="tnum">-</td><td>Bluesky</td><td>Không cần review, có idempotency key: adapter thật thứ hai rẻ để test đường đăng</td><td>Ít người dùng ở Việt Nam</td></tr>
+</tbody></table></div>
+<p>Còn 3 điểm docs mâu thuẫn hoặc chưa rõ, sẽ test khi làm adapter: giới hạn ngày của Instagram (docs ghi 100, mục carousel ghi 50); YouTube còn ép video từ project chưa xác minh về riêng tư không; điều kiện và quota của Zalo OA.</p>
+
+<h2 id="buoc">Các bước (mỗi bước 1 PR, làm trọn từ migration tới UI)</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Bước</th><th>Chờ</th><th>Protected path</th></tr></thead>
+<tbody>
+<tr><td class="tnum">S0</td><td>Plan này, ADR-0025 (đề xuất), D17</td><td>-</td><td><span class="b b-mute">Không</span></td></tr>
+<tr><td class="tnum">S1</td><td>Domain của <code>modules/social</code>: kiểu dữ liệu, luật kênh, máy trạng thái, slot hàng đợi, khóa idempotency; unit test và property test</td><td>-</td><td><span class="b b-warn">package.json, lockfile</span></td></tr>
+<tr><td class="tnum">S2</td><td>Kho credential + <code>channel_connection</code> + <code>packages/channel</code> với kênh <code>sandbox</code>; thêm vào ma trận RLS</td><td>ADR-0025 được chấp nhận</td><td><span class="b b-bad">Có</span></td></tr>
+<tr><td class="tnum">S3</td><td>Schema <code>crove_social</code>, command, query, contract, router; đăng ký vào kernel</td><td>#198, S1, S2</td><td><span class="b b-bad">Có</span></td></tr>
+<tr><td class="tnum">S4</td><td>Đường đăng bài: <code>external_call</code>, job đăng và đối soát, tạm dừng khi token hết hạn</td><td>S3</td><td><span class="b b-bad">Có</span></td></tr>
+<tr><td class="tnum">S5</td><td>UI: kênh, soạn bài có xem trước theo kênh, lịch, hàng đợi, chi tiết bài; Playwright trên <code>sandbox</code></td><td>S3, S4</td><td><span class="b b-mute">Không</span></td></tr>
+<tr><td class="tnum">S6</td><td>OAuth + adapter Meta (Facebook Page, Instagram), rồi Zalo OA</td><td>S2</td><td><span class="b b-bad">Có</span> (<code>http.ts</code>)</td></tr>
+<tr><td class="tnum">S7</td><td>AI soạn và viết lại</td><td>S3</td><td><span class="b b-mute">Không</span></td></tr>
+<tr><td class="tnum">S8</td><td>Job số liệu và màn hình phân tích</td><td>S4, S6</td><td><span class="b b-mute">Không</span></td></tr>
+<tr><td class="tnum">S9</td><td>Thư viện media, evergreen, duyệt nhiều bước, thêm kênh</td><td>S4, #220</td><td><span class="b b-warn">Một phần</span></td></tr>
+</tbody></table></div>
+
+<h2 id="exit">Tiêu chí xong v1</h2>
+<ol>
+<li>Trên laptop mới với <code>docker compose up</code>: kết nối kênh <code>sandbox</code>, soạn 1 bài cho 2 kênh, duyệt, lên lịch, cả 2 variant đăng đúng 1 lần; có test Playwright.</li>
+<li>Giết worker giữa lúc gọi nền tảng và lúc ghi kết quả: không có bài thứ hai (đối soát được, hoặc <code>needs_attention</code>).</li>
+<li>Token hết hạn: hàng đợi của kênh đó dừng và báo; không mất bài; kết nối lại thì chạy tiếp.</li>
+<li>Bài do AI soạn hoặc bị taint không bao giờ đăng khi chưa có người duyệt đúng revision đó.</li>
+<li>Test RLS chéo org phủ mọi bảng mới; token không xuất hiện trong log, audit, event hay API.</li>
+<li>Tắt <code>social</code> qua <code>CROVE_MODULES</code> thì kernel và Finance chạy y như cũ.</li>
+</ol>
+
+<h2 id="rui-ro">Rủi ro</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Rủi ro</th><th>Giảm thiểu</th></tr></thead>
+<tbody>
+<tr><td>Phân tán khỏi wedge Kế toán</td><td>Owner đã chốt; Social là stream riêng, không lấy việc kernel mà Finance đang chờ.</td></tr>
+<tr><td>Xung đột ở file chung</td><td>PR nhỏ, chỉ thêm dòng, rebase ngay trước merge.</td></tr>
+<tr><td>Nền tảng đổi luật hoặc chặn quyền</td><td>Adapter sau 1 interface; <code>sandbox</code> giữ sản phẩm luôn test được; kiểm lại ràng buộc mỗi khi làm adapter.</td></tr>
+<tr><td>Đăng trùng</td><td><code>external_call</code> + đối soát, không bao giờ gọi lại mù quáng.</td></tr>
+<tr><td>Lộ token</td><td>Mã hóa envelope, chỉ giải mã trong job và callback, có test che token.</td></tr>
+<tr><td>Nguồn gốc code</td><td>Postiz (kể cả fork DOS/Crove-Post), OpenPost và các dự án khác chỉ học thiết kế; adapter viết từ docs nền tảng. Muốn dùng lại code của fork thì theo ADR-0020.</td></tr>
+<tr><td>Self-host nặng như Postiz</td><td>Chỉ Postgres và pg-boss, đã có sẵn; worker chỉ cho kênh đã cấu hình; prober bắt worker bị treo qua heartbeat.</td></tr>
+<tr><td>Nền tảng đổi tên hoặc bỏ metric (Meta đổi Page Insights năm 2026)</td><td>Lưu các trường chung cộng phần <code>extra</code>; mỗi adapter có bảng map metric và test.</td></tr>
+</tbody></table></div>
+
+<footer>
+  <p>Trang tóm tắt, không thay thế nguồn chuẩn <a href="social.md"><code>docs/plan/social.md</code></a>.</p>
+</footer>
+</main>
+</div>
+</div>
+</body>
+</html>

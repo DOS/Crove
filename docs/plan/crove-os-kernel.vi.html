@@ -217,7 +217,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <tr><td>2b Finance A2</td><td class="tnum">8 tuần</td><td><span class="b b-mute">Chưa bắt đầu</span></td></tr>
 <tr><td>3 CRM + Calendar</td><td class="tnum">12 tuần</td><td><span class="b b-info">Chờ khách đòi</span></td></tr>
 <tr><td>4 Service</td><td class="tnum">10 tuần</td><td><span class="b b-info">Chờ khách đòi</span></td></tr>
-<tr><td>5 Social</td><td class="tnum">6 tuần</td><td><span class="b b-info">Chờ khách đòi</span></td></tr>
+<tr><td>5 Social</td><td class="tnum">6 tuần</td><td><span class="b b-ok">Bắt đầu 16/10 (D17)</span></td></tr>
 <tr><td>6 Sign</td><td class="tnum">8 tuần</td><td><span class="b b-info">Chờ khách đòi</span></td></tr>
 <tr><td>7 HRM</td><td class="tnum">10 tuần</td><td><span class="b b-info">Chờ khách đòi</span></td></tr>
 </tbody></table></div>
@@ -240,6 +240,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <tr><td class="tnum">14</td><td><strong>Nhận các đề xuất từ stack review (14/10).</strong> Vite+ làm toolchain từ đầu (ngoại lệ Oxfmt pre-1.0 do owner duyệt, <a href="https://github.com/DOS/Crove/issues/41">#41</a>); API công khai <code>/v1</code> chỉ trên oRPC v2; DB layer sẵn sàng chia cell (<a href="https://github.com/DOS/Crove/issues/45">#45</a>); roadmap nền tảng tích hợp (<a href="https://github.com/DOS/Crove/issues/68">#68</a>); spike DBOS (<a href="https://github.com/DOS/Crove/issues/59">#59</a>); canary Bun; PWA trước, rồi Expo và Tauri 2. Nguồn: <a href="../recommendations/2026-10-13-architecture-stack-review.vi.html">báo cáo đánh giá stack</a>.</td><td class="small"><a href="crove-os-kernel.md#decisions-2026-10-13">plan, D14</a></td></tr>
 <tr><td class="tnum">15</td><td><strong>Agent giữ vị trí trong sơ đồ tổ chức chung với người.</strong> Mỗi module có template agent (ví dụ <code>finance.chief_accountant</code>). R3 và đề xuất bị gắn cờ P03-P07 luôn kết thúc ở một người; agent không duyệt việc do chính chuỗi của mình tạo ra (cổng T18). Chỉ người quản lý sơ đồ, template, hạn mức và ngân sách.</td><td class="small"><a href="../adr/0029-agents-positions-and-org-chart.md">ADR-0029</a> · <a href="crove-os-kernel.md#decisions-2026-10-13">plan, D15</a></td></tr>
 <tr><td class="tnum">16</td><td><strong>Danh tính và thu hồi theo thiết kế C.</strong> Mỗi request verify JWT Supabase cục bộ và, trong cùng transaction, kiểm membership cùng bản ghi trạng thái phiên <code>auth_session</code> của Crove. Self-host đọc <code>auth.sessions</code>. Cloud (owner chốt lại 15/10/2026) dùng mặc định của Supabase Auth: đăng xuất ở nơi khác hủy refresh token ngay, access token hết hiệu lực khi tới <code>exp</code>; không gọi Auth mỗi request, không cần sửa gì bên DOS; DOS-28 thành tùy chọn về sau. Thu hồi phía Crove có hiệu lực ngay. R3 kiểm trực tiếp với Supabase Auth, cần <code>aal2</code> với MFA trong 5 phút gần nhất.</td><td class="small"><a href="../adr/0028-identity-sessions-and-revocation.md">ADR-0028</a> · <a href="crove-os-kernel.md#decisions-2026-10-13">plan, D16</a></td></tr>
+<tr><td class="tnum">17</td><td><strong>Social làm ngay, song song với Kế toán</strong> (owner chốt 16/10/2026). Ngoại lệ của D2, chỉ cho Social; CRM, Service, Sign, HRM vẫn chờ khách đòi. Social tự làm các phần kernel nó cần mà chưa ai làm: kho credential mã hóa, lớp <code>channel</code> (ADR-0025, kéo lên trước Phase 4), sổ <code>external_call</code>.</td><td class="small"><a href="social.vi.html">plan Social</a> · <a href="../adr/0025-channel-layer.md">ADR-0025</a></td></tr>
 </tbody></table></div>
 <h2 id="kien-truc">3. Kiến trúc và stack tóm tắt</h2>
 <h3>Kiến trúc</h3><ul>
@@ -320,7 +321,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <tr><td>2b Finance A2</td><td class="tnum">8 tuần</td><td><span class="b b-mute">Chưa bắt đầu</span></td><td>Bắt đầu khi có phát hành hóa đơn điện tử và kết nối ngân hàng: phát hành hóa đơn, bank API, Ask-the-books, SSE.</td></tr>
 <tr><td>3 CRM + Calendar</td><td class="tnum">12 tuần</td><td><span class="b b-info">Chờ khách đòi</span></td><td>Làm khi khách wedge cần (Decision 2).</td></tr>
 <tr><td>4 Service</td><td class="tnum">10 tuần</td><td><span class="b b-info">Chờ khách đòi</span></td><td>Hộp thư hợp nhất, ticket, SLA, lớp <code>channel</code>.</td></tr>
-<tr><td>5 Social</td><td class="tnum">6 tuần</td><td><span class="b b-info">Chờ khách đòi</span></td><td>Đăng bài đa kênh, lịch, duyệt nhiều bước.</td></tr>
+<tr><td>5 Social</td><td class="tnum">6 tuần</td><td><span class="b b-ok">Bắt đầu 16/10 (D17)</span></td><td>Đăng bài đa kênh, lịch, duyệt nhiều bước. Plan chi tiết: <a href="social.vi.html">social.vi.html</a>.</td></tr>
 <tr><td>6 Sign</td><td class="tnum">8 tuần</td><td><span class="b b-info">Chờ khách đòi</span></td><td>Ký số qua CA Việt Nam (MISA eSign/WeSign).</td></tr>
 <tr><td>7 HRM</td><td class="tnum">10 tuần</td><td><span class="b b-info">Chờ khách đòi</span></td><td>Hồ sơ nhân sự, chấm công, lương và bảo hiểm.</td></tr>
 </tbody></table></div>

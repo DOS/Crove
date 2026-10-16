@@ -28,7 +28,7 @@
 | 2b Finance A2 | 8 weeks | Not started |
 | 3 CRM + Calendar | 12 weeks | Waits for wedge-customer demand (Decision 2) |
 | 4 Service | 10 weeks | Waits for wedge-customer demand (Decision 2) |
-| 5 Social | 6 weeks | Waits for wedge-customer demand (Decision 2) |
+| 5 Social | 6 weeks | Started 2026-10-16 by owner decision, in parallel (Decision 17); plan: [social.md](social.md) |
 | 6 Sign | 8 weeks | Waits for wedge-customer demand (Decision 2) |
 | 7 HRM | 10 weeks | Waits for wedge-customer demand (Decision 2) |
 
@@ -65,6 +65,7 @@ The body of this plan was rewritten on 2026-10-14 to describe these decisions; i
     - §2 has the final stack.
 15. **Agents hold positions in an org chart shared with humans** (owner direction, 2026-10-14; [ADR-0029](../adr/0029-agents-positions-and-org-chart.md)). Each module ships one or more agent templates, for example `finance.chief_accountant` ("Kế toán trưởng (AI)"). A position is held by a human or an agent, and has a job description and tasks. Agents work with humans, and with each other where a module or an org has no humans: delegation only down their subtree, escalation to the supervisor position, communication only through tasks, comments and proposals. Only humans manage the chart, templates, limits and budgets. R3, and any proposal flagged P03-P07, always ends at a human (the nearest one up the chart holding the permission, else the org owner); agents never approve work from their own causal chain (External-tenant gate T18). Budgets, wake-up limits and kill switches per agent, module and org. Legal sign-off (kế toán trưởng, signed statements) stays with a qualified human. Ideas borrowed from Paperclip (MIT); Paperclip is not embedded, and external runtimes act through MCP grants.
 16. **Identity and revocation per ADR-0028 (design C), 2026-10-14.** Chosen by the owner after two blind reviews (Codex, Claude) independently converged on it. Every request verifies the Supabase JWT locally and, in the same transaction, checks membership and a Crove-owned session status record (`auth_session`). Status source, one interface with two adapters: self-host reads `auth.sessions` and the user's ban or deletion in the shared database (next request); Crove Cloud (amended 2026-10-15) keeps Supabase Auth's default behavior: a sign-out elsewhere destroys the refresh tokens at once and access ends when the access token expires (SLA: the project's JWT expiry), with no per-request Auth call and no DOS-side change; DOS ID lifecycle events (DOS-28) are an optional later refinement. A revoke in Crove (self or owner) is immediate. R3 checks Supabase Auth live and needs `aal2` with MFA in the last 5 minutes. Rejected: a Supabase Auth call on every request with a 30 s cache (Auth load and outage coupling on Cloud), short-lived tokens only, pure push, Crove-issued sessions through token exchange. The ADR's acceptance tests are the evidence for gate T1.
+17. **Social starts now, in parallel with Accounting (owner decision, 2026-10-16).** An exception to Decision 2 for Social only: CRM, Service, Sign and HRM still wait for wedge-customer demand. Social runs as its own stream and does not take kernel work Finance waits on. It builds the kernel pieces it needs and nobody else is building: the `crove-local` credential broker, the `channel` layer (ADR-0025, moved ahead of Phase 4) and the `external_call` ledger. Detailed plan: [social.md](social.md).
 
 ### MVP
 
@@ -1818,7 +1819,9 @@ Build: TS domain + `post_journal_entry` (SQL) + fast-check + TT133 B01/B02 on sa
 - An expired channel token alerts and stops sending; inbound messages are not lost.
 - The AI never promises prices, discounts or refunds outside policy.
 
-### Phase 5: Social (6 weeks, when wedge customers pull for it; reference: Postiz, Publer, Nuelink, Buffer)
+### Phase 5: Social (6 weeks, started 2026-10-16 per Decision 17; reference: Postiz, Publer, Nuelink, Buffer)
+
+Detailed plan, dependencies and steps: [social.md](social.md). The `channel` layer below moves from Phase 4 to this phase.
 
 **Scope:**
 - Reuses the Phase 4 `channel` layer; adds LinkedIn, YouTube, X.
@@ -1981,7 +1984,7 @@ ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this pla
 | 0020 | Clean-room process for using the archived forks as references | Before Phase 3 |
 | 0014 / 0019 / 0016 | Freezing public names + the `com.crove` prefix / MCP grants / egress, SSRF and NAT | Phase 3, or when the first provider requires an IP allowlist |
 | 0024 | Kernel `calendar` service: events, availability, external calendar sync, double-booking prevention | Before Phase 3 |
-| 0025 | `channel` layer: social and email connections shared by Service and Social, Cloud apps vs self-host | Before Phase 4 |
+| [0025](../adr/0025-channel-layer.md) | `channel` layer: social and email connections shared by Service and Social, Cloud apps vs self-host | Proposed 2026-10-16; before Social step S2 |
 
 0023 (federated identity: DOS ID via OIDC, `IdentityProvider` adapter, Crove sessions) will not be written: ADR-0027 and ADR-0028 replace it.
 
