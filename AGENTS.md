@@ -37,6 +37,7 @@ Crove is the open-source Business OS (AGPL). It must run with `docker compose up
 ## Commands
 
 - `pnpm install` · `pnpm lint` · `pnpm typecheck` · `pnpm test` (unit) · `pnpm test:db` (needs `CROVE_TEST_ADMIN_URL`)
+- Shared dev PostgreSQL: `migrate.db.test.ts` creates cluster-wide `t100_test_runner_*` roles and drops them afterwards; a run killed before that leaves them behind, and every later migrate on the cluster then fails the T17 check with `role t100_test_runner_..._proxy can create temporary objects`. The next run of that test drops leftovers older than 10 minutes; to clear them at once (with no run of it in progress): `psql "$CROVE_TEST_ADMIN_URL" -c "DO \$\$ DECLARE r text; BEGIN FOR r IN SELECT rolname FROM pg_roles WHERE rolname LIKE 't100\_test\_runner\_%' LOOP EXECUTE format('DROP OWNED BY %I', r); EXECUTE format('DROP ROLE %I', r); END LOOP; END \$\$"`
 - `pnpm db:migrate` applies `supabase/migrations` with the built-in runner
 - `docker compose up --build` runs the full stack on http://localhost:8080
 
