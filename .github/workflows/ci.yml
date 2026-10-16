@@ -39,8 +39,9 @@ jobs:
       - name: Install pnpm
         run: npm install -g pnpm@10.34.7 --no-fund --no-audit
 
+      # Every module, also one the kernel does not import yet: typecheck and unit tests run over all of them.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "@crove/app..." --filter "crove-monorepo"
+        run: pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "@crove/app..." --filter "./modules/*" --filter "crove-monorepo"
 
       - name: Lint
         run: pnpm lint

@@ -1,0 +1,17 @@
+{
+  "name": "@crove/mod-social",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Social module: compose, approve, schedule and publish posts to connected channels (plan docs/plan/social.md)",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "fast-check": "catalog:"
+  }
+}
