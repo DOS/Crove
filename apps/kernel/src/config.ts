@@ -126,6 +126,15 @@ const schema = z.object({
   AUTH_RATE_LIMIT_EMAIL_SENT: optional
     .transform((v) => (v === undefined ? undefined : Number(v)))
     .pipe(z.number().int().min(1).max(1_000_000).optional()),
+  // Attempts at secrets someone could guess through the /auth/v1 proxy (#221): password sign-in, emailed or texted
+  // one-time codes and MFA codes, per API process (see auth-guess-limit.ts). At most AUTH_GUESS_LIMIT_PER_CLIENT per
+  // client address (IPv6: per /64) and AUTH_GUESS_LIMIT_PER_ACCOUNT_CLIENT per account from one address in any 15
+  // minutes, and AUTH_GUESS_LIMIT_PER_ACCOUNT per account from every address in an hour. Attempts Supabase Auth
+  // accepts do not count. The account limit must hold an hour of what one address may try on one account (4 times
+  // AUTH_GUESS_LIMIT_PER_ACCOUNT_CLIENT), so one address alone cannot lock anyone out.
+  AUTH_GUESS_LIMIT_PER_CLIENT: z.coerce.number().int().min(1).max(100_000).default(30),
+  AUTH_GUESS_LIMIT_PER_ACCOUNT_CLIENT: z.coerce.number().int().min(1).max(100_000).default(10),
+  AUTH_GUESS_LIMIT_PER_ACCOUNT: z.coerce.number().int().min(1).max(1_000_000).default(50),
   // Per-user limits on creating orgs (External-tenant gate T4), enforced in the database across API instances:
   // at most ORG_CREATE_LIMIT_PER_DAY in any rolling 24 hours and ORG_CREATE_LIMIT_TOTAL ever (closed orgs count).
   ORG_CREATE_LIMIT_PER_DAY: z.coerce.number().int().min(1).max(999_999).default(5),
@@ -255,6 +264,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (Boolean(config.S3_ACCESS_KEY_ID) !== Boolean(config.S3_SECRET_ACCESS_KEY)) {
     throw new Error('set both S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or neither to use the default credential chain');
+  }
+  if (config.AUTH_GUESS_LIMIT_PER_ACCOUNT_CLIENT > config.AUTH_GUESS_LIMIT_PER_CLIENT) {
+    throw new Error('AUTH_GUESS_LIMIT_PER_ACCOUNT_CLIENT must not exceed AUTH_GUESS_LIMIT_PER_CLIENT');
+  }
+  // Four 15-minute windows an hour: one address may try one account that often, and the account's hourly budget
+  // must outlast it.
+  const perAddressHourly = config.AUTH_GUESS_LIMIT_PER_ACCOUNT_CLIENT * 4;
+  if (config.AUTH_GUESS_LIMIT_PER_ACCOUNT < perAddressHourly) {
+    throw new Error(
+      `AUTH_GUESS_LIMIT_PER_ACCOUNT=${config.AUTH_GUESS_LIMIT_PER_ACCOUNT} lets one client address lock an account out ` +
+        `(AUTH_GUESS_LIMIT_PER_ACCOUNT_CLIENT=${config.AUTH_GUESS_LIMIT_PER_ACCOUNT_CLIENT} per 15 minutes is ${perAddressHourly} an hour); ` +
+        `keep it at least ${perAddressHourly}, or lower AUTH_GUESS_LIMIT_PER_ACCOUNT_CLIENT`,
+    );
   }
   if (config.SMTP_HOST && !config.SMTP_FROM) throw new Error('SMTP_HOST needs SMTP_FROM, the sender address of Crove mails');
   const presigned = config.STORAGE === 's3' && config.S3_PRESIGNED_URLS === 'true';
