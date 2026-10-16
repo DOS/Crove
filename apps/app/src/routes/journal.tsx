@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableRow } from '@crove/ui/components/tabl
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { useFormat } from '../i18n/provider.tsx';
+import { isZeroAmount } from '../lib/decimal.ts';
 import { MAX_REASON_LENGTH, canAskReversal, defaultReversalDate, reversalErrorMessage, reversalFormError } from '../lib/reversal.ts';
 
 interface Entry {
@@ -161,6 +162,7 @@ export function JournalPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   {entry.reverses && <Badge variant="secondary">{t('reversalBadge')}</Badge>}
                   {entry.reversedBy && <Badge variant="warning">{t('reversedBadge')}</Badge>}
+                  {entry.pendingReversalId && !entry.reversedBy && <Badge variant="secondary">{t('reversalPendingBadge')}</Badge>}
                   {entry.document?.voided && <Badge variant="destructive">{t('documentVoided')}</Badge>}
                   <p className="text-xs text-subtle-foreground">{f.date(entry.entryDate)}</p>
                 </div>
@@ -187,12 +189,20 @@ export function JournalPage() {
                       <TableCell className="px-0 py-1.5 whitespace-normal text-muted-foreground">
                         <span className="font-mono text-foreground">{l.accountCode}</span> {l.accountName}
                       </TableCell>
-                      <TableCell className="w-36 px-0 py-1.5 text-right text-foreground tabular-nums">{l.debit !== '0' && l.debit !== '0.0000' ? f.money(l.debit) : ''}</TableCell>
-                      <TableCell className="w-36 px-0 py-1.5 text-right text-foreground tabular-nums">{l.credit !== '0' && l.credit !== '0.0000' ? f.money(l.credit) : ''}</TableCell>
+                      <TableCell className="w-36 px-0 py-1.5 text-right text-foreground tabular-nums">{isZeroAmount(l.debit) ? '' : f.money(l.debit)}</TableCell>
+                      <TableCell className="w-36 px-0 py-1.5 text-right text-foreground tabular-nums">{isZeroAmount(l.credit) ? '' : f.money(l.credit)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
+              {/* A reversal waiting for approval (#204): the request is not offered again; the proposal is one click away. */}
+              {entry.pendingReversalId && !entry.reversedBy && (
+                <p className="mt-2 text-right text-xs">
+                  <Link to="/o/$slug/inbox/$id" params={{ slug, id: entry.pendingReversalId }} className="text-link hover:underline">
+                    {t('reversalPendingLink')}
+                  </Link>
+                </p>
+              )}
               {canAskReversal(entry, org.data?.role) &&
                 (reversing === entry.id ? (
                   <ReversalForm entry={entry} slug={slug} onClose={() => setReversing(null)} />

@@ -108,6 +108,8 @@ export const vi = {
     reversesLink: 'Đảo bút toán ngày {date}',
     reversedByLink: 'Đã được đảo bởi bút toán ngày {date}',
     reverse: 'Đảo bút toán',
+    reversalPendingBadge: 'Đang chờ duyệt đảo',
+    reversalPendingLink: 'Xem đề xuất đảo đang chờ duyệt',
   },
   reversal: {
     intro:
@@ -245,6 +247,8 @@ export const vi = {
     originalDebit: 'Nợ (gốc)',
     originalCredit: 'Có (gốc)',
     alreadyReversed: 'Bút toán này đã được đảo ngày {date}.',
+    hiddenLines:
+      'Bạn chỉ thấy các dòng bạn được xem, và các dòng này không cân, nên bút toán còn dòng bạn không được xem. Khi duyệt, Crove đảo toàn bộ các dòng; nếu người duyệt không được xem hết thì đề xuất bị từ chối.',
     purchaseDocument: 'Bút toán ghi chứng từ mua {document} của {vendor}.',
     documentAlreadyVoided: 'Chứng từ này đã bị hủy trong sổ của Crove.',
     documentWillVoid:

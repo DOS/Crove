@@ -1,7 +1,7 @@
 // The approval preview must show exactly the entry the server will post.
 import { describe, expect, it } from 'vitest';
 import { buildPurchaseJournal } from '../../../packages/l10n-vn/src/index.ts';
-import { previewPurchaseJournal, type PreviewLine } from '../src/lib/decimal.ts';
+import { isZeroAmount, linesBalance, previewPurchaseJournal, type PreviewLine } from '../src/lib/decimal.ts';
 
 function server(lines: PreviewLine[], vat: string) {
   const proposed = lines.map((l, i) => ({ ...l, lineNo: i + 1, description: '', unit: null, quantity: null, unitPrice: null, reason: '' }));
@@ -58,5 +58,17 @@ describe('approval preview', () => {
       ['1332', '3500000', '0'],
       ['331', '0', '39580000'],
     ]);
+  });
+});
+
+describe('zero amounts and balance', () => {
+  it('treats every spelling of zero as zero, and nothing else', () => {
+    for (const zero of ['0', '0.0000', '0.00', '-0', '-0.0000', '00', '.0', '0.']) expect(isZeroAmount(zero)).toBe(true);
+    for (const value of ['1', '0.0001', '-0.5', '10', '100.0000', '', 'abc']) expect(isZeroAmount(value)).toBe(false);
+  });
+
+  it('checks that debits and credits add up exactly', () => {
+    expect(linesBalance([{ debit: '100.0000', credit: '0' }, { debit: '0', credit: '100' }])).toBe(true);
+    expect(linesBalance([{ debit: '100', credit: '0.0000' }, { debit: '0', credit: '99.9999' }])).toBe(false);
   });
 });

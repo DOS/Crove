@@ -308,6 +308,8 @@ export const zJournalEntry = z.object({
   // The reversal link, both ways (#138): the entry this one reverses, and the entry that reversed this one.
   reverses: zEntryRef.nullable(),
   reversedBy: zEntryRef.nullable(),
+  // The reversal proposal of this entry waiting for approval, if any (#204); another request is refused meanwhile.
+  pendingReversalId: zId.nullable(),
   // The purchase document this entry records, when it does (absent otherwise).
   document: z
     .object({ id: zId, series: z.string(), number: z.string(), issueDate: zLocalDate, partyName: z.string(), voided: z.boolean() })

@@ -64,20 +64,22 @@ export async function latestExtraction(ctx: QueryContext, fileId: string): Promi
   return { id: row.id, version: row.version, status: row.status, error, inFlight };
 }
 
-// An executed proposal whose recorded purchase document was voided by reversing its journal entry (#165). The invoice
-// is no longer in Crove's books, so its file may be read again into a new proposal and recorded anew; any other
-// executed proposal ends the file's reading for good.
+// Of the given proposals, those whose recorded purchase document was voided by reversing its journal entry (#165).
+// Asked of the finance module (finance.documents.voided_proposals) through ctx.query, so the kernel does not read the
+// finance schema (#204); a deployment without finance has no recorded purchases, so none.
+export const VOIDED_PROPOSALS_QUERY = 'finance.documents.voided_proposals';
+export async function voidedProposals(ctx: QueryContext, proposalIds: readonly string[]): Promise<Set<string>> {
+  if (proposalIds.length === 0) return new Set();
+  const found = await ctx.query<string[]>(VOIDED_PROPOSALS_QUERY, { proposalIds });
+  return new Set(found.status === 'ok' ? found.value : []);
+}
+
+// An executed proposal whose recorded purchase document was voided (above). The invoice is no longer in Crove's
+// books, so its file may be read again into a new proposal and recorded anew; any other executed proposal ends the
+// file's reading for good.
 export async function executedButVoided(ctx: QueryContext, proposal: { id: string; status: string } | undefined): Promise<boolean> {
   if (proposal?.status !== 'executed') return false;
-  const voided = await ctx.trx
-    .selectFrom('crove_finance.purchase_document as d')
-    .innerJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
-    .select('d.id')
-    .where('d.org_id', '=', ctx.orgId)
-    .where('d.proposal_id', '=', proposal.id)
-    .limit(1)
-    .executeTakeFirst();
-  return voided !== undefined;
+  return (await voidedProposals(ctx, [proposal.id])).has(proposal.id);
 }
 
 // Refuses a decision (approve, edit, reject) on a proposal whose file is being read again: the result would
