@@ -561,6 +561,47 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(kept).toEqual({ tainted: true });
   });
 
+  it('carries a claim taint to every later write of the same transaction, so one statement batch cannot launder it', async () => {
+    const { actor, positionId, taskId } = await liveAgent(orgA, owner);
+    const as = { actor, orgId: orgA };
+    const clean = await worker.execute<{ fence: string }>('kernel.task.checkout', { id: taskId }, as);
+    const dirty = await app.execute<{ taskId: string }>('kernel.task.create', { title: 'Bẩn', assigneePositionId: positionId }, { actor: asUser(owner), orgId: orgA });
+    await withAdmin((c) => c.query('UPDATE crove_kernel.task SET tainted = true WHERE id = $1', [dirty.taskId]));
+    // One agent transaction: claim the tainted task (the sealed context still says untainted), then write the clean one.
+    const after = await inAgentContext(orgA, actor, async (c) => {
+      await c.query(
+        `UPDATE crove_kernel.task SET checkout_run_id = $2, lock_expires_at = now() + interval '5 minutes', fence = fence + 1,
+           status = 'in_progress' WHERE id = $1`,
+        [dirty.taskId, actor.runId],
+      );
+      await c.query(`INSERT INTO crove_kernel.task_comment (org_id, task_id, body, author_type) VALUES ($1, $2, 'chép lại', 'agent')`, [orgA, taskId]);
+      const comment = await c.query<{ tainted: boolean }>('SELECT tainted FROM crove_kernel.task_comment WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1', [taskId]);
+      const task = await c.query<{ tainted: boolean }>('SELECT tainted FROM crove_kernel.task WHERE id = $1', [taskId]);
+      return { comment: comment.rows[0], task: task.rows[0] };
+    });
+    expect(after).toEqual({ comment: { tainted: true }, task: { tainted: true } });
+    expect(clean.fence).toEqual(expect.any(String));
+  });
+
+  it('takes an agent child task provenance from its parent, never from the agent', async () => {
+    const boss = await app.execute<{ positionId: string }>('kernel.position.create', { title: 'Trưởng phòng 3', module: 'finance', roleKey: 'finance.accountant' }, { actor: asMfa(owner), orgId: orgA });
+    await app.execute('kernel.position.assign', { id: boss.positionId, holder: { type: 'user', userId: owner } }, { actor: asMfa(owner), orgId: orgA });
+    const { actor, taskId } = await liveAgent(orgA, owner, boss.positionId);
+    await worker.execute('kernel.task.checkout', { id: taskId }, { actor, orgId: orgA });
+    const child = await inAgentContext(orgA, actor, async (c) =>
+      (
+        await c.query(
+          `INSERT INTO crove_kernel.task (org_id, title, kind, assignee_position_id, parent_task_id, source, source_ref, source_event_id,
+             created_by_type, status, due, created_at)
+           VALUES ($1, 'x', 'escalation', $2, $3, 'event', $4, $5, 'system', 'done', now() + interval '1 day', now() - interval '1 year')
+           RETURNING source, source_ref, source_event_id, status, due, created_by_type, created_at > now() - interval '1 minute' AS fresh`,
+          [orgA, boss.positionId, taskId, JSON.stringify({ type: 'kernel.proposal', id: randomUUID() }), randomUUID()],
+        )
+      ).rows[0],
+    );
+    expect(child).toEqual({ source: 'human', source_ref: null, source_event_id: null, status: 'todo', due: null, created_by_type: 'agent', fresh: true });
+  });
+
   it('lets an agent context write its own run only to taint it', async () => {
     const { actor } = await liveAgent(orgA, owner);
     const other = await liveAgent(orgA, owner);

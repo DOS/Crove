@@ -2,8 +2,9 @@
 -- delegations and escalations, more tables agents may never write, activity rows that name the agent, and a sweep
 -- that skips agents which cannot run. Idempotent; applied files stay untouched.
 --
--- 1. Taint. An untainted run that claims a tainted task becomes tainted (ai_run.tainted, read by the next context
---    entry). A tainted run taints every task it writes: an update in its context, or a comment on the task.
+-- 1. Taint. An untainted run that claims a tainted task becomes tainted (ai_run.tainted, read by the task triggers at
+--    once and by the next context entry). A tainted run taints every task it writes: an update in its context, a
+--    comment on the task, or a child task.
 -- 3. Defense in depth. In an agent context a new task is a delegation into the agent's own subtree, or an escalation
 --    to the nearest active position up the chart held by a human (NULL: the owners), never anything else. Agent
 --    contexts never write the tenant, its members, invites, proposals (approvals live there), or the finance rows only
@@ -94,8 +95,20 @@ $$;
 -- ---------------------------------------------------------------------------
 -- Task rules every writer meets (replaces the 20261018050000 bodies)
 -- ---------------------------------------------------------------------------
+-- Whether the agent context's run is tainted: the sealed context, or the run row when a claim earlier in the same
+-- transaction tainted it (the context keeps the value read at entry). TRUE when the run cannot be read.
+CREATE OR REPLACE FUNCTION crove_kernel.ctx_run_tainted() RETURNS boolean
+LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
+  SELECT coalesce((s.c ->> 'tainted')::boolean, true)
+         OR coalesce((SELECT r.tainted FROM crove_kernel.ai_run r
+                      WHERE r.org_id = (s.c ->> 'org')::uuid AND r.id = (s.c ->> 'run')::uuid), true)
+  FROM (SELECT crove_kernel.ctx_verified() AS c) s
+$$;
+
 -- On insert: as before, plus, in an agent context, the kind and the assignee: a delegation goes to a position in the
--- agent's own subtree, an escalation to the escalation target of its position; agents create no other task.
+-- agent's own subtree, an escalation to the escalation target of its position; agents create no other task. Its
+-- provenance comes from the parent, never from the agent: source and source_ref are the parent's, there is no source
+-- event, and the task starts as todo with no due date.
 CREATE OR REPLACE FUNCTION crove_kernel.task_before_insert() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
@@ -106,9 +119,12 @@ DECLARE
   v_run uuid;
   v_lock timestamptz;
   v_position uuid;
+  v_source text;
+  v_source_ref jsonb;
 BEGIN
   IF NEW.parent_task_id IS NOT NULL THEN
-    SELECT t.request_depth, t.tainted, t.checkout_run_id, t.lock_expires_at INTO v_depth, v_tainted, v_run, v_lock
+    SELECT t.request_depth, t.tainted, t.checkout_run_id, t.lock_expires_at, t.source, t.source_ref
+      INTO v_depth, v_tainted, v_run, v_lock, v_source, v_source_ref
     FROM crove_kernel.task t WHERE t.org_id = NEW.org_id AND t.id = NEW.parent_task_id;
     v_found := FOUND;
     IF v_found THEN
@@ -123,7 +139,7 @@ BEGIN
   NEW.created_by_id := CASE v_ctx ->> 'actor' WHEN 'user' THEN (v_ctx ->> 'user')::uuid WHEN 'agent' THEN (v_ctx ->> 'agent')::uuid END;
   NEW.created_by_run := (v_ctx ->> 'run')::uuid;
   IF v_ctx ->> 'actor' = 'agent' THEN
-    NEW.tainted := NEW.tainted OR coalesce((v_ctx ->> 'tainted')::boolean, true);
+    NEW.tainted := NEW.tainted OR crove_kernel.ctx_run_tainted();
     IF NOT v_found OR v_run IS DISTINCT FROM (v_ctx ->> 'run')::uuid OR v_lock IS NULL OR v_lock <= pg_catalog.now() THEN
       RAISE EXCEPTION 'AGENT_LEASE_REQUIRED' USING ERRCODE = '42501';
     END IF;
@@ -140,6 +156,12 @@ BEGIN
     ELSE
       RAISE EXCEPTION 'AGENT_TASK_KIND' USING ERRCODE = '42501';
     END IF;
+    NEW.source := v_source;
+    NEW.source_ref := v_source_ref;
+    NEW.source_event_id := NULL;
+    NEW.status := 'todo';
+    NEW.due := NULL;
+    NEW.created_at := pg_catalog.now();
     NEW.checkout_run_id := NULL;
     NEW.lock_expires_at := NULL;
     NEW.fence := 0;
@@ -162,7 +184,7 @@ BEGIN
     RETURN NEW;
   END IF;
   v_run := (v_ctx ->> 'run')::uuid;
-  v_ctx_tainted := coalesce((v_ctx ->> 'tainted')::boolean, true);
+  v_ctx_tainted := crove_kernel.ctx_run_tainted();
   IF (NEW.org_id, NEW.id, NEW.title, NEW.description, NEW.kind, NEW.assignee_position_id, NEW.parent_task_id, NEW.source,
       NEW.source_ref, NEW.source_event_id, NEW.created_by_type, NEW.created_by_id, NEW.created_by_run, NEW.due,
       NEW.request_depth, NEW.created_at)
@@ -216,7 +238,7 @@ BEGIN
   NEW.author_id := CASE v_ctx ->> 'actor' WHEN 'user' THEN (v_ctx ->> 'user')::uuid WHEN 'agent' THEN (v_ctx ->> 'agent')::uuid END;
   NEW.run_id := (v_ctx ->> 'run')::uuid;
   IF v_ctx ->> 'actor' = 'agent' THEN
-    NEW.tainted := NEW.tainted OR coalesce((v_ctx ->> 'tainted')::boolean, true);
+    NEW.tainted := NEW.tainted OR crove_kernel.ctx_run_tainted();
     IF v_run IS DISTINCT FROM (v_ctx ->> 'run')::uuid OR v_lock IS NULL OR v_lock <= pg_catalog.now() THEN
       RAISE EXCEPTION 'AGENT_LEASE_REQUIRED' USING ERRCODE = '42501';
     END IF;
@@ -226,6 +248,12 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;
+
+-- Tasks whose comments are tainted are tainted (20261018050000 did not carry a tainted run's comment to its task, and
+-- reads now trust an untainted task to have untainted comments). No context here, so the triggers let it through.
+UPDATE crove_kernel.task t SET tainted = true
+WHERE NOT t.tainted
+  AND EXISTS (SELECT 1 FROM crove_kernel.task_comment c WHERE c.org_id = t.org_id AND c.task_id = t.id AND c.tainted);
 
 -- ---------------------------------------------------------------------------
 -- Activity rows name the agent
@@ -312,10 +340,13 @@ $$;
 -- ---------------------------------------------------------------------------
 REVOKE ALL ON FUNCTION
   crove_kernel.ai_run_refuse_agent_write(),
+  crove_kernel.ctx_run_tainted(),
   crove_kernel.task_escalation_target(uuid, uuid),
   crove_kernel.position_in_subtree(uuid, uuid, uuid),
   crove_kernel.activity_stamp_agent(),
   crove_kernel.agent_wakeups_due(int, text[])
 FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
-GRANT EXECUTE ON FUNCTION crove_kernel.task_escalation_target(uuid, uuid), crove_kernel.position_in_subtree(uuid, uuid, uuid) TO crove_tenant;
+GRANT EXECUTE ON FUNCTION
+  crove_kernel.ctx_run_tainted(), crove_kernel.task_escalation_target(uuid, uuid), crove_kernel.position_in_subtree(uuid, uuid, uuid)
+TO crove_tenant;
 GRANT EXECUTE ON FUNCTION crove_kernel.agent_wakeups_due(int, text[]) TO crove_worker;

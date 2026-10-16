@@ -290,17 +290,22 @@ export const assignPosition = defineCommand({
       .where('id', '=', position.id)
       .execute();
     if (holderAgent) {
+      // One wake-up for the open tasks, as tainted as the most tainted of them, so the run that takes them over can
+      // read every one (an untainted run sees only untainted tasks).
       const open = await ctx.trx
         .selectFrom('crove_kernel.task')
-        .select(['id', 'tainted', 'request_depth'])
+        .select((eb) => [
+          eb.fn.min<string>(sql`id::text`).as('first_id'),
+          eb.fn<boolean>('bool_or', ['tainted']).as('tainted'),
+          eb.fn.max('request_depth').as('request_depth'),
+        ])
         .where('org_id', '=', ctx.orgId)
         .where('assignee_position_id', '=', position.id)
         .where('status', 'in', ['todo', 'in_progress'])
-        .orderBy('created_at')
-        .limit(1)
         .executeTakeFirst();
-      if (open) await requestWakeup(ctx, position.id, { taskId: open.id, why: 'holder_changed' }, open.tainted, open.request_depth);
-      else await rewakePending(ctx, [holderAgent]);
+      if (open?.first_id) {
+        await requestWakeup(ctx, position.id, { taskId: open.first_id, why: 'holder_changed' }, open.tainted === true, Number(open.request_depth ?? 0));
+      } else await rewakePending(ctx, [holderAgent]);
     }
     await ctx.activity('kernel.position', position.id, 'position.assigned', `Đổi người giữ vị trí ${position.title}`);
     await ctx.emit('kernel.position.assigned', { positionId: position.id });
