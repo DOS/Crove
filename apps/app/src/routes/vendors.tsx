@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { useDeferredValue, useState } from 'react';
 import { useTranslations } from 'use-intl';
-import { Empty, ErrorText, Input, PageHeader, Spinner, Table } from '../components/ui.tsx';
+import { Input } from '@crove/ui/components/input';
+import { TableCell, TableRow } from '@crove/ui/components/table';
+import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, orpc } from '../lib/api.ts';
 
@@ -24,16 +26,16 @@ export function VendorsPage() {
       ) : (vendors.data?.length ?? 0) === 0 ? (
         <Empty title={t('empty')} />
       ) : (
-        <Table head={[t('columns.name'), t('columns.taxCode'), t('columns.address'), t('columns.documents')]}>
+        <DataTable head={[t('columns.name'), t('columns.taxCode'), t('columns.address'), t('columns.documents')]}>
           {vendors.data?.map((v) => (
-            <tr key={v.id}>
-              <td className="px-4 py-3 font-medium text-fg">{v.name}</td>
-              <td className="px-4 py-3 font-mono text-xs text-fg-2">{v.taxCode}</td>
-              <td className="px-4 py-3 text-fg-3">{v.address}</td>
-              <td className="tabular px-4 py-3 text-fg-2">{f.number(v.documentCount)}</td>
-            </tr>
+            <TableRow key={v.id}>
+              <TableCell className="px-4 py-3 font-medium text-foreground">{v.name}</TableCell>
+              <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{v.taxCode}</TableCell>
+              <TableCell className="px-4 py-3 text-subtle-foreground">{v.address}</TableCell>
+              <TableCell className="px-4 py-3 text-muted-foreground tabular-nums">{f.number(v.documentCount)}</TableCell>
+            </TableRow>
           ))}
-        </Table>
+        </DataTable>
       )}
     </>
   );

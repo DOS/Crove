@@ -15,7 +15,7 @@ async function start() {
   try {
     await loadConfig();
   } catch {
-    root.render(<p className="p-8 text-sm text-rose-300">{translator()('common.serverUnreachable')}</p>);
+    root.render(<p className="p-8 text-sm text-destructive">{translator()('common.serverUnreachable')}</p>);
     return;
   }
   const { router } = await import('./router.tsx');

@@ -3,12 +3,18 @@ import { BLOCKING_CHECK_IDS } from '@crove/kernel-contract';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'use-intl';
-import { Badge, Button, Card, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { Badge } from '@crove/ui/components/badge';
+import { Button } from '@crove/ui/components/button';
+import { Card } from '@crove/ui/components/card';
+import { Checkbox } from '@crove/ui/components/checkbox';
+import { Label } from '@crove/ui/components/label';
+import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { errorMessage, fetchFile, orpc, queryClient } from '../lib/api.ts';
 import { previewPurchaseJournal } from '../lib/decimal.ts';
 import { useFormat } from '../i18n/provider.tsx';
 
-const CHECK_TONE = { pass: 'good', warn: 'warn', fail: 'bad' } as const;
+const CHECK_TONE = { pass: 'success', warn: 'warning', fail: 'destructive' } as const;
 const CHECK_ICON = { pass: '✓', warn: '!', fail: '✕' } as const;
 
 function FilePreview({ fileId, contentType, filename }: { fileId: string; contentType: string; filename: string }) {
@@ -29,21 +35,21 @@ function FilePreview({ fileId, contentType, filename }: { fileId: string; conten
   }, [fileId]);
   if (error) return <ErrorText>{error}</ErrorText>;
   if (!url) return <Spinner />;
-  if (contentType.startsWith('image/')) return <img src={url} alt={filename} className="w-full rounded-lg border border-line" />;
+  if (contentType.startsWith('image/')) return <img src={url} alt={filename} className="w-full rounded-lg border" />;
   if (contentType === 'application/pdf')
     return (
-      <div className="rounded-lg border border-line bg-surface-2 p-4 text-sm">
-        <p className="text-fg">{filename}</p>
-        <a href={url} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block text-brand-300 hover:underline">
+      <div className="rounded-lg border bg-muted p-4 text-sm">
+        <p className="text-foreground">{filename}</p>
+        <a href={url} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block text-link hover:underline">
           {t('openPdf')}
         </a>
       </div>
     );
   return (
-    <div className="rounded-lg border border-line bg-surface-2 p-4 text-sm">
-      <p className="text-fg">{t('xmlFile')}</p>
-      <p className="mt-1 text-xs text-fg-3">{t('xmlHint')}</p>
-      <a href={url} download={filename} className="mt-3 inline-block text-brand-300 hover:underline">
+    <div className="rounded-lg border bg-muted p-4 text-sm">
+      <p className="text-foreground">{t('xmlFile')}</p>
+      <p className="mt-1 text-xs text-subtle-foreground">{t('xmlHint')}</p>
+      <a href={url} download={filename} className="mt-3 inline-block text-link hover:underline">
         {t('download', { filename })}
       </a>
     </div>
@@ -115,6 +121,8 @@ export function InboxDetailPage() {
   const reextractButton =
     item.canReextract && fileId ? (
       <Button
+        variant="outline"
+        size="lg"
         disabled={busy}
         onClick={() => {
           const ask = pending ? t('confirmRereadPending') : t('confirmRereadOther');
@@ -131,7 +139,7 @@ export function InboxDetailPage() {
 
   return (
     <>
-      <Link to="/o/$slug/inbox" params={{ slug }} className="text-sm text-fg-3 hover:text-fg-2">
+      <Link to="/o/$slug/inbox" params={{ slug }} className="text-sm text-subtle-foreground hover:text-muted-foreground">
         {t('back')}
       </Link>
       <div className="mt-3">
@@ -150,7 +158,8 @@ export function InboxDetailPage() {
                 {reextractButton}
                 {item.canReject && (
                   <Button
-                    variant="danger"
+                    variant="destructive"
+                    size="lg"
                     disabled={busy}
                     onClick={() => {
                       const reason = window.prompt(t('rejectPrompt'));
@@ -163,6 +172,8 @@ export function InboxDetailPage() {
                 )}
                 {item.canEdit && dirty && (
                   <Button
+                    variant="outline"
+                    size="lg"
                     disabled={busy}
                     onClick={() =>
                       edit.mutate({
@@ -179,7 +190,7 @@ export function InboxDetailPage() {
                 )}
                 {item.canApprove && (
                   <Button
-                    variant="primary"
+                    size="lg"
                     disabled={busy || dirty || !payload || blocked || (failed > 0 && !acceptFailed)}
                     onClick={() =>
                       approve.mutate({
@@ -199,7 +210,7 @@ export function InboxDetailPage() {
             ) : (
               <>
                 {reextractButton}
-                <Badge tone={item.status === 'executed' ? 'good' : 'neutral'}>
+                <Badge variant={item.status === 'executed' ? 'success' : 'secondary'}>
                   {item.status === 'executed'
                     ? t('executedAt', { at: f.dateTime(item.decidedAt) })
                     : item.status === 'rejected'
@@ -217,7 +228,7 @@ export function InboxDetailPage() {
         </div>
       )}
       {reading && (
-        <p className="mb-4 flex items-center gap-2 text-sm text-brand-300">
+        <p className="mb-4 flex items-center gap-2 text-sm text-link">
           <Spinner />
           {t('reading', { version: lastRun?.version ?? '' })}
         </p>
@@ -231,13 +242,13 @@ export function InboxDetailPage() {
         </div>
       )}
       {pending && dirty && (
-        <p className="mb-4 text-sm text-fg-2">{t('dirty')}</p>
+        <p className="mb-4 text-sm text-muted-foreground">{t('dirty')}</p>
       )}
       {pending && !dirty && item.approveReason === 'four_eyes' && (
-        <p className="mb-4 text-sm text-fg-2">{t('fourEyes')}</p>
+        <p className="mb-4 text-sm text-muted-foreground">{t('fourEyes')}</p>
       )}
       {pending && !dirty && item.approveReason === 'not_eligible' && (
-        <p className="mb-4 text-sm text-fg-3">{t('notEligible')}</p>
+        <p className="mb-4 text-sm text-subtle-foreground">{t('notEligible')}</p>
       )}
       {pending && blocked && (
         <div className="mb-4">
@@ -249,10 +260,10 @@ export function InboxDetailPage() {
       {pending && !blocked && failed > 0 && (
         <div className="mb-4 space-y-2">
           <ErrorText>{t('failedChecks', { count: failed })}</ErrorText>
-          <label className="flex items-center gap-2 text-sm text-fg-2">
-            <input type="checkbox" checked={acceptFailed} onChange={(e) => setAcceptFailed(e.target.checked)} />
+          <Label className="font-normal text-muted-foreground">
+            <Checkbox checked={acceptFailed} onCheckedChange={(checked) => setAcceptFailed(checked)} />
             {t('acceptFailed')}
-          </label>
+          </Label>
         </div>
       )}
 
@@ -261,42 +272,42 @@ export function InboxDetailPage() {
           {payload && (
             <Card className="grid gap-4 p-4 sm:grid-cols-2">
               <div>
-                <p className="text-xs uppercase tracking-wide text-fg-3">{t('seller')}</p>
-                <p className="mt-1 text-sm font-medium text-fg">{payload.seller.name}</p>
-                <p className="text-xs text-fg-2">{t('taxCode', { code: payload.seller.taxCode ?? t('noTaxCode') })}</p>
-                <p className="text-xs text-fg-3">{payload.seller.address}</p>
+                <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('seller')}</p>
+                <p className="mt-1 text-sm font-medium text-foreground">{payload.seller.name}</p>
+                <p className="text-xs text-muted-foreground">{t('taxCode', { code: payload.seller.taxCode ?? t('noTaxCode') })}</p>
+                <p className="text-xs text-subtle-foreground">{payload.seller.address}</p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-fg-3">{t('buyer')}</p>
-                <p className="mt-1 text-sm font-medium text-fg">{payload.buyer.name || t('notStated')}</p>
-                <p className="text-xs text-fg-2">{t('taxCode', { code: payload.buyer.taxCode ?? t('noTaxCode') })}</p>
+                <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('buyer')}</p>
+                <p className="mt-1 text-sm font-medium text-foreground">{payload.buyer.name || t('notStated')}</p>
+                <p className="text-xs text-muted-foreground">{t('taxCode', { code: payload.buyer.taxCode ?? t('noTaxCode') })}</p>
               </div>
               <div className="grid grid-cols-3 gap-2 sm:col-span-2">
                 <div>
-                  <p className="text-xs text-fg-3">{t('subtotal')}</p>
-                  <p className="tabular text-sm text-fg">{money(payload.invoice.subtotal)}</p>
+                  <p className="text-xs text-subtle-foreground">{t('subtotal')}</p>
+                  <p className="text-sm text-foreground tabular-nums">{money(payload.invoice.subtotal)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-fg-3">{t('vat')}</p>
-                  <p className="tabular text-sm text-fg">{money(payload.invoice.vatTotal)}</p>
+                  <p className="text-xs text-subtle-foreground">{t('vat')}</p>
+                  <p className="text-sm text-foreground tabular-nums">{money(payload.invoice.vatTotal)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-fg-3">{t('total')}</p>
-                  <p className="tabular text-base font-semibold text-fg">{money(payload.invoice.total)}</p>
+                  <p className="text-xs text-subtle-foreground">{t('total')}</p>
+                  <p className="text-base font-semibold text-foreground tabular-nums">{money(payload.invoice.total)}</p>
                 </div>
-                <p className="text-xs text-fg-3 sm:col-span-3">{t('currency', { currency })}</p>
+                <p className="text-xs text-subtle-foreground sm:col-span-3">{t('currency', { currency })}</p>
               </div>
             </Card>
           )}
 
           {payload && (
-            <Card className="p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-fg-3">{t('checks')}</p>
+            <Card className="block p-4">
+              <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('checks')}</p>
               <ul className="mt-3 space-y-1.5">
                 {payload.checks.map((c) => (
                   <li key={c.id} className="flex items-start gap-2 text-sm">
-                    <Badge tone={CHECK_TONE[c.status]}>{CHECK_ICON[c.status]}</Badge>
-                    <span className="text-fg-2">{c.message}</span>
+                    <Badge variant={CHECK_TONE[c.status]}>{CHECK_ICON[c.status]}</Badge>
+                    <span className="text-muted-foreground">{c.message}</span>
                   </li>
                 ))}
               </ul>
@@ -304,38 +315,39 @@ export function InboxDetailPage() {
           )}
 
           {payload && (
-            <Card className="overflow-x-auto p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-fg-3">{t('lines')}</p>
+            <Card className="block overflow-x-auto p-4">
+              <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('lines')}</p>
               <table className="mt-3 w-full min-w-[560px] text-sm">
-                <thead className="text-left text-xs text-fg-3">
+                <thead className="text-left text-xs text-subtle-foreground">
                   <tr>
                     <th className="py-1.5 pr-2 font-medium">{t('description')}</th>
                     <th className="py-1.5 pr-2 text-right font-medium">{t('amount')}</th>
                     <th className="py-1.5 font-medium">{t('debitAccount')}</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[var(--line)]">
+                <tbody className="divide-y">
                   {lines.map((l) => (
                     <tr key={l.lineNo}>
-                      <td className="py-2 pr-2 text-fg">
+                      <td className="py-2 pr-2 text-foreground">
                         {l.description}
-                        <p className="text-xs text-fg-3">{l.reason}</p>
+                        <p className="text-xs text-subtle-foreground">{l.reason}</p>
                       </td>
-                      <td className="tabular py-2 pr-2 text-right text-fg">{money(l.amount)}</td>
+                      <td className="py-2 pr-2 text-right text-foreground tabular-nums">{money(l.amount)}</td>
                       <td className="py-2">
-                        <select
+                        <NativeSelect
+                          size="sm"
                           disabled={!item.canEdit || busy}
                           aria-label={t('debitAccountFor', { line: l.lineNo })}
-                          className="w-48 rounded-lg border border-line bg-surface-2 px-2 py-1 text-sm text-fg"
+                          className="w-48"
                           value={l.debitAccount}
                           onChange={(e) => setLineAccounts((prev) => ({ ...prev, [l.lineNo]: e.target.value }))}
                         >
                           {(accounts.data ?? [{ code: l.debitAccount, name: '', parentCode: null }]).map((a) => (
-                            <option key={a.code} value={a.code}>
+                            <NativeSelectOption key={a.code} value={a.code}>
                               {a.code} · {a.name}
-                            </option>
+                            </NativeSelectOption>
                           ))}
-                        </select>
+                        </NativeSelect>
                       </td>
                     </tr>
                   ))}
@@ -345,24 +357,24 @@ export function InboxDetailPage() {
           )}
 
           {payload && (
-            <Card className="p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-fg-3">{t('journal')}</p>
+            <Card className="block p-4">
+              <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('journal')}</p>
               <table className="mt-3 w-full text-sm">
-                <thead className="text-left text-xs text-fg-3">
+                <thead className="text-left text-xs text-subtle-foreground">
                   <tr>
                     <th className="py-1.5 font-medium">{t('account')}</th>
                     <th className="py-1.5 text-right font-medium">{t('debit')}</th>
                     <th className="py-1.5 text-right font-medium">{t('credit')}</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[var(--line)]">
+                <tbody className="divide-y">
                   {journal.map((j) => (
                     <tr key={`${j.accountCode}-${j.debit}-${j.credit}`}>
-                      <td className="py-2 text-fg">
-                        <span className="font-mono">{j.accountCode}</span> <span className="text-fg-3">{accountName(j.accountCode)}</span>
+                      <td className="py-2 text-foreground">
+                        <span className="font-mono">{j.accountCode}</span> <span className="text-subtle-foreground">{accountName(j.accountCode)}</span>
                       </td>
-                      <td className="tabular py-2 text-right text-fg">{j.debit !== '0' ? money(j.debit) : ''}</td>
-                      <td className="tabular py-2 text-right text-fg">{j.credit !== '0' ? money(j.credit) : ''}</td>
+                      <td className="py-2 text-right text-foreground tabular-nums">{j.debit !== '0' ? money(j.debit) : ''}</td>
+                      <td className="py-2 text-right text-foreground tabular-nums">{j.credit !== '0' ? money(j.credit) : ''}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -371,9 +383,9 @@ export function InboxDetailPage() {
           )}
         </div>
         <div className="lg:col-span-2">
-          <Card className="p-4">
-            <p className="mb-3 text-xs font-medium uppercase tracking-wide text-fg-3">{t('original')}</p>
-            {item.file ? <FilePreview fileId={item.file.id} contentType={item.file.contentType} filename={item.file.filename} /> : <p className="text-sm text-fg-3">{t('noFile')}</p>}
+          <Card className="block p-4">
+            <p className="mb-3 text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('original')}</p>
+            {item.file ? <FilePreview fileId={item.file.id} contentType={item.file.contentType} filename={item.file.filename} /> : <p className="text-sm text-subtle-foreground">{t('noFile')}</p>}
           </Card>
         </div>
       </div>

@@ -14,7 +14,7 @@
     "dev:web": "pnpm --filter @crove/web dev",
     "build": "pnpm -r --filter=!@crove/web build",
     "typecheck": "pnpm -r --filter=!@crove/web typecheck",
-    "lint": "oxlint --deny-warnings apps/kernel apps/extract apps/app packages modules",
+    "lint": "oxlint --deny-warnings apps/kernel apps/extract apps/app packages modules && node tools/ui-colors.mjs",
     "test": "vitest run --project unit",
     "test:db": "vitest run --project db",
     "ai:conformance": "vitest run --project ai conformance",

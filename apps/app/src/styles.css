@@ -1,81 +1,9 @@
-@import 'tailwindcss';
-
-/* Crove Design System 2.0 tokens (DESIGN.md). Dark by default; light via html:not(.dark). */
-@theme {
-  --color-brand-50: #f5f3ff;
-  --color-brand-100: #ede9fe;
-  --color-brand-300: #c4b5fd;
-  --color-brand-500: #8b5cf6;
-  --color-brand-600: #7c3aed;
-  --color-brand-700: #6d28d9;
-  --color-brand-crove: #612bd3;
-  --font-sans: 'Inter', 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-:root {
-  --bg: #faf9fe;
-  --surface: #ffffff;
-  --surface-2: #f4f2fb;
-  --line: #e8e5f2;
-  --fg: #09090b;
-  --fg-2: #52525b;
-  --fg-3: #71717a;
-  color-scheme: light;
-}
-
-html.dark {
-  --bg: #08080f;
-  --surface: #0f0f1c;
-  --surface-2: #151527;
-  --line: #1e1e2f;
-  --fg: #ffffff;
-  --fg-2: #a1a1aa;
-  --fg-3: #71717a;
-  color-scheme: dark;
-}
-
-@utility bg-canvas {
-  background-color: var(--bg);
-}
-@utility bg-surface {
-  background-color: var(--surface);
-}
-@utility bg-surface-2 {
-  background-color: var(--surface-2);
-}
-@utility border-line {
-  border-color: var(--line);
-}
-@utility text-fg {
-  color: var(--fg);
-}
-@utility text-fg-2 {
-  color: var(--fg-2);
-}
-@utility text-fg-3 {
-  color: var(--fg-3);
-}
+/* Theme tokens, base styles and the component classes come from the design system; Tailwind finds the app's own
+   class names from the app root. */
+@import '@crove/ui/globals.css';
 
 html,
 body,
 #root {
   height: 100%;
-}
-
-body {
-  background-color: var(--bg);
-  color: var(--fg);
-  font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-}
-
-:focus-visible {
-  outline: 2px solid var(--color-brand-500);
-  outline-offset: 2px;
-  border-radius: 6px;
-}
-
-.tabular {
-  font-variant-numeric: tabular-nums;
 }

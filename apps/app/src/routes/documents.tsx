@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'use-intl';
-import { Empty, ErrorText, PageHeader, Spinner, Table } from '../components/ui.tsx';
+import { TableCell, TableRow } from '@crove/ui/components/table';
+import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc } from '../lib/api.ts';
 import { useFormat } from '../i18n/provider.tsx';
 
@@ -18,7 +19,7 @@ export function DocumentsPage() {
       ) : (docs.data?.length ?? 0) === 0 ? (
         <Empty title={t('empty')} hint={t('emptyHint')} />
       ) : (
-        <Table
+        <DataTable
           head={[
             t('columns.issueDate'),
             t('columns.number'),
@@ -29,19 +30,19 @@ export function DocumentsPage() {
           ]}
         >
           {docs.data?.map((d) => (
-            <tr key={d.id}>
-              <td className="px-4 py-3 text-fg-2">{f.date(d.issueDate)}</td>
-              <td className="px-4 py-3 font-mono text-xs text-fg">
+            <TableRow key={d.id}>
+              <TableCell className="px-4 py-3 text-muted-foreground">{f.date(d.issueDate)}</TableCell>
+              <TableCell className="px-4 py-3 font-mono text-xs text-foreground">
                 {d.series ? `${d.series}-` : ''}
                 {d.number}
-              </td>
-              <td className="px-4 py-3 text-fg">{d.partyName}</td>
-              <td className="tabular px-4 py-3 text-fg-2">{f.money(d.subtotal)}</td>
-              <td className="tabular px-4 py-3 text-fg-2">{f.money(d.vatAmount)}</td>
-              <td className="tabular px-4 py-3 font-medium text-fg">{f.money(d.total)}</td>
-            </tr>
+              </TableCell>
+              <TableCell className="px-4 py-3 text-foreground">{d.partyName}</TableCell>
+              <TableCell className="px-4 py-3 text-muted-foreground tabular-nums">{f.money(d.subtotal)}</TableCell>
+              <TableCell className="px-4 py-3 text-muted-foreground tabular-nums">{f.money(d.vatAmount)}</TableCell>
+              <TableCell className="px-4 py-3 font-medium text-foreground tabular-nums">{f.money(d.total)}</TableCell>
+            </TableRow>
           ))}
-        </Table>
+        </DataTable>
       )}
     </>
   );

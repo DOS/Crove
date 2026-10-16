@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate, useParams } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
-import { Logo, cx } from '../components/ui.tsx';
+import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { Logo } from '../components/ui.tsx';
 import { LocaleSwitcher } from '../i18n/provider.tsx';
 import { orpc } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -28,24 +29,24 @@ export function OrgLayout() {
   const org = me.data?.orgs.find((o) => o.slug === slug);
 
   return (
-    <div className="flex min-h-full bg-canvas">
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-line bg-surface px-3 py-4 md:flex">
+    <div className="flex min-h-full bg-background">
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r bg-sidebar px-3 py-4 md:flex">
         <div className="px-2">
           <Logo />
         </div>
-        <label className="mt-6 block px-2 text-xs text-fg-3">
-          {t('org')}
-          <select
-            className="mt-1 w-full rounded-lg border border-line bg-surface-2 px-2 py-1.5 text-sm text-fg"
+        <label className="mt-6 block px-2 text-xs">
+          <span className="text-subtle-foreground">{t('org')}</span>
+          <NativeSelect
+            className="mt-1 w-full"
             value={slug}
             onChange={(e) => void navigate({ to: '/o/$slug/inbox', params: { slug: e.target.value } })}
           >
             {me.data?.orgs.map((o) => (
-              <option key={o.orgId} value={o.slug}>
+              <NativeSelectOption key={o.orgId} value={o.slug}>
                 {o.name}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <nav className="mt-6 flex flex-col gap-0.5">
           {NAV.map((item) => (
@@ -53,20 +54,20 @@ export function OrgLayout() {
               key={item.to}
               to={item.to}
               params={{ slug }}
-              className="flex items-center justify-between rounded-lg px-3 py-2 text-sm text-fg-2 hover:bg-surface-2 hover:text-fg"
-              activeProps={{ className: 'bg-brand-600/15 !text-fg' }}
+              className="flex items-center justify-between rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+              activeProps={{ className: 'bg-primary/15 !text-foreground' }}
             >
               {t(item.label)}
               {item.to === '/o/$slug/inbox' && (pending.data?.length ?? 0) > 0 && (
-                <span className="rounded-full bg-brand-600 px-1.5 text-xs text-white">{pending.data?.length}</span>
+                <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground">{pending.data?.length}</span>
               )}
             </Link>
           ))}
         </nav>
-        <div className="mt-auto border-t border-line px-2 pt-3 text-xs text-fg-3">
+        <div className="mt-auto border-t px-2 pt-3 text-xs text-subtle-foreground">
           <p className="truncate">{me.data?.email}</p>
           <div className="mt-1 flex items-center justify-between gap-2">
-            <button className="hover:text-fg-2" onClick={() => void signOut()}>
+            <button className="hover:text-muted-foreground" onClick={() => void signOut()}>
               {tc('signOut')}
             </button>
             <LocaleSwitcher />
@@ -74,23 +75,23 @@ export function OrgLayout() {
         </div>
       </aside>
       <div className="min-w-0 flex-1">
-        <header className="flex items-center justify-between border-b border-line bg-surface px-4 py-3 md:hidden">
+        <header className="flex items-center justify-between border-b bg-sidebar px-4 py-3 md:hidden">
           <Logo />
           <LocaleSwitcher />
-          <select
-            className="rounded-lg border border-line bg-surface-2 px-2 py-1 text-sm text-fg"
+          <NativeSelect
+            size="sm"
             value={NAV.find((n) => window.location.pathname.endsWith(n.to.split('/').pop() ?? ''))?.to ?? '/o/$slug/inbox'}
             onChange={(e) => void navigate({ to: e.target.value as (typeof ALL_NAV)[number]['to'], params: { slug } })}
           >
             {NAV.map((n) => (
-              <option key={n.to} value={n.to}>
+              <NativeSelectOption key={n.to} value={n.to}>
                 {t(n.label)}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
         </header>
-        <main className={cx('mx-auto w-full max-w-6xl px-4 py-6 md:px-8 md:py-8')}>
-          {me.isSuccess && !org ? <p className="text-sm text-rose-300">{t('notMember')}</p> : <Outlet />}
+        <main className="mx-auto w-full max-w-6xl px-4 py-6 md:px-8 md:py-8">
+          {me.isSuccess && !org ? <p className="text-sm text-destructive">{t('notMember')}</p> : <Outlet />}
         </main>
       </div>
     </div>

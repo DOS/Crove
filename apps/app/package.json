@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@crove/kernel-contract": "workspace:*",
+    "@crove/ui": "workspace:*",
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
     "@orpc/tanstack-query": "catalog:",

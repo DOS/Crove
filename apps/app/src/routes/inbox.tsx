@@ -2,7 +2,13 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
 import { useRef, useState, type DragEvent } from 'react';
 import { useTranslations } from 'use-intl';
-import { Badge, Button, Card, Empty, ErrorText, PageHeader, Spinner, Table, cx } from '../components/ui.tsx';
+import { Badge } from '@crove/ui/components/badge';
+import { Button } from '@crove/ui/components/button';
+import { Card } from '@crove/ui/components/card';
+import { TableCell, TableRow } from '@crove/ui/components/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
+import { cn } from '@crove/ui/lib/utils';
+import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
@@ -11,7 +17,7 @@ type Tab = 'pending' | 'executed' | 'rejected';
 
 const TABS: Tab[] = ['pending', 'executed', 'rejected'];
 
-const FILE_STATUS = { processing: 'brand', proposed: 'good', duplicate: 'warn', failed: 'bad' } as const;
+const FILE_STATUS = { processing: 'default', proposed: 'success', duplicate: 'warning', failed: 'destructive' } as const;
 type FileStatus = keyof typeof FILE_STATUS;
 
 function isFileStatus(status: string): status is FileStatus {
@@ -56,7 +62,7 @@ export function InboxPage() {
         title={t('title')}
         subtitle={t('subtitle')}
         actions={
-          <Button variant="primary" onClick={() => inputRef.current?.click()} disabled={upload.isPending}>
+          <Button size="lg" onClick={() => inputRef.current?.click()} disabled={upload.isPending}>
             {upload.isPending ? <Spinner /> : null}
             {t('upload')}
           </Button>
@@ -83,15 +89,15 @@ export function InboxPage() {
           }}
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
-          className={cx(
+          className={cn(
             'flex flex-col items-center justify-center rounded-xl border border-dashed px-6 py-8 text-center transition-colors lg:col-span-2',
-            dragging ? 'border-brand-500 bg-brand-600/10' : 'border-line bg-surface',
+            dragging ? 'border-ring bg-primary/10' : 'bg-card',
           )}
         >
-          <p className="text-sm font-medium text-fg">{t('dropHere')}</p>
-          <p className="mt-1 text-xs text-fg-3">{config.aiEnabled ? t('formatsAll') : t('formatsXml')}</p>
+          <p className="text-sm font-medium text-foreground">{t('dropHere')}</p>
+          <p className="mt-1 text-xs text-subtle-foreground">{config.aiEnabled ? t('formatsAll') : t('formatsXml')}</p>
           {!config.aiEnabled && (
-            <p className="mt-3 text-xs text-amber-300">{t('noAi')}</p>
+            <p className="mt-3 text-xs text-warning">{t('noAi')}</p>
           )}
           {upload.error && (
             <div className="mt-3">
@@ -99,47 +105,47 @@ export function InboxPage() {
             </div>
           )}
         </div>
-        <Card className="p-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-fg-3">{t('forwardTitle')}</p>
+        <Card className="block p-4">
+          <p className="text-xs font-medium tracking-wide text-subtle-foreground uppercase">{t('forwardTitle')}</p>
           {org.isLoading ? (
             <div className="mt-3">
               <Spinner />
             </div>
           ) : org.data?.inboundAddress ? (
             <>
-              <p className="mt-2 break-all font-mono text-sm text-fg">{org.data.inboundAddress}</p>
-              <Button className="mt-3" onClick={() => void navigator.clipboard.writeText(org.data?.inboundAddress ?? '')}>
+              <p className="mt-2 font-mono text-sm break-all text-foreground">{org.data.inboundAddress}</p>
+              <Button variant="outline" size="lg" className="mt-3" onClick={() => void navigator.clipboard.writeText(org.data?.inboundAddress ?? '')}>
                 {t('copyAddress')}
               </Button>
             </>
           ) : (
-            <p className="mt-2 text-sm text-fg-2">{t('noInbound')}</p>
+            <p className="mt-2 text-sm text-muted-foreground">{t('noInbound')}</p>
           )}
         </Card>
       </div>
 
       {(files.data?.length ?? 0) > 0 && (
         <div className="mt-6">
-          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-fg-3">
+          <p className="mb-2 text-xs font-medium tracking-wide text-subtle-foreground uppercase">
             {t('recentFiles')}{' '}
-            {processing > 0 && <span className="ml-1 normal-case text-brand-300">· {t('readingCount', { count: processing })}</span>}
+            {processing > 0 && <span className="ml-1 text-link normal-case">· {t('readingCount', { count: processing })}</span>}
           </p>
           <div className="flex flex-wrap gap-2">
             {files.data?.slice(0, 8).map((file) => (
               <span
                 key={file.id}
-                className="inline-flex max-w-full items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs"
+                className="inline-flex max-w-full items-center gap-2 rounded-lg border bg-card px-2.5 py-1.5 text-xs"
                 title={file.error ?? undefined}
               >
-                <span className="max-w-[16rem] truncate text-fg-2">{file.filename}</span>
-                <Badge tone={isFileStatus(file.status) ? FILE_STATUS[file.status] : 'neutral'}>
+                <span className="max-w-[16rem] truncate text-muted-foreground">{file.filename}</span>
+                <Badge variant={isFileStatus(file.status) ? FILE_STATUS[file.status] : 'secondary'}>
                   {isFileStatus(file.status) ? t(`fileStatus.${file.status}`) : file.status}
                 </Badge>
                 {file.status === 'failed' && file.canReextract && (
                   <button
                     type="button"
                     disabled={reextract.isPending}
-                    className="text-brand-300 hover:underline disabled:opacity-50"
+                    className="text-link hover:underline disabled:opacity-50"
                     onClick={() => reextract.mutate({ fileId: file.id, idempotencyKey: crypto.randomUUID() })}
                   >
                     {t('reread')}
@@ -148,56 +154,54 @@ export function InboxPage() {
               </span>
             ))}
           </div>
-          {reextract.error && <p className="mt-2 text-xs text-rose-300">{errorMessage(reextract.error)}</p>}
+          {reextract.error && <p className="mt-2 text-xs text-destructive">{errorMessage(reextract.error)}</p>}
           {files.data?.find((file) => file.status === 'failed')?.error && (
-            <p className="mt-2 text-xs text-rose-300">{files.data.find((file) => file.status === 'failed')?.error}</p>
+            <p className="mt-2 text-xs text-destructive">{files.data.find((file) => file.status === 'failed')?.error}</p>
           )}
         </div>
       )}
 
-      <div className="mt-8 flex gap-1 border-b border-line">
-        {TABS.map((id) => (
-          <button
-            key={id}
-            onClick={() => setTab(id)}
-            className={cx('-mb-px border-b-2 px-3 py-2 text-sm', tab === id ? 'border-brand-500 text-fg' : 'border-transparent text-fg-3 hover:text-fg-2')}
-          >
-            {t(`tabs.${id}`)}
-          </button>
-        ))}
-      </div>
+      <Tabs className="mt-8 gap-4" value={tab} onValueChange={(value) => setTab(value as Tab)}>
+        <TabsList variant="line" className="w-full justify-start border-b">
+          {TABS.map((id) => (
+            <TabsTrigger key={id} value={id} className="flex-none px-3">
+              {t(`tabs.${id}`)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
 
-      <div className="mt-4">
+      <TabsContent value={tab}>
         {items.isLoading ? (
           <Spinner />
         ) : (items.data?.length ?? 0) === 0 ? (
           <Empty title={tab === 'pending' ? t('emptyPending') : t('emptyOther')} hint={tab === 'pending' ? t('emptyPendingHint') : undefined} />
         ) : (
-          <Table head={[t('columns.document'), t('columns.issueDate'), t('columns.total'), t('columns.checks'), t('columns.received')]}>
+          <DataTable head={[t('columns.document'), t('columns.issueDate'), t('columns.total'), t('columns.checks'), t('columns.received')]}>
             {items.data?.map((item) => (
-              <tr key={item.id} className="hover:bg-surface-2">
-                <td className="px-4 py-3">
-                  <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="font-medium text-fg hover:text-brand-300">
+              <TableRow key={item.id}>
+                <TableCell className="px-4 py-3">
+                  <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="font-medium text-foreground hover:text-link">
                     {item.sellerName ?? item.title}
                   </Link>
-                  <p className="text-xs text-fg-3">{item.title}</p>
-                </td>
-                <td className="px-4 py-3 text-fg-2">{f.date(item.issueDate)}</td>
-                <td className="tabular px-4 py-3 text-fg">{f.money(item.total)}</td>
-                <td className="px-4 py-3">
+                  <p className="text-xs text-subtle-foreground">{item.title}</p>
+                </TableCell>
+                <TableCell className="px-4 py-3 text-muted-foreground">{f.date(item.issueDate)}</TableCell>
+                <TableCell className="px-4 py-3 text-foreground tabular-nums">{f.money(item.total)}</TableCell>
+                <TableCell className="px-4 py-3">
                   <div className="flex flex-wrap gap-1">
-                    {item.duplicateOf && <Badge tone="warn">{t('maybeDuplicate')}</Badge>}
-                    {item.failedChecks > 0 && <Badge tone="bad">{t('failedChecks', { count: item.failedChecks })}</Badge>}
-                    {item.warnChecks > 0 && <Badge tone="warn">{t('warnChecks', { count: item.warnChecks })}</Badge>}
-                    {item.failedChecks === 0 && item.warnChecks === 0 && !item.duplicateOf && <Badge tone="good">{t('matched')}</Badge>}
+                    {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
+                    {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
+                    {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}
+                    {item.failedChecks === 0 && item.warnChecks === 0 && !item.duplicateOf && <Badge variant="success">{t('matched')}</Badge>}
                   </div>
-                </td>
-                <td className="px-4 py-3 text-xs text-fg-3">{f.dateTime(item.createdAt)}</td>
-              </tr>
+                </TableCell>
+                <TableCell className="px-4 py-3 text-xs text-subtle-foreground">{f.dateTime(item.createdAt)}</TableCell>
+              </TableRow>
             ))}
-          </Table>
+          </DataTable>
         )}
-      </div>
+      </TabsContent>
+      </Tabs>
     </>
   );
 }
