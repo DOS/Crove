@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { findStale, nextVersions, suggestRenames } from '../ci/migration-order.mjs';
-import { rerunDecision, stalePrs, staleStatus } from '../ci/migration-recheck.mjs';
+import { rerunDecision, stalePrs, staleSummary } from '../ci/migration-recheck.mjs';
 
 const m = (version: string, name = 'crove_kernel_x') => `supabase/migrations/${version}_${name}.sql`;
 
@@ -67,10 +67,10 @@ describe('migration re-check after the base moves', () => {
     expect(rerunDecision(undefined).action).toBe('skip');
   });
 
-  it('describes a stale PR in a commit status within the 140 character limit', () => {
-    const pr = { number: 1, sha: 'a'.repeat(40), newest: '20261018020000', stale: [m('20261018010000'), m('20261018000000', 'y'.repeat(200))] };
-    const text = staleStatus(pr);
-    expect(text.startsWith('20261018010000_crove_kernel_x.sql and 1 more is not newer than 20261018020000')).toBe(true);
-    expect(text.length).toBeLessThanOrEqual(140);
+  it('names every stale file and the base newest in the fallback check run', () => {
+    const pr = { number: 1, sha: 'a'.repeat(40), newest: '20261018020000', stale: [m('20261018010000'), m('20261018000000', 'crove_kernel_y')] };
+    const text = staleSummary(pr);
+    expect(text).toContain('not newer than 20261018020000');
+    expect(text).toContain(`- ${m('20261018010000')}\n- ${m('20261018000000', 'crove_kernel_y')}`);
   });
 });

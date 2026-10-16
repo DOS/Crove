@@ -2,9 +2,9 @@
 # newer than main when its Docs check ran can fall behind while it waits. After every push to main, re-run the Docs
 # check of open PRs whose added migrations are no longer newer than main; its Migration order step reads the live
 # base branch and fails the required check. A re-run replays the original run's workflow file, so for a run from
-# before that step existed (or when a re-run is refused) it posts a failing "Migration order (base moved)" commit
-# status on the PR head instead. Runs trusted code from main only: PR heads are fetched as git objects and read
-# with ls-tree/diff, never checked out or executed. See tools/ci/migration-recheck.mjs.
+# before that step existed (or when a re-run is refused) it creates a failing "Docs check" check run on the PR head
+# instead. Runs trusted code from main only: PR heads are fetched as git objects and read with ls-tree/diff, never
+# checked out or executed. See tools/ci/migration-recheck.mjs.
 name: migration-recheck
 
 on:
@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: read
       actions: write # re-run a PR's Docs check workflow run
-      statuses: write # fallback: a failing status on a PR head whose Docs check cannot be re-run usefully
+      checks: write # fallback: a failing "Docs check" check run on a PR head whose run cannot be re-run usefully
       pull-requests: read # list the open PRs into main
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

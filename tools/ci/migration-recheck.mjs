@@ -4,18 +4,18 @@
 // that is no longer newer than the base's newest, and re-runs their "Docs check" workflow run. Its Migration order
 // step compares against the live base branch, so the required check fails until the author renames the file.
 // A re-run replays the workflow file of the original run, so a run from before the Migration order step existed
-// would pass again; for those, and when a re-run is refused or a run does not finish in time, the script posts a
-// failing commit status on the PR head instead.
+// would pass again; for those, and when a re-run is refused or a run does not finish in time, the script creates a
+// failing "Docs check" check run on the PR head instead, so the required check still blocks the merge.
 //
 // Trusted code only: the workflow runs this from the base branch on push. PR heads are fetched as git objects and
 // read with ls-tree/diff; they are never checked out or executed. Needs GH_TOKEN with actions: write (re-run),
-// statuses: write (the fallback status) and pull-requests: read (list), and the full history of the base
+// checks: write (the fallback check run) and pull-requests: read (list), and the full history of the base
 // (fetch-depth: 0) for merge bases.
 //
 // Usage: node tools/ci/migration-recheck.mjs [--dry-run] <base-branch> [base-ref]
 //   <base-branch> selects the open PRs (for example main); [base-ref] is the tree to compare with (default HEAD,
 //   the pushed commit). --dry-run reports without sending anything. Exits 1 when a PR that fell behind could get
-//   neither a re-run nor the fallback status, so a broken re-check shows up on the push.
+//   neither a re-run nor the fallback check run, so a broken re-check shows up on the push.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -23,7 +23,8 @@ import { addedMigrations, findStale, git, migrationPaths } from './migration-ord
 
 const WORKFLOW = 'docs-check.yml';
 const ORDER_STEP = 'Migration order';
-const STATUS_CONTEXT = 'Migration order (base moved)';
+const REQUIRED_CHECK = 'Docs check'; // the job name, a required check on main
+const FALLBACK_TITLE = 'Migration order (base moved)';
 const POLL_MS = 20_000;
 // Docs check runs still going get up to six minutes in total (the job itself times out at five).
 const WAIT_TOTAL_MS = 6 * 60_000;
@@ -66,15 +67,16 @@ function latestRun(repo, sha) {
   return out ? JSON.parse(out) : undefined;
 }
 
-function hasOrderStep(repo, runId) {
-  return gh(['api', `repos/${repo}/actions/runs/${runId}/jobs`, '--jq', `[.jobs[].steps[]?.name] | any(. == "${ORDER_STEP}")`]) === 'true';
+// Whether the run's job has the Migration order step: 'yes', 'no', or 'unknown' when the job recorded no steps
+// (for example a run cancelled before it started), in which case a re-run is worth trying.
+function orderStep(repo, runId) {
+  return gh(['api', `repos/${repo}/actions/runs/${runId}/jobs`, '--jq', `[.jobs[].steps[]?.name] | if length == 0 then "unknown" elif any(. == "${ORDER_STEP}") then "yes" else "no" end`]);
 }
 
-// Pure: the commit status for a stale PR whose Docs check cannot be re-run usefully (GitHub caps it at 140 chars).
-export function staleStatus(pr) {
-  const name = pr.stale[0].split('/').at(-1);
-  const more = pr.stale.length > 1 ? ` and ${pr.stale.length - 1} more` : '';
-  return `${name}${more} is not newer than ${pr.newest} on the base; rename it above that and push`.slice(0, 140);
+// Pure: the summary of the fallback check run for a stale PR whose Docs check cannot be re-run usefully.
+export function staleSummary(pr) {
+  const files = pr.stale.map((path) => `- ${path}`).join('\n');
+  return `These migrations are not newer than ${pr.newest}, the newest on the base branch:\n\n${files}\n\nRename each to a version above that (git mv) and push; the new push runs the Docs check again.`;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -130,22 +132,23 @@ async function main() {
       decision = rerunDecision(run);
     }
     let note = decision.reason;
-    let needStatus = false;
+    let needFallback = false;
     if (decision.action === 'wait') {
       note += ' and did not finish in time';
-      needStatus = true;
-    } else if (decision.action === 'rerun' && !hasOrderStep(repo, run.id)) {
+      needFallback = true;
+    } else if (decision.action === 'rerun' && orderStep(repo, run.id) === 'no') {
       note += `, but it predates the ${ORDER_STEP} step, so a re-run would pass again`;
-      needStatus = true;
+      needFallback = true;
     } else if (decision.action === 'rerun') {
       const [ok, text] = post([`repos/${repo}/actions/runs/${run.id}/rerun`], 're-run request');
       note += text;
-      needStatus = !ok;
+      needFallback = !ok;
     }
-    // Fallback when the required check cannot be made to fail: a failing commit status on the PR head.
-    if (needStatus) {
-      const fields = ['state=failure', `context=${STATUS_CONTEXT}`, `description=${staleStatus(pr)}`, ...(runUrl ? [`target_url=${runUrl}`] : [])];
-      const [ok, text] = post([`repos/${repo}/statuses/${pr.sha}`, ...fields.flatMap((field) => ['-f', field])], `failing "${STATUS_CONTEXT}" status`);
+    // Fallback when the Docs check run cannot be made to fail: a failing check run under the same required name on
+    // the PR head. GITHUB_TOKEN creates it as the GitHub Actions app, the app the required check is bound to.
+    if (needFallback) {
+      const fields = [`name=${REQUIRED_CHECK}`, `head_sha=${pr.sha}`, 'status=completed', 'conclusion=failure', `output[title]=${FALLBACK_TITLE}`, `output[summary]=${staleSummary(pr)}`, ...(runUrl ? [`details_url=${runUrl}`] : [])];
+      const [ok, text] = post([`repos/${repo}/check-runs`, ...fields.flatMap((field) => ['-f', field])], `failing "${REQUIRED_CHECK}" check run`);
       note += text;
       if (!ok) failed = true;
     }
