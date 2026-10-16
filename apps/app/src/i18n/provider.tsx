@@ -1,7 +1,7 @@
 import { createContext, useContext, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { IntlProvider, useTranslations } from 'use-intl';
-import { formatDate, formatDateTime, formatMoney, formatNumber } from '../lib/format.ts';
+import { formatDate, formatDateTime, formatDecimal, formatMoney, formatNumber } from '../lib/format.ts';
 import { LOCALES, LOCALE_NAMES, type Locale } from './locale.ts';
 import { CATALOGS, activeLocale, setActiveLocale, subscribeLocale } from './runtime.ts';
 
@@ -38,6 +38,8 @@ export function useFormat() {
     () => ({
       money: (value: string | null | undefined, currency?: string) => formatMoney(value, locale, currency),
       number: (value: number | bigint | string) => formatNumber(value, locale),
+      // AI budgets and run costs (6 decimals).
+      aiAmount: (value: string) => formatDecimal(value, locale, 6),
       date: (value: string | null | undefined) => formatDate(value, locale),
       dateTime: (value: string | null | undefined) => formatDateTime(value, locale),
     }),

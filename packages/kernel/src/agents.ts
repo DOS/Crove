@@ -1170,6 +1170,9 @@ function taskView(t: {
   };
 }
 
+// At most this many tasks per list: the oldest first for an agent (its work queue), the newest first for a person.
+export const TASK_LIST_LIMIT = 200;
+
 // Tasks of the org; an agent sees only its own position's tasks, and an untainted run only untainted ones (tainted
 // content never reaches a run that would write it untainted; a tainted task wakes the agent with a tainted run). mine:
 // the positions the user holds, plus the root tasks for an owner.
@@ -1179,7 +1182,14 @@ export const taskList = defineQuery({
   access: ALL,
   agent: { roles: 'any' },
   handler: async (ctx, input) => {
-    let query = ctx.trx.selectFrom('crove_kernel.task').selectAll().where('org_id', '=', ctx.orgId).orderBy('created_at').limit(200);
+    const order = ctx.agent ? 'asc' : 'desc';
+    let query = ctx.trx
+      .selectFrom('crove_kernel.task')
+      .selectAll()
+      .where('org_id', '=', ctx.orgId)
+      .orderBy('created_at', order)
+      .orderBy('id', order)
+      .limit(TASK_LIST_LIMIT);
     if (ctx.agent) {
       query = query.where('assignee_position_id', '=', ctx.agent.positionId);
       if (!ctx.agent.tainted) query = query.where('tainted', '=', false);
@@ -1250,6 +1260,73 @@ export const taskGet = defineQuery({
   },
 });
 
+// The agent templates modules declare, and whether this deployment enables each one's module (CROVE_MODULES,
+// ADR-0031): installing a template of a module that is off is refused with MODULE_DISABLED.
+export const templateList = defineQuery({
+  name: 'kernel.agent.templates.list',
+  input: z.object({}),
+  access: ALL,
+  handler: async (ctx) => {
+    const rows = await ctx.trx
+      .selectFrom('crove_kernel.agent_template')
+      .select(['key', 'module', 'title', 'role_key', 'max_risk', 'daily_run_cap', 'job_description'])
+      .orderBy('key')
+      .execute();
+    return {
+      templates: rows.map((t) => ({
+        key: t.key,
+        module: t.module,
+        title: t.title,
+        roleKey: t.role_key,
+        maxRisk: t.max_risk,
+        dailyRunCap: t.daily_run_cap,
+        jobDescription: t.job_description,
+        moduleEnabled: ctx.installed(t.module),
+      })),
+    };
+  },
+});
+
+// The monthly AI budgets with what this month's runs they cover cost so far (the month in Asia/Ho_Chi_Minh, as the
+// run gate counts it). Amounts are decimal strings. Owners and admins: costs are management data.
+export const budgetList = defineQuery({
+  name: 'kernel.agent.budgets.list',
+  input: z.object({}),
+  access: ['owner', 'admin'],
+  handler: async (ctx) => {
+    const { rows } = await sql<{
+      id: string;
+      scope: AgentScope;
+      target: string;
+      monthly_limit: string;
+      warn_percent: number;
+      hard_stop: boolean;
+      updated_at: Date;
+      spent: string;
+    }>`
+      SELECT b.id, b.scope, b.target, b.monthly_limit::text AS monthly_limit, b.warn_percent, b.hard_stop, b.updated_at,
+        (SELECT coalesce(sum(r.cost), 0)::text FROM crove_kernel.ai_run r
+         WHERE r.org_id = b.org_id
+           AND r.started_at >= pg_catalog.date_trunc('month', pg_catalog.now() AT TIME ZONE 'Asia/Ho_Chi_Minh') AT TIME ZONE 'Asia/Ho_Chi_Minh'
+           AND (b.scope = 'org' OR (b.scope = 'module' AND r.module = b.target) OR (b.scope = 'agent' AND r.agent_id::text = b.target))) AS spent
+      FROM crove_kernel.budget_policy b
+      WHERE b.org_id = ${ctx.orgId}::uuid
+      ORDER BY b.scope, b.target`.execute(ctx.trx);
+    return {
+      budgets: rows.map((b) => ({
+        id: b.id,
+        scope: b.scope,
+        target: b.target,
+        monthlyLimit: b.monthly_limit,
+        warnPercent: b.warn_percent,
+        hardStop: b.hard_stop,
+        spent: b.spent,
+        updatedAt: b.updated_at.toISOString(),
+      })),
+    };
+  },
+});
+
 export const agentCommands = [
   createPosition,
   updatePosition,
@@ -1270,4 +1347,4 @@ export const agentCommands = [
   finishAgentRun,
 ];
 
-export const agentQueries = [chartGet, taskList, taskGet];
+export const agentQueries = [chartGet, taskList, taskGet, templateList, budgetList];

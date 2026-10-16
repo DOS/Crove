@@ -1,7 +1,7 @@
 // Locale-aware money, number and date formatting (issue #47).
 import { describe, expect, it } from 'vitest';
 import { previewPurchaseJournal, toUnits } from '../src/lib/decimal.ts';
-import { formatDate, formatDateTime, formatMoney, formatNumber } from '../src/lib/format.ts';
+import { formatDate, formatDateTime, formatDecimal, formatMoney, formatNumber } from '../src/lib/format.ts';
 
 // Intl separates the amount and the currency symbol with a no-break space.
 const plain = (s: string) => s.replace(/[  ]/g, ' ');
@@ -87,5 +87,14 @@ describe('formatDateTime', () => {
     expect(formatDateTime('2026-10-16T08:05:00.000Z', 'vi')).toMatch(/16\/10\/26/);
     expect(formatDateTime('2026-10-16T08:05:00.000Z', 'en')).toMatch(/16\/10\/2026/);
     expect(formatDateTime(null, 'en')).toBe('');
+  });
+});
+
+describe('formatDecimal', () => {
+  it('keeps up to the given decimals, as AI budgets do', () => {
+    expect(formatDecimal('1.123456', 'en', 6)).toBe('1.123456');
+    expect(formatDecimal('0.000049', 'vi', 6)).toBe('0,000049');
+    expect(formatDecimal('150.500000', 'vi', 6)).toBe('150,5');
+    expect(formatDecimal('n/a', 'en', 6)).toBe('n/a');
   });
 });

@@ -5,6 +5,7 @@ import { errorMessage, getCurrentOrg, isUnauthenticated, orpc, queryClient, setC
 import { accessToken, auth, getConfig } from './lib/auth.ts';
 import { signOut } from './lib/session-actions.ts';
 import { pendingInvite, rememberInvite, takeTokenFromHash } from './lib/invite.ts';
+import { AgentsPage } from './routes/agents.tsx';
 import { AuthPage } from './routes/auth.tsx';
 import { DocumentsPage } from './routes/documents.tsx';
 import { InboxDetailPage } from './routes/inbox-detail.tsx';
@@ -14,6 +15,7 @@ import { JournalPage } from './routes/journal.tsx';
 import { OnboardingPage } from './routes/onboarding.tsx';
 import { OrgLayout } from './routes/org-layout.tsx';
 import { SettingsPage } from './routes/settings.tsx';
+import { TaskDetailPage, TasksPage } from './routes/tasks.tsx';
 import { VendorsPage } from './routes/vendors.tsx';
 
 async function requireAuth() {
@@ -112,13 +114,17 @@ const documentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'docu
 const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendors', beforeLoad: requireFinance, component: VendorsPage });
 const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, component: JournalPage });
 const settingsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'settings', component: SettingsPage });
+// AI agents and tasks (ADR-0029) belong to the kernel, so every deployment has them.
+const agentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'agents', component: AgentsPage });
+const tasksRoute = createRoute({ getParentRoute: () => orgRoute, path: 'tasks', component: TasksPage });
+const taskDetailRoute = createRoute({ getParentRoute: () => orgRoute, path: 'tasks/$id', component: TaskDetailPage });
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
   inviteRoute,
   onboardingRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, settingsRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, agentsRoute, tasksRoute, taskDetailRoute, settingsRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

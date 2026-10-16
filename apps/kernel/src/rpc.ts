@@ -14,6 +14,8 @@ import {
   type ChannelConnectInput,
   type OrgSummary,
 } from '@crove/kernel';
+import type { z } from 'zod';
+import type { zAgentBudget, zAgentTemplate, zTask } from '@crove/kernel-contract';
 import { DomainError, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { actorOf, type AuthUser } from './auth.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
@@ -74,6 +76,12 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
   // A procedure of a module this deployment leaves out (CROVE_MODULES, plan Decision 12) answers like a route that
   // does not exist, before any database work. The contract is shared, so the procedure stays in the router.
   const finance = runtime.installed('finance');
+  // A command that takes an idempotency key: the key travels in the options, never in the command's input.
+  const keyed = <O, I extends { idempotencyKey: string } = { idempotencyKey: string }>(context: RpcContext, name: string, input: I): Promise<O> =>
+    inOrg(context, (orgId, actor) => {
+      const { idempotencyKey, ...rest } = input;
+      return runtime.execute<O>(name, rest, { actor, orgId, idempotencyKey });
+    });
   const inFinance = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor) => Promise<T>) => {
     if (!finance) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun tài chính chưa được bật' });
     return inOrg(context, fn);
@@ -274,6 +282,35 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       list: os.accounts.list.handler(({ context }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.accounts.list', {}, { actor, orgId })),
       ),
+    },
+    // AI agents (ADR-0029). The kernel module owns them; a template of a module that is off answers MODULE_DISABLED.
+    chart: {
+      get: os.chart.get.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.chart.get', {}, { actor, orgId }))),
+      createPosition: os.chart.createPosition.handler(({ context, input }) => keyed(context, 'kernel.position.create', input)),
+      updatePosition: os.chart.updatePosition.handler(({ context, input }) => keyed(context, 'kernel.position.update', input)),
+      assign: os.chart.assign.handler(({ context, input }) => keyed(context, 'kernel.position.assign', input)),
+      templates: os.chart.templates.handler(({ context }) =>
+        inOrg(context, async (orgId, actor) => (await runtime.query<{ templates: z.infer<typeof zAgentTemplate>[] }>('kernel.agent.templates.list', {}, { actor, orgId })).templates),
+      ),
+      installTemplate: os.chart.installTemplate.handler(({ context, input }) => keyed(context, 'kernel.agent.template.install', input)),
+    },
+    agents: {
+      update: os.agents.update.handler(({ context, input }) => keyed(context, 'kernel.agent.update', input)),
+      budgets: os.agents.budgets.handler(({ context }) =>
+        inOrg(context, async (orgId, actor) => (await runtime.query<{ budgets: z.infer<typeof zAgentBudget>[] }>('kernel.agent.budgets.list', {}, { actor, orgId })).budgets),
+      ),
+      setBudget: os.agents.setBudget.handler(({ context, input }) => keyed(context, 'kernel.agent.budget.set', input)),
+      stop: os.agents.stop.handler(({ context, input }) => keyed(context, 'kernel.agent.kill_switch.engage', input)),
+      release: os.agents.release.handler(({ context, input }) => keyed(context, 'kernel.agent.kill_switch.release', input)),
+    },
+    tasks: {
+      list: os.tasks.list.handler(({ context, input }) =>
+        inOrg(context, async (orgId, actor) => (await runtime.query<{ tasks: z.infer<typeof zTask>[] }>('kernel.task.list', input, { actor, orgId })).tasks),
+      ),
+      get: os.tasks.get.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.task.get', input, { actor, orgId }))),
+      create: os.tasks.create.handler(({ context, input }) => keyed(context, 'kernel.task.create', input)),
+      comment: os.tasks.comment.handler(({ context, input }) => keyed(context, 'kernel.task.comment', input)),
+      setStatus: os.tasks.setStatus.handler(({ context, input }) => keyed(context, 'kernel.task.set_status', input)),
     },
   });
 
