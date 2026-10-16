@@ -85,7 +85,7 @@ function ReversalForm({ entry, slug, onClose }: { entry: Entry; slug: string; on
       {request.error && <ErrorText>{reversalErrorMessage(request.error, root, locale)}</ErrorText>}
       <div className="flex gap-2">
         <Button type="submit" disabled={request.isPending}>
-          {request.isPending ? <Spinner /> : null}
+          {request.isPending ? <Spinner className="text-current" /> : null}
           {t('submit')}
         </Button>
         <Button type="button" variant="ghost" onClick={onClose} disabled={request.isPending}>
@@ -127,7 +127,7 @@ export function JournalPage() {
         subtitle={t('subtitle')}
         actions={
           <Button size="lg" onClick={() => exportXlsx.mutate()} disabled={exportXlsx.isPending || (journal.data?.length ?? 0) === 0}>
-            {exportXlsx.isPending ? <Spinner /> : null}
+            {exportXlsx.isPending ? <Spinner className="text-current" /> : null}
             {t('export')}
           </Button>
         }

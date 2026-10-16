@@ -487,7 +487,7 @@ export function SettingsPage() {
                   {controlsFor(m.userId) ? (
                     <MemberControls member={m} self={m.userId === me.data?.userId} />
                   ) : (
-                    <Badge variant={m.role === 'owner' ? 'default' : 'secondary'}>{root(`roles.${m.role}`)}</Badge>
+                    <Badge variant={m.role === 'owner' ? 'brand' : 'secondary'}>{root(`roles.${m.role}`)}</Badge>
                   )}
                 </div>
                 {isOwner && me.data && m.userId !== me.data.userId && <MemberSessions userId={m.userId} name={m.displayName ?? m.email} />}

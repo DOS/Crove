@@ -19,7 +19,7 @@ type Tab = 'pending' | 'executed' | 'rejected';
 
 const TABS: Tab[] = ['pending', 'executed', 'rejected'];
 
-const FILE_STATUS = { processing: 'default', proposed: 'success', duplicate: 'warning', failed: 'destructive' } as const;
+const FILE_STATUS = { processing: 'brand', proposed: 'success', duplicate: 'warning', failed: 'destructive' } as const;
 type FileStatus = keyof typeof FILE_STATUS;
 
 function isFileStatus(status: string): status is FileStatus {
@@ -67,7 +67,7 @@ export function InboxPage() {
         subtitle={t('subtitle')}
         actions={
           <Button size="lg" onClick={() => inputRef.current?.click()} disabled={upload.isPending}>
-            {upload.isPending ? <Spinner /> : null}
+            {upload.isPending ? <Spinner className="text-current" /> : null}
             {t('upload')}
           </Button>
         }

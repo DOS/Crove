@@ -214,7 +214,7 @@ export function InboxDetailPage() {
           reextract.mutate({ fileId, idempotencyKey: crypto.randomUUID() });
         }}
       >
-        {reextract.isPending ? <Spinner /> : null}
+        {reextract.isPending ? <Spinner className="text-current" /> : null}
         {t('reread')}
       </Button>
     ) : null;
@@ -270,13 +270,13 @@ export function InboxDetailPage() {
                       })
                     }
                   >
-                    {edit.isPending ? <Spinner /> : null}
+                    {edit.isPending ? <Spinner className="text-current" /> : null}
                     {t('saveEdit')}
                   </Button>
                 )}
                 {item.canApprove && reversal && (
                   <Button size="lg" disabled={busy} onClick={() => approve.mutate({ id, revision: item.revision, idempotencyKey })}>
-                    {approve.isPending ? <Spinner /> : null}
+                    {approve.isPending ? <Spinner className="text-current" /> : null}
                     {t('approveReversal')}
                   </Button>
                 )}
@@ -294,7 +294,7 @@ export function InboxDetailPage() {
                       })
                     }
                   >
-                    {approve.isPending ? <Spinner /> : null}
+                    {approve.isPending ? <Spinner className="text-current" /> : null}
                     {t('approve')}
                   </Button>
                 )}

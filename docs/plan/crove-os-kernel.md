@@ -1536,7 +1536,10 @@ Updated 2026-10-14 for the Vite + TanStack Router SPA (Decision 6).
 - **Mutations:** every write is an oRPC command call to the kernel; the product app has no server-side code.
 - **Design system:**
   - `@crove/ui` is the only UI import and the only importer of `@base-ui/react`.
-  - OKLCH tokens; lint bans raw color classes (`web` rule).
+  - OKLCH tokens; lint bans raw color classes (`web` rule): `tools/ui-colors.mjs` rejects Tailwind palette classes (palette names read from the installed `tailwindcss/theme.css`), literal colors and CSS color names in arbitrary values, color attributes, style objects and the app's stylesheets (`none`, `currentColor`, `transparent`, `inherit` and system colors such as `Canvas` are allowed).
+  - shadcn's `Card` has `overflow-hidden`: absolutely positioned content inside a card (a popover, a menu, a tooltip) is clipped. Render it in a portal or outside the card.
+  - Badges: the solid `default` badge marks the one row to notice (the current session); status chips that repeat down a list (a file being read, the owner role) use the subtle `brand` variant, which keeps the brand hue without a solid fill on every row.
+  - A `Spinner` inside a button takes `text-current`, so it has the button's text color on any variant.
   - `DataView` wraps TanStack Table 9 + virtual.
   - AI Elements: vendored in 2b.
 - **Safety:** untrusted HTML renders only in a sandboxed iframe (§7.6); CSP and Trusted Types on; R3 approval needs step-up.
