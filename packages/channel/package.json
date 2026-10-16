@@ -1,0 +1,14 @@
+{
+  "name": "@crove/channel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Channel providers behind the kernel channel layer (ADR-0025): the offline sandbox, then the platform adapters",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

@@ -145,6 +145,20 @@ export const zInvitePreview = z.object({
   expiresAt: z.string(),
 });
 
+// A connected channel account (ADR-0025). Never carries a credential.
+export const zChannelConnection = z.object({
+  id: zId,
+  provider: z.string(),
+  externalAccountId: z.string(),
+  displayName: z.string(),
+  scopes: z.array(z.string()),
+  status: z.enum(['active', 'expired', 'revoked', 'error']),
+  statusReason: z.string().nullable(),
+  connectedBy: zId,
+  expiresAt: z.string().nullable(),
+  connectedAt: z.string(),
+});
+
 // A Supabase Auth session as Crove tracks it (ADR-0028).
 export const zSession = z.object({
   sessionId: zId,

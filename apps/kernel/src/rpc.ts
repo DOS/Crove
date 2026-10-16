@@ -2,8 +2,19 @@
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { contract } from '@crove/kernel-contract';
-import { createOrg, myOrgs, previewInvite, revokeOwnSessionsWithoutOrg, sessionOrgs, upstreamAuth, type AcceptedInvite, type OrgSummary } from '@crove/kernel';
-import { DomainError, type Runtime, type UserActor } from '@crove/kernel-runtime';
+import { sandbox } from '@crove/channel';
+import {
+  createOrg,
+  myOrgs,
+  previewInvite,
+  revokeOwnSessionsWithoutOrg,
+  sessionOrgs,
+  upstreamAuth,
+  type AcceptedInvite,
+  type ChannelConnectInput,
+  type OrgSummary,
+} from '@crove/kernel';
+import { DomainError, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { actorOf, type AuthUser } from './auth.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
 
@@ -39,8 +50,16 @@ interface CreatedInvite {
   acceptPath: string;
 }
 
-// sendInviteMail unset: invite mail is off (tests, or an embedder without mail).
-export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail) {
+export interface RpcChannels {
+  // Seals tokens before kernel.channel.connect stores them; never opens one in the API.
+  broker: CredentialBroker;
+  // The offline sandbox channel is enabled (CHANNEL_SANDBOX).
+  sandbox: boolean;
+}
+
+// sendInviteMail unset: invite mail is off (tests, or an embedder without mail). channels unset: no channel can be
+// connected through the API (the list and disconnect still work).
+export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -133,6 +152,33 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         }),
       ),
       export: os.org.export.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.export.get', {}, { actor, orgId }))),
+    },
+    channels: {
+      list: os.channels.list.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.channel.list', input, { actor, orgId }))),
+      // The token is made and sealed here and only the envelope reaches the command. No idempotency key: every seal
+      // differs, and connecting the same sandbox key again is already a reconnect of the same account.
+      connectSandbox: os.channels.connectSandbox.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          if (!channels?.sandbox) throw new DomainError('CHANNEL_PROVIDER_DISABLED', 404, 'Kênh thử nghiệm (sandbox) chưa được bật');
+          const account = sandbox.connect({ key: input.key, displayName: input.displayName });
+          const sealed = channels.broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });
+          const command: ChannelConnectInput = {
+            provider: account.provider,
+            externalAccountId: account.externalAccountId,
+            displayName: account.displayName,
+            scopes: account.scopes,
+            expiresAt: account.expiresAt?.toISOString() ?? null,
+            credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+          };
+          return runtime.execute('kernel.channel.connect', command, { actor, orgId });
+        }),
+      ),
+      disconnect: os.channels.disconnect.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('kernel.channel.disconnect', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
     },
     // Org-less: the invite names the org, so the x-crove-org header is ignored here.
     invites: {

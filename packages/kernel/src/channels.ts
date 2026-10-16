@@ -1,0 +1,204 @@
+// Channel connections (ADR-0025, Social plan step S2, issue #232): an org connects a page or account once, and the
+// kernel keeps its sealed tokens for every module that publishes to it or reads from it.
+//
+// Who may do what:
+// - Owners and admins connect and disconnect (R2, permission kernel.connection.bind in plan §7.4 terms); every member
+//   lists the org's connections. No query ever returns a credential.
+// - The command never sees a token: the caller (the OAuth callback, the sandbox route) seals it with the credential
+//   broker for the binding (org, provider, account) and passes the envelope, which the credential_put definer
+//   stores. Connecting an account that is already connected replaces its tokens on the same connection row.
+// - Only the worker reads a credential back (kernel.channel.credential, system actor, credential_get granted to
+//   crove_worker alone), and only while the member who connected the account is still in the org.
+import { sql } from 'kysely';
+import { z } from 'zod';
+import { zId } from '@crove/kernel-contract';
+import type { MemberRole } from '@crove/db';
+import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
+
+const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
+const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
+
+const zProvider = z.string().regex(/^[a-z][a-z0-9_]{1,31}$/);
+const zKeyId = z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/);
+// The sealed envelope as base64; its size is checked again by the column (64 KiB).
+const zEnvelope = z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/).max(90_000);
+
+// Errors the credential_* definers raise, as domain errors. Anything else goes through the runtime's mapping.
+function credentialError(error: unknown): never {
+  const message = (error as { message?: unknown } | null)?.message;
+  switch (message) {
+    case 'CHANNEL_NOT_FOUND':
+      throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
+    case 'CHANNEL_NOT_ACTIVE':
+      throw new DomainError('CHANNEL_NOT_ACTIVE', 409, 'Kênh này không còn hoạt động, hãy kết nối lại');
+    case 'CHANNEL_OWNER_LEFT':
+      throw new DomainError('CHANNEL_OWNER_LEFT', 409, 'Người đã kết nối kênh này không còn trong tổ chức, hãy kết nối lại');
+    case 'CREDENTIAL_FORBIDDEN':
+      throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới quản lý được kênh kết nối');
+    default:
+      throw error;
+  }
+}
+
+function requireUser(ctx: CommandContext): string {
+  if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới kết nối được kênh');
+  return ctx.actor.userId;
+}
+
+export const zChannelConnect = z.strictObject({
+  provider: zProvider,
+  externalAccountId: z.string().min(1).max(200),
+  displayName: z.string().trim().min(1).max(200),
+  scopes: z.array(z.string().min(1).max(200)).max(100),
+  expiresAt: z.iso.datetime({ offset: true }).nullable(),
+  credential: z.strictObject({ keyId: zKeyId, envelope: zEnvelope }),
+});
+export type ChannelConnectInput = z.infer<typeof zChannelConnect>;
+
+export const channelConnect = defineCommand({
+  name: 'kernel.channel.connect',
+  input: zChannelConnect,
+  risk: 'R2',
+  access: ADMINS,
+  handler: async (ctx, input) => {
+    const userId = requireUser(ctx);
+    const values = {
+      display_name: input.displayName,
+      scopes: input.scopes,
+      expires_at: input.expiresAt,
+      status: 'active' as const,
+      status_reason: null,
+      connected_by: userId,
+      updated_at: ctx.now,
+    };
+    // Reconnecting a live connection of the same account keeps its row; a revoked one is history and stays.
+    const existing = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select(['id'])
+      .where('org_id', '=', ctx.orgId)
+      .where('provider', '=', input.provider)
+      .where('external_account_id', '=', input.externalAccountId)
+      .where('status', '<>', 'revoked')
+      .forUpdate()
+      .executeTakeFirst();
+    let id: string;
+    if (existing) {
+      await ctx.trx.updateTable('crove_kernel.channel_connection').set(values).where('org_id', '=', ctx.orgId).where('id', '=', existing.id).execute();
+      id = existing.id;
+    } else {
+      const row = await ctx.trx
+        .insertInto('crove_kernel.channel_connection')
+        .values({ org_id: ctx.orgId, provider: input.provider, external_account_id: input.externalAccountId, ...values })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      id = row.id;
+    }
+    await sql`SELECT crove_kernel.credential_put(${id}::uuid, ${input.credential.keyId}, decode(${input.credential.envelope}, 'base64'))`
+      .execute(ctx.trx)
+      .catch(credentialError);
+    ctx.audit({ connection_id: id, provider: input.provider, reconnected: Boolean(existing) });
+    await ctx.emit('kernel.channel.connected', { connection_id: id, provider: input.provider, reconnected: Boolean(existing) });
+    return { connectionId: id, reconnected: Boolean(existing) };
+  },
+});
+
+export const channelDisconnect = defineCommand({
+  name: 'kernel.channel.disconnect',
+  input: z.strictObject({ connectionId: zId }),
+  risk: 'R2',
+  access: ADMINS,
+  target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const row = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select(['status', 'provider'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!row) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
+    if (row.status !== 'revoked') {
+      await ctx.trx
+        .updateTable('crove_kernel.channel_connection')
+        .set({ status: 'revoked', status_reason: 'disconnected', updated_at: ctx.now })
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', input.connectionId)
+        .execute();
+      await ctx.emit('kernel.channel.disconnected', { connection_id: input.connectionId, provider: row.provider });
+    }
+    // Forget the tokens even when the row was already revoked: a disconnect leaves nothing to decrypt.
+    await sql`SELECT crove_kernel.credential_drop(${input.connectionId}::uuid)`.execute(ctx.trx).catch(credentialError);
+    return { connectionId: input.connectionId, status: 'revoked' as const };
+  },
+});
+
+export interface ChannelConnectionView {
+  id: string;
+  provider: string;
+  externalAccountId: string;
+  displayName: string;
+  scopes: string[];
+  status: 'active' | 'expired' | 'revoked' | 'error';
+  statusReason: string | null;
+  connectedBy: string;
+  expiresAt: string | null;
+  connectedAt: string;
+}
+
+const iso = (d: Date | string | null) => (d === null ? null : new Date(d).toISOString());
+
+// The org's connections, live ones first. Never a credential: the columns are listed, not selected with *.
+export const channelsList = defineQuery({
+  name: 'kernel.channel.list',
+  input: z.object({ includeRevoked: z.boolean().optional() }),
+  access: ALL,
+  handler: async (ctx: QueryContext, input): Promise<ChannelConnectionView[]> => {
+    let q = ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select(['id', 'provider', 'external_account_id', 'display_name', 'scopes', 'status', 'status_reason', 'connected_by', 'expires_at', 'connected_at'])
+      .where('org_id', '=', ctx.orgId);
+    if (!input.includeRevoked) q = q.where('status', '<>', 'revoked');
+    const rows = await q.orderBy(sql`status = 'revoked'`).orderBy('connected_at', 'desc').limit(500).execute();
+    return rows.map((r) => ({
+      id: r.id,
+      provider: r.provider,
+      externalAccountId: r.external_account_id,
+      displayName: r.display_name,
+      scopes: r.scopes,
+      status: r.status,
+      statusReason: r.status_reason,
+      connectedBy: r.connected_by,
+      expiresAt: iso(r.expires_at),
+      connectedAt: iso(r.connected_at) ?? '',
+    }));
+  },
+});
+
+export interface SealedChannelCredential {
+  provider: string;
+  externalAccountId: string;
+  keyId: string;
+  // base64
+  envelope: string;
+}
+
+// The sealed credential of an active connection, for provider jobs in the worker. The caller opens it with the
+// credential broker for the binding returned here and drops the plaintext after the call.
+export const channelCredential = defineQuery({
+  name: 'kernel.channel.credential',
+  input: z.strictObject({ connectionId: zId }),
+  access: 'system',
+  handler: async (ctx, input): Promise<SealedChannelCredential> => {
+    const { rows } = await sql<{ key_id: string; envelope: Buffer; provider: string; external_account_id: string }>`
+      SELECT key_id, envelope, provider, external_account_id FROM crove_kernel.credential_get(${input.connectionId}::uuid)`
+      .execute(ctx.trx)
+      .catch(credentialError);
+    const row = rows[0];
+    if (!row) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
+    return { provider: row.provider, externalAccountId: row.external_account_id, keyId: row.key_id, envelope: row.envelope.toString('base64') };
+  },
+});
+
+export const channelCommands = [channelConnect, channelDisconnect];
+export const channelQueries = [channelsList, channelCredential];

@@ -135,6 +135,15 @@ const schema = z.object({
   REFUSAL_AUDIT_RESERVE_PER_ACTOR: z.coerce.number().int().min(0).max(999_999).default(10),
   REFUSAL_AUDIT_WINDOW_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
   REFUSAL_TALLY_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(7),
+  // The credential key seals channel tokens (ADR-0025): 32 bytes as base64 or 64 hex characters. It never goes in the
+  // database. CREDENTIAL_KEY wins; else CREDENTIAL_KEY_FILE names a file holding it, created with a fresh key when
+  // missing (the all-in-one container). CREDENTIAL_KEY_PREVIOUS still opens tokens sealed before a rotation
+  // (docs/runbooks/credential-key.md). Without a key no channel can be connected.
+  CREDENTIAL_KEY: optional,
+  CREDENTIAL_KEY_FILE: optional,
+  CREDENTIAL_KEY_PREVIOUS: optional,
+  // The offline sandbox channel (Social plan §3.5): connect and publish without any platform account.
+  CHANNEL_SANDBOX: z.enum(['true', 'false']).default('true'),
   // Requests per minute per signed-in user on /api (429 RATE_LIMITED with Retry-After past it), per API process; see
   // rate-limit.ts. 0 turns it off, for a deployment whose edge (proxy, CDN or WAF) limits per user instead.
   API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(0).max(999_999).default(600),

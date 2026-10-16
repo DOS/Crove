@@ -150,8 +150,15 @@ services:
       UPLOAD_BEGIN_LIMIT_PER_MINUTE: ${UPLOAD_BEGIN_LIMIT_PER_MINUTE:-20}
       # Every PDF, XML and MIME parse happens in crove-extract (External-tenant gate T12).
       EXTRACT_URL: http://crove-extract:8090
+      # Seals channel tokens (ADR-0025). Set CREDENTIAL_KEY to bring your own; otherwise the container creates a key
+      # file on the `keys` volume at first start. Back it up apart from the database (docs/runbooks/credential-key.md).
+      CREDENTIAL_KEY: ${CREDENTIAL_KEY:-}
+      CREDENTIAL_KEY_PREVIOUS: ${CREDENTIAL_KEY_PREVIOUS:-}
+      CREDENTIAL_KEY_FILE: /data/keys/credential.key
+      CHANNEL_SANDBOX: ${CHANNEL_SANDBOX:-true}
     volumes:
       - files:/data/files
+      - keys:/data/keys
     ports:
       # Loopback only. Put a TLS reverse proxy in front (and set PUBLIC_URL) to serve other machines.
       - '127.0.0.1:${PORT:-8080}:8080'
@@ -230,3 +237,4 @@ networks:
 volumes:
   db-data:
   files:
+  keys:

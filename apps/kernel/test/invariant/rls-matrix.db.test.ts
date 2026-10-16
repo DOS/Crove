@@ -38,8 +38,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-// Channel connections and their sealed credentials (ADR-0025, Social plan step S2, issue #232).
-const PENDING_TABLES = new Set<string>(['crove_kernel.channel_connection', 'crove_kernel.credential']);
+const PENDING_TABLES = new Set<string>();
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 

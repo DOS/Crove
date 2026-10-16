@@ -315,6 +315,25 @@ export interface TaskCommentTable {
   created_at: DefaultTimestamp;
 }
 
+export type ChannelConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';
+
+// A connected social or messaging account (ADR-0025). Its sealed tokens live in crove_kernel.credential, which has
+// no Kysely type: only the credential_* definers reach it.
+export interface ChannelConnectionTable {
+  org_id: string;
+  id: Generated<string>;
+  provider: string;
+  external_account_id: string;
+  display_name: string;
+  scopes: Generated<string[]>;
+  status: Generated<ChannelConnectionStatus>;
+  status_reason: string | null;
+  connected_by: string;
+  expires_at: Timestamp | null;
+  connected_at: DefaultTimestamp;
+  updated_at: DefaultTimestamp;
+}
+
 export interface AgentWakeupTable {
   org_id: string;
   id: Generated<string>;
@@ -466,6 +485,7 @@ export interface Database {
   'crove_kernel.agent_wakeup': AgentWakeupTable;
   'crove_kernel.kill_switch': KillSwitchTable;
   'crove_kernel.budget_policy': BudgetPolicyTable;
+  'crove_kernel.channel_connection': ChannelConnectionTable;
   'crove_finance.account': AccountTable;
   'crove_finance.purchase_document': PurchaseDocumentTable;
   'crove_finance.purchase_document_void': PurchaseDocumentVoidTable;
