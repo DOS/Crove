@@ -63,6 +63,10 @@ describe('reviser registry (#216)', () => {
       /reviser test\.thing\.revise revises test\.thing\.recrod, which is not a registered command/,
     );
     expect(invalid([list, editor(), reviser('test.thing.revise', list.name)])).toThrow(/revises test\.thing\.list, which does not run through a proposal/);
+    expect(invalid([editor(), reviser('test.thing.revise', 'test.proposal.edit')])).toThrow(/revises test\.proposal\.edit, which does not run through a proposal/);
+    expect(invalid([record, editor(), reviser('test.thing.revise', record.name), reviser('test.thing.revise_twice', 'test.thing.revise')])).toThrow(
+      /revises test\.thing\.revise, which does not run through a proposal/,
+    );
     expect(invalid([record, editor(), reviser('test.thing.revise', record.name), reviser('test.thing.revise_again', record.name)])).toThrow(
       /proposal command test\.thing\.record has more than one reviser: test\.thing\.revise, test\.thing\.revise_again/,
     );

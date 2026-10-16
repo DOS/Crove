@@ -440,7 +440,8 @@ function changesContent(payload: unknown, lineAccounts: z.infer<typeof zLineAcco
 
 // Edits a pending proposal: the new content becomes a new revision authored by the editor (plan §8.3), and
 // the approval policy runs again on it. An edit never approves; kernel.proposal.approve does, separately.
-// The proposal editor: the runtime runs a reviser only for the command that declares proposalEditor (#161, #216).
+//
+// It declares proposalEditor: the runtime runs a reviser only for the command that declares it (#161, #216).
 export const editProposal = defineCommand({
   name: 'kernel.proposal.edit',
   proposalEditor: true,

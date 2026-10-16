@@ -483,8 +483,8 @@ export class Runtime {
   // this command, approved by the calling command (executed_command_id), so no other path (an edit, a bug, a replay)
   // can reach a posting command; 'proposal_revision' needs a pending proposal of the command the reviser revises,
   // and the calling definition must be the proposal editor (#161, #216: its declared proposalEditor, not its name),
-  // so no other command, nor a reviser nested in a reviser, runs one. The caller holds the row lock. The row is read in the org in context only: another org's
-  // proposal id is refused exactly like an id that does not exist.
+  // so no other command, nor a reviser nested in a reviser, runs one. The caller holds the row lock. The row is read
+  // in the org in context only: another org's proposal id is refused exactly like an id that does not exist.
   private async requireProposalState(
     trx: Transaction<Database>,
     orgId: string,
