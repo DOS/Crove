@@ -27,12 +27,16 @@ const RUNTIME_ROLES = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_defin
 // Tables with org_id that no role but their owner can touch: only SECURITY DEFINER functions owned by the
 // table owner read or write them. They need RLS enabled (so a later grant stays deny-all until a policy is
 // added) and must be listed here, so a new table cannot quietly become one.
-const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.inbound_drop', 'crove_kernel.outbox_pending']);
+const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.inbound_drop', 'crove_kernel.outbox_pending', 'crove_kernel.refusal_tally']);
 // Tables whose row factory (and MACHINERY entry, for definer-only tables) lands on main before the table itself. CI
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>(['crove_finance.purchase_document_void']);
+const PENDING_TABLES = new Set<string>([
+  'crove_finance.purchase_document_void',
+  // Refusals counted per org, window, actor and (command, code) (issue #162).
+  'crove_kernel.refusal_tally',
+]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -148,6 +152,13 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         row: { org_id: o.id, address_id: address, dropped_count: 1 },
       };
     },
+  },
+  // Refusals counted per org, window, actor and (command, code) (issue #162). Definer-only machinery: no role but
+  // the owner holds a privilege on it. A random code keeps every row its own key.
+  'crove_kernel.refusal_tally': {
+    make: (o) => ({
+      row: { org_id: o.id, window_start: '2026-10-01T00:00:00Z', actor_key: `user:${o.owner}`, command: 'rls.matrix', code: `RLS_${tag()}` },
+    }),
   },
   // Pending member invites (issue #35). An open invite per (org, email), so every row gets its own address. Token
   // hash and expiry take their defaults (an unusable random hash, seven days). Tenant roles may update only status,
