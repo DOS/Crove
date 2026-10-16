@@ -1,0 +1,82 @@
+{
+  "fresh": {
+    "version": 123,
+    "appliedAs": "spike_migrate (NOSUPERUSER), one transaction",
+    "inventory": {
+      "tables": 13,
+      "indexes": 38,
+      "functions": 3,
+      "triggers": 1
+    },
+    "launchAsRunnerWithRunMigrationsFalse": {
+      "ok": true,
+      "result": 2
+    },
+    "reapplySameFile": {
+      "ok": false,
+      "message": "DBOS system schema is at version 123, this file expects 0 (vendored from @dbos-inc/dbos-sdk 5.2.11)"
+    },
+    "runnerCreateTable": {
+      "ok": false,
+      "code": "42501",
+      "message": "permission denied for schema crove_dbos"
+    },
+    "runnerCreateSchema": {
+      "ok": false,
+      "code": "42501",
+      "message": "permission denied for database spike_fresh"
+    },
+    "runnerAlterTable": {
+      "ok": false,
+      "code": "42501",
+      "message": "must be owner of table workflow_status"
+    }
+  },
+  "functions": [
+    {
+      "proname": "enqueue_workflow",
+      "security_definer": false,
+      "settings": "search_path=pg_catalog, pg_temp"
+    },
+    {
+      "proname": "notifications_function",
+      "security_definer": false,
+      "settings": "search_path=pg_catalog, pg_temp"
+    },
+    {
+      "proname": "send_message",
+      "security_definer": false,
+      "settings": "search_path=pg_catalog, pg_temp"
+    }
+  ],
+  "upgrade": {
+    "oldSdk": "5.0.2",
+    "oldSchemaVersion": 114,
+    "deltaFile": "sql/dbos-5.2.11-from-115.sql",
+    "deltaMigrations": "115..123",
+    "launchBehindWithRunMigrationsFalse": {
+      "ok": false,
+      "error": "Error",
+      "message": "System database postgres://spike_runner:***@127.0.0.1:55959/spike_upgrade is at schema version 114, but this version of DBOS requires 123. This process is configured with runMigrations disabled, so it will not migrate it: either migrate the system database out of band (`npx dbos schema`) or launch w"
+    },
+    "launchBehindWithRunMigrationsTrueAsRunner": {
+      "ok": false,
+      "error": "Error",
+      "message": "Failed to initialize workflow executor: must be owner of table workflow_status"
+    },
+    "deltaApply": {
+      "ok": true
+    },
+    "versionAfter": 123,
+    "dumpIdenticalToFresh": true,
+    "dumpLineDiff": 0,
+    "deltaReapply": {
+      "ok": false,
+      "message": "DBOS system schema is at version 123, this file expects 114 (vendored from @dbos-inc/dbos-sdk 5.2.11)"
+    },
+    "launchAfterUpgrade": {
+      "ok": true,
+      "result": 2
+    }
+  }
+}

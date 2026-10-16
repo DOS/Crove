@@ -1,0 +1,32 @@
+[
+  {
+    "version": "4.21.6",
+    "schemaVersion": 63,
+    "nonEmptyMigrations": 63,
+    "onlineIndexMigrations": 13
+  },
+  {
+    "version": "4.27.6",
+    "schemaVersion": 108,
+    "nonEmptyMigrations": 79,
+    "onlineIndexMigrations": 17
+  },
+  {
+    "version": "5.0.2",
+    "schemaVersion": 114,
+    "nonEmptyMigrations": 85,
+    "onlineIndexMigrations": 19
+  },
+  {
+    "version": "5.2.11",
+    "schemaVersion": 123,
+    "nonEmptyMigrations": 94,
+    "onlineIndexMigrations": 26
+  },
+  {
+    "version": "5.3.0",
+    "schemaVersion": 123,
+    "nonEmptyMigrations": 94,
+    "onlineIndexMigrations": 26
+  }
+]

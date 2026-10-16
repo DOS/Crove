@@ -1,0 +1,29 @@
+{
+  "name": "crove-spike-dbos",
+  "private": true,
+  "description": "Throwaway spike for issue #59: DBOS Transact vs the plan's process engine. Not part of the workspace.",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "vendor": "node src/vendor-schema.ts",
+    "setup": "node src/setup.ts",
+    "exp:schema": "node src/exp-schema.ts",
+    "exp:recovery": "node src/exp-recovery.ts",
+    "exp:wait": "node src/exp-wait.ts",
+    "exp:fairness": "node src/exp-fairness.ts",
+    "all": "node src/exp-schema.ts && node src/exp-recovery.ts && node src/exp-wait.ts && node src/exp-fairness.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@dbos-inc/dbos-sdk": "5.2.11",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "@types/pg": "8.23.1",
+    "typescript": "7.0.2"
+  }
+}

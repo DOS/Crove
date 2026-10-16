@@ -59,7 +59,7 @@ The body of this plan was rewritten on 2026-10-14 to describe these decisions; i
     - **Public `/v1` only on oRPC v2**, with a Crove-defined RFC 9457 error envelope; internal `/rpc` stays on oRPC 1.x.
     - **Cell-ready DB layer:** `@crove/db` resolves the pool from `org_id`; control-plane tables are kept apart from tenant data (§3.6).
     - **Integration platform roadmap:** an OAuth 2.1 authorization server for self-host (proposed in [ADR-0032](../adr/0032-oauth-authorization-server.md), 2026-10-16: `oidc-provider` embedded in the kernel, users still from Supabase Auth, Ory Hydra as fallback; accepted once its acceptance tests pass, before Phase 3), outbound webhooks per Standard Webhooks, TS/Python SDKs generated from OpenAPI.
-    - **DBOS Transact spike** (1 week) before Phase 2a; fail means keeping the own process engine.
+    - **DBOS Transact spike** (1 week) before Phase 2a; fail means keeping the own process engine. Done 2026-10-16: fail, the own engine stays ([ADR-0033](../adr/0033-dbos-transact-spike.md)). Recovery without Conductor, committed SQL and per-org fairness pass (recovery only with a Crove-owned sweeper); a 7-day wait holds a queue slot or worker memory and polling, and breaks or strands across a deploy.
     - **Bun nightly canary** in CI, non-blocking.
     - **Client platforms:** PWA first, then Expo for mobile and Tauri 2 for desktop when their triggers are met (fallbacks Capacitor and Electron).
     - §2 has the final stack.
@@ -264,7 +264,7 @@ The architecture and plan TL;DR follows.
 | Auth (kernel) | Supabase Auth (GoTrue), per ADR-0027: the kernel verifies access tokens with `jose` 6 (JWKS when asymmetric keys are on, otherwise the deployment's JWT secret), maps them to `user_account` and keeps org membership in Crove. R3 step-up uses Supabase Auth MFA (`aal2`) | Email + password, magic link, social/OIDC providers, MFA and password reset come from Supabase Auth instead of custom code; Cloud points the same code at DOS's Supabase Auth | A new identity adapter (`user_account` keeps `(issuer, subject)`) | Supabase Auth changes token signing; spike: Supabase Auth on plain `postgres:17` |
 | DB | <ul><li>`pg` 8 Pool (unnamed statements), `kysely` 0.29 exact pin (no migrator, no `CamelCasePlugin`), `kanel` 4 + `kanel-kysely`.</li><li>Migrations: committed idempotent SQL applied by the built-in runner (no Supabase CLI needed).</li><li>Cell-ready: `@crove/db` resolves the connection pool from `org_id` (one pool today); control-plane tables (identity, tenant directory, staff, sessions) are kept separate from tenant data so tenants can later move to another database. The seam, the table split and the join rule are in §3.6.</li></ul> | Close to SQL; holds no schema; cell routing is cheap now, later it touches every place that opens a transaction | `kysely-codegen` (per spike A3) | Kysely 0.30/1.0; one database nears its write ceiling |
 | Money, IDs | `decimal.js` 10; `uuid` (v7 for ids, v5 for derived keys) + SQL function `crove_kernel.uuid_v7()` | PG17 has no uuidv7 | - | Supabase moves to PG18 |
-| Jobs | <ul><li>`pg-boss` 12.x exact pin; `crove_jobs` schema vendored into migrations; `migrate:false`.</li><li>Durable processes use the plan's own process engine for now (`process_instance`, timers as jobs, human waits as proposals). A 1-week DBOS Transact spike runs before Phase 2a. Pass criteria: workflow recovery on Cloud Run worker pools without the paid Conductor; a 7-day approval wait that does not hold a queue slot; schema exportable as committed SQL; per-org fairness. Fail means keep the own engine.</li></ul> | DLQ, per-key FIFO, throttling, timezone-aware cron | `graphile-worker` behind the `defineJob` layer | An upgrade needs runtime DDL; upgrade quarterly; DBOS spike result |
+| Jobs | <ul><li>`pg-boss` 12.x exact pin; `crove_jobs` schema vendored into migrations; `migrate:false`.</li><li>Durable processes use the plan's own process engine for now (`process_instance`, timers as jobs, human waits as proposals). The 1-week DBOS Transact spike (issue #59) failed on the 7-day approval wait, so the own engine stays ([ADR-0033](../adr/0033-dbos-transact-spike.md)).</li></ul> | DLQ, per-key FIFO, throttling, timezone-aware cron | `graphile-worker` behind the `defineJob` layer | An upgrade needs runtime DDL; upgrade quarterly; a DBOS release that parks waits in the database and recovers old versions without replay (ADR-0033) |
 | Housekeeping | `pg_cron` + definer purge functions (DML only, batched) | No runtime DDL | Schedules inside the worker (default for self-host without `pg_cron`) | - |
 | Storage | <ul><li>S3 API (`@aws-sdk/client-s3` v3, checksum `WHEN_REQUIRED`) pointed at GCS `asia-southeast1`.</li><li>Buckets per project and environment.</li><li>Archive is WORM.</li><li>Self-host: any S3-compatible store; archive needs Object Lock.</li></ul> | Same region as compute | AWS S3 `ap-southeast-1` with Object Lock | A lawyer requires storage in Vietnam |
 | Parsing (sandbox) | `unpdf`/`pdfjs-dist` (`isEvalSupported:false`) and an XML-DSig library patched for CVE-2025-29775, in the `crove-extract` image | Moves parsers out of privileged processes | - | New CVE |
@@ -1677,7 +1677,7 @@ Day 0 is behind us: the repo exists, is public and has the MVP. This list keeps 
 - A12 G3 runtime on plain PG17.
 - A14 CSP + Trusted Types for the SPA (retargeted by Decision 6).
 - A15 sandbox egress blocking on Cloud Run (External-tenant gate T12).
-- DBOS Transact, 1 week, before Phase 2a (Decision 14; issue #59).
+- DBOS Transact, 1 week, before Phase 2a (Decision 14; issue #59): fail, own process engine kept ([ADR-0033](../adr/0033-dbos-transact-spike.md)).
 - Dropped: A1 (separate repo), A7 (OIDC with DOS ID; replaced by Supabase Auth), A16 (`supabase db push --db-url`; replaced by the built-in runner).
 - Moved to the phase that needs them: A4 (TS7 at scale) -> 2a; A9 (NAT) -> when a provider requires it; A11 (OAuth RFC 8707) -> 3; A13 (legal) -> track B.
 
@@ -1923,7 +1923,7 @@ No fork has real users. The owner archived the five fork repositories on 2026-10
   - No forwarding to the DOS Event Router.
 - **Schema:**
   - No runtime DDL, metadata engine, custom objects, per-tenant schemas or EAV.
-  - No ORM migrator; no vendor self-migration (Mastra, LangGraph; DBOS only if the Phase 2a spike shows its schema ships as committed SQL, Decision 14).
+  - No ORM migrator; no vendor self-migration (Mastra, LangGraph, DBOS; the DBOS spike showed its schema can ship as committed SQL, but DBOS is not adopted, ADR-0033).
 - **Jobs:** no transactional pg-boss handlers.
 - **Frontend:**
   - No persisted client cache; no server-side caching of tenant data.
@@ -1986,7 +1986,7 @@ ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this pla
 | 0011 | Frontend: SPA cache policy, CSP/Trusted Types, untrusted HTML | Before Phase 1 features |
 | 0015 | Version and upgrade policy (including the Vite+/Oxfmt exception) | Before Phase 1 features |
 | 0017 | Data classification, PII, crypto-shredding, deletion map, PDPL | Before Phase 1 features |
-| DBOS | Process engine: DBOS Transact or the plan's own engine (spike result, Decision 14) | Before Phase 2a |
+| [0033](../adr/0033-dbos-transact-spike.md) | Process engine: the plan's own engine, not DBOS Transact (spike result, Decision 14) | Accepted 2026-10-16 (Decision 14's rule; issue #59) |
 | 0009 / 0012 | Agent runtime and chat (OpenAI-compatible provider) / SSE invalidation | 2b |
 | [0032](../adr/0032-oauth-authorization-server.md) | OAuth 2.1 authorization server for self-host and Cloud (Decision 14; issue #67): proposed 2026-10-16, embedded `oidc-provider`, fallback Ory Hydra | Accepted before Phase 3 (acceptance tests in the ADR) |
 | 0020 | Clean-room process for using the archived forks as references | Before Phase 3 |

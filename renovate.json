@@ -23,6 +23,11 @@
   },
   "packageRules": [
     {
+      "description": "Throwaway spikes (spikes/**) are not part of the product and are never updated",
+      "matchFileNames": ["spikes/**"],
+      "enabled": false
+    },
+    {
       "description": "Patch, minor and digest updates: one grouped PR, automerged once all required checks pass",
       "matchUpdateTypes": ["patch", "minor", "digest", "pin", "pinDigest"],
       "groupName": "non-major dependencies",
