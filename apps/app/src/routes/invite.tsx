@@ -1,13 +1,12 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
+import { useTranslations } from 'use-intl';
 import { Button, Card, ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { signOut } from '../lib/session-actions.ts';
-import { formatDateTime } from '../lib/format.ts';
+import { useFormat } from '../i18n/provider.tsx';
 import { forgetInvite, pendingInvite } from '../lib/invite.ts';
-
-const ROLE_LABEL = { admin: 'quản trị', member: 'thành viên', viewer: 'chỉ xem' } as const;
 
 function errorCode(error: unknown): string | null {
   const code = (error as { code?: unknown } | null)?.code;
@@ -29,6 +28,9 @@ function Shell({ children }: { children: ReactNode }) {
 // signed in; the kernel checks that the signed-in email is the invited one before showing or accepting anything.
 export function InvitePage() {
   const navigate = useNavigate();
+  const t = useTranslations('invite');
+  const tc = useTranslations('common');
+  const f = useFormat();
   const token = pendingInvite();
   const me = useQuery(orpc.me.get.queryOptions());
   const preview = useQuery({ ...orpc.invites.peek.queryOptions({ input: { token: token ?? '' } }), enabled: token !== null, retry: false });
@@ -50,10 +52,10 @@ export function InvitePage() {
   if (!token) {
     return (
       <Shell>
-        <h1 className="mt-6 text-lg font-semibold text-fg">Không có lời mời</h1>
-        <p className="mt-1 text-sm text-fg-2">Liên kết mời không đúng hoặc đã được dùng. Hãy mở lại liên kết trong thư mời.</p>
+        <h1 className="mt-6 text-lg font-semibold text-fg">{t('noInviteTitle')}</h1>
+        <p className="mt-1 text-sm text-fg-2">{t('noInviteBody')}</p>
         <Button className="mt-6" onClick={() => void navigate({ to: '/' })}>
-          Về trang chính
+          {tc('backHome')}
         </Button>
       </Shell>
     );
@@ -71,18 +73,18 @@ export function InvitePage() {
     const mismatch = errorCode(preview.error) === 'INVITE_EMAIL_MISMATCH';
     return (
       <Shell>
-        <h1 className="mt-6 text-lg font-semibold text-fg">Không mở được lời mời</h1>
+        <h1 className="mt-6 text-lg font-semibold text-fg">{t('openFailed')}</h1>
         <ErrorText>{errorMessage(preview.error)}</ErrorText>
-        {mismatch && me.data && <p className="mt-2 text-sm text-fg-2">Bạn đang đăng nhập bằng {me.data.email}.</p>}
+        {mismatch && me.data && <p className="mt-2 text-sm text-fg-2">{t('signedInAs', { email: me.data.email })}</p>}
         <div className="mt-6 flex flex-wrap gap-2">
           {mismatch && (
             // The token stays in storage, so after signing in with the invited email the user comes back here.
             <Button variant="primary" onClick={() => void signOut({ keepInvite: true })}>
-              Đăng xuất để dùng email khác
+              {t('signOutOther')}
             </Button>
           )}
           <Button variant="ghost" onClick={leave}>
-            Về trang chính
+            {tc('backHome')}
           </Button>
         </div>
       </Shell>
@@ -93,21 +95,26 @@ export function InvitePage() {
   if (!invite) return null;
   return (
     <Shell>
-      <h1 className="mt-6 text-lg font-semibold text-fg">Lời mời tham gia {invite.orgName}</h1>
+      <h1 className="mt-6 text-lg font-semibold text-fg">{t('title', { org: invite.orgName })}</h1>
       <p className="mt-2 text-sm text-fg-2">
-        {invite.invitedBy} mời bạn tham gia tổ chức <span className="font-medium text-fg">{invite.orgName}</span> với vai trò{' '}
-        <span className="font-medium text-fg">{ROLE_LABEL[invite.role]}</span>.
+        {t.rich('body', {
+          invitedBy: invite.invitedBy,
+          org: invite.orgName,
+          role: t(`role.${invite.role}`),
+          strong: (chunks) => <span className="font-medium text-fg">{chunks}</span>,
+        })}
       </p>
       <p className="mt-2 text-xs text-fg-3">
-        Lời mời hết hạn lúc {formatDateTime(invite.expiresAt)}. Khi chấp nhận, thành viên của tổ chức sẽ thấy tên và email {me.data?.email ?? 'của bạn'}.
+        {t('expires', { at: f.dateTime(invite.expiresAt) })}{' '}
+        {me.data?.email ? t('visibility', { email: me.data.email }) : t('visibilityNoEmail')}
       </p>
       {accept.error && <ErrorText>{errorMessage(accept.error)}</ErrorText>}
       <div className="mt-6 flex flex-wrap gap-2">
         <Button variant="primary" disabled={accept.isPending} onClick={() => accept.mutate({ token })}>
-          {accept.isPending ? 'Đang xử lý…' : 'Chấp nhận lời mời'}
+          {accept.isPending ? tc('processing') : t('accept')}
         </Button>
         <Button variant="ghost" disabled={accept.isPending} onClick={leave}>
-          Từ chối
+          {t('decline')}
         </Button>
       </div>
     </Shell>

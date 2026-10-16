@@ -1,6 +1,7 @@
 // Errors the SPA reads from the kernel. The RPC path throws oRPC errors that carry `code` and `status`; the plain
 // fetch paths (upload, download, export) throw ApiError with the same fields, so the same checks recognise both
 // (issue #180): MFA_REQUIRED opens the MFA challenge instead of a sign-out, a dead session signs the user out.
+import type { Translate } from '../i18n/runtime.ts';
 
 export class ApiError extends Error {
   readonly code: string;
@@ -16,10 +17,10 @@ export class ApiError extends Error {
 
 // The kernel answers non-RPC errors as JSON `{ code, message }`. A body that is not JSON, or lacks a field, still
 // gives an ApiError with the HTTP status, so the checks below never depend on the body.
-export async function apiErrorFromResponse(response: Response): Promise<ApiError> {
+export async function apiErrorFromResponse(response: Response, t: Translate): Promise<ApiError> {
   const body = (await response.json().catch(() => null)) as { code?: unknown; message?: unknown } | null;
   const code = typeof body?.code === 'string' && body.code ? body.code : `HTTP_${response.status}`;
-  const message = typeof body?.message === 'string' && body.message ? body.message : `Lỗi ${response.status}`;
+  const message = typeof body?.message === 'string' && body.message ? body.message : t('common.httpError', { status: response.status });
   return new ApiError(code, response.status, message);
 }
 

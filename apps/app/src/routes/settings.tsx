@@ -1,11 +1,12 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
+import { useTranslations } from 'use-intl';
 import { MemberSessions, MySessions } from '../components/sessions.tsx';
 import { Badge, Button, Card, ErrorText, Input, PageHeader, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
-import { formatDateTime } from '../lib/format.ts';
-import { ROLES, ROLE_LABEL, roleChangeConfirmation, type Role, type RoleChangeConfirmation } from '../lib/members.ts';
+import { useFormat } from '../i18n/provider.tsx';
+import { ROLES, roleChangeConfirmation, type Role, type RoleChangeConfirmation } from '../lib/members.ts';
 
 interface MemberRow {
   userId: string;
@@ -22,6 +23,8 @@ type Pending = { kind: 'remove' } | { kind: 'role'; role: Role; confirmation: Ro
 // self-removal, fresh MFA); the screen only hides what can never succeed. One idempotency key per confirmation, so a
 // retried request is replayed, not repeated.
 function MemberControls({ member, self }: { member: MemberRow; self: boolean }) {
+  const root = useTranslations();
+  const t = useTranslations('settings');
   const [pending, setPending] = useState<Pending | null>(null);
   const [confirmKey, setConfirmKey] = useState(() => crypto.randomUUID());
   const settled = () => {
@@ -32,7 +35,7 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
   const changeRole = useMutation(orpc.org.changeMemberRole.mutationOptions({ onSuccess: settled }));
   const remove = useMutation(orpc.org.removeMember.mutationOptions({ onSuccess: settled }));
   const busy = changeRole.isPending || remove.isPending;
-  const name = self ? 'bạn' : (member.displayName ?? member.email);
+  const name = member.displayName ?? member.email;
 
   const ask = (next: Pending) => {
     changeRole.reset();
@@ -41,7 +44,7 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
     setPending(next);
   };
   const pickRole = (role: Role) => {
-    const confirmation = roleChangeConfirmation({ name, from: member.role, to: role, self });
+    const confirmation = roleChangeConfirmation({ name, from: member.role, to: role, self }, root);
     if (confirmation) ask({ kind: 'role', role, confirmation });
     else if (role !== member.role) changeRole.mutate({ userId: member.userId, role, idempotencyKey: crypto.randomUUID() });
   };
@@ -49,7 +52,7 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
   if (pending) {
     const text =
       pending.kind === 'remove'
-        ? { title: `Xóa ${name} khỏi tổ chức?`, body: 'Người này mất quyền truy cập tổ chức ngay từ yêu cầu tiếp theo. Bạn có thể mời lại họ sau.', action: 'Xác nhận xóa' }
+        ? { title: t('removeTitle', { name }), body: t('removeBody'), action: t('confirmRemove') }
         : pending.confirmation;
     const confirm = () =>
       pending.kind === 'remove'
@@ -73,7 +76,7 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
               setPending(null);
             }}
           >
-            Hủy
+            {root('common.cancel')}
           </Button>
         </div>
         {error && <ErrorText>{errorMessage(error)}</ErrorText>}
@@ -88,17 +91,17 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
           value={member.role}
           disabled={busy}
           onChange={(e) => pickRole(e.target.value as Role)}
-          aria-label={self ? 'Vai trò của bạn' : `Vai trò của ${name}`}
+          aria-label={self ? t('yourRole') : t('roleOf', { name })}
         >
           {ROLES.map((r) => (
             <option key={r} value={r}>
-              {ROLE_LABEL[r]}
+              {root(`roles.${r}`)}
             </option>
           ))}
         </select>
         {!self && (
           <Button variant="danger" className="px-2.5 py-1" disabled={busy} onClick={() => ask({ kind: 'remove' })}>
-            Xóa
+            {t('remove')}
           </Button>
         )}
       </div>
@@ -112,6 +115,8 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
 // the key is kept until a rotation succeeds, so a retry after a refusal can still rotate at most once. The fresh
 // MFA challenge screen (StepUpPrompt) lands with the SPA MFA flows (#32).
 function RotateInboundAddress() {
+  const t = useTranslations('settings');
+  const tc = useTranslations('common');
   const [confirming, setConfirming] = useState(false);
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const [rotated, setRotated] = useState<string | null>(null);
@@ -131,7 +136,7 @@ function RotateInboundAddress() {
       <div className="mt-4 space-y-2">
         {rotated && (
           <div className="rounded-lg border border-line bg-surface-2 p-3 text-sm" role="status">
-            <p className="text-fg-2">Đã đổi địa chỉ. Địa chỉ mới:</p>
+            <p className="text-fg-2">{t('rotated')}</p>
             <p className="mt-1 break-all font-mono text-fg">{rotated}</p>
           </div>
         )}
@@ -142,25 +147,22 @@ function RotateInboundAddress() {
             setConfirming(true);
           }}
         >
-          Đổi địa chỉ email nhận hóa đơn
+          {t('rotate')}
         </Button>
       </div>
     );
   }
   return (
-    <div className="mt-4 space-y-3 rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-sm" role="alertdialog" aria-label="Xác nhận đổi địa chỉ">
-      <p className="font-medium text-fg">Đổi địa chỉ email nhận hóa đơn?</p>
-      <p className="text-fg-2">
-        Địa chỉ hiện tại sẽ ngừng nhận thư ngay lập tức và không bao giờ được cấp lại. Thư gửi tới địa chỉ cũ sẽ bị bỏ qua mà không báo lỗi cho
-        người gửi, vì vậy hãy gửi địa chỉ mới cho các nhà cung cấp.
-      </p>
-      <p className="text-fg-3">Việc này cần xác thực hai lớp (MFA) trong 5 phút gần nhất. Mỗi tổ chức chỉ đổi được vài lần mỗi ngày.</p>
+    <div className="mt-4 space-y-3 rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-sm" role="alertdialog" aria-label={t('rotateLabel')}>
+      <p className="font-medium text-fg">{t('rotateTitle')}</p>
+      <p className="text-fg-2">{t('rotateBody')}</p>
+      <p className="text-fg-3">{t('rotateMfa')}</p>
       <div className="flex gap-2">
         <Button variant="danger" disabled={rotate.isPending} onClick={() => rotate.mutate({ idempotencyKey })}>
-          Xác nhận đổi địa chỉ
+          {t('rotateConfirm')}
         </Button>
         <Button variant="ghost" disabled={rotate.isPending} onClick={() => setConfirming(false)}>
-          Hủy
+          {tc('cancel')}
         </Button>
       </div>
       {rotate.error && <ErrorText>{errorMessage(rotate.error)}</ErrorText>}
@@ -172,17 +174,16 @@ type InviteRole = 'admin' | 'member' | 'viewer';
 
 // The accept link is shown once, right after the invite is created: the server keeps only a hash of its token.
 function CreatedInvite({ invite, onDone }: { invite: { email: string; expiresAt: string; acceptPath: string }; onDone: () => void }) {
+  const t = useTranslations('settings');
+  const tc = useTranslations('common');
+  const f = useFormat();
   const link = `${window.location.origin}${invite.acceptPath}`;
   const [copied, setCopied] = useState(false);
   return (
     <div className="mt-4 space-y-2 rounded-lg border border-line bg-surface-2 p-3 text-sm" role="status">
-      <p className="text-fg">Đã tạo lời mời cho {invite.email}.</p>
+      <p className="text-fg">{t('inviteCreated', { email: invite.email })}</p>
       <p className="text-fg-2">
-        {getConfig().mailEnabled
-          ? 'Crove gửi email mời tới địa chỉ này. Nếu người được mời không nhận được, hãy gửi họ liên kết dưới đây.'
-          : 'Máy chủ chưa cấu hình gửi email, nên Crove không gửi email mời. Hãy gửi liên kết dưới đây cho người được mời.'}{' '}
-        Chỉ người đăng nhập bằng đúng email này mới chấp nhận được. Liên kết chỉ hiện một lần, dùng được một lần và hết hạn lúc{' '}
-        {formatDateTime(invite.expiresAt)}.
+        {getConfig().mailEnabled ? t('inviteMailSent') : t('inviteMailOff')} {t('inviteRules', { at: f.dateTime(invite.expiresAt) })}
       </p>
       <p className="break-all rounded border border-line bg-surface px-2 py-1 font-mono text-xs text-fg">{link}</p>
       <div className="flex gap-2">
@@ -194,10 +195,10 @@ function CreatedInvite({ invite, onDone }: { invite: { email: string; expiresAt:
             )
           }
         >
-          {copied ? 'Đã sao chép' : 'Sao chép liên kết'}
+          {copied ? t('copied') : t('copyLink')}
         </Button>
         <Button variant="ghost" onClick={onDone}>
-          Đóng
+          {tc('close')}
         </Button>
       </div>
     </div>
@@ -205,6 +206,8 @@ function CreatedInvite({ invite, onDone }: { invite: { email: string; expiresAt:
 }
 
 function InviteMember({ isOwner }: { isOwner: boolean }) {
+  const root = useTranslations();
+  const t = useTranslations('settings');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<InviteRole>('member');
   const invite = useMutation(
@@ -224,21 +227,21 @@ function InviteMember({ isOwner }: { isOwner: boolean }) {
   return (
     <>
       <form className="mt-4 space-y-2" onSubmit={submit}>
-        <p className="text-xs text-fg-3">Mời thành viên qua email. Người được mời phải chấp nhận thì mới vào tổ chức.</p>
+        <p className="text-xs text-fg-3">{t('inviteHint')}</p>
         <div className="flex gap-2">
-          <Input type="email" required maxLength={320} placeholder="email@congty.vn" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <Input type="email" required maxLength={320} placeholder={t('emailPlaceholder')} value={email} onChange={(e) => setEmail(e.target.value)} />
           <select
             className="rounded-lg border border-line bg-surface-2 px-2 text-sm text-fg"
             value={role}
             onChange={(e) => setRole(e.target.value as InviteRole)}
-            aria-label="Vai trò"
+            aria-label={t('role')}
           >
-            {isOwner && <option value="admin">Quản trị</option>}
-            <option value="member">Thành viên</option>
-            <option value="viewer">Chỉ xem</option>
+            {isOwner && <option value="admin">{root('roles.admin')}</option>}
+            <option value="member">{root('roles.member')}</option>
+            <option value="viewer">{root('roles.viewer')}</option>
           </select>
           <Button type="submit" disabled={invite.isPending}>
-            Mời
+            {t('invite')}
           </Button>
         </div>
         {invite.error && <ErrorText>{errorMessage(invite.error)}</ErrorText>}
@@ -249,6 +252,9 @@ function InviteMember({ isOwner }: { isOwner: boolean }) {
 }
 
 function PendingInvites() {
+  const root = useTranslations();
+  const t = useTranslations('settings');
+  const f = useFormat();
   const invites = useQuery(orpc.org.listInvites.queryOptions());
   const revoke = useMutation(
     orpc.org.revokeInvite.mutationOptions({
@@ -260,21 +266,21 @@ function PendingInvites() {
   if (!invites.data?.length) return null;
   return (
     <div className="mt-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-fg-3">Lời mời đang chờ</p>
+      <p className="text-xs font-medium uppercase tracking-wide text-fg-3">{t('pendingInvites')}</p>
       <ul className="mt-2 divide-y divide-[var(--line)]">
         {invites.data.map((i) => (
           <li key={i.id} className="flex items-center justify-between gap-2 py-2 text-sm">
             <div className="min-w-0">
               <p className="truncate text-fg">{i.email}</p>
               <p className="text-xs text-fg-3">
-                {i.status === 'expired' ? 'Đã hết hạn' : `Hết hạn ${formatDateTime(i.expiresAt)}`}
-                {i.invitedBy ? ` · mời bởi ${i.invitedBy}` : ''}
+                {i.status === 'expired' ? t('expired') : t('expiresAt', { at: f.dateTime(i.expiresAt) })}
+                {i.invitedBy ? ` · ${t('invitedBy', { name: i.invitedBy })}` : ''}
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <Badge tone={i.status === 'expired' ? 'warn' : 'neutral'}>{ROLE_LABEL[i.role]}</Badge>
+              <Badge tone={i.status === 'expired' ? 'warn' : 'neutral'}>{root(`roles.${i.role}`)}</Badge>
               <Button variant="ghost" disabled={revoke.isPending} onClick={() => revoke.mutate({ inviteId: i.id })}>
-                Thu hồi
+                {t('revoke')}
               </Button>
             </div>
           </li>
@@ -286,6 +292,8 @@ function PendingInvites() {
 }
 
 export function SettingsPage() {
+  const root = useTranslations();
+  const t = useTranslations('settings');
   const org = useQuery(orpc.org.get.queryOptions());
   const me = useQuery(orpc.me.get.queryOptions());
 
@@ -299,27 +307,26 @@ export function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="Cài đặt" subtitle={org.data?.name} />
+      <PageHeader title={t('title')} subtitle={org.data?.name} />
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="p-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-fg-3">Tổ chức</p>
+          <p className="text-xs font-medium uppercase tracking-wide text-fg-3">{t('org')}</p>
           <dl className="mt-3 space-y-2 text-sm">
             <div>
-              <dt className="text-fg-3">Tên</dt>
+              <dt className="text-fg-3">{t('name')}</dt>
               <dd className="text-fg">{org.data?.name}</dd>
             </div>
             <div>
-              <dt className="text-fg-3">Mã rút gọn</dt>
+              <dt className="text-fg-3">{t('slug')}</dt>
               <dd className="font-mono text-fg">{org.data?.slug}</dd>
             </div>
             <div>
-              <dt className="text-fg-3">Địa chỉ nhận hóa đơn qua email</dt>
-              <dd className="break-all font-mono text-fg">{org.data?.inboundAddress ?? 'Máy chủ chưa bật nhận email'}</dd>
+              <dt className="text-fg-3">{t('inboundAddress')}</dt>
+              <dd className="break-all font-mono text-fg">{org.data?.inboundAddress ?? t('inboundOff')}</dd>
               {/* Mail to an address retired in the last 30 days is dropped without a bounce; only the count is kept (#139). */}
               {(org.data?.inboundDroppedCount ?? 0) > 0 && (
                 <dd className="mt-1 text-xs text-amber-300" role="status">
-                  {org.data?.inboundDroppedCount} thư gửi tới địa chỉ cũ đã bị bỏ qua (trong 30 ngày sau khi đổi địa chỉ). Hãy gửi địa chỉ mới cho các nhà
-                  cung cấp.
+                  {t('inboundDropped', { count: org.data?.inboundDroppedCount ?? 0 })}
                 </dd>
               )}
             </div>
@@ -327,7 +334,7 @@ export function SettingsPage() {
           {org.data?.role === 'owner' && org.data.inboundAddress && <RotateInboundAddress />}
         </Card>
         <Card className="p-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-fg-3">Thành viên</p>
+          <p className="text-xs font-medium uppercase tracking-wide text-fg-3">{t('members')}</p>
           <ul className="mt-3 divide-y divide-[var(--line)]">
             {org.data?.members.map((m) => (
               <li key={m.userId} className="py-2 text-sm">
@@ -336,7 +343,7 @@ export function SettingsPage() {
                   {controlsFor(m.userId) ? (
                     <MemberControls member={m} self={m.userId === me.data?.userId} />
                   ) : (
-                    <Badge tone={m.role === 'owner' ? 'brand' : 'neutral'}>{ROLE_LABEL[m.role]}</Badge>
+                    <Badge tone={m.role === 'owner' ? 'brand' : 'neutral'}>{root(`roles.${m.role}`)}</Badge>
                   )}
                 </div>
                 {isOwner && me.data && m.userId !== me.data.userId && <MemberSessions userId={m.userId} name={m.displayName ?? m.email} />}

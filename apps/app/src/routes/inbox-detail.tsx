@@ -2,15 +2,17 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { BLOCKING_CHECK_IDS } from '@crove/kernel-contract';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslations } from 'use-intl';
 import { Badge, Button, Card, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { previewPurchaseJournal } from '../lib/decimal.ts';
-import { formatDate, formatDateTime, formatMoney } from '../lib/format.ts';
+import { useFormat } from '../i18n/provider.tsx';
 
 const CHECK_TONE = { pass: 'good', warn: 'warn', fail: 'bad' } as const;
 const CHECK_ICON = { pass: '✓', warn: '!', fail: '✕' } as const;
 
 function FilePreview({ fileId, contentType, filename }: { fileId: string; contentType: string; filename: string }) {
+  const t = useTranslations('inboxDetail');
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -34,16 +36,16 @@ function FilePreview({ fileId, contentType, filename }: { fileId: string; conten
       <div className="rounded-lg border border-line bg-surface-2 p-4 text-sm">
         <p className="text-fg">{filename}</p>
         <a href={url} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block text-brand-300 hover:underline">
-          Mở PDF trong tab mới
+          {t('openPdf')}
         </a>
       </div>
     );
   return (
     <div className="rounded-lg border border-line bg-surface-2 p-4 text-sm">
-      <p className="text-fg">Tệp XML hóa đơn điện tử</p>
-      <p className="mt-1 text-xs text-fg-3">Dữ liệu được đọc trực tiếp từ XML, không qua AI.</p>
+      <p className="text-fg">{t('xmlFile')}</p>
+      <p className="mt-1 text-xs text-fg-3">{t('xmlHint')}</p>
       <a href={url} download={filename} className="mt-3 inline-block text-brand-300 hover:underline">
-        Tải {filename}
+        {t('download', { filename })}
       </a>
     </div>
   );
@@ -52,6 +54,8 @@ function FilePreview({ fileId, contentType, filename }: { fileId: string; conten
 export function InboxDetailPage() {
   const { slug, id } = useParams({ strict: false }) as { slug: string; id: string };
   const navigate = useNavigate();
+  const t = useTranslations('inboxDetail');
+  const f = useFormat();
   // While the file is being read again, poll until the new reading (or its failure) arrives.
   const detail = useQuery({
     ...orpc.inbox.get.queryOptions({ input: { id } }),
@@ -106,7 +110,7 @@ export function InboxDetailPage() {
   const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
   const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
   const currency = payload?.invoice.currency ?? 'VND';
-  const money = (value: string | null | undefined) => formatMoney(value, currency);
+  const money = (value: string | null | undefined) => f.money(value, currency);
   const reading = item.extraction?.inFlight ?? false;
   const fileId = item.file?.id;
   const reextractButton =
@@ -114,15 +118,13 @@ export function InboxDetailPage() {
       <Button
         disabled={busy}
         onClick={() => {
-          const ask = pending
-            ? 'Đọc lại chứng từ? Kết quả đọc mới sẽ thay nội dung đề xuất (thành một bản mới) và các tài khoản bạn đã chọn sẽ trở về mặc định. Người duyệt cần xem lại bản mới.'
-            : 'Đọc lại chứng từ? Nếu đọc được, một đề xuất mới sẽ được tạo; đề xuất đã từ chối giữ nguyên.';
+          const ask = pending ? t('confirmRereadPending') : t('confirmRereadOther');
           if (!window.confirm(ask)) return;
           reextract.mutate({ fileId, idempotencyKey: crypto.randomUUID() });
         }}
       >
         {reextract.isPending ? <Spinner /> : null}
-        Đọc lại
+        {t('reread')}
       </Button>
     ) : null;
   const lastRun = item.extraction;
@@ -131,12 +133,18 @@ export function InboxDetailPage() {
   return (
     <>
       <Link to="/o/$slug/inbox" params={{ slug }} className="text-sm text-fg-3 hover:text-fg-2">
-        ← Hộp thư chứng từ
+        {t('back')}
       </Link>
       <div className="mt-3">
         <PageHeader
           title={payload?.seller.name ?? item.title}
-          subtitle={payload ? `Hóa đơn ${payload.invoice.series ? `${payload.invoice.series} · ` : ''}số ${payload.invoice.number} · ngày ${formatDate(payload.invoice.issueDate)}` : undefined}
+          subtitle={
+            payload
+              ? payload.invoice.series
+                ? t('invoiceWithSeries', { series: payload.invoice.series, number: payload.invoice.number, date: f.date(payload.invoice.issueDate) })
+                : t('invoice', { number: payload.invoice.number, date: f.date(payload.invoice.issueDate) })
+              : undefined
+          }
           actions={
             pending ? (
               <>
@@ -146,12 +154,12 @@ export function InboxDetailPage() {
                     variant="danger"
                     disabled={busy}
                     onClick={() => {
-                      const reason = window.prompt('Lý do từ chối (không bắt buộc)');
+                      const reason = window.prompt(t('rejectPrompt'));
                       if (reason === null) return;
                       reject.mutate({ id, ...(reason.trim() ? { reason: reason.trim().slice(0, 500) } : {}) });
                     }}
                   >
-                    Từ chối
+                    {t('reject')}
                   </Button>
                 )}
                 {item.canEdit && dirty && (
@@ -167,7 +175,7 @@ export function InboxDetailPage() {
                     }
                   >
                     {edit.isPending ? <Spinner /> : null}
-                    Lưu chỉnh sửa
+                    {t('saveEdit')}
                   </Button>
                 )}
                 {item.canApprove && (
@@ -185,7 +193,7 @@ export function InboxDetailPage() {
                     }
                   >
                     {approve.isPending ? <Spinner /> : null}
-                    Duyệt và ghi sổ
+                    {t('approve')}
                   </Button>
                 )}
               </>
@@ -193,7 +201,11 @@ export function InboxDetailPage() {
               <>
                 {reextractButton}
                 <Badge tone={item.status === 'executed' ? 'good' : 'neutral'}>
-                  {item.status === 'executed' ? `Đã ghi sổ ${formatDateTime(item.decidedAt)}` : item.status === 'rejected' ? 'Đã từ chối' : item.status}
+                  {item.status === 'executed'
+                    ? t('executedAt', { at: f.dateTime(item.decidedAt) })
+                    : item.status === 'rejected'
+                      ? t('rejected')
+                      : item.status}
                 </Badge>
               </>
             )
@@ -208,43 +220,39 @@ export function InboxDetailPage() {
       {reading && (
         <p className="mb-4 flex items-center gap-2 text-sm text-brand-300">
           <Spinner />
-          Đang đọc lại chứng từ (lần đọc {lastRun?.version}). Đề xuất sẽ được cập nhật khi đọc xong; trong lúc này chưa duyệt, sửa hay từ chối được.
+          {t('reading', { version: lastRun?.version ?? '' })}
         </p>
       )}
       {!reading && lastRunFailed && (
         <div className="mb-4">
           <ErrorText>
-            Lần đọc lại gần nhất (lần {lastRun?.version}) không thành công: {lastRun?.error ?? 'không đọc được chứng từ'}.
-            {pending ? ' Đề xuất vẫn giữ kết quả đọc trước đó.' : ''}
+            {t('lastRunFailed', { version: lastRun?.version ?? '', error: lastRun?.error ?? t('lastRunUnknownError') })}
+            {pending ? ` ${t('lastRunKept')}` : ''}
           </ErrorText>
         </div>
       )}
       {pending && dirty && (
-        <p className="mb-4 text-sm text-fg-2">
-          Bạn đã đổi tài khoản. Hãy lưu chỉnh sửa trước khi duyệt; người lưu chỉnh sửa được tính là người soạn đề xuất, nên nếu tổ chức có từ hai người duyệt thì một người khác phải duyệt.
-        </p>
+        <p className="mb-4 text-sm text-fg-2">{t('dirty')}</p>
       )}
       {pending && !dirty && item.approveReason === 'four_eyes' && (
-        <p className="mb-4 text-sm text-fg-2">Cần một người khác duyệt (bạn đã tải lên hoặc chỉnh sửa đề xuất này).</p>
+        <p className="mb-4 text-sm text-fg-2">{t('fourEyes')}</p>
       )}
       {pending && !dirty && item.approveReason === 'not_eligible' && (
-        <p className="mb-4 text-sm text-fg-3">Bạn không có quyền duyệt đề xuất này.</p>
+        <p className="mb-4 text-sm text-fg-3">{t('notEligible')}</p>
       )}
       {pending && blocked && (
         <div className="mb-4">
           <ErrorText>
-            {payload?.extractionMethod === 'einvoice_xml'
-              ? 'Số tiền trên hóa đơn không khớp nhau (hoặc là hóa đơn ngoại tệ) nên không ghi sổ được. Hãy từ chối và xin người bán hóa đơn điều chỉnh.'
-              : 'Số tiền AI đọc được không khớp nhau, có thể do đọc sai một chữ số. Hãy từ chối và tải lên tệp XML của hóa đơn điện tử này để ghi sổ chính xác.'}
+            {payload?.extractionMethod === 'einvoice_xml' ? t('blockedXml') : t('blockedAi')}
           </ErrorText>
         </div>
       )}
       {pending && !blocked && failed > 0 && (
         <div className="mb-4 space-y-2">
-          <ErrorText>Có {failed} kiểm tra không đạt. Hãy đối chiếu với chứng từ gốc trước khi duyệt.</ErrorText>
+          <ErrorText>{t('failedChecks', { count: failed })}</ErrorText>
           <label className="flex items-center gap-2 text-sm text-fg-2">
             <input type="checkbox" checked={acceptFailed} onChange={(e) => setAcceptFailed(e.target.checked)} />
-            Tôi đã đối chiếu chứng từ gốc và vẫn muốn ghi sổ
+            {t('acceptFailed')}
           </label>
         </div>
       )}
@@ -254,37 +262,37 @@ export function InboxDetailPage() {
           {payload && (
             <Card className="grid gap-4 p-4 sm:grid-cols-2">
               <div>
-                <p className="text-xs uppercase tracking-wide text-fg-3">Người bán</p>
+                <p className="text-xs uppercase tracking-wide text-fg-3">{t('seller')}</p>
                 <p className="mt-1 text-sm font-medium text-fg">{payload.seller.name}</p>
-                <p className="text-xs text-fg-2">MST {payload.seller.taxCode ?? 'không có'}</p>
+                <p className="text-xs text-fg-2">{t('taxCode', { code: payload.seller.taxCode ?? t('noTaxCode') })}</p>
                 <p className="text-xs text-fg-3">{payload.seller.address}</p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-fg-3">Người mua</p>
-                <p className="mt-1 text-sm font-medium text-fg">{payload.buyer.name || 'Không ghi'}</p>
-                <p className="text-xs text-fg-2">MST {payload.buyer.taxCode ?? 'không có'}</p>
+                <p className="text-xs uppercase tracking-wide text-fg-3">{t('buyer')}</p>
+                <p className="mt-1 text-sm font-medium text-fg">{payload.buyer.name || t('notStated')}</p>
+                <p className="text-xs text-fg-2">{t('taxCode', { code: payload.buyer.taxCode ?? t('noTaxCode') })}</p>
               </div>
               <div className="grid grid-cols-3 gap-2 sm:col-span-2">
                 <div>
-                  <p className="text-xs text-fg-3">Trước thuế</p>
+                  <p className="text-xs text-fg-3">{t('subtotal')}</p>
                   <p className="tabular text-sm text-fg">{money(payload.invoice.subtotal)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-fg-3">Thuế GTGT</p>
+                  <p className="text-xs text-fg-3">{t('vat')}</p>
                   <p className="tabular text-sm text-fg">{money(payload.invoice.vatTotal)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-fg-3">Tổng thanh toán</p>
+                  <p className="text-xs text-fg-3">{t('total')}</p>
                   <p className="tabular text-base font-semibold text-fg">{money(payload.invoice.total)}</p>
                 </div>
-                <p className="text-xs text-fg-3 sm:col-span-3">Đơn vị tiền: {currency}</p>
+                <p className="text-xs text-fg-3 sm:col-span-3">{t('currency', { currency })}</p>
               </div>
             </Card>
           )}
 
           {payload && (
             <Card className="p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-fg-3">Kiểm tra tự động</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-fg-3">{t('checks')}</p>
               <ul className="mt-3 space-y-1.5">
                 {payload.checks.map((c) => (
                   <li key={c.id} className="flex items-start gap-2 text-sm">
@@ -298,13 +306,13 @@ export function InboxDetailPage() {
 
           {payload && (
             <Card className="overflow-x-auto p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-fg-3">Dòng hàng hóa, dịch vụ</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-fg-3">{t('lines')}</p>
               <table className="mt-3 w-full min-w-[560px] text-sm">
                 <thead className="text-left text-xs text-fg-3">
                   <tr>
-                    <th className="py-1.5 pr-2 font-medium">Diễn giải</th>
-                    <th className="py-1.5 pr-2 text-right font-medium">Thành tiền</th>
-                    <th className="py-1.5 font-medium">TK Nợ</th>
+                    <th className="py-1.5 pr-2 font-medium">{t('description')}</th>
+                    <th className="py-1.5 pr-2 text-right font-medium">{t('amount')}</th>
+                    <th className="py-1.5 font-medium">{t('debitAccount')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--line)]">
@@ -318,7 +326,7 @@ export function InboxDetailPage() {
                       <td className="py-2">
                         <select
                           disabled={!item.canEdit || busy}
-                          aria-label={`Tài khoản nợ cho dòng ${l.lineNo}`}
+                          aria-label={t('debitAccountFor', { line: l.lineNo })}
                           className="w-48 rounded-lg border border-line bg-surface-2 px-2 py-1 text-sm text-fg"
                           value={l.debitAccount}
                           onChange={(e) => setLineAccounts((prev) => ({ ...prev, [l.lineNo]: e.target.value }))}
@@ -339,13 +347,13 @@ export function InboxDetailPage() {
 
           {payload && (
             <Card className="p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-fg-3">Bút toán đề xuất (TT133)</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-fg-3">{t('journal')}</p>
               <table className="mt-3 w-full text-sm">
                 <thead className="text-left text-xs text-fg-3">
                   <tr>
-                    <th className="py-1.5 font-medium">Tài khoản</th>
-                    <th className="py-1.5 text-right font-medium">Nợ</th>
-                    <th className="py-1.5 text-right font-medium">Có</th>
+                    <th className="py-1.5 font-medium">{t('account')}</th>
+                    <th className="py-1.5 text-right font-medium">{t('debit')}</th>
+                    <th className="py-1.5 text-right font-medium">{t('credit')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--line)]">
@@ -365,8 +373,8 @@ export function InboxDetailPage() {
         </div>
         <div className="lg:col-span-2">
           <Card className="p-4">
-            <p className="mb-3 text-xs font-medium uppercase tracking-wide text-fg-3">Chứng từ gốc</p>
-            {item.file ? <FilePreview fileId={item.file.id} contentType={item.file.contentType} filename={item.file.filename} /> : <p className="text-sm text-fg-3">Không có tệp</p>}
+            <p className="mb-3 text-xs font-medium uppercase tracking-wide text-fg-3">{t('original')}</p>
+            {item.file ? <FilePreview fileId={item.file.id} contentType={item.file.contentType} filename={item.file.filename} /> : <p className="text-sm text-fg-3">{t('noFile')}</p>}
           </Card>
         </div>
       </div>
