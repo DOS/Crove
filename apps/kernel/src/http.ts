@@ -24,7 +24,7 @@ import {
 import type { OrgExportView } from '@crove/kernel';
 import { JOURNAL_EXPORT_LIMIT, buildJournalWorkbook, type JournalEntryView } from '@crove/mod-finance';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
-import { actorOf, type Authenticate, type AuthUser } from './auth.ts';
+import { actorOf, bearerIssuedToOAuthClient, oauthClientRefused, type Authenticate, type AuthUser } from './auth.ts';
 import { ConcurrencyLimiter } from './concurrency.ts';
 import { publicAuthUrl, type Config } from './config.ts';
 import { exportAad, exportSealer } from './export-seal.ts';
@@ -86,6 +86,14 @@ function emailRateLimited(retryAfterSeconds: number): Response {
     status: 429,
     headers: { 'content-type': 'application/json', 'retry-after': String(retryAfterSeconds) },
   });
+}
+
+// A token Supabase Auth issued to an OAuth client, refused before it reaches Supabase Auth (issue #277). Same code as
+// the kernel's verifier, in Supabase Auth's error shape like `emailRateLimited`, so auth-js reads it as `error.code`.
+function oauthClientTokenRefused(): Response {
+  const refused = oauthClientRefused();
+  const error = { code: refused.status, error_code: refused.code, msg: refused.message };
+  return new Response(JSON.stringify(error), { status: refused.status, headers: { 'content-type': 'application/json' } });
 }
 
 // With TRUSTED_PROXY_HOPS=0 behind a reverse proxy, every client shares the proxy's address and so one email budget.
@@ -222,6 +230,13 @@ export function createHttpApp(deps: HttpDeps) {
       const path = url.pathname.replace(/^\/auth\/v1/, '');
       if (!AUTH_PUBLIC_PATHS.test(path)) return c.json({ code: 'NOT_FOUND' }, 404);
       const headers = forwardable(c.req.raw.headers, SPOOFABLE);
+      // Supabase Auth accepts the access tokens its OAuth server issues to third-party clients wherever it accepts a
+      // browser's (ADR-0028 fact 11). Of the paths above, it authenticates /user, /logout, /reauthenticate and every
+      // /factors path with that token (`requireAuthentication`, v2.197.0), so an OAuth client could change the
+      // user's email or password, enroll or remove factors, or sign every session out. A browser never holds such a
+      // token, so it is refused on every forwarded path, before the email budget and without reaching Supabase Auth.
+      // The header checked is the one forwarded; the token is decoded, never verified (Supabase Auth does that).
+      if (bearerIssuedToOAuthClient(headers.get('authorization'))) return oauthClientTokenRefused();
       const ip = clientIp(c, config.TRUSTED_PROXY_HOPS);
       if (ip) headers.set('x-real-ip', ip);
       const method = c.req.method;

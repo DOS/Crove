@@ -7,6 +7,7 @@
 - Tracking: issue #22 (implementation), plan Tracking Decision 16 and "External-tenant gate" row T1
 - Amended: 2026-10-15, issue #126: a user with a verified MFA factor needs `aal2` for every request, not only for R3 (sections 3 and 8)
 - Amended: 2026-10-16, issue #272: a Supabase Auth access token issued to an OAuth client is refused on every surface and in every session check mode (fact 11, sections 1 and 8)
+- Amended: 2026-10-16, issue #277: the self-host `/auth/v1` proxy refuses the same tokens before they reach Supabase Auth (section 1)
 
 ## Context and problem statement
 
@@ -96,6 +97,7 @@ Described in Decision below. Self-host gets exact, next-request revocation from 
 - JWKS cache: at most 10 minutes. The runbook covers forcing a refresh after a key revocation.
 - Verification is local: no call to Supabase Auth on the request path, except the live check of R3 commands on Crove Cloud (section 5).
 - Refuse any token issued to an OAuth client (issue #272): a `client_id` claim of any value, or an `amr` entry whose method starts with `oauth_provider/` (fact 11; the `amr` test is load-bearing: an MFA verification on the OAuth session, or a hook, issues tokens for it without `client_id`). The check runs right after the signature, before every other claim check and before any database work, so it holds in every session check mode (`db`, `jwt`, `off`) and on every surface that authenticates a user (all of `/api`). A browser never holds such a token, and the kernel would otherwise accept it exactly like the user's own SPA session: every query and R1/R2 command, with no scope or org binding. Third-party access goes through the Crove authorization server (ADR-0032), never through Supabase Auth's.
+- The self-host `/auth/v1` proxy applies the same rule (issue #277, the same `issuedToOAuthClient` predicate) before forwarding, because Supabase Auth itself accepts these tokens wherever it accepts a browser's. Of the paths the proxy forwards, Supabase Auth authenticates `/user` (`GET`, `PUT`), `/logout`, `/reauthenticate` and every `/factors` path (enroll, challenge, verify, unenroll) with the user's access token (`requireAuthentication` in its router, v2.197.0), so without the check an OAuth client could change the user's email or password, enroll or remove factors, request a reauthentication code or sign out every session of the user. The proxy decodes the `Authorization: Bearer` JWT payload without verifying it (Supabase Auth verifies; the proxy only refuses, so a forged or altered token gains nothing) and refuses with 401 in Supabase Auth's error shape, `{"code":401,"error_code":"OAUTH_CLIENT_TOKEN_REFUSED","msg":...}`, which auth-js reads as `error.code`. It checks every forwarded path, not only those, since a browser never sends such a token anywhere, and it checks before the email budget (#190), so a refused request takes no slot and nothing reaches Supabase Auth. A header that is not a bearer JWS with a JSON object payload is forwarded unchanged for Supabase Auth to reject. The token is never logged. The compose stack keeps Supabase Auth's OAuth server off and the proxy does not forward `/oauth/*`, so this matters for a deployment that turns that server on; Crove Cloud has no proxy and relies on its Supabase Auth project's settings.
 
 ### 2. Session status record and membership, in the request transaction
 
@@ -216,6 +218,7 @@ Unit (kernel auth):
 - Boot fails without `AUTH_ISSUER`, with `AUTH_SESSION_CHECK=off` on a public URL, and with `jwt` on a public URL without an Auth URL; an unset `AUTH_SESSION_CHECK` resolves to `db` or `jwt` as described above.
 - A token with an empty `email` (phone-only user): 401.
 - A token issued to an OAuth client (`client_id` of any value, including empty or null, or an `oauth_provider/` `amr` method, as an object or a bare string): 401 `OAUTH_CLIENT_TOKEN_REFUSED`; a forged one still gets `UNAUTHENTICATED`; the browser `amr` methods pass.
+- The `/auth/v1` proxy (issue #277, `http.test.ts`, in front of a fake Supabase Auth): the same tokens, with any bearer scheme casing, get 401 `OAUTH_CLIENT_TOKEN_REFUSED` on `/user`, `/logout`, `/reauthenticate`, every `/factors` path and `/token`, never reach upstream, take no email slot and are not logged; browser tokens and the anon key are forwarded unchanged; malformed tokens (not a JWT, a non-object or non-JSON payload, two or five parts, trailing text) and other schemes are forwarded unchanged.
 
 Self-host (`db` adapter, Supabase Auth image pinned as in compose):
 
