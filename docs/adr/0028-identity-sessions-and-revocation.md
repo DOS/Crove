@@ -175,6 +175,7 @@ Choice: the self-host compose stack sets `GOTRUE_JWT_EXP=900` (15 minutes) as de
 |---|---|
 | Missing or invalid token, wrong `iss` or `aud`, missing `exp`, `sub` or `session_id`, expired, anonymous, wrong algorithm, empty `email` | 401 |
 | Crove session record `revoked`; self-host session row missing or past `not_after`; user banned or deleted upstream | 401 |
+| Session revoked by the org's owner for that org only | 401 `SESSION_REVOKED_IN_ORG`: the SPA leaves that org and keeps the session (issue #247); `me.get` no longer lists the org for that session |
 | R3 live check (`GET /user`, Crove Cloud): any 4xx other than 429, or a 200 for a different user id | 401 |
 | User has a verified MFA factor and the token is not `aal2` (any request, not only R3; `db`, and `jwt` once the identity provider states the fact) | 401 `MFA_REQUIRED` |
 | `user_account.disabled_at` set | 403 |

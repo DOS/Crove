@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate, useParams } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
-import { Logo } from '../components/ui.tsx';
+import { Logo, OrgLeftNotice } from '../components/ui.tsx';
 import { LocaleSwitcher } from '../i18n/provider.tsx';
 import { orpc } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -91,6 +91,7 @@ export function OrgLayout() {
           </NativeSelect>
         </header>
         <main className="mx-auto w-full max-w-6xl px-4 py-6 md:px-8 md:py-8">
+          <OrgLeftNotice />
           {me.isSuccess && !org ? <p className="text-sm text-destructive">{t('notMember')}</p> : <Outlet />}
         </main>
       </div>

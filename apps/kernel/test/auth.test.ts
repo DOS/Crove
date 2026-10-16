@@ -218,10 +218,12 @@ describe('live check with Supabase Auth for R3 (GET /user)', () => {
     await expect(confirm()).rejects.toMatchObject({ status: 503 });
   });
 
-  // Issue #126: the SPA sends MFA_REQUIRED to the MFA challenge; every other 28000 signs the user out.
-  it('maps the session check answers to 401 MFA_REQUIRED and 401 UNAUTHENTICATED', () => {
+  // Issue #126: the SPA sends MFA_REQUIRED to the MFA challenge; #247: SESSION_REVOKED_IN_ORG leaves that org only;
+  // every other 28000 signs the user out.
+  it('maps the session check answers to 401 MFA_REQUIRED, SESSION_REVOKED_IN_ORG and UNAUTHENTICATED', () => {
     expect(toDomainError({ code: '28000', message: 'MFA_REQUIRED' })).toMatchObject({ code: 'MFA_REQUIRED', status: 401 });
-    for (const message of ['SESSION_INVALID', 'SESSION_REVOKED', 'SESSION_REVOKED_IN_ORG', 'MFA_REQUIRED_SOMETHING']) {
+    expect(toDomainError({ code: '28000', message: 'SESSION_REVOKED_IN_ORG' })).toMatchObject({ code: 'SESSION_REVOKED_IN_ORG', status: 401 });
+    for (const message of ['SESSION_INVALID', 'SESSION_REVOKED', 'SESSION_REVOKED_IN_ORG_SOMETHING', 'MFA_REQUIRED_SOMETHING']) {
       expect(toDomainError({ code: '28000', message })).toMatchObject({ code: 'UNAUTHENTICATED', status: 401 });
     }
   });

@@ -16,6 +16,7 @@ export const en: Messages = {
     processing: 'Working…',
     backHome: 'Back to home',
     language: 'Language',
+    orgLeft: 'The owner of {org} revoked this session in that organization, so you have left it. Your other organizations still work.',
   },
   roles: {
     owner: 'Owner',

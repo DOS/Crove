@@ -114,10 +114,17 @@ export function toDomainError(error: unknown): DomainError {
   switch (pg?.code) {
     // Raised by crove_kernel.session_check (ADR-0028): signed out, revoked, expired upstream, banned or deleted.
     // MFA_REQUIRED: the session is valid but has not passed the user's second factor yet (issue #126); the SPA
-    // answers it with the MFA challenge instead of signing out.
+    // answers it with the MFA challenge instead of signing out. SESSION_REVOKED_IN_ORG: see below.
     case '28000':
       if (pg.message === 'MFA_REQUIRED') {
         return new DomainError('MFA_REQUIRED', 401, 'Tài khoản này đã bật xác thực hai lớp (MFA): hãy nhập mã xác thực để tiếp tục');
+      }
+      // The org's owner revoked this session for that org only (ADR-0028 section 4), so the SPA leaves the org
+      // instead of signing out (issue #247). session_check refuses a global revoke and a disabled user first; in
+      // db mode the upstream state (signed out, banned) is checked after the org row, so a session dead upstream
+      // may get this code here, and the start page's org-less me.get then answers UNAUTHENTICATED (sign-out).
+      if (pg.message === 'SESSION_REVOKED_IN_ORG') {
+        return new DomainError('SESSION_REVOKED_IN_ORG', 401, 'Phiên đăng nhập này đã bị thu hồi trong tổ chức này');
       }
       return new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nhập đã hết hiệu lực, hãy đăng nhập lại');
     case '55000':

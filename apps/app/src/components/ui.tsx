@@ -5,8 +5,9 @@ import { Empty as EmptyRoot, EmptyDescription, EmptyHeader, EmptyTitle } from '@
 import { Spinner as SpinnerIcon } from '@crove/ui/components/spinner';
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@crove/ui/components/table';
 import { cn } from '@crove/ui/lib/utils';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useTranslations } from 'use-intl';
+import { takeOrgLeftNotice } from '../lib/api.ts';
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string | undefined; actions?: ReactNode }) {
   return (
@@ -35,6 +36,31 @@ export function ErrorText({ children }: { children: ReactNode }) {
   return (
     <Alert variant="destructive" className="border-destructive/30 bg-destructive/10">
       {children}
+    </Alert>
+  );
+}
+
+// Read from storage once per page load, so a second render (or React StrictMode's double initializer) still sees it.
+let orgLeftNotice: ReturnType<typeof takeOrgLeftNotice> | undefined;
+function orgLeftOnce() {
+  if (orgLeftNotice === undefined) orgLeftNotice = takeOrgLeftNotice();
+  return orgLeftNotice;
+}
+
+// Shown once after this tab left an org whose owner revoked this session there (issue #247).
+export function OrgLeftNotice() {
+  const t = useTranslations('common');
+  const [left, setLeft] = useState(orgLeftOnce);
+  if (!left) return null;
+  return (
+    <Alert role="status" className="mb-4 flex items-start justify-between gap-3">
+      <span>{t('orgLeft', { org: left.name })}</span>
+      <button type="button" className="shrink-0 text-subtle-foreground hover:text-muted-foreground" onClick={() => {
+          orgLeftNotice = null;
+          setLeft(null);
+        }}>
+        {t('close')}
+      </button>
     </Alert>
   );
 }

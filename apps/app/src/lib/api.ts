@@ -3,10 +3,11 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
-import { MAX_UPLOAD_BYTES, ORG_HEADER, type contract } from '@crove/kernel-contract';
+import { MAX_UPLOAD_BYTES, type contract } from '@crove/kernel-contract';
 import { translator } from '../i18n/runtime.ts';
 import { accessToken, auth, getConfig } from './auth.ts';
-import { apiErrorFromResponse, isMfaRequired, isUnauthenticated, retryWhileBusy } from './errors.ts';
+import { apiErrorFromResponse, isMfaRequired, isOrgAccessRevoked, isUnauthenticated, retryWhileBusy } from './errors.ts';
+import { createSessionErrorHandler, rememberOrgLeft, requestHeaders, takeOrgLeft } from './org-access.ts';
 
 let currentOrg: string | null = null;
 
@@ -19,11 +20,7 @@ export function getCurrentOrg(): string | null {
 }
 
 async function headers(): Promise<Record<string, string>> {
-  const token = await accessToken();
-  return {
-    ...(token ? { authorization: `Bearer ${token}` } : {}),
-    ...(currentOrg ? { [ORG_HEADER]: currentOrg } : {}),
-  };
+  return requestHeaders(await accessToken(), currentOrg);
 }
 
 const link = new RPCLink({ url: `${window.location.origin}/api/rpc`, headers });
@@ -31,12 +28,33 @@ const link = new RPCLink({ url: `${window.location.origin}/api/rpc`, headers });
 export const client: ContractRouterClient<typeof contract> = createORPCClient(link);
 export const orpc = createTanstackQueryUtils(client);
 
-export { ApiError, isMfaRequired, isUnauthenticated } from './errors.ts';
+// The same API without the org header, whatever page this is: the user's own sign-out revoke (issue #247).
+const orglessLink = new RPCLink({ url: `${window.location.origin}/api/rpc`, headers: async () => requestHeaders(await accessToken(), null) });
+export const orglessClient: ContractRouterClient<typeof contract> = createORPCClient(orglessLink);
 
-// A stale or revoked session signs the user out locally; main.tsx then routes to /login.
-function onError(error: unknown): void {
-  if (isUnauthenticated(error)) void auth().signOut({ scope: 'local' });
+export { ApiError, isMfaRequired, isOrgAccessRevoked, isUnauthenticated } from './errors.ts';
+
+function sessionStore(): Storage | undefined {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return undefined;
+  }
 }
+
+// A stale or revoked session signs the user out locally; main.tsx then routes to /login. A session revoked in this
+// org only leaves the org: the start page then lists only the orgs this session can enter (issue #247).
+const onError = createSessionErrorHandler({
+  currentOrg: getCurrentOrg,
+  leaveOrg: (slug) => {
+    const me = queryClient.getQueryData<{ orgs: Array<{ slug: string; name: string }> }>(orpc.me.get.queryKey());
+    rememberOrgLeft(sessionStore(), { name: me?.orgs.find((o) => o.slug === slug)?.name ?? slug });
+    setCurrentOrg(null);
+    queryClient.clear();
+    window.location.assign('/');
+  },
+  signOut: () => void auth().signOut({ scope: 'local' }),
+});
 
 export const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError }),
@@ -45,7 +63,7 @@ export const queryClient = new QueryClient({
     queries: {
       staleTime: 10_000,
       refetchOnWindowFocus: true,
-      retry: (count, error) => !isUnauthenticated(error) && !isMfaRequired(error) && count < 1,
+      retry: (count, error) => !isUnauthenticated(error) && !isMfaRequired(error) && !isOrgAccessRevoked(error) && count < 1,
     },
   },
 });
@@ -57,6 +75,10 @@ export function errorMessage(error: unknown): string {
 
 // Authenticated fetch for non-RPC endpoints (files, export). A refusal throws ApiError with the kernel's code and
 // the HTTP status, like the RPC path, so MFA_REQUIRED and a dead session are recognised here too.
+export function takeOrgLeftNotice() {
+  return takeOrgLeft(sessionStore());
+}
+
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const response = await fetch(path, { ...init, headers: { ...(await headers()), ...(init.headers as Record<string, string> | undefined) } });
   if (!response.ok) throw await apiErrorFromResponse(response, translator());

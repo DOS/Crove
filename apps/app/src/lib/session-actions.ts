@@ -1,5 +1,5 @@
 // Binds the sign-out helper to the app's API and auth clients. Every "Đăng xuất" control goes through signOut().
-import { client, orpc, queryClient } from './api.ts';
+import { orglessClient, orpc, queryClient } from './api.ts';
 import { auth } from './auth.ts';
 import { forgetInvite } from './invite.ts';
 import { sessionIdFromToken } from './sessions.ts';
@@ -21,7 +21,8 @@ export function signOut(options: { keepInvite?: boolean } = {}): Promise<void> {
       const me = await queryClient.fetchQuery({ ...orpc.me.get.queryOptions(), staleTime: 0 });
       return { userId: me.userId, sessionId };
     },
-    revoke: (input, signal) => client.sessions.revoke(input, { signal }),
+    // Without the org header on every page: an org that refused this session cannot swallow its revoke (#247).
+    revoke: (input, signal) => orglessClient.sessions.revoke(input, { signal }),
     signOut: () => auth().signOut({ scope: 'local' }),
   });
 }

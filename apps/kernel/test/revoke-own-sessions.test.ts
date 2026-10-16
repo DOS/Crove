@@ -38,7 +38,7 @@ const orgs = (...ids: string[]) => ids.map((orgId) => ({ orgId, slug: orgId.slic
 describe('revokeOwnSessionsWithoutOrg', () => {
   it('runs the audited command in the oldest org that can run it', async () => {
     const { runtime, calls } = fakeRuntime([orgs(ORG_A, ORG_B)], (orgId) => {
-      if (orgId === ORG_A) throw new DomainError('UNAUTHENTICATED', 401, 'revoked in this org');
+      if (orgId === ORG_A) throw new DomainError('SESSION_REVOKED_IN_ORG', 401, 'revoked in this org');
       return { revoked: [SESSION] };
     });
     await expect(revokeOwnSessionsWithoutOrg(runtime, actor, input)).resolves.toEqual({ revoked: [SESSION] });
@@ -72,6 +72,13 @@ describe('revokeOwnSessionsWithoutOrg', () => {
     });
     await expect(revokeOwnSessionsWithoutOrg(runtime, actor, input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(calls).toEqual(['orgs', `execute:${ORG_A}`]);
+
+    // A dead session is the answer, not a reason to try the next org.
+    const dead = fakeRuntime([orgs(ORG_A, ORG_B)], () => {
+      throw new DomainError('UNAUTHENTICATED', 401, 'revoked');
+    });
+    await expect(revokeOwnSessionsWithoutOrg(dead.runtime, actor, input)).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+    expect(dead.calls).toEqual(['orgs', `execute:${ORG_A}`]);
 
     const mfa = fakeRuntime([orgs(ORG_A, ORG_B)], () => {
       throw new DomainError('MFA_REQUIRED', 401, 'second factor');
