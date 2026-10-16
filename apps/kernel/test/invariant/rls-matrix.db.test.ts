@@ -38,7 +38,14 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>();
+// Crove Social posts, variants, review decisions and queues (Social plan step S3, issue #233).
+const PENDING_TABLES = new Set<string>([
+  'crove_social.post',
+  'crove_social.post_variant',
+  'crove_social.post_approval',
+  'crove_social.queue',
+  'crove_social.queue_slot',
+]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -101,6 +108,21 @@ const channelConnectionRow = (o: { id: string; owner: string }) => ({
   display_name: 'RLS matrix channel',
   connected_by: o.owner,
 });
+// Crove Social (S3): a post, and a variant of it for a fresh channel connection (one variant per connection).
+const ZERO_HASH = `sha256:${'0'.repeat(64)}`;
+const socialPostRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), body: 'RLS matrix post' });
+const socialVariantRows = (o: { id: string; owner: string }) => {
+  const connection = channelConnectionRow(o);
+  const post = socialPostRow(o);
+  const variant = { org_id: o.id, id: randomUUID(), post_id: post.id, channel_connection_id: connection.id, provider: 'sandbox', content_hash: ZERO_HASH };
+  return {
+    setup: [
+      { table: 'crove_kernel.channel_connection', values: connection },
+      { table: 'crove_social.post', values: post },
+    ],
+    variant,
+  };
+};
 const journalEntry = (org: string, id: string): Row => ({
   table: 'crove_finance.journal_entry',
   values: { org_id: org, id, entry_date: '2026-10-01', description: 'rls matrix', source_type: 'rls.matrix', source_id: randomUUID() },
@@ -244,6 +266,52 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.channel_connection': { make: (o) => ({ row: channelConnectionRow(o) }) },
   // Definer-only machinery: the sealed token of a connection, one row per connection. The envelope is opaque bytes
   // here; only the vault in the worker opens a real one.
+  'crove_social.post': { make: (o) => ({ row: socialPostRow(o) }) },
+  'crove_social.post_variant': {
+    make: (o) => {
+      const { setup, variant } = socialVariantRows(o);
+      return { setup, row: variant };
+    },
+  },
+  // Append-only review decisions: tenant roles may only read and insert.
+  'crove_social.post_approval': {
+    make: (o) => {
+      const { setup, variant } = socialVariantRows(o);
+      return {
+        setup: [...setup, { table: 'crove_social.post_variant', values: variant }],
+        row: {
+          org_id: o.id,
+          post_id: variant.post_id,
+          variant_id: variant.id,
+          revision: 1,
+          content_hash: ZERO_HASH,
+          decision: 'approved',
+          decided_by: o.owner,
+          snapshot: '{}',
+        },
+      };
+    },
+  },
+  // One queue per connection, so every queue row gets its own connection.
+  'crove_social.queue': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return { setup: [{ table: 'crove_kernel.channel_connection', values: connection }], row: { org_id: o.id, channel_connection_id: connection.id } };
+    },
+  },
+  'crove_social.queue_slot': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      const queue = { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id };
+      return {
+        setup: [
+          { table: 'crove_kernel.channel_connection', values: connection },
+          { table: 'crove_social.queue', values: queue },
+        ],
+        row: { org_id: o.id, queue_id: queue.id, weekday: 1, minute: 540 },
+      };
+    },
+  },
   'crove_kernel.credential': {
     make: (o) => {
       const connection = channelConnectionRow(o);
