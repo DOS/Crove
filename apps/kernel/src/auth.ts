@@ -2,7 +2,7 @@
 // Self-host signs with HS256 (shared secret); hosted Supabase publishes asymmetric keys via JWKS. Verification is
 // local; the session status check runs later, in the request transaction (Runtime + SessionStatusSource), and R3
 // commands confirm the token live with Supabase Auth when the session check does not read Auth (jwt).
-import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
+import { createRemoteJWKSet, decodeJwt, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
 import type { Db } from '@crove/db';
 import { resolveIdentity } from '@crove/kernel';
 import { DomainError, toDomainError, type Aal, type UserActor } from '@crove/kernel-runtime';
@@ -87,7 +87,7 @@ const invalid = () => new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nh�
 // Token hook may drop `client_id` too.
 const OAUTH_CLIENT_AMR_PREFIX = 'oauth_provider/';
 
-const oauthClientRefused = () =>
+export const oauthClientRefused = () =>
   new DomainError('OAUTH_CLIENT_TOKEN_REFUSED', 401, 'Mã truy cập này được cấp cho một ứng dụng bên thứ ba, không dùng để đăng nhập Crove');
 
 // True when the token was issued to an OAuth client: any `client_id` claim (whatever its value), or an `amr` entry
@@ -100,6 +100,26 @@ export function issuedToOAuthClient(claims: Record<string, unknown>): boolean {
     const method = typeof entry === 'string' ? entry : entry && typeof entry === 'object' ? (entry as { method?: unknown }).method : undefined;
     return typeof method === 'string' && method.toLowerCase().startsWith(OAUTH_CLIENT_AMR_PREFIX);
   });
+}
+
+// Supabase Auth's bearer syntax (internal/api/helpers.go, `(?i)^bearer (\S+$)`), widened to any whitespace after the
+// scheme: its stricter syntax is a subset of this one, so every header it would read is read here too.
+const BEARER = /^bearer\s+(\S+)$/i;
+
+// The /auth/v1 proxy's test (issue #277): true when the Authorization header carries a JWT whose payload, decoded
+// WITHOUT verifying it, was issued to an OAuth client (`issuedToOAuthClient`). It only ever refuses: Supabase Auth
+// verifies every token it accepts, so a forged or altered token gains nothing from passing here. A header that is
+// not a bearer JWS with a JSON object payload is not one, and Supabase Auth rejects it itself. Never logs the token.
+export function bearerIssuedToOAuthClient(authorization: string | null | undefined): boolean {
+  const token = BEARER.exec(authorization?.trim() ?? '')?.[1];
+  if (!token) return false;
+  let claims: Record<string, unknown>;
+  try {
+    claims = decodeJwt(token);
+  } catch {
+    return false;
+  }
+  return issuedToOAuthClient(claims);
 }
 
 // Signature, algorithm family, issuer, audience and expiry, then the claims Crove relies on. Every failure is 401:

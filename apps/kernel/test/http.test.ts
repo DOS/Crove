@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ORG_HEADER } from '@crove/kernel-contract';
 import {
   BlobConflictError,
@@ -111,9 +111,16 @@ describe('configuration guards', () => {
   });
 });
 
+// A compact JWS with this payload (a JSON value, or raw text) and a dummy signature: the proxy decodes, never verifies.
+function jws(payload: unknown, raw = false): string {
+  const part = (text: string) => Buffer.from(text).toString('base64url');
+  return `${part('{"alg":"HS256","typ":"JWT"}')}.${part(raw ? String(payload) : JSON.stringify(payload))}.${part('signature')}`;
+}
+
 describe('auth proxy', () => {
   let upstream: Server;
   let seen: { path: string; headers: IncomingHttpHeaders } | null = null;
+  let reserved = 0;
   let app: ReturnType<typeof createHttpApp>;
 
   beforeAll(async () => {
@@ -140,6 +147,13 @@ describe('auth proxy', () => {
       },
       pool: {} as pg.Pool,
       aiEnabled: false,
+      emailLimiter: {
+        reserve: async () => {
+          reserved += 1;
+          return { allowed: true, reservation: 'slot' };
+        },
+        release: async () => {},
+      },
     });
   });
 
@@ -165,6 +179,113 @@ describe('auth proxy', () => {
     expect(seen?.path).toBe('/token?grant_type=password');
     expect(seen?.headers['x-real-ip']).toBe('203.0.113.9');
     expect(seen?.headers['x-forwarded-for']).toBeUndefined();
+  });
+
+  // Issue #277: Supabase Auth authenticates /user, /logout, /reauthenticate and /factors with the user's access token
+  // and accepts the tokens its OAuth server issues to third-party clients there; the proxy refuses them (same rule as
+  // the kernel's verifier, issue #272).
+  describe('tokens issued to OAuth clients', () => {
+    const now = Math.floor(Date.now() / 1000);
+    const browser = {
+      iss: 'http://localhost:8080/auth/v1',
+      aud: 'authenticated',
+      sub: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',
+      exp: now + 900,
+      role: 'authenticated',
+      email: 'user@example.com',
+      session_id: '2d0c6f1e-5b7a-4c3d-9e8f-1a2b3c4d5e6f',
+      aal: 'aal1',
+      amr: [{ method: 'password', timestamp: now }],
+    };
+    const oauthAmr = [{ method: 'oauth_provider/authorization_code', timestamp: now }];
+    const refused: Array<[string, string]> = [
+      ['a client_id and scope as the OAuth server issues them', `Bearer ${jws({ ...browser, client_id: randomUUID(), scope: 'openid email', amr: oauthAmr })}`],
+      ['a client_id with a browser amr', `Bearer ${jws({ ...browser, client_id: randomUUID() })}`],
+      ['an empty client_id', `Bearer ${jws({ ...browser, client_id: '' })}`],
+      ['a null client_id', `Bearer ${jws({ ...browser, client_id: null })}`],
+      ['the OAuth amr without client_id (MFA verify on the OAuth session)', `Bearer ${jws({ ...browser, aal: 'aal2', amr: [{ method: 'totp', timestamp: now }, ...oauthAmr] })}`],
+      ['the OAuth amr as a bare string', `Bearer ${jws({ ...browser, amr: ['oauth_provider/authorization_code'] })}`],
+      ['a lower-case scheme and extra spaces', `bearer   ${jws({ ...browser, client_id: randomUUID() })}  `],
+    ];
+    const routes: Array<[string, string, string | undefined]> = [
+      ['GET', '/user', undefined],
+      ['PUT', '/user', '{"email":"attacker@example.com"}'],
+      ['POST', '/logout?scope=global', undefined],
+      ['GET', '/reauthenticate', undefined],
+      ['POST', '/factors', '{"factor_type":"totp"}'],
+      ['POST', '/factors/8f0c7b1e-1a2b-4c3d-8e9f-0a1b2c3d4e5f/challenge', '{}'],
+      ['POST', '/factors/8f0c7b1e-1a2b-4c3d-8e9f-0a1b2c3d4e5f/verify', '{"challenge_id":"x","code":"123456"}'],
+      ['DELETE', '/factors/8f0c7b1e-1a2b-4c3d-8e9f-0a1b2c3d4e5f', undefined],
+      ['POST', '/token?grant_type=password', '{}'],
+    ];
+    // What the fake upstream last saw (a function, so TypeScript does not narrow `seen` to null after a reset).
+    const observed = () => seen;
+    const send = (method: string, path: string, authorization: string, body?: string) =>
+      app.request(`/auth/v1${path}`, { method, headers: { authorization, 'content-type': 'application/json' }, body: body ?? null });
+
+    for (const [label, authorization] of refused) {
+      it(`refuses ${label} on every forwarded route, before upstream and the email budget`, async () => {
+        const token = authorization.trim().split(/\s+/)[1] ?? '';
+        const logs = [vi.spyOn(console, 'log'), vi.spyOn(console, 'warn'), vi.spyOn(console, 'error')];
+        try {
+          for (const [method, path, body] of routes) {
+            seen = null;
+            reserved = 0;
+            const response = await send(method, path, authorization, body);
+            expect(response.status, `${method} ${path}`).toBe(401);
+            const text = await response.text();
+            expect(JSON.parse(text)).toEqual({ code: 401, error_code: 'OAUTH_CLIENT_TOKEN_REFUSED', msg: expect.any(String) });
+            expect(text).not.toContain(token);
+            expect(observed(), `${method} ${path} reached upstream`).toBeNull();
+            expect(reserved).toBe(0);
+          }
+          for (const log of logs) expect(log).not.toHaveBeenCalled();
+        } finally {
+          for (const log of logs) log.mockRestore();
+        }
+      });
+    }
+
+    it('forwards browser tokens unchanged', async () => {
+      const tokens = [
+        `Bearer ${jws(browser)}`,
+        `Bearer ${jws({ ...browser, aal: 'aal2', amr: [{ method: 'totp', timestamp: now }, { method: 'password', timestamp: now }] })}`,
+        `Bearer ${jws({ ...browser, amr: [{ method: 'oauth', provider: 'google', timestamp: now }] })}`,
+        `Bearer ${jws({ ...browser, amr: [{ method: 'otp', timestamp: now }], is_anonymous: false })}`,
+        // The anon key auth-js sends before sign-in.
+        `Bearer ${jws({ iss: 'supabase', role: 'anon', exp: now + 3600 })}`,
+      ];
+      for (const authorization of tokens) {
+        for (const [method, path, body] of routes) {
+          seen = null;
+          const response = await send(method, path, authorization, body);
+          expect(response.status, `${method} ${path}`).toBe(200);
+          expect(observed()?.path).toBe(path);
+          expect(observed()?.headers.authorization).toBe(authorization);
+        }
+      }
+    });
+
+    it('forwards malformed tokens unchanged, for Supabase Auth to reject', async () => {
+      const malformed = [
+        'Bearer not-a-jwt',
+        `Bearer ${jws('{"client_id":"x"', true)}`,
+        `Bearer ${jws(['client_id'])}`,
+        `Bearer ${jws('null', true)}`,
+        `Bearer ${jws({ client_id: 'x' }).split('.').slice(0, 2).join('.')}`,
+        `Bearer ${jws({ client_id: 'x' })}.extra.parts`,
+        `Bearer ${Buffer.from('{"alg":"none"}').toString('base64url')}..sig`,
+        `Bearer ${jws({ client_id: 'x' })} trailing`,
+        `Basic ${Buffer.from('user:pass').toString('base64')}`,
+        `Token ${jws({ client_id: 'x' })}`,
+      ];
+      for (const authorization of malformed) {
+        seen = null;
+        const response = await send('GET', '/user', authorization);
+        expect(response.status, authorization).toBe(200);
+        expect(observed()?.headers.authorization).toBe(authorization);
+      }
+    });
   });
 });
 
