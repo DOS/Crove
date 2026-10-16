@@ -151,7 +151,8 @@ suite('aal1 tokens of users with a verified MFA factor on PostgreSQL (issue #126
         CREATE TABLE auth.mfa_factors (
           id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE, friendly_name text,
           factor_type auth.factor_type NOT NULL, status auth.factor_status NOT NULL, created_at timestamptz NOT NULL,
-          updated_at timestamptz NOT NULL, secret text, phone text, last_challenged_at timestamptz);
+          updated_at timestamptz NOT NULL, secret text, phone text, last_challenged_at timestamptz UNIQUE,
+          web_authn_credential jsonb, web_authn_aaguid uuid, last_webauthn_challenge_data jsonb);
         ALTER TABLE auth.users ENABLE ROW LEVEL SECURITY;
         ALTER TABLE auth.sessions ENABLE ROW LEVEL SECURITY;
         ALTER TABLE auth.mfa_factors ENABLE ROW LEVEL SECURITY;`);
