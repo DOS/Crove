@@ -1,6 +1,8 @@
+import { useId } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate, useParams } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
+import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Logo, OrgLeftNotice } from '../components/ui.tsx';
 import { LocaleSwitcher } from '../i18n/provider.tsx';
@@ -34,6 +36,7 @@ export function OrgLayout() {
     refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS),
   });
   const org = me.data?.orgs.find((o) => o.slug === slug);
+  const orgSelectId = useId();
 
   return (
     <div className="flex min-h-full bg-background">
@@ -41,9 +44,12 @@ export function OrgLayout() {
         <div className="px-2">
           <Logo />
         </div>
-        <label className="mt-6 block px-2 text-xs">
-          <span className="text-subtle-foreground">{t('org')}</span>
+        <div className="mt-6 px-2">
+          <Label htmlFor={orgSelectId} className="text-xs font-normal text-subtle-foreground">
+            {t('org')}
+          </Label>
           <NativeSelect
+            id={orgSelectId}
             className="mt-1 w-full"
             value={slug}
             onChange={(e) => void navigate({ to: '/o/$slug/inbox', params: { slug: e.target.value } })}
@@ -54,7 +60,7 @@ export function OrgLayout() {
               </NativeSelectOption>
             ))}
           </NativeSelect>
-        </label>
+        </div>
         <nav className="mt-6 flex flex-col gap-0.5">
           {NAV.map((item) => (
             <Link

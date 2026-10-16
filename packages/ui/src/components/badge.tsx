@@ -13,7 +13,9 @@ const badgeVariants = cva(
           "bg-secondary text-secondary-foreground [a]:hover:bg-secondary/80",
         destructive:
           "bg-destructive/10 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/20",
-        // Crove status variants, styled like destructive.
+        // Crove variants. Status chips are styled like destructive; brand is the subtle primary chip for neutral
+        // states that should stand out without the solid fill (a file being read, the owner role).
+        brand: "border-primary/30 bg-primary/15 text-link",
         success: "border-success/30 bg-success/10 text-success",
         warning: "border-warning/30 bg-warning/10 text-warning",
         outline:

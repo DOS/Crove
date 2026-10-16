@@ -1,26 +1,108 @@
 // Design-token lint for the web app (plan §9, `web` rule): screens and components use the @crove/ui theme tokens
 // (`bg-primary`, `text-muted-foreground`, `border-destructive/30`, ...), never Tailwind palette colors
-// (`text-rose-300`, `bg-white`) or literal colors (`#7c3aed`, `rgba(...)`, `oklch(...)`). Colors live only in
-// packages/ui/src/styles/globals.css. No dependencies; run by `pnpm lint`.
-// Usage: node tools/ui-colors.mjs [files...]   (default: every .ts/.tsx file under SCAN_DIRS)
+// (`text-rose-300`, `bg-white`), literal colors (`#7c3aed`, `rgba(...)`, `oklch(...)`) or CSS color names
+// (`bg-[red]`, `fill="white"`, `style={{ color: 'red' }}`). Colors live only in packages/ui/src/styles/globals.css.
+// The palette names come from the installed Tailwind's theme.css, so a Tailwind release that adds a palette is
+// covered without editing this file. No dependencies; run by `pnpm lint`.
+// Usage: node tools/ui-colors.mjs [files...]   (default: every .ts/.tsx file under SCAN_DIRS and .css under CSS_DIRS)
 import { readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+const ROOT = join(fileURLToPath(import.meta.url), '..', '..');
 export const SCAN_DIRS = ['apps/app/src', 'packages/ui/src'];
+// Stylesheets of the app; packages/ui/src/styles is where the tokens are defined, so it is not scanned.
+export const CSS_DIRS = ['apps/app/src'];
 // UI copy, not class names.
 const SKIP_DIRS = ['apps/app/src/i18n/messages'];
 
-const PALETTE =
-  'red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|slate|gray|zinc|neutral|stone|mauve|olive|mist|taupe';
-const UTILITY =
-  'bg|text|text-shadow|border(?:-[xytrblse])?|ring(?:-offset)?|inset-ring|outline|divide|from|via|to|fill|stroke|shadow|inset-shadow|drop-shadow|decoration|accent|caret|placeholder';
-const RULES = [
-  { re: new RegExp(`(?<![\\w-])(?:${UTILITY})-(?:${PALETTE})-(?:50|[1-9]00|950)(?![\\w-])`, 'g'), what: 'Tailwind palette color' },
-  { re: new RegExp(`(?<![\\w-])(?:${UTILITY})-(?:white|black)(?![\\w-])`, 'g'), what: 'Tailwind palette color' },
-  { re: /(?<!&)#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-])/g, what: 'literal color' },
-  { re: /(?<![\w-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(/g, what: 'literal color' },
+/**
+ * Reads the color names of a Tailwind theme.css: `palettes` are the names with shades (`--color-rose-500`),
+ * `singles` the ones without (`--color-white`).
+ */
+export function parseTailwindTheme(css) {
+  const palettes = new Set();
+  const singles = new Set();
+  const shades = new Set();
+  for (const m of css.matchAll(/^\s*--color-([a-z]+)(?:-(\d+))?\s*:/gm)) {
+    if (m[2]) {
+      palettes.add(m[1]);
+      shades.add(m[2]);
+    } else {
+      singles.add(m[1]);
+    }
+  }
+  return { palettes: [...palettes], singles: [...singles], shades: [...shades] };
+}
+
+/** The installed Tailwind's theme (the version @crove/ui builds with). */
+export function readTailwindTheme() {
+  const require = createRequire(join(ROOT, 'packages/ui/package.json'));
+  const path = require.resolve('tailwindcss/theme.css');
+  const theme = parseTailwindTheme(readFileSync(path, 'utf8'));
+  if (!theme.palettes.length || !theme.singles.length || !theme.shades.length) {
+    throw new Error(`ui-colors: no --color-* palette found in ${path}; the Tailwind theme format changed`);
+  }
+  return theme;
+}
+
+// CSS named colors (CSS Color 4) other than `transparent`. `none`, `currentColor`, `inherit` and `transparent` are
+// allowed. System colors (`Canvas`, `CanvasText`) follow the color scheme and are allowed too: the native select
+// options use them.
+const NAMED = new Set(
+  (
+    'aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood ' +
+    'cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray ' +
+    'darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen ' +
+    'darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue ' +
+    'firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew ' +
+    'hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan ' +
+    'lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray ' +
+    'lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue ' +
+    'mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred ' +
+    'midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid ' +
+    'palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple ' +
+    'rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue ' +
+    'slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white ' +
+    'whitesmoke yellow yellowgreen'
+  ).split(' '),
+);
+
+// A CSS identifier on its own (not part of `--my-red`, `red-ish` or `red.png`).
+const IDENT = /(?<![\w-])[A-Za-z][\w-]*(?![\w.-])/g;
+// Places where a color value is written:
+const VALUE_SPOTS = [
+  // Tailwind arbitrary values (`bg-[red]`, `shadow-[0_0_0_1px_red]`), not arbitrary variants (`data-[tone=red]:`,
+  // `group-data-[tone=red]/card:`).
+  /-\[([^\]\s'"`]+)\](?!(?:\/[\w-]+)?:)/g,
+  // Tailwind arbitrary properties (`[color:red]`, `hover:[background:white]`).
+  /(?<![\w\])-])\[([a-z-]+:[^\]\s'"`]+)\](?!(?:\/[\w-]+)?:)/g,
+  // Color attributes in JSX and SVG (`fill="white"`, `stroke={'red'}`, `stopColor="gold"`).
+  /(?<![\w-])(?:fill|stroke|color|stopColor|stop-color|floodColor|flood-color|lightingColor|lighting-color|bgcolor)\s*=\s*\{?\s*(['"`])([^'"`\n]*)\1/g,
+  // Style objects (`style={{ color: 'red', borderColor: "white" }}`, `'background-color': 'red'`).
+  /(?<![\w-])['"]?[A-Za-z-]*(?:[cC]olor|[bB]ackground|[fF]ill|[sS]troke|[sS]hadow|[bB]order|[oO]utline)[A-Za-z-]*['"]?\s*:\s*(['"`])([^'"`\n]*)\1/g,
 ];
+// Declarations in stylesheets (`color: red;`, `border: 1px solid white }`).
+const CSS_DECLARATION = /(?<![\w-])-{0,2}[a-z][a-z-]*\s*:\s*([^;{}]+)(?=[;}])/g;
+
+function buildRules({ palettes, singles, shades }) {
+  const palette = palettes.join('|');
+  const single = singles.join('|');
+  const shade = shades.join('|');
+  const utility =
+    'bg|text|text-shadow|border(?:-[xytrblse])?|ring(?:-offset)?|inset-ring|outline|divide|from|via|to|fill|stroke|shadow|inset-shadow|drop-shadow|decoration|accent|caret|placeholder';
+  return [
+    { re: new RegExp(`(?<![\\w-])(?:${utility})-(?:${palette})-(?:${shade})(?![\\w-])`, 'g'), what: 'Tailwind palette color' },
+    { re: new RegExp(`(?<![\\w-])(?:${utility})-(?:${single})(?![\\w-])`, 'g'), what: 'Tailwind palette color' },
+    // The palette as a variable (`bg-[var(--color-rose-500)]`, `color: var(--color-white)`).
+    { re: new RegExp(`--color-(?:(?:${palette})-(?:${shade})|${single})(?![\\w-])`, 'g'), what: 'Tailwind palette color' },
+    { re: /(?<!&)#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-])/g, what: 'literal color' },
+    { re: /(?<![\w-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(/g, what: 'literal color' },
+  ];
+}
+
+let rules;
 
 // Comments are blanked (keeping line breaks) so that issue references such as "(#113)" do not count as hex colors.
 function stripComments(text) {
@@ -28,37 +110,60 @@ function stripComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, blank).replace(/(^|[^:'"`\\])\/\/[^\n]*/g, (m, lead) => lead + blank(m.slice(lead.length)));
 }
 
-/** Returns `{ line, match, what }` for each raw color in a source text. */
-export function findRawColors(text) {
-  const code = stripComments(text);
-  const found = [];
-  for (const { re, what } of RULES) {
-    for (const m of code.matchAll(re)) {
-      found.push({ at: m.index, line: code.slice(0, m.index).split('\n').length, match: m[0], what });
+function namedColors(code, spot, found) {
+  for (const m of code.matchAll(spot)) {
+    const value = m[m.length - 1];
+    const start = m.index + m[0].lastIndexOf(value);
+    // Tailwind writes spaces as `_` in arbitrary values (`shadow-[0_0_0_1px_red]`); same length, so offsets hold.
+    for (const id of value.replaceAll('_', ' ').matchAll(IDENT)) {
+      if (NAMED.has(id[0].toLowerCase())) found.push({ at: start + id.index, match: id[0], what: 'CSS color name' });
     }
   }
-  return found.sort((a, b) => a.at - b.at).map(({ line, match, what }) => ({ line, match, what }));
 }
 
-function listSources(root, dir) {
+/**
+ * Returns `{ line, match, what }` for each raw color in a source text. `css: true` reads it as a stylesheet
+ * (declarations) instead of TypeScript (attributes and style objects).
+ */
+export function findRawColors(text, { css = false, theme } = {}) {
+  const active = theme ? buildRules(theme) : (rules ??= buildRules(readTailwindTheme()));
+  const code = stripComments(text);
+  const found = [];
+  for (const { re, what } of active) {
+    for (const m of code.matchAll(re)) found.push({ at: m.index, match: m[0], what });
+  }
+  for (const spot of css ? [...VALUE_SPOTS.slice(0, 2), CSS_DECLARATION] : VALUE_SPOTS) namedColors(code, spot, found);
+  return found
+    .sort((a, b) => a.at - b.at)
+    .filter((f, i, all) => i === 0 || f.at !== all[i - 1].at)
+    .map(({ at, match, what }) => ({ line: code.slice(0, at).split('\n').length, match, what }));
+}
+
+function listSources(root, dir, pattern) {
   const out = [];
   for (const entry of readdirSync(join(root, dir), { withFileTypes: true })) {
     const path = `${dir}/${entry.name}`;
     if (entry.isDirectory()) {
-      if (entry.name !== 'node_modules' && !SKIP_DIRS.includes(path)) out.push(...listSources(root, path));
-    } else if (/\.tsx?$/.test(entry.name)) {
+      if (entry.name !== 'node_modules' && !SKIP_DIRS.includes(path)) out.push(...listSources(root, path, pattern));
+    } else if (pattern.test(entry.name)) {
       out.push(path);
     }
   }
   return out;
 }
 
+/** Every file the lint reads by default, relative to the repo root. */
+export function defaultFiles(root = ROOT) {
+  return [...SCAN_DIRS.flatMap((d) => listSources(root, d, /\.tsx?$/)), ...CSS_DIRS.flatMap((d) => listSources(root, d, /\.css$/))];
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const root = join(fileURLToPath(import.meta.url), '..', '..');
   const args = process.argv.slice(2);
-  const files = args.length ? args.map((f) => relative(root, f).replaceAll('\\', '/')) : SCAN_DIRS.flatMap((d) => listSources(root, d));
+  const files = args.length ? args.map((f) => relative(ROOT, f).replaceAll('\\', '/')) : defaultFiles();
   const failures = files.flatMap((file) =>
-    findRawColors(readFileSync(join(root, file), 'utf8')).map((f) => `${file}:${f.line}: ${f.what} "${f.match}"; use a theme token from @crove/ui`),
+    findRawColors(readFileSync(join(ROOT, file), 'utf8'), { css: file.endsWith('.css') }).map(
+      (f) => `${file}:${f.line}: ${f.what} "${f.match}"; use a theme token from @crove/ui`,
+    ),
   );
   if (failures.length) {
     console.error(failures.join('\n'));
