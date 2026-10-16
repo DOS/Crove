@@ -24,6 +24,19 @@ export class DomainError extends Error {
   }
 }
 
+const AGENT_REFUSALS = new Set([
+  'AGENT_FORBIDDEN',
+  'AGENT_CONTEXT_WORKER_ONLY',
+  'AGENT_RUN_NOT_LIVE',
+  'AGENT_NOT_ACTIVE',
+  'AGENT_NO_POSITION',
+  'AGENT_ROLE_MISMATCH',
+  'AGENT_TASK_FIELD',
+  'AGENT_TASK_CLOSED',
+  'KILL_SWITCH_ON',
+  'BUDGET_EXHAUSTED',
+]);
+
 interface PgLikeError {
   code?: string;
   message?: string;
@@ -119,10 +132,17 @@ export function toDomainError(error: unknown): DomainError {
       if (pg.message?.includes('CONTEXT_SEAL_INVALID')) return new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
       if (pg.message?.includes('NOT_A_MEMBER')) return new DomainError('NOT_A_MEMBER', 403, 'Bạn không thuộc tổ chức này');
       if (pg.message?.includes('USER_DISABLED')) return new DomainError('USER_DISABLED', 403, 'Tài khoản của bạn đã bị khóa');
+      // A write in an agent context without the task lease its run must hold (ADR-0029 section 4): the run lost its
+      // checkout, or never had it.
+      if (pg.message === 'AGENT_LEASE_REQUIRED') return new DomainError('LEASE_LOST', 409, 'Tác tử AI không còn giữ việc này');
+      // Agent context entry and the database guards on agents (crove_kernel.enter_agent_context, refuse_agent_write).
+      if (pg.message && AGENT_REFUSALS.has(pg.message)) return new DomainError(pg.message, 403, 'Tác tử AI không được thực hiện việc này');
       return new DomainError('FORBIDDEN', 403, 'Không có quyền thực hiện');
     case '23505':
       return new DomainError('CONFLICT', 409, 'Bản ghi đã tồn tại', pg.constraint ? { constraint: pg.constraint } : undefined);
     case '23514':
+      if (pg.message === 'POSITION_CYCLE') return new DomainError('POSITION_CYCLE', 422, 'Sơ đồ tổ chức không được có vòng báo cáo');
+      return new DomainError('INVALID', 422, 'Dữ liệu không hợp lệ');
     case '23502':
     case '22P02':
       return new DomainError('INVALID', 422, 'Dữ liệu không hợp lệ');

@@ -76,7 +76,7 @@ export interface AuditEventTable {
   org_id: string;
   id: Generated<string>;
   occurred_at: DefaultTimestamp;
-  actor_type: 'user' | 'system';
+  actor_type: 'user' | 'system' | 'agent';
   actor_id: string | null;
   command: string;
   command_id: string;
@@ -204,6 +204,157 @@ export interface ActivityTable {
   occurred_at: DefaultTimestamp;
 }
 
+// ADR-0029 Phase 1 (issue #79): agents in an org chart shared with humans. See the migration
+// 20261018050000_crove_kernel_agents_org_chart.sql for the rules the database enforces.
+export type AgentRisk = 'R0' | 'R1' | 'R2';
+
+export interface AgentTemplateTable {
+  key: string;
+  module: string;
+  title: string;
+  role_key: string;
+  max_risk: AgentRisk;
+  job_description: Json;
+  subscribes: string[];
+  daily_run_cap: number;
+}
+
+export type AgentStatus = 'active' | 'paused' | 'retired';
+
+export interface AgentTable {
+  org_id: string;
+  id: Generated<string>;
+  template_key: string;
+  display_name: string;
+  runtime: Generated<'builtin' | 'external'>;
+  model_alias: string | null;
+  status: Generated<AgentStatus>;
+  max_risk: Generated<AgentRisk>;
+  daily_run_cap: Generated<number>;
+  created_by: string;
+  created_at: DefaultTimestamp;
+  updated_at: DefaultTimestamp;
+}
+
+export type PositionStatus = 'active' | 'paused' | 'archived';
+
+export interface PositionTable {
+  org_id: string;
+  id: Generated<string>;
+  title: string;
+  module: string;
+  role_key: string;
+  reports_to: string | null;
+  holder_user_id: string | null;
+  holder_agent_id: string | null;
+  le_scope: ColumnType<string[], string[] | undefined, string[]>;
+  flags: ColumnType<string[], string[] | undefined, string[]>;
+  job_description: ColumnType<unknown, string | undefined, string>;
+  status: Generated<PositionStatus>;
+  created_at: DefaultTimestamp;
+  updated_at: DefaultTimestamp;
+}
+
+export type AiRunStatus = 'running' | 'succeeded' | 'failed' | 'expired' | 'cancelled';
+
+export interface AiRunTable {
+  org_id: string;
+  id: Generated<string>;
+  agent_id: string;
+  module: string;
+  status: Generated<AiRunStatus>;
+  tainted: Generated<boolean>;
+  request_depth: Generated<number>;
+  cost: Generated<string>;
+  started_at: DefaultTimestamp;
+  expires_at: Timestamp;
+  finished_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  error: string | null;
+}
+
+export type TaskStatus = 'todo' | 'in_progress' | 'waiting' | 'in_review' | 'done' | 'cancelled';
+export type TaskKind = 'general' | 'proposal_review' | 'escalation' | 'delegation';
+export type TaskSource = 'event' | 'proposal' | 'human' | 'schedule';
+
+export interface TaskTable {
+  org_id: string;
+  id: Generated<string>;
+  title: string;
+  description: string | null;
+  kind: Generated<TaskKind>;
+  assignee_position_id: string | null;
+  parent_task_id: string | null;
+  source: TaskSource;
+  source_ref: ColumnType<unknown, string | null | undefined, string | null>;
+  source_event_id: string | null;
+  // Stamped from the context by a trigger.
+  created_by_type: 'user' | 'system' | 'agent';
+  created_by_id: string | null;
+  created_by_run: string | null;
+  status: Generated<TaskStatus>;
+  due: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  request_depth: Generated<number>;
+  tainted: Generated<boolean>;
+  checkout_run_id: string | null;
+  lock_expires_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  fence: ColumnType<string, string | number | undefined, string | number>;
+  created_at: DefaultTimestamp;
+  updated_at: DefaultTimestamp;
+}
+
+export interface TaskCommentTable {
+  org_id: string;
+  id: Generated<string>;
+  task_id: string;
+  body: string;
+  // Stamped from the context by a trigger.
+  author_type: 'user' | 'system' | 'agent';
+  author_id: string | null;
+  run_id: string | null;
+  tainted: Generated<boolean>;
+  created_at: DefaultTimestamp;
+}
+
+export interface AgentWakeupTable {
+  org_id: string;
+  id: Generated<string>;
+  agent_id: string;
+  status: Generated<'pending' | 'claimed' | 'done'>;
+  reasons: ColumnType<unknown, string | undefined, string>;
+  request_count: Generated<number>;
+  tainted: Generated<boolean>;
+  request_depth: Generated<number>;
+  run_id: string | null;
+  created_at: DefaultTimestamp;
+  updated_at: DefaultTimestamp;
+}
+
+export type AgentScope = 'org' | 'module' | 'agent';
+
+export interface KillSwitchTable {
+  org_id: string;
+  id: Generated<string>;
+  scope: AgentScope;
+  target: string;
+  reason: string | null;
+  engaged_by: string;
+  engaged_at: DefaultTimestamp;
+  released_by: string | null;
+  released_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+}
+
+export interface BudgetPolicyTable {
+  org_id: string;
+  id: Generated<string>;
+  scope: AgentScope;
+  target: string;
+  monthly_limit: string;
+  warn_percent: Generated<number>;
+  hard_stop: Generated<boolean>;
+  updated_by: string;
+  updated_at: DefaultTimestamp;
+}
+
 export interface AccountTable {
   code: string;
   name: string;
@@ -306,6 +457,15 @@ export interface Database {
   'crove_kernel.extraction': ExtractionTable;
   'crove_kernel.proposal': ProposalTable;
   'crove_kernel.activity': ActivityTable;
+  'crove_kernel.agent_template': AgentTemplateTable;
+  'crove_kernel.agent': AgentTable;
+  'crove_kernel.position': PositionTable;
+  'crove_kernel.ai_run': AiRunTable;
+  'crove_kernel.task': TaskTable;
+  'crove_kernel.task_comment': TaskCommentTable;
+  'crove_kernel.agent_wakeup': AgentWakeupTable;
+  'crove_kernel.kill_switch': KillSwitchTable;
+  'crove_kernel.budget_policy': BudgetPolicyTable;
   'crove_finance.account': AccountTable;
   'crove_finance.purchase_document': PurchaseDocumentTable;
   'crove_finance.purchase_document_void': PurchaseDocumentVoidTable;

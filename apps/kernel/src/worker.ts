@@ -4,7 +4,8 @@ import { sql } from 'kysely';
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
-import { DomainError, inboundKey, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { DomainError, inboundKey, type AgentProgram, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { runAgentWake } from '@crove/kernel';
 import type { InvoiceReader } from '@crove/agent';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
@@ -20,7 +21,28 @@ export const QUEUES = {
   signOut: 'kernel-session-signout',
   orgExport: 'kernel-org-export',
   retention: 'kernel-retention-purge',
+  agentDispatch: 'kernel-agent-dispatch',
+  agentWake: 'kernel-agent-wake',
+  agentSweep: 'kernel-agent-sweep',
 } as const;
+// Queue options by queue. kernel-agent-wake is 'stately' with the singleton key <org>:<agent>: at most one queued and
+// one active job per agent, so wake-ups coalesce and an agent runs once at a time (ADR-0029 section 5; the database
+// also allows one running ai_run per agent).
+const QUEUE_OPTIONS: Partial<Record<(typeof QUEUES)[keyof typeof QUEUES], { policy: 'stately' }>> = { [QUEUES.agentWake]: { policy: 'stately' } };
+const AGENT_RETRY_LIMIT = 3;
+// Every 10 minutes the worker wakes agents whose wake-up is still pending (crove_kernel.agent_wakeups_due): a run
+// refused by the daily cap, a kill switch or a budget, or blocked by a run left live by a crashed worker.
+export const AGENT_SWEEP_CRON = '*/10 * * * *';
+const AGENT_SWEEP_LIMIT = 200;
+
+function sendAgentWake(boss: PgBoss, orgId: string, agentId: string) {
+  return boss.send(QUEUES.agentWake, { orgId, agentId } satisfies AgentWakeJob, {
+    singletonKey: `${orgId}:${agentId}`,
+    retryLimit: AGENT_RETRY_LIMIT,
+    retryDelay: 20,
+    retryBackoff: true,
+  });
+}
 const EXTRACT_RETRY_LIMIT = 3;
 const INBOUND_RETRY_LIMIT = 3;
 const SIGN_OUT_RETRY_LIMIT = 5;
@@ -37,6 +59,16 @@ interface InboundRow {
   raw_sha256: string;
   size_bytes: string;
   recipient: string;
+}
+
+interface AgentWakeJob {
+  orgId: string;
+  agentId: string;
+}
+
+interface AgentDispatchJob {
+  orgId: string;
+  eventId: string;
 }
 
 interface ExtractJob {
@@ -72,6 +104,8 @@ export interface WorkerDeps {
   instance?: string;
   // Days of crove_kernel.refusal_tally windows kept (default DEFAULT_REFUSAL_TALLY_RETENTION_DAYS).
   refusalTallyRetentionDays?: number;
+  // The built-in program of each agent template (ADR-0029 section 8), by template key.
+  agentPrograms?: Readonly<Record<string, AgentProgram>>;
 }
 
 /** Records that this worker is alive (crove_kernel.worker_beat, crove_worker only). */
@@ -194,6 +228,29 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   });
   await boss.schedule(QUEUES.retention, RETENTION_CRON, null, { tz: RETENTION_TZ, missed: 'once' });
 
+  // Inbox triage: tasks for the agents whose template subscribes to the event. The command reads the event from the
+  // outbox; the job carries only its id.
+  await boss.work<AgentDispatchJob>(QUEUES.agentDispatch, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    await deps.runtime.execute('kernel.agent.dispatch_event', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'kernel.agent' }, orgId: job.data.orgId });
+  });
+
+  const agentPrograms = deps.agentPrograms ?? {};
+  await boss.work<AgentWakeJob>(QUEUES.agentWake, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const result = await runAgentWake({ runtime: deps.runtime, programs: agentPrograms }, job.data.orgId, job.data.agentId);
+    const label = `agent ${job.data.agentId.slice(0, 8)}`;
+    if (result.runId === null) console.log(`[agent] ${label}: no run (${result.reason})`);
+    else console.log(`[agent] ${label}: run ${result.runId.slice(0, 8)} ${result.outcome ?? ''}`);
+  });
+
+  await boss.work(QUEUES.agentSweep, { batchSize: 1 }, async () => {
+    const { rows } = await sql<{ org_id: string; agent_id: string }>`SELECT * FROM crove_kernel.agent_wakeups_due(${AGENT_SWEEP_LIMIT}::int)`.execute(deps.workerDb);
+    await Promise.all(rows.map((row) => sendAgentWake(boss, row.org_id, row.agent_id)));
+    if (rows.length > 0) console.log(`[agent] sweep woke ${rows.length} agent(s) with pending wake-ups`);
+  });
+  await boss.schedule(QUEUES.agentSweep, AGENT_SWEEP_CRON, null, { tz: RETENTION_TZ });
+
   let running = false;
   let stopped = false;
   const relay = async () => {
@@ -231,6 +288,17 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   singletonKey: `${row.org_id}:org-export`,
                   retryLimit: ORG_EXPORT_RETRY_LIMIT,
                   retryDelay: 60,
+                  retryBackoff: true,
+                });
+              }
+              if (row.type === 'kernel.agent.wakeup_requested') {
+                return sendAgentWake(boss, row.org_id, String(row.payload.agentId));
+              }
+              if (row.type === 'kernel.proposal.created') {
+                return boss.send(QUEUES.agentDispatch, { orgId: row.org_id, eventId: row.event_id } satisfies AgentDispatchJob, {
+                  singletonKey: `${row.org_id}:${row.event_id}`,
+                  retryLimit: AGENT_RETRY_LIMIT,
+                  retryDelay: 20,
                   retryBackoff: true,
                 });
               }
@@ -310,7 +378,7 @@ export async function migrateJobs(adminUrl: string): Promise<void> {
   const boss = new PgBoss({ connectionString: adminUrl, schema: JOB_SCHEMA, migrate: true, supervise: false, schedule: false });
   boss.on('error', (error) => console.error('[pg-boss migrate]', error));
   await boss.start();
-  for (const queue of Object.values(QUEUES)) await boss.createQueue(queue);
+  for (const queue of Object.values(QUEUES)) await boss.createQueue(queue, QUEUE_OPTIONS[queue] ?? {});
   await boss.stop({ graceful: false });
   const client = new pg.Client({ connectionString: adminUrl, application_name: 'crove-migrate' });
   await client.connect();

@@ -26,6 +26,11 @@ export const EXPORT_TABLES = {
   'kernel.proposal': { from: 'crove_kernel.proposal', omit: [] },
   'kernel.activity': { from: 'crove_kernel.activity', omit: [] },
   'kernel.audit_event': { from: 'crove_kernel.audit_event', omit: [] },
+  // The org chart and its work (ADR-0029). Runs, wake-ups, budgets and kill switches are machinery and stay out.
+  'kernel.position': { from: 'crove_kernel.position', omit: [] },
+  'kernel.agent': { from: 'crove_kernel.agent', omit: [] },
+  'kernel.task': { from: 'crove_kernel.task', omit: [] },
+  'kernel.task_comment': { from: 'crove_kernel.task_comment', omit: [] },
   'finance.purchase_document': { from: 'crove_finance.purchase_document', omit: [] },
   'finance.purchase_line': { from: 'crove_finance.purchase_line', omit: [] },
   'finance.journal_entry': { from: 'crove_finance.journal_entry', omit: [] },

@@ -5,6 +5,7 @@ import { accountsList, documentsList, journalGet, journalList, vendorsList } fro
 
 export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
 export { buildJournalWorkbook } from './export.ts';
+export { CHIEF_ACCOUNTANT_TEMPLATE, chiefAccountantReview, financeAgentPrograms, reviewText } from './agent.ts';
 export * from './domain/money.ts';
 export * from './domain/ledger.ts';
 export * from './domain/tt133-reports.ts';
