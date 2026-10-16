@@ -2,7 +2,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import { zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { DomainError, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
+import { DomainError, PROPOSAL_EDIT_COMMAND, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
 import { PROPOSAL_REVISERS, actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { createOrgCommand, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
@@ -356,8 +356,9 @@ function changesContent(payload: unknown, lineAccounts: z.infer<typeof zLineAcco
 
 // Edits a pending proposal: the new content becomes a new revision authored by the editor (plan §8.3), and
 // the approval policy runs again on it. An edit never approves; kernel.proposal.approve does, separately.
+// The runtime runs a reviser only for this command (PROPOSAL_EDIT_COMMAND, #161).
 export const editProposal = defineCommand({
-  name: 'kernel.proposal.edit',
+  name: PROPOSAL_EDIT_COMMAND,
   input: z.object({ id: zId, revision: z.number().int().positive(), lineAccounts: zLineAccounts.min(1) }),
   risk: 'R1',
   access: MEMBERS,
