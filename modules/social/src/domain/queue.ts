@@ -126,12 +126,11 @@ export function slotsBetween(queue: QueueSpec, fromMs: number, toMs: number): nu
   return [...out].sort((a, b) => a - b);
 }
 
-// Whether an instant is one of the queue's slots (its local weekday and minute match a slot).
+// Whether an instant is one of the queue's slot instants, with the same mapping as slotsBetween: a slot inside a
+// forward DST gap is the instant after the gap, so a post placed there keeps its slot on the next placement.
 export function isSlot(queue: QueueSpec, epochMs: number): boolean {
   if (epochMs % MINUTE !== 0) return false;
-  const l = localTime(epochMs, queue.timeZone);
-  const minute = l.hour * 60 + l.minute;
-  return queue.slots.some((s) => validSlot(s) && s.weekday === l.weekday && s.minute === minute);
+  return slotsBetween(queue, epochMs - MINUTE, epochMs).includes(epochMs);
 }
 
 // The first slot after `afterMs` that is not taken, within the horizon; null when the queue has no slot there.
@@ -153,11 +152,14 @@ export interface QueuedPost {
 
 // Places a queue's posts after a change to the queue (slots edited, time zone changed) or when posts are added
 // (slotAt null). A post keeps its slot when that slot still exists and is after `now`; the others take the first
-// free slots, in their previous order. Nothing else moves. Posts that find no slot keep slotAt null.
+// free slots, in their previous order. Nothing else moves. When two posts share a slot, the lower id keeps it.
+// Posts that find no slot within the horizon get slotAt null. Callers pass only posts not yet handed to the
+// publisher: a due post (slotAt <= now) passed here is moved like any other.
 export function placeQueued(queue: QueueSpec, posts: readonly QueuedPost[], nowMs: number): QueuedPost[] {
   const kept = new Map<string, number>();
   const taken = new Set<number>();
-  for (const p of posts) {
+  const byId = [...posts].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const p of byId) {
     if (p.slotAt !== null && p.slotAt > nowMs && isSlot(queue, p.slotAt) && !taken.has(p.slotAt)) {
       kept.set(p.id, p.slotAt);
       taken.add(p.slotAt);

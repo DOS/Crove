@@ -18,6 +18,7 @@ export interface VariantDraft {
 }
 
 export type IssueCode =
+  | 'CONTENT_REQUIRED'
   | 'TEXT_REQUIRED'
   | 'TEXT_TOO_LONG'
   | 'TITLE_REQUIRED'
@@ -53,6 +54,8 @@ function checkText(issues: Issue[], field: 'body' | 'title', text: string, rule:
 
 export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities = CAPABILITIES[variant.provider]): Issue[] {
   const issues: Issue[] = [];
+  // No channel takes an empty post: it needs text or media.
+  if (variant.body.trim() === '' && variant.media.length === 0) issues.push({ code: 'CONTENT_REQUIRED', field: 'body', limit: null, actual: null });
   checkText(issues, 'body', variant.body, caps.body);
   if (caps.title) checkText(issues, 'title', variant.title ?? '', caps.title);
   else if (variant.title !== null && variant.title.trim() !== '') issues.push({ code: 'TITLE_NOT_SUPPORTED', field: 'title', limit: null, actual: null });
@@ -65,7 +68,8 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
   if (videos > rule.maxVideos && rule.kinds.includes('video')) {
     issues.push({ code: 'TOO_MANY_VIDEOS', field: 'media', limit: rule.maxVideos, actual: videos });
   }
-  if (!rule.mixed && videos > 0 && videos < media.length) issues.push({ code: 'MEDIA_MIX_NOT_ALLOWED', field: 'media', limit: null, actual: null });
+  const allowedKinds = media.every((m) => rule.kinds.includes(m.kind));
+  if (!rule.mixed && allowedKinds && videos > 0 && videos < media.length) issues.push({ code: 'MEDIA_MIX_NOT_ALLOWED', field: 'media', limit: null, actual: null });
 
   media.forEach((m, i) => {
     const field = `media.${i}`;

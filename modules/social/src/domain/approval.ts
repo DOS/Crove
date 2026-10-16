@@ -22,24 +22,47 @@ export interface HashedVariant {
   settings: Readonly<Record<string, unknown>>;
 }
 
-function canonical(value: unknown): unknown {
+// Plain JSON only: anything JSON would change silently (NaN, -0, undefined in an array, a Date or Map) is refused,
+// so two different contents never share a hash. An undefined object property is the same as a missing one.
+function canonical(value: unknown, path: string): unknown {
   if (typeof value === 'string') return value.normalize('NFC');
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
+  if (value === null || typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || Object.is(value, -0)) throw new Error(`contentHash: unsupported number at ${path}`);
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v: unknown, i) => {
+      if (v === undefined) throw new Error(`contentHash: undefined at ${path}[${i}]`);
+      return canonical(v, `${path}[${i}]`);
+    });
+  }
+  if (typeof value === 'object') {
+    const proto: unknown = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) throw new Error(`contentHash: not a plain object at ${path}`);
+    // A null-prototype target keeps a "__proto__" key as an ordinary key.
+    const out = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(value).sort()) {
       const v = (value as Record<string, unknown>)[key];
-      if (v !== undefined) out[key] = canonical(v);
+      if (v !== undefined) out[key] = canonical(v, `${path}.${key}`);
     }
     return out;
   }
-  return value;
+  throw new Error(`contentHash: unsupported ${typeof value} at ${path}`);
 }
 
-// sha256 over the variants sorted by channel connection, so the order they were added in does not matter.
+// Bumped if the canonical form ever changes, so old and new hashes never compare equal by accident.
+const HASH_VERSION = 'crove.social.content.v1';
+
+// sha256 over the variants sorted by channel connection, so the order they were added in does not matter. A post
+// has at most one variant per channel connection.
 export function contentHash(variants: readonly HashedVariant[]): string {
   const sorted = [...variants].sort((a, b) => (a.channelConnectionId < b.channelConnectionId ? -1 : a.channelConnectionId > b.channelConnectionId ? 1 : 0));
-  return 'sha256:' + createHash('sha256').update(JSON.stringify(canonical(sorted))).digest('hex');
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i]?.channelConnectionId === sorted[i - 1]?.channelConnectionId) throw new Error('contentHash: two variants for one channel connection');
+  }
+  const body = JSON.stringify(canonical(sorted, 'variants'));
+  return 'sha256:' + createHash('sha256').update(`${HASH_VERSION}\n${body}`).digest('hex');
 }
 
 export interface ApprovalRecord {

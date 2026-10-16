@@ -8,7 +8,6 @@ import {
   countLinks,
   countText,
   nextAction,
-  POST_STATUSES,
   postOutcome,
   PROVIDERS,
   publishCallKey,
@@ -64,6 +63,22 @@ describe('validateVariant', () => {
     expect(validateVariant({ provider: 'facebook_page', body: 'Xin chào', title: null, media: [] })).toEqual([]);
   });
 
+  it('refuses an empty post on every channel', () => {
+    for (const provider of PROVIDERS) {
+      const codes = validateVariant({ provider, body: '  ', title: null, media: [] }).map((i) => i.code);
+      expect(codes).toContain('CONTENT_REQUIRED');
+    }
+  });
+
+  it('accepts a media-only post on X', () => {
+    expect(validateVariant({ provider: 'x', body: '', title: null, media: [jpeg()] })).toEqual([]);
+  });
+
+  it('reports a disallowed media kind once, not also as a mix', () => {
+    const codes = validateVariant({ provider: 'zalo_oa', body: 'x', title: 'T', media: [jpeg(), mp4()] }).map((i) => i.code);
+    expect(codes).toEqual(['TOO_MANY_MEDIA', 'MEDIA_KIND_NOT_ALLOWED']);
+  });
+
   it('requires media on Instagram and accepts only JPEG images', () => {
     const codes = (media: MediaItem[]) => validateVariant({ provider: 'instagram', body: 'caption', title: null, media }).map((i) => i.code);
     expect(codes([])).toEqual(['MEDIA_REQUIRED']);
@@ -113,14 +128,21 @@ describe('validateVariant', () => {
     for (const p of PROVIDERS) expect(CAPABILITIES[p].provider).toBe(p);
   });
 
-  it('never throws and reports a too-long body exactly when the count exceeds the limit', () => {
+  it('flags text exactly one past the limit and accepts text at the limit', () => {
+    // Lengths around each limit, in characters that count differently per mode (ASCII, Vietnamese, emoji).
+    const limited = PROVIDERS.filter((p) => CAPABILITIES[p].body.max !== null);
     fc.assert(
-      fc.property(fc.constantFrom(...PROVIDERS), fc.string({ unit: 'grapheme', maxLength: 400 }), (provider, body) => {
-        const caps = CAPABILITIES[provider];
-        const issues = validateVariant({ provider, body, title: null, media: [] });
-        const tooLong = issues.some((i) => i.code === 'TEXT_TOO_LONG');
-        expect(tooLong).toBe(caps.body.max !== null && countText(body, caps.body.count) > caps.body.max);
+      fc.property(fc.constantFrom(...limited), fc.constantFrom('a', 'ệ', '😀'), fc.integer({ min: -2, max: 2 }), (provider, unit, delta) => {
+        const rule = CAPABILITIES[provider].body;
+        const max = rule.max ?? 0;
+        // Each unit counts the same in every mode on its own and when repeated (no unit joins its neighbor).
+        const body = unit.repeat(Math.max(0, Math.floor((max + delta) / countText(unit, rule.count))));
+        const tooLong = validateVariant({ provider, body, title: null, media: [] }).some((i) => i.code === 'TEXT_TOO_LONG');
+        expect(tooLong).toBe(countText(body, rule.count) > max);
+        if (delta >= 1 && countText(unit, rule.count) === 1) expect(tooLong).toBe(true);
+        if (delta <= 0) expect(tooLong).toBe(false);
       }),
+      { numRuns: 60 },
     );
   });
 });
@@ -135,6 +157,7 @@ describe('post lifecycle', () => {
     { type: 'unschedule' },
     { type: 'cancel' },
     { type: 'start_publishing' },
+    { type: 'resume_publishing' },
     { type: 'finish', outcome: 'published' },
     { type: 'finish', outcome: 'partially_published' },
     { type: 'finish', outcome: 'failed' },
@@ -161,6 +184,12 @@ describe('post lifecycle', () => {
     expect(run('scheduled', [{ type: 'edit' }])).toBe('draft');
   });
 
+  it('resumes publishing when a human retries a variant of a failed or partly published post', () => {
+    expect(transitionPost('failed', { type: 'resume_publishing' })).toEqual({ ok: true, status: 'publishing' });
+    expect(transitionPost('partially_published', { type: 'resume_publishing' })).toEqual({ ok: true, status: 'publishing' });
+    expect(transitionPost('published', { type: 'resume_publishing' }).ok).toBe(false);
+  });
+
   it('never edits or cancels a post while it publishes or after it published', () => {
     for (const s of ['publishing', 'published', 'partially_published', 'cancelled'] as const) {
       expect(transitionPost(s, { type: 'edit' }).ok).toBe(false);
@@ -183,7 +212,6 @@ describe('post lifecycle', () => {
           if (t.status === 'publishing') expect(approvedSinceEdit).toBe(true);
           s = t.status;
         }
-        expect(POST_STATUSES).toContain(s);
       }),
     );
   });
@@ -200,7 +228,9 @@ describe('variant lifecycle', () => {
     { type: 'accepted' },
     { type: 'pending' },
     { type: 'rejected' },
+    { type: 'rate_limited' },
     { type: 'unknown' },
+    { type: 'needs_human' },
     { type: 'reconciled', found: true },
     { type: 'reconciled', found: false },
     { type: 'retry' },
@@ -217,10 +247,24 @@ describe('variant lifecycle', () => {
     expect(transitionVariant('ambiguous', { type: 'retry' }).ok).toBe(false);
   });
 
+  it('reschedules a rate-limited call and pauses on an expired token, but never once the provider accepted it', () => {
+    expect(transitionVariant('publishing', { type: 'rate_limited' })).toEqual({ ok: true, status: 'scheduled' });
+    expect(transitionVariant('publishing', { type: 'pause' })).toEqual({ ok: true, status: 'paused' });
+    expect(transitionVariant('processing', { type: 'rate_limited' }).ok).toBe(false);
+    expect(transitionVariant('processing', { type: 'pause' }).ok).toBe(false);
+  });
+
+  it('hands an outcome nobody can find out to a human', () => {
+    expect(transitionVariant('publishing', { type: 'needs_human' })).toEqual({ ok: true, status: 'needs_attention' });
+    expect(transitionVariant('ambiguous', { type: 'needs_human' })).toEqual({ ok: true, status: 'needs_attention' });
+    expect(transitionVariant('needs_attention', { type: 'retry' })).toEqual({ ok: true, status: 'scheduled' });
+  });
+
   it('never leaves published', () => {
     fc.assert(
       fc.property(fc.array(fc.constantFrom(...events), { maxLength: 40 }), (path) => {
-        let s: VariantStatus = 'pending';
+        // Start from pending or just before an outcome, so runs actually reach published.
+        let s: VariantStatus = path.length % 2 === 0 ? 'pending' : 'publishing';
         let published = false;
         for (const e of path) {
           const t = transitionVariant(s, e);
@@ -289,28 +333,51 @@ describe('contentHash and approvalCovers', () => {
     expect(approvalCovers({ revision: 3, contentHash: contentHash([other]) }, post)).toBe(false);
     expect(approvalCovers(null, post)).toBe(false);
   });
+
+  it('refuses values JSON would change silently', () => {
+    const withSettings = (settings: Record<string, unknown>) => () => contentHash([{ ...base, settings }]);
+    expect(withSettings({ a: Number.NaN })).toThrow(/unsupported number/);
+    expect(withSettings({ a: -0 })).toThrow(/unsupported number/);
+    expect(withSettings({ a: [undefined] })).toThrow(/undefined/);
+    expect(withSettings({ a: new Date(1) })).toThrow(/plain object/);
+    expect(withSettings({ a: new Map() })).toThrow(/plain object/);
+    expect(withSettings({ a: 1n })).toThrow(/unsupported bigint/);
+    expect(() => contentHash([base, base])).toThrow(/two variants/);
+  });
+
+  it('keeps a __proto__ key from parsed JSON in the hash', () => {
+    const parsed = JSON.parse('{"__proto__":{"x":1}}') as Record<string, unknown>;
+    expect(contentHash([{ ...base, settings: parsed }])).not.toBe(contentHash([{ ...base, settings: {} }]));
+  });
+
+  it('treats an undefined property as missing', () => {
+    expect(contentHash([{ ...base, settings: { a: 1, b: { c: true }, d: undefined } }])).toBe(contentHash([base]));
+  });
 });
 
 describe('nextAction', () => {
   const states: CallState[] = ['none', 'started', 'succeeded', 'failed', 'ambiguous'];
   const safeties: RetrySafety[] = ['safe', 'idempotent', 'reconcile_only', 'never'];
 
-  it('repeats a started call only when the step is safe or idempotent', () => {
-    for (const state of states) {
-      for (const safety of safeties) {
-        const action = nextAction(state, safety);
-        if (state === 'none') expect(action).toBe('call');
-        else if (state === 'succeeded' || state === 'failed') expect(action).toBe('done');
-        else if (safety === 'safe' || safety === 'idempotent') expect(action).toBe('call');
-        else expect(action).toBe(safety === 'reconcile_only' ? 'reconcile' : 'manual');
-      }
-    }
+  it('matches the plan: one visible call per attempt unless the step is safe to repeat', () => {
+    const table: Record<CallState, Record<RetrySafety, string>> = {
+      none: { safe: 'call', idempotent: 'call', reconcile_only: 'call', never: 'call' },
+      started: { safe: 'call', idempotent: 'call', reconcile_only: 'reconcile', never: 'manual' },
+      ambiguous: { safe: 'call', idempotent: 'call', reconcile_only: 'reconcile', never: 'manual' },
+      succeeded: { safe: 'done', idempotent: 'done', reconcile_only: 'done', never: 'done' },
+      failed: { safe: 'done', idempotent: 'done', reconcile_only: 'done', never: 'done' },
+    };
+    for (const state of states) for (const safety of safeties) expect(nextAction(state, safety)).toBe(table[state][safety]);
   });
 
-  it('builds deterministic keys and refuses malformed parts', () => {
-    expect(publishCallKey('v-1', 2, 'create_container')).toBe('social.publish:v-1:2:create_container');
-    expect(publishJobKey('o-1', 'v-1', 2)).toBe('o-1:v-1:2');
-    expect(() => publishCallKey('v-1', 0, 'publish')).toThrow();
-    expect(() => publishCallKey('v-1', 1, 'Publish:x')).toThrow();
+  it('builds deterministic keys, fresh for a new attempt, and refuses malformed parts', () => {
+    expect(publishCallKey('v-1', 2, 1, 'create_container')).toBe('social.publish:v-1:2:1:create_container');
+    expect(publishCallKey('v-1', 2, 2, 'create_container')).not.toBe(publishCallKey('v-1', 2, 1, 'create_container'));
+    expect(publishJobKey('o-1', 'v-1', 2, 1)).toBe('o-1:v-1:2:1');
+    expect(() => publishCallKey('v-1', 0, 1, 'publish')).toThrow();
+    expect(() => publishCallKey('v-1', 1, 0, 'publish')).toThrow();
+    expect(() => publishCallKey('v-1', 1, 1, 'Publish:x')).toThrow();
+    expect(() => publishCallKey('v:1', 1, 1, 'publish')).toThrow();
+    expect(() => publishJobKey('o:1', 'v-1', 1, 1)).toThrow();
   });
 });

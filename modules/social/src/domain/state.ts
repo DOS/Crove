@@ -37,6 +37,8 @@ export type PostEvent =
   | { type: 'unschedule' }
   | { type: 'cancel' }
   | { type: 'start_publishing' }
+  // A human retried a failed variant of a post that already has an outcome (a new attempt, same revision).
+  | { type: 'resume_publishing' }
   // The post's outcome once publishing ends, from its variants (postOutcome).
   | { type: 'finish'; outcome: 'published' | 'partially_published' | 'failed' };
 
@@ -70,6 +72,8 @@ export function transitionPost(from: PostStatus, event: PostEvent): Transition<P
         return CANCELLABLE.has(from) ? 'cancelled' : null;
       case 'start_publishing':
         return from === 'scheduled' ? 'publishing' : null;
+      case 'resume_publishing':
+        return from === 'failed' || from === 'partially_published' ? 'publishing' : null;
       case 'finish':
         return from === 'publishing' ? event.outcome : null;
     }
@@ -91,25 +95,33 @@ export type VariantEvent =
   | { type: 'accepted' }
   | { type: 'pending' }
   | { type: 'rejected' }
+  // The provider refused the call for a rate limit before anything was posted; it runs again at error_retry_at.
+  | { type: 'rate_limited' }
   | { type: 'unknown' }
+  // nextAction said 'manual': the outcome cannot be found out, a human decides.
+  | { type: 'needs_human' }
   | { type: 'reconciled'; found: boolean }
   | { type: 'retry' }
   | { type: 'drop' };
 
 // pending -> scheduled -> publishing -> published | processing | failed | ambiguous.
-// ambiguous -> published (found) | needs_attention (not found); needs_attention -> scheduled (a human retries) or
-// cancelled (a human drops it). paused holds a variant whose channel lost its token or quota; resume reschedules.
+// ambiguous -> published (found) | needs_attention (not found, or nothing to ask); needs_attention -> scheduled (a
+// human retries, as a new attempt) or cancelled (a human drops it). paused holds a variant whose channel lost its
+// token or quota, before or instead of the call (the provider refused it); resume reschedules. A variant in
+// processing was accepted by the provider, so it never pauses or reschedules: its status checks continue.
 const VARIANT_TABLE: Readonly<Record<VariantEvent['type'], Partial<Record<VariantStatus, VariantStatus>>>> = {
   schedule: { pending: 'scheduled' },
   unschedule: { scheduled: 'pending', paused: 'pending' },
   cancel: { pending: 'cancelled', scheduled: 'cancelled', paused: 'cancelled' },
-  pause: { scheduled: 'paused' },
+  pause: { scheduled: 'paused', publishing: 'paused' },
   resume: { paused: 'scheduled' },
   start: { scheduled: 'publishing' },
   accepted: { publishing: 'published', processing: 'published' },
   pending: { publishing: 'processing' },
   rejected: { publishing: 'failed', processing: 'failed' },
+  rate_limited: { publishing: 'scheduled' },
   unknown: { publishing: 'ambiguous', processing: 'ambiguous' },
+  needs_human: { publishing: 'needs_attention', ambiguous: 'needs_attention' },
   reconciled: {},
   retry: { needs_attention: 'scheduled', failed: 'scheduled' },
   drop: { needs_attention: 'cancelled' },

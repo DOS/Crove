@@ -104,10 +104,7 @@ describe('slots', () => {
           if (next === null) return;
           expect(next).toBeGreaterThan(after);
           expect(taken.has(next)).toBe(false);
-          // A slot skipped by DST lands after the gap, so it is not a slot by local clock time: allow that case.
-          const local = localTime(next, tz);
-          const skipped = !slots.some((s) => s.weekday === local.weekday && s.minute === local.hour * 60 + local.minute);
-          if (!skipped) expect(isSlot(spec, next)).toBe(true);
+          expect(isSlot(spec, next)).toBe(true);
         },
       ),
       { numRuns: 200 },
@@ -156,6 +153,51 @@ describe('placeQueued', () => {
   it('moves posts whose slot is in the past', () => {
     const placed = placeQueued(queue, [{ id: 'late', slotAt: monday9 }], monday9 + MINUTE);
     expect(placed).toEqual([{ id: 'late', slotAt: wednesday }]);
+  });
+
+  it('keeps a post placed in a slot that falls in a DST gap', () => {
+    // Sunday 02:30 does not exist in New York on 2026-03-08; the slot instant is 03:30 EDT.
+    const ny: QueueSpec = { timeZone: NY, slots: [{ weekday: 7, minute: 150 }] };
+    const before = Date.UTC(2026, 2, 7, 12, 0);
+    const [first] = placeQueued(ny, [{ id: 'a', slotAt: null }], before);
+    expect(first?.slotAt).toBe(Date.UTC(2026, 2, 8, 7, 30));
+    expect(placeQueued(ny, [{ id: 'a', slotAt: first?.slotAt ?? null }], before)).toEqual([first]);
+  });
+
+  it('gives the shared slot to the lower id', () => {
+    const placed = placeQueued(queue, [
+      { id: 'b', slotAt: monday9 },
+      { id: 'a', slotAt: monday9 },
+    ], now);
+    expect(placed).toEqual([
+      { id: 'b', slotAt: wednesday },
+      { id: 'a', slotAt: monday9 },
+    ]);
+  });
+
+  it('is stable: placing an already placed queue changes nothing, in any zone', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom(HCM, NY, 'Australia/Lord_Howe', 'Asia/Kathmandu'),
+        fc.uniqueArray(fc.record({ weekday: fc.integer({ min: 1, max: 7 }), minute: fc.integer({ min: 0, max: 1439 }) }), {
+          minLength: 1,
+          maxLength: 5,
+          selector: (s) => `${s.weekday}:${s.minute}`,
+        }),
+        // Around the 2026 DST changes of New York (March, November) and Lord Howe (April, October).
+        fc.constantFrom(Date.UTC(2026, 2, 6), Date.UTC(2026, 3, 3), Date.UTC(2026, 9, 2), Date.UTC(2026, 9, 30)),
+        fc.integer({ min: 1, max: 8 }),
+        (tz, slots, nowMs, n) => {
+          const spec: QueueSpec = { timeZone: tz, slots };
+          const placed = placeQueued(spec, Array.from({ length: n }, (_, i) => ({ id: `p${i}`, slotAt: null })), nowMs);
+          expect(placeQueued(spec, placed, nowMs)).toEqual(placed);
+          const times = placed.map((p) => p.slotAt);
+          expect(new Set(times).size).toBe(n);
+          expect(times.every((t) => t !== null && t > nowMs && isSlot(spec, t))).toBe(true);
+        },
+      ),
+      { numRuns: 150 },
+    );
   });
 
   it('gives every post a distinct slot after now', () => {

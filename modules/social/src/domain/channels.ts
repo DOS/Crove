@@ -108,6 +108,7 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     scrapesLinkPreview: false,
     unverified: ['media.min', 'media.max'],
   },
+  // TikTok values: Content Posting API reference, media transfer guide and photo post reference (research §4).
   tiktok: {
     provider: 'tiktok',
     body: { max: 2200, count: 'utf16', required: false },
@@ -145,15 +146,15 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     unverified: ['body.max', 'media.max'],
   },
   x: {
-    // X weighs some characters double and counts every URL as 23; this simple count is a lower bound until the
-    // adapter adds X's own counting.
+    // X weighs some characters double and counts every URL as 23 characters. This plain count can be too low (wide
+    // characters) or too high (long URLs) until the adapter adds X's own counting.
     provider: 'x',
-    body: { max: 280, count: 'codepoints', required: true },
+    body: { max: 280, count: 'codepoints', required: false },
     title: null,
     media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: null, maxVideoSeconds: null },
     maxLinks: null,
     scrapesLinkPreview: true,
-    unverified: ['body.count'],
+    unverified: ['body.count', 'body.required'],
   },
   bluesky: {
     provider: 'bluesky',
@@ -162,7 +163,8 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: 1_000_000, maxVideoBytes: 50 * MB, maxVideoSeconds: null },
     maxLinks: null,
     scrapesLinkPreview: false,
-    unverified: ['body.max'],
+    // 50 MB is the PDS cap on any blob, not a documented video limit; Bluesky also caps post text in bytes.
+    unverified: ['body.max', 'media.maxVideoBytes'],
   },
 };
 
