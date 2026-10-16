@@ -47,6 +47,10 @@ const schema = z.object({
   PROBER_MAX_JOB_AGE_SECONDS: seconds(900),
   PROBER_MAX_HEARTBEAT_AGE_SECONDS: seconds(120),
   PROBER_MAX_DEAD_LETTERS: z.coerce.number().int().min(0).max(10_000).default(0),
+  // How full the cluster's NOTIFY queue may be, in percent (issue #281). It fills when a listening session stops
+  // reading (one stuck in a transaction, say); once full, every commit that sends a NOTIFY fails, including writes to
+  // the tables that send stream hints. PostgreSQL itself starts warning in its log at 50.
+  PROBER_MAX_NOTIFY_QUEUE_PERCENT: z.coerce.number().int().min(0).max(100).default(50),
   // Failed jobs count for this long. Default: the probe interval plus 60 s with --every (each dead letter alerts
   // once, or twice when it lands in the overlap, never zero times), 3600 otherwise. With cron, set it to the
   // cron interval plus 60.
@@ -70,6 +74,8 @@ export interface Thresholds {
   jobAgeSeconds: number;
   heartbeatAgeSeconds: number;
   deadLetters: number;
+  // Percent of the NOTIFY queue.
+  notifyQueuePercent: number;
 }
 
 export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeconds: number | null = null): ProberConfig {
@@ -98,6 +104,7 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
       jobAgeSeconds: raw.PROBER_MAX_JOB_AGE_SECONDS,
       heartbeatAgeSeconds: raw.PROBER_MAX_HEARTBEAT_AGE_SECONDS,
       deadLetters: raw.PROBER_MAX_DEAD_LETTERS,
+      notifyQueuePercent: raw.PROBER_MAX_NOTIFY_QUEUE_PERCENT,
     },
     deadLetterWindowSeconds: raw.PROBER_DEAD_LETTER_WINDOW_SECONDS ?? (everySeconds === null ? 3600 : Math.min(everySeconds + 60, 604_800)),
   };
@@ -112,7 +119,10 @@ function hostOf(url: string | undefined): string | undefined {
   }
 }
 
-/** One row of crove_kernel.health(). Ages in seconds, null when there is nothing to age. */
+/**
+ * One row of crove_kernel.health(), plus pg_notification_queue_usage(). Ages in seconds, null when there is nothing
+ * to age.
+ */
 export interface HealthSnapshot {
   checked_at: string;
   outbox_pending: number;
@@ -124,9 +134,13 @@ export interface HealthSnapshot {
   job_oldest_queued_age_seconds: number | null;
   dead_letter_count: number | null;
   worker_heartbeat_age_seconds: number | null;
+  // The fraction (0 to 1) of the cluster's NOTIFY queue in use: pg_notification_queue_usage(), a core function any
+  // login may call. Read beside health() rather than through it.
+  notify_queue_usage: number;
 }
 
 const s = (n: number) => `${Math.round(n)} s`;
+const percent = (fraction: number) => `${Math.round(fraction * 1000) / 10}%`;
 
 /** The thresholds a snapshot exceeds, as findings; [] when healthy. A missing heartbeat is a finding (absence). */
 export function evaluateHealth(h: HealthSnapshot, t: Thresholds, deadLetterWindowSeconds: number): Finding[] {
@@ -176,6 +190,14 @@ export function evaluateHealth(h: HealthSnapshot, t: Thresholds, deadLetterWindo
       message: `last worker heartbeat was ${s(h.worker_heartbeat_age_seconds)} ago (limit ${s(t.heartbeatAgeSeconds)}): the worker is down`,
     });
   }
+  if (h.notify_queue_usage * 100 > t.notifyQueuePercent) {
+    findings.push({
+      check: 'notify_queue',
+      value: h.notify_queue_usage,
+      threshold: t.notifyQueuePercent / 100,
+      message: `the NOTIFY queue is ${percent(h.notify_queue_usage)} full (limit ${t.notifyQueuePercent}%): a listening session has stopped reading (look for one idle in transaction); when it is full, writes that send stream hints fail`,
+    });
+  }
   return findings;
 }
 
@@ -204,7 +226,8 @@ export async function readHealth(databaseUrl: string, deadLetterWindowSeconds: n
     );
     const row = rows[0];
     if (!row) throw new Error('crove_kernel.health() returned no row');
-    return row;
+    const { rows: queue } = await client.query<{ usage: number }>('SELECT pg_catalog.pg_notification_queue_usage() AS usage');
+    return { ...row, notify_queue_usage: Number(queue[0]?.usage ?? 0) };
   } finally {
     await client.end().catch(() => {});
   }
@@ -339,7 +362,8 @@ export async function probeOnce(config: ProberConfig, deps: ProbeDeps = {}): Pro
     log(
       `[prober] ok: outbox ${health.outbox_pending} pending, inbound ${health.inbound_pending} pending, ` +
         `jobs ${health.jobs_queued ?? 0} queued, dead letters ${health.dead_letter_count ?? 0}, ` +
-        `heartbeat ${health.worker_heartbeat_age_seconds === null ? 'none' : s(health.worker_heartbeat_age_seconds)} ago`,
+        `heartbeat ${health.worker_heartbeat_age_seconds === null ? 'none' : s(health.worker_heartbeat_age_seconds)} ago, ` +
+        `notify queue ${percent(health.notify_queue_usage)}`,
     );
   } else {
     for (const f of findings) error(`[prober] FAIL ${f.check}: ${f.message}`);

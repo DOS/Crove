@@ -168,11 +168,14 @@ const schema = z.object({
   // (LISTEN does not work through a transaction-mode pooler such as PgBouncer in transaction mode or Supavisor :6543);
   // unset, DATABASE_URL. STREAM_MAX_CONNECTIONS open streams per process (0 turns streams off and the app polls),
   // STREAM_MAX_PER_USER per user and process. Every STREAM_RECHECK_SECONDS, and after every 50 hints, each stream
-  // re-runs the session check and membership of its org and closes when either fails.
+  // re-runs the session check and membership of its org and closes when either fails. At most
+  // STREAM_RECHECK_CONCURRENCY of those re-checks run at once per process (each takes a connection of the API pool of
+  // 10); the others wait their turn, holding their hints.
   DATABASE_LISTEN_URL: optional,
   STREAM_MAX_CONNECTIONS: z.coerce.number().int().min(0).max(100_000).default(500),
   STREAM_MAX_PER_USER: z.coerce.number().int().min(1).max(100).default(5),
   STREAM_RECHECK_SECONDS: z.coerce.number().int().min(5).max(60).default(30),
+  STREAM_RECHECK_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(3),
   // Any OpenAI-compatible endpoint. Without it, e-invoice XML still works; PDF/images do not.
   AI_BASE_URL: optional,
   AI_API_KEY: optional,

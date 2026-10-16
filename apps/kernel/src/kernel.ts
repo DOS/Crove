@@ -20,7 +20,7 @@ import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, assertExportKey, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
 import { exportSealer } from './export-seal.ts';
-import { ConcurrencyLimiter } from './concurrency.ts';
+import { ConcurrencyLimiter, Semaphore } from './concurrency.ts';
 import { createHttpApp, type StreamDeps } from './http.ts';
 import { createLogMailer, createMailer, type Mailer } from './mail.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
@@ -199,6 +199,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             tickets: createDbTicketStore(pool),
             slots: new ConcurrencyLimiter({ total: config.STREAM_MAX_CONNECTIONS, perKey: config.STREAM_MAX_PER_USER }),
             recheckSeconds: config.STREAM_RECHECK_SECONDS,
+            rechecks: new Semaphore(config.STREAM_RECHECK_CONCURRENCY),
           };
         }
         const app = createHttpApp({

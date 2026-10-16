@@ -18,9 +18,11 @@ const SCANNED = [...readdirSync(join(ROOT, 'apps')).map((app) => `apps/${app}/sr
 // Files that may name a control-plane table, each with its reason. Keep it empty: add a definer instead.
 const ALLOWED: string[] = [];
 
-// Control-plane tables (plan §3.6): identity, a user's sessions across orgs, inbound routing and the per-client
-// email budget in front of Supabase Auth. staff and kill_switch join this list when they are built (§4.12).
-const CONTROL_PLANE = ['user_account', 'auth_session', 'inbound_address', 'inbound_pending', 'auth_email_send'];
+// Control-plane tables (plan §3.6): identity, a user's sessions across orgs, inbound routing, the per-client
+// email budget in front of Supabase Auth and the invalidation stream's one-time tickets (#69, #281), which only the
+// stream_ticket_issue and stream_ticket_redeem definers touch. staff and kill_switch join this list when they are
+// built (§4.12).
+const CONTROL_PLANE = ['user_account', 'auth_session', 'inbound_address', 'inbound_pending', 'auth_email_send', 'stream_ticket'];
 const NAMES = CONTROL_PLANE.join('|');
 // Schema-qualified anywhere (Kysely table names, raw SQL, sql.table), optionally quoted, in any case (PostgreSQL
 // folds unquoted names) and across line breaks; or the bare name as a whole string literal, optionally aliased
@@ -76,6 +78,7 @@ describe('tenant code reaches control-plane tables only through definers', () =>
       'JOIN crove_kernel.inbound_address a ON a.token = t.inbound_token',
       "deleteFrom('crove_kernel.inbound_pending')",
       'INSERT INTO crove_kernel.auth_email_send (client_key) VALUES ($1)',
+      'DELETE FROM crove_kernel.stream_ticket WHERE ticket_hash = $1',
     ]) {
       expect(references(text), text).not.toEqual([]);
     }
@@ -84,6 +87,8 @@ describe('tenant code reaches control-plane tables only through definers', () =>
       'SELECT user_id, email FROM crove_kernel.member_profiles(${ids}::uuid[])',
       "selectFrom('crove_kernel.auth_session_org')",
       "selectFrom('crove_kernel.tenant_member')",
+      'SELECT crove_kernel.stream_ticket_issue($1, $2::uuid) AS ok',
+      'SELECT user_id FROM crove_kernel.stream_ticket_redeem($1)',
       'inbound_pending: number;',
       '// Reads crove_kernel.user_account only through member_profiles.',
       '/* JOIN crove_kernel.user_account */ SELECT 1',

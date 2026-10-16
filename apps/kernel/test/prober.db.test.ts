@@ -17,7 +17,7 @@ import { JOB_SCHEMA, QUEUES, beat, migrateJobs } from '../src/worker.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
-const limits = { outboxAgeSeconds: 300, jobAgeSeconds: 900, heartbeatAgeSeconds: 120, deadLetters: 0 };
+const limits = { outboxAgeSeconds: 300, jobAgeSeconds: 900, heartbeatAgeSeconds: 120, deadLetters: 0, notifyQueuePercent: 50 };
 
 const suite = ADMIN ? describe : describe.skip;
 
@@ -117,6 +117,8 @@ suite('prober on PostgreSQL', () => {
       job_oldest_queued_age_seconds: null,
       dead_letter_count: null,
       worker_heartbeat_age_seconds: null,
+      // pg_notification_queue_usage(), which crove_prober may call like any core function (issue #281).
+      notify_queue_usage: 0,
     });
     expect(evaluateHealth(health, limits, 3600).map((f) => f.check)).toEqual(['jobs_schema', 'heartbeat']);
   });
@@ -199,6 +201,7 @@ suite('prober on PostgreSQL', () => {
       'job_oldest_queued_age_seconds',
       'jobs_queued',
       'jobs_schema_present',
+      'notify_queue_usage',
       'outbox_oldest_age_seconds',
       'outbox_pending',
       'worker_heartbeat_age_seconds',

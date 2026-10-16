@@ -48,3 +48,39 @@ export class ConcurrencyLimiter {
     };
   }
 }
+
+// A bounded number of tasks at once, the rest waiting in FIFO order (issue #281: the invalidation stream's background
+// re-checks, so that the re-checks of many streams of one org, triggered by hints, never take more than `limit`
+// connections of the API pool from request traffic). Unlike ConcurrencyLimiter it never refuses: an overflow waits
+// for a free slot. The caller bounds the queue; each open stream has at most one re-check running or waiting.
+export class Semaphore {
+  readonly limit: number;
+  private active = 0;
+  private readonly waiting: Array<() => void> = [];
+
+  constructor(limit: number) {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('limit must be a positive integer');
+    this.limit = limit;
+  }
+
+  get running(): number {
+    return this.active;
+  }
+
+  get queued(): number {
+    return this.waiting.length;
+  }
+
+  // Runs fn once a slot is free; the slot is released when fn settles, and handed to the longest waiter.
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.active < this.limit) this.active++;
+    else await new Promise<void>((resolve) => this.waiting.push(resolve));
+    try {
+      return await fn();
+    } finally {
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.active--;
+    }
+  }
+}

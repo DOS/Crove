@@ -131,7 +131,7 @@ describe('the alert port', () => {
       telegramChatId: undefined,
       repeatSeconds: 3600,
       instance: 'test',
-      thresholds: { outboxAgeSeconds: 1, jobAgeSeconds: 1, heartbeatAgeSeconds: 1, deadLetters: 0 },
+      thresholds: { outboxAgeSeconds: 1, jobAgeSeconds: 1, heartbeatAgeSeconds: 1, deadLetters: 0, notifyQueuePercent: 50 },
       deadLetterWindowSeconds: 60,
     };
     const fetch = vi.fn();

@@ -10,12 +10,15 @@
 //
 // EventSource cannot send the Authorization header, so a stream opens with a one-time ticket from an authenticated
 // POST (stream_ticket_issue, stored as its SHA-256), valid for seconds, bound to the user, org, session and assurance,
-// and redeemed once on any instance (stream_ticket_redeem).
+// and redeemed once on any instance (stream_ticket_redeem). The redeem runs before any user is known, so it is capped
+// per client address (failed redeems per minute) and per process (redeems in flight) in http.ts (issue #281).
 //
 // Multi-instance: every instance LISTENs once and filters by org; Postgres delivers each notification to all of them.
 // LISTEN needs a session connection, so DATABASE_LISTEN_URL must not go through a transaction-mode pooler. When the
-// listener connection drops, every open stream of that process closes with `unavailable` (the app polls meanwhile),
-// new streams answer 503 until it is back, and the listener reconnects with backoff.
+// listener connection drops, or its periodic self-probe does not come back, every open stream of that process closes
+// with `unavailable` (the app polls meanwhile), new streams answer 503 until it is back, and the listener reconnects
+// with backoff. Background re-checks of all streams of a process share a small semaphore (STREAM_RECHECK_CONCURRENCY),
+// so a burst of hints for a busy org never takes more than that many connections of the API pool.
 import { createHash, randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { STREAM_HINT_TYPES, type StreamCloseReason, type StreamHint, type StreamHintType } from '@crove/kernel-contract';
@@ -30,6 +33,8 @@ export const STREAM_TICKET_TTL_SECONDS = 30;
 export const STREAM_TICKETS_PER_USER = 10;
 export const HEARTBEAT_MS = 25_000;
 export const RECHECK_EVERY_HINTS = 50;
+// A background re-check that takes longer closes its stream with `unavailable` (issue #281).
+export const RECHECK_TIMEOUT_MS = 20_000;
 // A stream never outlives this, whatever the token's exp says.
 export const MAX_STREAM_LIFETIME_MS = 60 * 60_000;
 // Distinct hints held for one stream (while a check runs or the client reads slowly); past it they collapse into one
@@ -169,24 +174,91 @@ export class StreamHub {
   }
 }
 
+// The listener's self-probe (issue #281): every PROBE_INTERVAL_MS it sends a NOTIFY on STREAM_CHANNEL from its own
+// connection and expects it back within PROBE_TIMEOUT_MS. The other instances receive it too and drop it; it would
+// not parse as a hint either (parseHint).
+export const PROBE_INTERVAL_MS = 30_000;
+export const PROBE_TIMEOUT_MS = 10_000;
+// A connection that stayed up this long resets the reconnect backoff; one that keeps dropping sooner backs off.
+export const LISTEN_STABLE_MS = 60_000;
+const PROBE_PREFIX = 'probe ';
+
+export function isProbePayload(payload: string): boolean {
+  return payload.startsWith(PROBE_PREFIX);
+}
+
 export interface PgSourceOptions {
   connectionString: string;
   // Backoff between reconnects: from minDelayMs, doubled up to maxDelayMs, with jitter.
   minDelayMs?: number;
   maxDelayMs?: number;
+  probeIntervalMs?: number;
+  probeTimeoutMs?: number;
+  stableMs?: number;
+  now?: () => number;
+  // Builds the listen client (tests replace it).
+  createClient?: (config: pg.ClientConfig) => pg.Client;
   log?: (message: string) => void;
 }
 
-// One dedicated pg client per process that LISTENs on STREAM_CHANNEL and reconnects with backoff.
+// One dedicated pg client per process that LISTENs on STREAM_CHANNEL and reconnects with backoff. A connection that
+// fails (error, end, a failed connect) or whose self-probe does not come back in time is dropped: the hub closes
+// every open stream with `unavailable`, and the source reconnects. The probe catches what keepAlive cannot: a
+// connection that is up but no longer delivers notifications, such as a DATABASE_LISTEN_URL that goes through a
+// transaction-mode pooler, or a backend that hangs.
 export function createPgNotificationSource(options: PgSourceOptions): NotificationSource {
   const minDelay = options.minDelayMs ?? 1_000;
   const maxDelay = options.maxDelayMs ?? 30_000;
+  const probeInterval = options.probeIntervalMs ?? PROBE_INTERVAL_MS;
+  const probeTimeout = options.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
+  const stableMs = options.stableMs ?? LISTEN_STABLE_MS;
+  const now = options.now ?? Date.now;
+  const createClient = options.createClient ?? ((config: pg.ClientConfig) => new pg.Client(config));
   const log = options.log ?? ((message: string) => console.error(`[stream] ${message}`));
   let client: pg.Client | null = null;
   let stopped = false;
   let attempt = 0;
   let timer: NodeJS.Timeout | null = null;
   let handlers: Parameters<NotificationSource['start']>[0] | null = null;
+  // Of the current connection: when it began to listen, its probe interval and the probe in flight.
+  let readyAt: number | null = null;
+  let probeTimer: NodeJS.Timeout | null = null;
+  let probe: { payload: string; deadline: NodeJS.Timeout; settle: (answered: boolean) => void } | null = null;
+
+  const stopProbes = () => {
+    if (probeTimer) clearInterval(probeTimer);
+    probeTimer = null;
+    const pending = probe;
+    probe = null;
+    if (pending) {
+      clearTimeout(pending.deadline);
+      pending.settle(false);
+    }
+  };
+
+  // settle(true) when the probe came back, settle(false) when the connection was dropped first.
+  const sendProbe = (current: pg.Client, settle: (answered: boolean) => void = () => {}) => {
+    if (client !== current) {
+      settle(false);
+      return;
+    }
+    // A probe still out has its own deadline.
+    if (probe) return;
+    const payload = `${PROBE_PREFIX}${randomBytes(12).toString('base64url')}`;
+    const deadline = setTimeout(
+      () =>
+        drop(
+          current,
+          `liveness probe not answered within ${probeTimeout} ms; DATABASE_LISTEN_URL must be a direct or session-mode connection`,
+        ),
+      probeTimeout,
+    );
+    deadline.unref?.();
+    probe = { payload, deadline, settle };
+    current.query('SELECT pg_catalog.pg_notify($1, $2)', [STREAM_CHANNEL, payload]).catch((error: unknown) => {
+      drop(current, `liveness probe failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
 
   const schedule = () => {
     if (stopped || timer) return;
@@ -204,6 +276,10 @@ export function createPgNotificationSource(options: PgSourceOptions): Notificati
   const drop = (current: pg.Client, why: string) => {
     if (client !== current) return;
     client = null;
+    stopProbes();
+    // The backoff starts over only after a connection that stayed up for stableMs.
+    if (readyAt !== null && now() - readyAt >= stableMs) attempt = 0;
+    readyAt = null;
     current.removeAllListeners('notification');
     current.end().catch(() => {});
     if (stopped) return;
@@ -215,18 +291,35 @@ export function createPgNotificationSource(options: PgSourceOptions): Notificati
   const connect = async () => {
     if (stopped) return;
     // keepAlive: a half-open TCP connection (NAT timeout, failover) is noticed instead of listening to nothing.
-    const current = new pg.Client({ connectionString: options.connectionString, application_name: 'crove-stream-listen', keepAlive: true });
+    const current = createClient({ connectionString: options.connectionString, application_name: 'crove-stream-listen', keepAlive: true });
     client = current;
     current.on('error', (error) => drop(current, error.message));
     current.on('end', () => drop(current, 'ended'));
     current.on('notification', (message) => {
-      if (message.channel === STREAM_CHANNEL) handlers?.notify(message.payload ?? '');
+      if (message.channel !== STREAM_CHANNEL) return;
+      const payload = message.payload ?? '';
+      // Probes, ours or another instance's, never reach the hub.
+      if (isProbePayload(payload)) {
+        if (client === current && probe && payload === probe.payload) {
+          const answered = probe;
+          probe = null;
+          clearTimeout(answered.deadline);
+          answered.settle(true);
+        }
+        return;
+      }
+      handlers?.notify(payload);
     });
     try {
       await current.connect();
       await current.query(`LISTEN ${STREAM_CHANNEL}`);
       if (stopped || client !== current) return;
-      attempt = 0;
+      // Ready only once a first probe came back: a connection that cannot deliver notifications never opens a stream.
+      const answered = await new Promise<boolean>((resolve) => sendProbe(current, resolve));
+      if (!answered || stopped || client !== current) return;
+      readyAt = now();
+      probeTimer = setInterval(() => sendProbe(current), probeInterval);
+      probeTimer.unref?.();
       handlers?.ready();
     } catch (error) {
       drop(current, error instanceof Error ? error.message : 'connect failed');
@@ -240,6 +333,7 @@ export function createPgNotificationSource(options: PgSourceOptions): Notificati
     },
     async stop() {
       stopped = true;
+      stopProbes();
       if (timer) clearTimeout(timer);
       timer = null;
       const current = client;
@@ -257,6 +351,11 @@ export interface StreamConnectionOptions {
   orgId: string;
   // The session check and membership of the org; throws a DomainError when the stream must end.
   check: () => Promise<void>;
+  // Bounds the background re-checks of every stream of the process (a Semaphore, issue #281): a re-check waits for
+  // a slot, and hints wait with it. Unset: re-checks run at once.
+  gate?: { run<T>(fn: () => Promise<T>): Promise<T> };
+  // How long a re-check may take (default RECHECK_TIMEOUT_MS).
+  checkTimeoutMs?: number;
   // Writes a chunk; returns false when the client has left more than MAX_BUFFERED_BYTES unread.
   write: (chunk: string) => boolean;
   // Ends the response (after the close event, if any).
@@ -354,12 +453,27 @@ export class StreamConnection implements HubSubscriber {
     }
   }
 
-  // Re-runs the session check and membership; hints wait until it answers.
+  // Re-runs the session check and membership; hints wait until it answers. At most one per stream runs or waits for
+  // the gate at a time, so the gate's queue never holds more than the open streams.
   async recheck(): Promise<void> {
     if (this.closed || this.checking) return;
     this.checking = true;
+    const { check, gate } = this.options;
+    const timeoutMs = this.options.checkTimeoutMs ?? RECHECK_TIMEOUT_MS;
+    // A check that does not answer in time (the pool exhausted, the database hanging) ends the stream as unavailable
+    // and frees its slot of the gate, so it cannot hold back the re-checks of every other stream.
+    const bounded = () => {
+      if (this.closed) return Promise.resolve();
+      let timer: NodeJS.Timeout | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('stream re-check timed out')), timeoutMs);
+      });
+      return Promise.race([check(), deadline]).finally(() => clearTimeout(timer));
+    };
     try {
-      await this.options.check();
+      // A stream that closed while it waited for a slot skips its check.
+      if (gate) await gate.run(bounded);
+      else await bounded();
     } catch (error) {
       this.checking = false;
       this.close(closeReason(error));
@@ -411,9 +525,12 @@ export interface TicketBinding {
   tokenExp: number;
 }
 
+// issued: stored. expired: the token's exp has passed (by the database's clock), 401. limit: the user holds
+// STREAM_TICKETS_PER_USER unexpired tickets already, 429.
+export type TicketIssue = 'issued' | 'expired' | 'limit';
+
 export interface TicketStore {
-  // false: the user holds STREAM_TICKETS_PER_USER unexpired tickets already, or the token has expired.
-  issue(ticketHash: string, binding: TicketBinding): Promise<boolean>;
+  issue(ticketHash: string, binding: TicketBinding): Promise<TicketIssue>;
   // The binding of an unexpired ticket, which is gone afterwards; null for an unknown, used or expired one.
   redeem(ticketHash: string): Promise<TicketBinding | null>;
 }
@@ -437,11 +554,16 @@ export function createDbTicketStore(pool: pg.Pool, options: { ttlSeconds?: numbe
   const perUser = options.perUser ?? STREAM_TICKETS_PER_USER;
   return {
     async issue(hash, b) {
-      const { rows } = await pool.query<{ ok: boolean }>(
-        `SELECT crove_kernel.stream_ticket_issue($1, $2::uuid, $3::uuid, $4::uuid, $5, $6::bigint, pg_catalog.to_timestamp($7::double precision), $8::integer, $9::integer) AS ok`,
+      // stream_ticket_issue answers false both for an expired token and for the per-user limit. `expired` repeats its
+      // token test in the same statement: now() is the transaction's start in both, so the two always agree.
+      const { rows } = await pool.query<{ ok: boolean; expired: boolean }>(
+        `SELECT crove_kernel.stream_ticket_issue($1, $2::uuid, $3::uuid, $4::uuid, $5, $6::bigint, pg_catalog.to_timestamp($7::double precision), $8::integer, $9::integer) AS ok,
+                pg_catalog.to_timestamp($7::double precision) <= pg_catalog.now() AS expired`,
         [hash, b.userId, b.orgId, b.sessionId, b.aal, b.mfaAt, b.tokenExp, ttl, perUser],
       );
-      return rows[0]?.ok === true;
+      const row = rows[0];
+      if (row?.ok === true) return 'issued';
+      return row?.expired === true ? 'expired' : 'limit';
     },
     async redeem(hash) {
       const { rows } = await pool.query<{
