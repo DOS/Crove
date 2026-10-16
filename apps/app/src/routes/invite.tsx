@@ -2,7 +2,9 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { useTranslations } from 'use-intl';
-import { Button, Card, ErrorText, Logo, Spinner } from '../components/ui.tsx';
+import { Button } from '@crove/ui/components/button';
+import { Card } from '@crove/ui/components/card';
+import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { signOut } from '../lib/session-actions.ts';
 import { useFormat } from '../i18n/provider.tsx';
@@ -15,8 +17,8 @@ function errorCode(error: unknown): string | null {
 
 function Shell({ children }: { children: ReactNode }) {
   return (
-    <main className="flex min-h-full items-center justify-center bg-canvas px-4 py-16">
-      <Card className="w-full max-w-md p-6">
+    <main className="flex min-h-full items-center justify-center bg-background px-4 py-16">
+      <Card className="block w-full max-w-md p-6">
         <Logo />
         {children}
       </Card>
@@ -52,9 +54,9 @@ export function InvitePage() {
   if (!token) {
     return (
       <Shell>
-        <h1 className="mt-6 text-lg font-semibold text-fg">{t('noInviteTitle')}</h1>
-        <p className="mt-1 text-sm text-fg-2">{t('noInviteBody')}</p>
-        <Button className="mt-6" onClick={() => void navigate({ to: '/' })}>
+        <h1 className="mt-6 text-lg font-semibold text-foreground">{t('noInviteTitle')}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{t('noInviteBody')}</p>
+        <Button variant="outline" size="lg" className="mt-6" onClick={() => void navigate({ to: '/' })}>
           {tc('backHome')}
         </Button>
       </Shell>
@@ -73,17 +75,17 @@ export function InvitePage() {
     const mismatch = errorCode(preview.error) === 'INVITE_EMAIL_MISMATCH';
     return (
       <Shell>
-        <h1 className="mt-6 text-lg font-semibold text-fg">{t('openFailed')}</h1>
+        <h1 className="mt-6 text-lg font-semibold text-foreground">{t('openFailed')}</h1>
         <ErrorText>{errorMessage(preview.error)}</ErrorText>
-        {mismatch && me.data && <p className="mt-2 text-sm text-fg-2">{t('signedInAs', { email: me.data.email })}</p>}
+        {mismatch && me.data && <p className="mt-2 text-sm text-muted-foreground">{t('signedInAs', { email: me.data.email })}</p>}
         <div className="mt-6 flex flex-wrap gap-2">
           {mismatch && (
             // The token stays in storage, so after signing in with the invited email the user comes back here.
-            <Button variant="primary" onClick={() => void signOut({ keepInvite: true })}>
+            <Button size="lg" onClick={() => void signOut({ keepInvite: true })}>
               {t('signOutOther')}
             </Button>
           )}
-          <Button variant="ghost" onClick={leave}>
+          <Button variant="ghost" size="lg" onClick={leave}>
             {tc('backHome')}
           </Button>
         </div>
@@ -95,25 +97,25 @@ export function InvitePage() {
   if (!invite) return null;
   return (
     <Shell>
-      <h1 className="mt-6 text-lg font-semibold text-fg">{t('title', { org: invite.orgName })}</h1>
-      <p className="mt-2 text-sm text-fg-2">
+      <h1 className="mt-6 text-lg font-semibold text-foreground">{t('title', { org: invite.orgName })}</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
         {t.rich('body', {
           invitedBy: invite.invitedBy,
           org: invite.orgName,
           role: t(`role.${invite.role}`),
-          strong: (chunks) => <span className="font-medium text-fg">{chunks}</span>,
+          strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
         })}
       </p>
-      <p className="mt-2 text-xs text-fg-3">
+      <p className="mt-2 text-xs text-subtle-foreground">
         {t('expires', { at: f.dateTime(invite.expiresAt) })}{' '}
         {me.data?.email ? t('visibility', { email: me.data.email }) : t('visibilityNoEmail')}
       </p>
       {accept.error && <ErrorText>{errorMessage(accept.error)}</ErrorText>}
       <div className="mt-6 flex flex-wrap gap-2">
-        <Button variant="primary" disabled={accept.isPending} onClick={() => accept.mutate({ token })}>
+        <Button size="lg" disabled={accept.isPending} onClick={() => accept.mutate({ token })}>
           {accept.isPending ? tc('processing') : t('accept')}
         </Button>
-        <Button variant="ghost" disabled={accept.isPending} onClick={leave}>
+        <Button variant="ghost" size="lg" disabled={accept.isPending} onClick={leave}>
           {t('decline')}
         </Button>
       </div>

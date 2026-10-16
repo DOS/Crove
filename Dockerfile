@@ -19,7 +19,7 @@ RUN pnpm install --frozen-lockfile --filter "@crove/app..." \
 # selected too and its parsers installed. Neither they nor the source of the other apps reach the image.
 FROM base AS kernel
 RUN pnpm install --frozen-lockfile --prod --filter-prod "@crove/kernel-server..." \
- && rm -rf apps/extract apps/app apps/web
+ && rm -rf apps/extract apps/app apps/web packages/ui
 
 FROM node:26-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0
 ENV NODE_ENV=production \

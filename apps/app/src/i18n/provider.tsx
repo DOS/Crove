@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { IntlProvider, useTranslations } from 'use-intl';
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '../lib/format.ts';
 import { LOCALES, LOCALE_NAMES, type Locale } from './locale.ts';
@@ -58,17 +59,18 @@ export function LocaleSwitcher({ className }: { className?: string }) {
   const { locale, setLocale } = useLocaleSetting();
   const t = useTranslations('common');
   return (
-    <select
-      className={className ?? 'rounded-lg border border-line bg-surface-2 px-2 py-1 text-xs text-fg-2'}
+    <NativeSelect
+      size="sm"
+      className={className}
       value={locale}
       aria-label={t('language')}
       onChange={(e) => setLocale(e.target.value as Locale)}
     >
       {LOCALES.map((l) => (
-        <option key={l} value={l}>
+        <NativeSelectOption key={l} value={l}>
           {LOCALE_NAMES[l]}
-        </option>
+        </NativeSelectOption>
       ))}
-    </select>
+    </NativeSelect>
   );
 }

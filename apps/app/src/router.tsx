@@ -1,6 +1,6 @@
 import { Outlet, createRootRoute, createRoute, createRouter, redirect, type ErrorComponentProps } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
-import { Button } from './components/ui.tsx';
+import { Button } from '@crove/ui/components/button';
 import { getCurrentOrg, isUnauthenticated, orpc, queryClient, setCurrentOrg } from './lib/api.ts';
 import { accessToken, auth, getConfig } from './lib/auth.ts';
 import { signOut } from './lib/session-actions.ts';
@@ -23,13 +23,13 @@ async function requireAuth() {
 function ErrorPage({ error }: ErrorComponentProps) {
   const t = useTranslations('common');
   return (
-    <main className="flex min-h-full items-center justify-center bg-canvas px-4">
+    <main className="flex min-h-full items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
-        <h1 className="text-lg font-semibold text-fg">{t('error')}</h1>
-        <p className="mt-2 text-sm text-fg-2">{error instanceof Error ? error.message : t('unknownError')}</p>
+        <h1 className="text-lg font-semibold text-foreground">{t('error')}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">{error instanceof Error ? error.message : t('unknownError')}</p>
         <div className="mt-6 flex justify-center gap-2">
-          <Button onClick={() => window.location.reload()}>{t('reload')}</Button>
-          <Button variant="ghost" onClick={() => void signOut().then(() => window.location.assign('/login'))}>
+          <Button variant="outline" size="lg" onClick={() => window.location.reload()}>{t('reload')}</Button>
+          <Button variant="ghost" size="lg" onClick={() => void signOut().then(() => window.location.assign('/login'))}>
             {t('signOut')}
           </Button>
         </div>
