@@ -1,6 +1,7 @@
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { readMigrations } from '../src/migrate.ts';
 
@@ -20,5 +21,18 @@ describe('migration files', () => {
     const dir = await mkdtemp(join(tmpdir(), 'crove-bad-'));
     await writeFile(join(dir, 'bad.sql'), 'SELECT 1;');
     await expect(readMigrations(dir)).rejects.toThrow(/naming rule/);
+  });
+
+  it('rejects two files with the same version', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'crove-dup-'));
+    await writeFile(join(dir, '20260101000000_crove_kernel_a.sql'), 'SELECT 1;');
+    await writeFile(join(dir, '20260101000000_crove_kernel_b.sql'), 'SELECT 2;');
+    await expect(readMigrations(dir)).rejects.toThrow(/duplicate migration version 20260101000000/);
+  });
+
+  it('the repository migrations have unique versions', async () => {
+    const dir = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
+    const files = await readMigrations(dir);
+    expect(new Set(files.map((f) => f.version)).size).toBe(files.length);
   });
 });
