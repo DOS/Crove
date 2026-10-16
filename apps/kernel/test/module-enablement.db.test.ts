@@ -157,7 +157,10 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
   });
 
   it('answers COMMAND_NOT_FOUND for a disabled module and not_installed for a lookup into it', async () => {
-    const runtime = new Runtime(db).register(moduleDefinitions(configFor('kernel'))).register({ commands: [probeCommand], queries: [probeQuery] });
+    // createKernel passes the modules CROVE_MODULES leaves out, so a lookup into them answers not_installed.
+    const runtime = new Runtime(db, { absentModules: ['finance'] })
+      .register(moduleDefinitions(configFor('kernel')))
+      .register({ commands: [probeCommand], queries: [probeQuery] });
     const actor = asUser(owner);
     expect(runtime.installed('kernel')).toBe(true);
     expect(runtime.installed('finance')).toBe(false);

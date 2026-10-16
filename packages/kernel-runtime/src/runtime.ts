@@ -159,8 +159,9 @@ export interface QueryContext {
   actor: Actor;
   role: MemberRole | null;
   // Runs another registered query in the same transaction, with the same access check as Runtime.query(). A query
-  // of a module this runtime does not have answers not_installed; an unknown query of an installed module is still
-  // QUERY_NOT_FOUND (a caller bug).
+  // of a module the deployment ships but leaves out (RuntimeOptions.absentModules) answers not_installed; with that
+  // list given, any other unknown query, a misspelled module included, is QUERY_NOT_FOUND (a caller bug). Query handlers must not write:
+  // from a command they run in its writable transaction, not in Runtime.query()'s read-only one.
   query<O>(name: string, input: unknown): Promise<Lookup<O>>;
   // The registered reviser of a proposal command (the one command whose `revises` names it), or null when there is
   // none or more than one (Runtime.validate() refuses the latter at startup).
@@ -249,6 +250,11 @@ export interface RuntimeOptions {
   stepUp?: 'required' | 'off';
   // Bound on refusal audit rows. Default DEFAULT_REFUSAL_AUDIT_LIMITS; 'unbounded' writes a row for every refusal.
   refusalAudit?: RefusalAuditLimits | 'unbounded';
+  // Modules the deployment ships but leaves out (CROVE_MODULES, ADR-0031; createKernel always passes it). ctx.query
+  // into one of them answers not_installed; a query of any other unregistered module is QUERY_NOT_FOUND, so a typo is
+  // never mistaken for a module that is off. Unset (tests and tools that register only some modules): every module
+  // without a registered command or query answers not_installed.
+  absentModules?: readonly string[];
 }
 
 // Policy P11 (ADR-0028 section 5): a second factor used within the last 5 minutes.
@@ -398,6 +404,8 @@ export class Runtime {
   private readonly sessions: SessionStatusSource | null;
   private readonly stepUp: 'required' | 'off';
   private readonly refusalAudit: Required<RefusalAuditLimits> | 'unbounded';
+  // null: absentModules not given, so every unregistered module counts as absent.
+  private readonly absentModules: ReadonlySet<string> | null;
 
   // A plain Db is one cell that also holds the control plane (singleCell).
   constructor(cells: CellResolver | Db, options: RuntimeOptions = {}) {
@@ -406,6 +414,7 @@ export class Runtime {
     this.stepUp = options.stepUp ?? 'required';
     const refusalAudit = options.refusalAudit ?? DEFAULT_REFUSAL_AUDIT_LIMITS;
     this.refusalAudit = refusalAudit === 'unbounded' ? 'unbounded' : validateRefusalAuditLimits(refusalAudit);
+    this.absentModules = options.absentModules ? new Set(options.absentModules) : null;
   }
 
   // How sessions are checked (see BootstrapEnv), for org-less reads that apply the same upstream checks as a command.
@@ -477,7 +486,8 @@ export class Runtime {
     const def = this.queries.get(name);
     if (!def) {
       const module = moduleOf(name);
-      if (!this.installedModules.has(module)) return { status: 'not_installed', module };
+      const absent = this.absentModules ? this.absentModules.has(module) : true;
+      if (absent && !this.installedModules.has(module)) return { status: 'not_installed', module };
       throw new DomainError('QUERY_NOT_FOUND', 404, `Không có truy vấn ${name}`);
     }
     const input = parseInput(def.input, rawInput);
