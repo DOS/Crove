@@ -13,8 +13,8 @@
 --     refuses the session in Crove (ADR-0028: correctness does not depend on the upstream call).
 --
 -- Only the user themself, and only while they belong to no active org:
---   * p_user_id is the caller: the kernel passes the verified token's user, as for my_orgs and invite_accept. The
---     call is also bound to a live session of that user: p_current_session (the request's session id) must be an
+--   * p_user_id is the caller: the kernel passes the verified token's user, as for my_orgs and invite_accept (a
+--     trust in crove_app, not an authorization boundary). The call is also tied to a live session of that user: p_current_session (the request's session id) must be an
 --     active auth_session row of p_user_id, which this transaction's session check has just recorded or confirmed.
 --   * ORG_REQUIRED (42501) when the user belongs to an active org: that revoke goes through the audited command.
 --   * NOT_ORGLESS (42501) inside an org context: this definer never runs in a tenant transaction.
