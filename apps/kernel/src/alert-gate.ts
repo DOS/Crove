@@ -38,6 +38,11 @@ export function problemKey(checks: readonly string[]): string | null {
 const MIN_REPEAT_SECONDS = 60;
 const MAX_REPEAT_SECONDS = 604_800;
 
+/** The repeat interval the rules apply: null for never (0), else clamped to 60 s..7 d like the SQL function. */
+export function effectiveRepeatSeconds(repeatSeconds: number): number | null {
+  return repeatSeconds > 0 ? Math.min(Math.max(repeatSeconds, MIN_REPEAT_SECONDS), MAX_REPEAT_SECONDS) : null;
+}
+
 export interface GateState {
   problem: string | null;
   startedAt: Date | null;
@@ -50,7 +55,8 @@ export interface GateState {
  */
 export function decideAlert(state: GateState, problem: string | null, now: Date, repeatSeconds: number): { result: GateResult; next: GateState } {
   const before = { previousProblem: state.problem, problemSince: state.startedAt, lastNotifiedAt: state.notifiedAt };
-  const repeatMs = repeatSeconds > 0 ? Math.min(Math.max(repeatSeconds, MIN_REPEAT_SECONDS), MAX_REPEAT_SECONDS) * 1000 : null;
+  const repeat = effectiveRepeatSeconds(repeatSeconds);
+  const repeatMs = repeat === null ? null : repeat * 1000;
   if (problem === null) {
     if (state.problem === null) return { result: { decision: 'healthy', ...before }, next: state };
     return { result: { decision: 'resolved', ...before }, next: { problem: null, startedAt: null, notifiedAt: now } };
@@ -99,6 +105,9 @@ export function pgAlertGate(databaseUrl: string, repeatSeconds: number): AlertGa
         application_name: 'crove-prober',
         connectionTimeoutMillis: 10_000,
         statement_timeout: 10_000,
+        // The client gives up too, so a half-open connection cannot stall the prober on the gate or the COMMIT.
+        query_timeout: 15_000,
+        keepAlive: true,
         idle_in_transaction_session_timeout: 60_000,
       });
       c.on('error', () => {});

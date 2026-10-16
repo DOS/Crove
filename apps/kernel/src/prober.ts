@@ -8,7 +8,7 @@
 import { hostname } from 'node:os';
 import pg from 'pg';
 import { z } from 'zod';
-import { memoryAlertGate, pgAlertGate, problemKey, type AlertGate, type GateResult } from './alert-gate.ts';
+import { effectiveRepeatSeconds, memoryAlertGate, pgAlertGate, problemKey, type AlertGate, type GateResult } from './alert-gate.ts';
 import {
   WEBHOOK_FORMATS,
   detectWebhookFormat,
@@ -16,6 +16,7 @@ import {
   type Alert,
   type AlertSink,
   type AlertSinkOptions,
+  type Delivery,
   type Finding,
   type WebhookFormat,
 } from './alert.ts';
@@ -261,13 +262,24 @@ function notification(gate: GateResult, base: Pick<Alert, 'instance' | 'at' | 'h
 function quietReason(gate: GateResult, repeatSeconds: number): string {
   if (gate.decision === 'busy') return 'another prober is sending the notification for this probe';
   const last = gate.lastNotifiedAt ? ` at ${gate.lastNotifiedAt.toISOString()}` : '';
+  const repeat = effectiveRepeatSeconds(repeatSeconds);
   const next =
-    repeatSeconds > 0 && gate.lastNotifiedAt
-      ? `, repeats from ${new Date(gate.lastNotifiedAt.getTime() + Math.max(repeatSeconds, 60) * 1000).toISOString()}`
-      : repeatSeconds > 0
-        ? ''
-        : ', repeats are off (ALERT_REPEAT_MINUTES=0)';
+    repeat === null
+      ? ', repeats are off (ALERT_REPEAT_MINUTES=0)'
+      : gate.lastNotifiedAt
+        ? `, repeats from ${new Date(gate.lastNotifiedAt.getTime() + repeat * 1000).toISOString()}`
+        : '';
   return `already notified${last}${next}`;
+}
+
+// A sink from an entrypoint (ADR-0030) might throw although the port says it should not: that counts as a failed
+// delivery, so the gate is still settled (rolled back) and the probe loop keeps running.
+async function safeDeliver(sink: AlertSink, alert: Alert): Promise<Delivery> {
+  try {
+    return await sink.deliver(alert);
+  } catch (e) {
+    return { channel: 'webhook', ok: false, error: `${sink.describe()} failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }
 
 /**
@@ -289,7 +301,7 @@ export async function probeOnce(config: ProberConfig, deps: ProbeDeps = {}): Pro
       await gate.settle(true);
       return true;
     }
-    const delivery = await sink.deliver(alert);
+    const delivery = await safeDeliver(sink, alert);
     await gate.settle(delivery.ok);
     if (!delivery.ok) {
       error(`[prober] alert delivery: ${delivery.error}`);
@@ -309,7 +321,8 @@ export async function probeOnce(config: ProberConfig, deps: ProbeDeps = {}): Pro
   } catch (e) {
     // The database itself is unreachable or health() is refused: that is an outage too, so it alerts. Its state
     // cannot be kept in the database, so the in-process gate de-duplicates it.
-    const reason = e instanceof Error ? e.message : String(e);
+    // One line: a driver message with a line break could otherwise start a Markdown heading or quote in a chat.
+    const reason = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, ' ').trim();
     error(`[prober] FAIL probe: could not read crove_kernel.health(): ${reason}`);
     const findings: Finding[] = [{ check: 'probe', value: null, threshold: null, message: `the prober could not read crove_kernel.health(): ${reason}` }];
     const result = await outage.decide('probe', now);
@@ -355,7 +368,7 @@ export async function sendTestAlert(config: ProberConfig, deps: ProbeDeps = {}):
   const error = deps.error ?? ((line: string) => console.error(line));
   const at = (deps.now ?? (() => new Date()))().toISOString();
   const sink = alertSink(config, deps);
-  const delivery = await sink.deliver({ kind: 'test', instance: config.instance, at, findings: [] });
+  const delivery = await safeDeliver(sink, { kind: 'test', instance: config.instance, at, findings: [] });
   if (!delivery.ok) {
     error(`[prober] test alert: ${delivery.error}`);
     return EXIT.deliveryFailed;

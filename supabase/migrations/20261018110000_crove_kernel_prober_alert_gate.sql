@@ -10,6 +10,8 @@
 --                          worked (a failed delivery rolls back, so the next probe tries again), and a second prober
 --                          that probes meanwhile gets 'busy' and sends nothing. EXECUTE for crove_prober only.
 
+SET LOCAL lock_timeout = '2s';
+
 CREATE TABLE IF NOT EXISTS crove_kernel.prober_alert_state (
   id smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   problem text CHECK (problem IS NULL OR (length(problem) BETWEEN 1 AND 256 AND problem ~ '^[a-z_]+(,[a-z_]+)*$')),

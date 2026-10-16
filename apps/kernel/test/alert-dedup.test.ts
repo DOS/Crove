@@ -221,6 +221,34 @@ describe('probes notify on news only', () => {
     expect(out).toContain('[prober] notification skipped: another prober is sending the notification for this probe');
   });
 
+  it('treats a sink that throws as a failed delivery: the state is rolled back and the probe returns 3', async () => {
+    const settled: boolean[] = [];
+    const inner = memoryAlertGate(3600);
+    const gate: AlertGate = { decide: (p, n) => inner.decide(p, n), settle: async (d) => (settled.push(d), inner.settle(d)) };
+    const sink = {
+      describe: () => 'pager',
+      deliver: async () => {
+        throw new Error('pager offline');
+      },
+    };
+    const err: string[] = [];
+    expect(await probeOnce(config(), { sink, gate, log: () => {}, error: (l) => err.push(l), readHealth: async () => workerDown })).toBe(EXIT.deliveryFailed);
+    expect(settled).toEqual([false]);
+    expect(err).toContain('[prober] alert delivery: pager failed: pager offline');
+    expect((await gate.decide('heartbeat', minutes(1))).decision).toBe('new');
+    expect(await runProber(['--test-alert'], {}, { sink, log: () => {}, error: () => {} })).toBe(EXIT.deliveryFailed);
+  });
+
+  it('keeps an outage reason on one line', async () => {
+    const texts: string[] = [];
+    const fetch = vi.fn(async (_u: string | URL | Request, init?: RequestInit) => {
+      texts.push((JSON.parse(String(init?.body)) as { text: string }).text);
+      return new Response('ok');
+    }) as unknown as typeof globalThis.fetch;
+    await probeOnce(config(), { fetch, log: () => {}, error: () => {}, readHealth: async () => Promise.reject(new Error('FATAL: no\n# heading\n> quote')) });
+    expect(texts[0]?.split('\n')).toEqual(['[Crove] ALERT on office: 1 health check(s) failed.', '- the prober could not read crove_kernel.health(): FATAL: no # heading > quote']);
+  });
+
   it('reads ALERT_REPEAT_MINUTES (default 60, 0 for never) and refuses other values', async () => {
     const { loadProberConfig } = await import('../src/prober.ts');
     expect(loadProberConfig({}).repeatSeconds).toBe(3600);
