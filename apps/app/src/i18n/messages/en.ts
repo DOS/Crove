@@ -463,6 +463,7 @@ export const en = {
       ENTRY_IS_REVERSAL: 'This is a reversal, so it cannot be reversed. Post a new entry instead.',
       ENTRY_NOT_FOUND: 'Journal entry not found.',
       REVERSAL_DATE_BEFORE_ENTRY: 'The reversal cannot be dated before the original entry.',
+      REVERSAL_PENDING: 'This entry already has a reversal proposal waiting for approval. Approve or reject it in the inbox.',
       TOO_LARGE: 'The file is larger than 25 MB.',
       TOO_MANY_FILES: 'Too many files in one upload.',
       UNSUPPORTED_TYPE: 'Only XML, PDF, JPG, PNG and WEBP files are accepted.',

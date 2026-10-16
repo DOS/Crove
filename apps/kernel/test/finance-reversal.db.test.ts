@@ -243,6 +243,10 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     expect(
       (await rpc('inbox/request', await tokenFor(owner), { command: 'finance.journal.reverse', input: { ...input, reason: 'Khác' }, idempotencyKey: key })).body,
     ).toMatchObject({ code: 'IDEMPOTENCY_MISMATCH' });
+    // Another request for the same entry while this one is pending is refused, and names the pending proposal (#254).
+    expect(
+      await rpc('inbox/request', await tokenFor(owner), { command: 'finance.journal.reverse', input: { ...input, reason: 'Lần hai' }, idempotencyKey: randomUUID() }),
+    ).toMatchObject({ status: 409, body: { code: 'REVERSAL_PENDING', data: { proposalId } } });
     // A viewer may not ask; a reason is required; only reversals can be asked for.
     expect(await rpc('inbox/request', await tokenFor(viewer), { command: 'finance.journal.reverse', input, idempotencyKey: randomUUID() })).toMatchObject({
       status: 403,

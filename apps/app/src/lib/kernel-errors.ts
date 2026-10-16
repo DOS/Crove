@@ -73,6 +73,7 @@ export const KERNEL_ERROR_CODES = [
   'ENTRY_IS_REVERSAL',
   'ENTRY_NOT_FOUND',
   'REVERSAL_DATE_BEFORE_ENTRY',
+  'REVERSAL_PENDING',
   // Files, uploads and exports.
   'TOO_LARGE',
   'TOO_MANY_FILES',

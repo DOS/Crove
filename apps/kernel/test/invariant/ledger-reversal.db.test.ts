@@ -113,8 +113,8 @@ suite('journal reversal on PostgreSQL (#138)', () => {
     );
 
   // A second open proposal for an entry that already has one, copied as the database owner (authorId sets who asked).
-  // A user's second request for the same entry is about to be refused while the first is pending (#204), but a
-  // proposal raised before that rule, or by any other writer, must still meet the checks at approval tested here.
+  // A user's second request for the same entry is refused while the first is pending (#254), but a proposal raised
+  // before that rule, or by any other writer, must still meet the checks at approval tested here.
   const copyProposal = (orgId: string, id: string, authorId?: string) =>
     withAdmin(async (a) => {
       const { rows } = await a.query<{ id: string }>(
@@ -339,6 +339,46 @@ suite('journal reversal on PostgreSQL (#138)', () => {
     expect(done.reversedEntryId).toBe(entry);
     // The member's earlier request is now refused on approval.
     await expect(approve(team, asMfa(users.admin), byMember.proposalId)).rejects.toMatchObject({ code: 'ALREADY_REVERSED', status: 409 });
+  });
+
+  it('refuses a second request for an entry while one is pending, also when both arrive at once (#254)', async () => {
+    const entry = await original(users.owner, team, SALE);
+    const first = await request(team, users.owner, { entryId: entry });
+    const pending = { code: 'REVERSAL_PENDING', status: 409, details: { proposalId: first.proposalId } };
+    // Another user, another key, the id in another spelling: still the same entry, so refused.
+    await expect(request(team, users.member, { entryId: entry })).rejects.toMatchObject(pending);
+    await expect(request(team, users.admin, { entryId: entry.toUpperCase() })).rejects.toMatchObject(pending);
+    // The stored payload holds the id lower-cased, so every request for the entry finds it.
+    const stored = await withAdmin((a) =>
+      a.query<{ entry_id: string }>(`SELECT payload->>'entryId' AS entry_id FROM crove_kernel.proposal WHERE org_id = $1 AND id = $2`, [team, first.proposalId]),
+    );
+    expect(stored.rows[0]?.entry_id).toBe(entry.toLowerCase());
+
+    // Once the pending request is rejected, the entry may be asked for again.
+    await runtime.execute('kernel.proposal.reject', { id: first.proposalId }, { actor: asUser(users.admin), orgId: team });
+    const again = await request(team, users.member, { entryId: entry.toUpperCase() });
+    await expect(request(team, users.owner, { entryId: entry })).rejects.toMatchObject({ code: 'REVERSAL_PENDING', details: { proposalId: again.proposalId } });
+    // Once it is approved and posted, a request is refused as already reversed.
+    await approve(team, asMfa(users.owner), again.proposalId);
+    await expect(request(team, users.member, { entryId: entry })).rejects.toMatchObject({ code: 'ALREADY_REVERSED', status: 409 });
+
+    // Requests for one entry at once: exactly one proposal; every other request is refused as pending.
+    const target = await original(users.owner, team, SALE);
+    const results = await Promise.allSettled(
+      [users.owner, users.admin, users.member, users.owner].map((userId) => request(team, userId, { entryId: target })),
+    );
+    const created = results.filter((r): r is PromiseFulfilledResult<{ proposalId: string }> => r.status === 'fulfilled');
+    expect(created).toHaveLength(1);
+    for (const r of results) {
+      if (r.status === 'rejected') expect(r.reason).toMatchObject({ code: 'REVERSAL_PENDING', details: { proposalId: created[0]?.value.proposalId } });
+    }
+    const open = await withAdmin((a) =>
+      a.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM crove_kernel.proposal WHERE org_id = $1 AND kind = 'finance.journal_reversal' AND status = 'pending' AND payload->>'entryId' = $2`,
+        [team, target],
+      ),
+    );
+    expect(open.rows[0]?.n).toBe(1);
   });
 
   it('replays a request with the same idempotency key and refuses the key for another request', async () => {

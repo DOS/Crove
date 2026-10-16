@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { zId, zLocalDate } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery, type QueryContext } from '@crove/kernel-runtime';
-import { REVERSAL_KIND } from './reversal.ts';
+import { OPEN_REVERSAL_STATUSES, REVERSAL_KIND } from './reversal.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const zRange = z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() });
@@ -178,12 +178,13 @@ async function loadEntries(
   // Reversal proposals waiting for approval, by the entry they name (#204).
   const pending = await ctx.trx
     .selectFrom('crove_kernel.proposal')
-    .select(['id', sql<string>`payload->>'entryId'`.as('entry_id')])
+    .select(['id', sql<string>`pg_catalog.lower(payload->>'entryId')`.as('entry_id')])
     .where('org_id', '=', ctx.orgId)
     .where('kind', '=', REVERSAL_KIND)
-    .where('status', '=', 'pending')
+    // The same statuses that refuse another request (prepare_reversal).
+    .where('status', 'in', OPEN_REVERSAL_STATUSES)
     .where(
-      sql<string>`payload->>'entryId'`,
+      sql<string>`pg_catalog.lower(payload->>'entryId')`,
       'in',
       rows.map((r) => r.id),
     )

@@ -7,11 +7,13 @@
 //   reverses_entry_id. It never appends lines to an existing entry.
 // The database enforces the rules for every writer (20261016210000): one reversal per entry, a reversal cannot be
 // reversed (post a new entry instead), no reversal dated before the original, and an exact mirror over every line.
+// A request is refused while another reversal of the same entry waits for approval (#254).
 // Reversing the entry of a purchase document also voids Crove's record of that document (#165, 20261018000000): an
 // append-only void row naming the reversal, in the same transaction, so the same supplier invoice can be recorded
 // again with the right accounts. It corrects Crove's records only, never the supplier's e-invoice. The database holds
 // every writer to both directions: a void names the reversal of its document's entry, and such a reversal commits
 // only with its void (20261018150000).
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { zJournalReversal, type JournalReversal } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
@@ -62,6 +64,36 @@ async function reversibleEntry(ctx: CommandContext, reversal: JournalReversal) {
   return entry;
 }
 
+// A reversal already asked for and waiting for approval (#254): a second request for the same entry is refused, as its
+// approval could only fail with ALREADY_REVERSED once the first is approved. Requests for one entry are serialized by
+// a transaction-level advisory lock, so two at once cannot both pass: the second waits for the first to commit, then
+// finds its proposal. Open proposals are checked before the reversal itself (reversibleEntry): an approval that commits
+// in between turns the proposal executed and posts the reversal together, so one of the two checks sees it. The id is
+// compared lower-cased, as payloads store it (prepareReversal) and as a payload written before that may not.
+// This relies on READ COMMITTED (the runtime's isolation for commands): the lookup after the lock takes a new snapshot
+// and so sees a proposal committed while it waited. Under REPEATABLE READ both requests could pass.
+// The lock is keyed by the entry alone (a uuid, lower-cased), so every spelling of the request takes the same lock.
+export const OPEN_REVERSAL_STATUSES = ['pending', 'approved'] as const;
+async function refuseOpenReversal(ctx: CommandContext, entryId: string): Promise<void> {
+  await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`${REVERSAL_KIND}:${entryId}`}, 0))`.execute(ctx.trx);
+  const open = await ctx.trx
+    .selectFrom('crove_kernel.proposal')
+    .select('id')
+    .where('org_id', '=', ctx.orgId)
+    .where('kind', '=', REVERSAL_KIND)
+    .where('status', 'in', OPEN_REVERSAL_STATUSES)
+    .where(sql<string>`pg_catalog.lower(payload->>'entryId')`, '=', entryId)
+    // The oldest, for a stable answer should there be more than one (proposals raised before this rule).
+    .orderBy('created_at')
+    .orderBy('id')
+    .executeTakeFirst();
+  if (open) {
+    throw new DomainError('REVERSAL_PENDING', 409, 'Bút toán này đã có đề xuất đảo đang chờ duyệt; hãy duyệt hoặc từ chối đề xuất đó', {
+      proposalId: open.id,
+    });
+  }
+}
+
 const reversalTitle = (entry: { entry_date: string; description: string; source_type: string }) =>
   `Đảo bút toán ngày ${entry.entry_date}${entry.source_type === PURCHASE_SOURCE ? ' (hủy chứng từ mua)' : ''}: ${entry.description}`.slice(0, 300);
 
@@ -70,10 +102,13 @@ export const prepareReversal = defineCommand({
   input: zJournalReversal,
   risk: 'R1',
   access: ['owner', 'admin', 'member'],
-  target: (input) => ({ type: 'finance.journal_entry', id: input.entryId }),
+  target: (input) => ({ type: 'finance.journal_entry', id: input.entryId.toLowerCase() }),
   handler: async (ctx, input) => {
-    const entry = await reversibleEntry(ctx, input);
-    return { kind: REVERSAL_KIND, command: REVERSAL_COMMAND, title: reversalTitle(entry), payload: input };
+    // One spelling of the id in every payload, so open requests are found by it.
+    const request = { ...input, entryId: input.entryId.toLowerCase() };
+    await refuseOpenReversal(ctx, request.entryId);
+    const entry = await reversibleEntry(ctx, request);
+    return { kind: REVERSAL_KIND, command: REVERSAL_COMMAND, title: reversalTitle(entry), payload: request };
   },
 });
 
