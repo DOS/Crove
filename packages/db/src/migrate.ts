@@ -23,9 +23,14 @@ export interface MigrationFile {
 export async function readMigrations(dir: string): Promise<MigrationFile[]> {
   const names = (await readdir(dir)).filter((n) => n.endsWith('.sql')).sort();
   const files: MigrationFile[] = [];
+  const seen = new Map<string, string>();
   for (const name of names) {
     const match = FILE_PATTERN.exec(name);
     if (!match?.[1]) throw new Error(`migration file name does not match the naming rule: ${name}`);
+    // The 14-digit prefix is the ledger version: two files sharing it would fail on a fresh database.
+    const other = seen.get(match[1]);
+    if (other) throw new Error(`duplicate migration version ${match[1]}: ${other} and ${name}`);
+    seen.set(match[1], name);
     // Normalize line endings so a Windows checkout (CRLF) and Linux (LF) hash the same file identically.
     const sql = (await readFile(join(dir, name), 'utf8')).replaceAll('\r\n', '\n');
     files.push({ version: match[1], name, sql, sha256: createHash('sha256').update(sql).digest('hex') });
