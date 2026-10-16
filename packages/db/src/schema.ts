@@ -7,17 +7,9 @@ type Timestamp = ColumnType<Date, Date | string, Date | string>;
 type DefaultTimestamp = ColumnType<Date, Date | string | undefined, Date | string>;
 type Json = ColumnType<unknown, string, string>;
 
-export interface UserAccountTable {
-  id: Generated<string>;
-  issuer: string;
-  subject: string;
-  email: string;
-  display_name: string | null;
-  created_at: DefaultTimestamp;
-  last_seen_at: DefaultTimestamp;
-  // Set by staff to block the user in Crove (ADR-0028): 403 on every request.
-  disabled_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
-}
+// crove_kernel.user_account (identity) is a control-plane table (plan §3.6, Decision 14) and has no Kysely type on
+// purpose: tenant code reaches it only through definers (crove_kernel.member_profiles, identity_resolve, my_orgs and
+// the like), so a direct selectFrom does not compile. tools/test/control-plane-reads.test.ts also catches raw SQL.
 
 export interface TenantTable {
   org_id: Generated<string>;
@@ -289,7 +281,6 @@ export interface VendorAccountRuleTable {
 }
 
 export interface Database {
-  'crove_kernel.user_account': UserAccountTable;
   'crove_kernel.tenant': TenantTable;
   'crove_kernel.tenant_member': TenantMemberTable;
   'crove_kernel.member_invite': MemberInviteTable;

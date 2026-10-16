@@ -19,6 +19,7 @@ import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
 import { inviteCommands } from './invites.ts';
 import { offboardingCommands } from './offboarding.ts';
+import { memberProfiles } from './profiles.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal', which the runtime checks
@@ -63,8 +64,8 @@ async function lockMembers(ctx: CommandContext, actorId: string, targetId: strin
   const target = rows.find((r) => r.user_id === targetId);
   let email = '';
   if (target) {
-    const account = await ctx.trx.selectFrom('crove_kernel.user_account').select('email').where('id', '=', targetId).executeTakeFirst();
-    email = account?.email ?? '';
+    // Through the definer (plan §3.6, #169): the target is a member of the org in context, so it is found.
+    email = (await memberProfiles(ctx.trx, [targetId])).get(targetId)?.email ?? '';
   }
   return {
     actorRole: rows.find((r) => r.user_id === actorId)?.role ?? null,

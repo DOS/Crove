@@ -97,6 +97,7 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
 
   // Every path that reads the context: each helper, an RLS read, an RLS write and the two kinds of definer
   // (emit() is owned by the migration runner, post_journal_entry() by crove_definer_tenant).
+  const USER_ACCOUNT_READ = 'SELECT count(*) FROM crove_kernel.user_account';
   const READS = [
     'SELECT crove_kernel.ctx_org_id()',
     'SELECT crove_kernel.ctx_user_id()',
@@ -105,7 +106,7 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
     `SELECT crove_kernel.ctx_le_allowed('00000000-0000-0000-0000-000000000000'::uuid)`,
     `SELECT crove_kernel.ctx_has_flag('salary')`,
     'SELECT count(*) FROM crove_kernel.party',
-    'SELECT count(*) FROM crove_kernel.user_account',
+    USER_ACCOUNT_READ,
   ];
 
   // A READ ONLY transaction refuses the INSERT before RLS runs; the definers still read the context first.
@@ -118,7 +119,14 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
     const ro = await readOnly(c);
     for (const text of READS) {
       await c.query('SAVEPOINT probe');
-      await expect(c.query(text), text).rejects.toMatchObject(SEAL_INVALID);
+      const error = await c.query(text).then(() => null, (e: unknown) => e);
+      // Step 2 of #169 (#222) revokes the direct SELECT on user_account (tenant code reads it through
+      // member_profiles): the read is then refused before any policy runs, which is just as closed.
+      if (text === USER_ACCOUNT_READ && (error as { message?: string } | null)?.message === 'permission denied for table user_account') {
+        expect(error, text).toMatchObject({ code: '42501' });
+      } else {
+        expect(error, text).toMatchObject(SEAL_INVALID);
+      }
       await c.query('ROLLBACK TO SAVEPOINT probe');
     }
     for (const [text, values] of [

@@ -376,13 +376,24 @@ suite('kernel invariants on PostgreSQL', () => {
     }
   });
 
+  // Tenant code reads user accounts only through crove_kernel.member_profiles (#169, plan §3.6). Step 2 (#222)
+  // revokes the direct SELECT; until then a direct read still sees only the org's accounts. Both are accepted here.
   it('only shows user accounts of the org in context', async () => {
-    const ids = await db.transaction().execute(async (trx) => {
-      await sql`SELECT crove_kernel.enter_context(${users.outsider}::uuid, ${orgB}::uuid)`.execute(trx);
-      return (await trx.selectFrom('crove_kernel.user_account').select('id').execute()).map((r) => r.id);
-    });
-    expect(ids).toEqual([users.outsider]);
-    expect(await db.selectFrom('crove_kernel.user_account').select('id').execute()).toHaveLength(0);
+    const direct = async (enter: boolean): Promise<string[] | 'denied'> => {
+      try {
+        return await db.transaction().execute(async (trx) => {
+          if (enter) await sql`SELECT crove_kernel.enter_context(${users.outsider}::uuid, ${orgB}::uuid)`.execute(trx);
+          return (await sql<{ id: string }>`SELECT id FROM crove_kernel.user_account`.execute(trx)).rows.map((r) => r.id);
+        });
+      } catch (e) {
+        expect(e).toMatchObject({ code: '42501', message: 'permission denied for table user_account' });
+        return 'denied';
+      }
+    };
+    const inContext = await direct(true);
+    if (inContext !== 'denied') expect(inContext).toEqual([users.outsider]);
+    const outside = await direct(false);
+    if (outside !== 'denied') expect(outside).toHaveLength(0);
   });
 
   it('lets only owners invite admins, and never changes an owner through an invite', async () => {
