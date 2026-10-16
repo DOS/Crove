@@ -1,0 +1,47 @@
+# Issue #251: GitHub does not re-run pull_request checks when the base branch moves, so a PR whose new migration was
+# newer than main when its Docs check ran can fall behind while it waits. After every push to main, re-run the Docs
+# check of open PRs whose added migrations are no longer newer than main; its Migration order step reads the live
+# base branch and fails the required check. A re-run replays the original run's workflow file, so for a run from
+# before that step existed (or when a re-run is refused) it creates a failing "Docs check" check run on the PR head
+# instead. Runs trusted code from main only: PR heads are fetched as git objects and read with ls-tree/diff, never
+# checked out or executed. See tools/ci/migration-recheck.mjs.
+name: migration-recheck
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migration-recheck-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  recheck:
+    name: Re-check open PR migrations
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write # re-run a PR's Docs check workflow run
+      checks: write # fallback: a failing "Docs check" check run on a PR head whose run cannot be re-run usefully
+      pull-requests: read # list the open PRs into main
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history of main, so every open PR head has a merge base with it.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Re-run the Docs check of PRs whose migrations fell behind
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node tools/ci/migration-recheck.mjs main HEAD

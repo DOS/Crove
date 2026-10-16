@@ -30,7 +30,8 @@ jobs:
         run: node tools/docs-check.mjs
 
       # AGENTS.md: a new migration's version is greater than every file on main. Compared against the live base
-      # branch, so re-running this job after main moves catches a PR that fell behind.
+      # branch, so re-running this job after main moves catches a PR that fell behind; migration-recheck.yml does
+      # that re-run after every push to main.
       - name: Migration order
         env:
           BASE_REF: ${{ github.base_ref }}
