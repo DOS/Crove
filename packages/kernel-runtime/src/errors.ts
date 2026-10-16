@@ -129,6 +129,12 @@ export function toDomainError(error: unknown): DomainError {
       if (pg.message === 'SESSION_REVOKED_IN_ORG') {
         return new DomainError('SESSION_REVOKED_IN_ORG', 401, 'Phiên đăng nhập này đã bị thu hồi trong tổ chức này');
       }
+      // db mode: the Supabase Auth session is bound to an OAuth client (auth.sessions.oauth_client_id, issue #276),
+      // whatever claims its token carries. The same answer as the kernel's claim check (issue #272), so the SPA signs
+      // out as for any dead session.
+      if (pg.message === 'OAUTH_CLIENT_SESSION') {
+        return new DomainError('OAUTH_CLIENT_TOKEN_REFUSED', 401, 'Mã truy cập này được cấp cho một ứng dụng bên thứ ba, không dùng để đăng nhập Crove');
+      }
       return new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nhập đã hết hiệu lực, hãy đăng nhập lại');
     case '55000':
       if (pg.message?.includes('AUTH_GRANTS_MISSING')) {
