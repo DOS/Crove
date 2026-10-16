@@ -21,12 +21,16 @@
     "ai:eval": "vitest run --project ai extraction-eval --silent=false",
     "docs:check": "node tools/docs-check.mjs",
     "db:migrate": "pnpm --filter @crove/db migrate",
+    "db:types": "node tools/db-types.mjs",
     "db:auth-grants": "pnpm --filter @crove/kernel-server auth-grants",
     "prepare": "node tools/install-git-hooks.mjs"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "kanel": "catalog:",
+    "kanel-kysely": "catalog:",
     "oxlint": "catalog:",
+    "pg": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

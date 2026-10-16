@@ -288,7 +288,7 @@ The architecture and plan TL;DR follows.
 
 **Client platforms.** Because the app shell is a static SPA and every write goes through the kernel API, desktop and mobile clients need no new backend. PWA, Mobile and Desktop above are direction only, built when their trigger is met.
 
-**State on `main` (2026-10-14).** The MVP already uses pnpm 12 (`packageManager: pnpm@12.11.2`, `catalogMode: strict`), Node 26, TypeScript 7.0.2, oxlint 1.88, Vitest 5, Hono 4, oRPC 1.15, Kysely 0.29, pg-boss 12, Vite 8, TanStack Router and Query, `@supabase/auth-js`, `jose`, `use-intl` (#206), Tailwind 4 and shadcn on `@base-ui/react` 1.8 in `@crove/ui` (#46; `pnpm lint` rejects raw colors in the SPA). Not adopted yet: Vite+ (scripts still call `oxlint`, `vitest` and `pnpm -r` directly), Kanel codegen, a formatter, Playwright, the vendored pg-boss schema (pg-boss creates `crove_jobs` at migrate time) and an S3 storage adapter (local disk only). Since #15 the landing page (`apps/web`) uses catalog versions (Next.js 16.4, React 19.3, Tailwind 4, TypeScript 7.0.2); its own Dockerfile still starts from `node:22-alpine`.
+**State on `main` (2026-10-14).** The MVP already uses pnpm 12 (`packageManager: pnpm@12.11.2`, `catalogMode: strict`), Node 26, TypeScript 7.0.2, oxlint 1.88, Vitest 5, Hono 4, oRPC 1.15, Kysely 0.29, pg-boss 12, Vite 8, TanStack Router and Query, `@supabase/auth-js`, `jose`, `use-intl` (#206), Tailwind 4 and shadcn on `@base-ui/react` 1.8 in `@crove/ui` (#46; `pnpm lint` rejects raw colors in the SPA). Kanel 4 + `kanel-kysely` generate the Kysely table types from the migrated database (`pnpm db:types`, #48; CI fails when `packages/db/src/generated/database.ts` is out of date): only the tables `crove_tenant` may read, so control-plane tables have no type, with hand-written refinements in `packages/db/src/schema.ts` that typecheck against the generated columns. Not adopted yet: Vite+ (scripts still call `oxlint`, `vitest` and `pnpm -r` directly), a formatter, Playwright, the vendored pg-boss schema (pg-boss creates `crove_jobs` at migrate time) and an S3 storage adapter (local disk only). Since #15 the landing page (`apps/web`) uses catalog versions (Next.js 16.4, React 19.3, Tailwind 4, TypeScript 7.0.2); its own Dockerfile still starts from `node:22-alpine`.
 
 ## 3. Topology
 
@@ -1670,7 +1670,7 @@ Day 0 is behind us: the repo exists, is public and has the MVP. This list keeps 
 - Supabase Auth on the plain `postgres:17` image (Decision 5): the compose stack on `main` runs it; keep it covered by the Playwright end-to-end job (T9).
 - Supabase Auth flow in the SPA: PKCE callback, refresh, logout, MFA and `aal2` (Decision 6; issue #32).
 - A2 pg-boss over Supavisor :5432 and :6543 (Crove Cloud).
-- A3 Kanel 4 (issue #48).
+- A3 Kanel 4 (issue #48): pass, adopted (§2 DB row).
 - A5 PG17 on Supabase: `GRANT … WITH SET/INHERIT`, definer ownership, the §4.5 re-entry guard behind Supavisor transaction mode, what Supavisor resets on a server connection between transactions (#117; Cloud runs `DB_RESET_ON_RELEASE=false` and relies on it), whether `postgres` can set `session_replication_role`.
 - A8 presign + `if-generation-match` on GCS.
 - A10 AI endpoint conformance (DOS.AI and at least one other OpenAI-compatible endpoint; issue #51).

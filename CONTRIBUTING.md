@@ -40,7 +40,7 @@ CROVE_TEST_ADMIN_URL=postgres://postgres:...@localhost:5432/postgres pnpm test:d
 1. Pick or open an issue; one task is one issue, one branch, one PR, end to end (migration, server, contract, UI, tests).
 2. Work in a git worktree on a branch from a freshly fetched `origin/main`.
 3. Keep the PR focused; open a follow-up issue instead of growing it. The PR body says `Closes #<n>` (or `Refs #<n>`).
-4. Run `pnpm lint`, `pnpm typecheck`, `pnpm test` (and `pnpm test:db` for database changes). Docs-only changes: `pnpm docs:check`.
+4. Run `pnpm lint`, `pnpm typecheck`, `pnpm test` (and, for database changes, `pnpm test:db` and `pnpm db:types`, which regenerates the Kysely types to commit with the migration). Docs-only changes: `pnpm docs:check`.
 5. Rebase on `origin/main` before merging. Squash merge once CI is green and review items are resolved.
 
 ## Contributor License Agreement

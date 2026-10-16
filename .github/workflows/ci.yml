@@ -49,6 +49,18 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # The Kysely types generated from the migrated database (issue #48): a migration that changes a table the
+      # tenant role reads commits the regenerated file with it.
+      - name: Generated database types are current
+        run: |
+          pnpm db:types
+          if [ -n "$(git status --porcelain -- packages/db/src/generated)" ]; then
+            git status --short -- packages/db/src/generated
+            git diff -- packages/db/src/generated
+            echo "::error::packages/db/src/generated is out of date. Run 'pnpm db:types' (needs CROVE_TEST_ADMIN_URL) and commit the result."
+            exit 1
+          fi
+
       # S3-compatible server for the S3BlobStore integration tests (External-tenant gate T7). minio/minio is no
       # longer published on Docker Hub; pgsty/minio is a community build of the same server, pinned by digest.
       - name: Start MinIO
