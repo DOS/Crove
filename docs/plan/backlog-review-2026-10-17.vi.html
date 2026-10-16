@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="vi" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Rà soát backlog Crove</title>
+<style>
+:root{
+  --bg:#0f1113; --surface:#16181d; --card:#1b1e25; --line:#2c303a; --fg:#eef0f4; --muted:#a3a9b6;
+  --accent:#ff2e29; --accent-ink:#ff8a85;
+  --ok:#34d399; --ok-bg:#0f2a21; --warn:#fbbf24; --warn-bg:#2a2110; --bad:#f87171; --bad-bg:#2d1515; --info:#60a5fa; --info-bg:#121f35;
+  --code-bg:#23262e;
+  --font-body:"Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased}
+.page{padding:32px clamp(16px,4vw,40px) 72px}
+main{max-width:980px;margin-inline:auto;min-width:0}
+a{color:var(--accent-ink);text-decoration:none;overflow-wrap:anywhere}a:hover{text-decoration:underline}
+.eyebrow{color:var(--accent-ink);font-weight:600;letter-spacing:.08em;text-transform:uppercase;font-size:13px;margin:0}
+h1{font-size:clamp(26px,4vw,34px);line-height:1.25;margin:6px 0 10px}
+h2{font-size:22px;margin:44px 0 12px;padding-top:12px;border-top:1px solid var(--line)}
+h3{font-size:18px;margin:26px 0 8px}
+.lead{color:var(--muted);margin:0 0 8px}
+code{font-family:var(--font-mono);font-size:.88em;background:var(--code-bg);padding:1px 6px;border-radius:4px}
+.callout{border:1px solid var(--line);border-left:4px solid var(--accent);background:var(--surface);border-radius:8px;padding:14px 18px;margin:16px 0}
+.callout.ok{border-left-color:var(--ok)}
+.callout.warn{border-left-color:var(--warn)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:16px 0}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.stat b{display:block;font-size:26px;color:var(--accent-ink);line-height:1.2}
+.stat span{color:var(--muted);font-size:14px}
+.table-wrap{overflow-x:auto;margin:12px 0;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:560px}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--line)}
+th{background:var(--surface);color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;font-size:12px;font-weight:600;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.p0{background:var(--bad-bg);color:var(--bad)}
+.p1{background:var(--warn-bg);color:var(--warn)}
+.p2{background:var(--info-bg);color:var(--info)}
+.p3{background:var(--code-bg);color:var(--muted)}
+.done{background:var(--ok-bg);color:var(--ok)}
+ul,ol{padding-left:22px}
+li{margin:4px 0}
+.ms{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:4px 18px 10px;margin:16px 0}
+.ms h3{margin-top:14px}
+.muted{color:var(--muted)}
+footer{margin-top:48px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<div class="page">
+<main>
+
+<p class="eyebrow">Crove · rà soát backlog · 17/10/2026</p>
+<h1>Backlog mới: đi thẳng tới khách hàng đầu tiên</h1>
+<p class="lead">Đề xuất sắp xếp lại toàn bộ backlog Crove (repo DOS/Crove, board Project 8) theo hướng MVP có người dùng thật. Bản tiếng Anh đầy đủ, lưu trong repo: <a href="backlog-review-2026-10-17.md">backlog-review-2026-10-17.md</a>.</p>
+
+<div class="grid">
+  <div class="stat"><b>~125</b><span>commit vào main kể từ MVP (#8, 13/10)</span></div>
+  <div class="stat"><b>~55</b><span>commit là security, auth, session, hardening</span></div>
+  <div class="stat"><b>~10</b><span>commit thay đổi thứ người dùng kế toán thấy</span></div>
+  <div class="stat"><b>0</b><span>bản deploy mà người ngoài đăng nhập được</span></div>
+</div>
+
+<h2 id="chan-doan">1. Chẩn đoán: vì sao backlog trôi sang security</h2>
+<div class="callout">
+<p><b>Crove đã có lõi sản phẩm chạy được:</b> tải lên hoặc chuyển tiếp email hóa đơn điện tử, AI và các kiểm tra tự động đề xuất bút toán TT133, người duyệt, xuất Excel cho kế toán. Nhưng chưa ai ngoài nhóm dùng được. Lý do: chưa có bản deploy nào. Hơn nữa, trên URL công khai, app bắt buộc MFA khi duyệt bút toán, mà giao diện chưa có màn hình đăng ký MFA (#32). Tức là có deploy thì cũng không ai duyệt được hóa đơn nào.</p>
+</div>
+<p>Nguyên nhân nằm ở cấu trúc backlog, không phải ở một agent cụ thể:</p>
+<ol>
+  <li><b>Milestone sớm nhất toàn là security.</b> Trước phần sản phẩm chỉ có "MVP exit criteria" và "External-tenant gate" gồm 18 dòng, dòng nào cũng là bằng chứng bảo mật. Quy tắc cho agent là "lấy issue ưu tiên cao nhất ở milestone sớm nhất", nên agent luôn lấy security.</li>
+  <li><b>Vòng lặp review follow-up tự nuôi chính nó.</b> Review nào cũng sinh ra vài issue "không chặn", được gắn P2 vào chính các milestone sớm đó, rồi agent sau lại lấy. Ví dụ: #117, #134, #180, #203 (CAPTCHA), #221, #223, #276, #281, #285, #289, #293 (lint màu).</li>
+  <li><b>Làm cả những thứ ADR-0026 đã hoãn có chủ đích,</b> như HMAC seal cho context và SSE realtime.</li>
+  <li><b>Mọi bước dẫn tới người dùng đều là việc của owner nhưng không có hạn chót:</b> duyệt chi tiền (#52), DNS (#53), phỏng vấn khách hàng (#57), kế toán review (#61). Agent không làm được các việc này nên lấp chỗ trống bằng việc tự làm được.</li>
+  <li><b>Mở thêm 2 stream chưa có khách:</b> Social (Decision 17) và org chart cho agents (ADR-0029).</li>
+  <li><b>Epic Finance (#60) chỉ là placeholder, không có issue con,</b> nên trên board không có việc sản phẩm nào để agent lấy.</li>
+</ol>
+
+<h2 id="thi-truong">2. Thị trường: điều nghiên cứu cho thấy</h2>
+<p class="muted">Nguồn chủ yếu là blog của vendor và các trang tóm tắt luật. Chưa đọc trực tiếp văn bản gốc, nên phải nhờ kế toán xác nhận trước khi build. Link nguồn có trong bản tiếng Anh, mục 2.</p>
+<ul>
+  <li><b>Hộ kinh doanh:</b> thuế khoán bỏ từ 1/1/2026. Nghị định 141/2026 nâng ngưỡng miễn VAT và TNCN lên <b>1 tỷ đồng/năm</b>. Khoảng 2,56 triệu trong khoảng 3,08 triệu hộ nằm dưới ngưỡng, không phải nộp thuế, chỉ khai doanh thu mỗi năm một lần, và nhà nước nói rõ là không cần mua phần mềm. Nhóm trên 1 tỷ (khoảng 0,5 triệu hộ, con số tự suy ra) thì đã có MISA eShop, KiotViet, Sapo, Viettel, VNPT và các ngân hàng tặng công cụ miễn phí hoặc rất rẻ.</li>
+  <li><b>Doanh nghiệp nhỏ và vừa vẫn dùng TT133.</b> Đã có dự thảo thay thế TT133 (khoảng 9/2026), còn TT99/2025 thay TT200. Nghị định 254/2026 được cho là thay Nghị định 123/2020 và 70/2025 về hóa đơn điện tử từ 1/7/2026, nên README của Crove cần kiểm lại. Tờ khai 01/GTGT dùng mẫu theo Thông tư 89/2026.</li>
+  <li><b>Đối thủ chính ở mảng dịch vụ kế toán là MISA ASP, và nó miễn phí</b> cho cả công ty dịch vụ lẫn khách của họ. MISA ASP có quản lý nhiều khách, tự lấy hóa đơn, tự hạch toán hóa đơn đầu vào, nhập sao kê, nộp tờ khai. Họ báo có 14.328 đối tác.</li>
+  <li><b>Công ty dịch vụ kế toán thu khách khoảng 400 nghìn đến 2 triệu đồng/tháng,</b> tùy số hóa đơn. Biên lợi nhuận mỏng, nên thứ đắt nhất với họ là số phút nhân viên bỏ ra cho mỗi khách.</li>
+  <li><b>Cổng hoadondientu.gdt.gov.vn không có API công khai.</b> Các vendor đồng bộ hóa đơn đầu vào bằng chính tài khoản cổng thuế của khách. Cách này hợp pháp tới đâu thì chưa xác minh được.</li>
+</ul>
+<div class="callout ok">
+<p><b>Kết luận:</b></p>
+<ul>
+  <li><b>Khách dễ tiếp cận nhất là công ty dịch vụ kế toán nhỏ</b> (10 đến 50 khách dùng TT133), bắt đầu từ một đối tác thiết kế là một công ty kế toán.</li>
+  <li><b>Crove chỉ thắng được nếu nhanh hơn rõ rệt</b> trên mỗi khách: AI hạch toán đúng gần hết, duyệt hàng loạt, xem được mọi khách trên một màn hình.</li>
+  <li><b>Crove phải đẩy dữ liệu sang phần mềm họ đang dùng</b> (thường là MISA), chứ không bắt họ bỏ MISA.</li>
+</ul>
+</div>
+
+<h2 id="muc-tieu">3. Mục tiêu MVP, đo được vào 31/01/2027</h2>
+<div class="callout">
+<p>Đối tác thiết kế (một công ty dịch vụ kế toán) làm sổ hằng tháng cho <b>ít nhất 5 công ty khách thật</b> trên Crove, <b>4 tuần liên tiếp</b>. Đo bằng dữ liệu audit của chính Crove:</p>
+<ol>
+  <li>Ít nhất 80% hóa đơn mua vào và bán ra trong tháng của các khách đó đi vào Crove và được duyệt trên Crove.</li>
+  <li>Ít nhất 70% đề xuất được duyệt mà không phải sửa.</li>
+  <li>Bảng kê VAT và file chứng từ chuyển sang phần mềm hiện tại hoặc tờ khai mà không phải gõ lại.</li>
+  <li>Công ty đó tự báo thời gian làm mỗi khách mỗi tháng giảm ít nhất 30%, có phỏng vấn trước và sau để so.</li>
+  <li>Có ít nhất 1 công ty trả tiền cho tháng tiếp theo hoặc ký đơn hàng có phí.</li>
+</ol>
+</div>
+<p class="muted">MVP không bao gồm: ERP tổng quát, thay MISA ngay từ đầu, cho người lạ tự đăng ký, Social, CRM, agent có ngân sách riêng, public API, mobile app.</p>
+
+<h2 id="milestones">4. Các milestone theo thứ tự</h2>
+<p>Agent chỉ được lấy việc ở milestone sớm nhất còn mở. Kích thước: S là tối đa 1 ngày, M là 2 đến 4 ngày, L là 1 đến 2 tuần công agent. Số trong ngoặc là issue cũ được dùng lại.</p>
+
+<div class="ms">
+<h3>M0 - Quyết định và tìm hiểu khách (owner, 17/10 đến 31/10, chạy song song M1)</h3>
+<ul>
+  <li><span class="tag p0">P0</span> Trả lời các câu hỏi ở mục 6.</li>
+  <li><span class="tag p0">P0</span> Phỏng vấn 10 người ở phía đối tác: 5 nhân viên công ty kế toán và 5 công ty khách của họ (#57, thu hẹp lại).</li>
+  <li><span class="tag p0">P0</span> Xin 100 chứng từ thật, có đồng ý bằng văn bản.</li>
+  <li><span class="tag p1">P1</span> Có một kế toán bên đối tác review mapping TT133 và báo cáo, khoảng 2 giờ mỗi tuần (#61).</li>
+  <li><span class="tag p1">P1</span> Ký thỏa thuận pilot ngắn: mục đích dùng dữ liệu, AI xử lý dữ liệu, xóa dữ liệu khi dừng. Agent soạn, owner ký.</li>
+</ul>
+</div>
+
+<div class="ms">
+<h3>M1 - Deploy cho pilot (20/10 đến 07/11)</h3>
+<p class="muted">Đích đến: nhân viên đối tác đăng nhập ở một URL thật, tải lên hóa đơn của một tháng, duyệt có MFA, rồi xuất file. Dữ liệu được backup, sập thì owner được báo.</p>
+<ul>
+  <li><span class="tag p0">P0</span> Đăng nhập trên SPA: quên mật khẩu, xác nhận email, đăng ký MFA và step-up (#32, PR #101 đang mở).</li>
+  <li><span class="tag p0">P0</span> Test Playwright end-to-end cho luồng chính, làm cổng chặn trước mỗi lần deploy (#18, PR #91 đang mở).</li>
+  <li><span class="tag p0">P0</span> Owner duyệt tiền hosting cho pilot (#52, đổi tên) và cấp DNS cùng định tuyến email (#53).</li>
+  <li><span class="tag p0">P0</span> Dựng 1 server chạy <code>docker compose</code>, có TLS, SMTP, bucket lưu file, secret nằm trong repo private (dùng #55 ở mức tối thiểu).</li>
+  <li><span class="tag p0">P0</span> Pipeline deploy: gắn tag là deploy, có smoke test và rollback bằng 1 lệnh (#56, đổi tên).</li>
+  <li><span class="tag p0">P0</span> Backup mỗi đêm và đã thử restore 1 lần. Mất dữ liệu tối đa 24 giờ, khôi phục trong tối đa 4 giờ.</li>
+  <li><span class="tag p0">P0</span> Checklist "sẵn sàng pilot": danh sách ngắn thay cho 18 dòng External-tenant gate, chỉ áp dụng cho đối tác đã ký thỏa thuận.</li>
+  <li><span class="tag p1">P1</span> Cảnh báo về điện thoại owner, kèm một dịch vụ bên ngoài kiểm tra uptime.</li>
+  <li><span class="tag p1">P1</span> Nút "Góp ý / Hỗ trợ" mở nhóm Zalo, kèm hướng dẫn nhanh 1 trang bằng tiếng Việt.</li>
+  <li><span class="tag p1">P1</span> Báo cáo số liệu hằng tuần để đo mục tiêu MVP.</li>
+  <li><span class="tag p1">P1</span> Endpoint AI cho pilot, có trần chi mỗi tháng.</li>
+</ul>
+</div>
+
+<div class="ms">
+<h3>M2 - Trọn vòng chốt sổ tháng cho công ty kế toán (09/11 đến 19/12)</h3>
+<ul>
+  <li><span class="tag p0">P0</span> Nhận hóa đơn bán ra. Hóa đơn XML do chính công ty phát hành sẽ thành chứng từ bán hàng, thêm khách hàng vào danh mục, và có đề xuất bút toán 131 / 511 / 3331.</li>
+  <li><span class="tag p0">P0</span> Tải lên hàng loạt: 1 file ZIP hoặc 200 file XML cùng lúc.</li>
+  <li><span class="tag p0">P0</span> Duyệt hàng loạt với chỉ 1 lần step-up MFA. Mỗi đề xuất vẫn có audit riêng.</li>
+  <li><span class="tag p0">P0</span> Bảng kê VAT theo tháng hoặc quý, kèm các tổng số để điền 01/GTGT, xuất Excel.</li>
+  <li><span class="tag p0">P0</span> Xuất chứng từ theo mẫu import của phần mềm công ty đang dùng (dự kiến là MISA SME).</li>
+  <li><span class="tag p1">P1</span> Màn hình nhiều khách: số việc chờ duyệt, file lỗi và hạn nộp VAT kế tiếp của từng khách.</li>
+  <li><span class="tag p1">P1</span> Hệ thống tài khoản TT133, cho thêm tài khoản con.</li>
+  <li><span class="tag p1">P1</span> Nhập số dư đầu kỳ từ Excel.</li>
+  <li><span class="tag p1">P1</span> Báo cáo: bảng cân đối số phát sinh, sổ cái, công nợ.</li>
+  <li><span class="tag p1">P1</span> Đo độ chính xác đọc chứng từ trên 100 chứng từ thật (gộp #153).</li>
+  <li><span class="tag p1">P1</span> Kế toán ký xác nhận số liệu (#61).</li>
+  <li><span class="tag p1">P1</span> Spike 1 tuần: đồng bộ hóa đơn đầu vào từ cổng thuế.</li>
+  <li><span class="tag p2">P2</span> B01-DNN và B02-DNN trên app, có kế toán xác nhận (gộp #154).</li>
+  <li><span class="tag p2">P2</span> Chặn yêu cầu đảo bút toán lần 2 (#254, PR #292 đang mở).</li>
+</ul>
+</div>
+
+<div class="ms">
+<h3>M3 - Pilot có thu tiền (21/12 đến 31/01/2027)</h3>
+<ul>
+  <li><span class="tag p0">P0</span> Chốt giá pilot. Thu bằng chuyển khoản hoặc VietQR, xuất hóa đơn tay, chưa cần tính năng billing trong app.</li>
+  <li><span class="tag p1">P1</span> Tạo khách mới từ mã số thuế (tự điền tên, địa chỉ), dưới 2 phút mỗi khách.</li>
+  <li><span class="tag p1">P1</span> Đồng bộ hóa đơn đầu vào tự động (chỉ làm nếu spike ở M2 cho kết quả "làm được").</li>
+  <li><span class="tag p1">P1</span> Nhập sao kê ngân hàng và khớp với công nợ. Phiếu thu, phiếu chi, báo nợ, báo có.</li>
+  <li><span class="tag p1">P1</span> Xuất XML tờ khai 01/GTGT mà HTKK và eTax nhận được.</li>
+  <li><span class="tag p1">P1</span> Điều khoản sử dụng và chính sách quyền riêng tư, có luật sư review.</li>
+  <li><span class="tag p2">P2</span> Khóa sổ theo tháng.</li>
+  <li><span class="tag p2">P2</span> Spike 1 tuần về hộ kinh doanh để quyết có làm hay không.</li>
+  <li><span class="tag p2">P2</span> Case study của đối tác, và một công ty kế toán thứ hai tự onboard chỉ bằng hướng dẫn.</li>
+</ul>
+</div>
+
+<p><b>Sau M3:</b> "GA gate" là tên mới của External-tenant gate, gồm review security bên ngoài (#31) và hồ sơ PDPL (#62). Gate này chỉ áp dụng trước khi mở cho người lạ tự đăng ký. <b>Social</b> tạm dừng. <b>Icebox</b> chứa review follow-up, tooling, app mobile và desktop, public API, agents.</p>
+
+<h2 id="xu-ly">5. Xử lý 57 issue đang mở</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Nhóm</th><th>Issue</th><th>Lý do</th></tr></thead>
+<tbody>
+<tr><td><span class="tag p0">Giữ, P0/P1</span></td><td>#18, #32, #52, #53, #55, #56, #57, #61</td><td>Nằm trên đường tới pilot (M0, M1, M2)</td></tr>
+<tr><td><span class="tag p2">Giữ, làm nốt PR</span></td><td>#25, #254</td><td>PR đã viết xong. Merge nếu CI xanh, không mở thêm vòng mới</td></tr>
+<tr><td><span class="tag p2">Gộp</span></td><td>#153 vào M2-11, #154 vào M2-10, #130 vào #25, #122 vào quyết định hosting</td><td>Trùng việc với issue mới</td></tr>
+<tr><td><span class="tag p2">GA gate</span></td><td>#31, #62 (tách phần pilot ra), #63 (nhãn hiệu, làm khi tiện)</td><td>Cần trước khi mở đăng ký công khai, chưa cần cho đối tác đã ký thỏa thuận</td></tr>
+<tr><td><span class="tag done">Đóng: đã xong</span></td><td>#33, #151, #223</td><td>Đã merge trong #144, #273/#274 và #252</td></tr>
+<tr><td><span class="tag done">Đóng: thay thế</span></td><td>#60, #80</td><td>Epic được thay bằng M2. Thương hiệu: giữ Crove</td></tr>
+<tr><td><span class="tag p3">Đóng: không làm</span></td><td>#203 (CAPTCHA), #293 (lint màu), #174 (nightly canary)</td><td>Không có giá trị cho người dùng. Chỉ mở lại khi có sự cố thật</td></tr>
+<tr><td><span class="tag p3">Tạm dừng</span></td><td>Social: #233 đến #239, #250, #264</td><td>Chưa có khách pilot nào cho Social (quyết định D5)</td></tr>
+<tr><td><span class="tag p3">Icebox</span></td><td>#34, #41, #50, #54, #64, #65, #66, #68, #70, #95, #117, #134, #180, #221, #258 đến #261, #276, #281, #285, #289, #294</td><td>Review follow-up, hardening cho tính năng chưa ai dùng, tooling, client app. PR nào đã xanh thì merge nguyên trạng, không mở thêm vòng</td></tr>
+</tbody>
+</table></div>
+<p class="muted">Dọn board: #35 đã đóng nhưng vẫn ở cột "In progress". Các issue #130, #153, #250, #264, #289 chưa được đưa lên board.</p>
+
+<h2 id="quyet-dinh">6. Câu hỏi cho owner, kèm đề xuất</h2>
+<p>Đề xuất nào owner không phản đối thì coi như được chọn. Riêng các mục liên quan tới tiền thì cần owner trả lời "đồng ý" rõ ràng.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Câu hỏi</th><th>Đề xuất và lý do</th></tr></thead>
+<tbody>
+<tr><td>D1</td><td>Khách đầu tiên là công ty dịch vụ kế toán hay hộ kinh doanh?</td><td><b>Công ty dịch vụ kế toán</b> phục vụ doanh nghiệp dùng TT133. Phần đã build hợp với nhóm này, đã có đối tác, và một công ty mang theo nhiều khách. Phần lớn hộ kinh doanh dưới ngưỡng 1 tỷ không phải nộp thuế, nhóm còn lại đã có đồ miễn phí. Chỉ làm 1 spike về hộ kinh doanh ở M3.</td></tr>
+<tr><td>D2</td><td>Cho đối tác dùng dữ liệu thật trước khi External-tenant gate xanh hết không?</td><td><b>Có</b>, với điều kiện có thỏa thuận pilot và checklist sẵn sàng pilot. Gate đầy đủ (review bên ngoài, PDPL) tốn nhiều tháng và tiền. Các lớp bảo vệ đang có trên main (RLS, sealed context, sandbox, sổ cái bất biến) đã vượt xa mức một pilot thông thường cần.</td></tr>
+<tr><td>D3</td><td>Pilot chạy ở đâu, trần chi mỗi tháng là bao nhiêu? <b>(cần owner duyệt)</b></td><td><b>1 server chạy compose,</b> ưu tiên đặt ở data center tại Việt Nam (hoặc Google Cloud Singapore nếu dựng nhanh hơn). Có object storage và backup mỗi đêm, trần khoảng 50 đến 100 USD/tháng. Hoãn kiến trúc Cloud trong plan (khoảng 350 đến 770 USD/tháng) cho tới khi có khoảng 20 org trả tiền. Đặt server ở Việt Nam cũng giải luôn câu hỏi lưu trữ dữ liệu ở #122.</td></tr>
+<tr><td>D4</td><td>Pilot đăng nhập bằng tài khoản Crove hay DOS ID?</td><td><b>Dùng đăng nhập có sẵn của Crove</b> (email, mật khẩu, MFA). Không phải chờ thay đổi bên DOS (#54). Sau này vẫn nối với DOS ID được.</td></tr>
+<tr><td>D5</td><td>Tạm dừng Social và org chart cho agents tới khi xong M2?</td><td><b>Có.</b> Cả hai chưa có người dùng pilot nào, trong khi số agent làm việc là thứ khan hiếm nhất. Các session đang làm #233 và #258 dừng ở điểm sạch, không merge nửa vời.</td></tr>
+<tr><td>D6</td><td>Ai hẹn lịch phỏng vấn và thu 100 chứng từ mẫu, xong trước ngày nào?</td><td><b>Owner làm cùng COO phía đối tác, xong trước 31/10.</b> Phạm vi M2 phụ thuộc vào kết quả này.</td></tr>
+<tr><td>D7</td><td>Pilot thu bao nhiêu? <b>(cần owner duyệt)</b></td><td><b>Miễn phí tới 31/12, sau đó tính theo mỗi công ty khách mỗi tháng.</b> Giả thuyết ban đầu khoảng 100 nghìn đồng, sẽ kiểm lại khi phỏng vấn. Công ty kế toán thu khách 400 nghìn đến 2 triệu, còn MISA ASP miễn phí, nên giá Crove phải là phần nhỏ trong phí của họ. Xuất hóa đơn tay.</td></tr>
+<tr><td>D8</td><td>Giữ thương hiệu Crove (#80)?</td><td><b>Giữ Crove, đóng #80.</b> Đổi tên thì phải sửa package, schema, tài liệu, domain. Phương án kia đã được xem xét và bị loại.</td></tr>
+<tr><td>D9</td><td>AI nào xử lý PDF và ảnh? Có được gửi dữ liệu ra ngoài Việt Nam không?</td><td><b>Dùng DOS.AI, có trần chi.</b> Hóa đơn XML (chiếm phần lớn) được đọc bằng code, không gọi AI. Ghi rõ điều này trong thỏa thuận pilot.</td></tr>
+<tr><td>D10</td><td>Chạy song song với phần mềm hiện tại của công ty kế toán thay vì thay thế nó?</td><td><b>Có.</b> Crove là lớp AI nhận và duyệt chứng từ, rồi xuất sang MISA. Đổi phần mềm sổ sách là quyết định của cuối năm. Cách này bỏ được chi phí chuyển đổi mà vẫn tiết kiệm được công nhập liệu.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="quy-tac">7. Quy tắc giữ backlog khỏe</h2>
+<ol>
+  <li>Issue nào cũng thuộc một milestone có kết quả cho người dùng. Không thuộc milestone nào thì vào Icebox. Agent chỉ lấy việc ở milestone sớm nhất còn P0 hoặc P1 đang mở.</li>
+  <li>Review follow-up không chặn thì tự động vào Icebox (P3, nhãn <code>review-followup</code>). Nó chỉ quay lại khi chặn một milestone, hoặc khi có người dùng thật gặp lỗi.</li>
+  <li>Không hardening cho tính năng chưa ai dùng. Chỉ làm security khi checklist của milestone hiện tại cần, hoặc khi phát hiện lỗ hổng high/critical thật (khi đó là P0 ngay).</li>
+  <li>Giới hạn WIP: tối đa 3 issue đang làm cùng lúc, ít nhất 2 trong số đó thuộc milestone hiện tại.</li>
+  <li>Agent không được tạo issue P0 hoặc P1. Issue mới mặc định là P3. Mỗi tuần coordinator phân loại một lần.</li>
+  <li>"Xong" nghĩa là đã chạy trên server pilot và có 1 dòng release note tiếng Việt.</li>
+  <li>Việc của owner phải có hạn chót. Báo cáo tuần liệt kê việc nào quá hạn, kèm phương án đi vòng.</li>
+  <li>Hết thời hạn mà chưa xong thì cắt bớt phạm vi, ghi rõ bằng văn bản. Không âm thầm lùi ngày.</li>
+  <li>Không thêm dòng gate mới nếu owner chưa đồng ý.</li>
+  <li>Mỗi tuần có báo cáo 1 trang bằng tiếng Việt: người dùng pilot đã làm gì, đã ship gì, việc gì đang chờ owner.</li>
+</ol>
+<p class="muted"><code>AGENTS.md</code> (mục "Picking up work") cần sửa theo các quy tắc 1 đến 5. Đây là file protected path, nên sửa bằng một PR riêng.</p>
+
+<footer>Crove · rà soát backlog 17/10/2026 · nguồn chính: <a href="backlog-review-2026-10-17.md">backlog-review-2026-10-17.md</a></footer>
+</main>
+</div>
+</body>
+</html>
