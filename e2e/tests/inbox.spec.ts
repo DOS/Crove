@@ -52,7 +52,7 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await approve.click();
     await expect(page).toHaveURL(new RegExp(`/o/${slug}/inbox$`));
     await expect(page.getByText('Không có đề xuất nào chờ duyệt')).toBeVisible();
-    await page.getByRole('button', { name: 'Đã ghi sổ' }).click();
+    await page.getByRole('tab', { name: 'Đã ghi sổ' }).click();
     await expect(page.getByRole('link', { name: SELLER })).toBeVisible();
   });
 
@@ -67,7 +67,7 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await nav.getByRole('link', { name: 'Chứng từ mua' }).click();
     const document = page.getByRole('row').filter({ hasText: 'C26TAB-1234' });
     await expect(document).toHaveCount(1);
-    await expect(document.getByRole('cell')).toHaveText(['15/09/2026', 'C26TAB-1234', SELLER, /^1\.800\.000/, /^180\.000/, /^1\.980\.000/]);
+    await expect(document.getByRole('cell')).toHaveText(['15/09/2026', 'C26TAB-1234', SELLER, /^1\.800\.000/, /^180\.000/, /^1\.980\.000/, 'Đã ghi sổ']);
 
     await nav.getByRole('link', { name: 'Bút toán' }).click();
     await expect(page.getByText(MEMO)).toBeVisible();
