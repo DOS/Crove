@@ -61,6 +61,17 @@ const schema = z.object({
   AUTH_STEP_UP: z.enum(['required', 'off']).default('required'),
   // Mirrors GOTRUE_MAILER_AUTOCONFIRM so the kernel can refuse unsafe public deployments.
   AUTH_AUTOCONFIRM: z.enum(['true', 'false']).default('false'),
+  // Per-client budget for the emails the bundled Supabase Auth sends (sign-up confirmation, recovery, magic link and
+  // OTP codes, resend, email change, reauthentication), enforced by the /auth/v1 proxy in the database across API
+  // instances (#190): at most AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR per client address (IPv6: per /64) in any rolling
+  // hour, and one per recipient every AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS. AUTH_RATE_LIMIT_EMAIL_SENT is Supabase
+  // Auth's deployment-wide budget (GOTRUE_RATE_LIMIT_EMAIL_SENT, per hour); when set, a public deployment refuses to
+  // start unless it takes at least EMAIL_BUDGET_MIN_CLIENTS client addresses to use it up.
+  AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR: z.coerce.number().int().min(1).max(100_000).default(5),
+  AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
+  AUTH_RATE_LIMIT_EMAIL_SENT: optional
+    .transform((v) => (v === undefined ? undefined : Number(v)))
+    .pipe(z.number().int().min(1).max(1_000_000).optional()),
   // Per-user limits on creating orgs (External-tenant gate T4), enforced in the database across API instances:
   // at most ORG_CREATE_LIMIT_PER_DAY in any rolling 24 hours and ORG_CREATE_LIMIT_TOTAL ever (closed orgs count).
   ORG_CREATE_LIMIT_PER_DAY: z.coerce.number().int().min(1).max(999_999).default(5),
@@ -151,6 +162,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (config.AUTH_STEP_UP === 'off') {
       throw new Error('AUTH_STEP_UP=off lets a stolen session approve and change roles without MFA; set it to required');
     }
+    const budget = config.AUTH_RATE_LIMIT_EMAIL_SENT;
+    if (config.AUTH_UPSTREAM_URL && budget !== undefined && config.AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR * EMAIL_BUDGET_MIN_CLIENTS > budget) {
+      throw new Error(
+        `AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR=${config.AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR} lets ${Math.ceil(budget / config.AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR)} ` +
+          `client addresses use up the email budget (AUTH_RATE_LIMIT_EMAIL_SENT=${budget}); keep it at most ` +
+          `${Math.floor(budget / EMAIL_BUDGET_MIN_CLIENTS)}, or raise the budget`,
+      );
+    }
   }
   // Hosted Supabase refuses requests without the project's publishable key, which would turn every R3 into a 401.
   const live = config.AUTH_SESSION_CHECK === 'jwt' ? liveAuthUrl(config) : null;
@@ -159,6 +178,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   return config;
 }
+
+// How many client addresses it must take, at least, to use up Supabase Auth's deployment-wide email budget.
+export const EMAIL_BUDGET_MIN_CLIENTS = 10;
 
 // Values shipped in docker-compose.yml and .env.example. Fine on localhost, never on a public URL.
 const SAMPLE_SECRETS = new Set(['local-only-jwt-secret-change-me-0123456789', 'change-me-to-a-long-random-string-0123456789']);

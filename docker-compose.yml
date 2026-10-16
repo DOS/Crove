@@ -53,6 +53,11 @@ services:
       GOTRUE_PASSWORD_MIN_LENGTH: '8'
       # The kernel proxy sets X-Real-IP from the client socket, so rate limits are per client.
       GOTRUE_RATE_LIMIT_HEADER: X-Real-IP
+      # Emails per hour for the whole deployment (counted while confirmations are on), and requests per 5 minutes per
+      # client address on sign-up, recovery, OTP, resend and user updates. The kernel proxy also caps emails per
+      # client (AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR, below), so one client cannot use up this budget (#190).
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: ${AUTH_RATE_LIMIT_EMAIL_SENT:-100}
+      GOTRUE_RATE_LIMIT_OTP: ${AUTH_RATE_LIMIT_OTP:-30}
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
       GOTRUE_DISABLE_SIGNUP: ${AUTH_DISABLE_SIGNUP:-false}
       GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true'
@@ -113,6 +118,11 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-noreply@crove.local}
       TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
+      # Emails Supabase Auth sends per client address and per recipient (#190); the same budget as the auth service,
+      # so a public deployment refuses to start when fewer than 10 client addresses could use it up.
+      AUTH_RATE_LIMIT_EMAIL_SENT: ${AUTH_RATE_LIMIT_EMAIL_SENT:-100}
+      AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR: ${AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR:-5}
+      AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS: ${AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS:-60}
       ORG_CREATE_LIMIT_PER_DAY: ${ORG_CREATE_LIMIT_PER_DAY:-5}
       ORG_CREATE_LIMIT_TOTAL: ${ORG_CREATE_LIMIT_TOTAL:-20}
       INBOUND_ROTATE_LIMIT_PER_DAY: ${INBOUND_ROTATE_LIMIT_PER_DAY:-3}
