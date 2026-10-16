@@ -52,3 +52,47 @@ Socioboard is dormant; Fediverse-only schedulers have no traction.
 - Several platforms fetch media from a public URL. A laptop deployment cannot serve one, so self-host media posts use the platforms' upload endpoints where they exist, and the media library needs signed, time-limited public URLs when storage is public.
 - Token lifetimes range from "no timer" (Facebook Page) to 24 h with rotating refresh tokens (TikTok, Zalo). A rotated refresh token must be stored in the same transaction that records the refresh, or the connection is lost.
 - Zalo OA is supported by none of the projects above: a differentiator for Vietnam.
+
+## 5. Schema comparison (read first-hand, 2026-10-16)
+
+Read directly from the sources, not from summaries: Postiz `libraries/nestjs-libraries/src/database/prisma/schema.prisma` (DOS/Crove-Post `dev` @ `aa4172c`), OpenPost `apps/server/internal/models/models.go` and `publication_review.go` (@ `e0be2de`), BrightBean Studio `apps/composer`, `apps/approvals`, `apps/calendar`, `apps/publisher` models (@ `9a52a8b`). Design only, no code taken (§1).
+
+### 5.1 Channel accounts and tokens (S2, merged)
+
+| | Postiz `Integration` | OpenPost `oauth_grants` + `social_accounts` | BrightBean `SocialAccount` | Crove (S2) |
+|---|---|---|---|---|
+| Token at rest | **Plain text**: `token`, `refreshToken` are stored as received (`integration.repository.ts` upsert). Its AES-256-CBC helper (fixed IV derived from `JWT_SECRET` with MD5) is used only for API keys and custom instance details | Encrypted bytes (`access_token_encrypted`, `refresh_token_encrypted`) | `EncryptedTextField` | AES-256-GCM envelope per token, key outside the database, bound to org, provider and account |
+| Grant vs account | One row is both | **Split**: one grant (a login) can back several accounts (`social_accounts.oauth_grant_id`) | One row is both | One credential per connection |
+| Refresh coordination | Long-running workflow per integration; `refreshNeeded` flag | `refresh_lease_owner`, `refresh_lease_expires_at`, `token_version`, last refresh error | Not checked | Not yet (S4) |
+| Account states | `disabled`, `refreshNeeded`, `inBetweenSteps` (pick a page after OAuth), soft delete | `is_active`, capability and preflight checks, revoke reason | Connection status enum | `active`, `expired`, `revoked`, `error`, `status_reason` |
+| Posting times | `postingTimes` JSON on the integration | Workspace `posting_schedules` rows | `PostingSlot` rows + `Queue` + `QueueEntry` | `queue` + slot rows (S3) |
+
+**Gaps found in S2, to fix before the adapters that need them:**
+- **Grant shared by several accounts.** A LinkedIn member token posts for the member and every organization page they administer; one Google login covers several YouTube channels. With one credential per connection, the same token would be sealed into several rows, and a refresh that rotates the refresh token (single-use on Zalo, possibly rotating on TikTok) would invalidate the other copies. Facebook Pages (a token per page) and Zalo OA (a token per OA) are not affected. Fix before the LinkedIn and YouTube adapters: a `crove_kernel.channel_grant` that holds the credential, with connections pointing at it (OpenPost's split).
+- **Refresh lease.** Two workers refreshing one single-use refresh token at once lose the connection. Add a lease (or an advisory lock plus `token_version`) with the refresh job in S4.
+
+### 5.2 Posts, variants and approval (S3, before the migration)
+
+| | Postiz | OpenPost | BrightBean | Decision for Crove |
+|---|---|---|---|---|
+| Unit of content | `Post` row per integration; `group` ties a thread, `batchId` one compose, `parentPostId` thread order | `publications` (source content) -> `renditions` (one per account, `target_key`) -> `publication_segments` / `rendition_segments` (thread parts) | `Post` (base) -> `PlatformPost` per account | `post` (base) -> `post_variant` per connection. Thread parts later as an additive `post_variant_part` table |
+| Per-channel content | Full copy per row | Full copy, with inheritance rules (migration 064) | **Nullable overrides**: null means "use the base" | Nullable overrides (`body`, `title`, `link_url`); the variant's effective content is hashed |
+| Status | `QUEUE`, `PUBLISHED`, `ERROR`, `DRAFT` on each row | Publication status + rendition status + delivery state | **Per platform post**, including review states; the post status is derived | **Per variant**, including review; `post.status` is a derived summary |
+| Approval | None (marketplace flag only) | `publication_authorizations` per rendition: revision, content, media and settings hashes, actor origin, scheduled time; `publication_reviews` with an epoch and an immutable snapshot of what the reviewer saw | `ApprovalAction` log (submitted, approved, changes requested, rejected, resubmitted, held), optionally per platform post; client stage (`pending_client`) | `post_approval` append-only, one row per variant decision: revision, content hash, decision (`approved`, `changes_requested`, `rejected`), comment, and a snapshot of what was shown. "Approve all" writes one row per variant in one command |
+| Schedule | `publishDate` per row | Publication `scheduled_at` + per-rendition `schedule_override` | Per platform post | `post.scheduled_at` + nullable `post_variant.scheduled_at` override |
+| Errors | `error` text | `error_kind`, `error_code`, `error_http_status`, `error_retryable`, `error_retry_at`, `error_action` | `publish_error` text, `retry_count`, `next_retry_at` | OpenPost's set, including `error_action` (what the user should do) |
+| Publish history | Temporal history | `provider_write_attempts` (fenced, payload fingerprint, no raw responses) + `provider_deliveries` (current projection) | `PublishLog` with the raw `response_body` | `crove_kernel.external_call` (S4) holds attempts without raw responses; `post_variant` is the projection |
+| Repeat and recycle | `intervalInDays` | `repost_policies` + executions | `RecurrenceRule` | Later (evergreen, S9) |
+| Metrics | Fetched on demand | `analytics_rendition_snapshots` with `metrics_json`, `metric_metadata_json` and a `capture_key` | Analytics app | `metric_snapshot` with normalized `metrics` jsonb, `capture_key` unique per variant and capture |
+| Rate limits | In memory per provider | Usage events, reservations and period counters | `RateLimitState` per account and platform | With the adapters (S4/S6), per app and per account |
+| Deletion | Soft delete everywhere | Mixed | Published or publishing rows are never removed | No DELETE grant on published history; drafts are cancelled, not deleted |
+
+**What changes in the plan (§3.2 of social.md):**
+1. The lifecycle moves to the variant. One channel can be approved, scheduled or published while another is still in review, as in BrightBean and OpenPost. `post.status` becomes a summary derived from its variants.
+2. Approval is recorded per variant, with a snapshot, and adds `changes_requested` next to `rejected` (BrightBean).
+3. Variants inherit the base content unless they override it.
+4. Per-variant schedule override and OpenPost's error fields.
+5. Queue slots become rows (`queue_slot`), one queue per channel connection, as Postiz and BrightBean do; the S1 slot rules are unchanged.
+6. Metrics become normalized jsonb with a capture key, because platforms rename metrics.
+
+The S1 domain functions (post lifecycle, `contentHash`) are adjusted in the S3 PR; the queue math and the publish decisions stay as they are.
