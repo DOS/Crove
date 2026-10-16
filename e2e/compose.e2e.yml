@@ -1,13 +1,18 @@
 # Test-only settings on top of ../docker-compose.yml. Sign-up needs the confirmation email, as in production
-# (the tests read it from Mailpit), the email rate limit does not trip on repeated local runs, and orgs get an
-# inbound address (nothing delivers to it) so Settings shows the rotation.
+# (the tests read it from Mailpit), and orgs get an inbound address (nothing delivers to it) so Settings shows the
+# rotation. Every test signs up and recovers from the runner's one address, often for an address just mailed, so
+# the email budgets (#190) are raised: Supabase Auth's deployment-wide one and the proxy's per-client and
+# per-recipient limits, keeping 10 clients' worth of the per-client limit inside the budget as the kernel requires.
 services:
   auth:
     environment:
       GOTRUE_MAILER_AUTOCONFIRM: 'false'
-      GOTRUE_RATE_LIMIT_EMAIL_SENT: '1000'
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: '10000'
   crove:
     environment:
       AUTH_AUTOCONFIRM: 'false'
+      AUTH_RATE_LIMIT_EMAIL_SENT: '10000'
+      AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR: '1000'
+      AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS: '0'
       INBOUND_DOMAIN: in.e2e.test
       INBOUND_SECRET: e2e-only-inbound-secret-0123456789abcdef
