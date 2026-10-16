@@ -104,6 +104,8 @@ export interface StreamClientDeps {
   live: (live: boolean) => void;
   setTimer?: (fn: () => void, ms: number) => unknown;
   now?: () => number;
+  // 0 to 1; backoff delays are scaled into [50%, 100%] so tabs that lost a stream together do not return together.
+  random?: () => number;
   clearTimer?: (handle: unknown) => void;
 }
 
@@ -123,6 +125,7 @@ export function startStreamClient(deps: StreamClientDeps): () => void {
   let source: EventSourceLike | null = null;
   let timer: unknown = null;
   const now = deps.now ?? Date.now;
+  const random = deps.random ?? Math.random;
   let failures = 0;
   let connectedBefore = false;
   let readyAt: number | null = null;
@@ -146,7 +149,8 @@ export function startStreamClient(deps: StreamClientDeps): () => void {
 
   const backoff = () => {
     failures++;
-    retry(Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * 2 ** Math.min(failures - 1, 10)));
+    const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * 2 ** Math.min(failures - 1, 10));
+    retry(Math.round(delay * (0.5 + random() / 2)));
   };
 
   const connect = async () => {

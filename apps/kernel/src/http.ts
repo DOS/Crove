@@ -317,6 +317,8 @@ export function createHttpApp(deps: HttpDeps) {
       return c.json({ code: 'STREAM_UNAVAILABLE', message: 'Kênh cập nhật tạm thời không hoạt động' }, 503);
     };
     app.get('/api/stream', async (c) => {
+      // Hono answers HEAD with this route and drops the body: a stream nobody reads would hold a slot.
+      if (c.req.method !== 'GET') return c.json({ code: 'METHOD_NOT_ALLOWED' }, 405);
       const ticket = c.req.query('ticket');
       const refused = () => c.json({ code: 'STREAM_TICKET_INVALID', message: 'Vé kết nối không hợp lệ hoặc đã hết hạn' }, 401);
       if (!wellFormedTicket(ticket)) return refused();
@@ -351,6 +353,11 @@ export function createHttpApp(deps: HttpDeps) {
       } catch (error) {
         release();
         return problem(c, error);
+      }
+      // The listener may have dropped, or the process begun to stop, while the checks ran.
+      if (!stream.hub.ready) {
+        release();
+        return unavailable(c);
       }
       const encoder = new TextEncoder();
       let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
@@ -397,6 +404,8 @@ export function createHttpApp(deps: HttpDeps) {
       c.req.raw.signal.addEventListener('abort', () => connection.finish(), { once: true });
       unsubscribe = stream.hub.subscribe(connection);
       connection.open(stream.recheckSeconds);
+      // A client that left during the checks above never fires abort again, and its body is never cancelled.
+      if (c.req.raw.signal.aborted) connection.finish();
       return new Response(body, {
         headers: {
           'content-type': 'text/event-stream; charset=utf-8',
@@ -436,6 +445,9 @@ export function createHttpApp(deps: HttpDeps) {
     app.post('/api/stream/tickets', bodyLimit({ maxSize: 1024 }), async (c) => {
       try {
         const user = c.get('user');
+        // Fail closed: without the token's exp a stream could outlive the token (jwt mode trusts it until then).
+        const tokenExp = user.tokenExp;
+        if (tokenExp === undefined) throw new DomainError('STREAM_UNAVAILABLE', 503, 'Kênh cập nhật tạm thời không hoạt động');
         const orgId = await resolveOrg(runtime, user, c.req.header(ORG_HEADER) ?? null);
         await runtime.query(STREAM_CHECK_QUERY, {}, { actor: actorOf(user), orgId });
         const { ticket, hash } = newTicket();
@@ -445,7 +457,7 @@ export function createHttpApp(deps: HttpDeps) {
           sessionId: user.sessionId,
           aal: user.aal,
           mfaAt: user.mfaAt,
-          tokenExp: user.tokenExp ?? Math.floor((Date.now() + MAX_STREAM_LIFETIME_MS) / 1000),
+          tokenExp,
         });
         if (!issued) {
           c.header('retry-after', String(STREAM_TICKET_TTL_SECONDS));

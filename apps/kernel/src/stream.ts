@@ -119,6 +119,11 @@ export class StreamHub {
   }
 
   subscribe(subscriber: HubSubscriber): () => void {
+    // A process that cannot see changes (listener down, stopping) feeds no stream.
+    if (!this.ready) {
+      subscriber.close('unavailable');
+      return () => {};
+    }
     let set = this.byOrg.get(subscriber.orgId);
     if (!set) {
       set = new Set();
@@ -205,7 +210,8 @@ export function createPgNotificationSource(options: PgSourceOptions): Notificati
 
   const connect = async () => {
     if (stopped) return;
-    const current = new pg.Client({ connectionString: options.connectionString, application_name: 'crove-stream-listen' });
+    // keepAlive: a half-open TCP connection (NAT timeout, failover) is noticed instead of listening to nothing.
+    const current = new pg.Client({ connectionString: options.connectionString, application_name: 'crove-stream-listen', keepAlive: true });
     client = current;
     current.on('error', (error) => drop(current, error.message));
     current.on('end', () => drop(current, 'ended'));
@@ -279,7 +285,17 @@ export class StreamConnection implements HubSubscriber {
     this.recheckEvery = options.recheckEveryHints ?? RECHECK_EVERY_HINTS;
     const now = options.now ?? Date.now;
     const heartbeat = options.heartbeatMs ?? HEARTBEAT_MS;
-    this.timers.push(setInterval(() => void this.recheck(), options.recheckMs));
+    // A random phase, so streams opened together (after a deploy) do not re-check together; the first check still
+    // comes within recheckMs.
+    const phase = 1 + Math.floor(Math.random() * Math.max(1, options.recheckMs - 1));
+    this.timers.push(
+      setTimeout(() => {
+        void this.recheck();
+        const interval = setInterval(() => void this.recheck(), options.recheckMs);
+        interval.unref?.();
+        this.timers.push(interval);
+      }, phase),
+    );
     this.timers.push(setInterval(() => this.send(': ping\n\n'), heartbeat));
     this.timers.push(setTimeout(() => this.close('expired'), Math.max(0, options.endsAt - now())));
     for (const timer of this.timers) timer.unref?.();

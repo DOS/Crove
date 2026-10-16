@@ -142,6 +142,7 @@ function harness(ticket: () => Promise<string> = async () => `t${Math.random()}`
     },
     clearTimer: () => {},
     now: () => clock,
+    random: () => 1,
   });
   const fireTimer = async () => {
     const timer = timers.shift();

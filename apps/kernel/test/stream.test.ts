@@ -103,6 +103,11 @@ describe('StreamHub', () => {
     const hub = new StreamHub(source);
     hub.start();
     expect(hub.ready).toBe(false);
+    // Not listening yet: a stream is closed at once and never subscribed.
+    const early = recorder(ORG_A);
+    hub.subscribe(early);
+    expect(early.closed).toEqual(['unavailable']);
+    expect(hub.size).toBe(0);
     source.ready();
     expect(hub.ready).toBe(true);
     const a = recorder(ORG_A);
