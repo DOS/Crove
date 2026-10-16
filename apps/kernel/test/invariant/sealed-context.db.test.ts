@@ -470,6 +470,11 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
       ['crove_kernel.session_revoke', `SELECT * FROM crove_kernel.session_revoke($1::uuid, NULL, 'forged')`, () => [users.owner]],
       ['crove_kernel.inbound_rotate', `SELECT crove_kernel.inbound_rotate()`, () => []],
     ] as const;
+    // The org-less self revoke (#184) refuses any context, so it is checked only against forged ones below.
+    const orgless = [
+      ['crove_kernel.session_revoke_orgless', `SELECT * FROM crove_kernel.session_revoke_orgless($1::uuid, $2::uuid, NULL, 'forged')`, () => [users.owner, randomUUID()]],
+    ] as const;
+    const forgeable = [...definers, ...orgless];
     const state = () =>
       withAdmin(async (a) => {
         const tokens = await a.query<{ org_id: string; inbound_token: string }>(
@@ -497,7 +502,7 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
 
     const before = await state();
     for (const patch of [{ org: orgB }, { user: users.other }, { org: orgB, user: users.other, role: 'owner' }]) {
-      for (const [name, text, args] of definers) {
+      for (const [name, text, args] of forgeable) {
         // The transaction is committed when the call succeeds: a refusal must leave nothing behind.
         await app.query('BEGIN');
         try {
@@ -510,7 +515,7 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
       }
     }
     // Without any entry, a context written by hand is refused the same way.
-    for (const [name, text, args] of definers) {
+    for (const [name, text, args] of forgeable) {
       await app.query('BEGIN');
       try {
         await setRaw(app, 'crove.ctx', JSON.stringify({ v: 1, org: orgB, actor: 'user', user: users.other, role: 'owner', le_scope: ['*'], flags: [] }));

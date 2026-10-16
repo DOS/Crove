@@ -603,10 +603,12 @@ export const revokeSession = defineCommand({
 
 // The user's own revoke sent without an org (issue #184: sign-out on the onboarding and invite pages). A self revoke
 // is global, so the org only decides where the audit row lands:
-// - a user who belongs to an org runs kernel.session.revoke in their oldest org, through execute() as from any
-//   other page: the same definer, membership and session checks, audit row and upstream sign-out;
-// - a user who belongs to no org has nowhere to audit: crove_kernel.session_revoke_orgless revokes in Crove only,
-//   in the org-less request transaction right after the session check, and refuses anyone who has an org.
+// - a user who belongs to an org runs kernel.session.revoke through execute() in their orgs, oldest first, as from
+//   any other page: the same definer, membership and session checks, audit row and upstream sign-out. An org that
+//   cannot run it (its owner revoked this session there, or the user left it since the lookup) passes to the next
+//   one, so one org's owner cannot block a global self revoke (issue #196);
+// - a user with no org that can run it has nowhere to audit: crove_kernel.session_revoke_orgless revokes in Crove
+//   only, in the org-less request transaction right after the session check, and refuses while some org could.
 // Revoking another user's sessions always needs that user's org: owners revoke in their org only.
 export async function revokeOwnSessionsWithoutOrg(runtime: Runtime, actor: UserActor, rawInput: unknown): Promise<{ revoked: string[] }> {
   const parsed = zSessionRevoke.safeParse(rawInput);
@@ -615,23 +617,38 @@ export async function revokeOwnSessionsWithoutOrg(runtime: Runtime, actor: UserA
   }
   const input = parsed.data;
   if (input.userId !== actor.userId) throw new DomainError('ORG_REQUIRED', 400, 'Thiếu tổ chức (header x-crove-org)');
-  const home = (await runtime.forUser(actor, (db) => myOrgs(db, actor.userId)))[0];
-  if (home) return runtime.execute<{ revoked: string[] }>('kernel.session.revoke', input, { actor, orgId: home.orgId });
-  return runtime.forUser(actor, async (db) => {
-    try {
-      const { rows } = await sql<{ revoked_session: string }>`
-        SELECT r AS revoked_session
-        FROM crove_kernel.session_revoke_orgless(${actor.userId}::uuid, ${actor.sessionId ?? null}::uuid,
-          ${input.sessionId ?? null}::uuid, ${input.reason ?? null}) r`.execute(db);
-      return { revoked: rows.map((r) => r.revoked_session) };
-    } catch (error) {
-      // The user joined an org since the lookup above: the revoke belongs in that org now.
-      if ((error as { message?: unknown } | null)?.message === 'ORG_REQUIRED') {
-        throw new DomainError('RETRY', 409, 'Xung đột đồng thời, hãy thử lại');
+  // A second pass covers a user who joined an org between the lookup and the org-less definer.
+  for (let pass = 0; pass < 2; pass += 1) {
+    const orgs = await runtime.forUser(actor, (db) => myOrgs(db, actor.userId));
+    for (const org of orgs) {
+      try {
+        return await runtime.execute<{ revoked: string[] }>('kernel.session.revoke', input, { actor, orgId: org.orgId });
+      } catch (error) {
+        // UNAUTHENTICATED here is the session refused in this org (SESSION_REVOKED_IN_ORG); a session refused
+        // everywhere is refused again by the org-less session check below.
+        const code = (error as { code?: unknown } | null)?.code;
+        if (code !== 'UNAUTHENTICATED' && code !== 'NOT_A_MEMBER') throw error;
       }
-      throw error;
     }
-  });
+    try {
+      return await runtime.forUser(actor, async (db) => {
+        try {
+          const { rows } = await sql<{ revoked_session: string }>`
+            SELECT r AS revoked_session
+            FROM crove_kernel.session_revoke_orgless(${actor.userId}::uuid, ${actor.sessionId ?? null}::uuid,
+              ${input.sessionId ?? null}::uuid, ${input.reason ?? null}) r`.execute(db);
+          return { revoked: rows.map((r) => r.revoked_session) };
+        } catch (error) {
+          // Thrown, not returned: the failed statement aborted this transaction, which then rolls back.
+          if ((error as { message?: unknown } | null)?.message === 'ORG_REQUIRED') throw new DomainError('ORG_REQUIRED', 409, 'Thử lại trong tổ chức');
+          throw error;
+        }
+      });
+    } catch (error) {
+      if (!(error instanceof DomainError && error.code === 'ORG_REQUIRED')) throw error;
+    }
+  }
+  throw new DomainError('RETRY', 409, 'Xung đột đồng thời, hãy thử lại');
 }
 
 const otherKernelCommands = [

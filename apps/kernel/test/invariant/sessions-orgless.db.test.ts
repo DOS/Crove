@@ -230,10 +230,12 @@ suite('own session revoke without an org (issue #184)', () => {
     const fn = 'crove_kernel.session_revoke_orgless(uuid,uuid,uuid,text)';
     const grants = await sql(
       `SELECT r AS role, has_function_privilege(r, $1, 'EXECUTE') AS can FROM unnest($2::text[]) r ORDER BY r`,
-      [fn, ['crove_app', 'crove_tenant', 'crove_worker']],
+      [fn, ['crove_app', 'crove_auth_reader', 'crove_definer_tenant', 'crove_tenant', 'crove_worker']],
     );
     expect(grants.rows).toEqual([
       { role: 'crove_app', can: true },
+      { role: 'crove_auth_reader', can: false },
+      { role: 'crove_definer_tenant', can: false },
       { role: 'crove_tenant', can: false },
       { role: 'crove_worker', can: false },
     ]);
@@ -247,6 +249,12 @@ suite('own session revoke without an org (issue #184)', () => {
     await expect(call(user.userId, owner.session, null)).rejects.toMatchObject({ code: '28000', message: 'SESSION_INVALID' });
     // A user with an org revokes through the audited command in it.
     await expect(call(owner.userId, owner.session, owner.session)).rejects.toMatchObject({ code: '42501', message: 'ORG_REQUIRED' });
+    // A user disabled in Crove, even with a live session and no org.
+    const disabled = account('disabled');
+    disabled.userId = await signIn(disabled);
+    await sql('UPDATE crove_kernel.user_account SET disabled_at = now() WHERE id = $1', [disabled.userId]);
+    await expect(call(disabled.userId, disabled.session, null)).rejects.toMatchObject({ code: '42501', message: 'USER_DISABLED' });
+    expect(await sessionRow(disabled.userId, disabled.session)).toEqual({ status: 'active', revoked_by: null, reason: null });
     expect(await sessionRow(user.userId, user.session)).toEqual({ status: 'active', revoked_by: null, reason: null });
     expect(await sessionRow(owner.userId, owner.session)).toMatchObject({ status: 'active' });
 
@@ -262,6 +270,60 @@ suite('own session revoke without an org (issue #184)', () => {
     } finally {
       await client.query('ROLLBACK');
       await client.end();
+    }
+  });
+  // Issue #196: an org that cannot run the user's own revoke must not block it.
+  it("does not let an owner's org-scoped revoke block a member's own global revoke without an org header", async () => {
+    // Only org: the owner revoked this session there, so the org-less definer revokes it.
+    const solo = account('solo');
+    solo.userId = await signIn(solo);
+    await sql(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [orgId, solo.userId]);
+    const token = await tokenFor(solo);
+    expect((await rpc('inbox/list', token, {}, orgSlug)).status).toBe(200);
+    expect((await rpc('sessions/revoke', await tokenFor(owner), { userId: solo.userId, sessionId: solo.session }, orgSlug)).status).toBe(200);
+    expect((await rpc('inbox/list', token, {}, orgSlug)).status).toBe(401);
+    expect((await rpc('me/get', token)).status).toBe(200);
+    const revoked = await rpc('sessions/revoke', token, { userId: solo.userId, sessionId: solo.session, reason: 'sign-out' });
+    expect(revoked).toMatchObject({ status: 200, body: { revoked: [solo.session] } });
+    expect(await sessionRow(solo.userId, solo.session)).toEqual({ status: 'revoked', revoked_by: solo.userId, reason: 'sign-out' });
+    expect((await rpc('me/get', token)).status).toBe(401);
+
+    // Two orgs: the oldest refuses this session, so the revoke runs in the next one and is audited there.
+    const pair = account('pair');
+    pair.userId = await signIn(pair);
+    await sql(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [orgId, pair.userId]);
+    const second = await rpc('org/create', await tokenFor(pair), { name: 'Pair Own Org', idempotencyKey: randomUUID() });
+    expect(second.status).toBe(200);
+    const pairToken = await tokenFor(pair);
+    expect((await rpc('inbox/list', pairToken, {}, orgSlug)).status).toBe(200);
+    expect((await rpc('sessions/revoke', await tokenFor(owner), { userId: pair.userId, sessionId: pair.session }, orgSlug)).status).toBe(200);
+    const result = await rpc('sessions/revoke', pairToken, { userId: pair.userId, sessionId: pair.session });
+    expect(result).toMatchObject({ status: 200, body: { revoked: [pair.session] } });
+    expect((await rpc('me/get', pairToken)).status).toBe(401);
+    expect(await revokeAudits(pair.userId)).toEqual([
+      { org_id: orgId, actor_id: owner.userId, outcome: 'ok', target_id: pair.userId },
+      { org_id: String(second.body?.orgId), actor_id: pair.userId, outcome: 'ok', target_id: pair.userId },
+    ]);
+  });
+
+  it('keeps who revoked a session and why once set, in Crove and in an org', async () => {
+    const user = account('pinned');
+    user.userId = await signIn(user);
+    expect((await rpc('sessions/revoke', await tokenFor(user), { userId: user.userId, sessionId: user.session, reason: 'lost phone' })).status).toBe(200);
+    for (const change of [`revoked_by = '${owner.userId}'`, `reason = 'rewritten'`]) {
+      await expect(sql(`UPDATE crove_kernel.auth_session SET ${change} WHERE user_id = $1 AND session_id = $2`, [user.userId, user.session])).rejects.toThrow(
+        /stays revoked/,
+      );
+    }
+    expect(await sessionRow(user.userId, user.session)).toEqual({ status: 'revoked', revoked_by: user.userId, reason: 'lost phone' });
+
+    const laptop = { ...member, session: randomUUID() };
+    expect((await rpc('inbox/list', await tokenFor(laptop), {}, orgSlug)).status).toBe(200);
+    expect((await rpc('sessions/revoke', await tokenFor(owner), { userId: member.userId, sessionId: laptop.session, reason: 'owner' }, orgSlug)).status).toBe(200);
+    for (const change of [`revoked_by = '${member.userId}'`, `reason = 'rewritten'`]) {
+      await expect(
+        sql(`UPDATE crove_kernel.auth_session_org SET ${change} WHERE org_id = $1 AND user_id = $2 AND session_id = $3`, [orgId, member.userId, laptop.session]),
+      ).rejects.toThrow(/stays revoked/);
     }
   });
 });
