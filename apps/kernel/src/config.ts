@@ -22,6 +22,8 @@ const modules = optional.transform((value, ctx): readonly ModuleId[] => {
     .split(',')
     .map((name) => name.trim().toLowerCase())
     .filter(Boolean);
+  // Only separators (",", " , ") names no module: the same as empty, so every module.
+  if (names.length === 0) return AVAILABLE_MODULES;
   const unknown = names.filter((name) => !(AVAILABLE_MODULES as readonly string[]).includes(name));
   if (unknown.length > 0) {
     ctx.addIssue({ code: 'custom', message: `unknown module(s) ${unknown.join(', ')}; available: ${AVAILABLE_MODULES.join(', ')}` });

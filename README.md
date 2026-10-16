@@ -31,7 +31,7 @@ The defaults are for local use. Before anyone else can reach your instance, copy
 
 | Feature | Variables |
 |---|---|
-| Modules | `CROVE_MODULES`: comma-separated modules to run, such as `finance` (default: every module; `kernel` is always on). A module left out registers no commands, routes, jobs or menus; migrations still apply to every schema (ADR-0031) |
+| Modules | `CROVE_MODULES`: comma-separated modules to run, such as `finance` (default: every module; `kernel` is always on). A module left out registers no commands, routes, jobs or menus; migrations still apply to every schema. Give the `api` and `worker` roles the same value (ADR-0031) |
 | AI for PDFs and photos | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` (any OpenAI-compatible endpoint: OpenAI, Ollama, vLLM, ...) |
 | Inbound email | `INBOUND_DOMAIN`, `INBOUND_SECRET`; your mail worker POSTs raw MIME to `/api/inbound/email` |
 | Org exports (offboarding) | `EXPORT_ENCRYPTION_KEY` (32 random bytes, `openssl rand -base64 32`; required on a public URL) seals exports at rest with AES-256-GCM; `EXPORT_RETENTION_DAYS` (35 to 90, default 35) before the worker deletes them; `EXPORT_ENCRYPTION_KEY_PREVIOUS` to read exports sealed before a key rotation. Give the bucket a lifecycle rule for noncurrent versions under `export/` and `inbound/` too |

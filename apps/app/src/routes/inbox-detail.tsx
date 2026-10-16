@@ -11,6 +11,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { errorMessage, fetchFile, orpc, queryClient } from '../lib/api.ts';
+import { getConfig } from '../lib/auth.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal } from '../lib/decimal.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { reversalErrorMessage } from '../lib/reversal.ts';
@@ -147,7 +148,8 @@ export function InboxDetailPage() {
     ...orpc.inbox.get.queryOptions({ input: { id } }),
     refetchInterval: (query) => (query.state.data?.extraction?.inFlight ? pollEvery(live, 2000) : false),
   });
-  const accounts = useQuery(orpc.accounts.list.queryOptions());
+  // The chart of accounts is the finance module's; without it (CROVE_MODULES) the screen does not ask for it.
+  const accounts = useQuery({ ...orpc.accounts.list.queryOptions(), enabled: getConfig().modules.includes('finance') });
   const [lineAccounts, setLineAccounts] = useState<Record<number, string>>({});
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [acceptFailed, setAcceptFailed] = useState(false);

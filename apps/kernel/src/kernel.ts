@@ -134,8 +134,12 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
   function buildRuntime(connectionString: string, applicationName: string) {
     const pool = createPool({ connectionString, applicationName, max: 10, resetOnRelease: config.DB_RESET_ON_RELEASE === 'true' });
     const db = createDb(pool);
+    // Modules this build ships that CROVE_MODULES leaves out (ADR-0031).
+    const absentModules = AVAILABLE_MODULES.filter((module) => !config.CROVE_MODULES.includes(module));
     // One database is the control plane and the only cell (Decision 14, plan §3.6).
     const runtime = new Runtime(singleCell(db), {
+      // ctx.query into one of them answers not_installed; any other unknown query is QUERY_NOT_FOUND.
+      absentModules,
       // Every user request is checked against its session (ADR-0028); the identity port never resolves to "no check".
       sessions: resolved.identity.sessions,
       stepUp: config.AUTH_STEP_UP,
@@ -148,7 +152,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     }).register(moduleDefinitions(config));
     // A command registry that does not fit together (a reviser naming no proposal command, two revisers for one
     // command) fails the boot (#216). Revisers of commands in modules this deployment leaves out are not checked.
-    runtime.validate({ absentModules: AVAILABLE_MODULES.filter((module) => !config.CROVE_MODULES.includes(module)) });
+    runtime.validate({ absentModules });
     return { pool, db, runtime };
   }
 
