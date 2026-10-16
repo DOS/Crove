@@ -1,7 +1,8 @@
 // Security properties of member invites (issue #35, plan §7.3 item 2, follow-ups #134): an invite adds nobody until
 // the invitee accepts; it reveals nothing about accounts, is bound to the invited email (confirmed in Supabase Auth
 // on self-host), single-use, revocable and expires; it dies with its inviter's right to issue it; an admin never
-// undoes an owner's invite; an accepted invite commits only with its audit row. Against a real PostgreSQL 17.
+// undoes an owner's invite; an accepted invite commits only with its audit row; the cap on invites per recipient
+// across orgs (#185) answers the same whether or not the address has an account. Against a real PostgreSQL 17.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md). The flows
 // (what the inviter sees, lists, the HTTP API) are in test/invites.db.test.ts. Set CROVE_TEST_ADMIN_URL to a
 // superuser URL; each run creates and drops its own database.
@@ -139,6 +140,106 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
       const audit = await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.member.invite.create' AND outcome = 'ok'`, [orgId]);
       expect(JSON.stringify(audit.rows)).not.toContain(known.id);
     });
+  });
+
+  // The cap on invites one address gets from all orgs together (#185, default 5 in any 24 hours; an org's first invite
+  // of an address always passes, its repeats are capped) counts invite rows only, never accounts: its answer is the
+  // same for an address with an account, one without and one that belongs to another org, and the refusal names only
+  // the rule and the limit, never who else invited the address or when.
+  it('caps invites per recipient across orgs with the same answer whether or not the address has an account', async () => {
+    const CAP = 5;
+    const owner = await person('owner');
+    const elsewhere = await person('elsewhere');
+    const orgId = await orgOf(owner);
+    const otherOrg = await orgOf(elsewhere);
+    const known = await person('known');
+    const memberElsewhere = await person('member');
+    expect((await accept(tokenOf(await invite(otherOrg, elsewhere.id, memberElsewhere.email)), memberElsewhere.id)).orgId).toBe(otherOrg);
+    const nobody = `nobody-${randomUUID().slice(0, 8)}@invites.test`;
+    const nearKnown = await person('near');
+    const nearNobody = `near-nobody-${randomUUID().slice(0, 8)}@invites.test`;
+    const capped = [known.email, memberElsewhere.email, nobody];
+    const near = [nearKnown.email, nearNobody];
+
+    // The inviting org's first invites: the same shape for every address, whatever other orgs sent.
+    const first = [];
+    for (const email of [...capped, ...near]) first.push(await invite(orgId, owner.id, email));
+    expect(first.map((a) => Object.keys(a).sort())).toEqual(first.map(() => ['acceptPath', 'email', 'expiresAt', 'inviteId', 'role']));
+    expect(JSON.stringify(first)).not.toContain(known.id);
+    expect(JSON.stringify(first)).not.toContain(memberElsewhere.id);
+
+    // Invites another org sent in the last 24 hours, as revoked rows: up to CAP in all for the capped addresses, one
+    // fewer for the others.
+    const topUp = async (email: string, total: number) =>
+      admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.member_invite (org_id, email, role, token_sha256, invited_by, status, revoked_at, revoked_by)
+           SELECT $1::uuid, $3, 'member', encode(sha256(convert_to(gen_random_uuid()::text, 'UTF8')), 'hex'), $2::uuid, 'revoked', now(), $2::uuid
+           FROM generate_series(1, $4::int - (SELECT count(*)::int FROM crove_kernel.member_invite WHERE email = $3))`,
+          [otherOrg, elsewhere.id, email, total],
+        ),
+      );
+    for (const email of capped) await topUp(email, CAP);
+    for (const email of near) await topUp(email, CAP - 1);
+
+    const refusals = [];
+    for (const email of capped) {
+      const error = (await invite(orgId, owner.id, email).catch((e: unknown) => e)) as Record<string, unknown>;
+      refusals.push({ type: error?.constructor?.name, keys: Object.keys(error).sort(), code: error.code, status: error.status, message: error.message, details: error.details });
+    }
+    expect(refusals[0]).toMatchObject({ code: 'INVITE_RATE_LIMITED', status: 429, details: { rule: 'invite_recipient_per_day', limit: CAP } });
+    expect(Object.keys(refusals[0]?.details as object).sort()).toEqual(['limit', 'rule']);
+    expect(refusals[1]).toEqual(refusals[0]);
+    expect(refusals[2]).toEqual(refusals[0]);
+    expect(JSON.stringify(refusals)).not.toContain(otherOrg);
+    expect(JSON.stringify(refusals)).not.toContain(elsewhere.id);
+
+    // Below the cap both addresses get a repeat invite of the same shape.
+    const allowed = [];
+    for (const email of near) allowed.push(await invite(orgId, owner.id, email));
+    expect(allowed.map((a) => Object.keys(a).sort())).toEqual(allowed.map(() => ['acceptPath', 'email', 'expiresAt', 'inviteId', 'role']));
+    expect(JSON.stringify(allowed[0])).not.toContain(nearKnown.id);
+
+    // The refused invites wrote nothing in the inviting org: one invite per capped address, two per other one.
+    await admin(async (c) => {
+      const { rows } = await c.query<{ email: string; n: number }>(
+        `SELECT email, count(*)::int AS n FROM crove_kernel.member_invite WHERE org_id = $1 GROUP BY email ORDER BY email`,
+        [orgId],
+      );
+      expect(rows).toEqual(
+        [...capped.map((email) => ({ email, n: 1 })), ...near.map((email) => ({ email, n: 2 }))].sort((x, y) => (x.email < y.email ? -1 : 1)),
+      );
+    });
+
+    // The definers that lock and count other orgs' invites: only the API login role may call them, pinned, never
+    // public, and they answer nothing.
+    const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant'];
+    const FNS = ['crove_kernel.invite_mail_gate(text,integer,integer,integer)', 'crove_kernel.invite_mail_lock(text)'];
+    const { matrix, shape } = await admin(async (c) => {
+      const { rows } = await c.query<{ fn: string; role: string }>(
+        `SELECT f AS fn, r AS role FROM unnest($1::text[]) f CROSS JOIN unnest($2::text[]) r
+         WHERE has_function_privilege(r, f::regprocedure, 'EXECUTE') ORDER BY 1, 2`,
+        [FNS, roles],
+      );
+      const { rows: defs } = await c.query(
+        `SELECT p.prosecdef AS definer, p.proconfig AS config, p.prorettype::regtype::text AS returns,
+                EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x WHERE x.grantee = 0) AS public
+         FROM pg_proc p WHERE p.oid = ANY ($1::regprocedure[]) ORDER BY p.oid::regprocedure::text`,
+        [FNS],
+      );
+      return { matrix: rows.map((r) => [r.fn, r.role]), shape: defs };
+    });
+    expect(matrix).toEqual(FNS.map((f) => [f, 'crove_app']));
+    expect(shape).toEqual(FNS.map(() => ({ definer: true, config: ['search_path=pg_catalog, pg_temp'], returns: 'void', public: false })));
+    // A member who may not invite can neither ask nor hold the locks.
+    for (const call of [sql`SELECT crove_kernel.invite_mail_gate(${nobody}, 50, 3, 1)`, sql`SELECT crove_kernel.invite_mail_lock(${nobody})`]) {
+      await expect(
+        db.transaction().execute(async (trx) => {
+          await sql`SELECT crove_kernel.enter_context(${memberElsewhere.id}::uuid, ${otherOrg}::uuid)`.execute(trx);
+          await call.execute(trx);
+        }),
+      ).rejects.toThrow(/INVITE_GATE_FORBIDDEN/);
+    }
   });
 
   it('lets only the invited email accept, case-insensitively, and never a disabled account', async () => {

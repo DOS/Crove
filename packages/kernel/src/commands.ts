@@ -18,7 +18,7 @@ import { channelCommands } from './channels.ts';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
-import { inviteCommands } from './invites.ts';
+import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
 
@@ -688,7 +688,8 @@ export async function revokeOwnSessionsWithoutOrg(runtime: Runtime, actor: UserA
 }
 
 const otherKernelCommands = [
-  ...inviteCommands,
+  revokeInvite,
+  acceptInvite,
   changeMemberRole,
   removeMember,
   ingestFile,
@@ -707,12 +708,19 @@ const otherKernelCommands = [
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),
 // options.inboundRotateLimits the inbound address rotation limits (default DEFAULT_INBOUND_ROTATE_LIMITS),
-// options.uploadBeginLimits the presigned upload grant rate (default DEFAULT_UPLOAD_BEGIN_LIMITS).
+// options.uploadBeginLimits the presigned upload grant rate (default DEFAULT_UPLOAD_BEGIN_LIMITS), options.inviteLimits
+// the invite mails one address may get from all orgs (default DEFAULT_INVITE_LIMITS).
 export function buildKernelCommands(
-  options: { orgCreateLimits?: OrgCreateLimits; inboundRotateLimits?: InboundRotateLimits; uploadBeginLimits?: UploadBeginLimits } = {},
+  options: {
+    orgCreateLimits?: OrgCreateLimits;
+    inboundRotateLimits?: InboundRotateLimits;
+    uploadBeginLimits?: UploadBeginLimits;
+    inviteLimits?: InviteLimits;
+  } = {},
 ) {
   return [
     options.orgCreateLimits ? orgCreateCommand(options.orgCreateLimits) : createOrgCommand,
+    options.inviteLimits ? inviteCreateCommand(options.inviteLimits) : createInvite,
     ...otherKernelCommands,
     options.uploadBeginLimits ? beginUploadCommand(options.uploadBeginLimits) : beginUpload,
     options.inboundRotateLimits ? inboundRotateCommand(options.inboundRotateLimits) : rotateInbound,
