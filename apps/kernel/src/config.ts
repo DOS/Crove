@@ -67,6 +67,15 @@ const schema = z.object({
   S3_SECRET_ACCESS_KEY: optional,
   // Path-style URLs (endpoint/bucket/key), needed by MinIO and most self-hosted servers.
   S3_FORCE_PATH_STYLE: z.enum(['true', 'false']).default('false'),
+  // Evidence integrity (ADR-0013): required (the default) refuses a write the bucket returns without an object
+  // version, so the bucket must have versioning enabled; off accepts an unversioned bucket (for example Cloudflare
+  // R2) and then relies on the sha256 check alone.
+  S3_VERSIONING: z.enum(['required', 'off']).default('required'),
+  // Browsers upload to a staging key and download through presigned URLs (plan §7.6). The bucket needs a CORS rule
+  // for PUBLIC_URL (POST and GET). false keeps every transfer streaming through the kernel.
+  S3_PRESIGNED_URLS: z.enum(['true', 'false']).default('true'),
+  // The S3 endpoint browsers reach, when it differs from S3_ENDPOINT (presigned URLs are signed for this host).
+  S3_PUBLIC_ENDPOINT: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
   // Supabase Auth (GoTrue). Self-host: the kernel proxies /auth/v1 to AUTH_UPSTREAM_URL.
   AUTH_UPSTREAM_URL: optional,
   PUBLIC_AUTH_URL: optional,

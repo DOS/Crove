@@ -21,6 +21,8 @@ export interface ExportedFile {
   sizeBytes: unknown;
   sha256: unknown;
   storageKey: unknown;
+  // The object version the bytes were written as (ADR-0013): with storageKey and sha256, the file's reference.
+  generation: unknown;
   source: unknown;
   createdAt: unknown;
 }
@@ -58,6 +60,7 @@ export async function runOrgExport(deps: { runtime: Runtime; store: BlobStore },
         sizeBytes: r.size_bytes,
         sha256: r.sha256,
         storageKey: r.storage_key,
+        generation: r.generation,
         source: r.source,
         createdAt: r.created_at,
       }));

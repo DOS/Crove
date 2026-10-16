@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
-import { Runtime, type BlobStore } from '@crove/kernel-runtime';
+import { Runtime, contentGeneration, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from '../../src/auth.ts';
 import { loadConfig } from '../../src/config.ts';
@@ -175,6 +175,7 @@ suite('aal1 tokens of users with a verified MFA factor on PostgreSQL (issue #126
     const store: BlobStore = {
       async put(key, bytes) {
         blobs.set(key, bytes);
+        return contentGeneration(sha256Hex(bytes));
       },
       async get(key) {
         const bytes = blobs.get(key);

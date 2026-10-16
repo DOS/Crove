@@ -5,16 +5,113 @@ import { dirname, join, resolve, sep } from 'node:path';
 
 // Object storage adapter. Local disk is the default; S3-compatible stores implement the same interface.
 // Bodies are buffered in memory as a Uint8Array in both directions, so a blob costs its full size in RAM while
-// it is read or written. Streaming bodies are a later change (#109).
+// it is read or written (at most MAX_UPLOAD_BYTES for a file, MAX_EMAIL_BYTES for a raw message).
+//
+// Evidence integrity (ADR-0013, plan §7.6, red-team S25): every write returns the generation of the object it
+// created or found, and every file row keeps the triple (key, generation, sha256). Reads go through readVerified,
+// which asks the store for that exact generation and refuses bytes whose sha256 differs, so an object swapped
+// after approval is never served or read as the original.
 export interface BlobStore {
   // An org key must end in the sha256 of the bytes (a content address); any other key is refused.
   // Writes are create-only: a key that already holds the same bytes is accepted (a re-upload dedupes), and a key
   // that holds different bytes raises BlobConflictError. A stored blob is never replaced.
-  put(key: string, bytes: Uint8Array, contentType: string): Promise<void>;
-  // Throws BlobNotFoundError when nothing is stored under the key.
-  get(key: string): Promise<Uint8Array>;
+  // Returns the generation (see GENERATION_PATTERN) of the object now under the key.
+  put(key: string, bytes: Uint8Array, contentType: string): Promise<string>;
+  // Throws BlobNotFoundError when nothing is stored under the key. With a versioned generation (s3:, gcs:) the store
+  // reads that exact version; content: and null read the current object. Callers that hold a file reference use
+  // readVerified, which also checks the sha256.
+  get(key: string, generation?: string | null): Promise<Uint8Array>;
   // Removes the blob; a missing key is not an error.
   delete(key: string): Promise<void>;
+  // Present when browsers transfer bytes to and from the store directly (S3 presigned URLs); absent for local
+  // disk, where uploads and downloads stream through the kernel.
+  direct?: DirectTransfers | undefined;
+}
+
+// What a file row records about its object: the triple of plan §7.6. generation is null only on rows written
+// before ADR-0013, whose reads are checked by sha256 alone.
+export interface BlobRef {
+  key: string;
+  generation: string | null;
+  sha256: string;
+}
+
+// A presigned S3 POST form: the browser sends `fields` plus the file (last) as multipart/form-data to `url`.
+export interface PresignedUpload {
+  url: string;
+  fields: Record<string, string>;
+  expiresAt: Date;
+  maxBytes: number;
+}
+
+export interface DirectTransfers {
+  // A form for one staging key (plan §7.6 step 1): valid for UPLOAD_TTL_SECONDS, 1 to maxBytes bytes. The grant row
+  // in crove_kernel.file_upload makes it single-use: the server reads the staging key at most once.
+  presignUpload(stagingKey: string, maxBytes: number): Promise<PresignedUpload>;
+  // A short-lived GET for the exact version, as an attachment. null when the generation cannot be pinned (content:
+  // or a row from before ADR-0013): the caller then streams the bytes through readVerified instead.
+  presignDownload(ref: BlobRef, file: { filename: string; contentType: string }): Promise<string | null>;
+  // Streams a staged object, refusing more than maxBytes, and returns its bytes with their sha256.
+  readStaged(stagingKey: string, maxBytes: number): Promise<{ bytes: Uint8Array; sha256: string }>;
+}
+
+// Presigned uploads live 5 minutes (plan §7.6); presigned downloads 60 seconds.
+export const UPLOAD_TTL_SECONDS = 300;
+export const DOWNLOAD_TTL_SECONDS = 60;
+
+// The generation of an object, tagged by where it lives:
+//   s3:<VersionId>      an S3 object version (bucket versioning on)
+//   gcs:<generation>    a GCS object generation (x-goog-generation)
+//   content:<sha256>    no native version (local disk, or an S3 bucket run with S3_VERSIONING=off): the object is
+//                       known by its content address only, and the sha256 check on read is the whole guarantee.
+export const GENERATION_PATTERN = /^(?:s3|gcs):[!-~]{1,1024}$|^content:[0-9a-f]{64}$/;
+
+export function contentGeneration(sha256: string): string {
+  return `content:${sha256}`;
+}
+
+// The version id a versioned generation names, or null for content: and rows from before ADR-0013.
+export function versionOf(generation: string | null | undefined): string | null {
+  if (!generation) return null;
+  const match = /^(?:s3|gcs):(.+)$/.exec(generation);
+  return match?.[1] ?? null;
+}
+
+// The stored bytes do not match the reference a file row holds: the object was replaced or corrupted after it
+// was recorded (red-team S25). Never served, never parsed; an operator must investigate.
+export class BlobIntegrityError extends Error {
+  readonly key: string;
+  constructor(ref: BlobRef) {
+    super(`stored blob does not match its recorded sha256: ${ref.key} (generation ${ref.generation ?? 'none'})`);
+    this.name = 'BlobIntegrityError';
+    this.key = ref.key;
+  }
+}
+
+// A staged upload is larger than its grant allows. S3 enforces the presigned POST's content-length-range; the
+// server checks again while it streams, so a store that ignores the condition cannot pass a larger file.
+export class BlobTooLargeError extends Error {
+  readonly key: string;
+  constructor(key: string, maxBytes: number) {
+    super(`staged object exceeds ${maxBytes} bytes: ${key}`);
+    this.name = 'BlobTooLargeError';
+    this.key = key;
+  }
+}
+
+// Writes a file's bytes and returns the generation its reference records. A store that reports none (one written
+// against the interface before ADR-0013, which returned nothing) has no versions, so the generation is the content
+// address and reads rest on the sha256 check. S3BlobStore always returns a version or throws (S3_VERSIONING).
+export async function putFile(store: BlobStore, key: string, bytes: Uint8Array, contentType: string, sha256: string): Promise<string> {
+  const generation: string | undefined = await store.put(key, bytes, contentType);
+  return generation ?? contentGeneration(sha256);
+}
+
+// Reads the object a file row references and fails closed unless its bytes hash to the recorded sha256.
+export async function readVerified(store: BlobStore, ref: BlobRef): Promise<Uint8Array> {
+  const bytes = await store.get(ref.key, ref.generation);
+  if (sha256Hex(bytes) !== ref.sha256) throw new BlobIntegrityError(ref);
+  return bytes;
 }
 
 export function sha256Hex(bytes: Uint8Array | string): string {
@@ -35,9 +132,23 @@ export function newInboundBlobId(): string {
   return randomBytes(32).toString('hex');
 }
 
-const KEY_PATTERN = /^(?:org\/[0-9a-f-]{36}|inbound)\/[0-9a-f]{64}$/;
+// A presigned upload lands here first (plan §7.6 step 1), under a random name, and never becomes a file itself: the
+// server reads it, hashes it and writes the bytes it hashed to the org key.
+export function stagingKey(id: string): string {
+  return `staging/${id}`;
+}
 
-// Every store accepts the same keys: org/<org_id>/<sha256> (plan §7.6) and inbound/<random id>.
+export function newStagingKey(): string {
+  return stagingKey(randomBytes(32).toString('hex'));
+}
+
+export function isStagingKey(key: string): boolean {
+  return /^staging\/[0-9a-f]{64}$/.test(key);
+}
+
+const KEY_PATTERN = /^(?:org\/[0-9a-f-]{36}|inbound|staging)\/[0-9a-f]{64}$/;
+
+// Every store accepts the same keys: org/<org_id>/<sha256> (plan §7.6), inbound/<random id> and staging/<random id>.
 export function assertStorageKey(key: string): void {
   if (!KEY_PATTERN.test(key)) throw new Error('invalid storage key');
 }
@@ -150,7 +261,11 @@ export class LocalDiskStore implements BlobStore {
   // On a filesystem without hard links the store warns once and creates the key itself exclusively ('wx'). That is
   // still create-only, but a concurrent reader (or a second writer comparing bytes) can see a file that is still
   // being written, and a crash during a write can leave it truncated.
-  async put(key: string, bytes: Uint8Array): Promise<void> {
+  //
+  // Local disk has no object versions, so the generation is the content address (content:<sha256>): the store only
+  // ever creates a key once, and a file replaced behind its back is caught by the sha256 check on read. An inode
+  // number or a modification time would change on a backup restore without any change in content.
+  async put(key: string, bytes: Uint8Array): Promise<string> {
     const target = this.path(key);
     const sha256 = sha256Hex(bytes);
     assertContentAddress(key, sha256);
@@ -159,12 +274,13 @@ export class LocalDiskStore implements BlobStore {
       const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
       try {
         await writeNewFileDurably(tmp, bytes);
-        if (await this.createOrCompare(key, sha256, () => this.link(tmp, target), true)) return;
+        if (await this.createOrCompare(key, sha256, () => this.link(tmp, target), true)) return contentGeneration(sha256);
       } finally {
         await rm(tmp, { force: true });
       }
     }
     await this.createOrCompare(key, sha256, () => writeNewFileDurably(target, bytes), false);
+    return contentGeneration(sha256);
   }
 
   // Runs create() until it makes the key, or compares the bytes already stored there. Returns false when link()
@@ -230,6 +346,7 @@ export class LocalDiskStore implements BlobStore {
     return removed;
   }
 
+  // One copy per key (see put), so the generation selects nothing; readVerified checks the bytes.
   async get(key: string): Promise<Uint8Array> {
     const target = this.path(key);
     try {

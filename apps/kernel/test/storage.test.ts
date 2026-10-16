@@ -4,10 +4,10 @@
 // store instance built from the same configuration, used by a new HTTP app or worker call.
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CreateBucketCommand } from '@aws-sdk/client-s3';
+import { BucketVersioningStatus, CreateBucketCommand, PutBucketVersioningCommand } from '@aws-sdk/client-s3';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ORG_HEADER } from '@crove/kernel-contract';
@@ -16,7 +16,7 @@ import type { AuthUser } from '../src/auth.ts';
 import { loadConfig, type Config } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { processInboundEmail } from '../src/inbound.ts';
-import { createBlobStore, describeStorage } from '../src/storage.ts';
+import { createBlobStore, describeStorage, directTransferOrigin } from '../src/storage.ts';
 import { inProcessExtract } from './extract-service.ts';
 
 const FIXTURE = readFileSync(new URL('../../extract/test/fixtures/einvoice-basic.xml', import.meta.url));
@@ -43,9 +43,21 @@ describe('storage configuration', () => {
     });
     expect(createBlobStore(config)).toBeInstanceOf(S3BlobStore);
     const line = describeStorage(config);
-    expect(line).toBe('s3 bucket crove-files-prod at acc0unt.r2.cloudflarestorage.com');
+    expect(line).toBe('s3 bucket crove-files-prod at acc0unt.r2.cloudflarestorage.com, versions required, presigned transfers');
     expect(line).not.toMatch(/AKIA|secret/);
     expect(loadConfig({ ...BASE, STORAGE: 's3', S3_BUCKET: 'b-1' }).S3_REGION).toBe('us-east-1');
+  });
+
+  it('names the origin browsers reach for presigned transfers, for the CSP', () => {
+    const s3 = { ...BASE, STORAGE: 's3', S3_BUCKET: 'crove-files', S3_REGION: 'eu-west-1' };
+    expect(directTransferOrigin(loadConfig(BASE))).toBeNull();
+    expect(directTransferOrigin(loadConfig({ ...s3, S3_PRESIGNED_URLS: 'false' }))).toBeNull();
+    expect(directTransferOrigin(loadConfig(s3))).toBe('https://crove-files.s3.eu-west-1.amazonaws.com');
+    expect(directTransferOrigin(loadConfig({ ...s3, S3_FORCE_PATH_STYLE: 'true' }))).toBe('https://s3.eu-west-1.amazonaws.com');
+    const minio = { ...s3, S3_ENDPOINT: 'http://minio:9000', S3_FORCE_PATH_STYLE: 'true' };
+    expect(directTransferOrigin(loadConfig(minio))).toBe('http://minio:9000');
+    expect(directTransferOrigin(loadConfig({ ...minio, S3_PUBLIC_ENDPOINT: 'https://files.example.com' }))).toBe('https://files.example.com');
+    expect(directTransferOrigin(loadConfig({ ...s3, S3_ENDPOINT: 'https://acc0unt.r2.cloudflarestorage.com' }))).toBe('https://crove-files.acc0unt.r2.cloudflarestorage.com');
   });
 
   it('refuses incomplete or malformed S3 settings, naming the field and never its value', () => {
@@ -90,6 +102,8 @@ if (S3_URL) {
       await client.send(new CreateBucketCommand({ Bucket: env.S3_BUCKET })).catch((error: { name?: string }) => {
         if (error.name !== 'BucketAlreadyOwnedByYou' && error.name !== 'BucketAlreadyExists') throw error;
       });
+      // Evidence buckets are versioned (ADR-0013); the store refuses writes without a version by default.
+      await client.send(new PutBucketVersioningCommand({ Bucket: env.S3_BUCKET, VersioningConfiguration: { Status: BucketVersioningStatus.Enabled } }));
       return env;
     },
   });
@@ -103,7 +117,7 @@ describe.each(backends)('files survive a restart on $name, from the API and the 
   let config: Config;
 
   // The rows the kernel would keep: file id -> what kernel.file.get returns.
-  const files = new Map<string, { filename: string; content_type: string; storage_key: string }>();
+  const files = new Map<string, { filename: string; content_type: string; storage_key: string; generation: string; sha256: string }>();
   // Answers to Runtime.orgless, in order (the enqueue definer, then the org lookup by inbound token).
   const orgless: unknown[] = [];
   const runtime = {
@@ -112,9 +126,9 @@ describe.each(backends)('files survive a restart on $name, from the API and the 
     forUser: async () => [{ orgId, slug: 'acme', name: 'Acme', role: 'owner' }],
     orgless: async () => orgless.shift(),
     execute: async (command: string, input: Record<string, unknown>) => {
-      const record = (f: { filename: string; contentType: string; storageKey: string }) => {
+      const record = (f: { filename: string; contentType: string; storageKey: string; generation: string; sha256: string }) => {
         const id = randomUUID();
-        files.set(id, { filename: f.filename, content_type: f.contentType, storage_key: f.storageKey });
+        files.set(id, { filename: f.filename, content_type: f.contentType, storage_key: f.storageKey, generation: f.generation, sha256: f.sha256 });
         return id;
       };
       if (command === 'kernel.file.ingest') return { fileId: record(input as never), duplicate: false };
@@ -134,8 +148,16 @@ describe.each(backends)('files survive a restart on $name, from the API and the 
     return createHttpApp({ config, runtime, store, authenticate: async () => user, pool: {} as pg.Pool, aiEnabled: false });
   }
 
+  // Local disk streams through the kernel; S3 answers with a presigned GET of the recorded version (plan §7.6),
+  // which the browser follows.
   async function download(fileId: string): Promise<Uint8Array> {
-    const response = await apiProcess().request(`/api/files/${fileId}`, { headers: { authorization: 'Bearer t', [ORG_HEADER]: 'acme' } });
+    let response = await apiProcess().request(`/api/files/${fileId}`, { headers: { authorization: 'Bearer t', [ORG_HEADER]: 'acme' } });
+    if (config.STORAGE === 's3') {
+      expect(response.status).toBe(302);
+      const location = new URL(response.headers.get('location') ?? '');
+      expect(location.searchParams.get('versionId')).toBe(files.get(fileId)?.generation.replace(/^s3:/, ''));
+      response = await fetch(location);
+    }
     expect(response.status).toBe(200);
     return new Uint8Array(await response.arrayBuffer());
   }
@@ -157,6 +179,23 @@ describe.each(backends)('files survive a restart on $name, from the API and the 
     const fileId = uploaded[0]?.fileId ?? '';
     expect(files.get(fileId)?.storage_key).toBe(`org/${orgId}/${sha256Hex(FIXTURE)}`);
     expect(await download(fileId)).toEqual(new Uint8Array(FIXTURE));
+  });
+
+  // Local disk has no versions: the sha256 check on read is what catches a file replaced on disk (red-team S25).
+  it.runIf(backend.name === 'local disk')('local disk: streams uploads through the kernel and refuses a file replaced on disk', async () => {
+    const begin = await apiProcess().request('/api/files/uploads', { method: 'POST', headers: { authorization: 'Bearer t', [ORG_HEADER]: 'acme' } });
+    expect(begin.status).toBe(404);
+    const bytes = new TextEncoder().encode(FIXTURE.toString('utf8').replace('<SHDon>1234</SHDon>', '<SHDon>7777</SHDon>'));
+    const form = new FormData();
+    form.append('file', new File([bytes], 'hd-7777.xml', { type: 'application/xml' }));
+    const upload = await apiProcess().request('/api/files', { method: 'POST', body: form, headers: { authorization: 'Bearer t', [ORG_HEADER]: 'acme' } });
+    const fileId = ((await upload.json()) as { files: Array<{ fileId: string }> }).files[0]?.fileId ?? '';
+    const row = files.get(fileId);
+    expect(row?.generation).toBe(`content:${sha256Hex(bytes)}`);
+    await writeFile(join(localRoot, row?.storage_key ?? ''), '<HDon>swapped on disk</HDon>');
+    const response = await apiProcess().request(`/api/files/${fileId}`, { headers: { authorization: 'Bearer t', [ORG_HEADER]: 'acme' } });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ code: 'BLOB_INTEGRITY' });
   });
 
   it('worker: a message the API stored is processed by a restarted worker, whose files a restarted API serves', async () => {

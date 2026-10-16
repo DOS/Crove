@@ -118,12 +118,27 @@ export interface FileTable {
   id: Generated<string>;
   sha256: string;
   storage_key: string;
+  // The object version the bytes were written as (ADR-0013); null only on rows from before it.
+  generation: string | null;
   filename: string;
   content_type: string;
   size_bytes: string;
   source: 'upload' | 'email';
   created_by: string | null;
   created_at: DefaultTimestamp;
+}
+
+// A single-use grant behind a presigned staging upload (plan §7.6, ADR-0013). The database sets created_at,
+// expires_at and used_at.
+export interface FileUploadTable {
+  org_id: string;
+  id: Generated<string>;
+  staging_key: string;
+  created_by: string;
+  max_bytes: string;
+  created_at: DefaultTimestamp;
+  expires_at: DefaultTimestamp;
+  used_at: Timestamp | null;
 }
 
 export interface InboundMessageTable {
@@ -283,6 +298,7 @@ export interface Database {
   'crove_kernel.audit_event': AuditEventTable;
   'crove_kernel.party': PartyTable;
   'crove_kernel.file': FileTable;
+  'crove_kernel.file_upload': FileUploadTable;
   'crove_kernel.inbound_message': InboundMessageTable;
   'crove_kernel.extraction': ExtractionTable;
   'crove_kernel.proposal': ProposalTable;

@@ -95,6 +95,9 @@ export const en: Messages = {
     empty: 'No journal entries yet',
   },
   inbox: {
+    fileTooLarge: '{name} is larger than 25 MB',
+    storageUploadFailed: 'Could not send {name} to storage; upload the file again',
+    storageDownloadFailed: 'Could not download the file from storage',
     title: 'Document inbox',
     subtitle: 'Send invoices here. AI proposes the entries, you only check and approve.',
     upload: 'Upload documents',

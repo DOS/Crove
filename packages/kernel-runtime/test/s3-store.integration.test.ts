@@ -1,17 +1,34 @@
 // Integration tests against a real S3-compatible server (CI: MinIO). Set CROVE_TEST_S3_URL to
-// http://<access key>:<secret>@<host>:<port>/<bucket>; the bucket is created if missing.
+// http://<access key>:<secret>@<host>:<port>/<bucket>; the bucket is created if missing, with versioning enabled
+// (evidence buckets need it, ADR-0013).
 import { createHash, randomUUID } from 'node:crypto';
-import { ChecksumMode, CreateBucketCommand, DeleteObjectCommand, HeadObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
-import { beforeAll, describe, expect, it } from 'vitest';
+import {
+  BucketVersioningStatus,
+  ChecksumMode,
+  CreateBucketCommand,
+  DeleteObjectCommand,
+  HeadObjectCommand,
+  PutBucketVersioningCommand,
+  PutObjectCommand,
+  type S3Client,
+} from '@aws-sdk/client-s3';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   BlobConflictError,
+  BlobIntegrityError,
   BlobNotFoundError,
+  BlobStoreVersioningError,
+  BlobTooLargeError,
   S3BlobStore,
+  UPLOAD_TTL_SECONDS,
   createS3Client,
   fileKey,
   inboundKey,
   newInboundBlobId,
+  newStagingKey,
+  readVerified,
   sha256Hex,
+  type PresignedUpload,
   type S3Sender,
   type S3StoreOptions,
 } from '../src/index.ts';
@@ -53,13 +70,18 @@ describe.skipIf(!URL_ENV)('S3BlobStore against a real S3-compatible server', () 
     await client.send(new CreateBucketCommand({ Bucket: options.bucket })).catch((error: { name?: string }) => {
       if (error.name !== 'BucketAlreadyOwnedByYou' && error.name !== 'BucketAlreadyExists') throw error;
     });
+    await client.send(new PutBucketVersioningCommand({ Bucket: options.bucket, VersioningConfiguration: { Status: BucketVersioningStatus.Enabled } }));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('stores bytes with their content type and sha256, and a new store instance reads them back', async () => {
     const bytes = encode(`<HDon>${randomUUID()}</HDon>`);
     const key = fileKey(orgId, sha256Hex(bytes));
     const { store, sent } = recording();
-    await store.put(key, bytes, 'application/xml');
+    const generation = await store.put(key, bytes, 'application/xml');
     // The server confirmed the sha256, so the store did not have to read the object back.
     expect(sent).toEqual(['PutObjectCommand']);
 
@@ -69,6 +91,9 @@ describe.skipIf(!URL_ENV)('S3BlobStore against a real S3-compatible server', () 
     expect(head.ContentType).toBe('application/xml');
     expect(head.ContentLength).toBe(bytes.byteLength);
     expect(head.ChecksumSHA256).toBe(createHash('sha256').update(bytes).digest('base64'));
+    // The generation is the version the bucket created (ADR-0013), and a re-upload records the same one.
+    expect(generation).toBe(`s3:${head.VersionId}`);
+    await expect(restarted.put(key, bytes, 'application/xml')).resolves.toBe(generation);
   });
 
   it('refuses a body that does not match the sha256 sent with it (the server verifies)', async () => {
@@ -137,4 +162,113 @@ describe.skipIf(!URL_ENV)('S3BlobStore against a real S3-compatible server', () 
     const error = await store.get(inboundKey(newInboundBlobId())).catch((e: unknown) => e);
     expect(error).not.toBeInstanceOf(BlobNotFoundError);
   });
+
+  // Red-team S25: an object is replaced after the file row recorded it (and a proposal was approved on it), by
+  // anyone with write access to the bucket, bypassing Crove's create-only writes.
+  it('reads the recorded version after the key is overwritten, and fails closed on the current bytes or a deleted version', async () => {
+    const store = S3BlobStore.connect(options);
+    const original = encode(`<HDon>${randomUUID()}</HDon>`);
+    const sha256 = sha256Hex(original);
+    const key = fileKey(orgId, sha256);
+    const generation = await store.put(key, original, 'application/xml');
+    const swapped = encode('<HDon>swapped after approval</HDon>');
+    const overwrite = await client.send(new PutObjectCommand({ Bucket: options.bucket, Key: key, Body: swapped }));
+    expect(`s3:${overwrite.VersionId}`).not.toBe(generation);
+
+    // The recorded triple still reads the original bytes, from a new store instance.
+    expect(await readVerified(S3BlobStore.connect(options), { key, generation, sha256 })).toEqual(original);
+    // A reference without a version (a row from before ADR-0013) gets the current bytes and refuses them.
+    await expect(readVerified(store, { key, generation: null, sha256 })).rejects.toBeInstanceOf(BlobIntegrityError);
+    await expect(readVerified(store, { key, generation: `content:${sha256}`, sha256 })).rejects.toBeInstanceOf(BlobIntegrityError);
+    // Removing the recorded version does not fall back to the current object.
+    await client.send(new DeleteObjectCommand({ Bucket: options.bucket, Key: key, VersionId: generation.slice('s3:'.length) }));
+    await expect(readVerified(store, { key, generation, sha256 })).rejects.toBeInstanceOf(BlobNotFoundError);
+  });
+
+  it('fails closed on an unversioned bucket, unless versioning is explicitly off', async () => {
+    const bucket = `crove-unversioned-${randomUUID().slice(0, 8)}`;
+    await client.send(new CreateBucketCommand({ Bucket: bucket }));
+    const bytes = encode(`<HDon>${randomUUID()}</HDon>`);
+    const key = fileKey(orgId, sha256Hex(bytes));
+    await expect(S3BlobStore.connect({ ...options, bucket }).put(key, bytes, 'application/xml')).rejects.toBeInstanceOf(BlobStoreVersioningError);
+    await expect(S3BlobStore.connect({ ...options, bucket, versioning: 'off' }).put(key, bytes, 'application/xml')).resolves.toBe(`content:${sha256Hex(bytes)}`);
+  });
+
+  // The browser side of a presigned POST: the form fields, then the file last.
+  async function post(form: PresignedUpload, bytes: Uint8Array, fields: Record<string, string> = form.fields) {
+    const body = new FormData();
+    for (const [name, value] of Object.entries(fields)) body.append(name, value);
+    body.append('file', new Blob([Buffer.from(bytes)]), 'upload.bin');
+    return fetch(form.url, { method: 'POST', body });
+  }
+
+  it('takes a presigned upload to its staging key, which the server streams back with its sha256', async () => {
+    const store = S3BlobStore.connect(options);
+    const staging = newStagingKey();
+    const form = await store.direct?.presignUpload(staging, 1024);
+    if (!form) throw new Error('no presigned form');
+    const bytes = encode(`<HDon>${randomUUID()}</HDon>`);
+    const response = await post(form, bytes);
+    expect(response.status).toBe(204);
+    expect(await store.direct?.readStaged(staging, 1024)).toEqual({ bytes, sha256: sha256Hex(bytes) });
+    // The staging object is not a file: the server writes the bytes it hashed to the org key itself.
+    const generation = await store.put(fileKey(orgId, sha256Hex(bytes)), bytes, 'application/xml');
+    expect(generation).toMatch(/^s3:/);
+    await store.delete(staging);
+    await expect(store.get(staging)).rejects.toBeInstanceOf(BlobNotFoundError);
+  });
+
+  it('refuses a presigned upload over the size limit, to another key, or after the form expired', async () => {
+    const store = S3BlobStore.connect(options);
+    const staging = newStagingKey();
+    const form = await store.direct?.presignUpload(staging, 16);
+    if (!form) throw new Error('no presigned form');
+    const tooLarge = await post(form, encode('x'.repeat(17)));
+    expect(tooLarge.status).toBe(400);
+    expect(await tooLarge.text()).toMatch(/EntityTooLarge/);
+    // The policy names the key: the same signature cannot write anywhere else.
+    const elsewhere = await post(form, encode('small'), { ...form.fields, key: newStagingKey() });
+    expect(elsewhere.status).toBe(403);
+    await expect(store.get(staging)).rejects.toBeInstanceOf(BlobNotFoundError);
+
+    // A form signed just over UPLOAD_TTL_SECONDS ago has expired.
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now - (UPLOAD_TTL_SECONDS + 5) * 1000);
+    const late = newStagingKey();
+    const stale = await store.direct?.presignUpload(late, 1024);
+    vi.restoreAllMocks();
+    if (!stale) throw new Error('no presigned form');
+    const expired = await post(stale, encode('late'));
+    expect(expired.status).toBe(403);
+    expect(await expired.text()).toMatch(/expired/i);
+    await expect(store.get(late)).rejects.toBeInstanceOf(BlobNotFoundError);
+  });
+
+  it('refuses to stream a staged object larger than the grant', async () => {
+    const store = S3BlobStore.connect(options);
+    const staging = newStagingKey();
+    await client.send(new PutObjectCommand({ Bucket: options.bucket, Key: staging, Body: encode('x'.repeat(64)) }));
+    await expect(store.direct?.readStaged(staging, 63)).rejects.toBeInstanceOf(BlobTooLargeError);
+  });
+
+  it('presigns a download of the recorded version, as an attachment, even after the key is overwritten', async () => {
+    const store = S3BlobStore.connect(options);
+    const original = encode(`<HDon>${randomUUID()}</HDon>`);
+    const sha256 = sha256Hex(original);
+    const key = fileKey(orgId, sha256);
+    const generation = await store.put(key, original, 'application/xml');
+    await client.send(new PutObjectCommand({ Bucket: options.bucket, Key: key, Body: encode('swapped') }));
+    const url = await store.direct?.presignDownload({ key, generation, sha256 }, { filename: 'hd 1.xml', contentType: 'application/xml' });
+    if (!url) throw new Error('no presigned url');
+    const response = await fetch(url);
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(original);
+    expect(response.headers.get('content-disposition')).toBe(`attachment; filename*=UTF-8''hd%201.xml`);
+    expect(response.headers.get('content-type')).toBe('application/xml');
+    // The version is part of the signature: pointing the URL at another version is refused.
+    const tampered = new URL(url);
+    tampered.searchParams.delete('versionId');
+    expect((await fetch(tampered)).status).toBe(403);
+  });
 });
+

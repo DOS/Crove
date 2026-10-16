@@ -8,7 +8,19 @@ import { secureHeaders } from 'hono/secure-headers';
 import type pg from 'pg';
 import { schemaMissing } from '@crove/db/migrate';
 import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES, ORG_HEADER } from '@crove/kernel-contract';
-import { BlobConflictError, BlobNotFoundError, DomainError, fileKey, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import {
+  BlobConflictError,
+  BlobIntegrityError,
+  BlobNotFoundError,
+  BlobTooLargeError,
+  DomainError,
+  fileKey,
+  putFile,
+  readVerified,
+  sha256Hex,
+  type BlobStore,
+  type Runtime,
+} from '@crove/kernel-runtime';
 import type { OrgExportView } from '@crove/kernel';
 import { JOURNAL_EXPORT_LIMIT, buildJournalWorkbook, type JournalEntryView } from '@crove/mod-finance';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
@@ -20,6 +32,7 @@ import type { Mailer } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { createRpcHandler, resolveMembership, resolveOrg } from './rpc.ts';
 import { safeFilename, sniffType } from './sniff.ts';
+import { directTransferOrigin } from './storage.ts';
 
 export interface HttpDeps {
   config: Config;
@@ -41,13 +54,17 @@ export interface HttpDeps {
 function storeProblem(error: unknown): DomainError | null {
   if (error instanceof BlobNotFoundError) return new DomainError('NOT_FOUND', 404, 'Không tìm thấy tệp');
   if (error instanceof BlobConflictError) return new DomainError('CONFLICT', 409, 'Tệp đã tồn tại với nội dung khác');
+  if (error instanceof BlobTooLargeError) return new DomainError('TOO_LARGE', 413, 'Tệp vượt quá 25 MB');
+  // The stored object is not the one the file row recorded (red-team S25). Never served; an operator investigates.
+  if (error instanceof BlobIntegrityError) return new DomainError('BLOB_INTEGRITY', 500, 'Tệp lưu trữ không khớp với bản đã ghi nhận; đã chặn tải về');
   return null;
 }
 
 function problem(c: Context, error: unknown) {
   const store = storeProblem(error);
   const domain = error instanceof DomainError ? error : (store ?? new DomainError('INTERNAL', 500, 'Lỗi hệ thống'));
-  if (domain.status === 500 || store) console.error('[http]', error);
+  if (error instanceof BlobIntegrityError) console.error('[http] ALERT evidence integrity:', error.message);
+  else if (domain.status === 500 || store) console.error('[http]', error);
   return c.json({ code: domain.code, message: domain.message }, domain.status);
 }
 
@@ -109,15 +126,16 @@ const AUTH_PUBLIC_PATHS =
   /^\/(?:token|signup|verify|recover|user|logout|otp|resend|settings|health|authorize|callback|reauthenticate|factors(?:\/[\w-]+(?:\/(?:challenge|verify))?)?|\.well-known\/jwks\.json)$/;
 const MAX_FILES_PER_UPLOAD = 5;
 const UPLOAD_BODY_LIMIT = 60 * 1024 * 1024;
-function contentSecurityPolicy(authUrl: string): string {
-  // Hosted Supabase Auth lives on another origin; the bundled one is proxied under /auth/v1.
+function contentSecurityPolicy(authUrl: string, storageOrigin: string | null): string {
+  // Hosted Supabase Auth lives on another origin; the bundled one is proxied under /auth/v1. With presigned
+  // transfers the app also posts uploads to, and fetches downloads from, the bucket's origin.
   const authOrigin = new URL(authUrl, 'http://localhost').origin;
   return [
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self'",
     "img-src 'self' blob: data:",
-    `connect-src 'self' ${authOrigin}`,
+    `connect-src 'self' ${authOrigin}${storageOrigin ? ` ${storageOrigin}` : ''}`,
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'self'",
@@ -171,6 +189,8 @@ export function createHttpApp(deps: HttpDeps) {
       authUrl: publicAuthUrl(config),
       authAnonKey: config.PUBLIC_AUTH_ANON_KEY ?? null,
       aiEnabled: deps.aiEnabled,
+      // presigned: the app uploads to a staging key and downloads from the bucket (plan §7.6); direct: through the kernel.
+      uploads: store.direct ? 'presigned' : 'direct',
       inboundEnabled: Boolean(config.INBOUND_DOMAIN && config.INBOUND_SECRET),
       mailEnabled: deps.mailer?.enabled ?? false,
       // The SPA shows the menus of these modules only (plan Decision 12).
@@ -278,12 +298,35 @@ export function createHttpApp(deps: HttpDeps) {
     return matched ? response : c.json({ code: 'NOT_FOUND' }, 404);
   });
 
+  // Files are written and recorded the same way on every path: the server computes the sha256 of the bytes it
+  // holds, writes them create-only to org/<org_id>/<sha256> and records the triple with the generation the store
+  // returned (plan §7.6, ADR-0013).
+  async function ingest(user: AuthUser, orgId: string, name: string, bytes: Uint8Array, sha256 = sha256Hex(bytes)) {
+    // The content decides the type; the browser's MIME type and the extension are only hints.
+    const type = sniffType(bytes);
+    if (!type || !ACCEPTED_UPLOAD_TYPES.includes(type)) {
+      throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận XML, PDF, JPG, PNG, WEBP`);
+    }
+    const storageKey = fileKey(orgId, sha256);
+    const generation = await putFile(store, storageKey, bytes, type, sha256);
+    return runtime.execute<{ fileId: string; duplicate: boolean }>(
+      'kernel.file.ingest',
+      { filename: safeFilename(name, type), contentType: type, sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },
+      { actor: actorOf(user), orgId },
+    );
+  }
+
+  async function uploader(c: Context<{ Variables: { user: AuthUser } }>) {
+    const user = c.get('user');
+    const membership = await resolveMembership(runtime, user, c.req.header(ORG_HEADER) ?? null);
+    if (membership.role === 'viewer') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không tải được chứng từ');
+    return { user, orgId: membership.orgId };
+  }
+
+  // Bytes through the kernel: always on local disk, and still accepted with S3 (the server hashes them either way).
   app.post('/api/files', bodyLimit({ maxSize: UPLOAD_BODY_LIMIT }), async (c) => {
     try {
-      const user = c.get('user');
-      const membership = await resolveMembership(runtime, user, c.req.header(ORG_HEADER) ?? null);
-      if (membership.role === 'viewer') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không tải được chứng từ');
-      const orgId = membership.orgId;
+      const { user, orgId } = await uploader(c);
       const body = await c.req.parseBody({ all: true });
       const files = ([] as unknown[]).concat(body.file ?? []).filter((f): f is File => f instanceof File);
       if (files.length === 0) throw new DomainError('NO_FILE', 400, 'Chưa chọn tệp');
@@ -291,24 +334,59 @@ export function createHttpApp(deps: HttpDeps) {
       const results = [];
       for (const file of files) {
         if (file.size > MAX_UPLOAD_BYTES) throw new DomainError('TOO_LARGE', 413, `${file.name} vượt quá 25 MB`);
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        // The content decides the type; the browser's MIME type and the extension are only hints.
-        const type = sniffType(bytes);
-        if (!type || !ACCEPTED_UPLOAD_TYPES.includes(type)) {
-          throw new DomainError('UNSUPPORTED_TYPE', 415, `${file.name}: chỉ nhận XML, PDF, JPG, PNG, WEBP`);
-        }
-        const sha256 = sha256Hex(bytes);
-        const storageKey = fileKey(orgId, sha256);
-        await store.put(storageKey, bytes, type);
-        results.push(
-          await runtime.execute<{ fileId: string; duplicate: boolean }>(
-            'kernel.file.ingest',
-            { filename: safeFilename(file.name, type), contentType: type, sizeBytes: bytes.byteLength, sha256, storageKey, source: 'upload' },
-            { actor: actorOf(user), orgId },
-          ),
-        );
+        results.push(await ingest(user, orgId, file.name, new Uint8Array(await file.arrayBuffer())));
       }
       return c.json({ files: results });
+    } catch (error) {
+      return problem(c, error);
+    }
+  });
+
+  // Staged presigned uploads (plan §7.6 steps 1 to 3), when the store supports them (STORAGE=s3).
+  const direct = store.direct;
+  const noDirect = () => new DomainError('NOT_FOUND', 404, 'Máy chủ nhận tệp trực tiếp; hãy dùng POST /api/files');
+
+  // Step 1: a single-use grant and a presigned POST form for a random staging key, 5 minutes, 1 byte to 25 MB.
+  app.post('/api/files/uploads', bodyLimit({ maxSize: 4 * 1024 }), async (c) => {
+    try {
+      if (!direct) throw noDirect();
+      const { user, orgId } = await uploader(c);
+      const grant = await runtime.execute<{ uploadId: string; stagingKey: string; maxBytes: number }>('kernel.file.upload.begin', {}, {
+        actor: actorOf(user),
+        orgId,
+      });
+      const form = await direct.presignUpload(grant.stagingKey, grant.maxBytes);
+      c.header('cache-control', 'private, no-store');
+      return c.json({ uploadId: grant.uploadId, url: form.url, fields: form.fields, expiresAt: form.expiresAt.toISOString(), maxBytes: form.maxBytes });
+    } catch (error) {
+      return problem(c, error);
+    }
+  });
+
+  // Steps 2 and 3: claim the grant (once), stream the staged object through sha256 with the size cap, write those
+  // exact bytes create-only to the org key, record the triple, and delete the staging object. The staging object is
+  // never itself a file, and a write to the staging key after the claim is never read.
+  app.post('/api/files/uploads/:id/complete', bodyLimit({ maxSize: 4 * 1024 }), async (c) => {
+    try {
+      if (!direct) throw noDirect();
+      const { user, orgId } = await uploader(c);
+      const input = (await c.req.json().catch(() => null)) as { filename?: unknown } | null;
+      const filename = typeof input?.filename === 'string' && input.filename.trim() ? input.filename.slice(0, 255) : 'chung-tu';
+      const claim = await runtime.execute<{ stagingKey: string; maxBytes: number }>(
+        'kernel.file.upload.claim',
+        { uploadId: c.req.param('id') },
+        { actor: actorOf(user), orgId },
+      );
+      try {
+        const staged = await direct.readStaged(claim.stagingKey, claim.maxBytes).catch((error: unknown) => {
+          if (error instanceof BlobNotFoundError) throw new DomainError('UPLOAD_MISSING', 409, 'Chưa nhận được tệp cho lượt tải lên này');
+          throw error;
+        });
+        if (staged.bytes.byteLength === 0) throw new DomainError('NO_FILE', 400, 'Tệp rỗng');
+        return c.json(await ingest(user, orgId, filename, staged.bytes, staged.sha256));
+      } finally {
+        await store.delete(claim.stagingKey).catch((error: unknown) => console.error('[http] staging object not deleted', error));
+      }
     } catch (error) {
       return problem(c, error);
     }
@@ -318,12 +396,26 @@ export function createHttpApp(deps: HttpDeps) {
     try {
       const user = c.get('user');
       const orgId = await resolveOrg(runtime, user, c.req.header(ORG_HEADER) ?? null);
-      const file = await runtime.query<{ filename: string; content_type: string; storage_key: string }>(
+      const file = await runtime.query<{ filename: string; content_type: string; storage_key: string; generation: string | null; sha256: string }>(
         'kernel.file.get',
         { id: c.req.param('id') },
         { actor: actorOf(user), orgId },
       );
-      const bytes = await store.get(file.storage_key);
+      const ref = { key: file.storage_key, generation: file.generation, sha256: file.sha256 };
+      // With S3, a presigned GET of the exact version the row recorded (60 seconds, as an attachment), after the
+      // same authorization as a streamed download. A generation that cannot be pinned streams, checked by sha256.
+      const presigned = direct ? await direct.presignDownload(ref, { filename: file.filename, contentType: file.content_type }) : null;
+      // ?link=1 answers with the URL instead of a redirect, so the app can fetch it without its Authorization and
+      // org headers (a redirect would carry the custom header to the bucket and need a CORS preflight there).
+      // url null: stream from this endpoint.
+      if (c.req.query('link') === '1') {
+        c.header('cache-control', 'private, no-store');
+        return c.json({ url: presigned });
+      }
+      if (presigned) {
+        return new Response(null, { status: 302, headers: { location: presigned, 'cache-control': 'private, no-store', 'referrer-policy': 'no-referrer' } });
+      }
+      const bytes = await readVerified(store, ref);
       return new Response(body(bytes), {
         headers: {
           'content-type': file.content_type,
@@ -401,7 +493,7 @@ export function createHttpApp(deps: HttpDeps) {
     app.use('/assets/*', serveStatic({ root }));
     app.use('/favicon.svg', serveStatic({ root }));
     const indexPath = join(config.WEB_DIST, 'index.html');
-    const csp = contentSecurityPolicy(publicAuthUrl(config));
+    const csp = contentSecurityPolicy(publicAuthUrl(config), store.direct ? directTransferOrigin(config) : null);
     let indexHtml: string | null = null;
     app.get('*', async (c) => {
       c.header('content-security-policy', csp);

@@ -94,6 +94,9 @@ export const vi = {
     empty: 'Chưa có bút toán',
   },
   inbox: {
+    fileTooLarge: '{name} vượt quá 25 MB',
+    storageUploadFailed: 'Không gửi được {name} lên kho lưu trữ; hãy tải lại tệp',
+    storageDownloadFailed: 'Không tải được tệp từ kho lưu trữ',
     title: 'Hộp thư chứng từ',
     subtitle: 'Gửi hóa đơn vào đây. AI đề xuất bút toán, bạn chỉ việc kiểm tra và duyệt.',
     upload: 'Tải chứng từ lên',

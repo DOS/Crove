@@ -179,6 +179,7 @@ describe('inbound email on the API', () => {
     store: {
       put: async (key: string) => {
         touched.push(key);
+        return 'content:test';
       },
       get: async () => new Uint8Array(),
       delete: async (key: string) => {

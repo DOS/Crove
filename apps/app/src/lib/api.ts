@@ -3,9 +3,9 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
-import { ORG_HEADER, type contract } from '@crove/kernel-contract';
+import { MAX_UPLOAD_BYTES, ORG_HEADER, type contract } from '@crove/kernel-contract';
 import { translator } from '../i18n/runtime.ts';
-import { accessToken, auth } from './auth.ts';
+import { accessToken, auth, getConfig } from './auth.ts';
 import { apiErrorFromResponse, isMfaRequired, isUnauthenticated } from './errors.ts';
 
 let currentOrg: string | null = null;
@@ -63,9 +63,54 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   return response;
 }
 
-export async function uploadFiles(files: File[]): Promise<{ files: Array<{ fileId: string; duplicate: boolean }> }> {
+// A stored file's bytes. With presigned transfers the kernel hands out a short-lived URL for the exact version it
+// recorded (after the same authorization), fetched without Crove's headers; otherwise the kernel streams it.
+export async function fetchFile(fileId: string): Promise<Blob> {
+  if (getConfig().uploads === 'presigned') {
+    const { url } = (await (await apiFetch(`/api/files/${fileId}?link=1`)).json()) as { url: string | null };
+    if (url) {
+      const response = await fetch(url, { credentials: 'omit' }).catch(() => null);
+      if (!response?.ok) throw new Error(translator()('inbox.storageDownloadFailed'));
+      return response.blob();
+    }
+  }
+  return (await apiFetch(`/api/files/${fileId}`)).blob();
+}
+
+type Uploaded = { fileId: string; duplicate: boolean };
+
+// One file through a presigned staging upload (plan §7.6): a single-use form from the kernel, the bytes straight to
+// the bucket, then the kernel reads them back, hashes them and records the file.
+async function uploadStaged(file: File): Promise<Uploaded> {
+  if (file.size > MAX_UPLOAD_BYTES) throw new Error(translator()('inbox.fileTooLarge', { name: file.name }));
+  const grant = (await (await apiFetch('/api/files/uploads', { method: 'POST' })).json()) as {
+    uploadId: string;
+    url: string;
+    fields: Record<string, string>;
+  };
+  const form = new FormData();
+  for (const [name, value] of Object.entries(grant.fields)) form.append(name, value);
+  // The file goes last: S3 ignores fields after it.
+  form.append('file', file);
+  // No credentials or Crove headers: the form's signature is the only authorization the bucket sees.
+  const stored = await fetch(grant.url, { method: 'POST', body: form, credentials: 'omit' }).catch(() => null);
+  if (!stored?.ok) throw new Error(translator()('inbox.storageUploadFailed', { name: file.name }));
+  const response = await apiFetch(`/api/files/uploads/${grant.uploadId}/complete`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ filename: file.name }),
+  });
+  return (await response.json()) as Uploaded;
+}
+
+export async function uploadFiles(files: File[]): Promise<{ files: Uploaded[] }> {
+  if (getConfig().uploads === 'presigned') {
+    const results: Uploaded[] = [];
+    for (const file of files) results.push(await uploadStaged(file));
+    return { files: results };
+  }
   const form = new FormData();
   for (const file of files) form.append('file', file);
   const response = await apiFetch('/api/files', { method: 'POST', body: form });
-  return (await response.json()) as { files: Array<{ fileId: string; duplicate: boolean }> };
+  return (await response.json()) as { files: Uploaded[] };
 }

@@ -10,6 +10,8 @@ export interface PublicConfig {
   mailEnabled: boolean;
   // The modules this deployment runs (CROVE_MODULES); kernel is always one of them.
   modules: string[];
+  // presigned: files go to the bucket through a staging upload (plan §7.6); direct: through the kernel.
+  uploads?: 'presigned' | 'direct';
 }
 
 let config: PublicConfig | null = null;
