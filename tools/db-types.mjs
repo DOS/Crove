@@ -247,7 +247,8 @@ async function dropStale(admin) {
   const { rows } = await admin.query("SELECT datname FROM pg_catalog.pg_database WHERE datname ~ '^crove_types_[0-9]+_[0-9a-f]{8}$'");
   for (const { datname } of rows) {
     if (Date.now() - Number(datname.split('_')[2]) > 3_600_000) {
-      await admin.query(`DROP DATABASE IF EXISTS ${datname} WITH (FORCE)`);
+      // Another run may be dropping it at the same time; a leftover is not worth failing this run.
+      await admin.query(`DROP DATABASE IF EXISTS ${datname} WITH (FORCE)`).catch((error) => console.warn(`db-types: could not drop ${datname}: ${error.message}`));
     }
   }
 }
