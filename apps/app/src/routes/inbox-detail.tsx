@@ -13,6 +13,7 @@ import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { errorMessage, fetchFile, orpc, queryClient } from '../lib/api.ts';
 import { previewPurchaseJournal } from '../lib/decimal.ts';
 import { useFormat } from '../i18n/provider.tsx';
+import { reversalErrorMessage } from '../lib/reversal.ts';
 
 const CHECK_TONE = { pass: 'success', warn: 'warning', fail: 'destructive' } as const;
 const CHECK_ICON = { pass: '✓', warn: '!', fail: '✕' } as const;
@@ -56,9 +57,75 @@ function FilePreview({ fileId, contentType, filename }: { fileId: string; conten
   );
 }
 
+// A reversal proposal (#138, #165): the entry it reverses, as the approver will post its mirror, and what else the
+// approval does. The entry is read as the caller sees it; the server posts the mirror of every line or refuses.
+function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDate: string; reason: string }; slug: string }) {
+  const t = useTranslations('inboxDetail');
+  const f = useFormat();
+  const entry = useQuery(orpc.journal.get.queryOptions({ input: { id: reversal.entryId } }));
+  const document = entry.data?.document;
+  return (
+    <Card className="block space-y-4 p-4">
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div>
+          <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('reversalDate')}</p>
+          <p className="mt-1 text-sm font-medium text-foreground">{f.date(reversal.entryDate)}</p>
+        </div>
+        <div className="sm:col-span-2">
+          <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('reason')}</p>
+          <p className="mt-1 text-sm whitespace-pre-wrap text-foreground">{reversal.reason}</p>
+        </div>
+      </div>
+      {entry.isLoading ? (
+        <Spinner />
+      ) : entry.error ? (
+        <ErrorText>{errorMessage(entry.error)}</ErrorText>
+      ) : entry.data ? (
+        <div>
+          <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">
+            {t('originalEntry', { date: f.date(entry.data.entryDate), description: entry.data.description })}
+          </p>
+          <p className="mt-1 text-xs text-subtle-foreground">{t('mirrorHint')}</p>
+          <table className="mt-3 w-full text-sm">
+            <thead className="text-left text-xs text-subtle-foreground">
+              <tr>
+                <th className="py-1.5 font-medium">{t('account')}</th>
+                <th className="py-1.5 text-right font-medium">{t('originalDebit')}</th>
+                <th className="py-1.5 text-right font-medium">{t('originalCredit')}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {entry.data.lines.map((l) => (
+                <tr key={l.lineNo}>
+                  <td className="py-2 text-foreground">
+                    <span className="font-mono">{l.accountCode}</span> <span className="text-subtle-foreground">{l.accountName}</span>
+                  </td>
+                  <td className="py-2 text-right text-foreground tabular-nums">{l.debit !== '0' && l.debit !== '0.0000' ? f.money(l.debit) : ''}</td>
+                  <td className="py-2 text-right text-foreground tabular-nums">{l.credit !== '0' && l.credit !== '0.0000' ? f.money(l.credit) : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {entry.data.reversedBy && <p className="mt-3 text-sm text-warning">{t('alreadyReversed', { date: f.date(entry.data.reversedBy.entryDate) })}</p>}
+          {document && (
+            <p className="mt-3 text-sm text-warning">
+              {t('purchaseDocument', { document: `${document.series ? `${document.series}-` : ''}${document.number}`, vendor: document.partyName })}{' '}
+              {document.voided ? t('documentAlreadyVoided') : t('documentWillVoid')}
+            </p>
+          )}
+          <Link to="/o/$slug/journal" params={{ slug }} hash={`entry-${entry.data.id}`} className="mt-3 inline-block text-sm text-link hover:underline">
+            {t('viewInJournal')}
+          </Link>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
 export function InboxDetailPage() {
   const { slug, id } = useParams({ strict: false }) as { slug: string; id: string };
   const navigate = useNavigate();
+  const root = useTranslations();
   const t = useTranslations('inboxDetail');
   const f = useFormat();
   // While the file is being read again, poll until the new reading (or its failure) arrives.
@@ -112,6 +179,7 @@ export function InboxDetailPage() {
   const item = detail.data;
   if (!item) return null;
   const pending = item.status === 'pending';
+  const reversal = item.reversal;
   const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
   const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
   const currency = payload?.invoice.currency ?? 'VND';
@@ -125,7 +193,7 @@ export function InboxDetailPage() {
         size="lg"
         disabled={busy}
         onClick={() => {
-          const ask = pending ? t('confirmRereadPending') : t('confirmRereadOther');
+          const ask = pending ? t('confirmRereadPending') : item.voided ? t('confirmRereadVoided') : t('confirmRereadOther');
           if (!window.confirm(ask)) return;
           reextract.mutate({ fileId, idempotencyKey: crypto.randomUUID() });
         }}
@@ -150,7 +218,9 @@ export function InboxDetailPage() {
               ? payload.invoice.series
                 ? t('invoiceWithSeries', { series: payload.invoice.series, number: payload.invoice.number, date: f.date(payload.invoice.issueDate) })
                 : t('invoice', { number: payload.invoice.number, date: f.date(payload.invoice.issueDate) })
-              : undefined
+              : reversal
+                ? t('reversalSubtitle')
+                : undefined
           }
           actions={
             pending ? (
@@ -188,7 +258,13 @@ export function InboxDetailPage() {
                     {t('saveEdit')}
                   </Button>
                 )}
-                {item.canApprove && (
+                {item.canApprove && reversal && (
+                  <Button size="lg" disabled={busy} onClick={() => approve.mutate({ id, revision: item.revision, idempotencyKey })}>
+                    {approve.isPending ? <Spinner /> : null}
+                    {t('approveReversal')}
+                  </Button>
+                )}
+                {item.canApprove && !reversal && (
                   <Button
                     size="lg"
                     disabled={busy || dirty || !payload || blocked || (failed > 0 && !acceptFailed)}
@@ -217,6 +293,7 @@ export function InboxDetailPage() {
                       ? t('rejected')
                       : item.status}
                 </Badge>
+                {item.voided && <Badge variant="destructive">{t('voidedBadge')}</Badge>}
               </>
             )
           }
@@ -224,7 +301,24 @@ export function InboxDetailPage() {
       </div>
       {(approve.error || reject.error || edit.error || reextract.error) && (
         <div className="mb-4">
-          <ErrorText>{errorMessage(approve.error ?? reject.error ?? edit.error ?? reextract.error)}</ErrorText>
+          <ErrorText>
+            {reversal && approve.error ? reversalErrorMessage(approve.error, root) : errorMessage(approve.error ?? reject.error ?? edit.error ?? reextract.error)}
+          </ErrorText>
+        </div>
+      )}
+      {/* An executed purchase whose document was voided by reversing its entry (#165). */}
+      {item.voided && (
+        <p className="mb-4 text-sm text-muted-foreground">
+          {t('voidedNotice')} {reextractButton ? t('voidedReread') : t('voidedNoReread')}
+        </p>
+      )}
+      {reversal && (
+        <div className="mb-6">
+          {pending && !item.canApprove && item.approveReason === 'four_eyes' && <p className="mb-4 text-sm text-muted-foreground">{t('reversalFourEyes')}</p>}
+          {pending && !item.canApprove && item.approveReason === 'not_eligible' && (
+            <p className="mb-4 text-sm text-subtle-foreground">{t('reversalNotEligible')}</p>
+          )}
+          <ReversalCard reversal={reversal} slug={slug} />
         </div>
       )}
       {reading && (
@@ -244,10 +338,10 @@ export function InboxDetailPage() {
       {pending && dirty && (
         <p className="mb-4 text-sm text-muted-foreground">{t('dirty')}</p>
       )}
-      {pending && !dirty && item.approveReason === 'four_eyes' && (
+      {pending && !reversal && !dirty && item.approveReason === 'four_eyes' && (
         <p className="mb-4 text-sm text-muted-foreground">{t('fourEyes')}</p>
       )}
-      {pending && !dirty && item.approveReason === 'not_eligible' && (
+      {pending && !reversal && !dirty && item.approveReason === 'not_eligible' && (
         <p className="mb-4 text-sm text-subtle-foreground">{t('notEligible')}</p>
       )}
       {pending && blocked && (
@@ -382,12 +476,15 @@ export function InboxDetailPage() {
             </Card>
           )}
         </div>
-        <div className="lg:col-span-2">
-          <Card className="block p-4">
-            <p className="mb-3 text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('original')}</p>
-            {item.file ? <FilePreview fileId={item.file.id} contentType={item.file.contentType} filename={item.file.filename} /> : <p className="text-sm text-subtle-foreground">{t('noFile')}</p>}
-          </Card>
-        </div>
+        {/* A reversal has no source file; its card above shows the entry it reverses. */}
+        {!reversal && (
+          <div className="lg:col-span-2">
+            <Card className="block p-4">
+              <p className="mb-3 text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('original')}</p>
+              {item.file ? <FilePreview fileId={item.file.id} contentType={item.file.contentType} filename={item.file.filename} /> : <p className="text-sm text-subtle-foreground">{t('noFile')}</p>}
+            </Card>
+          </div>
+        )}
       </div>
     </>
   );

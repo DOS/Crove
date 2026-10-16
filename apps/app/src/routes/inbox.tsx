@@ -12,6 +12,7 @@ import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/
 import { errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
+import { REVERSAL_KIND } from '../lib/reversal.ts';
 
 type Tab = 'pending' | 'executed' | 'rejected';
 
@@ -189,10 +190,14 @@ export function InboxPage() {
                 <TableCell className="px-4 py-3 text-foreground tabular-nums">{f.money(item.total)}</TableCell>
                 <TableCell className="px-4 py-3">
                   <div className="flex flex-wrap gap-1">
+                    {/* A reversal a user asked for has no invoice checks; its card shows the entry it reverses. */}
+                    {item.kind === REVERSAL_KIND && <Badge variant="secondary">{t('reversalKind')}</Badge>}
                     {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
                     {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
                     {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}
-                    {item.failedChecks === 0 && item.warnChecks === 0 && !item.duplicateOf && <Badge variant="success">{t('matched')}</Badge>}
+                    {item.kind !== REVERSAL_KIND && item.failedChecks === 0 && item.warnChecks === 0 && !item.duplicateOf && (
+                      <Badge variant="success">{t('matched')}</Badge>
+                    )}
                   </div>
                 </TableCell>
                 <TableCell className="px-4 py-3 text-xs text-subtle-foreground">{f.dateTime(item.createdAt)}</TableCell>

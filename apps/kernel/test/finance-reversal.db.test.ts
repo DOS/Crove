@@ -452,7 +452,7 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
   });
 
   it('voids, when the migration runs, the documents of purchase entries reversed before it', async () => {
-    const migration = readFileSync(new URL('../../../supabase/migrations/20261017160000_crove_finance_purchase_document_void.sql', import.meta.url), 'utf8');
+    const migration = readFileSync(new URL('../../../supabase/migrations/20261018000000_crove_finance_purchase_document_void.sql', import.meta.url), 'utf8');
     const document = randomUUID();
     const entry = randomUUID();
     const reversal = randomUUID();
