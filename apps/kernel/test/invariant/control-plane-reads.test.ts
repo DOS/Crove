@@ -3,8 +3,8 @@
 // identity_resolve, my_orgs and the like), which a multi-cell setup can reimplement as a call to the control plane.
 // No TypeScript source of an app, a module or a package may name a control-plane table, whether through Kysely
 // (selectFrom, a join, withSchema) or raw SQL. crove_kernel.user_account also has no Kysely type
-// (packages/db/src/schema.ts), and the database enforces the rule once the tenant roles lose their direct grant
-// (step 2 of #169, #222). Keep this directory self-contained: no imports from outside test/invariant/.
+// (packages/db/src/schema.ts), and since step 2 of #169 (#222) the tenant roles hold no grant on it, so the database
+// enforces the rule too. Keep this directory self-contained: no imports from outside test/invariant/.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';

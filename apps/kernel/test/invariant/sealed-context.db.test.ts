@@ -97,7 +97,6 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
 
   // Every path that reads the context: each helper, an RLS read, an RLS write and the two kinds of definer
   // (emit() is owned by the migration runner, post_journal_entry() by crove_definer_tenant).
-  const USER_ACCOUNT_READ = 'SELECT count(*) FROM crove_kernel.user_account';
   const READS = [
     'SELECT crove_kernel.ctx_org_id()',
     'SELECT crove_kernel.ctx_user_id()',
@@ -106,8 +105,18 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
     `SELECT crove_kernel.ctx_le_allowed('00000000-0000-0000-0000-000000000000'::uuid)`,
     `SELECT crove_kernel.ctx_has_flag('salary')`,
     'SELECT count(*) FROM crove_kernel.party',
-    USER_ACCOUNT_READ,
   ];
+
+  // user_account is a control-plane table (#169, plan §3.6): since step 2 (#222) no Crove role may read it
+  // directly, whatever the context, valid, forged or absent. Tenant code reads it through member_profiles.
+  const USER_ACCOUNT_READ = 'SELECT count(*) FROM crove_kernel.user_account';
+  const USER_ACCOUNT_DENIED = { code: '42501', message: 'permission denied for table user_account' };
+
+  async function expectUserAccountDenied(c: pg.Client) {
+    await c.query('SAVEPOINT probe');
+    await expect(c.query(USER_ACCOUNT_READ), USER_ACCOUNT_READ).rejects.toMatchObject(USER_ACCOUNT_DENIED);
+    await c.query('ROLLBACK TO SAVEPOINT probe');
+  }
 
   // A READ ONLY transaction refuses the INSERT before RLS runs; the definers still read the context first.
   async function readOnly(c: pg.Client): Promise<boolean> {
@@ -119,16 +128,10 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
     const ro = await readOnly(c);
     for (const text of READS) {
       await c.query('SAVEPOINT probe');
-      const error = await c.query(text).then(() => null, (e: unknown) => e);
-      // Step 2 of #169 (#222) revokes the direct SELECT on user_account (tenant code reads it through
-      // member_profiles): the read is then refused before any policy runs, which is just as closed.
-      if (text === USER_ACCOUNT_READ && (error as { message?: string } | null)?.message === 'permission denied for table user_account') {
-        expect(error, text).toMatchObject({ code: '42501' });
-      } else {
-        expect(error, text).toMatchObject(SEAL_INVALID);
-      }
+      await expect(c.query(text), text).rejects.toMatchObject(SEAL_INVALID);
       await c.query('ROLLBACK TO SAVEPOINT probe');
     }
+    await expectUserAccountDenied(c);
     for (const [text, values] of [
       [`INSERT INTO crove_kernel.party (org_id, name) VALUES ($1::uuid, 'forged')`, [orgId]],
       [`SELECT crove_kernel.emit('forged', '{}'::jsonb, NULL)`, []],
@@ -151,6 +154,7 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
     expect(await helpers(c)).toEqual({ org: null, user: null, actor: null, scope: null, allowed: false, flag: false });
     const { rows } = await c.query<{ n: string }>('SELECT count(*) AS n FROM crove_kernel.party');
     expect(rows[0]?.n).toBe('0');
+    await expectUserAccountDenied(c);
     for (const [text, error] of [
       [`INSERT INTO crove_kernel.party (org_id, name) VALUES ('${orgId}'::uuid, 'forged')`, /row-level security/],
       [`SELECT crove_kernel.emit('forged', '{}'::jsonb, NULL)`, /NO_CONTEXT/],
@@ -244,6 +248,29 @@ suite('sealed request context on PostgreSQL (§4.5 item 5, T11)', () => {
       ctx: { v: 1, org: orgB, actor: 'system', user: null, role: null, le_scope: ['*'], flags: [] },
       helpers: { org: orgB, user: null, actor: 'system', scope: ['*'], allowed: true, flag: false },
     });
+  });
+
+  it('refuses a direct read of user_account in a valid context, as crove_app and as crove_worker', async () => {
+    const app = await connect(appUrl);
+    const worker = await connect(workerUrl);
+    for (const begin of ['BEGIN', 'BEGIN READ ONLY'] as const) {
+      await inTx(
+        app,
+        async () => {
+          await enter(app, users.owner, orgA);
+          await expectUserAccountDenied(app);
+        },
+        begin,
+      );
+      await inTx(
+        worker,
+        async () => {
+          await enterSystem(worker, orgB);
+          await expectUserAccountDenied(worker);
+        },
+        begin,
+      );
+    }
   });
 
   it('keeps the key and the seal functions out of reach of every Crove role', async () => {
