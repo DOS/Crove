@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { exportSealer } from './export-seal.ts';
 
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
@@ -85,6 +86,15 @@ const schema = z.object({
   // Presigned upload grants (kernel.file.upload.begin) one user may open per org in any rolling minute, counted in the
   // database across API instances (issue #223). Bounds the staging objects an abandoned upload loop leaves behind.
   UPLOAD_BEGIN_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(1000).default(20),
+  // Org exports (issue #212, plan §7.9): kept EXPORT_RETENTION_DAYS (35 to 90) after they are made, then deleted by the
+  // worker's daily retention job.
+  EXPORT_RETENTION_DAYS: z.coerce.number().int().min(35).max(90).default(35),
+  // The AES-256-GCM key that seals org exports at rest: 32 random bytes as base64 or hex (openssl rand -base64 32). The
+  // API (downloads) and the worker (exports) need the same key. Required on a public PUBLIC_URL; without it (local URLs
+  // only) exports are stored unencrypted.
+  EXPORT_ENCRYPTION_KEY: optional,
+  // Earlier keys, comma separated, kept only to read exports sealed before a rotation, until those expired.
+  EXPORT_ENCRYPTION_KEY_PREVIOUS: optional,
   // Supabase Auth (GoTrue). Self-host: the kernel proxies /auth/v1 to AUTH_UPSTREAM_URL.
   AUTH_UPSTREAM_URL: optional,
   PUBLIC_AUTH_URL: optional,
@@ -207,6 +217,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error('INBOUND_SECRET must be at least 32 characters');
   }
   if (config.STORAGE === 's3' && !config.S3_BUCKET) throw new Error('STORAGE=s3 needs S3_BUCKET');
+  // Fails the boot on a malformed key rather than at the first export or download.
+  exportSealer(config);
   if (config.REFUSAL_AUDIT_RESERVE_PER_ACTOR > config.REFUSAL_AUDIT_LIMIT_PER_ACTOR) {
     throw new Error('REFUSAL_AUDIT_RESERVE_PER_ACTOR must not exceed REFUSAL_AUDIT_LIMIT_PER_ACTOR');
   }
@@ -282,6 +294,15 @@ function isHostedSupabase(url: string): boolean {
     return new URL(url).hostname.endsWith('.supabase.co');
   } catch {
     return false;
+  }
+}
+
+// The api, worker and all roles refuse to start on a public PUBLIC_URL without an export key (issue #212): an org
+// export is the whole org in one place and is sealed at rest. Checked when a role starts (createKernel), not in loadConfig, so
+// tools and tests that load a public configuration without serving exports keep working.
+export function assertExportKey(config: Pick<Config, 'PUBLIC_URL' | 'EXPORT_ENCRYPTION_KEY'>): void {
+  if (!isLocalUrl(config.PUBLIC_URL) && !config.EXPORT_ENCRYPTION_KEY) {
+    throw new Error('set EXPORT_ENCRYPTION_KEY (32 random bytes, openssl rand -base64 32): org exports hold the whole org and are sealed at rest');
   }
 }
 

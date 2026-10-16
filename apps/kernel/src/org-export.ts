@@ -1,74 +1,136 @@
-// The org export job (issue #38, plan §7.9 "Offboarding" step 1). Reads every exported table of the org through the
-// system query kernel.org.export.snapshot, stores each as one JSON document, then a manifest with the stored files
-// list, all as content-addressed blobs under the org's prefix, and records the export (kernel.org.export.record).
-// A retried job writes the same table blobs again (same bytes, same keys) and a new manifest.
+// The org export job (issue #38, plan §7.9 "Offboarding" step 1; streamed since #212). Streams every exported table of
+// the org through the system query kernel.org.export.snapshot (one REPEATABLE READ snapshot for all tables, a cursor
+// per table), writes each table as NDJSON (one row per line) in chunks of at most chunkBytes, seals every chunk (see
+// export-seal.ts) and stores it content addressed under export/<org_id>/, then a manifest, and records the export
+// (kernel.org.export.record) with the date it expires. Memory stays bounded by one chunk plus one FETCH batch,
+// whatever the size of the org. A retried job writes new blobs (fresh random bytes in every envelope); the blobs of a
+// failed attempt are never recorded and expire with the rest under export/.
 import {
   EXPORT_FORMAT,
-  EXPORT_MAX_ROWS,
-  EXPORT_TABLE_NAMES,
+  EXPORT_MAX_PARTS,
+  type ExportBatch,
+  type ExportEncryption,
   type ExportPart,
   type ExportRecord,
   type ExportTable,
 } from '@crove/kernel';
-import { fileKey, sha256Hex, type Actor, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { exportKey, sha256Hex, type Actor, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { exportAad, type ExportSealer } from './export-seal.ts';
 
 const SYSTEM: Actor = { type: 'system', component: 'org-export' };
-
-export interface ExportedFile {
-  id: unknown;
-  filename: unknown;
-  contentType: unknown;
-  sizeBytes: unknown;
-  sha256: unknown;
-  storageKey: unknown;
-  // The object version the bytes were written as (ADR-0013): with storageKey and sha256, the file's reference.
-  generation: unknown;
-  source: unknown;
-  createdAt: unknown;
-}
+// NDJSON bytes per stored chunk (before sealing). A chunk is held in memory while it is sealed and written.
+export const EXPORT_CHUNK_BYTES = 8 * 1024 * 1024;
+export const DEFAULT_EXPORT_RETENTION_DAYS = 35;
 
 export interface OrgExportManifest {
   format: typeof EXPORT_FORMAT;
   orgId: string;
   generatedAt: string;
+  expiresAt: string;
+  // Every table was read from one database snapshot.
+  snapshot: 'repeatable read';
+  encryption: ExportEncryption;
+  // Rows of kernel.file: the stored documents and email attachments, whose blobs stay under the storage_key (with
+  // generation and sha256) each row lists. The rows themselves are in the kernel.file part.
+  fileCount: number;
   parts: ExportPart[];
-  // The stored files (documents and email attachments): their blobs stay under the same keys in the store.
-  files: ExportedFile[];
 }
 
-async function putJson(store: BlobStore, orgId: string, value: unknown): Promise<{ key: string; sha256: string; bytes: number }> {
-  const bytes = new TextEncoder().encode(JSON.stringify(value));
-  const sha256 = sha256Hex(bytes);
-  const key = fileKey(orgId, sha256);
-  await store.put(key, bytes, 'application/json');
-  return { key, sha256, bytes: bytes.byteLength };
+export interface OrgExportDeps {
+  runtime: Runtime;
+  store: BlobStore;
+  sealer: ExportSealer;
+  // Days the export is kept (EXPORT_RETENTION_DAYS); the record carries the date.
+  retentionDays?: number;
 }
 
-export async function runOrgExport(deps: { runtime: Runtime; store: BlobStore }, orgId: string, now: () => Date = () => new Date()): Promise<ExportRecord> {
+export interface OrgExportOptions {
+  now?: () => Date;
+  chunkBytes?: number;
+}
+
+const NEWLINE = 0x0a;
+
+export async function runOrgExport(deps: OrgExportDeps, orgId: string, options: OrgExportOptions = {}): Promise<ExportRecord> {
+  const now = options.now ?? (() => new Date());
+  const chunkBytes = options.chunkBytes ?? EXPORT_CHUNK_BYTES;
+  const encoder = new TextEncoder();
   const parts: ExportPart[] = [];
-  let files: ExportedFile[] = [];
-  for (const table of EXPORT_TABLE_NAMES) {
-    const rows = await deps.runtime.query<Array<Record<string, unknown>>>('kernel.org.export.snapshot', { table }, { actor: SYSTEM, orgId });
-    if (rows.length > EXPORT_MAX_ROWS) throw new Error(`EXPORT_TOO_LARGE: ${table} has more than ${EXPORT_MAX_ROWS} rows`);
-    const stored = await putJson(deps.store, orgId, { format: EXPORT_FORMAT, orgId, table, rows });
-    parts.push({ table: table satisfies ExportTable, ...stored, rows: rows.length });
-    if (table === 'kernel.file') {
-      files = rows.map((r) => ({
-        id: r.id,
-        filename: r.filename,
-        contentType: r.content_type,
-        sizeBytes: r.size_bytes,
-        sha256: r.sha256,
-        storageKey: r.storage_key,
-        generation: r.generation,
-        source: r.source,
-        createdAt: r.created_at,
-      }));
-    }
+  let fileCount = 0;
+
+  async function storeSealed(plain: Uint8Array, aad: Buffer): Promise<{ key: string; sha256: string; generation: string }> {
+    const sealed = deps.sealer.seal(plain, aad);
+    const sha256 = sha256Hex(sealed);
+    const key = exportKey(orgId, sha256);
+    const generation = await deps.store.put(key, sealed, 'application/octet-stream');
+    return { key, sha256, generation };
   }
-  const manifest: OrgExportManifest = { format: EXPORT_FORMAT, orgId, generatedAt: now().toISOString(), parts, files };
-  const stored = await putJson(deps.store, orgId, manifest);
-  const record: ExportRecord = { manifestKey: stored.key, manifestSha256: stored.sha256, fileCount: files.length, parts };
+
+  // The chunk being filled: encoded lines and their size.
+  let current: { table: ExportTable; chunk: number; lines: Uint8Array[]; bytes: number; rows: number } | null = null;
+
+  async function flush(): Promise<void> {
+    if (!current) return;
+    const { table, chunk, lines, bytes, rows } = current;
+    current = null;
+    if (parts.length >= EXPORT_MAX_PARTS) throw new Error(`EXPORT_TOO_LARGE: more than ${EXPORT_MAX_PARTS} chunks`);
+    const plain = new Uint8Array(bytes);
+    let offset = 0;
+    for (const line of lines) {
+      plain.set(line, offset);
+      offset += line.byteLength;
+      plain[offset++] = NEWLINE;
+    }
+    const stored = await storeSealed(plain, exportAad(orgId, { table, chunk }));
+    parts.push({ table, chunk, ...stored, rows, bytes });
+  }
+
+  const sink = async (raw: unknown): Promise<void> => {
+    const batch = raw as ExportBatch;
+    if (current && current.table !== batch.table) await flush();
+    current ??= { table: batch.table, chunk: parts.filter((p) => p.table === batch.table).length, lines: [], bytes: 0, rows: 0 };
+    for (const text of batch.lines) {
+      const line = encoder.encode(text);
+      if (current.rows > 0 && current.bytes + line.byteLength + 1 > chunkBytes) {
+        const { table, chunk }: { table: ExportTable; chunk: number } = current;
+        await flush();
+        current = { table, chunk: chunk + 1, lines: [], bytes: 0, rows: 0 };
+      }
+      current.lines.push(line);
+      current.bytes += line.byteLength + 1;
+      current.rows++;
+    }
+    if (batch.table === 'kernel.file') fileCount += batch.lines.length;
+    // The table's last batch closes its last chunk (an empty table still gets one, empty, chunk).
+    if (batch.last) await flush();
+  };
+
+  await deps.runtime.stream('kernel.org.export.snapshot', {}, { actor: SYSTEM, orgId }, sink);
+  await flush();
+
+  const generatedAt = now();
+  const expiresAt = new Date(generatedAt.getTime() + (deps.retentionDays ?? DEFAULT_EXPORT_RETENTION_DAYS) * 86_400_000).toISOString();
+  const manifest: OrgExportManifest = {
+    format: EXPORT_FORMAT,
+    orgId,
+    generatedAt: generatedAt.toISOString(),
+    expiresAt,
+    snapshot: 'repeatable read',
+    encryption: deps.sealer.encryption,
+    fileCount,
+    parts,
+  };
+  const stored = await storeSealed(encoder.encode(JSON.stringify(manifest)), exportAad(orgId, 'manifest'));
+  const record: ExportRecord = {
+    format: EXPORT_FORMAT,
+    manifestKey: stored.key,
+    manifestSha256: stored.sha256,
+    manifestGeneration: stored.generation,
+    fileCount,
+    encryption: deps.sealer.encryption,
+    expiresAt,
+    parts,
+  };
   await deps.runtime.execute('kernel.org.export.record', record, { actor: SYSTEM, orgId });
   return record;
 }

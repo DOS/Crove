@@ -22,6 +22,7 @@ import {
   S3BlobStore,
   UPLOAD_TTL_SECONDS,
   createS3Client,
+  exportKey,
   fileKey,
   inboundKey,
   newInboundBlobId,
@@ -275,6 +276,38 @@ describe.skipIf(!URL_ENV)('S3BlobStore against a real S3-compatible server', () 
     expect(rest).toEqual({ deleted: 1, more: false });
     for (const key of staged) await expect(store.get(key)).rejects.toBeInstanceOf(BlobNotFoundError);
     expect(await store.get(evidenceKey)).toEqual(evidence);
+  });
+
+  // Issue #212. Its own bucket, so other test files' objects never show in the listing.
+  it('lists inbound/ and export/ page by page, in key order, and nothing else', async () => {
+    const bucket = `${options.bucket}-list`.slice(0, 63);
+    await client.send(new CreateBucketCommand({ Bucket: bucket })).catch((error: { name?: string }) => {
+      if (error.name !== 'BucketAlreadyOwnedByYou' && error.name !== 'BucketAlreadyExists') throw error;
+    });
+    const store = S3BlobStore.connect({ ...options, bucket, versioning: 'off' });
+    // Leftovers of an earlier run.
+    for (const prefix of ['inbound/', 'export/'] as const) {
+      for (let page = await store.list(prefix, null, 1000); ; ) {
+        await Promise.all(page.blobs.map((b) => store.delete(b.key)));
+        if (!page.next) break;
+        page = await store.list(prefix, page.next, 1000);
+      }
+    }
+    const mail = [newInboundBlobId(), newInboundBlobId(), newInboundBlobId()].map(inboundKey);
+    for (const key of mail) await store.put(key, encode(key), 'message/rfc822');
+    const part = encode(`part ${randomUUID()}`);
+    const exported = exportKey(orgId, sha256Hex(part));
+    await store.put(exported, part, 'application/octet-stream');
+    const file = encode(`<HDon>${randomUUID()}</HDon>`);
+    await store.put(fileKey(orgId, sha256Hex(file)), file, 'application/xml');
+    await client.send(new PutObjectCommand({ Bucket: bucket, Key: newStagingKey(), Body: encode('staged') }));
+
+    const first = await store.list('inbound/', null, 2);
+    expect(first.blobs.map((b) => b.key)).toEqual([...mail].sort().slice(0, 2));
+    expect(first.blobs.every((b) => b.lastModified instanceof Date)).toBe(true);
+    const rest = await store.list('inbound/', first.next, 2);
+    expect(rest).toEqual({ blobs: [expect.objectContaining({ key: [...mail].sort()[2] })], next: null });
+    expect((await store.list('export/', null, 10)).blobs.map((b) => b.key)).toEqual([exported]);
   });
 
   it('presigns a download of the recorded version, as an attachment, even after the key is overwritten', async () => {

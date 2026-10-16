@@ -8,10 +8,11 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
-import { errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { apiFetch, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { ROLES, roleChangeConfirmation, type Role, type RoleChangeConfirmation } from '../lib/members.ts';
+import { exportFileName, exportPhase, formatBytes, offboardErrorMessage, slugConfirmed } from '../lib/offboarding.ts';
 
 interface MemberRow {
   userId: string;
@@ -172,6 +173,146 @@ function RotateInboundAddress() {
       </div>
       {rotate.error && <ErrorText>{errorMessage(rotate.error)}</ErrorText>}
     </div>
+  );
+}
+
+// Owner only (issue #212). Starts offboarding (kernel.org.offboard, R3): the owner types the org's slug, and without a
+// second factor in the last 5 minutes the server answers STEP_UP_REQUIRED, shown below the buttons with a plain
+// message; the fresh MFA challenge screen lands with the SPA MFA flows (#32). One idempotency key per confirmation.
+// Then shows the export's state, polling while it is made, and the downloads of the manifest and of each table.
+function Offboarding({ name, slug }: { name: string; slug: string }) {
+  const root = useTranslations();
+  const t = useTranslations('offboarding');
+  const tc = useTranslations('common');
+  const f = useFormat();
+  const [confirming, setConfirming] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+  const state = useQuery({
+    ...orpc.org.export.queryOptions(),
+    // While an export is being made, look again every 10 seconds.
+    refetchInterval: (query) => (query.state.data && exportPhase(query.state.data).phase === 'pending' ? 10_000 : false),
+  });
+  const offboard = useMutation(
+    orpc.org.offboard.mutationOptions({
+      onSuccess: () => {
+        setConfirming(false);
+        setTyped('');
+        setIdempotencyKey(crypto.randomUUID());
+        void queryClient.invalidateQueries({ queryKey: orpc.org.export.key() });
+      },
+    }),
+  );
+  const download = useMutation({
+    mutationFn: async (part: string) => {
+      const response = await apiFetch(`/api/org-export/${encodeURIComponent(part)}`);
+      const url = URL.createObjectURL(await response.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = exportFileName(slug, part);
+      a.click();
+      // Revoked a little later: some browsers cancel a download whose URL is revoked at once.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    },
+  });
+
+  if (state.isLoading) return <Spinner />;
+  if (state.error) return <ErrorText>{errorMessage(state.error)}</ErrorText>;
+  const data = state.data;
+  if (!data) return null;
+  const { phase, downloadable } = exportPhase(data);
+  const exported = data.export;
+
+  return (
+    <Card className="block p-4 lg:col-span-2">
+      <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('title')}</p>
+      <p className="mt-3 text-sm text-muted-foreground">{t('intro')}</p>
+      {data.status === 'offboarding' && (
+        <p className="mt-3 text-sm text-warning" role="status">
+          {t('offboarding')}
+        </p>
+      )}
+      {data.status === 'closed' && <p className="mt-3 text-sm text-muted-foreground">{t('closed')}</p>}
+      {phase === 'pending' && (
+        <p className="mt-3 text-sm text-foreground" role="status">
+          {t('pending', { at: f.dateTime(data.requestedAt) })}
+        </p>
+      )}
+      {exported?.expired && (
+        <p className="mt-3 text-sm text-muted-foreground">{t('expired', { at: f.dateTime(exported.createdAt), expires: f.dateTime(exported.expiresAt) })}</p>
+      )}
+      {exported && downloadable && (
+        <div className="mt-3 space-y-2 text-sm">
+          <p className="text-foreground">{t('ready', { at: f.dateTime(exported.createdAt), expires: f.dateTime(exported.expiresAt) })}</p>
+          <p className="text-subtle-foreground">
+            {exported.encryption === 'aes-256-gcm' ? t('encrypted') : t('unencrypted')} {t('files', { count: exported.fileCount })}
+          </p>
+          <Button variant="outline" size="sm" disabled={download.isPending} onClick={() => download.mutate('manifest')}>
+            {t('manifest')}
+          </Button>
+          <ul className="divide-y">
+            {exported.tables.map((table) => (
+              <li key={table.table} className="flex items-center justify-between gap-3 py-2">
+                <div className="min-w-0">
+                  <p className="truncate font-mono text-foreground">{table.table}</p>
+                  <p className="text-xs text-subtle-foreground">{t('tableRows', { rows: f.number(table.rows), size: formatBytes(table.bytes, f.number) })}</p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={download.isPending}
+                  onClick={() => download.mutate(table.table)}
+                  aria-label={`${t('download')} ${table.table}`}
+                >
+                  {download.isPending && download.variables === table.table ? t('downloading') : t('download')}
+                </Button>
+              </li>
+            ))}
+          </ul>
+          {download.error && <ErrorText>{errorMessage(download.error)}</ErrorText>}
+        </div>
+      )}
+      {data.status !== 'closed' && !confirming && (
+        <div className="mt-4">
+          <Button
+            variant={data.status === 'active' ? 'destructive' : 'outline'}
+            disabled={phase === 'pending'}
+            onClick={() => {
+              offboard.reset();
+              setTyped('');
+              setConfirming(true);
+            }}
+          >
+            {data.status === 'active' ? t('start') : t('requestAgain')}
+          </Button>
+        </div>
+      )}
+      {confirming && (
+        <form
+          className="mt-4 space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"
+          role="alertdialog"
+          aria-label={t('confirmLabel')}
+          onSubmit={(event: FormEvent) => {
+            event.preventDefault();
+            if (slugConfirmed(typed, slug)) offboard.mutate({ confirmSlug: typed.trim(), idempotencyKey });
+          }}
+        >
+          <p className="font-medium text-foreground">{t('confirmTitle', { name })}</p>
+          <p className="text-muted-foreground">{t('confirmBody', { slug })}</p>
+          <Input value={typed} maxLength={48} placeholder={t('confirmPlaceholder')} onChange={(e) => setTyped(e.target.value)} aria-label={t('confirmPlaceholder')} autoComplete="off" />
+          <p className="text-subtle-foreground">{t('confirmMfa')}</p>
+          <div className="flex gap-2">
+            <Button type="submit" variant="destructive" disabled={offboard.isPending || !slugConfirmed(typed, slug)}>
+              {t('confirm')}
+            </Button>
+            <Button type="button" variant="ghost" disabled={offboard.isPending} onClick={() => setConfirming(false)}>
+              {tc('cancel')}
+            </Button>
+          </div>
+          {offboard.error && <ErrorText>{offboardErrorMessage(offboard.error, root)}</ErrorText>}
+        </form>
+      )}
+    </Card>
   );
 }
 
@@ -359,6 +500,7 @@ export function SettingsPage() {
           )}
         </Card>
         {me.data && <MySessions userId={me.data.userId} />}
+        {isOwner && org.data && <Offboarding name={org.data.name} slug={org.data.slug} />}
       </div>
     </>
   );

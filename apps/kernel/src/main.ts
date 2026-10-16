@@ -54,6 +54,10 @@ async function main() {
   console.log(`[storage] ${describeStorage(config)}`);
   console.log(`[mail] ${describeMailer(config)}`);
   console.log(`[modules] ${config.CROVE_MODULES.join(', ')}`);
+  console.log(
+    `[export] org exports kept ${config.EXPORT_RETENTION_DAYS} days, ` +
+      (config.EXPORT_ENCRYPTION_KEY ? 'sealed with AES-256-GCM' : 'stored unencrypted (set EXPORT_ENCRYPTION_KEY)'),
+  );
   if (config.STORAGE === 's3' && config.S3_VERSIONING === 'off') {
     // ADR-0013: without object versions a replaced object is detected (sha256 on read) but the original is gone.
     console.warn('[storage] S3_VERSIONING=off: evidence objects have no versions; enable bucket versioning for production');

@@ -20,7 +20,7 @@ import {
   type Runtime,
 } from '@crove/kernel-runtime';
 import type { AuthUser } from '../src/auth.ts';
-import { loadConfig } from '../src/config.ts';
+import { assertExportKey, loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 
 const SECRET = 'x'.repeat(32);
@@ -87,6 +87,20 @@ describe('configuration guards', () => {
     expect(() => loadConfig({ ...publicUrl, AUTH_STEP_UP: 'off' })).toThrow(/AUTH_STEP_UP=off/);
     expect(loadConfig(publicUrl).AUTH_STEP_UP).toBe('required');
     expect(loadConfig({ ...base, AUTH_STEP_UP: 'off' }).AUTH_STEP_UP).toBe('off');
+  });
+
+  // #212: org exports are sealed at rest on every public deployment; a key must be 32 bytes.
+  it('requires a well-formed export key to serve a public URL', () => {
+    const publicUrl = { ...base, PUBLIC_URL: 'https://books.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' };
+    expect(() => assertExportKey(loadConfig(publicUrl))).toThrow(/EXPORT_ENCRYPTION_KEY/);
+    expect(() => assertExportKey(loadConfig(base))).not.toThrow();
+    const key = Buffer.alloc(32, 7).toString('base64');
+    expect(() => assertExportKey(loadConfig({ ...publicUrl, EXPORT_ENCRYPTION_KEY: key }))).not.toThrow();
+    expect(() => assertExportKey(loadConfig({ ...publicUrl, EXPORT_ENCRYPTION_KEY: 'ab'.repeat(32) }))).not.toThrow();
+    expect(() => loadConfig({ ...base, EXPORT_ENCRYPTION_KEY: 'too-short' })).toThrow(/32 random bytes/);
+    expect(() => loadConfig({ ...base, EXPORT_ENCRYPTION_KEY: key, EXPORT_ENCRYPTION_KEY_PREVIOUS: `${'cd'.repeat(32)}, nope` })).toThrow(/32 random bytes/);
+    expect(() => loadConfig({ ...base, EXPORT_RETENTION_DAYS: '30' })).toThrow(/EXPORT_RETENTION_DAYS/);
+    expect(loadConfig(base).EXPORT_RETENTION_DAYS).toBe(35);
   });
 
   // #117: on by default (direct connections); off only behind a transaction-mode pooler.
