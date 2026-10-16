@@ -39,7 +39,7 @@ const OUTPUT = 'packages/db/src/generated/database.ts';
 
 // Schemas whose tables the kernel and modules query through Kysely. crove_meta (the migration ledger) is read with
 // raw SQL only; crove_jobs belongs to pg-boss.
-const SCHEMAS = ['crove_kernel', 'crove_finance'];
+const SCHEMAS = ['crove_kernel', 'crove_finance', 'crove_social'];
 // The role tenant code runs as (packages/db/src/context); a table it cannot SELECT gets no type.
 const TENANT_ROLE = 'crove_tenant';
 // The write type of a column TENANT_ROLE may not write; exported so schema.ts keeps it through a refinement.
@@ -168,7 +168,7 @@ function singleFile(outputPath, writable) {
         } else if (declaration.declarationType === 'typeDeclaration' && declaration.name === 'Database') {
           database = {
             ...declaration,
-            comment: [`Every table of ${SCHEMAS.join(' and ')} that ${TENANT_ROLE} may read.`],
+            comment: [`Every table of ${SCHEMAS.join(', ')} that ${TENANT_ROLE} may read.`],
             typeImports: typeImports(declaration),
             exportAs: 'named',
           };

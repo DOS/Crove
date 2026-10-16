@@ -7,21 +7,20 @@ import {
   contentHash,
   countLinks,
   countText,
+  effectiveContent,
   nextAction,
-  postOutcome,
+  POST_STATUSES,
+  postStatus,
   PROVIDERS,
   publishCallKey,
   publishJobKey,
   startsNewAttempt,
-  transitionPost,
   transitionVariant,
   validateVariant,
   VARIANT_STATUSES,
   type CallState,
   type HashedVariant,
   type MediaItem,
-  type PostEvent,
-  type PostStatus,
   type RetrySafety,
   type VariantEvent,
   type VariantStatus,
@@ -148,78 +147,13 @@ describe('validateVariant', () => {
   });
 });
 
-describe('post lifecycle', () => {
-  const events: PostEvent[] = [
+describe('variant lifecycle', () => {
+  const events: VariantEvent[] = [
     { type: 'edit' },
     { type: 'submit' },
     { type: 'approve' },
+    { type: 'request_changes' },
     { type: 'reject' },
-    { type: 'schedule' },
-    { type: 'unschedule' },
-    { type: 'cancel' },
-    { type: 'start_publishing' },
-    { type: 'resume_publishing' },
-    { type: 'finish', outcome: 'published' },
-    { type: 'finish', outcome: 'partially_published' },
-    { type: 'finish', outcome: 'failed' },
-  ];
-
-  function run(from: PostStatus, path: PostEvent[]): PostStatus {
-    let s = from;
-    for (const e of path) {
-      const t = transitionPost(s, e);
-      if (!t.ok) throw new Error(`${s} --${e.type}--> refused`);
-      s = t.status;
-    }
-    return s;
-  }
-
-  it('walks the happy path', () => {
-    expect(
-      run('draft', [{ type: 'submit' }, { type: 'approve' }, { type: 'schedule' }, { type: 'start_publishing' }, { type: 'finish', outcome: 'published' }]),
-    ).toBe('published');
-  });
-
-  it('sends an edited approved or scheduled post back to draft', () => {
-    expect(run('approved', [{ type: 'edit' }])).toBe('draft');
-    expect(run('scheduled', [{ type: 'edit' }])).toBe('draft');
-  });
-
-  it('resumes publishing when a human retries a variant of a failed or partly published post', () => {
-    expect(transitionPost('failed', { type: 'resume_publishing' })).toEqual({ ok: true, status: 'publishing' });
-    expect(transitionPost('partially_published', { type: 'resume_publishing' })).toEqual({ ok: true, status: 'publishing' });
-    expect(transitionPost('published', { type: 'resume_publishing' }).ok).toBe(false);
-  });
-
-  it('never edits or cancels a post while it publishes or after it published', () => {
-    for (const s of ['publishing', 'published', 'partially_published', 'cancelled'] as const) {
-      expect(transitionPost(s, { type: 'edit' }).ok).toBe(false);
-      expect(transitionPost(s, { type: 'cancel' }).ok).toBe(false);
-    }
-  });
-
-  it('reaches publishing only through approved and scheduled', () => {
-    // Property: in any sequence of accepted events from draft, start_publishing is accepted only right after the
-    // post was scheduled, and scheduling only from approved, so no path publishes without an approval.
-    fc.assert(
-      fc.property(fc.array(fc.constantFrom(...events), { maxLength: 30 }), (path) => {
-        let s: PostStatus = 'draft';
-        let approvedSinceEdit = false;
-        for (const e of path) {
-          const t = transitionPost(s, e);
-          if (!t.ok) continue;
-          if (e.type === 'approve') approvedSinceEdit = true;
-          if (t.status === 'draft') approvedSinceEdit = false;
-          if (t.status === 'publishing') expect(approvedSinceEdit).toBe(true);
-          s = t.status;
-        }
-      }),
-    );
-  });
-});
-
-describe('variant lifecycle', () => {
-  const events: VariantEvent[] = [
     { type: 'schedule' },
     { type: 'unschedule' },
     { type: 'cancel' },
@@ -228,7 +162,7 @@ describe('variant lifecycle', () => {
     { type: 'start' },
     { type: 'accepted' },
     { type: 'pending' },
-    { type: 'rejected' },
+    { type: 'failed' },
     { type: 'rate_limited' },
     { type: 'unknown' },
     { type: 'needs_human' },
@@ -238,14 +172,59 @@ describe('variant lifecycle', () => {
     { type: 'drop' },
   ];
 
-  it('resolves an unknown outcome by reconciliation or a human', () => {
-    const ambiguous = transitionVariant('publishing', { type: 'unknown' });
-    expect(ambiguous).toEqual({ ok: true, status: 'ambiguous' });
+  function run(from: VariantStatus, path: VariantEvent[]): VariantStatus {
+    let s = from;
+    for (const e of path) {
+      const t = transitionVariant(s, e);
+      if (!t.ok) throw new Error(`${s} --${e.type}--> refused`);
+      s = t.status;
+    }
+    return s;
+  }
+
+  it('walks review, schedule and publish', () => {
+    expect(run('draft', [{ type: 'submit' }, { type: 'approve' }, { type: 'schedule' }, { type: 'start' }, { type: 'accepted' }])).toBe('published');
+    expect(run('draft', [{ type: 'submit' }, { type: 'request_changes' }, { type: 'edit' }, { type: 'submit' }, { type: 'approve' }])).toBe('approved');
+    expect(run('draft', [{ type: 'submit' }, { type: 'reject' }, { type: 'submit' }])).toBe('in_review');
+  });
+
+  it('sends an edited reviewed, approved or scheduled variant back to draft', () => {
+    for (const from of ['in_review', 'approved', 'scheduled', 'paused', 'failed'] as const) expect(run(from, [{ type: 'edit' }])).toBe('draft');
+  });
+
+  it('never edits or cancels a variant in flight, waiting on a human, or history', () => {
+    for (const s of ['publishing', 'processing', 'ambiguous', 'needs_attention', 'published', 'cancelled'] as const) {
+      expect(transitionVariant(s, { type: 'edit' }).ok).toBe(false);
+      expect(transitionVariant(s, { type: 'cancel' }).ok).toBe(false);
+    }
+  });
+
+  it('reaches publishing only through an approval since the last edit', () => {
+    fc.assert(
+      fc.property(fc.array(fc.constantFrom(...events), { maxLength: 40 }), (path) => {
+        let s: VariantStatus = 'draft';
+        let approved = false;
+        for (const e of path) {
+          const t = transitionVariant(s, e);
+          if (!t.ok) continue;
+          if (e.type === 'approve') approved = true;
+          if (t.status === 'draft' || t.status === 'in_review' || t.status === 'changes_requested' || t.status === 'rejected') approved = false;
+          if (t.status === 'publishing') expect(approved).toBe(true);
+          s = t.status;
+        }
+      }),
+    );
+  });
+
+  it('resolves an unknown outcome by reconciliation or a human, never by a direct restart', () => {
+    expect(transitionVariant('publishing', { type: 'unknown' })).toEqual({ ok: true, status: 'ambiguous' });
     expect(transitionVariant('ambiguous', { type: 'reconciled', found: true })).toEqual({ ok: true, status: 'published' });
     expect(transitionVariant('ambiguous', { type: 'reconciled', found: false })).toEqual({ ok: true, status: 'needs_attention' });
-    // An ambiguous variant is never started again directly.
     expect(transitionVariant('ambiguous', { type: 'start' }).ok).toBe(false);
     expect(transitionVariant('ambiguous', { type: 'retry' }).ok).toBe(false);
+    expect(transitionVariant('publishing', { type: 'needs_human' })).toEqual({ ok: true, status: 'needs_attention' });
+    expect(transitionVariant('needs_attention', { type: 'retry' })).toEqual({ ok: true, status: 'scheduled' });
+    expect(transitionVariant('needs_attention', { type: 'drop' })).toEqual({ ok: true, status: 'cancelled' });
   });
 
   it('reschedules a rate-limited call and pauses on an expired token, but never once the provider accepted it', () => {
@@ -258,27 +237,19 @@ describe('variant lifecycle', () => {
   it('starts a new attempt on every return to scheduled after a publish began', () => {
     // A same-attempt return to scheduled would meet its own failed call in the ledger and never call again.
     for (const from of VARIANT_STATUSES) {
-      if (from === 'pending') continue;
+      if (from === 'approved') continue;
       for (const e of events) {
         const t = transitionVariant(from, e);
-        if (t.ok && t.status === 'scheduled') expect(startsNewAttempt(e)).toBe(true);
+        if (t.ok && t.status === 'scheduled') expect(startsNewAttempt(e), `${from} --${e.type}-->`).toBe(true);
       }
     }
     expect(startsNewAttempt({ type: 'schedule' })).toBe(false);
-    expect(startsNewAttempt({ type: 'unknown' })).toBe(false);
-  });
-
-  it('hands an outcome nobody can find out to a human', () => {
-    expect(transitionVariant('publishing', { type: 'needs_human' })).toEqual({ ok: true, status: 'needs_attention' });
-    expect(transitionVariant('ambiguous', { type: 'needs_human' })).toEqual({ ok: true, status: 'needs_attention' });
-    expect(transitionVariant('needs_attention', { type: 'retry' })).toEqual({ ok: true, status: 'scheduled' });
   });
 
   it('never leaves published', () => {
     fc.assert(
       fc.property(fc.array(fc.constantFrom(...events), { maxLength: 40 }), (path) => {
-        // Start from pending or just before an outcome, so runs actually reach published.
-        let s: VariantStatus = path.length % 2 === 0 ? 'pending' : 'publishing';
+        let s: VariantStatus = path.length % 2 === 0 ? 'scheduled' : 'publishing';
         let published = false;
         for (const e of path) {
           const t = transitionVariant(s, e);
@@ -286,7 +257,6 @@ describe('variant lifecycle', () => {
           if (published) throw new Error(`left published via ${e.type}`);
           s = t.status;
           if (s === 'published') published = true;
-          expect(VARIANT_STATUSES).toContain(s);
         }
       }),
     );
@@ -297,18 +267,40 @@ describe('variant lifecycle', () => {
   });
 });
 
-describe('postOutcome', () => {
-  it('waits while any variant is in flight or waiting on a human', () => {
-    expect(postOutcome(['published', 'publishing'])).toBeNull();
-    expect(postOutcome(['published', 'needs_attention'])).toBeNull();
-    expect(postOutcome(['published', 'paused'])).toBeNull();
+describe('postStatus', () => {
+  it('summarizes the variants', () => {
+    expect(postStatus([])).toBe('draft');
+    expect(postStatus(['draft', 'approved'])).toBe('draft');
+    expect(postStatus(['scheduled', 'paused'])).toBe('scheduled');
+    expect(postStatus(['scheduled', 'publishing'])).toBe('publishing');
+    expect(postStatus(['published', 'needs_attention'])).toBe('publishing');
+    expect(postStatus(['published', 'scheduled'])).toBe('partially_published');
+    expect(postStatus(['published', 'failed'])).toBe('partially_published');
+    expect(postStatus(['published', 'cancelled'])).toBe('published');
+    expect(postStatus(['failed', 'cancelled'])).toBe('failed');
+    expect(postStatus(['cancelled', 'cancelled'])).toBe('cancelled');
   });
 
-  it('ignores cancelled variants', () => {
-    expect(postOutcome(['published', 'cancelled'])).toBe('published');
-    expect(postOutcome(['published', 'failed'])).toBe('partially_published');
-    expect(postOutcome(['failed', 'cancelled'])).toBe('failed');
-    expect(postOutcome(['cancelled'])).toBe('failed');
+  it('always answers a known status', () => {
+    fc.assert(
+      fc.property(fc.array(fc.constantFrom(...VARIANT_STATUSES), { maxLength: 8 }), (vs) => {
+        expect(POST_STATUSES).toContain(postStatus(vs));
+        if (vs.some((v) => ['publishing', 'processing', 'ambiguous', 'needs_attention'].includes(v))) expect(postStatus(vs)).toBe('publishing');
+      }),
+    );
+  });
+});
+
+describe('effectiveContent', () => {
+  it('inherits the base where the variant has no override, and keeps an empty override', () => {
+    const base = { body: 'Gốc', title: 'Tiêu đề', linkUrl: 'https://a.vn' };
+    expect(effectiveContent(base, { body: null, title: null, linkUrl: null })).toEqual(base);
+    expect(effectiveContent(base, { body: 'Riêng', title: '', linkUrl: null })).toEqual({ body: 'Riêng', title: '', linkUrl: 'https://a.vn' });
+  });
+
+  it('keeps a frozen variant’s own content, where null means none', () => {
+    const base = { body: 'Gốc', title: 'Tiêu đề', linkUrl: 'https://a.vn' };
+    expect(effectiveContent(base, { body: 'Đã đăng', title: null, linkUrl: null }, true)).toEqual({ body: 'Đã đăng', title: null, linkUrl: null });
   });
 });
 

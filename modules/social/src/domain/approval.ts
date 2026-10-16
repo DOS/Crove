@@ -74,3 +74,22 @@ export interface ApprovalRecord {
 export function approvalCovers(approval: ApprovalRecord | null, post: { revision: number; contentHash: string }): boolean {
   return approval !== null && approval.revision === post.revision && approval.contentHash === post.contentHash;
 }
+
+// Base content of a post, and a variant's overrides of it: null inherits, any string (also '') overrides.
+export interface BaseContent {
+  body: string;
+  title: string | null;
+  linkUrl: string | null;
+}
+
+export interface ContentOverrides {
+  body: string | null;
+  title: string | null;
+  linkUrl: string | null;
+}
+
+// A frozen variant (history) keeps its own content: its columns hold it, and null there means "none".
+export function effectiveContent(base: BaseContent, overrides: ContentOverrides, frozen = false): BaseContent {
+  if (frozen) return { body: overrides.body ?? '', title: overrides.title, linkUrl: overrides.linkUrl };
+  return { body: overrides.body ?? base.body, title: overrides.title ?? base.title, linkUrl: overrides.linkUrl ?? base.linkUrl };
+}

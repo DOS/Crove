@@ -23,6 +23,12 @@ import {
   AI_RUN_STATUSES,
   AUDIT_OUTCOMES,
   CHANNEL_CONNECTION_STATUSES,
+  SOCIAL_ACTOR_ORIGINS,
+  SOCIAL_DECISIONS,
+  SOCIAL_ERROR_KINDS,
+  SOCIAL_ORIGINS,
+  SOCIAL_POST_STATUSES,
+  SOCIAL_VARIANT_STATUSES,
   EXTRACTION_METHODS,
   EXTRACTION_STATUSES,
   FILE_SOURCES,
@@ -42,7 +48,7 @@ import {
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
-const SCHEMAS = ['crove_kernel', 'crove_finance'];
+const SCHEMAS = ['crove_kernel', 'crove_finance', 'crove_social'];
 const suite = ADMIN ? describe : describe.skip;
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -93,6 +99,13 @@ const UNIONS = unions({
   'crove_kernel.task_comment.author_type': ACTOR_TYPES,
   'crove_kernel.tenant.status': TENANT_STATUSES,
   'crove_kernel.tenant_member.role': MEMBER_ROLES,
+  'crove_social.post.actor_origin': SOCIAL_ACTOR_ORIGINS,
+  'crove_social.post.origin': SOCIAL_ORIGINS,
+  'crove_social.post.status': SOCIAL_POST_STATUSES,
+  'crove_social.post_approval.actor_origin': SOCIAL_ACTOR_ORIGINS,
+  'crove_social.post_approval.decision': SOCIAL_DECISIONS,
+  'crove_social.post_variant.error_kind': SOCIAL_ERROR_KINDS,
+  'crove_social.post_variant.status': SOCIAL_VARIANT_STATUSES,
 });
 
 interface Constraint {
