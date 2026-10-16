@@ -269,7 +269,7 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
   it('refuses banned and deleted users, and a user disabled in Crove with 403', async () => {
     const subject = randomUUID();
     const user = { subject, email: 'banned@sessions.test', session: randomUUID() };
-    await sql('INSERT INTO auth.users (id, email) VALUES ($1, $2)', [subject, user.email]);
+    await sql('INSERT INTO auth.users (id, email, email_confirmed_at) VALUES ($1, $2, now())', [subject, user.email]);
     await signIn(subject, user.session);
     expect((await me(user)).status).toBe(200);
 
@@ -508,7 +508,7 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
   it('never updates the account of a disabled user or a revoked session', async () => {
     const subject = randomUUID();
     const user = { subject, email: 'renamed-before@sessions.test', session: randomUUID() };
-    await sql('INSERT INTO auth.users (id, email) VALUES ($1, $2)', [subject, user.email]);
+    await sql('INSERT INTO auth.users (id, email, email_confirmed_at) VALUES ($1, $2, now())', [subject, user.email]);
     await signIn(subject, user.session);
     expect((await me(user)).status).toBe(200);
     await sql(`UPDATE crove_kernel.user_account SET disabled_at = now() WHERE subject = $1`, [subject]);

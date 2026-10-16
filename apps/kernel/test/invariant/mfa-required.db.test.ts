@@ -94,7 +94,7 @@ suite('aal1 tokens of users with a verified MFA factor on PostgreSQL (issue #126
   async function account(factor: Factor): Promise<Account> {
     const subject = randomUUID();
     const a = { subject, email: `${factor}-${subject.slice(0, 8)}@mfa.test`, session: randomUUID() };
-    await sql('INSERT INTO auth.users (id, email) VALUES ($1, $2)', [subject, a.email]);
+    await sql('INSERT INTO auth.users (id, email, email_confirmed_at) VALUES ($1, $2, now())', [subject, a.email]);
     await sql('INSERT INTO auth.sessions (id, user_id) VALUES ($1, $2)', [a.session, subject]);
     // The org is created before enrollment, as a user does on onboarding.
     const created = await rpc('org/create', await tokenFor(a, 'aal1'), { name: `Org ${subject.slice(0, 6)}`, idempotencyKey: randomUUID() });
@@ -141,8 +141,8 @@ suite('aal1 tokens of users with a verified MFA factor on PostgreSQL (issue #126
       await c.query('SET ROLE supabase_auth_admin');
       await c.query(`
         CREATE TABLE auth.users (
-          id uuid PRIMARY KEY, email text, encrypted_password text, banned_until timestamptz, deleted_at timestamptz,
-          is_anonymous boolean NOT NULL DEFAULT false);
+          id uuid PRIMARY KEY, email text, encrypted_password text, email_confirmed_at timestamptz, banned_until timestamptz,
+          deleted_at timestamptz, is_anonymous boolean NOT NULL DEFAULT false);
         CREATE TABLE auth.sessions (
           id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
           created_at timestamptz NOT NULL DEFAULT now(), not_after timestamptz, aal text);
