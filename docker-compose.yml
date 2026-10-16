@@ -146,6 +146,8 @@ services:
       S3_VERSIONING: ${S3_VERSIONING:-required}
       S3_PRESIGNED_URLS: ${S3_PRESIGNED_URLS:-true}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+      UPLOAD_COMPLETE_CONCURRENCY: ${UPLOAD_COMPLETE_CONCURRENCY:-4}
+      UPLOAD_BEGIN_LIMIT_PER_MINUTE: ${UPLOAD_BEGIN_LIMIT_PER_MINUTE:-20}
       # Every PDF, XML and MIME parse happens in crove-extract (External-tenant gate T12).
       EXTRACT_URL: http://crove-extract:8090
     volumes:

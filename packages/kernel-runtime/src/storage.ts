@@ -26,6 +26,17 @@ export interface BlobStore {
   // Present when browsers transfer bytes to and from the store directly (S3 presigned URLs); absent for local
   // disk, where uploads and downloads stream through the kernel.
   direct?: DirectTransfers | undefined;
+  // Deletes staging/ objects last modified before `before` (abandoned presigned uploads), looking at no more than
+  // `limit` keys per call. For stores without a lifecycle rule on staging/; the worker's daily retention job calls
+  // it. Absent where no staging objects exist (local disk).
+  sweepStaging?(before: Date, limit: number): Promise<StagingSweep>;
+}
+
+export interface StagingSweep {
+  // Staging objects deleted.
+  deleted: number;
+  // The listing stopped at the limit, so older objects may remain for the next run.
+  more: boolean;
 }
 
 // What a file row records about its object: the triple of plan §7.6. generation is null only on rows written

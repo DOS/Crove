@@ -6,7 +6,7 @@ import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
 import { MAX_UPLOAD_BYTES, ORG_HEADER, type contract } from '@crove/kernel-contract';
 import { translator } from '../i18n/runtime.ts';
 import { accessToken, auth, getConfig } from './auth.ts';
-import { apiErrorFromResponse, isMfaRequired, isUnauthenticated } from './errors.ts';
+import { apiErrorFromResponse, isMfaRequired, isUnauthenticated, retryWhileBusy } from './errors.ts';
 
 let currentOrg: string | null = null;
 
@@ -95,11 +95,14 @@ async function uploadStaged(file: File): Promise<Uploaded> {
   // No credentials or Crove headers: the form's signature is the only authorization the bucket sees.
   const stored = await fetch(grant.url, { method: 'POST', body: form, credentials: 'omit' }).catch(() => null);
   if (!stored?.ok) throw new Error(translator()('inbox.storageUploadFailed', { name: file.name }));
-  const response = await apiFetch(`/api/files/uploads/${grant.uploadId}/complete`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ filename: file.name }),
-  });
+  // A busy kernel refuses the completion without using the grant, so the same completion is retried.
+  const response = await retryWhileBusy(() =>
+    apiFetch(`/api/files/uploads/${grant.uploadId}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename: file.name }),
+    }),
+  );
   return (await response.json()) as Uploaded;
 }
 

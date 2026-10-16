@@ -251,6 +251,32 @@ describe.skipIf(!URL_ENV)('S3BlobStore against a real S3-compatible server', () 
     await expect(store.direct?.readStaged(staging, 63)).rejects.toBeInstanceOf(BlobTooLargeError);
   });
 
+  // Issue #223. Its own unversioned bucket: a sweep of the shared one would race the staged uploads of other test files.
+  it('sweeps staging objects older than the cutoff and nothing else', async () => {
+    const bucket = `${options.bucket}-sweep`.slice(0, 63);
+    await client.send(new CreateBucketCommand({ Bucket: bucket })).catch((error: { name?: string }) => {
+      if (error.name !== 'BucketAlreadyOwnedByYou' && error.name !== 'BucketAlreadyExists') throw error;
+    });
+    const store = S3BlobStore.connect({ ...options, bucket, versioning: 'off' });
+    // Leftovers of an earlier, interrupted run.
+    await store.sweepStaging(new Date(Date.now() + 60_000), 10_000);
+    const staged = [newStagingKey(), newStagingKey(), newStagingKey()];
+    for (const key of staged) await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: encode('abandoned') }));
+    const evidence = encode(`<HDon>${randomUUID()}</HDon>`);
+    const evidenceKey = fileKey(orgId, sha256Hex(evidence));
+    await store.put(evidenceKey, evidence, 'application/xml');
+
+    // Nothing is older than an hour yet.
+    await expect(store.sweepStaging(new Date(Date.now() - 3600_000), 100)).resolves.toEqual({ deleted: 0, more: false });
+    // A limit smaller than the listing stops early and says so.
+    const first = await store.sweepStaging(new Date(Date.now() + 60_000), 2);
+    expect(first).toEqual({ deleted: 2, more: true });
+    const rest = await store.sweepStaging(new Date(Date.now() + 60_000), 100);
+    expect(rest).toEqual({ deleted: 1, more: false });
+    for (const key of staged) await expect(store.get(key)).rejects.toBeInstanceOf(BlobNotFoundError);
+    expect(await store.get(evidenceKey)).toEqual(evidence);
+  });
+
   it('presigns a download of the recorded version, as an attachment, even after the key is overwritten', async () => {
     const store = S3BlobStore.connect(options);
     const original = encode(`<HDon>${randomUUID()}</HDon>`);

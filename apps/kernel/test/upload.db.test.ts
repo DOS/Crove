@@ -11,7 +11,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { kernelCommands, kernelQueries } from '@crove/kernel';
+import { buildKernelCommands, kernelCommands, kernelQueries } from '@crove/kernel';
 import {
   BlobConflictError,
   BlobNotFoundError,
@@ -29,8 +29,9 @@ import {
 } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from '../src/auth.ts';
+import { ConcurrencyLimiter } from '../src/concurrency.ts';
 import { loadConfig } from '../src/config.ts';
-import { createHttpApp } from '../src/http.ts';
+import { createHttpApp, type HttpDeps } from '../src/http.ts';
 import { createSessionStatusSource } from '../src/sessions.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -161,6 +162,7 @@ suite.each(backends)('staged uploads on PostgreSQL and $name (issue #109)', (bac
   let pool: pg.Pool;
   let store: BlobStore;
   let app: ReturnType<typeof createHttpApp>;
+  let deps: HttpDeps;
   const accounts = new Map<string, { subject: string; email: string; session: string }>();
   let slug = '';
   let orgId = '';
@@ -275,7 +277,8 @@ suite.each(backends)('staged uploads on PostgreSQL and $name (issue #109)', (bac
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });
-    app = createHttpApp({ config, runtime, store, authenticate: createAuthenticator(config, db), pool, aiEnabled: false });
+    deps = { config, runtime, store, authenticate: createAuthenticator(config, db), pool, aiEnabled: false };
+    app = createHttpApp(deps);
     const created = await rpc('org/create', 'owner', { name: `Uploads ${randomUUID().slice(0, 6)}`, idempotencyKey: randomUUID() }, null);
     expect(created.status).toBe(200);
     slug = String(created.body.slug);
@@ -434,5 +437,92 @@ suite.each(backends)('staged uploads on PostgreSQL and $name (issue #109)', (bac
     const refused = await call('/api/files/uploads', 'member');
     expect(refused.status).toBe(429);
     expect(await refused.json()).toMatchObject({ code: 'RATE_LIMITED' });
+  });
+
+  // Runs the body against another app built from the same dependencies, then puts the suite's app back.
+  async function withApp<T>(other: ReturnType<typeof createHttpApp>, body: () => Promise<T>): Promise<T> {
+    const saved = app;
+    app = other;
+    try {
+      return await body();
+    } finally {
+      app = saved;
+    }
+  }
+
+  // Issue #223: each completion buffers up to 25 MB, so a process runs a few at once and refuses the rest at once.
+  it('refuses a completion with 503 and Retry-After while every slot is busy, and leaves its grant unused', async () => {
+    const direct = store.direct as DirectTransfers;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let entered!: () => void;
+    const inside = new Promise<void>((resolve) => (entered = resolve));
+    // The same store, with the staged read held until the test lets it go.
+    const gated: BlobStore = {
+      put: (key, bytes, contentType) => store.put(key, bytes, contentType),
+      get: (key, generation) => store.get(key, generation),
+      delete: (key) => store.delete(key),
+      direct: {
+        ...direct,
+        readStaged: async (key, maxBytes) => {
+          entered();
+          await gate;
+          return direct.readStaged(key, maxBytes);
+        },
+      },
+    };
+    await withApp(createHttpApp({ ...deps, store: gated, uploadCompletes: new ConcurrencyLimiter({ total: 1 }) }), async () => {
+      const first = await begin();
+      const second = await begin();
+      expect(await backend.post(first, invoice('5101'))).toBe(204);
+      expect(await backend.post(second, invoice('5102'))).toBe(204);
+      const running = complete(first.uploadId);
+      await inside;
+      const busy = await complete(second.uploadId);
+      expect(busy.status).toBe(503);
+      expect(busy.headers.get('retry-after')).toBe('3');
+      expect(await busy.json()).toMatchObject({ code: 'UPLOAD_BUSY' });
+      // Refused before the claim: the grant can still be completed.
+      expect((await grant(second.uploadId))?.used_at).toBeNull();
+      release();
+      expect((await running).status).toBe(200);
+      expect((await complete(second.uploadId)).status).toBe(200);
+      expect((await grant(second.uploadId))?.used_at).not.toBeNull();
+    });
+  });
+
+  // Issue #223: a claimed grant is no longer open, so the open cap alone does not bound begin, claim, late POST loops.
+  it('limits the grants one user opens per rolling minute, in the database', async () => {
+    await join('burst', 'member');
+    await join('steady', 'member');
+    const runtime = new Runtime(createDb(pool), { sessions: createSessionStatusSource('off'), stepUp: 'required' }).register({
+      commands: [...buildKernelCommands({ uploadBeginLimits: { perMinute: 3 } }), ...financeCommands],
+      queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
+    });
+    await withApp(createHttpApp({ ...deps, runtime }), async () => {
+      const ids: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const form = await begin('burst');
+        ids.push(form.uploadId);
+        // Claimed at once: none of them stays open, so only the rate refuses the next one.
+        expect((await complete(form.uploadId, 'burst')).status).toBe(409);
+      }
+      const refused = await call('/api/files/uploads', 'burst');
+      expect(refused.status).toBe(429);
+      expect(await refused.json()).toMatchObject({ code: 'RATE_LIMITED', message: expect.stringMatching(/một phút/) });
+      // Per user: another member is not affected.
+      expect((await call('/api/files/uploads', 'steady')).status).toBe(200);
+      // The window rolls with the database clock: grants issued two minutes ago no longer count.
+      await admin(async (c) => {
+        await c.query('BEGIN');
+        await c.query('SET LOCAL session_replication_role = replica');
+        await c.query(
+          "UPDATE crove_kernel.file_upload SET created_at = created_at - interval '2 minutes', expires_at = expires_at - interval '2 minutes', used_at = used_at - interval '2 minutes' WHERE id = ANY($1::uuid[])",
+          [ids],
+        );
+        await c.query('COMMIT');
+      });
+      expect((await call('/api/files/uploads', 'burst')).status).toBe(200);
+    });
   });
 });

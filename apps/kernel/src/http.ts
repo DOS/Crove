@@ -25,6 +25,7 @@ import type { OrgExportView } from '@crove/kernel';
 import { JOURNAL_EXPORT_LIMIT, buildJournalWorkbook, type JournalEntryView } from '@crove/mod-finance';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
 import { actorOf, type Authenticate, type AuthUser } from './auth.ts';
+import { ConcurrencyLimiter } from './concurrency.ts';
 import { publicAuthUrl, type Config } from './config.ts';
 import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts';
 import { createInviteMailSender } from './invite-mail.ts';
@@ -47,6 +48,8 @@ export interface HttpDeps {
   emailLimiter?: EmailLimiter;
   // Per-user request limit on /api (issue #162). Default: built from API_RATE_LIMIT_PER_MINUTE; null turns it off.
   rateLimiter?: RateLimiter | null;
+  // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
+  uploadCompletes?: ConcurrencyLimiter;
 }
 
 // Store errors that are not server faults. A blob missing behind a file row, or a key holding other bytes, is
@@ -126,6 +129,8 @@ const AUTH_PUBLIC_PATHS =
   /^\/(?:token|signup|verify|recover|user|logout|otp|resend|settings|health|authorize|callback|reauthenticate|factors(?:\/[\w-]+(?:\/(?:challenge|verify))?)?|\.well-known\/jwks\.json)$/;
 const MAX_FILES_PER_UPLOAD = 5;
 const UPLOAD_BODY_LIMIT = 60 * 1024 * 1024;
+// What a completion refused for lack of a slot tells the client to wait; the grant stays unused for 5 minutes.
+export const UPLOAD_BUSY_RETRY_SECONDS = 3;
 function contentSecurityPolicy(authUrl: string, storageOrigin: string | null): string {
   // Hosted Supabase Auth lives on another origin; the bundled one is proxied under /auth/v1. With presigned
   // transfers the app also posts uploads to, and fetches downloads from, the bucket's origin.
@@ -345,6 +350,9 @@ export function createHttpApp(deps: HttpDeps) {
   // Staged presigned uploads (plan §7.6 steps 1 to 3), when the store supports them (STORAGE=s3).
   const direct = store.direct;
   const noDirect = () => new DomainError('NOT_FOUND', 404, 'Máy chủ nhận tệp trực tiếp; hãy dùng POST /api/files');
+  // Each completion buffers the staged object (up to 25 MB) while it hashes and writes it, so this process runs at
+  // most UPLOAD_COMPLETE_CONCURRENCY of them at once, and one user at most half of them (issue #223).
+  const completes = deps.uploadCompletes ?? new ConcurrencyLimiter({ total: config.UPLOAD_COMPLETE_CONCURRENCY });
 
   // Step 1: a single-use grant and a presigned POST form for a random staging key, 5 minutes, 1 byte to 25 MB.
   app.post('/api/files/uploads', bodyLimit({ maxSize: 4 * 1024 }), async (c) => {
@@ -366,26 +374,38 @@ export function createHttpApp(deps: HttpDeps) {
   // Steps 2 and 3: claim the grant (once), stream the staged object through sha256 with the size cap, write those
   // exact bytes create-only to the org key, record the triple, and delete the staging object. The staging object is
   // never itself a file, and a write to the staging key after the claim is never read.
+  //
+  // The slot is taken after the (4 KB) body is read, so a slow body holds none, and before the claim: a completion
+  // refused with 503 UPLOAD_BUSY leaves its grant unused, so the client retries the same upload after Retry-After.
   app.post('/api/files/uploads/:id/complete', bodyLimit({ maxSize: 4 * 1024 }), async (c) => {
     try {
       if (!direct) throw noDirect();
       const { user, orgId } = await uploader(c);
       const input = (await c.req.json().catch(() => null)) as { filename?: unknown } | null;
       const filename = typeof input?.filename === 'string' && input.filename.trim() ? input.filename.slice(0, 255) : 'chung-tu';
-      const claim = await runtime.execute<{ stagingKey: string; maxBytes: number }>(
-        'kernel.file.upload.claim',
-        { uploadId: c.req.param('id') },
-        { actor: actorOf(user), orgId },
-      );
+      const release = completes.tryAcquire(user.userId);
+      if (!release) {
+        c.header('retry-after', String(UPLOAD_BUSY_RETRY_SECONDS));
+        throw new DomainError('UPLOAD_BUSY', 503, 'Máy chủ đang xử lý nhiều tệp; hãy thử lại sau vài giây');
+      }
       try {
-        const staged = await direct.readStaged(claim.stagingKey, claim.maxBytes).catch((error: unknown) => {
-          if (error instanceof BlobNotFoundError) throw new DomainError('UPLOAD_MISSING', 409, 'Chưa nhận được tệp cho lượt tải lên này');
-          throw error;
-        });
-        if (staged.bytes.byteLength === 0) throw new DomainError('NO_FILE', 400, 'Tệp rỗng');
-        return c.json(await ingest(user, orgId, filename, staged.bytes, staged.sha256));
+        const claim = await runtime.execute<{ stagingKey: string; maxBytes: number }>(
+          'kernel.file.upload.claim',
+          { uploadId: c.req.param('id') },
+          { actor: actorOf(user), orgId },
+        );
+        try {
+          const staged = await direct.readStaged(claim.stagingKey, claim.maxBytes).catch((error: unknown) => {
+            if (error instanceof BlobNotFoundError) throw new DomainError('UPLOAD_MISSING', 409, 'Chưa nhận được tệp cho lượt tải lên này');
+            throw error;
+          });
+          if (staged.bytes.byteLength === 0) throw new DomainError('NO_FILE', 400, 'Tệp rỗng');
+          return c.json(await ingest(user, orgId, filename, staged.bytes, staged.sha256));
+        } finally {
+          await store.delete(claim.stagingKey).catch((error: unknown) => console.error('[http] staging object not deleted', error));
+        }
       } finally {
-        await store.delete(claim.stagingKey).catch((error: unknown) => console.error('[http] staging object not deleted', error));
+        release();
       }
     } catch (error) {
       return problem(c, error);

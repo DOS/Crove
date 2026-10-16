@@ -102,6 +102,7 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
       commands: buildKernelCommands({
         orgCreateLimits: { perDay: config.ORG_CREATE_LIMIT_PER_DAY, total: config.ORG_CREATE_LIMIT_TOTAL },
         inboundRotateLimits: { perDay: config.INBOUND_ROTATE_LIMIT_PER_DAY, total: config.INBOUND_ROTATE_LIMIT_TOTAL },
+        uploadBeginLimits: { perMinute: config.UPLOAD_BEGIN_LIMIT_PER_MINUTE },
       }),
       queries: kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null }),
     }),
