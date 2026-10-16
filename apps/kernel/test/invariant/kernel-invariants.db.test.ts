@@ -398,7 +398,9 @@ suite('kernel invariants on PostgreSQL', () => {
          FROM pg_roles r CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) p
          WHERE r.rolname LIKE 'crove\\_%' AND NOT r.rolsuper
            AND r.oid <> (SELECT relowner FROM pg_class WHERE oid = 'crove_kernel.user_account'::regclass)
-           AND has_table_privilege(r.oid, 'crove_kernel.user_account', p)
+           AND (has_table_privilege(r.oid, 'crove_kernel.user_account', p)
+                OR (p IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES')
+                    AND has_any_column_privilege(r.oid, 'crove_kernel.user_account', p)))
          ORDER BY 1, 2`,
       );
       const p = await admin.query<{ polname: string }>(
