@@ -1,7 +1,7 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { MAX_UPLOAD_BYTES, zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
-import type { MemberRole } from '@crove/db';
+import type { Db, MemberRole } from '@crove/db';
 import {
   DomainError,
   GENERATION_PATTERN,
@@ -16,7 +16,7 @@ import {
 import { agentCommands } from './agents.ts';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
-import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
+import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
 import { inviteCommands } from './invites.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
@@ -626,6 +626,17 @@ export const revokeSession = defineCommand({
   },
 });
 
+// The user's orgs this session can enter (me.get): an org whose owner revoked this session there is left out, so
+// the SPA never sends the user back into it (issue #247). The membership checks stay in enter_context.
+export async function sessionOrgs(db: Db, userId: string, sessionId: string | null): Promise<OrgSummary[]> {
+  const orgs = await myOrgs(db, userId);
+  if (!sessionId || orgs.length === 0) return orgs;
+  const { rows } = await sql<{ org_id: string }>`
+    SELECT r AS org_id FROM crove_kernel.session_revoked_orgs(${userId}::uuid, ${sessionId}::uuid) r`.execute(db);
+  const revoked = new Set(rows.map((r) => r.org_id));
+  return orgs.filter((org) => !revoked.has(org.orgId));
+}
+
 // The user's own revoke sent without an org (issue #184: sign-out on the onboarding and invite pages). A self revoke
 // is global, so the org only decides where the audit row lands:
 // - a user who belongs to an org runs kernel.session.revoke through execute() in their orgs, oldest first, as from
@@ -649,10 +660,9 @@ export async function revokeOwnSessionsWithoutOrg(runtime: Runtime, actor: UserA
       try {
         return await runtime.execute<{ revoked: string[] }>('kernel.session.revoke', input, { actor, orgId: org.orgId });
       } catch (error) {
-        // UNAUTHENTICATED here is the session refused in this org (SESSION_REVOKED_IN_ORG); a session refused
-        // everywhere is refused again by the org-less session check below.
+        // Only the refusals that are about this org: any other one, a dead session included, is the answer.
         const code = (error as { code?: unknown } | null)?.code;
-        if (code !== 'UNAUTHENTICATED' && code !== 'NOT_A_MEMBER') throw error;
+        if (code !== 'SESSION_REVOKED_IN_ORG' && code !== 'NOT_A_MEMBER') throw error;
       }
     }
     try {

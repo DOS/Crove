@@ -6,7 +6,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
-import { ErrorText, Logo } from '../components/ui.tsx';
+import { ErrorText, Logo, OrgLeftNotice } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { signOut } from '../lib/session-actions.ts';
 
@@ -38,6 +38,7 @@ export function OnboardingPage() {
   return (
     <main className="flex min-h-full items-center justify-center bg-background px-4 py-16">
       <Card className="block w-full max-w-md p-6">
+        <OrgLeftNotice />
         <Logo />
         <h1 className="mt-6 text-lg font-semibold text-foreground">{t('title')}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t('subtitle')}</p>

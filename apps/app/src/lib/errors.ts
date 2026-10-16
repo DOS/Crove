@@ -31,9 +31,14 @@ export function isMfaRequired(error: unknown): boolean {
   return (error as { code?: string } | null)?.code === 'MFA_REQUIRED';
 }
 
+// The org's owner revoked this session for that org only (issue #247): leave the org, keep the session.
+export function isOrgAccessRevoked(error: unknown): boolean {
+  return (error as { code?: string } | null)?.code === 'SESSION_REVOKED_IN_ORG';
+}
+
 export function isUnauthenticated(error: unknown): boolean {
   const e = error as { status?: number; code?: string } | null;
-  if (isMfaRequired(error)) return false;
+  if (isMfaRequired(error) || isOrgAccessRevoked(error)) return false;
   return e?.status === 401 || e?.code === 'UNAUTHORIZED' || e?.code === 'UNAUTHENTICATED';
 }
 

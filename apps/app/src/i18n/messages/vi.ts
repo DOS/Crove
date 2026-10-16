@@ -15,6 +15,7 @@ export const vi = {
     processing: 'Đang xử lý…',
     backHome: 'Về trang chính',
     language: 'Ngôn ngữ',
+    orgLeft: 'Chủ sở hữu tổ chức {org} đã thu hồi phiên đăng nhập này trong tổ chức đó, nên bạn đã rời khỏi tổ chức. Các tổ chức khác của bạn vẫn dùng bình thường.',
   },
   roles: {
     owner: 'Chủ sở hữu',

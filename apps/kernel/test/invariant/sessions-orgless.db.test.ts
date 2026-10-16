@@ -226,6 +226,40 @@ suite('own session revoke without an org (issue #184)', () => {
     expect(audits.at(-1)).toEqual({ org_id: orgId, actor_id: owner.userId, outcome: 'ok', target_id: member.userId });
   });
 
+  // Issue #247: the SPA tells an org-scoped revoke from a dead session, and is not sent back into that org.
+  it('answers an org-scoped revoke with SESSION_REVOKED_IN_ORG and leaves that org out of me.get for that session only', async () => {
+    const tablet = { ...member, session: randomUUID() };
+    const token = await tokenFor(tablet);
+    expect((await rpc('inbox/list', token, {}, orgSlug)).status).toBe(200);
+    expect((await rpc('sessions/revoke', await tokenFor(owner), { userId: member.userId, sessionId: tablet.session }, orgSlug)).status).toBe(200);
+    expect(await rpc('inbox/list', token, {}, orgSlug)).toMatchObject({ status: 401, body: { code: 'SESSION_REVOKED_IN_ORG' } });
+    const me = await rpc('me/get', token);
+    expect(me.status).toBe(200);
+    expect(((me.body?.orgs ?? []) as Array<{ orgId: string }>).map((o) => o.orgId)).not.toContain(orgId);
+    // Another session of the member still lists and enters the org.
+    const phone = await tokenFor({ ...member, session: randomUUID() });
+    expect((((await rpc('me/get', phone)).body?.orgs ?? []) as Array<{ orgId: string }>).map((o) => o.orgId)).toContain(orgId);
+    expect((await rpc('inbox/list', phone, {}, orgSlug)).status).toBe(200);
+    // A session revoked by the user themself is still a plain dead session.
+    const own = { ...member, session: randomUUID() };
+    const ownToken = await tokenFor(own);
+    expect((await rpc('sessions/revoke', ownToken, { userId: member.userId, sessionId: own.session })).status).toBe(200);
+    expect(await rpc('inbox/list', ownToken, {}, orgSlug)).toMatchObject({ status: 401, body: { code: 'UNAUTHENTICATED' } });
+
+    const fn = 'crove_kernel.session_revoked_orgs(uuid,uuid)';
+    const grants = await sql(
+      `SELECT r AS role, has_function_privilege(r, $1, 'EXECUTE') AS can FROM unnest($2::text[]) r ORDER BY r`,
+      [fn, ['crove_app', 'crove_auth_reader', 'crove_definer_tenant', 'crove_tenant', 'crove_worker']],
+    );
+    expect(grants.rows).toEqual([
+      { role: 'crove_app', can: true },
+      { role: 'crove_auth_reader', can: false },
+      { role: 'crove_definer_tenant', can: false },
+      { role: 'crove_tenant', can: false },
+      { role: 'crove_worker', can: false },
+    ]);
+  });
+
   it('keeps the org-less definer to the API role, to a live session of the user, outside any org, and away from users with an org', async () => {
     const fn = 'crove_kernel.session_revoke_orgless(uuid,uuid,uuid,text)';
     const grants = await sql(
