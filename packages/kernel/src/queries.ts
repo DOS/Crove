@@ -2,16 +2,18 @@ import { z } from 'zod';
 import { sql } from 'kysely';
 import {
   zId,
+  zJournalReversal,
   zLocalDate,
   zMoney,
   zProposalStatus,
   zPurchaseProposal,
+  type JournalReversal,
   type PurchaseProposal,
 } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
 import { EDITOR_ROLES, decideApproval, proposalEditable } from './approval.ts';
-import { MAX_EXTRACTION_VERSIONS, REEXTRACT_STALE_MINUTES, STALE_RUN_ERROR, latestExtraction } from './extraction.ts';
+import { MAX_EXTRACTION_VERSIONS, REEXTRACT_STALE_MINUTES, STALE_RUN_ERROR, executedButVoided, latestExtraction } from './extraction.ts';
 import { inviteQueries } from './invites.ts';
 import { offboardingQueries } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
@@ -70,8 +72,19 @@ function countChecks(payload: PurchaseProposal | null, status: 'fail' | 'warn'):
   return payload?.checks.filter((c) => c.status === status).length ?? 0;
 }
 
-function parsePayload(raw: unknown): PurchaseProposal | null {
+// Payloads are parsed by the proposal's kind: a purchase read from a file, or a reversal a user asked for (#138).
+const PURCHASE_KIND = 'finance.purchase';
+const REVERSAL_KIND = 'finance.journal_reversal';
+
+function parsePayload(kind: string, raw: unknown): PurchaseProposal | null {
+  if (kind !== PURCHASE_KIND) return null;
   const result = zPurchaseProposal.safeParse(raw);
+  return result.success ? result.data : null;
+}
+
+function parseReversal(kind: string, raw: unknown): JournalReversal | null {
+  if (kind !== REVERSAL_KIND) return null;
+  const result = zJournalReversal.safeParse(raw);
   return result.success ? result.data : null;
 }
 
@@ -84,7 +97,7 @@ function toInboxItem(row: {
   duplicate_of: string | null;
   created_at: Date;
 }) {
-  const payload = parsePayload(row.payload);
+  const payload = parsePayload(row.kind, row.payload);
   return {
     id: row.id,
     kind: row.kind,
@@ -157,7 +170,7 @@ export const inboxGet = defineQuery({
           .where('id', '=', row.source_file_id)
           .executeTakeFirst()
       : undefined;
-    const result = row.result as { documentId?: string; journalEntryId?: string } | null;
+    const result = row.result as { documentId?: string; journalEntryId?: string; reversedEntryId?: string; voidedDocumentId?: string } | null;
     // The same decision kernel.proposal.approve makes (without its locks), so the Inbox shows Approve only
     // to users the server will accept.
     const approval = await decideApproval(ctx.trx, ctx.orgId, ctx.actor, row, { lock: false });
@@ -187,15 +200,27 @@ export const inboxGet = defineQuery({
           .executeTakeFirst()
       : undefined;
     const canChange = row.status === 'pending' && editor && !reading;
+    // The purchase this proposal recorded was voided by a reversal (#165); its file may then be read again.
+    const voided = await executedButVoided(ctx, row);
+    const newestReopened = newest?.id === row.id ? voided : await executedButVoided(ctx, newest);
     return {
       ...toInboxItem(row),
       revision: row.revision,
-      payload: parsePayload(row.payload),
+      payload: parsePayload(row.kind, row.payload),
+      reversal: parseReversal(row.kind, row.payload),
       error: null,
       file: file ? { id: file.id, filename: file.filename, contentType: file.content_type, sizeBytes: file.size_bytes } : null,
       decidedAt: row.decided_at ? row.decided_at.toISOString() : null,
       decisionNote: row.decision_note,
-      result: result?.documentId && result.journalEntryId ? { documentId: result.documentId, journalEntryId: result.journalEntryId } : null,
+      result: result?.journalEntryId
+        ? {
+            journalEntryId: result.journalEntryId,
+            ...(result.documentId ? { documentId: result.documentId } : {}),
+            ...(result.reversedEntryId ? { reversedEntryId: result.reversedEntryId } : {}),
+            ...(result.voidedDocumentId ? { voidedDocumentId: result.voidedDocumentId } : {}),
+          }
+        : null,
+      voided,
       canApprove: approval.reason === 'ok' && !reading,
       approveReason: approval.reason,
       // The same checks kernel.proposal.edit makes before it edits (NOT_EDITABLE otherwise).
@@ -210,7 +235,7 @@ export const inboxGet = defineQuery({
         latest !== undefined &&
         !reading &&
         newest?.id === row.id &&
-        newest.status !== 'executed' &&
+        (newest.status !== 'executed' || newestReopened) &&
         latest.version < MAX_EXTRACTION_VERSIONS,
     };
   },
@@ -249,6 +274,18 @@ export const filesRecent = defineQuery({
           eb
             .selectFrom('crove_kernel.proposal as q')
             .select(['q.id', 'q.status', 'q.duplicate_of'])
+            // An executed purchase whose document was voided by a reversal (#165) may be read again.
+            .select(({ exists, selectFrom }) =>
+              exists(
+                selectFrom('crove_finance.purchase_document as d')
+                  .innerJoin('crove_finance.purchase_document_void as v', (join) =>
+                    join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'),
+                  )
+                  .select('d.id')
+                  .whereRef('d.org_id', '=', 'q.org_id')
+                  .whereRef('d.proposal_id', '=', 'q.id'),
+              ).as('voided'),
+            )
             .whereRef('q.org_id', '=', 'f.org_id')
             .whereRef('q.source_file_id', '=', 'f.id')
             .orderBy('q.created_at', 'desc')
@@ -269,6 +306,7 @@ export const filesRecent = defineQuery({
         'p.id as proposal_id',
         'p.status as proposal_status',
         'p.duplicate_of',
+        'p.voided',
       ])
       .where('f.org_id', '=', ctx.orgId)
       .orderBy('f.created_at', 'desc')
@@ -294,7 +332,11 @@ export const filesRecent = defineQuery({
         version: r.version ?? null,
         // The same checks kernel.file.reextract makes.
         canReextract:
-          editor && Boolean(r.extraction_status) && !r.in_flight && r.proposal_status !== 'executed' && (r.version ?? 0) < MAX_EXTRACTION_VERSIONS,
+          editor &&
+          Boolean(r.extraction_status) &&
+          !r.in_flight &&
+          (r.proposal_status !== 'executed' || r.voided === true) &&
+          (r.version ?? 0) < MAX_EXTRACTION_VERSIONS,
         createdAt: r.created_at.toISOString(),
       };
     });

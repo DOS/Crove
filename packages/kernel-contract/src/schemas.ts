@@ -186,14 +186,33 @@ export const zInboxItem = z.object({
   createdAt: z.string(),
 });
 
+// Payload of a finance.journal_reversal proposal (#138), asked for with inbox.request and executed by
+// finance.journal.reverse on approval.
+export const zJournalReversal = z.object({
+  entryId: zId,
+  // The reversal's own date: on or after the original's, usually the day the mistake is corrected.
+  entryDate: zLocalDate,
+  reason: z.string().trim().min(1).max(500),
+});
+export type JournalReversal = z.infer<typeof zJournalReversal>;
+
 export const zInboxDetail = zInboxItem.extend({
   revision: z.number().int(),
+  // Parsed by kind: a purchase (kind finance.purchase) or a reversal (kind finance.journal_reversal); the other is null.
   payload: zPurchaseProposal.nullable(),
+  reversal: zJournalReversal.nullable(),
   error: z.string().nullable(),
   file: z.object({ id: zId, filename: z.string(), contentType: z.string(), sizeBytes: z.string() }).nullable(),
   decidedAt: z.string().nullable(),
   decisionNote: z.string().nullable(),
-  result: z.object({ documentId: zId, journalEntryId: zId }).nullable(),
+  // A purchase returns its document; a reversal returns the entry it reversed and, for a purchase entry, the
+  // document it voided (#165).
+  result: z
+    .object({ documentId: zId.optional(), journalEntryId: zId, reversedEntryId: zId.optional(), voidedDocumentId: zId.optional() })
+    .nullable(),
+  // An executed purchase whose document was voided by reversing its journal entry (#165): the file may be read again
+  // and the invoice recorded anew.
+  voided: z.boolean(),
   // The server's approval decision for the caller (plan §4.7 P10, P12): 'four_eyes' means the caller wrote
   // part of this revision and another eligible approver must approve it.
   canApprove: z.boolean(),
@@ -249,7 +268,13 @@ export const zPurchaseDocument = z.object({
   total: zMoney,
   journalEntryId: zId.nullable(),
   sourceFileId: zId.nullable(),
+  // Voided by reversing its journal entry (#165): Crove's record no longer counts; the supplier's invoice is untouched.
+  voided: z.object({ reversalEntryId: zId, reason: z.string(), voidedAt: z.string() }).nullable(),
+  // The voided document of the same invoice that this one replaces, when the invoice was recorded again.
+  replacesDocumentId: zId.nullable(),
 });
+
+const zEntryRef = z.object({ id: zId, entryDate: zLocalDate });
 
 export const zJournalEntry = z.object({
   id: zId,
@@ -260,6 +285,13 @@ export const zJournalEntry = z.object({
   lines: z.array(
     z.object({ lineNo: z.number().int(), accountCode: z.string(), accountName: z.string(), debit: zMoney, credit: zMoney }),
   ),
+  // The reversal link, both ways (#138): the entry this one reverses, and the entry that reversed this one.
+  reverses: zEntryRef.nullable(),
+  reversedBy: zEntryRef.nullable(),
+  // The purchase document this entry records, when it does (absent otherwise).
+  document: z
+    .object({ id: zId, series: z.string(), number: z.string(), issueDate: zLocalDate, partyName: z.string(), voided: z.boolean() })
+    .optional(),
 });
 
 export const zAccount = z.object({ code: z.string(), name: z.string(), parentCode: z.string().nullable() });

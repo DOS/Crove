@@ -7,30 +7,38 @@
 //   reverses_entry_id. It never appends lines to an existing entry.
 // The database enforces the rules for every writer (20261016210000): one reversal per entry, a reversal cannot be
 // reversed (post a new entry instead), no reversal dated before the original, and an exact mirror over every line.
+// Reversing the entry of a purchase document also voids Crove's record of that document (#165, 20261018000000): an
+// append-only void row naming the reversal, in the same transaction, so the same supplier invoice can be recorded
+// again with the right accounts. It corrects Crove's records only, never the supplier's e-invoice.
 import { z } from 'zod';
-import { zId, zLocalDate } from '@crove/kernel-contract';
+import { zJournalReversal, type JournalReversal } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { postJournalEntry } from './ledger.ts';
 
+export { zJournalReversal, type JournalReversal };
+
 export const REVERSAL_COMMAND = 'finance.journal.reverse';
 export const REVERSAL_KIND = 'finance.journal_reversal';
-
-export const zJournalReversal = z.object({
-  entryId: zId,
-  // The reversal's own date: on or after the original's, usually the day the mistake is corrected.
-  entryDate: zLocalDate,
-  reason: z.string().trim().min(1).max(500),
-});
-export type JournalReversal = z.infer<typeof zJournalReversal>;
+const PURCHASE_SOURCE = 'finance.purchase_document';
 
 const NOT_FOUND = () => new DomainError('ENTRY_NOT_FOUND', 404, 'Không tìm thấy bút toán');
 const ALREADY_REVERSED = () => new DomainError('ALREADY_REVERSED', 409, 'Bút toán này đã được đảo');
+// The database refuses a reversal that does not mirror every line of the original. Through this command that happens
+// only when the approver cannot see every line (for example lines of a legal entity outside their scope): the mirror
+// of the visible lines is not the whole entry. Same code and status as the runtime's mapping of 23514.
+const PARTIAL_MIRROR = () =>
+  new DomainError(
+    'INVALID',
+    422,
+    'Không đảo được bút toán này vì bạn không được xem tất cả các dòng của nó, nên không tạo được bút toán đảo đầy đủ. Hãy nhờ người được xem toàn bộ bút toán duyệt đề xuất này.',
+    { reason: 'partial_mirror' },
+  );
 
 // The entry as the caller sees it (RLS), and whether it may be reversed. The database re-checks all of it.
 async function reversibleEntry(ctx: CommandContext, reversal: JournalReversal) {
   const entry = await ctx.trx
     .selectFrom('crove_finance.journal_entry')
-    .select(['id', 'entry_date', 'description', 'reverses_entry_id'])
+    .select(['id', 'entry_date', 'description', 'reverses_entry_id', 'source_type', 'source_id'])
     .where('org_id', '=', ctx.orgId)
     .where('id', '=', reversal.entryId)
     .executeTakeFirst();
@@ -52,8 +60,8 @@ async function reversibleEntry(ctx: CommandContext, reversal: JournalReversal) {
   return entry;
 }
 
-const reversalTitle = (entry: { entry_date: string; description: string }) =>
-  `Đảo bút toán ngày ${entry.entry_date}: ${entry.description}`.slice(0, 300);
+const reversalTitle = (entry: { entry_date: string; description: string; source_type: string }) =>
+  `Đảo bút toán ngày ${entry.entry_date}${entry.source_type === PURCHASE_SOURCE ? ' (hủy chứng từ mua)' : ''}: ${entry.description}`.slice(0, 300);
 
 export const prepareReversal = defineCommand({
   name: 'finance.journal.prepare_reversal',
@@ -98,14 +106,36 @@ export const reverseEntry = defineCommand({
         partyId: l.party_id,
         memo: l.memo,
       })),
-    }).catch((error: { code?: string; constraint?: string }) => {
+    }).catch((error: { code?: string; constraint?: string; message?: string }) => {
       // A concurrent reversal of the same entry committed first: its insert held the unique index.
       if (error?.code === '23505' && error.constraint === 'journal_entry_reverses_uq') throw ALREADY_REVERSED();
+      // The original is posted, so it balances and has at least 2 lines, and the date and reversal rules were checked
+      // above: a mirror the database still refuses (not a mirror, unbalanced, too few lines) was built from fewer lines
+      // than the entry has, because the approver cannot see them all.
+      if (error?.code === '23514' && /does not mirror the entry it reverses|does not balance|needs at least 2 lines/.test(error.message ?? '')) {
+        throw PARTIAL_MIRROR();
+      }
       throw error;
     });
-    ctx.audit({ reversed_entry_id: entry.id, reversal_entry_id: journalEntryId });
+    // A purchase entry: void Crove's record of its document, naming this reversal (the database checks the link).
+    const voidedDocumentId = entry.source_type === PURCHASE_SOURCE ? entry.source_id : null;
+    if (voidedDocumentId) {
+      await ctx.trx
+        .insertInto('crove_finance.purchase_document_void')
+        .values({
+          org_id: ctx.orgId,
+          document_id: voidedDocumentId,
+          reversal_entry_id: journalEntryId,
+          reason: payload.reason,
+          voided_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
+        })
+        .execute();
+      await ctx.activity('finance.purchase_document', voidedDocumentId, 'purchase.voided', `Hủy chứng từ do đảo bút toán: ${entry.description}`);
+      await ctx.emit('finance.purchase.voided', { documentId: voidedDocumentId, reversalEntryId: journalEntryId });
+    }
+    ctx.audit({ reversed_entry_id: entry.id, reversal_entry_id: journalEntryId, voided_document_id: voidedDocumentId });
     await ctx.activity('finance.journal_entry', entry.id, 'journal_entry.reversed', `Đảo bút toán: ${entry.description}`);
     await ctx.emit('finance.journal_entry.reversed', { entryId: entry.id, reversalEntryId: journalEntryId });
-    return { journalEntryId, reversedEntryId: entry.id };
+    return { journalEntryId, reversedEntryId: entry.id, ...(voidedDocumentId ? { voidedDocumentId } : {}) };
   },
 });

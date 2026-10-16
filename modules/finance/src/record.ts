@@ -56,6 +56,32 @@ async function assertKnownAccounts(ctx: CommandContext, codes: string[]): Promis
   if (known.length !== unique.length) throw new DomainError('UNKNOWN_ACCOUNT', 422, 'Có tài khoản không thuộc hệ thống TT133');
 }
 
+// The voided document of this supplier invoice that no later document has replaced yet, or null. There is at most
+// one: every document of an invoice but the first replaces a voided one, each at most once.
+async function replaceableDocument(ctx: CommandContext, partyId: string, series: string, number: string): Promise<string | null> {
+  const row = await ctx.trx
+    .selectFrom('crove_finance.purchase_document as d')
+    .innerJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
+    .select('d.id')
+    .where('d.org_id', '=', ctx.orgId)
+    .where('d.party_id', '=', partyId)
+    .where('d.invoice_series', '=', series)
+    .where('d.invoice_number', '=', number)
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom('crove_finance.purchase_document as n')
+            .select('n.id')
+            .whereRef('n.org_id', '=', 'd.org_id')
+            .whereRef('n.replaces_document_id', '=', 'd.id'),
+        ),
+      ),
+    )
+    .limit(1)
+    .executeTakeFirst();
+  return row?.id ?? null;
+}
+
 export const revisePurchase = defineCommand({
   name: 'finance.purchase.revise',
   input: z.object({
@@ -118,6 +144,10 @@ export const recordPurchase = defineCommand({
     }
 
     const partyId = await upsertVendor(ctx, payload.seller);
+    // The invoice recorded again after its document was voided by a reversal (#165): the new document names the
+    // voided one it replaces. Any other document of the same invoice still in force makes this a duplicate, refused
+    // by the database (purchase_document_invoice_uq, purchase_document_replaces_uq).
+    const replaces = await replaceableDocument(ctx, partyId, invoice.series, invoice.number);
     const document = await ctx.trx
       .insertInto('crove_finance.purchase_document')
       .values({
@@ -135,6 +165,7 @@ export const recordPurchase = defineCommand({
         source_file_id: payload.sourceFileId,
         proposal_id: ctx.proposalId,
         created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
+        replaces_document_id: replaces,
       })
       .returning('id')
       .executeTakeFirst()
@@ -198,8 +229,9 @@ export const recordPurchase = defineCommand({
         .execute();
     }
 
-    await ctx.activity('finance.purchase_document', document.id, 'purchase.recorded', `Ghi sổ ${memo}`);
-    await ctx.emit('finance.purchase.recorded', { documentId: document.id, journalEntryId });
+    if (replaces) ctx.audit({ replaces_document_id: replaces });
+    await ctx.activity('finance.purchase_document', document.id, 'purchase.recorded', replaces ? `Ghi sổ lại ${memo} (thay chứng từ đã hủy)` : `Ghi sổ ${memo}`);
+    await ctx.emit('finance.purchase.recorded', { documentId: document.id, journalEntryId, ...(replaces ? { replacesDocumentId: replaces } : {}) });
     return { documentId: document.id, journalEntryId };
   },
 });

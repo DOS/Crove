@@ -61,7 +61,8 @@ export const en: Messages = {
   },
   documents: {
     title: 'Purchase documents',
-    subtitle: 'Purchase invoices that were approved and posted.',
+    subtitle:
+      'Purchase invoices that were approved and posted. A voided document is one whose entry was reversed: Crove no longer counts it, and the invoice of the seller is unchanged.',
     empty: 'No documents posted yet',
     emptyHint: 'Approve a proposal in the Document inbox to post it.',
     columns: {
@@ -71,7 +72,14 @@ export const en: Messages = {
       subtotal: 'Before tax',
       vat: 'VAT',
       total: 'Total',
+      status: 'Status',
     },
+    status: {
+      recorded: 'Posted',
+      voided: 'Voided (entry reversed)',
+      rerecorded: 'Posted again',
+    },
+    voidReason: 'Reason: {reason}',
   },
   vendors: {
     title: 'Vendors',
@@ -93,6 +101,32 @@ export const en: Messages = {
     from: 'From',
     to: 'To',
     empty: 'No journal entries yet',
+    reversalBadge: 'Reversal',
+    reversedBadge: 'Reversed',
+    documentVoided: 'Document voided',
+    reversesLink: 'Reverses the entry of {date}',
+    reversedByLink: 'Reversed by the entry of {date}',
+    reverse: 'Reverse entry',
+  },
+  reversal: {
+    intro:
+      'A reversal posts a new entry with mirrored lines (debit and credit swapped); the original entry is not changed. An entry can be reversed once, and a reversal cannot be reversed.',
+    documentNote:
+      'This entry records purchase document {document} from {vendor}. When the proposal is approved, Crove voids this document in its own books so the invoice can be posted again with the right accounts. The e-invoice of the seller is not changed.',
+    date: 'Reversal date',
+    reason: 'Reason (required)',
+    reasonPlaceholder: 'For example: posted to the wrong expense account',
+    submit: 'Ask for the reversal',
+    created: 'Reversal proposal created. The reversal is posted only when an owner or admin approves it.',
+    viewProposal: 'View proposal',
+    errors: {
+      date: 'Choose the reversal date',
+      dateBefore: 'The reversal cannot be dated before the original entry ({date})',
+      reasonRequired: 'Enter the reason for the reversal',
+      reasonTooLong: 'The reason can be at most {max} characters',
+      partialMirror:
+        'This entry cannot be reversed because the approver cannot see all of its lines, so a complete reversal cannot be built. Ask someone who can see the whole entry to approve this proposal.',
+    },
   },
   inbox: {
     fileTooLarge: '{name} is larger than 25 MB',
@@ -136,6 +170,7 @@ export const en: Messages = {
     failedChecks: '{count, plural, one {# error} other {# errors}}',
     warnChecks: '{count, plural, one {# warning} other {# warnings}}',
     matched: 'All checks pass',
+    reversalKind: 'Reversal',
   },
   inboxDetail: {
     back: '← Document inbox',
@@ -192,6 +227,29 @@ export const en: Messages = {
     credit: 'Credit',
     original: 'Original document',
     noFile: 'No file',
+    confirmRereadVoided:
+      'Read the document again? The document posted earlier was voided by a reversal; if it can be read, a new proposal is created to post the invoice again.',
+    voidedBadge: 'Document voided by a reversal',
+    voidedNotice: 'The entry of this invoice was reversed, so Crove voided the document in its own books.',
+    voidedReread: 'Press Read again to create a new proposal and post the invoice again with the right accounts.',
+    voidedNoReread:
+      'The file cannot be read again from this proposal (a newer proposal exists, or the file was read the maximum number of times); see the newest proposal of the file in the inbox.',
+    reversalSubtitle: 'Reversal proposal: when approved, Crove posts a new entry that mirrors the original.',
+    approveReversal: 'Approve and post the reversal',
+    reversalFourEyes: 'Someone else must approve (you asked for this reversal).',
+    reversalNotEligible: 'Only owners and admins can approve a reversal.',
+    reversalDate: 'Reversal date',
+    reason: 'Reason',
+    originalEntry: 'Original entry of {date}: {description}',
+    mirrorHint: 'The reversal posts these lines with debit and credit swapped, so the two entries cancel out.',
+    originalDebit: 'Debit (original)',
+    originalCredit: 'Credit (original)',
+    alreadyReversed: 'This entry was already reversed on {date}.',
+    purchaseDocument: 'The entry records purchase document {document} from {vendor}.',
+    documentAlreadyVoided: 'This document is already voided in the books of Crove.',
+    documentWillVoid:
+      'On approval, Crove voids this document in its own books so the invoice can be posted again with the right accounts (read the file again in the inbox). This corrects the books of Crove only; the e-invoice of the seller is not changed.',
+    viewInJournal: 'View in the journal',
   },
   invite: {
     noInviteTitle: 'No invitation',
