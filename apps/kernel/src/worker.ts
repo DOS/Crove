@@ -10,8 +10,9 @@ import type { InvoiceReader } from '@crove/agent';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
-import { runOrgExport } from './org-export.ts';
-import { RETENTION_CRON, RETENTION_TZ, runRetention, sweepStaging } from './retention.ts';
+import { ExportSealer } from './export-seal.ts';
+import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
+import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 
 export const JOB_SCHEMA = 'crove_jobs';
@@ -106,6 +107,10 @@ export interface WorkerDeps {
   refusalTallyRetentionDays?: number;
   // The built-in program of each agent template (ADR-0029 section 8), by template key.
   agentPrograms?: Readonly<Record<string, AgentProgram>>;
+  // Seals org export blobs at rest (EXPORT_ENCRYPTION_KEY, issue #212). Default: no key, stored unencrypted.
+  exportSealer?: ExportSealer;
+  // Days an org export is kept before the retention job deletes it (EXPORT_RETENTION_DAYS, 35 to 90).
+  exportRetentionDays?: number;
 }
 
 /** Records that this worker is alive (crove_kernel.worker_beat, crove_worker only). */
@@ -154,6 +159,10 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   boss.on('error', (error) => console.error('[pg-boss]', error));
   await boss.start();
 
+  const exportRetentionDays = deps.exportRetentionDays ?? DEFAULT_EXPORT_RETENTION_DAYS;
+  const exportSealer = deps.exportSealer ?? new ExportSealer(null);
+  if (!deps.exportSealer) console.warn('[org-export] no export sealer configured: exports are stored unencrypted');
+
   // Jobs of a module this deployment leaves out are not worked and never queued (CROVE_MODULES, plan Decision 12).
   // Reading files is the finance module's job today: without it an uploaded file is stored and stays unread.
   const finance = deps.runtime.installed('finance');
@@ -178,7 +187,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   });
 
   // The raw message is deleted once it is filed or dropped; after the last failed attempt it is kept for
-  // investigation (each delivery owns its blob, so no other job can still need it).
+  // investigation (each delivery owns its blob, so no other job can still need it), and the daily retention job
+  // deletes it INBOUND_BLOB_MAX_AGE_DAYS later (issue #212).
   await boss.work<InboundJob>(QUEUES.inbound, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
     const label = job.data.sha256.slice(0, 12);
@@ -211,8 +221,11 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (!job) return;
     const { orgId } = job.data;
     try {
-      const record = await runOrgExport({ runtime: deps.runtime, store: deps.store }, orgId);
-      console.log(`[org-export] org ${orgId}: ${record.parts.length} table(s), ${record.fileCount} file(s)`);
+      const record = await runOrgExport(
+        { runtime: deps.runtime, store: deps.store, sealer: exportSealer, retentionDays: exportRetentionDays },
+        orgId,
+      );
+      console.log(`[org-export] org ${orgId}: ${record.parts.length} part(s), ${record.fileCount} file(s), ${record.encryption}, expires ${record.expiresAt}`);
     } catch (error) {
       if (job.retryCount < ORG_EXPORT_RETRY_LIMIT) throw error;
       console.error(`[org-export] ALERT export of org ${orgId} failed after ${job.retryCount + 1} attempts`, error);
@@ -220,7 +233,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   });
 
   // Retention purges (plan §4.9), on a schedule registered idempotently at boot; pg_cron is not required. The same run
-  // deletes abandoned staging objects of presigned uploads (issue #223).
+  // deletes abandoned staging objects of presigned uploads (issue #223), leftover raw inbound mail and expired org
+  // exports (issue #212).
   const keepDays = deps.refusalTallyRetentionDays ?? DEFAULT_REFUSAL_TALLY_RETENTION_DAYS;
   await boss.work(QUEUES.retention, { batchSize: 1 }, async () => {
     try {
@@ -228,8 +242,10 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const pruned = await pruneRefusalTally(deps.workerDb, keepDays);
       console.log(`[retention] refusal_tally=${pruned}`);
     } finally {
-      // Catches its own errors; runs even when a database purge failed.
+      // Each catches its own errors; they run even when a database purge failed.
       await sweepStaging(deps.store);
+      await sweepInboundBlobs(deps.store, deps.workerDb);
+      await expireExports(deps.store, deps.runtime, exportRetentionDays);
     }
   });
   await boss.schedule(QUEUES.retention, RETENTION_CRON, null, { tz: RETENTION_TZ, missed: 'once' });

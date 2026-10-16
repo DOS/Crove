@@ -113,8 +113,17 @@ export interface QueryDef<I = unknown, O = unknown> {
   access: readonly MemberRole[] | 'system';
   // Agents that may read it (absent: none).
   agent?: Pick<AgentAccess, 'roles'>;
-  handler: (ctx: QueryContext, input: I) => Promise<O>;
+  // A streamed read (the org export, #212): it runs only through Runtime.stream(), which hands the handler a sink for
+  // its batches and opens one REPEATABLE READ, READ ONLY transaction, so every batch comes from the same snapshot.
+  // Runtime.query() and ctx.query refuse it (STREAM_ONLY) after the usual context and access checks.
+  stream?: true;
+  // sink is set exactly when the query runs through Runtime.stream().
+  handler: (ctx: QueryContext, input: I, sink?: QuerySink) => Promise<O>;
 }
+
+// Receives a streamed query's batches in order. The query waits for each call, so a slow consumer slows the read and
+// nothing piles up in memory.
+export type QuerySink = (batch: unknown) => Promise<void>;
 
 // The answer of a lookup into another module (plan Decision 12, ADR-0031). A deployment may leave a module out
 // (CROVE_MODULES), so a module that is not installed is an expected answer, not an error.
@@ -338,6 +347,14 @@ function moduleOf(name: string): string {
   return dot === -1 ? name : name.slice(0, dot);
 }
 
+// How long a streamed query's transaction may sit idle while its sink works on a batch.
+export const STREAM_IDLE_MINUTES = 10;
+
+// A streamed query answers only through Runtime.stream(), which gives it a sink and a single snapshot.
+function refuseStreamed(def: QueryDef<unknown, unknown>): void {
+  if (def.stream) throw new DomainError('STREAM_ONLY', 400, `Truy vấn ${def.name} chỉ đọc theo luồng`);
+}
+
 function isCellResolver(value: CellResolver | Db): value is CellResolver {
   const candidate = value as Partial<CellResolver>;
   return typeof candidate.resolveTenant === 'function' && typeof candidate.controlPlane === 'function';
@@ -438,6 +455,7 @@ export class Runtime {
     }
     const input = parseInput(def.input, rawInput);
     this.authorizeQuery(def, actor, entered);
+    refuseStreamed(def);
     const value = (await def.handler(this.queryContext(trx, orgId, actor, entered), input)) as O;
     return { status: 'ok', value };
   }
@@ -941,11 +959,45 @@ export class Runtime {
         await sql`SET TRANSACTION READ ONLY`.execute(trx);
         const entered = await this.enterContext(trx, options.actor, options.orgId);
         this.authorizeQuery(def, options.actor, entered);
+        refuseStreamed(def);
         return (await def.handler(this.queryContext(trx, options.orgId, options.actor, entered), input)) as O;
       });
     } catch (error) {
       const domain = toDomainError(error);
       if (domain.code === 'INTERNAL') logInternal(`query ${name}`, error, options);
+      throw domain;
+    }
+  }
+
+  /**
+   * Runs a streamed query (QueryDef.stream) and hands its batches to `sink` while it reads, in one REPEATABLE READ,
+   * READ ONLY transaction of the org with the same session, context and access checks as query(). The snapshot is
+   * taken at the transaction's first statement, so every batch sees the database as of one instant; the transaction
+   * stays open until the handler returns, so a long stream holds back vacuum for that long.
+   */
+  async stream<O = unknown>(name: string, rawInput: unknown, options: { actor: Actor; orgId: string }, sink: QuerySink): Promise<O> {
+    const def = this.queries.get(name);
+    if (!def) throw new DomainError('QUERY_NOT_FOUND', 404, `Không có truy vấn ${name}`);
+    if (!def.stream) throw new DomainError('NOT_STREAMED', 400, `Truy vấn ${name} không đọc theo luồng`);
+    const input = parseInput(def.input, rawInput);
+    try {
+      const db = await this.cells.resolveTenant(options.orgId);
+      return await db
+        .transaction()
+        .setIsolationLevel('repeatable read')
+        .execute(async (trx) => {
+          await this.checkSession(trx, options.actor, options.orgId);
+          await sql`SET TRANSACTION READ ONLY`.execute(trx);
+          // The transaction is idle while the sink stores a batch (an 8 MiB export chunk to a bucket can take longer
+          // than the pool's 10 s idle-in-transaction limit); every statement keeps the pool's statement_timeout.
+          await sql`SET LOCAL idle_in_transaction_session_timeout = ${sql.lit(`${STREAM_IDLE_MINUTES}min`)}`.execute(trx);
+          const entered = await this.enterContext(trx, options.actor, options.orgId);
+          this.authorizeQuery(def, options.actor, entered);
+          return (await def.handler(this.queryContext(trx, options.orgId, options.actor, entered), input, sink)) as O;
+        });
+    } catch (error) {
+      const domain = toDomainError(error);
+      if (domain.code === 'INTERNAL') logInternal(`stream ${name}`, error, options);
       throw domain;
     }
   }

@@ -96,8 +96,9 @@ export const zOrgDetail = z.object({
   members: z.array(z.object({ userId: zId, email: z.string(), displayName: z.string().nullable(), role: zRole })),
 });
 
-// Org offboarding and its export (issue #38). Each part is one table as JSON, downloaded from
-// GET /api/org-export/<table>, and the manifest (with the stored files list) from GET /api/org-export/manifest.
+// Org offboarding and its export (issue #38, #212). Each table downloads as NDJSON (one row per line) from
+// GET /api/org-export/<table>, and the manifest (the parts with their sha256 and row counts) as JSON from
+// GET /api/org-export/manifest, until expiresAt.
 export const zOrgStatus = z.enum(['active', 'offboarding', 'closed']);
 export const zOrgExport = z.object({
   status: zOrgStatus,
@@ -105,9 +106,14 @@ export const zOrgExport = z.object({
   export: z
     .object({
       createdAt: z.string(),
+      expiresAt: z.string(),
+      expired: z.boolean(),
+      encryption: z.enum(['aes-256-gcm', 'none']),
       manifestSha256: z.string(),
       fileCount: z.number().int().nonnegative(),
-      parts: z.array(z.object({ table: z.string(), sha256: z.string(), rows: z.number().int().nonnegative(), bytes: z.number().int().nonnegative() })),
+      tables: z.array(
+        z.object({ table: z.string(), rows: z.number().int().nonnegative(), bytes: z.number().int().nonnegative(), chunks: z.number().int().nonnegative() }),
+      ),
     })
     .nullable(),
 });

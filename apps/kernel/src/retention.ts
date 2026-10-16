@@ -2,7 +2,8 @@
 // one batch per call, until no store has expired rows left or the run's batch budget is spent.
 import { sql } from 'kysely';
 import type { Db } from '@crove/db';
-import type { BlobStore, StagingSweep } from '@crove/kernel-runtime';
+import { EXPORT_EXPIRY_GRACE_HOURS } from '@crove/kernel';
+import type { BlobStore, ListedBlob, ListPrefix, Runtime, StagingSweep } from '@crove/kernel-runtime';
 
 // Every day at 02:30 in Vietnam, outside working hours.
 export const RETENTION_CRON = '30 2 * * *';
@@ -87,4 +88,157 @@ export async function sweepStaging(
     log.error(`[retention] ALERT staging sweep failed after deleting ${deleted}`, error);
     return null;
   }
+}
+
+// Raw inbound mail (inbound/<blob_id>) is deleted by the worker once a message is filed or dropped, and kept after the
+// last failed attempt for investigation. The daily job deletes such leftovers once they are this old, the same window as
+// the inbound drop counts (issue #212).
+export const INBOUND_BLOB_MAX_AGE_DAYS = 30;
+// Keys one list call looks at; a run lists page after page, up to BLOB_SWEEP_MAX_PAGES.
+export const BLOB_SWEEP_PAGE = 1000;
+// At most this many pages per prefix and run (100,000 keys); past it the run logs an ALERT and the next run continues.
+export const BLOB_SWEEP_MAX_PAGES = 100;
+const BLOB_DELETES_IN_FLIGHT = 10;
+// Export blobs younger than this are never deleted, recorded or not: an export being written has not been recorded
+// yet. Older ones go unless a record that has not expired lists them.
+const EXPORT_UNRECORDED_MAX_AGE_MS = 2 * 86_400_000;
+// The pg-boss queue of inbound mail (worker.ts QUEUES.inbound).
+const INBOUND_QUEUE = 'kernel-inbound-email';
+
+export interface BlobSweep {
+  // Blobs deleted.
+  deleted: number;
+  // Old enough, but kept because something still references them.
+  kept: number;
+  // The run stopped at its page budget, so more blobs may remain for the next run.
+  more: boolean;
+}
+
+interface SweepOptions {
+  prefix: ListPrefix;
+  label: string;
+  cutoff: Date;
+  // Of the old blobs of one page, the keys that must be kept. Called once per page.
+  referenced: (blobs: ListedBlob[]) => Promise<Set<string>>;
+  log: Pick<Console, 'log' | 'error'>;
+  pageSize: number;
+  maxPages: number;
+}
+
+// Lists a prefix page by page and deletes the blobs older than the cutoff that `referenced` does not keep. A failure is
+// logged as an ALERT and returns null; it never stops the rest of the retention job.
+async function sweepPrefix(store: BlobStore, options: SweepOptions): Promise<BlobSweep | null> {
+  if (!store.list) {
+    options.log.log(`[retention] ${options.label}: the blob store cannot list; not swept`);
+    return null;
+  }
+  let deleted = 0;
+  let kept = 0;
+  let after: string | null = null;
+  try {
+    for (let page = 1; ; page++) {
+      const listing = await store.list(options.prefix, after, options.pageSize);
+      const old = listing.blobs.filter((b) => b.lastModified.getTime() < options.cutoff.getTime());
+      const keep = old.length > 0 ? await options.referenced(old) : new Set<string>();
+      const doomed = old.filter((b) => !keep.has(b.key)).map((b) => b.key);
+      kept += old.length - doomed.length;
+      for (let i = 0; i < doomed.length; i += BLOB_DELETES_IN_FLIGHT) {
+        const settled = await Promise.allSettled(doomed.slice(i, i + BLOB_DELETES_IN_FLIGHT).map((key) => store.delete(key)));
+        deleted += settled.filter((r) => r.status === 'fulfilled').length;
+        const failure = settled.find((r) => r.status === 'rejected');
+        if (failure) throw failure.reason;
+      }
+      after = listing.next;
+      if (after === null || page >= options.maxPages) {
+        const more = after !== null;
+        options.log.log(`[retention] ${options.label} deleted=${deleted} kept=${kept}`);
+        if (more) options.log.error(`[retention] ALERT ${options.label}: blobs remain after ${page} pages (deleted ${deleted}); the next run continues`);
+        return { deleted, kept, more };
+      }
+    }
+  } catch (error) {
+    options.log.error(`[retention] ALERT ${options.label} sweep failed after deleting ${deleted}`, error);
+    return null;
+  }
+}
+
+/**
+ * Of the given raw inbound blobs, the keys still waiting for the worker: a row in crove_kernel.inbound_pending (read
+ * through the worker-only definer inbound_pending_blobs) or a live pg-boss job of the inbound queue. The pending rows
+ * are read first: the relay sends the job before it commits the claim that deletes the row, so a blob is always in at
+ * least one of the two places this order reads.
+ */
+export async function referencedInboundBlobs(workerDb: Db, keys: readonly string[], jobSchema = 'crove_jobs'): Promise<Set<string>> {
+  const ids = keys.map((k) => k.slice('inbound/'.length));
+  const pending = await sql<{ blob_id: string }>`SELECT crove_kernel.inbound_pending_blobs(${ids}::text[]) AS blob_id`.execute(workerDb);
+  const live = await sql<{ blob_id: string }>`
+    SELECT j.data->>'blobId' AS blob_id FROM ${sql.table(`${jobSchema}.job`)} j
+    WHERE j.name = ${INBOUND_QUEUE} AND j.state IN ('created', 'retry', 'active') AND j.data->>'blobId' = ANY (${ids}::text[])`.execute(workerDb);
+  return new Set([...pending.rows, ...live.rows].map((r) => `inbound/${r.blob_id}`));
+}
+
+/** Deletes raw inbound mail older than INBOUND_BLOB_MAX_AGE_DAYS that nothing waits for (issue #212). */
+export async function sweepInboundBlobs(
+  store: BlobStore,
+  workerDb: Db,
+  now: Date = new Date(),
+  log: Pick<Console, 'log' | 'error'> = console,
+  limits: { pageSize?: number; maxPages?: number; maxAgeDays?: number } = {},
+): Promise<BlobSweep | null> {
+  return sweepPrefix(store, {
+    prefix: 'inbound/',
+    label: 'inbound blobs',
+    cutoff: new Date(now.getTime() - (limits.maxAgeDays ?? INBOUND_BLOB_MAX_AGE_DAYS) * 86_400_000),
+    referenced: (blobs) => referencedInboundBlobs(workerDb, blobs.map((b) => b.key)),
+    log,
+    pageSize: limits.pageSize ?? BLOB_SWEEP_PAGE,
+    maxPages: limits.maxPages ?? BLOB_SWEEP_MAX_PAGES,
+  });
+}
+
+/**
+ * Deletes org export blobs (export/<org_id>/...) once no export record that has not expired lists them (plan §7.9:
+ * 35 to 90 days). Each org's live keys come from its records (kernel.org.export.live_keys), so the expiry date the
+ * owner was shown decides, plus a day of grace, whatever EXPORT_RETENTION_DAYS is now; blobs of failed attempts go
+ * after two days. When an org's records cannot be read (its tenant row is closed or gone), its blobs fall back to their
+ * age: kept until retentionDays plus the grace day. File blobs live under org/ and are never listed here. On a
+ * versioned bucket a delete leaves a noncurrent version, which the bucket's lifecycle rule removes; it stays sealed
+ * (export-seal.ts).
+ */
+export async function expireExports(
+  store: BlobStore,
+  runtime: Pick<Runtime, 'query'>,
+  retentionDays: number,
+  now: Date = new Date(),
+  log: Pick<Console, 'log' | 'error'> = console,
+  limits: { pageSize?: number; maxPages?: number } = {},
+): Promise<BlobSweep | null> {
+  const byAge = now.getTime() - retentionDays * 86_400_000 - EXPORT_EXPIRY_GRACE_HOURS * 3_600_000;
+  const live = new Map<string, Set<string> | null>();
+  return sweepPrefix(store, {
+    prefix: 'export/',
+    label: 'export blobs',
+    cutoff: new Date(now.getTime() - EXPORT_UNRECORDED_MAX_AGE_MS),
+    referenced: async (blobs) => {
+      const keep = new Set<string>();
+      for (const blob of blobs) {
+        const orgId = blob.key.split('/')[1] as string;
+        if (!live.has(orgId)) {
+          try {
+            const keys = await runtime.query<string[]>('kernel.org.export.live_keys', {}, { actor: { type: 'system', component: 'retention' }, orgId });
+            live.set(orgId, new Set(keys));
+          } catch (error) {
+            log.error(`[retention] export records of org ${orgId} unreadable; its export blobs expire by age`, error);
+            live.set(orgId, null);
+          }
+        }
+        const keys = live.get(orgId);
+        if (keys ? keys.has(blob.key) : blob.lastModified.getTime() >= byAge) keep.add(blob.key);
+      }
+      return keep;
+    },
+    log,
+    pageSize: limits.pageSize ?? BLOB_SWEEP_PAGE,
+    maxPages: limits.maxPages ?? BLOB_SWEEP_MAX_PAGES,
+  });
 }

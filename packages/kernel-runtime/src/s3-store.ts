@@ -10,14 +10,19 @@ import {
   DOWNLOAD_TTL_SECONDS,
   UPLOAD_TTL_SECONDS,
   assertContentAddress,
+  assertListArgs,
   assertStorageKey,
   contentGeneration,
+  isListedKey,
   isStagingKey,
   sha256Hex,
   versionOf,
+  type BlobListing,
   type BlobRef,
   type BlobStore,
   type DirectTransfers,
+  type ListPrefix,
+  type ListedBlob,
   type PresignedUpload,
   type StagingSweep,
 } from './storage.ts';
@@ -355,6 +360,39 @@ export class S3BlobStore implements BlobStore {
       if (!token) return { deleted, more: false };
       // An empty page that still claims more is not progress; stop rather than loop.
       if (listed >= limit || contents.length === 0) return { deleted, more: true };
+    }
+  }
+
+  // Lists inbound/ or export/ in key order (ListObjectsV2 with StartAfter), page after page until `limit` keys were
+  // looked at. Keys outside the prefix's pattern, or without a modification time, are skipped but still move the
+  // cursor. Needs s3:ListBucket, which the store already requires. Lists current objects only: on a versioned bucket a
+  // deleted object's noncurrent versions are the lifecycle rule's job.
+  async list(prefix: ListPrefix, after: string | null, limit: number): Promise<BlobListing> {
+    assertListArgs(prefix, after, limit);
+    const blobs: ListedBlob[] = [];
+    let listed = 0;
+    let last = after;
+    let token: string | undefined;
+    for (;;) {
+      const page = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: prefix,
+          MaxKeys: Math.min(LIST_PAGE, limit - listed),
+          ...(token ? { ContinuationToken: token } : last ? { StartAfter: last } : {}),
+        }),
+      );
+      const contents = page.Contents ?? [];
+      listed += contents.length;
+      for (const o of contents) {
+        if (o.Key === undefined) continue;
+        last = o.Key;
+        if (isListedKey(prefix, o.Key) && o.LastModified !== undefined) blobs.push({ key: o.Key, lastModified: o.LastModified });
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      if (!token) return { blobs, next: null };
+      // An empty page that still claims more is not progress; hand the cursor back rather than loop.
+      if (listed >= limit || contents.length === 0) return { blobs, next: last };
     }
   }
 

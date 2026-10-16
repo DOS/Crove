@@ -27,6 +27,7 @@ import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter
 import { actorOf, type Authenticate, type AuthUser } from './auth.ts';
 import { ConcurrencyLimiter } from './concurrency.ts';
 import { publicAuthUrl, type Config } from './config.ts';
+import { exportAad, exportSealer } from './export-seal.ts';
 import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts';
 import { createInviteMailSender } from './invite-mail.ts';
 import type { Mailer } from './mail.ts';
@@ -482,8 +483,12 @@ export function createHttpApp(deps: HttpDeps) {
     });
   }
 
-  // The org export (issue #38), owners only: GET /api/org-export/manifest or /api/org-export/<table>, from the newest
-  // export kernel.org.export.get reports. The key comes from that export's audit row, never from the request.
+  // The org export (issue #38, streamed since #212), owners only: GET /api/org-export/manifest (JSON) or
+  // /api/org-export/<table> (NDJSON, one row per line), from the newest export kernel.org.export.get reports. Every key,
+  // version and sha256 comes from that export's audit row, never from the request; each blob is read at its recorded
+  // version, checked against its sha256 and opened with the export key. A table streams chunk by chunk, so the kernel
+  // holds one chunk at a time.
+  const sealer = exportSealer(config);
   app.get('/api/org-export/:part', async (c) => {
     try {
       const user = c.get('user');
@@ -491,18 +496,54 @@ export function createHttpApp(deps: HttpDeps) {
       const orgId = await resolveOrg(runtime, user, orgSlug);
       const view = await runtime.query<OrgExportView>('kernel.org.export.get', {}, { actor: actorOf(user), orgId });
       const part = c.req.param('part');
-      const key = part === 'manifest' ? view.export?.manifestKey : view.export?.parts.find((p) => p.table === part)?.key;
-      // The key must be under this org's prefix whatever wrote the audit row (kernel.org.export.record checks it too).
-      if (!view.export || !key || !key.startsWith(`org/${orgId}/`)) throw new DomainError('NOT_FOUND', 404, 'Chưa có bản xuất dữ liệu này');
-      const bytes = await store.get(key);
-      return new Response(body(bytes), {
-        headers: {
-          'content-type': 'application/json; charset=utf-8',
-          'content-disposition': `attachment; filename="crove-${orgSlug}-${part}.json"`,
-          'x-content-type-options': 'nosniff',
-          'cache-control': 'private, no-store',
-        },
+      const exported = view.export;
+      const missing = () => new DomainError('NOT_FOUND', 404, 'Chưa có bản xuất dữ liệu này');
+      if (!exported) throw missing();
+      if (exported.expired) throw new DomainError('EXPORT_EXPIRED', 404, 'Bản xuất dữ liệu đã hết hạn; hãy yêu cầu xuất lại');
+      const read = async (ref: { key: string; generation: string; sha256: string }, aad: Buffer) => {
+        // Under this org's export prefix whatever wrote the audit row (kernel.org.export.record checks it too).
+        if (!ref.key.startsWith(`export/${orgId}/`)) throw missing();
+        return sealer.open(await readVerified(store, ref), aad, exported.encryption);
+      };
+      const headers = (type: string, extension: string, length: number) => ({
+        'content-type': type,
+        'content-length': String(length),
+        'content-disposition': `attachment; filename="crove-${orgSlug}-${part}.${extension}"`,
+        'x-content-type-options': 'nosniff',
+        'cache-control': 'private, no-store',
       });
+      if (part === 'manifest') {
+        const ref = { key: exported.manifestKey, generation: exported.manifestGeneration, sha256: exported.manifestSha256 };
+        const bytes = await read(ref, exportAad(orgId, 'manifest'));
+        return new Response(body(bytes), { headers: headers('application/json; charset=utf-8', 'json', bytes.byteLength) });
+      }
+      const chunks = exported.parts.filter((p) => p.table === part).sort((a, b) => a.chunk - b.chunk);
+      if (chunks.length === 0) throw missing();
+      const readChunk = (p: (typeof chunks)[number]) => read(p, exportAad(orgId, { table: p.table, chunk: p.chunk }));
+      // The first chunk is read before the response starts, so a missing or altered blob answers with an error status.
+      const first = await readChunk(chunks[0] as (typeof chunks)[number]);
+      let next = 1;
+      const stream = new ReadableStream<Uint8Array>(
+        {
+          start(controller) {
+            controller.enqueue(first);
+          },
+          async pull(controller) {
+            const chunk = chunks[next++];
+            if (!chunk) return controller.close();
+            try {
+              controller.enqueue(await readChunk(chunk));
+            } catch (error) {
+              // The status is already sent; the client sees a cut download (content-length tells it so).
+              console.error(`[org-export] download of ${part} chunk ${chunk.chunk} failed`, error);
+              controller.error(error);
+            }
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      const length = chunks.reduce((n, p) => n + p.bytes, 0);
+      return new Response(stream, { headers: headers('application/x-ndjson; charset=utf-8', 'ndjson', length) });
     } catch (error) {
       return problem(c, error);
     }

@@ -545,6 +545,7 @@ suite('kernel invariants on PostgreSQL', () => {
       'crove_kernel.inbound_claim(integer)',
       'crove_kernel.outbox_claim(integer)',
       'crove_kernel.retention_purge(integer)',
+      'crove_kernel.inbound_pending_blobs(text[])',
     ];
     const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant'];
     const matrix = await withAdmin(async (admin) => {
@@ -563,6 +564,7 @@ suite('kernel invariants on PostgreSQL', () => {
       'crove_kernel.inbound_claim(integer)': ['crove_worker'],
       'crove_kernel.outbox_claim(integer)': ['crove_worker'],
       'crove_kernel.retention_purge(integer)': ['crove_worker'],
+      'crove_kernel.inbound_pending_blobs(text[])': ['crove_worker'],
     });
 
     // The API login role is refused by the database itself, and so is a system command run through it.

@@ -17,8 +17,9 @@ import {
 } from '@crove/kernel-runtime';
 import { financeAgentPrograms, financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator, type Authenticate } from './auth.ts';
-import { AVAILABLE_MODULES, type Config, type ModuleId } from './config.ts';
+import { AVAILABLE_MODULES, assertExportKey, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
+import { exportSealer } from './export-seal.ts';
 import { createHttpApp } from './http.ts';
 import { createLogMailer, createMailer, type Mailer } from './mail.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
@@ -151,6 +152,8 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
   async function start(role: ServerRole): Promise<() => Promise<void>> {
     const api = role === 'api' || role === 'all';
     const worker = role === 'worker' || role === 'all';
+    // Both roles handle org exports (the worker seals them, the API opens them for download).
+    assertExportKey(config);
     // The worker alone enters system context, so it never shares the API's login role (External-tenant gate T5).
     const workerUrl = config.WORKER_DATABASE_URL;
     if (worker && !workerUrl) throw new Error('WORKER_DATABASE_URL is required for the worker; connect it as crove_worker');
@@ -211,6 +214,8 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             revoker: resolved.identity.revoker,
             refusalTallyRetentionDays: config.REFUSAL_TALLY_RETENTION_DAYS,
             agentPrograms: financeAgentPrograms,
+            exportSealer: exportSealer(config),
+            exportRetentionDays: config.EXPORT_RETENTION_DAYS,
           }),
         );
       }

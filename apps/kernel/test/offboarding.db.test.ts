@@ -1,18 +1,21 @@
 // Org offboarding with export (issue #38, plan §7.9) on a real PostgreSQL 17: the product flow. Access, status and
 // audit invariants live in test/invariant/offboarding.db.test.ts. Set CROVE_TEST_ADMIN_URL to a superuser
 // URL; the run creates and drops its own database.
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { sql } from 'kysely';
 import pg from 'pg';
+import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { EXPORT_TABLE_NAMES, createOrg, kernelCommands, kernelQueries, myOrgs, upsertIdentity, type OrgExportView } from '@crove/kernel';
-import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
+import { Runtime, defineQuery, exportKey, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import type { AuthUser } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
+import { ExportSealer, exportAad } from '../src/export-seal.ts';
 import { runOrgExport, type OrgExportManifest } from '../src/org-export.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -47,6 +50,8 @@ suite('org offboarding on PostgreSQL (#38)', () => {
   let runtime: Runtime;
   let workerRuntime: Runtime;
   const store = new MemoryStore();
+  const exportKeyBytes = randomBytes(32);
+  const sealer = new ExportSealer(exportKeyBytes);
 
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
   const asMfa = (userId: string) => ({
@@ -213,34 +218,47 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     const { org, owner, member } = await orgWithMember('Công ty Xuất');
     await runtime.execute('kernel.org.offboard', { confirmSlug: org.slug }, { actor: asMfa(owner.id), orgId: org.orgId });
 
-    const record = await runOrgExport({ runtime: workerRuntime, store }, org.orgId, () => new Date('2026-10-16T00:00:00Z'));
-    expect(record.parts.map((p) => p.table)).toEqual(EXPORT_TABLE_NAMES);
-    expect(record.fileCount).toBe(1);
-    const read = async (key: string) => JSON.parse(new TextDecoder().decode(await store.get(key))) as Record<string, unknown>;
+    const generatedAt = new Date('2026-10-16T00:00:00Z');
+    const record = await runOrgExport({ runtime: workerRuntime, store, sealer, retentionDays: 40 }, org.orgId, { now: () => generatedAt });
+    // One chunk per table here, in table order; everything sealed under the org's export prefix.
+    expect(record.parts.map((p) => [p.table, p.chunk])).toEqual(EXPORT_TABLE_NAMES.map((t) => [t, 0]));
+    expect(record).toMatchObject({ format: 'crove.org-export.v2', encryption: 'aes-256-gcm', fileCount: 1, expiresAt: '2026-11-25T00:00:00.000Z' });
+    const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+    const lines = (text: string) => text.split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
     for (const part of record.parts) {
-      expect(part.key).toBe(fileKey(org.orgId, part.sha256));
-      const doc = (await read(part.key)) as { orgId: string; table: string; rows: Array<Record<string, unknown>> };
-      expect(doc).toMatchObject({ format: 'crove.org-export.v1', orgId: org.orgId, table: part.table });
-      expect(doc.rows).toHaveLength(part.rows);
+      expect(part.key).toBe(exportKey(org.orgId, part.sha256));
+      const stored = await store.get(part.key);
+      expect(sha256Hex(stored)).toBe(part.sha256);
+      // Sealed at rest: the stored bytes are not the NDJSON, and only this part's AAD opens them.
+      expect(decode(stored)).not.toContain(org.orgId);
+      const rows = lines(decode(sealer.open(stored, exportAad(org.orgId, part), 'aes-256-gcm')));
+      expect(rows).toHaveLength(part.rows);
       // Only this org's rows, whatever the table.
-      expect(doc.rows.every((r) => r.org_id === org.orgId)).toBe(true);
+      expect(rows.every((r) => r.org_id === org.orgId)).toBe(true);
     }
+    expect(() => sealer.open(store.blobs.get(record.parts[0]!.key)!, exportAad(other.org.orgId, record.parts[0]!), 'aes-256-gcm')).toThrow(/authentication/);
     const part = (table: string) => record.parts.find((p) => p.table === table)!;
-    const rowsOf = async (table: string) => ((await read(part(table).key)) as { rows: Array<Record<string, unknown>> }).rows;
+    const rowsOf = async (table: string) => lines(decode(sealer.open(await store.get(part(table).key), exportAad(org.orgId, part(table)), 'aes-256-gcm')));
     // Secrets stay out.
     expect(await rowsOf('kernel.tenant')).toEqual([expect.not.objectContaining({ inbound_token: expect.anything() })]);
     expect((await rowsOf('kernel.member_invite')).every((r) => !('token_sha256' in r))).toBe(true);
     expect((await rowsOf('kernel.tenant_member')).map((r) => r.user_id).sort()).toEqual([owner.id, member.id].sort());
     expect((await rowsOf('kernel.audit_event')).some((r) => r.command === 'kernel.org.offboard')).toBe(true);
-    const manifest = (await read(record.manifestKey)) as unknown as OrgExportManifest;
-    expect(manifest).toMatchObject({ orgId: org.orgId, generatedAt: '2026-10-16T00:00:00.000Z', parts: record.parts });
-    expect(manifest.files).toEqual([
-      expect.objectContaining({ filename: 'hd.xml', contentType: 'application/xml', storageKey: expect.stringMatching(`^org/${org.orgId}/`), generation: expect.stringMatching(/^content:/) }),
+    const manifest = JSON.parse(decode(sealer.open(await store.get(record.manifestKey), exportAad(org.orgId, 'manifest'), 'aes-256-gcm'))) as OrgExportManifest;
+    expect(manifest).toMatchObject({ orgId: org.orgId, generatedAt: '2026-10-16T00:00:00.000Z', snapshot: 'repeatable read', fileCount: 1, parts: record.parts });
+    // The stored files are the kernel.file rows: key, generation and sha256 of each blob, which stays under org/.
+    expect(await rowsOf('kernel.file')).toEqual([
+      expect.objectContaining({ filename: 'hd.xml', content_type: 'application/xml', storage_key: expect.stringMatching(`^org/${org.orgId}/`), generation: expect.stringMatching(/^content:/) }),
     ]);
 
     // Recorded and visible to owners.
     const view = await runtime.query<OrgExportView>('kernel.org.export.get', {}, { actor: asUser(owner.id), orgId: org.orgId });
-    expect(view).toMatchObject({ status: 'offboarding', requestedAt: expect.any(String), export: { manifestKey: record.manifestKey, fileCount: 1 } });
+    expect(view).toMatchObject({
+      status: 'offboarding',
+      requestedAt: expect.any(String),
+      export: { manifestKey: record.manifestKey, fileCount: 1, encryption: 'aes-256-gcm', expiresAt: record.expiresAt, expired: false },
+    });
+    expect(view.export?.tables.find((t) => t.table === 'kernel.tenant_member')).toEqual({ table: 'kernel.tenant_member', rows: 2, bytes: part('kernel.tenant_member').bytes, chunks: 1 });
     // Once it finished, the owner may ask for a new export (the worker then exports again).
     await expect(runtime.execute('kernel.org.offboard', { confirmSlug: org.slug }, { actor: asMfa(owner.id), orgId: org.orgId })).resolves.toEqual({
       status: 'offboarding',
@@ -257,13 +275,31 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     await expect(
       workerRuntime.execute(
         'kernel.org.export.record',
-        { ...record, manifestKey: fileKey(other.org.orgId, record.manifestSha256) },
+        { ...record, manifestKey: exportKey(other.org.orgId, record.manifestSha256) },
         { actor: { type: 'system', component: 'test' }, orgId: org.orgId },
       ),
     ).rejects.toMatchObject({ code: 'INVALID_STORAGE_KEY' });
-    // Users cannot run the export query or record an export.
+    // Nor a file key of the org itself: exports live under export/ only.
+    await expect(
+      workerRuntime.execute(
+        'kernel.org.export.record',
+        { ...record, manifestKey: fileKey(org.orgId, record.manifestSha256) },
+        { actor: { type: 'system', component: 'test' }, orgId: org.orgId },
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_STORAGE_KEY' });
+    // Parts must cover every table with chunks in order.
+    await expect(
+      workerRuntime.execute('kernel.org.export.record', { ...record, parts: record.parts.slice(1) }, { actor: { type: 'system', component: 'test' }, orgId: org.orgId }),
+    ).rejects.toMatchObject({ code: 'VALIDATION' });
+    // Users cannot run the export query or record an export, and it never answers outside a stream.
     await expect(runtime.query('kernel.org.export.snapshot', { table: 'kernel.party' }, { actor: asUser(owner.id), orgId: org.orgId })).rejects.toMatchObject({
       status: 403,
+    });
+    await expect(runtime.stream('kernel.org.export.snapshot', {}, { actor: asUser(owner.id), orgId: org.orgId }, async () => {})).rejects.toMatchObject({
+      status: 403,
+    });
+    await expect(workerRuntime.query('kernel.org.export.snapshot', {}, { actor: { type: 'system', component: 'test' }, orgId: org.orgId })).rejects.toMatchObject({
+      code: 'STREAM_ONLY',
     });
 
     // Download through the API: owners only, parts named by the recorded export.
@@ -271,7 +307,13 @@ suite('org offboarding on PostgreSQL (#38)', () => {
       [owner.id, other.owner.id].map((id) => [id, { userId: id, email: '', name: null, aal: 'aal1', sessionId: randomUUID(), mfaAt: null }]),
     );
     const app = createHttpApp({
-      config: loadConfig({ DATABASE_URL: appUrl, AUTH_JWT_SECRET: 'test-only-jwt-secret-for-export-0123456789', AUTH_ISSUER: 'test-auth', WEB_DIST: '/nonexistent' }),
+      config: loadConfig({
+        DATABASE_URL: appUrl,
+        AUTH_JWT_SECRET: 'test-only-jwt-secret-for-export-0123456789',
+        AUTH_ISSUER: 'test-auth',
+        WEB_DIST: '/nonexistent',
+        EXPORT_ENCRYPTION_KEY: exportKeyBytes.toString('base64'),
+      }),
       runtime,
       store,
       authenticate: async (header) => users.get(String(header).replace('Bearer ', ''))!,
@@ -283,12 +325,128 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     const manifestResponse = await get('/api/org-export/manifest', owner.id, org.slug);
     expect(manifestResponse.status).toBe(200);
     expect(manifestResponse.headers.get('content-disposition')).toContain('attachment');
-    expect(sha256Hex(new Uint8Array(await manifestResponse.arrayBuffer()))).toBe(record.manifestSha256);
-    const partyResponse = await get('/api/org-export/kernel.party', owner.id, org.slug);
-    expect(sha256Hex(new Uint8Array(await partyResponse.arrayBuffer()))).toBe(part('kernel.party').sha256);
+    expect(JSON.parse(await manifestResponse.text())).toEqual(manifest);
+    const memberResponse = await get('/api/org-export/kernel.tenant_member', owner.id, org.slug);
+    expect(memberResponse.headers.get('content-type')).toContain('application/x-ndjson');
+    expect(lines(await memberResponse.text()).map((r) => r.user_id).sort()).toEqual([owner.id, member.id].sort());
     expect((await get('/api/org-export/kernel.nope', owner.id, org.slug)).status).toBe(404);
     // Another org's owner gets nothing from this org, and nothing of their own yet.
     expect((await get('/api/org-export/manifest', other.owner.id, org.slug)).status).toBe(403);
     expect((await get('/api/org-export/manifest', other.owner.id, other.org.slug)).status).toBe(404);
+
+    // A stored part replaced behind the record's back is never served.
+    const victim = part('kernel.party');
+    const original = store.blobs.get(victim.key)!;
+    store.blobs.set(victim.key, sealer.seal(new TextEncoder().encode('{"forged":true}\n'), exportAad(org.orgId, victim)));
+    expect((await get('/api/org-export/kernel.party', owner.id, org.slug)).status).toBe(500);
+    store.blobs.set(victim.key, original);
+    expect((await get('/api/org-export/kernel.party', owner.id, org.slug)).status).toBe(200);
+
+    // An export past its expiry is refused even before the retention job deletes its blobs.
+    await runOrgExport({ runtime: workerRuntime, store, sealer }, org.orgId, { now: () => new Date('2020-01-01T00:00:00Z') });
+    const stale = await get('/api/org-export/manifest', owner.id, org.slug);
+    expect(stale.status).toBe(404);
+    expect(await stale.json()).toMatchObject({ code: 'EXPORT_EXPIRED' });
+
+    // The retention job keeps exactly the blobs of records that have not expired: the first export's, not the stale one's.
+    const system = { actor: { type: 'system' as const, component: 'test' }, orgId: org.orgId };
+    const live = new Set(await workerRuntime.query<string[]>('kernel.org.export.live_keys', {}, system));
+    expect(live).toEqual(new Set([record.manifestKey, ...record.parts.map((p) => p.key)]));
+    await expect(runtime.query('kernel.org.export.live_keys', {}, { actor: asUser(owner.id), orgId: org.orgId })).rejects.toMatchObject({ status: 403 });
   });
+
+  it('runs a streamed query in one REPEATABLE READ, READ ONLY transaction that may idle while the sink works', async () => {
+    const { org } = await orgWithMember('Công ty Luồng');
+    const probe = defineQuery({
+      name: 'kernel.test.stream_probe',
+      input: z.object({}),
+      access: 'system',
+      stream: true,
+      handler: async (ctx, _input, sink) => {
+        const { rows } = await sql<Record<string, string>>`
+          SELECT current_setting('transaction_isolation') AS isolation, current_setting('transaction_read_only') AS read_only,
+                 current_setting('idle_in_transaction_session_timeout') AS idle`.execute(ctx.trx);
+        await sink?.(rows[0]);
+        return 'done';
+      },
+    });
+    const probing = new Runtime(createDb(workerPool)).register({ queries: [probe] });
+    const seen: unknown[] = [];
+    await expect(probing.stream('kernel.test.stream_probe', {}, { actor: { type: 'system', component: 'test' }, orgId: org.orgId }, async (b) => {
+      seen.push(b);
+    })).resolves.toBe('done');
+    expect(seen).toEqual([{ isolation: 'repeatable read', read_only: 'on', idle: '10min' }]);
+    // A plain query refuses it, and stream() refuses a query that does not stream.
+    await expect(probing.query('kernel.test.stream_probe', {}, { actor: { type: 'system', component: 'test' }, orgId: org.orgId })).rejects.toMatchObject({ code: 'STREAM_ONLY' });
+    await expect(workerRuntime.stream('kernel.org.export.live_keys', {}, { actor: { type: 'system', component: 'test' }, orgId: org.orgId }, async () => {})).rejects.toMatchObject({
+      code: 'NOT_STREAMED',
+    });
+  });
+
+  it('streams a large table in bounded chunks from one snapshot, and expires the download', async () => {
+    const { org, owner } = await orgWithMember('Công ty Lớn');
+    await runtime.execute('kernel.org.offboard', { confirmSlug: org.slug }, { actor: asMfa(owner.id), orgId: org.orgId });
+    const ROWS = 250_000;
+    // Synthetic parties, written as the database owner (test data only).
+    await withAdmin((admin) =>
+      admin.query(`INSERT INTO crove_kernel.party (org_id, name, tax_code) SELECT $1, 'Nhà cung cấp ' || g, lpad(g::text, 10, '0') FROM generate_series(1, $2) g`, [org.orgId, ROWS]),
+    );
+    // Wraps the export's stream to watch the batches and to write while it reads: a party added after the snapshot
+    // began must not appear in the export.
+    let maxBatch = 0;
+    let sneaked = false;
+    const watching = Object.create(workerRuntime) as Runtime;
+    watching.stream = (name, input, options, sink) =>
+      workerRuntime.stream(name, input, options, async (batch) => {
+        const b = batch as { table: string; lines: string[] };
+        maxBatch = Math.max(maxBatch, b.lines.length);
+        if (!sneaked && b.table === 'kernel.tenant') {
+          sneaked = true;
+          await withAdmin((admin) => admin.query(`INSERT INTO crove_kernel.party (org_id, name) VALUES ($1, 'Sau ảnh chụp')`, [org.orgId]));
+        }
+        await sink(batch);
+      });
+    const chunkBytes = 4 * 1024 * 1024;
+    const started = Date.now();
+    const record = await runOrgExport({ runtime: watching, store, sealer }, org.orgId, { chunkBytes });
+    expect(Date.now() - started).toBeLessThan(25_000);
+    expect(maxBatch).toBeLessThanOrEqual(1000);
+    const parties = record.parts.filter((p) => p.table === 'kernel.party');
+    expect(parties.length).toBeGreaterThan(1);
+    expect(parties.map((p) => p.chunk)).toEqual(parties.map((_, i) => i));
+    expect(parties.every((p) => p.bytes <= chunkBytes)).toBe(true);
+    expect(parties.reduce((n, p) => n + p.rows, 0)).toBe(ROWS);
+
+    const users = new Map<string, AuthUser>([[owner.id, { userId: owner.id, email: '', name: null, aal: 'aal1', sessionId: randomUUID(), mfaAt: null }]]);
+    const app = createHttpApp({
+      config: loadConfig({
+        DATABASE_URL: appUrl,
+        AUTH_JWT_SECRET: 'test-only-jwt-secret-for-export-0123456789',
+        AUTH_ISSUER: 'test-auth',
+        WEB_DIST: '/nonexistent',
+        EXPORT_ENCRYPTION_KEY: exportKeyBytes.toString('base64'),
+      }),
+      runtime,
+      store,
+      authenticate: async (header) => users.get(String(header).replace('Bearer ', ''))!,
+      pool,
+      aiEnabled: false,
+    });
+    const response = await app.request('/api/org-export/kernel.party', { headers: { authorization: `Bearer ${owner.id}`, 'x-crove-org': org.slug } });
+    expect(response.status).toBe(200);
+    expect(Number(response.headers.get('content-length'))).toBe(parties.reduce((n, p) => n + p.bytes, 0));
+    const text = await response.text();
+    const names = new Set<string>();
+    let count = 0;
+    for (const line of text.split('\n')) {
+      if (!line) continue;
+      const row = JSON.parse(line) as { name: string };
+      names.add(row.name);
+      count++;
+    }
+    expect(count).toBe(ROWS);
+    expect(names.size).toBe(ROWS);
+    expect(names.has('Sau ảnh chụp')).toBe(false);
+
+  }, 120_000);
 });

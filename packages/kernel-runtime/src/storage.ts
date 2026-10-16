@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
-import { link as fsLink, mkdir, open, readFile, readdir, rm, stat, type FileHandle } from 'node:fs/promises';
+import { link as fsLink, mkdir, open, opendir, readFile, readdir, rm, stat, type FileHandle } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 
 // Object storage adapter. Local disk is the default; S3-compatible stores implement the same interface.
@@ -30,6 +30,26 @@ export interface BlobStore {
   // `limit` keys per call. For stores without a lifecycle rule on staging/; the worker's daily retention job calls
   // it. Absent where no staging objects exist (local disk).
   sweepStaging?(before: Date, limit: number): Promise<StagingSweep>;
+  // One page of the blobs under inbound/ or export/, in key order, starting after the key `after` (null: from the
+  // start) and looking at no more than `limit` keys. For the daily retention job, which decides what to delete (issue
+  // #212); keys outside the prefix's pattern (temporary files, foreign objects) are never returned. Absent on a store
+  // that cannot list.
+  list?(prefix: ListPrefix, after: string | null, limit: number): Promise<BlobListing>;
+}
+
+// The prefixes the retention job sweeps: raw inbound mail and org exports. Never org/ (evidence) or staging/ (its own
+// sweep).
+export type ListPrefix = 'inbound/' | 'export/';
+
+export interface ListedBlob {
+  key: string;
+  lastModified: Date;
+}
+
+export interface BlobListing {
+  blobs: ListedBlob[];
+  // Pass as `after` for the next page; null when the listing reached the end.
+  next: string | null;
 }
 
 export interface StagingSweep {
@@ -133,6 +153,12 @@ export function fileKey(orgId: string, sha256: string): string {
   return `org/${orgId}/${sha256}`;
 }
 
+// An org export part (issue #212): content addressed like a file, under its own prefix, so the retention job can
+// expire exports without ever touching a file blob (org/<org_id>/...), even one with the same bytes.
+export function exportKey(orgId: string, sha256: string): string {
+  return `export/${orgId}/${sha256}`;
+}
+
 // Raw inbound email, stored by the API before any org is known, under a random id per delivery so the
 // worker can delete it once handled without counting references. Only the worker reads it.
 export function inboundKey(blobId: string): string {
@@ -157,16 +183,36 @@ export function isStagingKey(key: string): boolean {
   return /^staging\/[0-9a-f]{64}$/.test(key);
 }
 
-const KEY_PATTERN = /^(?:org\/[0-9a-f-]{36}|inbound|staging)\/[0-9a-f]{64}$/;
+const KEY_PATTERN = /^(?:(?:org|export)\/[0-9a-f-]{36}|inbound|staging)\/[0-9a-f]{64}$/;
+// The keys a listing of each sweepable prefix returns.
+const LISTED_KEY: Record<ListPrefix, RegExp> = {
+  'inbound/': /^inbound\/[0-9a-f]{64}$/,
+  'export/': /^export\/[0-9a-f-]{36}\/[0-9a-f]{64}$/,
+};
 
-// Every store accepts the same keys: org/<org_id>/<sha256> (plan §7.6), inbound/<random id> and staging/<random id>.
+// Every store accepts the same keys: org/<org_id>/<sha256> (plan §7.6), export/<org_id>/<sha256>, inbound/<random id>
+// and staging/<random id>.
 export function assertStorageKey(key: string): void {
   if (!KEY_PATTERN.test(key)) throw new Error('invalid storage key');
 }
 
-// Org keys are content addresses: their last segment must be the sha256 of the bytes stored under them.
+// Whether a listing of the prefix may return the key.
+export function isListedKey(prefix: ListPrefix, key: string): boolean {
+  return LISTED_KEY[prefix].test(key);
+}
+
+// Checks the arguments of BlobStore.list, the same for every store.
+export function assertListArgs(prefix: ListPrefix, after: string | null, limit: number): void {
+  if (!Object.hasOwn(LISTED_KEY, prefix)) throw new Error('invalid list prefix');
+  if (after !== null && (typeof after !== 'string' || !after.startsWith(prefix) || after.length > 200)) throw new Error('invalid list cursor');
+  if (!Number.isInteger(limit) || limit < 1) throw new Error('invalid list limit');
+}
+
+// Org and export keys are content addresses: their last segment must be the sha256 of the bytes stored under them.
 export function assertContentAddress(key: string, sha256: string): void {
-  if (key.startsWith('org/') && !key.endsWith(`/${sha256}`)) throw new Error('storage key does not match the content sha256');
+  if ((key.startsWith('org/') || key.startsWith('export/')) && !key.endsWith(`/${sha256}`)) {
+    throw new Error('storage key does not match the content sha256');
+  }
 }
 
 // Raised by every store for a missing blob, so callers never depend on which store is configured.
@@ -332,13 +378,15 @@ export class LocalDiskStore implements BlobStore {
   }
 
   // Removes temporary files that a crashed put left behind, once they are older than maxAgeMs. It looks only where
-  // put writes (inbound/ and org/<org_id>/) and only at the names put gives its temporary files, so it never
-  // touches a blob. Returns how many it removed. Called once at startup.
+  // put writes (inbound/, org/<org_id>/ and export/<org_id>/) and only at the names put gives its temporary files,
+  // so it never touches a blob. Returns how many it removed. Called once at startup.
   async sweepTempFiles(maxAgeMs: number = STALE_TEMP_AGE_MS): Promise<number> {
     const cutoff = Date.now() - maxAgeMs;
     const dirs = [join(this.root, 'inbound')];
-    for (const org of await entries(join(this.root, 'org'))) {
-      if (org.isDirectory() && UUID_DIR.test(org.name)) dirs.push(join(this.root, 'org', org.name));
+    for (const top of ['org', 'export']) {
+      for (const org of await entries(join(this.root, top))) {
+        if (org.isDirectory() && UUID_DIR.test(org.name)) dirs.push(join(this.root, top, org.name));
+      }
     }
     let removed = 0;
     for (const dir of dirs) {
@@ -371,6 +419,54 @@ export class LocalDiskStore implements BlobStore {
   async delete(key: string): Promise<void> {
     await rm(this.path(key), { force: true });
   }
+
+  // Lists inbound/<id> or export/<org_id>/<sha256> files in key order. The directories are walked once per call and
+  // only the smallest keys after `after` are kept (one more than the limit, to know whether more remain), so memory
+  // stays bounded by the page however many files there are. Temporary files of put are skipped.
+  async list(prefix: ListPrefix, after: string | null, limit: number): Promise<BlobListing> {
+    assertListArgs(prefix, after, limit);
+    const keep = limit + 1;
+    let page: string[] = [];
+    const consider = (key: string) => {
+      if (!isListedKey(prefix, key) || (after !== null && key <= after)) return;
+      page.push(key);
+      if (page.length >= keep * 4) page = page.sort().slice(0, keep);
+    };
+    if (prefix === 'inbound/') {
+      for await (const entry of walk(join(this.root, 'inbound'))) if (entry.isFile()) consider(`inbound/${entry.name}`);
+    } else {
+      for await (const org of walk(join(this.root, 'export'))) {
+        if (!org.isDirectory() || !UUID_DIR.test(org.name)) continue;
+        // Every key of a directory before the cursor's directory sorts before the cursor.
+        if (after !== null && `export/${org.name}/` < after.slice(0, 'export/'.length + 37)) continue;
+        for await (const entry of walk(join(this.root, 'export', org.name))) if (entry.isFile()) consider(`export/${org.name}/${entry.name}`);
+      }
+    }
+    page = page.sort().slice(0, keep);
+    const keys = page.slice(0, limit);
+    const blobs: ListedBlob[] = [];
+    for (const key of keys) {
+      try {
+        blobs.push({ key, lastModified: (await stat(this.path(key))).mtime });
+      } catch (error) {
+        // Deleted since the walk: not listed.
+        if (errorCode(error) !== 'ENOENT') throw error;
+      }
+    }
+    return { blobs, next: page.length > limit ? (keys.at(-1) ?? null) : null };
+  }
+}
+
+// The entries of a directory one by one, or none when it does not exist yet.
+async function* walk(dir: string): AsyncGenerator<Dirent> {
+  let handle;
+  try {
+    handle = await opendir(dir);
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return;
+    throw error;
+  }
+  for await (const entry of handle) yield entry;
 }
 
 // The entries of a directory, or none when it does not exist yet.
