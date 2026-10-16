@@ -37,6 +37,8 @@ catalog:
   fast-xml-parser: 5.11.2
   hono: 4.13.13
   jose: 6.2.12
+  kanel: 4.0.4
+  kanel-kysely: 4.0.0
   kysely: 0.29.6
   lucide-react: 1.56.0
   next: 16.4.0
