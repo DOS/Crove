@@ -110,6 +110,8 @@ export const en = {
     reversesLink: 'Reverses the entry of {date}',
     reversedByLink: 'Reversed by the entry of {date}',
     reverse: 'Reverse entry',
+    reversalPendingBadge: 'Reversal pending',
+    reversalPendingLink: 'View the pending reversal proposal',
   },
   reversal: {
     intro:
@@ -248,6 +250,8 @@ export const en = {
     originalDebit: 'Debit (original)',
     originalCredit: 'Credit (original)',
     alreadyReversed: 'This entry was already reversed on {date}.',
+    hiddenLines:
+      'You see only the lines you may view, and they do not balance, so the entry has lines hidden from you. On approval, Crove reverses every line; if the approver cannot view them all, the approval is refused.',
     purchaseDocument: 'The entry records purchase document {document} from {vendor}.',
     documentAlreadyVoided: 'This document is already voided in the books of Crove.',
     documentWillVoid:

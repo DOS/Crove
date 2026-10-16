@@ -14,12 +14,17 @@ export const MAX_REASON_LENGTH = 500;
 interface EntryLinks {
   reverses: { id: string } | null;
   reversedBy: { id: string } | null;
+  // A reversal proposal of the entry waiting for approval (#204).
+  pendingReversalId?: string | null | undefined;
 }
 
 // Whether the journal screen offers the reversal: not for a reversal (it cannot be reversed; post a new entry), not
-// for an entry already reversed, and not for viewers.
+// for an entry already reversed or with a reversal waiting for approval (the server refuses a second request), and not
+// for viewers.
 export function canAskReversal(entry: EntryLinks, role: string | null | undefined): boolean {
-  return Boolean(role && REQUESTERS.includes(role)) && entry.reverses === null && entry.reversedBy === null;
+  return (
+    Boolean(role && REQUESTERS.includes(role)) && entry.reverses === null && entry.reversedBy === null && !entry.pendingReversalId
+  );
 }
 
 // Today as YYYY-MM-DD in the user's time zone, the default date of a reversal.

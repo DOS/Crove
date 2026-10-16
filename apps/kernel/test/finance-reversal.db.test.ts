@@ -268,6 +268,8 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
       id: firstEntry,
       reverses: null,
       reversedBy: null,
+      // The journal shows the pending request instead of offering another (#204).
+      pendingReversalId: proposalId,
       document: { id: firstDocument, voided: false },
     });
 
@@ -287,7 +289,12 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
   it('shows the reversal link both ways and the voided document', async () => {
     const journal = await rpc('journal/list', await tokenFor(viewer), {});
     const byId = new Map<string, any>((journal.body as any[]).map((e) => [e.id, e]));
-    expect(byId.get(firstEntry)).toMatchObject({ reverses: null, reversedBy: { id: reversalEntry, entryDate: '2026-10-15' }, document: { voided: true } });
+    expect(byId.get(firstEntry)).toMatchObject({
+      reverses: null,
+      reversedBy: { id: reversalEntry, entryDate: '2026-10-15' },
+      pendingReversalId: null,
+      document: { voided: true },
+    });
     expect(byId.get(reversalEntry)).toMatchObject({ reverses: { id: firstEntry, entryDate: '2026-09-15' }, reversedBy: null, sourceType: 'kernel.proposal' });
     expect(byId.get(reversalEntry)).not.toHaveProperty('document');
 
@@ -397,6 +404,92 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     });
   });
 
+  it('commits a reversal of a purchase entry only with the void of its document, for every writer (#204)', async () => {
+    // The entry of the second document, which is in force, and the mirror of its lines.
+    const { entry, lines } = await admin(async (c) => {
+      const found = await c.query<{ id: string }>(
+        `SELECT id FROM crove_finance.journal_entry WHERE org_id = $1 AND source_type = 'finance.purchase_document' AND source_id = $2`,
+        [org.orgId, secondDocument],
+      );
+      const id = found.rows[0]?.id ?? '';
+      const rows = await c.query<{ line_no: number; account_code: string; debit: string; credit: string; party_id: string | null; memo: string | null }>(
+        `SELECT line_no, account_code, debit::text, credit::text, party_id, memo FROM crove_finance.journal_line WHERE org_id = $1 AND entry_id = $2 ORDER BY line_no`,
+        [org.orgId, id],
+      );
+      return { entry: id, lines: rows.rows };
+    });
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+    const mirror = lines.map((l) => ({ ...l, debit: l.credit, credit: l.debit }));
+    const unvoided = /must void purchase document/;
+
+    // The API login role in the owner's context, calling the posting function with p_reverses_entry_id and writing no
+    // void: the mirror is exact, but the commit is refused.
+    const client = new pg.Client({ connectionString: appUrl });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner.userId, org.orgId]);
+      await client.query(`SELECT crove_finance.post_journal_entry('2026-10-16'::date, 'Đảo trực tiếp', 'test', $1::uuid, $2::jsonb, $3::uuid)`, [
+        randomUUID(),
+        JSON.stringify(mirror),
+        entry,
+      ]);
+      await expect(client.query('COMMIT')).rejects.toMatchObject({ code: '23514', message: expect.stringMatching(unvoided) });
+    } finally {
+      await client.query('ROLLBACK').catch(() => {});
+      await client.end();
+    }
+
+    // A superuser writing the rows directly is held to the same rule: refused at commit without the void, and when
+    // the check is run early before the void is written; accepted with the void (rolled back, so the document stays
+    // in force).
+    await admin(async (c) => {
+      const attempt = async (options: { void: boolean; early: boolean; commit: boolean }) => {
+        await c.query('BEGIN');
+        try {
+          const reversal = randomUUID();
+          await c.query(
+            `INSERT INTO crove_finance.journal_entry (org_id, id, entry_date, description, source_type, source_id, reverses_entry_id)
+             VALUES ($1, $2, '2026-10-16', 'Đảo trực tiếp', 'test', gen_random_uuid(), $3)`,
+            [org.orgId, reversal, entry],
+          );
+          for (const l of mirror) {
+            await c.query(
+              `INSERT INTO crove_finance.journal_line (org_id, entry_id, line_no, account_code, debit, credit, party_id, memo) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              [org.orgId, reversal, l.line_no, l.account_code, l.debit, l.credit, l.party_id, l.memo],
+            );
+          }
+          if (options.early) await c.query('SET CONSTRAINTS crove_finance.journal_entry_reversal_voids IMMEDIATE');
+          if (options.void) {
+            await c.query(`INSERT INTO crove_finance.purchase_document_void (org_id, document_id, reversal_entry_id, reason) VALUES ($1, $2, $3, 'x')`, [
+              org.orgId,
+              secondDocument,
+              reversal,
+            ]);
+          }
+          if (options.commit) {
+            await c.query('COMMIT');
+          } else {
+            await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+            await c.query('ROLLBACK');
+          }
+          return null;
+        } catch (error) {
+          await c.query('ROLLBACK').catch(() => {});
+          return error;
+        }
+      };
+      expect(await attempt({ void: false, early: false, commit: true })).toMatchObject({ code: '23514', message: expect.stringMatching(unvoided) });
+      expect(await attempt({ void: true, early: true, commit: true })).toMatchObject({ code: '23514', message: expect.stringMatching(unvoided) });
+      expect(await attempt({ void: true, early: false, commit: false })).toBeNull();
+    });
+
+    // Nothing was committed: the entry has no reversal and its document is still in force.
+    const documents = await rpc('documents/list', await tokenFor(owner), {});
+    expect((documents.body as any[]).find((d) => d.id === secondDocument)).toMatchObject({ voided: null });
+    expect((await rpc('journal/get', await tokenFor(owner), { id: entry })).body).toMatchObject({ reversedBy: null });
+  });
+
   it('explains a reversal the approver cannot see in full', async () => {
     await admin((c) =>
       c.query(`CREATE POLICY crove_test_le_scope_165 ON crove_finance.journal_line AS RESTRICTIVE FOR SELECT TO crove_tenant
@@ -457,8 +550,10 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     const entry = randomUUID();
     const reversal = randomUUID();
     await admin(async (c) => {
-      // A purchase entry and its reversal, written as they were before voids existed (no void row).
+      // A purchase entry and its reversal, written as they were before voids existed (no void row). The rule that such
+      // a reversal commits only with its void (20261018030000) came later, so it is switched off for this legacy write.
       await c.query('BEGIN');
+      await c.query('ALTER TABLE crove_finance.journal_entry DISABLE TRIGGER journal_entry_reversal_voids');
       await c.query(
         `INSERT INTO crove_finance.purchase_document (org_id, id, party_id, invoice_number, invoice_date, subtotal, vat_amount, total)
          SELECT org_id, $2, party_id, '7900', '2026-10-01', 100, 10, 110 FROM crove_finance.purchase_document WHERE org_id = $1 LIMIT 1`,
@@ -473,6 +568,8 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
       await c.query(line, [org.orgId, entry, 2, '331', 0, 110]);
       await c.query(line, [org.orgId, reversal, 1, '6422', 0, 110]);
       await c.query(line, [org.orgId, reversal, 2, '331', 110, 0]);
+      await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+      await c.query('ALTER TABLE crove_finance.journal_entry ENABLE TRIGGER journal_entry_reversal_voids');
       await c.query('COMMIT');
       // Applying the migration again backfills the void, once.
       for (let run = 0; run < 2; run += 1) {

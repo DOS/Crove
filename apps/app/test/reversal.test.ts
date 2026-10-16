@@ -22,6 +22,11 @@ describe('canAskReversal', () => {
     expect(canAskReversal({ reverses: ref, reversedBy: null }, 'owner')).toBe(false);
     expect(canAskReversal({ reverses: null, reversedBy: ref }, 'owner')).toBe(false);
   });
+
+  it('does not offer it again while a reversal of the entry waits for approval (#204)', () => {
+    expect(canAskReversal({ ...plain, pendingReversalId: ref.id }, 'owner')).toBe(false);
+    expect(canAskReversal({ ...plain, pendingReversalId: null }, 'owner')).toBe(true);
+  });
 });
 
 describe('reversal dates', () => {

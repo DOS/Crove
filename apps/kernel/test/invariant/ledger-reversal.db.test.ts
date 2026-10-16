@@ -112,6 +112,20 @@ suite('journal reversal on PostgreSQL (#138)', () => {
       { actor, orgId, idempotencyKey: randomUUID() },
     );
 
+  // A second open proposal for an entry that already has one, copied as the database owner (authorId sets who asked).
+  // A user's second request for the same entry is about to be refused while the first is pending (#204), but a
+  // proposal raised before that rule, or by any other writer, must still meet the checks at approval tested here.
+  const copyProposal = (orgId: string, id: string, authorId?: string) =>
+    withAdmin(async (a) => {
+      const { rows } = await a.query<{ id: string }>(
+        `INSERT INTO crove_kernel.proposal (org_id, kind, command, title, payload, eligible_approvers, authors)
+         SELECT org_id, kind, command, title, payload, eligible_approvers, coalesce($3::jsonb, authors)
+         FROM crove_kernel.proposal WHERE org_id = $1 AND id = $2 RETURNING id`,
+        [orgId, id, authorId ? JSON.stringify([{ type: 'user', id: authorId }]) : null],
+      );
+      return { proposalId: rows[0]?.id ?? '' };
+    });
+
   const SALE: Line[] = [
     { line_no: 1, account_code: '6422', debit: '100.5', credit: '0', memo: 'Văn phòng phẩm' },
     { line_no: 2, account_code: '1331', debit: '10.05', credit: '0', memo: null },
@@ -245,7 +259,7 @@ suite('journal reversal on PostgreSQL (#138)', () => {
 
     // Two proposals for one entry: the second approval, after the first, is refused and leaves its proposal pending.
     const first = await request(solo, users.solo, { entryId: fresh, entryDate: '2026-10-10' });
-    const second = await request(solo, users.solo, { entryId: fresh });
+    const second = await copyProposal(solo, first.proposalId);
     await approve(solo, asMfa(users.solo), first.proposalId);
     await expect(approve(solo, asMfa(users.solo), second.proposalId)).rejects.toMatchObject({ code: 'ALREADY_REVERSED', status: 409 });
     const status = await withAdmin((a) =>
@@ -257,7 +271,7 @@ suite('journal reversal on PostgreSQL (#138)', () => {
   it('lets exactly one of two concurrent reversals of the same entry win', async () => {
     const entry = await original(users.solo, solo, SALE);
     const a = await request(solo, users.solo, { entryId: entry });
-    const b = await request(solo, users.solo, { entryId: entry });
+    const b = await copyProposal(solo, a.proposalId);
     const results = await Promise.allSettled([approve(solo, asMfa(users.solo), a.proposalId), approve(solo, asMfa(users.solo), b.proposalId)]);
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
@@ -317,7 +331,7 @@ suite('journal reversal on PostgreSQL (#138)', () => {
     expect([...(snapshot.rows[0]?.eligible_approvers ?? [])].sort()).toEqual([users.owner, users.admin].sort());
 
     // The admin asks, so the admin may not approve their own request while another approver exists (P10).
-    const byAdmin = await request(team, users.admin, { entryId: entry });
+    const byAdmin = await copyProposal(team, byMember.proposalId, users.admin);
     await expect(approve(team, asMfa(users.admin), byAdmin.proposalId)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED', status: 403 });
     // The owner approves, but only with a fresh second factor (P11).
     await expect(approve(team, asUser(users.owner), byAdmin.proposalId)).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED', status: 403 });

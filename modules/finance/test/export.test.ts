@@ -19,6 +19,7 @@ function entry(id: string, amount: string, overrides: Partial<JournalEntryView> 
     ],
     reverses: null,
     reversedBy: null,
+    pendingReversalId: null,
     document: { id, series: '1C26TAA', number: '00000123', issueDate: '2026-09-30', partyName: 'Công ty TNHH ABC', partyTaxCode: '0101234564', voided: false },
     ...overrides,
   };

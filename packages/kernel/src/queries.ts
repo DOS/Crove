@@ -13,7 +13,7 @@ import {
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
 import { EDITOR_ROLES, decideApproval, proposalEditable } from './approval.ts';
-import { MAX_EXTRACTION_VERSIONS, REEXTRACT_STALE_MINUTES, STALE_RUN_ERROR, executedButVoided, latestExtraction } from './extraction.ts';
+import { MAX_EXTRACTION_VERSIONS, REEXTRACT_STALE_MINUTES, STALE_RUN_ERROR, executedButVoided, latestExtraction, voidedProposals } from './extraction.ts';
 import { agentQueries } from './agents.ts';
 import { channelQueries } from './channels.ts';
 import { inviteQueries } from './invites.ts';
@@ -276,18 +276,6 @@ export const filesRecent = defineQuery({
           eb
             .selectFrom('crove_kernel.proposal as q')
             .select(['q.id', 'q.status', 'q.duplicate_of'])
-            // An executed purchase whose document was voided by a reversal (#165) may be read again.
-            .select(({ exists, selectFrom }) =>
-              exists(
-                selectFrom('crove_finance.purchase_document as d')
-                  .innerJoin('crove_finance.purchase_document_void as v', (join) =>
-                    join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'),
-                  )
-                  .select('d.id')
-                  .whereRef('d.org_id', '=', 'q.org_id')
-                  .whereRef('d.proposal_id', '=', 'q.id'),
-              ).as('voided'),
-            )
             .whereRef('q.org_id', '=', 'f.org_id')
             .whereRef('q.source_file_id', '=', 'f.id')
             .orderBy('q.created_at', 'desc')
@@ -308,12 +296,16 @@ export const filesRecent = defineQuery({
         'p.id as proposal_id',
         'p.status as proposal_status',
         'p.duplicate_of',
-        'p.voided',
       ])
       .where('f.org_id', '=', ctx.orgId)
       .orderBy('f.created_at', 'desc')
       .limit(50)
       .execute();
+    // An executed purchase whose document was voided by a reversal (#165) may be read again.
+    const voided = await voidedProposals(
+      ctx,
+      rows.flatMap((r) => (r.proposal_id && r.proposal_status === 'executed' ? [r.proposal_id] : [])),
+    );
     const editor = ctx.actor.type === 'user' && ctx.role !== null && EDITOR_ROLES.includes(ctx.role);
     return rows.map((r) => {
       const status =
@@ -337,7 +329,7 @@ export const filesRecent = defineQuery({
           editor &&
           Boolean(r.extraction_status) &&
           !r.in_flight &&
-          (r.proposal_status !== 'executed' || r.voided === true) &&
+          (r.proposal_status !== 'executed' || (r.proposal_id !== null && voided.has(r.proposal_id))) &&
           (r.version ?? 0) < MAX_EXTRACTION_VERSIONS,
         createdAt: r.created_at.toISOString(),
       };

@@ -1,7 +1,9 @@
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId, zLocalDate } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery, type QueryContext } from '@crove/kernel-runtime';
+import { REVERSAL_KIND } from './reversal.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const zRange = z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() });
@@ -110,6 +112,8 @@ export interface JournalEntryView {
   // The reversal link, both ways (#138): the entry this one reverses, and the entry that reversed this one.
   reverses: EntryRef | null;
   reversedBy: EntryRef | null;
+  // The reversal proposal of this entry waiting for approval, if any (#204): a second request is refused meanwhile.
+  pendingReversalId: string | null;
   // The purchase document the entry records; voided once the entry is reversed (#165).
   document?: { id: string; series: string; number: string; issueDate: string; partyName: string; partyTaxCode: string | null; voided: boolean };
 }
@@ -171,6 +175,20 @@ async function loadEntries(
     .orderBy('l.entry_id')
     .orderBy('l.line_no')
     .execute();
+  // Reversal proposals waiting for approval, by the entry they name (#204).
+  const pending = await ctx.trx
+    .selectFrom('crove_kernel.proposal')
+    .select(['id', sql<string>`payload->>'entryId'`.as('entry_id')])
+    .where('org_id', '=', ctx.orgId)
+    .where('kind', '=', REVERSAL_KIND)
+    .where('status', '=', 'pending')
+    .where(
+      sql<string>`payload->>'entryId'`,
+      'in',
+      rows.map((r) => r.id),
+    )
+    .execute();
+  const pendingByEntry = new Map(pending.map((p) => [p.entry_id, p.id]));
   const byEntry = new Map<string, JournalEntryView['lines']>();
   for (const l of lines) {
     const list = byEntry.get(l.entry_id) ?? [];
@@ -186,6 +204,7 @@ async function loadEntries(
     lines: byEntry.get(r.id) ?? [],
     reverses: r.reverses_id && r.reverses_date ? { id: r.reverses_id, entryDate: r.reverses_date } : null,
     reversedBy: r.reversed_by_id && r.reversed_by_date ? { id: r.reversed_by_id, entryDate: r.reversed_by_date } : null,
+    pendingReversalId: pendingByEntry.get(r.id) ?? null,
     ...(r.document_id && r.invoice_number && r.invoice_date && r.party_name
       ? {
           document: {
@@ -217,6 +236,28 @@ export const journalGet = defineQuery({
     const [entry] = await loadEntries(ctx, { id: input.id, limit: 1 });
     if (!entry) throw new DomainError('ENTRY_NOT_FOUND', 404, 'Không tìm thấy bút toán');
     return entry;
+  },
+});
+
+// Of the given proposals, those whose recorded purchase document was voided by reversing its journal entry (#165).
+// The kernel asks this through ctx.query (#204), so it does not read the finance schema itself: such a proposal's file
+// may be read again into a new proposal.
+export const VOIDED_PROPOSALS_QUERY = 'finance.documents.voided_proposals';
+export const voidedProposals = defineQuery({
+  name: VOIDED_PROPOSALS_QUERY,
+  input: z.object({ proposalIds: z.array(zId).max(1000) }),
+  access: ALL,
+  handler: async (ctx, input): Promise<string[]> => {
+    if (input.proposalIds.length === 0) return [];
+    const rows = await ctx.trx
+      .selectFrom('crove_finance.purchase_document as d')
+      .innerJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
+      .select('d.proposal_id')
+      .distinct()
+      .where('d.org_id', '=', ctx.orgId)
+      .where('d.proposal_id', 'in', input.proposalIds)
+      .execute();
+    return rows.flatMap((r) => (r.proposal_id ? [r.proposal_id] : []));
   },
 });
 

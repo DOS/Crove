@@ -22,6 +22,17 @@ function toExact(value: string): bigint {
   return parse(value, EXACT, 8);
 }
 
+// Whether a decimal string is zero ("0", "0.0000", "-0.00"), however many decimals the server sends. Used to leave zero
+// amounts out of debit and credit columns; a string comparison would miss any other spelling of zero.
+export function isZeroAmount(value: string): boolean {
+  return /^[+-]?(0+(\.0*)?|\.0+)$/.test(value.trim());
+}
+
+// Whether the debits and credits of the lines add up to the same amount (exactly, on the 4 decimals money carries).
+export function linesBalance(lines: ReadonlyArray<{ debit: string; credit: string }>): boolean {
+  return lines.reduce((acc, l) => acc + toUnits(l.debit) - toUnits(l.credit), 0n) === 0n;
+}
+
 export function fromUnits(units: bigint): string {
   const negative = units < 0n;
   const abs = negative ? -units : units;

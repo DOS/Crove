@@ -11,7 +11,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { errorMessage, fetchFile, orpc, queryClient } from '../lib/api.ts';
-import { previewPurchaseJournal } from '../lib/decimal.ts';
+import { isZeroAmount, linesBalance, previewPurchaseJournal } from '../lib/decimal.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { reversalErrorMessage } from '../lib/reversal.ts';
 
@@ -107,12 +107,15 @@ function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDa
                   <td className="py-2 text-foreground">
                     <span className="font-mono">{l.accountCode}</span> <span className="text-subtle-foreground">{l.accountName}</span>
                   </td>
-                  <td className="py-2 text-right text-foreground tabular-nums">{l.debit !== '0' && l.debit !== '0.0000' ? f.money(l.debit) : ''}</td>
-                  <td className="py-2 text-right text-foreground tabular-nums">{l.credit !== '0' && l.credit !== '0.0000' ? f.money(l.credit) : ''}</td>
+                  <td className="py-2 text-right text-foreground tabular-nums">{isZeroAmount(l.debit) ? '' : f.money(l.debit)}</td>
+                  <td className="py-2 text-right text-foreground tabular-nums">{isZeroAmount(l.credit) ? '' : f.money(l.credit)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {/* The lines are the ones this viewer may see. A posted entry balances, so visible lines that do not mean some
+              are hidden from this viewer; the approval then reverses every line or is refused (partial_mirror). */}
+          {!linesBalance(entry.data.lines) && <p className="mt-3 text-sm text-warning">{t('hiddenLines')}</p>}
           {entry.data.reversedBy && <p className="mt-3 text-sm text-warning">{t('alreadyReversed', { date: f.date(entry.data.reversedBy.entryDate) })}</p>}
           {document && (
             <p className="mt-3 text-sm text-warning">
@@ -475,8 +478,8 @@ export function InboxDetailPage() {
                       <td className="py-2 text-foreground">
                         <span className="font-mono">{j.accountCode}</span> <span className="text-subtle-foreground">{accountName(j.accountCode)}</span>
                       </td>
-                      <td className="py-2 text-right text-foreground tabular-nums">{j.debit !== '0' ? money(j.debit) : ''}</td>
-                      <td className="py-2 text-right text-foreground tabular-nums">{j.credit !== '0' ? money(j.credit) : ''}</td>
+                      <td className="py-2 text-right text-foreground tabular-nums">{isZeroAmount(j.debit) ? '' : money(j.debit)}</td>
+                      <td className="py-2 text-right text-foreground tabular-nums">{isZeroAmount(j.credit) ? '' : money(j.credit)}</td>
                     </tr>
                   ))}
                 </tbody>
