@@ -34,6 +34,10 @@ describe('design-token lint (ui-colors)', () => {
     expect(theme.shades).toEqual(expect.arrayContaining(['50', '500', '950']));
   });
 
+  it('reads hyphenated palette names', () => {
+    expect(parseTailwindTheme('  --color-light-blue-500: oklch(1 0 0);').palettes).toEqual(['light-blue']);
+  });
+
   it('picks up a palette that a new Tailwind theme adds', () => {
     const theme = parseTailwindTheme('@theme default {\n  --color-plum-50: oklch(1 0 0);\n  --color-plum-975: oklch(0.1 0 0);\n  --color-ink: #000;\n  --spacing: 0.25rem;\n}');
     expect(theme).toEqual({ palettes: ['plum'], singles: ['ink'], shades: ['50', '975'] });
@@ -76,6 +80,8 @@ describe('design-token lint (ui-colors)', () => {
       "<p style={{ color: 'currentColor', background: 'transparent', borderColor: 'inherit' }} />",
       '<option className="bg-[Canvas] text-[CanvasText] bg-[transparent] text-[currentColor]" />',
       '<div className="data-[tone=red]:bg-primary group-data-[variant=white]/x:text-link bg-[--my-red] bg-[url(red.png)]" />',
+      '<div className="has-[[data-tone=red]]:bg-primary group-has-[[data-tone=red]]/card:text-link [&_[data-x=red]]:p-1" />',
+      '<div className="bg-[var(--brand_red)]" /><rect fill="url(#gold)" />',
       "const variant = { fill: 'primary', color: 'success' }; const [red] = values;",
     ];
     for (const text of ok) expect(matches(text), text).toEqual([]);

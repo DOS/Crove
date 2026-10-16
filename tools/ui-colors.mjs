@@ -25,7 +25,7 @@ export function parseTailwindTheme(css) {
   const palettes = new Set();
   const singles = new Set();
   const shades = new Set();
-  for (const m of css.matchAll(/^\s*--color-([a-z]+)(?:-(\d+))?\s*:/gm)) {
+  for (const m of css.matchAll(/^\s*--color-([a-z]+(?:-[a-z]+)*)(?:-(\d+))?\s*:/gm)) {
     if (m[2]) {
       palettes.add(m[1]);
       shades.add(m[2]);
@@ -69,15 +69,18 @@ const NAMED = new Set(
   ).split(' '),
 );
 
-// A CSS identifier on its own (not part of `--my-red`, `red-ish` or `red.png`).
-const IDENT = /(?<![\w-])[A-Za-z][\w-]*(?![\w.-])/g;
-// Places where a color value is written:
+// A CSS identifier on its own (not part of `--my-red`, `red-ish`, `red.png` or `#red`).
+const IDENT = /(?<![\w#-])[A-Za-z][\w-]*(?![\w.-])/g;
+// One bracketed Tailwind segment, which may hold one level of nested brackets (`has-[[data-tone=red]]:`).
+const SEGMENT = String.raw`((?:[^\[\]\s'"\`]|\[[^\[\]\s'"\`]*\])+)`;
+// Places where a color value is written; the first two are Tailwind arbitrary values (where `_` is a space).
+const TAILWIND_SPOTS = 2;
 const VALUE_SPOTS = [
   // Tailwind arbitrary values (`bg-[red]`, `shadow-[0_0_0_1px_red]`), not arbitrary variants (`data-[tone=red]:`,
   // `group-data-[tone=red]/card:`).
-  /-\[([^\]\s'"`]+)\](?!(?:\/[\w-]+)?:)/g,
+  new RegExp(String.raw`-\[${SEGMENT}\](?!(?:\/[\w-]+)?:)`, 'g'),
   // Tailwind arbitrary properties (`[color:red]`, `hover:[background:white]`).
-  /(?<![\w\])-])\[([a-z-]+:[^\]\s'"`]+)\](?!(?:\/[\w-]+)?:)/g,
+  new RegExp(String.raw`(?<![\w\])-])\[([a-z-]+:${SEGMENT.slice(1)}\](?!(?:\/[\w-]+)?:)`, 'g'),
   // Color attributes in JSX and SVG (`fill="white"`, `stroke={'red'}`, `stopColor="gold"`).
   /(?<![\w-])(?:fill|stroke|color|stopColor|stop-color|floodColor|flood-color|lightingColor|lighting-color|bgcolor)\s*=\s*\{?\s*(['"`])([^'"`\n]*)\1/g,
   // Style objects (`style={{ color: 'red', borderColor: "white" }}`, `'background-color': 'red'`).
@@ -110,12 +113,14 @@ function stripComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, blank).replace(/(^|[^:'"`\\])\/\/[^\n]*/g, (m, lead) => lead + blank(m.slice(lead.length)));
 }
 
-function namedColors(code, spot, found) {
+function namedColors(code, spot, tailwind, found) {
   for (const m of code.matchAll(spot)) {
     const value = m[m.length - 1];
     const start = m.index + m[0].lastIndexOf(value);
-    // Tailwind writes spaces as `_` in arbitrary values (`shadow-[0_0_0_1px_red]`); same length, so offsets hold.
-    for (const id of value.replaceAll('_', ' ').matchAll(IDENT)) {
+    // Tailwind writes spaces as `_` in arbitrary values (`shadow-[0_0_0_1px_red]`), but not in a variable name
+    // (`var(--brand_red)`); same length, so offsets hold.
+    const spaced = tailwind ? value.replace(/(--[\w-]+)|_/g, (m, name) => name ?? ' ') : value;
+    for (const id of spaced.matchAll(IDENT)) {
       if (NAMED.has(id[0].toLowerCase())) found.push({ at: start + id.index, match: id[0], what: 'CSS color name' });
     }
   }
@@ -132,7 +137,8 @@ export function findRawColors(text, { css = false, theme } = {}) {
   for (const { re, what } of active) {
     for (const m of code.matchAll(re)) found.push({ at: m.index, match: m[0], what });
   }
-  for (const spot of css ? [...VALUE_SPOTS.slice(0, 2), CSS_DECLARATION] : VALUE_SPOTS) namedColors(code, spot, found);
+  const spots = css ? [...VALUE_SPOTS.slice(0, TAILWIND_SPOTS), CSS_DECLARATION] : VALUE_SPOTS;
+  spots.forEach((spot, i) => namedColors(code, spot, i < TAILWIND_SPOTS, found));
   return found
     .sort((a, b) => a.at - b.at)
     .filter((f, i, all) => i === 0 || f.at !== all[i - 1].at)
