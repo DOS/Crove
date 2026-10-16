@@ -646,14 +646,24 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     await expect(acceptUp(token, invitee)).resolves.toMatchObject({ orgId, role: 'member' });
     expect(await memberships(invitee.id)).toEqual([{ org_id: orgId, role: 'member' }]);
 
-    // Today a Supabase Auth without the column skips the check (auth-grants warns); every Supabase Auth release has
-    // it. Failing closed here is the second step (#134), once every fixture's fake auth.users carries the column.
+    // A Supabase Auth without the column: every Supabase Auth release has it, and every fake auth.users in this suite
+    // now carries it (#208). Until the second step lands the check is skipped (auth-grants warns); after it, invites
+    // fail closed with 503. Both are accepted here, so this copy of the suite can gate either.
     const late = await signedIn('no-column', false);
     const lateToken = tokenOf(await upstream.execute<Created>('kernel.member.invite.create', { email: late.email, role: 'viewer' }, { actor: owner.actor, orgId }));
     await admin(async (c) => {
       await c.query('SET ROLE supabase_auth_admin');
       await c.query('ALTER TABLE auth.users DROP COLUMN email_confirmed_at');
     });
-    await expect(acceptUp(lateToken, late)).resolves.toMatchObject({ orgId, role: 'viewer' });
+    const outcome = await acceptUp(lateToken, late).then(
+      (accepted) => ({ accepted }),
+      (refused: unknown) => ({ refused }),
+    );
+    if ('accepted' in outcome) {
+      expect(outcome.accepted).toMatchObject({ orgId, role: 'viewer' });
+    } else {
+      expect(outcome.refused).toMatchObject({ code: 'AUTH_NOT_READY', status: 503 });
+      expect(await memberships(late.id)).toEqual([]);
+    }
   });
 });
