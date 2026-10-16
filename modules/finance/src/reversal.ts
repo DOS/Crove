@@ -11,7 +11,7 @@
 // append-only void row naming the reversal, in the same transaction, so the same supplier invoice can be recorded
 // again with the right accounts. It corrects Crove's records only, never the supplier's e-invoice. The database holds
 // every writer to both directions: a void names the reversal of its document's entry, and such a reversal commits
-// only with its void (20261018030000).
+// only with its void (20261018060000).
 import { z } from 'zod';
 import { zJournalReversal, type JournalReversal } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
