@@ -31,13 +31,10 @@ export type Actor = UserActor | { type: 'system'; component: string };
 // 'members' = owner/admin/member; 'system' = system actor only;
 // 'proposal' = only run by the command that approved the proposal: the proposal is in state 'approved' for this
 //   command, and its executed_command_id is the calling command (kernel.proposal.approve), checked in the database;
-// 'proposal_revision' = only run by the proposal edit command (PROPOSAL_EDIT_COMMAND) on a pending proposal of the
-//   command the reviser declares in `revises` (a module reviser computing the next revision), checked in the database.
+// 'proposal_revision' = only run by the proposal editor (the command that declares `proposalEditor`) on a pending
+//   proposal of the command the reviser declares in `revises` (a module reviser computing the next revision), checked
+//   in the database.
 export type Access = readonly MemberRole[] | 'system' | 'proposal' | 'proposal_revision';
-
-// The one command that may run a reviser (#161): kernel.proposal.edit, which locks the pending proposal and writes
-// the revision the reviser computes. No other command, a reviser included, reaches a reviser.
-export const PROPOSAL_EDIT_COMMAND = 'kernel.proposal.edit';
 
 export interface CommandDef<I = unknown, O = unknown> {
   name: string;
@@ -52,8 +49,13 @@ export interface CommandDef<I = unknown, O = unknown> {
   // `env` says how the runtime checks sessions, for definers that also read the upstream Auth records (invites).
   bootstrap?: (trx: Transaction<Database>, actor: UserActor, input: I, idempotencyKey: string | null, env: BootstrapEnv) => Promise<string>;
   // access 'proposal_revision' only, and required there: the proposal command whose pending proposals this reviser
-  // revises. The runtime refuses the reviser for a proposal of any other command.
+  // revises. The runtime refuses the reviser for a proposal of any other command. One reviser per proposal command;
+  // the edit finds it through reviserOf() on its context, so this is the only place the pairing is written.
   revises?: string;
+  // The proposal editor (#161, #216): the one command that may run a reviser. The kernel's proposal edit command
+  // declares it: it locks the pending proposal and writes the revision the reviser computes. The runtime checks this
+  // declaration on the calling definition, never a command name, and registers at most one editor, run by users.
+  proposalEditor?: true;
   handler: (ctx: CommandContext, input: I) => Promise<O>;
 }
 
@@ -83,6 +85,9 @@ export interface QueryContext {
   // of a module this runtime does not have answers not_installed; an unknown query of an installed module is still
   // QUERY_NOT_FOUND (a caller bug).
   query<O>(name: string, input: unknown): Promise<Lookup<O>>;
+  // The registered reviser of a proposal command (the one command whose `revises` names it), or null when there is
+  // none or more than one (Runtime.validate() refuses the latter at startup).
+  reviserOf(command: string): string | null;
 }
 
 export interface CommandContext extends QueryContext {
@@ -273,6 +278,8 @@ export class Runtime {
   private readonly queries = new Map<string, QueryDef<unknown, unknown>>();
   // Modules with at least one registered command or query: the part of a name before its first dot.
   private readonly installedModules = new Set<string>();
+  // Proposal command -> the revisers registered for it, derived from `revises` (one source for the pairing).
+  private readonly revisers = new Map<string, string[]>();
   // Where each transaction opens (Decision 14): tenant work on the org's cell, org-less work on the control plane.
   private readonly cells: CellResolver;
   private readonly sessions: SessionStatusSource | null;
@@ -293,14 +300,23 @@ export class Runtime {
     return this.sessions?.mode ?? null;
   }
 
+  // Checks each definition on its own; validate() checks how they fit together once every module is registered.
   register(defs: { commands?: CommandDef<any, any>[]; queries?: QueryDef<any, any>[] }): this {
     for (const c of defs.commands ?? []) {
       if (this.commands.has(c.name)) throw new Error(`duplicate command ${c.name}`);
       if ((c.access === 'proposal_revision') !== (typeof c.revises === 'string' && c.revises.length > 0)) {
         throw new Error(`command ${c.name}: a reviser (access 'proposal_revision') names the command it revises, and only a reviser does`);
       }
+      if (c.proposalEditor !== undefined) {
+        if (c.proposalEditor !== true || typeof c.access === 'string') {
+          throw new Error(`command ${c.name}: the proposal editor declares proposalEditor: true and is run by users (access is a role list)`);
+        }
+        const editor = this.proposalEditor();
+        if (editor) throw new Error(`command ${c.name}: ${editor.name} is already the proposal editor`);
+      }
       this.commands.set(c.name, c as CommandDef<unknown, unknown>);
       this.installedModules.add(moduleOf(c.name));
+      if (c.revises) this.revisers.set(c.revises, [...(this.revisers.get(c.revises) ?? []), c.name]);
     }
     for (const q of defs.queries ?? []) {
       if (this.queries.has(q.name)) throw new Error(`duplicate query ${q.name}`);
@@ -321,9 +337,17 @@ export class Runtime {
     return [...this.installedModules].sort();
   }
 
-  // A query context for a handler: the transaction, the entered org and role, and ctx.query for lookups.
+  // A query context for a handler: the transaction, the entered org and role, ctx.query for lookups and the reviser
+  // registry.
   private queryContext(trx: Transaction<Database>, orgId: string, actor: Actor, role: MemberRole | null): QueryContext {
-    return { trx, orgId, actor, role, query: (name, input) => this.lookup(trx, orgId, actor, role, name, input) };
+    return {
+      trx,
+      orgId,
+      actor,
+      role,
+      query: (name, input) => this.lookup(trx, orgId, actor, role, name, input),
+      reviserOf: (command) => this.reviserOf(command),
+    };
   }
 
   // ctx.query: another query in the caller's transaction and context, checked as Runtime.query() checks it.
@@ -353,6 +377,44 @@ export class Runtime {
     } else if (actor.type === 'user' && (!role || !def.access.includes(role))) {
       throw new DomainError('FORBIDDEN', 403, 'Không có quyền xem');
     }
+  }
+
+  // Startup check of the whole registry (createKernel calls it after registering every enabled module), so a mistake
+  // fails the boot instead of leaving a reviser that can never run: each reviser revises a registered command that
+  // runs through a proposal (access 'proposal'), no proposal command has two revisers, and revisers have an editor.
+  // `absentModules` names the modules the deployment ships but leaves out (CROVE_MODULES, ADR-0031): a reviser of a
+  // command in one of them never runs, as no proposal of that module is raised, so it is not a mistake. Any other
+  // missing command is (a typo, also in the module part of the name). register() cannot check these, because a
+  // module may register before the commands it refers to.
+  validate(options: { absentModules?: readonly string[] } = {}): this {
+    const absent = new Set(options.absentModules ?? []);
+    const problems: string[] = [];
+    for (const c of this.commands.values()) {
+      if (c.access !== 'proposal_revision') continue;
+      const revises = c.revises ?? '';
+      const revised = this.commands.get(revises);
+      if (!revised) {
+        if (!absent.has(moduleOf(revises))) problems.push(`reviser ${c.name} revises ${revises}, which is not a registered command`);
+      } else if (revised.access !== 'proposal') {
+        problems.push(`reviser ${c.name} revises ${revises}, which does not run through a proposal (access 'proposal')`);
+      }
+    }
+    for (const [command, names] of this.revisers) {
+      if (names.length > 1) problems.push(`proposal command ${command} has more than one reviser: ${names.join(', ')}`);
+    }
+    if (this.revisers.size > 0 && !this.proposalEditor()) problems.push('revisers are registered but no proposal editor (proposalEditor: true) is');
+    if (problems.length > 0) throw new Error(`invalid command registry:\n- ${problems.join('\n- ')}`);
+    return this;
+  }
+
+  private proposalEditor(): CommandDef<unknown, unknown> | undefined {
+    for (const c of this.commands.values()) if (c.proposalEditor === true) return c;
+    return undefined;
+  }
+
+  private reviserOf(command: string): string | null {
+    const names = this.revisers.get(command);
+    return names?.length === 1 ? (names[0] ?? null) : null;
   }
 
   // The session status check, in the caller's transaction. Fails closed: a user actor without a session id is
@@ -420,15 +482,15 @@ export class Runtime {
   // in the database, not against the caller's say-so: 'proposal' needs the proposal in state 'approved' for exactly
   // this command, approved by the calling command (executed_command_id), so no other path (an edit, a bug, a replay)
   // can reach a posting command; 'proposal_revision' needs a pending proposal of the command the reviser revises,
-  // and the calling command must be the proposal edit command (#161), so no other command, nor a reviser nested in
-  // a reviser, runs one. The caller holds the row lock. The row is read in the org in context only: another org's
+  // and the calling definition must be the proposal editor (#161, #216: its declared proposalEditor, not its name),
+  // so no other command, nor a reviser nested in a reviser, runs one. The caller holds the row lock. The row is read in the org in context only: another org's
   // proposal id is refused exactly like an id that does not exist.
   private async requireProposalState(
     trx: Transaction<Database>,
     orgId: string,
     def: CommandDef<unknown, unknown>,
     proposalId: string,
-    caller: { name: string; commandId: string },
+    caller: { def: CommandDef<unknown, unknown>; commandId: string },
   ): Promise<void> {
     const proposal = await trx
       .selectFrom('crove_kernel.proposal')
@@ -439,7 +501,7 @@ export class Runtime {
     const allowed =
       def.access === 'proposal'
         ? proposal?.status === 'approved' && proposal.command === def.name && proposal.executed_command_id === caller.commandId
-        : caller.name === PROPOSAL_EDIT_COMMAND && proposal?.status === 'pending' && proposal.command === def.revises;
+        : caller.def.proposalEditor === true && proposal?.status === 'pending' && proposal.command === def.revises;
     if (!allowed) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt', { rule: 'proposal_state' });
   }
 
@@ -520,7 +582,7 @@ export class Runtime {
         const proposalId = options?.proposalId ?? base.proposalId;
         this.authorize(nested.access, base.actor, base.role, proposalId !== null);
         if (proposalId !== null && (nested.access === 'proposal' || nested.access === 'proposal_revision')) {
-          await this.requireProposalState(trx, base.orgId, nested, proposalId, { name: def.name, commandId });
+          await this.requireProposalState(trx, base.orgId, nested, proposalId, { def, commandId });
         }
         this.requireStepUp(nested, base.actor);
         // An R3 command already confirmed the session live for this execution.
