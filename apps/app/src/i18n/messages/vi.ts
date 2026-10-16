@@ -465,6 +465,7 @@ export const vi = {
       ENTRY_IS_REVERSAL: 'Đây là bút toán đảo nên không đảo lại được; hãy ghi một bút toán mới',
       ENTRY_NOT_FOUND: 'Không tìm thấy bút toán',
       REVERSAL_DATE_BEFORE_ENTRY: 'Ngày bút toán đảo không được trước ngày của bút toán gốc',
+      REVERSAL_PENDING: 'Bút toán này đã có đề xuất đảo đang chờ duyệt; hãy duyệt hoặc từ chối đề xuất đó trong Hộp thư',
       TOO_LARGE: 'Tệp vượt quá 25 MB',
       TOO_MANY_FILES: 'Quá nhiều tệp trong một lần tải lên',
       UNSUPPORTED_TYPE: 'Chỉ nhận XML, PDF, JPG, PNG, WEBP',

@@ -31,7 +31,8 @@ function ReversalForm({ entry, slug, onClose }: { entry: Entry; slug: string; on
   const [touched, setTouched] = useState(false);
   // One key per form: a retry of the same request returns the same proposal.
   const [idempotencyKey] = useState(() => crypto.randomUUID());
-  const request = useMutation(orpc.inbox.request.mutationOptions({ onSuccess: () => void queryClient.invalidateQueries() }));
+  // Refreshes after a refusal too: one for a request already pending (REVERSAL_PENDING) makes the journal show it.
+  const request = useMutation(orpc.inbox.request.mutationOptions({ onSettled: () => void queryClient.invalidateQueries() }));
   const problem = reversalFormError({ entryDate, reason }, entry.entryDate, root, f.date);
 
   if (request.data) {
@@ -195,24 +196,30 @@ export function JournalPage() {
                   ))}
                 </TableBody>
               </Table>
-              {/* A reversal waiting for approval (#204): the request is not offered again; the proposal is one click away. */}
-              {entry.pendingReversalId && !entry.reversedBy && (
-                <p className="mt-2 text-right text-xs">
-                  <Link to="/o/$slug/inbox/$id" params={{ slug, id: entry.pendingReversalId }} className="text-link hover:underline">
-                    {t('reversalPendingLink')}
-                  </Link>
-                </p>
+              {/* The open form stays until it is closed, so its confirmation (with the proposal link) is still shown once
+                  the entry reports the request as pending. */}
+              {reversing === entry.id ? (
+                <ReversalForm entry={entry} slug={slug} onClose={() => setReversing(null)} />
+              ) : (
+                <>
+                  {/* A reversal waiting for approval (#204, #254): the server refuses another request, so none is
+                      offered; the proposal is one click away. */}
+                  {entry.pendingReversalId && !entry.reversedBy && (
+                    <p className="mt-2 text-right text-xs">
+                      <Link to="/o/$slug/inbox/$id" params={{ slug, id: entry.pendingReversalId }} className="text-link hover:underline">
+                        {t('reversalPendingLink')}
+                      </Link>
+                    </p>
+                  )}
+                  {canAskReversal(entry, org.data?.role) && (
+                    <div className="mt-2 flex justify-end">
+                      <Button variant="ghost" onClick={() => setReversing(entry.id)}>
+                        {t('reverse')}
+                      </Button>
+                    </div>
+                  )}
+                </>
               )}
-              {canAskReversal(entry, org.data?.role) &&
-                (reversing === entry.id ? (
-                  <ReversalForm entry={entry} slug={slug} onClose={() => setReversing(null)} />
-                ) : (
-                  <div className="mt-2 flex justify-end">
-                    <Button variant="ghost" onClick={() => setReversing(entry.id)}>
-                      {t('reverse')}
-                    </Button>
-                  </div>
-                ))}
             </Card>
           ))}
         </div>

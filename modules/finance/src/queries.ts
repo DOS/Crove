@@ -178,12 +178,12 @@ async function loadEntries(
   // Reversal proposals waiting for approval, by the entry they name (#204).
   const pending = await ctx.trx
     .selectFrom('crove_kernel.proposal')
-    .select(['id', sql<string>`payload->>'entryId'`.as('entry_id')])
+    .select(['id', sql<string>`pg_catalog.lower(payload->>'entryId')`.as('entry_id')])
     .where('org_id', '=', ctx.orgId)
     .where('kind', '=', REVERSAL_KIND)
     .where('status', '=', 'pending')
     .where(
-      sql<string>`payload->>'entryId'`,
+      sql<string>`pg_catalog.lower(payload->>'entryId')`,
       'in',
       rows.map((r) => r.id),
     )
