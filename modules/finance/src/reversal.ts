@@ -7,7 +7,7 @@
 //   reverses_entry_id. It never appends lines to an existing entry.
 // The database enforces the rules for every writer (20261016210000): one reversal per entry, a reversal cannot be
 // reversed (post a new entry instead), no reversal dated before the original, and an exact mirror over every line.
-// Reversing the entry of a purchase document also voids Crove's record of that document (#165, 20261016230000): an
+// Reversing the entry of a purchase document also voids Crove's record of that document (#165, 20261017020000): an
 // append-only void row naming the reversal, in the same transaction, so the same supplier invoice can be recorded
 // again with the right accounts. It corrects Crove's records only, never the supplier's e-invoice.
 import { z } from 'zod';
@@ -109,7 +109,12 @@ export const reverseEntry = defineCommand({
     }).catch((error: { code?: string; constraint?: string; message?: string }) => {
       // A concurrent reversal of the same entry committed first: its insert held the unique index.
       if (error?.code === '23505' && error.constraint === 'journal_entry_reverses_uq') throw ALREADY_REVERSED();
-      if (error?.code === '23514' && error.message?.includes('does not mirror the entry it reverses')) throw PARTIAL_MIRROR();
+      // The original is posted, so it balances and has at least 2 lines, and the date and reversal rules were checked
+      // above: a mirror the database still refuses (not a mirror, unbalanced, too few lines) was built from fewer lines
+      // than the entry has, because the approver cannot see them all.
+      if (error?.code === '23514' && /does not mirror the entry it reverses|does not balance|needs at least 2 lines/.test(error.message ?? '')) {
+        throw PARTIAL_MIRROR();
+      }
       throw error;
     });
     // A purchase entry: void Crove's record of its document, naming this reversal (the database checks the link).

@@ -400,39 +400,89 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
       c.query(`CREATE POLICY crove_test_le_scope_165 ON crove_finance.journal_line AS RESTRICTIVE FOR SELECT TO crove_tenant
                USING (memo IS DISTINCT FROM '${HIDDEN}')`),
     );
-    const client = new pg.Client({ connectionString: appUrl });
-    await client.connect();
-    let entryId = '';
-    try {
-      await client.query('BEGIN');
-      await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner.userId, org.orgId]);
-      const lines = [
+    // Posts an entry as the API login role in the owner's context.
+    const post = async (lines: Array<Record<string, unknown>>) => {
+      const client = new pg.Client({ connectionString: appUrl });
+      await client.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner.userId, org.orgId]);
+        const { rows } = await client.query<{ id: string }>(
+          `SELECT crove_finance.post_journal_entry('2026-10-01'::date, 'Có dòng ngoài phạm vi', 'test', $1::uuid, $2::jsonb) AS id`,
+          [randomUUID(), JSON.stringify(lines)],
+        );
+        await client.query('COMMIT');
+        return rows[0]?.id ?? '';
+      } finally {
+        await client.end();
+      }
+    };
+    // Hidden lines that balance each other (the visible mirror balances but is not the whole entry), and a hidden VAT
+    // line (the visible mirror does not even balance): both get the same plain explanation.
+    const entries = [
+      await post([
         { line_no: 1, account_code: '6422', debit: '100', credit: '0', memo: 'Văn phòng phẩm' },
         { line_no: 2, account_code: '331', debit: '0', credit: '100', memo: null },
         { line_no: 3, account_code: '6422', debit: '30', credit: '0', memo: HIDDEN },
         { line_no: 4, account_code: '331', debit: '0', credit: '30', memo: HIDDEN },
-      ];
-      const { rows } = await client.query<{ id: string }>(
-        `SELECT crove_finance.post_journal_entry('2026-10-01'::date, 'Có dòng ngoài phạm vi', 'test', $1::uuid, $2::jsonb) AS id`,
-        [randomUUID(), JSON.stringify(lines)],
-      );
-      entryId = rows[0]?.id ?? '';
-      await client.query('COMMIT');
-    } finally {
-      await client.end();
+      ]),
+      await post([
+        { line_no: 1, account_code: '6422', debit: '100', credit: '0', memo: 'Văn phòng phẩm' },
+        { line_no: 2, account_code: '1331', debit: '10', credit: '0', memo: HIDDEN },
+        { line_no: 3, account_code: '331', debit: '0', credit: '110', memo: null },
+      ]),
+    ];
+    for (const entryId of entries) {
+      const asked = await rpc('inbox/request', await tokenFor(owner), {
+        command: 'finance.journal.reverse',
+        input: { entryId, entryDate: '2026-10-15', reason: 'Sai' },
+        idempotencyKey: randomUUID(),
+      });
+      expect(asked.status).toBe(200);
+      const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
+      expect(approved).toMatchObject({
+        status: 422,
+        body: { code: 'INVALID', data: { reason: 'partial_mirror' }, message: expect.stringContaining('không được xem tất cả các dòng') },
+      });
+      // Nothing was posted and the proposal is still pending.
+      expect((await rpc('inbox/get', await tokenFor(owner), { id: asked.body.proposalId })).body).toMatchObject({ status: 'pending' });
     }
-    const asked = await rpc('inbox/request', await tokenFor(owner), {
-      command: 'finance.journal.reverse',
-      input: { entryId, entryDate: '2026-10-15', reason: 'Sai' },
-      idempotencyKey: randomUUID(),
+  });
+
+  it('voids, when the migration runs, the documents of purchase entries reversed before it', async () => {
+    const migration = readFileSync(new URL('../../../supabase/migrations/20261017020000_crove_finance_purchase_document_void.sql', import.meta.url), 'utf8');
+    const document = randomUUID();
+    const entry = randomUUID();
+    const reversal = randomUUID();
+    await admin(async (c) => {
+      // A purchase entry and its reversal, written as they were before voids existed (no void row).
+      await c.query('BEGIN');
+      await c.query(
+        `INSERT INTO crove_finance.purchase_document (org_id, id, party_id, invoice_number, invoice_date, subtotal, vat_amount, total)
+         SELECT org_id, $2, party_id, '7900', '2026-10-01', 100, 10, 110 FROM crove_finance.purchase_document WHERE org_id = $1 LIMIT 1`,
+        [org.orgId, document],
+      );
+      const insertEntry = `INSERT INTO crove_finance.journal_entry (org_id, id, entry_date, description, source_type, source_id, reverses_entry_id)
+                           VALUES ($1, $2, '2026-10-02', $3, $4, $5, $6)`;
+      await c.query(insertEntry, [org.orgId, entry, 'HĐ 7900', 'finance.purchase_document', document, null]);
+      await c.query(insertEntry, [org.orgId, reversal, 'Đảo bút toán (lý do: cũ)', 'kernel.proposal', randomUUID(), entry]);
+      const line = `INSERT INTO crove_finance.journal_line (org_id, entry_id, line_no, account_code, debit, credit) VALUES ($1, $2, $3, $4, $5, $6)`;
+      await c.query(line, [org.orgId, entry, 1, '6422', 110, 0]);
+      await c.query(line, [org.orgId, entry, 2, '331', 0, 110]);
+      await c.query(line, [org.orgId, reversal, 1, '6422', 0, 110]);
+      await c.query(line, [org.orgId, reversal, 2, '331', 110, 0]);
+      await c.query('COMMIT');
+      // Applying the migration again backfills the void, once.
+      for (let run = 0; run < 2; run += 1) {
+        await c.query('BEGIN');
+        await c.query(migration);
+        await c.query('COMMIT');
+      }
+      const { rows } = await c.query('SELECT reversal_entry_id, reason, voided_by FROM crove_finance.purchase_document_void WHERE org_id = $1 AND document_id = $2', [
+        org.orgId,
+        document,
+      ]);
+      expect(rows).toEqual([{ reversal_entry_id: reversal, reason: 'Đảo bút toán (lý do: cũ)', voided_by: null }]);
     });
-    expect(asked.status).toBe(200);
-    const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
-    expect(approved).toMatchObject({
-      status: 422,
-      body: { code: 'INVALID', data: { reason: 'partial_mirror' }, message: expect.stringContaining('không được xem tất cả các dòng') },
-    });
-    // Nothing was posted and the proposal is still pending.
-    expect((await rpc('inbox/get', await tokenFor(owner), { id: asked.body.proposalId })).body).toMatchObject({ status: 'pending' });
   });
 });

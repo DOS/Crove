@@ -10,7 +10,7 @@
 -- - purchase_document_replaces_uq: each document is replaced at most once (of two concurrent re-records, the second
 --   waits on the index and fails with a unique violation);
 -- - a document may replace only a voided document of the same supplier invoice (check_document_replaces).
--- Idempotent.
+-- Idempotent, including the backfill of voids for purchase entries reversed before this migration.
 SET LOCAL lock_timeout = '2s';
 
 CREATE TABLE IF NOT EXISTS crove_finance.purchase_document_void (
@@ -52,6 +52,16 @@ DROP TRIGGER IF EXISTS purchase_document_void_reversal ON crove_finance.purchase
 CREATE TRIGGER purchase_document_void_reversal
   AFTER INSERT ON crove_finance.purchase_document_void
   FOR EACH ROW EXECUTE FUNCTION crove_finance.check_document_void();
+
+-- Purchase entries reversed before this migration (since 20261016210000) void their documents now, as a reversal does
+-- from here on. The reason is the reversal's description, which carries the reason given; voided_by is unknown.
+INSERT INTO crove_finance.purchase_document_void (org_id, document_id, reversal_entry_id, reason, voided_by, created_at)
+SELECT r.org_id, o.source_id, r.id, pg_catalog.left(r.description, 500), NULL, r.created_at
+FROM crove_finance.journal_entry r
+JOIN crove_finance.journal_entry o ON o.org_id = r.org_id AND o.id = r.reverses_entry_id
+JOIN crove_finance.purchase_document d ON d.org_id = o.org_id AND d.id = o.source_id
+WHERE o.source_type = 'finance.purchase_document' AND pg_catalog.length(r.description) > 0
+ON CONFLICT DO NOTHING;
 
 -- A document recorded again names the voided document it replaces.
 ALTER TABLE crove_finance.purchase_document ADD COLUMN IF NOT EXISTS replaces_document_id uuid;
