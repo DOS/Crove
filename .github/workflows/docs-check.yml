@@ -19,6 +19,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The merge commit and its first parent, so the migration order step can list what this PR adds.
+          fetch-depth: 2
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -26,3 +28,12 @@ jobs:
 
       - name: Docs check
         run: node tools/docs-check.mjs
+
+      # AGENTS.md: a new migration's version is greater than every file on main. Compared against the live base
+      # branch, so re-running this job after main moves catches a PR that fell behind.
+      - name: Migration order
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          node tools/ci/migration-order.mjs "origin/$BASE_REF" HEAD^1
