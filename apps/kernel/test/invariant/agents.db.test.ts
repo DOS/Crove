@@ -24,6 +24,14 @@ const suite = ADMIN ? describe : describe.skip;
 
 // Commands an agent may run at all; every other command declares no agent access.
 const AGENT_COMMANDS = ['kernel.task.checkout', 'kernel.task.comment', 'kernel.task.set_status', 'kernel.task.escalate', 'kernel.task.delegate'];
+// Agent proposals and approvals (#260, ADR-0029 section 6): two more task commands. Accepted here before the feature
+// lands, so this invariant holds on both sides of it: proposing is R1 and carries the run's taint into the proposal
+// (taint 'propagate'); recording an approval is R1 without it, so the runtime refuses a tainted run (P03). Neither
+// writes a proposal: a system command in the worker acts on what they record, after checking it again.
+const AGENT_PROPOSAL_COMMANDS: Record<string, 'propagate' | undefined> = {
+  'kernel.task.propose': 'propagate',
+  'kernel.task.approve_proposal': undefined,
+};
 
 // Probe commands for the runtime's agent policy, each declaring agent access for any role.
 const probe = (name: string, risk: Risk, taint?: 'propagate'): CommandDef<unknown, unknown> =>
@@ -207,11 +215,16 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
 
   it('declares agent access only on the task commands, never on chart, agent, budget, kill-switch or approval commands', () => {
     const declared = kernelCommands.filter((c) => (c as CommandDef<unknown, unknown>).agent).map((c) => c.name);
-    expect(declared.sort()).toEqual([...AGENT_COMMANDS].sort());
+    expect(declared.filter((name) => !Object.hasOwn(AGENT_PROPOSAL_COMMANDS, name)).sort()).toEqual([...AGENT_COMMANDS].sort());
     expect(financeCommands.filter((c) => (c as CommandDef<unknown, unknown>).agent)).toEqual([]);
     for (const name of AGENT_COMMANDS) {
       const def = agentCommands.find((c) => c.name === name) as CommandDef<unknown, unknown>;
       expect(def.risk, name).toBe('R1');
+    }
+    for (const name of declared.filter((n) => Object.hasOwn(AGENT_PROPOSAL_COMMANDS, n))) {
+      const def = kernelCommands.find((c) => c.name === name) as CommandDef<unknown, unknown>;
+      expect(def.risk, name).toBe('R1');
+      expect(def.agent?.taint, name).toBe(AGENT_PROPOSAL_COMMANDS[name]);
     }
   });
 
