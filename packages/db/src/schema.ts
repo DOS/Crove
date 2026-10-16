@@ -259,6 +259,56 @@ export type JournalEntryTable = Refine<
   }
 >;
 
+// Crove Social (Social plan §3.2, S3).
+export const SOCIAL_POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled'] as const;
+export const SOCIAL_VARIANT_STATUSES = [
+  'draft',
+  'in_review',
+  'changes_requested',
+  'rejected',
+  'approved',
+  'scheduled',
+  'publishing',
+  'processing',
+  'published',
+  'failed',
+  'ambiguous',
+  'needs_attention',
+  'paused',
+  'cancelled',
+] as const;
+export const SOCIAL_ORIGINS = ['human', 'ai'] as const;
+export const SOCIAL_ACTOR_ORIGINS = ['ui', 'api', 'mcp', 'agent', 'system'] as const;
+export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as const;
+export const SOCIAL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
+export type SocialVariantStatus = (typeof SOCIAL_VARIANT_STATUSES)[number];
+export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
+export type SocialActorOrigin = (typeof SOCIAL_ACTOR_ORIGINS)[number];
+export type SocialDecision = (typeof SOCIAL_DECISIONS)[number];
+
+export type SocialPostTable = Refine<
+  G.SocialPostTable,
+  {
+    origin: Generated<(typeof SOCIAL_ORIGINS)[number]>;
+    actor_origin: Generated<SocialActorOrigin>;
+    status: Generated<SocialPostStatus>;
+  }
+>;
+export type SocialPostVariantTable = Refine<
+  G.SocialPostVariantTable,
+  {
+    status: Generated<SocialVariantStatus>;
+    error_kind: (typeof SOCIAL_ERROR_KINDS)[number] | null;
+  }
+>;
+export type SocialPostApprovalTable = Refine<
+  G.SocialPostApprovalTable,
+  {
+    decision: ColumnType<SocialDecision, SocialDecision, never>;
+    actor_origin: ColumnType<SocialActorOrigin, SocialActorOrigin | undefined, never>;
+  }
+>;
+
 type Refined = Tables<{
   'crove_kernel.tenant': TenantTable;
   'crove_kernel.tenant_member': TenantMemberTable;
@@ -280,6 +330,9 @@ type Refined = Tables<{
   'crove_kernel.channel_connection': ChannelConnectionTable;
   'crove_finance.purchase_document': PurchaseDocumentTable;
   'crove_finance.journal_entry': JournalEntryTable;
+  'crove_social.post': SocialPostTable;
+  'crove_social.post_variant': SocialPostVariantTable;
+  'crove_social.post_approval': SocialPostApprovalTable;
 }>;
 
 // Every table crove_tenant may read: the generated table type, or its refinement above.

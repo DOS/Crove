@@ -11,6 +11,13 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
+  "dependencies": {
+    "@crove/db": "workspace:*",
+    "@crove/kernel-contract": "workspace:*",
+    "@crove/kernel-runtime": "workspace:*",
+    "kysely": "catalog:",
+    "zod": "catalog:"
+  },
   "devDependencies": {
     "fast-check": "catalog:"
   }

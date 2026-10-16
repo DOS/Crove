@@ -49,14 +49,14 @@ describe('configuration guards', () => {
 
   // Plan Decision 12, ADR-0031.
   it('enables every module by default, always keeps kernel and refuses an unknown module', () => {
-    expect(loadConfig(base).CROVE_MODULES).toEqual(['kernel', 'finance']);
-    expect(loadConfig({ ...base, CROVE_MODULES: '  ' }).CROVE_MODULES).toEqual(['kernel', 'finance']);
-    expect(loadConfig({ ...base, CROVE_MODULES: ',' }).CROVE_MODULES).toEqual(['kernel', 'finance']);
-    expect(loadConfig({ ...base, CROVE_MODULES: ' , ,' }).CROVE_MODULES).toEqual(['kernel', 'finance']);
+    expect(loadConfig(base).CROVE_MODULES).toEqual(['kernel', 'finance', 'social']);
+    expect(loadConfig({ ...base, CROVE_MODULES: '  ' }).CROVE_MODULES).toEqual(['kernel', 'finance', 'social']);
+    expect(loadConfig({ ...base, CROVE_MODULES: ',' }).CROVE_MODULES).toEqual(['kernel', 'finance', 'social']);
+    expect(loadConfig({ ...base, CROVE_MODULES: ' , ,' }).CROVE_MODULES).toEqual(['kernel', 'finance', 'social']);
     expect(loadConfig({ ...base, CROVE_MODULES: 'kernel' }).CROVE_MODULES).toEqual(['kernel']);
     expect(loadConfig({ ...base, CROVE_MODULES: ' Finance ' }).CROVE_MODULES).toEqual(['kernel', 'finance']);
     expect(loadConfig({ ...base, CROVE_MODULES: 'finance,kernel' }).CROVE_MODULES).toEqual(['kernel', 'finance']);
-    expect(() => loadConfig({ ...base, CROVE_MODULES: 'kernel,crm' })).toThrow(/CROVE_MODULES \(unknown module\(s\) crm; available: kernel, finance\)/);
+    expect(() => loadConfig({ ...base, CROVE_MODULES: 'kernel,crm' })).toThrow(/CROVE_MODULES \(unknown module\(s\) crm; available: kernel, finance, social\)/);
   });
 
   it('never resolves the session check to "no check" by default', () => {

@@ -154,10 +154,11 @@ export interface QueuedPost {
 // (slotAt null). A post keeps its slot when that slot still exists and is after `now`; the others take the first
 // free slots, in their previous order. Nothing else moves. When two posts share a slot, the lower id keeps it.
 // Posts that find no slot within the horizon get slotAt null. Callers pass only posts not yet handed to the
-// publisher: a due post (slotAt <= now) passed here is moved like any other.
-export function placeQueued(queue: QueueSpec, posts: readonly QueuedPost[], nowMs: number): QueuedPost[] {
+// publisher: a due post (slotAt <= now) passed here is moved like any other. `reserved` are slots held by posts that
+// are not placed here (in flight): nobody keeps or takes them.
+export function placeQueued(queue: QueueSpec, posts: readonly QueuedPost[], nowMs: number, reserved: ReadonlySet<number> = new Set()): QueuedPost[] {
   const kept = new Map<string, number>();
-  const taken = new Set<number>();
+  const taken = new Set<number>(reserved);
   const byId = [...posts].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   for (const p of byId) {
     if (p.slotAt !== null && p.slotAt > nowMs && isSlot(queue, p.slotAt) && !taken.has(p.slotAt)) {

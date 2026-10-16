@@ -136,7 +136,7 @@ No platform except Bluesky has an idempotency key (research §4), and duplicate 
 | S0 | This plan, ADR-0025 (proposed), Decision 17 | - | No |
 | S1 | `modules/social` domain: types, channel rules, state machine, queue slots, idempotency keys; unit and property tests | - | `package.json`, lockfile |
 | S2 | Credential store (`crove-local` broker) + `channel_connection` + `packages/channel` with the `sandbox` provider; RLS matrix rows | ADR-0025 accepted | Yes (migrations, kernel) |
-| S3 | `crove_social` schema, commands, queries, contract and router; registered in the kernel | #198, S1, S2 | Yes (migration) |
+| S3 | `crove_social` schema, commands, queries; registered in the kernel (RLS factories first, #291). The oRPC contract and router follow in their own PR, ahead of S5 | #198, S1, S2 | Yes (migration) |
 | S4 | Publish pipeline: `external_call`, publish and reconcile jobs, pause on expired tokens | S3 | Yes (migration) |
 | S5 | UI: channels, composer with per-channel preview, calendar, queue, post detail; Playwright run on `sandbox` | S3, S4 | No |
 | S6 | OAuth connect flow + Meta adapter (Facebook Page, Instagram), then Zalo OA | S2 | Yes (`http.ts`) |

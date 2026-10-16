@@ -40,6 +40,11 @@ export const EXPORT_TABLES = {
   'finance.journal_entry': { from: 'crove_finance.journal_entry', omit: [] },
   'finance.journal_line': { from: 'crove_finance.journal_line', omit: [] },
   'finance.vendor_account_rule': { from: 'crove_finance.vendor_account_rule', omit: [] },
+  'social.post': { from: 'crove_social.post', omit: [] },
+  'social.post_variant': { from: 'crove_social.post_variant', omit: [] },
+  'social.post_approval': { from: 'crove_social.post_approval', omit: [] },
+  'social.queue': { from: 'crove_social.queue', omit: [] },
+  'social.queue_slot': { from: 'crove_social.queue_slot', omit: [] },
 } as const satisfies Record<string, { from: string; omit: readonly string[] }>;
 
 export type ExportTable = keyof typeof EXPORT_TABLES;
