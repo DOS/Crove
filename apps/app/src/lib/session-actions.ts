@@ -17,7 +17,8 @@ export function signOut(options: { keepInvite?: boolean } = {}): Promise<void> {
       const { data } = await auth().getSession();
       const sessionId = sessionIdFromToken(data.session?.access_token);
       if (!data.session || !sessionId) return null;
-      const me = await queryClient.fetchQuery(orpc.me.get.queryOptions());
+      // Fresh, never cached: another tab may have signed in as someone else in the last few seconds (#196).
+      const me = await queryClient.fetchQuery({ ...orpc.me.get.queryOptions(), staleTime: 0 });
       return { userId: me.userId, sessionId };
     },
     revoke: (input, signal) => client.sessions.revoke(input, { signal }),
