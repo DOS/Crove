@@ -27,7 +27,13 @@ function keyFromFile(path: string): string {
     const tmp = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
     writeFileSync(tmp, `${generateVaultKey()}\n`, { flag: 'wx', mode: 0o600 });
     try {
-      linkSync(tmp, path);
+      try {
+        linkSync(tmp, path);
+      } catch (error) {
+        // A volume without hard links (some SMB, FAT or bind mounts): write in place, still never overwriting.
+        if (!['EPERM', 'ENOTSUP', 'ENOSYS', 'EXDEV'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        writeFileSync(path, readFileSync(tmp), { flag: 'wx', mode: 0o600 });
+      }
       console.warn(
         `[credentials] created a new credential key at ${path}. If this deployment had connected channels, its key file was lost and ` +
           'every channel must be reconnected; back the key up apart from the database (docs/runbooks/credential-key.md)',

@@ -161,9 +161,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         guard(async () => {
           const { orgId, role } = await resolveMembership(runtime, context.user, context.orgSlug);
           const actor = actorOf(context.user);
-          if (!channels?.sandbox) throw new DomainError('CHANNEL_PROVIDER_DISABLED', 404, 'Kênh thử nghiệm (sandbox) chưa được bật');
           // The command checks the role again; checking first keeps a member from learning how the deployment is set up.
           if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới kết nối được kênh');
+          if (!channels?.sandbox) throw new DomainError('CHANNEL_PROVIDER_DISABLED', 404, 'Kênh thử nghiệm (sandbox) chưa được bật');
           const account = sandbox.connect({ key: input.key, displayName: input.displayName });
           const sealed = channels.broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });
           const command: ChannelConnectInput = {
