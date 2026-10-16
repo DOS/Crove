@@ -1,6 +1,7 @@
 // Prober and alert delivery (plan §4.13, issue #39), unit part: thresholds, exit codes and the webhook payload.
 // The database part (health(), privileges, a real webhook) is in prober.db.test.ts and test/invariant/prober.db.test.ts.
 import { describe, expect, it, vi } from 'vitest';
+import { memoryAlertGate } from '../src/alert-gate.ts';
 import { alertPayload, deliverAlert } from '../src/alert.ts';
 import { EXIT, evaluateHealth, loadProberConfig, parseProberArgs, probeOnce, runProber, type HealthSnapshot, type ProberConfig } from '../src/prober.ts';
 
@@ -24,6 +25,9 @@ function config(overrides: Partial<ProberConfig> = {}): ProberConfig {
   return {
     databaseUrl: 'postgres://crove_prober:pw@db:5432/postgres',
     webhookUrl: SECRET_HOOK,
+    webhookFormat: 'generic',
+    telegramChatId: undefined,
+    repeatSeconds: 3600,
     instance: 'crove.example.test',
     thresholds: limits,
     deadLetterWindowSeconds: 300,
@@ -31,10 +35,11 @@ function config(overrides: Partial<ProberConfig> = {}): ProberConfig {
   };
 }
 
+// Each capture carries a fresh in-memory de-duplication gate, so a probe never reaches for a real database.
 function capture() {
   const out: string[] = [];
   const err: string[] = [];
-  return { out, err, log: (l: string) => out.push(l), error: (l: string) => err.push(l) };
+  return { out, err, log: (l: string) => out.push(l), error: (l: string) => err.push(l), gate: memoryAlertGate(3600) };
 }
 
 function webhook(status = 200) {

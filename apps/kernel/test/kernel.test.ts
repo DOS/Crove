@@ -127,6 +127,9 @@ describe('the alert port', () => {
     const config: ProberConfig = {
       databaseUrl: undefined,
       webhookUrl: 'https://hooks.example.test/x',
+      webhookFormat: 'generic',
+      telegramChatId: undefined,
+      repeatSeconds: 3600,
       instance: 'test',
       thresholds: { outboxAgeSeconds: 1, jobAgeSeconds: 1, heartbeatAgeSeconds: 1, deadLetters: 0 },
       deadLetterWindowSeconds: 60,

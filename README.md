@@ -46,7 +46,7 @@ See [`.env.example`](./.env.example) for the full list.
 
 ## Monitoring and alerts
 
-The image's `prober` role checks that background work is moving and alerts you when it is not. It connects as `crove_prober`, a login that can only call `crove_kernel.health()` (aggregate ages and counts, no tenant data), and alerts when:
+The image's `prober` role checks that background work is moving and alerts you when it is not. It connects as `crove_prober`, a login that can only call `crove_kernel.health()` (aggregate ages and counts, no tenant data) and `crove_kernel.prober_alert_gate()` (the alert state below), and alerts when:
 
 | Check | Default limit | Variable |
 |---|---|---|
@@ -56,13 +56,32 @@ The image's `prober` role checks that background work is moving and alerts you w
 | Freshest worker heartbeat (the worker writes one every 30 s); none at all also alerts | 120 s | `PROBER_MAX_HEARTBEAT_AGE_SECONDS` |
 | The database cannot be reached or `health()` fails | always | |
 
-Alerts go to `ALERT_WEBHOOK_URL` as a JSON POST whose body has `text` (Slack and Mattermost incoming webhooks, Google Chat), `content` (Discord) and a structured `crove` object for anything else; without it they are printed to stdout. Name the deployment with `ALERT_INSTANCE` (default: the host of `PUBLIC_URL`). Exit codes: 0 healthy, 1 a limit was exceeded, 2 the check could not run, 3 the alert could not be delivered (it is printed instead). Use an `https` webhook: most webhook URLs carry their secret in the path.
+Every probe logs what fails, but it notifies only on news:
+
+- **New problem:** `[Crove] ALERT on <instance>: ...` with one line per failing check.
+- **Changed problem** (another set of checks fails): an alert at once, naming the checks that failed before.
+- **Still failing:** `[Crove] STILL FAILING on <instance> for 1 h 5 min: ...` every `ALERT_REPEAT_MINUTES` (default 60; 0 turns repeats off) while the same checks keep failing. Values such as a growing backlog do not make a new problem.
+- **Resolved:** `[Crove] RESOLVED on <instance>: ...` once every check passes again.
+
+The state lives in the database (`crove_kernel.prober_alert_state`, one row), so it survives restarts and is shared by every prober on the same database: a prober holds the row while it delivers, a second one probing at that moment sends nothing, and an alert that could not be delivered stays due for the next probe. The one problem the database cannot record is the database itself being unreachable: a long-running prober (`--every`, the Compose profile) de-duplicates that outage in memory and says when the database answers again, while a cron run alerts on every run until it does.
+
+Alerts go to `ALERT_WEBHOOK_URL`; without it they are printed to stdout. The request shape follows `ALERT_WEBHOOK_FORMAT` (default `auto`, which picks it from the webhook host):
+
+| Format | `ALERT_WEBHOOK_URL` | JSON body |
+|---|---|---|
+| `slack` | a Slack incoming webhook, `https://hooks.slack.com/services/...` | `{"text", "mrkdwn": false}`, with `&`, `<` and `>` escaped |
+| `discord` | a Discord channel webhook, `https://discord.com/api/webhooks/<id>/<token>` | `{"content", "allowed_mentions": {"parse": []}}`: Markdown escaped, no pings, at most 2000 characters |
+| `telegram` | `https://api.telegram.org/bot<token>/sendMessage`, plus `ALERT_TELEGRAM_CHAT_ID` (numeric id, negative for groups and channels, or `@channelname`) | `{"chat_id", "text", "link_preview_options": {"is_disabled": true}}`, plain text (no `parse_mode`) |
+| `generic` | anything else (Mattermost, Google Chat, your own receiver) | `{"text", "content", "crove"}`, where `crove` holds `kind` (`alert`, `resolved`, `test`), `state` (`new`, `changed`, `repeat`), `severity`, `since`, the findings and the `health()` row |
+
+Name the deployment with `ALERT_INSTANCE` (default: the host of `PUBLIC_URL`). Exit codes report health whether or not a notification went out: 0 healthy, 1 a limit was exceeded, 2 the check could not run, 3 a due notification could not be delivered (it is printed instead, with the vendor's short reason such as `no_text` or `Bad Request: chat not found`). Use an `https` webhook: these URLs carry their secret (the Telegram bot token, the Slack and Discord path), and the prober logs only their host.
 
 Set `CROVE_PROBER_DB_PASSWORD` (applied by `migrate`) and `ALERT_WEBHOOK_URL` in `.env`, then pick one way to run it:
 
 ```bash
 # Check the alert path end to end: you should receive "[Crove] Test alert from ..."
-docker compose run --rm prober prober --test-alert
+pnpm alert:test                                   # from a checkout, reads .env
+docker compose run --rm prober prober --test-alert   # or through the image
 
 # Compose: a long-running prober that checks every PROBER_INTERVAL_SECONDS (default 300)
 docker compose --profile prober up -d
@@ -71,7 +90,7 @@ docker compose --profile prober up -d
 */5 * * * * cd /path/to/Crove && docker compose run --rm -e PROBER_DEAD_LETTER_WINDOW_SECONDS=360 prober prober >> /var/log/crove-prober.log 2>&1
 ```
 
-Without Compose, run `node apps/kernel/src/main.ts prober` from any scheduler with `PROBER_DATABASE_URL=postgres://crove_prober:<password>@<host>:5432/<db>`. The prober repeats an alert on every run while the problem lasts, and it cannot report its own absence or a whole-host outage: for those, add an external uptime check on `/healthz`.
+Without Compose, run `node apps/kernel/src/main.ts prober` from any scheduler with `PROBER_DATABASE_URL=postgres://crove_prober:<password>@<host>:5432/<db>`. The prober cannot report its own absence or a whole-host outage: for those, add an external uptime check on `/healthz`.
 
 ## Development
 

@@ -1,9 +1,18 @@
-// Alert delivery for the prober (plan §4.13, issue #39), behind the AlertSink port (ADR-0030). One generic adapter:
-// POST a JSON body to ALERT_WEBHOOK_URL, or print to stdout when no webhook is configured. The body carries `text` (Slack incoming webhooks, Mattermost,
-// Google Chat), `content` (Discord) and a structured `crove` object for anything else. The webhook URL usually
-// embeds a secret, so it is never logged: only its host is.
+// Alert delivery for the prober (plan §4.13, issues #39 and #151), behind the AlertSink port (ADR-0030). One webhook
+// adapter with four request shapes, picked by ALERT_WEBHOOK_FORMAT (default: from the webhook host):
+//   slack     Slack incoming webhook: {text, mrkdwn: false}, with &, < and > escaped as Slack asks.
+//   discord   Discord execute webhook: {content, allowed_mentions: {parse: []}}, content at most 2000 characters,
+//             Markdown characters escaped and no @everyone, role or user pings.
+//   telegram  Telegram Bot API sendMessage: {chat_id, text, link_preview_options: {is_disabled: true}} and no
+//             parse_mode, so the text is sent as plain text and needs no escaping.
+//   generic   anything else (Mattermost, Google Chat, a custom receiver): {text, content, crove}, where crove is the
+//             structured alert.
+// Without a webhook the alert is printed to stdout. The webhook URL usually embeds a secret (Slack and Discord in
+// the path, Telegram's bot token), so it is never logged: only its host is.
 
-export type AlertKind = 'alert' | 'test';
+export type AlertKind = 'alert' | 'resolved' | 'test';
+// Why an alert goes out: a new problem, another set of failing checks, or the same problem repeated.
+export type AlertState = 'new' | 'changed' | 'repeat';
 
 export interface Finding {
   check: 'outbox' | 'inbound' | 'jobs_schema' | 'job_age' | 'dead_letters' | 'heartbeat' | 'probe';
@@ -19,24 +28,80 @@ export interface Alert {
   findings: Finding[];
   // The health() row the findings came from, when the probe could read it.
   health?: Record<string, unknown>;
+  // kind 'alert': why it is sent (absent means new).
+  state?: AlertState;
+  // When the problem started (repeat, changed, resolved), ISO 8601.
+  since?: string;
+  // The checks that failed before (changed, resolved).
+  previous?: string[];
 }
 
 export interface AlertPayload {
   text: string;
   content: string;
-  crove: { kind: AlertKind; severity: 'critical' | 'info'; instance: string; at: string; findings: Finding[]; health?: Record<string, unknown> };
+  crove: {
+    kind: AlertKind;
+    severity: 'critical' | 'info';
+    instance: string;
+    at: string;
+    findings: Finding[];
+    state?: AlertState;
+    since?: string;
+    previous?: string[];
+    health?: Record<string, unknown>;
+  };
 }
 
-// Discord rejects content over 2000 characters.
+export const WEBHOOK_FORMATS = ['generic', 'slack', 'discord', 'telegram'] as const;
+export type WebhookFormat = (typeof WEBHOOK_FORMATS)[number];
+
+// The plain text stays under Discord's 2000-character content limit (Telegram allows 4096, Slack far more).
 const MAX_TEXT = 1900;
+export const DISCORD_MAX_CONTENT = 2000;
+
+/** "45 s", "12 min", "3 h 5 min", "2 d 4 h". */
+export function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return `${total} s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return minutes % 60 === 0 ? `${hours} h` : `${hours} h ${minutes % 60} min`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 === 0 ? `${days} d` : `${days} d ${hours % 24} h`;
+}
+
+function lasted(alert: Alert): string | null {
+  if (!alert.since) return null;
+  const ms = Date.parse(alert.at) - Date.parse(alert.since);
+  return Number.isFinite(ms) ? formatDuration(ms / 1000) : null;
+}
+
+function headline(alert: Alert): string {
+  const n = alert.findings.length;
+  const duration = lasted(alert);
+  if (alert.kind === 'test') return `[Crove] Test alert from ${alert.instance}: alert delivery works.`;
+  if (alert.kind === 'resolved') {
+    const after = duration ? ` after ${duration}` : '';
+    if (alert.previous?.length === 1 && alert.previous[0] === 'probe') {
+      return `[Crove] RESOLVED on ${alert.instance}: the prober reads crove_kernel.health() again${after}.`;
+    }
+    const was = alert.previous?.length ? ` (${alert.previous.join(', ')})` : '';
+    return `[Crove] RESOLVED on ${alert.instance}: the failing health checks pass again${after}${was}.`;
+  }
+  if (alert.state === 'repeat') {
+    return `[Crove] STILL FAILING on ${alert.instance}${duration ? ` for ${duration}` : ''}: ${n} health check(s) failed.`;
+  }
+  if (alert.state === 'changed') {
+    const was = alert.previous?.length ? ` (was: ${alert.previous.join(', ')})` : '';
+    return `[Crove] ALERT on ${alert.instance}: ${n} health check(s) failed${was}.`;
+  }
+  return `[Crove] ALERT on ${alert.instance}: ${n} health check(s) failed.`;
+}
 
 export function alertText(alert: Alert): string {
-  const head =
-    alert.kind === 'test'
-      ? `[Crove] Test alert from ${alert.instance}: alert delivery works.`
-      : `[Crove] ALERT on ${alert.instance}: ${alert.findings.length} health check(s) failed.`;
   const lines = alert.findings.map((f) => `- ${f.message}`);
-  const text = [head, ...lines].join('\n');
+  const text = [headline(alert), ...lines].join('\n');
   return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT - 3)}...` : text;
 }
 
@@ -47,17 +112,72 @@ export function alertPayload(alert: Alert): AlertPayload {
     content: text,
     crove: {
       kind: alert.kind,
-      severity: alert.kind === 'test' ? 'info' : 'critical',
+      severity: alert.kind === 'alert' ? 'critical' : 'info',
       instance: alert.instance,
       at: alert.at,
       findings: alert.findings,
+      ...(alert.kind === 'alert' ? { state: alert.state ?? 'new' } : {}),
+      ...(alert.since ? { since: alert.since } : {}),
+      ...(alert.previous ? { previous: alert.previous } : {}),
       ...(alert.health ? { health: alert.health } : {}),
     },
   };
 }
 
+// Slack treats &, < and > as control characters (links, mentions): they are sent as HTML entities, nothing else is.
+export function slackEscape(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Discord renders Markdown in content: a backslash makes each emphasis, code and spoiler character literal (the
+// lines start with "[Crove]" or "- ", so no heading or quote can form, and the findings render as a list). The
+// result is cut to the 2000-character limit without leaving a dangling escape.
+export function discordContent(text: string): string {
+  const escaped = text.replace(/[\\*_~`|]/g, (c) => `\\${c}`);
+  if (escaped.length <= DISCORD_MAX_CONTENT) return escaped;
+  let cut = escaped.slice(0, DISCORD_MAX_CONTENT - 3);
+  // An odd run of trailing backslashes would escape the ellipsis: drop the last one.
+  const trailing = /\\+$/.exec(cut)?.[0].length ?? 0;
+  if (trailing % 2 === 1) cut = cut.slice(0, -1);
+  return `${cut}...`;
+}
+
+/** The format for a webhook URL: Slack, Discord and Telegram by their API hosts, generic otherwise. */
+export function detectWebhookFormat(url: string): WebhookFormat {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return 'generic';
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (host === 'hooks.slack.com') return 'slack';
+  if (host === 'api.telegram.org') return 'telegram';
+  if (/^(?:(?:ptb|canary)\.)?discord(?:app)?\.com$/.test(host) && parsed.pathname.startsWith('/api/webhooks/')) return 'discord';
+  return 'generic';
+}
+
+/** The JSON body for one alert in a given format. telegramChatId is required for 'telegram'. */
+export function webhookBody(alert: Alert, format: WebhookFormat, telegramChatId?: string): Record<string, unknown> {
+  const payload = alertPayload(alert);
+  switch (format) {
+    case 'slack':
+      return { text: slackEscape(payload.text), mrkdwn: false };
+    case 'discord':
+      return { content: discordContent(payload.text), allowed_mentions: { parse: [] } };
+    case 'telegram':
+      if (!telegramChatId) throw new Error('a Telegram webhook needs ALERT_TELEGRAM_CHAT_ID');
+      return { chat_id: telegramChatId, text: payload.text, link_preview_options: { is_disabled: true } };
+    case 'generic':
+      return { ...payload };
+  }
+}
+
 export interface AlertSinkOptions {
   webhookUrl?: string | undefined;
+  // Default: detected from the webhook host.
+  format?: WebhookFormat | undefined;
+  telegramChatId?: string | undefined;
   fetch?: typeof fetch | undefined;
   timeoutMs?: number;
   log?: ((line: string) => void) | undefined;
@@ -69,40 +189,65 @@ export interface Delivery {
   error?: string;
 }
 
-export function describeWebhook(url: string | undefined): string {
+export function describeWebhook(url: string | undefined, format?: WebhookFormat): string {
   if (!url) return 'stdout (ALERT_WEBHOOK_URL is not set)';
   try {
-    return `webhook at ${new URL(url).host}`;
+    const host = new URL(url).host;
+    const kind = format ?? detectWebhookFormat(url);
+    return kind === 'generic' ? `webhook at ${host}` : `${kind} webhook at ${host}`;
   } catch {
     return 'webhook (invalid URL)';
   }
 }
 
+// The vendors answer an error with a short reason (Slack "invalid_payload", Telegram {"description": ...}, Discord
+// {"message": ...}) that never contains the webhook secret: it is kept, cut to 200 printable characters. A generic
+// receiver's answer is not logged at all (it may echo the request).
+async function errorDetail(response: Response, format: WebhookFormat): Promise<string> {
+  if (format === 'generic') {
+    await response.arrayBuffer().catch(() => undefined);
+    return '';
+  }
+  const body = await response.text().catch(() => '');
+  let reason = body;
+  try {
+    const json = JSON.parse(body) as { description?: unknown; message?: unknown };
+    if (typeof json.description === 'string') reason = json.description;
+    else if (typeof json.message === 'string') reason = json.message;
+  } catch {
+    // Slack answers plain text.
+  }
+  const clean = reason.replace(/[^\x20-\x7e]/g, ' ').trim().slice(0, 200);
+  return clean ? `: ${clean}` : '';
+}
+
 /** Delivers one alert. Never throws: a failed webhook is reported in the result and the alert is printed instead. */
 export async function deliverAlert(alert: Alert, options: AlertSinkOptions): Promise<Delivery> {
   const log = options.log ?? ((line: string) => console.log(line));
-  const payload = alertPayload(alert);
+  const text = alertText(alert);
   if (!options.webhookUrl) {
-    log(payload.text);
+    log(text);
     return { channel: 'stdout', ok: true };
   }
+  const format = options.format ?? detectWebhookFormat(options.webhookUrl);
   const doFetch = options.fetch ?? fetch;
   try {
+    const body = webhookBody(alert, format, options.telegramChatId);
     const response = await doFetch(options.webhookUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(body),
       redirect: 'error',
       signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
     });
-    // Drain the body so the connection is released; its content is not logged (it may echo the request).
+    if (!response.ok) throw new Error(`HTTP ${response.status}${await errorDetail(response, format)}`);
+    // Drain the body so the connection is released; its content is not logged.
     await response.arrayBuffer().catch(() => undefined);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return { channel: 'webhook', ok: true };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    log(payload.text);
-    return { channel: 'webhook', ok: false, error: `${describeWebhook(options.webhookUrl)} failed: ${reason}` };
+    log(text);
+    return { channel: 'webhook', ok: false, error: `${describeWebhook(options.webhookUrl, format)} failed: ${reason}` };
   }
 }
 
@@ -113,7 +258,7 @@ export interface AlertSink {
   deliver(alert: Alert): Promise<Delivery>;
 }
 
-// The open-source default: the generic webhook, or stdout without one.
+// The open-source default: the webhook, or stdout without one.
 export function webhookAlertSink(options: AlertSinkOptions): AlertSink {
-  return { describe: () => describeWebhook(options.webhookUrl), deliver: (alert) => deliverAlert(alert, options) };
+  return { describe: () => describeWebhook(options.webhookUrl, options.format), deliver: (alert) => deliverAlert(alert, options) };
 }

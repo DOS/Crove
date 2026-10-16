@@ -1,5 +1,6 @@
-// The `prober` image role (plan §4.13, issue #39): reads crove_kernel.health() as crove_prober, compares it with
-// thresholds and sends one alert when any is exceeded. Runs once and exits (cron, a scheduler), or repeats with
+// The `prober` image role (plan §4.13, issues #39 and #151): reads crove_kernel.health() as crove_prober, compares
+// it with thresholds and notifies on news only (alert-gate.ts): a new or changed problem, a resolved one, and the
+// same problem again every ALERT_REPEAT_MINUTES. Runs once and exits (cron, a scheduler), or repeats with
 // `--every <seconds>` (the Compose profile). `--test-alert` sends a test alert and needs no database.
 //
 // Exit codes: 0 healthy (or the test alert was delivered), 1 thresholds exceeded, 2 the health check could not run
@@ -7,7 +8,18 @@
 import { hostname } from 'node:os';
 import pg from 'pg';
 import { z } from 'zod';
-import { webhookAlertSink, type Alert, type AlertSink, type AlertSinkOptions, type Finding } from './alert.ts';
+import { effectiveRepeatSeconds, memoryAlertGate, pgAlertGate, problemKey, type AlertGate, type GateResult } from './alert-gate.ts';
+import {
+  WEBHOOK_FORMATS,
+  detectWebhookFormat,
+  webhookAlertSink,
+  type Alert,
+  type AlertSink,
+  type AlertSinkOptions,
+  type Delivery,
+  type Finding,
+  type WebhookFormat,
+} from './alert.ts';
 
 export const EXIT = { ok: 0, unhealthy: 1, probeFailed: 2, deliveryFailed: 3 } as const;
 
@@ -21,6 +33,13 @@ const schema = z.object({
   // Connect as crove_prober (password CROVE_PROBER_DB_PASSWORD, set by `migrate`).
   PROBER_DATABASE_URL: optional,
   ALERT_WEBHOOK_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
+  // auto: Slack, Discord and Telegram by their API hosts, generic otherwise (alert.ts).
+  ALERT_WEBHOOK_FORMAT: z.enum(['auto', ...WEBHOOK_FORMATS]).default('auto'),
+  // Telegram only: the chat the bot posts to, a numeric id (groups and channels are negative) or @channelname.
+  ALERT_TELEGRAM_CHAT_ID: optional.pipe(z.string().regex(/^(?:-?\d{1,20}|@[A-Za-z0-9_]{5,32})$/).optional()),
+  // While the same problem lasts, notify again every this many minutes; 0 notifies only when it starts, changes
+  // or ends.
+  ALERT_REPEAT_MINUTES: z.coerce.number().int().min(0).max(10_080).default(60),
   // Names this deployment in alerts. Default: the host of PUBLIC_URL, else the machine's host name.
   ALERT_INSTANCE: optional,
   PUBLIC_URL: optional,
@@ -37,6 +56,10 @@ const schema = z.object({
 export interface ProberConfig {
   databaseUrl: string | undefined;
   webhookUrl: string | undefined;
+  webhookFormat: WebhookFormat;
+  telegramChatId: string | undefined;
+  // 0: never repeat.
+  repeatSeconds: number;
   instance: string;
   thresholds: Thresholds;
   deadLetterWindowSeconds: number;
@@ -56,9 +79,19 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
     throw new Error(`invalid prober configuration: ${fields}`);
   }
   const raw = parsed.data;
+  const webhookFormat = raw.ALERT_WEBHOOK_FORMAT === 'auto' ? (raw.ALERT_WEBHOOK_URL ? detectWebhookFormat(raw.ALERT_WEBHOOK_URL) : 'generic') : raw.ALERT_WEBHOOK_FORMAT;
+  if (raw.ALERT_WEBHOOK_URL && webhookFormat === 'telegram') {
+    if (!raw.ALERT_TELEGRAM_CHAT_ID) throw new Error('invalid prober configuration: ALERT_TELEGRAM_CHAT_ID (a Telegram webhook needs the chat id)');
+    if (!/\/bot[^/]+\/sendMessage$/.test(new URL(raw.ALERT_WEBHOOK_URL).pathname)) {
+      throw new Error('invalid prober configuration: ALERT_WEBHOOK_URL (a Telegram webhook is https://api.telegram.org/bot<token>/sendMessage)');
+    }
+  }
   return {
     databaseUrl: raw.PROBER_DATABASE_URL,
     webhookUrl: raw.ALERT_WEBHOOK_URL,
+    webhookFormat,
+    telegramChatId: raw.ALERT_TELEGRAM_CHAT_ID,
+    repeatSeconds: raw.ALERT_REPEAT_MINUTES * 60,
     instance: raw.ALERT_INSTANCE ?? hostOf(raw.PUBLIC_URL) ?? hostname(),
     thresholds: {
       outboxAgeSeconds: raw.PROBER_MAX_OUTBOX_AGE_SECONDS,
@@ -185,58 +218,149 @@ export interface ProbeDeps {
   now?: () => Date;
   // Replaces the default webhook sink (ADR-0030); fetch is then unused.
   sink?: AlertSink;
+  // The deployment-wide de-duplication state. Default: pgAlertGate on PROBER_DATABASE_URL.
+  gate?: AlertGate;
+  // The state for "the database cannot be read". runProber keeps one across --every probes; default: a fresh one.
+  outageGate?: AlertGate;
 }
 
 function alertSink(config: ProberConfig, deps: ProbeDeps): AlertSink {
-  return deps.sink ?? webhookAlertSink({ webhookUrl: config.webhookUrl, fetch: deps.fetch, log: deps.log ?? ((line: string) => console.log(line)) });
+  return (
+    deps.sink ??
+    webhookAlertSink({
+      webhookUrl: config.webhookUrl,
+      format: config.webhookFormat,
+      telegramChatId: config.telegramChatId,
+      fetch: deps.fetch,
+      log: deps.log ?? ((line: string) => console.log(line)),
+    })
+  );
 }
 
-/** One probe: returns the exit code. Never throws. */
+const iso = (d: Date | null) => (d ? d.toISOString() : undefined);
+const checksOf = (problem: string | null) => (problem ? problem.split(',') : []);
+
+// The notification a gate decision calls for, or null when there is nothing to send.
+function notification(gate: GateResult, base: Pick<Alert, 'instance' | 'at' | 'health'>, findings: Finding[]): Alert | null {
+  const since = iso(gate.problemSince);
+  switch (gate.decision) {
+    case 'new':
+      return { kind: 'alert', state: 'new', ...base, findings };
+    case 'changed':
+      return { kind: 'alert', state: 'changed', ...base, findings, ...(since ? { since } : {}), previous: checksOf(gate.previousProblem) };
+    case 'repeat':
+      return { kind: 'alert', state: 'repeat', ...base, findings, ...(since ? { since } : {}) };
+    case 'resolved':
+      return { kind: 'resolved', ...base, findings: [], ...(since ? { since } : {}), previous: checksOf(gate.previousProblem) };
+    case 'healthy':
+    case 'suppressed':
+    case 'busy':
+      return null;
+  }
+}
+
+function quietReason(gate: GateResult, repeatSeconds: number): string {
+  if (gate.decision === 'busy') return 'another prober is sending the notification for this probe';
+  const last = gate.lastNotifiedAt ? ` at ${gate.lastNotifiedAt.toISOString()}` : '';
+  const repeat = effectiveRepeatSeconds(repeatSeconds);
+  const next =
+    repeat === null
+      ? ', repeats are off (ALERT_REPEAT_MINUTES=0)'
+      : gate.lastNotifiedAt
+        ? `, repeats from ${new Date(gate.lastNotifiedAt.getTime() + repeat * 1000).toISOString()}`
+        : '';
+  return `already notified${last}${next}`;
+}
+
+// A sink from an entrypoint (ADR-0030) might throw although the port says it should not: that counts as a failed
+// delivery, so the gate is still settled (rolled back) and the probe loop keeps running.
+async function safeDeliver(sink: AlertSink, alert: Alert): Promise<Delivery> {
+  try {
+    return await sink.deliver(alert);
+  } catch (e) {
+    return { channel: 'webhook', ok: false, error: `${sink.describe()} failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/**
+ * One probe: returns the exit code. Never throws. The exit code reports health (0, 1, 2) whether or not a
+ * notification went out, and 3 when one was due and could not be delivered.
+ */
 export async function probeOnce(config: ProberConfig, deps: ProbeDeps = {}): Promise<number> {
   const log = deps.log ?? ((line: string) => console.log(line));
   const error = deps.error ?? ((line: string) => console.error(line));
-  const at = (deps.now ?? (() => new Date()))().toISOString();
+  const now = (deps.now ?? (() => new Date()))();
+  const at = now.toISOString();
   const sink = alertSink(config, deps);
+  const outage = deps.outageGate ?? memoryAlertGate(config.repeatSeconds);
 
-  let alert: Alert;
-  let code: number;
+  // Sends what `result` calls for and settles `gate`; false when a due notification could not be delivered.
+  const notify = async (gate: AlertGate, result: GateResult, alert: Alert | null): Promise<boolean> => {
+    if (!alert) {
+      if (result.decision === 'suppressed' || result.decision === 'busy') log(`[prober] notification skipped: ${quietReason(result, config.repeatSeconds)}`);
+      await gate.settle(true);
+      return true;
+    }
+    const delivery = await safeDeliver(sink, alert);
+    await gate.settle(delivery.ok);
+    if (!delivery.ok) {
+      error(`[prober] alert delivery: ${delivery.error}`);
+      return false;
+    }
+    log(`[prober] ${alert.kind === 'resolved' ? 'resolved notice' : 'alert'} sent to ${sink.describe()}`);
+    return true;
+  };
+
   if (!config.databaseUrl) {
     error('[prober] PROBER_DATABASE_URL is not set; connect it as crove_prober');
     return EXIT.probeFailed;
   }
+  let health: HealthSnapshot;
   try {
-    const health = await (deps.readHealth ?? readHealth)(config.databaseUrl, config.deadLetterWindowSeconds);
-    const findings = evaluateHealth(health, config.thresholds, config.deadLetterWindowSeconds);
-    if (findings.length === 0) {
-      log(
-        `[prober] ok: outbox ${health.outbox_pending} pending, inbound ${health.inbound_pending} pending, ` +
-          `jobs ${health.jobs_queued ?? 0} queued, dead letters ${health.dead_letter_count ?? 0}, ` +
-          `heartbeat ${health.worker_heartbeat_age_seconds === null ? 'none' : s(health.worker_heartbeat_age_seconds)} ago`,
-      );
-      return EXIT.ok;
-    }
-    for (const f of findings) error(`[prober] FAIL ${f.check}: ${f.message}`);
-    alert = { kind: 'alert', instance: config.instance, at, findings, health: { ...health } };
-    code = EXIT.unhealthy;
+    health = await (deps.readHealth ?? readHealth)(config.databaseUrl, config.deadLetterWindowSeconds);
   } catch (e) {
-    // The database itself is unreachable or health() is refused: that is an outage too, so it alerts.
-    const reason = e instanceof Error ? e.message : String(e);
+    // The database itself is unreachable or health() is refused: that is an outage too, so it alerts. Its state
+    // cannot be kept in the database, so the in-process gate de-duplicates it.
+    // One line: a driver message with a line break could otherwise start a Markdown heading or quote in a chat.
+    const reason = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, ' ').trim();
     error(`[prober] FAIL probe: could not read crove_kernel.health(): ${reason}`);
-    alert = {
-      kind: 'alert',
-      instance: config.instance,
-      at,
-      findings: [{ check: 'probe', value: null, threshold: null, message: `the prober could not read crove_kernel.health(): ${reason}` }],
-    };
-    code = EXIT.probeFailed;
+    const findings: Finding[] = [{ check: 'probe', value: null, threshold: null, message: `the prober could not read crove_kernel.health(): ${reason}` }];
+    const result = await outage.decide('probe', now);
+    const sent = await notify(outage, result, notification(result, { instance: config.instance, at }, findings));
+    return sent ? EXIT.probeFailed : EXIT.deliveryFailed;
   }
-  const delivery = await sink.deliver(alert);
-  if (!delivery.ok) {
-    error(`[prober] alert delivery: ${delivery.error}`);
-    return EXIT.deliveryFailed;
+
+  // The database answers again after an outage this process alerted about.
+  const recovered = await outage.decide(null, now);
+  let delivered = await notify(outage, recovered, notification(recovered, { instance: config.instance, at }, []));
+
+  const findings = evaluateHealth(health, config.thresholds, config.deadLetterWindowSeconds);
+  if (findings.length === 0) {
+    log(
+      `[prober] ok: outbox ${health.outbox_pending} pending, inbound ${health.inbound_pending} pending, ` +
+        `jobs ${health.jobs_queued ?? 0} queued, dead letters ${health.dead_letter_count ?? 0}, ` +
+        `heartbeat ${health.worker_heartbeat_age_seconds === null ? 'none' : s(health.worker_heartbeat_age_seconds)} ago`,
+    );
+  } else {
+    for (const f of findings) error(`[prober] FAIL ${f.check}: ${f.message}`);
   }
-  log(`[prober] alert sent to ${sink.describe()}`);
-  return code;
+
+  const problem = problemKey(findings.map((f) => f.check));
+  const gate = deps.gate ?? pgAlertGate(config.databaseUrl, config.repeatSeconds);
+  let result: GateResult;
+  try {
+    result = await gate.decide(problem, now);
+  } catch (e) {
+    // Without the shared state, alert as if the problem were new (and say nothing when healthy): a missed alert is
+    // worse than a duplicate.
+    const reason = e instanceof Error ? e.message : String(e);
+    error(`[prober] alert state unavailable, notifying without de-duplication: ${reason}`);
+    result = { decision: problem === null ? 'healthy' : 'new', previousProblem: null, problemSince: null, lastNotifiedAt: null };
+  }
+  const alert = notification(result, { instance: config.instance, at, health: { ...health } }, findings);
+  delivered = (await notify(gate, result, alert)) && delivered;
+  if (!delivered) return EXIT.deliveryFailed;
+  return findings.length === 0 ? EXIT.ok : EXIT.unhealthy;
 }
 
 export async function sendTestAlert(config: ProberConfig, deps: ProbeDeps = {}): Promise<number> {
@@ -244,7 +368,7 @@ export async function sendTestAlert(config: ProberConfig, deps: ProbeDeps = {}):
   const error = deps.error ?? ((line: string) => console.error(line));
   const at = (deps.now ?? (() => new Date()))().toISOString();
   const sink = alertSink(config, deps);
-  const delivery = await sink.deliver({ kind: 'test', instance: config.instance, at, findings: [] });
+  const delivery = await safeDeliver(sink, { kind: 'test', instance: config.instance, at, findings: [] });
   if (!delivery.ok) {
     error(`[prober] test alert: ${delivery.error}`);
     return EXIT.deliveryFailed;
@@ -287,11 +411,12 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   if (args.testAlert) return sendTestAlert(config, deps);
   if (args.everySeconds === null) return probeOnce(config, deps);
   const every = args.everySeconds;
+  const looping = { ...deps, outageGate: deps.outageGate ?? memoryAlertGate(config.repeatSeconds) };
   // Under Docker this is PID 1, which gets no default SIGTERM handling: stop between probes at once.
   process.once('SIGTERM', () => process.exit(EXIT.ok));
   (deps.log ?? console.log)(`[prober] probing every ${every} s, alerts to ${alertSink(config, deps).describe()}`);
   for (;;) {
-    await probeOnce(config, deps);
+    await probeOnce(config, looping);
     await new Promise((resolve) => setTimeout(resolve, every * 1000));
   }
 }

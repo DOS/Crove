@@ -951,7 +951,7 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
   - Cloud Scheduler runs the `crove-prober` job every minute. The prober calls `crove_kernel.health()` as `crove_prober` and reads: age of the oldest unpublished outbox row, longest-queued job, DLQ, relay/worker heartbeats, purge results.
   - Results become Cloud Monitoring metrics, with absence alerts.
   - SEV1 pages the owner's phone and also opens an issue for an agent to handle per runbook.
-  - Open-source core (issue #39): the image's `prober` role and `crove_kernel.health()` (outbox and inbound relay age, oldest queued job, dead letters, worker heartbeat), with a generic webhook or stdout alert and `--test-alert`. Self-hosters schedule it with cron or the Compose `prober` profile (README); Cloud Scheduler, Cloud Monitoring and paging stay in Crove Cloud.
+  - Open-source core (issue #39): the image's `prober` role and `crove_kernel.health()` (outbox and inbound relay age, oldest queued job, dead letters, worker heartbeat), with a webhook (Slack, Discord, Telegram or generic JSON) or stdout alert and `--test-alert`. Alerts are de-duplicated (issue #151): a notification on a new, changed or resolved problem and a repeat every `ALERT_REPEAT_MINUTES`, with the state in `crove_kernel.prober_alert_state` behind `prober_alert_gate()`, locked while one prober delivers. Self-hosters schedule it with cron or the Compose `prober` profile (README); Cloud Scheduler, Cloud Monitoring and paging stay in Crove Cloud.
 
 ## 5. Modules
 
@@ -1163,7 +1163,7 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 | `crove_api` | LOGIN NOINHERIT; limits and timeouts per §3.3; EXECUTE only (`enter_context`, `my_orgs`, `identity_upsert`, `auth_session_valid` (self-host, ADR-0028), `record_inbound_message`, `record_inbound_webhook`, `schema_missing`) | `crove_m_*` (SET, no INHERIT) | API |
 | `crove_worker` | LOGIN NOINHERIT | `crove_m_*`, `crove_system` (SET) | Worker, Jobs |
 | `crove_queue` | LOGIN NOINHERIT; DML on `crove_jobs` | - | pg-boss |
-| `crove_prober` | LOGIN; EXECUTE `health()` | - | Prober |
+| `crove_prober` | LOGIN; EXECUTE `health()`, `prober_alert_gate()` | - | Prober |
 | `crove_tenant` | NOLOGIN, group | - | Target of every tenant policy |
 | `crove_m_<id>` | NOLOGIN | `crove_tenant` (INHERIT) | Module role |
 | `crove_system` | NOLOGIN; EXECUTE on cross-tenant machinery; DML on `crove_jobs` | - | Relay, purge |

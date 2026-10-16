@@ -1,7 +1,7 @@
 // Prober privileges (plan §4.13, issues #39 and #151) on a real PostgreSQL 17. crove_prober may execute
-// crove_kernel.health() and, once it exists, crove_kernel.prober_alert_gate() (alert de-duplication, #151), and nothing
-// else: no table, no other function, no temporary objects, no role membership. Heartbeats are written only by the
-// worker login; the alert state only through the gate. Part of the invariant suite: CI runs this file from the base branch on protected-path
+// crove_kernel.health() and crove_kernel.prober_alert_gate() and nothing else: no table, no other function, no
+// temporary objects, no role membership. Heartbeats are written only by the worker login; the alert state only
+// through the gate. Part of the invariant suite: CI runs this file from the base branch on protected-path
 // PRs (AGENTS.md). Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -11,9 +11,6 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
 const PINNED = ['search_path=pg_catalog, pg_temp'];
-// Lands with the #151 migration; until then every check below holds without it. Once it is on main, the next change
-// to this file requires it.
-const GATE = 'crove_kernel.prober_alert_gate(text,integer)';
 
 const suite = ADMIN ? describe : describe.skip;
 
@@ -34,11 +31,6 @@ suite('prober privileges', () => {
     await client.connect();
     clients.push(client);
     return client;
-  }
-
-  async function gatePresent(admin: pg.Client): Promise<boolean> {
-    const { rows } = await admin.query<{ present: boolean }>('SELECT to_regprocedure($1) IS NOT NULL AS present', [GATE]);
-    return rows[0]?.present === true;
   }
 
   beforeAll(async () => {
@@ -89,10 +81,9 @@ suite('prober privileges', () => {
     ]);
   });
 
-  it('lets only crove_prober execute health() (and the alert gate), and only crove_worker execute worker_beat() (EXECUTE matrix)', async () => {
+  it('lets only crove_prober execute health() and prober_alert_gate(), and only crove_worker execute worker_beat() (EXECUTE matrix)', async () => {
     const admin = await connect(adminUrl);
-    const gate = await gatePresent(admin);
-    const functions = ['crove_kernel.health(integer)', ...(gate ? [GATE] : []), 'crove_kernel.worker_beat(text)'];
+    const functions = ['crove_kernel.health(integer)', 'crove_kernel.prober_alert_gate(text,integer)', 'crove_kernel.worker_beat(text)'];
     const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober'];
     const { rows } = await admin.query<{ fn: string; role: string }>(
       `SELECT f AS fn, r AS role FROM unnest($1::text[]) f CROSS JOIN unnest($2::text[]) r
@@ -101,27 +92,25 @@ suite('prober privileges', () => {
     );
     expect(rows).toEqual([
       { fn: 'crove_kernel.health(integer)', role: 'crove_prober' },
-      ...(gate ? [{ fn: GATE, role: 'crove_prober' }] : []),
+      { fn: 'crove_kernel.prober_alert_gate(text,integer)', role: 'crove_prober' },
       { fn: 'crove_kernel.worker_beat(text)', role: 'crove_worker' },
     ]);
     const defs = await admin.query(
       `SELECT p.oid::regprocedure::text AS fn, p.prosecdef, p.proconfig FROM pg_proc p
-       WHERE p.oid IN ('crove_kernel.health(integer)'::regprocedure, 'crove_kernel.worker_beat(text)'::regprocedure)
-          OR p.oid = to_regprocedure($1) ORDER BY 1`,
-      [GATE],
+       WHERE p.oid IN ('crove_kernel.health(integer)'::regprocedure, 'crove_kernel.prober_alert_gate(text,integer)'::regprocedure,
+                       'crove_kernel.worker_beat(text)'::regprocedure) ORDER BY 1`,
     );
     expect(defs.rows).toEqual([
       { fn: 'crove_kernel.health(integer)', prosecdef: true, proconfig: PINNED },
-      ...(gate ? [{ fn: GATE, prosecdef: true, proconfig: PINNED }] : []),
+      { fn: 'crove_kernel.prober_alert_gate(text,integer)', prosecdef: true, proconfig: PINNED },
       { fn: 'crove_kernel.worker_beat(text)', prosecdef: true, proconfig: PINNED },
     ]);
     // crove_prober executes no other Crove function.
     const others = await admin.query<{ fn: string }>(
       `SELECT p.oid::regprocedure::text AS fn FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname LIKE 'crove\\_%' AND n.nspname <> 'crove_jobs'
-         AND p.oid <> 'crove_kernel.health(integer)'::regprocedure AND p.oid IS DISTINCT FROM to_regprocedure($1)
+         AND p.oid NOT IN ('crove_kernel.health(integer)'::regprocedure, 'crove_kernel.prober_alert_gate(text,integer)'::regprocedure)
          AND has_function_privilege('crove_prober', p.oid, 'EXECUTE')`,
-      [GATE],
     );
     expect(others.rows).toEqual([]);
   });
@@ -145,7 +134,6 @@ suite('prober privileges', () => {
   });
 
   it('as the crove_prober login: reads health() and is refused everything else', async () => {
-    const gate = await gatePresent(await connect(adminUrl));
     const prober = await connect(loginUrl('crove_prober', 'test-prober-pw'));
     const { rows } = await prober.query('SELECT * FROM crove_kernel.health()');
     expect(rows).toHaveLength(1);
@@ -166,32 +154,25 @@ suite('prober privileges', () => {
       'SELECT 1 FROM crove_kernel.outbox_event LIMIT 1',
       'SELECT 1 FROM crove_kernel.outbox_pending LIMIT 1',
       'SELECT 1 FROM crove_kernel.worker_heartbeat LIMIT 1',
+      'SELECT 1 FROM crove_kernel.prober_alert_state LIMIT 1',
+      "UPDATE crove_kernel.prober_alert_state SET problem = 'probe'",
+      'DELETE FROM crove_kernel.prober_alert_state',
       "SELECT crove_kernel.worker_beat('prober')",
       'SELECT * FROM crove_kernel.outbox_claim(1)',
       "SELECT crove_kernel.enter_system_context('00000000-0000-0000-0000-000000000000')",
       'CREATE TEMP TABLE t (x int)',
       'CREATE TABLE crove_kernel.planted (x int)',
-      ...(gate
-        ? [
-            'SELECT 1 FROM crove_kernel.prober_alert_state LIMIT 1',
-            "UPDATE crove_kernel.prober_alert_state SET problem = 'probe'",
-            'DELETE FROM crove_kernel.prober_alert_state',
-          ]
-        : []),
     ];
     for (const statement of refused) {
       await expect(prober.query(statement), statement).rejects.toMatchObject({ code: '42501' });
     }
     // The alert gate is the one thing it may change.
-    if (gate) expect((await prober.query('SELECT decision FROM crove_kernel.prober_alert_gate(NULL, 3600)')).rows).toEqual([{ decision: 'healthy' }]);
+    const gate = await prober.query(`SELECT decision FROM crove_kernel.prober_alert_gate(NULL, 3600)`);
+    expect(gate.rows).toEqual([{ decision: 'healthy' }]);
   });
 
-  it('keeps the alert state, once it exists, a definer-only machinery table: RLS on, no org_id, no grants, one row', async () => {
+  it('keeps the alert state a definer-only machinery table: RLS on, no grants, one row', async () => {
     const admin = await connect(adminUrl);
-    if (!(await gatePresent(admin))) {
-      expect((await admin.query(`SELECT to_regclass('crove_kernel.prober_alert_state') IS NULL AS absent`)).rows).toEqual([{ absent: true }]);
-      return;
-    }
     const table = await admin.query(
       `SELECT c.relrowsecurity AS rls,
               (SELECT count(*)::int FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = 'org_id' AND NOT a.attisdropped) AS org_id,
@@ -202,7 +183,7 @@ suite('prober privileges', () => {
        FROM pg_class c WHERE c.oid = 'crove_kernel.prober_alert_state'::regclass`,
     );
     expect(table.rows).toEqual([{ rls: true, org_id: 0, grantees: 0 }]);
-    await expect(admin.query('INSERT INTO crove_kernel.prober_alert_state (id) VALUES (2)')).rejects.toMatchObject({ code: '23514' });
+    await expect(admin.query(`INSERT INTO crove_kernel.prober_alert_state (id) VALUES (2)`)).rejects.toMatchObject({ code: '23514' });
   });
 
   it('lets only the worker login write heartbeats, even when EXECUTE is granted by mistake', async () => {

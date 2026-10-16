@@ -54,6 +54,9 @@ suite('prober on PostgreSQL', () => {
   const proberConfig = (overrides: Partial<ProberConfig> = {}): ProberConfig => ({
     databaseUrl: proberUrl,
     webhookUrl: hookUrl,
+    webhookFormat: 'generic',
+    telegramChatId: undefined,
+    repeatSeconds: 3600,
     instance: 'prober-test',
     thresholds: limits,
     deadLetterWindowSeconds: 3600,
