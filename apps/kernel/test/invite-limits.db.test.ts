@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { sql, type Transaction } from 'kysely';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDb, createPool, type Database, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { MAX_INVITES_PER_DAY, MAX_INVITES_PER_EMAIL_PER_DAY, buildKernelCommands, createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
@@ -303,6 +303,184 @@ suite('invite mail limits on PostgreSQL (#185)', () => {
     expect(await invite(runtime, orgId, owner.id, email)).toMatchObject({ inviteId: expect.any(String) });
   });
 
+  it('keys the limits on the inbox: +tags everywhere, dots only at Gmail (#270)', async () => {
+    const keys = await admin(async (c) => {
+      const cases = [
+        'ab@gmail.com',
+        'a.b+x@gmail.com',
+        'A.B+X@GoogleMail.com',
+        'a.b@googlemail.com',
+        'a.b@example.com',
+        'ab@example.com',
+        'a+b+c@example.com',
+        'a.b+x@sub.gmail.com',
+        '+x@gmail.com',
+        '...@gmail.com',
+        'odd',
+      ];
+      const { rows } = await c.query<{ k: string }>('SELECT crove_kernel.invite_cap_key(e) AS k FROM unnest($1::text[]) WITH ORDINALITY u(e, n) ORDER BY n', [cases]);
+      return Object.fromEntries(cases.map((e, i) => [e, rows[i]?.k]));
+    });
+    expect(keys).toEqual({
+      'ab@gmail.com': 'ab@gmail.com',
+      'a.b+x@gmail.com': 'ab@gmail.com',
+      'A.B+X@GoogleMail.com': 'ab@gmail.com',
+      'a.b@googlemail.com': 'ab@gmail.com',
+      'a.b@example.com': 'a.b@example.com',
+      'ab@example.com': 'ab@example.com',
+      'a+b+c@example.com': 'a@example.com',
+      'a.b+x@sub.gmail.com': 'a.b@sub.gmail.com',
+      // A local part that is nothing but a tag or dots folds into no other address.
+      '+x@gmail.com': '+x@gmail.com',
+      '...@gmail.com': '...@gmail.com',
+      odd: 'odd',
+    });
+    // The per-inbox count reads the index on the key.
+    const plan = await admin(async (c) => {
+      await c.query('BEGIN');
+      try {
+        await c.query('SET LOCAL enable_seqscan = off');
+        const { rows } = await c.query<{ 'QUERY PLAN': string }>(
+          `EXPLAIN SELECT 1 FROM crove_kernel.member_invite i
+           WHERE crove_kernel.invite_cap_key(i.email) = 'ab@gmail.com' AND i.created_at > clock_timestamp() - interval '24 hours'`,
+        );
+        return rows.map((r) => r['QUERY PLAN']).join('\n');
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    expect(plan).toContain('member_invite_cap_key_created_idx');
+  });
+
+  it('folds address variants for the cap, never for who the invite is for (#270)', async () => {
+    const r = randomUUID().slice(0, 8);
+    const stranger = await person('stranger');
+    const strangerOrg = await orgOf(stranger);
+    // Another org used up the cap of two inboxes today.
+    await sent(strangerOrg, stranger.id, Array.from({ length: TIGHT }, () => `ab${r}@gmail.com`));
+    await sent(strangerOrg, stranger.id, Array.from({ length: TIGHT }, () => `ab${r}@example.com`));
+    const owner = await person('owner');
+    const orgId = await orgOf(owner);
+
+    // a.b+x@gmail.com is the inbox ab@gmail.com: the org's first invite of it passes, a repeat under another
+    // spelling is refused by the cap.
+    const first = await invite(tight, orgId, owner.id, `a.b${r}+x@gmail.com`);
+    expect(first).toMatchObject({ email: `a.b${r}+x@gmail.com` });
+    await expect(invite(tight, orgId, owner.id, `ab${r}@googlemail.com`)).rejects.toMatchObject({
+      code: 'INVITE_RATE_LIMITED',
+      status: 429,
+      details: { rule: 'invite_recipient_per_day', limit: TIGHT },
+    });
+
+    // a.b@example.com is not ab@example.com: no dots fold outside Gmail, so its repeats are not capped by the
+    // stranger's invites. Its +tags fold, into this org's per-email limit too.
+    for (const email of [`a.b${r}@example.com`, `a.b${r}@example.com`, `a.b${r}+y@example.com`]) {
+      expect(await invite(tight, orgId, owner.id, email)).toMatchObject({ inviteId: expect.any(String) });
+    }
+    await expect(invite(tight, orgId, owner.id, `a.b${r}+z@example.com`)).rejects.toMatchObject({
+      code: 'INVITE_RATE_LIMITED',
+      details: { rule: 'invite_email_per_day', limit: MAX_INVITES_PER_EMAIL_PER_DAY },
+    });
+
+    // The invite stays bound to the email it names: the account of the inbox's plain address cannot accept it, the
+    // account with that exact address can.
+    const token = first.acceptPath.slice(first.acceptPath.indexOf('#') + 1);
+    const plain = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: `ab${r}@gmail.com`, name: null });
+    await expect(runtime.executeOrgless('kernel.member.invite.accept', { token }, { actor: asUser(plain) })).rejects.toMatchObject({
+      code: 'INVITE_EMAIL_MISMATCH',
+      status: 403,
+    });
+    const tagged = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: `a.b${r}+x@gmail.com`, name: null });
+    await expect(runtime.executeOrgless('kernel.member.invite.accept', { token }, { actor: asUser(tagged) })).resolves.toMatchObject({ orgId });
+    // The rows keep the addresses as given.
+    expect(await invitesOf('org_id = $1 AND email = $2', [orgId, `a.b${r}+x@gmail.com`])).toBe(1);
+    expect(await invitesOf('org_id = $1 AND email = $2', [orgId, `a.b${r}+y@example.com`])).toBe(1);
+  });
+
+  it('dates invites by the database clock, whatever the API clock says (#270)', async () => {
+    const owner = await person('owner');
+    const orgId = await orgOf(owner);
+    const email = `clock-${randomUUID().slice(0, 8)}@limits.test`;
+    const dbNow = async () => admin(async (c) => (await c.query<{ t: Date }>('SELECT clock_timestamp() AS t')).rows[0]?.t as Date);
+    const before = await dbNow();
+    // The API host's clock is 30 hours behind the database: with created_at from it, every invite would already be
+    // outside the window and the limits would never refuse.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(before.getTime() - 30 * 60 * 60 * 1000);
+      for (let i = 0; i < MAX_INVITES_PER_EMAIL_PER_DAY; i++) {
+        expect(await invite(runtime, orgId, owner.id, email)).toMatchObject({ inviteId: expect.any(String) });
+      }
+      await expect(invite(runtime, orgId, owner.id, email)).rejects.toMatchObject({
+        code: 'INVITE_RATE_LIMITED',
+        details: { rule: 'invite_email_per_day', limit: MAX_INVITES_PER_EMAIL_PER_DAY },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    const after = await dbNow();
+    const created = await admin(
+      async (c) => (await c.query<{ created_at: Date }>('SELECT created_at FROM crove_kernel.member_invite WHERE org_id = $1 ORDER BY created_at', [orgId])).rows,
+    );
+    expect(created).toHaveLength(MAX_INVITES_PER_EMAIL_PER_DAY);
+    for (const row of created) {
+      expect(row.created_at.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(row.created_at.getTime()).toBeLessThanOrEqual(after.getTime());
+    }
+  });
+
+  it('refuses an invite already over a limit at once, without waiting for the locks (#270)', async () => {
+    const email = `capped-${randomUUID().slice(0, 8)}@limits.test`;
+    const stranger = await person('stranger');
+    await sent(await orgOf(stranger), stranger.id, Array.from({ length: TIGHT }, () => email));
+    const owner = await person('owner');
+    const orgId = await orgOf(owner);
+    await sent(orgId, owner.id, [email]);
+    const full = await person('full');
+    const fullOrg = await orgOf(full);
+    await sent(
+      fullOrg,
+      full.id,
+      Array.from({ length: MAX_INVITES_PER_DAY }, (_, i) => `earlier-${i}-${randomUUID().slice(0, 6)}@limits.test`),
+    );
+    const unlocked = (await invite(tight, orgId, owner.id, email).catch((e: unknown) => e)) as Record<string, unknown>;
+    expect(unlocked).toMatchObject({ code: 'INVITE_RATE_LIMITED', status: 429, details: { rule: 'invite_recipient_per_day', limit: TIGHT } });
+
+    const holder = new pg.Client({ connectionString: adminUrl });
+    await holder.connect();
+    try {
+      await holder.query('BEGIN');
+      // Both locks the invites need, held by another connection.
+      for (const key of [`kernel.member.invite:${orgId}`, `kernel.member.invite:${fullOrg}`, `kernel.member.invite.recipient:${email}`]) {
+        await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [key]);
+      }
+      // The repeat invite of the capped address: refused at once, with the answer it gets without the locks.
+      let started = Date.now();
+      const refused = (await invite(tight, orgId, owner.id, email).catch((e: unknown) => e)) as Record<string, unknown>;
+      expect(Date.now() - started).toBeLessThan(1500);
+      expect({ type: refused?.constructor?.name, keys: Object.keys(refused).sort(), code: refused.code, status: refused.status, message: refused.message, details: refused.details }).toEqual(
+        { type: unlocked?.constructor?.name, keys: Object.keys(unlocked).sort(), code: unlocked.code, status: unlocked.status, message: unlocked.message, details: unlocked.details },
+      );
+      // An org already at its daily limit: refused at once too.
+      started = Date.now();
+      await expect(invite(tight, fullOrg, full.id, `late-${randomUUID().slice(0, 8)}@limits.test`)).rejects.toMatchObject({
+        code: 'INVITE_RATE_LIMITED',
+        details: { rule: 'invite_org_per_day', limit: MAX_INVITES_PER_DAY },
+      });
+      expect(Date.now() - started).toBeLessThan(1500);
+      // An invite the limits let through still waits for the locks, and is told the system is busy.
+      const newcomer = await person('newcomer');
+      const newcomerOrg = await orgOf(newcomer);
+      started = Date.now();
+      await expect(invite(tight, newcomerOrg, newcomer.id, email)).rejects.toMatchObject({ code: 'INVITE_RATE_LIMITED', details: { rule: 'invite_busy' } });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(2500);
+    } finally {
+      await holder.query('ROLLBACK');
+      await holder.end();
+    }
+    expect(await invitesOf('org_id = $1', [orgId])).toBe(1);
+  });
+
   it('restores the caller lock_timeout, and refuses callers without a context, outside the inviting roles or with bad input', async () => {
     const owner = await person('owner');
     const viewer = await person('viewer');
@@ -326,17 +504,30 @@ suite('invite mail limits on PostgreSQL (#185)', () => {
     });
     expect(setting).toBe('7s');
 
-    await expect(db.transaction().execute((trx) => gate('nobody@limits.test').execute(trx))).rejects.toThrow(/NO_CONTEXT/);
-    await expect(asApp(viewer.id, (trx) => gate('someone@limits.test').execute(trx))).rejects.toThrow(/INVITE_GATE_FORBIDDEN/);
-    for (const [email, limits] of [
-      ['Upper@limits.test', [50, 3, 5]],
-      [' padded@limits.test', [50, 3, 5]],
-      ['ok@limits.test', [0, 3, 5]],
-      ['ok@limits.test', [50, 0, 5]],
-      ['ok@limits.test', [50, 3, 0]],
-      ['ok@limits.test', [50, 3, 100001]],
-    ] as const) {
-      await expect(asApp(owner.id, (trx) => gate(email, [...limits]).execute(trx))).rejects.toThrow(/INVITE_LIMIT_INVALID/);
+    // The precheck (#270) checks the same, without the locks.
+    const precheck = (email: string, limits: [number, number, number] = [50, 3, 5]) =>
+      sql`SELECT crove_kernel.invite_mail_precheck(${email}, ${limits[0]}::int, ${limits[1]}::int, ${limits[2]}::int)`;
+    for (const call of [gate, precheck]) {
+      await expect(db.transaction().execute((trx) => call('nobody@limits.test').execute(trx))).rejects.toThrow(/NO_CONTEXT/);
+      await expect(asApp(viewer.id, (trx) => call('someone@limits.test').execute(trx))).rejects.toThrow(/INVITE_GATE_FORBIDDEN/);
+      for (const [email, limits] of [
+        ['Upper@limits.test', [50, 3, 5]],
+        [' padded@limits.test', [50, 3, 5]],
+        ['ok@limits.test', [0, 3, 5]],
+        ['ok@limits.test', [50, 0, 5]],
+        ['ok@limits.test', [50, 3, 0]],
+        ['ok@limits.test', [50, 3, 100001]],
+      ] as const) {
+        await expect(asApp(owner.id, (trx) => call(email, [...limits]).execute(trx))).rejects.toThrow(/INVITE_LIMIT_INVALID/);
+      }
     }
+    // The precheck takes no lock.
+    const advisory = sql<{ n: number }>`SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid()`;
+    const held = await asApp(owner.id, async (trx) => {
+      const before = (await advisory.execute(trx)).rows[0]?.n;
+      await precheck(`free-${randomUUID().slice(0, 8)}@limits.test`).execute(trx);
+      return [before, (await advisory.execute(trx)).rows[0]?.n];
+    });
+    expect(held[1]).toBe(held[0]);
   });
 });

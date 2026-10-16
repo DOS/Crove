@@ -211,10 +211,14 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
       );
     });
 
-    // The definers that lock and count other orgs' invites: only the API login role may call them, pinned, never
-    // public, and they answer nothing.
+    // The definers that lock and count other orgs' invites (the precheck counts without the locks, #270): only the
+    // API login role may call them, pinned, never public, and they answer nothing.
     const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant'];
-    const FNS = ['crove_kernel.invite_mail_gate(text,integer,integer,integer)', 'crove_kernel.invite_mail_lock(text)'];
+    const FNS = [
+      'crove_kernel.invite_mail_gate(text,integer,integer,integer)',
+      'crove_kernel.invite_mail_lock(text)',
+      'crove_kernel.invite_mail_precheck(text,integer,integer,integer)',
+    ];
     const { matrix, shape } = await admin(async (c) => {
       const { rows } = await c.query<{ fn: string; role: string }>(
         `SELECT f AS fn, r AS role FROM unnest($1::text[]) f CROSS JOIN unnest($2::text[]) r
@@ -231,8 +235,30 @@ suite('member invites with consent on PostgreSQL (issue #35)', () => {
     });
     expect(matrix).toEqual(FNS.map((f) => [f, 'crove_app']));
     expect(shape).toEqual(FNS.map(() => ({ definer: true, config: ['search_path=pg_catalog, pg_temp'], returns: 'void', public: false })));
+    // The checks they share run only inside them: no role may call those directly. The cap key (#270) is a pure
+    // function of its argument, executable by the roles that write invites (it is part of an index).
+    const INTERNAL = ['crove_kernel.invite_mail_caller(text)', 'crove_kernel.invite_mail_counts(text,integer,integer,integer,boolean)'];
+    const helpers = await admin(async (c) => {
+      const { rows } = await c.query<{ fn: string; role: string }>(
+        `SELECT f AS fn, r AS role FROM unnest($1::text[]) f CROSS JOIN unnest($2::text[]) r
+         WHERE has_function_privilege(r, f::regprocedure, 'EXECUTE') ORDER BY 1, 2`,
+        [INTERNAL, roles],
+      );
+      const { rows: key } = await c.query(
+        `SELECT p.prosecdef AS definer, p.provolatile AS volatility, p.proconfig AS config,
+                EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x WHERE x.grantee = 0) AS public
+         FROM pg_proc p WHERE p.oid = 'crove_kernel.invite_cap_key(text)'::regprocedure`,
+      );
+      return { internal: rows, key: key[0] };
+    });
+    expect(helpers.internal).toEqual([]);
+    expect(helpers.key).toEqual({ definer: false, volatility: 'i', config: ['search_path=pg_catalog, pg_temp'], public: false });
     // A member who may not invite can neither ask nor hold the locks.
-    for (const call of [sql`SELECT crove_kernel.invite_mail_gate(${nobody}, 50, 3, 1)`, sql`SELECT crove_kernel.invite_mail_lock(${nobody})`]) {
+    for (const call of [
+      sql`SELECT crove_kernel.invite_mail_gate(${nobody}, 50, 3, 1)`,
+      sql`SELECT crove_kernel.invite_mail_lock(${nobody})`,
+      sql`SELECT crove_kernel.invite_mail_precheck(${nobody}, 50, 3, 1)`,
+    ]) {
       await expect(
         db.transaction().execute(async (trx) => {
           await sql`SELECT crove_kernel.enter_context(${memberElsewhere.id}::uuid, ${otherOrg}::uuid)`.execute(trx);
