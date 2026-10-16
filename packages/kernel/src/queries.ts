@@ -13,6 +13,7 @@ import { DomainError, defineQuery } from '@crove/kernel-runtime';
 import { EDITOR_ROLES, decideApproval, proposalEditable } from './approval.ts';
 import { MAX_EXTRACTION_VERSIONS, REEXTRACT_STALE_MINUTES, STALE_RUN_ERROR, latestExtraction } from './extraction.ts';
 import { inviteQueries } from './invites.ts';
+import { offboardingQueries } from './offboarding.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
@@ -335,5 +336,5 @@ export const sessionsList = defineQuery({
 });
 
 export function kernelQueries(options: OrgDetailOptions) {
-  return [orgDetailQuery(options), inboxList, inboxGet, filesRecent, fileGet, sessionsList, ...inviteQueries];
+  return [orgDetailQuery(options), inboxList, inboxGet, filesRecent, fileGet, sessionsList, ...inviteQueries, ...offboardingQueries];
 }

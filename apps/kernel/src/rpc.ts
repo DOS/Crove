@@ -119,6 +119,13 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           return runtime.execute('kernel.member.remove', rest, { actor, orgId, idempotencyKey });
         }),
       ),
+      offboard: os.org.offboard.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('kernel.org.offboard', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+      export: os.org.export.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.export.get', {}, { actor, orgId }))),
     },
     // Org-less: the invite names the org, so the x-crove-org header is ignored here.
     invites: {

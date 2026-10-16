@@ -96,6 +96,22 @@ export const zOrgDetail = z.object({
   members: z.array(z.object({ userId: zId, email: z.string(), displayName: z.string().nullable(), role: zRole })),
 });
 
+// Org offboarding and its export (issue #38). Each part is one table as JSON, downloaded from
+// GET /api/org-export/<table>, and the manifest (with the stored files list) from GET /api/org-export/manifest.
+export const zOrgStatus = z.enum(['active', 'offboarding', 'closed']);
+export const zOrgExport = z.object({
+  status: zOrgStatus,
+  requestedAt: z.string().nullable(),
+  export: z
+    .object({
+      createdAt: z.string(),
+      manifestSha256: z.string(),
+      fileCount: z.number().int().nonnegative(),
+      parts: z.array(z.object({ table: z.string(), sha256: z.string(), rows: z.number().int().nonnegative(), bytes: z.number().int().nonnegative() })),
+    })
+    .nullable(),
+});
+
 // Member invites (issue #35). The token is 32 random bytes in base64url; only its SHA-256 is stored.
 export const zInviteToken = z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'invite token');
 export const zInviteRole = zRole.exclude(['owner']);
