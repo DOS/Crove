@@ -381,6 +381,76 @@ suite('journal reversal on PostgreSQL (#138)', () => {
     expect(open.rows[0]?.n).toBe(1);
   });
 
+  it('makes a request wait for one in flight for the same entry, then refuses it as pending (#302)', async () => {
+    // Deterministic: a second connection plays the first request. It takes the per-entry lock the request takes and
+    // writes a pending reversal proposal for the entry, then holds its transaction open. The request must wait on the
+    // lock (it would pass if it looked before the first commits), and once the first commits, see its proposal.
+    const entry = await original(users.owner, team, SALE);
+    const holder = await connect(adminUrl);
+    await holder.query('BEGIN');
+    await holder.query(`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))`, [`finance.journal_reversal:${entry}`]);
+    const { rows } = await holder.query<{ id: string }>(
+      `INSERT INTO crove_kernel.proposal (org_id, kind, command, title, payload, eligible_approvers, authors)
+       VALUES ($1, 'finance.journal_reversal', 'finance.journal.reverse', 'Đảo bút toán (đang ghi)', $2::jsonb, ARRAY[$3::uuid, $4::uuid], $5::jsonb)
+       RETURNING id`,
+      [
+        team,
+        JSON.stringify({ entryId: entry, entryDate: '2026-10-15', reason: 'Ghi nhầm tài khoản' }),
+        users.owner,
+        users.admin,
+        JSON.stringify([{ type: 'user', id: users.owner }]),
+      ],
+    );
+    const inFlight = rows[0]?.id ?? '';
+    let settled = false;
+    const second = request(team, users.member, { entryId: entry }).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    void second.then(() => {
+      settled = true;
+    });
+    // The request waits on the advisory lock the holder has.
+    await withAdmin(async (a) => {
+      for (let i = 0; i < 200; i++) {
+        const waiting = await a.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_catalog.pg_locks l
+           WHERE l.locktype = 'advisory' AND NOT l.granted AND l.database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())`,
+        );
+        if ((waiting.rows[0]?.n ?? 0) > 0) return;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      throw new Error('the request never waited for the one in flight');
+    });
+    expect(settled).toBe(false);
+    await holder.query('COMMIT');
+    expect(await second).toMatchObject({ error: { code: 'REVERSAL_PENDING', status: 409, details: { proposalId: inFlight } } });
+    // Only the proposal in flight is open for the entry.
+    const open = await withAdmin((a) =>
+      a.query<{ id: string }>(
+        `SELECT id FROM crove_kernel.proposal WHERE org_id = $1 AND kind = 'finance.journal_reversal' AND status = 'pending' AND payload->>'entryId' = $2`,
+        [team, entry],
+      ),
+    );
+    expect(open.rows.map((r) => r.id)).toEqual([inFlight]);
+
+    // A holder that rolls back (the first request was refused or failed) lets the waiting request through.
+    const other = await original(users.owner, team, SALE);
+    await holder.query('BEGIN');
+    await holder.query(`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))`, [`finance.journal_reversal:${other}`]);
+    const third = request(team, users.member, { entryId: other });
+    await withAdmin(async (a) => {
+      for (let i = 0; i < 200; i++) {
+        const waiting = await a.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND NOT granted`);
+        if ((waiting.rows[0]?.n ?? 0) > 0) return;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      throw new Error('the request never waited for the lock holder');
+    });
+    await holder.query('ROLLBACK');
+    expect(await third).toMatchObject({ proposalId: expect.any(String) });
+  });
+
   it('replays a request with the same idempotency key and refuses the key for another request', async () => {
     const entry = await original(users.owner, team, SALE);
     const key = randomUUID();
