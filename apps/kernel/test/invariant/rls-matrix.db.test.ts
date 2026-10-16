@@ -32,7 +32,17 @@ const MACHINERY = new Set(['crove_kernel.auth_session_org', 'crove_kernel.inboun
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>();
+const PENDING_TABLES = new Set<string>([
+  // ADR-0029 Phase 1 (#79), landing in the PR that closes #79.
+  'crove_kernel.agent',
+  'crove_kernel."position"',
+  'crove_kernel.ai_run',
+  'crove_kernel.task',
+  'crove_kernel.task_comment',
+  'crove_kernel.agent_wakeup',
+  'crove_kernel.kill_switch',
+  'crove_kernel.budget_policy',
+]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -77,6 +87,13 @@ let lineNo = 100;
 const balancingLine = (org: string, entry: string, lineNo: number, side: 'debit' | 'credit'): Row => ({
   table: 'crove_finance.journal_line',
   values: { org_id: org, entry_id: entry, line_no: lineNo, account_code: side === 'debit' ? '6422' : '331', debit: side === 'debit' ? '100' : '0', credit: side === 'credit' ? '100' : '0' },
+});
+const agentRow = (o: { id: string; owner: string }) => ({
+  org_id: o.id,
+  id: randomUUID(),
+  template_key: 'finance.chief_accountant',
+  display_name: 'RLS matrix agent',
+  created_by: o.owner,
 });
 const journalEntry = (org: string, id: string): Row => ({
   table: 'crove_finance.journal_entry',
@@ -170,6 +187,53 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   // on a pending invite.
   'crove_kernel.member_invite': {
     make: (o) => ({ row: { org_id: o.id, email: `invite-${tag()}@rls.test`, role: 'member', invited_by: o.owner } }),
+  },
+  // ADR-0029 Phase 1 (#79): agents in the org chart. An agent row needs a template; every factory that needs an agent
+  // adds a fresh one, since an agent runs once at a time and has at most one pending wake-up.
+  'crove_kernel.agent': { make: (o) => ({ row: agentRow(o) }) },
+  // position is an SQL keyword, so the catalog prints the name quoted.
+  'crove_kernel."position"': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), title: 'RLS matrix seat', module: 'finance', role_key: 'finance.chief_accountant' } }),
+  },
+  'crove_kernel.ai_run': {
+    make: (o) => {
+      const agent = agentRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.agent', values: agent }],
+        row: {
+          org_id: o.id,
+          agent_id: agent.id,
+          module: 'finance',
+          status: 'succeeded',
+          started_at: '2026-10-01T00:00:00Z',
+          expires_at: '2026-10-01T00:15:00Z',
+          finished_at: '2026-10-01T00:10:00Z',
+        },
+      };
+    },
+  },
+  'crove_kernel.task': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), title: 'RLS matrix task', source: 'human', created_by_type: 'user' } }),
+  },
+  'crove_kernel.task_comment': {
+    make: (o) => {
+      const task = randomUUID();
+      return {
+        setup: [{ table: 'crove_kernel.task', values: { org_id: o.id, id: task, title: 'RLS matrix task', source: 'human', created_by_type: 'user' } }],
+        row: { org_id: o.id, task_id: task, body: 'RLS matrix', author_type: 'user' },
+      };
+    },
+  },
+  'crove_kernel.agent_wakeup': {
+    make: (o) => {
+      const agent = agentRow(o);
+      return { setup: [{ table: 'crove_kernel.agent', values: agent }], row: { org_id: o.id, agent_id: agent.id } };
+    },
+  },
+  // One active switch per (org, scope, target), so every row stops its own agent id.
+  'crove_kernel.kill_switch': { make: (o) => ({ row: { org_id: o.id, scope: 'agent', target: randomUUID(), engaged_by: o.owner } }) },
+  'crove_kernel.budget_policy': {
+    make: (o) => ({ row: { org_id: o.id, scope: 'agent', target: randomUUID(), monthly_limit: '100', updated_by: o.owner } }),
   },
   'crove_finance.purchase_document': {
     make: (o) => ({
