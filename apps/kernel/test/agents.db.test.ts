@@ -22,6 +22,8 @@ suite('agent positions, tasks and wake-ups on PostgreSQL (ADR-0029 Phase 1)', ()
   const pools: pg.Pool[] = [];
   let app: Runtime;
   let worker: Runtime;
+  // The same database served by a deployment that enables only the kernel (CROVE_MODULES=kernel, ADR-0031).
+  let kernelOnly: { app: Runtime; worker: Runtime };
   let owner = '';
   let orgId = '';
 
@@ -36,6 +38,28 @@ suite('agent positions, tasks and wake-ups on PostgreSQL (ADR-0029 Phase 1)', ()
     } finally {
       await c.end();
     }
+  }
+
+  // The sweep's answer for one agent, read as the worker login role.
+  async function due(agentId: string, modules?: string[]) {
+    const url = new URL(adminUrl);
+    url.username = 'crove_worker';
+    url.password = 'test-worker-pw';
+    const w = new pg.Client({ connectionString: url.toString() });
+    await w.connect();
+    try {
+      const { rows } = modules
+        ? await w.query<{ org_id: string; agent_id: string }>('SELECT * FROM crove_kernel.agent_wakeups_due(100, $1::text[])', [modules])
+        : await w.query<{ org_id: string; agent_id: string }>('SELECT * FROM crove_kernel.agent_wakeups_due(100)');
+      return rows.filter((r) => r.agent_id === agentId);
+    } finally {
+      await w.end();
+    }
+  }
+
+  // Makes the agent's pending wake-up old enough for the sweep (a minute).
+  async function age(agentId: string) {
+    await admin((c) => c.query(`UPDATE crove_kernel.agent_wakeup SET updated_at = now() - interval '2 minutes' WHERE agent_id = $1 AND status = 'pending'`, [agentId]));
   }
 
   // A pending proposal and its kernel.proposal.created event, as the extraction writes them.
@@ -65,18 +89,22 @@ suite('agent positions, tasks and wake-ups on PostgreSQL (ADR-0029 Phase 1)', ()
     adminUrl = base.toString();
     await migrate({ adminUrl, dir: MIGRATIONS });
     await setRolePasswords(adminUrl, { crove_app: 'test-app-pw', crove_worker: 'test-worker-pw' });
-    const runtimeFor = (user: string, password: string) => {
+    const runtimeFor = (user: string, password: string, withFinance = true) => {
       const url = new URL(adminUrl);
       url.username = user;
       url.password = password;
       const pool = createPool({ connectionString: url.toString(), max: 4 });
       pools.push(pool);
       const db = createDb(pool);
-      return { db, runtime: new Runtime(db).register({ commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] }) };
+      const registry = withFinance
+        ? { commands: [...kernelCommands, ...financeCommands], queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries] }
+        : { commands: [...kernelCommands], queries: [...kernelQueries({ inboundDomain: null })] };
+      return { db, runtime: new Runtime(db).register(registry) };
     };
     const api = runtimeFor('crove_app', 'test-app-pw');
     app = api.runtime;
     worker = runtimeFor('crove_worker', 'test-worker-pw').runtime;
+    kernelOnly = { app: runtimeFor('crove_app', 'test-app-pw', false).runtime, worker: runtimeFor('crove_worker', 'test-worker-pw', false).runtime };
     owner = await upsertIdentity(api.db, { issuer: 'agents', subject: 'owner', email: 'owner@agents.test', name: null });
     orgId = (await createOrg(app, asUser(owner), 'Agents')).orgId;
   });
@@ -153,7 +181,7 @@ suite('agent positions, tasks and wake-ups on PostgreSQL (ADR-0029 Phase 1)', ()
     await expect(runAgentWake({ runtime: worker, programs: financeAgentPrograms }, orgId, agentId)).resolves.toEqual({ runId: null, reason: 'idle' });
   });
 
-  it('keeps a refused wake-up pending and finds it again in the sweep', async () => {
+  it('keeps a refused wake-up pending and finds it again in the sweep once the agent can run', async () => {
     const { agentId, positionId } = await app.execute<{ agentId: string; positionId: string }>(
       'kernel.agent.template.install',
       { templateKey: 'finance.chief_accountant', displayName: 'Kế toán trưởng 3' },
@@ -164,23 +192,68 @@ suite('agent positions, tasks and wake-ups on PostgreSQL (ADR-0029 Phase 1)', ()
     await expect(runAgentWake({ runtime: worker, programs: financeAgentPrograms }, orgId, agentId)).resolves.toMatchObject({ outcome: 'succeeded' });
     await app.execute('kernel.task.create', { title: 'Hai', assigneePositionId: positionId }, { actor: asUser(owner), orgId });
     await expect(runAgentWake({ runtime: worker, programs: financeAgentPrograms }, orgId, agentId)).resolves.toEqual({ runId: null, reason: 'daily_cap' });
-    const due = async () =>
-      admin(async (c) => {
-        const url = new URL(adminUrl);
-        url.username = 'crove_worker';
-        url.password = 'test-worker-pw';
-        const w = new pg.Client({ connectionString: url.toString() });
-        await w.connect();
-        try {
-          return (await w.query<{ org_id: string; agent_id: string }>('SELECT * FROM crove_kernel.agent_wakeups_due(100)')).rows.filter((r) => r.agent_id === agentId);
-        } finally {
-          await w.end();
-          void c;
-        }
-      });
-    expect(await due()).toEqual([]);
-    await admin((c) => c.query(`UPDATE crove_kernel.agent_wakeup SET updated_at = now() - interval '2 minutes' WHERE agent_id = $1 AND status = 'pending'`, [agentId]));
-    expect(await due()).toEqual([{ org_id: orgId, agent_id: agentId }]);
+    expect(await due(agentId)).toEqual([]);
+    await age(agentId);
+    // Still at its daily cap: the sweep leaves it out (no refused start, no audit row every 10 minutes).
+    expect(await due(agentId)).toEqual([]);
+    await app.execute('kernel.agent.update', { id: agentId, dailyRunCap: 2 }, { actor: asMfa(owner), orgId });
+    await age(agentId);
+    expect(await due(agentId)).toEqual([{ org_id: orgId, agent_id: agentId }]);
+  });
+
+  it('leaves kill-switched, out-of-budget and disabled-module agents out of the sweep', async () => {
+    const { agentId, positionId } = await app.execute<{ agentId: string; positionId: string }>(
+      'kernel.agent.template.install',
+      { templateKey: 'finance.chief_accountant', displayName: 'Kế toán trưởng 4' },
+      { actor: asMfa(owner), orgId },
+    );
+    await app.execute('kernel.task.create', { title: 'Chờ', assigneePositionId: positionId }, { actor: asUser(owner), orgId });
+    await age(agentId);
+    expect(await due(agentId)).toEqual([{ org_id: orgId, agent_id: agentId }]);
+    // Only the enabled modules' agents, when the worker passes them.
+    expect(await due(agentId, ['kernel'])).toEqual([]);
+    expect(await due(agentId, ['kernel', 'finance'])).toEqual([{ org_id: orgId, agent_id: agentId }]);
+
+    const { killSwitchId } = await app.execute<{ killSwitchId: string }>('kernel.agent.kill_switch.engage', { scope: 'agent', target: agentId }, { actor: asUser(owner), orgId });
+    expect(await due(agentId)).toEqual([]);
+    await app.execute('kernel.agent.kill_switch.release', { id: killSwitchId }, { actor: asMfa(owner), orgId });
+    await age(agentId);
+    expect(await due(agentId)).toEqual([{ org_id: orgId, agent_id: agentId }]);
+
+    // A spent hard-stop budget (a limit of 0 is spent at once) keeps it out too.
+    await app.execute('kernel.agent.budget.set', { scope: 'agent', target: agentId, monthlyLimit: '0' }, { actor: asMfa(owner), orgId });
+    await age(agentId);
+    expect(await due(agentId)).toEqual([]);
+    await app.execute('kernel.agent.budget.set', { scope: 'agent', target: agentId, monthlyLimit: '10' }, { actor: asMfa(owner), orgId });
+    await age(agentId);
+    expect(await due(agentId)).toEqual([{ org_id: orgId, agent_id: agentId }]);
+  });
+
+  it('installs no template and wakes no agent of a module the deployment does not enable', async () => {
+    const { agentId, positionId } = await app.execute<{ agentId: string; positionId: string }>(
+      'kernel.agent.template.install',
+      { templateKey: 'finance.chief_accountant', displayName: 'Kế toán trưởng 5' },
+      { actor: asMfa(owner), orgId },
+    );
+    // The same database, served by a deployment with CROVE_MODULES=kernel.
+    await expect(
+      kernelOnly.app.execute('kernel.agent.template.install', { templateKey: 'finance.chief_accountant' }, { actor: asMfa(owner), orgId }),
+    ).rejects.toMatchObject({ code: 'MODULE_DISABLED', status: 409 });
+    const wakeEvents = async () =>
+      admin(async (c) => (await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'kernel.agent.wakeup_requested'`, [orgId])).rows[0]?.n);
+    const before = await wakeEvents();
+    await kernelOnly.app.execute('kernel.task.create', { title: 'Không đánh thức', assigneePositionId: positionId }, { actor: asUser(owner), orgId });
+    // The request stays pending for when the module is enabled again, but nothing wakes the agent now.
+    expect(await wakeEvents()).toBe(before);
+    const pending = await admin(async (c) => (await c.query(`SELECT status FROM crove_kernel.agent_wakeup WHERE agent_id = $1 AND status = 'pending'`, [agentId])).rows);
+    expect(pending).toEqual([{ status: 'pending' }]);
+    await expect(kernelOnly.worker.execute('kernel.agent.run.start', { agentId }, { actor: SYSTEM, orgId })).resolves.toEqual({ runId: null, reason: 'module_disabled' });
+    // Inbox triage skips it as well.
+    const { eventId } = await proposalCreated('Hóa đơn tắt phân hệ', []);
+    const tasksBefore = await admin(async (c) => (await c.query(`SELECT count(*)::int AS n FROM crove_kernel.task WHERE assignee_position_id = $1`, [positionId])).rows[0]);
+    await kernelOnly.worker.execute('kernel.agent.dispatch_event', { eventId }, { actor: SYSTEM, orgId });
+    const tasksAfter = await admin(async (c) => (await c.query(`SELECT count(*)::int AS n FROM crove_kernel.task WHERE assignee_position_id = $1`, [positionId])).rows[0]);
+    expect(tasksAfter).toEqual(tasksBefore);
   });
 
   it('runs one run per agent at a time and pauses an agent at once', async () => {

@@ -31,8 +31,10 @@ export const QUEUES = {
 // also allows one running ai_run per agent).
 const QUEUE_OPTIONS: Partial<Record<(typeof QUEUES)[keyof typeof QUEUES], { policy: 'stately' }>> = { [QUEUES.agentWake]: { policy: 'stately' } };
 const AGENT_RETRY_LIMIT = 3;
-// Every 10 minutes the worker wakes agents whose wake-up is still pending (crove_kernel.agent_wakeups_due): a run
-// refused by the daily cap, a kill switch or a budget, or blocked by a run left live by a crashed worker.
+// Every 10 minutes the worker wakes agents whose wake-up is still pending and that can run now
+// (crove_kernel.agent_wakeups_due): a run refused earlier by the daily cap, a kill switch or a budget that has since
+// lifted, or blocked by a run left live by a crashed worker. Agents still capped, switched off, out of budget or of a
+// module this deployment does not enable are left out, so the sweep writes no refused start for them.
 export const AGENT_SWEEP_CRON = '*/10 * * * *';
 const AGENT_SWEEP_LIMIT = 200;
 
@@ -267,7 +269,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   });
 
   await boss.work(QUEUES.agentSweep, { batchSize: 1 }, async () => {
-    const { rows } = await sql<{ org_id: string; agent_id: string }>`SELECT * FROM crove_kernel.agent_wakeups_due(${AGENT_SWEEP_LIMIT}::int)`.execute(deps.workerDb);
+    const { rows } = await sql<{ org_id: string; agent_id: string }>`SELECT * FROM crove_kernel.agent_wakeups_due(${AGENT_SWEEP_LIMIT}::int, ${deps.runtime.modules()}::text[])`.execute(deps.workerDb);
     await Promise.all(rows.map((row) => sendAgentWake(boss, row.org_id, row.agent_id)));
     if (rows.length > 0) console.log(`[agent] sweep woke ${rows.length} agent(s) with pending wake-ups`);
   });
