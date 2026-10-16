@@ -79,6 +79,14 @@ export function staleSummary(pr) {
   return `These migrations are not newer than ${pr.newest}, the newest on the base branch:\n\n${files}\n\nRename each to a version above that (git mv) and push; the new push runs the Docs check again.`;
 }
 
+// Whether the newest "Docs check" check run on the commit is already this script's failing fallback, so later pushes
+// to main do not stack more copies of it.
+function hasFallback(repo, sha) {
+  const query = `repos/${repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(REQUIRED_CHECK)}&filter=latest`;
+  const jq = `[.check_runs[] | select(.app.slug == "github-actions")] | sort_by(.started_at) | last | (.conclusion == "failure" and .output.title == "${FALLBACK_TITLE}")`;
+  return gh(['api', query, '--jq', jq]) === 'true';
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function main() {
@@ -146,7 +154,9 @@ async function main() {
     }
     // Fallback when the Docs check run cannot be made to fail: a failing check run under the same required name on
     // the PR head. GITHUB_TOKEN creates it as the GitHub Actions app, the app the required check is bound to.
-    if (needFallback) {
+    if (needFallback && hasFallback(repo, pr.sha)) {
+      note += `; the failing "${REQUIRED_CHECK}" check run from an earlier re-check is still there`;
+    } else if (needFallback) {
       const fields = [`name=${REQUIRED_CHECK}`, `head_sha=${pr.sha}`, 'status=completed', 'conclusion=failure', `output[title]=${FALLBACK_TITLE}`, `output[summary]=${staleSummary(pr)}`, ...(runUrl ? [`details_url=${runUrl}`] : [])];
       const [ok, text] = post([`repos/${repo}/check-runs`, ...fields.flatMap((field) => ['-f', field])], `failing "${REQUIRED_CHECK}" check run`);
       note += text;
