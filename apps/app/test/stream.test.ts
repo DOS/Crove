@@ -4,7 +4,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { createTanstackQueryUtils } from '@orpc/tanstack-query';
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, type QueryKey } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import type { contract } from '@crove/kernel-contract';
 import {
@@ -41,9 +41,11 @@ function seeded() {
     me: orpc.me.get.queryKey(),
     org: orpc.org.get.queryKey(),
   };
-  for (const key of Object.values(keys)) qc.setQueryData(key, {});
-  qc.setQueryData(keys.detail1, { file: { id: FILE }, result: { documentId: DOC, journalEntryId: ENTRY } });
-  qc.setQueryData(keys.detail2, { file: { id: '0190a000-0000-7000-8000-0000000000f2' }, result: null });
+  // Partial records: invalidateHint reads only the ids, so the seeds skip the rest of each response's shape.
+  const seed = (key: QueryKey, data: unknown) => qc.setQueryData(key, data);
+  for (const key of Object.values(keys)) seed(key, {});
+  seed(keys.detail1, { file: { id: FILE }, result: { documentId: DOC, journalEntryId: ENTRY } });
+  seed(keys.detail2, { file: { id: '0190a000-0000-7000-8000-0000000000f2' }, result: null });
   const stale = () =>
     Object.entries(keys)
       .filter(([, key]) => qc.getQueryState(key)?.isInvalidated)

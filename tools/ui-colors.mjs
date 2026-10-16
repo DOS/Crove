@@ -128,7 +128,10 @@ function namedColors(code, spot, tailwind, found) {
 
 /**
  * Returns `{ line, match, what }` for each raw color in a source text. `css: true` reads it as a stylesheet
- * (declarations) instead of TypeScript (attributes and style objects).
+ * (declarations) instead of TypeScript (attributes and style objects). `theme` (from `parseTailwindTheme`)
+ * replaces the installed Tailwind theme.
+ * @param {string} text
+ * @param {{ css?: boolean, theme?: ReturnType<typeof parseTailwindTheme> }} [options]
  */
 export function findRawColors(text, { css = false, theme } = {}) {
   const active = theme ? buildRules(theme) : (rules ??= buildRules(readTailwindTheme()));

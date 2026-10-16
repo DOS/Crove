@@ -91,7 +91,7 @@ describe('error checks on fetch-path errors', () => {
 
   // Issue #272: a browser never holds a token issued to an OAuth client, so the SPA signs out as for a dead session.
   it('treats a token issued to an OAuth client as unauthenticated', async () => {
-    const error = await apiErrorFromResponse(json(401, { code: 'OAUTH_CLIENT_TOKEN_REFUSED', message: 'm' }), vi);
+    const error = await apiErrorFromResponse(json(401, { code: 'OAUTH_CLIENT_TOKEN_REFUSED', message: 'm' }));
     expect(isUnauthenticated(error)).toBe(true);
     expect(isMfaRequired(error)).toBe(false);
   });
