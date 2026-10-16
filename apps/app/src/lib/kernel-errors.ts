@@ -12,6 +12,7 @@ export const KERNEL_LOCALE: Locale = 'vi';
 export const KERNEL_ERROR_CODES = [
   // Sessions, membership and the org.
   'UNAUTHENTICATED',
+  'OAUTH_CLIENT_TOKEN_REFUSED',
   'MFA_REQUIRED',
   'SESSION_REVOKED_IN_ORG',
   'STEP_UP_REQUIRED',

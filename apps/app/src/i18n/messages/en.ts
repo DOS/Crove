@@ -403,6 +403,7 @@ export const en = {
   kernelErrors: {
     codes: {
       UNAUTHENTICATED: 'Your session has ended. Sign in again.',
+      OAUTH_CLIENT_TOKEN_REFUSED: 'This access token was issued to a third-party app and cannot be used to sign in to Crove.',
       MFA_REQUIRED: 'This account uses two-factor authentication (MFA): enter your code to continue.',
       SESSION_REVOKED_IN_ORG: 'This session was revoked in this organization.',
       STEP_UP_REQUIRED: 'This needs two-factor authentication (MFA) in the last 5 minutes.',

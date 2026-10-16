@@ -405,6 +405,7 @@ export const vi = {
   kernelErrors: {
     codes: {
       UNAUTHENTICATED: 'Phiên đăng nhập đã hết hiệu lực, hãy đăng nhập lại',
+      OAUTH_CLIENT_TOKEN_REFUSED: 'Mã truy cập này được cấp cho một ứng dụng bên thứ ba, không dùng để đăng nhập Crove',
       MFA_REQUIRED: 'Tài khoản này đã bật xác thực hai lớp (MFA): hãy nhập mã xác thực để tiếp tục',
       SESSION_REVOKED_IN_ORG: 'Phiên đăng nhập này đã bị thu hồi trong tổ chức này',
       STEP_UP_REQUIRED: 'Cần xác thực hai lớp (MFA) trong 5 phút gần nhất để thực hiện việc này',
