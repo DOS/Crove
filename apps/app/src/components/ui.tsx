@@ -40,15 +40,25 @@ export function ErrorText({ children }: { children: ReactNode }) {
   );
 }
 
+// Read from storage once per page load, so a second render (or React StrictMode's double initializer) still sees it.
+let orgLeftNotice: ReturnType<typeof takeOrgLeftNotice> | undefined;
+function orgLeftOnce() {
+  if (orgLeftNotice === undefined) orgLeftNotice = takeOrgLeftNotice();
+  return orgLeftNotice;
+}
+
 // Shown once after this tab left an org whose owner revoked this session there (issue #247).
 export function OrgLeftNotice() {
   const t = useTranslations('common');
-  const [left, setLeft] = useState(takeOrgLeftNotice);
+  const [left, setLeft] = useState(orgLeftOnce);
   if (!left) return null;
   return (
     <Alert role="status" className="mb-4 flex items-start justify-between gap-3">
       <span>{t('orgLeft', { org: left.name })}</span>
-      <button type="button" className="shrink-0 text-subtle-foreground hover:text-muted-foreground" onClick={() => setLeft(null)}>
+      <button type="button" className="shrink-0 text-subtle-foreground hover:text-muted-foreground" onClick={() => {
+          orgLeftNotice = null;
+          setLeft(null);
+        }}>
         {t('close')}
       </button>
     </Alert>

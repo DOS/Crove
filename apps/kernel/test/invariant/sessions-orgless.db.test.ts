@@ -240,6 +240,10 @@ suite('own session revoke without an org (issue #184)', () => {
     const phone = await tokenFor({ ...member, session: randomUUID() });
     expect((((await rpc('me/get', phone)).body?.orgs ?? []) as Array<{ orgId: string }>).map((o) => o.orgId)).toContain(orgId);
     expect((await rpc('inbox/list', phone, {}, orgSlug)).status).toBe(200);
+    // Revoked in the org, then by the user themself: a dead session, refused as such in that org too.
+    expect((await rpc('sessions/revoke', token, { userId: member.userId, sessionId: tablet.session })).status).toBe(200);
+    expect(await rpc('inbox/list', token, {}, orgSlug)).toMatchObject({ status: 401, body: { code: 'UNAUTHENTICATED' } });
+    expect(await rpc('me/get', token)).toMatchObject({ status: 401, body: { code: 'UNAUTHENTICATED' } });
     // A session revoked by the user themself is still a plain dead session.
     const own = { ...member, session: randomUUID() };
     const ownToken = await tokenFor(own);
