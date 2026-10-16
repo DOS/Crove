@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client, type S3ClientConfig } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client, type S3ClientConfig } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
@@ -19,6 +19,7 @@ import {
   type BlobStore,
   type DirectTransfers,
   type PresignedUpload,
+  type StagingSweep,
 } from './storage.ts';
 
 // required: every write must come back with an object version (S3 VersionId, GCS generation), or the store fails
@@ -49,6 +50,9 @@ export type S3Sender = Pick<S3Client, 'send'>;
 
 const GOOGLE_HOST = 'storage.googleapis.com';
 const CONFLICT_RETRIES = 3;
+// ListObjectsV2 returns at most 1000 keys per page; the sweep deletes this many keys at a time.
+const LIST_PAGE = 1000;
+const SWEEP_DELETES_IN_FLIGHT = 10;
 
 function isGoogle(endpoint: string | undefined): boolean {
   return Boolean(endpoint) && new URL(endpoint as string).hostname === GOOGLE_HOST;
@@ -313,6 +317,44 @@ export class S3BlobStore implements BlobStore {
       await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
     } catch (error) {
       if (!isMissingObject(error)) throw error;
+    }
+  }
+
+  // Deletes abandoned staging objects (a grant begun and never completed, or bytes posted to a form again after its
+  // claim) for buckets without a lifecycle rule on staging/. Lists staging/ page by page and deletes every staging
+  // key last modified before `before`, looking at no more than `limit` keys per call; a key without a modification
+  // time or outside the staging pattern is left alone. Needs s3:ListBucket and s3:DeleteObject, which the store
+  // already requires. On a versioned bucket a delete leaves the object as a noncurrent version behind a delete
+  // marker, which only a lifecycle rule (or the operator) removes: Crove holds no s3:DeleteObjectVersion, so it can
+  // never delete a version of evidence.
+  async sweepStaging(before: Date, limit: number): Promise<StagingSweep> {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('invalid sweep limit');
+    const cutoff = before.getTime();
+    let listed = 0;
+    let deleted = 0;
+    let token: string | undefined;
+    for (;;) {
+      const page = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: 'staging/',
+          MaxKeys: Math.min(LIST_PAGE, limit - listed),
+          ...(token ? { ContinuationToken: token } : {}),
+        }),
+      );
+      const contents = page.Contents ?? [];
+      listed += contents.length;
+      const stale = contents
+        .filter((o) => o.Key !== undefined && isStagingKey(o.Key) && o.LastModified !== undefined && o.LastModified.getTime() < cutoff)
+        .map((o) => o.Key as string);
+      for (let i = 0; i < stale.length; i += SWEEP_DELETES_IN_FLIGHT) {
+        await Promise.all(stale.slice(i, i + SWEEP_DELETES_IN_FLIGHT).map((k) => this.delete(k)));
+      }
+      deleted += stale.length;
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      if (!token) return { deleted, more: false };
+      // An empty page that still claims more is not progress; stop rather than loop.
+      if (listed >= limit || contents.length === 0) return { deleted, more: true };
     }
   }
 

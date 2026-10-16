@@ -67,7 +67,7 @@ Operator requirements for an evidence bucket (S3 terms; GCS and others have equi
 - Versioning enabled before the first write.
 - A retention hold on `org/` objects (S3 Object Lock in governance or compliance mode, or a GCS retention policy) for the legal retention period of plan §7.9. Crove does not set it per object today; the bucket default applies.
 - IAM: `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`, `s3:DeleteObject` on objects, `s3:ListBucket` on the bucket.
-- A lifecycle rule that expires `staging/` objects, their noncurrent versions and delete markers after one day.
+- A lifecycle rule that expires `staging/` objects, their noncurrent versions and delete markers after one day. Without one, the worker's daily retention job deletes `staging/` objects older than an hour (issue #223, section 4); on a versioned bucket those deletes leave noncurrent versions behind, which only the lifecycle rule removes, because Crove holds no `s3:DeleteObjectVersion`.
 - With presigned transfers, a CORS rule allowing `POST` and `GET` from `PUBLIC_URL`.
 
 ### 4. Staged uploads with presigned POST (STORAGE=s3)
@@ -80,6 +80,8 @@ Why POST and not PUT: a presigned PUT URL cannot bound the size; the signed `Con
 
 Why the server re-writes the bytes instead of a server-side `CopyObject`: within its 5 minutes the same form can be posted again, replacing the staging object. A `CopyObject` would copy whatever the staging key holds at copy time, possibly not the bytes that were hashed; pinning it (`CopySourceVersionId`, `CopySourceIfMatch`) and conditional copies (`If-None-Match` on the destination) are not supported the same way across S3-compatible servers. Writing the buffered bytes the server just hashed has no window at all, uses the same create-only `put` and checksum as every other write, and costs at most 25 MB of memory for one request, as a direct upload already does.
 
+Why the bytes are buffered rather than streamed from the staging object into the destination: the destination key is the sha256 of the bytes (`org/<org_id>/<sha256>`), which is known only once the last byte has been read, and the create-only `put` sends that sha256 as its checksum up front. Streaming would need a temporary destination and a copy, which is the window above. So the memory is bounded instead (issue #223): each API process completes at most `UPLOAD_COMPLETE_CONCURRENCY` (default 4) uploads at once, and one user at most half of them. A completion past that answers `503 UPLOAD_BUSY` with `Retry-After` at once, without waiting in memory. The slot is taken before the claim, so a refused completion leaves its grant unused and the app retries the same upload (with backoff, for about a minute).
+
 Single use is enforced by the database, not by the URL: a presigned POST can be replayed until it expires, so the grant row is what is used once.
 
 `crove_kernel.file_upload` (`org_id`, `id`, `staging_key`, `created_by`, `max_bytes`, `created_at`, `expires_at`, `used_at`), a tenant table with the standard RLS policy:
@@ -89,8 +91,10 @@ Single use is enforced by the database, not by the URL: a presigned POST can be 
 - Tenant roles hold `SELECT`, `INSERT` and `UPDATE (used_at)` only; no `DELETE`.
 - The claim command locks the row, so of concurrent completions exactly one proceeds; the others get `409 UPLOAD_USED`. Another user's grant reads as `404`.
 - `kernel.file.upload.begin` refuses a user with 20 open grants in the org (`429 RATE_LIMITED`), counted under a per-user advisory lock so concurrent requests cannot pass the cap together.
+- It also refuses a user who opened `UPLOAD_BEGIN_LIMIT_PER_MINUTE` (default 20) grants in the org in the last minute, by `created_at` (the database clock), under the same lock, so the limit holds across API instances (issue #223). The open cap alone does not bound a loop of begin, claim and a late POST to the still valid form: a claimed grant is no longer open, yet each round can leave a 25 MB staging object.
+- The worker's daily retention job deletes grants created more than 7 days ago (`crove_kernel.retention_purge`, store `kernel.file_upload`); a grant expires 5 minutes after it is created, so each of them is used or expired and nothing can claim it any more. The audit rows keep the grant id. The purge runs as the table owner and only the worker may call it; tenant roles still cannot delete a grant.
 
-The staging object never becomes a file: no file row points at a `staging/` key (the ingest command accepts only the org content address), and a write to the staging key after the claim is never read. A grant that is begun and never completed leaves at most one staging object, removed by the lifecycle rule.
+The staging object never becomes a file: no file row points at a `staging/` key (the ingest command accepts only the org content address), and a write to the staging key after the claim is never read. A grant that is begun and never completed leaves at most one staging object, and so does a form posted again after its claim. The lifecycle rule removes them. As a fallback, the worker's daily retention job lists `staging/` (`ListObjectsV2`, 10,000 keys per call, at most 100 calls per run) and deletes every staging object last modified more than an hour ago, logging an `ALERT` when objects remain or the sweep fails. A grant lives 5 minutes and its completion reads the object right after the claim, so an hour-old staging object is never read again. The sweep frees space only on an unversioned bucket: on a versioned one each delete leaves a noncurrent version, so the lifecycle rule stays the real bound there. The per-minute grant rate bounds what one user can leave behind between sweeps (at most 20 objects of 25 MB a minute per org by default).
 
 Clock note: the database decides the grant's expiry; the API's clock signs the POST policy's expiration. Both are 5 minutes; a skew between them shifts which of the two refuses first, never lets a late upload become a file.
 
@@ -100,11 +104,15 @@ The direct `POST /api/files` stays available with S3 (scripts, API clients, `S3_
 
 `GET /api/files/:id` runs the same authorization as before (membership, `kernel.file.get` under RLS). With S3 and a versioned generation it answers `302` to a presigned `GET` for that `VersionId`, valid 60 seconds, with `response-content-disposition: attachment` (RFC 6266 filename), the sniffed content type and `cache-control: private, no-store`. The version is inside the signature, so the URL cannot be pointed at another version. `?link=1` returns the same URL as JSON, which the app uses so that its `Authorization` and org headers never follow a redirect to the bucket.
 
+A presigned GET is the one read that skips the sha256 check: the bytes go from the bucket to the browser and never pass through the kernel. That is sound because the URL names the exact version the row recorded, inside the signature, and an object version is immutable: a write to the key creates a new version and never changes the recorded one. Those bytes were verified when they were written (the create-only `put` sends their sha256 as `x-amz-checksum-sha256`, which the server checks, or the store reads the object back and compares). The worst a bucket writer can do is delete that version, and then the GET fails; it cannot make the URL serve other bytes. Unpinned generations are exactly the ones that cannot rely on this, so they are never presigned.
+
 A generation that cannot be pinned (`content:`, or NULL) is never presigned: the kernel streams it through `readVerified`, so an unversioned object is still checked before it is served. Local disk always streams through the kernel, as before.
 
 With a GCS endpoint presigned transfers stay off (the POST policy fields `@aws-sdk/s3-presigned-post` signs have not been verified against GCS), so transfers stream through the kernel there.
 
-The SPA adds the bucket's origin to `connect-src` in its Content-Security-Policy only when presigned transfers are on.
+Cloudflare R2 does not accept POST policy uploads, so with presigned transfers on every browser upload would fail at the bucket. The kernel refuses to start when `S3_ENDPOINT` or `S3_PUBLIC_ENDPOINT` is an R2 host (`*.r2.cloudflarestorage.com`) and `S3_PRESIGNED_URLS` is `true` (the default), and says to set it to `false` (issue #223). Refusing rather than warning: a warning would let a deployment start with an upload button that never works, and R2 gains nothing from presigned transfers anyway, since without versioning (`S3_VERSIONING=off`) its generations are `content:` and are never presigned for download.
+
+The SPA adds the bucket's origin to `connect-src` in its Content-Security-Policy only when presigned transfers are on. On a public `PUBLIC_URL` that origin must be `https`: the kernel refuses to start when the endpoint browsers reach (`S3_PUBLIC_ENDPOINT`, else `S3_ENDPOINT`) is plain `http` and presigned transfers are on (issue #223), because the files would cross the network unencrypted and the CSP would allow an `http` origin.
 
 ## Considered options
 
@@ -122,7 +130,8 @@ The SPA adds the bucket's origin to `connect-src` in its Content-Security-Policy
 - Evidence buckets need versioning (default), `s3:GetObjectVersion`, a lifecycle rule for `staging/` and, for presigned transfers, CORS. A bucket without versioning fails the first upload until the operator enables it or sets `S3_VERSIONING=off`.
 - Two new dependencies in `@crove/kernel-runtime`: `@aws-sdk/s3-presigned-post` and `@aws-sdk/s3-request-presigner`, the same release as `@aws-sdk/client-s3`.
 - With presigned transfers the kernel no longer carries download bodies; uploads are still read back once by the API to hash them (bounded at 25 MB).
-- Not done here, follow-ups: setting a per-object retention or legal hold from Crove (bucket defaults apply today); a sweep of `staging/` objects for stores without lifecycle rules; pruning old `file_upload` rows; running the presigned and generation paths against GCS and R2 (T7 lists them as not yet run).
+- Done in issue #223: a per-process cap on concurrent completions, a per-user rate on grants, a daily sweep of `staging/` objects for stores without lifecycle rules, pruning of old `file_upload` rows, the R2 and plain-`http` endpoint refusals at startup.
+- Not done, follow-ups: setting a per-object retention or legal hold from Crove (S3 Object Lock legal hold, GCS event-based hold; bucket defaults apply today); running the presigned and generation paths against GCS and R2 (T7 lists them as not yet run).
 
 ## Tests
 
@@ -131,6 +140,7 @@ The SPA adds the bucket's origin to `connect-src` in its Content-Security-Policy
 - PostgreSQL plus an in-memory versioned store, and MinIO when `CROVE_TEST_S3_URL` is set (`apps/kernel/test/upload.db.test.ts`, through the HTTP API): staged upload end to end with the triple recorded and the staging object deleted, single use (also after new bytes reach the staging key), expiry, other users, viewers, missing bytes, unsupported content, the generation-pinned 302 after an overwrite, fail closed for a row without a version, the open-grant cap.
 - Invariant suite (`apps/kernel/test/invariant/file-upload.db.test.ts`): the triple required and checked, file rows immutable for every role, grant columns set by the database, single use under concurrency, expiry, creator-only claims, no delete; plus the generated RLS matrix row factory for `crove_kernel.file_upload`.
 - Local disk (`apps/kernel/test/storage.test.ts`): `content:` generations, a file replaced on disk is refused.
+- Issue #223: the completion cap (`apps/kernel/test/concurrency.test.ts`; through the HTTP API in `upload.db.test.ts`, a busy completion answers 503 with `Retry-After` and its grant stays usable), the per-minute grant rate per user (`upload.db.test.ts`), the staging sweep (mocked client in `s3-store.test.ts`, MinIO in `s3-store.integration.test.ts`, the job in `apps/kernel/test/staging-sweep.test.ts`), the grant purge (`apps/kernel/test/retention.db.test.ts`), the R2 and `http` endpoint refusals (`apps/kernel/test/storage.test.ts`) and the app's retry (`apps/app/test/errors.test.ts`).
 
 ## References
 

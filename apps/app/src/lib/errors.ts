@@ -36,3 +36,24 @@ export function isUnauthenticated(error: unknown): boolean {
   if (isMfaRequired(error)) return false;
   return e?.status === 401 || e?.code === 'UNAUTHORIZED' || e?.code === 'UNAUTHENTICATED';
 }
+
+// The kernel completes a few staged uploads at a time and answers 503 UPLOAD_BUSY past that (issue #223), leaving the
+// upload's grant unused for its 5 minutes. Retries fn after each delay while it is refused that way; any other error,
+// or the last refusal, is thrown.
+export const UPLOAD_BUSY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000];
+
+export async function retryWhileBusy<T>(
+  fn: () => Promise<T>,
+  delaysMs: readonly number[] = UPLOAD_BUSY_DELAYS_MS,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const delay = delaysMs[attempt];
+      if ((error as { code?: string } | null)?.code !== 'UPLOAD_BUSY' || delay === undefined) throw error;
+      await sleep(delay);
+    }
+  }
+}

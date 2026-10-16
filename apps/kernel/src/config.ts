@@ -72,10 +72,19 @@ const schema = z.object({
   // R2) and then relies on the sha256 check alone.
   S3_VERSIONING: z.enum(['required', 'off']).default('required'),
   // Browsers upload to a staging key and download through presigned URLs (plan §7.6). The bucket needs a CORS rule
-  // for PUBLIC_URL (POST and GET). false keeps every transfer streaming through the kernel.
+  // for PUBLIC_URL (POST and GET). false keeps every transfer streaming through the kernel; Cloudflare R2 needs false
+  // (it has no POST policy uploads, so Crove refuses to start with true on an R2 endpoint).
   S3_PRESIGNED_URLS: z.enum(['true', 'false']).default('true'),
-  // The S3 endpoint browsers reach, when it differs from S3_ENDPOINT (presigned URLs are signed for this host).
+  // The S3 endpoint browsers reach, when it differs from S3_ENDPOINT (presigned URLs are signed for this host). On a
+  // public PUBLIC_URL it must be https: it is where browsers send files, and it lands in the CSP connect-src.
   S3_PUBLIC_ENDPOINT: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
+  // Staged upload completions one API process runs at once (issue #223): each buffers the staged file (up to 25 MB)
+  // while it hashes and writes it. Past it, and past half of it for one user, completions answer 503 UPLOAD_BUSY with
+  // Retry-After and their grant stays unused.
+  UPLOAD_COMPLETE_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(4),
+  // Presigned upload grants (kernel.file.upload.begin) one user may open per org in any rolling minute, counted in the
+  // database across API instances (issue #223). Bounds the staging objects an abandoned upload loop leaves behind.
+  UPLOAD_BEGIN_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(1000).default(20),
   // Supabase Auth (GoTrue). Self-host: the kernel proxies /auth/v1 to AUTH_UPSTREAM_URL.
   AUTH_UPSTREAM_URL: optional,
   PUBLIC_AUTH_URL: optional,
@@ -196,6 +205,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error('set both S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or neither to use the default credential chain');
   }
   if (config.SMTP_HOST && !config.SMTP_FROM) throw new Error('SMTP_HOST needs SMTP_FROM, the sender address of Crove mails');
+  const presigned = config.STORAGE === 's3' && config.S3_PRESIGNED_URLS === 'true';
+  // Cloudflare R2 has no POST policy uploads: with presigned URLs on, every browser upload would fail at the bucket.
+  if (presigned && [config.S3_ENDPOINT, config.S3_PUBLIC_ENDPOINT].some(isR2Endpoint)) {
+    throw new Error('Cloudflare R2 does not accept presigned POST uploads; set S3_PRESIGNED_URLS=false (transfers then stream through the kernel)');
+  }
   if (Boolean(config.SMTP_USER) !== Boolean(config.SMTP_PASS)) throw new Error('set both SMTP_USER and SMTP_PASS, or neither');
   if (!isLocalUrl(config.PUBLIC_URL)) {
     if (config.AUTH_JWT_SECRET && SAMPLE_SECRETS.has(config.AUTH_JWT_SECRET)) {
@@ -212,6 +226,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     }
     if (config.AUTH_STEP_UP === 'off') {
       throw new Error('AUTH_STEP_UP=off lets a stolen session approve and change roles without MFA; set it to required');
+    }
+    // Browsers send files to, and fetch them from, this endpoint, and it is allowed in the app's CSP connect-src.
+    const browserEndpoint = config.S3_PUBLIC_ENDPOINT ?? config.S3_ENDPOINT;
+    if (presigned && browserEndpoint && new URL(browserEndpoint).protocol !== 'https:') {
+      throw new Error(
+        `presigned transfers would send files over plain http to ${new URL(browserEndpoint).origin}; set S3_PUBLIC_ENDPOINT to the https URL ` +
+          'browsers reach the bucket at, or S3_PRESIGNED_URLS=false',
+      );
     }
     const budget = config.AUTH_RATE_LIMIT_EMAIL_SENT;
     if (config.AUTH_UPSTREAM_URL && budget !== undefined && config.AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR * EMAIL_BUDGET_MIN_CLIENTS > budget) {
@@ -235,6 +257,16 @@ export const EMAIL_BUDGET_MIN_CLIENTS = 10;
 
 // Values shipped in docker-compose.yml and .env.example. Fine on localhost, never on a public URL.
 const SAMPLE_SECRETS = new Set(['local-only-jwt-secret-change-me-0123456789', 'change-me-to-a-long-random-string-0123456789']);
+
+// Cloudflare R2's S3 API: https://<account>.r2.cloudflarestorage.com (and jurisdiction hosts such as <account>.eu.).
+export function isR2Endpoint(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    return new URL(url).hostname.replace(/\.$/, '').endsWith('.r2.cloudflarestorage.com');
+  } catch {
+    return false;
+  }
+}
 
 function isHostedSupabase(url: string): boolean {
   try {

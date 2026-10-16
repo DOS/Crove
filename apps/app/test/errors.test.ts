@@ -2,7 +2,7 @@
 // code and the HTTP status like RPC errors, so MFA_REQUIRED and a dead session are recognised there too.
 import { describe, expect, it } from 'vitest';
 import { translatorFor } from '../src/i18n/runtime.ts';
-import { ApiError, apiErrorFromResponse, isMfaRequired, isUnauthenticated } from '../src/lib/errors.ts';
+import { ApiError, apiErrorFromResponse, isMfaRequired, isUnauthenticated, retryWhileBusy } from '../src/lib/errors.ts';
 
 const vi = translatorFor('vi');
 
@@ -51,5 +51,50 @@ describe('error checks on fetch-path errors', () => {
       expect(isUnauthenticated(error)).toBe(false);
       expect(isMfaRequired(error)).toBe(false);
     }
+  });
+});
+
+// Issue #223: a busy kernel refuses a completion with 503 UPLOAD_BUSY and leaves the grant unused.
+describe('retryWhileBusy', () => {
+  const busy = () => new ApiError('UPLOAD_BUSY', 503, 'busy');
+
+  it('retries while the kernel answers UPLOAD_BUSY, waiting each delay in turn', async () => {
+    const waits: number[] = [];
+    let calls = 0;
+    const result = await retryWhileBusy(
+      async () => {
+        calls++;
+        if (calls < 3) throw busy();
+        return 'done';
+      },
+      [10, 20, 30],
+      async (ms) => {
+        waits.push(ms);
+      },
+    );
+    expect(result).toBe('done');
+    expect(waits).toEqual([10, 20]);
+  });
+
+  it('gives up after the last delay, and never retries another error', async () => {
+    const waits: number[] = [];
+    const sleep = async (ms: number) => {
+      waits.push(ms);
+    };
+    await expect(retryWhileBusy(async () => Promise.reject(busy()), [5, 5], sleep)).rejects.toMatchObject({ code: 'UPLOAD_BUSY' });
+    expect(waits).toEqual([5, 5]);
+    let calls = 0;
+    const used = new ApiError('UPLOAD_USED', 409, 'used');
+    await expect(
+      retryWhileBusy(
+        async () => {
+          calls++;
+          throw used;
+        },
+        [5],
+        sleep,
+      ),
+    ).rejects.toBe(used);
+    expect(calls).toBe(1);
   });
 });

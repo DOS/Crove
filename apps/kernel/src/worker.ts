@@ -11,7 +11,7 @@ import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { runOrgExport } from './org-export.ts';
-import { RETENTION_CRON, RETENTION_TZ, runRetention } from './retention.ts';
+import { RETENTION_CRON, RETENTION_TZ, runRetention, sweepStaging } from './retention.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 
 export const JOB_SCHEMA = 'crove_jobs';
@@ -219,12 +219,18 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     }
   });
 
-  // Retention purges (plan §4.9), on a schedule registered idempotently at boot; pg_cron is not required.
+  // Retention purges (plan §4.9), on a schedule registered idempotently at boot; pg_cron is not required. The same run
+  // deletes abandoned staging objects of presigned uploads (issue #223).
   const keepDays = deps.refusalTallyRetentionDays ?? DEFAULT_REFUSAL_TALLY_RETENTION_DAYS;
   await boss.work(QUEUES.retention, { batchSize: 1 }, async () => {
-    await runRetention(deps.workerDb);
-    const pruned = await pruneRefusalTally(deps.workerDb, keepDays);
-    console.log(`[retention] refusal_tally=${pruned}`);
+    try {
+      await runRetention(deps.workerDb);
+      const pruned = await pruneRefusalTally(deps.workerDb, keepDays);
+      console.log(`[retention] refusal_tally=${pruned}`);
+    } finally {
+      // Catches its own errors; runs even when a database purge failed.
+      await sweepStaging(deps.store);
+    }
   });
   await boss.schedule(QUEUES.retention, RETENTION_CRON, null, { tz: RETENTION_TZ, missed: 'once' });
 

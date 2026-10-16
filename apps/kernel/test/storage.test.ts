@@ -40,10 +40,11 @@ describe('storage configuration', () => {
       S3_ACCESS_KEY_ID: 'AKIAEXAMPLEKEY',
       S3_SECRET_ACCESS_KEY: 'example-secret-value',
       S3_FORCE_PATH_STYLE: 'true',
+      S3_PRESIGNED_URLS: 'false',
     });
     expect(createBlobStore(config)).toBeInstanceOf(S3BlobStore);
     const line = describeStorage(config);
-    expect(line).toBe('s3 bucket crove-files-prod at acc0unt.r2.cloudflarestorage.com, versions required, presigned transfers');
+    expect(line).toBe('s3 bucket crove-files-prod at acc0unt.r2.cloudflarestorage.com, versions required, transfers through the kernel');
     expect(line).not.toMatch(/AKIA|secret/);
     expect(loadConfig({ ...BASE, STORAGE: 's3', S3_BUCKET: 'b-1' }).S3_REGION).toBe('us-east-1');
   });
@@ -57,7 +58,39 @@ describe('storage configuration', () => {
     const minio = { ...s3, S3_ENDPOINT: 'http://minio:9000', S3_FORCE_PATH_STYLE: 'true' };
     expect(directTransferOrigin(loadConfig(minio))).toBe('http://minio:9000');
     expect(directTransferOrigin(loadConfig({ ...minio, S3_PUBLIC_ENDPOINT: 'https://files.example.com' }))).toBe('https://files.example.com');
-    expect(directTransferOrigin(loadConfig({ ...s3, S3_ENDPOINT: 'https://acc0unt.r2.cloudflarestorage.com' }))).toBe('https://crove-files.acc0unt.r2.cloudflarestorage.com');
+    expect(directTransferOrigin(loadConfig({ ...s3, S3_ENDPOINT: 'https://objects.example.net' }))).toBe('https://crove-files.objects.example.net');
+  });
+
+  // Issue #223: Cloudflare R2 has no POST policy uploads, so presigned transfers there would fail every upload.
+  it('refuses presigned transfers on a Cloudflare R2 endpoint, and starts with them off', () => {
+    const r2 = { ...BASE, STORAGE: 's3', S3_BUCKET: 'crove-files', S3_REGION: 'auto', S3_ENDPOINT: 'https://acc0unt.r2.cloudflarestorage.com' };
+    expect(() => loadConfig(r2)).toThrow(/R2 does not accept presigned POST uploads; set S3_PRESIGNED_URLS=false/);
+    expect(() => loadConfig({ ...r2, S3_ENDPOINT: 'https://acc0unt.eu.r2.cloudflarestorage.com' })).toThrow(/S3_PRESIGNED_URLS=false/);
+    expect(() => loadConfig({ ...r2, S3_ENDPOINT: 'https://ACC0UNT.R2.cloudflarestorage.com./' })).toThrow(/S3_PRESIGNED_URLS=false/);
+    expect(() => loadConfig({ ...r2, S3_ENDPOINT: 'https://objects.example.net', S3_PUBLIC_ENDPOINT: 'https://acc0unt.r2.cloudflarestorage.com' })).toThrow(
+      /S3_PRESIGNED_URLS=false/,
+    );
+    expect(loadConfig({ ...r2, S3_PRESIGNED_URLS: 'false' }).S3_PRESIGNED_URLS).toBe('false');
+    // Only an S3 store presigns: an R2 endpoint left over beside local disk is not refused.
+    expect(loadConfig({ ...r2, STORAGE: 'local' }).STORAGE).toBe('local');
+    // A look-alike host is not R2.
+    expect(loadConfig({ ...r2, S3_ENDPOINT: 'https://r2.cloudflarestorage.com.example.net' }).S3_PRESIGNED_URLS).toBe('true');
+  });
+
+  // Issue #223: the endpoint browsers reach lands in the CSP connect-src and carries every file.
+  it('refuses a plain http endpoint for presigned transfers on a public URL', () => {
+    const prod = { ...BASE, PUBLIC_URL: 'https://crove.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1', STORAGE: 's3', S3_BUCKET: 'crove-files', S3_FORCE_PATH_STYLE: 'true' };
+    expect(() => loadConfig({ ...prod, S3_ENDPOINT: 'http://minio:9000' })).toThrow(/plain http to http:\/\/minio:9000; set S3_PUBLIC_ENDPOINT/);
+    expect(() => loadConfig({ ...prod, S3_ENDPOINT: 'https://minio.internal', S3_PUBLIC_ENDPOINT: 'http://files.example.com' })).toThrow(
+      /plain http to http:\/\/files\.example\.com/,
+    );
+    // https for browsers, whatever the kernel itself uses; transfers through the kernel; AWS; and localhost are fine.
+    expect(loadConfig({ ...prod, S3_ENDPOINT: 'http://minio:9000', S3_PUBLIC_ENDPOINT: 'https://files.example.com' }).S3_PUBLIC_ENDPOINT).toBe(
+      'https://files.example.com',
+    );
+    expect(loadConfig({ ...prod, S3_ENDPOINT: 'http://minio:9000', S3_PRESIGNED_URLS: 'false' }).S3_ENDPOINT).toBe('http://minio:9000');
+    expect(loadConfig(prod).STORAGE).toBe('s3');
+    expect(loadConfig({ ...prod, PUBLIC_URL: 'http://localhost:8080', S3_ENDPOINT: 'http://localhost:9000' }).S3_ENDPOINT).toBe('http://localhost:9000');
   });
 
   it('refuses incomplete or malformed S3 settings, naming the field and never its value', () => {

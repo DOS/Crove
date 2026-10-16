@@ -107,6 +107,24 @@ suite('retention purges on PostgreSQL (#38)', () => {
            ($1, 'd@example.com', 'member', $2, now(), now() + interval '7 days', 'pending', NULL, NULL)`,
         [orgId, owner],
       );
+      // Staged upload grants (#223): used 8 days ago and expired unused 8 days ago (purged), used 6 days ago and
+      // open now (kept). Past the insert trigger, which would set the clock, as only a superuser can.
+      await c.query('SET LOCAL session_replication_role = replica');
+      const stagingKey = () => `staging/${randomUUID().replaceAll('-', '')}${randomUUID().replaceAll('-', '')}`;
+      for (const [age, used] of [
+        ['8 days', true],
+        ['8 days', false],
+        ['6 days', true],
+        ['0 days', false],
+      ] as const) {
+        await c.query(
+          `INSERT INTO crove_kernel.file_upload (org_id, staging_key, created_by, max_bytes, created_at, expires_at, used_at)
+           VALUES ($1, $2, $3, 1024, now() - $4::interval, now() - $4::interval + interval '5 minutes',
+                   CASE WHEN $5 THEN now() - $4::interval + interval '1 minute' END)`,
+          [orgId, stagingKey(), owner, age, used],
+        );
+      }
+      await c.query('SET LOCAL session_replication_role = origin');
       // Kept for good: an audit row, an outbox event and a balanced ledger entry, all years old.
       await c.query(
         `INSERT INTO crove_kernel.audit_event (org_id, occurred_at, actor_type, command, command_id, outcome, input_sha256)
@@ -147,7 +165,7 @@ suite('retention purges on PostgreSQL (#38)', () => {
     // One row per table per batch: the loop keeps calling until nothing expired is left.
     const result = await runRetention(workerDb, 1, silent);
     expect(result).toEqual({
-      deleted: { 'kernel.idempotency_key': 5, 'kernel.inbound_drop': 1, 'kernel.member_invite': 2 },
+      deleted: { 'kernel.idempotency_key': 5, 'kernel.inbound_drop': 1, 'kernel.member_invite': 2, 'kernel.file_upload': 2 },
       remaining: [],
     });
     expect(await count('crove_kernel.idempotency_key', `org_id = '${orgId}' AND command = 'kernel.test'`)).toBe(1);
@@ -157,6 +175,10 @@ suite('retention purges on PostgreSQL (#38)', () => {
       await admin(async (c) => (await c.query<{ email: string }>(`SELECT email FROM crove_kernel.member_invite ORDER BY email`)).rows.map((r) => r.email)),
     ).toEqual(['c@example.com', 'd@example.com']);
     expect(await untouchable()).toEqual(before);
+    // Grants: the two older than 7 days went; the recent used one and the open one stay.
+    expect(await count('crove_kernel.file_upload', "created_at < now() - interval '7 days'")).toBe(0);
+    expect(await count('crove_kernel.file_upload')).toBe(2);
+    expect(await count('crove_kernel.file_upload', 'used_at IS NULL')).toBe(1);
 
     // A second run finds nothing to do.
     const again = await sql<{ store: string; deleted: number; more: boolean }>`SELECT * FROM crove_kernel.retention_purge(10000)`.execute(workerDb);

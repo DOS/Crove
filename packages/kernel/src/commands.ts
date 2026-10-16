@@ -230,38 +230,62 @@ export const ingestFile = defineCommand({
 // Staged uploads (plan §7.6, ADR-0013). At most this many open (unused, unexpired) grants per user and org.
 export const MAX_OPEN_UPLOADS = 20;
 
+// Grants one user may open per org in any rolling minute (issue #223). A claimed grant is no longer open, so the open
+// cap alone does not bound a loop of begin, claim and a late POST to the still valid form, which leaves a staging
+// object behind each time; this does, together with the staging sweep and the bucket's lifecycle rule.
+export interface UploadBeginLimits {
+  perMinute: number;
+}
+
+export const DEFAULT_UPLOAD_BEGIN_LIMITS: UploadBeginLimits = { perMinute: 20 };
+
 // Opens a single-use grant for one presigned upload to a random staging key. The database sets the 5-minute expiry
 // and the creator (the user in the sealed context). The API signs the upload form for the returned key.
-export const beginUpload = defineCommand({
-  name: 'kernel.file.upload.begin',
-  input: z.object({}),
-  risk: 'R1',
-  access: MEMBERS,
-  handler: async (ctx) => {
-    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới tải tệp lên được');
-    const userId = ctx.actor.userId;
-    // Serializes begins of one user in one org, so concurrent requests cannot pass the cap together.
-    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove.file_upload:${ctx.orgId}:${userId}`}, 0))`.execute(ctx.trx);
-    const open = await ctx.trx
-      .selectFrom('crove_kernel.file_upload')
-      .select((eb) => eb.fn.countAll<string>().as('n'))
-      .where('org_id', '=', ctx.orgId)
-      .where('created_by', '=', userId)
-      .where('used_at', 'is', null)
-      .where(sql<boolean>`expires_at > pg_catalog.now()`)
-      .executeTakeFirstOrThrow();
-    if (Number(open.n) >= MAX_OPEN_UPLOADS) {
-      throw new DomainError('RATE_LIMITED', 429, 'Quá nhiều lượt tải lên đang mở; hãy chờ vài phút rồi thử lại');
-    }
-    const row = await ctx.trx
-      .insertInto('crove_kernel.file_upload')
-      .values({ org_id: ctx.orgId, staging_key: newStagingKey(), created_by: userId, max_bytes: String(MAX_UPLOAD_BYTES) })
-      .returning(['id', 'staging_key', 'max_bytes', 'expires_at'])
-      .executeTakeFirstOrThrow();
-    ctx.audit({ upload_id: row.id });
-    return { uploadId: row.id, stagingKey: row.staging_key, maxBytes: Number(row.max_bytes), expiresAt: row.expires_at.toISOString() };
-  },
-});
+export function beginUploadCommand(limits: UploadBeginLimits = DEFAULT_UPLOAD_BEGIN_LIMITS) {
+  if (!Number.isInteger(limits.perMinute) || limits.perMinute < 1 || limits.perMinute > 1000) {
+    throw new Error('perMinute must be an integer from 1 to 1000');
+  }
+  return defineCommand({
+    name: 'kernel.file.upload.begin',
+    input: z.object({}),
+    risk: 'R1',
+    access: MEMBERS,
+    handler: async (ctx) => {
+      if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới tải tệp lên được');
+      const userId = ctx.actor.userId;
+      // Serializes begins of one user in one org, so concurrent requests cannot pass either cap together.
+      await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove.file_upload:${ctx.orgId}:${userId}`}, 0))`.execute(ctx.trx);
+      // Both counts use the database clock: the insert trigger sets created_at and expires_at from now(), the start
+      // of the inserting transaction, and they are compared with now() here. Only grants of the last 5 minutes can
+      // count (a grant expires 5 minutes after it is created), which bounds the scan on file_upload_recent_idx.
+      const counts = await ctx.trx
+        .selectFrom('crove_kernel.file_upload')
+        .select([
+          sql<string>`count(*) FILTER (WHERE used_at IS NULL AND expires_at > pg_catalog.now())`.as('open'),
+          sql<string>`count(*) FILTER (WHERE created_at > pg_catalog.now() - interval '1 minute')`.as('recent'),
+        ])
+        .where('org_id', '=', ctx.orgId)
+        .where('created_by', '=', userId)
+        .where(sql<boolean>`created_at > pg_catalog.now() - interval '5 minutes'`)
+        .executeTakeFirstOrThrow();
+      if (Number(counts.open) >= MAX_OPEN_UPLOADS) {
+        throw new DomainError('RATE_LIMITED', 429, 'Quá nhiều lượt tải lên đang mở; hãy chờ vài phút rồi thử lại');
+      }
+      if (Number(counts.recent) >= limits.perMinute) {
+        throw new DomainError('RATE_LIMITED', 429, 'Bạn mở quá nhiều lượt tải lên trong một phút; hãy thử lại sau');
+      }
+      const row = await ctx.trx
+        .insertInto('crove_kernel.file_upload')
+        .values({ org_id: ctx.orgId, staging_key: newStagingKey(), created_by: userId, max_bytes: String(MAX_UPLOAD_BYTES) })
+        .returning(['id', 'staging_key', 'max_bytes', 'expires_at'])
+        .executeTakeFirstOrThrow();
+      ctx.audit({ upload_id: row.id });
+      return { uploadId: row.id, stagingKey: row.staging_key, maxBytes: Number(row.max_bytes), expiresAt: row.expires_at.toISOString() };
+    },
+  });
+}
+
+export const beginUpload = beginUploadCommand();
 
 // Uses a grant, once: only its creator, only before it expires (database clock). The API reads the staging object
 // only after this commits, so a second completion of the same upload never reads it again.
@@ -657,7 +681,6 @@ const otherKernelCommands = [
   changeMemberRole,
   removeMember,
   ingestFile,
-  beginUpload,
   claimUpload,
   receiveInbound,
   ...extractionCommands,
@@ -671,11 +694,15 @@ const otherKernelCommands = [
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),
-// options.inboundRotateLimits the inbound address rotation limits (default DEFAULT_INBOUND_ROTATE_LIMITS).
-export function buildKernelCommands(options: { orgCreateLimits?: OrgCreateLimits; inboundRotateLimits?: InboundRotateLimits } = {}) {
+// options.inboundRotateLimits the inbound address rotation limits (default DEFAULT_INBOUND_ROTATE_LIMITS),
+// options.uploadBeginLimits the presigned upload grant rate (default DEFAULT_UPLOAD_BEGIN_LIMITS).
+export function buildKernelCommands(
+  options: { orgCreateLimits?: OrgCreateLimits; inboundRotateLimits?: InboundRotateLimits; uploadBeginLimits?: UploadBeginLimits } = {},
+) {
   return [
     options.orgCreateLimits ? orgCreateCommand(options.orgCreateLimits) : createOrgCommand,
     ...otherKernelCommands,
+    options.uploadBeginLimits ? beginUploadCommand(options.uploadBeginLimits) : beginUpload,
     options.inboundRotateLimits ? inboundRotateCommand(options.inboundRotateLimits) : rotateInbound,
   ];
 }

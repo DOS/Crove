@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { describe, expect, it } from 'vitest';
 import {
   BlobConflictError,
@@ -22,7 +22,7 @@ import {
   type S3Sender,
 } from '../src/index.ts';
 
-type Command = PutObjectCommand | GetObjectCommand | DeleteObjectCommand;
+type Command = PutObjectCommand | GetObjectCommand | DeleteObjectCommand | ListObjectsV2Command;
 
 // An S3 failure the way the SDK reports it: a named error with the HTTP status in $metadata.
 function s3Error(name: string, status: number): Error {
@@ -302,6 +302,53 @@ describe('staged reads (plan §7.6 step 2)', () => {
     await expect(store.direct?.readStaged(key, 1024)).rejects.toThrow(/invalid staging key/);
     await expect(store.direct?.readStaged(inboundKey(newInboundBlobId()), 1024)).rejects.toThrow(/invalid staging key/);
     expect(sent).toEqual([]);
+  });
+});
+
+// Issue #223: abandoned staging objects on buckets without a lifecycle rule.
+describe('staging sweep', () => {
+  const now = Date.parse('2026-10-17T12:00:00Z');
+  const before = new Date(now - 3600_000);
+  const old = new Date(now - 2 * 3600_000);
+  const fresh = new Date(now - 60_000);
+  const page = (keys: Array<[string, Date | undefined]>, next?: string) => ({
+    Contents: keys.map(([Key, LastModified]) => ({ Key, LastModified })),
+    IsTruncated: next !== undefined,
+    ...(next ? { NextContinuationToken: next } : {}),
+  });
+
+  it('deletes only staging keys older than the cutoff, page by page', async () => {
+    const [a, b, c, d] = [newStagingKey(), newStagingKey(), newStagingKey(), newStagingKey()];
+    const pages = [
+      page([[a, old], [b, fresh], ['staging/not-a-staging-key', old], [c, undefined]], 'next-1'),
+      page([[d, old]]),
+    ];
+    const { store, sent } = fakeStore((command) => (command instanceof ListObjectsV2Command ? pages.shift() : {}));
+    await expect(store.sweepStaging(before, 100)).resolves.toEqual({ deleted: 2, more: false });
+    const lists = sent.filter((c) => c instanceof ListObjectsV2Command);
+    expect(lists.map((c) => c.input)).toEqual([
+      { Bucket: 'crove-files', Prefix: 'staging/', MaxKeys: 100 },
+      { Bucket: 'crove-files', Prefix: 'staging/', MaxKeys: 96, ContinuationToken: 'next-1' },
+    ]);
+    // Never a version delete: Crove holds no s3:DeleteObjectVersion and never removes a version of anything.
+    expect(sent.filter((c) => c instanceof DeleteObjectCommand).map((c) => c.input)).toEqual([
+      { Bucket: 'crove-files', Key: a },
+      { Bucket: 'crove-files', Key: d },
+    ]);
+  });
+
+  it('looks at no more than the limit per call and says when more may remain', async () => {
+    const keys = Array.from({ length: 3 }, () => newStagingKey());
+    const { store, sent } = fakeStore((command) => (command instanceof ListObjectsV2Command ? page(keys.map((k) => [k, old]), 'next') : {}));
+    await expect(store.sweepStaging(before, 3)).resolves.toEqual({ deleted: 3, more: true });
+    expect(sent.filter((c) => c instanceof ListObjectsV2Command)).toHaveLength(1);
+    await expect(store.sweepStaging(before, 0)).rejects.toThrow(/invalid sweep limit/);
+  });
+
+  it('stops on an empty page that still claims more', async () => {
+    const { store, sent } = fakeStore((command) => (command instanceof ListObjectsV2Command ? page([], 'again') : {}));
+    await expect(store.sweepStaging(before, 5000)).resolves.toEqual({ deleted: 0, more: true });
+    expect(sent).toHaveLength(1);
   });
 });
 
