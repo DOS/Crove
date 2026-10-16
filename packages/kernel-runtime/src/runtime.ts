@@ -31,8 +31,13 @@ export type Actor = UserActor | { type: 'system'; component: string };
 // 'members' = owner/admin/member; 'system' = system actor only;
 // 'proposal' = only run by the command that approved the proposal: the proposal is in state 'approved' for this
 //   command, and its executed_command_id is the calling command (kernel.proposal.approve), checked in the database;
-// 'proposal_revision' = only run inside an edit of a pending proposal (a module reviser computing the next revision).
+// 'proposal_revision' = only run by the proposal edit command (PROPOSAL_EDIT_COMMAND) on a pending proposal of the
+//   command the reviser declares in `revises` (a module reviser computing the next revision), checked in the database.
 export type Access = readonly MemberRole[] | 'system' | 'proposal' | 'proposal_revision';
+
+// The one command that may run a reviser (#161): kernel.proposal.edit, which locks the pending proposal and writes
+// the revision the reviser computes. No other command, a reviser included, reaches a reviser.
+export const PROPOSAL_EDIT_COMMAND = 'kernel.proposal.edit';
 
 export interface CommandDef<I = unknown, O = unknown> {
   name: string;
@@ -46,6 +51,9 @@ export interface CommandDef<I = unknown, O = unknown> {
   // command, and writes the handler's changes, the audit row and the idempotency key in one transaction.
   // `env` says how the runtime checks sessions, for definers that also read the upstream Auth records (invites).
   bootstrap?: (trx: Transaction<Database>, actor: UserActor, input: I, idempotencyKey: string | null, env: BootstrapEnv) => Promise<string>;
+  // access 'proposal_revision' only, and required there: the proposal command whose pending proposals this reviser
+  // revises. The runtime refuses the reviser for a proposal of any other command.
+  revises?: string;
   handler: (ctx: CommandContext, input: I) => Promise<O>;
 }
 
@@ -220,6 +228,9 @@ export class Runtime {
   register(defs: { commands?: CommandDef<any, any>[]; queries?: QueryDef<any, any>[] }): this {
     for (const c of defs.commands ?? []) {
       if (this.commands.has(c.name)) throw new Error(`duplicate command ${c.name}`);
+      if ((c.access === 'proposal_revision') !== (typeof c.revises === 'string' && c.revises.length > 0)) {
+        throw new Error(`command ${c.name}: a reviser (access 'proposal_revision') names the command it revises, and only a reviser does`);
+      }
       this.commands.set(c.name, c as CommandDef<unknown, unknown>);
     }
     for (const q of defs.queries ?? []) {
@@ -293,13 +304,16 @@ export class Runtime {
   // The proposal state gate (#88). A command that only runs through a proposal is checked against the proposal row
   // in the database, not against the caller's say-so: 'proposal' needs the proposal in state 'approved' for exactly
   // this command, approved by the calling command (executed_command_id), so no other path (an edit, a bug, a replay)
-  // can reach a posting command; 'proposal_revision' needs a pending proposal. The caller holds the row lock.
+  // can reach a posting command; 'proposal_revision' needs a pending proposal of the command the reviser revises,
+  // and the calling command must be the proposal edit command (#161), so no other command, nor a reviser nested in
+  // a reviser, runs one. The caller holds the row lock. The row is read in the org in context only: another org's
+  // proposal id is refused exactly like an id that does not exist.
   private async requireProposalState(
     trx: Transaction<Database>,
     orgId: string,
     def: CommandDef<unknown, unknown>,
     proposalId: string,
-    callerCommandId: string,
+    caller: { name: string; commandId: string },
   ): Promise<void> {
     const proposal = await trx
       .selectFrom('crove_kernel.proposal')
@@ -309,8 +323,8 @@ export class Runtime {
       .executeTakeFirst();
     const allowed =
       def.access === 'proposal'
-        ? proposal?.status === 'approved' && proposal.command === def.name && proposal.executed_command_id === callerCommandId
-        : proposal?.status === 'pending';
+        ? proposal?.status === 'approved' && proposal.command === def.name && proposal.executed_command_id === caller.commandId
+        : caller.name === PROPOSAL_EDIT_COMMAND && proposal?.status === 'pending' && proposal.command === def.revises;
     if (!allowed) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt', { rule: 'proposal_state' });
   }
 
@@ -394,7 +408,7 @@ export class Runtime {
         const proposalId = options?.proposalId ?? base.proposalId;
         this.authorize(nested.access, base.actor, base.role, proposalId !== null);
         if (proposalId !== null && (nested.access === 'proposal' || nested.access === 'proposal_revision')) {
-          await this.requireProposalState(trx, base.orgId, nested, proposalId, commandId);
+          await this.requireProposalState(trx, base.orgId, nested, proposalId, { name: def.name, commandId });
         }
         this.requireStepUp(nested, base.actor);
         // An R3 command already confirmed the session live for this execution.

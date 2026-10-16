@@ -64,6 +64,7 @@ export const revisePurchase = defineCommand({
   }),
   risk: 'R1',
   access: 'proposal_revision',
+  revises: 'finance.purchase.record',
   handler: async (ctx, { payload, lineAccounts }) => {
     const lineNos = new Set(payload.lines.map((l) => l.lineNo));
     if (lineAccounts.some((l) => !lineNos.has(l.lineNo))) throw new DomainError('UNKNOWN_LINE', 422, 'Có dòng không thuộc hóa đơn này');
