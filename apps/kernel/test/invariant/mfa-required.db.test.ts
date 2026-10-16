@@ -151,7 +151,8 @@ suite('aal1 tokens of users with a verified MFA factor on PostgreSQL (issue #126
         CREATE TABLE auth.mfa_factors (
           id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE, friendly_name text,
           factor_type auth.factor_type NOT NULL, status auth.factor_status NOT NULL, created_at timestamptz NOT NULL,
-          updated_at timestamptz NOT NULL, secret text, phone text, last_challenged_at timestamptz);
+          updated_at timestamptz NOT NULL, secret text, phone text, last_challenged_at timestamptz UNIQUE,
+          web_authn_credential jsonb, web_authn_aaguid uuid, last_webauthn_challenge_data jsonb);
         ALTER TABLE auth.users ENABLE ROW LEVEL SECURITY;
         ALTER TABLE auth.sessions ENABLE ROW LEVEL SECURITY;
         ALTER TABLE auth.mfa_factors ENABLE ROW LEVEL SECURITY;`);
@@ -289,5 +290,38 @@ suite('aal1 tokens of users with a verified MFA factor on PostgreSQL (issue #126
     await applyAuthGrants({ adminUrl, timeoutMs: 1000 });
     expect((await sql('SELECT crove_kernel.auth_grants_ready() AS ok')).rows).toEqual([{ ok: true }]);
     expect((await rpc('me/get', await tokenFor(user, 'aal1'))).status).toBe(200);
+  });
+
+  // A Supabase Auth upgrade that renames or drops the table must not turn the MFA rule off (issue #180): every
+  // request fails closed, for users with and without a factor, until the table is back and auth-grants ran again.
+  it('fails closed with 503 when auth.mfa_factors is missing, and auth-grants waits for it', async () => {
+    const plain = await account('none');
+    const enrolled = await account('verified');
+    await admin(async (c) => {
+      await c.query('SET ROLE supabase_auth_admin');
+      await c.query('ALTER TABLE auth.mfa_factors RENAME TO mfa_factors_moved');
+    });
+    try {
+      expect((await sql('SELECT crove_kernel.auth_grants_ready() AS ok')).rows).toEqual([{ ok: false }]);
+      for (const user of [plain, enrolled]) {
+        const token = await tokenFor(user, 'aal1');
+        expect(await rpc('me/get', token)).toMatchObject({ status: 503, body: { code: 'AUTH_NOT_READY' } });
+        expect(await rpc('inbox/list', token, {}, orgs.get(user.subject) as string)).toMatchObject({ status: 503, body: { code: 'AUTH_NOT_READY' } });
+      }
+      const ready = await app.request('/readyz');
+      expect(ready.status).toBe(503);
+      expect(await ready.json()).toEqual({ ready: false, reason: 'auth_grants' });
+      // auth-grants does not settle for the other two tables: it keeps waiting, then gives up.
+      await expect(applyAuthGrants({ adminUrl, timeoutMs: 300, pollMs: 100 })).rejects.toThrow(/auth\.mfa_factors do not exist/);
+    } finally {
+      await admin(async (c) => {
+        await c.query('SET ROLE supabase_auth_admin');
+        await c.query('ALTER TABLE auth.mfa_factors_moved RENAME TO mfa_factors');
+      });
+    }
+    await applyAuthGrants({ adminUrl, timeoutMs: 1000 });
+    expect((await rpc('me/get', await tokenFor(plain, 'aal1'))).status).toBe(200);
+    expect(await rpc('me/get', await tokenFor(enrolled, 'aal1'))).toMatchObject({ status: 401, body: { code: 'MFA_REQUIRED' } });
+    expect((await rpc('me/get', await tokenFor(enrolled, 'aal2'))).status).toBe(200);
   });
 });

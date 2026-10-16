@@ -23,9 +23,14 @@ export interface MigrationFile {
 export async function readMigrations(dir: string): Promise<MigrationFile[]> {
   const names = (await readdir(dir)).filter((n) => n.endsWith('.sql')).sort();
   const files: MigrationFile[] = [];
+  const seen = new Map<string, string>();
   for (const name of names) {
     const match = FILE_PATTERN.exec(name);
     if (!match?.[1]) throw new Error(`migration file name does not match the naming rule: ${name}`);
+    // The 14-digit prefix is the ledger version: two files sharing it would fail on a fresh database.
+    const other = seen.get(match[1]);
+    if (other) throw new Error(`duplicate migration version ${match[1]}: ${other} and ${name}`);
+    seen.set(match[1], name);
     // Normalize line endings so a Windows checkout (CRLF) and Linux (LF) hash the same file identically.
     const sql = (await readFile(join(dir, name), 'utf8')).replaceAll('\r\n', '\n');
     files.push({ version: match[1], name, sql, sha256: createHash('sha256').update(sql).digest('hex') });
@@ -327,10 +332,10 @@ export interface AuthGrantsOptions {
 // tables, then lets crove_auth_reader select exactly the columns the session check reads (column grants plus a
 // SELECT policy, because Supabase Auth turns on row-level security): auth.sessions, auth.users and, for the MFA
 // check (issue #126), auth.mfa_factors (user_id, status), never the factor secrets. Supabase Auth creates
-// auth.mfa_factors before it adds auth.sessions.not_after, so the table exists once the wait below ends; a Supabase
-// Auth without it has no MFA. Needs a superuser or the owner of the auth tables (supabase_auth_admin), so it runs
-// with the admin URL, like `migrate`. Safe to run on every start: it re-applies the grant if Supabase Auth ever
-// recreated a table.
+// auth.mfa_factors before it adds auth.sessions.not_after, so all three exist together; without auth.mfa_factors
+// the session check fails closed with 503 (issue #180), so the wait covers it too. Needs a superuser or the owner of
+// the auth tables (supabase_auth_admin), so it runs with the admin URL, like `migrate`. Safe to run on every start:
+// it re-applies the grant if Supabase Auth ever recreated a table.
 export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void> {
   const log = options.log ?? (() => {});
   const deadline = Date.now() + (options.timeoutMs ?? 120_000);
@@ -340,18 +345,20 @@ export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void>
     for (;;) {
       // Every column the check reads, not just the tables: Supabase Auth adds some (not_after) in later migrations.
       const { rows } = await client.query<{ ready: boolean }>(`
-        SELECT count(*) = 6 AS ready FROM pg_attribute a
+        SELECT count(*) = 8 AS ready FROM pg_attribute a
         WHERE a.attnum > 0 AND NOT a.attisdropped AND (
           (a.attrelid = to_regclass('auth.sessions') AND a.attname IN ('id', 'user_id', 'not_after'))
-          OR (a.attrelid = to_regclass('auth.users') AND a.attname IN ('id', 'banned_until', 'deleted_at')))`);
+          OR (a.attrelid = to_regclass('auth.users') AND a.attname IN ('id', 'banned_until', 'deleted_at'))
+          OR (a.attrelid = to_regclass('auth.mfa_factors') AND a.attname IN ('user_id', 'status')))`);
       if (rows[0]?.ready) break;
       if (Date.now() >= deadline) {
-        throw new Error('auth.sessions and auth.users do not exist (or lack columns the session check reads); start Supabase Auth and run auth-grants again');
+        throw new Error(
+          'auth.sessions, auth.users and auth.mfa_factors do not exist (or lack columns the session check reads); start Supabase Auth and run auth-grants again',
+        );
       }
-      log('waiting for Supabase Auth to create auth.sessions and auth.users');
+      log('waiting for Supabase Auth to create auth.sessions, auth.users and auth.mfa_factors');
       await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 2000));
     }
-    let factors = false;
     await client.query('BEGIN');
     try {
       await client.query(`
@@ -363,25 +370,18 @@ export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void>
         DROP POLICY IF EXISTS crove_auth_reader_select ON auth.sessions;
         CREATE POLICY crove_auth_reader_select ON auth.sessions AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);
         DROP POLICY IF EXISTS crove_auth_reader_select ON auth.users;
-        CREATE POLICY crove_auth_reader_select ON auth.users AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);`);
-      const { rows: mfa } = await client.query<{ present: boolean }>("SELECT to_regclass('auth.mfa_factors') IS NOT NULL AS present");
-      factors = mfa[0]?.present === true;
-      if (factors) {
-        await client.query(`
-          GRANT SELECT (user_id, status) ON auth.mfa_factors TO crove_auth_reader;
-          DROP POLICY IF EXISTS crove_auth_reader_select ON auth.mfa_factors;
-          CREATE POLICY crove_auth_reader_select ON auth.mfa_factors AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);`);
-      } else {
-        log('WARNING: auth.mfa_factors does not exist, so the session check cannot require MFA for users who enrolled it; upgrade Supabase Auth and run auth-grants again');
-      }
+        CREATE POLICY crove_auth_reader_select ON auth.users AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);
+        GRANT SELECT (user_id, status) ON auth.mfa_factors TO crove_auth_reader;
+        DROP POLICY IF EXISTS crove_auth_reader_select ON auth.mfa_factors;
+        CREATE POLICY crove_auth_reader_select ON auth.mfa_factors AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);`);
       const { rows } = await client.query<{ ok: boolean }>('SELECT crove_kernel.auth_grants_ready() AS ok');
-      if (!rows[0]?.ok) throw new Error('the session check still cannot read auth.sessions and auth.users after the grant');
+      if (!rows[0]?.ok) throw new Error('the session check still cannot read auth.sessions, auth.users and auth.mfa_factors after the grant');
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
     }
-    log(`crove_auth_reader may read auth.sessions and auth.users${factors ? ' and auth.mfa_factors (user_id, status)' : ''}`);
+    log('crove_auth_reader may read auth.sessions, auth.users and auth.mfa_factors (user_id, status)');
   } finally {
     await client.end();
   }

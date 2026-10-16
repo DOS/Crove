@@ -5,6 +5,7 @@ import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
 import { ORG_HEADER, type contract } from '@crove/kernel-contract';
 import { accessToken, auth } from './auth.ts';
+import { apiErrorFromResponse, isMfaRequired, isUnauthenticated } from './errors.ts';
 
 let currentOrg: string | null = null;
 
@@ -29,18 +30,7 @@ const link = new RPCLink({ url: `${window.location.origin}/api/rpc`, headers });
 export const client: ContractRouterClient<typeof contract> = createORPCClient(link);
 export const orpc = createTanstackQueryUtils(client);
 
-// The session is valid but has not passed the user's second factor yet (issue #126): the kernel refuses every
-// call until it has. Not a sign-out: the server's message tells the user to enter their MFA code, and the MFA
-// challenge screen (issue #32) takes over once it ships.
-export function isMfaRequired(error: unknown): boolean {
-  return (error as { code?: string } | null)?.code === 'MFA_REQUIRED';
-}
-
-export function isUnauthenticated(error: unknown): boolean {
-  const e = error as { status?: number; code?: string } | null;
-  if (isMfaRequired(error)) return false;
-  return e?.status === 401 || e?.code === 'UNAUTHORIZED' || e?.code === 'UNAUTHENTICATED';
-}
+export { ApiError, isMfaRequired, isUnauthenticated } from './errors.ts';
 
 // A stale or revoked session signs the user out locally; main.tsx then routes to /login.
 function onError(error: unknown): void {
@@ -64,13 +54,11 @@ export function errorMessage(error: unknown): string {
   return 'Đã có lỗi xảy ra';
 }
 
-// Authenticated fetch for non-RPC endpoints (files, export).
+// Authenticated fetch for non-RPC endpoints (files, export). A refusal throws ApiError with the kernel's code and
+// the HTTP status, like the RPC path, so MFA_REQUIRED and a dead session are recognised here too.
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const response = await fetch(path, { ...init, headers: { ...(await headers()), ...(init.headers as Record<string, string> | undefined) } });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(body?.message ?? `Lỗi ${response.status}`);
-  }
+  if (!response.ok) throw await apiErrorFromResponse(response);
   return response;
 }
 

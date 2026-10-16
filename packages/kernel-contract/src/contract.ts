@@ -73,7 +73,8 @@ export const contract = {
           idempotencyKey: zId,
         }),
       )
-      .output(z.object({ documentId: zId, journalEntryId: zId })),
+      // A purchase returns its document; a reversal (#138) returns the entry it reversed.
+      .output(z.object({ documentId: zId.optional(), journalEntryId: zId, reversedEntryId: zId.optional() })),
     // Saves changed line accounts as a new revision authored by the caller; it never approves.
     edit: oc
       .input(

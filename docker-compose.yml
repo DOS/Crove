@@ -106,6 +106,12 @@ services:
       AI_MODEL: ${AI_MODEL:-}
       INBOUND_DOMAIN: ${INBOUND_DOMAIN:-}
       INBOUND_SECRET: ${INBOUND_SECRET:-}
+      # Invite mails go through the same SMTP server as Supabase Auth's (Mailpit at http://localhost:8025 locally).
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-noreply@crove.local}
       TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
       ORG_CREATE_LIMIT_PER_DAY: ${ORG_CREATE_LIMIT_PER_DAY:-5}
       ORG_CREATE_LIMIT_TOTAL: ${ORG_CREATE_LIMIT_TOTAL:-20}

@@ -10,6 +10,7 @@
 import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { liveAuthUrl, loadConfig, type Config } from './config.ts';
 import { createKernel, defaultAdapters, type ServerRole } from './kernel.ts';
+import { describeMailer } from './mail.ts';
 import { runProber } from './prober.ts';
 import { describeStorage } from './storage.ts';
 import { migrateJobs } from './worker.ts';
@@ -51,6 +52,7 @@ async function main() {
       (config.AUTH_SESSION_CHECK === 'jwt' ? `, live check for R3: ${live ? new URL(live).host : 'not configured (R3 answers 503)'}` : ''),
   );
   console.log(`[storage] ${describeStorage(config)}`);
+  console.log(`[mail] ${describeMailer(config)}`);
 
   const kernel = createKernel(config, defaultAdapters(config));
   const stop = await kernel.start(role);

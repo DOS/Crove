@@ -13,6 +13,10 @@ import { DomainError, defineCommand, defineQuery, type CommandContext } from '@c
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // Pending, unexpired invites one org may hold at once.
 export const MAX_PENDING_INVITES = 100;
+// Invites one org may create in any 24 hours, in total and per email (revoked and replaced ones count). Each invite
+// sends a mail (#129), and replacing or revoking frees pending slots, so these bound the mail an org can send.
+export const MAX_INVITES_PER_DAY = 50;
+export const MAX_INVITES_PER_EMAIL_PER_DAY = 3;
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -121,6 +125,20 @@ export const createInvite = defineCommand({
       .executeTakeFirstOrThrow();
     if (pending.n >= MAX_PENDING_INVITES) {
       throw new DomainError('TOO_MANY_INVITES', 429, `Tổ chức đang có quá nhiều lời mời chờ (tối đa ${MAX_PENDING_INVITES}); hãy thu hồi bớt`);
+    }
+
+    const since = new Date(ctx.now.getTime() - 24 * 60 * 60 * 1000);
+    const recent = await ctx.trx
+      .selectFrom('crove_kernel.member_invite')
+      .select([
+        sql<number>`pg_catalog.count(*)::int`.as('n'),
+        sql<number>`(pg_catalog.count(*) FILTER (WHERE email = ${email}))::int`.as('same'),
+      ])
+      .where('org_id', '=', ctx.orgId)
+      .where('created_at', '>', since)
+      .executeTakeFirstOrThrow();
+    if (recent.n >= MAX_INVITES_PER_DAY || recent.same >= MAX_INVITES_PER_EMAIL_PER_DAY) {
+      throw new DomainError('INVITE_RATE_LIMITED', 429, 'Tổ chức đã gửi quá nhiều lời mời trong 24 giờ qua; hãy thử lại sau');
     }
 
     const token = newInviteToken();

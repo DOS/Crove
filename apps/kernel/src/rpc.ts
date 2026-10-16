@@ -5,6 +5,7 @@ import { contract } from '@crove/kernel-contract';
 import { createOrg, myOrgs, previewInvite, type AcceptedInvite, type OrgSummary } from '@crove/kernel';
 import { DomainError, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { actorOf, type AuthUser } from './auth.ts';
+import type { InviteRole, SendInviteMail } from './invite-mail.ts';
 
 export interface RpcContext {
   user: AuthUser;
@@ -30,7 +31,16 @@ export async function resolveOrg(runtime: Runtime, user: AuthUser, slug: string 
   return (await resolveMembership(runtime, user, slug)).orgId;
 }
 
-export function createRpcHandler(runtime: Runtime) {
+interface CreatedInvite {
+  inviteId: string;
+  email: string;
+  role: InviteRole;
+  expiresAt: string;
+  acceptPath: string;
+}
+
+// sendInviteMail unset: invite mail is off (tests, or an embedder without mail).
+export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -59,9 +69,28 @@ export function createRpcHandler(runtime: Runtime) {
         guard(() => createOrg(runtime, actorOf(context.user), input.name, input.idempotencyKey)),
       ),
       get: os.org.get.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.get', {}, { actor, orgId }))),
-      // No idempotency key: the answer carries the invite token, which must never be stored with a key.
+      // No idempotency key: the answer carries the invite token, which must never be stored with a key. The mail
+      // goes out after the command has committed (invite-mail.ts says why); its outcome is logged and never changes
+      // the answer, which stays the same whether or not the email has an account.
       invite: os.org.invite.handler(({ context, input }) =>
-        inOrg(context, (orgId, actor) => runtime.execute('kernel.member.invite.create', input, { actor, orgId })),
+        guard(async () => {
+          const org = await resolveMembership(runtime, context.user, context.orgSlug);
+          const created = await runtime.execute<CreatedInvite>('kernel.member.invite.create', input, { actor: actorOf(context.user), orgId: org.orgId });
+          try {
+            await sendInviteMail?.({
+              to: created.email,
+              orgName: org.name,
+              inviterName: context.user.name,
+              inviterEmail: context.user.email,
+              role: created.role,
+              expiresAt: created.expiresAt,
+              acceptPath: created.acceptPath,
+            });
+          } catch (error) {
+            console.error(`[mail] invite mail not sent: ${error instanceof Error ? error.name : 'unknown error'}`);
+          }
+          return created;
+        }),
       ),
       listInvites: os.org.listInvites.handler(({ context }) =>
         inOrg(context, (orgId, actor) => runtime.query('kernel.member.invites.list', {}, { actor, orgId })),

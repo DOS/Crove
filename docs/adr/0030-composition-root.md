@@ -22,6 +22,7 @@ Before this ADR, `apps/kernel/src/main.ts` built every dependency inline from co
    | `identity` | `IdentityPort`: `sessions` (the ADR-0028 status source), `authenticator(db)` (token verification and identity mapping), `revoker` (upstream sign-out or null) | yes | Supabase Auth per `AUTH_*` settings |
    | `ai` | `InvoiceReader` (`fromText`, `fromImage`) or `null` | yes, `null` means no AI | `InvoiceExtractor` on the OpenAI-compatible endpoint in `AI_*`, else `null` |
    | `storage` | `BlobStore` | yes | local disk or S3-compatible per `STORAGE` |
+   | `mail` | `Mailer` (`enabled`, `send`; issue #129) | no | SMTP per `SMTP_*`; without `SMTP_HOST`, a fallback that logs the subject and sends nothing |
    | `broker` | `CredentialBroker` (plan §7.4) | no | none: every lookup fails with `BROKER_NOT_CONFIGURED` |
    | `connectors` | `Connector[]` | no | empty |
    | `billing` | `Billing.entitlements(orgId)` (Decision 10) | no | every org holds `full` |
@@ -30,7 +31,7 @@ Before this ADR, `apps/kernel/src/main.ts` built every dependency inline from co
 3. A required port that is `undefined` stops the boot with `createKernel: missing adapter(s) <names>`, and so does an identity port without `sessions`, `authenticator` or `revoker` (a runtime without a session source would skip the ADR-0028 check). TypeScript already rejects it; the runtime check covers entrypoints assembled dynamically. `ai: null` is an explicit choice, not a missing port.
 4. `main.ts` stays the open-source entrypoint: it loads configuration, runs `migrate`, `auth-grants` and `prober` as before, and for the server roles calls `createKernel(config, defaultAdapters(config))`. No behavior change.
 5. Crove Cloud, once it needs a DOS-only adapter, adds its own entrypoint in `crove-cloud` that imports `createKernel` and `defaultAdapters` from this package, replaces the ports it needs (for example `billing` with DOS billing, `ai` with DOS.AI credits, `connectors` with its commercial connectors) and builds the Cloud image. Identity stays the Supabase Auth adapter pointed at DOS's Supabase Auth (ADR-0027 decision 3). Until then Cloud runs the core image with DOS configuration. The core never imports from `crove-cloud`.
-6. Nothing in the core consumes `broker`, `connectors` or `billing` yet. Their interfaces are the smallest that name the seam; the first feature that needs one (credential bindings in Phase 2a, the entitlement check, the first connector) extends its interface in the same PR. Mail joins as a port when the invite email change lands (PR #173 adds a mailer).
+6. Nothing in the core consumes `broker`, `connectors` or `billing` yet. Their interfaces are the smallest that name the seam; the first feature that needs one (credential bindings in Phase 2a, the entitlement check, the first connector) extends its interface in the same PR. Mail joined as the optional `mail` port with the invite email (PR #173): the API sends member invites through it.
 
 ## Consequences
 

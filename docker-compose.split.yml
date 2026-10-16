@@ -1,0 +1,132 @@
+# Split roles on S3 storage (External-tenant gate T7): `api` and `worker` run as separate containers from the same
+# image, with STORAGE=s3 against MinIO and no shared files volume. An override of docker-compose.yml:
+#
+#   docker compose -p crove-split -f docker-compose.yml -f docker-compose.split.yml up -d --build
+#   node tools/e2e/split-stack.mjs
+#   docker compose -p crove-split -f docker-compose.yml -f docker-compose.split.yml down -v
+#   docker image rm crove:split crove-extract:split
+#
+# The CI job `split-stack` in .github/workflows/ci.yml runs exactly this. The all-in-one `crove` service is moved
+# to the `all-in-one` profile, so it does not start. Images are tagged :split so a running default stack keeps its
+# own. Every secret here is a throwaway value for local use; the API listens on 127.0.0.1:${SPLIT_PORT:-18080}.
+# The project name below keeps it apart from the default `crove` stack (and its database) even without `-p`.
+name: crove-split
+
+x-crove-env: &crove-env
+  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
+  AUTH_ISSUER: crove-auth
+  AUTH_AUTOCONFIRM: 'true'
+  AUTH_SESSION_CHECK: db
+  AUTH_STEP_UP: 'off'
+  AUTH_UPSTREAM_URL: http://auth:9999
+  DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
+  PUBLIC_URL: http://localhost:${SPLIT_PORT:-18080}
+  INBOUND_DOMAIN: inbound.crove.test
+  INBOUND_SECRET: split-stack-inbound-secret-0123456789abcdef
+  STORAGE: s3
+  S3_ENDPOINT: http://minio:9000
+  S3_REGION: us-east-1
+  S3_BUCKET: crove-files
+  S3_ACCESS_KEY_ID: crove-split
+  S3_SECRET_ACCESS_KEY: crove-split-minio-secret
+  S3_FORCE_PATH_STYLE: 'true'
+
+services:
+  migrate:
+    image: crove:split
+
+  # Same URLs and sign-up settings as the API below, whatever a local .env says.
+  auth:
+    environment:
+      API_EXTERNAL_URL: http://localhost:${SPLIT_PORT:-18080}/auth/v1
+      GOTRUE_SITE_URL: http://localhost:${SPLIT_PORT:-18080}
+      GOTRUE_URI_ALLOW_LIST: http://localhost:${SPLIT_PORT:-18080}/**
+      GOTRUE_DISABLE_SIGNUP: 'false'
+      GOTRUE_MAILER_AUTOCONFIRM: 'true'
+
+  auth-grants:
+    image: crove:split
+
+  crove:
+    image: crove:split
+    profiles: ['all-in-one']
+
+  crove-extract:
+    image: crove-extract:split
+
+  # Same image and digest as the MinIO in the CI `check` job. Not on the `extract` network: the sandbox has no route
+  # to the blobs. No port is published; tools/e2e/split-stack.mjs lists the bucket with `mc` inside the container.
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+    command: ['server', '/data']
+    environment:
+      MINIO_ROOT_USER: crove-split
+      MINIO_ROOT_PASSWORD: crove-split-minio-secret
+      # For `docker compose exec minio mc ...`.
+      MC_HOST_local: http://crove-split:crove-split-minio-secret@127.0.0.1:9000
+    healthcheck:
+      test: ['CMD', 'curl', '--silent', '--fail', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio-init:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+    entrypoint: ['mc']
+    command: ['mb', '--ignore-existing', 'local/crove-files']
+    environment:
+      MC_HOST_local: http://crove-split:crove-split-minio-secret@minio:9000
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  # HTTP API and web UI only. It stores uploads and inbound mail in the bucket and never calls crove-extract, so it
+  # is not on the `extract` network.
+  api:
+    build: .
+    image: crove:split
+    command: ['api']
+    restart: unless-stopped
+    environment:
+      <<: *crove-env
+    ports:
+      - '127.0.0.1:${SPLIT_PORT:-18080}:8080'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      auth:
+        condition: service_started
+      auth-grants:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+
+  # Outbox relay and jobs: reads the blobs the API stored, has crove-extract parse them and files the results.
+  worker:
+    build: .
+    image: crove:split
+    command: ['worker']
+    restart: unless-stopped
+    # The image's healthcheck probes the API port, which the worker does not open.
+    healthcheck:
+      disable: true
+    environment:
+      <<: *crove-env
+      WORKER_DATABASE_URL: postgres://crove_worker:${CROVE_WORKER_DB_PASSWORD:-local-worker-password}@db:5432/postgres
+      EXTRACT_URL: http://crove-extract:8090
+    networks:
+      - default
+      - extract
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      auth-grants:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      crove-extract:
+        condition: service_healthy
+
+  # Not needed here (sign-up is auto-confirmed); published ports would clash with a running default stack.
+  mailpit:
+    ports: !reset []

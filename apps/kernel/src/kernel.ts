@@ -11,6 +11,7 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator, type Authenticate } from './auth.ts';
 import type { Config } from './config.ts';
 import { createHttpApp } from './http.ts';
+import { createLogMailer, createMailer, type Mailer } from './mail.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
 import { createBlobStore } from './storage.ts';
 import { startWorker } from './worker.ts';
@@ -48,6 +49,8 @@ export interface KernelAdapters {
   // The AI invoice reader; null runs without AI (e-invoice XML still works, PDF and images do not).
   ai: InvoiceReader | null;
   storage: BlobStore;
+  // Outbound mail (member invites, issue #129); the default logs that nothing was sent.
+  mail?: Mailer;
   broker?: CredentialBroker;
   connectors?: readonly Connector[];
   billing?: Billing;
@@ -92,6 +95,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     identity: adapters.identity,
     ai: adapters.ai,
     storage: adapters.storage,
+    mail: adapters.mail ?? createLogMailer(),
     broker: adapters.broker ?? noCredentialBroker,
     connectors: adapters.connectors ?? [],
     billing: adapters.billing ?? selfHostBilling,
@@ -148,7 +152,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
         await assertRlsEnforced(pool);
         await assertSystemContextAccess(pool, 'denied');
         const authenticate = resolved.identity.authenticator(db);
-        const app = createHttpApp({ config, runtime, store, authenticate, pool, aiEnabled: resolved.ai !== null });
+        const app = createHttpApp({ config, runtime, store, authenticate, pool, aiEnabled: resolved.ai !== null, mailer: resolved.mail });
         const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });
         console.log(`[api] listening on ${config.HOST}:${config.PORT}`);
         stops.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -184,7 +188,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
 }
 
 // The open-source defaults, built from configuration: Supabase Auth identity (ADR-0028), any OpenAI-compatible
-// endpoint for AI, local disk or S3-compatible storage. No DOS service.
+// endpoint for AI, local disk or S3-compatible storage, SMTP for mail. No DOS service.
 export function defaultAdapters(config: Config): KernelAdapters {
   return {
     identity: {
@@ -203,5 +207,7 @@ export function defaultAdapters(config: Config): KernelAdapters {
         : null,
     // API and worker build the same store from config; with STORAGE=s3 they share no volume (T7).
     storage: createBlobStore(config),
+    // SMTP from SMTP_*; without SMTP_HOST, the log fallback.
+    mail: createMailer(config),
   };
 }
