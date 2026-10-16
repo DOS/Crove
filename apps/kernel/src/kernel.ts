@@ -112,6 +112,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
       refusalAudit: {
         perActor: config.REFUSAL_AUDIT_LIMIT_PER_ACTOR,
         perOrg: config.REFUSAL_AUDIT_LIMIT_PER_ORG,
+        reserve: config.REFUSAL_AUDIT_RESERVE_PER_ACTOR,
         windowSeconds: config.REFUSAL_AUDIT_WINDOW_SECONDS,
       },
     }).register({
@@ -179,6 +180,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             extract: createExtractClient({ url: extractUrl }),
             inboundDomain: config.INBOUND_DOMAIN ?? null,
             revoker: resolved.identity.revoker,
+            refusalTallyRetentionDays: config.REFUSAL_TALLY_RETENTION_DAYS,
           }),
         );
       }

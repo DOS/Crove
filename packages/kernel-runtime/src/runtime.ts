@@ -101,30 +101,51 @@ export interface SessionStatusSource {
   check(trx: Transaction<Database>, actor: UserActor & { sessionId: string }, orgId: string | null): Promise<void>;
 }
 
-// Bound on denied/failed audit rows (issue #162, plan §4.10): per window of windowSeconds, an actor's refusals get an
-// audit row while the actor has fewer than perActor and the org fewer than perOrg refusals in the window; past that a
-// refusal is only counted in crove_kernel.refusal_tally. The first refusal of each (command, code) of an actor in a
-// window always gets its row.
+// Bound on denied/failed audit rows (issue #162, plan §4.10), per window of windowSeconds. A refusal gets its audit row
+// when it is the actor's first of its (command, code) in the window, or the actor has fewer than reserve refusals (a
+// share the org bound never takes away), or the actor has fewer than perActor and either the org fewer than perOrg
+// or the refusal is security relevant (SECURITY_REFUSAL_CODES, or any 404). Otherwise it is only counted in
+// crove_kernel.refusal_tally.
 export interface RefusalAuditLimits {
   perActor: number;
   perOrg: number;
   windowSeconds: number;
+  // Default: DEFAULT_REFUSAL_AUDIT_LIMITS.reserve, or perActor when that is lower.
+  reserve?: number;
 }
 
-export const DEFAULT_REFUSAL_AUDIT_LIMITS: RefusalAuditLimits = { perActor: 50, perOrg: 500, windowSeconds: 3600 };
+export const DEFAULT_REFUSAL_AUDIT_LIMITS: Required<RefusalAuditLimits> = { perActor: 50, perOrg: 500, windowSeconds: 3600, reserve: 10 };
 export const MAX_REFUSAL_AUDIT_LIMIT = 999_999;
 export const MIN_REFUSAL_AUDIT_WINDOW_S = 60;
 export const MAX_REFUSAL_AUDIT_WINDOW_S = 86_400;
 
+// Refusals that point at a probe or a stolen session rather than a user's slip: they are audited up to the actor's
+// own limit even when the org's budget is spent, so one member flooding the org cannot hide them. Every 404 after the
+// org was entered counts as well (a record the actor named is not in the org, such as MEMBER_NOT_FOUND for a member
+// of another org). Keep this list explicit; a code added here is audited more, never less.
+export const SECURITY_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  'FORBIDDEN',
+  'STEP_UP_REQUIRED',
+  'MFA_REQUIRED',
+  'NOT_A_MEMBER',
+  'MEMBER_NOT_FOUND',
+]);
+
+export function isSecurityRefusal(refusal: DomainError): boolean {
+  return refusal.status === 404 || SECURITY_REFUSAL_CODES.has(refusal.code);
+}
+
 // Same ranges as crove_kernel.refusal_tally_note, which refuses anything else.
-export function validateRefusalAuditLimits(limits: RefusalAuditLimits): RefusalAuditLimits {
+export function validateRefusalAuditLimits(limits: RefusalAuditLimits): Required<RefusalAuditLimits> {
   const check = (name: string, value: number, min: number, max: number) => {
     if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${name} must be an integer from ${min} to ${max}`);
   };
   check('refusal audit perActor', limits.perActor, 1, MAX_REFUSAL_AUDIT_LIMIT);
   check('refusal audit perOrg', limits.perOrg, 1, MAX_REFUSAL_AUDIT_LIMIT);
   check('refusal audit windowSeconds', limits.windowSeconds, MIN_REFUSAL_AUDIT_WINDOW_S, MAX_REFUSAL_AUDIT_WINDOW_S);
-  return { perActor: limits.perActor, perOrg: limits.perOrg, windowSeconds: limits.windowSeconds };
+  const reserve = limits.reserve ?? Math.min(DEFAULT_REFUSAL_AUDIT_LIMITS.reserve, limits.perActor);
+  check('refusal audit reserve', reserve, 0, limits.perActor);
+  return { perActor: limits.perActor, perOrg: limits.perOrg, windowSeconds: limits.windowSeconds, reserve };
 }
 
 export interface RuntimeOptions {
@@ -240,7 +261,7 @@ export class Runtime {
   private readonly cells: CellResolver;
   private readonly sessions: SessionStatusSource | null;
   private readonly stepUp: 'required' | 'off';
-  private readonly refusalAudit: RefusalAuditLimits | 'unbounded';
+  private readonly refusalAudit: Required<RefusalAuditLimits> | 'unbounded';
 
   // A plain Db is one cell that also holds the control plane (singleCell).
   constructor(cells: CellResolver | Db, options: RuntimeOptions = {}) {
@@ -595,7 +616,7 @@ export class Runtime {
       const db = await this.cells.resolveTenant(orgId);
       await db.transaction().execute(async (trx) => {
         await this.enter(trx, actor, orgId);
-        if (!(await this.countRefusal(trx, name, refusal.code, actor, orgId))) return;
+        if (!(await this.countRefusal(trx, name, refusal, actor, orgId))) return;
         await this.writeAudit(trx, {
           orgId,
           actor,
@@ -630,13 +651,15 @@ export class Runtime {
   // Counts the refusal in crove_kernel.refusal_tally (in the refusal transaction, after the context is entered) and
   // answers whether its audit row is written. A failing count never suppresses the row: the count is rolled back to
   // a savepoint, logged with ids and codes only, and the row is written as without a bound.
-  private async countRefusal(trx: Transaction<Database>, name: string, code: string, actor: Actor, orgId: string): Promise<boolean> {
+  private async countRefusal(trx: Transaction<Database>, name: string, refusal: DomainError, actor: Actor, orgId: string): Promise<boolean> {
     const limits = this.refusalAudit;
     if (limits === 'unbounded') return true;
+    const code = refusal.code;
     await sql`SAVEPOINT refusal_tally`.execute(trx);
     try {
       const { rows } = await sql<{ audit: boolean }>`
-        SELECT crove_kernel.refusal_tally_note(${name}, ${code}, ${limits.perActor}::integer, ${limits.perOrg}::integer,
+        SELECT crove_kernel.refusal_tally_note(${name}, ${code}, ${isSecurityRefusal(refusal)}::boolean,
+          ${limits.perActor}::integer, ${limits.perOrg}::integer, ${limits.reserve}::integer,
           ${limits.windowSeconds}::integer) AS audit`.execute(trx);
       await sql`RELEASE SAVEPOINT refusal_tally`.execute(trx);
       return rows[0]?.audit !== false;

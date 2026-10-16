@@ -27,6 +27,9 @@ const SIGN_OUT_RETRY_LIMIT = 5;
 const ORG_EXPORT_RETRY_LIMIT = 3;
 // The prober alerts when the freshest heartbeat is older than PROBER_MAX_HEARTBEAT_AGE_SECONDS (default 120).
 export const HEARTBEAT_INTERVAL_MS = 30_000;
+// Refusal tally windows (issue #162) older than the retention are deleted by the daily retention job, in batches.
+export const DEFAULT_REFUSAL_TALLY_RETENTION_DAYS = 7;
+const REFUSAL_TALLY_PRUNE_BATCH = 10_000;
 
 interface InboundRow {
   seq: string;
@@ -67,11 +70,29 @@ export interface WorkerDeps {
   revoker?: SessionRevoker | null;
   // Names this worker in crove_kernel.worker_heartbeat (default: the host name, the container id under Docker).
   instance?: string;
+  // Days of crove_kernel.refusal_tally windows kept (default DEFAULT_REFUSAL_TALLY_RETENTION_DAYS).
+  refusalTallyRetentionDays?: number;
 }
 
 /** Records that this worker is alive (crove_kernel.worker_beat, crove_worker only). */
 export async function beat(workerDb: Db, instance: string): Promise<void> {
   await sql`SELECT crove_kernel.worker_beat(${instance.slice(0, 128)})`.execute(workerDb);
+}
+
+/**
+ * Deletes refusal tally windows older than keepDays (crove_kernel.refusal_tally_prune, crove_worker only), batch by
+ * batch until none is left, and returns how many rows went. Several workers may run it at once; each batch is its
+ * own statement.
+ */
+export async function pruneRefusalTally(workerDb: Db, keepDays: number): Promise<number> {
+  let total = 0;
+  for (;;) {
+    const { rows } = await sql<{ n: number }>`
+      SELECT crove_kernel.refusal_tally_prune(${keepDays}::integer, ${REFUSAL_TALLY_PRUNE_BATCH}::integer) AS n`.execute(workerDb);
+    const n = rows[0]?.n ?? 0;
+    total += n;
+    if (n < REFUSAL_TALLY_PRUNE_BATCH) return total;
+  }
 }
 
 /**
@@ -161,8 +182,11 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   });
 
   // Retention purges (plan §4.9), on a schedule registered idempotently at boot; pg_cron is not required.
+  const keepDays = deps.refusalTallyRetentionDays ?? DEFAULT_REFUSAL_TALLY_RETENTION_DAYS;
   await boss.work(QUEUES.retention, { batchSize: 1 }, async () => {
     await runRetention(deps.workerDb);
+    const pruned = await pruneRefusalTally(deps.workerDb, keepDays);
+    console.log(`[retention] refusal_tally=${pruned}`);
   });
   await boss.schedule(QUEUES.retention, RETENTION_CRON, null, { tz: RETENTION_TZ, missed: 'once' });
 

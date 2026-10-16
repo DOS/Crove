@@ -47,21 +47,26 @@ describe('RateLimiter', () => {
     expect([1, 2, 3].map(() => limiter.take('a').allowed)).toEqual([true, true, false]);
   });
 
-  it('keeps at most maxKeys keys, dropping full buckets first, then the least recently used', () => {
+  it('keeps at most maxKeys keys, dropping only buckets that are full again', () => {
     const time = clock();
-    const limiter = new RateLimiter({ perMinute: 1, maxKeys: 10, now: time.now });
-    for (let i = 0; i < 10; i++) limiter.take(`k${i}`);
-    // k0 is used again (refused, its bucket is empty), so k1 is now the least recently used.
-    expect(limiter.take('k0').allowed).toBe(false);
-    limiter.take('new');
-    expect(limiter.size).toBe(10);
-    // k0 kept its empty bucket; k1 was dropped and starts over.
-    expect(limiter.take('k0').allowed).toBe(false);
-    expect(limiter.take('k1').allowed).toBe(true);
-    // Once every bucket is full again, one new key drops them all instead of the most recent ones.
-    time.advance(60_000);
-    limiter.take('fresh');
-    expect(limiter.size).toBe(1);
+    const limiter = new RateLimiter({ perMinute: 2, maxKeys: 3, now: time.now });
+    for (const key of ['a', 'b', 'c']) limiter.take(key);
+    // Every tracked bucket is still spending: a new key is refused, nobody's bucket is reset.
+    expect(limiter.take('new')).toEqual({ allowed: false, retryAfterSeconds: 30 });
+    expect(limiter.size).toBe(3);
+    // Refused again without another sweep until a bucket can be full again.
+    time.advance(10_000);
+    expect(limiter.take('other')).toEqual({ allowed: false, retryAfterSeconds: 20 });
+    // Known keys keep their own budget meanwhile.
+    expect(limiter.take('a').allowed).toBe(true);
+    expect(limiter.take('a').allowed).toBe(false);
+    // Once b and c are full again they make room; a, still spending, is kept.
+    time.advance(20_000);
+    expect(limiter.take('new').allowed).toBe(true);
+    expect(limiter.size).toBe(2);
+    // a kept its own bucket (one token earned back since), not a fresh one with two.
+    expect(limiter.take('a').allowed).toBe(true);
+    expect(limiter.take('a').allowed).toBe(false);
   });
 
   it('refuses a limit that is not a positive integer', () => {
@@ -77,7 +82,8 @@ describe('rate limit and refusal audit configuration', () => {
       REFUSAL_AUDIT_LIMIT_PER_ORG: DEFAULT_REFUSAL_AUDIT_LIMITS.perOrg,
       REFUSAL_AUDIT_WINDOW_SECONDS: DEFAULT_REFUSAL_AUDIT_LIMITS.windowSeconds,
     });
-    expect(DEFAULT_REFUSAL_AUDIT_LIMITS).toEqual({ perActor: 50, perOrg: 500, windowSeconds: 3600 });
+    expect(DEFAULT_REFUSAL_AUDIT_LIMITS).toEqual({ perActor: 50, perOrg: 500, windowSeconds: 3600, reserve: 10 });
+    expect(loadConfig(base)).toMatchObject({ REFUSAL_AUDIT_RESERVE_PER_ACTOR: 10, REFUSAL_TALLY_RETENTION_DAYS: 7 });
     expect(loadConfig({ ...base, API_RATE_LIMIT_PER_MINUTE: '0' }).API_RATE_LIMIT_PER_MINUTE).toBe(0);
   });
 
@@ -88,6 +94,10 @@ describe('rate limit and refusal audit configuration', () => {
     for (const field of ['REFUSAL_AUDIT_LIMIT_PER_ACTOR', 'REFUSAL_AUDIT_LIMIT_PER_ORG']) {
       for (const value of ['0', '-1', '1.5', 'many', '1000000']) expect(() => loadConfig({ ...base, [field]: value })).toThrow(new RegExp(field));
     }
+    for (const value of ['-1', '1.5', 'many']) expect(() => loadConfig({ ...base, REFUSAL_AUDIT_RESERVE_PER_ACTOR: value })).toThrow(/REFUSAL_AUDIT_RESERVE_PER_ACTOR/);
+    expect(() => loadConfig({ ...base, REFUSAL_AUDIT_LIMIT_PER_ACTOR: '5', REFUSAL_AUDIT_RESERVE_PER_ACTOR: '6' })).toThrow(/RESERVE/);
+    expect(loadConfig({ ...base, REFUSAL_AUDIT_RESERVE_PER_ACTOR: '0' }).REFUSAL_AUDIT_RESERVE_PER_ACTOR).toBe(0);
+    for (const value of ['0', '3651', 'week']) expect(() => loadConfig({ ...base, REFUSAL_TALLY_RETENTION_DAYS: value })).toThrow(/REFUSAL_TALLY_RETENTION_DAYS/);
     for (const value of ['59', '86401', '0', 'hour']) {
       expect(() => loadConfig({ ...base, REFUSAL_AUDIT_WINDOW_SECONDS: value })).toThrow(/REFUSAL_AUDIT_WINDOW_SECONDS/);
     }
@@ -98,6 +108,8 @@ describe('rate limit and refusal audit configuration', () => {
     expect(() => new Runtime(db, { refusalAudit: { perActor: 0, perOrg: 1, windowSeconds: 60 } })).toThrow(/perActor/);
     expect(() => new Runtime(db, { refusalAudit: { perActor: 1, perOrg: 1_000_000, windowSeconds: 60 } })).toThrow(/perOrg/);
     expect(() => new Runtime(db, { refusalAudit: { perActor: 1, perOrg: 1, windowSeconds: 30 } })).toThrow(/windowSeconds/);
+    expect(() => new Runtime(db, { refusalAudit: { perActor: 5, perOrg: 9, windowSeconds: 60, reserve: 6 } })).toThrow(/reserve/);
+    expect(() => new Runtime(db, { refusalAudit: { perActor: 5, perOrg: 9, windowSeconds: 60, reserve: -1 } })).toThrow(/reserve/);
     expect(() => new Runtime(db, { refusalAudit: 'unbounded' })).not.toThrow();
   });
 });
