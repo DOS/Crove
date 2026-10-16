@@ -6,8 +6,8 @@
 --    removed from it mid-request (NOT_A_MEMBER). One org's owner could thus keep a member's session alive in their
 --    other orgs and in org-less calls until it expired, against ADR-0028 section 4 (a self revoke is global).
 --    The kernel now tries each of the user's orgs in turn, and session_revoke_orgless refuses a user only while
---    one of their active orgs could still run the audited command: an org where the caller's session is revoked
---    for that org no longer counts. Nothing else changes from 20261017130000_crove_kernel_session_revoke_orgless.sql.
+--    one of their orgs (as my_orgs lists them) could still run the audited command: an org where the caller's
+--    session is revoked for that org no longer counts. Nothing else changes from 20261017130000_crove_kernel_session_revoke_orgless.sql.
 -- 2. A revoked session also keeps who revoked it and why: auth_session_keep_revoked refuses to change revoked_by
 --    or reason once set (the definers already keep them with coalesce; now the trigger enforces it). Applies to
 --    auth_session and auth_session_org, which share the trigger function.
@@ -54,11 +54,13 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'SESSION_INVALID' USING ERRCODE = '28000';
   END IF;
-  -- An active org (as my_orgs lists them) where the caller's session still works: the revoke goes through
-  -- kernel.session.revoke there, audited. An org whose owner revoked this session for that org cannot run it.
+  -- An org my_orgs lists (active, or offboarding for its owner, as enter_context admits) where the caller's
+  -- session still works: the revoke goes through kernel.session.revoke there, audited. An org whose owner revoked
+  -- this session for that org cannot run it.
   IF EXISTS (
     SELECT 1 FROM crove_kernel.tenant_member m JOIN crove_kernel.tenant t ON t.org_id = m.org_id
-    WHERE m.user_id = p_user_id AND t.status = 'active'
+    WHERE m.user_id = p_user_id
+      AND (t.status = 'active' OR (t.status = 'offboarding' AND m.role = 'owner'))
       AND NOT EXISTS (
         SELECT 1 FROM crove_kernel.auth_session_org o
         WHERE o.org_id = m.org_id AND o.user_id = p_user_id AND o.session_id = p_current_session AND o.status = 'revoked'

@@ -73,6 +73,12 @@ describe('revokeOwnSessionsWithoutOrg', () => {
     await expect(revokeOwnSessionsWithoutOrg(runtime, actor, input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(calls).toEqual(['orgs', `execute:${ORG_A}`]);
 
+    const mfa = fakeRuntime([orgs(ORG_A, ORG_B)], () => {
+      throw new DomainError('MFA_REQUIRED', 401, 'second factor');
+    });
+    await expect(revokeOwnSessionsWithoutOrg(mfa.runtime, actor, input)).rejects.toMatchObject({ code: 'MFA_REQUIRED' });
+    expect(mfa.calls).toEqual(['orgs', `execute:${ORG_A}`]);
+
     const other = fakeRuntime([], () => ({ revoked: [] }));
     await expect(
       revokeOwnSessionsWithoutOrg(other.runtime, actor, { userId: '0198a3a0-0000-7000-8000-000000000002', all: true }),
