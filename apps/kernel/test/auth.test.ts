@@ -56,6 +56,7 @@ describe('access token verification', () => {
       aal: 'aal1',
       sessionId: SESSION,
       mfaAt: null,
+      expiresAt: expect.any(Number),
     });
   });
 

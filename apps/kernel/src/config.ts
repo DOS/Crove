@@ -161,6 +161,16 @@ const schema = z.object({
   // Requests per minute per signed-in user on /api (429 RATE_LIMITED with Retry-After past it), per API process; see
   // rate-limit.ts. 0 turns it off, for a deployment whose edge (proxy, CDN or WAF) limits per user instead.
   API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(0).max(999_999).default(600),
+  // Realtime invalidation (issue #69, plan §9): GET /api/stream sends ids of changed records over SSE. Each API process
+  // LISTENs on one dedicated connection to DATABASE_LISTEN_URL, which must be a direct or session-mode connection
+  // (LISTEN does not work through a transaction-mode pooler such as PgBouncer in transaction mode or Supavisor :6543);
+  // unset, DATABASE_URL. STREAM_MAX_CONNECTIONS open streams per process (0 turns streams off and the app polls),
+  // STREAM_MAX_PER_USER per user and process. Every STREAM_RECHECK_SECONDS, and after every 50 hints, each stream
+  // re-runs the session check and membership of its org and closes when either fails.
+  DATABASE_LISTEN_URL: optional,
+  STREAM_MAX_CONNECTIONS: z.coerce.number().int().min(0).max(100_000).default(500),
+  STREAM_MAX_PER_USER: z.coerce.number().int().min(1).max(100).default(5),
+  STREAM_RECHECK_SECONDS: z.coerce.number().int().min(5).max(60).default(30),
   // Any OpenAI-compatible endpoint. Without it, e-invoice XML still works; PDF/images do not.
   AI_BASE_URL: optional,
   AI_API_KEY: optional,

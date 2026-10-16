@@ -8,6 +8,7 @@ import { orpc } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { installedItems } from '../lib/modules.ts';
 import { signOut } from '../lib/session-actions.ts';
+import { SAFETY_POLL_MS, pollEvery, useInvalidationStream, useStreamLive } from '../lib/stream-hook.ts';
 
 // Each item belongs to a module; the menu shows only the modules this deployment runs (CROVE_MODULES).
 const ALL_NAV = [
@@ -25,7 +26,13 @@ export function OrgLayout() {
   const t = useTranslations('nav');
   const tc = useTranslations('common');
   const me = useQuery(orpc.me.get.queryOptions());
-  const pending = useQuery({ ...orpc.inbox.list.queryOptions({ input: { status: 'pending' } }), refetchInterval: 30_000 });
+  // Hints of this org's changes (issue #69); the counts below poll only while the stream is down.
+  useInvalidationStream(slug);
+  const live = useStreamLive();
+  const pending = useQuery({
+    ...orpc.inbox.list.queryOptions({ input: { status: 'pending' } }),
+    refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS),
+  });
   const org = me.data?.orgs.find((o) => o.slug === slug);
 
   return (
