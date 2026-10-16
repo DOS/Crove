@@ -7,7 +7,7 @@
 // other control-plane tables (plan §3.6, Decision 14) have no Kysely type on purpose: tenant code reaches them only
 // through definers (crove_kernel.member_profiles, identity_resolve, my_orgs and the like), so a direct selectFrom does
 // not compile. The invariant test control-plane-reads.test.ts catches raw SQL.
-import type { ColumnType, Generated, InsertType, SelectType } from 'kysely';
+import type { ColumnType, Generated, InsertType, SelectType, UpdateType } from 'kysely';
 import type * as G from './generated/database.ts';
 
 // A refinement narrows what a column holds (a CHECK-constraint union) or restricts how it is written (never, insert
@@ -15,8 +15,14 @@ import type * as G from './generated/database.ts';
 // must fit the generated one, it is nullable exactly when the column is, and it is optional on insert only when the
 // column has a default or is nullable, unless the column is listed as assigned by a trigger (the third parameter).
 // A migration that renames, retypes, changes the nullability or drops the default of a refined column fails
-// typecheck here until the refinement follows. The members of a CHECK-constraint union are not compared with the
-// database.
+// typecheck here until the refinement follows (the default check means little for a column crove_tenant may not
+// insert, whose insert type is undefined). The generated write types follow crove_tenant's privileges (issue #266):
+// a column the role may not insert or update has the write type G.NotGranted there, which a refinement keeps
+// whatever it says, so a refinement cannot make a forbidden write compile; a refinement's never is treated the same.
+//
+// Each CHECK-constraint union is a const array below with the type derived from it; check-unions.db.test.ts
+// compares every such array with the values its CHECK constraint allows on a freshly migrated database, and fails
+// when a migration widens or narrows the constraint without the union following.
 
 // Kysely lets an insert omit a column whose insert type takes undefined or null.
 type Optional<T> = undefined extends T ? true : null extends T ? true : false;
@@ -44,19 +50,32 @@ type Refinement<Table, R, ByTrigger> = {
       : Mismatch<Table[K], R[K], K extends ByTrigger ? true : false>
     : 'not a column of the generated table';
 };
+// The refined column under the generated column's privileges: an insert or update crove_tenant is not granted
+// (G.NotGranted) stays NotGranted whatever the refinement says, and a refinement's never becomes NotGranted too
+// (Kysely drops a never column, so an object carrying it, or a table left with no writable column, would pass).
+type WriteType<Column, Refined> = [Column] extends [G.NotGranted] ? G.NotGranted : [Refined] extends [never] ? G.NotGranted : Refined;
+type Granted<Column, Refined> = ColumnType<
+  SelectType<Refined>,
+  WriteType<InsertType<Column>, InsertType<Refined>>,
+  WriteType<UpdateType<Column>, UpdateType<Refined>>
+>;
 export type Refine<Table, R extends Refinement<Table, R, ByTrigger>, ByTrigger extends keyof R = never> = {
-  [K in keyof Table]: K extends keyof R ? R[K] : Table[K];
+  [K in keyof Table]: K extends keyof R ? Granted<Table[K], R[K]> : Table[K];
 };
 type Tables<R extends { [K in keyof R]: K extends keyof G.Database ? unknown : 'not a table of the generated Database' }> = R;
 
-export type MemberRole = 'owner' | 'admin' | 'member' | 'viewer';
-type ActorType = 'user' | 'system' | 'agent';
+export const MEMBER_ROLES = ['owner', 'admin', 'member', 'viewer'] as const;
+export type MemberRole = (typeof MEMBER_ROLES)[number];
+export const ACTOR_TYPES = ['user', 'system', 'agent'] as const;
+type ActorType = (typeof ACTOR_TYPES)[number];
+
+export const TENANT_STATUSES = ['active', 'offboarding', 'closed'] as const;
 
 export type TenantTable = Refine<
   G.KernelTenantTable,
   {
     // 'offboarding': only owners may enter (kernel.org.offboard, issue #38); 'closed' is set by staff.
-    status: Generated<'active' | 'offboarding' | 'closed'>;
+    status: Generated<(typeof TENANT_STATUSES)[number]>;
     // inbound_token is the active inbound token. Every token ever issued, retired ones included, is in
     // crove_kernel.inbound_address, which only definers read and write; rotation is the command kernel.inbound.rotate.
   }
@@ -66,40 +85,56 @@ export type TenantMemberTable = Refine<G.KernelTenantMemberTable, { role: Member
 
 // A pending, accepted or revoked invite (issue #35). Tenant roles insert invites and may only set status,
 // revoked_at and revoked_by; crove_kernel.invite_accept() is the only writer of accepted_at and accepted_by.
+export const INVITE_ROLES = ['admin', 'member', 'viewer'] as const;
+export const INVITE_STATUSES = ['pending', 'accepted', 'revoked'] as const;
 export type MemberInviteTable = Refine<
   G.KernelMemberInviteTable,
   {
-    role: 'admin' | 'member' | 'viewer';
+    role: (typeof INVITE_ROLES)[number];
     token_sha256: string;
-    status: Generated<'pending' | 'accepted' | 'revoked'>;
+    status: Generated<(typeof INVITE_STATUSES)[number]>;
     expires_at: ColumnType<Date, Date | string, Date | string>;
     accepted_at: ColumnType<Date | null, never, never>;
     accepted_by: ColumnType<string | null, never, never>;
   }
 >;
 
+export const AUDIT_OUTCOMES = ['ok', 'pending_approval', 'denied', 'failed'] as const;
+
 export type AuditEventTable = Refine<
   G.KernelAuditEventTable,
   {
     actor_type: ActorType;
-    outcome: 'ok' | 'pending_approval' | 'denied' | 'failed';
+    outcome: (typeof AUDIT_OUTCOMES)[number];
   }
 >;
+
+export const PARTY_KINDS = ['organization', 'person'] as const;
+export const PARTY_SOURCE_TRUSTS = ['external', 'user', 'system'] as const;
 
 export type PartyTable = Refine<
   G.KernelPartyTable,
   {
-    kind: Generated<'organization' | 'person'>;
-    source_trust: Generated<'external' | 'user' | 'system'>;
+    kind: Generated<(typeof PARTY_KINDS)[number]>;
+    source_trust: Generated<(typeof PARTY_SOURCE_TRUSTS)[number]>;
   }
 >;
 
 // generation is the object version the bytes were written as (ADR-0013); null only on rows from before it.
-export type FileTable = Refine<G.KernelFileTable, { source: 'upload' | 'email' }>;
+// A file row never changes, for every role (trigger file_guard; a move to another org is refused by RLS): crove_tenant
+// keeps UPDATE only to lock the row (SELECT ... FOR UPDATE), so no column has an update type here.
+export const FILE_SOURCES = ['upload', 'email'] as const;
+type Frozen<T> = ColumnType<SelectType<T>, InsertType<T>, G.NotGranted>;
+export type FileTable = Refine<
+  G.KernelFileTable,
+  { [K in Exclude<keyof G.KernelFileTable, 'source'>]: Frozen<G.KernelFileTable[K]> } & { source: Frozen<(typeof FILE_SOURCES)[number]> }
+>;
 
-export type ExtractionMethod = 'einvoice_xml' | 'pdf_text_ai' | 'image_ai' | 'unsupported';
+export const EXTRACTION_METHODS = ['einvoice_xml', 'pdf_text_ai', 'image_ai', 'unsupported'] as const;
+export type ExtractionMethod = (typeof EXTRACTION_METHODS)[number];
 
-export type ExtractionStatus = 'pending' | 'done' | 'failed';
+export const EXTRACTION_STATUSES = ['pending', 'done', 'failed'] as const;
+export type ExtractionStatus = (typeof EXTRACTION_STATUSES)[number];
 
 // requested_by is the user who asked for a re-extraction; NULL for the first extraction.
 export type ExtractionTable = Refine<
@@ -116,14 +151,16 @@ export type ExtractionTable = Refine<
 
 // 'approved' exists only inside the transaction of kernel.proposal.approve today: it marks the proposal approved for
 // its command while that command runs (the runtime's proposal state gate), and the same transaction ends 'executed'.
-export type ProposalStatus = 'pending' | 'approved' | 'executed' | 'rejected' | 'failed';
+export const PROPOSAL_STATUSES = ['pending', 'approved', 'executed', 'rejected', 'failed'] as const;
+export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
 // eligible_approvers is set on every new proposal; NULL only on proposals decided before the approval policy existed.
 export type ProposalTable = Refine<G.KernelProposalTable, { status: Generated<ProposalStatus> }>;
 
 // ADR-0029 Phase 1 (issue #79): agents in an org chart shared with humans. See the migration
 // 20261018050000_crove_kernel_agents_org_chart.sql for the rules the database enforces.
-export type AgentRisk = 'R0' | 'R1' | 'R2';
+export const AGENT_RISKS = ['R0', 'R1', 'R2'] as const;
+export type AgentRisk = (typeof AGENT_RISKS)[number];
 
 export type AgentTemplateTable = Refine<
   G.KernelAgentTemplateTable,
@@ -134,28 +171,35 @@ export type AgentTemplateTable = Refine<
   }
 >;
 
-export type AgentStatus = 'active' | 'paused' | 'retired';
+export const AGENT_STATUSES = ['active', 'paused', 'retired'] as const;
+export type AgentStatus = (typeof AGENT_STATUSES)[number];
+export const AGENT_RUNTIMES = ['builtin', 'external'] as const;
 
 export type AgentTable = Refine<
   G.KernelAgentTable,
   {
-    runtime: Generated<'builtin' | 'external'>;
+    runtime: Generated<(typeof AGENT_RUNTIMES)[number]>;
     status: Generated<AgentStatus>;
     max_risk: Generated<AgentRisk>;
   }
 >;
 
-export type PositionStatus = 'active' | 'paused' | 'archived';
+export const POSITION_STATUSES = ['active', 'paused', 'archived'] as const;
+export type PositionStatus = (typeof POSITION_STATUSES)[number];
 
 export type PositionTable = Refine<G.KernelPositionTable, { status: Generated<PositionStatus> }>;
 
-export type AiRunStatus = 'running' | 'succeeded' | 'failed' | 'expired' | 'cancelled';
+export const AI_RUN_STATUSES = ['running', 'succeeded', 'failed', 'expired', 'cancelled'] as const;
+export type AiRunStatus = (typeof AI_RUN_STATUSES)[number];
 
 export type AiRunTable = Refine<G.KernelAiRunTable, { status: Generated<AiRunStatus> }>;
 
-export type TaskStatus = 'todo' | 'in_progress' | 'waiting' | 'in_review' | 'done' | 'cancelled';
-export type TaskKind = 'general' | 'proposal_review' | 'escalation' | 'delegation';
-export type TaskSource = 'event' | 'proposal' | 'human' | 'schedule';
+export const TASK_STATUSES = ['todo', 'in_progress', 'waiting', 'in_review', 'done', 'cancelled'] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+export const TASK_KINDS = ['general', 'proposal_review', 'escalation', 'delegation'] as const;
+export type TaskKind = (typeof TASK_KINDS)[number];
+export const TASK_SOURCES = ['event', 'proposal', 'human', 'schedule'] as const;
+export type TaskSource = (typeof TASK_SOURCES)[number];
 
 export type TaskTable = Refine<
   G.KernelTaskTable,
@@ -177,15 +221,18 @@ export type TaskCommentTable = Refine<
   }
 >;
 
-export type ChannelConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';
+export const CHANNEL_CONNECTION_STATUSES = ['active', 'expired', 'revoked', 'error'] as const;
+export type ChannelConnectionStatus = (typeof CHANNEL_CONNECTION_STATUSES)[number];
 
 // A connected social or messaging account (ADR-0025). Its sealed tokens live in crove_kernel.credential, which has
 // no Kysely type: only the credential_* definers reach it.
 export type ChannelConnectionTable = Refine<G.KernelChannelConnectionTable, { status: Generated<ChannelConnectionStatus> }>;
 
-export type AgentWakeupTable = Refine<G.KernelAgentWakeupTable, { status: Generated<'pending' | 'claimed' | 'done'> }>;
+export const AGENT_WAKEUP_STATUSES = ['pending', 'claimed', 'done'] as const;
+export type AgentWakeupTable = Refine<G.KernelAgentWakeupTable, { status: Generated<(typeof AGENT_WAKEUP_STATUSES)[number]> }>;
 
-export type AgentScope = 'org' | 'module' | 'agent';
+export const AGENT_SCOPES = ['org', 'module', 'agent'] as const;
+export type AgentScope = (typeof AGENT_SCOPES)[number];
 
 export type KillSwitchTable = Refine<G.KernelKillSwitchTable, { scope: AgentScope }>;
 

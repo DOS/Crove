@@ -11,6 +11,15 @@
 //   query that compiles. The invariant test control-plane-reads.test.ts also scans this generated file.
 // - Plain column types instead of Kanel's branded identifier types; json/jsonb columns take JSON text on insert and
 //   update (code passes JSON.stringify output, never an object or array, to pg).
+// - Write types from the tenant role's privileges (issue #266): a column crove_tenant may not INSERT has the insert
+//   type NotGranted, one it may not UPDATE the update type NotGranted (has_column_privilege, which counts table and
+//   column grants alike). NotGranted is undefined, not never: Kysely drops a never column from Insertable and
+//   Updateable, and a table with no writable column would then take any object, while undefined keeps the column
+//   and refuses every value. So a forbidden write, such as an insert into outbox_event or an update of an
+//   append-only table, fails typecheck instead of at runtime (Kysely leaves an undefined value out of the statement).
+//   The login roles (crove_app, crove_worker) are members of crove_tenant with no table privilege of their own on
+//   these schemas. This covers values() and set() with a value; DELETE (not a column type), raw sql, insert ...
+//   select and an empty object are refused only by the database at runtime.
 // - One file, named exports, sorted, LF line endings, so the output depends only on the migrations.
 // packages/db/src/schema.ts refines these types (CHECK-constraint unions, columns only triggers or definers write)
 // and is what code imports.
@@ -33,6 +42,18 @@ const OUTPUT = 'packages/db/src/generated/database.ts';
 const SCHEMAS = ['crove_kernel', 'crove_finance'];
 // The role tenant code runs as (packages/db/src/context); a table it cannot SELECT gets no type.
 const TENANT_ROLE = 'crove_tenant';
+// The write type of a column TENANT_ROLE may not write; exported so schema.ts keeps it through a refinement.
+const NOT_GRANTED = 'NotGranted';
+const notGranted = {
+  declarationType: 'typeDeclaration',
+  name: NOT_GRANTED,
+  comment: [
+    `The insert or update type of a column ${TENANT_ROLE} may not insert or update: no value but undefined, which`,
+    'Kysely leaves out of the statement, so a write of the column fails typecheck.',
+  ],
+  typeDefinition: ['undefined'],
+  exportAs: 'named',
+};
 
 // Every column type in the Crove schemas, as the pool's type parsers return it (packages/db/src/index.ts): numeric,
 // int8 and date stay strings, timestamptz is a Date, json and jsonb are parsed. A type missing here fails the run.
@@ -79,19 +100,27 @@ function jsonColumnType(column) {
   return `ColumnType<unknown, ${insert}, ${write}>`;
 }
 
-// Kysely's short forms: ColumnType<T, T, T> is T, ColumnType<T, T | undefined, T> is Generated<T>.
-function simplify(typeName) {
+// [select, insert, update] of a property type in the forms kanel-kysely and jsonColumnType write: T, Generated<T> or
+// ColumnType<S, I, U>.
+function columnParts(typeName) {
+  const generated = /^Generated<([^<>]*)>$/.exec(typeName)?.[1];
+  if (generated) return [generated, `${generated} | undefined`, generated];
   const parts = /^ColumnType<([^<>]*)>$/.exec(typeName)?.[1]?.split(', ');
-  if (parts?.length !== 3) return typeName;
-  const [select, insert, update] = parts;
+  if (parts?.length === 3) return parts;
+  if (typeName.includes('<')) throw new Error(`db-types: unexpected column type ${typeName}`);
+  return [typeName, typeName, typeName];
+}
+
+// Kysely's short forms: ColumnType<T, T, T> is T, ColumnType<T, T | undefined, T> is Generated<T>.
+function columnType([select, insert, update]) {
   if (insert === select && update === select) return select;
   if (insert === `${select} | undefined` && update === select) return `Generated<${select}>`;
-  return typeName;
+  return `ColumnType<${select}, ${insert}, ${update}>`;
 }
 
 // The last pre-render hook: everything in one file with named exports, sorted by name, without the
 // Selectable/Insertable/Updateable aliases and identifier types (code derives those from Database if it needs them).
-function singleFile(outputPath) {
+function singleFile(outputPath, writable) {
   return (output) => {
     const { schemas } = useKanelContext();
     const tables = new Map();
@@ -112,7 +141,14 @@ function singleFile(outputPath) {
             const column = table.columns.find((c) => c.name === property.name);
             if (!column) throw new Error(`db-types: no column ${property.name} in ${table.schemaName}.${table.name}`);
             const json = column.type.fullName === 'pg_catalog.json' || column.type.fullName === 'pg_catalog.jsonb';
-            return { ...property, comment: undefined, typeName: json ? jsonColumnType(column) : simplify(property.typeName) };
+            const [select, insert, update] = columnParts(json ? jsonColumnType(column) : property.typeName);
+            const key = `${table.schemaName}.${table.name}.${column.name}`;
+            const typeName = columnType([
+              select,
+              writable.insert.has(key) ? insert : NOT_GRANTED,
+              writable.update.has(key) ? update : NOT_GRANTED,
+            ]);
+            return { ...property, comment: undefined, typeName };
           });
           const kysely = ['ColumnType', 'Generated'].filter((name) => properties.some((p) => p.typeName.startsWith(`${name}<`)));
           interfaces.push({
@@ -144,7 +180,7 @@ function singleFile(outputPath) {
     return {
       [outputPath]: {
         fileType: 'typescript',
-        declarations: [database, ...schemaInterfaces.sort(byName), ...interfaces.sort(byName)],
+        declarations: [database, notGranted, ...schemaInterfaces.sort(byName), ...interfaces.sort(byName)],
       },
     };
   };
@@ -163,17 +199,34 @@ function render(text) {
   ].join('\n');
 }
 
-async function readableTables(dbUrl) {
+// The tables crove_tenant may SELECT, and the columns of those tables it may INSERT and UPDATE, as
+// schema.table and schema.table.column.
+async function tenantPrivileges(dbUrl) {
   const client = new pg.Client({ connectionString: dbUrl });
   await client.connect();
   try {
-    const { rows } = await client.query(
+    const { rows: tables } = await client.query(
       `SELECT n.nspname AS schema, c.relname AS name FROM pg_catalog.pg_class c
          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
         WHERE c.relkind IN ('r', 'p') AND n.nspname = ANY($1) AND pg_catalog.has_table_privilege($2, c.oid, 'SELECT')`,
       [SCHEMAS, TENANT_ROLE],
     );
-    return new Set(rows.map((r) => `${r.schema}.${r.name}`));
+    const { rows: columns } = await client.query(
+      `SELECT n.nspname AS schema, c.relname AS name, a.attname AS column,
+              pg_catalog.has_column_privilege($2, c.oid, a.attnum, 'INSERT') AS insert,
+              pg_catalog.has_column_privilege($2, c.oid, a.attnum, 'UPDATE') AS update
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+        WHERE c.relkind IN ('r', 'p') AND n.nspname = ANY($1) AND pg_catalog.has_table_privilege($2, c.oid, 'SELECT')`,
+      [SCHEMAS, TENANT_ROLE],
+    );
+    const key = (r) => `${r.schema}.${r.name}.${r.column}`;
+    return {
+      readable: new Set(tables.map((r) => `${r.schema}.${r.name}`)),
+      insert: new Set(columns.filter((r) => r.insert).map(key)),
+      update: new Set(columns.filter((r) => r.update).map(key)),
+    };
   } finally {
     await client.end();
   }
@@ -198,7 +251,8 @@ async function main() {
     await admin.query(`CREATE DATABASE ${dbName}`);
     created = true;
     await migrate({ adminUrl: dbUrl, dir: MIGRATIONS });
-    const readable = await readableTables(dbUrl);
+    const privileges = await tenantPrivileges(dbUrl);
+    const { readable } = privileges;
     // Kanel resolves foreign keys while building identifier types (which this script does not use) and warns about
     // every reference to a table left out above. Those warnings are expected; every other one is printed.
     console.warn = (...args) => {
@@ -227,7 +281,7 @@ async function main() {
           preRenderHooks: [makeKyselyHook({ databaseFilename: 'Database', includeSchemaNameInTableName: true })],
         }),
       ],
-      preRenderHooks: [singleFile(join(work, 'database'))],
+      preRenderHooks: [singleFile(join(work, 'database'), privileges)],
     });
     const files = readdirSync(work);
     if (files.length !== 1 || files[0] !== 'database.ts') throw new Error(`db-types: unexpected output ${files.join(', ')}`);
