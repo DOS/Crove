@@ -535,6 +535,7 @@ export interface SocialPostVariantTable {
   body: string | null;
   title: string | null;
   link_url: string | null;
+  content_frozen: Generated<boolean>;
   settings: ColumnType<unknown, string | undefined, string>;
   revision: Generated<number>;
   content_hash: string;

@@ -88,6 +88,8 @@ export interface ContentOverrides {
   linkUrl: string | null;
 }
 
-export function effectiveContent(base: BaseContent, overrides: ContentOverrides): BaseContent {
+// A frozen variant (history) keeps its own content: its columns hold it, and null there means "none".
+export function effectiveContent(base: BaseContent, overrides: ContentOverrides, frozen = false): BaseContent {
+  if (frozen) return { body: overrides.body ?? '', title: overrides.title, linkUrl: overrides.linkUrl };
   return { body: overrides.body ?? base.body, title: overrides.title ?? base.title, linkUrl: overrides.linkUrl ?? base.linkUrl };
 }

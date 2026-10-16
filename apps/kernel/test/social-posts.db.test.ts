@@ -276,4 +276,125 @@ suite('social posts on PostgreSQL (S3)', () => {
     expect(await list(new Date(), new Date(Date.now() + 24 * HOUR))).toEqual([soon.id]);
     expect((await list(new Date(), new Date(Date.now() + 72 * HOUR))).sort()).toEqual([soon.id, later.id].sort());
   });
+  it('stores an override equal to the base, and inheriting again, though the effective content does not change', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const { postId } = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'A', channels: [{ connectionId: conn }] });
+    let post = await get(o, o.owner, postId);
+    const v = post.variants[0] as PostView['variants'][number];
+    // Pin the same text: no new revision, but a later base edit no longer reaches it.
+    expect(await exec(o, o.member, 'social.variant.update', { variantId: v.id, revision: 1, body: 'A' })).toMatchObject({ changed: false, revision: 1 });
+    await exec(o, o.member, 'social.post.update', { postId, revision: post.revision, body: 'B' });
+    post = await get(o, o.owner, postId);
+    expect(post.variants[0]).toMatchObject({ effective: { body: 'A' }, overrides: { body: 'A' }, revision: 1 });
+    // Inherit again: the text changes to the base, as asked.
+    await exec(o, o.member, 'social.variant.update', { variantId: v.id, revision: 1, body: null });
+    post = await get(o, o.owner, postId);
+    expect(post.variants[0]).toMatchObject({ effective: { body: 'B' }, overrides: { body: null }, revision: 2 });
+  });
+
+  it('freezes history, also its empty title and link, when the base changes', async () => {
+    const o = await org();
+    const [a, b] = [await connection(o.orgId, o.owner), await connection(o.orgId, o.owner)];
+    const post = await approved(o, [a, b], 'Gốc');
+    const [va, vb] = post.variants as [PostView['variants'][number], PostView['variants'][number]];
+    // One cancelled through the command, one published by the publisher (not frozen yet).
+    await exec(o, o.owner, 'social.variant.cancel', { variantIds: [va.id] });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET status = 'published', published_at = now() WHERE id = $1", [vb.id]));
+    await exec(o, o.member, 'social.post.update', { postId: post.id, revision: post.revision, body: 'Mới', title: 'Tiêu đề mới', linkUrl: 'https://crove.example/moi' });
+    const view = await get(o, o.owner, post.id);
+    for (const v of view.variants) expect(v.effective).toEqual({ body: 'Gốc', title: null, linkUrl: null });
+  });
+
+  it('serializes scheduling into a queue with a queue edit, without a deadlock', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const slots = [1, 2, 3, 4, 5, 6, 7].flatMap((weekday) => [540, 1200].map((minute) => ({ weekday, minute })));
+    await exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots });
+    const posts = await Promise.all([1, 2, 3].map((i) => approved(o, [conn], `Bài ${i}`)));
+    const results = await Promise.allSettled([
+      ...posts.map((p) => exec(o, o.owner, 'social.variant.schedule', { postId: p.id, queue: true })),
+      exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots: slots.filter((s) => s.minute === 540) }),
+      exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots }),
+    ]);
+    expect(results.filter((r) => r.status === 'rejected').map((r) => (r as PromiseRejectedResult).reason)).toEqual([]);
+    const at = (await Promise.all(posts.map((p) => get(o, o.owner, p.id)))).map((p) => p.variants[0]?.queueSlotAt);
+    expect(new Set(at).size).toBe(3);
+  });
+
+  it('updates the post status when a queue edit takes its variant out, and handles two first sets at once', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const fresh = await connection(o.orgId, o.owner);
+    const both = await Promise.allSettled([
+      exec(o, o.owner, 'social.queue.set', { connectionId: fresh, timeZone: 'Asia/Ho_Chi_Minh', slots: [{ weekday: 1, minute: 540 }] }),
+      exec(o, o.owner, 'social.queue.set', { connectionId: fresh, timeZone: 'Asia/Ho_Chi_Minh', slots: [{ weekday: 2, minute: 540 }] }),
+    ]);
+    expect(both.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
+    await expect(exec(o, o.owner, 'social.variant.schedule', { postId: (await approved(o, [conn])).id, queue: true })).rejects.toMatchObject({ code: 'QUEUE_EMPTY' });
+    await exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots: [{ weekday: 3, minute: 600 }] });
+    const post = await approved(o, [conn]);
+    await exec(o, o.owner, 'social.variant.schedule', { postId: post.id, queue: true });
+    expect((await get(o, o.owner, post.id)).status).toBe('scheduled');
+    await exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots: [] });
+    expect(await get(o, o.owner, post.id)).toMatchObject({ status: 'draft', variants: [{ status: 'approved', queueSlotAt: null }] });
+  });
+
+  it('lets a failed variant be edited after another post took its slot', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    await exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots: [{ weekday: 1, minute: 540 }] });
+    const x = await approved(o, [conn], 'X');
+    await exec(o, o.owner, 'social.variant.schedule', { postId: x.id, queue: true });
+    const xv = (await get(o, o.owner, x.id)).variants[0] as PostView['variants'][number];
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET status = 'failed' WHERE id = $1", [xv.id]));
+    const y = await approved(o, [conn], 'Y');
+    await exec(o, o.owner, 'social.variant.schedule', { postId: y.id, queue: true });
+    expect((await get(o, o.owner, y.id)).variants[0]?.queueSlotAt).toBe(xv.queueSlotAt);
+    const xp = await get(o, o.owner, x.id);
+    await exec(o, o.member, 'social.post.update', { postId: x.id, revision: xp.revision, body: 'X sửa' });
+    expect((await get(o, o.owner, x.id)).variants[0]).toMatchObject({ status: 'draft', queueSlotAt: null });
+  });
+
+  it('keeps signed-off work for owners and admins, and lets a cancelled channel be added again', async () => {
+    const o = await org();
+    const [a, b] = [await connection(o.orgId, o.owner), await connection(o.orgId, o.owner)];
+    const post = await approved(o, [a, b]);
+    const [va, vb] = post.variants as [PostView['variants'][number], PostView['variants'][number]];
+    await expect(exec(o, o.member, 'social.variant.cancel', { variantIds: [va.id] })).rejects.toMatchObject({ status: 403 });
+    await exec(o, o.owner, 'social.variant.schedule', { postId: post.id, variantIds: [vb.id], at: new Date(Date.now() + HOUR).toISOString() });
+    await expect(exec(o, o.member, 'social.variant.unschedule', { variantIds: [vb.id] })).rejects.toMatchObject({ status: 403 });
+    await exec(o, o.owner, 'social.variant.unschedule', { variantIds: [vb.id] });
+    await exec(o, o.owner, 'social.variant.cancel', { variantIds: [va.id] });
+    // A draft is the member's to cancel.
+    const draft = await exec<{ postId: string; variants: Array<{ variantId: string }> }>(o, o.member, 'social.post.create', { body: 'Nháp', channels: [{ connectionId: a }] });
+    await exec(o, o.member, 'social.variant.cancel', { variantIds: [draft.variants[0]?.variantId] });
+    // The cancelled channel can be added to its post again.
+    const added = await exec<{ variants: Array<{ variantId: string }> }>(o, o.member, 'social.post.add_channels', { postId: post.id, channels: [{ connectionId: a }] });
+    expect(added.variants).toHaveLength(1);
+  });
+
+  it('refuses variant ids of another org or of several posts', async () => {
+    const o = await org();
+    const other = await org();
+    const mine = await approved(o, [await connection(o.orgId, o.owner)]);
+    const theirs = await approved(other, [await connection(other.orgId, other.owner)]);
+    const theirVariant = theirs.variants[0]?.id as string;
+    await expect(exec(o, o.owner, 'social.variant.cancel', { variantIds: [theirVariant] })).rejects.toMatchObject({ code: 'VARIANT_NOT_FOUND' });
+    await expect(exec(o, o.owner, 'social.variant.unschedule', { variantIds: [theirVariant] })).rejects.toMatchObject({ code: 'VARIANT_NOT_FOUND' });
+    await expect(exec(o, o.owner, 'social.variant.decide', { postId: mine.id, decision: 'approved', variants: seen(theirs) })).rejects.toMatchObject({ code: 'VARIANT_NOT_FOUND' });
+    const second = await approved(o, [await connection(o.orgId, o.owner)]);
+    await expect(exec(o, o.owner, 'social.variant.cancel', { variantIds: [mine.variants[0]?.id, second.variants[0]?.id] })).rejects.toMatchObject({
+      code: 'VARIANTS_OF_SEVERAL_POSTS',
+    });
+  });
+
+  it('caps settings at 16 KiB of UTF-8, below what the column allows', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const big = { note: 'ệ'.repeat(6000) };
+    await expect(exec(o, o.member, 'social.post.create', { body: 'x', channels: [{ connectionId: conn, settings: big }] })).rejects.toMatchObject({ status: 422 });
+    const fits = { note: 'ệ'.repeat(5000) };
+    await expect(exec(o, o.member, 'social.post.create', { body: 'x', channels: [{ connectionId: conn, settings: fits }] })).resolves.toBeDefined();
+  });
 });

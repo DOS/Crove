@@ -55,7 +55,11 @@ CREATE TABLE IF NOT EXISTS crove_social.post_variant (
   body text CHECK (body IS NULL OR length(body) <= 100000),
   title text CHECK (title IS NULL OR length(title) <= 500),
   link_url text CHECK (link_url IS NULL OR (length(link_url) <= 2000 AND link_url ~ '^https?://')),
-  settings jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(settings) = 'object' AND octet_length(settings::text) <= 16384),
+  -- History (published, cancelled) keeps the content it had: its own columns hold it, NULL then means "none", and
+  -- base edits no longer reach it.
+  content_frozen boolean NOT NULL DEFAULT false,
+  -- The commands cap settings at 16 KiB of JSON; jsonb's text form adds spaces, so the column allows twice that.
+  settings jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(settings) = 'object' AND octet_length(settings::text) <= 32768),
   revision integer NOT NULL DEFAULT 1 CHECK (revision >= 1),
   content_hash text NOT NULL CHECK (content_hash ~ '^sha256:[0-9a-f]{64}$'),
   status text NOT NULL DEFAULT 'draft' CHECK (status IN (
@@ -82,8 +86,12 @@ CREATE TABLE IF NOT EXISTS crove_social.post_variant (
   CONSTRAINT post_variant_post_fk FOREIGN KEY (org_id, post_id) REFERENCES crove_social.post (org_id, id) ON DELETE CASCADE,
   CONSTRAINT post_variant_connection_fk FOREIGN KEY (org_id, channel_connection_id)
     REFERENCES crove_kernel.channel_connection (org_id, id),
-  CONSTRAINT post_variant_one_per_connection UNIQUE (org_id, post_id, channel_connection_id)
+  -- Lets a decision name its variant and the variant's post in one foreign key.
+  CONSTRAINT post_variant_post_uq UNIQUE (org_id, id, post_id)
 );
+-- One live variant per connection in a post; a cancelled one is history and the connection can be added again.
+CREATE UNIQUE INDEX IF NOT EXISTS post_variant_live_per_connection ON crove_social.post_variant (org_id, post_id, channel_connection_id)
+  WHERE status <> 'cancelled';
 CREATE INDEX IF NOT EXISTS post_variant_connection_idx ON crove_social.post_variant (org_id, channel_connection_id, status);
 -- The calendar and the publisher read by effective time.
 CREATE INDEX IF NOT EXISTS post_variant_schedule_idx ON crove_social.post_variant (org_id, (coalesce(queue_slot_at, scheduled_at)))
@@ -109,8 +117,8 @@ CREATE TABLE IF NOT EXISTS crove_social.post_approval (
   snapshot jsonb NOT NULL CHECK (jsonb_typeof(snapshot) = 'object'),
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (org_id, id),
-  CONSTRAINT post_approval_variant_fk FOREIGN KEY (org_id, variant_id) REFERENCES crove_social.post_variant (org_id, id),
-  CONSTRAINT post_approval_post_fk FOREIGN KEY (org_id, post_id) REFERENCES crove_social.post (org_id, id)
+  -- The decision's variant belongs to the decision's post.
+  CONSTRAINT post_approval_variant_fk FOREIGN KEY (org_id, variant_id, post_id) REFERENCES crove_social.post_variant (org_id, id, post_id)
 );
 CREATE INDEX IF NOT EXISTS post_approval_variant_idx ON crove_social.post_approval (org_id, variant_id, created_at DESC);
 SELECT crove_kernel.apply_tenant_rls('crove_social.post_approval', true);

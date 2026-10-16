@@ -33,7 +33,7 @@ const zTitle = z.string().max(500);
 const zLink = z.url({ protocol: /^https?$/ }).max(2000);
 const zTimeZone = z.string().min(1).max(64).refine(isValidTimeZone, 'unknown IANA time zone');
 // Provider settings (privacy level, post type...): plain JSON, 16 KiB at most.
-const zSettings = z.record(z.string().max(100), z.json()).refine((v) => JSON.stringify(v).length <= 16_384, 'settings over 16 KiB');
+const zSettings = z.record(z.string().max(100), z.json()).refine((v) => Buffer.byteLength(JSON.stringify(v), 'utf8') <= 16_384, 'settings over 16 KiB');
 const zChannel = z.strictObject({
   connectionId: zId,
   body: zBody.nullable().optional(),
@@ -42,6 +42,13 @@ const zChannel = z.strictObject({
   settings: zSettings.optional(),
 });
 const zVariantIds = z.array(zId).min(1).max(MAX_CHANNELS_PER_POST);
+
+// JSON with sorted keys, to compare settings whatever order jsonb returns them in.
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : v,
+  );
+}
 
 function requireUser(ctx: CommandContext): string {
   if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
@@ -70,6 +77,7 @@ interface VariantRow {
   settings: unknown;
   revision: number;
   content_hash: string;
+  content_frozen: boolean;
   status: SocialVariantStatus;
   scheduled_at: Date | null;
   queue_slot_at: Date | null;
@@ -89,6 +97,7 @@ const VARIANT_COLUMNS = [
   'settings',
   'revision',
   'content_hash',
+  'content_frozen',
   'status',
   'scheduled_at',
   'queue_slot_at',
@@ -106,15 +115,18 @@ function providerOf(v: { provider: string }) {
 }
 
 // The hash a reviewer's decision binds to: the variant's effective content, settings and target.
-function hashOf(post: BaseContent, v: Pick<VariantRow, 'channel_connection_id' | 'provider' | 'body' | 'title' | 'link_url' | 'settings'>): string {
-  const content = effectiveContent(post, overrides(v));
+function hashOf(
+  post: BaseContent,
+  v: Pick<VariantRow, 'channel_connection_id' | 'provider' | 'body' | 'title' | 'link_url' | 'settings'> & { content_frozen?: boolean },
+): string {
+  const content = effectiveContent(post, overrides(v), v.content_frozen ?? false);
   return contentHash([
     { channelConnectionId: v.channel_connection_id, provider: providerOf(v), body: content.body, title: content.title, linkUrl: content.linkUrl, media: [], settings: settingsOf(v) },
   ]);
 }
 
 function issuesOf(post: BaseContent, v: VariantRow): Issue[] {
-  const content = effectiveContent(post, overrides(v));
+  const content = effectiveContent(post, overrides(v), v.content_frozen);
   return validateVariant({ provider: providerOf(v), body: content.body, title: content.title, media: [] });
 }
 
@@ -177,9 +189,15 @@ function pick(variants: VariantRow[], ids: readonly string[] | undefined): Varia
 async function variantPost(trx: Trx, orgId: string, variantIds: readonly string[]): Promise<string> {
   const rows = await trx.selectFrom('crove_social.post_variant').select(['post_id']).where('org_id', '=', orgId).where('id', 'in', [...variantIds]).execute();
   const posts = new Set(rows.map((r) => r.post_id));
-  if (rows.length !== new Set(variantIds).size || posts.size !== 1) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy kênh của bài đăng này');
+  if (rows.length !== new Set(variantIds).size) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy kênh này của bài đăng');
+  if (posts.size !== 1) throw new DomainError('VARIANTS_OF_SEVERAL_POSTS', 422, 'Chỉ chọn các kênh của cùng một bài đăng');
   return [...posts][0] as string;
 }
+
+// Statuses whose queue slot is free again (the post_variant_slot_uq index skips them); every other status holds it.
+const SLOT_FREED: readonly SocialVariantStatus[] = ['cancelled', 'published', 'failed'];
+// Queued variants a queue edit may move: they have not been handed to the publisher.
+const MOVABLE: readonly SocialVariantStatus[] = ['draft', 'in_review', 'changes_requested', 'rejected', 'approved', 'scheduled', 'paused'];
 
 async function setVariant(ctx: CommandContext, id: string, values: Record<string, unknown>): Promise<void> {
   await ctx.trx
@@ -187,7 +205,25 @@ async function setVariant(ctx: CommandContext, id: string, values: Record<string
     .set({ ...values, updated_at: ctx.now })
     .where('org_id', '=', ctx.orgId)
     .where('id', '=', id)
-    .execute();
+    .execute()
+    .catch((error: unknown) => {
+      if ((error as { constraint?: string }).constraint === 'post_variant_slot_uq') {
+        throw new DomainError('SLOT_TAKEN', 409, 'Khung giờ này của kênh đã có bài khác, hãy thử lại');
+      }
+      throw error;
+    });
+}
+
+// What a variant moving to draft by an edit keeps: a failed one gives up its old slot and time (another post may
+// hold that slot by now); the others keep their place in the queue while they are reviewed again.
+function editValues(v: VariantRow): Record<string, unknown> {
+  return v.status === 'failed' ? { status: step(v, { type: 'edit' }), queue_slot_at: null, scheduled_at: null } : { status: step(v, { type: 'edit' }) };
+}
+
+// A variant becoming history keeps the content it had: copied into its own columns, which base edits no longer reach.
+function freezeValues(post: PostRow, v: VariantRow): Record<string, unknown> {
+  const kept = effectiveContent(base(post), overrides(v), v.content_frozen);
+  return { body: kept.body, title: kept.title, link_url: kept.linkUrl, content_frozen: true };
 }
 
 async function refreshPostStatus(ctx: CommandContext, postId: string): Promise<void> {
@@ -243,7 +279,7 @@ async function insertVariants(ctx: CommandContext, post: PostRow, channels: z.in
       .returning('id')
       .executeTakeFirstOrThrow()
       .catch((error: unknown) => {
-        if ((error as { constraint?: string }).constraint === 'post_variant_one_per_connection') {
+        if ((error as { constraint?: string }).constraint === 'post_variant_live_per_connection') {
           throw new DomainError('CHANNEL_ALREADY_IN_POST', 409, 'Bài đăng đã có kênh này');
         }
         throw error;
@@ -331,6 +367,8 @@ export const postUpdate = defineCommand({
     title: zTitle.nullable().optional(),
     linkUrl: zLink.nullable().optional(),
     timeZone: zTimeZone.optional(),
+    // The planned time of variants not yet scheduled; a scheduled variant keeps the time it was scheduled at.
+    scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
   }),
   risk: 'R1',
   access: MEMBERS,
@@ -345,31 +383,33 @@ export const postUpdate = defineCommand({
       title: input.title === undefined ? post.title : input.title,
       link_url: input.linkUrl === undefined ? post.link_url : input.linkUrl,
       time_zone: input.timeZone ?? post.time_zone,
+      scheduled_at: input.scheduledAt === undefined ? post.scheduled_at : input.scheduledAt === null ? null : new Date(Date.parse(input.scheduledAt)),
     };
+    const same =
+      next.body === post.body &&
+      next.title === post.title &&
+      next.link_url === post.link_url &&
+      next.time_zone === post.time_zone &&
+      next.scheduled_at?.getTime() === post.scheduled_at?.getTime();
+    if (same) return { postId: post.id, revision: post.revision, changedVariants: [] as string[] };
     const variants = await lockVariants(ctx.trx, ctx.orgId, post.id);
-    const changed = variants.filter((v) => hashOf(base(next), v) !== v.content_hash);
+    // History whose content is not frozen yet is frozen first, whatever changes.
+    for (const v of variants.filter((x) => FROZEN.has(x.status) && !x.content_frozen)) await setVariant(ctx, v.id, freezeValues(post, v));
+    const changed = variants.filter((v) => !FROZEN.has(v.status) && hashOf(base(next), v) !== v.content_hash);
     const blocked = changed.filter((v) => IN_FLIGHT.has(v.status));
     if (blocked.length > 0) {
       throw new DomainError('VARIANT_IN_FLIGHT', 409, 'Có kênh đang đăng: chờ kết quả rồi mới sửa nội dung chung', { variantIds: blocked.map((v) => v.id) });
     }
-    for (const v of changed) {
-      if (FROZEN.has(v.status)) {
-        // History keeps what it had: copy the inherited content into the variant before the base changes.
-        const kept = effectiveContent(base(post), overrides(v));
-        await setVariant(ctx, v.id, { body: kept.body, title: kept.title, link_url: kept.linkUrl });
-        continue;
-      }
-      await setVariant(ctx, v.id, { content_hash: hashOf(base(next), v), revision: v.revision + 1, status: step(v, { type: 'edit' }) });
-    }
+    for (const v of changed) await setVariant(ctx, v.id, { content_hash: hashOf(base(next), v), revision: v.revision + 1, ...editValues(v) });
     const revision = post.revision + 1;
     await ctx.trx
       .updateTable('crove_social.post')
-      .set({ body: next.body, title: next.title, link_url: next.link_url, time_zone: next.time_zone, revision, updated_at: ctx.now })
+      .set({ body: next.body, title: next.title, link_url: next.link_url, time_zone: next.time_zone, scheduled_at: next.scheduled_at, revision, updated_at: ctx.now })
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', post.id)
       .execute();
     await refreshPostStatus(ctx, post.id);
-    return { postId: post.id, revision, changedVariants: changed.filter((v) => !FROZEN.has(v.status)).map((v) => v.id) };
+    return { postId: post.id, revision, changedVariants: changed.map((v) => v.id) };
   },
 });
 
@@ -400,18 +440,17 @@ export const variantUpdate = defineCommand({
       link_url: input.linkUrl === undefined ? v.link_url : input.linkUrl,
       settings: input.settings ?? settingsOf(v),
     };
+    if (v.content_frozen || FROZEN.has(v.status)) step(v, { type: 'edit' });
+    const columns = { body: next.body, title: next.title, link_url: next.link_url, settings: JSON.stringify(next.settings) };
+    const stored = v.body === next.body && v.title === next.title && v.link_url === next.link_url && canonicalJson(settingsOf(v)) === canonicalJson(next.settings);
     const hash = hashOf(base(post), next);
-    if (hash === v.content_hash) return { variantId: v.id, revision: v.revision, changed: false };
-    const status = step(v, { type: 'edit' });
-    await setVariant(ctx, v.id, {
-      body: next.body,
-      title: next.title,
-      link_url: next.link_url,
-      settings: JSON.stringify(next.settings),
-      content_hash: hash,
-      revision: v.revision + 1,
-      status,
-    });
+    if (hash === v.content_hash) {
+      // The effective content is the same (for example an override equal to the base, or inheriting it again): store
+      // what the user chose, so later base edits reach the variant or not as they asked, without a new revision.
+      if (!stored) await setVariant(ctx, v.id, columns);
+      return { variantId: v.id, revision: v.revision, changed: false };
+    }
+    await setVariant(ctx, v.id, { ...columns, content_hash: hash, revision: v.revision + 1, ...editValues(v) });
     await refreshPostStatus(ctx, postId);
     return { variantId: v.id, revision: v.revision + 1, changed: true };
   },
@@ -475,7 +514,7 @@ export const variantDecide = defineCommand({
         throw new DomainError('STALE_REVISION', 409, 'Nội dung kênh đã đổi sau khi bạn xem, hãy xem lại trước khi duyệt', { variantId: v.id, revision: v.revision });
       }
       const status = step(v, DECISION_EVENT[input.decision]);
-      const content = effectiveContent(base(post), overrides(v));
+      const content = effectiveContent(base(post), overrides(v), v.content_frozen);
       await ctx.trx
         .insertInto('crove_social.post_approval')
         .values({
@@ -543,7 +582,6 @@ async function lockQueue(trx: Trx, orgId: string, connectionId: string): Promise
   return { id: queue.id, paused: queue.paused, spec: { timeZone: queue.time_zone, slots } };
 }
 
-const HOLDS_SLOT: readonly SocialVariantStatus[] = ['draft', 'in_review', 'changes_requested', 'rejected', 'approved', 'scheduled', 'paused'];
 
 async function takenSlots(trx: Trx, orgId: string, connectionId: string, exceptId?: string): Promise<Set<number>> {
   let q = trx
@@ -552,7 +590,7 @@ async function takenSlots(trx: Trx, orgId: string, connectionId: string, exceptI
     .where('org_id', '=', orgId)
     .where('channel_connection_id', '=', connectionId)
     .where('queue_slot_at', 'is not', null)
-    .where('status', 'not in', ['cancelled', 'published', 'failed']);
+    .where('status', 'not in', [...SLOT_FREED]);
   if (exceptId) q = q.where('id', '<>', exceptId);
   const rows = await q.execute();
   return new Set(rows.map((r) => (r.queue_slot_at as Date).getTime()));
@@ -570,6 +608,20 @@ export const variantSchedule = defineCommand({
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
     requireUser(ctx);
+    // Lock order: queue rows (sorted by connection), then the post, then its variants. social.queue.set takes the
+    // queue row before the variants too, so the two never wait on each other in a cycle.
+    const queues = new Map<string, QueueState | null>();
+    if (input.queue) {
+      const connections = await ctx.trx
+        .selectFrom('crove_social.post_variant')
+        .select('channel_connection_id')
+        .distinct()
+        .where('org_id', '=', ctx.orgId)
+        .where('post_id', '=', input.postId)
+        .orderBy('channel_connection_id')
+        .execute();
+      for (const c of connections) queues.set(c.channel_connection_id, await lockQueue(ctx.trx, ctx.orgId, c.channel_connection_id));
+    }
     const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     const all = await lockVariants(ctx.trx, ctx.orgId, post.id);
     const chosen = input.variantIds ? pick(all, input.variantIds) : all.filter((v) => v.status === 'approved');
@@ -587,14 +639,15 @@ export const variantSchedule = defineCommand({
       }
       const status = step(v, { type: 'schedule' });
       if (input.queue) {
-        const queue = await lockQueue(ctx.trx, ctx.orgId, v.channel_connection_id);
+        const queue = queues.get(v.channel_connection_id) ?? null;
         if (!queue || queue.spec.slots.length === 0) throw new DomainError('QUEUE_EMPTY', 409, 'Kênh này chưa có khung giờ đăng trong hàng đợi', { variantId: v.id });
         const slot = nextFreeSlot(queue.spec, ctx.now.getTime(), await takenSlots(ctx.trx, ctx.orgId, v.channel_connection_id, v.id));
         if (slot === null) throw new DomainError('QUEUE_FULL', 409, 'Hàng đợi của kênh này đã kín trong năm tới', { variantId: v.id });
         await setVariant(ctx, v.id, { status, queue_slot_at: new Date(slot), scheduled_at: null });
         scheduled.push({ variantId: v.id, at: new Date(slot).toISOString() });
       } else {
-        await setVariant(ctx, v.id, { status, queue_slot_at: null, scheduled_at: input.at ? at : null });
+        // The time is stored on the variant, so a later change of the post's planned time does not move it.
+        await setVariant(ctx, v.id, { status, queue_slot_at: null, scheduled_at: at });
         scheduled.push({ variantId: v.id, at: (at as Date).toISOString() });
       }
     }
@@ -628,9 +681,13 @@ export const variantCancel = defineCommand({
   handler: async (ctx, input) => {
     requireUser(ctx);
     const postId = await variantPost(ctx.trx, ctx.orgId, input.variantIds);
-    await lockPost(ctx.trx, ctx.orgId, postId);
+    const post = await lockPost(ctx.trx, ctx.orgId, postId);
     const chosen = pick(await lockVariants(ctx.trx, ctx.orgId, postId), input.variantIds);
-    for (const v of chosen) await setVariant(ctx, v.id, { status: step(v, { type: 'cancel' }) });
+    // Approved, scheduled or paused work was signed off by an owner or admin: only they take it back.
+    if (chosen.some((v) => ['approved', 'scheduled', 'paused'].includes(v.status)) && ctx.role !== 'owner' && ctx.role !== 'admin') {
+      throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới hủy được kênh đã duyệt hoặc đã lên lịch');
+    }
+    for (const v of chosen) await setVariant(ctx, v.id, { status: step(v, { type: 'cancel' }), ...freezeValues(post, v) });
     await refreshPostStatus(ctx, postId);
     await ctx.emit('social.variant.cancelled', { post_id: postId, variant_ids: chosen.map((v) => v.id) });
     return { postId, variants: chosen.map((v) => v.id) };
@@ -658,9 +715,17 @@ export const queueSet = defineCommand({
     if (new Set(input.slots.map((s) => `${s.weekday}:${s.minute}`)).size !== input.slots.length) {
       throw new DomainError('DUPLICATE_SLOT', 422, 'Có khung giờ bị trùng');
     }
-    // Serializes with schedule commands on this connection (they lock the same row).
-    const before = await lockQueue(ctx.trx, ctx.orgId, input.connectionId);
-    let queueId = before?.id;
+    // Create the row if missing (a concurrent first set waits here instead of failing on the unique key), then lock
+    // it: schedule commands lock the same row before any variant.
+    const missing = await ctx.trx
+      .insertInto('crove_social.queue')
+      .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, time_zone: input.timeZone, paused: input.paused ?? false })
+      .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id']).doNothing())
+      .returning('id')
+      .executeTakeFirst();
+    const locked = await lockQueue(ctx.trx, ctx.orgId, input.connectionId);
+    const before = missing ? null : locked;
+    const queueId = (locked as QueueState).id;
     if (before) {
       await ctx.trx
         .updateTable('crove_social.queue')
@@ -669,55 +734,56 @@ export const queueSet = defineCommand({
         .where('id', '=', before.id)
         .execute();
       await ctx.trx.deleteFrom('crove_social.queue_slot').where('org_id', '=', ctx.orgId).where('queue_id', '=', before.id).execute();
-    } else {
-      const created = await ctx.trx
-        .insertInto('crove_social.queue')
-        .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, time_zone: input.timeZone, paused: input.paused ?? false })
-        .returning('id')
-        .executeTakeFirstOrThrow();
-      queueId = created.id;
     }
     if (input.slots.length > 0) {
       await ctx.trx
         .insertInto('crove_social.queue_slot')
-        .values(input.slots.map((s) => ({ org_id: ctx.orgId, queue_id: queueId as string, weekday: s.weekday, minute: s.minute, label: s.label ?? null })))
+        .values(input.slots.map((s) => ({ org_id: ctx.orgId, queue_id: queueId, weekday: s.weekday, minute: s.minute, label: s.label ?? null })))
         .execute();
     }
     const spec: QueueSpec = { timeZone: input.timeZone, slots: input.slots };
-    const queued = await ctx.trx
+    const holders = await ctx.trx
       .selectFrom('crove_social.post_variant')
-      .select(['id', 'queue_slot_at'])
+      .select(['id', 'post_id', 'status', 'queue_slot_at'])
       .where('org_id', '=', ctx.orgId)
       .where('channel_connection_id', '=', input.connectionId)
       .where('queue_slot_at', 'is not', null)
-      .where('status', 'in', [...HOLDS_SLOT])
+      .where('status', 'not in', [...SLOT_FREED])
       .orderBy('queue_slot_at')
       .orderBy('id')
       .forUpdate()
       .execute();
+    const now = ctx.now.getTime();
+    // In-flight variants and ones already due keep their slot untouched; nobody else may take it.
+    const movable = holders.filter((h) => MOVABLE.includes(h.status) && (h.queue_slot_at as Date).getTime() > now);
+    const reserved = new Set(holders.filter((h) => !movable.includes(h)).map((h) => (h.queue_slot_at as Date).getTime()));
     const zoneChanged = before !== null && before.spec.timeZone !== input.timeZone;
     const placed = placeQueued(
       spec,
-      queued.map((q) => {
+      movable.map((q) => {
         const at = (q.queue_slot_at as Date).getTime();
         return { id: q.id, slotAt: zoneChanged ? retime(at, (before as QueueState).spec.timeZone, input.timeZone) : at };
       }),
-      ctx.now.getTime(),
+      now,
+      reserved,
     );
-    const was = new Map(queued.map((q) => [q.id, (q.queue_slot_at as Date).getTime()]));
+    const was = new Map(movable.map((q) => [q.id, (q.queue_slot_at as Date).getTime()]));
     const moved = placed.filter((p) => p.slotAt !== was.get(p.id));
     // Clear first, then assign: two posts trading slots never meet on the unique slot index.
     for (const p of moved) await setVariant(ctx, p.id, { queue_slot_at: null });
+    const posts = new Set<string>();
     for (const p of moved) {
+      const row = movable.find((m) => m.id === p.id) as (typeof movable)[number];
+      posts.add(row.post_id);
       if (p.slotAt === null) {
         // No slot left within a year: the variant leaves the queue and waits for a person.
-        const [row] = await ctx.trx.selectFrom('crove_social.post_variant').select(['id', 'status', 'post_id']).where('org_id', '=', ctx.orgId).where('id', '=', p.id).execute();
-        if (row?.status === 'scheduled') await setVariant(ctx, p.id, { status: step(row, { type: 'unschedule' }) });
+        if (row.status === 'scheduled' || row.status === 'paused') await setVariant(ctx, p.id, { status: step(row, { type: 'unschedule' }) });
         continue;
       }
       await setVariant(ctx, p.id, { queue_slot_at: new Date(p.slotAt) });
     }
-    return { queueId: queueId as string, moved: moved.map((p) => ({ variantId: p.id, at: p.slotAt === null ? null : new Date(p.slotAt).toISOString() })) };
+    for (const postId of posts) await refreshPostStatus(ctx, postId);
+    return { queueId, moved: moved.map((p) => ({ variantId: p.id, at: p.slotAt === null ? null : new Date(p.slotAt).toISOString() })) };
   },
 });
 
@@ -824,17 +890,17 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               provider: v.provider,
               position: v.position,
               overrides: overrides(v),
-              effective: effectiveContent(b, overrides(v)),
+              effective: effectiveContent(b, overrides(v), v.content_frozen),
               settings: settingsOf(v),
               revision: v.revision,
               contentHash: v.content_hash,
               status: v.status,
-              effectiveAt: iso(v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at),
+              effectiveAt: iso(v.status === 'published' ? v.published_at : (v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at)),
               queueSlotAt: iso(v.queue_slot_at),
               attempt: v.attempt,
               externalUrl: v.external_url,
               publishedAt: iso(v.published_at),
-              error: v.error_kind || v.error_code ? { kind: v.error_kind, code: v.error_code, action: v.error_action, message: v.error_message, retryAt: iso(v.error_retry_at) } : null,
+              error: v.error_kind || v.error_code || v.error_message ? { kind: v.error_kind, code: v.error_code, action: v.error_action, message: v.error_message, retryAt: iso(v.error_retry_at) } : null,
               issues: isProvider(v.provider) ? issuesOf(b, row) : [],
               latestDecision: d
                 ? { decision: d.decision, comment: d.comment, decidedBy: d.decided_by, at: iso(d.created_at) ?? '', revision: d.revision, current: d.revision === v.revision && d.content_hash === v.content_hash }
@@ -879,7 +945,7 @@ export const postList = defineQuery({
             .whereRef('v.post_id', '=', 'p.id')
             .where('v.status', '<>', 'cancelled')
             .where((w) => {
-              const at = sql`coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at)`;
+              const at = sql`CASE WHEN v.status = 'published' THEN v.published_at ELSE coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at) END`;
               const parts = [];
               if (input.from) parts.push(w(at, '>=', new Date(Date.parse(input.from))));
               if (input.to) parts.push(w(at, '<', new Date(Date.parse(input.to))));

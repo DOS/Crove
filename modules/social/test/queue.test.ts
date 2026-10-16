@@ -164,6 +164,17 @@ describe('placeQueued', () => {
     expect(placeQueued(ny, [{ id: 'a', slotAt: first?.slotAt ?? null }], before)).toEqual([first]);
   });
 
+  it('neither keeps nor takes a reserved slot', () => {
+    const placed = placeQueued(queue, [
+      { id: 'a', slotAt: monday9 },
+      { id: 'b', slotAt: null },
+    ], now, new Set([monday9]));
+    expect(placed).toEqual([
+      { id: 'a', slotAt: wednesday },
+      { id: 'b', slotAt: friday },
+    ]);
+  });
+
   it('gives the shared slot to the lower id', () => {
     const placed = placeQueued(queue, [
       { id: 'b', slotAt: monday9 },

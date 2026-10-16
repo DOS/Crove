@@ -65,6 +65,8 @@ const NOT_SHOWN: Record<string, string> = {
   VARIANT_IN_FLIGHT: 'social',
   VARIANT_NOT_FOUND: 'social',
   VARIANT_STATE: 'social',
+  SLOT_TAKEN: 'social',
+  VARIANTS_OF_SEVERAL_POSTS: 'social',
   // The inbound mail endpoint answers the mail relay, not a browser.
   EMPTY_MESSAGE: 'inbound mail',
   UNKNOWN_RECIPIENT: 'inbound mail',
