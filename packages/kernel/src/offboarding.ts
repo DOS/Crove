@@ -132,11 +132,12 @@ export const offboardOrg = defineCommand({
       const { rows } = await sql<{ pending: boolean }>`
         SELECT EXISTS (
           SELECT 1 FROM crove_kernel.audit_event r
-          WHERE r.org_id = ${ctx.orgId}::uuid AND r.command = 'kernel.org.offboard' AND r.outcome = 'ok'
+          WHERE r.org_id = ${ctx.orgId}::uuid AND r.command = 'kernel.org.offboard' AND r.outcome = 'ok' AND r.actor_type <> 'agent'
             AND r.occurred_at > pg_catalog.now() - pg_catalog.make_interval(mins => ${EXPORT_REQUEST_COOLDOWN_MINUTES}::int)
             AND NOT EXISTS (
               SELECT 1 FROM crove_kernel.audit_event d
-              WHERE d.org_id = r.org_id AND d.command = 'kernel.org.export.record' AND d.outcome = 'ok' AND d.occurred_at >= r.occurred_at
+              WHERE d.org_id = r.org_id AND d.command = 'kernel.org.export.record' AND d.outcome = 'ok' AND d.actor_type <> 'agent'
+                AND d.occurred_at >= r.occurred_at
             )
         ) AS pending`.execute(ctx.trx);
       if (rows[0]?.pending) {
@@ -284,6 +285,8 @@ export const orgExportGet = defineQuery({
         .where('org_id', '=', ctx.orgId)
         .where('command', '=', command)
         .where('outcome', '=', 'ok')
+        // An agent never runs these commands; its audit rows never stand for them (issue #285).
+        .where('actor_type', '<>', 'agent')
         .orderBy('occurred_at', 'desc')
         .orderBy('id', 'desc')
         .limit(1)
@@ -348,7 +351,7 @@ export const exportLiveKeys = defineQuery({
         UNION ALL
         SELECT p->>'key' FROM pg_catalog.jsonb_array_elements(r.detail->'parts') p
       ) k
-      WHERE r.org_id = ${ctx.orgId}::uuid AND r.command = 'kernel.org.export.record' AND r.outcome = 'ok'
+      WHERE r.org_id = ${ctx.orgId}::uuid AND r.command = 'kernel.org.export.record' AND r.outcome = 'ok' AND r.actor_type <> 'agent'
         AND r.detail->>'format' = ${EXPORT_FORMAT}
         AND (r.detail->>'expires_at')::timestamptz > pg_catalog.now() - pg_catalog.make_interval(hours => ${EXPORT_EXPIRY_GRACE_HOURS}::int)
         AND k.key IS NOT NULL`.execute(ctx.trx);

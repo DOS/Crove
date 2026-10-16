@@ -70,6 +70,19 @@ const AGENT_READ_ONLY_TABLES = [
   'crove_kernel.tenant',
   'crove_kernel.tenant_member',
 ];
+// Issue #285: the only tables an agent context writes without agent_write_guard. Each has agent rules of its own
+// (task, task_comment, ai_run, activity) or is written only by a definer that stamps or counts from the context
+// (outbox_event, refusal_tally). Every other table of every crove_* schema carries the guard.
+const AGENT_WRITE_EXEMPT = [
+  'crove_kernel.activity',
+  'crove_kernel.ai_run',
+  'crove_kernel.outbox_event',
+  'crove_kernel.refusal_tally',
+  'crove_kernel.task',
+  'crove_kernel.task_comment',
+];
+// Guarded tables that accept narrow agent writes (tested on their own below).
+const AGENT_WRITE_NARROW = ['crove_kernel.agent_wakeup', 'crove_kernel.audit_event', 'crove_kernel.idempotency_key', 'crove_kernel.outbox_pending'];
 
 suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', () => {
   const dbName = `crove_test_t18_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -764,5 +777,189 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(facade).toMatchObject({ orgId: orgA, agentId, runId: result.runId });
     const expected = { actor: { type: 'agent', agentId, runId: result.runId }, orgId: orgA, positionId };
     expect(answers).toEqual([expected, expected]);
+  });
+
+  // Issue #285: an allowlist, not a denylist. The catalog is the list, so a new table is guarded by default.
+  it('guards every crove_* table but the exempt few against agent writes, enumerated from the catalog', async () => {
+    const tables = await withAdmin(async (c) =>
+      (
+        await c.query<{ name: string; guarded: boolean }>(
+          `SELECT n.nspname || '.' || c.relname AS name,
+                  EXISTS (SELECT 1 FROM pg_trigger t
+                          WHERE t.tgrelid = c.oid AND t.tgname = 'agent_write_guard' AND NOT t.tgisinternal AND t.tgenabled = 'O'
+                            AND t.tgfoid = 'crove_kernel.agent_write_guard()'::regprocedure
+                            AND (t.tgtype & 1) = 1 AND (t.tgtype & 2) = 2 AND (t.tgtype & 28) = 28) AS guarded
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname LIKE 'crove\\_%' AND n.nspname NOT IN ('crove_meta', 'crove_jobs')
+             AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+           ORDER BY 1`,
+        )
+      ).rows,
+    );
+    expect(tables.length).toBeGreaterThan(AGENT_WRITE_EXEMPT.length + 20);
+    expect(tables.filter((t) => !t.guarded).map((t) => t.name)).toEqual(AGENT_WRITE_EXEMPT);
+    // The guard reads the sealed context as its owner, whoever writes, and no role may call it.
+    const fn = await withAdmin(async (c) =>
+      (
+        await c.query<{ definer: boolean; config: string[]; callers: string[] }>(
+          `SELECT p.prosecdef AS definer, p.proconfig AS config,
+                  ARRAY(SELECT r FROM unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant']) r
+                        WHERE has_function_privilege(r, p.oid, 'EXECUTE')) AS callers
+           FROM pg_proc p WHERE p.oid = 'crove_kernel.agent_write_guard()'::regprocedure`,
+        )
+      ).rows[0],
+    );
+    expect(fn).toEqual({ definer: true, config: ['search_path=pg_catalog, pg_temp'], callers: [] });
+
+    // Every guarded table refuses a row written in an agent context, even by a role that holds every privilege (the
+    // guard fires before constraints, so an empty row reaches it).
+    const { actor } = await liveAgent(orgA, owner);
+    const refusals = await withAdmin(async (c) => {
+      const found: Array<[string, string]> = [];
+      await c.query('BEGIN');
+      try {
+        await c.query('SELECT crove_kernel.enter_agent_context($1::uuid, $2::uuid, $3::uuid)', [orgA, actor.agentId, actor.runId]);
+        for (const { name } of tables.filter((t) => t.guarded && !AGENT_WRITE_NARROW.includes(t.name))) {
+          await c.query('SAVEPOINT probe');
+          const [schema, table] = name.split('.') as [string, string];
+          const outcome = await c.query(`INSERT INTO ${schema}."${table}" DEFAULT VALUES`).then(
+            () => 'inserted',
+            (e: { message: string }) => e.message,
+          );
+          await c.query('ROLLBACK TO SAVEPOINT probe');
+          found.push([name, outcome]);
+        }
+      } finally {
+        await c.query('ROLLBACK');
+      }
+      return found;
+    });
+    expect(refusals.filter(([, outcome]) => outcome !== 'AGENT_FORBIDDEN')).toEqual([]);
+  });
+
+  it('refuses an agent the tenant tables the denylist left open, through its real login role', async () => {
+    const { actor } = await liveAgent(orgA, owner);
+    const statements: Array<[string, unknown[]]> = [
+      [`INSERT INTO crove_kernel.party (org_id, name) VALUES ($1, 'AI')`, [orgA]],
+      [`UPDATE crove_kernel.party SET name = 'AI' WHERE org_id = $1`, [orgA]],
+      [`INSERT INTO crove_kernel.file (org_id) VALUES ($1)`, [orgA]],
+      [`INSERT INTO crove_kernel.extraction (org_id) VALUES ($1)`, [orgA]],
+      [`INSERT INTO crove_finance.purchase_document (org_id) VALUES ($1)`, [orgA]],
+    ];
+    await withAdmin((c) => c.query(`INSERT INTO crove_kernel.party (org_id, name) VALUES ($1, 'Nhà cung cấp')`, [orgA]));
+    for (const [text, values] of statements) {
+      await expect(inAgentContext(orgA, actor, (c) => c.query(text, values)), text).rejects.toMatchObject({ code: '42501', message: 'AGENT_FORBIDDEN' });
+    }
+  });
+
+  it('lets an agent write audit rows, idempotency keys and wake-ups only for itself and only forward', async () => {
+    const { actor, agentId, positionId } = await liveAgent(orgA, owner);
+    // An agent below it in the chart: the only kind of agent its delegations wake.
+    const other = await liveAgent(orgA, owner, positionId);
+    const outside = await liveAgent(orgA, owner);
+    const forbidden = { code: '42501', message: 'AGENT_FORBIDDEN' };
+    const audit = (actorType: string, actorId: string, run: string, at = 'now()') => (c: pg.Client) =>
+      c.query<{ recent: boolean }>(
+        `INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, detail, occurred_at)
+         VALUES ($1, $2, $3, 'kernel.org.export.record', $4, 'ok', 'x', $5, ${at})
+         RETURNING occurred_at BETWEEN now() - interval '1 minute' AND now() + interval '1 minute' AS recent`,
+        [orgA, actorType, actorId, randomUUID(), JSON.stringify({ agentRun: run })],
+      );
+    await expect(inAgentContext(orgA, actor, audit('user', owner, actor.runId))).rejects.toMatchObject(forbidden);
+    await expect(inAgentContext(orgA, actor, audit('agent', other.agentId, actor.runId))).rejects.toMatchObject(forbidden);
+    await expect(inAgentContext(orgA, actor, audit('agent', agentId, other.runId))).rejects.toMatchObject(forbidden);
+    // Its own row is accepted, dated now whatever it says.
+    const own = await inAgentContext(orgA, actor, async (c) => (await audit('agent', agentId, actor.runId, `now() + interval '1 year'`)(c)).rows[0]);
+    expect(own).toEqual({ recent: true });
+    // An agent row never stands for a command only users or the system run (the offboarding readers skip it).
+    await withAdmin((c) => audit('agent', agentId, actor.runId, `now() + interval '1 year'`)(c));
+    await expect(app.query('kernel.org.export.get', {}, { actor: asUser(owner), orgId: orgA })).resolves.toMatchObject({ export: null });
+
+    // Pending outbox rows: inserts only, so an agent transaction never claims every org's pending events.
+    await expect(inAgentContext(orgA, actor, (c) => c.query('SELECT * FROM crove_kernel.outbox_claim(10)'))).rejects.toMatchObject(forbidden);
+
+    // Idempotency keys: this run's only, so an agent never plants an answer a user's retry would replay.
+    const key = (actorKey: string) => (c: pg.Client) =>
+      c.query(`INSERT INTO crove_kernel.idempotency_key (org_id, actor_key, key, command, request_sha256) VALUES ($1, $2, 'k', 't18', 'x')`, [orgA, actorKey]);
+    await expect(inAgentContext(orgA, actor, key(`user:${owner}`))).rejects.toMatchObject(forbidden);
+    await expect(inAgentContext(orgA, actor, key(`agent:${agentId}:${other.runId}`))).rejects.toMatchObject(forbidden);
+    await expect(inAgentContext(orgA, actor, key(`agent:${agentId}:${actor.runId}`))).resolves.toMatchObject({ rowCount: 1 });
+    await withAdmin((c) =>
+      c.query(`INSERT INTO crove_kernel.idempotency_key (org_id, actor_key, key, command, request_sha256) VALUES ($1, $2, 'u', 't18', 'x')`, [orgA, `user:${owner}`]),
+    );
+    await expect(
+      inAgentContext(orgA, actor, (c) => c.query(`UPDATE crove_kernel.idempotency_key SET response = '{"value": 1}' WHERE org_id = $1 AND actor_key = $2`, [orgA, `user:${owner}`])),
+    ).rejects.toMatchObject(forbidden);
+    await expect(
+      inAgentContext(orgA, actor, (c) => c.query(`DELETE FROM crove_kernel.idempotency_key WHERE org_id = $1 AND actor_key = $2`, [orgA, `user:${owner}`])),
+    ).rejects.toMatchObject(forbidden);
+
+    // Wake-ups: pending requests only; never claimed or done by an agent, taint never cleared, counts never lowered.
+    const wake = await app.execute<{ taskId: string }>('kernel.task.create', { title: 'Đánh thức', assigneePositionId: other.positionId }, { actor: asUser(owner), orgId: orgA });
+    expect(wake.taskId).toEqual(expect.any(String));
+    // Never for an agent outside its subtree, nor for itself.
+    await app.execute('kernel.task.create', { title: 'Ngoài', assigneePositionId: outside.positionId }, { actor: asUser(owner), orgId: orgA });
+    await app.execute('kernel.task.create', { title: 'Chính nó', assigneePositionId: positionId }, { actor: asUser(owner), orgId: orgA });
+    for (const target of [outside.agentId, agentId]) {
+      await expect(
+        inAgentContext(orgA, actor, (c) => c.query(`UPDATE crove_kernel.agent_wakeup SET request_count = request_count + 1 WHERE agent_id = $1 AND status = 'pending'`, [target])),
+        target,
+      ).rejects.toMatchObject(forbidden);
+    }
+    await withAdmin((c) => c.query(`UPDATE crove_kernel.agent_wakeup SET tainted = true WHERE agent_id = $1 AND status = 'pending'`, [other.agentId]));
+    await expect(
+      inAgentContext(orgA, actor, (c) => c.query(`UPDATE crove_kernel.agent_wakeup SET status = 'done', run_id = $2 WHERE agent_id = $1 AND status = 'pending'`, [other.agentId, actor.runId])),
+    ).rejects.toMatchObject(forbidden);
+    await withAdmin((c) => c.query(`UPDATE crove_kernel.agent_wakeup SET request_count = 3, request_depth = 2 WHERE agent_id = $1 AND status = 'pending'`, [other.agentId]));
+    await expect(
+      inAgentContext(orgA, actor, (c) => c.query(`UPDATE crove_kernel.agent_wakeup SET request_count = 1 WHERE agent_id = $1 AND status = 'pending'`, [other.agentId])),
+    ).rejects.toMatchObject(forbidden);
+    // The coalescing upsert the runtime makes (count and depth up, reasons appended) is allowed.
+    await expect(
+      inAgentContext(orgA, actor, (c) =>
+        c.query(`UPDATE crove_kernel.agent_wakeup SET request_count = request_count + 1, reasons = reasons || '[{"why": "t18"}]' WHERE agent_id = $1 AND status = 'pending'`, [other.agentId]),
+      ),
+    ).resolves.toMatchObject({ rowCount: 1 });
+    await expect(
+      inAgentContext(orgA, actor, (c) => c.query(`UPDATE crove_kernel.agent_wakeup SET request_depth = 0 WHERE agent_id = $1 AND status = 'pending'`, [other.agentId])),
+    ).rejects.toMatchObject(forbidden);
+    const kept = await inAgentContext(orgA, actor, async (c) =>
+      (await c.query<{ tainted: boolean }>(`UPDATE crove_kernel.agent_wakeup SET tainted = false WHERE agent_id = $1 AND status = 'pending' RETURNING tainted`, [other.agentId])).rows[0],
+    );
+    expect(kept).toEqual({ tainted: true });
+    await expect(
+      inAgentContext(orgA, actor, (c) => c.query(`INSERT INTO crove_kernel.agent_wakeup (org_id, agent_id, status, run_id) VALUES ($1, $2, 'claimed', $3)`, [orgA, other.agentId, actor.runId])),
+    ).rejects.toMatchObject(forbidden);
+    // A tainted run's new request is tainted whatever it writes.
+    await withAdmin((c) => c.query('UPDATE crove_kernel.ai_run SET tainted = true WHERE id = $1', [actor.runId]));
+    await withAdmin((c) => c.query(`UPDATE crove_kernel.agent_wakeup SET status = 'done', run_id = $2 WHERE agent_id = $1 AND status = 'pending'`, [other.agentId, other.runId]));
+    const inserted = await inAgentContext(orgA, actor, async (c) =>
+      (
+        await c.query<{ tainted: boolean; request_count: number }>(
+          `INSERT INTO crove_kernel.agent_wakeup (org_id, agent_id, tainted, request_count) VALUES ($1, $2, false, 99) RETURNING tainted, request_count`,
+          [orgA, other.agentId],
+        )
+      ).rows[0],
+    );
+    expect(inserted).toEqual({ tainted: true, request_count: 1 });
+  });
+
+  it('never lets an agent delegate to an archived position', async () => {
+    const { actor, positionId, taskId } = await liveAgent(orgA, owner);
+    const below = await app.execute<{ positionId: string }>('kernel.position.create', { title: 'Đã ngừng', module: 'finance', roleKey: 'finance.accountant', reportsTo: positionId }, { actor: asMfa(owner), orgId: orgA });
+    await app.execute('kernel.position.update', { id: below.positionId, status: 'archived' }, { actor: asMfa(owner), orgId: orgA });
+    const { fence } = await worker.execute<{ fence: string }>('kernel.task.checkout', { id: taskId }, { actor, orgId: orgA });
+    await expect(
+      worker.execute('kernel.task.delegate', { id: taskId, fence, assigneePositionId: below.positionId, title: 'Giao' }, { actor, orgId: orgA }),
+    ).rejects.toMatchObject({ code: 'POSITION_ARCHIVED' });
+    await expect(
+      inAgentContext(orgA, actor, (c) =>
+        c.query(
+          `INSERT INTO crove_kernel.task (org_id, title, kind, assignee_position_id, parent_task_id, source, created_by_type)
+           VALUES ($1, 'x', 'delegation', $2, $3, 'human', 'agent')`,
+          [orgA, below.positionId, taskId],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: '42501', message: 'AGENT_DELEGATION_SUBTREE' });
   });
 });
