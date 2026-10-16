@@ -2,7 +2,7 @@
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { contract } from '@crove/kernel-contract';
-import { createOrg, myOrgs, previewInvite, upstreamAuth, type AcceptedInvite, type OrgSummary } from '@crove/kernel';
+import { createOrg, myOrgs, previewInvite, revokeOwnSessionsWithoutOrg, upstreamAuth, type AcceptedInvite, type OrgSummary } from '@crove/kernel';
 import { DomainError, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { actorOf, type AuthUser } from './auth.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
@@ -147,7 +147,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         inOrg(context, (orgId, actor) => runtime.query('kernel.sessions.list', input, { actor, orgId })),
       ),
       revoke: os.sessions.revoke.handler(({ context, input }) =>
-        inOrg(context, (orgId, actor) => runtime.execute('kernel.session.revoke', input, { actor, orgId })),
+        // A user's own revoke needs no org (issue #184: sign-out on the onboarding and invite pages); anyone else's
+        // is org-scoped and still answers ORG_REQUIRED without one.
+        !context.orgSlug && input.userId === context.user.userId
+          ? guard(() => revokeOwnSessionsWithoutOrg(runtime, actorOf(context.user), input))
+          : inOrg(context, (orgId, actor) => runtime.execute('kernel.session.revoke', input, { actor, orgId })),
       ),
     },
     inbox: {

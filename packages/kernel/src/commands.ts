@@ -2,10 +2,10 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import { zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { DomainError, PROPOSAL_EDIT_COMMAND, defineCommand, fileKey, type CommandContext } from '@crove/kernel-runtime';
+import { DomainError, PROPOSAL_EDIT_COMMAND, defineCommand, fileKey, type CommandContext, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { PROPOSAL_REVISERS, actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
-import { createOrgCommand, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
+import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits } from './identity.ts';
 import { inviteCommands } from './invites.ts';
 import { offboardingCommands } from './offboarding.ts';
 
@@ -486,6 +486,7 @@ export const rejectProposal = defineCommand({
 // - the org owner revokes a member's session in that org only: no global record, no upstream sign-out, because
 //   sessions are global and one org's owner has no say over the member's other orgs;
 // - nobody else, admins included.
+// The user's own revoke also works without an org: see revokeOwnSessionsWithoutOrg.
 export const revokeSession = defineCommand({
   name: 'kernel.session.revoke',
   input: zSessionRevoke,
@@ -511,6 +512,39 @@ export const revokeSession = defineCommand({
     return { revoked: rows.map((r) => r.revoked_session) };
   },
 });
+
+// The user's own revoke sent without an org (issue #184: sign-out on the onboarding and invite pages). A self revoke
+// is global, so the org only decides where the audit row lands:
+// - a user who belongs to an org runs kernel.session.revoke in their oldest org, through execute() as from any
+//   other page: the same definer, membership and session checks, audit row and upstream sign-out;
+// - a user who belongs to no org has nowhere to audit: crove_kernel.session_revoke_orgless revokes in Crove only,
+//   in the org-less request transaction right after the session check, and refuses anyone who has an org.
+// Revoking another user's sessions always needs that user's org: owners revoke in their org only.
+export async function revokeOwnSessionsWithoutOrg(runtime: Runtime, actor: UserActor, rawInput: unknown): Promise<{ revoked: string[] }> {
+  const parsed = zSessionRevoke.safeParse(rawInput);
+  if (!parsed.success) {
+    throw new DomainError('VALIDATION', 422, 'Dữ liệu không hợp lệ', { issues: parsed.error.issues.slice(0, 10) });
+  }
+  const input = parsed.data;
+  if (input.userId !== actor.userId) throw new DomainError('ORG_REQUIRED', 400, 'Thiếu tổ chức (header x-crove-org)');
+  const home = (await runtime.forUser(actor, (db) => myOrgs(db, actor.userId)))[0];
+  if (home) return runtime.execute<{ revoked: string[] }>('kernel.session.revoke', input, { actor, orgId: home.orgId });
+  return runtime.forUser(actor, async (db) => {
+    try {
+      const { rows } = await sql<{ revoked_session: string }>`
+        SELECT r AS revoked_session
+        FROM crove_kernel.session_revoke_orgless(${actor.userId}::uuid, ${actor.sessionId ?? null}::uuid,
+          ${input.sessionId ?? null}::uuid, ${input.reason ?? null}) r`.execute(db);
+      return { revoked: rows.map((r) => r.revoked_session) };
+    } catch (error) {
+      // The user joined an org since the lookup above: the revoke belongs in that org now.
+      if ((error as { message?: unknown } | null)?.message === 'ORG_REQUIRED') {
+        throw new DomainError('RETRY', 409, 'Xung đột đồng thời, hãy thử lại');
+      }
+      throw error;
+    }
+  });
+}
 
 const otherKernelCommands = [
   ...inviteCommands,

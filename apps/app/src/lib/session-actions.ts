@@ -1,5 +1,5 @@
 // Binds the sign-out helper to the app's API and auth clients. Every "Đăng xuất" control goes through signOut().
-import { client } from './api.ts';
+import { client, orpc, queryClient } from './api.ts';
 import { auth } from './auth.ts';
 import { forgetInvite } from './invite.ts';
 import { sessionIdFromToken } from './sessions.ts';
@@ -12,10 +12,13 @@ import { signOutWithRevoke } from './sign-out.ts';
 export function signOut(options: { keepInvite?: boolean } = {}): Promise<void> {
   if (!options.keepInvite) forgetInvite();
   return signOutWithRevoke({
+    // The kernel's user id (me.get), not Supabase Auth's: a revoke names the Crove user (issue #184).
     currentSession: async () => {
       const { data } = await auth().getSession();
       const sessionId = sessionIdFromToken(data.session?.access_token);
-      return data.session && sessionId ? { userId: data.session.user.id, sessionId } : null;
+      if (!data.session || !sessionId) return null;
+      const me = await queryClient.fetchQuery(orpc.me.get.queryOptions());
+      return { userId: me.userId, sessionId };
     },
     revoke: (input, signal) => client.sessions.revoke(input, { signal }),
     signOut: () => auth().signOut({ scope: 'local' }),
