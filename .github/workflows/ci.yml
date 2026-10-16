@@ -173,7 +173,6 @@ jobs:
       contents: read
     env:
       COMPOSE: docker compose -p crove-split -f docker-compose.yml -f docker-compose.split.yml
-      SPLIT_PROJECT: crove-split
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

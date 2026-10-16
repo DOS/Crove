@@ -9,6 +9,8 @@
 # The CI job `split-stack` in .github/workflows/ci.yml runs exactly this. The all-in-one `crove` service is moved
 # to the `all-in-one` profile, so it does not start. Images are tagged :split so a running default stack keeps its
 # own. Every secret here is a throwaway value for local use; the API listens on 127.0.0.1:${SPLIT_PORT:-18080}.
+# The project name below keeps it apart from the default `crove` stack (and its database) even without `-p`.
+name: crove-split
 
 x-crove-env: &crove-env
   AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
@@ -32,6 +34,15 @@ x-crove-env: &crove-env
 services:
   migrate:
     image: crove:split
+
+  # Same URLs and sign-up settings as the API below, whatever a local .env says.
+  auth:
+    environment:
+      API_EXTERNAL_URL: http://localhost:${SPLIT_PORT:-18080}/auth/v1
+      GOTRUE_SITE_URL: http://localhost:${SPLIT_PORT:-18080}
+      GOTRUE_URI_ALLOW_LIST: http://localhost:${SPLIT_PORT:-18080}/**
+      GOTRUE_DISABLE_SIGNUP: 'false'
+      GOTRUE_MAILER_AUTOCONFIRM: 'true'
 
   auth-grants:
     image: crove:split

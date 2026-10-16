@@ -26,6 +26,8 @@ const BUCKET = 'crove-files';
 const INVOICE = readFileSync(`${ROOT}apps/extract/test/fixtures/einvoice-basic.xml`);
 const SELLER = 'CÔNG TY TNHH DỊCH VỤ MẪU';
 const TOTAL = /^1980000(?:\.0+)?$/;
+// Every HTTP request; a hung one fails the run instead of the job timeout.
+const REQUEST_MS = 15_000;
 
 const started = Date.now();
 const log = (message) => console.log(`[split-stack +${((Date.now() - started) / 1000).toFixed(1)}s] ${message}`);
@@ -67,6 +69,7 @@ async function rpc(token, path, input, org) {
     method: 'POST',
     headers,
     body: JSON.stringify(input === undefined ? {} : { json: input }),
+    signal: AbortSignal.timeout(REQUEST_MS),
   });
   const body = await response.json().catch(() => null);
   if (!response.ok) throw new Error(`rpc ${path}: HTTP ${response.status} ${JSON.stringify(body?.json ?? body)}`);
@@ -97,7 +100,6 @@ function checkTopology() {
     assert(logs.includes(`[storage] s3 bucket ${BUCKET} at minio:9000`), `${service} logs that it stores blobs in the bucket`);
   }
   assert(containerOf('api').Image === containerOf('worker').Image, 'api and worker run the same image');
-  log('topology: api and worker are separate containers of one image, no mounts, only the worker reaches crove-extract');
 }
 
 async function signUp() {
@@ -107,6 +109,7 @@ async function signUp() {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email, password }),
+    signal: AbortSignal.timeout(REQUEST_MS),
   });
   const body = await response.json();
   assert(response.ok && typeof body.access_token === 'string', `sign-up returns a session (HTTP ${response.status})`);
@@ -176,7 +179,12 @@ async function main() {
     return true;
   });
   log('api ready');
-  checkTopology();
+  // The worker may still be starting when the API is ready.
+  await waitFor('the split topology', 60_000, async () => {
+    checkTopology();
+    return true;
+  });
+  log('topology: api and worker are separate containers of one image, no mounts, only the worker reaches crove-extract');
 
   const token = await signUp();
   const org = await rpc(token, 'org/create', { name: 'Công ty Split Stack', idempotencyKey: randomUUID() });
@@ -191,6 +199,7 @@ async function main() {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'x-crove-org': org.slug },
     body: form,
+    signal: AbortSignal.timeout(REQUEST_MS),
   });
   const uploaded = await upload.json();
   assert(upload.ok && uploaded.files?.[0]?.fileId, `upload accepted (HTTP ${upload.status})`);
@@ -207,6 +216,7 @@ async function main() {
       method: 'POST',
       headers: { authorization: `Bearer ${secret}`, 'x-crove-recipient': detail.inboundAddress, 'content-type': 'message/rfc822' },
       body: message,
+      signal: AbortSignal.timeout(REQUEST_MS),
     });
   assert((await post('wrong-secret-wrong-secret-wrong-secret-00')).status === 401, 'a wrong inbound secret is refused');
   const accepted = await post(INBOUND_SECRET);
@@ -235,7 +245,10 @@ async function main() {
     [uploadedId, INVOICE],
     [mailed.id, second],
   ]) {
-    const response = await fetch(`${BASE_URL}/api/files/${id}`, { headers: { authorization: `Bearer ${token}`, 'x-crove-org': org.slug } });
+    const response = await fetch(`${BASE_URL}/api/files/${id}`, {
+      headers: { authorization: `Bearer ${token}`, 'x-crove-org': org.slug },
+      signal: AbortSignal.timeout(REQUEST_MS),
+    });
     assert(response.ok && Buffer.from(await response.arrayBuffer()).equals(bytes), `file ${id} reads back from the bucket with its bytes`);
   }
   log(`MinIO holds both files (${objects.length} object(s) in ${BUCKET}), the raw message is gone, and both read back`);
