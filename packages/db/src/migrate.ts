@@ -361,7 +361,8 @@ const AUTH_COLUMNS: ReadonlyArray<readonly [string, string]> = [
 // tables, then lets crove_auth_reader select exactly the columns the session check reads (column grants plus a
 // SELECT policy, because Supabase Auth turns on row-level security): auth.sessions, auth.users and, for the MFA
 // check (issue #126), auth.mfa_factors (user_id, status), never the factor secrets; plus
-// auth.users.email_confirmed_at for the invite definers (#134). Supabase Auth creates auth.mfa_factors and
+// auth.users.email_confirmed_at for the invite definers (#134); plus auth.sessions.oauth_client_id, when Supabase Auth
+// has it, for the OAuth session check (issue #276). Supabase Auth creates auth.mfa_factors and
 // auth.users.email_confirmed_at before it adds auth.sessions.not_after, so all of them exist together; without
 // auth.mfa_factors the session check fails closed with 503 (issue #180), and without email_confirmed_at invite
 // acceptance and preview do (issue #208), so the wait covers both. Needs a superuser or the owner of
@@ -376,14 +377,20 @@ export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void>
     for (;;) {
       // Every column the checks read, not just the tables: Supabase Auth adds some (not_after) in later migrations.
       // Lists what is still missing: a table that does not exist by its name, a missing column as table.column.
+      // auth.sessions.oauth_client_id (issue #276) is required only where Supabase Auth runs the OAuth server
+      // (auth.oauth_clients exists): there a session without it could not be told apart, so the check would be blind.
       const { rows: missing } = await client.query<{ name: string }>(
         `SELECT DISTINCT CASE WHEN to_regclass(r.tbl) IS NULL THEN r.tbl ELSE r.tbl || '.' || r.col END AS name
          FROM unnest($1::text[], $2::text[]) AS r (tbl, col)
-         WHERE NOT EXISTS (
-           SELECT 1 FROM pg_attribute a
-           WHERE a.attrelid = to_regclass(r.tbl) AND a.attname = r.col AND a.attnum > 0 AND NOT a.attisdropped)
+         WHERE (r.col <> 'oauth_client_id' OR to_regclass('auth.oauth_clients') IS NOT NULL)
+           AND NOT EXISTS (
+             SELECT 1 FROM pg_attribute a
+             WHERE a.attrelid = to_regclass(r.tbl) AND a.attname = r.col AND a.attnum > 0 AND NOT a.attisdropped)
          ORDER BY 1`,
-        [AUTH_COLUMNS.map(([table]) => table), AUTH_COLUMNS.map(([, column]) => column)],
+        [
+          [...AUTH_COLUMNS.map(([table]) => table), 'auth.sessions'],
+          [...AUTH_COLUMNS.map(([, column]) => column), 'oauth_client_id'],
+        ],
       );
       if (missing.length === 0) break;
       if (Date.now() >= deadline) {
@@ -412,7 +419,20 @@ export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void>
         CREATE POLICY crove_auth_reader_select ON auth.users AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);
         GRANT SELECT (user_id, status) ON auth.mfa_factors TO crove_auth_reader;
         DROP POLICY IF EXISTS crove_auth_reader_select ON auth.mfa_factors;
-        CREATE POLICY crove_auth_reader_select ON auth.mfa_factors AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);`);
+        CREATE POLICY crove_auth_reader_select ON auth.mfa_factors AS PERMISSIVE FOR SELECT TO crove_auth_reader USING (true);
+        -- The OAuth session check (issue #276): only when this Supabase Auth has the column. Waited for above only
+        -- where the OAuth server exists, since older releases never get it; once it exists, auth_grants_ready()
+        -- requires this grant.
+        DO $grant$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_catalog.pg_attribute a
+            WHERE a.attrelid = pg_catalog.to_regclass('auth.sessions') AND a.attname = 'oauth_client_id'
+              AND a.attnum > 0 AND NOT a.attisdropped
+          ) THEN
+            GRANT SELECT (oauth_client_id) ON auth.sessions TO crove_auth_reader;
+          END IF;
+        END $grant$;`);
       const { rows } = await client.query<{ ok: boolean; invites: boolean }>(
         'SELECT crove_kernel.auth_grants_ready() AS ok, crove_kernel.auth_email_check_ready() AS invites',
       );
@@ -423,7 +443,7 @@ export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void>
       await client.query('ROLLBACK');
       throw error;
     }
-    log('crove_auth_reader may read auth.sessions, auth.users and auth.mfa_factors (user_id, status)');
+    log('crove_auth_reader may read auth.sessions (with oauth_client_id when present), auth.users and auth.mfa_factors (user_id, status)');
   } finally {
     await client.end();
   }

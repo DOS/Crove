@@ -69,12 +69,21 @@ services:
       GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
       GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_FROM:-noreply@crove.local}
       GOTRUE_SMTP_SENDER_NAME: Crove
+    # Supabase Auth runs all its migrations before it serves /health, so healthy means its schema is complete.
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', '-T', '3', 'http://127.0.0.1:9999/health']
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      # Failures while Supabase Auth migrates do not count, so a long upgrade migration does not fail the stack.
+      start_period: 300s
     depends_on:
       migrate:
         condition: service_completed_successfully
 
-  # One-shot (ADR-0028): waits until Supabase Auth has created auth.sessions and auth.users, then lets the session
-  # check read exactly the columns it needs. Runs on every `up`, so the grant survives a recreated table.
+  # One-shot (ADR-0028): runs once Supabase Auth has finished its migrations (healthy), then lets the session check
+  # read exactly the columns it needs, including optional ones such as auth.sessions.oauth_client_id (issue #276)
+  # that a grant made mid-migration would miss. Runs on every `up`, so the grant survives a recreated table.
   auth-grants:
     build: .
     image: crove:local
@@ -86,7 +95,7 @@ services:
       DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
     depends_on:
       auth:
-        condition: service_started
+        condition: service_healthy
 
   crove:
     build: .
