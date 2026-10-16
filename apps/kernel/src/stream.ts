@@ -91,8 +91,12 @@ export class StreamHub {
   private started = false;
   private stopped = false;
   private count = 0;
+  // Not a parameter property: Node runs this file with type stripping, which refuses them.
+  private readonly source: NotificationSource;
 
-  constructor(private readonly source: NotificationSource) {}
+  constructor(source: NotificationSource) {
+    this.source = source;
+  }
 
   // Starts listening; streams are refused until the source reports ready.
   start(): void {
