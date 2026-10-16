@@ -81,6 +81,43 @@ describe('access token verification', () => {
     });
   }
 
+  // Issue #272: Supabase Auth's OAuth 2.1 server issues tokens with the browser's aud and role, plus client_id and
+  // scope, and the session's amr records the OAuth authorization code grant (Supabase Auth v2.197.0).
+  const CLIENT = '5f1c2e3d-4b5a-4968-8776-655443322110';
+  const oauthAmr = [{ method: 'oauth_provider/authorization_code', timestamp: 1_760_000_000 }];
+  const oauth: Array<[string, TokenParts]> = [
+    ['a client_id and scope as the OAuth server issues them', { claims: { client_id: CLIENT, scope: 'openid email profile', amr: oauthAmr } }],
+    ['a client_id with a browser amr', { claims: { client_id: CLIENT, amr: [{ method: 'password', timestamp: 1_760_000_000 }] } }],
+    ['a client_id on an aal2 token', { claims: { client_id: CLIENT, aal: 'aal2', amr: [{ method: 'totp', timestamp: Math.floor(Date.now() / 1000) }] } }],
+    ['an empty client_id', { claims: { client_id: '' } }],
+    ['a null client_id', { claims: { client_id: null } }],
+    // An MFA verification on the OAuth session reissues its token without client_id (updateMFASessionAndClaims), and
+    // a Custom Access Token hook may drop it: the session's amr still names the OAuth grant.
+    ['the OAuth amr and scope without client_id (MFA verify on the OAuth session)', { claims: { aal: 'aal2', scope: 'openid', amr: [{ method: 'totp', timestamp: 2 }, ...oauthAmr] } }],
+    ['the OAuth amr without client_id (a hook dropped it)', { claims: { amr: oauthAmr } }],
+    ['the OAuth amr as a bare string', { claims: { amr: ['oauth_provider/authorization_code'] } }],
+    ['an OAuth amr among other entries', { claims: { amr: [{ method: 'totp', timestamp: 2 }, { method: 'OAuth_Provider/authorization_code', timestamp: 1 }] } }],
+  ];
+  for (const [label, parts] of oauth) {
+    it(`refuses a token with ${label} as OAUTH_CLIENT_TOKEN_REFUSED`, async () => {
+      await expect(verify(await token(parts))).rejects.toMatchObject({ code: 'OAUTH_CLIENT_TOKEN_REFUSED', status: 401 });
+    });
+  }
+
+  it('checks the signature and expiry before the client_id, and accepts the browser amr methods', async () => {
+    const forged = await new SignJWT({ iss: ISSUER, aud: 'authenticated', sub: SUBJECT, exp: Math.floor(Date.now() / 1000) + 60, client_id: CLIENT })
+      .setProtectedHeader({ alg: 'HS256' })
+      .sign(new TextEncoder().encode('y'.repeat(40)));
+    await expect(verify(forged)).rejects.toMatchObject({ code: 'UNAUTHENTICATED', status: 401 });
+    // An expired one fails on exp first.
+    const expired = await token({ claims: { client_id: CLIENT }, exp: Math.floor(Date.now() / 1000) - 120 });
+    await expect(verify(expired)).rejects.toMatchObject({ code: 'UNAUTHENTICATED', status: 401 });
+    // `oauth` is the first factor of a social sign-in (Google, GitHub) in the browser, not the OAuth server.
+    for (const method of ['password', 'otp', 'magiclink', 'oauth', 'sso/saml', 'totp', 'webauthn', 'anonymous']) {
+      await expect(verify(await token({ claims: { amr: [{ method, timestamp: 1 }] } }))).resolves.toMatchObject({ subject: SUBJECT });
+    }
+  });
+
   it('tolerates at most 30 seconds of clock skew', async () => {
     await expect(verify(await token({ exp: Math.floor(Date.now() / 1000) - 10 }))).resolves.toBeTruthy();
     await expect(verify(await token({ exp: Math.floor(Date.now() / 1000) - 45 }))).rejects.toMatchObject({ status: 401 });

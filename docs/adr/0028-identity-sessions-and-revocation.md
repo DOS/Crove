@@ -6,6 +6,7 @@
 - Builds on: ADR-0027 decision 3 (auth uses Supabase Auth only) and plan Decision 5
 - Tracking: issue #22 (implementation), plan Tracking Decision 16 and "External-tenant gate" row T1
 - Amended: 2026-10-15, issue #126: a user with a verified MFA factor needs `aal2` for every request, not only for R3 (sections 3 and 8)
+- Amended: 2026-10-16, issue #272: a Supabase Auth access token issued to an OAuth client is refused on every surface and in every session check mode (fact 11, sections 1 and 8)
 
 ## Context and problem statement
 
@@ -33,6 +34,7 @@ Supabase Auth facts this ADR relies on (checked against Supabase documentation a
 8. The admin sign-out (`auth.admin.signOut(jwt, scope)`) takes the target session's access token ("A valid, logged-in JWT"), not a user id or a session id. [10]
 9. Supabase Auth has six auth hooks: Before User Created, Custom Access Token, Send SMS, Send Email, MFA Verification Attempt and Password Verification Attempt. None fires on sign-out or session revocation. [11]
 10. A refresh keeps the session: `RefreshTokenGrant` loads the session from the refresh token and issues the new access token with `SessionID: &session.ID`, so every token a session ever issues carries the same `session_id`. [12]
+11. Supabase Auth's OAuth 2.1 server (beta, off unless `GOTRUE_OAUTH_SERVER_ENABLED` is set) issues access tokens to third-party OAuth clients through the same `GenerateAccessToken` as browser sessions: same signing key, `aud` from the user (normally `authenticated`), `role = authenticated`, a `session_id`, `aal` and `amr`. They differ only by `client_id` (the client's UUID, `json:"client_id,omitempty"`, so a browser token never carries it) and `scope` (the granted scopes, also `omitempty`). The authorization code exchange creates a session bound to the client (`auth.sessions.oauth_client_id`) whose `amr` first factor is `oauth_provider/authorization_code`; a refresh of that session requires the same client and keeps both `client_id` and the `amr`. Two paths issue a token for that session without `client_id`: an MFA verification on it (`updateMFASessionAndClaims` calls `GenerateAccessToken` without the client, and the `/factors` routes accept the client's token), which yields an `aal2` token that still carries the session's `amr` and `scope`; and a Custom Access Token hook, whose schema lists `client_id` as optional. Checked in the Supabase Auth source at tag `v2.197.0`, the version compose pins. [13]
 
 ## Decision drivers
 
@@ -93,6 +95,7 @@ Described in Decision below. Self-host gets exact, next-request revocation from 
 - `email` stays required and non-empty, as on `main`: Crove identifies and adds members by email. A Supabase Auth user who signs in with a phone number only (empty `email`) gets 401 until a later ADR supports phone-only accounts.
 - JWKS cache: at most 10 minutes. The runbook covers forcing a refresh after a key revocation.
 - Verification is local: no call to Supabase Auth on the request path, except the live check of R3 commands on Crove Cloud (section 5).
+- Refuse any token issued to an OAuth client (issue #272): a `client_id` claim of any value, or an `amr` entry whose method starts with `oauth_provider/` (fact 11; the `amr` test is load-bearing: an MFA verification on the OAuth session, or a hook, issues tokens for it without `client_id`). The check runs right after the signature, before every other claim check and before any database work, so it holds in every session check mode (`db`, `jwt`, `off`) and on every surface that authenticates a user (all of `/api`). A browser never holds such a token, and the kernel would otherwise accept it exactly like the user's own SPA session: every query and R1/R2 command, with no scope or org binding. Third-party access goes through the Crove authorization server (ADR-0032), never through Supabase Auth's.
 
 ### 2. Session status record and membership, in the request transaction
 
@@ -174,6 +177,7 @@ Choice: the self-host compose stack sets `GOTRUE_JWT_EXP=900` (15 minutes) as de
 | Condition | Answer |
 |---|---|
 | Missing or invalid token, wrong `iss` or `aud`, missing `exp`, `sub` or `session_id`, expired, anonymous, wrong algorithm, empty `email` | 401 |
+| Valid signature, but the token was issued to an OAuth client (`client_id` claim, or an `oauth_provider/` `amr` method) | 401 `OAUTH_CLIENT_TOKEN_REFUSED`, before any database work; the SPA signs out as for any 401 (a browser never holds such a token) |
 | Crove session record `revoked`; self-host session row missing or past `not_after`; user banned or deleted upstream | 401 |
 | Session revoked by the org's owner for that org only | 401 `SESSION_REVOKED_IN_ORG`: the SPA leaves that org and keeps the session (issue #247); `me.get` no longer lists the org for that session |
 | R3 live check (`GET /user`, Crove Cloud): any 4xx other than 429, or a 200 for a different user id | 401 |
@@ -211,6 +215,7 @@ Unit (kernel auth):
 - 401 for a token with no `iss` or a wrong one, no `aud` or a wrong one, no `exp`, an expired `exp`, no `sub`, no `session_id`, `role` other than `authenticated`, `is_anonymous = true`, `alg: none`, and an HS256 token when JWKS is configured.
 - Boot fails without `AUTH_ISSUER`, with `AUTH_SESSION_CHECK=off` on a public URL, and with `jwt` on a public URL without an Auth URL; an unset `AUTH_SESSION_CHECK` resolves to `db` or `jwt` as described above.
 - A token with an empty `email` (phone-only user): 401.
+- A token issued to an OAuth client (`client_id` of any value, including empty or null, or an `oauth_provider/` `amr` method, as an object or a bare string): 401 `OAUTH_CLIENT_TOKEN_REFUSED`; a forged one still gets `UNAUTHENTICATED`; the browser `amr` methods pass.
 
 Self-host (`db` adapter, Supabase Auth image pinned as in compose):
 
@@ -232,6 +237,7 @@ Both adapters:
 - Auth outage: new logins and R3 fail with 503; existing sessions keep working (self-host while the DB is up; Cloud until the access token expires).
 - R3 without fresh MFA is refused: an `aal1` token gets 403 `STEP_UP_REQUIRED`; an `aal2` token whose MFA `amr` timestamp is older than 5 minutes gets 403 `STEP_UP_REQUIRED`; an `aal2` token with fresh MFA executes, and the audit row records `aal`, `session_id` and the MFA timestamp. A job that executes approved R3 work stops when the approver's session was revoked in between.
 - Every read, export and download route is covered by the check (route enumeration test).
+- Tokens issued to OAuth clients (issue #272, `oauth-client-tokens.db.test.ts`, in `db`, `jwt` and `off`): a token signed like a browser token but with `client_id`, an OAuth-server token, and one without `client_id` (as an MFA verification on the OAuth session or a hook issues it) are refused with 401 `OAUTH_CLIENT_TOKEN_REFUSED` on a read query, an R1 command, an org-less command and `me.get`, and change nothing; a first sign-in through an OAuth client creates no user account; the same user's browser token keeps working.
 - `member` and `viewer` cannot approve (covered since #71).
 
 ## References
@@ -248,3 +254,4 @@ Both adapters:
 10. Supabase JavaScript reference, `auth.admin.signOut()`: https://supabase.com/docs/reference/javascript/auth-admin-signout and the Swift reference, which documents the `jwt` parameter as the target user's access token and the `local`, `global` and `others` scopes: https://supabase.com/docs/reference/swift/auth-admin-signout
 11. Supabase, Auth Hooks: https://supabase.com/docs/guides/auth/auth-hooks
 12. Supabase Auth source, `RefreshTokenGrant` and `GenerateAccessToken`: https://github.com/supabase/auth/blob/master/internal/tokens/service.go
+13. Supabase Auth source at tag `v2.197.0`: `internal/api/token.go` (`updateMFASessionAndClaims`), `internal/tokens/service.go` (`AccessTokenClaims` with `client_id` and `scope`, `GenerateAccessToken`, the refresh client check, the Custom Access Token hook schema), `internal/api/oauthserver/handlers.go` (the authorization code exchange sets `OAuthClientID` and the `oauth_provider/authorization_code` method), `internal/models/factor.go` and `internal/models/sessions.go` (`oauth_client_id`, `CalculateAALAndAMR`): https://github.com/supabase/auth/tree/v2.197.0

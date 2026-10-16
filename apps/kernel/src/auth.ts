@@ -71,7 +71,34 @@ export function mfaTimestamp(amr: unknown): number | null {
 
 const invalid = () => new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn');
 
-// Signature, algorithm family, issuer, audience and expiry, then the claims Crove relies on. Every failure is 401.
+// Supabase Auth's OAuth 2.1 server (issue #272, ADR-0028 section 1, ADR-0032) signs the access tokens it issues to
+// third-party OAuth clients with the same key, `aud` and `role` as a browser session's. In the Supabase Auth source
+// (v2.197.0, internal/tokens/service.go) they differ only by `client_id` (the client's UUID, `omitempty`, so a
+// browser token never carries the claim) and `scope`, and their session's `amr` holds the first factor
+// `oauth_provider/authorization_code` (internal/models/factor.go), kept by every refresh. A browser never holds
+// such a token, so the kernel refuses it outright: third-party access goes through the Crove authorization server.
+// The amr test is load-bearing, not a fallback: an MFA verification on the OAuth session (internal/api/token.go,
+// updateMFASessionAndClaims) reissues its token without `client_id` but with the session's amr, and a Custom Access
+// Token hook may drop `client_id` too.
+const OAUTH_CLIENT_AMR_PREFIX = 'oauth_provider/';
+
+const oauthClientRefused = () =>
+  new DomainError('OAUTH_CLIENT_TOKEN_REFUSED', 401, 'Mã truy cập này được cấp cho một ứng dụng bên thứ ba, không dùng để đăng nhập Crove');
+
+// True when the token was issued to an OAuth client: any `client_id` claim (whatever its value), or an `amr` entry
+// (an object's `method`, or a bare string) from the OAuth server's authorization code grant.
+export function issuedToOAuthClient(claims: Record<string, unknown>): boolean {
+  if (Object.hasOwn(claims, 'client_id')) return true;
+  const { amr } = claims;
+  if (!Array.isArray(amr)) return false;
+  return amr.some((entry) => {
+    const method = typeof entry === 'string' ? entry : entry && typeof entry === 'object' ? (entry as { method?: unknown }).method : undefined;
+    return typeof method === 'string' && method.toLowerCase().startsWith(OAUTH_CLIENT_AMR_PREFIX);
+  });
+}
+
+// Signature, algorithm family, issuer, audience and expiry, then the claims Crove relies on. Every failure is 401:
+// OAUTH_CLIENT_TOKEN_REFUSED for a token issued to an OAuth client, UNAUTHENTICATED otherwise.
 export function createTokenVerifier(config: Config, keys: { jwks?: JWTVerifyGetKey } = {}) {
   const jwks = keys.jwks ?? (config.AUTH_JWKS_URL ? createRemoteJWKSet(new URL(config.AUTH_JWKS_URL), { cacheMaxAge: 10 * 60_000 }) : null);
   const secret = config.AUTH_JWT_SECRET ? new TextEncoder().encode(config.AUTH_JWT_SECRET) : null;
@@ -92,6 +119,8 @@ export function createTokenVerifier(config: Config, keys: { jwks?: JWTVerifyGetK
     } catch {
       throw invalid();
     }
+    // First after the signature, so the answer names the reason; nothing below (and no database work) runs for it.
+    if (issuedToOAuthClient(claims)) throw oauthClientRefused();
     const { sub, iss, email, role, session_id: sessionId } = claims;
     if (typeof sub !== 'string' || sub === '' || typeof iss !== 'string') throw invalid();
     if (role !== 'authenticated' || claims.is_anonymous === true) throw invalid();
