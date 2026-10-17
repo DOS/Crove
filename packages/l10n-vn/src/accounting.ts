@@ -6,6 +6,10 @@ export const PAYABLE_ACCOUNT = '331';
 export const VAT_INPUT_GOODS = '1331';
 export const VAT_INPUT_ASSETS = '1332';
 export const FIXED_ASSETS = '211';
+// 211 or one of its sub-accounts (2111, 211.XE): a sub-account's code starts with its parent's (#319).
+export function isFixedAssetAccount(code: string): boolean {
+  return code.startsWith(FIXED_ASSETS);
+}
 export const FIXED_ASSET_THRESHOLD = '30000000';
 
 export interface AccountSuggestion {
@@ -118,7 +122,7 @@ export function vatPercent(rate: string | null): number {
 // Input VAT on fixed assets goes to 1332, the rest to 1331. For a mixed invoice the asset share is
 // estimated from each asset line's rate, rounded to whole VND and capped at the invoice VAT.
 export function fixedAssetVat(lines: Array<Pick<ProposedLine, 'debitAccount' | 'amount' | 'vatRate'>>, vat: ReturnType<typeof money>) {
-  const assets = lines.filter((l) => l.debitAccount === FIXED_ASSETS);
+  const assets = lines.filter((l) => isFixedAssetAccount(l.debitAccount));
   if (assets.length === 0 || vat.isZero()) return money(0);
   if (assets.length === lines.length) return vat;
   const estimate = sum(assets.map((l) => money(l.amount).times(vatPercent(l.vatRate)).dividedBy(100))).toDecimalPlaces(0);

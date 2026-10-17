@@ -1,6 +1,7 @@
 export * from './schemas.ts';
 export * from './contract.ts';
 export * from './opening-balance.ts';
+export * from './accounts.ts';
 
 export const ORG_HEADER = 'x-crove-org';
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;

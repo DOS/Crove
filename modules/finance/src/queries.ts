@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { zId, zLocalDate } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
+import { chartAccounts, type ChartAccount } from './accounts.ts';
 import { OPEN_REVERSAL_STATUSES, REVERSAL_KIND } from './reversal.ts';
 import type { PurchaseVoucher } from './misa.ts';
 
@@ -17,6 +18,14 @@ export const vendorsList = defineQuery({
     let query = ctx.trx
       .selectFrom('crove_kernel.party as p')
       .select(['p.id', 'p.name', 'p.tax_code', 'p.address'])
+      .select((eb) =>
+        eb
+          .selectFrom('crove_finance.vendor_account_rule as r')
+          .select('r.debit_account')
+          .whereRef('r.org_id', '=', 'p.org_id')
+          .whereRef('r.party_id', '=', 'p.id')
+          .as('default_account'),
+      )
       .select((eb) =>
         eb
           .selectFrom('crove_finance.purchase_document as d')
@@ -38,6 +47,7 @@ export const vendorsList = defineQuery({
       taxCode: r.tax_code,
       address: r.address,
       documentCount: Number(r.document_count ?? 0),
+      defaultAccount: r.default_account ?? null,
     }));
   },
 });
@@ -165,8 +175,10 @@ async function loadEntries(
   if (rows.length === 0) return [];
   const lines = await ctx.trx
     .selectFrom('crove_finance.journal_line as l')
-    .innerJoin('crove_finance.account as a', 'a.code', 'l.account_code')
-    .select(['l.entry_id', 'l.line_no', 'l.account_code', 'a.name', 'l.debit', 'l.credit'])
+    // A line names a TT133 account or one of the org's sub-accounts (#319), by code; the name shown is the current one.
+    .leftJoin('crove_finance.account as a', 'a.code', 'l.account_code')
+    .leftJoin('crove_finance.org_account as o', (join) => join.onRef('o.org_id', '=', 'l.org_id').onRef('o.code', '=', 'l.account_code'))
+    .select(['l.entry_id', 'l.line_no', 'l.account_code', 'a.name as tt133_name', 'o.name as own_name', 'l.debit', 'l.credit'])
     .where('l.org_id', '=', ctx.orgId)
     .where(
       'l.entry_id',
@@ -194,7 +206,7 @@ async function loadEntries(
   const byEntry = new Map<string, JournalEntryView['lines']>();
   for (const l of lines) {
     const list = byEntry.get(l.entry_id) ?? [];
-    list.push({ lineNo: l.line_no, accountCode: l.account_code, accountName: l.name, debit: l.debit, credit: l.credit });
+    list.push({ lineNo: l.line_no, accountCode: l.account_code, accountName: l.tt133_name ?? l.own_name ?? '', debit: l.debit, credit: l.credit });
     byEntry.set(l.entry_id, list);
   }
   return rows.map((r) => ({
@@ -361,14 +373,11 @@ export const voidedProposals = defineQuery({
   },
 });
 
+// The org's chart (#319): the TT133 accounts and the org's sub-accounts, inactive ones included (pickers hide them,
+// and the journal still shows them), ordered by code so each sub-account follows its parent.
 export const accountsList = defineQuery({
   name: 'finance.accounts.list',
   input: z.object({}),
   access: ALL,
-  handler: async (ctx) =>
-    (await ctx.trx.selectFrom('crove_finance.account').select(['code', 'name', 'parent_code']).orderBy('code').execute()).map((a) => ({
-      code: a.code,
-      name: a.name,
-      parentCode: a.parent_code,
-    })),
+  handler: async (ctx): Promise<ChartAccount[]> => [...(await chartAccounts(ctx)).values()].sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0)),
 });

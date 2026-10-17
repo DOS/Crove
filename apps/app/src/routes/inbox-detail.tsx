@@ -11,6 +11,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { errorMessage, fetchFile, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal } from '../lib/decimal.ts';
@@ -463,9 +464,10 @@ export function InboxDetailPage() {
                           value={l.debitAccount}
                           onChange={(e) => setLineAccounts((prev) => ({ ...prev, [l.lineNo]: e.target.value }))}
                         >
-                          {(accounts.data ?? [{ code: l.debitAccount, name: '', parentCode: null }]).map((a) => (
+                          {/* Accounts in use, plus the line's own even if it was deactivated since (#319). */}
+                          {pickableAccounts(accounts.data ?? [], l.debitAccount).map((a) => (
                             <NativeSelectOption key={a.code} value={a.code}>
-                              {a.code} · {a.name}
+                              {accountLabel(a)}
                             </NativeSelectOption>
                           ))}
                         </NativeSelect>

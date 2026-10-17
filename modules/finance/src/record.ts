@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { BLOCKING_CHECK_IDS, zAccountCode, zPurchaseProposal } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { buildPurchaseJournal, journalIsBalanced, money, parseTaxCode } from '@crove/l10n-vn';
+import { assertUsableAccounts } from './accounts.ts';
 import { postJournalEntry } from './ledger.ts';
 
 async function upsertVendor(ctx: CommandContext, seller: z.infer<typeof zPurchaseProposal>['seller']): Promise<string> {
@@ -50,12 +51,6 @@ function journalMemo(payload: z.infer<typeof zPurchaseProposal>): string {
   return `HĐ ${invoice.series ? `${invoice.series}-` : ''}${invoice.number} ${payload.seller.name}`.trim();
 }
 
-async function assertKnownAccounts(ctx: CommandContext, codes: string[]): Promise<void> {
-  const unique = [...new Set(codes)];
-  const known = await ctx.trx.selectFrom('crove_finance.account').select('code').where('code', 'in', unique).execute();
-  if (known.length !== unique.length) throw new DomainError('UNKNOWN_ACCOUNT', 422, 'Có tài khoản không thuộc hệ thống TT133');
-}
-
 // The voided document of this supplier invoice that no later document has replaced yet, or null. There is at most
 // one: every document of an invoice but the first replaces a voided one, each at most once.
 async function replaceableDocument(ctx: CommandContext, partyId: string, series: string, number: string): Promise<string | null> {
@@ -95,15 +90,16 @@ export const revisePurchase = defineCommand({
     const lineNos = new Set(payload.lines.map((l) => l.lineNo));
     if (lineAccounts.some((l) => !lineNos.has(l.lineNo))) throw new DomainError('UNKNOWN_LINE', 422, 'Có dòng không thuộc hóa đơn này');
     const overrides = new Map(lineAccounts.map((l) => [l.lineNo, l.debitAccount]));
-    let changed = false;
+    const chosen: string[] = [];
     const lines = payload.lines.map((l) => {
       const account = overrides.get(l.lineNo);
       if (!account || account === l.debitAccount) return l;
-      changed = true;
+      chosen.push(account);
       return { ...l, debitAccount: account, reason: 'Người dùng chọn' };
     });
-    if (!changed) return { changed: false as const, payload };
-    await assertKnownAccounts(ctx, lines.map((l) => l.debitAccount));
+    if (chosen.length === 0) return { changed: false as const, payload };
+    // The accounts the user picked now; the others are checked again when the proposal is approved.
+    await assertUsableAccounts(ctx, chosen);
     const revised = { ...payload, lines, journal: buildPurchaseJournal(lines, payload.invoice.vatTotal, journalMemo(payload)) };
     return { changed: true as const, payload: revised };
   },
@@ -130,9 +126,10 @@ export const recordPurchase = defineCommand({
     if (failed.length > 0 && !acceptFailedChecks) {
       throw new DomainError('CHECKS_FAILED', 422, `Còn ${failed.length} kiểm tra không đạt; hãy xác nhận đã đối chiếu chứng từ gốc`);
     }
-    // Line accounts come from the approved revision; changing them is an edit (kernel.proposal.edit).
+    // Line accounts come from the approved revision; changing them is an edit (kernel.proposal.edit). A sub-account
+    // deactivated since the proposal was made is refused here, with its code.
     const { lines } = payload;
-    await assertKnownAccounts(ctx, lines.map((l) => l.debitAccount));
+    await assertUsableAccounts(ctx, lines.map((l) => l.debitAccount));
 
     const memo = journalMemo(payload);
     const journal = buildPurchaseJournal(lines, invoice.vatTotal, memo);
@@ -226,7 +223,12 @@ export const recordPurchase = defineCommand({
             updated_at: ctx.now,
           }),
         )
-        .execute();
+        .execute()
+        .catch((error: { code?: string }) => {
+          // The sub-account was deactivated after the check above (the database checks it again under a lock).
+          if (error?.code === '23503') throw new DomainError('ACCOUNT_INACTIVE', 422, `Tài khoản ${main.debitAccount} đã ngừng sử dụng; hãy chọn tài khoản khác`);
+          throw error;
+        });
     }
 
     if (replaces) ctx.audit({ replaces_document_id: replaces });
