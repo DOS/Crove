@@ -154,6 +154,19 @@ Built in S4 (#234), with these choices against the list above:
 | S8 | Metrics jobs and analytics screen | S4, S6 | No |
 | S9 | Media library (after #220), evergreen reposting, multi-step approval, more channels | S4, #220 | Some |
 
+### Status (2026-10-17)
+
+Done and merged: S1 (#243), S2 (#262, #263), S3 (#297, contract and RPC #338), S5 (#346), S4 (#353, #355). On the offline `sandbox` channel the whole flow runs end to end: connect, queue, compose, review, schedule, and the worker publishes exactly once (the e2e spec waits for it).
+
+Next, S6 (#236), in this order:
+
+1. #361 puts the `crove_kernel.oauth_state` row factory on main (definer-only machinery, two-step new-table rule). The table PR follows: one row per connect attempt with the hash of the state parameter, the PKCE verifier, the user, the provider and a 10 minute expiry, consumed once by the callback definer.
+2. `/api/channels/:provider/start` and `/callback` in `http.ts` with a `Connector` interface in `@crove/channel` (authorize URL, code exchange, accounts the grant covers, account picking when one login covers several Pages), and the Facebook Page adapter (`POST /{page}/feed`, reconcile by listing recent Page posts). Tests run against recorded HTTP answers; no live call in CI.
+3. Instagram (container, status polling through `processing`, `media_publish`; a `PUBLISHED` container means the publish went through).
+4. Zalo OA (OAuth v4 with PKCE, access token 25 h, single-use refresh token stored in the transaction that uses it) with the refresh schedule, which also settles the expired-connection lifecycle in #264.
+
+What only people can do: trying S6 against the real platforms needs a Meta developer app (development mode works for people with a role on the app) and the Crove callback URL added to a Zalo app linked to an OA. DOS already has a Zalo OA app (used by DOS.Me); Meta has none yet. Open follow-ups: #250, #264, #335, #352.
+
 ## 5. Exit criteria (v1)
 
 1. On a fresh laptop with `docker compose up`: connect the `sandbox` channel, compose a post for two channels, approve, schedule, and both variants publish once; Playwright covers it.
