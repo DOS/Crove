@@ -47,6 +47,8 @@ export const EXPORT_TABLES = {
   'social.post_approval': { from: 'crove_social.post_approval', omit: [] },
   // A post's images in order, with their descriptions (#372); the files themselves are in kernel.file.
   'social.post_media': { from: 'crove_social.post_media', omit: [] },
+  // What the platforms reported for published posts (#238).
+  'social.metric_snapshot': { from: 'crove_social.metric_snapshot', omit: [] },
   'social.queue': { from: 'crove_social.queue', omit: [] },
   'social.queue_slot': { from: 'crove_social.queue_slot', omit: [] },
 } as const satisfies Record<string, { from: string; omit: readonly string[] }>;

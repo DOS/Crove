@@ -13,8 +13,10 @@ import { errorMessage, orpc } from '../lib/api.ts';
 import { dayKey, providerName, VARIANT_TONE } from '../lib/social.ts';
 import { pollEvery, SAFETY_POLL_MS, useStreamLive } from '../lib/stream-hook.ts';
 
-type Tab = 'upcoming' | 'review' | 'drafts' | 'done';
-const TABS: Tab[] = ['upcoming', 'review', 'drafts', 'done'];
+type Tab = 'upcoming' | 'review' | 'drafts' | 'done' | 'metrics';
+const TABS: Tab[] = ['upcoming', 'review', 'drafts', 'done', 'metrics'];
+// The counts the analytics table shows, in order; a platform that does not report one shows a dash.
+const METRIC_COLUMNS = ['reach', 'reactions', 'comments', 'shares'] as const;
 const DAY = 86_400_000;
 // The agenda lists what goes out in the next year, day by day.
 const AGENDA_DAYS = 366;
@@ -56,6 +58,77 @@ function PostRow({ post, slug, names, right }: { post: Post; slug: string; names
       </div>
       {right && <span className="shrink-0 text-xs text-subtle-foreground tabular-nums">{right}</span>}
     </Link>
+  );
+}
+
+// How published posts did (S8): totals over the window, then each published channel with its latest capture.
+function Metrics({ slug, names }: { slug: string; names: Map<string, string> }) {
+  const t = useTranslations('social');
+  const f = useFormat();
+  const [days, setDays] = useState(30);
+  const rows = useQuery(orpc.social.metrics.summary.queryOptions({ input: { days } }));
+  if (rows.isLoading) return <Spinner />;
+  if (rows.error) return <ErrorText>{errorMessage(rows.error)}</ErrorText>;
+  const data = rows.data ?? [];
+  const total = (name: string) => data.reduce((sum, r) => sum + (r.metrics[name] ?? 0), 0);
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-2">
+        {[7, 30, 90].map((d) => (
+          <Button key={d} variant={d === days ? 'secondary' : 'ghost'} size="sm" onClick={() => setDays(d)}>
+            {t('metricsDays', { days: String(d) })}
+          </Button>
+        ))}
+      </div>
+      {data.length === 0 ? (
+        <Empty title={t('empty.metrics')} hint={t('metricsHint')} />
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {METRIC_COLUMNS.map((m) => (
+              <Card key={m} className="block p-4">
+                <p className="text-xs text-subtle-foreground">{t(`metric.${m}`)}</p>
+                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{f.number(total(m))}</p>
+              </Card>
+            ))}
+          </div>
+          <div className="overflow-x-auto rounded-xl border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted text-xs text-subtle-foreground">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">{t('metricsPost')}</th>
+                  {METRIC_COLUMNS.map((m) => (
+                    <th key={m} className="px-3 py-2 text-right font-medium">
+                      {t(`metric.${m}`)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.map((r) => (
+                  <tr key={r.variantId} className="border-t">
+                    <td className="max-w-md px-3 py-2">
+                      <Link to="/o/$slug/social/$id" params={{ slug, id: r.postId }} className="line-clamp-1 text-foreground hover:underline">
+                        {r.excerpt || t('emptyText')}
+                      </Link>
+                      <p className="text-xs text-subtle-foreground">
+                        {providerName(r.provider)} · {names.get(r.connectionId) ?? ''} · {r.publishedAt ? f.dateTime(r.publishedAt) : ''}
+                        {r.capturedAt ? ` · ${t('metricsAsOf', { when: f.dateTime(r.capturedAt) })}` : ` · ${t('metricsPending')}`}
+                      </p>
+                    </td>
+                    {METRIC_COLUMNS.map((m) => (
+                      <td key={m} className="px-3 py-2 text-right text-foreground tabular-nums">
+                        {r.metrics[m] === undefined ? '-' : f.number(r.metrics[m])}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -126,7 +199,7 @@ export function SocialPage() {
   const names = new Map((channels.data ?? []).map((c) => [c.id, c.displayName]));
   const noChannels = channels.isSuccess && channels.data.length === 0;
 
-  const lists: Record<Exclude<Tab, 'upcoming'>, Post[]> = {
+  const lists: Record<Exclude<Tab, 'upcoming' | 'metrics'>, Post[]> = {
     review: (all.data ?? []).filter((p) => p.variants.some((v) => v.status === 'in_review')),
     drafts: (all.data ?? []).filter((p) => p.status === 'draft' && !p.variants.some((v) => v.status === 'in_review')),
     done: (all.data ?? []).filter((p) => ['published', 'partially_published', 'failed', 'publishing', 'cancelled'].includes(p.status)),
@@ -177,6 +250,9 @@ export function SocialPage() {
         </TabsList>
         <TabsContent value="upcoming">
           {upcoming.isLoading ? <Spinner /> : upcoming.error ? <ErrorText>{errorMessage(upcoming.error)}</ErrorText> : <Agenda posts={upcoming.data ?? []} slug={slug} names={names} />}
+        </TabsContent>
+        <TabsContent value="metrics">
+          <Metrics slug={slug} names={names} />
         </TabsContent>
         {(['review', 'drafts', 'done'] as const).map((id) => (
           <TabsContent key={id} value={id}>

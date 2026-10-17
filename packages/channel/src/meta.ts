@@ -7,7 +7,7 @@
 // `/me/accounts` lists the Pages the user granted in Meta's dialog, each with its own Page token. A Page token from a
 // long-lived user token has no expiry timer, so it is sealed as is; the user token is dropped.
 import { createHmac } from 'node:crypto';
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
+import type { ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const META_GRAPH_HOST = 'graph.facebook.com';
@@ -330,6 +330,36 @@ export class FacebookPagePublisher implements Publisher {
       }
     }
     return { ids };
+  }
+
+  // Reactions, comments and shares of a Page post: plain fields of the post, which Meta's 2026 Page Insights changes do
+  // not touch; impressions need Page Insights metrics that are being retired, so they are not read.
+  async metrics(input: MetricsInput): Promise<MetricsResult> {
+    const token = pageToken(input.secret);
+    if (!token) return { refused: 'token_expired' };
+    if (!/^\d{1,32}_\d{1,32}$/.test(input.externalId)) return { refused: 'gone' };
+    try {
+      const answer = await this.graph.call<{ reactions?: { summary?: { total_count?: unknown } }; comments?: { summary?: { total_count?: unknown } }; shares?: { count?: unknown } }>('GET', input.externalId, {
+        token,
+        params: { fields: 'reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0),shares' },
+      });
+      const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
+      const metrics: Partial<Record<'reactions' | 'comments' | 'shares', number>> = {};
+      const reactions = n(answer.reactions?.summary?.total_count);
+      const comments = n(answer.comments?.summary?.total_count);
+      // A post nobody shared has no shares field at all.
+      const shares = n(answer.shares?.count) ?? 0;
+      if (reactions !== undefined) metrics.reactions = reactions;
+      if (comments !== undefined) metrics.comments = comments;
+      metrics.shares = shares;
+      return { metrics };
+    } catch (error) {
+      const result = graphPublishResult(error);
+      if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
+      // Code 100 on a post id: the post was deleted on Facebook.
+      if (error instanceof GraphError && error.code === 100) return { refused: 'gone' };
+      return null;
+    }
   }
 
   async reconcile(input: ReconcileInput): Promise<ReconcileResult> {

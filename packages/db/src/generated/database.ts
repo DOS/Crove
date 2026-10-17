@@ -51,6 +51,7 @@ export interface CroveKernelSchema {
 }
 
 export interface CroveSocialSchema {
+  'crove_social.metric_snapshot': SocialMetricSnapshotTable;
   'crove_social.post': SocialPostTable;
   'crove_social.post_approval': SocialPostApprovalTable;
   'crove_social.post_media': SocialPostMediaTable;
@@ -525,6 +526,17 @@ export interface KernelTenantTable {
   base_currency: Generated<string>;
   created_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.metric_snapshot */
+export interface SocialMetricSnapshotTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  variant_id: ColumnType<string, string, NotGranted>;
+  capture_key: ColumnType<string, string, NotGranted>;
+  captured_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  metrics: ColumnType<unknown, string | undefined, NotGranted>;
+  extra: ColumnType<unknown, string | null | undefined, NotGranted>;
 }
 
 /** crove_social.post_approval */

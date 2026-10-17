@@ -139,6 +139,17 @@ export interface Refresher {
   refresh(secret: string): Promise<{ secret: string; expiresAt: Date | null } | { refused: string } | { failed: string }>;
 }
 
+// What a platform reports for a published post (Social plan S8). Counts use these names whatever the platform calls
+// them; a count the platform does not report is left out, never zero. Anything else goes in extra.
+export const METRIC_NAMES = ['impressions', 'reach', 'reactions', 'comments', 'shares', 'saves', 'clicks', 'views'] as const;
+export type MetricName = (typeof METRIC_NAMES)[number];
+export interface MetricsInput {
+  externalAccountId: string;
+  secret: string;
+  externalId: string;
+}
+export type MetricsResult = { metrics: Partial<Record<MetricName, number>>; extra?: Record<string, unknown> } | { refused: 'token_expired' | 'gone' } | null;
+
 export interface Publisher {
   readonly provider: ChannelProviderId;
   readonly publishSafety: RetrySafety;
@@ -147,6 +158,9 @@ export interface Publisher {
   status?(input: StatusInput): Promise<PublishResult>;
   // Providers that can be asked whether an earlier call went through.
   reconcile?(input: ReconcileInput): Promise<ReconcileResult>;
+  // Providers that report how a post did: null when the platform did not answer (try again later), refused when the
+  // token no longer works or the post is gone.
+  metrics?(input: MetricsInput): Promise<MetricsResult>;
 }
 
 interface SandboxPost {
@@ -177,6 +191,14 @@ export class SandboxPublisher implements Publisher {
   async reconcile(input: ReconcileInput): Promise<ReconcileResult> {
     const post = (this.accounts.get(input.externalAccountId) ?? []).find((p) => p.callKey === input.callKey || (p.contentHash === input.contentHash && p.at >= input.after && p.at <= input.before));
     return post ? { found: true, externalId: post.id, url: null } : { found: false };
+  }
+
+  // Counts that grow with the post's age, so the local demo shows something.
+  async metrics(input: MetricsInput): Promise<MetricsResult> {
+    const post = [...this.accounts.values()].flat().find((p) => p.id === input.externalId);
+    if (!post) return { refused: 'gone' };
+    const hours = Math.max(0, Math.floor((Date.now() - post.at.getTime()) / 3_600_000));
+    return { metrics: { impressions: 40 + hours * 12, reach: 30 + hours * 9, reactions: 3 + hours, comments: Math.floor(hours / 3), shares: Math.floor(hours / 6) } };
   }
 
   // What the sandbox platform shows for an account (tests and the local demo).

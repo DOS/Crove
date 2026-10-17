@@ -25,6 +25,7 @@ import {
   zSocialPostCreate,
   zSocialPostUpdate,
   zSocialQueue,
+  zSocialMetricsRow,
   zSocialQueueSet,
   zSocialSchedule,
   zSocialVariantUpdate,
@@ -149,6 +150,10 @@ export const contract = {
           }),
         )
         .output(z.object({ postId: zId })),
+    },
+    // How published posts did (S8): the latest capture of each variant published in the last days days (30 by default).
+    metrics: {
+      summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional() })).output(z.array(zSocialMetricsRow)),
     },
     variants: {
       update: oc.input(zSocialVariantUpdate).output(z.object({ variantId: zId, revision: z.number().int(), changed: z.boolean() })),

@@ -11,7 +11,7 @@ import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
-import { PUBLISH_STALE_SECONDS, runPublishJob } from '@crove/mod-social';
+import { METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runPublishJob, sweepMetrics } from '@crove/mod-social';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, socialPublishQueue } from './jobs-schema.ts';
@@ -341,6 +341,22 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const refreshTimer = Object.keys(refreshers).length > 0 ? setInterval(() => void refreshSweep(), REFRESH_SWEEP_MS) : null;
   void refreshSweep();
 
+  // Metrics of published posts (S8): every 15 minutes, the variants whose last capture is older than 6 hours.
+  let measuring = false;
+  const metricsSweep = async () => {
+    if (measuring || publishing.size === 0 || !channels) return;
+    measuring = true;
+    try {
+      const done = await sweepMetrics({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb, publishers });
+      if (done.recorded > 0) console.log(`[social-metrics] recorded ${done.recorded}, skipped ${done.skipped}`);
+    } catch (error) {
+      console.error('[social-metrics] sweep', error);
+    } finally {
+      measuring = false;
+    }
+  };
+  const metricsTimer = publishing.size > 0 ? setInterval(() => void metricsSweep(), METRICS_SWEEP_MS) : null;
+
   let running = false;
   let stopped = false;
   const relay = async () => {
@@ -460,6 +476,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     clearInterval(heartbeatTimer);
     if (socialTimer) clearInterval(socialTimer);
     if (refreshTimer) clearInterval(refreshTimer);
+    if (metricsTimer) clearInterval(metricsTimer);
     await listener.end().catch(() => {});
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});
   };

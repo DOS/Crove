@@ -7,3 +7,4 @@ export * from './domain/queue.ts';
 export * from './posts.ts';
 export * from './publishing.ts';
 export * from './publisher.ts';
+export * from './metrics.ts';
