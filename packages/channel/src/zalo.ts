@@ -294,10 +294,12 @@ export class ZaloOaPublisher implements Publisher {
       const to = input.before.getTime() + 60_000;
       let undated = false;
       for (const m of answer?.medias ?? []) {
-        if (typeof m.id !== 'string' || m.title !== title) continue;
+        // Zalo gives ids as strings or numbers.
+        const id = typeof m.id === 'string' || typeof m.id === 'number' ? String(m.id) : '';
+        if (!id || m.title !== title) continue;
         const at = typeof m.create_date === 'number' ? m.create_date : typeof m.create_date === 'string' ? Number(m.create_date) : Number.NaN;
         if (!Number.isFinite(at)) undated = true;
-        else if (at >= from && at <= to) return { found: true, externalId: m.id, url: null };
+        else if (at >= from && at <= to) return { found: true, externalId: id, url: null };
       }
       return undated ? { found: 'unknown' } : { found: false };
     } catch {
