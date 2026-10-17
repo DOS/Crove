@@ -226,7 +226,7 @@ export function graphPublishResult(error: unknown): PublishResult {
   const code = error.code;
   const base = { code: code === undefined ? `HTTP_${error.status}` : String(code), message: error.message, httpStatus: error.status };
   if (error.status >= 500 || (code !== undefined && UNCLEAR_CODES.has(code))) return { kind: 'unknown', code: base.code, message: base.message };
-  if (code !== undefined && TOKEN_CODES.has(code)) return { kind: 'rejected', error: 'token_expired', ...base };
+  if ((code !== undefined && TOKEN_CODES.has(code)) || error.status === 401) return { kind: 'rejected', error: 'token_expired', ...base };
   if ((code !== undefined && (PERMISSION_CODES.has(code) || (code >= 200 && code <= 299))) || error.status === 403) return { kind: 'rejected', error: 'permission', ...base };
   if ((code !== undefined && RATE_CODES.has(code)) || error.status === 429) return { kind: 'rejected', error: 'rate_limited', ...base };
   if (error.status >= 400) return { kind: 'rejected', error: 'bad_request', ...base };

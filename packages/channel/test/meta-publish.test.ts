@@ -56,6 +56,7 @@ describe('FacebookPagePublisher.publish', () => {
   it('maps Graph refusals to what the pipeline needs', async () => {
     const cases: [ReturnType<typeof graphError>, string][] = [
       [graphError(400, 190, 'Error validating access token'), 'token_expired'],
+      [graphError(401, 2500, 'An active access token must be used'), 'token_expired'],
       [graphError(400, 200, 'Requires pages_manage_posts permission'), 'permission'],
       [graphError(403, 10), 'permission'],
       [graphError(400, 32, 'Page request limit reached'), 'rate_limited'],
