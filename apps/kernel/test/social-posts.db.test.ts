@@ -1,7 +1,7 @@
 // Crove Social posts on PostgreSQL 17 (Social plan S3, issue #233): compose for several channels, inherit and override
 // content, review per variant on the exact revision seen, schedule at a time or in a queue, cancel, and the rules that
 // keep history and in-flight variants safe. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -413,5 +413,89 @@ suite('social posts on PostgreSQL (S3)', () => {
     await expect(exec(o, o.member, 'social.post.create', { body: 'x', channels: [{ connectionId: conn, settings: big }] })).rejects.toMatchObject({ status: 422 });
     const fits = { note: 'ệ'.repeat(5000) };
     await expect(exec(o, o.member, 'social.post.create', { body: 'x', channels: [{ connectionId: conn, settings: fits }] })).resolves.toBeDefined();
+  });
+
+  // Images on posts (#372): the post's media is part of every inheriting variant's content, hash and channel checks.
+  describe('images', () => {
+    async function image(orgId: string, contentType = 'image/jpeg', sizeBytes = 120_000, source = 'social') {
+      const id = randomUUID();
+      const sha = createHash('sha256').update(id).digest('hex');
+      await admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [orgId, id, sha, `org/${orgId}/${sha}`, `content:${sha}`, 'anh.jpg', contentType, sizeBytes, source],
+        ),
+      );
+      return id;
+    }
+
+    it('keeps the images in order, binds them into the hash and checks them per channel', async () => {
+      const o = await org();
+      const [fb, ig] = [await connection(o.orgId, o.owner, 'facebook_page'), await connection(o.orgId, o.owner, 'instagram')];
+      const [a, b] = [await image(o.orgId), await image(o.orgId, 'image/png')];
+      const { postId } = await exec<{ postId: string }>(o, o.member, 'social.post.create', {
+        body: 'Khai trương',
+        media: [{ fileId: a, altText: 'Mặt tiền' }, { fileId: b }],
+        channels: [{ connectionId: fb }, { connectionId: ig }],
+      });
+      let post = await get(o, o.viewer, postId);
+      expect(post.media.map((m) => [m.fileId, m.altText, m.mime])).toEqual([
+        [a, 'Mặt tiền', 'image/jpeg'],
+        [b, null, 'image/png'],
+      ]);
+      expect(post.variants.map((v) => v.media.length)).toEqual([2, 2]);
+      // Instagram takes JPEG only; Facebook takes both.
+      const igVariant = post.variants.find((v) => v.provider === 'instagram');
+      expect(igVariant?.issues.map((i) => i.code)).toEqual(['IMAGE_TYPE_NOT_ALLOWED']);
+      expect(post.variants.find((v) => v.provider === 'facebook_page')?.issues).toEqual([]);
+
+      // Changing the images is an edit: every inheriting variant gets a new hash and revision.
+      const before = post.variants.map((v) => v.contentHash);
+      const updated = await exec<{ changedVariants: string[]; revision: number }>(o, o.member, 'social.post.update', { postId, revision: post.revision, media: [{ fileId: a, altText: 'Mặt tiền' }] });
+      expect(updated.changedVariants).toHaveLength(2);
+      post = await get(o, o.viewer, postId);
+      expect(post.media.map((m) => m.fileId)).toEqual([a]);
+      expect(post.variants.map((v) => v.contentHash)).not.toEqual(before);
+      expect(post.variants.map((v) => v.revision)).toEqual([2, 2]);
+      expect(igVariant && post.variants.find((v) => v.id === igVariant.id)?.issues).toEqual([]);
+      // The same list again changes nothing.
+      expect((await exec<{ changedVariants: string[] }>(o, o.member, 'social.post.update', { postId, revision: post.revision, media: [{ fileId: a, altText: 'Mặt tiền' }] })).changedVariants).toEqual([]);
+    });
+
+    it('takes only images uploaded for posts, never a document of the org, and keeps them out of the Inbox', async () => {
+      const o = await org();
+      const conn = await connection(o.orgId, o.owner, 'facebook_page');
+      const pdf = await image(o.orgId, 'application/pdf', 1000, 'social');
+      await expect(exec(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: pdf }], channels: [{ connectionId: conn }] })).rejects.toMatchObject({ code: 'MEDIA_TYPE_UNSUPPORTED' });
+      // An invoice photo is an image too, but it is an accounting document: it cannot be attached.
+      const scan = await image(o.orgId, 'image/jpeg', 1000, 'upload');
+      await expect(exec(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: scan }], channels: [{ connectionId: conn }] })).rejects.toMatchObject({ code: 'MEDIA_NOT_FOUND' });
+      const other = await org();
+      const foreign = await image(other.orgId);
+      await expect(exec(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: foreign }], channels: [{ connectionId: conn }] })).rejects.toMatchObject({ code: 'MEDIA_NOT_FOUND' });
+      const mine = await image(o.orgId);
+      await expect(exec(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: mine }, { fileId: mine }], channels: [{ connectionId: conn }] })).rejects.toMatchObject({ status: 422 });
+      const recent = await rt.query<{ id: string }[]>('kernel.files.recent', {}, { actor: asUser(o.owner), orgId: o.orgId });
+      expect(recent.map((f) => f.id)).toEqual([scan]);
+      // A file a post shows cannot be deleted from under it.
+      const { postId } = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: mine }], channels: [{ connectionId: conn }] });
+      expect(postId).toBeTruthy();
+      await expect(admin((c) => c.query('DELETE FROM crove_kernel.file WHERE id = $1', [mine]))).rejects.toThrow(/post_media_file_fk/);
+    });
+
+    it('freezes the images a published or cancelled variant had', async () => {
+      const o = await org();
+      const conn = await connection(o.orgId, o.owner, 'facebook_page');
+      const [a, b] = [await image(o.orgId), await image(o.orgId)];
+      const { postId, variants } = await exec<{ postId: string; variants: { variantId: string }[] }>(o, o.member, 'social.post.create', { body: 'Bài', media: [{ fileId: a }], channels: [{ connectionId: conn }] });
+      await exec(o, o.member, 'social.variant.cancel', { variantIds: variants.map((v) => v.variantId) });
+      let post = await get(o, o.owner, postId);
+      expect(post.variants[0]?.status).toBe('cancelled');
+      await exec(o, o.member, 'social.post.update', { postId, revision: post.revision, media: [{ fileId: b }] });
+      post = await get(o, o.owner, postId);
+      expect(post.media.map((m) => m.fileId)).toEqual([b]);
+      expect(post.variants[0]?.media.map((m) => m.fileId)).toEqual([a]);
+    });
   });
 });

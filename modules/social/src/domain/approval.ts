@@ -5,10 +5,18 @@ import { createHash } from 'node:crypto';
 import type { Provider } from './channels.ts';
 
 export interface HashedMedia {
-  // Kernel file id and its storage generation, so replacing a file's bytes changes the hash.
+  // Kernel file id and the object version its bytes were written as (ADR-0013; null on files from before it), so
+  // another file or other bytes change the hash. With null, the file id alone binds the bytes: a file row never changes
+  // (file_guard) and every read is checked against its sha256.
   fileId: string;
-  generation: number;
+  generation: string | null;
   altText: string | null;
+}
+
+// An image of a post or variant as the commands keep it: what the hash binds to, plus what the channel rules check.
+export interface PostMedia extends HashedMedia {
+  mime: string;
+  sizeBytes: number;
 }
 
 export interface HashedVariant {
@@ -86,6 +94,12 @@ export interface ContentOverrides {
   body: string | null;
   title: string | null;
   linkUrl: string | null;
+}
+
+// A variant's media: its own list when it has one (an override, or the list history kept), else the post's.
+export function effectiveMedia(base: readonly PostMedia[], own: readonly PostMedia[] | null, frozen = false): readonly PostMedia[] {
+  if (frozen) return own ?? [];
+  return own ?? base;
 }
 
 // A frozen variant (history) keeps its own content: its columns hold it, and null there means "none".

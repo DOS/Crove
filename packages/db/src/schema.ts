@@ -123,7 +123,8 @@ export type PartyTable = Refine<
 // generation is the object version the bytes were written as (ADR-0013); null only on rows from before it.
 // A file row never changes, for every role (trigger file_guard; a move to another org is refused by RLS): crove_tenant
 // keeps UPDATE only to lock the row (SELECT ... FOR UPDATE), so no column has an update type here.
-export const FILE_SOURCES = ['upload', 'email'] as const;
+// social: an image uploaded for a Social post (#372); never extracted, never in the Inbox.
+export const FILE_SOURCES = ['upload', 'email', 'social'] as const;
 type Frozen<T> = ColumnType<SelectType<T>, InsertType<T>, G.NotGranted>;
 export type FileTable = Refine<
   G.KernelFileTable,

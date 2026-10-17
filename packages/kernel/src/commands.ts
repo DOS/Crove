@@ -184,7 +184,8 @@ const zIngestFile = z.object({
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   storageKey: z.string().min(1),
   generation: z.string().regex(GENERATION_PATTERN),
-  source: z.enum(['upload', 'email']),
+  // social: an image for a Social post (#372), stored like any file but never sent to extraction.
+  source: z.enum(['upload', 'email', 'social']),
 });
 
 export const ingestFile = defineCommand({
@@ -216,12 +217,28 @@ export const ingestFile = defineCommand({
     if (!inserted) {
       const existing = await ctx.trx
         .selectFrom('crove_kernel.file')
-        .select('id')
+        .select(['id', 'source'])
         .where('org_id', '=', ctx.orgId)
         .where('sha256', '=', input.sha256)
+        .forUpdate()
         .executeTakeFirstOrThrow();
+      // Files are deduplicated by content, so the same bytes can arrive as a document and as an image for a Social
+      // post (#372). A document is never offered for publishing: an image upload of a document's bytes is refused.
+      if (input.source === 'social' && existing.source !== 'social') {
+        throw new DomainError('FILE_IS_DOCUMENT', 409, 'Ảnh này đã có trong chứng từ kế toán của tổ chức, hãy dùng ảnh khác cho bài đăng');
+      }
+      // A document whose bytes were first uploaded as a post image is still read as a document, once.
+      if (input.source !== 'social' && existing.source === 'social') {
+        const read = await ctx.trx.selectFrom('crove_kernel.extraction').select('id').where('org_id', '=', ctx.orgId).where('file_id', '=', existing.id).limit(1).executeTakeFirst();
+        if (!read) {
+          await ctx.activity('kernel.file', existing.id, 'file.received', `Nhận chứng từ ${input.filename}`);
+          await ctx.emit('kernel.file.ingested', { fileId: existing.id });
+          return { fileId: existing.id, duplicate: false };
+        }
+      }
       return { fileId: existing.id, duplicate: true };
     }
+    if (input.source === 'social') return { fileId: inserted.id, duplicate: false };
     await ctx.activity('kernel.file', inserted.id, 'file.received', `Nhận chứng từ ${input.filename}`);
     await ctx.emit('kernel.file.ingested', { fileId: inserted.id });
     return { fileId: inserted.id, duplicate: false };

@@ -45,7 +45,7 @@ export function InboxPage() {
   const items = useQuery({ ...orpc.inbox.list.queryOptions({ input: { status: tab } }), refetchInterval: pollEvery(live, 5000, SAFETY_POLL_MS) });
 
   const upload = useMutation({
-    mutationFn: uploadFiles,
+    mutationFn: (files: File[]) => uploadFiles(files),
     onSuccess: () => void queryClient.invalidateQueries(),
   });
   // Reads a file that could not be read again (for example after AI was configured).

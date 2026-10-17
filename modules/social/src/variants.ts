@@ -4,7 +4,7 @@
 import type { Transaction } from 'kysely';
 import type { Database, SocialVariantStatus } from '@crove/db';
 import { DomainError, type CommandContext } from '@crove/kernel-runtime';
-import { contentHash, effectiveContent, type BaseContent } from './domain/approval.ts';
+import { contentHash, effectiveContent, effectiveMedia, type BaseContent, type PostMedia } from './domain/approval.ts';
 import { isProvider } from './domain/channels.ts';
 import { postStatus, transitionVariant, type VariantEvent } from './domain/state.ts';
 import { validateVariant, type Issue } from './domain/validate.ts';
@@ -19,6 +19,8 @@ export interface PostRow {
   time_zone: string;
   scheduled_at: Date | null;
   revision: number;
+  // The post's images in order (crove_social.post_media), loaded with the row.
+  media: readonly PostMedia[];
 }
 
 export interface VariantRow {
@@ -31,6 +33,8 @@ export interface VariantRow {
   title: string | null;
   link_url: string | null;
   settings: unknown;
+  // The variant's own media list (jsonb), null to inherit the post's.
+  media: unknown;
   revision: number;
   content_hash: string;
   content_frozen: boolean;
@@ -55,6 +59,7 @@ export const VARIANT_COLUMNS = [
   'title',
   'link_url',
   'settings',
+  'media',
   'revision',
   'content_hash',
   'content_frozen',
@@ -68,8 +73,37 @@ export const VARIANT_COLUMNS = [
   'updated_at',
 ] as const;
 
-export const base = (post: PostRow): BaseContent => ({ body: post.body, title: post.title, linkUrl: post.link_url });
+// A post's base content: text and images, which every variant inherits unless it overrides them.
+export type PostContent = BaseContent & { media: readonly PostMedia[] };
+export const base = (post: Pick<PostRow, 'body' | 'title' | 'link_url' | 'media'>): PostContent => ({ body: post.body, title: post.title, linkUrl: post.link_url, media: post.media });
 export const overrides = (v: Pick<VariantRow, 'body' | 'title' | 'link_url'>) => ({ body: v.body, title: v.title, linkUrl: v.link_url });
+
+// A variant's own media column, as the commands wrote it; anything else reads as no list (inherit).
+export function mediaOf(value: unknown): PostMedia[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.flatMap((m: unknown) => {
+    if (m === null || typeof m !== 'object') return [];
+    const r = m as Record<string, unknown>;
+    if (typeof r.fileId !== 'string' || typeof r.mime !== 'string' || typeof r.sizeBytes !== 'number') return [];
+    return [{ fileId: r.fileId, generation: typeof r.generation === 'string' ? r.generation : null, altText: typeof r.altText === 'string' ? r.altText : null, mime: r.mime, sizeBytes: r.sizeBytes }];
+  });
+}
+
+// The images a variant shows.
+export const mediaFor = (post: PostContent, v: { media?: unknown; content_frozen?: boolean }) => effectiveMedia(post.media, mediaOf(v.media), v.content_frozen ?? false);
+
+// The images of a post, in order, with what the hash and the channel rules need from each file.
+export async function loadPostMedia(trx: Trx, orgId: string, postId: string): Promise<PostMedia[]> {
+  const rows = await trx
+    .selectFrom('crove_social.post_media as m')
+    .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
+    .select(['m.file_id', 'm.alt_text', 'f.generation', 'f.content_type', 'f.size_bytes'])
+    .where('m.org_id', '=', orgId)
+    .where('m.post_id', '=', postId)
+    .orderBy('m.position')
+    .execute();
+  return rows.map((r) => ({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes) }));
+}
 export const settingsOf = (v: { settings: unknown }): Record<string, unknown> =>
   v.settings !== null && typeof v.settings === 'object' && !Array.isArray(v.settings) ? (v.settings as Record<string, unknown>) : {};
 
@@ -80,18 +114,20 @@ export function providerOf(v: { provider: string }) {
 
 // The hash a reviewer's decision binds to: the variant's effective content, settings and target.
 export function hashOf(
-  post: BaseContent,
-  v: Pick<VariantRow, 'channel_connection_id' | 'provider' | 'body' | 'title' | 'link_url' | 'settings'> & { content_frozen?: boolean },
+  post: PostContent,
+  v: Pick<VariantRow, 'channel_connection_id' | 'provider' | 'body' | 'title' | 'link_url' | 'settings'> & { media?: unknown; content_frozen?: boolean },
 ): string {
   const content = effectiveContent(post, overrides(v), v.content_frozen ?? false);
+  const media = mediaFor(post, v).map((m) => ({ fileId: m.fileId, generation: m.generation, altText: m.altText }));
   return contentHash([
-    { channelConnectionId: v.channel_connection_id, provider: providerOf(v), body: content.body, title: content.title, linkUrl: content.linkUrl, media: [], settings: settingsOf(v) },
+    { channelConnectionId: v.channel_connection_id, provider: providerOf(v), body: content.body, title: content.title, linkUrl: content.linkUrl, media, settings: settingsOf(v) },
   ]);
 }
 
-export function issuesOf(post: BaseContent, v: VariantRow): Issue[] {
+export function issuesOf(post: PostContent, v: VariantRow): Issue[] {
   const content = effectiveContent(post, overrides(v), v.content_frozen);
-  return validateVariant({ provider: providerOf(v), body: content.body, title: content.title, media: [] });
+  const media = mediaFor(post, v).map((m) => ({ kind: 'image' as const, mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: null }));
+  return validateVariant({ provider: providerOf(v), body: content.body, title: content.title, media });
 }
 
 export function step(v: { id: string; status: SocialVariantStatus }, event: VariantEvent): SocialVariantStatus {
@@ -126,7 +162,8 @@ export function eventLabel(event: VariantEvent): string {
 export async function lockPost(trx: Trx, orgId: string, postId: string): Promise<PostRow> {
   const post = await trx.selectFrom('crove_social.post').select(POST_COLUMNS).where('org_id', '=', orgId).where('id', '=', postId).forUpdate().executeTakeFirst();
   if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
-  return post;
+  // Media rows change only under this post lock, so reading them after it is consistent.
+  return { ...post, media: await loadPostMedia(trx, orgId, postId) };
 }
 
 export async function lockVariants(trx: Trx, orgId: string, postId: string): Promise<VariantRow[]> {
@@ -187,7 +224,7 @@ export function editValues(v: VariantRow): Record<string, unknown> {
 // A variant becoming history keeps the content it had: copied into its own columns, which base edits no longer reach.
 export function freezeValues(post: PostRow, v: VariantRow): Record<string, unknown> {
   const kept = effectiveContent(base(post), overrides(v), v.content_frozen);
-  return { body: kept.body, title: kept.title, link_url: kept.linkUrl, content_frozen: true };
+  return { body: kept.body, title: kept.title, link_url: kept.linkUrl, media: JSON.stringify(mediaFor(base(post), v)), content_frozen: true };
 }
 
 export async function refreshPostStatus(ctx: CommandContext, postId: string): Promise<void> {

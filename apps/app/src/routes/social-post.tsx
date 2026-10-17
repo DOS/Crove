@@ -13,6 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
 import type { Issue } from '@crove/mod-social/contract';
+import { MediaField, MediaPreview, type MediaItem } from '../components/social-media.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -40,6 +41,7 @@ interface Base {
   body: string;
   title: string;
   linkUrl: string;
+  media: MediaItem[];
 }
 
 // A channel's own text, or none (it uses the shared text).
@@ -95,7 +97,7 @@ function Counter({ provider, body }: { provider: string; body: string }) {
 }
 
 // How the post reads on the channel: name, text, title and link, without the platform's chrome.
-function Preview({ channel, provider, content }: { channel: string; provider: string; content: { body: string; title: string; linkUrl: string } }) {
+function Preview({ channel, provider, content }: { channel: string; provider: string; content: { body: string; title: string; linkUrl: string; media: readonly MediaItem[] } }) {
   const t = useTranslations('social');
   let host = '';
   try {
@@ -114,6 +116,7 @@ function Preview({ channel, provider, content }: { channel: string; provider: st
       </div>
       {hasTitle(provider) && content.title && <p className="mt-3 text-sm font-semibold text-foreground">{content.title}</p>}
       <p className="mt-2 text-sm [overflow-wrap:anywhere] whitespace-pre-wrap text-foreground">{content.body || <span className="text-subtle-foreground">{t('emptyText')}</span>}</p>
+      <MediaPreview media={content.media} />
       {host && (
         <div className="mt-3 rounded-lg border bg-muted px-3 py-2 text-xs text-muted-foreground">
           <span className="font-mono">{host}</span>
@@ -143,8 +146,8 @@ function ChannelEditor({
   footer?: ReactNode;
 }) {
   const t = useTranslations('social');
-  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl: base.linkUrl };
-  const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null });
+  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl: base.linkUrl, media: base.media };
+  const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, media: content.media });
   return (
     <Card className="block space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -190,11 +193,15 @@ function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false 
         <Label htmlFor="social-link">{t('link')}</Label>
         <Input id="social-link" type="url" inputMode="url" value={base.linkUrl} disabled={disabled} placeholder="https://" onChange={(e) => onChange({ ...base, linkUrl: e.target.value })} />
       </div>
+      <MediaField media={base.media} disabled={disabled} onChange={(media) => onChange({ ...base, media })} />
     </Card>
   );
 }
 
 const orNull = (value: string) => (value.trim() === '' ? null : value);
+const mediaInput = (media: readonly MediaItem[]) => media.map((m) => ({ fileId: m.fileId, altText: orNull(m.altText) }));
+const mediaItems = (media: readonly { fileId: string; altText: string | null; mime: string; sizeBytes: number }[]): MediaItem[] =>
+  media.map((m) => ({ fileId: m.fileId, altText: m.altText ?? '', mime: m.mime, sizeBytes: m.sizeBytes }));
 
 // ---------------------------------------------------------------------------------------------------------------------
 // New post
@@ -205,7 +212,7 @@ export function SocialComposePage() {
   const t = useTranslations('social');
   const navigate = useNavigate();
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
-  const [base, setBase] = useState<Base>({ body: '', title: '', linkUrl: '' });
+  const [base, setBase] = useState<Base>({ body: '', title: '', linkUrl: '', media: [] });
   const [chosen, setChosen] = useState<string[]>([]);
   const [own, setOwn] = useState<Record<string, Own>>({});
   const live = (channels.data ?? []).filter((c) => c.status === 'active');
@@ -224,6 +231,7 @@ export function SocialComposePage() {
         title: orNull(base.title),
         linkUrl: orNull(base.linkUrl),
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        media: mediaInput(base.media),
         channels: chosen.map((connectionId) => {
           const mine = own[connectionId] ?? EMPTY_OWN;
           return mine.custom ? { connectionId, body: mine.body, title: orNull(mine.title) } : { connectionId };
@@ -243,7 +251,7 @@ export function SocialComposePage() {
   const blocking = selected.some((c) => {
     const mine = own[c.id] ?? EMPTY_OWN;
     const content = { body: mine.custom ? mine.body : base.body, title: mine.custom ? mine.title : base.title };
-    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null }).length > 0;
+    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null, media: base.media }).length > 0;
   });
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !blocking && !create.isPending) {
@@ -348,7 +356,7 @@ function contentKey(p: Post): string {
 }
 
 function baseOf(p: Post): Base {
-  return { body: p.body, title: p.title ?? '', linkUrl: p.linkUrl ?? '' };
+  return { body: p.body, title: p.title ?? '', linkUrl: p.linkUrl ?? '', media: mediaItems(p.media) };
 }
 
 function sameOwn(a: Own, b: Own): boolean {
@@ -534,8 +542,16 @@ export function SocialPostPage() {
     mutationFn: async () => {
       if (!origin || !base) return;
       const before = baseOf(origin);
-      if (base.body !== before.body || base.title !== before.title || base.linkUrl !== before.linkUrl) {
-        await client.social.posts.update({ postId, revision: origin.revision, body: base.body, title: orNull(base.title), linkUrl: orNull(base.linkUrl) });
+      const mediaChanged = JSON.stringify(mediaInput(base.media)) !== JSON.stringify(mediaInput(before.media));
+      if (base.body !== before.body || base.title !== before.title || base.linkUrl !== before.linkUrl || mediaChanged) {
+        await client.social.posts.update({
+          postId,
+          revision: origin.revision,
+          body: base.body,
+          title: orNull(base.title),
+          linkUrl: orNull(base.linkUrl),
+          ...(mediaChanged ? { media: mediaInput(base.media) } : {}),
+        });
         adoptNext.current = 'keep-own';
       }
       // Base edits move the inheriting variants' revisions: read them again before saving overrides.
@@ -631,7 +647,7 @@ export function SocialPostPage() {
                 key={v.id}
                 provider={v.provider}
                 channel={names.get(v.connectionId) ?? providerName(v.provider)}
-                base={frozen ? { body: v.effective.body, title: v.effective.title ?? '', linkUrl: v.effective.linkUrl ?? '' } : base}
+                base={frozen ? { body: v.effective.body, title: v.effective.title ?? '', linkUrl: v.effective.linkUrl ?? '', media: mediaItems(v.media) } : base}
                 own={frozen ? EMPTY_OWN : (own[v.id] ?? ownOf(v))}
                 disabled={frozen || !canWrite || save.isPending}
                 status={v.status}

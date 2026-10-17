@@ -7,7 +7,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
 import type pg from 'pg';
 import { schemaMissing } from '@crove/db/migrate';
-import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES, ORG_HEADER } from '@crove/kernel-contract';
+import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES, ORG_HEADER, SOCIAL_IMAGE_TYPES, type UploadPurpose } from '@crove/kernel-contract';
 import {
   BlobConflictError,
   BlobIntegrityError,
@@ -554,9 +554,13 @@ export function createHttpApp(deps: HttpDeps) {
   // Files are written and recorded the same way on every path: the server computes the sha256 of the bytes it
   // holds, writes them create-only to org/<org_id>/<sha256> and records the triple with the generation the store
   // returned (plan §7.6, ADR-0013).
-  async function ingest(user: AuthUser, orgId: string, name: string, bytes: Uint8Array, sha256 = sha256Hex(bytes)) {
+  // purpose social: an image for a Social post (#372), recorded with source 'social' so it never goes to extraction.
+  async function ingest(user: AuthUser, orgId: string, name: string, bytes: Uint8Array, sha256 = sha256Hex(bytes), purpose: UploadPurpose = 'document') {
     // The content decides the type; the browser's MIME type and the extension are only hints.
     const type = sniffType(bytes);
+    if (purpose === 'social' && (!type || !SOCIAL_IMAGE_TYPES.includes(type))) {
+      throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: ảnh bài đăng chỉ nhận JPG, PNG, WEBP`);
+    }
     if (!type || !ACCEPTED_UPLOAD_TYPES.includes(type)) {
       throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận XML, PDF, JPG, PNG, WEBP`);
     }
@@ -564,9 +568,16 @@ export function createHttpApp(deps: HttpDeps) {
     const generation = await putFile(store, storageKey, bytes, type, sha256);
     return runtime.execute<{ fileId: string; duplicate: boolean }>(
       'kernel.file.ingest',
-      { filename: safeFilename(name, type), contentType: type, sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },
+      { filename: safeFilename(name, type), contentType: type, sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: purpose === 'social' ? 'social' : 'upload' },
       { actor: actorOf(user), orgId },
     );
+  }
+
+  // What an upload is for: a document (the default) or an image for a Social post. Anything else is refused.
+  function uploadPurpose(value: unknown): UploadPurpose {
+    if (value === undefined || value === null || value === '' || value === 'document') return 'document';
+    if (value === 'social') return 'social';
+    throw new DomainError('INVALID', 400, 'Mục đích tải lên không hợp lệ');
   }
 
   async function uploader(c: Context<{ Variables: { user: AuthUser } }>) {
@@ -582,12 +593,14 @@ export function createHttpApp(deps: HttpDeps) {
       const { user, orgId } = await uploader(c);
       const body = await c.req.parseBody({ all: true });
       const files = ([] as unknown[]).concat(body.file ?? []).filter((f): f is File => f instanceof File);
+      const purpose = uploadPurpose(body.purpose);
       if (files.length === 0) throw new DomainError('NO_FILE', 400, 'Chưa chọn tệp');
       if (files.length > MAX_FILES_PER_UPLOAD) throw new DomainError('TOO_MANY_FILES', 413, `Tối đa ${MAX_FILES_PER_UPLOAD} tệp mỗi lần`);
       const results = [];
       for (const file of files) {
         if (file.size > MAX_UPLOAD_BYTES) throw new DomainError('TOO_LARGE', 413, `${file.name} vượt quá 25 MB`);
-        results.push(await ingest(user, orgId, file.name, new Uint8Array(await file.arrayBuffer())));
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        results.push(await ingest(user, orgId, file.name, bytes, sha256Hex(bytes), purpose));
       }
       return c.json({ files: results });
     } catch (error) {
@@ -629,7 +642,8 @@ export function createHttpApp(deps: HttpDeps) {
     try {
       if (!direct) throw noDirect();
       const { user, orgId } = await uploader(c);
-      const input = (await c.req.json().catch(() => null)) as { filename?: unknown } | null;
+      const input = (await c.req.json().catch(() => null)) as { filename?: unknown; purpose?: unknown } | null;
+      const purpose = uploadPurpose(input?.purpose);
       const filename = typeof input?.filename === 'string' && input.filename.trim() ? input.filename.slice(0, 255) : 'chung-tu';
       const release = completes.tryAcquire(user.userId);
       if (!release) {
@@ -648,7 +662,7 @@ export function createHttpApp(deps: HttpDeps) {
             throw error;
           });
           if (staged.bytes.byteLength === 0) throw new DomainError('NO_FILE', 400, 'Tệp rỗng');
-          return c.json(await ingest(user, orgId, filename, staged.bytes, staged.sha256));
+          return c.json(await ingest(user, orgId, filename, staged.bytes, staged.sha256, purpose));
         } finally {
           await store.delete(claim.stagingKey).catch((error: unknown) => console.error('[http] staging object not deleted', error));
         }

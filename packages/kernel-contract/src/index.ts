@@ -6,6 +6,10 @@ export * from './accounts.ts';
 export const ORG_HEADER = 'x-crove-org';
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 export const ACCEPTED_UPLOAD_TYPES = ['application/xml', 'text/xml', 'application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+// Images for Social posts (#372): an upload with purpose=social takes these only.
+export const SOCIAL_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+export const UPLOAD_PURPOSES = ['document', 'social'] as const;
+export type UploadPurpose = (typeof UPLOAD_PURPOSES)[number];
 
 // Realtime invalidation (issue #69): GET /api/stream sends hints `{ type, id }` only, never row data; the SPA re-fetches
 // through the normal authorized queries. extraction carries the id of the file whose reading changed, and document

@@ -315,7 +315,7 @@ describe('contentHash and approvalCovers', () => {
     body: 'Khuyến mãi tháng 10',
     title: null,
     linkUrl: 'https://crove.example/sale',
-    media: [{ fileId: 'f-1', generation: 1, altText: null }],
+    media: [{ fileId: 'f-1', generation: 's3:v1', altText: null }],
     settings: { a: 1, b: { c: true } },
   };
   const other: HashedVariant = { ...base, channelConnectionId: 'c-2', provider: 'instagram', settings: {} };
@@ -332,7 +332,7 @@ describe('contentHash and approvalCovers', () => {
     const h = contentHash([base]);
     expect(contentHash([{ ...base, body: base.body + '!' }])).not.toBe(h);
     expect(contentHash([{ ...base, linkUrl: null }])).not.toBe(h);
-    expect(contentHash([{ ...base, media: [{ fileId: 'f-1', generation: 2, altText: null }] }])).not.toBe(h);
+    expect(contentHash([{ ...base, media: [{ fileId: 'f-1', generation: 's3:v2', altText: null }] }])).not.toBe(h);
     expect(contentHash([{ ...base, settings: { a: 2, b: { c: true } } }])).not.toBe(h);
   });
 
