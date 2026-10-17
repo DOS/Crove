@@ -935,10 +935,10 @@ export const mediaFile = defineQuery({
   name: 'social.media.file',
   input: z.strictObject({ fileId: zId }),
   access: 'system',
-  handler: async (ctx, input): Promise<{ storageKey: string; generation: string | null; sha256: string }> => {
+  handler: async (ctx, input): Promise<{ storageKey: string; generation: string | null; sha256: string; contentType: string; filename: string }> => {
     const file = await ctx.trx
       .selectFrom('crove_kernel.file as f')
-      .select(['f.storage_key', 'f.generation', 'f.sha256'])
+      .select(['f.storage_key', 'f.generation', 'f.sha256', 'f.content_type', 'f.filename'])
       .where('f.org_id', '=', ctx.orgId)
       .where('f.id', '=', input.fileId)
       .where((eb) =>
@@ -955,7 +955,7 @@ export const mediaFile = defineQuery({
       )
       .executeTakeFirst();
     if (!file) throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này');
-    return { storageKey: file.storage_key, generation: file.generation, sha256: file.sha256 };
+    return { storageKey: file.storage_key, generation: file.generation, sha256: file.sha256, contentType: file.content_type, filename: file.filename };
   },
 });
 

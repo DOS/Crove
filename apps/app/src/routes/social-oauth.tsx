@@ -4,12 +4,14 @@ import { useMutation } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
+import type { OAUTH_CHANNEL_PROVIDERS } from '@crove/kernel-contract';
 import { Card } from '@crove/ui/components/card';
 import { ErrorText, Spinner } from '../components/ui.tsx';
 import { client, errorMessage, queryClient, setCurrentOrg } from '../lib/api.ts';
 import { takeOAuthAttempt } from '../lib/oauth.ts';
 import { providerName } from '../lib/social.ts';
 
+type OAuthProvider = (typeof OAUTH_CHANNEL_PROVIDERS)[number];
 type Callback = { kind: 'finish'; slug: string; state: string; code: string } | { kind: 'cancelled'; slug: string | null } | { kind: 'lost' };
 
 // Read once per page load: the address bar is cleaned right after, so a reload never replays the code.
@@ -40,7 +42,7 @@ export function OAuthCallbackPage() {
     mutationFn: (c: Extract<Callback, { kind: 'finish' }>) => {
       setCurrentOrg(c.slug);
       // The oauth providers are a fixed list in the contract; the server refuses any other.
-      return client.channels.oauthFinish({ provider: provider as 'facebook_page', state: c.state, code: c.code });
+      return client.channels.oauthFinish({ provider: provider as OAuthProvider, state: c.state, code: c.code });
     },
     onSuccess: () => void queryClient.invalidateQueries(),
   });

@@ -35,6 +35,7 @@ const input = (over: Partial<PublishInput> = {}): PublishInput => ({
   readMedia: async () => {
     throw new Error('no media in this test');
   },
+  mediaUrl: async () => null,
   settings: {},
   callKey: 'call-1',
   contentHash: `sha256:${'0'.repeat(64)}`,

@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 
 export * from './oauth.ts';
 export * from './meta.ts';
+export * from './instagram.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
@@ -90,6 +91,9 @@ export interface PublishInput {
   // The bytes of one of content.media; throws when the file cannot be read. An adapter reads every image before its
   // first visible call, so a read failure is a rejection with nothing posted.
   readMedia(fileId: string): Promise<Uint8Array>;
+  // A short-lived public URL for one of content.media, for platforms that fetch images themselves (Instagram); null
+  // when the deployment's storage cannot hand one out (local disk).
+  mediaUrl(fileId: string): Promise<string | null>;
   settings: Record<string, unknown>;
   // The external_call key of this step: unique per attempt, so a provider with idempotency keys can use it.
   callKey: string;

@@ -3,7 +3,7 @@
 // configuration (defaultAdapters); a Crove Cloud entrypoint wires its own adapters into the same factory.
 import { serve } from '@hono/node-server';
 import { InvoiceExtractor, type InvoiceReader } from '@crove/agent';
-import { FacebookPageConnector, FacebookPagePublisher, SandboxPublisher, type OAuthConnector, type Publisher } from '@crove/channel';
+import { FacebookPageConnector, FacebookPagePublisher, InstagramConnector, InstagramPublisher, SandboxPublisher, type OAuthConnector, type Publisher } from '@crove/channel';
 import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
 import { buildKernelCommands, kernelQueries } from '@crove/kernel';
@@ -117,7 +117,10 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
 export function channelConnectors(config: Pick<Config, 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION'>): Partial<Record<string, OAuthConnector>> {
   const connectors: Partial<Record<string, OAuthConnector>> = {};
   if (config.CHANNEL_META_APP_ID && config.CHANNEL_META_APP_SECRET) {
-    connectors.facebook_page = new FacebookPageConnector({ appId: config.CHANNEL_META_APP_ID, appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
+    const app = { appId: config.CHANNEL_META_APP_ID, appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION };
+    connectors.facebook_page = new FacebookPageConnector(app);
+    // Instagram professional accounts linked to the user's Pages, through the same Meta app (S6.3).
+    connectors.instagram = new InstagramConnector(app);
   }
   return connectors;
 }
@@ -128,6 +131,7 @@ export function channelPublishers(config: Pick<Config, 'CHANNEL_SANDBOX' | 'CHAN
   if (config.CHANNEL_SANDBOX === 'true') publishers.sandbox = new SandboxPublisher();
   if (config.CHANNEL_META_APP_ID && config.CHANNEL_META_APP_SECRET) {
     publishers.facebook_page = new FacebookPagePublisher({ appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
+    publishers.instagram = new InstagramPublisher({ appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
   }
   return publishers;
 }
