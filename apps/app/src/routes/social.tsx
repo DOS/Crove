@@ -138,6 +138,28 @@ function Metrics({ slug, names }: { slug: string; names: Map<string, string> }) 
   );
 }
 
+// The posts that show an image.
+function Usage({ fileId, slug }: { fileId: string; slug: string }) {
+  const t = useTranslations('social');
+  const f = useFormat();
+  const usage = useQuery(orpc.social.media.usage.queryOptions({ input: { fileId } }));
+  if (usage.isLoading) return <Spinner />;
+  if (usage.error) return <ErrorText>{errorMessage(usage.error)}</ErrorText>;
+  if ((usage.data ?? []).length === 0) return <p className="text-xs text-subtle-foreground">{t('libraryUsageNone')}</p>;
+  return (
+    <ul className="space-y-2">
+      {(usage.data ?? []).map((u) => (
+        <li key={u.postId}>
+          <Link to="/o/$slug/social/$id" params={{ slug, id: u.postId }} className="block rounded-lg border px-3 py-2 text-sm hover:border-ring/60">
+            <span className="line-clamp-2 [overflow-wrap:anywhere] text-foreground">{u.excerpt || t('emptyText')}</span>
+            <span className="text-xs text-subtle-foreground">{f.dateTime(u.updatedAt)}</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 // The media library (S9): the org's post images, searchable by name, each with the posts that show it.
 function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   const t = useTranslations('social');
@@ -146,7 +168,6 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   const [open, setOpen] = useState<LibraryItem | null>(null);
   const picker = useRef<HTMLInputElement>(null);
   const library = useLibrary(search);
-  const usage = useQuery({ ...orpc.social.media.usage.queryOptions({ input: { fileId: open?.fileId ?? '' } }), enabled: open !== null });
   const upload = useMutation({ mutationFn: (files: File[]) => uploadFiles(files, 'social'), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['social-library'] }) });
   const items = library.data?.pages.flatMap((p) => p.items) ?? [];
   return (
@@ -213,24 +234,8 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
               <p className="text-sm font-medium [overflow-wrap:anywhere] text-foreground">{open.filename}</p>
               <p className="text-xs text-subtle-foreground">{f.dateTime(open.createdAt)}</p>
               <p className="text-xs font-medium tracking-wide text-subtle-foreground uppercase">{t('libraryUsageTitle')}</p>
-              {usage.isLoading ? (
-                <Spinner />
-              ) : usage.error ? (
-                <ErrorText>{errorMessage(usage.error)}</ErrorText>
-              ) : (usage.data ?? []).length === 0 ? (
-                <p className="text-xs text-subtle-foreground">{t('libraryUsageNone')}</p>
-              ) : (
-                <ul className="space-y-2">
-                  {(usage.data ?? []).map((u) => (
-                    <li key={u.postId}>
-                      <Link to="/o/$slug/social/$id" params={{ slug, id: u.postId }} className="block rounded-lg border px-3 py-2 text-sm hover:border-ring/60">
-                        <span className="line-clamp-2 [overflow-wrap:anywhere] text-foreground">{u.excerpt || t('emptyText')}</span>
-                        <span className="text-xs text-subtle-foreground">{f.dateTime(u.updatedAt)}</span>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <Usage fileId={open.fileId} slug={slug} />
+
             </Card>
           )}
         </div>
