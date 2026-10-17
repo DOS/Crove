@@ -3,7 +3,19 @@
 // configuration (defaultAdapters); a Crove Cloud entrypoint wires its own adapters into the same factory.
 import { serve } from '@hono/node-server';
 import { InvoiceExtractor, type InvoiceReader } from '@crove/agent';
-import { FacebookPageConnector, FacebookPagePublisher, InstagramConnector, InstagramPublisher, SandboxPublisher, type OAuthConnector, type Publisher } from '@crove/channel';
+import {
+  FacebookPageConnector,
+  FacebookPagePublisher,
+  InstagramConnector,
+  InstagramPublisher,
+  SandboxPublisher,
+  ZaloOaConnector,
+  ZaloOaPublisher,
+  ZaloOaRefresher,
+  type OAuthConnector,
+  type Publisher,
+  type Refresher,
+} from '@crove/channel';
 import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
 import { buildKernelCommands, kernelQueries } from '@crove/kernel';
@@ -114,7 +126,10 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
 
 // OAuth connectors of the providers this deployment has app credentials for (Social plan S6); a provider without
 // them is not offered.
-export function channelConnectors(config: Pick<Config, 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION'>): Partial<Record<string, OAuthConnector>> {
+type ChannelConfig = Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION' | 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'>;
+const zaloApp = (config: Pick<Config, 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'>) => (config.CHANNEL_ZALO_APP_ID && config.CHANNEL_ZALO_APP_SECRET ? { appId: config.CHANNEL_ZALO_APP_ID, appSecret: config.CHANNEL_ZALO_APP_SECRET } : null);
+
+export function channelConnectors(config: Omit<ChannelConfig, 'CHANNEL_SANDBOX'>): Partial<Record<string, OAuthConnector>> {
   const connectors: Partial<Record<string, OAuthConnector>> = {};
   if (config.CHANNEL_META_APP_ID && config.CHANNEL_META_APP_SECRET) {
     const app = { appId: config.CHANNEL_META_APP_ID, appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION };
@@ -122,18 +137,28 @@ export function channelConnectors(config: Pick<Config, 'CHANNEL_META_APP_ID' | '
     // Instagram professional accounts linked to the user's Pages, through the same Meta app (S6.3).
     connectors.instagram = new InstagramConnector(app);
   }
+  const zalo = zaloApp(config);
+  if (zalo) connectors.zalo_oa = new ZaloOaConnector(zalo);
   return connectors;
 }
 
 // The providers the worker publishes to: the sandbox when it is on, and each platform with app credentials.
-export function channelPublishers(config: Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION'>): Record<string, Publisher> {
+export function channelPublishers(config: ChannelConfig): Record<string, Publisher> {
   const publishers: Record<string, Publisher> = {};
   if (config.CHANNEL_SANDBOX === 'true') publishers.sandbox = new SandboxPublisher();
   if (config.CHANNEL_META_APP_ID && config.CHANNEL_META_APP_SECRET) {
     publishers.facebook_page = new FacebookPagePublisher({ appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
     publishers.instagram = new InstagramPublisher({ appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
   }
+  const zalo = zaloApp(config);
+  if (zalo) publishers.zalo_oa = new ZaloOaPublisher(zalo);
   return publishers;
+}
+
+// Providers whose tokens the worker renews ahead of expiry (S6.4).
+export function channelRefreshers(config: ChannelConfig): Record<string, Refresher> {
+  const zalo = zaloApp(config);
+  return zalo ? { zalo_oa: new ZaloOaRefresher(zalo) } : {};
 }
 
 export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
@@ -271,7 +296,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             agentPrograms: financeAgentPrograms,
             exportSealer: exportSealer(config),
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,
-            channels: { broker: resolved.broker, publishers: channelPublishers(config) },
+            channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config) },
           }),
         );
       }

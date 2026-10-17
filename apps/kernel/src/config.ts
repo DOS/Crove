@@ -165,6 +165,10 @@ const schema = z.object({
   CHANNEL_META_APP_ID: optional,
   CHANNEL_META_APP_SECRET: optional,
   CHANNEL_META_GRAPH_VERSION: z.string().regex(/^v\d{1,3}\.\d{1,2}$/).default('v24.0'),
+  // The deployment's Zalo app, linked to the OAs it posts for (Social plan S6.4). Set both to offer Zalo OA. The app's
+  // callback URL is PUBLIC_URL/channels/oauth/zalo_oa/callback.
+  CHANNEL_ZALO_APP_ID: optional,
+  CHANNEL_ZALO_APP_SECRET: optional,
   // Requests per minute per signed-in user on /api (429 RATE_LIMITED with Retry-After past it), per API process; see
   // rate-limit.ts. 0 turns it off, for a deployment whose edge (proxy, CDN or WAF) limits per user instead.
   API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(0).max(999_999).default(600),
@@ -272,6 +276,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error('set both CHANNEL_META_APP_ID and CHANNEL_META_APP_SECRET, or neither');
   }
   if (config.CHANNEL_META_APP_ID && !/^\d{1,32}$/.test(config.CHANNEL_META_APP_ID)) throw new Error('CHANNEL_META_APP_ID is the numeric id of the Meta app');
+  if (Boolean(config.CHANNEL_ZALO_APP_ID) !== Boolean(config.CHANNEL_ZALO_APP_SECRET)) throw new Error('set both CHANNEL_ZALO_APP_ID and CHANNEL_ZALO_APP_SECRET, or neither');
+  if (config.CHANNEL_ZALO_APP_ID && !/^\d{1,32}$/.test(config.CHANNEL_ZALO_APP_ID)) throw new Error('CHANNEL_ZALO_APP_ID is the numeric id of the Zalo app');
   if (!isLocalUrl(config.PUBLIC_URL)) {
     if (config.AUTH_JWT_SECRET && SAMPLE_SECRETS.has(config.AUTH_JWT_SECRET)) {
       throw new Error('AUTH_JWT_SECRET is a sample value; generate a random secret before exposing Crove');

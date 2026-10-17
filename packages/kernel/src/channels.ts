@@ -233,6 +233,49 @@ export const channelOAuthConsume = defineCommand({
   },
 });
 
+// A provider job renewed a connection's tokens (Social plan S6.4): the new credential is sealed in and the expiry
+// moves, in one transaction, so a rotated single-use refresh token is never lost to a half-done write. ifVersion is the
+// connection's updated_at the refresh started from; a connection changed since (reconnected, disconnected, expired) is
+// left alone, and the answer says so: the caller then drops the new tokens.
+export const channelRefresh = defineCommand({
+  name: 'kernel.channel.refresh',
+  input: z.strictObject({
+    connectionId: zId,
+    ifVersion: z.iso.datetime({ offset: true }),
+    expiresAt: z.iso.datetime({ offset: true }).nullable(),
+    credential: z.strictObject({ keyId: zKeyId, envelope: zEnvelope }),
+  }),
+  risk: 'R1',
+  access: 'system',
+  target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
+    const row = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select(['status', 'provider', 'updated_at'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!row) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
+    // Compared at millisecond precision, the precision the caller read it at.
+    if (row.status !== 'active' || Math.floor(row.updated_at.getTime()) !== Date.parse(input.ifVersion)) {
+      return { connectionId: input.connectionId, refreshed: false };
+    }
+    await sql`SELECT crove_kernel.credential_put(${input.connectionId}::uuid, ${input.credential.keyId}, decode(${input.credential.envelope}, 'base64'))`
+      .execute(ctx.trx)
+      .catch(credentialError);
+    await ctx.trx
+      .updateTable('crove_kernel.channel_connection')
+      .set({ expires_at: input.expiresAt, updated_at: ctx.now })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .execute();
+    ctx.audit({ connection_id: input.connectionId, provider: row.provider });
+    return { connectionId: input.connectionId, refreshed: true };
+  },
+});
+
 export interface ChannelConnectionView {
   id: string;
   provider: string;
@@ -300,5 +343,5 @@ export const channelCredential = defineQuery({
   },
 });
 
-export const channelCommands = [channelConnect, channelDisconnect, channelMarkExpired, channelOAuthBegin, channelOAuthConsume];
+export const channelCommands = [channelConnect, channelDisconnect, channelMarkExpired, channelOAuthBegin, channelOAuthConsume, channelRefresh];
 export const channelQueries = [channelsList, channelCredential];
