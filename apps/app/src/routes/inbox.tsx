@@ -178,7 +178,17 @@ export function InboxPage() {
         {items.isLoading ? (
           <Spinner />
         ) : (items.data?.length ?? 0) === 0 ? (
-          <Empty title={tab === 'pending' ? t('emptyPending') : t('emptyOther')} hint={tab === 'pending' ? t('emptyPendingHint') : undefined} />
+          <Empty
+            title={tab === 'pending' ? t('emptyPending') : t('emptyOther')}
+            hint={tab === 'pending' ? t('emptyPendingHint') : undefined}
+            action={
+              tab === 'pending' && config.modules.includes('finance') ? (
+                <Link to="/o/$slug/guide" params={{ slug }} className="text-sm text-link hover:underline">
+                  {t('guideLink')}
+                </Link>
+              ) : undefined
+            }
+          />
         ) : (
           <DataTable head={[t('columns.document'), t('columns.issueDate'), t('columns.total'), t('columns.checks'), t('columns.received')]}>
             {items.data?.map((item) => (

@@ -1,7 +1,7 @@
 // App-level building blocks composed from the @crove/ui design system. Screens import primitives (Button, Input,
 // Card, Badge, ...) from @crove/ui directly and these composites from here.
 import { Alert } from '@crove/ui/components/alert';
-import { Empty as EmptyRoot, EmptyDescription, EmptyHeader, EmptyTitle } from '@crove/ui/components/empty';
+import { Empty as EmptyRoot, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@crove/ui/components/empty';
 import { Spinner as SpinnerIcon } from '@crove/ui/components/spinner';
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@crove/ui/components/table';
 import { cn } from '@crove/ui/lib/utils';
@@ -21,13 +21,14 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   );
 }
 
-export function Empty({ title, hint }: { title: string; hint?: string | undefined }) {
+export function Empty({ title, hint, action }: { title: string; hint?: string | undefined; action?: ReactNode }) {
   return (
     <EmptyRoot className="border border-dashed px-6 py-12">
       <EmptyHeader>
         <EmptyTitle className="text-foreground">{title}</EmptyTitle>
         {hint && <EmptyDescription className="text-subtle-foreground">{hint}</EmptyDescription>}
       </EmptyHeader>
+      {action && <EmptyContent>{action}</EmptyContent>}
     </EmptyRoot>
   );
 }

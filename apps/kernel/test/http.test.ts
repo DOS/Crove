@@ -111,6 +111,38 @@ describe('configuration guards', () => {
     expect(loadConfig({ ...base, DB_RESET_ON_RELEASE: 'false' }).DB_RESET_ON_RELEASE).toBe('false');
     expect(() => loadConfig({ ...base, DB_RESET_ON_RELEASE: 'no' })).toThrow(/DB_RESET_ON_RELEASE/);
   });
+
+  // #310: the app's feedback and support link is an https: page or a mailto: address; unset hides it.
+  it('accepts an https: or mailto: SUPPORT_URL and refuses any other', () => {
+    expect(loadConfig(base).SUPPORT_URL).toBeUndefined();
+    expect(loadConfig({ ...base, SUPPORT_URL: '  ' }).SUPPORT_URL).toBeUndefined();
+    expect(loadConfig({ ...base, SUPPORT_URL: ' https://chat.example.com/g/pilot ' }).SUPPORT_URL).toBe('https://chat.example.com/g/pilot');
+    expect(loadConfig({ ...base, SUPPORT_URL: 'mailto:support@example.com' }).SUPPORT_URL).toBe('mailto:support@example.com');
+    for (const url of ['http://chat.example.com', 'javascript:alert(1)', 'data:text/html,x', 'support@example.com', 'https://']) {
+      expect(() => loadConfig({ ...base, SUPPORT_URL: url }), url).toThrow(/SUPPORT_URL/);
+    }
+    for (const url of ['mailto:', 'mailto:?subject=Crove']) {
+      expect(() => loadConfig({ ...base, SUPPORT_URL: url }), url).toThrow(/SUPPORT_URL \(a mailto: link needs an address\)/);
+    }
+  });
+
+  it('hands SUPPORT_URL to the app through /api/config, or null', async () => {
+    const config = async (env: Record<string, string>) => {
+      const app = createHttpApp({
+        config: loadConfig({ ...base, WEB_DIST: '/nonexistent', ...env }),
+        runtime: { installed: () => true, modules: () => ['kernel'] } as unknown as Runtime,
+        store: {} as BlobStore,
+        authenticate: async () => {
+          throw new Error('not used');
+        },
+        pool: {} as pg.Pool,
+        aiEnabled: false,
+      });
+      return ((await (await app.request('/api/config')).json()) as { supportUrl: unknown }).supportUrl;
+    };
+    expect(await config({})).toBeNull();
+    expect(await config({ SUPPORT_URL: 'mailto:support@example.com' })).toBe('mailto:support@example.com');
+  });
 });
 
 // A compact JWS with this payload (a JSON value, or raw text) and a dummy signature: the proxy decodes, never verifies.

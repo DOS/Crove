@@ -31,6 +31,19 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     return created;
   });
 
+  await test.step('the empty Inbox links the quick guide, and the shell the support channel (#310)', async () => {
+    const support = page.getByRole('complementary').getByRole('link', { name: 'Góp ý / Hỗ trợ' });
+    await expect(support).toHaveAttribute('href', 'mailto:support@e2e.test');
+    await page.getByRole('link', { name: 'Xem hướng dẫn nhanh: tải lên, duyệt, xuất Excel' }).click();
+    await expect(page).toHaveURL(new RegExp(`/o/${slug}/guide$`));
+    await expect(page.getByRole('heading', { name: 'Hướng dẫn nhanh' })).toBeVisible();
+    for (const step of ['Bước 1. Tải hóa đơn lên', 'Bước 2. Kiểm tra và duyệt', 'Bước 3. Xuất Excel cho kế toán']) {
+      await expect(page.getByRole('heading', { name: step })).toBeVisible();
+    }
+    await page.getByRole('link', { name: '← Hộp thư chứng từ' }).click();
+    await expect(page.getByRole('heading', { name: 'Hộp thư chứng từ' })).toBeVisible();
+  });
+
   await test.step('upload the e-invoice and wait for the proposal', async () => {
     await page.locator('input[type=file]').setInputFiles(INVOICE);
     await expect(page.getByText('einvoice-basic.xml')).toBeVisible();

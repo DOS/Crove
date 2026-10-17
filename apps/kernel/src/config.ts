@@ -193,6 +193,16 @@ const schema = z.object({
   SMTP_USER: optional,
   SMTP_PASS: optional,
   SMTP_FROM: optional,
+  // Where the app's "Góp ý / Hỗ trợ" (feedback and support) link goes: an https: page (a chat group, a help desk) or
+  // a mailto: address. Unset hides the link. Browsers see it through /api/config, so it must hold nothing secret.
+  SUPPORT_URL: optional.pipe(
+    z
+      .url({ protocol: /^(https|mailto)$/ })
+      .refine((value) => !value.toLowerCase().startsWith('mailto:') || new URL(value).pathname.trim() !== '', {
+        message: 'a mailto: link needs an address',
+      })
+      .optional(),
+  ),
   // Inbound email: <token>@INBOUND_DOMAIN, delivered by a mail worker to POST /api/inbound/email.
   INBOUND_DOMAIN: optional,
   INBOUND_SECRET: optional,
