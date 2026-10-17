@@ -10,6 +10,7 @@ import { Card } from '@crove/ui/components/card';
 import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
+import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
 import type { Issue } from '@crove/mod-social/contract';
@@ -491,6 +492,42 @@ function SchedulePanel({ post, onDone }: { post: Post; onDone: () => void }) {
   );
 }
 
+const EVERGREEN_DAYS = [7, 14, 30, 60, 90, 180, 365] as const;
+
+// Evergreen (S9): a published post drafted again every N days and sent to review; a person approves each repost.
+function EvergreenPanel({ post, onDone }: { post: Post; onDone: () => void }) {
+  const t = useTranslations('social');
+  const set = useMutation({ mutationFn: (days: number | null) => client.social.posts.setEvergreen({ postId: post.id, days }), onSuccess: onDone });
+  const current = post.evergreenDays;
+  return (
+    <Card className="block space-y-2 p-4">
+      <Label htmlFor="evergreen" className="text-sm font-medium text-foreground">
+        {t('evergreenTitle')}
+      </Label>
+      <NativeSelect
+        id="evergreen"
+        size="sm"
+        className="w-full max-w-xs"
+        value={current === null ? '' : String(current)}
+        disabled={set.isPending}
+        onChange={(e) => set.mutate(e.target.value === '' ? null : Number(e.target.value))}
+      >
+        <NativeSelectOption value="">{t('evergreenOff')}</NativeSelectOption>
+        {current !== null && !(EVERGREEN_DAYS as readonly number[]).includes(current) && (
+          <NativeSelectOption value={String(current)}>{t('evergreenEvery', { days: String(current) })}</NativeSelectOption>
+        )}
+        {EVERGREEN_DAYS.map((d) => (
+          <NativeSelectOption key={d} value={String(d)}>
+            {t('evergreenEvery', { days: String(d) })}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      <p className="text-xs text-subtle-foreground">{t('evergreenHint')}</p>
+      {set.error && <ErrorText>{errorMessage(set.error)}</ErrorText>}
+    </Card>
+  );
+}
+
 // What happened to a variant on its way out, in words: a retry time, a pending or unknown outcome, a pause on its
 // channel, a refusal with what the platform said.
 function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
@@ -537,6 +574,7 @@ export function SocialPostPage() {
   const t = useTranslations('social');
   const f = useFormat();
   const { canDecide, canWrite } = useRole(slug);
+  const navigate = useNavigate();
   const post = useQuery(orpc.social.posts.get.queryOptions({ input: { postId } }));
   const channels = useQuery(orpc.channels.list.queryOptions({ input: { includeRevoked: true } }));
   const names = useMemo(() => new Map((channels.data ?? []).map((c: Channel) => [c.id, c.displayName])), [channels.data]);
@@ -604,6 +642,15 @@ export function SocialPostPage() {
     onSettled: refresh,
   });
   const submit = useMutation({ mutationFn: () => client.social.posts.submit({ postId }), onSuccess: refresh });
+  // A repost opens as a new draft for the same channels; the page takes the new post's content whole.
+  const repost = useMutation({
+    mutationFn: () => client.social.posts.repost({ postId }),
+    onSuccess: (made) => {
+      adoptNext.current = 'all';
+      refresh();
+      void navigate({ to: '/o/$slug/social/$id', params: { slug, id: made.postId } });
+    },
+  });
   const unschedule = useMutation({ mutationFn: (variantId: string) => client.social.variants.unschedule({ variantIds: [variantId] }), onSuccess: refresh });
   const cancel = useMutation({ mutationFn: (variantId: string) => client.social.variants.cancel({ variantIds: [variantId] }), onSuccess: refresh });
   const retry = useMutation({ mutationFn: (variantId: string) => client.social.variants.retry({ variantIds: [variantId] }), onSuccess: refresh });
@@ -624,7 +671,8 @@ export function SocialPostPage() {
       save.mutate();
     }
   };
-  const error = save.error ?? submit.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
+  const published = p.variants.some((v) => v.status === 'published');
+  const error = save.error ?? submit.error ?? repost.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
   const reviewable = !dirty && !stale;
 
   return (
@@ -648,6 +696,12 @@ export function SocialPostPage() {
                 {t('submit')}
               </Button>
             )}
+            {canWrite && published && (
+              <Button variant="outline" size="lg" disabled={dirty || repost.isPending} title={t('repostHint')} onClick={() => repost.mutate()}>
+                {repost.isPending ? <Spinner className="text-current" /> : null}
+                {t('repost')}
+              </Button>
+            )}
           </>
         }
       />
@@ -660,6 +714,14 @@ export function SocialPostPage() {
         <div className="mb-4 flex items-center gap-2 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
           <Badge variant="secondary">{t('aiBadge')}</Badge>
           <span>{t('aiBadgeHint')}</span>
+        </div>
+      )}
+      {p.repostOf && (
+        <div className="mb-4 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
+          {t('repostOf')}{' '}
+          <Link to="/o/$slug/social/$id" params={{ slug, id: p.repostOf }} className="text-link hover:underline">
+            {t('repostOfLink')}
+          </Link>
         </div>
       )}
       {stale && (
@@ -675,6 +737,7 @@ export function SocialPostPage() {
           <SharedFields base={base} onChange={setBase} disabled={!editable || save.isPending} needsTitle={p.variants.some((v) => hasTitle(v.provider))} />
           {canDecide && reviewable && <ReviewPanel post={p} onDone={refresh} />}
           {canDecide && reviewable && <SchedulePanel post={p} onDone={refresh} />}
+          {canWrite && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
           {dirty && <p className="text-xs text-subtle-foreground">{t('unsaved')}</p>}
         </div>
         <div className="space-y-4">
