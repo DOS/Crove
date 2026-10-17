@@ -26,7 +26,9 @@ export async function approvalsRequired(trx: Trx, orgId: string, connectionIds: 
   return out;
 }
 
-// The review decisions of variants, newest first, as approvalsInRound reads them.
+// The review decisions of variants, newest first, as approvalsInRound reads them. Newest by id: uuid_v7 takes the clock
+// when the row is written, under the post lock, while created_at is the start of its transaction, which a decision
+// that waited for the lock may share with an older one.
 export async function decisionsOf(trx: Trx, orgId: string, variantIds: readonly string[]) {
   const out = new Map<string, { decision: string; decidedBy: string; revision: number; contentHash: string }[]>();
   if (variantIds.length === 0) return out;
@@ -35,7 +37,6 @@ export async function decisionsOf(trx: Trx, orgId: string, variantIds: readonly 
     .select(['variant_id', 'decision', 'decided_by', 'revision', 'content_hash'])
     .where('org_id', '=', orgId)
     .where('variant_id', 'in', [...variantIds])
-    .orderBy('created_at', 'desc')
     .orderBy('id', 'desc')
     .execute();
   for (const r of rows) out.set(r.variant_id, [...(out.get(r.variant_id) ?? []), { decision: r.decision, decidedBy: r.decided_by, revision: r.revision, contentHash: r.content_hash }]);

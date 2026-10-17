@@ -403,8 +403,10 @@ function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
   const self = me.data?.userId;
   const inReview = post.variants.filter((v) => v.status === 'in_review');
   // A channel that needs several approvals waits for another person once this reviewer has approved it.
+  // The reviewer may still ask for changes or reject such a channel, which ends the round; only approving it again is
+  // refused.
   const mine = (v: Variant) => self !== undefined && v.review.approvedBy.includes(self);
-  const waiting = inReview.filter((v) => !mine(v));
+  const waiting = inReview;
   const [unticked, setUnticked] = useState<string[]>([]);
   const picked = waiting.map((v) => v.id).filter((id) => !unticked.includes(id));
   const [comment, setComment] = useState('');
@@ -415,7 +417,7 @@ function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
         decision,
         ...(comment.trim() ? { comment: comment.trim() } : {}),
         // What this reviewer sees: a newer revision is refused, never approved by mistake.
-        variants: waiting.filter((v) => picked.includes(v.id)).map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })),
+        variants: waiting.filter((v) => picked.includes(v.id) && (decision !== 'approved' || !mine(v))).map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })),
       }),
     onSuccess: () => {
       setComment('');
@@ -425,14 +427,8 @@ function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
   });
   if (inReview.length === 0) return null;
   const done = inReview.filter(mine);
-  if (waiting.length === 0) {
-    return (
-      <Card className="block space-y-2 border-warning/40 p-4">
-        <p className="text-sm font-medium text-foreground">{t('reviewTitle')}</p>
-        <p className="text-xs text-subtle-foreground">{t('reviewYouApproved', { channels: done.map((v) => providerName(v.provider)).join(', ') })}</p>
-      </Card>
-    );
-  }
+  const approvable = waiting.filter((v) => picked.includes(v.id) && !mine(v));
+
   return (
     <Card className="block space-y-3 border-warning/40 p-4">
       <p className="text-sm font-medium text-foreground">{t('reviewTitle')}</p>
@@ -453,7 +449,7 @@ function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
       <Textarea value={comment} rows={2} aria-label={t('commentPlaceholder')} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
       {decide.error && <ErrorText>{errorMessage(decide.error)}</ErrorText>}
       <div className="flex flex-wrap gap-2">
-        <Button size="lg" disabled={picked.length === 0 || decide.isPending} onClick={() => decide.mutate('approved')}>
+        <Button size="lg" disabled={approvable.length === 0 || decide.isPending} onClick={() => decide.mutate('approved')}>
           {t('approve')}
         </Button>
         <Button variant="outline" size="lg" disabled={picked.length === 0 || decide.isPending || !comment.trim()} onClick={() => decide.mutate('changes_requested')}>

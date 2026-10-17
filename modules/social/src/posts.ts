@@ -790,7 +790,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
           'in',
           variants.map((v) => v.id),
         )
-        .orderBy('created_at', 'desc')
+        // Newest by id: written under the post lock, unlike created_at (its transaction's start).
         .orderBy('id', 'desc')
         .execute()
     : [];
