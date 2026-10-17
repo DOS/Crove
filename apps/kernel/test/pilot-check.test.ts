@@ -73,6 +73,7 @@ describe('pilot-check settings', () => {
     expect(failing({ ...READY, AUTH_AUTOCONFIRM: undefined })).toEqual([expect.stringContaining('AUTH_AUTOCONFIRM is unset')]);
     expect(failing({ ...READY, SMTP_HOST: 'smtp.example.com' })).toEqual([expect.stringContaining('SMTP_HOST is smtp.example.com')]);
     expect(failing({ ...READY, SMTP_HOST: 'mailpit' })).toEqual([expect.stringContaining('SMTP_HOST is mailpit')]);
+    expect(failing({ ...READY, SMTP_HOST: '127.0.0.1' })).toEqual([expect.stringContaining('SMTP_HOST is 127.0.0.1')]);
     expect(failing({ ...READY, AUTH_STEP_UP: 'off' })).toEqual([expect.stringContaining('AUTH_STEP_UP=off')]);
     // Unset is the kernel's and docker compose's default, required.
     expect(failing({ ...READY, AUTH_STEP_UP: undefined })).toEqual([]);
@@ -124,11 +125,34 @@ describe('pilot-check probe', () => {
     expect(results.map((r) => r.item)).toEqual(['TLS', 'TLS', 'Sign-up limited', 'Email confirmation and MFA step-up']);
   });
 
-  it('accepts a plain-http redirect to https and refuses plain-http service', async () => {
-    const redirect = { ...healthy, 'http://crove.example.com/healthz': () => new Response(null, { status: 301, headers: { location: 'https://crove.example.com/healthz' } }) };
-    expect(failures(await probeDeployment('https://crove.example.com', fakeFetch(redirect)))).toEqual([]);
+  it('accepts a plain-http redirect to https on the same host and refuses plain-http service', async () => {
+    const redirectTo = (location: string) => ({ ...healthy, 'http://crove.example.com/healthz': () => new Response(null, { status: 301, headers: { location } }) });
+    expect(failures(await probeDeployment('https://crove.example.com', fakeFetch(redirectTo('https://crove.example.com/healthz'))))).toEqual([]);
+    for (const location of ['https://elsewhere.example.net/', 'http://crove.example.com/', 'not a url']) {
+      expect(failures(await probeDeployment('https://crove.example.com', fakeFetch(redirectTo(location)))).map((r) => r.message), location).toEqual([
+        expect.stringContaining('over plain http'),
+      ]);
+    }
     const served = { ...healthy, 'http://crove.example.com/healthz': json({ ok: true }) };
     expect(failures(await probeDeployment('https://crove.example.com', fakeFetch(served))).map((r) => r.message)).toEqual([expect.stringContaining('over plain http')]);
+  });
+
+  it('passes closed plain http only on a refused connection, not on a timeout', async () => {
+    const timeout: Fetch = async (input, init) => {
+      if (input.startsWith('http:')) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      return fakeFetch(healthy)(input, init);
+    };
+    expect(failures(await probeDeployment('https://crove.example.com', timeout)).map((r) => r.message)).toEqual([expect.stringContaining('could not tell whether http://crove.example.com')]);
+  });
+
+  it('probes port 80 for plain http whatever port the https URL uses', async () => {
+    const seen: string[] = [];
+    const record: Fetch = async (input, init) => {
+      seen.push(input);
+      return fakeFetch({ 'https://crove.example.com:8443/healthz': json({ ok: true }) })(input, init);
+    };
+    await probeDeployment('https://crove.example.com:8443', record);
+    expect(seen).toContain('http://crove.example.com/healthz');
   });
 
   it('reports a certificate error and an http origin', async () => {
@@ -140,23 +164,34 @@ describe('pilot-check probe', () => {
     expect(failures(await probeDeployment('http://crove.example.com', fakeFetch({}))).map((r) => r.message)).toEqual([
       'http://crove.example.com is not https',
       expect.stringContaining('could not read the Supabase Auth settings'),
+      expect.stringContaining('could not read the Supabase Auth settings'),
     ]);
   });
 
-  it('reads what the running Supabase Auth does, sending the anon key to a remote one', async () => {
+  it('reads what the running Supabase Auth does', async () => {
     const open = { ...healthy, 'https://crove.example.com/auth/v1/settings': json({ disable_signup: false, mailer_autoconfirm: true }) };
     expect(failures(await probeDeployment('https://crove.example.com', fakeFetch(open))).map((r) => r.item)).toEqual(['Sign-up limited', 'Email confirmation and MFA step-up']);
-    let apikey: string | null = null;
-    const remote = {
-      ...healthy,
-      'https://crove.example.com/api/config': json({ authUrl: 'https://auth.example.net/auth/v1/', authAnonKey: 'anon-key' }),
-      'https://auth.example.net/auth/v1/settings': (_url: string, init?: RequestInit) => {
-        apikey = new Headers(init?.headers).get('apikey');
-        return Response.json({ disable_signup: true, mailer_autoconfirm: false });
-      },
+    // Every fetch refuses redirects, except the ones that inspect them.
+    const modes: (RequestRedirect | undefined)[] = [];
+    const record: Fetch = async (input, init) => {
+      modes.push(init?.redirect);
+      return fakeFetch(healthy)(input, init);
     };
-    expect(failures(await probeDeployment('https://crove.example.com', fakeFetch(remote)))).toEqual([]);
-    expect(apikey).toBe('anon-key');
+    await probeDeployment('https://crove.example.com', record);
+    expect(modes).toEqual(['manual', 'manual', 'error', 'error']);
+  });
+
+  it('never fetches an Auth URL the instance names on another origin', async () => {
+    for (const authUrl of ['https://auth.example.net/auth/v1', 'http://crove.example.com/auth/v1', 'http://169.254.169.254/latest', 'http://localhost:8080/auth/v1', 'nope']) {
+      const seen: string[] = [];
+      const record: Fetch = async (input, init) => {
+        seen.push(input);
+        return fakeFetch({ ...healthy, 'https://crove.example.com/api/config': json({ authUrl }) })(input, init);
+      };
+      const failed = failures(await probeDeployment('https://crove.example.com', record));
+      expect(failed.map((r) => r.item), authUrl).toEqual(['Sign-up limited', 'Email confirmation and MFA step-up']);
+      expect(seen.filter((u) => u.endsWith('/settings')), authUrl).toEqual([]);
+    }
   });
 });
 

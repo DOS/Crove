@@ -170,7 +170,7 @@ export function checkEnv(env: Env): CheckResult[] {
     );
   }
   const smtpHost = value(env, 'SMTP_HOST');
-  if (!smtpHost || smtpHost === 'smtp.example.com' || smtpHost === 'mailpit') {
+  if (!smtpHost || ['smtp.example.com', 'mailpit', 'mailhog'].includes(smtpHost) || isLocalHost(smtpHost)) {
     auth.push(`SMTP_HOST is ${smtpHost ?? 'unset (docker compose then uses the local Mailpit)'}: with confirmations on, set a real SMTP server or nobody can confirm an email`);
   }
   const stepUp = value(env, 'AUTH_STEP_UP');
@@ -210,6 +210,15 @@ export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 const PROBE_TIMEOUT_MS = 10_000;
 
+// Connection errors that mean nothing listens on the port. A timeout or a DNS failure proves nothing.
+const CLOSED_CODES: ReadonlySet<string> = new Set(['ECONNREFUSED', 'ECONNRESET']);
+
+function isHttpsOn(location: string | null, hostname: string): boolean {
+  if (!location || !URL.canParse(location)) return false;
+  const target = new URL(location);
+  return target.protocol === 'https:' && target.hostname === hostname;
+}
+
 function reason(error: unknown): string {
   if (error instanceof Error) {
     const cause = (error as { cause?: unknown }).cause;
@@ -230,9 +239,10 @@ export async function probeDeployment(origin: string, fetchFn: Fetch = fetch): P
   if (url.protocol !== 'https:') {
     results.push({ item: 'TLS', status: 'fail', message: `${origin} is not https` });
   } else {
-    // fetch verifies the certificate chain and the host name; a self-signed or expired certificate fails here.
+    // fetch verifies the certificate chain and the host name; a self-signed or expired certificate fails here. No
+    // redirect is followed: a redirect elsewhere would test another host's certificate.
     try {
-      const response = await fetchFn(`${origin}/healthz`, init());
+      const response = await fetchFn(`${origin}/healthz`, init({ redirect: 'manual' }));
       results.push(
         response.ok
           ? { item: 'TLS', status: 'pass', message: `${origin}/healthz answers over https with a valid certificate` }
@@ -241,35 +251,45 @@ export async function probeDeployment(origin: string, fetchFn: Fetch = fetch): P
     } catch (error) {
       results.push({ item: 'TLS', status: 'fail', message: `${origin}/healthz failed over https: ${reason(error)}` });
     }
-    // Plain http must be closed or redirect to https, never serve the app.
+    // Plain http on port 80 must refuse the connection or redirect to https on the same host, never serve the app.
     const plain = new URL(origin);
     plain.protocol = 'http:';
     plain.port = '';
     try {
       const response = await fetchFn(`${plain.origin}/healthz`, init({ redirect: 'manual' }));
-      const location = response.headers.get('location') ?? '';
-      const redirected = response.status >= 300 && response.status < 400 && location.startsWith('https://');
+      const redirected = response.status >= 300 && response.status < 400 && isHttpsOn(response.headers.get('location'), url.hostname);
       results.push(
         redirected
           ? { item: 'TLS', status: 'pass', message: `${plain.origin} redirects to https` }
-          : { item: 'TLS', status: 'fail', message: `${plain.origin}/healthz answered ${response.status} over plain http; redirect it to https or close port 80` },
+          : { item: 'TLS', status: 'fail', message: `${plain.origin}/healthz answered ${response.status} over plain http; redirect it to https on the same host or close port 80` },
       );
-    } catch {
-      results.push({ item: 'TLS', status: 'pass', message: `${plain.origin} does not answer (plain http is closed)` });
+    } catch (error) {
+      const code = reason(error);
+      results.push(
+        CLOSED_CODES.has(code)
+          ? { item: 'TLS', status: 'pass', message: `${plain.origin} refuses connections (plain http is closed)` }
+          : { item: 'TLS', status: 'fail', message: `could not tell whether ${plain.origin} serves plain http (${code}); check port 80 by hand` },
+      );
     }
   }
 
   // Supabase Auth's public settings: what the running auth service really does, whatever .env says. The app's
-  // /api/config names the Auth URL the SPA signs in with (the bundled one behind /auth/v1, or a remote one).
+  // /api/config names the Auth URL the SPA signs in with; for the pilot that is the bundled one behind /auth/v1 on the
+  // same origin. The probe never follows that URL elsewhere: it is data from the instance, not from the operator.
+  const authFailed = (message: string) => {
+    for (const item of ['Sign-up limited', 'Email confirmation and MFA step-up']) results.push({ item, status: 'fail', message });
+  };
   try {
-    const config = await fetchFn(`${origin}/api/config`, init());
+    const config = await fetchFn(`${origin}/api/config`, init({ redirect: 'error' }));
     if (!config.ok) throw new Error(`${origin}/api/config answered ${config.status}`);
-    const { authUrl, authAnonKey } = (await config.json()) as { authUrl?: unknown; authAnonKey?: unknown };
-    if (typeof authUrl !== 'string') throw new Error(`${origin}/api/config names no authUrl`);
-    const authProblem = httpsProblem('the Auth URL of /api/config', authUrl);
-    if (authProblem) results.push({ item: 'TLS', status: 'fail', message: authProblem });
-    const headers: Record<string, string> = typeof authAnonKey === 'string' ? { apikey: authAnonKey } : {};
-    const response = await fetchFn(`${authUrl.replace(/\/$/, '')}/settings`, init({ headers }));
+    const { authUrl } = (await config.json()) as { authUrl?: unknown };
+    if (typeof authUrl !== 'string' || !URL.canParse(authUrl)) throw new Error(`${origin}/api/config names no valid authUrl`);
+    const auth = new URL(authUrl);
+    if (auth.origin !== url.origin) {
+      authFailed(`the Auth URL ${auth.origin} is not on ${url.origin}: check Supabase Auth's sign-up and confirmation settings by hand`);
+      return results;
+    }
+    const response = await fetchFn(`${authUrl.replace(/\/$/, '')}/settings`, init({ redirect: 'error' }));
     if (!response.ok) throw new Error(`${authUrl}/settings answered ${response.status}`);
     const settings = (await response.json()) as { disable_signup?: unknown; mailer_autoconfirm?: unknown };
     results.push(
@@ -281,7 +301,7 @@ export async function probeDeployment(origin: string, fetchFn: Fetch = fetch): P
         : { item: 'Email confirmation and MFA step-up', status: 'fail', message: 'the running Supabase Auth skips email confirmation (mailer_autoconfirm is not false)' },
     );
   } catch (error) {
-    results.push({ item: 'Sign-up limited', status: 'fail', message: `could not read the Supabase Auth settings: ${reason(error)}` });
+    authFailed(`could not read the Supabase Auth settings: ${reason(error)}`);
   }
   return results;
 }

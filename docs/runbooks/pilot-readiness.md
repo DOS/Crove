@@ -11,11 +11,11 @@ pnpm pilot:check                                   # the settings in .env
 pnpm pilot:check -- --url https://crove.example.com  # also probe the running instance
 ```
 
-Without a checkout of the deployment's `.env` (another secret store, Kubernetes), export the same variables and run `node apps/kernel/src/main.ts pilot-check [--url <public URL>]`. Variables already set in the shell win over `.env`, as they do for `docker compose`.
+Without a checkout of the deployment's `.env` (another secret store, Kubernetes), export the same variables and run `node apps/kernel/src/main.ts pilot-check [--url <public URL>]`. Variables already set in the shell win over `.env`, as they do for `docker compose`. The preflight reads `.env` values literally, while `docker compose` expands `$NAME` inside them: keep `$` out of generated secrets (`openssl rand -hex 32` has none), or the checked value is not the deployed one.
 
 Each line is `PASS`, `FAIL` or `MANUAL`. Exit codes: 0 every automatic check passed, 1 a check failed, 2 bad arguments. `MANUAL` lines are what only a person can confirm; the sections below say how.
 
-`--url` probes three things on the running instance: `/healthz` over https (the certificate chain and host name are verified), plain http on port 80 (closed, or a redirect to https), and the settings the running Supabase Auth reports (`GET <auth URL>/settings`, the Auth URL taken from `/api/config`): `disable_signup` must be `true` and `mailer_autoconfirm` `false`. The probe sees what the auth service really runs with, so it catches a `.env` change that was never applied (`docker compose up -d` recreates the services whose settings changed).
+`--url` probes three things on the running instance: `/healthz` over https (the certificate chain and host name are verified), plain http on port 80 (the connection is refused, or it redirects to https on the same host; a timeout fails as inconclusive), and the settings the running Supabase Auth reports (`GET <auth URL>/settings`, the Auth URL taken from `/api/config`): `disable_signup` must be `true` and `mailer_autoconfirm` `false`. The probe follows no redirect and only reads an Auth URL on the same origin as `--url` (the bundled Supabase Auth behind `/auth/v1`); a remote Auth URL fails and is checked by hand. The probe sees what the auth service really runs with, so it catches a `.env` change that was never applied (`docker compose up -d` recreates the services whose settings changed).
 
 ## 1. TLS on every public endpoint; every secret changed from the defaults
 
