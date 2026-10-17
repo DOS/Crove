@@ -161,7 +161,7 @@ Done and merged: S1 (#243), S2 (#262, #263), S3 (#297, contract and RPC #338), S
 Next, S6 (#236), in this order:
 
 1. #361 put the `crove_kernel.oauth_state` row factory on main (definer-only machinery, two-step new-table rule).
-2. Done in #370: the `oauth_state` table, the `OAuthConnector` interface in `@crove/channel`, the RPCs `channels.oauthStart` and `channels.oauthFinish`, the SPA callback screen and the Facebook Page connector (long-lived user token, `/me/accounts` Page tokens), tested against recorded Graph answers. Next, #371: the Facebook Page publisher (`POST /{page}/feed`, reconcile by listing recent Page posts).
+2. Done in #370: the `oauth_state` table, the `OAuthConnector` interface in `@crove/channel`, the RPCs `channels.oauthStart` and `channels.oauthFinish`, the SPA callback screen and the Facebook Page connector (long-lived user token, `/me/accounts` Page tokens), tested against recorded Graph answers. #371 adds the Facebook Page publisher: `POST /{page}/feed` with the Page token, Graph errors mapped to the pipeline's kinds (a 5xx, Meta's unknown error or a duplicate are `unknown`), reconcile by listing the Page's posts in the window and matching the message. Next, #372 (images on posts), which Instagram and Zalo OA need.
 3. Instagram (container, status polling through `processing`, `media_publish`; a `PUBLISHED` container means the publish went through).
 4. Zalo OA (OAuth v4 with PKCE, access token 25 h, single-use refresh token stored in the transaction that uses it) with the refresh schedule, which also settles the expired-connection lifecycle in #264.
 

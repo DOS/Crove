@@ -6,7 +6,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from '@crove/channel';
+import { FacebookPagePublisher, type Publisher, type PublishInput, type PublishResult, type ReconcileInput, type ReconcileResult, type RetrySafety } from '@crove/channel';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
@@ -506,5 +506,62 @@ suite('social publishing on PostgreSQL (S4)', () => {
       ),
     );
     expect(rows.map((r) => r.role)).toEqual(['crove_worker']);
+  });
+
+  // S6.2 (#371): the Facebook Page publisher through the same pipeline, against recorded Graph answers.
+  describe('Facebook Page', () => {
+    function graph(answer: { status: number; body: unknown }) {
+      const asked: { path: string; form: string }[] = [];
+      const fetchImpl = async (input: string, init?: RequestInit) => {
+        asked.push({ path: new URL(input).pathname, form: typeof init?.body === 'string' ? init.body : '' });
+        return new Response(JSON.stringify(answer.body), { status: answer.status, headers: { 'content-type': 'application/json' } });
+      };
+      return { asked, publisher: new FacebookPagePublisher({ appSecret: 'test-app-secret-not-real' }, fetchImpl) };
+    }
+
+    async function duePagePost(o: { orgId: string; owner: string }, body: string) {
+      const page = String(100000 + Math.floor(Math.random() * 899999));
+      const sealed = vault.seal(JSON.stringify({ accessToken: 'page-token-db' }), { orgId: o.orgId, provider: 'facebook_page', externalAccountId: page });
+      const { connectionId } = await exec<{ connectionId: string }>(o, 'kernel.channel.connect', {
+        provider: 'facebook_page',
+        externalAccountId: page,
+        displayName: 'Quán Cà Phê A',
+        scopes: ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement'],
+        expiresAt: null,
+        credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+      });
+      const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body, channels: [{ connectionId }] });
+      await exec(o, 'social.post.submit', { postId });
+      const post = await get(o, postId);
+      await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+      await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+      await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+      return { postId, page, connectionId, variantId: post.variants[0]?.id as string };
+    }
+
+    const runPage = (o: { orgId: string }, variantId: string, publisher: Publisher) =>
+      runPublishJob({ runtime: worker, broker: vault, publishers: { facebook_page: publisher }, callTimeoutMs: 2_000 }, o.orgId, variantId, 'facebook_page');
+
+    it('publishes to the Page feed once and keeps the post link', async () => {
+      const o = await org();
+      const { postId, page, variantId } = await duePagePost(o, 'Khai trương chi nhánh mới!');
+      const { asked, publisher } = graph({ status: 200, body: { id: `${page}_42` } });
+      expect(await runPage(o, variantId, publisher)).toEqual({ action: 'call', status: 'published' });
+      expect(asked).toEqual([{ path: `/v24.0/${page}/feed`, form: new URLSearchParams({ message: 'Khai trương chi nhánh mới!' }).toString() }]);
+      const v = await variant(o, postId);
+      expect([v.status, v.externalUrl]).toEqual(['published', `https://www.facebook.com/${page}_42`]);
+      expect(await runPage(o, variantId, publisher)).toEqual({ action: 'none', reason: 'published' });
+      expect(asked).toHaveLength(1);
+    });
+
+    it('pauses the variant and expires the channel when Meta refuses the Page token', async () => {
+      const o = await org();
+      const { postId, connectionId, variantId } = await duePagePost(o, 'Bài sẽ bị từ chối');
+      const { publisher } = graph({ status: 400, body: { error: { message: 'Error validating access token', type: 'OAuthException', code: 190 } } });
+      await runPage(o, variantId, publisher);
+      expect((await variant(o, postId)).status).toBe('paused');
+      const channel = await admin(async (c) => (await c.query<{ status: string }>('SELECT status FROM crove_kernel.channel_connection WHERE id = $1', [connectionId])).rows[0]);
+      expect(channel?.status).toBe('expired');
+    });
   });
 });

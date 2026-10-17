@@ -3,7 +3,7 @@
 // configuration (defaultAdapters); a Crove Cloud entrypoint wires its own adapters into the same factory.
 import { serve } from '@hono/node-server';
 import { InvoiceExtractor, type InvoiceReader } from '@crove/agent';
-import { FacebookPageConnector, SandboxPublisher, type OAuthConnector } from '@crove/channel';
+import { FacebookPageConnector, FacebookPagePublisher, SandboxPublisher, type OAuthConnector, type Publisher } from '@crove/channel';
 import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
 import { buildKernelCommands, kernelQueries } from '@crove/kernel';
@@ -120,6 +120,16 @@ export function channelConnectors(config: Pick<Config, 'CHANNEL_META_APP_ID' | '
     connectors.facebook_page = new FacebookPageConnector({ appId: config.CHANNEL_META_APP_ID, appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
   }
   return connectors;
+}
+
+// The providers the worker publishes to: the sandbox when it is on, and each platform with app credentials.
+export function channelPublishers(config: Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION'>): Record<string, Publisher> {
+  const publishers: Record<string, Publisher> = {};
+  if (config.CHANNEL_SANDBOX === 'true') publishers.sandbox = new SandboxPublisher();
+  if (config.CHANNEL_META_APP_ID && config.CHANNEL_META_APP_SECRET) {
+    publishers.facebook_page = new FacebookPagePublisher({ appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
+  }
+  return publishers;
 }
 
 export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
@@ -257,8 +267,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             agentPrograms: financeAgentPrograms,
             exportSealer: exportSealer(config),
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,
-            // Platform adapters join the sandbox as they are added (Social plan S6).
-            channels: { broker: resolved.broker, publishers: config.CHANNEL_SANDBOX === 'true' ? { sandbox: new SandboxPublisher() } : {} },
+            channels: { broker: resolved.broker, publishers: channelPublishers(config) },
           }),
         );
       }
