@@ -183,3 +183,24 @@ describe('FacebookPagePublisher with images', () => {
     expect(down.calls.map((c) => c.path)).toEqual([`/v24.0/${PAGE}/photos`, `/v24.0/${PAGE}/photos`]);
   });
 });
+
+describe('FacebookPagePublisher.metrics', () => {
+  it('reads reactions, comments and shares of a Page post', async () => {
+    const { calls, publisher } = fake({ body: { reactions: { summary: { total_count: 12 } }, comments: { summary: { total_count: 3 } }, shares: { count: 2 } } });
+    expect(await publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toEqual({ metrics: { reactions: 12, comments: 3, shares: 2 } });
+    expect(calls[0]?.url.pathname).toBe(`/v24.0/${PAGE}_42`);
+    expect(calls[0]?.url.searchParams.get('fields')).toContain('reactions.summary(total_count)');
+  });
+
+  it('counts no shares as zero, tells a deleted post and a dead token apart from an outage', async () => {
+    expect(await fake({ body: { reactions: { summary: { total_count: 0 } }, comments: { summary: { total_count: 0 } } } }).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toEqual({
+      metrics: { reactions: 0, comments: 0, shares: 0 },
+    });
+    const gone = { status: 400, body: { error: { message: 'Object does not exist', type: 'GraphMethodException', code: 100, error_subcode: 33 } } };
+    expect(await fake(gone).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toEqual({ refused: 'gone' });
+    // Code 100 without subcode 33 is a permission or field problem, not a deleted post.
+    expect(await fake(graphError(400, 100, 'Requires pages_read_engagement')).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toBeNull();
+    expect(await fake(graphError(400, 190)).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toEqual({ refused: 'token_expired' });
+    expect(await fake(graphError(500, 2)).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toBeNull();
+  });
+});

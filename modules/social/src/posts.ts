@@ -20,6 +20,7 @@ import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } fr
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { publishingCommands } from './publishing.ts';
+import { metricsCommands, metricsQueries } from './metrics.ts';
 import { MOVABLE, POST_COLUMNS, SLOT_FREED, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -932,6 +933,7 @@ export const socialCommands = [
   variantCancel,
   queueSet,
   ...publishingCommands,
+  ...metricsCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
 // org shows, so the job never reads another kind of file through it.
@@ -963,4 +965,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries];

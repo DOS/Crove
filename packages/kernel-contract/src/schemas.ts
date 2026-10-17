@@ -672,6 +672,19 @@ export const zSocialPost = z.object({
   variants: z.array(zSocialVariant),
 });
 
+// The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
+export const zSocialMetricsRow = z.object({
+  variantId: zId,
+  postId: zId,
+  provider: z.string(),
+  connectionId: zId,
+  excerpt: z.string(),
+  publishedAt: z.string().nullable(),
+  externalUrl: z.string().nullable(),
+  metrics: z.record(z.string(), z.number()),
+  capturedAt: z.string().nullable(),
+});
+
 export const zSocialQueue = z.object({
   connectionId: zId,
   queueId: zId.nullable(),
