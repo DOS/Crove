@@ -11,6 +11,7 @@ describe('protected-path detection (G6)', () => {
       '.github/CODEOWNERS',
       '.githooks/pre-commit',
       'tools/install-git-hooks.mjs',
+      'tools/deploy/deploy.sh',
       '.gitattributes',
       'supabase/.gitattributes',
       '.gitmodules',

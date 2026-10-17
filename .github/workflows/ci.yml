@@ -46,6 +46,10 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # The deploy script runs on the production host (issue #56); the test stand-ins are bash too.
+      - name: Shell scripts (shellcheck)
+        run: shellcheck tools/deploy/deploy.sh tools/test/deploy-stubs/docker tools/test/deploy-stubs/curl
+
       - name: Typecheck
         run: pnpm typecheck
 
