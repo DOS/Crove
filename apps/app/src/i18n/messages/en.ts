@@ -357,6 +357,7 @@ export const en = {
   },
   inbox: {
     fileTooLarge: '{name} is larger than 25 MB',
+    socialFileTooLarge: '{name} is larger than 100 MB',
     storageUploadFailed: 'Could not send {name} to storage; upload the file again',
     storageDownloadFailed: 'Could not download the file from storage',
     title: 'Document inbox',

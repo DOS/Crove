@@ -401,10 +401,9 @@ suite.each(backends)('staged uploads on PostgreSQL and $name (issue #109)', (bac
     const box = (type: string, body: number[]) => [...u32(8 + body.length), ...Buffer.from(type), ...body];
     const ftyp = box('ftyp', [...Buffer.from('isom'), ...u32(0), ...Buffer.from('isomavc1')]);
     const mvhd = box('mvhd', [0, 0, 0, 0, ...u32(0), ...u32(0), ...u32(1000), ...u32(12_500), ...Array.from({ length: 80 }, () => 0)]);
-    const mp4 = Uint8Array.from([...ftyp, ...box('free', [...Buffer.from(randomUUID())]), ...box('moov', mvhd)]);
+    const trak = (handler: string) => box('trak', box('mdia', box('hdlr', [0, 0, 0, 0, ...u32(0), ...Buffer.from(handler), ...Array.from({ length: 12 }, () => 0)])));
+    const mp4 = Uint8Array.from([...ftyp, ...box('free', [...Buffer.from(randomUUID())]), ...box('moov', [...mvhd, ...trak('vide')])]);
 
-    const document = await begin();
-    expect(document.maxBytes).toBe(25 * 1024 * 1024);
     const form = await begin('owner', 'social');
     expect(form.maxBytes).toBe(100 * 1024 * 1024);
     expect(await backend.post(form, mp4)).toBe(204);
@@ -416,12 +415,16 @@ suite.each(backends)('staged uploads on PostgreSQL and $name (issue #109)', (bac
 
     // A video is never taken as a document, and one without a movie header is refused.
     const asDocument = await begin();
+    expect(asDocument.maxBytes).toBe(25 * 1024 * 1024);
     expect(await backend.post(asDocument, mp4)).toBe(204);
     expect((await call(`/api/files/uploads/${asDocument.uploadId}/complete`, 'owner', { json: { filename: 'a.mp4' } })).status).toBe(415);
     const broken = await begin('owner', 'social');
     expect(await backend.post(broken, Uint8Array.from([...ftyp, ...box('mdat', [...Buffer.from(randomUUID())])]))).toBe(204);
     const refused = await call(`/api/files/uploads/${broken.uploadId}/complete`, 'owner', { json: { filename: 'hong.mp4', purpose: 'social' } });
     expect(refused.status).toBe(415);
+    const audio = await begin('owner', 'social');
+    expect(await backend.post(audio, Uint8Array.from([...ftyp, ...box('free', [...Buffer.from(randomUUID())]), ...box('moov', [...mvhd, ...trak('soun')])]))).toBe(204);
+    expect((await call(`/api/files/uploads/${audio.uploadId}/complete`, 'owner', { json: { filename: 'nhac.mp4', purpose: 'social' } })).status).toBe(415);
   });
 
   it('keeps documents and post images apart when the same bytes arrive as both', async () => {

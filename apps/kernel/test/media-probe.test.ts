@@ -1,6 +1,6 @@
 // Video type and duration read from the file itself (#409): box headers only, every size checked.
 import { describe, expect, it } from 'vitest';
-import { sniffVideo, videoDurationMs } from '../src/media-probe.ts';
+import { hasVideoTrack, sniffVideo, videoDurationMs } from '../src/media-probe.ts';
 
 const u32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
 const text = (s: string) => [...s].map((c) => c.charCodeAt(0));
@@ -24,6 +24,16 @@ describe('sniffVideo', () => {
     expect(sniffVideo(file(box('ftyp', [...text('XAVC'), ...u32(0), ...text('abcd')])))).toBeNull();
     expect(sniffVideo(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBeNull();
     expect(sniffVideo(file([...u32(9999), ...text('ftyp'), ...text('isom')]))).toBeNull();
+  });
+});
+
+describe('hasVideoTrack', () => {
+  const hdlr = (handler: string) => box('hdlr', [0, 0, 0, 0, ...u32(0), ...text(handler), ...Array.from({ length: 12 }, () => 0)]);
+  const trak = (handler: string) => box('trak', box('mdia', hdlr(handler)));
+  it('finds a video track, and not in an audio-only file', () => {
+    expect(hasVideoTrack(file(ftyp('isom'), box('moov', [...mvhd0(1000, 5000), ...trak('soun'), ...trak('vide')])))).toBe(true);
+    expect(hasVideoTrack(file(ftyp('isom'), box('moov', [...mvhd0(1000, 5000), ...trak('soun')])))).toBe(false);
+    expect(hasVideoTrack(file(ftyp('isom')))).toBe(false);
   });
 });
 

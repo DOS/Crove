@@ -116,11 +116,15 @@ type Uploaded = { fileId: string; duplicate: boolean };
 
 // A Social upload may be a video of up to 100 MB (#409); the server checks each type's own limit.
 const maxBytesFor = (purpose: UploadPurpose) => (purpose === 'social' ? MAX_SOCIAL_VIDEO_BYTES : MAX_UPLOAD_BYTES);
+const tooLarge = (file: File, purpose: UploadPurpose) =>
+  purpose === 'social'
+    ? new ClientError('inbox.socialFileTooLarge', (t) => t('inbox.socialFileTooLarge', { name: file.name }))
+    : new ClientError('inbox.fileTooLarge', (t) => t('inbox.fileTooLarge', { name: file.name }));
 
 // One file through a presigned staging upload (plan §7.6): a single-use form from the kernel, the bytes straight to
 // the bucket, then the kernel reads them back, hashes them and records the file.
 async function uploadStaged(file: File, purpose: UploadPurpose): Promise<Uploaded> {
-  if (file.size > maxBytesFor(purpose)) throw new ClientError('inbox.fileTooLarge', (t) => t('inbox.fileTooLarge', { name: file.name }));
+  if (file.size > maxBytesFor(purpose)) throw tooLarge(file, purpose);
   const grant = (await (await apiFetch('/api/files/uploads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ purpose }) })).json()) as {
     uploadId: string;
     url: string;
@@ -159,7 +163,7 @@ export async function uploadFiles(files: File[], purpose: UploadPurpose = 'docum
   };
   // Social files go one per request, so a video's body stays within the server's limit.
   if (purpose !== 'social') return send(files);
-  for (const file of files) if (file.size > maxBytesFor(purpose)) throw new ClientError('inbox.fileTooLarge', (t) => t('inbox.fileTooLarge', { name: file.name }));
+  for (const file of files) if (file.size > maxBytesFor(purpose)) throw tooLarge(file, purpose);
   const results: Uploaded[] = [];
   for (const file of files) results.push(...(await send([file])).files);
   return { files: results };

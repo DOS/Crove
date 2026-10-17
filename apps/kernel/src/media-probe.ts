@@ -64,6 +64,26 @@ function* boxes(bytes: Uint8Array, start: number, end: number): Generator<Box> {
   }
 }
 
+// Whether the movie has a video track (moov/trak/mdia/hdlr with handler type vide): an audio-only file shares the
+// container and the generic brands, and is not a video.
+export function hasVideoTrack(bytes: Uint8Array): boolean {
+  for (const top of boxes(bytes, 0, bytes.byteLength)) {
+    if (top.type !== 'moov') continue;
+    for (const trak of boxes(bytes, top.body, top.end)) {
+      if (trak.type !== 'trak') continue;
+      for (const mdia of boxes(bytes, trak.body, trak.end)) {
+        if (mdia.type !== 'mdia') continue;
+        for (const hdlr of boxes(bytes, mdia.body, mdia.end)) {
+          // version and flags (4 bytes), pre_defined (4 bytes), then the handler type.
+          if (hdlr.type === 'hdlr' && hdlr.body + 12 <= hdlr.end && fourcc(bytes, hdlr.body + 8) === 'vide') return true;
+        }
+      }
+    }
+    return false;
+  }
+  return false;
+}
+
 // The movie's duration in milliseconds, or null when there is no readable movie header.
 export function videoDurationMs(bytes: Uint8Array): number | null {
   for (const top of boxes(bytes, 0, bytes.byteLength)) {

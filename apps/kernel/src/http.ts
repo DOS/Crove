@@ -46,7 +46,7 @@ import { pgBossSchemaVersion } from './jobs-schema.ts';
 import type { Mailer } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
-import { sniffVideo, videoDurationMs } from './media-probe.ts';
+import { hasVideoTrack, sniffVideo, videoDurationMs } from './media-probe.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 import { directTransferOrigin } from './storage.ts';
 import {
@@ -134,6 +134,20 @@ function problem(c: Context, error: unknown) {
   if (error instanceof BlobIntegrityError) console.error('[http] ALERT evidence integrity:', error.message);
   else if (domain.status === 500 || store) console.error('[http]', error);
   return c.json({ code: domain.code, message: domain.message }, domain.status);
+}
+
+// The bytes as a one-chunk stream that calls release once the chunk is taken or the stream is cancelled.
+function held(bytes: Uint8Array, release: () => void): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+      release();
+    },
+    cancel() {
+      release();
+    },
+  });
 }
 
 function body(bytes: Uint8Array): ArrayBuffer {
@@ -571,6 +585,7 @@ export function createHttpApp(deps: HttpDeps) {
       if (bytes.byteLength > MAX_SOCIAL_VIDEO_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 100 MB`);
       const ms = videoDurationMs(bytes);
       if (ms === null || ms === 0) throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: không đọc được thời lượng video`);
+      if (!hasVideoTrack(bytes)) throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: tệp không có hình, chỉ có âm thanh`);
       if (ms > MAX_SOCIAL_VIDEO_MS) throw new DomainError('VIDEO_TOO_LONG', 422, `${name}: video dài quá 3 giờ`);
       durationMs = ms;
     } else {
@@ -761,10 +776,13 @@ export function createHttpApp(deps: HttpDeps) {
       let bytes: Uint8Array;
       try {
         bytes = await readVerified(store, ref);
-      } finally {
+      } catch (error) {
         releaseLarge?.();
+        throw error;
       }
-      return new Response(body(bytes), {
+      // A large body keeps its slot until it is handed to the connection (or the client goes away).
+      const payload = releaseLarge ? held(bytes, releaseLarge) : body(bytes);
+      return new Response(payload, {
         headers: {
           'content-type': file.content_type,
           'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
