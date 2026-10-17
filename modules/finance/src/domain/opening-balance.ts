@@ -10,7 +10,7 @@ export const OPENING_BALANCE_SOURCE = 'finance.opening_balance';
 export const OPENING_BALANCE_CURRENCY = 'VND';
 
 // An account of the org's chart, as the check needs it.
-export interface ChartAccount {
+export interface OpeningChartAccount {
   code: string;
   name: string;
   active: boolean;
@@ -65,7 +65,7 @@ const zero = () => new Decimal(0);
 // Checks a trial balance and builds the opening entry's lines, in row order: one line per side with an amount, so an
 // account with both a debit and a credit balance (receivables from some customers, advances from others) keeps both.
 // A row with no amount on either side is skipped without further checks (headings, accounts with no balance).
-export function checkOpeningBalance(input: OpeningBalanceImport, chart: ReadonlyMap<string, ChartAccount>, ledger: LedgerFacts): OpeningCheck {
+export function checkOpeningBalance(input: OpeningBalanceImport, chart: ReadonlyMap<string, OpeningChartAccount>, ledger: LedgerFacts): OpeningCheck {
   const rows = input.rows.map((row) => {
     const code = row.accountCode.trim();
     const debit = parseOpeningAmount(row.debit);

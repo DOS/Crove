@@ -5,9 +5,9 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { normalizeAmountText, type OpeningBalanceImport, type OpeningBalanceRow } from '@crove/kernel-contract';
 import { money, sum } from '@crove/l10n-vn';
-import { checkOpeningBalance, parseOpeningAmount, type ChartAccount, type LedgerFacts } from '../src/index.ts';
+import { checkOpeningBalance, parseOpeningAmount, type OpeningChartAccount, type LedgerFacts } from '../src/index.ts';
 
-const CHART: ReadonlyMap<string, ChartAccount> = new Map(
+const CHART: ReadonlyMap<string, OpeningChartAccount> = new Map(
   [
     ['111', 'Tiền mặt'],
     ['112', 'Tiền gửi ngân hàng'],
