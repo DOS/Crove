@@ -90,10 +90,15 @@ async function refreshOne(deps: RefreshDeps, refresher: Refresher, row: Due): Pr
   }
   if ('failed' in result) return 'failed';
   const next = deps.broker.seal(result.secret, binding);
-  const stored = await deps.runtime.execute<{ refreshed: boolean }>(
-    'kernel.channel.refresh',
-    { connectionId: row.connection_id, ifVersion, expiresAt: result.expiresAt?.toISOString() ?? null, credential: { keyId: next.keyId, envelope: next.envelope.toString('base64') } },
-    options,
-  );
-  return stored.refreshed ? 'refreshed' : 'failed';
+  const command = { connectionId: row.connection_id, ifVersion, expiresAt: result.expiresAt?.toISOString() ?? null, credential: { keyId: next.keyId, envelope: next.envelope.toString('base64') } };
+  // The provider has rotated the tokens: this write is the only copy of them, so a passing database error is retried.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const stored = await deps.runtime.execute<{ refreshed: boolean }>('kernel.channel.refresh', command, options);
+      return stored.refreshed ? 'refreshed' : 'failed';
+    } catch (error) {
+      if (attempt >= 3 || error instanceof DomainError) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    }
+  }
 }

@@ -183,7 +183,9 @@ export class ZaloOaRefresher implements Refresher {
     this.client = new ZaloClient(app, fetchImpl);
   }
 
-  // refused: Zalo turned the refresh token down (revoked, expired, already used): the connection needs reconnecting.
+  // refused: Zalo turned the refresh token down (invalid, expired or already used): the connection needs reconnecting.
+  // Anything else (a rate limit, an outage, an answer we do not know) is a failure: the token may still be good, and the
+  // next sweep tries again; if it really is dead, the access token expires and publishing marks the connection expired.
   async refresh(secret: string): Promise<{ secret: string; expiresAt: Date } | { refused: string } | { failed: string }> {
     const s = zaloSecretOf(secret);
     if (!s) return { refused: 'NO_REFRESH_TOKEN' };
@@ -191,10 +193,18 @@ export class ZaloOaRefresher implements Refresher {
       const tokens = await this.client.token({ refresh_token: s.refreshToken, grant_type: 'refresh_token' });
       return { secret: JSON.stringify({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken } satisfies ZaloSecret), expiresAt: tokens.expiresAt };
     } catch (error) {
-      if (error instanceof ZaloError && error.status < 500) return { refused: String(error.code ?? error.status) };
+      if (error instanceof ZaloError && refusedRefresh(error)) return { refused: String(error.code ?? error.status) };
       return { failed: error instanceof ZaloError ? String(error.code ?? error.status) : 'NETWORK' };
     }
   }
+}
+
+// A refresh Zalo refused for the token itself: its code for an invalid refresh token, or a message naming one.
+const REFRESH_REFUSED = new Set([-14020, -14014]);
+function refusedRefresh(error: ZaloError): boolean {
+  if (error.status === 429 || error.status === 408 || error.status >= 500 || error.status < 200) return false;
+  if (error.code !== undefined && REFRESH_REFUSED.has(error.code)) return true;
+  return /refresh[ _]?token/i.test(error.message) && /invalid|expired|used|revoked/i.test(error.message);
 }
 
 interface CreateAnswer {
@@ -204,6 +214,7 @@ interface VerifyAnswer {
   id?: unknown;
 }
 interface SliceAnswer {
+  // create_date: milliseconds since the epoch.
   medias?: { id?: unknown; title?: unknown; create_date?: unknown }[];
 }
 
@@ -260,8 +271,9 @@ export class ZaloOaPublisher implements Publisher {
     } catch (error) {
       return zaloPublishResult(error);
     }
-    // The article exists from here; the token tells where it stands.
-    return this.verify(s.accessToken, token);
+    // The article exists from here; the token tells where it stands. Nothing after this point is a rejection.
+    const verified = await this.verify(s.accessToken, token);
+    return verified.kind === 'rejected' ? { kind: 'pending', externalRef: token, checkAfterSeconds: CHECK_AFTER_SECONDS } : verified;
   }
 
   async status(input: StatusInput): Promise<PublishResult> {
@@ -276,8 +288,18 @@ export class ZaloOaPublisher implements Publisher {
     if (!s || !title) return { found: 'unknown' };
     try {
       const answer = await this.client.api<SliceAnswer>('GET', 'article/getslice', s.accessToken, { params: { offset: '0', limit: '20', type: 'normal' } });
-      const hit = (answer?.medias ?? []).find((m) => typeof m.id === 'string' && m.title === title);
-      return hit ? { found: true, externalId: hit.id as string, url: null } : { found: false };
+      // The same title is often reused (a weekly offer), so only an article created in the call's window counts; one
+      // without a creation time cannot be told apart from an older one.
+      const from = input.after.getTime() - 60_000;
+      const to = input.before.getTime() + 60_000;
+      let undated = false;
+      for (const m of answer?.medias ?? []) {
+        if (typeof m.id !== 'string' || m.title !== title) continue;
+        const at = typeof m.create_date === 'number' ? m.create_date : typeof m.create_date === 'string' ? Number(m.create_date) : Number.NaN;
+        if (!Number.isFinite(at)) undated = true;
+        else if (at >= from && at <= to) return { found: true, externalId: m.id, url: null };
+      }
+      return undated ? { found: 'unknown' } : { found: false };
     } catch {
       return { found: 'unknown' };
     }
@@ -290,8 +312,9 @@ export class ZaloOaPublisher implements Publisher {
       return id ? { kind: 'accepted', externalId: id, url: null } : { kind: 'pending', externalRef: token, checkAfterSeconds: CHECK_AFTER_SECONDS };
     } catch (error) {
       const result = zaloPublishResult(error);
-      // A token still processing, or an answer that did not come: check again later; the article may exist.
-      return result.kind === 'rejected' && result.error === 'token_expired' ? result : { kind: 'pending', externalRef: token, checkAfterSeconds: CHECK_AFTER_SECONDS };
+      // A refused token, or Zalo refusing the article itself (a 4xx), ends the check; a token still processing or an
+      // answer that did not come is checked again later.
+      return result.kind === 'rejected' && (result.error === 'token_expired' || result.error === 'bad_request') ? result : { kind: 'pending', externalRef: token, checkAfterSeconds: CHECK_AFTER_SECONDS };
     }
   }
 }

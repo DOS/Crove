@@ -62,6 +62,13 @@ describe('ZaloOaRefresher', () => {
     expect(await new ZaloOaRefresher(APP, refused.fetchImpl).refresh(SECRET)).toEqual({ refused: '-14020' });
     const down = zalo({ 'POST oauth.zaloapp.com/v4/oa/access_token': [{ status: 503, body: {} }] });
     expect(await new ZaloOaRefresher(APP, down.fetchImpl).refresh(SECRET)).toEqual({ failed: '503' });
+    // A rate limit, or an error code Crove does not know, is not a dead token: the next sweep tries again.
+    const limited = zalo({ 'POST oauth.zaloapp.com/v4/oa/access_token': [{ status: 429, body: { error: -32, message: 'Too many requests' } }] });
+    expect(await new ZaloOaRefresher(APP, limited.fetchImpl).refresh(SECRET)).toEqual({ failed: '-32' });
+    const odd = zalo({ 'POST oauth.zaloapp.com/v4/oa/access_token': [{ body: { error: -9999, message: 'Something else' } }] });
+    expect(await new ZaloOaRefresher(APP, odd.fetchImpl).refresh(SECRET)).toEqual({ failed: '-9999' });
+    const named = zalo({ 'POST oauth.zaloapp.com/v4/oa/access_token': [{ body: { error: -14001, error_description: 'Refresh token is expired' } }] });
+    expect(await new ZaloOaRefresher(APP, named.fetchImpl).refresh(SECRET)).toEqual({ refused: '-14001' });
   });
 });
 
@@ -126,16 +133,28 @@ describe('ZaloOaPublisher', () => {
   it('answers unknown when Zalo fails while creating, and reconciles by title', async () => {
     const down = zalo({ 'POST openapi.zalo.me/v2.0/article/create': [{ status: 502, body: {} }] });
     expect((await new ZaloOaPublisher(APP, down.fetchImpl).publish(input())).kind).toBe('unknown');
-    const listing = zalo({ 'GET openapi.zalo.me/v2.0/article/getslice': [{ body: { error: 0, data: { medias: [{ id: 'art-9', title: 'Khai trương' }] } } }] });
-    const found = await new ZaloOaPublisher(APP, listing.fetchImpl).reconcile({
-      externalAccountId: '579745863508352884',
-      secret: SECRET,
-      callKey: 'call-1',
-      contentHash: `sha256:${'0'.repeat(64)}`,
-      content: input().content,
-      after: new Date(Date.now() - 600_000),
-      before: new Date(),
+    const window = { externalAccountId: '579745863508352884', secret: SECRET, callKey: 'call-1', contentHash: `sha256:${'0'.repeat(64)}`, content: input().content, after: new Date(Date.now() - 600_000), before: new Date() };
+    // Last week's article with the same title is not this one.
+    const listing = zalo({
+      'GET openapi.zalo.me/v2.0/article/getslice': [
+        { body: { error: 0, data: { medias: [{ id: 'art-8', title: 'Khai trương', create_date: Date.now() - 7 * 86_400_000 }, { id: 'art-9', title: 'Khai trương', create_date: Date.now() - 120_000 }] } } },
+        { body: { error: 0, data: { medias: [{ id: 'art-8', title: 'Khai trương', create_date: Date.now() - 7 * 86_400_000 }] } } },
+        { body: { error: 0, data: { medias: [{ id: 'art-7', title: 'Khai trương' }] } } },
+      ],
     });
-    expect(found).toEqual({ found: true, externalId: 'art-9', url: null });
+    const publisher = new ZaloOaPublisher(APP, listing.fetchImpl);
+    expect(await publisher.reconcile(window)).toEqual({ found: true, externalId: 'art-9', url: null });
+    expect(await publisher.reconcile(window)).toEqual({ found: false });
+    expect(await publisher.reconcile(window)).toEqual({ found: 'unknown' });
+  });
+
+  it('never answers a rejection once the article was created, and ends a status check Zalo refuses', async () => {
+    const { fetchImpl } = zalo({
+      'POST openapi.zalo.me/v2.0/article/create': [{ body: { error: 0, data: { token: 'tok-3' } } }],
+      'POST openapi.zalo.me/v2.0/article/verify': [{ body: { error: -216, message: 'Access token is invalid' } }, { status: 400, body: { error: -201, message: 'Article failed' } }],
+    });
+    const publisher = new ZaloOaPublisher(APP, fetchImpl);
+    expect(await publisher.publish(input())).toEqual({ kind: 'pending', externalRef: 'tok-3', checkAfterSeconds: 20 });
+    expect(await publisher.status({ externalAccountId: '579745863508352884', secret: SECRET, externalRef: 'tok-3' })).toMatchObject({ kind: 'rejected', error: 'bad_request' });
   });
 });
