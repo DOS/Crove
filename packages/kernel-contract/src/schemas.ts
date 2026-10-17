@@ -564,12 +564,17 @@ export const zSocialChannelInput = z.strictObject({
   settings: zSocialSettings.optional(),
 });
 
+// A post's images in order (#372): files uploaded with purpose=social.
+export const zSocialMediaInput = z.array(z.strictObject({ fileId: zId, altText: z.string().trim().max(1000).nullable().optional() })).max(20);
+export const zSocialMedia = z.object({ fileId: zId, altText: z.string().nullable(), mime: z.string(), sizeBytes: z.number().int() });
+
 export const zSocialPostCreate = z.strictObject({
   body: zSocialText,
   title: zSocialTitle.nullable().optional(),
   linkUrl: zSocialLink.nullable().optional(),
   timeZone: z.string().min(1).max(64).optional(),
   scheduledAt: zInstant.nullable().optional(),
+  media: zSocialMediaInput.optional(),
   channels: z.array(zSocialChannelInput).min(1).max(20),
 });
 
@@ -581,6 +586,7 @@ export const zSocialPostUpdate = z.strictObject({
   linkUrl: zSocialLink.nullable().optional(),
   timeZone: z.string().min(1).max(64).optional(),
   scheduledAt: zInstant.nullable().optional(),
+  media: zSocialMediaInput.optional(),
 });
 
 export const zSocialVariantUpdate = z.strictObject({
@@ -629,6 +635,7 @@ export const zSocialVariant = z.object({
   position: z.number().int(),
   overrides: z.object({ body: z.string().nullable(), title: z.string().nullable(), linkUrl: z.string().nullable() }),
   effective: zContent,
+  media: z.array(zSocialMedia),
   settings: z.record(z.string(), z.unknown()),
   revision: z.number().int(),
   contentHash: z.string(),
@@ -652,6 +659,7 @@ export const zSocialPost = z.object({
   body: z.string(),
   title: z.string().nullable(),
   linkUrl: z.string().nullable(),
+  media: z.array(zSocialMedia),
   timeZone: z.string(),
   scheduledAt: z.string().nullable(),
   revision: z.number().int(),

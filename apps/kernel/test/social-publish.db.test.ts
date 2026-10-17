@@ -2,7 +2,7 @@
 // once, a run that dies between the provider call and its result never posts again on its own, and every refusal
 // ends where the plan says (failed, a new attempt, paused until the channel is reconnected, or a person's decision).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -10,12 +10,15 @@ import { FacebookPagePublisher, type Publisher, type PublishInput, type PublishR
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
+import { CredentialVault, Runtime, parseVaultKey, type BlobStore } from '@crove/kernel-runtime';
 import { runPublishJob, socialCommands, socialQueries, type BeginResult, type PostView } from '@crove/mod-social';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
 const suite = ADMIN ? describe : describe.skip;
+const noMedia = async (): Promise<Uint8Array> => {
+  throw new Error('no media in this test');
+};
 
 // A platform that remembers what was posted, answers what a test scripts, and can be asked about a call.
 class FakePlatform implements Publisher {
@@ -214,7 +217,7 @@ suite('social publishing on PostgreSQL (S4)', () => {
     const begun = await worker.execute<BeginResult>('social.publish.begin', { variantId: id, provider: 'sandbox', safety: 'reconcile_only' }, { actor: system, orgId: o.orgId });
     expect(begun.action).toBe('call');
     if (begun.action !== 'call') return;
-    await platform.publish({ externalAccountId: 'x', secret: '{}', content: begun.content, settings: {}, callKey: begun.callKey, contentHash: begun.contentHash });
+    await platform.publish({ externalAccountId: 'x', secret: '{}', content: begun.content, readMedia: noMedia, settings: {}, callKey: begun.callKey, contentHash: begun.contentHash });
 
     // A run while the first could still be alive waits.
     expect(await run(o, id, platform)).toEqual({ action: 'none', reason: 'in_flight' });
@@ -234,7 +237,7 @@ suite('social publishing on PostgreSQL (S4)', () => {
     const id = variants[0] as string;
     const begun = await worker.execute<BeginResult>('social.publish.begin', { variantId: id, provider: 'sandbox', safety: 'never' }, { actor: system, orgId: o.orgId });
     if (begun.action !== 'call') throw new Error('expected a call');
-    await platform.publish({ externalAccountId: 'x', secret: '{}', content: begun.content, settings: {}, callKey: begun.callKey, contentHash: begun.contentHash });
+    await platform.publish({ externalAccountId: 'x', secret: '{}', content: begun.content, readMedia: noMedia, settings: {}, callKey: begun.callKey, contentHash: begun.contentHash });
     await age(id, 700);
 
     expect(await run(o, id, platform)).toEqual({ action: 'none', reason: 'needs_attention' });
@@ -519,7 +522,7 @@ suite('social publishing on PostgreSQL (S4)', () => {
       return { asked, publisher: new FacebookPagePublisher({ appSecret: 'test-app-secret-not-real' }, fetchImpl) };
     }
 
-    async function duePagePost(o: { orgId: string; owner: string }, body: string) {
+    async function duePagePost(o: { orgId: string; owner: string }, body: string, media: { fileId: string }[] = []) {
       const page = String(100000 + Math.floor(Math.random() * 899999));
       const sealed = vault.seal(JSON.stringify({ accessToken: 'page-token-db' }), { orgId: o.orgId, provider: 'facebook_page', externalAccountId: page });
       const { connectionId } = await exec<{ connectionId: string }>(o, 'kernel.channel.connect', {
@@ -530,7 +533,7 @@ suite('social publishing on PostgreSQL (S4)', () => {
         expiresAt: null,
         credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
       });
-      const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body, channels: [{ connectionId }] });
+      const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body, media, channels: [{ connectionId }] });
       await exec(o, 'social.post.submit', { postId });
       const post = await get(o, postId);
       await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
@@ -552,6 +555,57 @@ suite('social publishing on PostgreSQL (S4)', () => {
       expect([v.status, v.externalUrl]).toEqual(['published', `https://www.facebook.com/${page}_42`]);
       expect(await runPage(o, variantId, publisher)).toEqual({ action: 'none', reason: 'published' });
       expect(asked).toHaveLength(1);
+    });
+
+    it('reads the approved image from storage and posts it with the text', async () => {
+      const o = await org();
+      const bytes = new Uint8Array(Buffer.from('fake-jpeg-bytes'));
+      const sha = createHash('sha256').update(bytes).digest('hex');
+      const fileId = randomUUID();
+      await admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source)
+           VALUES ($1, $2, $3, $4, $5, 'anh.jpg', 'image/jpeg', $6, 'social')`,
+          [o.orgId, fileId, sha, `org/${o.orgId}/${sha}`, `content:${sha}`, bytes.byteLength],
+        ),
+      );
+      const { postId, page, variantId } = await duePagePost(o, 'Có ảnh', [{ fileId }]);
+      const asked: { path: string; multipart: boolean }[] = [];
+      const answers = [{ id: 'photo-1' }, { id: `${page}_99` }];
+      const publisher = new FacebookPagePublisher({ appSecret: 'test-app-secret-not-real' }, async (input, init) => {
+        asked.push({ path: new URL(input).pathname, multipart: init?.body instanceof FormData });
+        return new Response(JSON.stringify(answers.shift()), { status: 200, headers: { 'content-type': 'application/json' } });
+      });
+      const reads: string[] = [];
+      const store = { get: async (key: string) => (reads.push(key), bytes) } as unknown as BlobStore;
+      const outcome = await runPublishJob({ runtime: worker, broker: vault, publishers: { facebook_page: publisher }, store, callTimeoutMs: 2_000 }, o.orgId, variantId, 'facebook_page');
+      expect(outcome).toEqual({ action: 'call', status: 'published' });
+      expect(reads).toEqual([`org/${o.orgId}/${sha}`]);
+      expect(asked).toEqual([
+        { path: `/v24.0/${page}/photos`, multipart: true },
+        { path: `/v24.0/${page}/feed`, multipart: false },
+      ]);
+      expect((await variant(o, postId)).externalUrl).toBe(`https://www.facebook.com/${page}_99`);
+    });
+
+    it('posts nothing when the stored image no longer matches its hash', async () => {
+      const o = await org();
+      const sha = createHash('sha256').update('the approved bytes').digest('hex');
+      const fileId = randomUUID();
+      await admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source)
+           VALUES ($1, $2, $3, $4, $5, 'anh.jpg', 'image/jpeg', 18, 'social')`,
+          [o.orgId, fileId, sha, `org/${o.orgId}/${sha}`, `content:${sha}`],
+        ),
+      );
+      const { postId, variantId } = await duePagePost(o, 'Ảnh bị tráo', [{ fileId }]);
+      const { asked, publisher } = graph({ status: 200, body: { id: 'never' } });
+      const store = { get: async () => new Uint8Array(Buffer.from('swapped bytes')) } as unknown as BlobStore;
+      await runPublishJob({ runtime: worker, broker: vault, publishers: { facebook_page: publisher }, store, callTimeoutMs: 2_000 }, o.orgId, variantId, 'facebook_page');
+      expect(asked).toEqual([]);
+      const v = await variant(o, postId);
+      expect([v.status, v.error?.code]).toEqual(['failed', 'MEDIA_UNREADABLE']);
     });
 
     it('pauses the variant and expires the channel when Meta refuses the Page token', async () => {

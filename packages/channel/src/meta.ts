@@ -65,17 +65,20 @@ export class Graph {
     return url.toString();
   }
 
-  async call<T>(method: 'GET' | 'POST', path: string, options: { token?: string; params?: Record<string, string>; form?: Record<string, string> } = {}): Promise<T> {
+  async call<T>(method: 'GET' | 'POST', path: string, options: { token?: string; params?: Record<string, string>; form?: Record<string, string>; multipart?: FormData } = {}): Promise<T> {
     const params = { ...options.params };
     const headers: Record<string, string> = { accept: 'application/json' };
     if (options.token) {
       headers.authorization = `Bearer ${options.token}`;
       params.appsecret_proof = createHmac('sha256', this.appSecret).update(options.token).digest('hex');
     }
-    let body: string | undefined;
+    let body: string | FormData | undefined;
     if (options.form) {
       headers['content-type'] = 'application/x-www-form-urlencoded';
       body = new URLSearchParams(options.form).toString();
+    } else if (options.multipart) {
+      // fetch sets the multipart content type with its boundary.
+      body = options.multipart;
     }
     const response = await this.fetch(this.url(path, params), { method, headers, ...(body === undefined ? {} : { body }) });
     const json = (await response.json().catch(() => null)) as ({ error?: GraphErrorBody } & Record<string, unknown>) | null;
@@ -247,9 +250,17 @@ export class FacebookPagePublisher implements Publisher {
     const token = pageToken(input.secret);
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_PAGE_TOKEN' };
     if (!/^\d{1,32}$/.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_PAGE_ID' };
+    const media = input.content.media;
     const form: Record<string, string> = { message: feedMessage(input.content) };
-    if (input.content.linkUrl) form.link = input.content.linkUrl;
-    if (!form.message && !form.link) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    // A post with photos has no link preview: the link goes at the end of the text.
+    if (input.content.linkUrl && media.length > 0) form.message = [form.message, input.content.linkUrl].filter(Boolean).join('\n\n');
+    else if (input.content.linkUrl) form.link = input.content.linkUrl;
+    if (!form.message && !form.link && media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    if (media.length > 0) {
+      const uploaded = await this.uploadPhotos(input, token);
+      if ('rejected' in uploaded) return uploaded.rejected;
+      form.attached_media = JSON.stringify(uploaded.ids.map((id) => ({ media_fbid: id })));
+    }
     try {
       const answer = await this.graph.call<FeedAnswer>('POST', `${input.externalAccountId}/feed`, { token, form });
       // Meta answered 200 without an id: it may have posted.
@@ -258,6 +269,35 @@ export class FacebookPagePublisher implements Publisher {
     } catch (error) {
       return graphPublishResult(error);
     }
+  }
+
+  // Uploads the post's images as unpublished photos of the Page: invisible until the feed post attaches them, so this
+  // step is safe to repeat and any failure here posted nothing. Every image is read before the first upload.
+  private async uploadPhotos(input: PublishInput, token: string): Promise<{ ids: string[] } | { rejected: PublishResult }> {
+    const files: { mime: string; bytes: Uint8Array }[] = [];
+    for (const m of input.content.media) {
+      try {
+        files.push({ mime: m.mime, bytes: await input.readMedia(m.fileId) });
+      } catch {
+        return { rejected: { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' } };
+      }
+    }
+    const ids: string[] = [];
+    for (const [i, f] of files.entries()) {
+      const body = new FormData();
+      body.set('published', 'false');
+      body.set('source', new Blob([new Uint8Array(f.bytes)], { type: f.mime }), `image-${i + 1}`);
+      try {
+        const answer = await this.graph.call<FeedAnswer>('POST', `${input.externalAccountId}/photos`, { token, multipart: body });
+        if (typeof answer.id !== 'string' || !answer.id) return { rejected: { kind: 'rejected', error: 'transient', code: 'NO_PHOTO_ID' } };
+        ids.push(answer.id);
+      } catch (error) {
+        const result = graphPublishResult(error);
+        // Nothing is visible yet, so an unclear answer here is a failure to retry, not an unknown post.
+        return { rejected: result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) } };
+      }
+    }
+    return { ids };
   }
 
   async reconcile(input: ReconcileInput): Promise<ReconcileResult> {

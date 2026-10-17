@@ -298,6 +298,8 @@ export const filesRecent = defineQuery({
         'p.duplicate_of',
       ])
       .where('f.org_id', '=', ctx.orgId)
+      // Images of Social posts are not documents (#372).
+      .where('f.source', '<>', 'social')
       .orderBy('f.created_at', 'desc')
       .limit(50)
       .execute();

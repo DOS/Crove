@@ -4,7 +4,7 @@
 import type { ColumnType, Generated } from 'kysely';
 
 /** Every table of crove_kernel, crove_finance, crove_social that crove_tenant may read. */
-export type Database = CroveKernelSchema & CroveFinanceSchema & CroveSocialSchema;
+export type Database = CroveKernelSchema & CroveSocialSchema & CroveFinanceSchema;
 
 /**
  * The insert or update type of a column crove_tenant may not insert or update: no value but undefined, which
@@ -53,6 +53,7 @@ export interface CroveKernelSchema {
 export interface CroveSocialSchema {
   'crove_social.post': SocialPostTable;
   'crove_social.post_approval': SocialPostApprovalTable;
+  'crove_social.post_media': SocialPostMediaTable;
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.queue': SocialQueueTable;
   'crove_social.queue_slot': SocialQueueSlotTable;
@@ -542,6 +543,17 @@ export interface SocialPostApprovalTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
+/** crove_social.post_media */
+export interface SocialPostMediaTable {
+  org_id: string;
+  id: Generated<string>;
+  post_id: string;
+  file_id: string;
+  position: number;
+  alt_text: string | null;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 /** crove_social.post */
 export interface SocialPostTable {
   org_id: string;
@@ -593,6 +605,7 @@ export interface SocialPostVariantTable {
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
   paused_connection_version: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  media: ColumnType<unknown, string | null | undefined, string | null>;
 }
 
 /** crove_social.queue_slot */

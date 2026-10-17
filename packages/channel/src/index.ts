@@ -66,10 +66,20 @@ export type RetrySafety = 'safe' | 'idempotent' | 'reconcile_only' | 'never';
 export const PUBLISH_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
 export type PublishErrorKind = (typeof PUBLISH_ERROR_KINDS)[number];
 
+// An image of the post, by file. The bytes come from `PublishInput.readMedia`, which reads the exact stored version
+// and checks its hash.
+export interface PublishMedia {
+  fileId: string;
+  mime: string;
+  sizeBytes: number;
+  altText: string | null;
+}
+
 export interface PublishContent {
   body: string;
   title: string | null;
   linkUrl: string | null;
+  media: readonly PublishMedia[];
 }
 
 export interface PublishInput {
@@ -77,6 +87,9 @@ export interface PublishInput {
   // The opened credential (the provider's own JSON); never logged or stored by the adapter.
   secret: string;
   content: PublishContent;
+  // The bytes of one of content.media; throws when the file cannot be read. An adapter reads every image before its
+  // first visible call, so a read failure is a rejection with nothing posted.
+  readMedia(fileId: string): Promise<Uint8Array>;
   settings: Record<string, unknown>;
   // The external_call key of this step: unique per attempt, so a provider with idempotency keys can use it.
   callKey: string;

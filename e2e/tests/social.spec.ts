@@ -57,6 +57,37 @@ test('composes, reviews and schedules a post on the sandbox channel', async ({ p
   await expect(page.getByText(/Đã đăng lúc/)).toBeVisible();
 });
 
+// A 1x1 PNG.
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==', 'base64');
+
+test('attaches images to a post, shows them in the preview and keeps them out of the Inbox', async ({ page }) => {
+  await signUp(page, newEmail('social-media'));
+  await createOrg(page, 'Công ty Ảnh');
+  await page.getByRole('navigation').getByRole('link', { name: 'Mạng xã hội' }).click();
+  await page.getByRole('link', { name: 'Kết nối kênh' }).first().click();
+  await page.getByLabel('Tên kênh thử').fill('Trang Ảnh');
+  await page.getByRole('button', { name: 'Kết nối kênh thử' }).click();
+  await expect(page.getByText('Trang Ảnh').first()).toBeVisible();
+  await page.getByRole('link', { name: 'Quay lại' }).click();
+  await page.getByRole('link', { name: 'Soạn bài' }).click();
+  await page.getByLabel('Nội dung chung').fill('Bài có ảnh');
+
+  await page.locator('input[type="file"]').setInputFiles([{ name: 'mat-tien.png', mimeType: 'image/png', buffer: PNG }]);
+  await expect(page.getByText('1/20')).toBeVisible();
+  await page.getByRole('textbox', { name: 'Mô tả ảnh 1' }).fill('Mặt tiền cửa hàng');
+  // The image shows in the form and in the channel preview.
+  await expect(page.getByRole('img', { name: 'Mặt tiền cửa hàng' })).toHaveCount(2);
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  await expect(page.getByRole('img', { name: 'Mặt tiền cửa hàng' }).first()).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Mô tả ảnh 1' })).toHaveValue('Mặt tiền cửa hàng');
+
+  // An image for a post is not a document: the Inbox stays empty.
+  await page.getByRole('navigation').getByRole('link', { name: 'Hộp thư' }).click();
+  await expect(page.getByText('mat-tien.png')).toHaveCount(0);
+});
+
 test('keeps unsaved edits when another tab approves the post', async ({ page, context }) => {
   await signUp(page, newEmail('social-edit'));
   await createOrg(page, 'Công ty Hai Tab');

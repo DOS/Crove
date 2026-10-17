@@ -303,7 +303,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await boss.work<SocialPublishJob>(socialPublishQueue(provider), { batchSize: 1 }, async ([job]) => {
       if (!job || !channels) return;
       const { orgId, variantId } = job.data;
-      const outcome = await runPublishJob({ runtime: deps.runtime, broker: channels.broker, publishers }, orgId, variantId, provider);
+      const outcome = await runPublishJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider);
       if (outcome.action !== 'none') console.log(`[social-publish] ${provider} variant ${variantId.slice(0, 8)}: ${outcome.action} -> ${outcome.status}`);
     });
   }

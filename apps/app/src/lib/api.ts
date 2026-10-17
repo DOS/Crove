@@ -3,7 +3,7 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
-import { MAX_UPLOAD_BYTES, type contract } from '@crove/kernel-contract';
+import { MAX_UPLOAD_BYTES, type contract, type UploadPurpose } from '@crove/kernel-contract';
 import { activeLocale, translator } from '../i18n/runtime.ts';
 import { accessToken, auth, getConfig } from './auth.ts';
 import { ClientError, apiErrorFromResponse, describeError, isMfaRequired, isOrgAccessRevoked, isUnauthenticated, retryWhileBusy } from './errors.ts';
@@ -116,7 +116,7 @@ type Uploaded = { fileId: string; duplicate: boolean };
 
 // One file through a presigned staging upload (plan §7.6): a single-use form from the kernel, the bytes straight to
 // the bucket, then the kernel reads them back, hashes them and records the file.
-async function uploadStaged(file: File): Promise<Uploaded> {
+async function uploadStaged(file: File, purpose: UploadPurpose): Promise<Uploaded> {
   if (file.size > MAX_UPLOAD_BYTES) throw new ClientError('inbox.fileTooLarge', (t) => t('inbox.fileTooLarge', { name: file.name }));
   const grant = (await (await apiFetch('/api/files/uploads', { method: 'POST' })).json()) as {
     uploadId: string;
@@ -135,19 +135,21 @@ async function uploadStaged(file: File): Promise<Uploaded> {
     apiFetch(`/api/files/uploads/${grant.uploadId}/complete`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ filename: file.name }),
+      body: JSON.stringify({ filename: file.name, purpose }),
     }),
   );
   return (await response.json()) as Uploaded;
 }
 
-export async function uploadFiles(files: File[]): Promise<{ files: Uploaded[] }> {
+// purpose social: images for a Social post (#372), stored but never read as documents.
+export async function uploadFiles(files: File[], purpose: UploadPurpose = 'document'): Promise<{ files: Uploaded[] }> {
   if (getConfig().uploads === 'presigned') {
     const results: Uploaded[] = [];
-    for (const file of files) results.push(await uploadStaged(file));
+    for (const file of files) results.push(await uploadStaged(file, purpose));
     return { files: results };
   }
   const form = new FormData();
+  form.append('purpose', purpose);
   for (const file of files) form.append('file', file);
   const response = await apiFetch('/api/files', { method: 'POST', body: form });
   return (await response.json()) as { files: Uploaded[] };

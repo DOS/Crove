@@ -31,7 +31,10 @@ function fake(answer: { status?: number; body: unknown } | Error) {
 const input = (over: Partial<PublishInput> = {}): PublishInput => ({
   externalAccountId: PAGE,
   secret: SECRET,
-  content: { body: '  Khai trương chi nhánh mới!  ', title: null, linkUrl: 'https://example.com/khai-truong' },
+  content: { body: '  Khai trương chi nhánh mới!  ', title: null, linkUrl: 'https://example.com/khai-truong', media: [] },
+  readMedia: async () => {
+    throw new Error('no media in this test');
+  },
   settings: {},
   callKey: 'call-1',
   contentHash: `sha256:${'0'.repeat(64)}`,
@@ -78,7 +81,7 @@ describe('FacebookPagePublisher.publish', () => {
     const { calls, publisher } = fake({ body: { id: 'x' } });
     expect(await publisher.publish(input({ secret: '{}' }))).toMatchObject({ kind: 'rejected', error: 'token_expired' });
     expect(await publisher.publish(input({ externalAccountId: '../me' }))).toMatchObject({ kind: 'rejected', error: 'bad_request' });
-    expect(await publisher.publish(input({ content: { body: ' ', title: null, linkUrl: null } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' });
+    expect(await publisher.publish(input({ content: { body: ' ', title: null, linkUrl: null, media: [] } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' });
     expect(calls).toHaveLength(0);
   });
 });
@@ -89,7 +92,7 @@ describe('FacebookPagePublisher.reconcile', () => {
     secret: SECRET,
     callKey: 'call-1',
     contentHash: `sha256:${'0'.repeat(64)}`,
-    content: { body: 'Khai trương chi nhánh mới!', title: null, linkUrl: null },
+    content: { body: 'Khai trương chi nhánh mới!', title: null, linkUrl: null, media: [] },
     after: new Date('2026-10-18T02:00:00Z'),
     before: new Date('2026-10-18T02:10:00Z'),
   };
@@ -114,7 +117,54 @@ describe('FacebookPagePublisher.reconcile', () => {
     expect(await fake({ body: { data: [] } }).publisher.reconcile(window)).toEqual({ found: false });
     expect(await fake(graphError(500, 2)).publisher.reconcile(window)).toEqual({ found: 'unknown' });
     const { calls, publisher } = fake({ body: { data: [] } });
-    expect(await publisher.reconcile({ ...window, content: { body: '', title: null, linkUrl: 'https://example.com' } })).toEqual({ found: 'unknown' });
+    expect(await publisher.reconcile({ ...window, content: { body: '', title: null, linkUrl: 'https://example.com', media: [] } })).toEqual({ found: 'unknown' });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('FacebookPagePublisher with images', () => {
+  // Answers in order; records what was asked, with multipart fields.
+  function sequence(answers: { status?: number; body: unknown }[]) {
+    const calls: { path: string; form: URLSearchParams; multipart: FormData | null }[] = [];
+    const fetchImpl: Fetch = async (input, init) => {
+      calls.push({
+        path: new URL(input).pathname,
+        form: new URLSearchParams(typeof init?.body === 'string' ? init.body : ''),
+        multipart: init?.body instanceof FormData ? init.body : null,
+      });
+      const answer = answers.shift() ?? { status: 500, body: { error: { message: 'no more answers', code: 1 } } };
+      return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
+    };
+    return { calls, publisher: new FacebookPagePublisher(APP, fetchImpl) };
+  }
+  const media = [
+    { fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 3, altText: null },
+    { fileId: 'f-2', mime: 'image/png', sizeBytes: 3, altText: 'Mặt tiền' },
+  ];
+  const withMedia = (readMedia: PublishInput['readMedia']) => input({ content: { body: 'Ảnh khai trương', title: null, linkUrl: 'https://example.com/a', media }, readMedia });
+
+  it('uploads each image unpublished, then posts once with the photos attached and the link in the text', async () => {
+    const { calls, publisher } = sequence([{ body: { id: 'photo-1' } }, { body: { id: 'photo-2' } }, { body: { id: `${PAGE}_7` } }]);
+    const read: string[] = [];
+    const result = await publisher.publish(withMedia(async (fileId) => (read.push(fileId), new Uint8Array([1, 2, 3]))));
+    expect(result).toEqual({ kind: 'accepted', externalId: `${PAGE}_7`, url: `https://www.facebook.com/${PAGE}_7` });
+    expect(read).toEqual(['f-1', 'f-2']);
+    expect(calls.map((c) => c.path)).toEqual([`/v24.0/${PAGE}/photos`, `/v24.0/${PAGE}/photos`, `/v24.0/${PAGE}/feed`]);
+    expect(calls[0]?.multipart?.get('published')).toBe('false');
+    const source = calls[1]?.multipart?.get('source');
+    expect(source instanceof Blob ? source.type : null).toBe('image/png');
+    expect(Object.fromEntries(calls[2]?.form ?? [])).toEqual({
+      message: 'Ảnh khai trương\n\nhttps://example.com/a',
+      attached_media: JSON.stringify([{ media_fbid: 'photo-1' }, { media_fbid: 'photo-2' }]),
+    });
+  });
+
+  it('posts nothing when an image cannot be read or a photo upload fails', async () => {
+    const unreadable = sequence([]);
+    expect(await unreadable.publisher.publish(withMedia(async () => Promise.reject(new Error('sha256 mismatch'))))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' });
+    expect(unreadable.calls).toHaveLength(0);
+    const down = sequence([{ body: { id: 'photo-1' } }, { status: 500, body: { error: { message: 'Service temporarily unavailable', code: 2 } } }]);
+    expect(await down.publisher.publish(withMedia(async () => new Uint8Array([1])))).toMatchObject({ kind: 'rejected', error: 'transient' });
+    expect(down.calls.map((c) => c.path)).toEqual([`/v24.0/${PAGE}/photos`, `/v24.0/${PAGE}/photos`]);
   });
 });

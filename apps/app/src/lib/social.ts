@@ -67,9 +67,10 @@ export function hasTitle(provider: string): boolean {
 }
 
 // The issues a draft would have at submit, checked as it is typed (the server checks again).
-export function draftIssues(provider: string, content: { body: string; title: string | null }): Issue[] {
+export function draftIssues(provider: string, content: { body: string; title: string | null; media?: readonly { mime: string; sizeBytes: number }[] }): Issue[] {
   if (!isProvider(provider)) return [];
-  return validateVariant({ provider, body: content.body, title: content.title, media: [] });
+  const media = (content.media ?? []).map((m) => ({ kind: 'image' as const, mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: null }));
+  return validateVariant({ provider, body: content.body, title: content.title, media });
 }
 
 // Local calendar day (yyyy-mm-dd) of an instant, in the viewer's time zone.

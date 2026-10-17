@@ -153,6 +153,8 @@ export const KERNEL_ERROR_CODES = [
   'OAUTH_PERMISSION_MISSING',
   'OAUTH_PROVIDER_FAILED',
   'CHANNEL_NO_ACCOUNTS',
+  'MEDIA_NOT_FOUND',
+  'MEDIA_TYPE_UNSUPPORTED',
 ] as const;
 
 export type KernelErrorCode = (typeof KERNEL_ERROR_CODES)[number];

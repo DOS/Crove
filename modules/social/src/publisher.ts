@@ -9,7 +9,7 @@
 // - after the call, before record: the same, and that is the case the ledger exists for;
 // - record failing: the job throws, pg-boss retries it, and the retry's begin finds the variant in flight.
 import type { Publisher, PublishResult, ReconcileResult } from '@crove/channel';
-import { DomainError, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
+import { DomainError, readVerified, type BlobStore, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
 
 export interface PublishDeps {
@@ -19,6 +19,8 @@ export interface PublishDeps {
   publishers: Readonly<Record<string, Publisher>>;
   // How long one provider call may take before its outcome counts as unknown.
   callTimeoutMs?: number;
+  // Where the images of posts are stored. Unset: a post with images is refused by the adapter with nothing posted.
+  store?: BlobStore;
   staleSeconds?: number;
 }
 
@@ -90,14 +92,22 @@ async function openCredential(deps: PublishDeps, orgId: string, connectionId: st
   }
 }
 
-async function provide(deps: PublishDeps, publisher: Publisher, work: PublishWork, credential: { externalAccountId: string; secret: string }): Promise<PublishRecord> {
+async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, work: PublishWork, credential: { externalAccountId: string; secret: string }): Promise<PublishRecord> {
   const timeout = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+  // Only the variant's own images, of this org.
+  const readMedia = async (fileId: string): Promise<Uint8Array> => {
+    if (!work.content.media.some((m) => m.fileId === fileId)) throw new Error('not an image of this variant');
+    if (!deps.store) throw new Error('media storage not available');
+    const file = await deps.runtime.query<{ storageKey: string; generation: string | null; sha256: string }>('social.media.file', { fileId }, { actor: ACTOR, orgId });
+    // The exact version the post was approved with, checked against its hash.
+    return readVerified(deps.store, { key: file.storageKey, generation: file.generation, sha256: file.sha256 });
+  };
   try {
     switch (work.action) {
       case 'call':
         return fromPublish(
           await withTimeout(timeout, () =>
-            publisher.publish({ ...credential, content: work.content, settings: work.settings, callKey: work.callKey, contentHash: work.contentHash }),
+            publisher.publish({ ...credential, content: work.content, readMedia, settings: work.settings, callKey: work.callKey, contentHash: work.contentHash }),
           ),
         );
       case 'status':
@@ -154,7 +164,7 @@ export async function runPublishJob(deps: PublishDeps, orgId: string, variantId:
         : begun.action === 'status'
           ? { kind: 'unknown', code: credential.blocked }
           : { kind: 'unknowable', code: credential.blocked }
-      : await provide(deps, publisher, begun, credential);
+      : await provide(deps, orgId, publisher, begun, credential);
   const recorded = await deps.runtime.execute<{ recorded: boolean; status?: string; reason?: string }>(
     'social.publish.record',
     { variantId, callKey: begun.callKey, phase: begun.action, result, connectionVersion: begun.connectionVersion },

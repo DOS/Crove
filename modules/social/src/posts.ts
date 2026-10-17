@@ -11,16 +11,16 @@
 // - Scheduling needs the variant's latest decision to be an approval of its current revision and hash.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zId } from '@crove/kernel-contract';
+import { SOCIAL_IMAGE_TYPES, zId } from '@crove/kernel-contract';
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
-import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
+import { approvalCovers, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
 import { isProvider } from './domain/channels.ts';
 import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { publishingCommands } from './publishing.ts';
-import { MOVABLE, POST_COLUMNS, SLOT_FREED, base, editValues, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
+import { MOVABLE, POST_COLUMNS, SLOT_FREED, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -43,6 +43,49 @@ const zChannel = z.strictObject({
   settings: zSettings.optional(),
 });
 const zVariantIds = z.array(zId).min(1).max(MAX_CHANNELS_PER_POST);
+// A post's images, in order: files of the org uploaded for Social (JPEG, PNG or WEBP). The channel rules decide how
+// many each channel takes; 20 is the most any supported channel shows in one post.
+export const MAX_MEDIA_PER_POST = 20;
+const zMedia = z
+  .array(z.strictObject({ fileId: zId, altText: z.string().trim().max(1000).nullable().optional() }))
+  .max(MAX_MEDIA_PER_POST)
+  .refine((list) => new Set(list.map((m) => m.fileId)).size === list.length, 'each image once');
+const MEDIA_TYPES: readonly string[] = SOCIAL_IMAGE_TYPES;
+
+// The files a media list names, in its order, as the hash and the channel rules see them. Every file must be an image
+// of the org.
+async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): Promise<PostMedia[]> {
+  if (list.length === 0) return [];
+  const files = await ctx.trx
+    .selectFrom('crove_kernel.file')
+    .select(['id', 'generation', 'content_type', 'size_bytes'])
+    .where('org_id', '=', ctx.orgId)
+    .where(
+      'id',
+      'in',
+      list.map((m) => m.fileId),
+    )
+    .execute();
+  const byId = new Map(files.map((f) => [f.id, f]));
+  return list.map((m) => {
+    const f = byId.get(m.fileId);
+    if (!f) throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này');
+    if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG hoặc WEBP');
+    return { fileId: f.id, generation: f.generation, altText: m.altText || null, mime: f.content_type, sizeBytes: Number(f.size_bytes) };
+  });
+}
+
+// Replaces a post's media rows with a list, positions from 1.
+async function writePostMedia(ctx: CommandContext, postId: string, media: readonly PostMedia[]): Promise<void> {
+  await ctx.trx.deleteFrom('crove_social.post_media').where('org_id', '=', ctx.orgId).where('post_id', '=', postId).execute();
+  if (media.length === 0) return;
+  await ctx.trx
+    .insertInto('crove_social.post_media')
+    .values(media.map((m, i) => ({ org_id: ctx.orgId, post_id: postId, file_id: m.fileId, position: i + 1, alt_text: m.altText })))
+    .execute();
+}
+
+const sameMedia = (a: readonly PostMedia[], b: readonly PostMedia[]) => a.length === b.length && a.every((m, i) => m.fileId === b[i]?.fileId && m.altText === b[i]?.altText);
 
 // JSON with sorted keys, to compare settings whatever order jsonb returns them in.
 function canonicalJson(value: unknown): string {
@@ -121,6 +164,7 @@ export const zPostCreate = z.strictObject({
   linkUrl: zLink.nullable().optional(),
   timeZone: zTimeZone.optional(),
   scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
+  media: zMedia.optional(),
   channels: z.array(zChannel).min(1).max(MAX_CHANNELS_PER_POST),
 });
 
@@ -132,7 +176,8 @@ export const postCreate = defineCommand({
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
     distinctConnections(input.channels);
-    const post = await ctx.trx
+    const media = await resolveMedia(ctx, input.media ?? []);
+    const inserted = await ctx.trx
       .insertInto('crove_social.post')
       .values({
         org_id: ctx.orgId,
@@ -148,8 +193,10 @@ export const postCreate = defineCommand({
       })
       .returning(POST_COLUMNS)
       .executeTakeFirstOrThrow();
+    await writePostMedia(ctx, inserted.id, media);
+    const post: PostRow = { ...inserted, media };
     const variants = await insertVariants(ctx, post, input.channels, 0);
-    ctx.audit({ post_id: post.id, variants: variants.length });
+    ctx.audit({ post_id: post.id, variants: variants.length, media: media.length });
     await ctx.emit('social.post.created', { post_id: post.id });
     return { postId: post.id, revision: post.revision, variants };
   },
@@ -189,6 +236,8 @@ export const postUpdate = defineCommand({
     timeZone: zTimeZone.optional(),
     // The planned time of variants not yet scheduled; a scheduled variant keeps the time it was scheduled at.
     scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
+    // The whole list of images, replacing the post's; omitted leaves them as they are.
+    media: zMedia.optional(),
   }),
   risk: 'R1',
   access: MEMBERS,
@@ -204,8 +253,11 @@ export const postUpdate = defineCommand({
       link_url: input.linkUrl === undefined ? post.link_url : input.linkUrl,
       time_zone: input.timeZone ?? post.time_zone,
       scheduled_at: input.scheduledAt === undefined ? post.scheduled_at : input.scheduledAt === null ? null : new Date(Date.parse(input.scheduledAt)),
+      media: input.media === undefined ? post.media : await resolveMedia(ctx, input.media),
     };
+    const mediaChanged = !sameMedia(post.media, next.media);
     const same =
+      !mediaChanged &&
       next.body === post.body &&
       next.title === post.title &&
       next.link_url === post.link_url &&
@@ -221,6 +273,7 @@ export const postUpdate = defineCommand({
       throw new DomainError('VARIANT_IN_FLIGHT', 409, 'Có kênh đang đăng: chờ kết quả rồi mới sửa nội dung chung', { variantIds: blocked.map((v) => v.id) });
     }
     for (const v of changed) await setVariant(ctx, v.id, { content_hash: hashOf(base(next), v), revision: v.revision + 1, ...editValues(v) });
+    if (mediaChanged) await writePostMedia(ctx, post.id, next.media);
     const revision = post.revision + 1;
     await ctx.trx
       .updateTable('crove_social.post')
@@ -353,6 +406,7 @@ export const variantDecide = defineCommand({
             body: content.body,
             title: content.title,
             link_url: content.linkUrl,
+            media: mediaFor(base(post), v).map((m) => ({ file_id: m.fileId, generation: m.generation, alt_text: m.altText })),
             settings: settingsOf(v),
           }),
         })
@@ -634,6 +688,8 @@ export interface VariantView {
   position: number;
   overrides: { body: string | null; title: string | null; linkUrl: string | null };
   effective: BaseContent;
+  // The images this variant shows: its own list, or the post's.
+  media: MediaView[];
   settings: Record<string, unknown>;
   revision: number;
   contentHash: string;
@@ -649,11 +705,21 @@ export interface VariantView {
   latestDecision: { decision: SocialDecision; comment: string | null; decidedBy: string; at: string; revision: number; current: boolean } | null;
 }
 
+export interface MediaView {
+  fileId: string;
+  altText: string | null;
+  mime: string;
+  sizeBytes: number;
+}
+
+const mediaView = (list: readonly PostMedia[]): MediaView[] => list.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime, sizeBytes: m.sizeBytes }));
+
 export interface PostView {
   id: string;
   body: string;
   title: string | null;
   linkUrl: string | null;
+  media: MediaView[];
   timeZone: string;
   scheduledAt: string | null;
   revision: number;
@@ -695,17 +761,32 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
     : [];
   const latest = new Map<string, (typeof decisions)[number]>();
   for (const d of decisions) if (!latest.has(d.variant_id)) latest.set(d.variant_id, d);
+  const mediaRows = await ctx.trx
+    .selectFrom('crove_social.post_media as m')
+    .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
+    .select(['m.post_id', 'm.file_id', 'm.alt_text', 'f.generation', 'f.content_type', 'f.size_bytes'])
+    .where('m.org_id', '=', ctx.orgId)
+    .where('m.post_id', 'in', postIds)
+    .orderBy('m.position')
+    .execute();
+  const mediaByPost = new Map<string, PostMedia[]>();
+  for (const r of mediaRows) {
+    const list = mediaByPost.get(r.post_id) ?? [];
+    list.push({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes) });
+    mediaByPost.set(r.post_id, list);
+  }
   const byPost = new Map(posts.map((p) => [p.id, p]));
   return postIds
     .map((id) => byPost.get(id))
     .filter((p): p is (typeof posts)[number] => p !== undefined)
     .map((p) => {
-      const b: BaseContent = { body: p.body, title: p.title, linkUrl: p.link_url };
+      const b: PostContent = { body: p.body, title: p.title, linkUrl: p.link_url, media: mediaByPost.get(p.id) ?? [] };
       return {
         id: p.id,
         body: p.body,
         title: p.title,
         linkUrl: p.link_url,
+        media: mediaView(b.media),
         timeZone: p.time_zone,
         scheduledAt: iso(p.scheduled_at),
         revision: p.revision,
@@ -727,6 +808,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               position: v.position,
               overrides: overrides(v),
               effective: effectiveContent(b, overrides(v), v.content_frozen),
+              media: mediaView(mediaFor(b, v)),
               settings: settingsOf(v),
               revision: v.revision,
               contentHash: v.content_hash,
@@ -846,4 +928,34 @@ export const socialCommands = [
   queueSet,
   ...publishingCommands,
 ];
-export const socialQueries = [postGet, postList, queueGet];
+// Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
+// org shows, so the job never reads another kind of file through it.
+export const mediaFile = defineQuery({
+  name: 'social.media.file',
+  input: z.strictObject({ fileId: zId }),
+  access: 'system',
+  handler: async (ctx, input): Promise<{ storageKey: string; generation: string | null; sha256: string }> => {
+    const file = await ctx.trx
+      .selectFrom('crove_kernel.file as f')
+      .select(['f.storage_key', 'f.generation', 'f.sha256'])
+      .where('f.org_id', '=', ctx.orgId)
+      .where('f.id', '=', input.fileId)
+      .where((eb) =>
+        eb.or([
+          eb.exists(eb.selectFrom('crove_social.post_media as m').select('m.id').whereRef('m.org_id', '=', 'f.org_id').whereRef('m.file_id', '=', 'f.id')),
+          eb.exists(
+            eb
+              .selectFrom('crove_social.post_variant as v')
+              .select('v.id')
+              .whereRef('v.org_id', '=', 'f.org_id')
+              .where(sql<boolean>`v.media @> jsonb_build_array(jsonb_build_object('fileId', ${input.fileId}::text))`),
+          ),
+        ]),
+      )
+      .executeTakeFirst();
+    if (!file) throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này');
+    return { storageKey: file.storage_key, generation: file.generation, sha256: file.sha256 };
+  },
+});
+
+export const socialQueries = [postGet, postList, queueGet, mediaFile];

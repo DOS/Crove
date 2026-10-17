@@ -184,7 +184,8 @@ const zIngestFile = z.object({
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   storageKey: z.string().min(1),
   generation: z.string().regex(GENERATION_PATTERN),
-  source: z.enum(['upload', 'email']),
+  // social: an image for a Social post (#372), stored like any file but never sent to extraction.
+  source: z.enum(['upload', 'email', 'social']),
 });
 
 export const ingestFile = defineCommand({
@@ -222,6 +223,7 @@ export const ingestFile = defineCommand({
         .executeTakeFirstOrThrow();
       return { fileId: existing.id, duplicate: true };
     }
+    if (input.source === 'social') return { fileId: inserted.id, duplicate: false };
     await ctx.activity('kernel.file', inserted.id, 'file.received', `Nhận chứng từ ${input.filename}`);
     await ctx.emit('kernel.file.ingested', { fileId: inserted.id });
     return { fileId: inserted.id, duplicate: false };

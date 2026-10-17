@@ -24,6 +24,7 @@ import {
   latestDecision,
   lockPost,
   lockVariants,
+  mediaFor,
   overrides,
   pick,
   refreshPostStatus,
@@ -65,7 +66,8 @@ export interface PublishWork {
   connectionId: string;
   callKey: string;
   contentHash: string;
-  content: BaseContent;
+  // Text and images; the images by file, which the job reads from storage for the provider.
+  content: BaseContent & { media: { fileId: string; mime: string; sizeBytes: number; altText: string | null }[] };
   settings: Record<string, unknown>;
   // The pending post's platform id, for a status check.
   externalRef: string | null;
@@ -147,7 +149,10 @@ function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, s
     connectionId: v.channel_connection_id,
     callKey: key,
     contentHash: v.content_hash,
-    content: effectiveContent(base(post), overrides(v), v.content_frozen),
+    content: {
+      ...effectiveContent(base(post), overrides(v), v.content_frozen),
+      media: mediaFor(base(post), v).map((m) => ({ fileId: m.fileId, mime: m.mime, sizeBytes: m.sizeBytes, altText: m.altText })),
+    },
     settings: settingsOf(v),
     externalRef: v.external_post_id,
     callStartedAt: startedAt.toISOString(),

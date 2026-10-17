@@ -373,6 +373,28 @@ suite.each(backends)('staged uploads on PostgreSQL and $name (issue #109)', (bac
     expect((await grant(form.uploadId))?.used_at).not.toBeNull();
   });
 
+  // Images for Social posts (#372): stored like every file, recorded as source 'social', never sent to extraction.
+  it('records an image uploaded for a Social post as source social, and takes only images for it', async () => {
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Buffer.from(randomUUID())]);
+    const form = await begin();
+    expect(await backend.post(form, png)).toBe(204);
+    const done = await call(`/api/files/uploads/${form.uploadId}/complete`, 'owner', { json: { filename: 'anh.png', purpose: 'social' } });
+    expect(done.status).toBe(200);
+    const { fileId } = (await done.json()) as { fileId: string };
+    const row = await admin(async (c) => (await c.query<{ source: string; content_type: string }>('SELECT source, content_type FROM crove_kernel.file WHERE id = $1', [fileId])).rows[0]);
+    expect(row).toEqual({ source: 'social', content_type: 'image/png' });
+    // No extraction is queued for it.
+    const events = await admin(async (c) => (await c.query("SELECT 1 FROM crove_kernel.outbox_event WHERE type = 'kernel.file.ingested' AND payload->>'fileId' = $1", [fileId])).rowCount);
+    expect(events).toBe(0);
+
+    const xml = await begin();
+    expect(await backend.post(xml, invoice('5099'))).toBe(204);
+    expect((await call(`/api/files/uploads/${xml.uploadId}/complete`, 'owner', { json: { filename: 'hd.xml', purpose: 'social' } })).status).toBe(415);
+    const odd = await begin();
+    expect(await backend.post(odd, png)).toBe(204);
+    expect((await call(`/api/files/uploads/${odd.uploadId}/complete`, 'owner', { json: { filename: 'anh.png', purpose: 'payroll' } })).status).toBe(400);
+  });
+
   it('refuses content that is not an accepted type, without recording a file', async () => {
     const form = await begin();
     expect(await backend.post(form, new TextEncoder().encode('#!/bin/sh\necho no'))).toBe(204);
