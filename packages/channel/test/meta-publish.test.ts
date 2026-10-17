@@ -159,6 +159,20 @@ describe('FacebookPagePublisher with images', () => {
     });
   });
 
+  it('finds a post with photos and a link again by the text it was sent with', async () => {
+    const { publisher } = sequence([{ body: { data: [{ id: `${PAGE}_7`, message: 'Ảnh khai trương\n\nhttps://example.com/a', permalink_url: 'https://www.facebook.com/p/7' }] } }]);
+    const found = await publisher.reconcile({
+      externalAccountId: PAGE,
+      secret: SECRET,
+      callKey: 'call-1',
+      contentHash: `sha256:${'0'.repeat(64)}`,
+      content: { body: 'Ảnh khai trương', title: null, linkUrl: 'https://example.com/a', media },
+      after: new Date(Date.now() - 600_000),
+      before: new Date(),
+    });
+    expect(found).toEqual({ found: true, externalId: `${PAGE}_7`, url: 'https://www.facebook.com/p/7' });
+  });
+
   it('posts nothing when an image cannot be read or a photo upload fails', async () => {
     const unreadable = sequence([]);
     expect(await unreadable.publisher.publish(withMedia(async () => Promise.reject(new Error('sha256 mismatch'))))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' });

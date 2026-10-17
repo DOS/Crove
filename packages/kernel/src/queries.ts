@@ -298,8 +298,8 @@ export const filesRecent = defineQuery({
         'p.duplicate_of',
       ])
       .where('f.org_id', '=', ctx.orgId)
-      // Images of Social posts are not documents (#372).
-      .where('f.source', '<>', 'social')
+      // Images of Social posts are not documents (#372), unless the same bytes were also uploaded as one and read.
+      .where((eb) => eb.or([eb('f.source', '<>', 'social'), eb('e.status', 'is not', null)]))
       .orderBy('f.created_at', 'desc')
       .limit(50)
       .execute();

@@ -6,7 +6,8 @@ import type { Provider } from './channels.ts';
 
 export interface HashedMedia {
   // Kernel file id and the object version its bytes were written as (ADR-0013; null on files from before it), so
-  // another file or other bytes change the hash.
+  // another file or other bytes change the hash. With null, the file id alone binds the bytes: a file row never changes
+  // (file_guard) and every read is checked against its sha256.
   fileId: string;
   generation: string | null;
   altText: string | null;

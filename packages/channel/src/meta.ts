@@ -220,8 +220,11 @@ function pageToken(secret: string): string | null {
   }
 }
 
-// What Facebook shows as the post's text. Facebook Pages have no title; a link is sent apart and previewed.
-const feedMessage = (content: { body: string }) => content.body.trim();
+// What Facebook shows as the post's text, built the same way for publishing and reconciling. Facebook Pages have no
+// title; a link is sent apart and previewed, except on a post with photos, which has no link preview: there the link
+// goes at the end of the text.
+const feedMessage = (content: { body: string; linkUrl: string | null; media: readonly unknown[] }) =>
+  content.linkUrl && content.media.length > 0 ? [content.body.trim(), content.linkUrl].filter(Boolean).join('\n\n') : content.body.trim();
 const postUrl = (id: string) => `https://www.facebook.com/${encodeURIComponent(id)}`;
 
 export function graphPublishResult(error: unknown): PublishResult {
@@ -252,9 +255,7 @@ export class FacebookPagePublisher implements Publisher {
     if (!/^\d{1,32}$/.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_PAGE_ID' };
     const media = input.content.media;
     const form: Record<string, string> = { message: feedMessage(input.content) };
-    // A post with photos has no link preview: the link goes at the end of the text.
-    if (input.content.linkUrl && media.length > 0) form.message = [form.message, input.content.linkUrl].filter(Boolean).join('\n\n');
-    else if (input.content.linkUrl) form.link = input.content.linkUrl;
+    if (input.content.linkUrl && media.length === 0) form.link = input.content.linkUrl;
     if (!form.message && !form.link && media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
     if (media.length > 0) {
       const uploaded = await this.uploadPhotos(input, token);
@@ -272,21 +273,19 @@ export class FacebookPagePublisher implements Publisher {
   }
 
   // Uploads the post's images as unpublished photos of the Page: invisible until the feed post attaches them, so this
-  // step is safe to repeat and any failure here posted nothing. Every image is read before the first upload.
+  // step is safe to repeat and any failure here posted nothing. One image at a time is held in memory.
   private async uploadPhotos(input: PublishInput, token: string): Promise<{ ids: string[] } | { rejected: PublishResult }> {
-    const files: { mime: string; bytes: Uint8Array }[] = [];
-    for (const m of input.content.media) {
+    const ids: string[] = [];
+    for (const [i, m] of input.content.media.entries()) {
+      let bytes: Uint8Array;
       try {
-        files.push({ mime: m.mime, bytes: await input.readMedia(m.fileId) });
+        bytes = await input.readMedia(m.fileId);
       } catch {
         return { rejected: { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' } };
       }
-    }
-    const ids: string[] = [];
-    for (const [i, f] of files.entries()) {
       const body = new FormData();
       body.set('published', 'false');
-      body.set('source', new Blob([new Uint8Array(f.bytes)], { type: f.mime }), `image-${i + 1}`);
+      body.set('source', new Blob([new Uint8Array(bytes)], { type: m.mime }), `image-${i + 1}`);
       try {
         const answer = await this.graph.call<FeedAnswer>('POST', `${input.externalAccountId}/photos`, { token, multipart: body });
         if (typeof answer.id !== 'string' || !answer.id) return { rejected: { kind: 'rejected', error: 'transient', code: 'NO_PHOTO_ID' } };
@@ -304,7 +303,7 @@ export class FacebookPagePublisher implements Publisher {
     const token = pageToken(input.secret);
     if (!token || !/^\d{1,32}$/.test(input.externalAccountId)) return { found: 'unknown' };
     const message = feedMessage(input.content);
-    // A link-only post has no message to match on, so it cannot be found again.
+    // A post without text (link only, or photos only) has no message to match on, so it cannot be found again.
     if (!message) return { found: 'unknown' };
     // Graph's since/until are Unix seconds; a minute either side covers clock skew between Meta and the worker.
     const params = {

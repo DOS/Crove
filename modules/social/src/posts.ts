@@ -58,7 +58,7 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
   if (list.length === 0) return [];
   const files = await ctx.trx
     .selectFrom('crove_kernel.file')
-    .select(['id', 'generation', 'content_type', 'size_bytes'])
+    .select(['id', 'generation', 'content_type', 'size_bytes', 'source'])
     .where('org_id', '=', ctx.orgId)
     .where(
       'id',
@@ -69,7 +69,8 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
   const byId = new Map(files.map((f) => [f.id, f]));
   return list.map((m) => {
     const f = byId.get(m.fileId);
-    if (!f) throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này');
+    // Only images uploaded for posts: an accounting document of the org is never published, whatever its type.
+    if (!f || f.source !== 'social') throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này');
     if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG hoặc WEBP');
     return { fileId: f.id, generation: f.generation, altText: m.altText || null, mime: f.content_type, sizeBytes: Number(f.size_bytes) };
   });

@@ -463,18 +463,21 @@ suite('social posts on PostgreSQL (S3)', () => {
       expect((await exec<{ changedVariants: string[] }>(o, o.member, 'social.post.update', { postId, revision: post.revision, media: [{ fileId: a, altText: 'Mặt tiền' }] })).changedVariants).toEqual([]);
     });
 
-    it('takes only image files of the org, and keeps them out of the Inbox', async () => {
+    it('takes only images uploaded for posts, never a document of the org, and keeps them out of the Inbox', async () => {
       const o = await org();
       const conn = await connection(o.orgId, o.owner, 'facebook_page');
-      const pdf = await image(o.orgId, 'application/pdf', 1000, 'upload');
+      const pdf = await image(o.orgId, 'application/pdf', 1000, 'social');
       await expect(exec(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: pdf }], channels: [{ connectionId: conn }] })).rejects.toMatchObject({ code: 'MEDIA_TYPE_UNSUPPORTED' });
+      // An invoice photo is an image too, but it is an accounting document: it cannot be attached.
+      const scan = await image(o.orgId, 'image/jpeg', 1000, 'upload');
+      await expect(exec(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: scan }], channels: [{ connectionId: conn }] })).rejects.toMatchObject({ code: 'MEDIA_NOT_FOUND' });
       const other = await org();
       const foreign = await image(other.orgId);
       await expect(exec(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: foreign }], channels: [{ connectionId: conn }] })).rejects.toMatchObject({ code: 'MEDIA_NOT_FOUND' });
       const mine = await image(o.orgId);
       await expect(exec(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: mine }, { fileId: mine }], channels: [{ connectionId: conn }] })).rejects.toMatchObject({ status: 422 });
       const recent = await rt.query<{ id: string }[]>('kernel.files.recent', {}, { actor: asUser(o.owner), orgId: o.orgId });
-      expect(recent.map((f) => f.id)).toEqual([pdf]);
+      expect(recent.map((f) => f.id)).toEqual([scan]);
       // A file a post shows cannot be deleted from under it.
       const { postId } = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: mine }], channels: [{ connectionId: conn }] });
       expect(postId).toBeTruthy();
