@@ -33,10 +33,14 @@ interface Box {
   end: number;
 }
 
-// The boxes between start and end, stopping at the first header that does not fit.
+// A real file has a handful of top-level boxes and a few dozen inside moov; a file of millions of tiny boxes would hold
+// the event loop, so a walk gives up after this many.
+const MAX_BOXES = 10_000;
+
+// The boxes between start and end, stopping at the first header that does not fit, or after MAX_BOXES.
 function* boxes(bytes: Uint8Array, start: number, end: number): Generator<Box> {
   let at = start;
-  while (at + 8 <= end) {
+  for (let seen = 0; at + 8 <= end && seen < MAX_BOXES; seen++) {
     let size = readU32(bytes, at);
     const type = fourcc(bytes, at + 4);
     let header = 8;

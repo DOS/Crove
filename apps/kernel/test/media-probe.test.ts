@@ -37,6 +37,10 @@ describe('videoDurationMs', () => {
     expect(videoDurationMs(file(ftyp('isom'), box('moov', mvhd0(1000, 0xffffffff))))).toBeNull();
     const whole = file(ftyp('isom'), box('moov', mvhd0(1000, 5000)));
     expect(videoDurationMs(whole.slice(0, whole.length - 60))).toBeNull();
+    // A file of thousands of tiny boxes is given up on rather than walked to the end.
+    const tiny = Array.from({ length: 20_000 }, () => box('free', [])).flat();
+    expect(videoDurationMs(file(ftyp('isom'), tiny, box('moov', mvhd0(1000, 5000))))).toBeNull();
+    expect(videoDurationMs(file(ftyp('isom'), tiny.slice(0, 8 * 100), box('moov', mvhd0(1000, 5000))))).toBe(5000);
     // A box claiming more bytes than there are stops the walk.
     expect(videoDurationMs(file(ftyp('isom'), [...u32(1 << 30), ...text('moov')]))).toBeNull();
   });

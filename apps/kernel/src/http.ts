@@ -570,7 +570,7 @@ export function createHttpApp(deps: HttpDeps) {
     if (video) {
       if (bytes.byteLength > MAX_SOCIAL_VIDEO_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 100 MB`);
       const ms = videoDurationMs(bytes);
-      if (ms === null) throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: không đọc được thời lượng video`);
+      if (ms === null || ms === 0) throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: không đọc được thời lượng video`);
       if (ms > MAX_SOCIAL_VIDEO_MS) throw new DomainError('VIDEO_TOO_LONG', 422, `${name}: video dài quá 3 giờ`);
       durationMs = ms;
     } else {
@@ -733,7 +733,7 @@ export function createHttpApp(deps: HttpDeps) {
     try {
       const user = c.get('user');
       const orgId = await resolveOrg(runtime, user, c.req.header(ORG_HEADER) ?? null);
-      const file = await runtime.query<{ filename: string; content_type: string; storage_key: string; generation: string | null; sha256: string }>(
+      const file = await runtime.query<{ filename: string; content_type: string; storage_key: string; generation: string | null; sha256: string; size_bytes: string }>(
         'kernel.file.get',
         { id: c.req.param('id') },
         { actor: actorOf(user), orgId },
@@ -752,7 +752,18 @@ export function createHttpApp(deps: HttpDeps) {
       if (presigned) {
         return new Response(null, { status: 302, headers: { location: presigned, 'cache-control': 'private, no-store', 'referrer-policy': 'no-referrer' } });
       }
-      const bytes = await readVerified(store, ref);
+      // A file larger than a document (a Social video) is read whole to check its hash: it takes a large slot.
+      let releaseLarge: (() => void) | null = null;
+      if (Number(file.size_bytes) > MAX_UPLOAD_BYTES) {
+        releaseLarge = large.tryAcquire(user.userId);
+        if (!releaseLarge) throw busy(c);
+      }
+      let bytes: Uint8Array;
+      try {
+        bytes = await readVerified(store, ref);
+      } finally {
+        releaseLarge?.();
+      }
       return new Response(body(bytes), {
         headers: {
           'content-type': file.content_type,
