@@ -95,10 +95,21 @@ async function openCredential(deps: PublishDeps, orgId: string, connectionId: st
 async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, work: PublishWork, credential: { externalAccountId: string; secret: string }): Promise<PublishRecord> {
   const timeout = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
   // Only the variant's own images, of this org.
-  const readMedia = async (fileId: string): Promise<Uint8Array> => {
+  const mediaFile = async (fileId: string) => {
     if (!work.content.media.some((m) => m.fileId === fileId)) throw new Error('not an image of this variant');
+    return deps.runtime.query<{ storageKey: string; generation: string | null; sha256: string; contentType: string; filename: string }>('social.media.file', { fileId }, { actor: ACTOR, orgId });
+  };
+  // A presigned GET of the exact version, where the store hands them out (S3); valid briefly, enough for the platform
+  // to fetch it right after the call that names it.
+  const mediaUrl = async (fileId: string): Promise<string | null> => {
+    const direct = deps.store?.direct;
+    if (!direct) return null;
+    const file = await mediaFile(fileId);
+    return direct.presignDownload({ key: file.storageKey, generation: file.generation, sha256: file.sha256 }, { filename: file.filename, contentType: file.contentType });
+  };
+  const readMedia = async (fileId: string): Promise<Uint8Array> => {
     if (!deps.store) throw new Error('media storage not available');
-    const file = await deps.runtime.query<{ storageKey: string; generation: string | null; sha256: string }>('social.media.file', { fileId }, { actor: ACTOR, orgId });
+    const file = await mediaFile(fileId);
     // The exact version the post was approved with, checked against its hash.
     return readVerified(deps.store, { key: file.storageKey, generation: file.generation, sha256: file.sha256 });
   };
@@ -107,7 +118,7 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
       case 'call':
         return fromPublish(
           await withTimeout(timeout, () =>
-            publisher.publish({ ...credential, content: work.content, readMedia, settings: work.settings, callKey: work.callKey, contentHash: work.contentHash }),
+            publisher.publish({ ...credential, content: work.content, readMedia, mediaUrl, settings: work.settings, callKey: work.callKey, contentHash: work.contentHash }),
           ),
         );
       case 'status':

@@ -8,6 +8,9 @@ import { Card } from '@crove/ui/components/card';
 import { ErrorText, Spinner } from '../components/ui.tsx';
 import { client, errorMessage, queryClient, setCurrentOrg } from '../lib/api.ts';
 import { takeOAuthAttempt } from '../lib/oauth.ts';
+import type { OAUTH_CHANNEL_PROVIDERS } from '@crove/kernel-contract';
+
+type OAuthProvider = (typeof OAUTH_CHANNEL_PROVIDERS)[number];
 import { providerName } from '../lib/social.ts';
 
 type Callback = { kind: 'finish'; slug: string; state: string; code: string } | { kind: 'cancelled'; slug: string | null } | { kind: 'lost' };
@@ -40,7 +43,7 @@ export function OAuthCallbackPage() {
     mutationFn: (c: Extract<Callback, { kind: 'finish' }>) => {
       setCurrentOrg(c.slug);
       // The oauth providers are a fixed list in the contract; the server refuses any other.
-      return client.channels.oauthFinish({ provider: provider as 'facebook_page', state: c.state, code: c.code });
+      return client.channels.oauthFinish({ provider: provider as OAuthProvider, state: c.state, code: c.code });
     },
     onSuccess: () => void queryClient.invalidateQueries(),
   });

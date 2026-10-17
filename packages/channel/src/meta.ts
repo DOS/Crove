@@ -93,23 +93,32 @@ interface TokenAnswer {
 interface PermissionsAnswer {
   data?: { permission?: unknown; status?: unknown }[];
 }
+export interface MetaPageRow {
+  id?: unknown;
+  name?: unknown;
+  access_token?: unknown;
+  tasks?: unknown;
+  instagram_business_account?: { id?: unknown; username?: unknown; name?: unknown };
+}
 interface AccountsAnswer {
-  data?: { id?: unknown; name?: unknown; access_token?: unknown; tasks?: unknown }[];
+  data?: MetaPageRow[];
   paging?: { cursors?: { after?: unknown }; next?: unknown };
 }
 
 const MAX_PAGES_LISTED = 1000;
 
-export class FacebookPageConnector implements OAuthConnector {
-  readonly provider = 'facebook_page' as const;
-  readonly pkce = false;
+// Facebook Login for one set of permissions: the dialog URL, the code exchange to a long-lived user token, and the
+// Pages that token manages. Shared by the Facebook Page and Instagram connectors; the user token never leaves here.
+export class MetaLogin {
+  readonly graph: Graph;
   private readonly app: MetaAppConfig;
-  private readonly graph: Graph;
+  private readonly scopes: readonly string[];
 
-  constructor(app: MetaAppConfig, fetchImpl?: Fetch) {
+  constructor(app: MetaAppConfig, scopes: readonly string[], fetchImpl?: Fetch) {
     if (!/^\d{1,32}$/.test(app.appId)) throw new Error('invalid Meta app id');
     if (!app.appSecret) throw new Error('missing Meta app secret');
     this.app = app;
+    this.scopes = scopes;
     this.graph = new Graph(app.appSecret, app.graphVersion, fetchImpl);
   }
 
@@ -119,13 +128,14 @@ export class FacebookPageConnector implements OAuthConnector {
     url.searchParams.set('redirect_uri', input.redirectUri);
     url.searchParams.set('state', input.state);
     url.searchParams.set('response_type', 'code');
-    url.searchParams.set('scope', FACEBOOK_PAGE_SCOPES.join(','));
+    url.searchParams.set('scope', this.scopes.join(','));
     // Asks again for a permission the user declined last time; without it Meta skips declined permissions for good.
     url.searchParams.set('auth_type', 'rerequest');
     return url.toString();
   }
 
-  async exchange(input: ExchangeInput): Promise<ConnectedAccount[]> {
+  // The long-lived user token for a code, and the permissions it holds (all of the connector's, or a denied error).
+  async userToken(input: ExchangeInput): Promise<{ token: string; scopes: string[] }> {
     const short = await this.graph
       .call<TokenAnswer>('POST', 'oauth/access_token', {
         form: { client_id: this.app.appId, client_secret: this.app.appSecret, redirect_uri: input.redirectUri, code: input.code },
@@ -137,39 +147,62 @@ export class FacebookPageConnector implements OAuthConnector {
           ? new ConnectorError('invalid_grant', 'Meta refused the authorization code', String(error.code))
           : asProviderError(error);
       });
-    const shortToken = tokenOf(short);
     const long = await this.graph
       .call<TokenAnswer>('POST', 'oauth/access_token', {
-        form: { grant_type: 'fb_exchange_token', client_id: this.app.appId, client_secret: this.app.appSecret, fb_exchange_token: shortToken },
+        form: { grant_type: 'fb_exchange_token', client_id: this.app.appId, client_secret: this.app.appSecret, fb_exchange_token: tokenOf(short) },
       })
       .catch(asProviderErrorThrow);
-    const userToken = tokenOf(long);
-
-    const permissions = await this.graph.call<PermissionsAnswer>('GET', 'me/permissions', { token: userToken }).catch(asProviderErrorThrow);
+    const token = tokenOf(long);
+    const permissions = await this.graph.call<PermissionsAnswer>('GET', 'me/permissions', { token }).catch(asProviderErrorThrow);
     const granted = new Set((permissions.data ?? []).filter((p) => p.status === 'granted' && typeof p.permission === 'string').map((p) => p.permission as string));
-    const missing = FACEBOOK_PAGE_SCOPES.filter((s) => !granted.has(s));
+    const missing = this.scopes.filter((s) => !granted.has(s));
     if (missing.length > 0) throw new ConnectorError('denied', `Meta did not grant ${missing.join(', ')}`, 'MISSING_PERMISSION');
-    const scopes = FACEBOOK_PAGE_SCOPES.filter((s) => granted.has(s));
+    return { token, scopes: this.scopes.filter((s) => granted.has(s)) };
+  }
 
-    const accounts: ConnectedAccount[] = [];
+  // Every Page the user token manages, by cursor (never Meta's `next` URL, which carries the token).
+  async pages(token: string, fields: string): Promise<MetaPageRow[]> {
+    const out: MetaPageRow[] = [];
     let after: string | null = null;
-    for (let listed = 0; listed < MAX_PAGES_LISTED; ) {
-      const params: Record<string, string> = { fields: 'id,name,access_token,tasks', limit: '100' };
+    while (out.length < MAX_PAGES_LISTED) {
+      const params: Record<string, string> = { fields, limit: '100' };
       if (after) params.after = after;
-      const page = await this.graph.call<AccountsAnswer>('GET', 'me/accounts', { token: userToken, params }).catch(asProviderErrorThrow);
+      const page = await this.graph.call<AccountsAnswer>('GET', 'me/accounts', { token, params }).catch(asProviderErrorThrow);
       const rows = page.data ?? [];
-      listed += rows.length;
-      for (const row of rows) {
-        // Posting needs the CREATE_CONTENT task on the Page; a Page the user only moderates cannot be connected.
-        const tasks = Array.isArray(row.tasks) ? row.tasks : [];
-        if (typeof row.id !== 'string' || !/^\d{1,32}$/.test(row.id) || typeof row.access_token !== 'string' || !row.access_token) continue;
-        if (!tasks.includes('CREATE_CONTENT')) continue;
-        const name = typeof row.name === 'string' && row.name.trim() ? row.name.trim().slice(0, 200) : `Facebook Page ${row.id}`;
-        accounts.push({ provider: 'facebook_page', externalAccountId: row.id, displayName: name, scopes: [...scopes], expiresAt: null, secret: JSON.stringify({ accessToken: row.access_token }) });
-      }
+      out.push(...rows);
       const cursor = page.paging?.cursors?.after;
       if (rows.length === 0 || typeof page.paging?.next !== 'string' || typeof cursor !== 'string') break;
       after = cursor;
+    }
+    return out;
+  }
+}
+
+const NUMERIC_ID = /^\d{1,32}$/;
+
+export class FacebookPageConnector implements OAuthConnector {
+  readonly provider = 'facebook_page' as const;
+  readonly pkce = false;
+  private readonly login: MetaLogin;
+
+  constructor(app: MetaAppConfig, fetchImpl?: Fetch) {
+    this.login = new MetaLogin(app, FACEBOOK_PAGE_SCOPES, fetchImpl);
+  }
+
+  authorizeUrl(input: AuthorizeInput): string {
+    return this.login.authorizeUrl(input);
+  }
+
+  async exchange(input: ExchangeInput): Promise<ConnectedAccount[]> {
+    const { token, scopes } = await this.login.userToken(input);
+    const accounts: ConnectedAccount[] = [];
+    for (const row of await this.login.pages(token, 'id,name,access_token,tasks')) {
+      // Posting needs the CREATE_CONTENT task on the Page; a Page the user only moderates cannot be connected.
+      const tasks = Array.isArray(row.tasks) ? row.tasks : [];
+      if (typeof row.id !== 'string' || !NUMERIC_ID.test(row.id) || typeof row.access_token !== 'string' || !row.access_token) continue;
+      if (!tasks.includes('CREATE_CONTENT')) continue;
+      const name = typeof row.name === 'string' && row.name.trim() ? row.name.trim().slice(0, 200) : `Facebook Page ${row.id}`;
+      accounts.push({ provider: 'facebook_page', externalAccountId: row.id, displayName: name, scopes: [...scopes], expiresAt: null, secret: JSON.stringify({ accessToken: row.access_token }) });
     }
     return accounts;
   }
@@ -180,11 +213,11 @@ function tokenOf(answer: TokenAnswer): string {
   return answer.access_token;
 }
 
-function asProviderError(error: unknown): ConnectorError {
+export function asProviderError(error: unknown): ConnectorError {
   if (error instanceof ConnectorError) return error;
   if (error instanceof GraphError) return new ConnectorError(error.status === 403 || error.code === 10 || error.code === 200 ? 'denied' : 'provider', error.message, String(error.code ?? error.status));
   // fetch's own message (DNS, TLS, timeout) for the log; our URLs carry no token.
-  return new ConnectorError('provider', `Meta could not be reached: ${error instanceof Error ? `: ${error.message}` : typeof error}`);
+  return new ConnectorError('provider', `Meta could not be reached: ${error instanceof Error ? `${error.name}: ${error.message}` : typeof error}`);
 }
 
 function asProviderErrorThrow(error: unknown): never {

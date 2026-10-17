@@ -217,7 +217,7 @@ suite('social publishing on PostgreSQL (S4)', () => {
     const begun = await worker.execute<BeginResult>('social.publish.begin', { variantId: id, provider: 'sandbox', safety: 'reconcile_only' }, { actor: system, orgId: o.orgId });
     expect(begun.action).toBe('call');
     if (begun.action !== 'call') return;
-    await platform.publish({ externalAccountId: 'x', secret: '{}', content: begun.content, readMedia: noMedia, settings: {}, callKey: begun.callKey, contentHash: begun.contentHash });
+    await platform.publish({ externalAccountId: 'x', secret: '{}', content: begun.content, readMedia: noMedia, mediaUrl: async () => null, settings: {}, callKey: begun.callKey, contentHash: begun.contentHash });
 
     // A run while the first could still be alive waits.
     expect(await run(o, id, platform)).toEqual({ action: 'none', reason: 'in_flight' });
@@ -237,7 +237,7 @@ suite('social publishing on PostgreSQL (S4)', () => {
     const id = variants[0] as string;
     const begun = await worker.execute<BeginResult>('social.publish.begin', { variantId: id, provider: 'sandbox', safety: 'never' }, { actor: system, orgId: o.orgId });
     if (begun.action !== 'call') throw new Error('expected a call');
-    await platform.publish({ externalAccountId: 'x', secret: '{}', content: begun.content, readMedia: noMedia, settings: {}, callKey: begun.callKey, contentHash: begun.contentHash });
+    await platform.publish({ externalAccountId: 'x', secret: '{}', content: begun.content, readMedia: noMedia, mediaUrl: async () => null, settings: {}, callKey: begun.callKey, contentHash: begun.contentHash });
     await age(id, 700);
 
     expect(await run(o, id, platform)).toEqual({ action: 'none', reason: 'needs_attention' });
