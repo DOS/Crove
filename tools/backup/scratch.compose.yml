@@ -1,0 +1,35 @@
+# A scratch Crove next to a running one, for the monthly restore test (docs/runbooks/backup-and-restore.md). An
+# override of docker-compose.yml:
+#
+#   COMPOSE_PROJECT_NAME=crove-restore-test COMPOSE_FILE=docker-compose.yml:tools/backup/scratch.compose.yml \
+#     PORT=18090 PUBLIC_URL=http://localhost:18090 STORAGE=local tools/backup/restore.sh s3:latest
+#   COMPOSE_PROJECT_NAME=crove-restore-test docker compose down -v
+#
+# The restored copy must not act on the world: its mail goes to its own Mailpit (port not published), it calls no AI
+# endpoint, and its files go to its own `files` volume (STORAGE=local; the local store reads a blob by its key and
+# sha256, whatever version a row recorded), never to the production bucket, which its retention jobs would then
+# sweep. Channel tokens stay sealed: the scratch has its own credential key, so no job can post anywhere.
+services:
+  auth:
+    environment:
+      GOTRUE_SMTP_HOST: mailpit
+      GOTRUE_SMTP_PORT: '1025'
+      GOTRUE_SMTP_USER: ''
+      GOTRUE_SMTP_PASS: ''
+
+  crove:
+    environment:
+      STORAGE: local
+      SMTP_HOST: mailpit
+      SMTP_PORT: '1025'
+      SMTP_USER: ''
+      SMTP_PASS: ''
+      AI_BASE_URL: ''
+      AI_API_KEY: ''
+      AI_MODEL: ''
+      INBOUND_DOMAIN: ''
+      CREDENTIAL_KEY: ''
+      CREDENTIAL_KEY_PREVIOUS: ''
+
+  mailpit:
+    ports: !reset []
