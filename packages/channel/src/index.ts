@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 export * from './oauth.ts';
 export * from './meta.ts';
 export * from './instagram.ts';
+export * from './zalo.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
@@ -130,6 +131,13 @@ export interface ReconcileInput {
 
 // found: the post is on the platform; missing: it is not; unknown: the provider cannot be asked or did not answer.
 export type ReconcileResult = { found: true; externalId: string; url: string | null } | { found: false } | { found: 'unknown' };
+
+// Renews a connection's tokens before they expire (providers with short-lived tokens and refresh tokens, such as Zalo
+// OA). refused: the provider turned the refresh down and the connection needs reconnecting; failed: try again later.
+export interface Refresher {
+  readonly provider: ChannelProviderId;
+  refresh(secret: string): Promise<{ secret: string; expiresAt: Date | null } | { refused: string } | { failed: string }>;
+}
 
 export interface Publisher {
   readonly provider: ChannelProviderId;

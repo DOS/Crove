@@ -186,6 +186,8 @@ services:
       CHANNEL_SANDBOX: ${CHANNEL_SANDBOX:-true}
       CHANNEL_META_APP_ID: ${CHANNEL_META_APP_ID:-}
       CHANNEL_META_APP_SECRET: ${CHANNEL_META_APP_SECRET:-}
+      CHANNEL_ZALO_APP_ID: ${CHANNEL_ZALO_APP_ID:-}
+      CHANNEL_ZALO_APP_SECRET: ${CHANNEL_ZALO_APP_SECRET:-}
     volumes:
       - files:/data/files
       - keys:/data/keys

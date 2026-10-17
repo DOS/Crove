@@ -7,7 +7,8 @@ import type { Db } from '@crove/db';
 import { DomainError, inboundKey, type AgentProgram, type BlobStore, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
 import { runAgentWake } from '@crove/kernel';
 import type { InvoiceReader } from '@crove/agent';
-import type { Publisher } from '@crove/channel';
+import type { Publisher, Refresher } from '@crove/channel';
+import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
 import { PUBLISH_STALE_SECONDS, runPublishJob } from '@crove/mod-social';
@@ -107,7 +108,7 @@ export interface WorkerDeps {
   exportRetentionDays?: number;
   // Social publishing: the credential broker that opens channel tokens, and the providers this deployment can publish
   // to. Without it, or without the social module, scheduled posts wait.
-  channels?: { broker: CredentialBroker; publishers: Readonly<Record<string, Publisher>> };
+  channels?: { broker: CredentialBroker; publishers: Readonly<Record<string, Publisher>>; refreshers?: Readonly<Record<string, Refresher>> };
 }
 
 interface SocialPublishJob {
@@ -322,6 +323,24 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const socialTimer = publishing.size > 0 ? setInterval(() => void socialSweep(), SOCIAL_SWEEP_MS) : null;
   void socialSweep();
 
+  // Channel tokens are renewed before they expire (S6.4), whatever module uses the channel.
+  const refreshers = channels?.refreshers ?? {};
+  let refreshing = false;
+  const refreshSweep = async () => {
+    if (refreshing || !channels) return;
+    refreshing = true;
+    try {
+      const done = await refreshChannels({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb, refreshers });
+      if (done.refreshed + done.expired + done.failed > 0) console.log(`[channel-refresh] refreshed ${done.refreshed}, expired ${done.expired}, failed ${done.failed}`);
+    } catch (error) {
+      console.error('[channel-refresh] sweep', error);
+    } finally {
+      refreshing = false;
+    }
+  };
+  const refreshTimer = Object.keys(refreshers).length > 0 ? setInterval(() => void refreshSweep(), REFRESH_SWEEP_MS) : null;
+  void refreshSweep();
+
   let running = false;
   let stopped = false;
   const relay = async () => {
@@ -440,6 +459,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     clearInterval(timer);
     clearInterval(heartbeatTimer);
     if (socialTimer) clearInterval(socialTimer);
+    if (refreshTimer) clearInterval(refreshTimer);
     await listener.end().catch(() => {});
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});
   };
