@@ -27,9 +27,11 @@ import {
   MISA_SME_PURCHASE_SERVICE,
   buildJournalWorkbook,
   buildMisaWorkbook,
+  buildVatWorkbook,
   purchaseRows,
   type JournalEntryView,
   type PurchaseVoucher,
+  type VatReport,
 } from '@crove/mod-finance';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
 import { actorOf, bearerIssuedToOAuthClient, oauthClientRefused, type Authenticate, type AuthUser } from './auth.ts';
@@ -745,6 +747,31 @@ export function createHttpApp(deps: HttpDeps) {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': `attachment; filename="crove-misa-mua-dich-vu-${orgSlug}.xlsx"`,
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // VAT working of one month or quarter (issue #316), ?period=2026-09 or ?period=2026-Q3. The query checks the
+    // period (422 otherwise) and the roles, so the file name below only ever holds a valid period.
+    app.get('/api/export/vat.xlsx', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const period = c.req.query('period') ?? '';
+        const report = await runtime.query<VatReport>('finance.vat.period', { period }, { actor: actorOf(user), orgId });
+        const bytes = await buildVatWorkbook(report, orgSlug ?? '');
+        // The export's audit row (period and invoice count only). No row, no download.
+        const documents = report.input.documents.length + report.output.documents.length;
+        await runtime.execute('finance.vat.export', { period: report.period.period, documents }, { actor: actorOf(user), orgId });
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': `attachment; filename="crove-gtgt-${report.period.period}-${orgSlug}.xlsx"`,
             'cache-control': 'private, no-store',
           },
         });

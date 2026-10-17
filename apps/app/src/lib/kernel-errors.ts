@@ -87,6 +87,7 @@ export const KERNEL_ERROR_CODES = [
   'EXPORT_EXPIRED',
   'EXPORT_PENDING',
   'EXPORT_TOO_LARGE',
+  'PERIOD_TOO_LARGE',
   'SLUG_MISMATCH',
   // AI agents: the chart, templates, agents, budgets and tasks (ADR-0029, issue #258).
   'MODULE_DISABLED',

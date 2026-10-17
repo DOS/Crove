@@ -119,6 +119,34 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     expect(total.toFixed(0)).toBe('1980000');
   });
 
+  await test.step('VAT working for September 2026 and its Excel export (#316)', async () => {
+    await page.getByRole('navigation').getByRole('link', { name: 'Tờ khai GTGT' }).click();
+    await expect(page.getByRole('heading', { name: 'Tờ khai thuế GTGT' })).toBeVisible();
+    await page.getByLabel('Kỳ khai', { exact: true }).selectOption('month');
+    await page.getByLabel('Năm', { exact: true }).selectOption('2026');
+    await page.getByLabel('Tháng', { exact: true }).selectOption('9');
+    await expect(page.getByText('Từ 01/09/2026 đến 30/09/2026, theo ngày lập hóa đơn')).toBeVisible();
+    const indicator = (code: string) => page.getByRole('row').filter({ has: page.getByRole('cell', { name: `[${code}]`, exact: true }) });
+    await expect(indicator('23').getByRole('cell').last()).toHaveText(/^1\.800\.000/);
+    await expect(indicator('24').getByRole('cell').last()).toHaveText(/^180\.000/);
+    await expect(page.getByText('Crove chưa ghi nhận hóa đơn bán ra')).toBeVisible();
+    const purchase = page.getByRole('row').filter({ hasText: 'C26TAB-1234' });
+    await expect(purchase).toHaveCount(1);
+    await expect(purchase.getByRole('cell')).toHaveText(['15/09/2026', 'C26TAB-1234', new RegExp(SELLER), '10%', /^1\.800\.000/, /^180\.000/, '']);
+
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Xuất Excel' }).click();
+    const file = await download;
+    expect(file.suggestedFilename()).toBe(`crove-gtgt-2026-09-${slug}.xlsx`);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(await file.path());
+    const sheet = workbook.getWorksheet('Mua vao');
+    if (!sheet) throw new Error('the VAT export has no purchase sheet');
+    const values = (row: number) => (sheet.getRow(row).values as unknown[]).slice(1);
+    expect(values(2)).toEqual([1, '2026-09-15', 'C26TAB', '1234', SELLER_TAX_CODE, SELLER, '10%', 1800000, 180000, '']);
+    expect(values(3).slice(5)).toEqual(['Tổng cộng', undefined, 1800000, 180000]);
+  });
+
   await test.step('rows in the database', async () => {
     const [org] = sql<{ org_id: string; user_id: string }>(
       `SELECT t.org_id, u.id AS user_id
