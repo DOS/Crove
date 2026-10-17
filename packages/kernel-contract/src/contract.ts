@@ -142,6 +142,10 @@ export const contract = {
         .input(z.strictObject({ postId: zId, channels: z.array(zSocialChannelInput).min(1).max(20) }))
         .output(z.object({ postId: zId, variants: z.array(z.object({ variantId: zId, connectionId: zId })) })),
       submit: oc.input(z.strictObject({ postId: zId, variantIds: z.array(zId).min(1).max(20).optional() })).output(z.object({ postId: zId, submitted: z.array(zId) })),
+      // A new post with the content of a published one, for the channels it went out on (S9); it is reviewed as usual.
+      repost: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
+      // Repost a published post every N days (7 to 365), each repost sent to review; null stops it.
+      setEvergreen: oc.input(z.strictObject({ postId: zId, days: z.number().int().min(7).max(365).nullable() })).output(z.object({ postId: zId, evergreenDays: z.number().int().nullable() })),
       // AI drafting (Social plan §3.7): the server asks the deployment's model for a draft from the brief and saves it as
       // a new post with origin 'ai' (tainted), one variant per channel. Each call drafts anew: a draft whose answer was
       // lost is only an extra draft, which publishes nothing until a person approves it.

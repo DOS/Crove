@@ -21,6 +21,7 @@ import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { publishingCommands } from './publishing.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
+import { evergreenCommands } from './evergreen.ts';
 import { MOVABLE, POST_COLUMNS, SLOT_FREED, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -78,7 +79,7 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
 }
 
 // Replaces a post's media rows with a list, positions from 1.
-async function writePostMedia(ctx: CommandContext, postId: string, media: readonly PostMedia[]): Promise<void> {
+export async function writePostMedia(ctx: CommandContext, postId: string, media: readonly PostMedia[]): Promise<void> {
   await ctx.trx.deleteFrom('crove_social.post_media').where('org_id', '=', ctx.orgId).where('post_id', '=', postId).execute();
   if (media.length === 0) return;
   await ctx.trx
@@ -116,7 +117,7 @@ async function liveConnections(ctx: CommandContext, ids: readonly string[]): Pro
   return map;
 }
 
-async function insertVariants(ctx: CommandContext, post: PostRow, channels: z.infer<typeof zChannel>[], startAt: number) {
+export async function insertVariants(ctx: CommandContext, post: PostRow, channels: z.infer<typeof zChannel>[], startAt: number) {
   const providers = await liveConnections(
     ctx,
     channels.map((c) => c.connectionId),
@@ -726,6 +727,9 @@ export interface PostView {
   title: string | null;
   linkUrl: string | null;
   media: MediaView[];
+  // Reposted every N days (S9), or null; and the post this one reposts.
+  evergreenDays: number | null;
+  repostOf: string | null;
   timeZone: string;
   scheduledAt: string | null;
   revision: number;
@@ -793,6 +797,8 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
         title: p.title,
         linkUrl: p.link_url,
         media: mediaView(b.media),
+        evergreenDays: p.evergreen_days,
+        repostOf: p.repost_of,
         timeZone: p.time_zone,
         scheduledAt: iso(p.scheduled_at),
         revision: p.revision,
@@ -934,6 +940,7 @@ export const socialCommands = [
   queueSet,
   ...publishingCommands,
   ...metricsCommands,
+  ...evergreenCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
 // org shows, so the job never reads another kind of file through it.

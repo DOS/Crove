@@ -11,7 +11,7 @@ import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
-import { METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runPublishJob, sweepMetrics } from '@crove/mod-social';
+import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, socialPublishQueue } from './jobs-schema.ts';
@@ -323,6 +323,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const socialTimer = publishing.size > 0 ? setInterval(() => void socialSweep(), SOCIAL_SWEEP_MS) : null;
   void socialSweep();
 
+  // Evergreen posts (S9): every hour, a repost of each one that is due, sent to review.
+  let reposting = false;
+  const evergreenSweep = async () => {
+    if (reposting || !deps.runtime.installed('social')) return;
+    reposting = true;
+    try {
+      const made = await sweepEvergreen({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (made > 0) console.log(`[social-evergreen] reposted ${made}`);
+    } catch (error) {
+      console.error('[social-evergreen] sweep', error);
+    } finally {
+      reposting = false;
+    }
+  };
+  const evergreenTimer = deps.runtime.installed('social') ? setInterval(() => void evergreenSweep(), EVERGREEN_SWEEP_MS) : null;
+  void evergreenSweep();
+
   // Channel tokens are renewed before they expire (S6.4), whatever module uses the channel.
   const refreshers = channels?.refreshers ?? {};
   let refreshing = false;
@@ -475,6 +492,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     clearInterval(timer);
     clearInterval(heartbeatTimer);
     if (socialTimer) clearInterval(socialTimer);
+    if (evergreenTimer) clearInterval(evergreenTimer);
     if (refreshTimer) clearInterval(refreshTimer);
     if (metricsTimer) clearInterval(metricsTimer);
     await listener.end().catch(() => {});

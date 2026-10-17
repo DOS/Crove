@@ -173,6 +173,8 @@ S9, Bluesky (#390): accounts connect with their handle and an app password (refu
 
 S9, Threads (#391): the Threads use case of a Meta app has its own id (`CHANNEL_THREADS_APP_ID`, `CHANNEL_THREADS_APP_SECRET`). Connect through threads.net's dialog to a 60-day token, renewed a week ahead by the refresh sweep (each refresher now says how far ahead it renews). Publish like Instagram: a text, image or carousel container, a wait for `FINISHED`, `threads_publish` once, pending recognised later by the text's hash; text posts need no public image URL.
 
+S9 evergreen (#393): *Repost* on a published post makes a new draft (`post.repost_of` points to the source) for the channels it went out on that are still connected, with its text and images; a channel that went out with its own text or images keeps them, and the copy is as tainted as its source. A post can be marked evergreen every 7 to 365 days (`post.evergreen_days`): every hour the worker asks `crove_social.evergreen_due` (worker only, ids only) for evergreen posts whose last publish or repost is older than that and that have no repost still open, makes the repost and sends it to review, so a person approves each one before it goes out. A post none of whose channels is still connected stops being evergreen.
+
 What only people can do: trying S6 against the real platforms needs a Meta developer app (development mode works for people with a role on the app) and the Crove callback URL added to a Zalo app linked to an OA. DOS already has a Zalo OA app (used by DOS.Me); Meta has none yet. Open follow-ups: #250, #264, #335, #352.
 
 ## 5. Exit criteria (v1)

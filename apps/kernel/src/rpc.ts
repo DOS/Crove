@@ -242,6 +242,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         update: os.social.posts.update.handler(socialCommand('social.post.update')),
         addChannels: os.social.posts.addChannels.handler(socialCommand('social.post.add_channels')),
         submit: os.social.posts.submit.handler(socialCommand('social.post.submit')),
+        repost: os.social.posts.repost.handler(socialCommand('social.post.repost')),
+        setEvergreen: os.social.posts.setEvergreen.handler(socialCommand('social.post.set_evergreen')),
         draftWithAi: os.social.posts.draftWithAi.handler(({ context, input }) =>
           inSocial(context, async (orgId, actor) => {
             // The model costs money: only those who may write posts get to call it, checked before anything else (the

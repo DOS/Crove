@@ -583,6 +583,8 @@ export interface SocialPostTable {
   status: Generated<string>;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  evergreen_days: number | null;
+  repost_of: string | null;
 }
 
 /** crove_social.post_variant */

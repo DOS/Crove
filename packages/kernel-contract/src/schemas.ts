@@ -660,6 +660,8 @@ export const zSocialPost = z.object({
   title: z.string().nullable(),
   linkUrl: z.string().nullable(),
   media: z.array(zSocialMedia),
+  evergreenDays: z.number().int().nullable(),
+  repostOf: zId.nullable(),
   timeZone: z.string(),
   scheduledAt: z.string().nullable(),
   revision: z.number().int(),
