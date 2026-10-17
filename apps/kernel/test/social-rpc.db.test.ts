@@ -14,6 +14,8 @@ import { CredentialVault, parseVaultKey, Runtime, type BlobStore } from '@crove/
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
+import type { SocialDrafter } from '../src/rpc.ts';
+import type { DraftRequest, DraftResult } from '@crove/agent';
 import { createSessionStatusSource } from '../src/sessions.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -35,7 +37,16 @@ suite('social posts through the API', () => {
   let pool: pg.Pool;
   let db: Db;
   let config: ReturnType<typeof loadConfig>;
-  let apps: Record<'on' | 'off', ReturnType<typeof createHttpApp>>;
+  let apps: Record<'on' | 'off' | 'noAi', ReturnType<typeof createHttpApp>>;
+  // Stands in for the model: answers what the test queued, remembers what it was asked.
+  const writerAnswers: (DraftResult | null)[] = [];
+  const writerAsked: DraftRequest[] = [];
+  const writer: SocialDrafter = {
+    draft: async (request) => {
+      writerAsked.push(request);
+      return writerAnswers.shift() ?? null;
+    },
+  };
   const vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
   const owner: Account = { subject: randomUUID(), email: 'owner@social-api.test', session: randomUUID(), userId: '' };
   const viewer: Account = { subject: randomUUID(), email: 'viewer@social-api.test', session: randomUUID(), userId: '' };
@@ -99,9 +110,9 @@ suite('social posts through the API', () => {
       WEB_DIST: '/nonexistent',
     });
     const store = {} as BlobStore;
-    const make = (rt: Runtime) =>
-      createHttpApp({ config, runtime: rt, store, authenticate: createAuthenticator(config, db), pool, aiEnabled: false, channels: { broker: vault, sandbox: true } });
-    apps = { on: make(runtime), off: make(withoutSocial) };
+    const make = (rt: Runtime, socialWriter?: SocialDrafter) =>
+      createHttpApp({ config, runtime: rt, store, authenticate: createAuthenticator(config, db), pool, aiEnabled: false, channels: { broker: vault, sandbox: true }, ...(socialWriter ? { socialWriter } : {}) });
+    apps = { on: make(runtime, writer), off: make(withoutSocial), noAi: make(runtime) };
 
     for (const who of [owner, viewer]) {
       const me = await rpc('me/get', await tokenFor(who), undefined, { slug: null });
@@ -180,5 +191,36 @@ suite('social posts through the API', () => {
   it('answers 404 when the deployment leaves the social module out', async () => {
     const off = await rpc('social/posts/list', await tokenFor(owner), {}, { app: 'off' });
     expect(off.status).toBe(404);
+  });
+
+  // AI drafting (S7, #237): the server drafts with the deployment's model and saves an AI post, tainted.
+  it('drafts a post with AI for the chosen channels, marked as AI and needing review', async () => {
+    const owner_ = await tokenFor(owner);
+    const connected = await rpc('channels/connectSandbox', owner_, { displayName: 'Trang AI', key: randomUUID() });
+    const connectionId = String(connected.body?.connectionId);
+    writerAnswers.push({ body: 'Khai trương chi nhánh Quận 3, giảm 20% tuần đầu!', title: null, variants: [{ key: connectionId, body: 'Bản riêng cho kênh thử', title: null }] });
+    const drafted = await rpc('social/posts/draftWithAi', owner_, { brief: 'Khai trương chi nhánh Quận 3, giảm 20% tuần đầu', connectionIds: [connectionId] });
+    expect(drafted.status).toBe(200);
+    expect(writerAsked.at(-1)?.channels).toEqual([{ key: connectionId, provider: 'sandbox', label: 'test channel (Trang AI)', maxChars: 1000, unit: 'characters', title: null }]);
+    const post = await rpc('social/posts/get', owner_, { postId: drafted.body?.postId });
+    expect(post.body).toMatchObject({ origin: 'ai', tainted: true, body: 'Khai trương chi nhánh Quận 3, giảm 20% tuần đầu!' });
+    expect(post.body.variants).toMatchObject([{ status: 'draft', effective: { body: 'Bản riêng cho kênh thử' } }]);
+    // The app's own create cannot claim an origin.
+    const forged = await rpc('social/posts/create', owner_, { body: 'x', origin: 'human', channels: [{ connectionId }], idempotencyKey: randomUUID() });
+    expect(forged.status).toBe(400);
+  });
+
+  it('refuses AI drafting for a viewer, a foreign channel, without AI, and answers an empty draft plainly', async () => {
+    const owner_ = await tokenFor(owner);
+    const connected = await rpc('channels/connectSandbox', owner_, { displayName: 'Trang AI 2', key: randomUUID() });
+    const connectionId = String(connected.body?.connectionId);
+    const asked = writerAsked.length;
+    expect((await rpc('social/posts/draftWithAi', await tokenFor(viewer), { brief: 'x', connectionIds: [connectionId] })).status).toBe(403);
+    // The model was not called for the viewer.
+    expect(writerAsked.length).toBe(asked);
+    expect(await rpc('social/posts/draftWithAi', owner_, { brief: 'x', connectionIds: [randomUUID()] })).toMatchObject({ status: 404, body: { code: 'CHANNEL_NOT_FOUND' } });
+    expect(await rpc('social/posts/draftWithAi', owner_, { brief: 'x', connectionIds: [connectionId] }, { app: 'noAi' })).toMatchObject({ status: 503, body: { code: 'AI_NOT_CONFIGURED' } });
+    writerAnswers.push(null);
+    expect(await rpc('social/posts/draftWithAi', owner_, { brief: 'x', connectionIds: [connectionId] })).toMatchObject({ status: 422, body: { code: 'AI_DRAFT_EMPTY' } });
   });
 });

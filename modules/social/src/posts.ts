@@ -167,6 +167,9 @@ export const zPostCreate = z.strictObject({
   scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
   media: zMedia.optional(),
   channels: z.array(zChannel).min(1).max(MAX_CHANNELS_PER_POST),
+  // Set by the server only (the AI drafting route); the app's create never sends it. An AI draft is tainted: every
+  // variant needs a person's approval of what the model wrote (plan §3.7).
+  origin: z.enum(['human', 'ai']).optional(),
 });
 
 export const postCreate = defineCommand({
@@ -186,7 +189,8 @@ export const postCreate = defineCommand({
         title: input.title ?? null,
         link_url: input.linkUrl ?? null,
         // The surface sets actor_origin once API and MCP clients exist; today every write comes from the app.
-        origin: 'human',
+        origin: input.origin ?? 'human',
+        tainted: input.origin === 'ai',
         actor_origin: 'ui',
         author_user_id: userId,
         ...(input.timeZone ? { time_zone: input.timeZone } : {}),
@@ -197,7 +201,7 @@ export const postCreate = defineCommand({
     await writePostMedia(ctx, inserted.id, media);
     const post: PostRow = { ...inserted, media };
     const variants = await insertVariants(ctx, post, input.channels, 0);
-    ctx.audit({ post_id: post.id, variants: variants.length, media: media.length });
+    ctx.audit({ post_id: post.id, variants: variants.length, media: media.length, origin: input.origin ?? 'human' });
     await ctx.emit('social.post.created', { post_id: post.id });
     return { postId: post.id, revision: post.revision, variants };
   },

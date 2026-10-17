@@ -3,7 +3,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { useTranslations } from 'use-intl';
+import { useLocale, useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -17,6 +17,7 @@ import { MediaField, MediaPreview, type MediaItem } from '../components/social-m
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { getConfig } from '../lib/auth.ts';
 import {
   CANCELLABLE,
   EDITABLE,
@@ -247,6 +248,19 @@ export function SocialComposePage() {
     },
   });
 
+  // AI drafting (S7): the server asks the model for a draft of the brief for the chosen channels and saves it as a
+  // new post marked as written by AI; every channel of it is reviewed before it can go out.
+  const [brief, setBrief] = useState('');
+  const locale = useLocale();
+  const aiEnabled = getConfig().aiEnabled === true;
+  const aiDraft = useMutation({
+    mutationFn: () => client.social.posts.draftWithAi({ brief: brief.trim(), connectionIds: chosen, language: locale === 'en' ? 'en' : 'vi' }),
+    onSuccess: ({ postId }) => {
+      void queryClient.invalidateQueries();
+      void navigate({ to: '/o/$slug/social/$id', params: { slug, id: postId } });
+    },
+  });
+
   const selected = live.filter((c) => chosen.includes(c.id));
   const blocking = selected.some((c) => {
     const mine = own[c.id] ?? EMPTY_OWN;
@@ -316,6 +330,25 @@ export function SocialComposePage() {
                   );
                 })}
               </div>
+            )}
+          </Card>
+          <Card className="block space-y-2 p-4">
+            <Label htmlFor="social-ai-brief">{t('aiDraftTitle')}</Label>
+            {aiEnabled ? (
+              <>
+                <Textarea id="social-ai-brief" value={brief} rows={3} maxLength={4000} placeholder={t('aiBriefPlaceholder')} disabled={aiDraft.isPending} onChange={(e) => {
+                  setBrief(e.target.value);
+                  if (aiDraft.error) aiDraft.reset();
+                }} />
+                <p className="text-xs text-subtle-foreground">{t('aiDraftHint')}</p>
+                <Button variant="outline" size="sm" disabled={!brief.trim() || chosen.length === 0 || aiDraft.isPending} onClick={() => aiDraft.mutate()}>
+                  {aiDraft.isPending ? <Spinner className="text-current" /> : null}
+                  {t('aiDraft')}
+                </Button>
+                {aiDraft.error && <ErrorText>{errorMessage(aiDraft.error)}</ErrorText>}
+              </>
+            ) : (
+              <p className="text-xs text-subtle-foreground">{t('aiOff')}</p>
             )}
           </Card>
           <p className="text-xs text-subtle-foreground">{t('shortcutHint')}</p>
@@ -621,6 +654,12 @@ export function SocialPostPage() {
       {(error || flash) && (
         <div className="mb-4">
           <ErrorText>{error ? errorMessage(error) : flash}</ErrorText>
+        </div>
+      )}
+      {p.origin === 'ai' && (
+        <div className="mb-4 flex items-center gap-2 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
+          <Badge variant="secondary">{t('aiBadge')}</Badge>
+          <span>{t('aiBadgeHint')}</span>
         </div>
       )}
       {stale && (

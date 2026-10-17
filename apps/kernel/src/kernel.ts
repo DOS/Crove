@@ -2,7 +2,7 @@
 // and starts the server roles; it builds no adapter itself. main.ts wires the open-source defaults from
 // configuration (defaultAdapters); a Crove Cloud entrypoint wires its own adapters into the same factory.
 import { serve } from '@hono/node-server';
-import { InvoiceExtractor, type InvoiceReader } from '@crove/agent';
+import { InvoiceExtractor, SocialWriter, type InvoiceReader } from '@crove/agent';
 import {
   FacebookPageConnector,
   FacebookPagePublisher,
@@ -71,6 +71,8 @@ export interface KernelAdapters {
   identity: IdentityPort;
   // The AI invoice reader; null runs without AI (e-invoice XML still works, PDF and images do not).
   ai: InvoiceReader | null;
+  // Drafts Social posts (Social plan S7) through the same endpoint; null runs without AI drafting.
+  writer?: Pick<SocialWriter, 'draft'> | null;
   storage: BlobStore;
   // Outbound mail (member invites, issue #129); the default logs that nothing was sent.
   mail?: Mailer;
@@ -177,6 +179,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
   const resolved: ResolvedAdapters = {
     identity: adapters.identity,
     ai: adapters.ai,
+    writer: adapters.writer ?? null,
     storage: adapters.storage,
     mail: adapters.mail ?? createLogMailer(),
     broker: adapters.broker ?? noCredentialBroker,
@@ -261,6 +264,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           authenticate,
           pool,
           aiEnabled: resolved.ai !== null,
+          ...(resolved.writer ? { socialWriter: resolved.writer } : {}),
           mailer: resolved.mail,
           channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL },
           ...(stream ? { stream } : {}),
@@ -313,21 +317,18 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
 // The open-source defaults, built from configuration: Supabase Auth identity (ADR-0028), any OpenAI-compatible
 // endpoint for AI, local disk or S3-compatible storage, SMTP for mail. No DOS service.
 export function defaultAdapters(config: Config): KernelAdapters {
+  const aiConfig =
+    config.AI_BASE_URL && config.AI_MODEL
+      ? { baseURL: config.AI_BASE_URL, apiKey: config.AI_API_KEY ?? null, model: config.AI_MODEL, supportsStructuredOutputs: config.AI_STRUCTURED_OUTPUTS === 'true' }
+      : null;
   return {
     identity: {
       sessions: createSessionStatusSource(config.AUTH_SESSION_CHECK),
       authenticator: (db) => createAuthenticator(config, db),
       revoker: createSessionRevoker(config),
     },
-    ai:
-      config.AI_BASE_URL && config.AI_MODEL
-        ? new InvoiceExtractor({
-            baseURL: config.AI_BASE_URL,
-            apiKey: config.AI_API_KEY ?? null,
-            model: config.AI_MODEL,
-            supportsStructuredOutputs: config.AI_STRUCTURED_OUTPUTS === 'true',
-          })
-        : null,
+    ai: aiConfig ? new InvoiceExtractor(aiConfig) : null,
+    writer: aiConfig ? new SocialWriter(aiConfig) : null,
     // API and worker build the same store from config; with STORAGE=s3 they share no volume (T7).
     storage: createBlobStore(config),
     // SMTP from SMTP_*; without SMTP_HOST, the log fallback.
