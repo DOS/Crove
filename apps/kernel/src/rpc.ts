@@ -321,6 +321,17 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         inFinance(context, (orgId, actor) => runtime.query('finance.journal.get', input, { actor, orgId })),
       ),
     },
+    openingBalance: {
+      preview: os.openingBalance.preview.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.opening_balance.preview', input, { actor, orgId })),
+      ),
+      post: os.openingBalance.post.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('finance.opening_balance.post', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+    },
     accounts: {
       list: os.accounts.list.handler(({ context }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.accounts.list', {}, { actor, orgId })),

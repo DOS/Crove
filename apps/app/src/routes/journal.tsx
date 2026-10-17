@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { Alert, AlertDescription } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
-import { Button } from '@crove/ui/components/button';
+import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Table, TableBody, TableCell, TableRow } from '@crove/ui/components/table';
@@ -12,11 +12,13 @@ import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { isZeroAmount } from '../lib/decimal.ts';
+import { OPENING_BALANCE_SOURCE, canImportOpeningBalance } from '../lib/opening-balance.ts';
 import { MAX_REASON_LENGTH, canAskReversal, defaultReversalDate, reversalErrorMessage, reversalFormError } from '../lib/reversal.ts';
 
 interface Entry {
   id: string;
   entryDate: string;
+  sourceType: string;
   document?: { series: string; number: string; partyName: string } | undefined;
 }
 
@@ -26,7 +28,9 @@ function ReversalForm({ entry, slug, onClose }: { entry: Entry; slug: string; on
   const locale = useLocale();
   const t = useTranslations('reversal');
   const f = useFormat();
-  const [entryDate, setEntryDate] = useState(() => defaultReversalDate(entry.entryDate));
+  // An opening entry (#320) is reversed on its own date only; the kernel refuses any other.
+  const opening = entry.sourceType === OPENING_BALANCE_SOURCE;
+  const [entryDate, setEntryDate] = useState(() => (opening ? entry.entryDate : defaultReversalDate(entry.entryDate)));
   const [reason, setReason] = useState('');
   const [touched, setTouched] = useState(false);
   // One key per form: a retry of the same request returns the same proposal.
@@ -70,9 +74,18 @@ function ReversalForm({ entry, slug, onClose }: { entry: Entry; slug: string; on
           })}
         </p>
       )}
+      {opening && <p className="text-sm text-muted-foreground">{t('openingNote', { date: f.date(entry.entryDate) })}</p>}
       <label className="block text-xs">
         <span className="text-subtle-foreground">{t('date')}</span>
-        <Input type="date" required min={entry.entryDate} value={entryDate} onChange={(e) => setEntryDate(e.target.value)} className="mt-1 w-44" />
+        <Input
+          type="date"
+          required
+          min={entry.entryDate}
+          {...(opening ? { max: entry.entryDate, readOnly: true } : {})}
+          value={entryDate}
+          onChange={(e) => setEntryDate(e.target.value)}
+          className="mt-1 w-44"
+        />
       </label>
       <label className="block text-xs">
         <span className="text-subtle-foreground">{t('reason')}</span>
@@ -107,6 +120,7 @@ function ReversalForm({ entry, slug, onClose }: { entry: Entry; slug: string; on
 
 export function JournalPage() {
   const t = useTranslations('journal');
+  const ob = useTranslations('openingBalance');
   const f = useFormat();
   const { slug } = useParams({ strict: false }) as { slug: string };
   const [from, setFrom] = useState('');
@@ -142,6 +156,11 @@ export function JournalPage() {
         subtitle={t('subtitle')}
         actions={
           <div className="flex flex-wrap gap-2">
+            {canImportOpeningBalance(org.data?.role) && (
+              <Link to="/o/$slug/journal/opening-balances" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+                {ob('open')}
+              </Link>
+            )}
             <Button size="lg" variant="outline" onClick={() => exportMisa.mutate()} disabled={exportMisa.isPending || nothingToExport}>
               {exportMisa.isPending ? <Spinner className="text-current" /> : null}
               {t('exportMisa')}
@@ -181,6 +200,7 @@ export function JournalPage() {
               <div id={`entry-${entry.id}`} className="flex scroll-mt-4 flex-wrap items-baseline justify-between gap-2">
                 <p className="text-sm font-medium text-foreground">{entry.description}</p>
                 <div className="flex flex-wrap items-center gap-2">
+                  {entry.sourceType === OPENING_BALANCE_SOURCE && <Badge variant="secondary">{ob('badge')}</Badge>}
                   {entry.reverses && <Badge variant="secondary">{t('reversalBadge')}</Badge>}
                   {entry.reversedBy && <Badge variant="warning">{t('reversedBadge')}</Badge>}
                   {entry.pendingReversalId && !entry.reversedBy && <Badge variant="secondary">{t('reversalPendingBadge')}</Badge>}

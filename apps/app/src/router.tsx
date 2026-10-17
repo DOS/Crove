@@ -16,6 +16,7 @@ import { JournalPage } from './routes/journal.tsx';
 import { LedgerPage } from './routes/ledger.tsx';
 import { MfaPage } from './routes/mfa.tsx';
 import { OnboardingPage } from './routes/onboarding.tsx';
+import { OpeningBalancePage } from './routes/opening-balance.tsx';
 import { OrgLayout } from './routes/org-layout.tsx';
 import { ResetPasswordPage } from './routes/reset-password.tsx';
 import { SettingsPage } from './routes/settings.tsx';
@@ -149,6 +150,8 @@ const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journa
 const vatRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vat', beforeLoad: requireFinance, component: VatPage });
 // Ledger reports per month, quarter or year (issue #321).
 const ledgerRoute = createRoute({ getParentRoute: () => orgRoute, path: 'ledger', beforeLoad: requireFinance, component: LedgerPage });
+// Opening balances from Excel (#320), reached from the journal.
+const openingBalanceRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal/opening-balances', beforeLoad: requireFinance, component: OpeningBalancePage });
 // The Vietnamese quick guide (issue #310), linked from the empty Inbox; it walks through finance screens.
 const guideRoute = createRoute({ getParentRoute: () => orgRoute, path: 'guide', beforeLoad: requireFinance, component: GuidePage });
 // Screens of the social module; without it (CROVE_MODULES) they send you to the inbox.
@@ -173,7 +176,7 @@ const routeTree = rootRoute.addChildren([
   mfaRoute,
   resetPasswordRoute,
   onboardingRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vatRoute, ledgerRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vatRoute, ledgerRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

@@ -17,6 +17,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import { zJournalReversal, type JournalReversal } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
+import { OPENING_BALANCE_SOURCE } from './domain/opening-balance.ts';
 import { postJournalEntry } from './ledger.ts';
 
 export { zJournalReversal, type JournalReversal };
@@ -60,6 +61,13 @@ async function reversibleEntry(ctx: CommandContext, reversal: JournalReversal) {
   // Both are YYYY-MM-DD, so string order is date order.
   if (reversal.entryDate < entry.entry_date) {
     throw new DomainError('REVERSAL_DATE_BEFORE_ENTRY', 422, 'Ngày bút toán đảo không được trước ngày của bút toán gốc');
+  }
+  // An opening entry (#320) is reversed on its own date, so it cancels out at every date and the next opening entry
+  // replaces it whole. A later reversal would leave both counted until then, and it can never be moved.
+  if (entry.source_type === OPENING_BALANCE_SOURCE && reversal.entryDate !== entry.entry_date) {
+    throw new DomainError('OPENING_REVERSAL_DATE', 422, `Bút toán số dư đầu kỳ chỉ được đảo vào đúng ngày của nó (${entry.entry_date})`, {
+      entryDate: entry.entry_date,
+    });
   }
   return entry;
 }
