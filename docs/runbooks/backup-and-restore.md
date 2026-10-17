@@ -156,11 +156,11 @@ The plan's rehearsal of the full disaster path (§7.9) is the drill below, done 
 
 `node tools/backup/drill.mjs` runs the whole path on throwaway stacks with their own compose project names, image tags and ports, then removes everything it made: it seeds a source stack (an org, three synthetic e-invoices uploaded and read into proposals, one approved into the journal), checks that a failing backup exits 1 and alerts through the prober, makes a backup to a separate MinIO playing the second location, deletes the source stack, its volumes and the local copy of the run, restores `s3:latest` onto a scratch stack with empty volumes and an empty bucket, and then signs in as the same user through the API, downloads the three files and compares their sha256, finds the journal entry, and uploads a fourth invoice that the worker reads.
 
-Run on 2026-10-17 on a development workstation (Windows 11, Docker Desktop, Git Bash), on `main` at schema version `20261019010000`. All three variants passed (the s3 and local ones twice; the table gives the range), and each removed its containers, volumes, networks and images:
+Run on 2026-10-17 on a development workstation (Windows 11, Docker Desktop, Git Bash), on `main` at schema version `20261019010000`. All three variants passed (s3 three times, local twice; the table gives the range), and each removed its containers, volumes, networks and images:
 
 | Variant | Backup | Restore (`restore.sh s3:latest` until `/readyz` is green) | Restore and API checks |
 |---|---|---|---|
-| `--storage s3`: api and worker, files in a versioned MinIO bucket, restored into a new empty bucket (the disaster path) | 63 to 88 s | 86 to 96 s | **89 to 98 s** |
+| `--storage s3`: api and worker, files in a versioned MinIO bucket, restored into a new empty bucket (the disaster path) | 63 to 88 s | 86 to 128 s | **89 to 129 s** |
 | `--storage local`: the all-in-one stack, files on the volume | 46 to 59 s | 71 to 75 s | 73 to 79 s |
 | `--storage s3 --restore-storage local`: the monthly test, an S3 backup onto a scratch stack with `scratch.compose.yml` | 74 s | 85 s | 87 s |
 
