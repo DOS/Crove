@@ -4,6 +4,10 @@
 import { expect, test } from '@playwright/test';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
 
+// Queue slots are set in the queue's time zone (Asia/Ho_Chi_Minh by default) and the agenda shows the viewer's local
+// time, so the browser runs in that zone whatever the machine's zone is.
+test.use({ timezoneId: 'Asia/Ho_Chi_Minh' });
+
 test('composes, reviews and schedules a post on the sandbox channel', async ({ page }) => {
   await signUp(page, newEmail('social'));
   await createOrg(page, 'Công ty Social');
