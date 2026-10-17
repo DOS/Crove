@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="vi" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Tình trạng Crove</title>
+<style>
+:root{
+  --bg:#0f1113; --surface:#16181d; --card:#1b1e25; --line:#2c303a; --fg:#eef0f4; --muted:#a3a9b6;
+  --accent:#ff2e29; --accent-ink:#ff8a85;
+  --ok:#34d399; --ok-bg:#0f2a21; --warn:#fbbf24; --warn-bg:#2a2110; --bad:#f87171; --bad-bg:#2d1515; --info:#60a5fa; --info-bg:#121f35;
+  --code-bg:#23262e;
+  --font-body:"Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased}
+.page{padding:32px clamp(16px,4vw,40px) 72px}
+main{max-width:980px;margin-inline:auto;min-width:0}
+a{color:var(--accent-ink);text-decoration:none;overflow-wrap:anywhere}a:hover{text-decoration:underline}
+.eyebrow{color:var(--accent-ink);font-weight:600;letter-spacing:.08em;text-transform:uppercase;font-size:13px;margin:0}
+h1{font-size:clamp(26px,4vw,34px);line-height:1.25;margin:6px 0 10px}
+h2{font-size:22px;margin:44px 0 12px;padding-top:12px;border-top:1px solid var(--line)}
+h3{font-size:18px;margin:26px 0 8px}
+.lead{color:var(--muted);margin:0 0 8px}
+code{font-family:var(--font-mono);font-size:.88em;background:var(--code-bg);padding:1px 6px;border-radius:4px}
+.callout{border:1px solid var(--line);border-left:4px solid var(--accent);background:var(--surface);border-radius:8px;padding:14px 18px;margin:16px 0}
+.callout.ok{border-left-color:var(--ok)}
+.callout.warn{border-left-color:var(--warn)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:16px 0}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.stat b{display:block;font-size:26px;color:var(--accent-ink);line-height:1.2}
+.stat span{color:var(--muted);font-size:14px}
+.table-wrap{overflow-x:auto;margin:12px 0;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:560px}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--line)}
+th{background:var(--surface);color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;font-size:12px;font-weight:600;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.p0{background:var(--bad-bg);color:var(--bad)}
+.p1{background:var(--warn-bg);color:var(--warn)}
+.p2{background:var(--info-bg);color:var(--info)}
+.p3{background:var(--code-bg);color:var(--muted)}
+.done{background:var(--ok-bg);color:var(--ok)}
+ul,ol{padding-left:22px}
+li{margin:4px 0}
+.ms{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:4px 18px 10px;margin:16px 0}
+.ms h3{margin-top:14px}
+.muted{color:var(--muted)}
+footer{margin-top:48px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<div class="page">
+<main>
+
+<p class="eyebrow">Crove · bàn giao · 17/10/2026</p>
+<h1>Tình trạng Crove sau phiên làm backlog</h1>
+<p class="lead">Trang này dành cho owner và agent kế tiếp: cái gì đã merge, cái gì đang chờ owner, và các câu hỏi còn mở. Bản tiếng Anh gốc: <a href="status-2026-10-17.md">status-2026-10-17.md</a>.</p>
+
+<div class="grid">
+  <div class="stat"><b>11</b><span>issue đã có PR merge trong phiên</span></div>
+  <div class="stat"><b>M1</b><span>phần agent làm được đã xong, còn lại chờ owner</span></div>
+  <div class="stat"><b>M2</b><span>4 việc đã merge, #319 đang ở PR #363</span></div>
+</div>
+
+<h2>1. Tóm tắt</h2>
+<ul>
+  <li><b>M1 (dựng bản pilot):</b> mọi phần agent tự làm được đã merge. Còn lại cần owner: duyệt chi phí server (#52), DNS và email đến (#53), AI endpoint (#312). Sau đó mới dựng server (#306) và deploy thật lần đầu (#56).</li>
+  <li><b>M2 (vòng khóa sổ tháng):</b> đã merge VAT theo kỳ (#316), xuất chứng từ mua sang MISA (#317), số dư đầu kỳ (#320), sổ sách (#321). Tài khoản con (#319) đang ở PR #363. Hóa đơn bán ra, nhập hàng loạt, duyệt hàng loạt (#313 đến #315) do session khác nhận.</li>
+  <li><b>M0:</b> toàn bộ là việc của owner, phiên này chưa có gì thay đổi.</li>
+</ul>
+
+<h2>2. Đã merge trong phiên này</h2>
+<div class="table-wrap"><table>
+<tr><th>Issue</th><th>PR</th><th>Pilot được gì</th><th>Còn mở</th></tr>
+<tr><td>#32, #18</td><td>#91, #101</td><td>Khôi phục mật khẩu, đăng ký MFA trong app; test Playwright cho luồng Inbox, giờ là check bắt buộc</td><td></td></tr>
+<tr><td>#311</td><td>#343</td><td><code>pnpm usage:report</code>: số liệu dùng theo tuần cho mục tiêu MVP</td><td>P3 #344</td></tr>
+<tr><td>#310</td><td>#347</td><td>Link "Góp ý / Hỗ trợ" (chỉ hiện khi đặt <code>SUPPORT_URL</code>) và trang hướng dẫn nhanh tiếng Việt</td><td>Owner chọn kênh: Zalo group hay email</td></tr>
+<tr><td>#308</td><td>#349</td><td>Lệnh <code>pnpm pilot:check</code> và runbook kiểm tra trước pilot</td><td>Owner ký xác nhận trên bản deploy thật</td></tr>
+<tr><td>#307</td><td>#348</td><td>Backup hàng đêm (DB và file, có checksum, copy sang bucket thứ hai, giữ 30 ngày); drill khôi phục mất 73 đến 129 giây</td><td>Cất key mã hóa và <code>.env</code> ở chỗ riêng, ngoài backup</td></tr>
+<tr><td>#56</td><td>#354</td><td>Pipeline deploy: tag <code>v*</code> trên main chạy migration, worker, API, smoke test, tự rollback khi hỏng</td><td>Deploy thật lần đầu</td></tr>
+<tr><td>#25</td><td>#104</td><td>Schema pg-boss nằm trong migration, production không tự đổi schema nữa</td><td>#130</td></tr>
+<tr><td>#316</td><td>#356</td><td>Màn "Tờ khai GTGT" và Excel theo tháng hoặc quý, tính sẵn các chỉ tiêu 01/GTGT Crove có dữ liệu</td><td>Kế toán kiểm 1 tháng thật (#61); phần bán ra chờ #313</td></tr>
+<tr><td>#317</td><td>#357</td><td>Xuất chứng từ mua theo mẫu MISA SME "Chứng từ mua dịch vụ"; phần bán ra làm sẵn chờ #313</td><td>Đối tác import thành công 1 file</td></tr>
+<tr><td>#321</td><td>#364</td><td>Màn "Sổ sách": cân đối số phát sinh, sổ cái, công nợ 131/331 theo đối tượng, xuất Excel</td><td>P3 #365</td></tr>
+<tr><td>#320</td><td>#367</td><td>Nhập số dư đầu kỳ từ file Excel mẫu, kiểm từng dòng, ghi thành 1 bút toán có xác thực MFA</td><td>P3 #366</td></tr>
+</table></div>
+
+<h2>3. Đang chờ owner</h2>
+<div class="table-wrap"><table>
+<tr><th>Issue</th><th>Việc</th><th>Mở khóa cho</th></tr>
+<tr><td>#303</td><td>Trả lời quyết định D1 đến D10 trong trang rà soát backlog</td><td>Phạm vi M2</td></tr>
+<tr><td>#52</td><td>Duyệt chi phí server, khoảng 50 đến 100 USD mỗi tháng</td><td>#306, #56</td></tr>
+<tr><td>#53</td><td>DNS và email đến cho domain pilot</td><td>#306</td></tr>
+<tr><td>#312</td><td>AI endpoint có trần chi tiêu tháng</td><td>Đọc PDF và ảnh chụp trên bản pilot</td></tr>
+<tr><td>#57, #304, #305</td><td>Phỏng vấn đối tác, 100 chứng từ thật có đồng ý bằng văn bản, ký thỏa thuận pilot</td><td>#153, nghiệm thu M2</td></tr>
+<tr><td>#95</td><td>Thêm secret <code>ANTHROPIC_API_KEY</code> cho repo</td><td>Job security review trong CI; tới lúc đó PR đụng file protected phải có review riêng</td></tr>
+<tr><td>#308</td><td>Ký checklist sẵn sàng trên bản deploy thật</td><td>Bắt đầu pilot</td></tr>
+</table></div>
+<p>Khi có server: tạo environment <code>pilot</code> trên GitHub (chỉ nhận tag <code>v*</code> và branch <code>main</code>, có người duyệt bắt buộc) và ruleset để chỉ maintainer tạo tag <code>v*</code>. Sau đó agent đặt 4 secret SSH theo runbook deploy.</p>
+
+<h2>4. Đề xuất, owner không phản đối thì giữ</h2>
+<ol>
+  <li><b>Workflow deploy để trong repo public</b>, viết chung chung, chạy bằng secret. Không cần repo private #55 cho M1.</li>
+  <li><b>Đăng ký tài khoản cho pilot:</b> đóng đăng ký (<code>AUTH_DISABLE_SIGNUP=true</code>). Chỉ mở một lúc ngắn khi nhân viên đối tác đăng ký và nhận lời mời, rồi đóng lại và rà danh sách tài khoản trước khi owner ký.</li>
+  <li><b>Sửa hệ thống tài khoản cần owner hoặc admin</b>, có audit, không bắt xác thực MFA thêm. Chưa chặn ghi sổ vào tài khoản cha đã có tài khoản con.</li>
+  <li><b>Số dư đầu kỳ ghi sổ thẳng</b> với xác thực MFA, không cần người thứ hai duyệt.</li>
+</ol>
+
+<h2>5. Câu hỏi cho kế toán đối tác</h2>
+<p class="muted">Đã ghi vào từng issue; gom câu trả lời trong buổi phỏng vấn (#57) hoặc qua track kế toán (#61).</p>
+<ul>
+  <li><b>VAT (#316):</b> hóa đơn mua không chịu thuế (KCT) có tính vào chỉ tiêu [23] không; pilot có cần kê khai hóa đơn đầu vào vào kỳ sau không; có cần lưu VAT theo từng thuế suất để hóa đơn nhiều thuế suất ra số chính xác không?</li>
+  <li><b>MISA (#317):</b> gửi file mẫu "Chứng từ mua dịch vụ" tải từ chính MISA của họ, vì 14/33 cột mới có 1 nguồn; mã hàng hoặc mã dịch vụ dùng 1 mã chung hay theo từng nhà cung cấp; có điền mã nhà cung cấp không; phương thức thanh toán, "Nhóm HHDV mua vào", số âm cho dòng chiết khấu; cờ hóa đơn khi xuất hóa đơn ngoài MISA; định dạng số chứng từ. Hàng nhập kho (152, 153, 156) cần mẫu mua hàng có kho, Crove chưa làm.</li>
+  <li><b>Sổ sách (#321):</b> bút toán đảo đang cộng vào cả phát sinh Nợ lẫn phát sinh Có, còn B02 ghi thành phát sinh âm. Công ty muốn cách nào?</li>
+  <li><b>Tài khoản con (#319):</b> file xuất MISA có cần bảng đổi mã như <code>6422.VP</code> sang mã số chi tiết của MISA không?</li>
+  <li><b>Số dư đầu kỳ (#320):</b> số dư 131 và 331 chưa tách theo từng khách hàng hoặc nhà cung cấp. Tháng đầu có cần không?</li>
+</ul>
+
+<h2>6. Ghi chú cho agent kế tiếp</h2>
+<ul>
+  <li><b>PR đụng file protected:</b> job "Security review (agent)" trong CI chỉ pass ở chế độ "pending owner setup" khi #95 chưa xong. PR nào sửa file protected (ví dụ <code>apps/kernel/src/http.ts</code>) phải có review độc lập riêng, soi tenancy, quyền và audit.</li>
+  <li><b>Các PR finance chạy song song hay đụng nhau</b> ở <code>http.ts</code>, <code>modules/finance/src/index.ts</code>, <code>e2e/tests/inbox.spec.ts</code>. Rebase lúc merge, và soi cả conflict ngầm mà git không báo (#363 suýt làm tài khoản con rơi khỏi sổ sách).</li>
+  <li><b>Chỉ dọn worktree sau khi chắc chắn đã merge</b> (<code>gh pr view &lt;n&gt; --json state</code> trả về <code>MERGED</code>).</li>
+  <li><b>Thứ tự migration:</b> kiểm file mới nhất trong <code>supabase/migrations</code> trên <code>origin/main</code> ngay trước mỗi lần merge.</li>
+  <li><b>#313 và phần VAT, MISA:</b> bên nào merge sau thì thêm bộ lọc <code>direction</code> trong <code>purchaseInvoices()</code>; #313 gắn route và nút xuất MISA cho hóa đơn bán ra.</li>
+</ul>
+
+<footer>Crove · bàn giao 17/10/2026 · nguồn chính: <a href="status-2026-10-17.md">status-2026-10-17.md</a></footer>
+</main>
+</div>
+</body>
+</html>

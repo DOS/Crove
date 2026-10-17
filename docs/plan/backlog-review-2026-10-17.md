@@ -1,6 +1,6 @@
 # Crove backlog review, 2026-10-17
 
-> Proposal for the product backlog of `DOS/Crove` and its board (GitHub Project 8). Written for the owner and for the agents that pick work from the board. Status: proposed; the owner decisions in section 6 are open. Vietnamese page for the owner: [backlog-review-2026-10-17.vi.html](backlog-review-2026-10-17.vi.html). The kernel plan ([crove-os-kernel.md](crove-os-kernel.md)) stays the architecture record; where this file and the plan's Tracking section disagree about what to build next, this file is the proposal to adopt.
+> Proposal for the product backlog of `DOS/Crove` and its board (GitHub Project 8). Written for the owner and for the agents that pick work from the board. Status: proposed; the owner decisions in section 6 are open. Vietnamese page for the owner: [backlog-review-2026-10-17.vi.html](backlog-review-2026-10-17.vi.html). The kernel plan ([crove-os-kernel.md](crove-os-kernel.md)) stays the architecture record; where this file and the plan's Tracking section disagree about what to build next, this file is the proposal to adopt. Progress against it: [status-2026-10-17.md](status-2026-10-17.md).
 
 ## 1. Diagnosis
 
