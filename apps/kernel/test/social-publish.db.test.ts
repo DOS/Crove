@@ -440,6 +440,25 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(platform.posts).toHaveLength(1);
   });
 
+  it('reconciles a post still processing after a day, and records it published when the platform has it', async () => {
+    const o = await org();
+    const platform = new FakePlatform();
+    platform.answers.push({ kind: 'pending', externalRef: 'container-2', checkAfterSeconds: 30 });
+    const { postId, variants } = await duePost(o);
+    const id = variants[0] as string;
+    expect(await run(o, id, platform)).toEqual({ action: 'call', status: 'processing' });
+    // A day later (the ledger's start time cannot change through tenant roles; the test moves it as the owner, with
+    // triggers off).
+    await admin(async (c) => {
+      await c.query("SET session_replication_role = 'replica'");
+      await c.query("UPDATE crove_kernel.external_call SET started_at = now() - interval '25 hours' WHERE key LIKE $1", [`social.publish:${id}:%`]);
+      await c.query("UPDATE crove_social.post_variant SET next_check_at = now() - interval '1 second' WHERE id = $1", [id]);
+    });
+    expect(await run(o, id, platform)).toEqual({ action: 'reconcile', status: 'published' });
+    expect((await variant(o, postId)).status).toBe('published');
+    expect((await calls(id)).map((c) => c.state)).toEqual(['succeeded']);
+  });
+
   it('ignores an answer for a key that is no longer the variant’s', async () => {
     const o = await org();
     const { variants } = await duePost(o);

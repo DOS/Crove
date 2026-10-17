@@ -113,12 +113,15 @@ async function callRow(ctx: CommandContext, key: string): Promise<CallRow | unde
     .executeTakeFirst();
 }
 
+// Updates a call that has no outcome yet. A call with its outcome is history (the guard trigger refuses any change), so
+// a later answer for the same key (a reconcile after a pending submission went through) leaves it as it is.
 async function setCall(ctx: CommandContext, key: string, values: Record<string, unknown>): Promise<void> {
   await ctx.trx
     .updateTable('crove_kernel.external_call')
     .set({ ...values, updated_at: ctx.now })
     .where('org_id', '=', ctx.orgId)
     .where('key', '=', key)
+    .where('state', 'in', ['started', 'ambiguous'])
     .execute();
 }
 
@@ -199,14 +202,11 @@ interface ConnectionState {
 
 // The variant's connection, read under a share lock (after the post and its variants), so a reconnect or a disconnect
 // in progress commits first and is seen.
-async function connectionOf(ctx: CommandContext, connectionId: string): Promise<ConnectionState | null> {
-  const row = await ctx.trx
-    .selectFrom('crove_kernel.channel_connection')
-    .select(['status', 'updated_at'])
-    .where('org_id', '=', ctx.orgId)
-    .where('id', '=', connectionId)
-    .forShare()
-    .executeTakeFirst();
+// lock 'update' where the same transaction may go on to update the connection (mark_expired): a share lock upgraded
+// later would deadlock two jobs of one channel.
+async function connectionOf(ctx: CommandContext, connectionId: string, lock: 'share' | 'update' = 'share'): Promise<ConnectionState | null> {
+  const q = ctx.trx.selectFrom('crove_kernel.channel_connection').select(['status', 'updated_at']).where('org_id', '=', ctx.orgId).where('id', '=', connectionId);
+  const row = await (lock === 'update' ? q.forUpdate() : q.forShare()).executeTakeFirst();
   return row ? { status: row.status, updatedAt: row.updated_at } : null;
 }
 
@@ -223,7 +223,7 @@ async function pauseOnChannel(ctx: CommandContext, v: VariantRow, values: Record
 // Whether the connection changed since begin read it at `version` (a reconnect in between).
 async function channelChanged(ctx: CommandContext, connectionId: string, version: string | null | undefined): Promise<boolean> {
   if (!version) return false;
-  const connection = await connectionOf(ctx, connectionId);
+  const connection = await connectionOf(ctx, connectionId, 'update');
   return connection !== null && connection.updatedAt.getTime() !== Date.parse(version);
 }
 
