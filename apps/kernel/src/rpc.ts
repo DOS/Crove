@@ -87,6 +87,21 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     return inOrg(context, fn);
   };
 
+  const social = runtime.installed('social');
+  const inSocial = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor) => Promise<T>) => {
+    if (!social) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun mạng xã hội chưa được bật' });
+    return inOrg(context, fn);
+  };
+  // The command or query checks the input again and its answer has the contract's shape (oRPC validates it).
+  const socialCommand =
+    (name: string) =>
+    <I, O>({ context, input }: { context: RpcContext; input: I }): Promise<O> =>
+      inSocial(context, (orgId, actor) => runtime.execute<O>(name, input, { actor, orgId }));
+  const socialQuery =
+    (name: string) =>
+    <I, O>({ context, input }: { context: RpcContext; input: I }): Promise<O> =>
+      inSocial(context, (orgId, actor) => runtime.query<O>(name, input, { actor, orgId }));
+
   const router = os.router({
     me: {
       get: os.me.get.handler(({ context }) =>
@@ -160,6 +175,32 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         }),
       ),
       export: os.org.export.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.export.get', {}, { actor, orgId }))),
+    },
+    social: {
+      posts: {
+        list: os.social.posts.list.handler(socialQuery('social.post.list')),
+        get: os.social.posts.get.handler(socialQuery('social.post.get')),
+        create: os.social.posts.create.handler(({ context, input }) =>
+          inSocial(context, (orgId, actor) => {
+            const { idempotencyKey, ...rest } = input;
+            return runtime.execute('social.post.create', rest, { actor, orgId, idempotencyKey });
+          }),
+        ),
+        update: os.social.posts.update.handler(socialCommand('social.post.update')),
+        addChannels: os.social.posts.addChannels.handler(socialCommand('social.post.add_channels')),
+        submit: os.social.posts.submit.handler(socialCommand('social.post.submit')),
+      },
+      variants: {
+        update: os.social.variants.update.handler(socialCommand('social.variant.update')),
+        decide: os.social.variants.decide.handler(socialCommand('social.variant.decide')),
+        schedule: os.social.variants.schedule.handler(socialCommand('social.variant.schedule')),
+        unschedule: os.social.variants.unschedule.handler(socialCommand('social.variant.unschedule')),
+        cancel: os.social.variants.cancel.handler(socialCommand('social.variant.cancel')),
+      },
+      queues: {
+        get: os.social.queues.get.handler(socialQuery('social.queue.get')),
+        set: os.social.queues.set.handler(socialCommand('social.queue.set')),
+      },
     },
     channels: {
       list: os.channels.list.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.channel.list', input, { actor, orgId }))),

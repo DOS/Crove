@@ -408,3 +408,149 @@ export const zTaskDetail = z.object({
   proposal: z.object({ id: zId, title: z.string(), status: z.string(), checks: z.array(zCheck).nullable() }).nullable(),
 });
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Crove Social (Social plan §3.3). The commands in @crove/mod-social check every input again, strictly: time zones
+// (IANA names), channel rules and the choice of a time or the queue are checked there, not here.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const SOCIAL_VARIANT_STATUSES = [
+  'draft',
+  'in_review',
+  'changes_requested',
+  'rejected',
+  'approved',
+  'scheduled',
+  'publishing',
+  'processing',
+  'published',
+  'failed',
+  'ambiguous',
+  'needs_attention',
+  'paused',
+  'cancelled',
+] as const;
+export const SOCIAL_POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled'] as const;
+export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as const;
+
+const zSocialText = z.string().max(100_000);
+const zSocialTitle = z.string().max(500);
+const zSocialLink = z.url({ protocol: /^https?$/ }).max(2000);
+const zSocialSettings = z.record(z.string().max(100), z.json());
+const zInstant = z.iso.datetime({ offset: true });
+
+export const zSocialChannelInput = z.strictObject({
+  connectionId: zId,
+  body: zSocialText.nullable().optional(),
+  title: zSocialTitle.nullable().optional(),
+  linkUrl: zSocialLink.nullable().optional(),
+  settings: zSocialSettings.optional(),
+});
+
+export const zSocialPostCreate = z.strictObject({
+  body: zSocialText,
+  title: zSocialTitle.nullable().optional(),
+  linkUrl: zSocialLink.nullable().optional(),
+  timeZone: z.string().min(1).max(64).optional(),
+  scheduledAt: zInstant.nullable().optional(),
+  channels: z.array(zSocialChannelInput).min(1).max(20),
+});
+
+export const zSocialPostUpdate = z.strictObject({
+  postId: zId,
+  revision: z.number().int().positive(),
+  body: zSocialText.optional(),
+  title: zSocialTitle.nullable().optional(),
+  linkUrl: zSocialLink.nullable().optional(),
+  timeZone: z.string().min(1).max(64).optional(),
+  scheduledAt: zInstant.nullable().optional(),
+});
+
+export const zSocialVariantUpdate = z.strictObject({
+  variantId: zId,
+  revision: z.number().int().positive(),
+  body: zSocialText.nullable().optional(),
+  title: zSocialTitle.nullable().optional(),
+  linkUrl: zSocialLink.nullable().optional(),
+  settings: zSocialSettings.optional(),
+});
+
+export const zSocialDecide = z.strictObject({
+  postId: zId,
+  decision: z.enum(SOCIAL_DECISIONS),
+  comment: z.string().trim().max(2000).optional(),
+  variants: z
+    .array(z.strictObject({ variantId: zId, revision: z.number().int().positive(), contentHash: z.string().regex(/^sha256:[0-9a-f]{64}$/) }))
+    .min(1)
+    .max(20),
+});
+
+export const zSocialSchedule = z.strictObject({
+  postId: zId,
+  variantIds: z.array(zId).min(1).max(20).optional(),
+  at: zInstant.optional(),
+  queue: z.literal(true).optional(),
+});
+
+export const zSocialQueueSet = z.strictObject({
+  connectionId: zId,
+  timeZone: z.string().min(1).max(64),
+  paused: z.boolean().optional(),
+  slots: z
+    .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional() }))
+    .max(100),
+});
+
+export const zSocialIssue = z.object({ code: z.string(), field: z.string(), limit: z.number().nullable(), actual: z.number().nullable() });
+
+const zContent = z.object({ body: z.string(), title: z.string().nullable(), linkUrl: z.string().nullable() });
+
+export const zSocialVariant = z.object({
+  id: zId,
+  connectionId: zId,
+  provider: z.string(),
+  position: z.number().int(),
+  overrides: z.object({ body: z.string().nullable(), title: z.string().nullable(), linkUrl: z.string().nullable() }),
+  effective: zContent,
+  settings: z.record(z.string(), z.unknown()),
+  revision: z.number().int(),
+  contentHash: z.string(),
+  status: z.enum(SOCIAL_VARIANT_STATUSES),
+  effectiveAt: z.string().nullable(),
+  queueSlotAt: z.string().nullable(),
+  attempt: z.number().int(),
+  externalUrl: z.string().nullable(),
+  publishedAt: z.string().nullable(),
+  error: z
+    .object({ kind: z.string().nullable(), code: z.string().nullable(), action: z.string().nullable(), message: z.string().nullable(), retryAt: z.string().nullable() })
+    .nullable(),
+  issues: z.array(zSocialIssue),
+  latestDecision: z
+    .object({ decision: z.enum(SOCIAL_DECISIONS), comment: z.string().nullable(), decidedBy: zId, at: z.string(), revision: z.number().int(), current: z.boolean() })
+    .nullable(),
+});
+
+export const zSocialPost = z.object({
+  id: zId,
+  body: z.string(),
+  title: z.string().nullable(),
+  linkUrl: z.string().nullable(),
+  timeZone: z.string(),
+  scheduledAt: z.string().nullable(),
+  revision: z.number().int(),
+  status: z.enum(SOCIAL_POST_STATUSES),
+  origin: z.string(),
+  tainted: z.boolean(),
+  authorUserId: zId.nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  variants: z.array(zSocialVariant),
+});
+
+export const zSocialQueue = z.object({
+  connectionId: zId,
+  queueId: zId.nullable(),
+  timeZone: z.string().nullable(),
+  paused: z.boolean(),
+  slots: z.array(z.object({ weekday: z.number().int(), minute: z.number().int(), label: z.string().nullable(), active: z.boolean() })),
+  nextFree: z.array(z.string()),
+});
