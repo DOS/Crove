@@ -3,7 +3,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { useTranslations } from 'use-intl';
+import { useLocale, useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -251,9 +251,10 @@ export function SocialComposePage() {
   // AI drafting (S7): the server asks the model for a draft of the brief for the chosen channels and saves it as a
   // new post marked as written by AI; every channel of it is reviewed before it can go out.
   const [brief, setBrief] = useState('');
+  const locale = useLocale();
   const aiEnabled = getConfig().aiEnabled === true;
   const aiDraft = useMutation({
-    mutationFn: () => client.social.posts.draftWithAi({ brief: brief.trim(), connectionIds: chosen, language: 'vi' }),
+    mutationFn: () => client.social.posts.draftWithAi({ brief: brief.trim(), connectionIds: chosen, language: locale === 'en' ? 'en' : 'vi' }),
     onSuccess: ({ postId }) => {
       void queryClient.invalidateQueries();
       void navigate({ to: '/o/$slug/social/$id', params: { slug, id: postId } });

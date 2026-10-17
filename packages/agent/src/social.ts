@@ -50,6 +50,12 @@ const zDraft = z.object({
 });
 
 const LANGUAGE = { vi: 'Vietnamese', en: 'English' } as const;
+// What the posts the writer feeds take (crove_social.post): longer text or titles are cut rather than refused after the
+// model was paid for, and the channel rules still flag a text too long for its channel.
+const MAX_BODY = 100_000;
+const MAX_TITLE = 500;
+// A channel label is the connection's display name: one line, short, so it cannot read as instructions.
+const oneLine = (value: string, max: number) => value.replace(/\s+/g, ' ').trim().slice(0, max);
 
 function instructions(request: DraftRequest): string {
   return [
@@ -68,7 +74,7 @@ function channelLines(channels: readonly WriterChannel[]): string {
     .map((c) => {
       const limit = c.maxChars === null ? 'no length limit' : `at most ${c.maxChars} characters`;
       const title = c.title ? `; title ${c.title.required ? 'required' : 'optional'}${c.title.max ? `, at most ${c.title.max} characters` : ''}` : '; no title';
-      return `- key ${c.key}: ${c.label}, text ${limit}${title}`;
+      return `- key ${oneLine(c.key, 64)}: ${oneLine(c.label, 120)}, text ${limit}${title}`;
     })
     .join('\n');
 }
@@ -114,8 +120,8 @@ export class SocialWriter {
     const seen = new Set<string>();
     const variants = output.variants
       .filter((v) => keys.has(v.key) && !seen.has(v.key) && seen.add(v.key))
-      .map((v) => ({ key: v.key, body: v.body?.trim() ? v.body.trim() : null, title: v.title?.trim() ? v.title.trim() : null }))
+      .map((v) => ({ key: v.key, body: v.body?.trim() ? v.body.trim().slice(0, MAX_BODY) : null, title: v.title?.trim() ? v.title.trim().slice(0, MAX_TITLE) : null }))
       .filter((v) => v.body !== null || v.title !== null);
-    return { body: output.body.trim(), title: output.title?.trim() ? output.title.trim() : null, variants };
+    return { body: output.body.trim().slice(0, MAX_BODY), title: output.title?.trim() ? output.title.trim().slice(0, MAX_TITLE) : null, variants };
   }
 }
