@@ -30,6 +30,7 @@ const RUNTIME_ROLES = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_defin
 const MACHINERY = new Set([
   'crove_kernel.auth_session_org',
   'crove_kernel.credential',
+  'crove_kernel.oauth_state',
   'crove_kernel.inbound_drop',
   'crove_kernel.outbox_pending',
   'crove_kernel.refusal_tally',
@@ -38,7 +39,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>();
+const PENDING_TABLES = new Set<string>(['crove_kernel.oauth_state']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -322,6 +323,11 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => ({
       row: { org_id: o.id, key: `rls.matrix:${randomUUID()}`, module: 'social', target: 'sandbox', step: 'publish', retry_safety: 'reconcile_only' },
     }),
+  },
+  // Definer-only machinery (Social plan §3.5, S6): one single-use OAuth state per connect attempt, holding the hash of
+  // the state parameter and the PKCE verifier; only the start and callback definers touch it.
+  'crove_kernel.oauth_state': {
+    make: (o) => ({ row: { org_id: o.id, user_id: o.owner, provider: 'sandbox', state_hash: `sha256:${hex64()}`, expires_at: '2099-01-01T00:00:00Z' } }),
   },
   'crove_finance.purchase_document': {
     make: (o) => ({
