@@ -3,6 +3,8 @@ import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { contract } from '@crove/kernel-contract';
 import { ConnectorError, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
+import type { SocialWriter, WriterChannel } from '@crove/agent';
+import { CAPABILITIES, isProvider as isSocialProvider } from '@crove/mod-social/contract';
 import {
   createOrg,
   myOrgs,
@@ -52,6 +54,23 @@ interface CreatedInvite {
   acceptPath: string;
 }
 
+// Drafts Social posts with the deployment's model (SocialWriter in @crove/agent); unset: AI drafting is off.
+export type SocialDrafter = Pick<SocialWriter, 'draft'>;
+
+// What the writer is told about a channel: the limits the channel rules check afterwards.
+function writerChannel(c: { id: string; provider: string; displayName: string }): WriterChannel {
+  const caps = isSocialProvider(c.provider) ? CAPABILITIES[c.provider] : null;
+  return {
+    key: c.id,
+    provider: c.provider,
+    label: `${PROVIDER_LABELS[c.provider] ?? c.provider} (${c.displayName})`,
+    maxChars: caps?.body.max ?? null,
+    title: caps?.title ? { required: caps.title.required, max: caps.title.max } : null,
+  };
+}
+
+const PROVIDER_LABELS: Record<string, string> = { sandbox: 'test channel', facebook_page: 'Facebook Page', instagram: 'Instagram', zalo_oa: 'Zalo Official Account (article)', tiktok: 'TikTok', youtube: 'YouTube', threads: 'Threads', linkedin: 'LinkedIn', x: 'X', bluesky: 'Bluesky' };
+
 export interface RpcChannels {
   // Seals tokens before kernel.channel.connect stores them; never opens one in the API.
   broker: CredentialBroker;
@@ -78,7 +97,7 @@ function connectorFailure(error: unknown): DomainError {
 
 // sendInviteMail unset: invite mail is off (tests, or an embedder without mail). channels unset: no channel can be
 // connected through the API (the list and disconnect still work).
-export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels) {
+export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -220,6 +239,39 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         update: os.social.posts.update.handler(socialCommand('social.post.update')),
         addChannels: os.social.posts.addChannels.handler(socialCommand('social.post.add_channels')),
         submit: os.social.posts.submit.handler(socialCommand('social.post.submit')),
+        draftWithAi: os.social.posts.draftWithAi.handler(({ context, input }) =>
+          inSocial(context, async (orgId, actor) => {
+            // The model costs money: only those who may write posts get to call it, checked before anything else (the
+            // create command checks the role again).
+            const { role } = await resolveMembership(runtime, context.user, context.orgSlug);
+            if (role !== 'owner' && role !== 'admin' && role !== 'member') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không soạn được bài');
+            if (!socialWriter) throw new DomainError('AI_NOT_CONFIGURED', 503, 'Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL)');
+            const connections = await runtime.query<{ id: string; provider: string; displayName: string; status: string }[]>('kernel.channel.list', {}, { actor, orgId });
+            const chosen = input.connectionIds.map((id) => connections.find((c) => c.id === id && c.status === 'active'));
+            if (chosen.some((c) => !c)) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
+            const channels = (chosen as { id: string; provider: string; displayName: string }[]).map((c) => writerChannel(c));
+            const draft = await socialWriter.draft({ brief: input.brief, channels, language: input.language ?? 'vi', ...(input.tone ? { tone: input.tone } : {}) }).catch((error: unknown) => {
+              console.error('[social-ai] draft failed', error instanceof Error ? error.name : typeof error);
+              throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
+            });
+            if (!draft) throw new DomainError('AI_DRAFT_EMPTY', 422, 'AI không soạn được bài từ mô tả này, hãy viết rõ hơn');
+            const own = new Map(draft.variants.map((v) => [v.key, v]));
+            const created = await runtime.execute<{ postId: string }>(
+              'social.post.create',
+              {
+                body: draft.body,
+                title: draft.title,
+                origin: 'ai',
+                channels: input.connectionIds.map((connectionId) => {
+                  const v = own.get(connectionId);
+                  return { connectionId, ...(v?.body ? { body: v.body } : {}), ...(v?.title ? { title: v.title } : {}) };
+                }),
+              },
+              { actor, orgId },
+            );
+            return { postId: created.postId };
+          }),
+        ),
       },
       variants: {
         update: os.social.variants.update.handler(socialCommand('social.variant.update')),

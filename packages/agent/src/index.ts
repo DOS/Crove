@@ -8,6 +8,7 @@ import { normalizeNumber, normalizeSeries, type ParsedInvoice } from '@crove/l10
 
 export * from './errors.ts';
 export * from './eval.ts';
+export * from './social.ts';
 
 export interface AiConfig {
   baseURL: string;

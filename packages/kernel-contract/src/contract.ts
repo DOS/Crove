@@ -136,6 +136,19 @@ export const contract = {
         .input(z.strictObject({ postId: zId, channels: z.array(zSocialChannelInput).min(1).max(20) }))
         .output(z.object({ postId: zId, variants: z.array(z.object({ variantId: zId, connectionId: zId })) })),
       submit: oc.input(z.strictObject({ postId: zId, variantIds: z.array(zId).min(1).max(20).optional() })).output(z.object({ postId: zId, submitted: z.array(zId) })),
+      // AI drafting (Social plan §3.7): the server asks the deployment's model for a draft from the brief and saves it as
+      // a new post with origin 'ai' (tainted), one variant per channel. Each call drafts anew: a draft whose answer was
+      // lost is only an extra draft, which publishes nothing until a person approves it.
+      draftWithAi: oc
+        .input(
+          z.strictObject({
+            brief: z.string().trim().min(1).max(4000),
+            connectionIds: z.array(zId).min(1).max(20),
+            tone: z.string().trim().max(300).optional(),
+            language: z.enum(['vi', 'en']).optional(),
+          }),
+        )
+        .output(z.object({ postId: zId })),
     },
     variants: {
       update: oc.input(zSocialVariantUpdate).output(z.object({ variantId: zId, revision: z.number().int(), changed: z.boolean() })),

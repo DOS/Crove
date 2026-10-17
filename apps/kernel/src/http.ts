@@ -45,7 +45,7 @@ import { createInviteMailSender } from './invite-mail.ts';
 import { pgBossSchemaVersion } from './jobs-schema.ts';
 import type { Mailer } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
-import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels } from './rpc.ts';
+import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 import { directTransferOrigin } from './storage.ts';
 import {
@@ -81,6 +81,8 @@ export interface HttpDeps {
   // Channel connections (ADR-0025): the broker that seals tokens, and whether the sandbox channel is on. Unset: no
   // channel can be connected through the API.
   channels?: RpcChannels;
+  // Drafts Social posts with the deployment's model (Social plan S7); unset: AI drafting answers 503.
+  socialWriter?: SocialDrafter;
   // Realtime invalidation (issue #69). Unset: /api/stream answers 404 and the app keeps polling.
   stream?: StreamDeps;
 }
@@ -232,7 +234,7 @@ function clientIp(c: Context, trustedHops: number): string | null {
 export function createHttpApp(deps: HttpDeps) {
   const { config, runtime, store, authenticate } = deps;
   const app = new Hono<{ Variables: { user: AuthUser } }>();
-  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL) : undefined, deps.channels);
+  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL) : undefined, deps.channels, deps.socialWriter);
   const perMinute = config.API_RATE_LIMIT_PER_MINUTE;
   const limiter = deps.rateLimiter !== undefined ? deps.rateLimiter : perMinute > 0 ? new RateLimiter({ perMinute }) : null;
 
