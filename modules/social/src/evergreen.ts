@@ -9,11 +9,13 @@ import type { Db, MemberRole } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { effectiveContent } from './domain/approval.ts';
 import { insertVariants, writePostMedia } from './posts.ts';
-import { POST_COLUMNS, base, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, setVariant, settingsOf, step, type PostRow } from './variants.ts';
+import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, setVariant, settingsOf, step, type PostRow } from './variants.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const EVERGREEN_SWEEP_MS = 60 * 60_000;
 const ACTOR: SystemActor = { type: 'system', component: 'social.evergreen' };
+// A repost in one of these is no longer on its way; any other status holds the next evergreen repost back.
+const REPOST_DONE = ['published', 'partially_published', 'failed', 'cancelled'] as const;
 
 async function repost(ctx: CommandContext, sourceId: string, submit: boolean): Promise<{ postId: string; submitted: number } | null> {
   const source = await lockPost(ctx.trx, ctx.orgId, sourceId);
@@ -77,14 +79,20 @@ async function repost(ctx: CommandContext, sourceId: string, submit: boolean): P
     channels.map(({ ownMedia: _own, ...c }) => c),
     0,
   );
-  // Variants with their own images keep them.
+  // Variants with their own images keep them, and their hash covers those images: a reviewer approves what goes out.
   for (const [i, c] of channels.entries()) {
     const id = created[i]?.variantId;
     if (id && c.ownMedia) await setVariant(ctx, id, { media: JSON.stringify(c.ownMedia) });
   }
+  const fresh = await lockVariants(ctx.trx, ctx.orgId, post.id);
+  for (const v of fresh) {
+    const hash = hashOf(base(post), v);
+    if (hash === v.content_hash) continue;
+    await setVariant(ctx, v.id, { content_hash: hash });
+    v.content_hash = hash;
+  }
   const submitted: string[] = [];
   if (submit) {
-    const fresh = await lockVariants(ctx.trx, ctx.orgId, post.id);
     for (const v of fresh) {
       // One that no longer fits its channel (a rule changed) stays a draft for a person to fix.
       if (issuesOf(base(post), v).length > 0) continue;
@@ -121,6 +129,28 @@ export const postRepostEvergreen = defineCommand({
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
+    // The scan ran outside this transaction: under the post's lock, check again that it is still evergreen and has no
+    // repost on its way (another worker, or a person turning it off, may have come first).
+    await lockPost(ctx.trx, ctx.orgId, input.postId);
+    const still = await ctx.trx
+      .selectFrom('crove_social.post as p')
+      .select('p.id')
+      .where('p.org_id', '=', ctx.orgId)
+      .where('p.id', '=', input.postId)
+      .where('p.evergreen_days', 'is not', null)
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom('crove_social.post as r')
+              .select('r.id')
+              .whereRef('r.org_id', '=', 'p.org_id')
+              .whereRef('r.repost_of', '=', 'p.id')
+              .where('r.status', 'not in', [...REPOST_DONE]),
+          ),
+        ),
+      )
+      .executeTakeFirst();
+    if (!still) return { postId: null };
     const done = await repost(ctx, input.postId, true);
     // No channel left: the post stops being evergreen rather than being tried every hour.
     if (!done) {
@@ -158,7 +188,7 @@ export async function sweepEvergreen(deps: { runtime: Runtime; workerDb: Db }): 
       const done = await deps.runtime.execute<{ postId: string | null }>('social.post.repost_evergreen', { postId: row.post_id }, { actor: ACTOR, orgId: row.org_id });
       if (done.postId) made += 1;
     } catch (error) {
-      if (!(error instanceof DomainError)) console.warn(`[social-evergreen] post ${row.post_id.slice(0, 8)}`, error instanceof Error ? error.message : error);
+      console.warn(`[social-evergreen] post ${row.post_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.message : error);
     }
   }
   return made;

@@ -2,7 +2,7 @@
 // post for the channels it went out on, an evergreen post gets one repost per period sent to review, never a second
 // while one is open, and a post whose channels are gone stops being evergreen.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -102,6 +102,22 @@ suite('social reposts and evergreen posts on PostgreSQL (S9)', () => {
   const agePublished = (postId: string, days: number) =>
     admin((c) => c.query('UPDATE crove_social.post_variant SET published_at = now() - make_interval(days => $2) WHERE post_id = $1', [postId, days]));
   const sweep = () => sweepEvergreen({ runtime: worker, workerDb });
+  const repostNow = (o: Org, postId: string) =>
+    worker.execute<{ postId: string | null }>('social.post.repost_evergreen', { postId }, { actor: { type: 'system', component: 'social-evergreen-test' }, orgId: o.orgId });
+
+  // An image uploaded for Social, as the upload route records it.
+  async function image(orgId: string) {
+    const id = randomUUID();
+    const sha = createHash('sha256').update(id).digest('hex');
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source)
+         VALUES ($1, $2, $3, $4, $5, 'anh.jpg', 'image/jpeg', 120000, 'social')`,
+        [orgId, id, sha, `org/${orgId}/${sha}`, `content:${sha}`],
+      ),
+    );
+    return { fileId: id, generation: `content:${sha}`, altText: null, mime: 'image/jpeg', sizeBytes: 120_000 };
+  }
 
   beforeAll(async () => {
     const root = new pg.Client({ connectionString: ADMIN });
@@ -153,6 +169,20 @@ suite('social reposts and evergreen posts on PostgreSQL (S9)', () => {
     await expect(exec(o, 'social.post.repost', { postId: copy })).rejects.toMatchObject({ code: 'NOTHING_TO_REPOST' });
   });
 
+  it("binds a channel's own images into the repost's hash, so its approval covers them", async () => {
+    const o = await org();
+    const { postId } = await published(o);
+    // The second channel went out with an image the post no longer has.
+    const own = await image(o.orgId);
+    await admin((c) => c.query('UPDATE crove_social.post_variant SET media = $2::jsonb WHERE post_id = $1 AND position = 1', [postId, JSON.stringify([own])]));
+    const { postId: copy } = await exec<{ postId: string }>(o, 'social.post.repost', { postId });
+    const view = await get(o, copy);
+    expect(view.variants.map((v) => v.media.map((m) => m.fileId))).toEqual([[], [own.fileId]]);
+    // A save that changes nothing a hash covers (the time zone) finds every hash current: nothing goes back to draft.
+    const saved = await exec<{ changedVariants: string[] }>(o, 'social.post.update', { postId: copy, revision: view.revision, timeZone: 'Asia/Bangkok' });
+    expect(saved.changedVariants).toEqual([]);
+  });
+
   it('marks a post evergreen within 7 to 365 days, and only the worker may scan for due ones', async () => {
     const o = await org();
     const { postId } = await published(o);
@@ -189,6 +219,22 @@ suite('social reposts and evergreen posts on PostgreSQL (S9)', () => {
     await admin((c) => c.query("UPDATE crove_social.post SET created_at = now() - interval '8 days' WHERE id = $1", [first.id]));
     await sweep();
     expect(await reposts(postId)).toHaveLength(2);
+  });
+
+  it('makes no second repost when two runs race, nor one after evergreen is turned off', async () => {
+    const o = await org();
+    const { postId } = await published(o);
+    await exec(o, 'social.post.set_evergreen', { postId, days: 7 });
+    await agePublished(postId, 8);
+    const [a, b] = await Promise.all([repostNow(o, postId), repostNow(o, postId)]);
+    expect([a.postId, b.postId].filter(Boolean)).toHaveLength(1);
+    expect(await reposts(postId)).toHaveLength(1);
+
+    const other = await published(o);
+    await exec(o, 'social.post.set_evergreen', { postId: other.postId, days: 7 });
+    await agePublished(other.postId, 8);
+    await exec(o, 'social.post.set_evergreen', { postId: other.postId, days: null });
+    expect(await repostNow(o, other.postId)).toEqual({ postId: null });
   });
 
   it('stops being evergreen when none of its channels is connected any more', async () => {
