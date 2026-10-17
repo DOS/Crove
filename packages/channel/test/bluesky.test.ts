@@ -66,7 +66,8 @@ describe('BlueskyPublisher', () => {
     });
     const result = await new BlueskyPublisher(fetchImpl).publish(input());
     expect(result).toEqual({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kabc`, url: 'https://bsky.app/profile/quan-a.bsky.social/post/3kabc' });
-    const record = (calls[1]?.json as { record: { text: string; facets: unknown[] } }).record;
+    const record = (calls[1]?.json as { record: { text: string; facets: unknown[] } } | undefined)?.record;
+    if (!record) throw new Error('no record');
     expect(record.text).toBe('Khai trương! Xem https://example.com/a');
     expect(record.facets).toEqual(linkFacets(record.text));
     expect(calls[1]?.auth).toBe('Bearer access-jwt-1');
@@ -87,7 +88,7 @@ describe('BlueskyPublisher', () => {
     const content = { body: 'Ảnh mới', title: null, linkUrl: null, media: [{ fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 3, altText: 'Mặt tiền' }] };
     expect((await new BlueskyPublisher(fetchImpl).publish(input({ content }))).kind).toBe('accepted');
     expect(calls[1]?.type).toBe('image/jpeg');
-    expect((calls[2]?.json as { record: { embed: unknown } }).record.embed).toEqual({ $type: 'app.bsky.embed.images', images: [{ alt: 'Mặt tiền', image: { $type: 'blob', ref: { $link: 'bafyimg' }, mimeType: 'image/jpeg', size: 3 } }] });
+    expect((calls[2]?.json as { record: { embed: unknown } } | undefined)?.record.embed).toEqual({ $type: 'app.bsky.embed.images', images: [{ alt: 'Mặt tiền', image: { $type: 'blob', ref: { $link: 'bafyimg' }, mimeType: 'image/jpeg', size: 3 } }] });
   });
 
   it('maps a revoked app password to token_expired and an outage after the post to unknown', async () => {
