@@ -47,13 +47,13 @@ suite('channel token refresh on PostgreSQL (S6.4)', () => {
     return { orgId, owner };
   }
 
-  async function connect(o: { orgId: string; owner: string }, expiresInMs: number, secret = JSON.stringify({ accessToken: 'a-1', refreshToken: 'r-1' })) {
+  async function connect(o: { orgId: string; owner: string }, expiresInMs: number, secret = JSON.stringify({ accessToken: 'a-1', refreshToken: 'r-1' }), provider = 'zalo_oa') {
     const account = String(Math.floor(Math.random() * 1e15));
-    const sealed = vault.seal(secret, { orgId: o.orgId, provider: 'zalo_oa', externalAccountId: account });
+    const sealed = vault.seal(secret, { orgId: o.orgId, provider, externalAccountId: account });
     const { connectionId } = await api.execute<{ connectionId: string }>(
       'kernel.channel.connect',
       {
-        provider: 'zalo_oa',
+        provider,
         externalAccountId: account,
         displayName: 'Zalo OA',
         scopes: ['oa'],
@@ -190,5 +190,25 @@ suite('channel token refresh on PostgreSQL (S6.4)', () => {
     expect(rows.map((r) => r.role)).toEqual(['crove_worker']);
     // The API runtime cannot store a refresh: the command is the system's.
     await expect(api.execute('kernel.channel.refresh', { connectionId: randomUUID(), ifVersion: new Date().toISOString(), expiresAt: null, credential: { keyId: 'k', envelope: 'AA==' } }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('renews each provider within its own window', async () => {
+    const o = await org();
+    const zalo = await connect(o, 3 * 24 * HOUR);
+    const threads = await connect(o, 3 * 24 * HOUR, JSON.stringify({ accessToken: 't-1' }), 'threads');
+    const seen: string[] = [];
+    const longLived: Refresher = {
+      provider: 'threads',
+      horizonSeconds: 7 * 24 * 3600,
+      refresh: async (secret) => {
+        seen.push(secret);
+        return { secret: JSON.stringify({ accessToken: 't-2' }), expiresAt: new Date(Date.now() + 60 * 24 * HOUR) };
+      },
+    };
+    await refreshChannels({ runtime: worker, broker: vault, workerDb, refreshers: { zalo_oa: fakeRefresher(), threads: longLived } });
+    expect(seen).toEqual([JSON.stringify({ accessToken: 't-1' })]);
+    expect(await secretOf(o.orgId, threads)).toBe(JSON.stringify({ accessToken: 't-2' }));
+    // Three days out is outside Zalo's 6-hour window: untouched.
+    expect(await secretOf(o.orgId, zalo)).toBe(JSON.stringify({ accessToken: 'a-1', refreshToken: 'r-1' }));
   });
 });

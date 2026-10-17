@@ -8,6 +8,7 @@ export * from './meta.ts';
 export * from './instagram.ts';
 export * from './zalo.ts';
 export * from './bluesky.ts';
+export * from './threads.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
@@ -137,6 +138,8 @@ export type ReconcileResult = { found: true; externalId: string; url: string | n
 // OA). refused: the provider turned the refresh down and the connection needs reconnecting; failed: try again later.
 export interface Refresher {
   readonly provider: ChannelProviderId;
+  // How long before expiry to renew (6 hours when unset): long-lived tokens are renewed days ahead.
+  readonly horizonSeconds?: number;
   refresh(secret: string): Promise<{ secret: string; expiresAt: Date | null } | { refused: string } | { failed: string }>;
 }
 

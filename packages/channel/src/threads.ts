@@ -1,0 +1,348 @@
+// Threads (S9, issue #391), written from Meta's Threads API docs. Threads has its own OAuth and its own app id (the
+// Threads use case of a Meta app): CHANNEL_THREADS_APP_ID and CHANNEL_THREADS_APP_SECRET.
+//
+// Connect: threads.net's dialog, a short-lived token, then a long-lived one (60 days) that can be refreshed once it
+// is a day old; the refresh schedule renews it a week before it expires.
+// Publish: a container (text, an image, or a carousel of 2 to 20), a wait until Meta has processed it, then
+// threads_publish, the one visible step. As for Instagram, a PUBLISHED container went out already, and a pending
+// reference carries the text's hash so a status check recognises the post it became.
+import { createHash } from 'node:crypto';
+import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
+
+export const THREADS_HOSTS = ['graph.threads.net'] as const;
+export const THREADS_SCOPES = ['threads_basic', 'threads_content_publish'] as const;
+const API = 'https://graph.threads.net';
+const VERSION = 'v1.0';
+const WAIT_MS = 15_000;
+const POLL_MS = 2_000;
+const CHECK_AFTER_SECONDS = 30;
+const NUMERIC_ID = /^\d{1,32}$/;
+// Threads takes 2 to 20 items in a carousel.
+const CAROUSEL_MAX = 20;
+
+export interface ThreadsAppConfig {
+  appId: string;
+  appSecret: string;
+}
+
+export class ThreadsError extends Error {
+  readonly status: number;
+  readonly code: number | undefined;
+  readonly subcode: number | undefined;
+  constructor(status: number, body: { message?: unknown; code?: unknown; error_subcode?: unknown } | undefined) {
+    super(typeof body?.message === 'string' ? body.message : `Threads answered ${status}`);
+    this.name = 'ThreadsError';
+    this.status = status;
+    this.code = typeof body?.code === 'number' ? body.code : undefined;
+    this.subcode = typeof body?.error_subcode === 'number' ? body.error_subcode : undefined;
+  }
+}
+
+class ThreadsClient {
+  private readonly fetch: Fetch;
+
+  constructor(fetchImpl?: Fetch) {
+    this.fetch = allowlistedFetch(THREADS_HOSTS, fetchImpl);
+  }
+
+  // path is relative to graph.threads.net; a token goes in the Authorization header unless an endpoint needs it as a
+  // parameter (the token exchanges).
+  async call<T>(method: 'GET' | 'POST', path: string, options: { token?: string; params?: Record<string, string>; form?: Record<string, string> } = {}): Promise<T> {
+    const url = new URL(`${API}/${path.replace(/^\//, '')}`);
+    for (const [k, v] of Object.entries(options.params ?? {})) url.searchParams.set(k, v);
+    const headers: Record<string, string> = { accept: 'application/json' };
+    if (options.token) headers.authorization = `Bearer ${options.token}`;
+    let body: string | undefined;
+    if (options.form) {
+      headers['content-type'] = 'application/x-www-form-urlencoded';
+      body = new URLSearchParams(options.form).toString();
+    }
+    const response = await this.fetch(url.toString(), { method, headers, ...(body === undefined ? {} : { body }) });
+    const json = (await response.json().catch(() => null)) as ({ error?: { message?: unknown; code?: unknown; error_subcode?: unknown } } & Record<string, unknown>) | null;
+    if (!response.ok || !json || json.error) throw new ThreadsError(response.ok && !json ? 200 : response.status, json?.error);
+    return json as T;
+  }
+}
+
+function asConnectorError(error: unknown, codeStep = false): ConnectorError {
+  if (error instanceof ConnectorError) return error;
+  if (error instanceof ThreadsError) {
+    if (codeStep && error.status < 500 && error.status >= 400) return new ConnectorError('invalid_grant', 'Threads refused the authorization code', String(error.code ?? error.status));
+    return new ConnectorError(error.status === 403 || error.code === 10 ? 'denied' : 'provider', error.message, String(error.code ?? error.status));
+  }
+  return new ConnectorError('provider', `Threads could not be reached: ${error instanceof Error ? `${error.name}: ${error.message}` : typeof error}`);
+}
+
+interface TokenAnswer {
+  access_token?: unknown;
+  expires_in?: unknown;
+  user_id?: unknown;
+}
+
+const tokenOf = (a: TokenAnswer) => {
+  if (typeof a.access_token !== 'string' || !a.access_token) throw new ConnectorError('provider', 'Threads answered without an access token');
+  return a.access_token;
+};
+const expiryOf = (a: TokenAnswer, now = Date.now()) => {
+  const seconds = Number(a.expires_in);
+  return new Date(now + (Number.isFinite(seconds) && seconds > 0 ? seconds : 60 * 86_400) * 1000);
+};
+
+export class ThreadsConnector implements OAuthConnector {
+  readonly provider = 'threads' as const;
+  readonly pkce = false;
+  private readonly app: ThreadsAppConfig;
+  private readonly client: ThreadsClient;
+
+  constructor(app: ThreadsAppConfig, fetchImpl?: Fetch) {
+    if (!/^\d{1,32}$/.test(app.appId)) throw new Error('invalid Threads app id');
+    if (!app.appSecret) throw new Error('missing Threads app secret');
+    this.app = app;
+    this.client = new ThreadsClient(fetchImpl);
+  }
+
+  authorizeUrl(input: AuthorizeInput): string {
+    const url = new URL('https://threads.net/oauth/authorize');
+    url.searchParams.set('client_id', this.app.appId);
+    url.searchParams.set('redirect_uri', input.redirectUri);
+    url.searchParams.set('scope', THREADS_SCOPES.join(','));
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('state', input.state);
+    return url.toString();
+  }
+
+  async exchange(input: ExchangeInput): Promise<ConnectedAccount[]> {
+    const short = await this.client
+      .call<TokenAnswer>('POST', 'oauth/access_token', {
+        form: { client_id: this.app.appId, client_secret: this.app.appSecret, grant_type: 'authorization_code', redirect_uri: input.redirectUri, code: input.code },
+      })
+      .catch((error: unknown) => {
+        throw asConnectorError(error, true);
+      });
+    // The long-lived exchange takes its tokens as parameters (Meta's documented form); this URL is never logged.
+    const long = await this.client
+      .call<TokenAnswer>('GET', 'access_token', { params: { grant_type: 'th_exchange_token', client_secret: this.app.appSecret, access_token: tokenOf(short) } })
+      .catch((error: unknown) => {
+        throw asConnectorError(error);
+      });
+    const token = tokenOf(long);
+    const me = await this.client.call<{ id?: unknown; username?: unknown }>('GET', `${VERSION}/me`, { token, params: { fields: 'id,username' } }).catch((error: unknown) => {
+      throw asConnectorError(error);
+    });
+    const id = typeof me.id === 'string' || typeof me.id === 'number' ? String(me.id) : '';
+    if (!NUMERIC_ID.test(id)) throw new ConnectorError('provider', 'Threads answered without a user id');
+    const name = typeof me.username === 'string' && me.username ? `@${me.username}` : `Threads ${id}`;
+    return [{ provider: 'threads', externalAccountId: id, displayName: name.slice(0, 200), scopes: [...THREADS_SCOPES], expiresAt: expiryOf(long), secret: JSON.stringify({ accessToken: token }) }];
+  }
+}
+
+const tokenIn = (secret: string): string | null => {
+  try {
+    const t = (JSON.parse(secret) as { accessToken?: unknown }).accessToken;
+    return typeof t === 'string' && t ? t : null;
+  } catch {
+    return null;
+  }
+};
+
+// Renews a long-lived token a week before it expires (Meta allows it once the token is a day old).
+export class ThreadsRefresher implements Refresher {
+  readonly provider = 'threads' as const;
+  readonly horizonSeconds = 7 * 86_400;
+  private readonly client: ThreadsClient;
+
+  constructor(fetchImpl?: Fetch) {
+    this.client = new ThreadsClient(fetchImpl);
+  }
+
+  async refresh(secret: string): Promise<{ secret: string; expiresAt: Date | null } | { refused: string } | { failed: string }> {
+    const token = tokenIn(secret);
+    if (!token) return { refused: 'NO_TOKEN' };
+    try {
+      const answer = await this.client.call<TokenAnswer>('GET', 'refresh_access_token', { params: { grant_type: 'th_refresh_token', access_token: token } });
+      return { secret: JSON.stringify({ accessToken: tokenOf(answer) }), expiresAt: expiryOf(answer) };
+    } catch (error) {
+      // 190: the token is no longer valid; anything else may pass.
+      if (error instanceof ThreadsError && (error.code === 190 || error.status === 401)) return { refused: String(error.code ?? error.status) };
+      return { failed: error instanceof ThreadsError ? String(error.code ?? error.status) : 'NETWORK' };
+    }
+  }
+}
+
+const TOKEN_CODES = new Set([102, 190, 463, 467]);
+const RATE_CODES = new Set([4, 17, 32, 613]);
+
+function threadsResult(error: unknown): PublishResult {
+  if (!(error instanceof ThreadsError)) return { kind: 'unknown', code: 'NETWORK' };
+  const code = error.code === undefined ? `HTTP_${error.status}` : String(error.code);
+  const base = { code, message: error.message, httpStatus: error.status };
+  if (error.status < 400 || error.status >= 500 || error.code === 1 || error.code === 2) return { kind: 'unknown', code, message: error.message };
+  if ((error.code !== undefined && TOKEN_CODES.has(error.code)) || error.status === 401) return { kind: 'rejected', error: 'token_expired', ...base };
+  if (error.code === 10 || (error.code !== undefined && error.code >= 200 && error.code <= 299) || error.status === 403) return { kind: 'rejected', error: 'permission', ...base };
+  if ((error.code !== undefined && RATE_CODES.has(error.code)) || error.status === 429) return { kind: 'rejected', error: 'rate_limited', ...base };
+  return { kind: 'rejected', error: 'bad_request', ...base };
+}
+
+const textOf = (content: { body: string; linkUrl: string | null }) => {
+  const body = content.body.trim();
+  return content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+};
+const textKey = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
+const refOf = (container: string, text: string) => `${container}.${textKey(text)}`;
+const parseRef = (ref: string) => {
+  const m = /^(\d{1,32})\.([0-9a-f]{16})$/.exec(ref);
+  return m ? { container: m[1] as string, key: m[2] as string } : null;
+};
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+class NoUrl extends Error {}
+
+export class ThreadsPublisher implements Publisher {
+  readonly provider = 'threads' as const;
+  readonly publishSafety: RetrySafety = 'reconcile_only';
+  private readonly client: ThreadsClient;
+  private readonly waitMs: number;
+  private readonly pollMs: number;
+
+  constructor(fetchImpl?: Fetch, timing: { waitMs?: number; pollMs?: number } = {}) {
+    this.client = new ThreadsClient(fetchImpl);
+    this.waitMs = timing.waitMs ?? WAIT_MS;
+    this.pollMs = timing.pollMs ?? POLL_MS;
+  }
+
+  async publish(input: PublishInput): Promise<PublishResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_TOKEN' };
+    if (!NUMERIC_ID.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
+    const user = input.externalAccountId;
+    const text = textOf(input.content);
+    const media = input.content.media.slice(0, CAROUSEL_MAX);
+    if (!text && media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    const urlOf = async (fileId: string) => {
+      const url = await input.mediaUrl(fileId).catch(() => null);
+      if (!url) throw new NoUrl();
+      return url;
+    };
+    let container: string;
+    try {
+      if (media.length === 0) {
+        container = await this.create(user, token, { media_type: 'TEXT', text });
+      } else if (media.length === 1) {
+        container = await this.create(user, token, { media_type: 'IMAGE', image_url: await urlOf((media[0] as { fileId: string }).fileId), ...(text ? { text } : {}) });
+      } else {
+        const children: string[] = [];
+        for (const m of media) children.push(await this.create(user, token, { media_type: 'IMAGE', image_url: await urlOf(m.fileId), is_carousel_item: 'true' }));
+        container = await this.create(user, token, { media_type: 'CAROUSEL', children: children.join(','), ...(text ? { text } : {}) });
+      }
+    } catch (error) {
+      if (error instanceof NoUrl) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+      // Containers are invisible until published: an unclear answer here posted nothing.
+      const result = threadsResult(error);
+      return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
+    }
+    const deadline = Date.now() + this.waitMs;
+    for (;;) {
+      const state = await this.status_(container, token);
+      if (state === 'FINISHED') return this.publishContainer(user, token, container, textKey(text));
+      if (state === 'ERROR' || state === 'EXPIRED') return { kind: 'rejected', error: 'bad_request', code: `CONTAINER_${state}` };
+      if (state === 'PUBLISHED') return this.findPublished(user, token, textKey(text), container);
+      if (state === 'TOKEN_EXPIRED') return { kind: 'rejected', error: 'token_expired', code: '190' };
+      if (Date.now() >= deadline) return { kind: 'pending', externalRef: refOf(container, text), checkAfterSeconds: CHECK_AFTER_SECONDS };
+      await sleep(this.pollMs);
+    }
+  }
+
+  async status(input: StatusInput): Promise<PublishResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_TOKEN' };
+    const ref = parseRef(input.externalRef);
+    if (!ref) return { kind: 'unknown', code: 'BAD_CONTAINER_REF' };
+    switch (await this.status_(ref.container, token)) {
+      case 'FINISHED': {
+        const already = await this.findPublished(input.externalAccountId, token, ref.key, ref.container);
+        if (already.kind === 'accepted') return already;
+        return this.publishContainer(input.externalAccountId, token, ref.container, ref.key);
+      }
+      case 'PUBLISHED':
+        return this.findPublished(input.externalAccountId, token, ref.key, ref.container);
+      case 'IN_PROGRESS':
+        return { kind: 'pending', externalRef: input.externalRef, checkAfterSeconds: CHECK_AFTER_SECONDS };
+      case 'ERROR':
+      case 'EXPIRED':
+        return { kind: 'rejected', error: 'bad_request', code: 'CONTAINER_FAILED' };
+      case 'TOKEN_EXPIRED':
+        return { kind: 'rejected', error: 'token_expired', code: '190' };
+      default:
+        return { kind: 'unknown', code: 'CONTAINER_STATUS_UNKNOWN' };
+    }
+  }
+
+  async reconcile(input: ReconcileInput): Promise<ReconcileResult> {
+    const token = tokenIn(input.secret);
+    const text = textOf(input.content);
+    if (!token || !text || !NUMERIC_ID.test(input.externalAccountId)) return { found: 'unknown' };
+    try {
+      const post = await this.recent(input.externalAccountId, token, (p) => p.text === text && p.at >= input.after.getTime() - 60_000 && p.at <= input.before.getTime() + 60_000);
+      return post ? { found: true, externalId: post.id, url: post.permalink } : { found: false };
+    } catch {
+      return { found: 'unknown' };
+    }
+  }
+
+  private async create(user: string, token: string, form: Record<string, string>): Promise<string> {
+    const answer = await this.client.call<{ id?: unknown }>('POST', `${VERSION}/${user}/threads`, { token, form });
+    const id = typeof answer.id === 'string' || typeof answer.id === 'number' ? String(answer.id) : '';
+    if (!NUMERIC_ID.test(id)) throw new ThreadsError(502, { message: 'no container id', code: 1 });
+    return id;
+  }
+
+  private async status_(container: string, token: string): Promise<string> {
+    try {
+      const answer = await this.client.call<{ status?: unknown }>('GET', `${VERSION}/${container}`, { token, params: { fields: 'status' } });
+      return typeof answer.status === 'string' ? answer.status : 'UNKNOWN';
+    } catch (error) {
+      const result = threadsResult(error);
+      return result.kind === 'rejected' && result.error === 'token_expired' ? 'TOKEN_EXPIRED' : 'UNKNOWN';
+    }
+  }
+
+  private async publishContainer(user: string, token: string, container: string, key: string): Promise<PublishResult> {
+    try {
+      const answer = await this.client.call<{ id?: unknown }>('POST', `${VERSION}/${user}/threads_publish`, { token, form: { creation_id: container } });
+      const id = typeof answer.id === 'string' || typeof answer.id === 'number' ? String(answer.id) : '';
+      if (!id) return { kind: 'unknown', code: 'NO_POST_ID' };
+      const link = await this.client.call<{ permalink?: unknown }>('GET', `${VERSION}/${id}`, { token, params: { fields: 'permalink' } }).catch(() => ({ permalink: null }));
+      return { kind: 'accepted', externalId: id, url: typeof link.permalink === 'string' ? link.permalink : null };
+    } catch (error) {
+      if ((await this.status_(container, token)) === 'PUBLISHED') return this.findPublished(user, token, key, container);
+      return threadsResult(error);
+    }
+  }
+
+  // The post a published container became: a post of the last day with the same text; no match is unknown.
+  private async findPublished(user: string, token: string, key: string, container: string): Promise<PublishResult> {
+    const since = Date.now() - 86_400_000;
+    try {
+      const post = await this.recent(user, token, (p) => textKey(p.text) === key && !(p.at < since));
+      return post ? { kind: 'accepted', externalId: post.id, url: post.permalink } : { kind: 'unknown', code: 'PUBLISHED_NOT_FOUND', message: `container ${container}` };
+    } catch {
+      return { kind: 'unknown', code: 'PUBLISHED_NOT_FOUND' };
+    }
+  }
+
+  private async recent(user: string, token: string, match: (p: { text: string; at: number }) => boolean): Promise<{ id: string; permalink: string | null } | null> {
+    const answer = await this.client.call<{ data?: { id?: unknown; text?: unknown; timestamp?: unknown; permalink?: unknown }[] }>('GET', `${VERSION}/${user}/threads`, {
+      token,
+      params: { fields: 'id,text,timestamp,permalink', limit: '25' },
+    });
+    for (const p of answer.data ?? []) {
+      const id = typeof p.id === 'string' || typeof p.id === 'number' ? String(p.id) : '';
+      if (!id) continue;
+      const text = typeof p.text === 'string' ? p.text.trim() : '';
+      const at = typeof p.timestamp === 'string' ? Date.parse(p.timestamp) : Number.NaN;
+      if (match({ text, at })) return { id, permalink: typeof p.permalink === 'string' ? p.permalink : null };
+    }
+    return null;
+  }
+}

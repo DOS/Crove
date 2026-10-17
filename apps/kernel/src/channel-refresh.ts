@@ -51,9 +51,15 @@ export async function refreshChannels(deps: RefreshDeps): Promise<RefreshOutcome
     const { rows } = await sql<{ locked: boolean }>`SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended(${LOCK_KEY}, 0)) AS locked`.execute(db);
     if (!rows[0]?.locked) return { ...outcome, skipped: true };
     try {
-      const due = await sql<Due>`
+      // Each provider with its own window: a Zalo token (25 hours) a few hours ahead, a 60-day Threads token a week ahead.
+      const due = { rows: [] as Due[] };
+      for (const provider of providers) {
+        const horizon = deps.refreshers[provider]?.horizonSeconds ?? REFRESH_HORIZON_SECONDS;
+        const { rows: part } = await sql<Due>`
         SELECT org_id, connection_id, provider, version
-        FROM crove_kernel.channel_refresh_due(${REFRESH_LIMIT}::int, ${providers}::text[], ${REFRESH_HORIZON_SECONDS}::int)`.execute(db);
+          FROM crove_kernel.channel_refresh_due(${REFRESH_LIMIT}::int, ${[provider]}::text[], ${horizon}::int)`.execute(db);
+        due.rows.push(...part);
+      }
       for (const row of due.rows) {
         const refresher = deps.refreshers[row.provider];
         if (!refresher) continue;
