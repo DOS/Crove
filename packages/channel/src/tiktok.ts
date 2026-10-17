@@ -109,7 +109,8 @@ class TikTokClient {
     } catch {
       body = null;
     }
-    if (!response.ok || !body || (body.error?.code !== undefined && body.error.code !== 'ok')) throw new TikTokError(response.ok && body ? 400 : response.status, body);
+    // Success carries error.code 'ok'; any other error object, with or without a code, is a refusal.
+    if (!response.ok || !body || (body.error !== undefined && body.error !== null && body.error.code !== 'ok')) throw new TikTokError(response.ok && body ? 400 : response.status, body);
     return { data: (body.data ?? {}) as T, raw };
   }
 

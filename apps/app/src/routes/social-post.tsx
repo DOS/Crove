@@ -56,7 +56,8 @@ interface Own {
 }
 
 const EMPTY_OWN: Own = { custom: false, body: '', title: '', settings: {} };
-const sameSettings = (a: Record<string, unknown>, b: Record<string, unknown>) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
+const sameSettings = (a: Record<string, unknown> | null | undefined, b: Record<string, unknown> | null | undefined) =>
+  JSON.stringify(Object.entries(a ?? {}).sort()) === JSON.stringify(Object.entries(b ?? {}).sort());
 
 // The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
 function ProviderSettings({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
