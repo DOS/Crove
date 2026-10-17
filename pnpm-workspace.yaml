@@ -2,6 +2,7 @@ packages:
   - 'apps/*'
   - 'packages/*'
   - 'modules/*'
+  - 'e2e'
 
 catalogMode: strict
 
@@ -16,6 +17,7 @@ catalog:
   '@orpc/contract': 1.15.6
   '@orpc/server': 1.15.6
   '@orpc/tanstack-query': 1.15.6
+  '@playwright/test': 1.64.0
   '@supabase/auth-js': 2.117.3
   '@tailwindcss/postcss': 4.3.3
   '@tailwindcss/vite': 4.3.3

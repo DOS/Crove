@@ -1,0 +1,52 @@
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  # A newer push replaces a pull request's run; a push to main or dev always finishes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  inbox:
+    name: Playwright on docker compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.34.7 --no-fund --no-audit
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter "@crove/e2e"
+
+      - name: Install Chromium
+        run: pnpm --filter @crove/e2e exec playwright install --with-deps chromium
+
+      # Fresh volumes on every run: the runner starts empty.
+      - name: Build and start the stack
+        run: pnpm --filter @crove/e2e stack:up
+
+      - name: Playwright
+        run: pnpm test:e2e
+
+      - name: Stack logs
+        if: failure()
+        run: pnpm --filter @crove/e2e stack:logs
+
+      - name: Stop the stack
+        if: always()
+        run: pnpm --filter @crove/e2e stack:down
