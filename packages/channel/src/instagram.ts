@@ -7,13 +7,15 @@
 // whose status_code is PUBLISHED went out already, so a check after a lost answer finds the post instead of posting
 // again. Meta fetches each image from a public URL: deployments whose storage hands out presigned URLs (S3) can post;
 // others get MEDIA_URL_UNAVAILABLE with nothing posted.
+import { createHash } from 'node:crypto';
 import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
 import { Graph, GraphError, graphPublishResult, MetaLogin, type MetaAppConfig } from './meta.ts';
 import type { AuthorizeInput, ExchangeInput, Fetch, OAuthConnector } from './oauth.ts';
 
 export const INSTAGRAM_SCOPES = ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish'] as const;
-// How long a publish waits for Meta to process the containers before it reports the post as pending.
-const WAIT_MS = 20_000;
+// How long a publish waits for Meta to process the containers before it reports the post as pending; with the creates it
+// stays well inside the job's 60 second call timeout.
+const WAIT_MS = 15_000;
 const POLL_MS = 2_000;
 // When the pipeline checks a pending post again.
 const CHECK_AFTER_SECONDS = 30;
@@ -81,6 +83,14 @@ interface MediaListAnswer {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const captionOf = (content: { body: string }) => content.body.trim();
+// A pending post's reference: the container and a short hash of its caption, so a later status check can recognise the
+// post the container became without the content.
+const captionKey = (caption: string) => createHash('sha256').update(caption).digest('hex').slice(0, 16);
+const refOf = (container: string, caption: string) => `${container}.${captionKey(caption)}`;
+function parseRef(ref: string): { container: string; key: string } | null {
+  const m = /^(\d{1,32})\.([0-9a-f]{16})$/.exec(ref);
+  return m ? { container: m[1] as string, key: m[2] as string } : null;
+}
 
 export class InstagramPublisher implements Publisher {
   readonly provider = 'instagram' as const;
@@ -102,35 +112,42 @@ export class InstagramPublisher implements Publisher {
     if (!NUMERIC_ID.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
     const media = input.content.media;
     if (media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_REQUIRED' };
-    // Every URL first: nothing is created if one image cannot be offered to Meta.
-    const urls: string[] = [];
-    for (const m of media) {
-      const url = await input.mediaUrl(m.fileId).catch(() => null);
-      if (!url) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
-      urls.push(url);
-    }
+    // A presigned URL lives about a minute, so each is made right before the container that names it. The first one is
+    // made before anything else: a deployment that cannot hand out URLs creates nothing.
+    const urlOf = async (fileId: string) => {
+      const url = await input.mediaUrl(fileId).catch(() => null);
+      if (!url) throw new NoUrl();
+      return url;
+    };
+    const first = await input.mediaUrl((media[0] as { fileId: string }).fileId).catch(() => null);
+    if (!first) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
     const caption = captionOf(input.content);
     // Containers are invisible until published, so any failure while making them posted nothing.
     let container: string;
     try {
-      if (urls.length === 1) {
-        container = await this.create(input.externalAccountId, s.accessToken, { image_url: urls[0] as string, caption });
+      if (media.length === 1) {
+        container = await this.create(input.externalAccountId, s.accessToken, { image_url: first, caption });
       } else {
         const children: string[] = [];
-        for (const url of urls) children.push(await this.create(input.externalAccountId, s.accessToken, { image_url: url, is_carousel_item: 'true' }));
+        for (const [i, m] of media.entries()) {
+          children.push(await this.create(input.externalAccountId, s.accessToken, { image_url: i === 0 ? first : await urlOf(m.fileId), is_carousel_item: 'true' }));
+        }
         container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'CAROUSEL', children: children.join(','), caption });
       }
     } catch (error) {
+      if (error instanceof NoUrl) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
       const result = graphPublishResult(error);
       return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
     }
     const deadline = Date.now() + this.waitMs;
     for (;;) {
       const state = await this.containerStatus(container, s.accessToken);
-      if (state === 'FINISHED') return this.publishContainer(input.externalAccountId, s.accessToken, container, caption);
+      if (state === 'FINISHED') return this.publishContainer(input.externalAccountId, s.accessToken, container, captionKey(caption));
       if (state === 'ERROR' || state === 'EXPIRED') return { kind: 'rejected', error: 'bad_request', code: `CONTAINER_${state}` };
-      if (state === 'PUBLISHED') return this.findPublished(input.externalAccountId, s.accessToken, caption, container);
-      if (Date.now() >= deadline) return { kind: 'pending', externalRef: container, checkAfterSeconds: CHECK_AFTER_SECONDS };
+      if (state === 'PUBLISHED') return this.findPublished(input.externalAccountId, s.accessToken, captionKey(caption), container);
+      // Nothing is published yet, so a refused token here posted nothing.
+      if (state === 'TOKEN_EXPIRED') return { kind: 'rejected', error: 'token_expired', code: '190' };
+      if (Date.now() >= deadline) return { kind: 'pending', externalRef: refOf(container, caption), checkAfterSeconds: CHECK_AFTER_SECONDS };
       await sleep(this.pollMs);
     }
   }
@@ -139,16 +156,23 @@ export class InstagramPublisher implements Publisher {
   async status(input: StatusInput): Promise<PublishResult> {
     const s = secretOf(input.secret);
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_PAGE_TOKEN' };
-    if (!NUMERIC_ID.test(input.externalRef)) return { kind: 'unknown', code: 'BAD_CONTAINER_ID' };
-    const state = await this.containerStatus(input.externalRef, s.accessToken);
+    const ref = parseRef(input.externalRef);
+    if (!ref) return { kind: 'unknown', code: 'BAD_CONTAINER_REF' };
+    const state = await this.containerStatus(ref.container, s.accessToken);
     switch (state) {
-      case 'FINISHED':
+      case 'FINISHED': {
+        // A media_publish that timed out may have gone through before the container shows it: look first.
+        const already = await this.findPublished(input.externalAccountId, s.accessToken, ref.key, ref.container, true);
+        if (already.kind === 'accepted') return already;
         // The caption is on the container; media_publish needs only its id.
-        return this.publishContainer(input.externalAccountId, s.accessToken, input.externalRef, null);
+        return this.publishContainer(input.externalAccountId, s.accessToken, ref.container, ref.key);
+      }
       case 'PUBLISHED':
-        return this.findPublished(input.externalAccountId, s.accessToken, null, input.externalRef);
+        return this.findPublished(input.externalAccountId, s.accessToken, ref.key, ref.container);
       case 'IN_PROGRESS':
         return { kind: 'pending', externalRef: input.externalRef, checkAfterSeconds: CHECK_AFTER_SECONDS };
+      case 'TOKEN_EXPIRED':
+        return { kind: 'rejected', error: 'token_expired', code: '190' };
       case 'ERROR':
       case 'EXPIRED':
         return { kind: 'rejected', error: 'bad_request', code: `CONTAINER_${state}` };
@@ -180,12 +204,14 @@ export class InstagramPublisher implements Publisher {
     try {
       const answer = await this.graph.call<ContainerAnswer>('GET', container, { token, params: { fields: 'status_code' } });
       return typeof answer.status_code === 'string' ? answer.status_code : 'UNKNOWN';
-    } catch {
-      return 'UNKNOWN';
+    } catch (error) {
+      const result = graphPublishResult(error);
+      return result.kind === 'rejected' && result.error === 'token_expired' ? 'TOKEN_EXPIRED' : 'UNKNOWN';
     }
   }
 
-  private async publishContainer(account: string, token: string, container: string, caption: string | null): Promise<PublishResult> {
+  // key: the caption's captionKey, to recognise the post a published container became.
+  private async publishContainer(account: string, token: string, container: string, key: string): Promise<PublishResult> {
     try {
       const answer = await this.graph.call<IdAnswer>('POST', `${account}/media_publish`, { token, form: { creation_id: container } });
       if (typeof answer.id !== 'string' || !answer.id) return { kind: 'unknown', code: 'NO_MEDIA_ID' };
@@ -193,16 +219,18 @@ export class InstagramPublisher implements Publisher {
       return { kind: 'accepted', externalId: answer.id, url: permalink };
     } catch (error) {
       // Did it go out anyway? The container says so once Meta has published it.
-      if ((await this.containerStatus(container, token)) === 'PUBLISHED') return this.findPublished(account, token, caption, container);
+      if ((await this.containerStatus(container, token)) === 'PUBLISHED') return this.findPublished(account, token, key, container);
       return graphPublishResult(error);
     }
   }
 
-  // The post a published container became: the newest post with its caption (Meta does not link them back).
-  private async findPublished(account: string, token: string, caption: string | null, container: string): Promise<PublishResult> {
+  // The post a published container became: the newest post with the same caption in the last day (Meta does not link
+  // them back, and its listing may lag). Never a guess: no match is unknown. quiet: a miss is not worth reporting.
+  private async findPublished(account: string, token: string, key: string, container: string, quiet = false): Promise<PublishResult> {
+    const since = Date.now() - 86_400_000;
     try {
-      const post = await this.recent(account, token, (p) => caption === null || p.caption === caption);
-      return post ? { kind: 'accepted', externalId: post.id, url: post.permalink } : { kind: 'unknown', code: 'PUBLISHED_NOT_FOUND', message: `container ${container}` };
+      const post = await this.recent(account, token, (p) => captionKey(p.caption) === key && !(p.at < since));
+      return post ? { kind: 'accepted', externalId: post.id, url: post.permalink } : { kind: 'unknown', code: quiet ? 'NOT_YET' : 'PUBLISHED_NOT_FOUND', message: `container ${container}` };
     } catch {
       return { kind: 'unknown', code: 'PUBLISHED_NOT_FOUND' };
     }
@@ -228,3 +256,5 @@ export class InstagramPublisher implements Publisher {
     }
   }
 }
+
+class NoUrl extends Error {}

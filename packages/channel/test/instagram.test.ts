@@ -1,4 +1,5 @@
 // Instagram through Facebook Login against recorded Graph answers (shapes from Meta's docs); no live call.
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { InstagramConnector, InstagramPublisher, type Fetch, type PublishInput } from '../src/index.ts';
 
@@ -35,6 +36,7 @@ const input = (over: Partial<PublishInput> = {}): PublishInput => ({
   ...over,
 });
 const fast = { waitMs: 0, pollMs: 0 };
+const ref = (container: string, caption = 'Khai trương!') => `${container}.${createHash('sha256').update(caption).digest('hex').slice(0, 16)}`;
 
 describe('InstagramConnector', () => {
   it('asks for the Instagram publishing permissions and connects the business account of each Page', async () => {
@@ -115,13 +117,15 @@ describe('InstagramPublisher', () => {
     const { fetchImpl, calls } = graph({
       [`POST /${IG}/media`]: [{ body: { id: '9001' } }],
       'GET /9001': [{ body: { status_code: 'IN_PROGRESS' } }, { body: { status_code: 'FINISHED' } }],
+      // Before publishing on the status check, it looks for a post that already went out.
+      [`GET /${IG}/media`]: [{ body: { data: [] } }],
       [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000003' } }],
       'GET /18000000000000003': [{ body: { permalink: 'https://www.instagram.com/p/def/' } }],
     });
     const publisher = new InstagramPublisher(APP, fetchImpl, fast);
-    expect(await publisher.publish(input())).toEqual({ kind: 'pending', externalRef: '9001', checkAfterSeconds: 30 });
+    expect(await publisher.publish(input())).toEqual({ kind: 'pending', externalRef: ref('9001'), checkAfterSeconds: 30 });
     expect(calls.some((c) => c.route.endsWith('/media_publish'))).toBe(false);
-    expect(await publisher.status({ externalAccountId: IG, secret: SECRET, externalRef: '9001' })).toMatchObject({ kind: 'accepted', externalId: '18000000000000003' });
+    expect(await publisher.status({ externalAccountId: IG, secret: SECRET, externalRef: ref('9001') })).toMatchObject({ kind: 'accepted', externalId: '18000000000000003' });
   });
 
   it('finds the post of a container that was published already instead of publishing again', async () => {
@@ -129,9 +133,23 @@ describe('InstagramPublisher', () => {
       'GET /9001': [{ body: { status_code: 'PUBLISHED' } }],
       [`GET /${IG}/media`]: [{ body: { data: [{ id: '18000000000000004', caption: 'Khai trương!', timestamp: new Date().toISOString(), permalink: 'https://www.instagram.com/p/ghi/' }] } }],
     });
-    const result = await new InstagramPublisher(APP, fetchImpl, fast).status({ externalAccountId: IG, secret: SECRET, externalRef: '9001' });
+    const result = await new InstagramPublisher(APP, fetchImpl, fast).status({ externalAccountId: IG, secret: SECRET, externalRef: ref('9001') });
     expect(result).toEqual({ kind: 'accepted', externalId: '18000000000000004', url: 'https://www.instagram.com/p/ghi/' });
     expect(calls.some((c) => c.route.endsWith('/media_publish'))).toBe(false);
+  });
+
+  it('never takes an unrelated newer post for the one a container became', async () => {
+    const { fetchImpl } = graph({
+      'GET /9001': [{ body: { status_code: 'PUBLISHED' } }],
+      [`GET /${IG}/media`]: [{ body: { data: [{ id: '18000000000000099', caption: 'Bài đăng tay của chủ tài khoản', timestamp: new Date().toISOString() }] } }],
+    });
+    const result = await new InstagramPublisher(APP, fetchImpl, fast).status({ externalAccountId: IG, secret: SECRET, externalRef: ref('9001') });
+    expect(result).toMatchObject({ kind: 'unknown', code: 'PUBLISHED_NOT_FOUND' });
+  });
+
+  it('reports a refused token while checking a pending container', async () => {
+    const { fetchImpl } = graph({ 'GET /9001': [{ status: 400, body: { error: { message: 'Error validating access token', code: 190 } } }] });
+    expect(await new InstagramPublisher(APP, fetchImpl, fast).status({ externalAccountId: IG, secret: SECRET, externalRef: ref('9001') })).toMatchObject({ kind: 'rejected', error: 'token_expired' });
   });
 
   it('checks the container when media_publish fails, so a publish that went through is not repeated', async () => {
