@@ -73,6 +73,15 @@ jobs:
             environment=beta
           fi
           case "$environment" in pilot | beta) ;; *) echo "::error::no environment for $EVENT on $REF"; exit 1 ;; esac
+          # Whatever the action, the pilot runs only code from main: the deploy script of the run's commit executes on
+          # the host. (The environment's branch and tag rules are the boundary that holds against an edited workflow.)
+          if [ "$environment" = pilot ]; then
+            git fetch --no-tags origin main
+            if ! git merge-base --is-ancestor "$SHA" origin/main; then
+              echo "::error::the pilot runs only commits of main; $REF ($SHA) is not one"
+              exit 1
+            fi
+          fi
           if [ "$action" = deploy ]; then
             if [ "$REF_TYPE" = tag ]; then
               release="$REF_NAME"
@@ -86,13 +95,9 @@ jobs:
               echo "::error::release name '$release' must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}"
               exit 1
             fi
-            # The pilot runs main: a tag on any other commit is refused.
-            if [ "$environment" = pilot ]; then
-              git fetch --no-tags origin main
-              if [ "$REF_TYPE" != tag ] || [[ "$REF_NAME" != v* ]] || ! git merge-base --is-ancestor "$SHA" origin/main; then
-                echo "::error::pilot deploys only v* tags on commits of main; $REF ($SHA) is not one"
-                exit 1
-              fi
+            if [ "$environment" = pilot ] && { [ "$REF_TYPE" != tag ] || [[ "$REF_NAME" != v* ]]; }; then
+              echo "::error::pilot deploys only v* tags (on commits of main); got $REF"
+              exit 1
             fi
           fi
           {
@@ -222,7 +227,7 @@ jobs:
           # Checked here because they become part of the SSH configuration and the remote command line.
           [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.:-]+$ ]] || { echo '::error::DEPLOY_HOST must be a host name or an IP address'; exit 1; }
           [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo '::error::DEPLOY_USER must be a plain user name'; exit 1; }
-          [[ "$port" =~ ^[0-9]{1,5}$ ]] || { echo '::error::DEPLOY_PORT must be a port number'; exit 1; }
+          [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((port >= 1 && port <= 65535)) || { echo '::error::DEPLOY_PORT must be a port number'; exit 1; }
           [[ "$dir" =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo '::error::DEPLOY_DIR must be an absolute path of letters, digits, ., _, - and /'; exit 1; }
           [[ "$env_file" =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo '::error::DEPLOY_ENV_FILE must be an absolute path of letters, digits, ., _, - and /'; exit 1; }
           if [ -n "$PUBLIC_URL" ] && ! [[ "$PUBLIC_URL" =~ ^https?://[A-Za-z0-9.:-]+/?$ ]]; then
@@ -244,6 +249,8 @@ jobs:
             BatchMode yes
             StrictHostKeyChecking yes
             UserKnownHostsFile $ssh_dir/known_hosts
+            GlobalKnownHostsFile /dev/null
+            ConnectTimeout 20
             ServerAliveInterval 30
             ServerAliveCountMax 10
           EOF
@@ -284,14 +291,15 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
+          [[ "$ACTOR" =~ ^[A-Za-z0-9._-]+(\[bot\])?$ ]] || { echo '::error::unexpected actor name'; exit 1; }
+          # The read-only token goes over stdin: never on a command line, and the host keeps it only for the pull.
+          registry="--dir '$DIR' --env-file '$ENV_FILE' --registry ghcr.io --registry-user '$ACTOR' --registry-password-stdin"
           if [ "$ACTION" = rollback ]; then
-            ssh -F "$SSH_CONFIG" crove-target "bash '$REMOTE/deploy.sh' rollback --dir '$DIR' --env-file '$ENV_FILE'" < /dev/null
+            printf '%s\n' "$GH_TOKEN" | ssh -F "$SSH_CONFIG" crove-target "bash '$REMOTE/deploy.sh' rollback $registry"
           else
             [[ "$IMAGE" =~ ^[a-z0-9./_:-]+@sha256:[0-9a-f]{64}$ && "$EXTRACT" =~ ^[a-z0-9./_:-]+@sha256:[0-9a-f]{64}$ ]] || { echo '::error::image digests missing'; exit 1; }
-            [[ "$ACTOR" =~ ^[A-Za-z0-9._-]+(\[bot\])?$ ]] || { echo '::error::unexpected actor name'; exit 1; }
-            # The read-only token goes over stdin: never on a command line, and the host keeps it only for the pull.
             printf '%s\n' "$GH_TOKEN" | ssh -F "$SSH_CONFIG" crove-target \
-              "bash '$REMOTE/deploy.sh' deploy --dir '$DIR' --env-file '$ENV_FILE' --release '$RELEASE' --image '$IMAGE' --extract-image '$EXTRACT' --compose '$REMOTE/docker-compose.yml' --registry ghcr.io --registry-user '$ACTOR' --registry-password-stdin"
+              "bash '$REMOTE/deploy.sh' deploy $registry --release '$RELEASE' --image '$IMAGE' --extract-image '$EXTRACT' --compose '$REMOTE/docker-compose.yml'"
           fi
 
       # The same checks through the public URL: DNS, TLS and the reverse proxy. Optional (DEPLOY_PUBLIC_URL).
@@ -307,9 +315,13 @@ jobs:
           REMOTE: ${{ steps.config.outputs.remote }}
           DIR: ${{ steps.config.outputs.dir }}
           ENV_FILE: ${{ steps.config.outputs.env_file }}
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
         run: |
           echo '::error::the public smoke test failed; rolling back'
-          ssh -F "$SSH_CONFIG" crove-target "bash '$REMOTE/deploy.sh' rollback --dir '$DIR' --env-file '$ENV_FILE'" < /dev/null
+          [[ "$ACTOR" =~ ^[A-Za-z0-9._-]+(\[bot\])?$ ]] || { echo '::error::unexpected actor name'; exit 1; }
+          printf '%s\n' "$GH_TOKEN" | ssh -F "$SSH_CONFIG" crove-target \
+            "bash '$REMOTE/deploy.sh' rollback --dir '$DIR' --env-file '$ENV_FILE' --registry ghcr.io --registry-user '$ACTOR' --registry-password-stdin"
 
       - name: Summary
         if: always() && steps.config.outputs.ready == 'true'

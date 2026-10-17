@@ -44,8 +44,10 @@ KEEP_RELEASES="${CROVE_KEEP_RELEASES:-5}"
 # Base URL of the smoke test on the host; default: the loopback port the API service publishes.
 SMOKE_URL="${CROVE_SMOKE_URL:-}"
 
-log() { printf '[deploy] %s\n' "$*"; }
-err() { printf '[deploy] ERROR: %s\n' "$*" >&2; }
+# Output may go to an SSH session that has dropped (see the signal traps in main): a failed write never stops a
+# deploy halfway.
+log() { printf '[deploy] %s\n' "$*" 2>/dev/null || true; }
+err() { printf '[deploy] ERROR: %s\n' "$*" >&2 2>/dev/null || true; }
 die() {
   err "$2"
   exit "$1"
@@ -124,6 +126,10 @@ acquire_lock() {
   if ! mkdir "$lock" 2>/dev/null; then
     pid="$(cat "$lock/pid" 2>/dev/null || true)"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then die "$EXIT_USAGE" "another deploy (pid $pid) is running"; fi
+    # No pid yet: another run may have just taken the lock. Only a lock older than a minute is stale.
+    if [ -z "$pid" ] && [ -z "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      die "$EXIT_USAGE" 'another deploy is starting'
+    fi
     log "removing a stale lock left by pid ${pid:-unknown}"
     rm -rf "$lock"
     mkdir "$lock" || die "$EXIT_USAGE" "cannot take the lock $lock"
@@ -132,6 +138,31 @@ acquire_lock() {
   LOCK_HELD=1
 }
 release_lock() { if [ "$LOCK_HELD" = 1 ]; then rm -rf "$(state_dir)/lock"; fi; }
+
+# The registry login's throwaway Docker config (pull_images); removed on every exit.
+PULL_CONFIG=''
+cleanup() {
+  if [ -n "$PULL_CONFIG" ]; then rm -rf "$PULL_CONFIG"; fi
+  release_lock
+}
+
+# What runs in a deploy or rollback, for the history log when it is stopped.
+CURRENT_WORK=''
+on_signal() {
+  record "${CURRENT_WORK:-run} interrupted by a signal; check the stack (deploy.sh status, docker compose ps)"
+  err 'interrupted; the stack may be half rolled'
+  exit 143
+}
+
+# Called once the lock is held. A dropped SSH session (a cancelled job, a network blip) must not stop a deploy
+# halfway: hangups and writes to the closed connection are ignored, and the run finishes and records its result.
+# An explicit stop (TERM, INT) is recorded in the history log.
+guard_run() {
+  CURRENT_WORK="$1"
+  trap cleanup EXIT
+  trap '' HUP PIPE
+  trap on_signal TERM INT
+}
 
 # docker compose for the active files in $DEPLOY_DIR. The project name comes from the compose file (`crove`) or
 # COMPOSE_PROJECT_NAME in the env file, so volumes stay the same from release to release.
@@ -270,22 +301,24 @@ roll_services() {
 }
 
 pull_images() {
-  local image="$1" extract="$2" registry="$3" user="$4" password="$5" cfg rc=0
-  # A throwaway Docker config for the registry login, removed right after the pull: no credential stays on the host.
-  # Only the plain `docker pull` uses it (compose may live in the default config's cli-plugins).
-  cfg="$(mktemp -d)"
+  local image="$1" extract="$2" registry="$3" user="$4" password="$5" rc=0
+  # A throwaway Docker config for the registry login, removed right after the pull (and by cleanup on any exit): no
+  # credential stays on the host. Only the plain `docker pull` uses it (compose may live in the default config's
+  # cli-plugins).
+  PULL_CONFIG="$(mktemp -d)"
   if [ -n "$password" ]; then
-    printf '%s' "$password" | DOCKER_CONFIG="$cfg" docker login --username "$user" --password-stdin "$registry" >/dev/null || rc=$?
+    printf '%s' "$password" | DOCKER_CONFIG="$PULL_CONFIG" docker login --username "$user" --password-stdin "$registry" >/dev/null || rc=$?
   fi
   if [ "$rc" = 0 ]; then
     log "pulling $image"
-    DOCKER_CONFIG="$cfg" docker pull --quiet "$image" >/dev/null || rc=$?
+    DOCKER_CONFIG="$PULL_CONFIG" docker pull --quiet "$image" >/dev/null || rc=$?
   fi
   if [ "$rc" = 0 ]; then
     log "pulling $extract"
-    DOCKER_CONFIG="$cfg" docker pull --quiet "$extract" >/dev/null || rc=$?
+    DOCKER_CONFIG="$PULL_CONFIG" docker pull --quiet "$extract" >/dev/null || rc=$?
   fi
-  rm -rf "$cfg"
+  rm -rf "$PULL_CONFIG"
+  PULL_CONFIG=''
   return "$rc"
 }
 
@@ -311,19 +344,23 @@ preflight() {
   mkdir -p "$(state_dir)" "$DEPLOY_DIR/releases"
 }
 
+
 # Installs this script on the host for manual rollbacks (when it is not already that copy).
 install_self() {
   local self target
   self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   target="$(state_dir)/deploy.sh"
-  if [ "$self" != "$target" ]; then cp -f "$self" "$target.tmp" && chmod 0755 "$target.tmp" && mv -f "$target.tmp" "$target"; fi
+  [ "$self" != "$target" ] || return 0
+  if ! { cp -f "$self" "$target.tmp" && chmod 0755 "$target.tmp" && mv -f "$target.tmp" "$target"; }; then
+    err "could not install $target; a manual rollback needs a copy of this script"
+  fi
 }
 
 prune_releases() {
   local current previous keep=0 d name
   current="$(read_state current)"
   previous="$(read_state previous)"
-  # Newest first, by the deploy time recorded in each release.env.
+  # Newest first, by the time each release was staged (recorded in its release.env).
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     name="$(basename "$d")"
@@ -332,7 +369,7 @@ prune_releases() {
       log "removing old release $name"
       rm -rf "$d"
     fi
-  done < <(for d in "$DEPLOY_DIR"/releases/*/; do [ -f "$d/release.env" ] && printf '%s %s\n' "$(sed -n 's/^STAGED_AT=//p' "$d/release.env")" "${d%/}"; done | sort -r | cut -d' ' -f2-)
+  done < <(for d in "$DEPLOY_DIR"/releases/*/; do if [ -f "$d/release.env" ]; then printf '%s %s\n' "$(sed -n 's/^STAGED_AT=//p' "$d/release.env")" "${d%/}"; fi; done | sort -r | cut -d' ' -f2-)
 }
 
 # Rolls back to a release after a failed deploy or rollback. Exit 1 when it is serving again, 3 when not.
@@ -352,41 +389,58 @@ recover() {
   die "$EXIT_ROLLBACK_FAILED" "$what failed and the rollback to $target failed too: the instance needs an operator"
 }
 
+# Options both deploy and rollback take. Sets OPT_SHIFT to the number of arguments used (0: not one of these).
+REGISTRY='' REGISTRY_USER='' REGISTRY_PASSWORD='' READ_PASSWORD=0 OPT_SHIFT=0
+common_option() {
+  OPT_SHIFT=2
+  case "$1" in
+    --dir) DEPLOY_DIR="${2:-}" ;;
+    --env-file) ENV_FILE="${2:-}" ;;
+    --registry) REGISTRY="${2:-}" ;;
+    --registry-user) REGISTRY_USER="${2:-}" ;;
+    --registry-password-stdin) READ_PASSWORD=1 OPT_SHIFT=1 ;;
+    *) OPT_SHIFT=0 ;;
+  esac
+}
+
+# Reads the registry password from stdin (one line) when asked to; never from an argument or the environment.
+read_registry_password() {
+  ((READ_PASSWORD)) || return 0
+  [[ "$REGISTRY" =~ ^[a-z0-9.-]+(:[0-9]+)?$ ]] || die "$EXIT_USAGE" "--registry must be a host name: '$REGISTRY'"
+  [[ "$REGISTRY_USER" =~ ^[A-Za-z0-9._-]+(\[bot\])?$ ]] || die "$EXIT_USAGE" "--registry-user is required with --registry-password-stdin"
+  IFS= read -r REGISTRY_PASSWORD || true
+  [ -n "$REGISTRY_PASSWORD" ] || die "$EXIT_USAGE" 'no registry password on stdin'
+}
+
 do_deploy() {
-  local release="" image="" extract="" compose="" registry="" user="" password="" read_password=0
+  local release="" image="" extract="" compose=""
   while (($# > 0)); do
     case "$1" in
       --release) release="${2:-}"; shift 2 ;;
       --image) image="${2:-}"; shift 2 ;;
       --extract-image) extract="${2:-}"; shift 2 ;;
       --compose) compose="${2:-}"; shift 2 ;;
-      --dir) DEPLOY_DIR="${2:-}"; shift 2 ;;
-      --env-file) ENV_FILE="${2:-}"; shift 2 ;;
-      --registry) registry="${2:-}"; shift 2 ;;
-      --registry-user) user="${2:-}"; shift 2 ;;
-      --registry-password-stdin) read_password=1; shift ;;
-      *) die "$EXIT_USAGE" "unknown option $1" ;;
+      *)
+        common_option "$@"
+        ((OPT_SHIFT > 0)) || die "$EXIT_USAGE" "unknown option $1"
+        shift "$OPT_SHIFT"
+        ;;
     esac
   done
   valid_release "$release" || die "$EXIT_USAGE" "--release must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}: '$release'"
   valid_image "$image" || die "$EXIT_USAGE" "--image must be pinned by digest (name@sha256:...): '$image'"
   valid_image "$extract" || die "$EXIT_USAGE" "--extract-image must be pinned by digest (name@sha256:...): '$extract'"
   [ -f "$compose" ] || die "$EXIT_USAGE" "--compose file not found: '$compose'"
-  if ((read_password)); then
-    [[ "$registry" =~ ^[a-z0-9.-]+(:[0-9]+)?$ ]] || die "$EXIT_USAGE" "--registry must be a host name: '$registry'"
-    [[ "$user" =~ ^[A-Za-z0-9._-]+(\[bot\])?$ ]] || die "$EXIT_USAGE" "--registry-user is required with --registry-password-stdin"
-    IFS= read -r password || true
-    [ -n "$password" ] || die "$EXIT_USAGE" 'no registry password on stdin'
-  fi
+  read_registry_password
   preflight
   acquire_lock
-  trap release_lock EXIT
-  install_self
 
   local digest name dir current
   digest="${image##*@sha256:}"
   name="$release-${digest:0:12}"
   dir="$DEPLOY_DIR/releases/$name"
+  guard_run "deploy $name"
+  install_self
   current="$(read_state current)"
   log "deploying $release ($name); running now: ${current:-nothing}"
 
@@ -394,13 +448,12 @@ do_deploy() {
   mkdir -p "$dir"
   cp -f "$compose" "$dir/docker-compose.yml"
   write_override "$image" "$extract" >"$dir/docker-compose.override.yml"
-  printf 'RELEASE=%s\nIMAGE=%s\nEXTRACT_IMAGE=%s\nSTAGED_AT=%s\n' "$release" "$image" "$extract" "$(date -u +%Y%m%dT%H%M%SZ)" >"$dir/release.env"
+  printf 'RELEASE=%s\nIMAGE=%s\nEXTRACT_IMAGE=%s\nSTAGED_AT=%s\n' "$release" "$image" "$extract" "$(date -u +%Y%m%dT%H%M%S.%NZ)" >"$dir/release.env"
 
-  if ! pull_images "$image" "$extract" "$registry" "$user" "$password"; then
+  if ! pull_images "$image" "$extract" "$REGISTRY" "$REGISTRY_USER" "$REGISTRY_PASSWORD"; then
     record "deploy $name failed: pull"
     die "$EXIT_FAILED" 'pulling the images failed; nothing was changed'
   fi
-  password=''
 
   activate "$name"
   # Check the merged files before touching any container.
@@ -438,22 +491,26 @@ do_deploy() {
 
 do_rollback() {
   while (($# > 0)); do
-    case "$1" in
-      --dir) DEPLOY_DIR="${2:-}"; shift 2 ;;
-      --env-file) ENV_FILE="${2:-}"; shift 2 ;;
-      *) die "$EXIT_USAGE" "unknown option $1" ;;
-    esac
+    common_option "$@"
+    ((OPT_SHIFT > 0)) || die "$EXIT_USAGE" "unknown option $1"
+    shift "$OPT_SHIFT"
   done
+  read_registry_password
   preflight
   acquire_lock
-  trap release_lock EXIT
-  install_self
   local current previous
   current="$(read_state current)"
   previous="$(read_state previous)"
+  guard_run "rollback to ${previous:-nothing}"
+  install_self
   [ -n "$previous" ] || die "$EXIT_USAGE" 'no previous release is recorded; deploy a release instead'
-  [ -d "$DEPLOY_DIR/releases/$previous" ] || die "$EXIT_USAGE" "the previous release $previous is no longer on the host"
+  [ -f "$DEPLOY_DIR/releases/$previous/release.env" ] || die "$EXIT_USAGE" "the previous release $previous is no longer on the host"
   log "rolling back from ${current:-nothing} to $previous (images and compose files only; the schema stays)"
+  # The images are normally still on the host. Pull them again (by digest, so nothing else can arrive) in case
+  # they were pruned; without registry credentials a private image that is gone cannot come back.
+  if ! pull_images "$(release_field "$previous" IMAGE)" "$(release_field "$previous" EXTRACT_IMAGE)" "$REGISTRY" "$REGISTRY_USER" "$REGISTRY_PASSWORD"; then
+    log 'pulling the previous images failed; trying with the images on the host'
+  fi
   activate "$previous"
   if ! roll_services; then
     recover "$current" "rollback to $previous"
@@ -464,6 +521,7 @@ do_rollback() {
   record "rollback to $previous ok"
   log "rolled back to $previous"
 }
+
 
 do_status() {
   while (($# > 0)); do

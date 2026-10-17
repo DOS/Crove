@@ -19,7 +19,8 @@ Until an environment has its secrets, a run still builds and pushes the release 
 - `pilot` deploys only `v*` tags whose commit is on `main`; any other tag fails the run before anything is built.
 - There is no `dev` branch yet: today every PR merges to `main`, and plan §3.5 creates `dev` together with a beta instance. Until both exist, `beta` stays unused.
 - The commit must have passed CI: the run waits up to 30 minutes for the check runs named in the variable `DEPLOY_REQUIRED_CHECKS` (one name per line; default `Lint, typecheck, test` and `Playwright on docker compose`) and stops if one did not succeed.
-- One deploy per environment runs at a time; a second one waits.
+- One deploy per environment runs at a time; a second one waits. GitHub keeps only one waiting run per environment: when a third arrives, the one that was waiting is cancelled. Check the Actions list after queuing a rollback behind a running deploy.
+- `pilot` runs only commits of `main`, for a rollback too: start a manual run from `main` or from a `v*` tag.
 
 ## What a deploy does
 
@@ -69,7 +70,7 @@ The host is one Linux server with Docker Engine and the compose plugin **v2.24 o
 2. Create an SSH key pair for the workflow (`ssh-keygen -t ed25519 -N '' -f deploy_key`). Put the public key in the deploy user's `~/.ssh/authorized_keys` with the `restrict` option (no port, agent or X11 forwarding, no terminal): `restrict ssh-ed25519 AAAA... crove-deploy`.
 3. Create the stack directory, owned by the deploy user, mode 700: `/opt/crove` by default (`DEPLOY_DIR`).
 4. Write the env file there as `.env` (or at `DEPLOY_ENV_FILE`), mode 600: start from `.env.example`, change every secret, and set at least `PUBLIC_URL` (the https address), `AUTH_AUTOCONFIRM=false` with a real SMTP server, `EXPORT_ENCRYPTION_KEY` and `TRUSTED_PROXY_HOPS=1` behind the reverse proxy. The pilot readiness checklist (M1-8) lists the rest.
-5. Optional: `compose.host.yml` in the same directory for local changes the release files must not overwrite (a reverse proxy service, split `api` and `worker` services, extra volumes). Services it adds that run the Crove images use `image: ${CROVE_IMAGE}` and `${CROVE_EXTRACT_IMAGE}`, which the deploy sets to the release's digests. `COMPOSE_PROFILES=prober` in the env file turns the prober on.
+5. Optional: `compose.host.yml` in the same directory (for example, to drop Mailpit's loopback port, which the default compose file publishes for local use: `services: { mailpit: { ports: !reset [] } }`) for local changes the release files must not overwrite (a reverse proxy service, split `api` and `worker` services, extra volumes). Services it adds that run the Crove images use `image: ${CROVE_IMAGE}` and `${CROVE_EXTRACT_IMAGE}`, which the deploy sets to the release's digests. `COMPOSE_PROFILES=prober` in the env file turns the prober on.
 6. Put a TLS reverse proxy in front of `127.0.0.1:${PORT}` (the compose file publishes the port on loopback only).
 7. Read the host key for the workflow from a trusted session on the server (`ssh-keyscan -t ed25519 localhost` on the host itself, then replace `localhost` with the address the runner uses; for a port other than 22 the line starts with `[address]:port`). Do not take it from a scan over the network you are trying to protect.
 
@@ -77,10 +78,11 @@ The first deploy creates `releases/`, `.deploy/` and the active compose files. A
 
 ## Settings of each GitHub environment
 
-Create the environment (`pilot`, later `beta`) under Settings, Environments. A run that references it before it exists creates it without protection rules, so set these up first:
+Create the environment (`pilot`, later `beta`) under Settings, Environments. A run that references it before it exists creates it without protection rules, so set these up first. The workflow refuses a pilot run whose commit is not on `main`, but a check inside a workflow does not hold against someone who can push an edited workflow; these settings are the real boundary, so they are required:
 
-- **Deployment branches and tags:** "Selected branches and tags", with the tag rule `v*` for `pilot` and the branch `dev` (and, if you want, `v*`) for `beta`.
-- **Required reviewers** (optional): the owner approves each production deploy with one click.
+- **Deployment branches and tags** (required): "Selected branches and tags", with the tag rule `v*` and the branch `main` for `pilot` (the branch is for rollback runs started from `main`), and the branch `dev` (and, if you want, the tag rule `v*`) for `beta`.
+- **Tag protection** (required): a repository ruleset that lets only maintainers create, update or delete tags matching `v*`. Pushing such a tag is a production deploy.
+- **Required reviewers** (recommended): the owner approves each pilot deploy and rollback with one click.
 
 | Name | Kind | Required | Value |
 |---|---|---|---|
@@ -106,13 +108,15 @@ To deploy an existing tag again, run the workflow by hand from that tag (Actions
 
 ## Roll back
 
-From GitHub: Actions, deploy, Run workflow, pick the environment and the action `rollback`. It redeploys the release that ran before the current one, with its images and compose file, and runs the smoke test. Running it again returns to the release you left.
+From GitHub: Actions, deploy, Run workflow from `main`, pick the environment and the action `rollback`. It redeploys the release that ran before the current one, with its images (pulled again by digest if they are no longer on the host) and compose file, and runs the smoke test. Running it again returns to the release you left.
 
 From a shell on the server, the same in one command:
 
 ```
 bash /opt/crove/.deploy/deploy.sh rollback --dir /opt/crove
 ```
+
+This one has no registry credentials, so it needs the previous images on the host: do not run `docker image prune -a` (or `docker system prune -a`) there, which removes them. Plain `docker image prune` (dangling images only) is safe.
 
 `bash /opt/crove/.deploy/deploy.sh status --dir /opt/crove` shows the current and previous releases and the last lines of `.deploy/history.log`. The host keeps the last 5 release directories (`CROVE_KEEP_RELEASES`); a rollback reaches only the one before the current. To go further back, run the workflow by hand from an older tag: it builds that tag again (new digests) and deploys it like any release, migrations included (they are already applied, so nothing changes in the schema).
 
@@ -121,4 +125,5 @@ bash /opt/crove/.deploy/deploy.sh rollback --dir /opt/crove
 - **Exit 1 at the pull, compose check or migration:** nothing was restarted. Read the run log; for a failed migration, fix it with a new migration and release again.
 - **Exit 1 after the rollout:** the previous release serves again. The log shows which step or smoke check failed (`smoke failed: ...`, `not ready after ...`, the worker's last log lines).
 - **Exit 3:** the deploy and the rollback both failed. On the server: `docker compose ps` and `docker compose logs --tail 100 crove auth` in the stack directory, and `/readyz` (`curl -s http://127.0.0.1:8080/readyz`) for the reason (`database`, `schema`, `auth_grants`).
+- **The run was cancelled or the connection dropped:** the script on the host ignores the hangup and finishes, so the result is in `.deploy/history.log` (`deploy.sh status`). A run stopped by a signal is logged there as "interrupted"; check `docker compose ps` and deploy or roll back again.
 - **"another deploy (pid N) is running":** a deploy holds the lock `.deploy/lock`. A lock whose process is gone is removed by the next run.

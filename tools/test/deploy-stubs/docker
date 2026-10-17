@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # A stand-in for docker in tools/test/deploy.test.ts. Records each call in $STUB_LOG and answers what deploy.sh
 # asks. Settings (environment): STUB_SERVICES (compose services, space separated), STUB_RUNNING (services that
-# `compose ps --status running` lists), STUB_MIGRATE_EXIT, STUB_PULL_FAIL.
+# `compose ps --status running` lists), STUB_WORKER_DOWN_DIGEST (the worker is down while this image runs),
+# STUB_MIGRATE_EXIT, STUB_PULL_FAIL.
 set -euo pipefail
 
 if [ "${1:-}" = login ]; then
@@ -52,7 +53,14 @@ case "$sub" in
   run)
     case "$args" in *migrate*) exit "${STUB_MIGRATE_EXIT:-0}" ;; esac
     ;;
-  ps) for s in ${STUB_RUNNING:-worker}; do echo "$s"; done ;;
+  ps)
+    # The worker is down while the image in STUB_WORKER_DOWN_DIGEST is the active release.
+    if [ -n "${STUB_WORKER_DOWN_DIGEST:-}" ] && grep -q "$STUB_WORKER_DOWN_DIGEST" "$STUB_DEPLOY_DIR/docker-compose.override.yml"; then
+      echo api
+    else
+      for s in ${STUB_RUNNING:-worker}; do echo "$s"; done
+    fi
+    ;;
   up | logs) ;;
   *)
     echo "stub docker compose: unexpected $sub" >&2

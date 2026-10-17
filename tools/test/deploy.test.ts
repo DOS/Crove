@@ -1,14 +1,17 @@
 // tools/deploy/deploy.sh (issue #56) against stand-ins for docker and curl (tools/test/deploy-stubs): the order of
 // the steps, the readiness gate, rollback on a failed smoke test, the state it records, and what it refuses.
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const repo = resolve(import.meta.dirname, '../..');
 const script = join(repo, 'tools/deploy/deploy.sh');
+// Linux and macOS (CI runs it on Linux). Under Git Bash on Windows the same suite takes about 15 minutes, since every
+// case forks a few hundred processes; set CROVE_DEPLOY_TESTS=1 to run it there anyway.
 const hasBash = spawnSync('bash', ['-c', 'exit 0']).status === 0;
+const runHere = hasBash && (process.platform !== 'win32' || process.env['CROVE_DEPLOY_TESTS'] === '1');
 
 const digest = (c: string) => c.repeat(64);
 const image = (c: string) => `ghcr.io/example/crove@sha256:${digest(c)}`;
@@ -52,8 +55,7 @@ const state = (name: string) => {
 const running = () => readFileSync(join(dir, 'docker-compose.override.yml'), 'utf8');
 const indexOf = (lines: string[], text: string) => lines.findIndex((l) => l.includes(text));
 
-// Each case forks a few hundred processes, which takes seconds on Linux and much longer under Git Bash on Windows.
-describe.skipIf(!hasBash)('deploy.sh', { timeout: 300_000 }, () => {
+describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
   beforeEach(() => {
     root = slash(mkdtempSync(join(tmpdir(), 'crove-deploy-')));
     dir = `${root}/host`;
@@ -62,7 +64,8 @@ describe.skipIf(!hasBash)('deploy.sh', { timeout: 300_000 }, () => {
     mkdirSync(dir);
     mkdirSync(`${root}/bin`);
     for (const stub of ['docker', 'curl']) {
-      copyFileSync(join(import.meta.dirname, 'deploy-stubs', stub), `${root}/bin/${stub}`);
+      // LF endings whatever the checkout did (core.autocrlf on Windows): bash refuses a CR in the shebang.
+      writeFileSync(`${root}/bin/${stub}`, readFileSync(join(import.meta.dirname, 'deploy-stubs', stub), 'utf8').replaceAll('\r\n', '\n'));
       chmodSync(`${root}/bin/${stub}`, 0o755);
     }
     writeFileSync(`${dir}/.env`, 'POSTGRES_PASSWORD=x\n');
@@ -120,11 +123,16 @@ describe.skipIf(!hasBash)('deploy.sh', { timeout: 300_000 }, () => {
     const env = { STUB_SERVICES: 'db migrate auth crove-extract api worker' };
     expect(deploy('v1.0.0', 'a', env).status).toBe(0);
     rmSync(log);
-    const res = deploy('v1.1.0', 'b', { ...env, STUB_RUNNING: 'api' });
+    const res = deploy('v1.1.0', 'b', { ...env, STUB_WORKER_DOWN_DIGEST: digest('b') });
     expect(res.status, res.out).toBe(1);
     expect(res.out).toContain('the worker is not running');
     expect(res.out).toContain(`rolled back to ${releaseDir('v1.0.0', 'a')}`);
     expect(state('current')).toBe(releaseDir('v1.0.0', 'a'));
+    // The new API was never started: the first `up api` after the failed worker belongs to the rollback.
+    const c = calls();
+    const firstApi = indexOf(c, '--wait-timeout 600 api');
+    expect(firstApi).toBeGreaterThan(indexOf(c, 'compose ps --status running --services'));
+    expect(c.filter((l) => l.endsWith(' api')).length).toBe(1);
   });
 
   it('keeps the previous release and moves on with a second deploy', () => {
@@ -268,6 +276,28 @@ describe.skipIf(!hasBash)('deploy.sh', { timeout: 300_000 }, () => {
     const res = deploy('v1.0.0', 'a');
     expect(res.status, res.out).toBe(0);
     expect(res.out).toContain('removing a stale lock');
+  });
+
+  it('treats a fresh lock without a pid as taken (another run is starting)', () => {
+    mkdirSync(`${dir}/.deploy/lock`, { recursive: true });
+    const res = deploy('v1.0.0', 'a');
+    expect(res.status).toBe(2);
+    expect(res.out).toContain('another deploy is starting');
+    expect(existsSync(`${dir}/.deploy/lock`)).toBe(true);
+  });
+
+  it('pulls the previous images again on a rollback, with the password from stdin', () => {
+    expect(deploy('v1.0.0', 'a').status).toBe(0);
+    expect(deploy('v1.1.0', 'b').status).toBe(0);
+    rmSync(log);
+    const res = run(['rollback', '--registry', 'ghcr.io', '--registry-user', 'github-actions[bot]', '--registry-password-stdin'], {}, 'the-token\n');
+    expect(res.status, res.out).toBe(0);
+    const c = calls();
+    expect(c.some((l) => l.startsWith('login ') && l.endsWith('--username github-actions[bot] --password-stdin ghcr.io'))).toBe(true);
+    expect(indexOf(c, `pull ${image('a')}`)).toBeGreaterThanOrEqual(0);
+    expect(indexOf(c, `pull ${extract('a')}`)).toBeGreaterThanOrEqual(0);
+    expect(readFileSync(log, 'utf8')).not.toContain('the-token');
+    expect(state('current')).toBe(releaseDir('v1.0.0', 'a'));
   });
 
   it('keeps the newest releases and never removes the current or previous one', () => {
