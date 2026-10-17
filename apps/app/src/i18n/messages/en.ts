@@ -697,6 +697,7 @@ export const en = {
       needsAttention: 'Crove cannot tell whether the post reached the channel. Check the page, then pick one of the options below.',
       paused: 'This channel needs reconnecting. The post is paused, not lost, and goes out once the channel is reconnected.',
       ownerLeft: 'The member who connected this channel has left the organization. Reconnect the channel to let the post go out.',
+      revoked: 'This channel was disconnected, so the post cannot go out. Cancel this channel, then add the new one to the post if needed.',
       failed: 'The platform refused this post.',
       platformSaid: 'The platform said: {message}',
     },

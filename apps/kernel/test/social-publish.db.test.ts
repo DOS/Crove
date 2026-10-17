@@ -176,7 +176,7 @@ suite('social publishing on PostgreSQL (S4)', () => {
     const { postId, variants } = await duePost(o);
     const id = variants[0] as string;
 
-    const due = await admin(async (c) => (await c.query('SELECT variant_id, status FROM crove_social.publish_due(100, 600)')).rows);
+    const due = await admin(async (c) => (await c.query("SELECT variant_id, status FROM crove_social.publish_due(100, 600, ARRAY['sandbox'])")).rows);
     expect(due).toContainEqual({ variant_id: id, status: 'scheduled' });
 
     expect(await run(o, id, platform)).toEqual({ action: 'call', status: 'published' });
@@ -352,8 +352,74 @@ suite('social publishing on PostgreSQL (S4)', () => {
     await exec(o, 'kernel.channel.disconnect', { connectionId: connections[0] });
     expect(await run(o, variants[0] as string, platform)).toEqual({ action: 'none', reason: 'paused' });
     const v = await variant(o, postId);
-    expect([v.status, v.error?.code]).toEqual(['paused', 'CHANNEL_NOT_ACTIVE']);
+    // A disconnected channel does not come back: the page says so instead of waiting for a reconnect.
+    expect([v.status, v.error?.code]).toEqual(['paused', 'CHANNEL_REVOKED']);
     expect(platform.posts).toHaveLength(0);
+  });
+
+  it('waits a minute before reconciling, and leaves a queue that was paused meanwhile alone', async () => {
+    const o = await org();
+    const platform = new FakePlatform('reconcile_only');
+    platform.answers.push({ kind: 'unknown', code: 'TIMEOUT' });
+    const first = await duePost(o);
+    const id = first.variants[0] as string;
+    expect(await run(o, id, platform)).toEqual({ action: 'call', status: 'ambiguous' });
+    // Straight after the unknown answer the platform may not show the post yet.
+    expect(await run(o, id, platform)).toEqual({ action: 'none', reason: 'reconcile_wait' });
+    await age(id, 90);
+    expect(await run(o, id, platform)).toEqual({ action: 'reconcile', status: 'published' });
+
+    const queued = await duePost(o);
+    const qid = queued.variants[0] as string;
+    await exec(o, 'social.queue.set', { connectionId: queued.connections[0], timeZone: 'Asia/Ho_Chi_Minh', paused: true, slots: [{ weekday: 1, minute: 540 }] });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = NULL, queue_slot_at = now() - interval '1 second' WHERE id = $1", [qid]));
+    expect(await run(o, qid, platform)).toEqual({ action: 'none', reason: 'queue_paused' });
+  });
+
+  it('lists only work this worker can do: its providers, active orgs, each kind in its own share', async () => {
+    const o = await org();
+    const closed = await org();
+    const mine = (await duePost(o)).variants[0] as string;
+    const theirs = (await duePost(closed)).variants[0] as string;
+    await admin((c) => c.query("UPDATE crove_kernel.tenant SET status = 'closed' WHERE org_id = $1", [closed.orgId]));
+    const due = async (providers: string[]) =>
+      (await admin(async (c) => (await c.query<{ variant_id: string }>('SELECT variant_id FROM crove_social.publish_due(1000, 600, $1)', [providers])).rows)).map((r) => r.variant_id);
+    expect(await due(['sandbox'])).toContain(mine);
+    expect(await due(['sandbox'])).not.toContain(theirs);
+    expect(await due(['facebook_page'])).not.toContain(mine);
+  });
+
+  it('resumes a paused variant on any change of its reconnected channel, whatever the clocks say', async () => {
+    const o = await org();
+    const platform = new FakePlatform();
+    platform.answers.push({ kind: 'rejected', error: 'token_expired', code: '190' });
+    const { variants, connections } = await duePost(o);
+    const id = variants[0] as string;
+    expect(await run(o, id, platform)).toEqual({ action: 'call', status: 'paused' });
+    // A reconnect that committed with a clock behind the pause's.
+    await admin((c) => c.query("UPDATE crove_kernel.channel_connection SET status = 'active', updated_at = now() - interval '1 hour' WHERE id = $1", [connections[0]]));
+    expect(await run(o, id, platform)).toEqual({ action: 'none', reason: 'resumed' });
+    expect(await run(o, id, platform)).toEqual({ action: 'call', status: 'published' });
+  });
+
+  it('publishes with the new token when the old one was refused after a reconnect', async () => {
+    const o = await org();
+    const platform = new FakePlatform();
+    const { postId, variants, accounts } = await duePost(o);
+    const id = variants[0] as string;
+    const begun = await worker.execute<BeginResult>('social.publish.begin', { variantId: id, provider: 'sandbox', safety: 'reconcile_only' }, { actor: system, orgId: o.orgId });
+    if (begun.action !== 'call') throw new Error('expected a call');
+    // The owner reconnects while the call with the old token is out; the platform refuses the old token.
+    await connect(o, accounts[0] as string);
+    await worker.execute(
+      'social.publish.record',
+      { variantId: id, callKey: begun.callKey, phase: 'call', result: { kind: 'rejected', error: 'token_expired', code: '190' }, connectionVersion: begun.connectionVersion },
+      { actor: system, orgId: o.orgId },
+    );
+    const channels = await api.query<Array<{ status: string }>>('kernel.channel.list', {}, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(channels.map((c) => c.status)).toEqual(['active']);
+    expect((await variant(o, postId)).status).toBe('scheduled');
+    expect(await run(o, id, platform)).toEqual({ action: 'call', status: 'published' });
   });
 
   it('checks a pending post until the platform has published it', async () => {
@@ -417,7 +483,7 @@ suite('social publishing on PostgreSQL (S4)', () => {
     const { rows } = await admin((c) =>
       c.query<{ role: string }>(
         `SELECT r AS role FROM unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant']) r
-         WHERE has_function_privilege(r, 'crove_social.publish_due(int, int)', 'EXECUTE') ORDER BY 1`,
+         WHERE has_function_privilege(r, 'crove_social.publish_due(int, int, text[])', 'EXECUTE') ORDER BY 1`,
       ),
     );
     expect(rows.map((r) => r.role)).toEqual(['crove_worker']);

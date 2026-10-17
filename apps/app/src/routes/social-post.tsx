@@ -469,10 +469,14 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
     case 'paused':
       return (
         <div className="space-y-1">
-          <p className="text-warning">{t(v.error?.code === 'CHANNEL_OWNER_LEFT' ? 'outcome.ownerLeft' : 'outcome.paused')}</p>
-          <Link to="/o/$slug/social/channels" params={{ slug }} className="text-link hover:underline">
-            {t('reconnect')}
-          </Link>
+          <p className="text-warning">
+            {t(v.error?.code === 'CHANNEL_OWNER_LEFT' ? 'outcome.ownerLeft' : v.error?.code === 'CHANNEL_REVOKED' ? 'outcome.revoked' : 'outcome.paused')}
+          </p>
+          {v.error?.code !== 'CHANNEL_REVOKED' && (
+            <Link to="/o/$slug/social/channels" params={{ slug }} className="text-link hover:underline">
+              {t('reconnect')}
+            </Link>
+          )}
         </div>
       );
     case 'failed':

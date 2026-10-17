@@ -119,7 +119,7 @@ interface SocialPublishJob {
 /** Sends a publish job for each variant with publishing work, for the providers this worker can publish to. */
 export async function sweepSocialPublishing(boss: PgBoss, workerDb: Db, providers: ReadonlySet<string>): Promise<number> {
   const { rows } = await sql<{ org_id: string; variant_id: string; provider: string }>`
-    SELECT org_id, variant_id, provider FROM crove_social.publish_due(${SOCIAL_SWEEP_LIMIT}::int, ${PUBLISH_STALE_SECONDS}::int)`.execute(workerDb);
+    SELECT org_id, variant_id, provider FROM crove_social.publish_due(${SOCIAL_SWEEP_LIMIT}::int, ${PUBLISH_STALE_SECONDS}::int, ${[...providers]}::text[])`.execute(workerDb);
   const due = rows.filter((r) => providers.has(r.provider));
   await Promise.all(
     due.map((r) =>

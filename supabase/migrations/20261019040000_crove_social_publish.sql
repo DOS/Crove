@@ -89,55 +89,63 @@ CREATE INDEX IF NOT EXISTS post_variant_due_idx ON crove_social.post_variant ((c
 CREATE INDEX IF NOT EXISTS post_variant_publish_work_idx ON crove_social.post_variant (status, updated_at)
   WHERE status IN ('publishing', 'processing', 'ambiguous', 'paused');
 
--- Work items, oldest first within each kind:
+-- The connection's updated_at when a variant was paused on it, read under the connection's lock. The variant resumes
+-- once the connection is active and has changed since (a reconnect), compared as stored values: never two clocks.
+ALTER TABLE crove_social.post_variant ADD COLUMN IF NOT EXISTS paused_connection_version timestamptz;
+
+-- Work items, oldest first within each kind, each kind with its own share of p_limit so a kind that piles up never
+-- hides the others:
 -- - scheduled and due (a variant waiting in a paused queue is skipped until the queue is resumed);
 -- - processing, whose status check is due (two-phase platforms);
--- - ambiguous for a minute: the platform has had time to show the post, so the reconcile asks it;
+-- - ambiguous for a minute (social.publish.begin waits as long): the platform has had time to show the post;
 -- - publishing for p_stale_seconds: the worker that started it died between the call and the result;
--- - paused on a channel that was reconnected after the pause.
--- Only orgs that are active. Ids only.
-CREATE OR REPLACE FUNCTION crove_social.publish_due(p_limit int, p_stale_seconds int DEFAULT 600)
+-- - paused on a channel that is active again and changed since the pause (reconnected).
+-- Only orgs that are active and providers the caller can publish to (p_providers), both before each LIMIT, so rows
+-- nobody will work on never fill it. Ids only.
+DROP FUNCTION IF EXISTS crove_social.publish_due(int, int);
+CREATE OR REPLACE FUNCTION crove_social.publish_due(p_limit int, p_stale_seconds int, p_providers text[])
 RETURNS TABLE (org_id uuid, variant_id uuid, provider text, status text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   WITH lim AS (SELECT LEAST(GREATEST(p_limit, 1), 1000) AS n),
-  due AS (
-    (SELECT v.org_id, v.id, v.provider, v.status
-     FROM crove_social.post_variant v
-     WHERE v.status = 'scheduled' AND coalesce(v.error_retry_at, v.scheduled_at, v.queue_slot_at) <= pg_catalog.now()
-       AND NOT (v.error_retry_at IS NULL AND v.scheduled_at IS NULL AND EXISTS (
-         SELECT 1 FROM crove_social.queue q
-         WHERE q.org_id = v.org_id AND q.channel_connection_id = v.channel_connection_id AND q.paused))
-     ORDER BY coalesce(v.error_retry_at, v.scheduled_at, v.queue_slot_at)
-     LIMIT (SELECT n FROM lim))
-    UNION ALL
-    (SELECT v.org_id, v.id, v.provider, v.status
-     FROM crove_social.post_variant v
-     WHERE v.status = 'processing' AND v.next_check_at <= pg_catalog.now()
-     ORDER BY v.next_check_at
-     LIMIT (SELECT n FROM lim))
-    UNION ALL
-    (SELECT v.org_id, v.id, v.provider, v.status
-     FROM crove_social.post_variant v
-     WHERE (v.status = 'ambiguous' AND v.updated_at < pg_catalog.now() - pg_catalog.make_interval(mins => 1))
-        OR (v.status = 'publishing' AND v.updated_at < pg_catalog.now() - pg_catalog.make_interval(secs => GREATEST(p_stale_seconds, 60)))
-     ORDER BY v.updated_at
-     LIMIT (SELECT n FROM lim))
-    UNION ALL
-    (SELECT v.org_id, v.id, v.provider, v.status
-     FROM crove_social.post_variant v
-     JOIN crove_kernel.channel_connection c ON c.org_id = v.org_id AND c.id = v.channel_connection_id
-     WHERE v.status = 'paused' AND c.status = 'active' AND c.updated_at > v.updated_at
-     ORDER BY v.updated_at
-     LIMIT (SELECT n FROM lim))
+  live AS NOT MATERIALIZED (
+    SELECT v.*
+    FROM crove_social.post_variant v
+    JOIN crove_kernel.tenant t ON t.org_id = v.org_id AND t.status = 'active'
+    WHERE v.provider = ANY (p_providers)
+      AND v.status IN ('scheduled', 'processing', 'ambiguous', 'publishing', 'paused')
   )
-  SELECT d.org_id, d.id, d.provider, d.status
-  FROM due d
-  JOIN crove_kernel.tenant t ON t.org_id = d.org_id AND t.status = 'active'
-  LIMIT (SELECT n FROM lim)
+  (SELECT v.org_id, v.id, v.provider, v.status
+   FROM live v
+   WHERE v.status = 'scheduled' AND coalesce(v.error_retry_at, v.scheduled_at, v.queue_slot_at) <= pg_catalog.now()
+     AND NOT (v.error_retry_at IS NULL AND v.scheduled_at IS NULL AND EXISTS (
+       SELECT 1 FROM crove_social.queue q
+       WHERE q.org_id = v.org_id AND q.channel_connection_id = v.channel_connection_id AND q.paused))
+   ORDER BY coalesce(v.error_retry_at, v.scheduled_at, v.queue_slot_at)
+   LIMIT (SELECT n FROM lim))
+  UNION ALL
+  (SELECT v.org_id, v.id, v.provider, v.status
+   FROM live v
+   WHERE v.status = 'processing' AND v.next_check_at <= pg_catalog.now()
+   ORDER BY v.next_check_at
+   LIMIT (SELECT n FROM lim))
+  UNION ALL
+  (SELECT v.org_id, v.id, v.provider, v.status
+   FROM live v
+   WHERE (v.status = 'ambiguous' AND v.updated_at < pg_catalog.now() - pg_catalog.make_interval(mins => 1))
+      OR (v.status = 'publishing' AND v.updated_at < pg_catalog.now() - pg_catalog.make_interval(secs => GREATEST(p_stale_seconds, 60)))
+   ORDER BY v.updated_at
+   LIMIT (SELECT n FROM lim))
+  UNION ALL
+  (SELECT v.org_id, v.id, v.provider, v.status
+   FROM live v
+   JOIN crove_kernel.channel_connection c ON c.org_id = v.org_id AND c.id = v.channel_connection_id
+   WHERE v.status = 'paused' AND c.status = 'active' AND c.updated_at IS DISTINCT FROM v.paused_connection_version
+   ORDER BY v.updated_at
+   LIMIT (SELECT n FROM lim))
 $$;
 
-REVOKE ALL ON FUNCTION crove_social.publish_due(int, int) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
-GRANT EXECUTE ON FUNCTION crove_social.publish_due(int, int) TO crove_worker;
+REVOKE ALL ON FUNCTION crove_social.publish_due(int, int, text[]) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+GRANT EXECUTE ON FUNCTION crove_social.publish_due(int, int, text[]) TO crove_worker;
 
 -- ---------------------------------------------------------------------------
 -- 3. Publish queues

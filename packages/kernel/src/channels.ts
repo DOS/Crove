@@ -141,7 +141,9 @@ export const channelDisconnect = defineCommand({
 // an owner or admin reconnects it. Run by provider jobs (system actor) in their own transaction, through ctx.run.
 export const channelMarkExpired = defineCommand({
   name: 'kernel.channel.mark_expired',
-  input: z.strictObject({ connectionId: zId, reason: z.string().min(1).max(200) }),
+  // ifVersion: the connection's updated_at the caller saw; a connection changed since (reconnected with a new token)
+  // is left alone.
+  input: z.strictObject({ connectionId: zId, reason: z.string().min(1).max(200), ifVersion: z.iso.datetime({ offset: true }).optional() }),
   risk: 'R1',
   access: 'system',
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
@@ -149,13 +151,15 @@ export const channelMarkExpired = defineCommand({
     if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
     const row = await ctx.trx
       .selectFrom('crove_kernel.channel_connection')
-      .select(['status', 'provider'])
+      .select(['status', 'provider', 'updated_at'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.connectionId)
       .forUpdate()
       .executeTakeFirst();
     if (!row) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
     if (row.status !== 'active') return { connectionId: input.connectionId, status: row.status };
+    // Compared at millisecond precision, the precision the caller read it at.
+    if (input.ifVersion && Math.floor(row.updated_at.getTime()) !== Date.parse(input.ifVersion)) return { connectionId: input.connectionId, status: row.status };
     await ctx.trx
       .updateTable('crove_kernel.channel_connection')
       .set({ status: 'expired', status_reason: input.reason, updated_at: ctx.now })

@@ -10,6 +10,7 @@
 // People decide what the job cannot: social.variant.retry publishes a failed or needs_attention variant again (a new
 // attempt with fresh keys), social.variant.resolve records that a needs_attention post is on the platform after all,
 // or drops it.
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole, SocialVariantStatus } from '@crove/db';
@@ -44,6 +45,11 @@ export const MAX_AUTO_ATTEMPTS = 5;
 const MAX_RETRY_DELAY_MS = 60 * 60_000;
 // A pending post whose status check cannot be answered is checked again after this long.
 const STATUS_RECHECK_MS = 60_000;
+// An ambiguous variant waits this long before its reconcile asks the platform (crove_social.publish_due waits as long),
+// so the platform has had time to show a post that went through.
+export const RECONCILE_WAIT_MS = 60_000;
+// A post still processing on the platform this long after its call is reconciled: found, or a person decides.
+const MAX_PROCESSING_MS = 24 * 3_600_000;
 
 const zSafety = z.enum(['safe', 'idempotent', 'reconcile_only', 'never']);
 const zVariantIds = z.array(zId).min(1).max(20);
@@ -65,6 +71,9 @@ export interface PublishWork {
   externalRef: string | null;
   // When the call under callKey was first made, for the reconcile's time window.
   callStartedAt: string;
+  // The connection's updated_at as begin saw it: an expired token marks the connection only if it has not changed
+  // since (a reconnect in between brought a new token).
+  connectionVersion: string | null;
 }
 
 export type BeginResult = { action: 'none'; reason: string } | PublishWork;
@@ -126,7 +135,7 @@ async function startCall(ctx: CommandContext, v: VariantRow, key: string, safety
   return ctx.now;
 }
 
-function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, startedAt: Date): PublishWork {
+function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, startedAt: Date, connection: ConnectionState | null): PublishWork {
   return {
     action,
     variantId: v.id,
@@ -139,6 +148,7 @@ function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, s
     settings: settingsOf(v),
     externalRef: v.external_post_id,
     callStartedAt: startedAt.toISOString(),
+    connectionVersion: connection ? connection.updatedAt.toISOString() : null,
   };
 }
 
@@ -154,27 +164,79 @@ async function lockVariant(ctx: CommandContext, variantId: string): Promise<{ po
 
 // A call already started under this key, by a worker that is gone: make it again only when that is safe, else ask
 // the provider (reconcile) or a person.
-async function resume(ctx: CommandContext, post: PostRow, v: VariantRow, key: string, safety: RetrySafety, existing: CallRow | undefined): Promise<BeginResult> {
+async function resume(
+  ctx: CommandContext,
+  post: PostRow,
+  v: VariantRow,
+  key: string,
+  safety: RetrySafety,
+  existing: CallRow | undefined,
+  connection: ConnectionState | null,
+): Promise<BeginResult> {
+  // A call with its outcome on a variant still publishing: the two are written together, so this is not expected;
+  // a person looks.
+  if (existing?.state === 'succeeded' || existing?.state === 'failed') return needsHuman(ctx, post, v);
   const action = nextAction(existing ? existing.state : 'none', safety);
-  if (action === 'call') return work('call', post, v, key, await startCall(ctx, v, key, safety, existing));
+  if (action === 'call') return work('call', post, v, key, await startCall(ctx, v, key, safety, existing), connection);
   if (existing?.state === 'started') await setCall(ctx, key, { state: 'ambiguous' });
   if (action === 'reconcile') {
     await move(ctx, v, { type: 'unknown' }, { error_kind: 'unknown', error_code: 'OUTCOME_UNKNOWN' });
-    return work('reconcile', post, v, key, existing?.started_at ?? ctx.now);
+    return work('reconcile', post, v, key, existing?.started_at ?? ctx.now, connection);
   }
+  return needsHuman(ctx, post, v);
+}
+
+async function needsHuman(ctx: CommandContext, post: PostRow, v: VariantRow): Promise<BeginResult> {
   await move(ctx, v, { type: 'needs_human' }, { error_kind: 'unknown', error_code: 'OUTCOME_UNKNOWN' });
   await ctx.emit('social.variant.needs_attention', { post_id: post.id, variant_id: v.id });
   return none('needs_attention');
 }
 
-async function connectionUsable(ctx: CommandContext, connectionId: string): Promise<{ active: boolean; updatedAt: Date } | null> {
+interface ConnectionState {
+  status: string;
+  updatedAt: Date;
+}
+
+// The variant's connection, read under a share lock (after the post and its variants), so a reconnect or a disconnect
+// in progress commits first and is seen.
+async function connectionOf(ctx: CommandContext, connectionId: string): Promise<ConnectionState | null> {
   const row = await ctx.trx
     .selectFrom('crove_kernel.channel_connection')
     .select(['status', 'updated_at'])
     .where('org_id', '=', ctx.orgId)
     .where('id', '=', connectionId)
+    .forShare()
     .executeTakeFirst();
-  return row ? { active: row.status === 'active', updatedAt: row.updated_at } : null;
+  return row ? { status: row.status, updatedAt: row.updated_at } : null;
+}
+
+// Pauses a variant on its channel and stamps the connection's version as stored now (in SQL, never through a
+// clock), so it resumes once the connection is active and has changed since.
+async function pauseOnChannel(ctx: CommandContext, v: VariantRow, values: Record<string, unknown>): Promise<void> {
+  await move(ctx, v, { type: 'pause' }, values);
+  await sql`
+    UPDATE crove_social.post_variant SET paused_connection_version = (
+      SELECT c.updated_at FROM crove_kernel.channel_connection c WHERE c.org_id = ${ctx.orgId}::uuid AND c.id = ${v.channel_connection_id}::uuid)
+    WHERE org_id = ${ctx.orgId}::uuid AND id = ${v.id}::uuid`.execute(ctx.trx);
+}
+
+// Whether the connection changed since begin read it at `version` (a reconnect in between).
+async function channelChanged(ctx: CommandContext, connectionId: string, version: string | null | undefined): Promise<boolean> {
+  if (!version) return false;
+  const connection = await connectionOf(ctx, connectionId);
+  return connection !== null && connection.updatedAt.getTime() !== Date.parse(version);
+}
+
+// A variant waiting in a queue that was paused after the sweep read it waits on.
+async function queuePaused(ctx: CommandContext, v: VariantRow): Promise<boolean> {
+  if (v.error_retry_at || v.scheduled_at || !v.queue_slot_at) return false;
+  const q = await ctx.trx
+    .selectFrom('crove_social.queue')
+    .select('paused')
+    .where('org_id', '=', ctx.orgId)
+    .where('channel_connection_id', '=', v.channel_connection_id)
+    .executeTakeFirst();
+  return q?.paused === true;
 }
 
 export const publishBegin = defineCommand({
@@ -203,10 +265,14 @@ export const publishBegin = defineCommand({
           result = none('approval');
           break;
         }
-        const connection = await connectionUsable(ctx, v.channel_connection_id);
-        if (!connection?.active) {
-          await move(ctx, v, { type: 'pause' }, { ...NO_ERROR, error_kind: 'token_expired', error_code: 'CHANNEL_NOT_ACTIVE' });
-          await ctx.emit('social.variant.paused', { post_id: post.id, variant_id: v.id, reason: 'CHANNEL_NOT_ACTIVE' });
+        if (await queuePaused(ctx, v)) return none('queue_paused');
+        const connection = await connectionOf(ctx, v.channel_connection_id);
+        if (connection?.status !== 'active') {
+          // A disconnected channel never comes back (connecting the account again makes a new connection); an expired
+          // one does, and the variant then resumes.
+          const code = connection?.status === 'revoked' || !connection ? 'CHANNEL_REVOKED' : 'CHANNEL_NOT_ACTIVE';
+          await pauseOnChannel(ctx, v, { ...NO_ERROR, error_kind: 'token_expired', error_code: code });
+          await ctx.emit('social.variant.paused', { post_id: post.id, variant_id: v.id, reason: code });
           result = none('paused');
           break;
         }
@@ -220,32 +286,45 @@ export const publishBegin = defineCommand({
           existing = await callRow(ctx, callKey);
         }
         await move(ctx, v, { type: 'start' });
-        result = existing ? await resume(ctx, post, v, callKey, input.safety, existing) : work('call', post, v, callKey, await startCall(ctx, v, callKey, input.safety, undefined));
+        result = existing
+          ? await resume(ctx, post, v, callKey, input.safety, existing, connection)
+          : work('call', post, v, callKey, await startCall(ctx, v, callKey, input.safety, undefined), connection);
         break;
       }
       case 'publishing': {
         if (now - v.updated_at.getTime() < (input.staleSeconds ?? PUBLISH_STALE_SECONDS) * 1000) return none('in_flight');
         const existing = await callRow(ctx, key);
-        // A call with its outcome on a variant still publishing: the two are written together, so this is not
-        // expected; a person looks.
-        result = await resume(ctx, post, v, key, input.safety, existing?.state === 'succeeded' || existing?.state === 'failed' ? { ...existing, state: 'ambiguous' } : existing);
+        result = await resume(ctx, post, v, key, input.safety, existing, await connectionOf(ctx, v.channel_connection_id));
         if (result.action === 'call') await setVariant(ctx, v.id, {});
         break;
       }
       case 'processing': {
         if (!v.next_check_at || v.next_check_at.getTime() > now) return none('not_due');
         const existing = await callRow(ctx, key);
-        return work('status', post, v, key, existing?.started_at ?? v.updated_at);
+        const startedAt = existing?.started_at ?? v.updated_at;
+        const connection = await connectionOf(ctx, v.channel_connection_id);
+        if (now - startedAt.getTime() < MAX_PROCESSING_MS) return work('status', post, v, key, startedAt, connection);
+        // Processing for a day: ask whether it is on the platform; if not, a person decides.
+        await move(ctx, v, { type: 'unknown' }, { error_kind: 'unknown', error_code: 'PROCESSING_TOO_LONG', next_check_at: null });
+        result = work('reconcile', post, v, key, startedAt, connection);
+        break;
       }
       case 'ambiguous': {
+        // The platform needs a moment to show a post that went through; a reconcile right after the unknown answer
+        // could miss it and send a person to publish it again.
+        if (now - v.updated_at.getTime() < RECONCILE_WAIT_MS) return none('reconcile_wait');
         const existing = await callRow(ctx, key);
-        return work('reconcile', post, v, key, existing?.started_at ?? v.updated_at);
+        return work('reconcile', post, v, key, existing?.started_at ?? v.updated_at, await connectionOf(ctx, v.channel_connection_id));
       }
       case 'paused': {
-        // Paused on its channel: once the channel is reconnected (after the pause), a new attempt goes out.
-        const connection = await connectionUsable(ctx, v.channel_connection_id);
-        if (!connection?.active || connection.updatedAt.getTime() <= v.updated_at.getTime()) return none('paused');
-        await move(ctx, v, { type: 'resume' }, NO_ERROR);
+        // Paused on its channel: once the channel is active and has changed since the pause (reconnected), a new
+        // attempt goes out. Compared as stored values, so no clock decides it.
+        const connection = await connectionOf(ctx, v.channel_connection_id);
+        const { rows } = await sql<{ version: Date | null }>`
+          SELECT paused_connection_version AS version FROM crove_social.post_variant WHERE org_id = ${ctx.orgId}::uuid AND id = ${v.id}::uuid`.execute(ctx.trx);
+        const pausedAt = rows[0]?.version ?? null;
+        if (connection?.status !== 'active' || (pausedAt !== null && pausedAt.getTime() === connection.updatedAt.getTime())) return none('paused');
+        await move(ctx, v, { type: 'resume' }, { ...NO_ERROR, paused_connection_version: null });
         result = none('resumed');
         break;
       }
@@ -288,7 +367,13 @@ function retryDelay(attempt: number): number {
 
 export const publishRecord = defineCommand({
   name: 'social.publish.record',
-  input: z.strictObject({ variantId: zId, callKey: z.string().min(1).max(500), phase: z.enum(['call', 'status', 'reconcile']), result: zResult }),
+  input: z.strictObject({
+    variantId: zId,
+    callKey: z.string().min(1).max(500),
+    phase: z.enum(['call', 'status', 'reconcile']),
+    result: zResult,
+    connectionVersion: z.iso.datetime({ offset: true }).nullable().optional(),
+  }),
   risk: 'R1',
   access: 'system',
   handler: async (ctx, input) => {
@@ -309,6 +394,13 @@ export const publishRecord = defineCommand({
       error_http_status: http,
     });
     let event: string | null = null;
+    // Marks the channel expired, unless it changed since begin read it (a reconnect brought a new token meanwhile).
+    const expire = (code: string | undefined) =>
+      ctx.run('kernel.channel.mark_expired', {
+        connectionId: v.channel_connection_id,
+        reason: code ?? 'token_expired',
+        ...(input.connectionVersion ? { ifVersion: input.connectionVersion } : {}),
+      });
     switch (r.kind) {
       case 'accepted':
       case 'found': {
@@ -338,11 +430,14 @@ export const publishRecord = defineCommand({
         } else if (input.phase === 'status') {
           // The post went through; only its status check failed. Check again later.
           await setVariant(ctx, v.id, { ...values, next_check_at: new Date(ctx.now.getTime() + (r.error === 'token_expired' ? 60 : 1) * STATUS_RECHECK_MS) });
-          if (r.error === 'token_expired') await ctx.run('kernel.channel.mark_expired', { connectionId: v.channel_connection_id, reason: r.code ?? 'token_expired' });
+          if (r.error === 'token_expired') await expire(r.code);
+        } else if (r.error === 'token_expired' && (await channelChanged(ctx, v.channel_connection_id, input.connectionVersion))) {
+          // The refused token was the one before a reconnect: nothing was posted, and the new token goes out now.
+          await move(ctx, v, { type: 'rate_limited' }, { ...values, error_retry_at: ctx.now });
         } else if (r.error === 'token_expired') {
           // Nothing was posted. The channel needs reconnecting; this and every other variant of it waits paused.
-          await move(ctx, v, { type: 'pause' }, values);
-          await ctx.run('kernel.channel.mark_expired', { connectionId: v.channel_connection_id, reason: r.code ?? 'token_expired' });
+          await expire(r.code);
+          await pauseOnChannel(ctx, v, values);
           event = 'social.variant.paused';
         } else if (v.attempt >= MAX_AUTO_ATTEMPTS) {
           await move(ctx, v, { type: 'failed' }, { ...values, error_code: r.code ?? 'TOO_MANY_ATTEMPTS' });
@@ -374,7 +469,7 @@ export const publishRecord = defineCommand({
       case 'blocked': {
         if (input.phase !== 'call') return { recorded: false as const, reason: 'invalid' };
         await setCall(ctx, key, { state: 'failed', error_code: r.code, ...done });
-        await move(ctx, v, { type: 'pause' }, failure(r.code === 'CHANNEL_NOT_ACTIVE' ? 'token_expired' : 'permission', r.code, null, null));
+        await pauseOnChannel(ctx, v, failure(r.code === 'CHANNEL_NOT_ACTIVE' ? 'token_expired' : 'permission', r.code, null, null));
         event = 'social.variant.paused';
         break;
       }

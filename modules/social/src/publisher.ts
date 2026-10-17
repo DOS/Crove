@@ -134,6 +134,7 @@ export interface PublishOutcome {
 export async function runPublishJob(deps: PublishDeps, orgId: string, variantId: string, provider: string): Promise<PublishOutcome> {
   const publisher = deps.publishers[provider];
   if (!publisher) return { action: 'none', reason: 'provider_not_configured' };
+  const begunAt = Date.now();
   const begun = await deps.runtime.execute<BeginResult>(
     'social.publish.begin',
     { variantId, provider, safety: publisher.publishSafety, staleSeconds: deps.staleSeconds ?? PUBLISH_STALE_SECONDS },
@@ -141,8 +142,13 @@ export async function runPublishJob(deps: PublishDeps, orgId: string, variantId:
   );
   if (begun.action === 'none') return { action: 'none', reason: begun.reason };
   const credential = await openCredential(deps, orgId, begun.connectionId);
+  // A run that stalled after begin (a paused VM, a long GC) for half the stale time may already have been taken over
+  // by another run's reconcile: it does not call, and records the outcome as unknown.
+  const late = Date.now() - begunAt > ((deps.staleSeconds ?? PUBLISH_STALE_SECONDS) * 1000) / 2;
   const result: PublishRecord =
-    'blocked' in credential
+    begun.action === 'call' && late
+      ? { kind: 'unknown', code: 'LATE_START' }
+      : 'blocked' in credential
       ? begun.action === 'call'
         ? { kind: 'blocked', code: credential.blocked }
         : begun.action === 'status'
@@ -151,7 +157,7 @@ export async function runPublishJob(deps: PublishDeps, orgId: string, variantId:
       : await provide(deps, publisher, begun, credential);
   const recorded = await deps.runtime.execute<{ recorded: boolean; status?: string; reason?: string }>(
     'social.publish.record',
-    { variantId, callKey: begun.callKey, phase: begun.action, result },
+    { variantId, callKey: begun.callKey, phase: begun.action, result, connectionVersion: begun.connectionVersion },
     { actor: ACTOR, orgId },
   );
   return { action: begun.action, status: recorded.status ?? recorded.reason ?? 'not_recorded' };

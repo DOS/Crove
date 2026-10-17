@@ -698,6 +698,7 @@ export const vi = {
       needsAttention: 'Crove không xác định được bài đã lên kênh hay chưa. Hãy mở trang để kiểm tra, rồi chọn một trong các cách dưới đây.',
       paused: 'Kênh cần được kết nối lại. Bài đang tạm dừng, không bị mất, và sẽ tự đăng sau khi kênh được kết nối lại.',
       ownerLeft: 'Người đã kết nối kênh này không còn trong tổ chức. Hãy kết nối lại kênh để bài tiếp tục đăng.',
+      revoked: 'Kênh này đã bị ngắt kết nối nên bài không đăng được. Hãy hủy kênh này, rồi thêm kênh mới vào bài nếu cần.',
       failed: 'Nền tảng từ chối bài này.',
       platformSaid: 'Nền tảng báo: {message}',
     },

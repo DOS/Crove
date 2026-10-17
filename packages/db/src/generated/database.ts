@@ -576,6 +576,7 @@ export interface SocialPostVariantTable {
   next_check_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  paused_connection_version: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.queue_slot */
