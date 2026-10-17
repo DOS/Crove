@@ -1020,6 +1020,7 @@ export const vi = {
       PARENT_INACTIVE: 'Tài khoản cha đã ngừng sử dụng',
       PARENT_NOT_FOUND: 'Không tìm thấy tài khoản cha',
       PARENT_TAGGED: 'Tài khoản có ký hiệu (như 1121.VCB) không có tài khoản con',
+      PARENT_NOT_DEEPEST: 'Mã này nằm dưới một tài khoản chi tiết hơn; hãy chọn tài khoản đó làm tài khoản cha',
       PARTY_NOT_FOUND: 'Không tìm thấy nhà cung cấp',
       TOO_LARGE: 'Tệp vượt quá 25 MB',
       TOO_MANY_FILES: 'Quá nhiều tệp trong một lần tải lên',

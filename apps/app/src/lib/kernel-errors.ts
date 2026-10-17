@@ -91,6 +91,7 @@ export const KERNEL_ERROR_CODES = [
   'PARENT_INACTIVE',
   'PARENT_NOT_FOUND',
   'PARENT_TAGGED',
+  'PARENT_NOT_DEEPEST',
   'PARTY_NOT_FOUND',
   // Files, uploads and exports.
   'TOO_LARGE',

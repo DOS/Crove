@@ -220,7 +220,7 @@ suite('opening balances from Excel (#320)', () => {
       status: 422,
       body: { code: 'UNBALANCED', data: { difference: '1' } },
     });
-    expect(await post(owner, { asOf: '2025-12-31', rows: [row('111', '100', ''), row('4111', '', '100')] })).toMatchObject({
+    expect(await post(owner, { asOf: '2025-12-31', rows: [row('111', '100', ''), row('9999', '', '100')] })).toMatchObject({
       status: 422,
       body: { code: 'OPENING_BALANCE_INVALID' },
     });

@@ -9,16 +9,17 @@
 // The database holds the same rules (20261019060000_crove_finance_sub_accounts.sql); the checks here come first so the
 // refusal says what to do.
 import { z } from 'zod';
-import { subAccountCodeProblem, zAccountCode, zId } from '@crove/kernel-contract';
+import { isTaggedCode, subAccountCodeProblem, zAccountCode, zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, type QueryContext } from '@crove/kernel-runtime';
+import type { OpeningChartAccount } from './domain/opening-balance.ts';
 
 const MANAGERS: readonly MemberRole[] = ['owner', 'admin'];
 const zName = z.string().trim().min(1).max(200);
 // How many vendor names a refusal lists.
 const NAMED_VENDORS = 5;
 
-export interface ChartAccount {
+export interface OrgChartAccount {
   code: string;
   name: string;
   parentCode: string | null;
@@ -30,7 +31,7 @@ export interface ChartAccount {
 }
 
 // The org's chart, or the accounts of it named in `codes`: TT133 accounts first match, then the org's sub-accounts.
-export async function chartAccounts(ctx: QueryContext, codes?: readonly string[]): Promise<Map<string, ChartAccount>> {
+export async function chartAccounts(ctx: QueryContext, codes?: readonly string[]): Promise<Map<string, OrgChartAccount>> {
   if (codes && codes.length === 0) return new Map();
   let tt133 = ctx.trx.selectFrom('crove_finance.account').select(['code', 'name', 'parent_code']);
   let own = ctx.trx
@@ -41,7 +42,7 @@ export async function chartAccounts(ctx: QueryContext, codes?: readonly string[]
     tt133 = tt133.where('code', 'in', [...codes]);
     own = own.where('code', 'in', [...codes]);
   }
-  const chart = new Map<string, ChartAccount>();
+  const chart = new Map<string, OrgChartAccount>();
   for (const a of await tt133.execute()) {
     chart.set(a.code, { code: a.code, name: a.name, parentCode: a.parent_code, rootCode: a.code, active: true, custom: false });
   }
@@ -50,6 +51,12 @@ export async function chartAccounts(ctx: QueryContext, codes?: readonly string[]
     chart.set(a.code, { code: a.code, name: a.name, parentCode: a.parent_code, rootCode: a.root_code, active: a.active, custom: true });
   }
   return chart;
+}
+
+// The org's chart as the opening balance check reads it (#320): every account it may name, with whether it is in use.
+// A firm imports its opening balances onto TT133 accounts and its own active sub-accounts; an inactive one is flagged.
+export async function chartOfAccounts(ctx: QueryContext): Promise<Map<string, OpeningChartAccount>> {
+  return new Map([...(await chartAccounts(ctx)).values()].map((a) => [a.code, { code: a.code, name: a.name, active: a.active }]));
 }
 
 // Refuses a code that is not in the org's chart, or a sub-account that is no longer in use, for a new posting or a
@@ -97,7 +104,29 @@ export const createAccount = defineCommand({
     }
     const parent = chart.get(parentCode);
     if (!parent) throw new DomainError('PARENT_NOT_FOUND', 422, `Không có tài khoản ${parentCode} trong hệ thống tài khoản của tổ chức`);
-    if (!parent.active) throw new DomainError('PARENT_INACTIVE', 422, `Tài khoản ${parentCode} đã ngừng sử dụng`);
+    // A sub-account parent is locked until commit, so it cannot be deactivated before the new child is in (the
+    // database's insert trigger takes the same lock).
+    const parentActive = parent.custom
+      ? (
+          await ctx.trx
+            .selectFrom('crove_finance.org_account')
+            .select('active')
+            .where('org_id', '=', ctx.orgId)
+            .where('code', '=', parentCode)
+            .forShare()
+            .executeTakeFirst()
+        )?.active === true
+      : true;
+    if (!parentActive) throw new DomainError('PARENT_INACTIVE', 422, `Tài khoản ${parentCode} đã ngừng sử dụng`);
+    // A digit code goes under the most detailed account it extends (13321 under 1332, not 133), so the roll-up by code
+    // prefix (B01, B02) and by parent (trial balance, general ledger) agree.
+    const between = isTaggedCode(code)
+      ? []
+      : Array.from({ length: code.length - parentCode.length - 1 }, (_, i) => code.slice(0, parentCode.length + i + 1));
+    const deeper = [...(await chartAccounts(ctx, between)).keys()].sort((a, b) => b.length - a.length)[0];
+    if (deeper) {
+      throw new DomainError('PARENT_NOT_DEEPEST', 422, `Mã ${code} nằm dưới tài khoản ${deeper}; hãy chọn ${deeper} làm tài khoản cha`, { parentCode: deeper });
+    }
     const created = await ctx.trx
       .insertInto('crove_finance.org_account')
       .values({ org_id: ctx.orgId, code, name, parent_code: parentCode, created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null })

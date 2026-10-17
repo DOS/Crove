@@ -135,8 +135,10 @@ function toMoney(a: Amounts): TrialBalanceAmounts {
   };
 }
 
-// The chart by code, and an account's line up to the top: [code, parent, grandparent, ...]. An account missing from
-// the chart (the foreign key forbids it) is its own top. A cycle (also impossible) stops at the first repeat.
+// The chart by code, and an account's line up to the top: [code, parent, grandparent, ...]. The chart passed in must
+// hold every account a line names: the TT133 accounts and the org's sub-accounts (#319), whose parent_code makes them
+// roll up. An account missing from it (the database refuses such a line) would be its own top. A cycle (also
+// impossible) stops at the first repeat.
 class Chart {
   readonly byCode: ReadonlyMap<string, ChartAccount>;
   constructor(accounts: ReadonlyArray<ChartAccount>) {

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { zId, zLocalDate } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
-import { chartAccounts, type ChartAccount } from './accounts.ts';
+import { chartAccounts, type OrgChartAccount } from './accounts.ts';
 import { OPEN_REVERSAL_STATUSES, REVERSAL_KIND } from './reversal.ts';
 import type { PurchaseVoucher } from './misa.ts';
 
@@ -379,5 +379,5 @@ export const accountsList = defineQuery({
   name: 'finance.accounts.list',
   input: z.object({}),
   access: ALL,
-  handler: async (ctx): Promise<ChartAccount[]> => [...(await chartAccounts(ctx)).values()].sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0)),
+  handler: async (ctx): Promise<OrgChartAccount[]> => [...(await chartAccounts(ctx)).values()].sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0)),
 });

@@ -1018,6 +1018,7 @@ export const en = {
       PARENT_INACTIVE: 'The parent account is no longer in use.',
       PARENT_NOT_FOUND: 'Parent account not found.',
       PARENT_TAGGED: 'A tagged account (such as 1121.VCB) has no sub-accounts.',
+      PARENT_NOT_DEEPEST: 'This code falls under a more detailed account. Pick that account as the parent.',
       PARTY_NOT_FOUND: 'Vendor not found.',
       TOO_LARGE: 'The file is larger than 25 MB.',
       TOO_MANY_FILES: 'Too many files in one upload.',

@@ -8,6 +8,7 @@ import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
 import { zAccountCode, zLedgerPeriod } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
+import { chartAccounts } from './accounts.ts';
 import {
   PAYABLE_ACCOUNT,
   RECEIVABLE_ACCOUNT,
@@ -62,11 +63,11 @@ interface LedgerData {
 
 async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<LedgerData> {
   const period = ledgerPeriod(periodText);
-  const chart = (await ctx.trx.selectFrom('crove_finance.account').select(['code', 'name', 'parent_code']).orderBy('code').execute()).map((a) => ({
-    code: a.code,
-    name: a.name,
-    parentCode: a.parent_code,
-  }));
+  // The org's whole chart (#319): the TT133 accounts and the org's sub-accounts, inactive ones included (posted lines
+  // may name them). A sub-account's parent is its parent_code, so it rolls up into its parent like a TT133 account.
+  const chart = [...(await chartAccounts(ctx)).values()]
+    .map((a) => ({ code: a.code, name: a.name, parentCode: a.parentCode }))
+    .sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
 
   // The opening balance: the debits and credits of every entry dated before the period, per account and party.
   const opening = await ctx.trx
@@ -177,7 +178,7 @@ export const ledgerAccountQuery = defineQuery({
   handler: async (ctx, input): Promise<AccountLedgerView> => {
     const data = await loadLedgerData(ctx, input.period);
     if (!data.chart.some((a) => a.code === input.accountCode)) {
-      throw new DomainError('UNKNOWN_ACCOUNT', 422, `Tài khoản ${input.accountCode} không thuộc hệ thống tài khoản`);
+      throw new DomainError('UNKNOWN_ACCOUNT', 422, `Tài khoản ${input.accountCode} không có trong hệ thống tài khoản của tổ chức`);
     }
     return ledgerView(data, input.accountCode);
   },
