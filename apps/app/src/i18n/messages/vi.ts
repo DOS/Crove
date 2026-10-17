@@ -114,6 +114,8 @@ export const vi = {
     subtitle: 'Sổ nhật ký chung theo TT133. Xuất Excel dạng Nợ/Có từng dòng cho kế toán.',
     export: 'Xuất Excel',
     exportFile: 'crove-but-toan-{org}.xlsx',
+    exportMisa: 'Xuất chứng từ mua vào cho MISA',
+    exportMisaFile: 'crove-misa-mua-dich-vu-{org}.xlsx',
     from: 'Từ ngày',
     to: 'Đến ngày',
     empty: 'Chưa có bút toán',

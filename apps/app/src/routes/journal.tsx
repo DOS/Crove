@@ -116,18 +116,24 @@ export function JournalPage() {
   const journal = useQuery(orpc.journal.list.queryOptions({ input: range }));
   const org = useQuery(orpc.org.get.queryOptions());
 
+  const download = async (path: string, filename: string) => {
+    const params = new URLSearchParams(range);
+    const response = await apiFetch(`${path}?${params}`);
+    const url = URL.createObjectURL(await response.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
   const exportXlsx = useMutation({
-    mutationFn: async () => {
-      const params = new URLSearchParams(range);
-      const response = await apiFetch(`/api/export/journal.xlsx?${params}`);
-      const url = URL.createObjectURL(await response.blob());
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = t('exportFile', { org: getCurrentOrg() ?? 'org' });
-      a.click();
-      URL.revokeObjectURL(url);
-    },
+    mutationFn: () => download('/api/export/journal.xlsx', t('exportFile', { org: getCurrentOrg() ?? 'org' })),
   });
+  // Purchase vouchers in the MISA SME import template, for firms that keep MISA as their books (#317).
+  const exportMisa = useMutation({
+    mutationFn: () => download('/api/export/misa/purchases.xlsx', t('exportMisaFile', { org: getCurrentOrg() ?? 'org' })),
+  });
+  const nothingToExport = (journal.data?.length ?? 0) === 0;
 
   return (
     <>
@@ -135,10 +141,16 @@ export function JournalPage() {
         title={t('title')}
         subtitle={t('subtitle')}
         actions={
-          <Button size="lg" onClick={() => exportXlsx.mutate()} disabled={exportXlsx.isPending || (journal.data?.length ?? 0) === 0}>
-            {exportXlsx.isPending ? <Spinner className="text-current" /> : null}
-            {t('export')}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button size="lg" variant="outline" onClick={() => exportMisa.mutate()} disabled={exportMisa.isPending || nothingToExport}>
+              {exportMisa.isPending ? <Spinner className="text-current" /> : null}
+              {t('exportMisa')}
+            </Button>
+            <Button size="lg" onClick={() => exportXlsx.mutate()} disabled={exportXlsx.isPending || nothingToExport}>
+              {exportXlsx.isPending ? <Spinner className="text-current" /> : null}
+              {t('export')}
+            </Button>
+          </div>
         }
       />
       <div className="mb-4 flex flex-wrap items-end gap-3">
@@ -151,9 +163,9 @@ export function JournalPage() {
           <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="mt-1 w-44" />
         </label>
       </div>
-      {exportXlsx.error && (
+      {(exportXlsx.error || exportMisa.error) && (
         <div className="mb-4">
-          <ErrorText>{errorMessage(exportXlsx.error)}</ErrorText>
+          <ErrorText>{errorMessage(exportXlsx.error ?? exportMisa.error)}</ErrorText>
         </div>
       )}
       {journal.isLoading ? (

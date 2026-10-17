@@ -22,7 +22,15 @@ import {
   type Runtime,
 } from '@crove/kernel-runtime';
 import type { OrgExportView } from '@crove/kernel';
-import { JOURNAL_EXPORT_LIMIT, buildJournalWorkbook, type JournalEntryView } from '@crove/mod-finance';
+import {
+  JOURNAL_EXPORT_LIMIT,
+  MISA_SME_PURCHASE_SERVICE,
+  buildJournalWorkbook,
+  buildMisaWorkbook,
+  purchaseRows,
+  type JournalEntryView,
+  type PurchaseVoucher,
+} from '@crove/mod-finance';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
 import { actorOf, bearerIssuedToOAuthClient, oauthClientRefused, type Authenticate, type AuthUser } from './auth.ts';
 import { ConcurrencyLimiter, type Semaphore } from './concurrency.ts';
@@ -707,6 +715,36 @@ export function createHttpApp(deps: HttpDeps) {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': `attachment; filename="crove-but-toan-${orgSlug}.xlsx"`,
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // Purchase vouchers in the MISA SME import template (issue #317), same roles, range and audit as the journal
+    // export above.
+    app.get('/api/export/misa/purchases.xlsx', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const range = { from: c.req.query('from') || undefined, to: c.req.query('to') || undefined, limit: JOURNAL_EXPORT_LIMIT };
+        const vouchers = await runtime.query<PurchaseVoucher[]>('finance.vouchers.purchases', range, { actor: actorOf(user), orgId });
+        if (vouchers.length >= JOURNAL_EXPORT_LIMIT) {
+          throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều chứng từ để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
+        }
+        const bytes = await buildMisaWorkbook(MISA_SME_PURCHASE_SERVICE, vouchers.flatMap(purchaseRows));
+        await runtime.execute(
+          'finance.journal.export',
+          { from: range.from, to: range.to, entries: vouchers.length, format: 'misa_sme_purchases' },
+          { actor: actorOf(user), orgId },
+        );
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': `attachment; filename="crove-misa-mua-dich-vu-${orgSlug}.xlsx"`,
             'cache-control': 'private, no-store',
           },
         });

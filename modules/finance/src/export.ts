@@ -32,7 +32,15 @@ export type MoneyCell =
  * significant digits, so Excel shows and sums the exact amount. Larger amounts become text, exact.
  */
 export function moneyCell(amount: string): MoneyCell {
-  const exact = money(toMoney(money(amount)));
+  return decimalCell(toMoney(money(amount)));
+}
+
+/**
+ * The same rule for any decimal string (a quantity, a unit price with 8 decimals), without rounding it to the
+ * 4 decimals of an amount first.
+ */
+export function decimalCell(value: string): MoneyCell {
+  const exact = money(value);
   if (exact.isZero()) return { kind: 'number', value: 0, numFmt: '#,##0' };
   const canonical = exact.toFixed();
   if (exact.precision(true) <= EXCEL_SIGNIFICANT_DIGITS) {
