@@ -6,7 +6,8 @@
   "license": "AGPL-3.0-only",
   "description": "Social module: compose, approve, schedule and publish posts to connected channels (plan docs/plan/social.md)",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

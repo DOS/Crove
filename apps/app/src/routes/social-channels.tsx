@@ -1,0 +1,238 @@
+// Connected channels: connect (the offline sandbox today; Facebook, Instagram and Zalo OA come with their adapters),
+// disconnect, and each channel's posting queue: weekly slots in a time zone.
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { Link, useParams } from '@tanstack/react-router';
+import { useState } from 'react';
+import { useTranslations } from 'use-intl';
+import { Badge } from '@crove/ui/components/badge';
+import { Button } from '@crove/ui/components/button';
+import { Card } from '@crove/ui/components/card';
+import { Input } from '@crove/ui/components/input';
+import { Label } from '@crove/ui/components/label';
+import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { useFormat } from '../i18n/provider.tsx';
+import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { getConfig } from '../lib/auth.ts';
+import { minuteLabel, parseMinute, providerName } from '../lib/social.ts';
+
+type Channel = Awaited<ReturnType<typeof orpc.channels.list.call>>[number];
+type Slot = { weekday: number; minute: number; label?: string };
+
+const CHANNEL_TONE = { active: 'success', expired: 'warning', error: 'destructive', revoked: 'outline' } as const;
+// The time zones most Crove orgs post in; the queue keeps any IANA zone it already has.
+const ZONES = ['Asia/Ho_Chi_Minh', 'Asia/Bangkok', 'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney', 'Europe/London', 'America/New_York', 'America/Los_Angeles', 'UTC'];
+const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const;
+const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+const dayKeyOf = (weekday: number) => DAY_KEYS[(weekday - 1) % 7] ?? 'mon';
+
+function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean }) {
+  const t = useTranslations('social');
+  const f = useFormat();
+  const queue = useQuery(orpc.social.queues.get.queryOptions({ input: { connectionId: channel.id } }));
+  const [draft, setDraft] = useState<{ timeZone: string; slots: Slot[] } | null>(null);
+  const [weekday, setWeekday] = useState(1);
+  const [time, setTime] = useState('09:00');
+  const current = draft ?? (queue.data ? { timeZone: queue.data.timeZone ?? 'Asia/Ho_Chi_Minh', slots: queue.data.slots.map((s) => ({ weekday: s.weekday, minute: s.minute, ...(s.label ? { label: s.label } : {}) })) } : null);
+  const save = useMutation({
+    mutationFn: (next: { timeZone: string; slots: Slot[] }) => client.social.queues.set({ connectionId: channel.id, ...next }),
+    onSuccess: () => {
+      setDraft(null);
+      void queryClient.invalidateQueries();
+    },
+  });
+  if (queue.isLoading || !current) return <Spinner />;
+  const sorted = [...current.slots].sort((a, b) => a.weekday - b.weekday || a.minute - b.minute);
+  const add = () => {
+    const minute = parseMinute(time);
+    if (minute === null || current.slots.some((s) => s.weekday === weekday && s.minute === minute)) return;
+    setDraft({ ...current, slots: [...current.slots, { weekday, minute }] });
+  };
+  const everyDay = () => {
+    const minute = parseMinute(time);
+    if (minute === null) return;
+    const missing = WEEKDAYS.filter((d) => !current.slots.some((s) => s.weekday === d && s.minute === minute)).map((d) => ({ weekday: d, minute }));
+    setDraft({ ...current, slots: [...current.slots, ...missing] });
+  };
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1">
+          <Label className="text-xs">{t('timeZone')}</Label>
+          <NativeSelect size="sm" value={current.timeZone} disabled={!canEdit} onChange={(e) => setDraft({ ...current, timeZone: e.target.value })}>
+            {[...new Set([current.timeZone, ...ZONES])].map((z) => (
+              <NativeSelectOption key={z} value={z}>
+                {z}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </div>
+      </div>
+      {sorted.length === 0 ? (
+        <p className="text-xs text-subtle-foreground">{t('noSlots')}</p>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {sorted.map((s) => (
+            <span key={`${s.weekday}:${s.minute}`} className="inline-flex items-center gap-1.5 rounded-lg border bg-background px-2 py-1 text-xs text-foreground">
+              {t(`weekday.${dayKeyOf(s.weekday)}`)} <span className="font-mono tabular-nums">{minuteLabel(s.minute)}</span>
+              {canEdit && (
+                <button
+                  type="button"
+                  aria-label={t('removeSlot')}
+                  className="text-subtle-foreground hover:text-destructive"
+                  onClick={() => setDraft({ ...current, slots: current.slots.filter((x) => !(x.weekday === s.weekday && x.minute === s.minute)) })}
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+      {canEdit && (
+        <div className="flex flex-wrap items-center gap-2">
+          <NativeSelect size="sm" value={String(weekday)} onChange={(e) => setWeekday(Number(e.target.value))} aria-label={t('weekdayLabel')}>
+            {WEEKDAYS.map((d) => (
+              <NativeSelectOption key={d} value={String(d)}>
+                {t(`weekday.${dayKeyOf(d)}`)}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+          <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="h-7 w-28" aria-label={t('timeLabel')} />
+          <Button variant="outline" size="sm" onClick={add}>
+            {t('addSlot')}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={everyDay}>
+            {t('addEveryDay')}
+          </Button>
+          <Button size="sm" disabled={!draft || save.isPending} onClick={() => draft && save.mutate(draft)}>
+            {t('saveQueue')}
+          </Button>
+        </div>
+      )}
+      {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
+      {!draft && (queue.data?.nextFree.length ?? 0) > 0 && (
+        <p className="text-xs text-subtle-foreground">{t('nextFree', { list: (queue.data?.nextFree ?? []).map((s) => f.dateTime(s)).join(', ') })}</p>
+      )}
+    </div>
+  );
+}
+
+export function SocialChannelsPage() {
+  const { slug } = useParams({ strict: false }) as { slug: string };
+  const t = useTranslations('social');
+  const f = useFormat();
+  const me = useQuery(orpc.me.get.queryOptions());
+  const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
+  const isAdmin = role === 'owner' || role === 'admin';
+  const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
+  const [name, setName] = useState('');
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const sandbox = getConfig().channels?.sandbox ?? false;
+  const connect = useMutation({
+    mutationFn: () => client.channels.connectSandbox({ displayName: name.trim(), key: crypto.randomUUID() }),
+    onSuccess: () => {
+      setName('');
+      void queryClient.invalidateQueries();
+    },
+  });
+  const disconnect = useMutation({
+    mutationFn: (connectionId: string) => client.channels.disconnect({ connectionId, idempotencyKey: crypto.randomUUID() }),
+    onSuccess: () => {
+      setConfirming(null);
+      void queryClient.invalidateQueries();
+    },
+  });
+
+  return (
+    <>
+      <PageHeader
+        title={t('channelsTitle')}
+        subtitle={t('channelsSubtitle')}
+        actions={
+          <Link to="/o/$slug/social" params={{ slug }} className="inline-flex h-9 items-center px-2.5 text-sm text-muted-foreground hover:text-foreground">
+            {t('back')}
+          </Link>
+        }
+      />
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="space-y-3">
+          {channels.isLoading ? (
+            <Spinner />
+          ) : channels.error ? (
+            <ErrorText>{errorMessage(channels.error)}</ErrorText>
+          ) : (channels.data?.length ?? 0) === 0 ? (
+            <Empty title={t('noChannelsTitle')} hint={t('noChannelsHint')} />
+          ) : (
+            channels.data?.map((c) => (
+              <Card key={c.id} className="block space-y-4 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline">{providerName(c.provider)}</Badge>
+                      <span className="truncate text-sm font-medium text-foreground">{c.displayName}</span>
+                      <Badge variant={CHANNEL_TONE[c.status]}>{t(`channelStatus.${c.status}`)}</Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-subtle-foreground">{t('connectedAt', { when: f.dateTime(c.connectedAt) })}</p>
+                    {c.status !== 'active' && <p className="mt-1 text-xs text-warning">{t('reconnectHint')}</p>}
+                  </div>
+                  {isAdmin &&
+                    (confirming === c.id ? (
+                      <div className="flex gap-2">
+                        <Button variant="destructive" size="sm" disabled={disconnect.isPending} onClick={() => disconnect.mutate(c.id)}>
+                          {t('confirmDisconnect')}
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => setConfirming(null)}>
+                          {t('keep')}
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button variant="ghost" size="sm" onClick={() => setConfirming(c.id)}>
+                        {t('disconnect')}
+                      </Button>
+                    ))}
+                </div>
+                {confirming === c.id && <p className="text-xs text-muted-foreground">{t('disconnectHint')}</p>}
+                <div className="border-t pt-3">
+                  <p className="mb-2 text-xs font-medium tracking-wide text-subtle-foreground uppercase">{t('queueTitle')}</p>
+                  <QueueEditor channel={c} canEdit={isAdmin} />
+                </div>
+              </Card>
+            ))
+          )}
+          {disconnect.error && <ErrorText>{errorMessage(disconnect.error)}</ErrorText>}
+        </div>
+        <Card className="block h-fit space-y-4 p-4">
+          <p className="text-sm font-medium text-foreground">{t('connectTitle')}</p>
+          {sandbox && isAdmin ? (
+            <form
+              className="space-y-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (name.trim()) connect.mutate();
+              }}
+            >
+              <Label htmlFor="sandbox-name">{t('sandboxName')}</Label>
+              <Input id="sandbox-name" value={name} placeholder={t('sandboxPlaceholder')} onChange={(e) => setName(e.target.value)} />
+              <p className="text-xs text-subtle-foreground">{t('sandboxHint')}</p>
+              <Button type="submit" size="lg" disabled={!name.trim() || connect.isPending}>
+                {t('connectSandbox')}
+              </Button>
+              {connect.error && <ErrorText>{errorMessage(connect.error)}</ErrorText>}
+            </form>
+          ) : (
+            <p className="text-xs text-subtle-foreground">{isAdmin ? t('sandboxOff') : t('adminsConnect')}</p>
+          )}
+          <div className="space-y-1.5 border-t pt-3">
+            {['facebook_page', 'instagram', 'zalo_oa'].map((p) => (
+              <div key={p} className="flex items-center justify-between text-sm text-muted-foreground">
+                {providerName(p)}
+                <Badge variant="secondary">{t('comingSoon')}</Badge>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </>
+  );
+}

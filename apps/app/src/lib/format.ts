@@ -77,6 +77,12 @@ export function formatDate(value: string | null | undefined, locale: Locale): st
 }
 
 // A point in time in the browser's time zone.
+// Hours and minutes in the locale's clock (24 h in Vietnamese).
+export function formatTime(value: string | null | undefined, locale: Locale): string {
+  if (!value) return '';
+  return new Date(value).toLocaleTimeString(FORMAT_LOCALE[locale], { hour: '2-digit', minute: '2-digit' });
+}
+
 export function formatDateTime(value: string | null | undefined, locale: Locale): string {
   if (!value) return '';
   return new Date(value).toLocaleString(FORMAT_LOCALE[locale], { dateStyle: 'short', timeStyle: 'short' });

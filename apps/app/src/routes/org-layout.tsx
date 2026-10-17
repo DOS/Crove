@@ -21,6 +21,7 @@ const ALL_NAV = [
   { to: '/o/$slug/journal', label: 'journal', module: 'finance' },
   { to: '/o/$slug/agents', label: 'agents', module: 'kernel' },
   { to: '/o/$slug/tasks', label: 'tasks', module: 'kernel' },
+  { to: '/o/$slug/social', label: 'social', module: 'social' },
   { to: '/o/$slug/settings', label: 'settings', module: 'kernel' },
 ] as const;
 
@@ -98,7 +99,7 @@ export function OrgLayout() {
           <LocaleSwitcher />
           <NativeSelect
             size="sm"
-            value={NAV.find((n) => window.location.pathname.endsWith(n.to.split('/').pop() ?? ''))?.to ?? '/o/$slug/inbox'}
+            value={NAV.find((n) => window.location.pathname.split('/')[3] === n.to.split('/').pop())?.to ?? '/o/$slug/inbox'}
             onChange={(e) => void navigate({ to: e.target.value as (typeof ALL_NAV)[number]['to'], params: { slug } })}
           >
             {NAV.map((n) => (

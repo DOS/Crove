@@ -18,6 +18,9 @@ import { OnboardingPage } from './routes/onboarding.tsx';
 import { OrgLayout } from './routes/org-layout.tsx';
 import { ResetPasswordPage } from './routes/reset-password.tsx';
 import { SettingsPage } from './routes/settings.tsx';
+import { SocialPage } from './routes/social.tsx';
+import { SocialChannelsPage } from './routes/social-channels.tsx';
+import { SocialComposePage, SocialPostPage } from './routes/social-post.tsx';
 import { TaskDetailPage, TasksPage } from './routes/tasks.tsx';
 import { VendorsPage } from './routes/vendors.tsx';
 
@@ -142,6 +145,15 @@ const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendor
 const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, component: JournalPage });
 // The Vietnamese quick guide (issue #310), linked from the empty Inbox; it walks through finance screens.
 const guideRoute = createRoute({ getParentRoute: () => orgRoute, path: 'guide', beforeLoad: requireFinance, component: GuidePage });
+// Screens of the social module; without it (CROVE_MODULES) they send you to the inbox.
+const requireSocial = ({ params }: { params: { slug: string } }) => {
+  if (!getConfig().modules.includes('social')) throw redirect({ to: '/o/$slug/inbox', params: { slug: params.slug } });
+};
+const socialRoute = createRoute({ getParentRoute: () => orgRoute, path: 'social', beforeLoad: requireSocial, component: () => <Outlet /> });
+const socialIndexRoute = createRoute({ getParentRoute: () => socialRoute, path: '/', component: SocialPage });
+const socialNewRoute = createRoute({ getParentRoute: () => socialRoute, path: 'new', component: SocialComposePage });
+const socialChannelsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'channels', component: SocialChannelsPage });
+const socialPostRoute = createRoute({ getParentRoute: () => socialRoute, path: '$id', component: SocialPostPage });
 const settingsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'settings', component: SettingsPage });
 // AI agents and tasks (ADR-0029) belong to the kernel, so every deployment has them.
 const agentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'agents', component: AgentsPage });
@@ -155,7 +167,7 @@ const routeTree = rootRoute.addChildren([
   mfaRoute,
   resetPasswordRoute,
   onboardingRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

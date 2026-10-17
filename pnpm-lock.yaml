@@ -358,6 +358,9 @@ importers:
       '@crove/kernel-contract':
         specifier: workspace:*
         version: link:../../packages/kernel-contract
+      '@crove/mod-social':
+        specifier: workspace:*
+        version: link:../../modules/social
       '@crove/ui':
         specifier: workspace:*
         version: link:../../packages/ui

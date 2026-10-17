@@ -1,0 +1,579 @@
+// Compose a post and work on it: shared text, a variant per channel that inherits it or has its own text, live
+// channel rules and a preview, then review (owners and admins decide on what they see), schedule and cancel.
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { Link, useNavigate, useParams } from '@tanstack/react-router';
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useTranslations } from 'use-intl';
+import { Badge } from '@crove/ui/components/badge';
+import { Button } from '@crove/ui/components/button';
+import { Card } from '@crove/ui/components/card';
+import { Checkbox } from '@crove/ui/components/checkbox';
+import { Input } from '@crove/ui/components/input';
+import { Label } from '@crove/ui/components/label';
+import { Textarea } from '@crove/ui/components/textarea';
+import { cn } from '@crove/ui/lib/utils';
+import type { Issue } from '@crove/mod-social/contract';
+import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { useFormat } from '../i18n/provider.tsx';
+import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
+import {
+  CANCELLABLE,
+  EDITABLE,
+  draftIssues,
+  fromLocalInput,
+  hasTitle,
+  providerName,
+  SUBMITTABLE,
+  textBudget,
+  toLocalInput,
+  VARIANT_TONE,
+  type VariantStatus,
+} from '../lib/social.ts';
+
+type Post = Awaited<ReturnType<typeof orpc.social.posts.get.call>>;
+type Variant = Post['variants'][number];
+type Channel = Awaited<ReturnType<typeof orpc.channels.list.call>>[number];
+
+interface Base {
+  body: string;
+  title: string;
+  linkUrl: string;
+}
+
+// A channel's own text, or none (it uses the shared text).
+interface Own {
+  custom: boolean;
+  body: string;
+  title: string;
+}
+
+const EMPTY_OWN: Own = { custom: false, body: '', title: '' };
+
+function useRole(slug: string) {
+  const me = useQuery(orpc.me.get.queryOptions());
+  const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
+  return { role, canDecide: role === 'owner' || role === 'admin', canWrite: role === 'owner' || role === 'admin' || role === 'member' };
+}
+
+function IssueList({ issues }: { issues: Issue[] }) {
+  const t = useTranslations('social.issues');
+  if (issues.length === 0) return null;
+  const text = (issue: Issue) => {
+    const limit = issue.limit ?? 0;
+    const actual = issue.actual ?? 0;
+    switch (issue.code) {
+      case 'TEXT_TOO_LONG':
+        return t('TEXT_TOO_LONG', { limit, actual });
+      case 'TITLE_TOO_LONG':
+        return t('TITLE_TOO_LONG', { limit, actual });
+      case 'MEDIA_REQUIRED':
+        return t('MEDIA_REQUIRED', { limit });
+      case 'TOO_MANY_MEDIA':
+        return t('TOO_MANY_MEDIA', { limit });
+      case 'TOO_MANY_LINKS':
+        return t('TOO_MANY_LINKS', { limit, actual });
+      default:
+        return t(issue.code);
+    }
+  };
+  return (
+    <ul className="space-y-1 text-xs text-destructive">
+      {issues.map((issue) => (
+        <li key={`${issue.code}:${issue.field}`}>{text(issue)}</li>
+      ))}
+    </ul>
+  );
+}
+
+function Counter({ provider, body }: { provider: string; body: string }) {
+  const { used, max } = textBudget(provider, body);
+  if (max === null) return null;
+  const over = used > max;
+  return <span className={cn('font-mono text-xs tabular-nums', over ? 'text-destructive' : used > max * 0.9 ? 'text-warning' : 'text-subtle-foreground')}>{used}/{max}</span>;
+}
+
+// How the post reads on the channel: name, text, title and link, without the platform's chrome.
+function Preview({ channel, provider, content }: { channel: string; provider: string; content: { body: string; title: string; linkUrl: string } }) {
+  const t = useTranslations('social');
+  let host = '';
+  try {
+    host = content.linkUrl ? new URL(content.linkUrl).host : '';
+  } catch {
+    host = '';
+  }
+  return (
+    <div className="rounded-xl border bg-background p-3">
+      <div className="flex items-center gap-2">
+        <span className="flex size-8 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-link">{channel.slice(0, 1).toUpperCase()}</span>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-foreground">{channel}</p>
+          <p className="text-xs text-subtle-foreground">{providerName(provider)}</p>
+        </div>
+      </div>
+      {hasTitle(provider) && content.title && <p className="mt-3 text-sm font-semibold text-foreground">{content.title}</p>}
+      <p className="mt-2 text-sm [overflow-wrap:anywhere] whitespace-pre-wrap text-foreground">{content.body || <span className="text-subtle-foreground">{t('emptyText')}</span>}</p>
+      {host && (
+        <div className="mt-3 rounded-lg border bg-muted px-3 py-2 text-xs text-muted-foreground">
+          <span className="font-mono">{host}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChannelEditor({
+  provider,
+  channel,
+  base,
+  own,
+  onChange,
+  disabled,
+  status,
+  footer,
+}: {
+  provider: string;
+  channel: string;
+  base: Base;
+  own: Own;
+  onChange: (own: Own) => void;
+  disabled: boolean;
+  status?: VariantStatus;
+  footer?: ReactNode;
+}) {
+  const t = useTranslations('social');
+  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl: base.linkUrl };
+  const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null });
+  return (
+    <Card className="block space-y-3 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <Badge variant="outline">{providerName(provider)}</Badge>
+          <span className="truncate text-sm font-medium text-foreground">{channel}</span>
+          {status && <Badge variant={VARIANT_TONE[status]}>{t(`status.${status}`)}</Badge>}
+        </div>
+        <Counter provider={provider} body={content.body} />
+      </div>
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Checkbox checked={own.custom} disabled={disabled} onCheckedChange={(checked) => onChange({ custom: checked === true, body: own.body || base.body, title: own.title || base.title })} />
+        {t('ownText')}
+      </label>
+      {own.custom && (
+        <div className="space-y-2">
+          {hasTitle(provider) && <Input value={own.title} disabled={disabled} placeholder={t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
+          <Textarea value={own.body} disabled={disabled} rows={5} placeholder={t('ownTextPlaceholder')} onChange={(e) => onChange({ ...own, body: e.target.value })} />
+        </div>
+      )}
+      <IssueList issues={issues} />
+      <Preview channel={channel} provider={provider} content={content} />
+      {footer}
+    </Card>
+  );
+}
+
+function SharedFields({ base, onChange, disabled, needsTitle }: { base: Base; onChange: (base: Base) => void; disabled: boolean; needsTitle: boolean }) {
+  const t = useTranslations('social');
+  return (
+    <Card className="block space-y-3 p-4">
+      <div className="space-y-1.5">
+        <Label htmlFor="social-body">{t('sharedText')}</Label>
+        <Textarea id="social-body" autoFocus value={base.body} disabled={disabled} rows={7} placeholder={t('sharedTextPlaceholder')} onChange={(e) => onChange({ ...base, body: e.target.value })} />
+      </div>
+      {needsTitle && (
+        <div className="space-y-1.5">
+          <Label htmlFor="social-title">{t('titleField')}</Label>
+          <Input id="social-title" value={base.title} disabled={disabled} placeholder={t('titlePlaceholder')} onChange={(e) => onChange({ ...base, title: e.target.value })} />
+        </div>
+      )}
+      <div className="space-y-1.5">
+        <Label htmlFor="social-link">{t('link')}</Label>
+        <Input id="social-link" type="url" inputMode="url" value={base.linkUrl} disabled={disabled} placeholder="https://" onChange={(e) => onChange({ ...base, linkUrl: e.target.value })} />
+      </div>
+    </Card>
+  );
+}
+
+const orNull = (value: string) => (value.trim() === '' ? null : value);
+
+// ---------------------------------------------------------------------------------------------------------------------
+// New post
+// ---------------------------------------------------------------------------------------------------------------------
+
+export function SocialComposePage() {
+  const { slug } = useParams({ strict: false }) as { slug: string };
+  const t = useTranslations('social');
+  const navigate = useNavigate();
+  const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
+  const [base, setBase] = useState<Base>({ body: '', title: '', linkUrl: '' });
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [own, setOwn] = useState<Record<string, Own>>({});
+  const live = (channels.data ?? []).filter((c) => c.status === 'active');
+  useEffect(() => {
+    // The only channel is chosen for you.
+    if (chosen.length === 0 && live.length === 1 && live[0]) setChosen([live[0].id]);
+  }, [live.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const create = useMutation({
+    mutationFn: async (submit: boolean) => {
+      const created = await client.social.posts.create({
+        idempotencyKey: crypto.randomUUID(),
+        body: base.body,
+        title: orNull(base.title),
+        linkUrl: orNull(base.linkUrl),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        channels: chosen.map((connectionId) => {
+          const mine = own[connectionId] ?? EMPTY_OWN;
+          return mine.custom ? { connectionId, body: mine.body, title: orNull(mine.title) } : { connectionId };
+        }),
+      });
+      if (submit) await client.social.posts.submit({ postId: created.postId });
+      return created.postId;
+    },
+    onSuccess: (postId) => {
+      void queryClient.invalidateQueries();
+      void navigate({ to: '/o/$slug/social/$id', params: { slug, id: postId } });
+    },
+  });
+
+  const selected = live.filter((c) => chosen.includes(c.id));
+  const blocking = selected.some((c) => {
+    const mine = own[c.id] ?? EMPTY_OWN;
+    const content = { body: mine.custom ? mine.body : base.body, title: mine.custom ? mine.title : base.title };
+    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null }).length > 0;
+  });
+  const onKey = (e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !create.isPending) {
+      e.preventDefault();
+      create.mutate(!blocking);
+    }
+  };
+
+  if (channels.isLoading) return <Spinner />;
+  return (
+    <div onKeyDown={onKey}>
+      <PageHeader
+        title={t('composeTitle')}
+        subtitle={t('composeSubtitle')}
+        actions={
+          <>
+            <Button variant="outline" size="lg" disabled={chosen.length === 0 || create.isPending} onClick={() => create.mutate(false)}>
+              {t('saveDraft')}
+            </Button>
+            <Button size="lg" disabled={chosen.length === 0 || blocking || create.isPending} onClick={() => create.mutate(true)}>
+              {create.isPending ? <Spinner className="text-current" /> : null}
+              {t('saveAndSubmit')}
+            </Button>
+          </>
+        }
+      />
+      {create.error && (
+        <div className="mb-4">
+          <ErrorText>{errorMessage(create.error)}</ErrorText>
+        </div>
+      )}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="space-y-4">
+          <SharedFields base={base} onChange={setBase} disabled={create.isPending} needsTitle={selected.some((c) => hasTitle(c.provider))} />
+          <Card className="block p-4">
+            <p className="mb-3 text-sm font-medium text-foreground">{t('pickChannels')}</p>
+            {live.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {t('noChannelsHint')}{' '}
+                <Link to="/o/$slug/social/channels" params={{ slug }} className="text-link hover:underline">
+                  {t('connectFirst')}
+                </Link>
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {live.map((c) => {
+                  const on = chosen.includes(c.id);
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => setChosen(on ? chosen.filter((id) => id !== c.id) : [...chosen, c.id])}
+                      className={cn(
+                        'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
+                        on ? 'border-primary/50 bg-primary/15 text-foreground' : 'bg-card text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      <span className="text-xs text-subtle-foreground">{providerName(c.provider)}</span>
+                      {c.displayName}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+          <p className="text-xs text-subtle-foreground">{t('shortcutHint')}</p>
+        </div>
+        <div className="space-y-4">
+          {selected.length === 0 ? (
+            <Card className="block p-6 text-sm text-muted-foreground">{t('pickChannelsHint')}</Card>
+          ) : (
+            selected.map((c) => (
+              <ChannelEditor
+                key={c.id}
+                provider={c.provider}
+                channel={c.displayName}
+                base={base}
+                own={own[c.id] ?? EMPTY_OWN}
+                disabled={create.isPending}
+                onChange={(next) => setOwn({ ...own, [c.id]: next })}
+              />
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// One post: edit, review, schedule
+// ---------------------------------------------------------------------------------------------------------------------
+
+function ownOf(v: Variant): Own {
+  return { custom: v.overrides.body !== null, body: v.overrides.body ?? '', title: v.overrides.title ?? '' };
+}
+
+function baseOf(p: Post): Base {
+  return { body: p.body, title: p.title ?? '', linkUrl: p.linkUrl ?? '' };
+}
+
+function sameOwn(a: Own, b: Own): boolean {
+  return a.custom === b.custom && (!a.custom || (a.body === b.body && a.title === b.title));
+}
+
+function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
+  const t = useTranslations('social');
+  const waiting = post.variants.filter((v) => v.status === 'in_review');
+  const [picked, setPicked] = useState<string[]>(waiting.map((v) => v.id));
+  const [comment, setComment] = useState('');
+  const decide = useMutation({
+    mutationFn: (decision: 'approved' | 'changes_requested' | 'rejected') =>
+      client.social.variants.decide({
+        postId: post.id,
+        decision,
+        ...(comment.trim() ? { comment: comment.trim() } : {}),
+        // What this reviewer sees: a newer revision is refused, never approved by mistake.
+        variants: waiting.filter((v) => picked.includes(v.id)).map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })),
+      }),
+    onSuccess: () => {
+      setComment('');
+      onDone();
+    },
+  });
+  if (waiting.length === 0) return null;
+  return (
+    <Card className="block space-y-3 border-warning/40 p-4">
+      <p className="text-sm font-medium text-foreground">{t('reviewTitle')}</p>
+      <div className="space-y-1.5">
+        {waiting.map((v) => (
+          <label key={v.id} className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Checkbox checked={picked.includes(v.id)} onCheckedChange={(on) => setPicked(on === true ? [...picked, v.id] : picked.filter((id) => id !== v.id))} />
+            {providerName(v.provider)}
+          </label>
+        ))}
+      </div>
+      <Textarea value={comment} rows={2} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
+      {decide.error && <ErrorText>{errorMessage(decide.error)}</ErrorText>}
+      <div className="flex flex-wrap gap-2">
+        <Button size="lg" disabled={picked.length === 0 || decide.isPending} onClick={() => decide.mutate('approved')}>
+          {t('approve')}
+        </Button>
+        <Button variant="outline" size="lg" disabled={picked.length === 0 || decide.isPending || !comment.trim()} onClick={() => decide.mutate('changes_requested')}>
+          {t('requestChanges')}
+        </Button>
+        <Button variant="destructive" size="lg" disabled={picked.length === 0 || decide.isPending} onClick={() => decide.mutate('rejected')}>
+          {t('reject')}
+        </Button>
+      </div>
+      {!comment.trim() && <p className="text-xs text-subtle-foreground">{t('changesNeedComment')}</p>}
+    </Card>
+  );
+}
+
+function SchedulePanel({ post, onDone }: { post: Post; onDone: () => void }) {
+  const t = useTranslations('social');
+  const ready = post.variants.filter((v) => v.status === 'approved');
+  const [mode, setMode] = useState<'time' | 'queue'>('time');
+  const [when, setWhen] = useState(() => toLocalInput(post.scheduledAt ?? new Date(Date.now() + 3_600_000).toISOString()));
+  const schedule = useMutation({
+    mutationFn: () => {
+      const at = fromLocalInput(when);
+      return client.social.variants.schedule({ postId: post.id, variantIds: ready.map((v) => v.id), ...(mode === 'queue' ? { queue: true as const } : at ? { at } : {}) });
+    },
+    onSuccess: onDone,
+  });
+  if (ready.length === 0) return null;
+  return (
+    <Card className="block space-y-3 border-primary/40 p-4">
+      <p className="text-sm font-medium text-foreground">{t('scheduleTitle', { count: ready.length })}</p>
+      <div className="flex flex-wrap gap-2" role="radiogroup">
+        {(['time', 'queue'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={mode === m}
+            onClick={() => setMode(m)}
+            className={cn('rounded-lg border px-3 py-1.5 text-sm', mode === m ? 'border-primary/50 bg-primary/15 text-foreground' : 'text-muted-foreground hover:text-foreground')}
+          >
+            {t(m === 'time' ? 'atTime' : 'nextSlot')}
+          </button>
+        ))}
+      </div>
+      {mode === 'time' && <Input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} className="max-w-xs" />}
+      {mode === 'queue' && <p className="text-xs text-subtle-foreground">{t('nextSlotHint')}</p>}
+      {schedule.error && <ErrorText>{errorMessage(schedule.error)}</ErrorText>}
+      <Button size="lg" disabled={schedule.isPending || (mode === 'time' && !fromLocalInput(when))} onClick={() => schedule.mutate()}>
+        {t('schedule')}
+      </Button>
+    </Card>
+  );
+}
+
+export function SocialPostPage() {
+  const { slug, id: postId } = useParams({ strict: false }) as { slug: string; id: string };
+  const t = useTranslations('social');
+  const f = useFormat();
+  const { canDecide, canWrite } = useRole(slug);
+  const post = useQuery(orpc.social.posts.get.queryOptions({ input: { postId } }));
+  const channels = useQuery(orpc.channels.list.queryOptions({ input: { includeRevoked: true } }));
+  const names = useMemo(() => new Map((channels.data ?? []).map((c: Channel) => [c.id, c.displayName])), [channels.data]);
+  const [base, setBase] = useState<Base | null>(null);
+  const [own, setOwn] = useState<Record<string, Own>>({});
+  // Local edits start from the post as loaded, and again after every save.
+  useEffect(() => {
+    if (!post.data) return;
+    setBase(baseOf(post.data));
+    setOwn(Object.fromEntries(post.data.variants.map((v) => [v.id, ownOf(v)])));
+  }, [post.data?.revision, post.data?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const refresh = () => void queryClient.invalidateQueries();
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!post.data || !base) return;
+      const before = baseOf(post.data);
+      if (base.body !== before.body || base.title !== before.title || base.linkUrl !== before.linkUrl) {
+        await client.social.posts.update({ postId, revision: post.data.revision, body: base.body, title: orNull(base.title), linkUrl: orNull(base.linkUrl) });
+      }
+      // Base edits move the inheriting variants' revisions: read them again before saving overrides.
+      const fresh = await client.social.posts.get({ postId });
+      for (const v of fresh.variants) {
+        const mine = own[v.id];
+        if (!mine || sameOwn(mine, ownOf(v)) || !EDITABLE.includes(v.status)) continue;
+        await client.social.variants.update({
+          variantId: v.id,
+          revision: v.revision,
+          body: mine.custom ? mine.body : null,
+          title: mine.custom ? orNull(mine.title) : null,
+        });
+      }
+    },
+    onSuccess: refresh,
+  });
+  const submit = useMutation({ mutationFn: () => client.social.posts.submit({ postId }), onSuccess: refresh });
+  const unschedule = useMutation({ mutationFn: (variantId: string) => client.social.variants.unschedule({ variantIds: [variantId] }), onSuccess: refresh });
+  const cancel = useMutation({ mutationFn: (variantId: string) => client.social.variants.cancel({ variantIds: [variantId] }), onSuccess: refresh });
+
+  if (post.isLoading || !base) return post.error ? <ErrorText>{errorMessage(post.error)}</ErrorText> : <Spinner />;
+  if (!post.data) return null;
+  const p = post.data;
+  const dirty =
+    JSON.stringify(base) !== JSON.stringify(baseOf(p)) || p.variants.some((v) => own[v.id] && !sameOwn(own[v.id] as Own, ownOf(v)));
+  const editable = canWrite && p.variants.some((v) => EDITABLE.includes(v.status));
+  const submittable = p.variants.filter((v) => SUBMITTABLE.includes(v.status));
+  const onKey = (e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 's' && dirty) {
+      e.preventDefault();
+      save.mutate();
+    }
+  };
+  const error = save.error ?? submit.error ?? unschedule.error ?? cancel.error;
+
+  return (
+    <div onKeyDown={onKey}>
+      <PageHeader
+        title={t('postTitle')}
+        subtitle={t('postSubtitle', { updated: f.dateTime(p.updatedAt) })}
+        actions={
+          <>
+            <Link to="/o/$slug/social" params={{ slug }} className="inline-flex h-9 items-center px-2.5 text-sm text-muted-foreground hover:text-foreground">
+              {t('back')}
+            </Link>
+            {editable && (
+              <Button variant="outline" size="lg" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+                {save.isPending ? <Spinner className="text-current" /> : null}
+                {t('save')}
+              </Button>
+            )}
+            {canWrite && submittable.length > 0 && (
+              <Button size="lg" disabled={dirty || submit.isPending} title={dirty ? t('saveFirst') : undefined} onClick={() => submit.mutate()}>
+                {t('submit')}
+              </Button>
+            )}
+          </>
+        }
+      />
+      {error && (
+        <div className="mb-4">
+          <ErrorText>{errorMessage(error)}</ErrorText>
+        </div>
+      )}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="space-y-4">
+          <SharedFields base={base} onChange={setBase} disabled={!editable || save.isPending} needsTitle={p.variants.some((v) => hasTitle(v.provider))} />
+          {canDecide && !dirty && <ReviewPanel key={`${p.revision}:${p.updatedAt}`} post={p} onDone={refresh} />}
+          {canDecide && !dirty && <SchedulePanel key={`s:${p.revision}:${p.updatedAt}`} post={p} onDone={refresh} />}
+          {dirty && <p className="text-xs text-subtle-foreground">{t('unsaved')}</p>}
+        </div>
+        <div className="space-y-4">
+          {p.variants.map((v) => {
+            const frozen = !EDITABLE.includes(v.status);
+            const decision = v.latestDecision;
+            return (
+              <ChannelEditor
+                key={v.id}
+                provider={v.provider}
+                channel={names.get(v.connectionId) ?? providerName(v.provider)}
+                base={frozen ? { body: v.effective.body, title: v.effective.title ?? '', linkUrl: v.effective.linkUrl ?? '' } : base}
+                own={frozen ? EMPTY_OWN : (own[v.id] ?? ownOf(v))}
+                disabled={frozen || !canWrite || save.isPending}
+                status={v.status}
+                onChange={(next) => setOwn({ ...own, [v.id]: next })}
+                footer={
+                  <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
+                    {v.effectiveAt && ['scheduled', 'paused', 'publishing', 'processing', 'published'].includes(v.status) && (
+                      <p>{t(v.status === 'published' ? 'publishedAt' : 'goesOutAt', { when: f.dateTime(v.effectiveAt) })}{v.queueSlotAt && v.status !== 'published' ? ` · ${t('fromQueue')}` : ''}</p>
+                    )}
+                    {decision && decision.comment && ['changes_requested', 'rejected'].includes(v.status) && <p className="text-warning">{t('reviewerSaid', { comment: decision.comment })}</p>}
+                    {v.error?.message && <p className="text-destructive">{v.error.message}</p>}
+                    {v.externalUrl && (
+                      <a href={v.externalUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">
+                        {t('openPost')}
+                      </a>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {canDecide && ['scheduled', 'paused'].includes(v.status) && (
+                        <Button variant="outline" size="sm" disabled={unschedule.isPending} onClick={() => unschedule.mutate(v.id)}>
+                          {t('unschedule')}
+                        </Button>
+                      )}
+                      {canWrite && CANCELLABLE.includes(v.status) && (canDecide || !['approved', 'scheduled', 'paused'].includes(v.status)) && (
+                        <Button variant="ghost" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate(v.id)}>
+                          {t('cancelChannel')}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                }
+              />
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
