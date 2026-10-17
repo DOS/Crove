@@ -1,7 +1,7 @@
 // Images of a Social post (#372): pick, reorder and remove them, and show them in the channel previews. Files are
 // uploaded with purpose=social, so they are stored like documents but never read as invoices.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { SOCIAL_IMAGE_TYPES } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
@@ -19,21 +19,25 @@ export interface MediaItem {
 
 export const MAX_POST_MEDIA = 20;
 
-// A stored image as an object URL, fetched once per file for the session.
+// A stored image, fetched once per file while it is shown (the bytes of a file id never change). Each thumbnail makes
+// its own object URL and revokes it when it goes away.
 function useImageUrl(fileId: string) {
-  return useQuery({
-    queryKey: ['social-media', fileId],
-    queryFn: async () => URL.createObjectURL(await fetchFile(fileId)),
-    staleTime: Infinity,
-    gcTime: Infinity,
-  });
+  const blob = useQuery({ queryKey: ['social-media', fileId], queryFn: () => fetchFile(fileId), staleTime: Infinity });
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!blob.data) return;
+    const next = URL.createObjectURL(blob.data);
+    setUrl(next);
+    return () => URL.revokeObjectURL(next);
+  }, [blob.data]);
+  return { url, isLoading: blob.isLoading };
 }
 
 export function Thumb({ fileId, alt, className }: { fileId: string; alt: string; className?: string }) {
   const url = useImageUrl(fileId);
   return (
     <div className={cn('overflow-hidden rounded-lg border bg-muted', className)}>
-      {url.data ? <img src={url.data} alt={alt} className="size-full object-cover" /> : <div className="flex size-full items-center justify-center">{url.isLoading ? <Spinner /> : null}</div>}
+      {url.url ? <img src={url.url} alt={alt} className="size-full object-cover" /> : <div className="flex size-full items-center justify-center">{url.isLoading ? <Spinner /> : null}</div>}
     </div>
   );
 }
