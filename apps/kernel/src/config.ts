@@ -201,6 +201,8 @@ const schema = z.object({
   CROVE_WORKER_DB_PASSWORD: optional,
   // The prober's login (crove_prober); it may only execute crove_kernel.health().
   CROVE_PROBER_DB_PASSWORD: optional,
+  // The usage report's login (crove_reporter); it may only execute crove_kernel.usage_weekly().
+  CROVE_REPORTER_DB_PASSWORD: optional,
   AUTH_DB_PASSWORD: optional,
 });
 

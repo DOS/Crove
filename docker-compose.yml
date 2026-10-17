@@ -25,6 +25,7 @@ services:
       CROVE_APP_DB_PASSWORD: ${CROVE_APP_DB_PASSWORD:-local-app-password}
       CROVE_WORKER_DB_PASSWORD: ${CROVE_WORKER_DB_PASSWORD:-local-worker-password}
       CROVE_PROBER_DB_PASSWORD: ${CROVE_PROBER_DB_PASSWORD:-local-prober-password}
+      CROVE_REPORTER_DB_PASSWORD: ${CROVE_REPORTER_DB_PASSWORD:-local-reporter-password}
       AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-local-auth-password}
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-local-only-jwt-secret-change-me-0123456789}
       AUTH_ISSUER: crove-auth
@@ -247,6 +248,22 @@ services:
       PROBER_MAX_DEAD_LETTERS: ${PROBER_MAX_DEAD_LETTERS:-0}
       # Unset: the probe interval plus 60 s, so each dead letter alerts once (twice at most).
       PROBER_DEAD_LETTER_WINDOW_SECONDS: ${PROBER_DEAD_LETTER_WINDOW_SECONDS:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Weekly usage report for the operator (issue #311), never started by `up`:
+  # `docker compose run --rm usage usage-report [--weeks 8] [--by-org] [--csv]`.
+  usage:
+    build: .
+    image: crove:local
+    profiles: ['usage']
+    command: ['usage-report']
+    restart: 'no'
+    healthcheck:
+      disable: true
+    environment:
+      REPORTER_DATABASE_URL: postgres://crove_reporter:${CROVE_REPORTER_DB_PASSWORD:-local-reporter-password}@db:5432/postgres
     depends_on:
       migrate:
         condition: service_completed_successfully

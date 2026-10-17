@@ -2,7 +2,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId, zLocalDate } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { DomainError, defineQuery, type QueryContext } from '@crove/kernel-runtime';
+import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { OPEN_REVERSAL_STATUSES, REVERSAL_KIND } from './reversal.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -227,6 +227,20 @@ export const journalList = defineQuery({
   input: zRange.extend({ limit: z.number().int().positive().max(JOURNAL_EXPORT_LIMIT).optional() }),
   access: ALL,
   handler: (ctx, input): Promise<JournalEntryView[]> => loadEntries(ctx, input),
+});
+
+// Records one Excel export of the journal (GET /api/export/journal.xlsx) after the workbook is built. It changes
+// nothing: its audit row is the record, counted by crove_kernel.usage_weekly() (issue #311), and holds the number of
+// entries exported, never their content. Same roles as finance.journal.list, which the export reads.
+export const journalExport = defineCommand({
+  name: 'finance.journal.export',
+  input: zRange.extend({ entries: z.number().int().nonnegative().max(JOURNAL_EXPORT_LIMIT) }),
+  risk: 'R0',
+  access: ALL,
+  handler: async (ctx, input) => {
+    ctx.audit({ entries: input.entries });
+    return { ok: true as const };
+  },
 });
 
 export const journalGet = defineQuery({

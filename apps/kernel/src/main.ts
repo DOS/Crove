@@ -6,6 +6,7 @@
 //   worker   outbox relay + jobs
 //   all      api + worker in one process (default for self-host)
 //   prober   health check and alert (plan §4.13): once, or `--every <seconds>`; `--test-alert` sends a test alert
+//   usage-report  the weekly usage counts of the MVP goal, as crove_reporter (issue #311); prints and exits
 // It wires the open-source default adapters into the composition root (createKernel, ADR-0030).
 import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { liveAuthUrl, loadConfig, type Config } from './config.ts';
@@ -13,10 +14,11 @@ import { createKernel, defaultAdapters, type ServerRole } from './kernel.ts';
 import { describeMailer } from './mail.ts';
 import { runProber } from './prober.ts';
 import { describeStorage } from './storage.ts';
+import { runUsageReport } from './usage-report.ts';
 import { migrateJobs } from './worker.ts';
 
-type Role = 'migrate' | 'auth-grants' | 'prober' | ServerRole;
-const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober'];
+type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | ServerRole;
+const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report'];
 
 async function runMigrate(config: Config) {
   const adminUrl = config.ADMIN_DATABASE_URL;
@@ -26,6 +28,7 @@ async function runMigrate(config: Config) {
     crove_app: config.CROVE_APP_DB_PASSWORD,
     crove_worker: config.CROVE_WORKER_DB_PASSWORD,
     crove_prober: config.CROVE_PROBER_DB_PASSWORD,
+    crove_reporter: config.CROVE_REPORTER_DB_PASSWORD,
     supabase_auth_admin: config.AUTH_DB_PASSWORD,
   });
   await migrateJobs(adminUrl);
@@ -43,6 +46,7 @@ async function main() {
   if (!ROLES.includes(role)) throw new Error(`unknown role ${role}`);
   // The prober needs only its own settings (no auth, storage or AI configuration), so it reads them itself.
   if (role === 'prober') process.exit(await runProber(process.argv.slice(3)));
+  if (role === 'usage-report') process.exit(await runUsageReport(process.argv.slice(3)));
   const config = loadConfig();
   if (role === 'migrate') return runMigrate(config);
   if (role === 'auth-grants') return runAuthGrants(config);

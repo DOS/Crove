@@ -693,6 +693,8 @@ export function createHttpApp(deps: HttpDeps) {
           throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều bút toán để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
         }
         const bytes = await buildJournalWorkbook([...entries].reverse(), orgSlug ?? '');
+        // The export's audit row (counts only), for the weekly usage report (issue #311). No row, no download.
+        await runtime.execute('finance.journal.export', { from: range.from, to: range.to, entries: entries.length }, { actor: actorOf(user), orgId });
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
