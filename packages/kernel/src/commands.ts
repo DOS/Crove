@@ -1,6 +1,6 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { MAX_UPLOAD_BYTES, zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
+import { MAX_SOCIAL_VIDEO_BYTES, MAX_UPLOAD_BYTES, UPLOAD_PURPOSES, zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
 import type { Db, MemberRole } from '@crove/db';
 import {
   DomainError,
@@ -184,8 +184,10 @@ const zIngestFile = z.object({
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   storageKey: z.string().min(1),
   generation: z.string().regex(GENERATION_PATTERN),
-  // social: an image for a Social post (#372), stored like any file but never sent to extraction.
+  // social: an image or video for a Social post (#372, #409), stored like any file but never sent to extraction.
   source: z.enum(['upload', 'email', 'social']),
+  // A video's duration, read by the server from the file (#409).
+  durationMs: z.number().int().min(0).max(86_400_000).optional(),
 });
 
 export const ingestFile = defineCommand({
@@ -209,6 +211,7 @@ export const ingestFile = defineCommand({
         content_type: input.contentType,
         size_bytes: String(input.sizeBytes),
         source: input.source,
+        duration_ms: input.durationMs === undefined ? null : String(input.durationMs),
         created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
       })
       .onConflict((oc) => oc.columns(['org_id', 'sha256']).doNothing())
@@ -265,12 +268,14 @@ export function beginUploadCommand(limits: UploadBeginLimits = DEFAULT_UPLOAD_BE
   }
   return defineCommand({
     name: 'kernel.file.upload.begin',
-    input: z.object({}),
+    // social: an image or video for a post, so the grant allows a video's size (#409); a document stays at 25 MB.
+    input: z.object({ purpose: z.enum(UPLOAD_PURPOSES).optional() }),
     risk: 'R1',
     access: MEMBERS,
-    handler: async (ctx) => {
+    handler: async (ctx, input) => {
       if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới tải tệp lên được');
       const userId = ctx.actor.userId;
+      const maxBytes = input.purpose === 'social' ? MAX_SOCIAL_VIDEO_BYTES : MAX_UPLOAD_BYTES;
       // Serializes begins of one user in one org, so concurrent requests cannot pass either cap together.
       await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove.file_upload:${ctx.orgId}:${userId}`}, 0))`.execute(ctx.trx);
       // Both counts use the database clock: the insert trigger sets created_at and expires_at from now(), the start
@@ -294,7 +299,7 @@ export function beginUploadCommand(limits: UploadBeginLimits = DEFAULT_UPLOAD_BE
       }
       const row = await ctx.trx
         .insertInto('crove_kernel.file_upload')
-        .values({ org_id: ctx.orgId, staging_key: newStagingKey(), created_by: userId, max_bytes: String(MAX_UPLOAD_BYTES) })
+        .values({ org_id: ctx.orgId, staging_key: newStagingKey(), created_by: userId, max_bytes: String(maxBytes) })
         .returning(['id', 'staging_key', 'max_bytes', 'expires_at'])
         .executeTakeFirstOrThrow();
       ctx.audit({ upload_id: row.id });

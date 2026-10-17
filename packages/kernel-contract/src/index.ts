@@ -8,6 +8,11 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 export const ACCEPTED_UPLOAD_TYPES = ['application/xml', 'text/xml', 'application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
 // Images for Social posts (#372): an upload with purpose=social takes these only.
 export const SOCIAL_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+// Videos for Social posts (#409): MP4 and QuickTime, up to 100 MB (a staged upload grant allows at most that), at most
+// 3 hours long. The server reads the type and the duration from the file itself.
+export const SOCIAL_VIDEO_TYPES = ['video/mp4', 'video/quicktime'];
+export const MAX_SOCIAL_VIDEO_BYTES = 100 * 1024 * 1024;
+export const MAX_SOCIAL_VIDEO_MS = 3 * 3600 * 1000;
 export const UPLOAD_PURPOSES = ['document', 'social'] as const;
 export type UploadPurpose = (typeof UPLOAD_PURPOSES)[number];
 

@@ -5,7 +5,8 @@ import { dirname, join, resolve, sep } from 'node:path';
 
 // Object storage adapter. Local disk is the default; S3-compatible stores implement the same interface.
 // Bodies are buffered in memory as a Uint8Array in both directions, so a blob costs its full size in RAM while
-// it is read or written (at most MAX_UPLOAD_BYTES for a file, MAX_EMAIL_BYTES for a raw message).
+// it is read or written (at most MAX_UPLOAD_BYTES for a document, MAX_SOCIAL_VIDEO_BYTES for a Social video, whose uploads
+// the API limits to two at a time, and MAX_EMAIL_BYTES for a raw message).
 //
 // Evidence integrity (ADR-0013, plan §7.6, red-team S25): every write returns the generation of the object it
 // created or found, and every file row keeps the triple (key, generation, sha256). Reads go through readVerified,

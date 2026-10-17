@@ -164,6 +164,7 @@ export const KERNEL_ERROR_CODES = [
   'MEDIA_NOT_FOUND',
   'MEDIA_TYPE_UNSUPPORTED',
   'FILE_IS_DOCUMENT',
+  'VIDEO_TOO_LONG',
 ] as const;
 
 export type KernelErrorCode = (typeof KERNEL_ERROR_CODES)[number];

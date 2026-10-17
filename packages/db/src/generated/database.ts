@@ -334,6 +334,7 @@ export interface KernelFileTable {
   created_by: string | null;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   generation: string | null;
+  duration_ms: string | null;
 }
 
 /** crove_kernel.file_upload */
