@@ -13,6 +13,7 @@ import { InboxDetailPage } from './routes/inbox-detail.tsx';
 import { InboxPage } from './routes/inbox.tsx';
 import { InvitePage } from './routes/invite.tsx';
 import { JournalPage } from './routes/journal.tsx';
+import { LedgerPage } from './routes/ledger.tsx';
 import { MfaPage } from './routes/mfa.tsx';
 import { OnboardingPage } from './routes/onboarding.tsx';
 import { OrgLayout } from './routes/org-layout.tsx';
@@ -146,6 +147,8 @@ const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendor
 const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, component: JournalPage });
 // VAT working per month or quarter (issue #316).
 const vatRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vat', beforeLoad: requireFinance, component: VatPage });
+// Ledger reports per month, quarter or year (issue #321).
+const ledgerRoute = createRoute({ getParentRoute: () => orgRoute, path: 'ledger', beforeLoad: requireFinance, component: LedgerPage });
 // The Vietnamese quick guide (issue #310), linked from the empty Inbox; it walks through finance screens.
 const guideRoute = createRoute({ getParentRoute: () => orgRoute, path: 'guide', beforeLoad: requireFinance, component: GuidePage });
 // Screens of the social module; without it (CROVE_MODULES) they send you to the inbox.
@@ -170,7 +173,7 @@ const routeTree = rootRoute.addChildren([
   mfaRoute,
   resetPasswordRoute,
   onboardingRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vatRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vatRoute, ledgerRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

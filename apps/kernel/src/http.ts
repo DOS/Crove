@@ -26,10 +26,12 @@ import {
   JOURNAL_EXPORT_LIMIT,
   MISA_SME_PURCHASE_SERVICE,
   buildJournalWorkbook,
+  buildLedgerWorkbook,
   buildMisaWorkbook,
   buildVatWorkbook,
   purchaseRows,
   type JournalEntryView,
+  type LedgerBook,
   type PurchaseVoucher,
   type VatReport,
 } from '@crove/mod-finance';
@@ -772,6 +774,30 @@ export function createHttpApp(deps: HttpDeps) {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': `attachment; filename="crove-gtgt-${report.period.period}-${orgSlug}.xlsx"`,
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // Ledger reports of one month, quarter or year (issue #321), ?period=2026-09, 2026-Q3 or 2026. The query checks
+    // the period (422 otherwise) and the roles, so the file name below only ever holds a valid period.
+    app.get('/api/export/ledger.xlsx', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const period = c.req.query('period') ?? '';
+        const book = await runtime.query<LedgerBook>('finance.ledger.book', { period }, { actor: actorOf(user), orgId });
+        const bytes = await buildLedgerWorkbook(book, orgSlug ?? '');
+        // The export's audit row (period and journal line count only). No row, no download.
+        await runtime.execute('finance.ledger.export', { period: book.period.period, lines: book.lines }, { actor: actorOf(user), orgId });
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': `attachment; filename="crove-so-sach-${book.period.period}-${orgSlug}.xlsx"`,
             'cache-control': 'private, no-store',
           },
         });

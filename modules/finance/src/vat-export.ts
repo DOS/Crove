@@ -4,11 +4,9 @@
 // moneyCell, text never read as a formula. Headers and labels stay Vietnamese in every locale: the file goes to
 // Vietnamese accountants and their software.
 import ExcelJS from 'exceljs';
-import { moneyCell, textCell } from './export.ts';
+import { setMoneyCell as setMoney, setTextCell as setText } from './export.ts';
 import type { VatRate } from './domain/vat-return.ts';
 import type { VatInvoiceView, VatReport, VatSide, VatWarning } from './vat.ts';
-
-const TEXT_FORMAT = '@';
 
 export const VAT_RATE_LABELS: Readonly<Record<VatRate, string>> = {
   '0': '0%',
@@ -26,23 +24,6 @@ export const VAT_WARNING_LABELS: Readonly<Record<VatWarning, string>> = {
   reduced_rate_outside_period: 'Thuế suất 8% ngoài thời gian được giảm thuế',
   lines_mismatch: 'Tổng các dòng lệch tiền trước thuế của hóa đơn',
 };
-
-function setMoney(cell: ExcelJS.Cell, amount: string): void {
-  const value = moneyCell(amount);
-  cell.value = value.value;
-  if (value.kind === 'number') {
-    cell.numFmt = value.numFmt;
-  } else {
-    // Exact decimal kept as text (more digits than Excel can hold); aligned like a number.
-    cell.numFmt = TEXT_FORMAT;
-    cell.alignment = { horizontal: 'right' };
-  }
-}
-
-function setText(cell: ExcelJS.Cell, value: string | null | undefined): void {
-  cell.value = textCell(value);
-  cell.numFmt = TEXT_FORMAT;
-}
 
 function invoiceSheet(workbook: ExcelJS.Workbook, name: string, side: VatSide, partyHeader: string, taxCodeHeader: string): void {
   const sheet = workbook.addWorksheet(name);
