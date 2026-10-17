@@ -129,6 +129,27 @@ describe('trialBalance', () => {
     ]);
   });
 
+  it('nets a parent whose sub-accounts have balances on opposite sides', () => {
+    const opposite = trialBalance(
+      CHART,
+      [
+        { accountCode: '1331', partyId: null, debit: '100', credit: '0' },
+        { accountCode: '1332', partyId: null, debit: '0', credit: '30' },
+        { accountCode: '111', partyId: null, debit: '0', credit: '70' },
+      ],
+      [],
+    );
+    const sides = (code: string) => {
+      const r = opposite.rows.find((x) => x.accountCode === code);
+      return r && [r.openingDebit, r.openingCredit, r.closingDebit, r.closingCredit];
+    };
+    expect(sides('1331')).toEqual(['100', '0', '100', '0']);
+    expect(sides('1332')).toEqual(['0', '30', '0', '30']);
+    expect(sides('133')).toEqual(['70', '0', '70', '0']);
+    expect(opposite.totals).toMatchObject({ openingDebit: '70', openingCredit: '70', closingDebit: '70', closingCredit: '70' });
+    expect(opposite.balanced).toBe(true);
+  });
+
   it('shows payable and receivable balances per party: an advance to a vendor stays a debit balance', () => {
     expect(row('331')).toMatchObject({ openingDebit: '500000', openingCredit: '1100000', debit: '3300000', credit: '2200000', closingDebit: '500000', closingCredit: '0' });
     expect(row('131')).toMatchObject({ openingDebit: '0', debit: '3300000', closingDebit: '3300000' });

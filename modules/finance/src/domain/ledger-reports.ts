@@ -209,10 +209,11 @@ export function trialBalance(chartAccounts: ReadonlyArray<ChartAccount>, opening
     entry.change.set(key, (entry.change.get(key) ?? money(0)).plus(debit).minus(credit));
   }
 
+  const isPartyAccount = (code: string) => PARTY_BALANCE_ACCOUNTS.some((root) => chart.within(code, root));
   // The amounts of each account's own lines.
   const ownAmounts = new Map<string, Amounts>();
   for (const [code, entry] of own) {
-    const perParty = PARTY_BALANCE_ACCOUNTS.some((root) => chart.within(code, root));
+    const perParty = isPartyAccount(code);
     const parties = new Set([...entry.opening.keys(), ...entry.change.keys()]);
     const openingNets: DecimalValue[] = [];
     const closingNets: DecimalValue[] = [];
@@ -252,6 +253,13 @@ export function trialBalance(chartAccounts: ReadonlyArray<ChartAccount>, opening
     if (cached) return cached;
     let total = ownAmounts.get(code) ?? zero();
     for (const child of sortedChildren(code)) total = add(total, amountsOf(child));
+    // A parent outside 131 and 331 shows its net balance, as its own lines do: a debit sub-account and a credit
+    // sub-account offset each other instead of filling both columns.
+    if (!isPartyAccount(code)) {
+      const opening = sideSplit([total.openingDebit.minus(total.openingCredit)]);
+      const closing = sideSplit([total.closingDebit.minus(total.closingCredit)]);
+      total = { ...total, openingDebit: opening.debit, openingCredit: opening.credit, closingDebit: closing.debit, closingCredit: closing.credit };
+    }
     totalOf.set(code, total);
     return total;
   };
