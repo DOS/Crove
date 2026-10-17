@@ -6,7 +6,7 @@ import { useTranslations } from 'use-intl';
 import { I18nProvider } from './i18n/provider.tsx';
 import { startLocaleSync } from './i18n/runtime.ts';
 import { queryClient } from './lib/api.ts';
-import { auth, loadConfig } from './lib/auth.ts';
+import { auth, loadConfig, settleCallback } from './lib/auth.ts';
 import './styles.css';
 
 const root = createRoot(document.getElementById('root') as HTMLElement);
@@ -28,6 +28,7 @@ async function start() {
     );
     return;
   }
+  await settleCallback();
   const { router } = await import('./router.tsx');
   auth().onAuthStateChange((event: string) => {
     if (event === 'SIGNED_OUT') {

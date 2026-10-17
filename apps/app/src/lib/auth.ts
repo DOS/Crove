@@ -41,6 +41,8 @@ export function auth(): Client {
     url: authUrl,
     headers: authAnonKey ? { apikey: authAnonKey, Authorization: `Bearer ${authAnonKey}` } : {},
     storageKey: 'crove-auth',
+    // Email links (confirmation, recovery) come back with a one-time code that only this browser can exchange.
+    flowType: 'pkce',
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: true,
@@ -53,21 +55,88 @@ export async function accessToken(): Promise<string | null> {
   return data.session?.access_token ?? null;
 }
 
+// True when the session is signed in with a password only but the user has a verified second factor.
+export async function needsSecondFactor(): Promise<boolean> {
+  const { data } = await auth().mfa.getAuthenticatorAssuranceLevel();
+  return data?.currentLevel === 'aal1' && data.nextLevel === 'aal2';
+}
+
 export type { Session };
 
 // Supabase Auth error codes with a message of their own; any other error shows the server's message.
-const AUTH_ERRORS = ['invalid_credentials', 'user_already_exists', 'email_not_confirmed', 'weak_password', 'over_email_send_rate_limit'] as const;
+const AUTH_ERRORS = [
+  'invalid_credentials',
+  'user_already_exists',
+  'email_not_confirmed',
+  'weak_password',
+  'same_password',
+  'over_email_send_rate_limit',
+  'otp_expired',
+  'flow_state_expired',
+  'flow_state_not_found',
+  'bad_code_verifier',
+  'mfa_verification_failed',
+  'mfa_challenge_expired',
+  'insufficient_aal',
+] as const;
 type AuthErrorCode = (typeof AUTH_ERRORS)[number];
 
-// What the sign-in screen keeps of a Supabase Auth error: the code when the SPA words it, else the server's message.
+function knownCode(code: string | undefined): AuthErrorCode | null {
+  return AUTH_ERRORS.find((c) => c === code) ?? null;
+}
+
+// What a screen keeps of a Supabase Auth error: the code when the SPA words it, else the server's message.
 // It is put in words at render (authErrorText), so a language switch rewords it.
 export type AuthFailure = { code: AuthErrorCode } | { message: string };
 
 export function authFailure(error: { code?: string | undefined; message: string }): AuthFailure {
-  const code = AUTH_ERRORS.find((c): c is AuthErrorCode => c === error.code);
+  const code = knownCode(error.code);
   return code ? { code } : { message: error.message };
 }
 
 export function authErrorText(failure: AuthFailure, t: Translate): string {
   return 'code' in failure ? t(`auth.errors.${failure.code}`) : failure.message;
+}
+
+// What happened to an email link (confirmation or recovery) the app was opened with, shown once on the sign-in page.
+// Kept as a code, so the page shows it in the language it renders in.
+export type CallbackNotice = { error: true; code: AuthErrorCode | null } | { error: false };
+let callbackNotice: CallbackNotice | null = null;
+
+// Runs once at startup, before the router reads the URL. A failed link lands here with Supabase Auth's error.
+// A recovery link always opens the new-password screen, even if Supabase Auth redirected it elsewhere.
+export async function settleCallback(): Promise<void> {
+  let recovery = false;
+  const { data: listener } = auth().onAuthStateChange((event: string) => {
+    if (event === 'PASSWORD_RECOVERY') recovery = true;
+  });
+  const { error } = await auth().initialize();
+  listener.subscription.unsubscribe();
+  const url = new URL(window.location.href);
+  const hadCode = url.searchParams.has('code');
+  // The one-time code and any error leave the address bar and history; a leaked code could still be exchanged.
+  for (const key of ['code', 'error', 'error_code', 'error_description']) url.searchParams.delete(key);
+  if (/(^#|&)(error|error_code|error_description)=/.test(url.hash)) url.hash = '';
+  const target = recovery ? '/reset-password' : `${url.pathname}${url.search}${url.hash}`;
+  if (target !== `${window.location.pathname}${window.location.search}${window.location.hash}`) window.history.replaceState(null, '', target);
+  if (error) {
+    // The message can come from the link's error_description, which anyone can write: show known codes only.
+    callbackNotice = { error: true, code: knownCode((error as { details?: { code?: string } }).details?.code ?? error.code) };
+  } else if (hadCode && !(await accessToken())) {
+    // Supabase Auth accepted the link, but the one-time code belongs to another browser (PKCE).
+    callbackNotice = { error: false };
+  }
+}
+
+export function peekCallbackNotice(): CallbackNotice | null {
+  return callbackNotice;
+}
+
+export function callbackNoticeText(notice: CallbackNotice, t: Translate): string {
+  if (!notice.error) return t('auth.linkVerified');
+  return notice.code ? t(`auth.errors.${notice.code}`) : t('auth.linkInvalid');
+}
+
+export function clearCallbackNotice(): void {
+  callbackNotice = null;
 }

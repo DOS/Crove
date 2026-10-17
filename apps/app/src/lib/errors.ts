@@ -74,8 +74,7 @@ export function describeError(error: unknown, t: Translate, locale: Locale): str
 }
 
 // The session is valid but has not passed the user's second factor yet (issue #126): the kernel refuses every
-// call until it has. Not a sign-out: the server's message tells the user to enter their MFA code, and the MFA
-// challenge screen (issue #32) takes over once it ships.
+// call until it has. Not a sign-out: the SPA opens the MFA challenge (/mfa, issue #32).
 export function isMfaRequired(error: unknown): boolean {
   return (error as { code?: string } | null)?.code === 'MFA_REQUIRED';
 }
@@ -83,6 +82,11 @@ export function isMfaRequired(error: unknown): boolean {
 // The org's owner revoked this session for that org only (issue #247): leave the org, keep the session.
 export function isOrgAccessRevoked(error: unknown): boolean {
   return (error as { code?: string } | null)?.code === 'SESSION_REVOKED_IN_ORG';
+}
+
+// R3 work (approve, membership changes) needs a second factor verified in the last 5 minutes (policy P11).
+export function isStepUpRequired(error: unknown): boolean {
+  return (error as { code?: string } | null)?.code === 'STEP_UP_REQUIRED';
 }
 
 export function isUnauthenticated(error: unknown): boolean {
