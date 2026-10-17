@@ -23,7 +23,7 @@
 // Environment: DRILL_SRC_PORT (default 18181), DRILL_RESTORE_PORT (18182), DRILL_BASH (default bash).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -302,6 +302,12 @@ async function main() {
   assert(/\[backup\] FAILED: file copy/.test(broken.output), 'a failing backup logs [backup] FAILED');
   assert(broken.output.includes('the backup failed.'), 'a failing backup alerts through the prober');
   log('failure path: backup.sh exited 1, logged [backup] FAILED and the prober printed the alert');
+  // A missing setting fails before anything is dumped, through the same report and alert.
+  const unset = script('backup.sh', SRC, { BACKUP_S3_BUCKET: '' });
+  assert(unset.status === 1, `a backup without BACKUP_S3_BUCKET exits 1 (got ${unset.status})`);
+  assert(unset.output.includes('[backup] FAILED: settings: BACKUP_S3_BUCKET is required'), 'a missing setting logs [backup] FAILED');
+  assert(unset.output.includes('the backup failed.'), 'a missing setting alerts through the prober');
+  log('failure path: a missing BACKUP_S3_BUCKET exited 1, logged [backup] FAILED and alerted');
 
   const backup = await time('backup', async () => script('backup.sh', SRC, {}));
   assert(backup.status === 0, `backup.sh exits 0 (got ${backup.status})`);
@@ -312,10 +318,24 @@ async function main() {
   });
   log('source stack, its volumes and the local copy of the backup are gone; only the backup bucket is left');
 
+  // A STORAGE that differs from the target stack's would write the blobs where the target does not read them (the
+  // production bucket, for a scratch stack): restore.sh refuses before it touches anything.
+  const wrongStorage = DST.storage === 's3' ? 'local' : 's3';
+  const refused = script('restore.sh', DST, { STORAGE: wrongStorage, S3_BUCKET: 'crove-files' }, ['s3:latest']);
+  assert(refused.status === 1, `restore.sh with STORAGE=${wrongStorage} exits 1 (got ${refused.status})`);
+  assert(refused.output.includes(`the target compose project uses STORAGE=${DST.storage}`), 'restore.sh names the storage mismatch');
+  log(`refused: restore.sh with STORAGE=${wrongStorage} onto a STORAGE=${DST.storage} stack`);
+
   const restore = await time('restore (restore.sh s3:latest, until /readyz is green)', async () =>
     script('restore.sh', DST, DST.storage === 's3' ? { RESTORE_PRESTART: 'db minio', RESTORE_SAMPLE: '0' } : { RESTORE_SAMPLE: '0' }, ['s3:latest']),
   );
   assert(restore.status === 0, `restore.sh exits 0 (got ${restore.status})`);
+  // The downloaded copy of the run (the whole database in plain text) is gone; the restore log and lists stay.
+  const restoreDirs = readdirSync(backupDir).filter((name) => name.startsWith('restore-'));
+  assert(restoreDirs.length === 1, `one restore directory (found ${restoreDirs.join(', ')})`);
+  const leftover = readdirSync(`${backupDir}/${restoreDirs[0]}`).filter((name) => /^\d{8}T\d{6}Z$/.test(name));
+  assert(leftover.length === 0, `no downloaded run left after the restore (found ${leftover.join(', ')})`);
+  assert(readdirSync(`${backupDir}/${restoreDirs[0]}`).includes('counts.restored.tsv'), 'the restore directory keeps its lists');
   await time('verify through the API', async () => {
     await ready(DST);
     await verifyRestored(seeded);

@@ -2,6 +2,9 @@
 # Needs bash, docker with the compose plugin, tar, sha256sum and the usual coreutils on the host. Every database
 # command runs inside the stack's `db` container, every S3 command in a throwaway container of BACKUP_MC_IMAGE.
 
+# Runs hold the whole database (password hashes, refresh tokens, MFA secrets): nothing written is readable by others.
+umask 077
+
 # Git Bash on Windows rewrites arguments that look like paths (/data/files); Linux ignores these.
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 
@@ -51,26 +54,51 @@ stack_network() {
 }
 
 # mc_run <network> <host dir mounted at /work> <script>: runs a POSIX sh script in a throwaway MinIO client
-# container. Credentials reach it as environment variables named on the command line without their values, so
-# they never appear in a process list. The image has sh, mc, sha256sum, cut and cat, nothing else.
+# container, as the host user and with umask 077, so what it writes stays private. Its aliases `src` and `dst` come
+# from MC_HOST_src and MC_HOST_dst (set_mc_hosts), passed by name with -e, so the keys appear on no command line,
+# here or in the container. The image has sh, mc, sha256sum, cut and cat, nothing else.
 mc_run() {
   local network="$1" dir="$2" script="$3"
   local args=(run --rm -i --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$(host_path "$dir"):/work")
   [ -n "$network" ] && args+=(--network "$network")
   local name
-  for name in S3_ENDPOINT S3_BUCKET S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_PATH \
-    BACKUP_S3_ENDPOINT BACKUP_S3_BUCKET BACKUP_S3_PREFIX BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY RUN_ID; do
+  for name in MC_HOST_src MC_HOST_dst S3_BUCKET BACKUP_S3_BUCKET BACKUP_S3_PREFIX RUN_ID; do
     args+=(-e "$name")
   done
-  docker "${args[@]}" --entrypoint /bin/sh "${BACKUP_MC_IMAGE:-$BACKUP_MC_IMAGE_DEFAULT}" -c "$script"
+  docker "${args[@]}" --entrypoint /bin/sh "${BACKUP_MC_IMAGE:-$BACKUP_MC_IMAGE_DEFAULT}" -c "umask 077; $script"
 }
 
-# sh snippets that define the mc aliases inside mc_run. src: the stack's bucket (S3_*), dst: the backup target
-# (BACKUP_S3_*). An empty S3_ENDPOINT means AWS S3, as in the kernel.
-MC_ALIAS_SRC='mc alias set src "${S3_ENDPOINT:-https://s3.amazonaws.com}" "$S3_ACCESS_KEY_ID" "$S3_SECRET_ACCESS_KEY" --path "${S3_PATH:-auto}" >/dev/null'
-MC_ALIAS_DST='mc alias set dst "$BACKUP_S3_ENDPOINT" "$BACKUP_S3_ACCESS_KEY_ID" "$BACKUP_S3_SECRET_ACCESS_KEY" >/dev/null'
+# Percent-encodes a string for the user information part of a URL.
+urlencode() {
+  local LC_ALL=C s="$1" out='' c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in [a-zA-Z0-9._~-]) out+="$c" ;; *) out+="$(printf '%%%02X' "'$c")" ;; esac
+  done
+  printf '%s' "$out"
+}
 
-s3_path_style() { if [ "${S3_FORCE_PATH_STYLE:-false}" = true ]; then echo on; else echo auto; fi; }
+# mc_host <endpoint> <access key> <secret>: an MC_HOST_<alias> value, scheme://key:secret@host[:port]. mc picks the
+# addressing style itself (path style for anything but the large providers it knows).
+mc_host() { printf '%s://%s:%s@%s' "${1%%://*}" "$(urlencode "$2")" "$(urlencode "$3")" "${1#*://}"; }
+
+# The mc aliases: src is the stack's bucket (S3_*; an empty S3_ENDPOINT means AWS S3, as in the kernel), dst the
+# backup bucket (BACKUP_S3_*). Exported for mc_run only.
+set_mc_hosts() {
+  if [ -n "${S3_BUCKET:-}" ]; then
+    MC_HOST_src="$(mc_host "${S3_ENDPOINT:-https://s3.amazonaws.com}" "${S3_ACCESS_KEY_ID:-}" "${S3_SECRET_ACCESS_KEY:-}")"
+    export MC_HOST_src
+  fi
+  if [ -n "${BACKUP_S3_ENDPOINT:-}" ]; then
+    MC_HOST_dst="$(mc_host "$BACKUP_S3_ENDPOINT" "${BACKUP_S3_ACCESS_KEY_ID:-}" "${BACKUP_S3_SECRET_ACCESS_KEY:-}")"
+    export MC_HOST_dst
+  fi
+  export S3_BUCKET BACKUP_S3_BUCKET BACKUP_S3_PREFIX
+}
+
+# The values the target compose project resolves for an environment variable of its services (`docker compose
+# config`), one per line. restore.sh compares them with its own settings.
+stack_setting() { dc config 2>/dev/null | sed -n "s/^      $1: *//p" | sed 's/^"\(.*\)"$/\1/' | sort -u; }
 
 # The row count of every table, as "schema.table<TAB>count" sorted by name, except crove_kernel.context_key, whose
 # rows a backup leaves out on purpose (docs/runbooks/context-key-rotation.md). Run as the superuser, so row level

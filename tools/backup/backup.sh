@@ -45,10 +45,6 @@ BACKUP_S3_PREFIX="${BACKUP_S3_PREFIX:-crove}"
 BACKUP_FILES_SERVICE="${BACKUP_FILES_SERVICE:-crove}"
 BACKUP_ALERT="${BACKUP_ALERT:-prober}"
 STORAGE="${STORAGE:-local}"
-S3_PATH="$(s3_path_style)"
-# Passed by name to the MinIO client container (lib.sh, mc_run).
-export BACKUP_S3_PREFIX S3_PATH S3_ENDPOINT S3_BUCKET S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY BACKUP_S3_ENDPOINT BACKUP_S3_BUCKET \
-  BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 export RUN_ID
 RUN="$BACKUP_DIR/$RUN_ID"
@@ -56,31 +52,58 @@ PARTIAL="$RUN.partial"
 LOCK="$BACKUP_DIR/.lock"
 LOG_FILE="$BACKUP_DIR/logs/$RUN_ID.log"
 STEP=setup
+REPORTED=0
 
 alert() {
   [ "$BACKUP_ALERT" = off ] && return 0
   dc run --rm --no-deps -T prober prober --backup-failed "$1" </dev/null || log "the backup alert could not be sent (see above)"
 }
 
+# Every failure ends here once: the log line, the alert, the lock released.
+report_failure() {
+  REPORTED=1
+  trap - ERR
+  printf '[backup] FAILED: %s\n' "$1" >&2
+  alert "$1"
+  [ -d "$LOCK" ] && [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"
+  return 0
+}
+
 on_error() {
   local status=$? line=$1
   # A failure inside a command substitution reaches the main shell as well: report it once, there.
   [ "$BASH_SUBSHELL" -gt 0 ] && exit "$status"
-  trap - ERR
-  local reason="$STEP failed (exit $status, backup.sh line $line); run $RUN_ID, log $LOG_FILE"
-  printf '[backup] FAILED: %s\n' "$reason" >&2
-  alert "$reason"
-  [ -d "$LOCK" ] && [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"
+  report_failure "$STEP failed (exit $status, backup.sh line $line); run $RUN_ID, log $LOG_FILE"
   exit 1
 }
 trap 'on_error $LINENO' ERR
 
+# Anything that ends the script without passing through on_error (a shell error such as an unset variable under
+# set -u, a signal) is reported here, so no failure stays silent.
+on_exit() {
+  local status=$?
+  [ "$BASH_SUBSHELL" -gt 0 ] && return
+  if [ "$status" -ne 0 ] && [ "$REPORTED" -eq 0 ]; then
+    report_failure "backup.sh stopped with exit $status during: $STEP; run $RUN_ID, log $LOG_FILE"
+  fi
+}
+trap on_exit EXIT
+
+STEP="settings"
 case "$STORAGE" in local | s3) ;; *) STEP="settings: STORAGE must be local or s3, not $STORAGE"; false ;; esac
 for n in BACKUP_KEEP_DAYS BACKUP_LOCAL_KEEP_DAYS; do
   [[ "${!n}" =~ ^[1-9][0-9]{0,3}$ ]] || { STEP="settings: $n must be a whole number of days"; false; }
 done
+if [ "$STORAGE" = s3 ] && [ -z "${S3_BUCKET:-}" ]; then STEP="settings: S3_BUCKET is required with STORAGE=s3"; false; fi
+if [ -n "${BACKUP_S3_ENDPOINT:-}" ]; then
+  for n in BACKUP_S3_BUCKET BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY; do
+    [ -n "${!n:-}" ] || { STEP="settings: $n is required with BACKUP_S3_ENDPOINT"; false; }
+  done
+fi
+set_mc_hosts
 
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 STEP="taking the lock $LOCK (another backup running?)"
 if ! mkdir "$LOCK" 2>/dev/null; then
   holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
@@ -126,9 +149,8 @@ STEP="file copy ($STORAGE)"
 if [ "$STORAGE" = local ]; then
   dc exec -T "$BACKUP_FILES_SERVICE" tar -C /data/files --exclude='*.tmp' -cf - . | tar -xf - -C "$PARTIAL/files"
 else
-  : "${S3_BUCKET:?S3_BUCKET is required with STORAGE=s3}"
   network="${BACKUP_SOURCE_NETWORK:-$(stack_network)}"
-  mc_run "$network" "$PARTIAL" "$MC_ALIAS_SRC && mc mirror --quiet --exclude 'staging/*' \"src/\$S3_BUCKET\" /work/files >/dev/null" </dev/null
+  mc_run "$network" "$PARTIAL" "mc mirror --quiet --exclude 'staging/*' \"src/\$S3_BUCKET\" /work/files >/dev/null" </dev/null
 fi
 STEP="file checksums"
 (cd "$PARTIAL/files" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) | normalize_sums >"$PARTIAL/files.sha256"
@@ -155,28 +177,42 @@ ledger="$(db_psql -d postgres -tA -c 'SELECT max(version) FROM crove_meta.schema
   echo "COMPOSE_PROJECT=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$(dc ps -q db)")"
 } >"$PARTIAL/meta.env"
 (cd "$PARTIAL" && sha256sum db.dump roles.sql counts.tsv file-refs.tsv files.sha256 meta.env) | normalize_sums >"$PARTIAL/SHA256SUMS"
+# The umask covers what this script writes; tar run as root keeps the modes of the archive, so close those too.
+chmod -R go-rwx "$PARTIAL" "$BACKUP_DIR/logs"
 mv "$PARTIAL" "$RUN"
 log "complete: $RUN"
 
 # --- Second location ------------------------------------------------------------------------------------------------
 if [ -n "${BACKUP_S3_ENDPOINT:-}" ]; then
   STEP="upload to the backup bucket"
-  : "${BACKUP_S3_BUCKET:?BACKUP_S3_BUCKET is required with BACKUP_S3_ENDPOINT}"
   dest='dst/$BACKUP_S3_BUCKET/$BACKUP_S3_PREFIX/$RUN_ID'
-  mc_run "${BACKUP_S3_NETWORK:-}" "$RUN" "$MC_ALIAS_DST && mc mirror --quiet --exclude SHA256SUMS /work \"$dest\" >/dev/null && mc cp --quiet /work/SHA256SUMS \"$dest/SHA256SUMS\" >/dev/null && mc cat \"$dest/SHA256SUMS\"" </dev/null >"$BACKUP_DIR/.remote-sums"
-  cmp -s "$BACKUP_DIR/.remote-sums" "$RUN/SHA256SUMS" || { STEP="upload to the backup bucket: SHA256SUMS read back differs"; false; }
+  # A run that does not read back whole is deleted from the bucket, so s3:latest never picks it.
+  remove_remote_run() {
+    mc_run "${BACKUP_S3_NETWORK:-}" "$RUN" "mc rm --quiet --recursive --force \"$dest/\" >/dev/null" </dev/null ||
+      log "could not delete the incomplete run $RUN_ID from the backup bucket; delete it by hand"
+  }
+  if ! mc_run "${BACKUP_S3_NETWORK:-}" "$RUN" "mc mirror --quiet --exclude SHA256SUMS /work \"$dest\" >/dev/null && mc cp --quiet /work/SHA256SUMS \"$dest/SHA256SUMS\" >/dev/null && mc cat \"$dest/SHA256SUMS\"" </dev/null >"$BACKUP_DIR/.remote-sums" ||
+    ! cmp -s "$BACKUP_DIR/.remote-sums" "$RUN/SHA256SUMS"; then
+    remove_remote_run
+    STEP="upload to the backup bucket: the upload failed or SHA256SUMS read back differs"
+    false
+  fi
   rm -f "$BACKUP_DIR/.remote-sums"
-  remote_count="$(mc_run "${BACKUP_S3_NETWORK:-}" "$RUN" "$MC_ALIAS_DST && mc ls --recursive \"$dest/\" | wc -l" </dev/null)"
+  remote_count="$(mc_run "${BACKUP_S3_NETWORK:-}" "$RUN" "mc ls --recursive \"$dest/\" | wc -l" </dev/null)"
   local_count="$(cd "$RUN" && find . -type f | wc -l)"
-  [ "$((remote_count))" -eq "$((local_count))" ] || { STEP="upload to the backup bucket: $remote_count object(s) there, $local_count file(s) here"; false; }
+  if [ "$((remote_count))" -ne "$((local_count))" ]; then
+    remove_remote_run
+    STEP="upload to the backup bucket: $remote_count object(s) there, $local_count file(s) here"
+    false
+  fi
   log "uploaded to $BACKUP_S3_ENDPOINT, bucket $BACKUP_S3_BUCKET, prefix $BACKUP_S3_PREFIX/$RUN_ID ($remote_count objects)"
 
   STEP="pruning the backup bucket"
   cutoff="$(days_ago "$BACKUP_KEEP_DAYS")"
-  old="$(mc_run "${BACKUP_S3_NETWORK:-}" "$RUN" "$MC_ALIAS_DST && mc ls \"dst/\$BACKUP_S3_BUCKET/\$BACKUP_S3_PREFIX/\"" </dev/null |
+  old="$(mc_run "${BACKUP_S3_NETWORK:-}" "$RUN" "mc ls \"dst/\$BACKUP_S3_BUCKET/\$BACKUP_S3_PREFIX/\"" </dev/null |
     grep -o '[0-9]\{8\}T[0-9]\{6\}Z/$' | tr -d / | while read -r id; do [ "${id%%T*}" -lt "$cutoff" ] && echo "$id"; done || true)"
   for id in $old; do
-    mc_run "${BACKUP_S3_NETWORK:-}" "$RUN" "$MC_ALIAS_DST && mc rm --quiet --recursive --force \"dst/\$BACKUP_S3_BUCKET/\$BACKUP_S3_PREFIX/$id/\"" </dev/null
+    mc_run "${BACKUP_S3_NETWORK:-}" "$RUN" "mc rm --quiet --recursive --force \"dst/\$BACKUP_S3_BUCKET/\$BACKUP_S3_PREFIX/$id/\"" </dev/null
     log "deleted $id from the backup bucket (older than $BACKUP_KEEP_DAYS days)"
   done
   keep_local="$BACKUP_LOCAL_KEEP_DAYS"
@@ -197,9 +233,19 @@ for dir in "$BACKUP_DIR"/*; do
     log "deleted $name from $BACKUP_DIR"
   fi
 done
+# Directories restore.sh left (a failed restore keeps its downloaded copy of a run) follow the same cutoff.
+for dir in "$BACKUP_DIR"/restore-*; do
+  name="${dir##*/restore-}"
+  [[ "$name" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || continue
+  if [ "${name%%T*}" -lt "$cutoff" ]; then
+    rm -rf "$dir"
+    log "deleted restore-$name from $BACKUP_DIR"
+  fi
+done
 for file in "$BACKUP_DIR"/logs/*.log; do
   name="${file##*/}"
-  [[ "$name" =~ ^[0-9]{8}T[0-9]{6}Z\.log$ ]] || continue
+  [[ "$name" =~ ^(restore-)?[0-9]{8}T[0-9]{6}Z\.log$ ]] || continue
+  name="${name#restore-}"
   [ "${name%%T*}" -lt "$cutoff" ] && rm -f "$file"
 done
 

@@ -39,6 +39,7 @@ A run fails, and is kept as `<run id>.partial` until the next one deletes it, wh
 - Each run is written to `BACKUP_DIR` on the server, then copied to `BACKUP_S3_*`, an S3-compatible bucket in another place than the server and than the files bucket (another provider or account). The copy is checked: the `SHA256SUMS` read back must match, and the object count too. `SHA256SUMS` is uploaded last, so a run without it in the bucket is incomplete and restore refuses it.
 - Retention: runs older than `BACKUP_KEEP_DAYS` (30) are deleted from the bucket, and older than `BACKUP_LOCAL_KEEP_DAYS` (default the same; 7 in `.env.example`) from `BACKUP_DIR`. Logs are in `BACKUP_DIR/logs/`.
 - Every run is a full copy. At pilot scale (5 to 20 orgs, invoices of kilobytes) a run is a few megabytes; the bucket holds about 30 times the file store.
+- A run holds password hashes, refresh tokens and MFA secrets (the `auth` schema). The scripts run with `umask 077` and keep `BACKUP_DIR` at mode 700, so only the user that runs them can read it; run them as root or as a dedicated user in the `docker` group. The S3 keys reach the MinIO client container as `MC_HOST_*` environment variables, never on a command line.
 - The script does not encrypt the run. Whoever can read the backup bucket can read the books, so: a private bucket with encryption at rest, keys that reach only `BACKUP_S3_PREFIX` (list, read, write, delete), and, if the provider has it, versioning or object lock so a stolen server key cannot erase the history.
 - With no `BACKUP_S3_ENDPOINT` the runs stay in `BACKUP_DIR` only. That is for development: a copy on the same disk is not a backup.
 
@@ -84,7 +85,7 @@ A run fails, and is kept as `<run id>.partial` until the next one deletes it, wh
 
 ## When a backup fails
 
-A failed run exits 1, writes `[backup] FAILED: <step> failed (exit <code>, backup.sh line <n>); run <id>, log <file>` to stderr and to its log, and runs `docker compose run --rm --no-deps prober prober --backup-failed "<reason>"`. That sends `[Crove] ALERT on <instance>: the backup failed.` with the reason to `ALERT_WEBHOOK_URL`, in the format the other alerts use (README, "Monitoring and alerts"); without a webhook it is printed. `BACKUP_ALERT=off` skips the alert.
+A failed run exits 1, writes `[backup] FAILED: <step> failed (exit <code>, backup.sh line <n>); run <id>, log <file>` to stderr and to its log, and runs `docker compose run --rm --no-deps prober prober --backup-failed "<reason>"`. That sends `[Crove] ALERT on <instance>: the backup failed.` with the reason to `ALERT_WEBHOOK_URL`, in the format the other alerts use (README, "Monitoring and alerts"); without a webhook it is printed. `BACKUP_ALERT=off` skips the alert. A missing setting (say `BACKUP_S3_BUCKET` with `BACKUP_S3_ENDPOINT` set) fails the same way before anything is dumped, and any other stop of the script (a shell error, a signal) is reported and alerted from its exit handler. A run whose copy in the bucket does not read back whole is deleted from the bucket, so `s3:latest` never picks it.
 
 Read the log, fix the cause, and run `tools/backup/backup.sh` again by hand. The next run deletes the `.partial` directory of the failed one.
 
@@ -92,7 +93,7 @@ What no alert covers: a backup that never runs (the timer disabled, the server o
 
 ## Restore
 
-`tools/backup/restore.sh <run>` restores a run onto the compose stack named by the current directory's `.env`, `COMPOSE_PROJECT_NAME` and `COMPOSE_FILE`, and checks it. `<run>` is a run directory, `s3:<run id>` or `s3:latest` (the newest complete run in `BACKUP_S3_*`). It refuses a database that already holds Crove: restore into empty volumes only.
+`tools/backup/restore.sh <run>` restores a run onto the compose stack named by the current directory's `.env`, `COMPOSE_PROJECT_NAME` and `COMPOSE_FILE`, and checks it. `<run>` is a run directory, `s3:<run id>` or `s3:latest` (the newest complete run in `BACKUP_S3_*`). It refuses a database that already holds Crove: restore into empty volumes only. It also refuses when its own `STORAGE` (or, with `s3`, `S3_BUCKET`) differs from what the target compose project resolves (`docker compose config`): the blobs would otherwise go where the target does not read them, for a scratch stack possibly the production bucket, bringing back erased blobs.
 
 It runs these steps and stops at the first failure with `[restore] FAILED: <reason>`:
 
@@ -103,7 +104,7 @@ It runs these steps and stops at the first failure with `[restore] FAILED: <reas
 5. Reads back `RESTORE_SAMPLE` blobs (default 50, `0` for all) named by restored file rows, each at its recorded version, and checks their sha256.
 6. Starts the whole stack: `migrate` must finish (it applies migrations newer than the backup, sets the role passwords and runs the hardening guard), then `/readyz` must answer `{"ready":true}`.
 
-It prints the time of each step and of the whole restore.
+It prints the time of each step and of the whole restore. Its log, the row counts, the blob sample and `generations.tsv` stay in `BACKUP_DIR/restore-<time>/`. A run downloaded for `s3:` is deleted from there when the restore passes (a failed restore keeps it for diagnosis), and restore directories past the local retention are deleted by the nightly backup (and by the next restore), so no plain copy outlives the retention.
 
 ### Onto a new server (disaster)
 
@@ -154,15 +155,15 @@ The plan's rehearsal of the full disaster path (§7.9) is the drill below, done 
 
 ## The restore drill (2026-10-17)
 
-`node tools/backup/drill.mjs` runs the whole path on throwaway stacks with their own compose project names, image tags and ports, then removes everything it made: it seeds a source stack (an org, three synthetic e-invoices uploaded and read into proposals, one approved into the journal), checks that a failing backup exits 1 and alerts through the prober, makes a backup to a separate MinIO playing the second location, deletes the source stack, its volumes and the local copy of the run, restores `s3:latest` onto a scratch stack with empty volumes and an empty bucket, and then signs in as the same user through the API, downloads the three files and compares their sha256, finds the journal entry, and uploads a fourth invoice that the worker reads.
+`node tools/backup/drill.mjs` runs the whole path on throwaway stacks with their own compose project names, image tags and ports, then removes everything it made: it seeds a source stack (an org, three synthetic e-invoices uploaded and read into proposals, one approved into the journal), checks that a failing backup and a missing setting each exit 1 and alert through the prober, makes a backup to a separate MinIO playing the second location, deletes the source stack, its volumes and the local copy of the run, checks that `restore.sh` refuses a `STORAGE` that differs from the scratch stack's, restores `s3:latest` onto a scratch stack with empty volumes and an empty bucket, checks that the downloaded copy of the run is gone afterwards, and then signs in as the same user through the API, downloads the three files and compares their sha256, finds the journal entry, and uploads a fourth invoice that the worker reads.
 
-Run on 2026-10-17 on a development workstation (Windows 11, Docker Desktop, Git Bash), on `main` at schema version `20261019010000`. All three variants passed (s3 three times, local twice; the table gives the range), and each removed its containers, volumes, networks and images:
+Run on 2026-10-17 on a development workstation (Windows 11, Docker Desktop, Git Bash), on `main` at schema version `20261019010000`. All three variants passed (s3 four times, local three times, s3 to local twice; the table gives the range), and each removed its containers, volumes, networks and images:
 
 | Variant | Backup | Restore (`restore.sh s3:latest` until `/readyz` is green) | Restore and API checks |
 |---|---|---|---|
 | `--storage s3`: api and worker, files in a versioned MinIO bucket, restored into a new empty bucket (the disaster path) | 63 to 88 s | 86 to 128 s | **89 to 129 s** |
-| `--storage local`: the all-in-one stack, files on the volume | 46 to 59 s | 71 to 75 s | 73 to 79 s |
-| `--storage s3 --restore-storage local`: the monthly test, an S3 backup onto a scratch stack with `scratch.compose.yml` | 74 s | 85 s | 87 s |
+| `--storage local`: the all-in-one stack, files on the volume | 46 to 73 s | 71 to 111 s | 73 to 114 s |
+| `--storage s3 --restore-storage local`: the monthly test, an S3 backup onto a scratch stack with `scratch.compose.yml` | 62 to 74 s | 83 to 85 s | 87 s |
 
 The steps of the s3 restore: fetch and check 11 s, database 19 s, database checks 9 s, files (with 3 generations pointed at the new versions) 7 s, blob read-back 9 s, stack start 27 s. The data was small (a 580 KB dump, 89 tables, 258 rows, 3 blobs), so these times are mostly fixed costs: starting containers and Supabase Auth. The failing backup exited 1 within seconds and the prober printed `[Crove] ALERT on localhost:18181: the backup failed.` with the reason.
 

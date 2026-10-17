@@ -5,7 +5,8 @@
 #   tools/backup/restore.sh <run>      <run> is a run directory, s3:<run id> or s3:latest (from BACKUP_S3_*)
 #
 # The target is the compose stack that CROVE_DIR, COMPOSE_PROJECT_NAME, COMPOSE_FILE and .env name, with an empty
-# database volume: the script refuses a database that already holds Crove. Steps:
+# database volume: the script refuses a database that already holds Crove, and a STORAGE or S3_BUCKET that differs
+# from what that project resolves. A run downloaded for s3: is deleted once the restore passes. Steps:
 #   1. check the run against SHA256SUMS and files.sha256;
 #   2. start RESTORE_PRESTART (default: db), load the roles and pg_restore the dump (pg_restore --create, so the
 #      database's own settings and grants come back too);
@@ -30,7 +31,11 @@ LOG_TAG=restore
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 load_env_file "$CROVE_DIR/.env"
 
-SOURCE="${1:?usage: restore.sh <run directory | s3:<run id> | s3:latest>}"
+if [ $# -ne 1 ]; then
+  echo 'usage: restore.sh <run directory | s3:<run id> | s3:latest>' >&2
+  exit 2
+fi
+SOURCE="$1"
 BACKUP_DIR="${BACKUP_DIR:-$CROVE_DIR/.data/backups}"
 BACKUP_S3_PREFIX="${BACKUP_S3_PREFIX:-crove}"
 STORAGE="${STORAGE:-local}"
@@ -39,13 +44,12 @@ RESTORE_SAMPLE="${RESTORE_SAMPLE:-50}"
 RESTORE_FILES_SERVICE="${RESTORE_FILES_SERVICE:-crove}"
 RESTORE_READY_TIMEOUT="${RESTORE_READY_TIMEOUT:-600}"
 RESTORE_FILES="${RESTORE_FILES:-copy}"
-S3_PATH="$(s3_path_style)"
-export BACKUP_S3_PREFIX S3_PATH S3_ENDPOINT S3_BUCKET S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY BACKUP_S3_ENDPOINT BACKUP_S3_BUCKET \
-  BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY
+BACKUP_KEEP_DAYS="${BACKUP_KEEP_DAYS:-30}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 WORK="$BACKUP_DIR/restore-$STAMP"
 LOG_FILE="$BACKUP_DIR/logs/restore-$STAMP.log"
 STEP=setup
+REPORTED=0
 PHASE_AT="$STARTED_AT"
 PHASES=()
 
@@ -53,10 +57,19 @@ on_error() {
   local status=$? line=$1
   [ "$BASH_SUBSHELL" -gt 0 ] && exit "$status"
   trap - ERR
+  REPORTED=1
   printf '[restore] FAILED: %s (exit %s, restore.sh line %s); log %s\n' "$STEP" "$status" "$line" "$LOG_FILE" >&2
   exit 1
 }
 trap 'on_error $LINENO' ERR
+# A stop that bypasses on_error (a shell error, a signal) is reported too.
+on_exit() {
+  local status=$?
+  [ "$BASH_SUBSHELL" -gt 0 ] && return
+  [ "$status" -ne 0 ] && [ "$REPORTED" -eq 0 ] && printf '[restore] FAILED: stopped with exit %s during: %s; log %s\n' "$status" "$STEP" "$LOG_FILE" >&2
+  return 0
+}
+trap on_exit EXIT
 
 # Ends the current phase: records how long it took.
 phase_done() {
@@ -70,7 +83,31 @@ phase_done() {
 case "$STORAGE" in local | s3) ;; *) STEP="settings: STORAGE must be local or s3, not $STORAGE"; false ;; esac
 [[ "$RESTORE_SAMPLE" =~ ^[0-9]+$ ]] || { STEP="settings: RESTORE_SAMPLE must be a whole number"; false; }
 case "$RESTORE_FILES" in copy | skip) ;; *) STEP="settings: RESTORE_FILES must be copy or skip"; false ;; esac
+[[ "$BACKUP_KEEP_DAYS" =~ ^[1-9][0-9]{0,3}$ ]] || { STEP="settings: BACKUP_KEEP_DAYS must be a whole number of days"; false; }
+if [ "$STORAGE" = s3 ] && [ -z "${S3_BUCKET:-}" ]; then STEP="settings: S3_BUCKET is required with STORAGE=s3"; false; fi
+if [[ "$SOURCE" == s3:* ]]; then
+  for n in BACKUP_S3_ENDPOINT BACKUP_S3_BUCKET BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY; do
+    [ -n "${!n:-}" ] || { STEP="settings: $n is required to restore $SOURCE"; false; }
+  done
+fi
+set_mc_hosts
+
+# The blobs go where the target stack reads them, and nowhere else. A STORAGE or S3_BUCKET here that differs from
+# what the target compose project resolves (say, a scratch stack on STORAGE=local restored with production's
+# STORAGE=s3 from .env) would write into a bucket the target does not use: the production bucket, where it would
+# bring back erased blobs.
+STEP="checking the target stack's storage"
+stack_storage="$(stack_setting STORAGE)"
+[ "$stack_storage" = "$STORAGE" ] ||
+  { STEP="settings: STORAGE=$STORAGE here, but the target compose project uses STORAGE=$(echo $stack_storage) (set STORAGE to match)"; false; }
+if [ "$STORAGE" = s3 ]; then
+  stack_bucket="$(stack_setting S3_BUCKET)"
+  [ "$stack_bucket" = "$S3_BUCKET" ] ||
+    { STEP="settings: S3_BUCKET=$S3_BUCKET here, but the target compose project uses $(echo $stack_bucket) (set S3_BUCKET to match)"; false; }
+fi
+
 mkdir -p "$WORK" "$BACKUP_DIR/logs"
+chmod 700 "$BACKUP_DIR"
 exec > >(tee -a "$LOG_FILE") 2>&1
 log "restoring $SOURCE onto compose project ${COMPOSE_PROJECT_NAME:-of $CROVE_DIR} (storage $STORAGE)"
 
@@ -78,14 +115,13 @@ log "restoring $SOURCE onto compose project ${COMPOSE_PROJECT_NAME:-of $CROVE_DI
 STEP="fetching the run"
 case "$SOURCE" in
   s3:*)
-    : "${BACKUP_S3_ENDPOINT:?BACKUP_S3_ENDPOINT is required for $SOURCE}" "${BACKUP_S3_BUCKET:?BACKUP_S3_BUCKET is required}"
     RUN_ID="${SOURCE#s3:}"
     if [ "$RUN_ID" = latest ]; then
       # The newest complete run: SHA256SUMS is uploaded last.
       RUN_ID=""
-      for id in $(mc_run "${BACKUP_S3_NETWORK:-}" "$WORK" "$MC_ALIAS_DST && mc ls \"dst/\$BACKUP_S3_BUCKET/\$BACKUP_S3_PREFIX/\"" </dev/null |
+      for id in $(mc_run "${BACKUP_S3_NETWORK:-}" "$WORK" "mc ls \"dst/\$BACKUP_S3_BUCKET/\$BACKUP_S3_PREFIX/\"" </dev/null |
         grep -o '[0-9]\{8\}T[0-9]\{6\}Z/$' | tr -d / | sort -r); do
-        if mc_run "${BACKUP_S3_NETWORK:-}" "$WORK" "$MC_ALIAS_DST && mc stat \"dst/\$BACKUP_S3_BUCKET/\$BACKUP_S3_PREFIX/$id/SHA256SUMS\" >/dev/null 2>&1" </dev/null; then
+        if mc_run "${BACKUP_S3_NETWORK:-}" "$WORK" "mc stat \"dst/\$BACKUP_S3_BUCKET/\$BACKUP_S3_PREFIX/$id/SHA256SUMS\" >/dev/null 2>&1" </dev/null; then
           RUN_ID="$id"
           break
         fi
@@ -94,7 +130,7 @@ case "$SOURCE" in
     fi
     [[ "$RUN_ID" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { STEP="fetching the run: $RUN_ID is not a run id"; false; }
     export RUN_ID
-    mc_run "${BACKUP_S3_NETWORK:-}" "$WORK" "$MC_ALIAS_DST && mc mirror --quiet \"dst/\$BACKUP_S3_BUCKET/\$BACKUP_S3_PREFIX/\$RUN_ID\" \"/work/\$RUN_ID\" >/dev/null" </dev/null
+    mc_run "${BACKUP_S3_NETWORK:-}" "$WORK" "mc mirror --quiet \"dst/\$BACKUP_S3_BUCKET/\$BACKUP_S3_PREFIX/\$RUN_ID\" \"/work/\$RUN_ID\" >/dev/null" </dev/null
     RUN="$WORK/$RUN_ID"
     ;;
   *)
@@ -159,12 +195,11 @@ if [ "$RESTORE_FILES" = skip ]; then
 elif [ "$STORAGE" = local ]; then
   tar -cf - -C "$RUN/files" . | dc run --rm --no-deps -T --entrypoint tar "$RESTORE_FILES_SERVICE" -xf - -C /data/files
 else
-  : "${S3_BUCKET:?S3_BUCKET is required with STORAGE=s3}"
   network="${RESTORE_TARGET_NETWORK:-$(stack_network)}"
   # The bucket must exist; with S3_VERSIONING=required (the default) it must keep versions.
   versioning=''
   [ "${S3_VERSIONING:-required}" = required ] && versioning='&& mc version enable "src/$S3_BUCKET" >/dev/null'
-  mc_run "$network" "$RUN" "$MC_ALIAS_SRC && { mc stat \"src/\$S3_BUCKET\" >/dev/null 2>&1 || mc mb \"src/\$S3_BUCKET\" >/dev/null; } $versioning && mc mirror --quiet /work/files \"src/\$S3_BUCKET\" >/dev/null && mc ls --recursive --versions --json \"src/\$S3_BUCKET\"" </dev/null >"$WORK/objects.jsonl"
+  mc_run "$network" "$RUN" "{ mc stat \"src/\$S3_BUCKET\" >/dev/null 2>&1 || mc mb \"src/\$S3_BUCKET\" >/dev/null; } $versioning && mc mirror --quiet /work/files \"src/\$S3_BUCKET\" >/dev/null && mc ls --recursive --versions --json \"src/\$S3_BUCKET\"" </dev/null >"$WORK/objects.jsonl"
 
   STEP="pointing file rows at the restored object versions"
   # Each file row records the object version it was written as (ADR-0013). Restored objects have new version ids, so
@@ -224,7 +259,7 @@ while IFS="$tab" read -r key sha gen; do
   esac | sha256sum | cut -d' ' -f1
 done </work/sample.tsv
 SH
-  mc_run "$network" "$WORK" "$MC_ALIAS_SRC && $sample_script" </dev/null >"$WORK/sample.read"
+  mc_run "$network" "$WORK" "$sample_script" </dev/null >"$WORK/sample.read"
 fi
 if ! diff <(cut -f2 "$WORK/sample.tsv") "$WORK/sample.read" >/dev/null; then
   paste "$WORK/sample.tsv" "$WORK/sample.read" | awk -F'\t' '$2 != $4 {print "  bad blob: " $1}'
@@ -258,6 +293,24 @@ until ready="$(dc exec -T "$api" node -e "fetch('http://127.0.0.1:8080/readyz').
 done
 log "readyz: $ready"
 phase_done "stack start"
+
+STEP="cleaning up"
+# The downloaded copy of the run is the whole database in plain text: it goes now, and restore directories older
+# than BACKUP_KEEP_DAYS (a failed restore keeps its copy for diagnosis) go with the same cutoff as the runs. The log,
+# counts, sample and generations.tsv stay in $WORK.
+[[ "$SOURCE" == s3:* ]] && rm -rf "${WORK:?}/$RUN_ID"
+chmod -R go-rwx "$WORK"
+cutoff="$(days_ago "$BACKUP_KEEP_DAYS")"
+for dir in "$BACKUP_DIR"/restore-*; do
+  name="${dir##*/restore-}"
+  [[ "$name" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || continue
+  [ "${name%%T*}" -lt "$cutoff" ] && rm -rf "$dir" && log "deleted restore-$name (older than $BACKUP_KEEP_DAYS days)"
+done
+for file in "$BACKUP_DIR"/logs/restore-*.log; do
+  name="${file##*/restore-}"
+  [[ "$name" =~ ^[0-9]{8}T[0-9]{6}Z\.log$ ]] || continue
+  [ "${name%%T*}" -lt "$cutoff" ] && rm -f "$file"
+done
 
 log "restore of $RUN_ID passed in $(($(date +%s) - STARTED_AT)) s: ${PHASES[*]/%/;}"
 log "before reopening writes: reconcile with the e-invoice providers (docs/runbooks/ledger-after-restore.md, step 4)"
