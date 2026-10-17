@@ -116,3 +116,28 @@ describe('BlueskyPublisher', () => {
     expect(await publisher.reconcile(window)).toEqual({ found: false });
   });
 });
+
+describe('Bluesky edge answers', () => {
+  it('takes a success without a readable body after the post call as unknown, never a refusal', async () => {
+    const calls: string[] = [];
+    const fetchImpl: Fetch = async (input) => {
+      const url = new URL(input);
+      calls.push(url.pathname);
+      if (url.pathname.endsWith('createSession')) return new Response(JSON.stringify(session().body), { status: 200 });
+      return new Response('', { status: 200 });
+    };
+    expect((await new BlueskyPublisher(fetchImpl).publish(input())).kind).toBe('unknown');
+  });
+
+  it('refuses a PDS on another port and a malformed one', async () => {
+    for (const pds of ['https://morel.us-east.host.bsky.network:8443', 'not a url']) {
+      const { fetchImpl } = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session(pds)] });
+      await expect(connectBluesky({ handle: 'quan-a.bsky.social', appPassword: APP_PASSWORD }, fetchImpl)).rejects.toMatchObject({ code: 'UnsupportedPds' });
+    }
+  });
+
+  it('pauses on a deactivated account instead of failing the post', async () => {
+    const { fetchImpl } = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [{ status: 400, body: { error: 'AccountDeactivated', message: 'Account is deactivated' } }] });
+    expect(await new BlueskyPublisher(fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+  });
+});

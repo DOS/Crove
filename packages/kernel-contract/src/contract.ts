@@ -113,7 +113,8 @@ export const contract = {
     disconnect: oc.input(z.object({ connectionId: zId, idempotencyKey: zId })).output(z.object({ connectionId: zId, status: z.literal('revoked') })),
     // Bluesky with an app password (S9): checked once by opening a session, then sealed; the account password is refused.
     connectBluesky: oc
-      .input(z.object({ handle: z.string().trim().min(3).max(260), appPassword: z.string().trim().regex(/^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/) }))
+      // The format of an app password is checked by the server, which says so in words rather than as a validation error.
+      .input(z.object({ handle: z.string().trim().min(3).max(260), appPassword: z.string().trim().min(1).max(100) }))
       .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
     // Connecting through a provider's OAuth dialog (Social plan S6). Start returns where to send the browser; the
     // provider sends it back to /channels/oauth/:provider/callback, and that screen finishes the attempt with the code

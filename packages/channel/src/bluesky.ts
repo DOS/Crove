@@ -21,7 +21,7 @@ export function isBlueskyHost(host: string): boolean {
 function blueskyFetch(fetchImpl: Fetch = fetch, timeoutMs = 15_000): Fetch {
   return async (input, init) => {
     const url = new URL(input);
-    if (url.protocol !== 'https:' || !isBlueskyHost(url.hostname)) throw new Error(`host not allowed for Bluesky: ${url.hostname}`);
+    if (url.protocol !== 'https:' || url.port !== '' || !isBlueskyHost(url.hostname)) throw new Error(`host not allowed for Bluesky: ${url.hostname}`);
     return fetchImpl(url.toString(), { ...init, redirect: 'manual', signal: init?.signal ?? AbortSignal.timeout(timeoutMs) });
   };
 }
@@ -86,6 +86,8 @@ class Xrpc {
     }
     const response = await this.fetch(url.toString(), { method, headers, ...(body === undefined ? {} : { body: typeof body === 'string' ? body : new Blob([new Uint8Array(body)]) }) });
     const json = (await response.json().catch(() => null)) as ({ error?: unknown; message?: unknown } & Record<string, unknown>) | null;
+    // A success whose body cannot be read may still have done what was asked: never a refusal.
+    if (response.ok && !json) throw new BlueskyError(response.status, 'UnreadableAnswer', 'Bluesky answered without a readable body');
     if (!response.ok || !json) throw new BlueskyError(response.status, typeof json?.error === 'string' ? json.error : undefined, typeof json?.message === 'string' ? json.message : `Bluesky answered ${response.status}`);
     return json as T;
   }
@@ -98,8 +100,15 @@ class Xrpc {
     if (typeof answer.did !== 'string' || !answer.did.startsWith('did:') || typeof answer.accessJwt !== 'string') throw new BlueskyError(502, 'BadSession', 'Bluesky answered without a session');
     const endpoint = answer.didDoc?.service?.find((s) => s.id === '#atproto_pds')?.serviceEndpoint;
     const pds = typeof endpoint === 'string' ? endpoint.replace(/\/$/, '') : ENTRYWAY;
-    const host = new URL(pds).hostname;
-    if (!pds.startsWith('https://') || !isBlueskyHost(host)) throw new BlueskyError(400, 'UnsupportedPds', `accounts hosted on ${host} are not supported yet`);
+    let url: URL | null = null;
+    try {
+      url = new URL(pds);
+    } catch {
+      url = null;
+    }
+    if (!url || url.protocol !== 'https:' || url.port !== '' || url.pathname !== '/' || !isBlueskyHost(url.hostname)) {
+      throw new BlueskyError(400, 'UnsupportedPds', `accounts hosted on ${url?.host ?? 'this server'} are not supported yet`);
+    }
     return { did: answer.did, handle: typeof answer.handle === 'string' ? answer.handle : identifier, accessJwt: answer.accessJwt, pds };
   }
 }
@@ -133,8 +142,9 @@ const textOf = (content: { body: string; linkUrl: string | null }) => {
 function blueskyResult(error: unknown): PublishResult {
   if (!(error instanceof BlueskyError)) return { kind: 'unknown', code: 'NETWORK' };
   const code = error.code ?? `HTTP_${error.status}`;
-  if (error.status >= 500) return { kind: 'unknown', code, message: error.message };
-  if (error.status === 401 || error.code === 'AuthenticationRequired' || error.code === 'ExpiredToken' || error.code === 'AccountTakedown')
+  // Anything but a clear 4xx (a 5xx, a 2xx or 3xx without a readable answer) may have gone through.
+  if (error.status < 400 || error.status >= 500) return { kind: 'unknown', code, message: error.message };
+  if (error.status === 401 || error.code === 'AuthenticationRequired' || error.code === 'ExpiredToken' || error.code === 'AccountTakedown' || error.code === 'AccountDeactivated')
     return { kind: 'rejected', error: 'token_expired', code, message: error.message, httpStatus: error.status };
   if (error.status === 429) return { kind: 'rejected', error: 'rate_limited', code, message: error.message, httpStatus: error.status };
   return { kind: 'rejected', error: 'bad_request', code, message: error.message, httpStatus: error.status };
