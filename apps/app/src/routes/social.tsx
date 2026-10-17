@@ -113,8 +113,9 @@ function Metrics({ slug, names }: { slug: string; names: Map<string, string> }) 
                         {r.excerpt || t('emptyText')}
                       </Link>
                       <p className="text-xs text-subtle-foreground">
-                        {providerName(r.provider)} · {names.get(r.connectionId) ?? ''} · {r.publishedAt ? f.dateTime(r.publishedAt) : ''}
-                        {r.capturedAt ? ` · ${t('metricsAsOf', { when: f.dateTime(r.capturedAt) })}` : ` · ${t('metricsPending')}`}
+                        {[providerName(r.provider), names.get(r.connectionId), r.publishedAt ? f.dateTime(r.publishedAt) : null, r.capturedAt ? t('metricsAsOf', { when: f.dateTime(r.capturedAt) }) : t('metricsPending')]
+                          .filter(Boolean)
+                          .join(' · ')}
                       </p>
                     </td>
                     {METRIC_COLUMNS.map((m) => (
