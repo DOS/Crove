@@ -8,7 +8,7 @@
 //
 // Publish: an article is created asynchronously (`article/create` answers a token), then `article/verify` turns the
 // token into the article id once Zalo has processed it. The cover is fetched by Zalo from a public URL (1 MB at most).
-import type { ConnectedAccount, Publisher, Refresher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
+import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, Refresher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const ZALO_HOSTS = ['oauth.zaloapp.com', 'openapi.zalo.me'] as const;
@@ -218,6 +218,16 @@ interface SliceAnswer {
   medias?: { id?: unknown; title?: unknown; create_date?: unknown }[];
 }
 
+interface DetailAnswer {
+  total_view?: unknown;
+  total_share?: unknown;
+}
+// Zalo gives counts as numbers or numeric strings.
+function count(v: unknown): number | undefined {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : Number.NaN;
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
 function zaloPublishResult(error: unknown): PublishResult {
   if (!(error instanceof ZaloError)) return { kind: 'unknown', code: 'NETWORK' };
   const code = error.code === undefined ? `HTTP_${error.status}` : String(error.code);
@@ -304,6 +314,26 @@ export class ZaloOaPublisher implements Publisher {
       return undated ? { found: 'unknown' } : { found: false };
     } catch {
       return { found: 'unknown' };
+    }
+  }
+
+  // Views and shares of an article, when Zalo reports them on its detail.
+  async metrics(input: MetricsInput): Promise<MetricsResult> {
+    const s = zaloSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(input.externalId)) return { refused: 'gone' };
+    try {
+      const answer = await this.client.api<DetailAnswer>('GET', 'article/getdetail', s.accessToken, { params: { id: input.externalId } });
+      const metrics: Partial<Record<MetricName, number>> = {};
+      const views = count(answer?.total_view);
+      const shares = count(answer?.total_share);
+      if (views !== undefined) metrics.views = views;
+      if (shares !== undefined) metrics.shares = shares;
+      return { metrics };
+    } catch (error) {
+      const result = zaloPublishResult(error);
+      if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
+      return null;
     }
   }
 
