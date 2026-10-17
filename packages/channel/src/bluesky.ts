@@ -5,10 +5,12 @@
 //
 // Only Bluesky-hosted accounts are supported for now (PDS hosts under bsky.network, or bsky.social): the PDS address
 // comes from the account's DID document, and an arbitrary host there would let anyone point the worker at any server.
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
+import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
 import type { Fetch } from './oauth.ts';
 
 const ENTRYWAY = 'https://bsky.social';
+// Bluesky's public AppView: post counts without a session, so reading metrics never spends the account's session quota.
+const PUBLIC_APPVIEW = 'https://public.api.bsky.app';
 const POST_COLLECTION = 'app.bsky.feed.post';
 // Bluesky's own image limit per blob.
 const MAX_IMAGE_BYTES = 1_000_000;
@@ -21,7 +23,7 @@ export function isBlueskyHost(host: string): boolean {
 function blueskyFetch(fetchImpl: Fetch = fetch, timeoutMs = 15_000): Fetch {
   return async (input, init) => {
     const url = new URL(input);
-    if (url.protocol !== 'https:' || url.port !== '' || !isBlueskyHost(url.hostname)) throw new Error(`host not allowed for Bluesky: ${url.hostname}`);
+    if (url.protocol !== 'https:' || url.port !== '' || !(isBlueskyHost(url.hostname) || url.origin === PUBLIC_APPVIEW)) throw new Error(`host not allowed for Bluesky: ${url.hostname}`);
     return fetchImpl(url.toString(), { ...init, redirect: 'manual', signal: init?.signal ?? AbortSignal.timeout(timeoutMs) });
   };
 }
@@ -152,6 +154,10 @@ function blueskyResult(error: unknown): PublishResult {
   return { kind: 'rejected', error: 'bad_request', code, message: error.message, httpStatus: error.status };
 }
 
+interface PostsAnswer {
+  posts?: { uri?: unknown; likeCount?: unknown; replyCount?: unknown; repostCount?: unknown; quoteCount?: unknown }[];
+}
+
 interface ListAnswer {
   records?: { uri?: unknown; value?: { text?: unknown; createdAt?: unknown } }[];
 }
@@ -209,6 +215,30 @@ export class BlueskyPublisher implements Publisher {
       return { kind: 'accepted', externalId: answer.uri, url: postUrl(session.handle, answer.uri) };
     } catch (error) {
       return blueskyResult(error);
+    }
+  }
+
+  // Likes, replies, reposts and quotes of a post, from the public AppView. A post of another account is never read; a
+  // post the AppView no longer lists was deleted.
+  async metrics(input: MetricsInput): Promise<MetricsResult> {
+    const match = /^at:\/\/(did:[a-z0-9]+:[A-Za-z0-9._:%-]{1,256})\/app\.bsky\.feed\.post\/[A-Za-z0-9._~:-]{1,512}$/.exec(input.externalId);
+    if (!match || match[1] !== input.externalAccountId) return { refused: 'gone' };
+    try {
+      const answer = await this.xrpc.call<PostsAnswer>(PUBLIC_APPVIEW, 'GET', 'app.bsky.feed.getPosts', { params: { uris: input.externalId } });
+      const post = answer.posts?.find((p) => p.uri === input.externalId);
+      if (!post) return { refused: 'gone' };
+      const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
+      const metrics: Partial<Record<MetricName, number>> = {};
+      const likes = n(post.likeCount);
+      const replies = n(post.replyCount);
+      const reposts = n(post.repostCount);
+      const quotes = n(post.quoteCount);
+      if (likes !== undefined) metrics.reactions = likes;
+      if (replies !== undefined) metrics.comments = replies;
+      if (reposts !== undefined || quotes !== undefined) metrics.shares = (reposts ?? 0) + (quotes ?? 0);
+      return { metrics, ...(quotes !== undefined ? { extra: { quotes } } : {}) };
+    } catch {
+      return null;
     }
   }
 

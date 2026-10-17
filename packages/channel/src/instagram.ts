@@ -8,11 +8,12 @@
 // again. Meta fetches each image from a public URL: deployments whose storage hands out presigned URLs (S3) can post;
 // others get MEDIA_URL_UNAVAILABLE with nothing posted.
 import { createHash } from 'node:crypto';
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
+import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
 import { Graph, GraphError, graphPublishResult, MetaLogin, type MetaAppConfig } from './meta.ts';
 import type { AuthorizeInput, ExchangeInput, Fetch, OAuthConnector } from './oauth.ts';
 
-export const INSTAGRAM_SCOPES = ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish'] as const;
+// instagram_manage_insights: reach, saves, shares and views of the account's posts (S8 metrics).
+export const INSTAGRAM_SCOPES = ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights'] as const;
 // How long a publish waits for Meta to process the containers before it reports the post as pending; with the creates it
 // stays well inside the job's 60 second call timeout.
 const WAIT_MS = 15_000;
@@ -194,6 +195,39 @@ export class InstagramPublisher implements Publisher {
     }
   }
 
+  // Likes and comments are fields of the post; reach, saves, shares and views come from its insights, which need
+  // instagram_manage_insights (an account connected before Crove asked for it has none) and exist only for posts made
+  // after the account became professional. Without insights the plain counts are still reported.
+  async metrics(input: MetricsInput): Promise<MetricsResult> {
+    const s = secretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (!NUMERIC_ID.test(input.externalId)) return { refused: 'gone' };
+    const metrics: Partial<Record<MetricName, number>> = {};
+    try {
+      const answer = await this.graph.call<{ like_count?: unknown; comments_count?: unknown }>('GET', input.externalId, { token: s.accessToken, params: { fields: 'like_count,comments_count' } });
+      const likes = count(answer.like_count);
+      const comments = count(answer.comments_count);
+      if (likes !== undefined) metrics.reactions = likes;
+      if (comments !== undefined) metrics.comments = comments;
+    } catch (error) {
+      const result = graphPublishResult(error);
+      if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
+      if (error instanceof GraphError && error.code === 100 && error.subcode === 33) return { refused: 'gone' };
+      return null;
+    }
+    try {
+      const insights = await this.graph.call<InsightsAnswer>('GET', `${input.externalId}/insights`, { token: s.accessToken, params: { metric: 'reach,saved,shares,views' } });
+      for (const row of insights.data ?? []) {
+        const name = typeof row.name === 'string' ? INSIGHT_NAMES[row.name] : undefined;
+        const value = count(row.values?.[0]?.value ?? row.total_value?.value);
+        if (name && value !== undefined) metrics[name] = value;
+      }
+    } catch {
+      // No insights for this post or this connection: the plain counts stand.
+    }
+    return { metrics };
+  }
+
   private async create(account: string, token: string, form: Record<string, string>): Promise<string> {
     const answer = await this.graph.call<IdAnswer>('POST', `${account}/media`, { token, form });
     if (typeof answer.id !== 'string' || !NUMERIC_ID.test(answer.id)) throw new GraphError(502, { message: 'no container id', code: 1 });
@@ -258,3 +292,9 @@ export class InstagramPublisher implements Publisher {
 }
 
 class NoUrl extends Error {}
+
+interface InsightsAnswer {
+  data?: { name?: unknown; values?: { value?: unknown }[]; total_value?: { value?: unknown } }[];
+}
+const INSIGHT_NAMES: Record<string, MetricName> = { reach: 'reach', saved: 'saves', shares: 'shares', views: 'views' };
+const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);

@@ -43,7 +43,7 @@ describe('InstagramConnector', () => {
     const { fetchImpl, calls } = graph({
       'POST /oauth/access_token': [{ body: { access_token: 'short' } }, { body: { access_token: 'long-user-token' } }],
       'GET /me/permissions': [
-        { body: { data: ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish'].map((permission) => ({ permission, status: 'granted' })) } },
+        { body: { data: ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights'].map((permission) => ({ permission, status: 'granted' })) } },
       ],
       'GET /me/accounts': [
         {
@@ -58,14 +58,14 @@ describe('InstagramConnector', () => {
     });
     const connector = new InstagramConnector(APP, fetchImpl);
     const url = new URL(connector.authorizeUrl({ state: 'st', redirectUri: REDIRECT, codeChallenge: null }));
-    expect(url.searchParams.get('scope')).toBe('pages_show_list,pages_read_engagement,instagram_basic,instagram_content_publish');
+    expect(url.searchParams.get('scope')).toBe('pages_show_list,pages_read_engagement,instagram_basic,instagram_content_publish,instagram_manage_insights');
     const accounts = await connector.exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: null });
     expect(accounts).toEqual([
       {
         provider: 'instagram',
         externalAccountId: IG,
         displayName: '@quan.a',
-        scopes: ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish'],
+        scopes: ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights'],
         expiresAt: null,
         secret: JSON.stringify({ accessToken: 'page-token-111', pageId: '111' }),
       },
@@ -187,5 +187,48 @@ describe('InstagramPublisher', () => {
     expect(await new InstagramPublisher(APP, expired.fetchImpl, fast).publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired' });
     const broken = graph({ [`POST /${IG}/media`]: [{ body: { id: '9001' } }], 'GET /9001': [{ body: { status_code: 'ERROR' } }] });
     expect(await new InstagramPublisher(APP, broken.fetchImpl, fast).publish(input())).toMatchObject({ kind: 'rejected', code: 'CONTAINER_ERROR' });
+  });
+});
+
+describe('InstagramPublisher metrics', () => {
+  const metricsInput = { externalAccountId: IG, secret: SECRET, externalId: '18000000000000042' };
+
+  it('reads likes and comments, and reach, saves, shares and views from the insights', async () => {
+    const { fetchImpl, calls } = graph({
+      'GET /18000000000000042': [{ body: { like_count: 12, comments_count: 3, id: '18000000000000042' } }],
+      'GET /18000000000000042/insights': [
+        {
+          body: {
+            data: [
+              { name: 'reach', period: 'lifetime', values: [{ value: 140 }] },
+              { name: 'saved', period: 'lifetime', values: [{ value: 4 }] },
+              { name: 'shares', period: 'lifetime', values: [{ value: 2 }] },
+              { name: 'views', period: 'lifetime', total_value: { value: 310 } },
+            ],
+          },
+        },
+      ],
+    });
+    expect(await new InstagramPublisher(APP, fetchImpl).metrics(metricsInput)).toEqual({ metrics: { reactions: 12, comments: 3, reach: 140, saves: 4, shares: 2, views: 310 } });
+    expect(calls[0]?.query.get('fields')).toBe('like_count,comments_count');
+    expect(calls[1]?.query.get('metric')).toBe('reach,saved,shares,views');
+  });
+
+  it('keeps the plain counts when the insights are refused (no insights permission)', async () => {
+    const { fetchImpl } = graph({
+      'GET /18000000000000042': [{ body: { like_count: 5, comments_count: 0 } }],
+      'GET /18000000000000042/insights': [{ status: 403, body: { error: { message: '(#10) Application does not have permission for this action', code: 10 } } }],
+    });
+    expect(await new InstagramPublisher(APP, fetchImpl).metrics(metricsInput)).toEqual({ metrics: { reactions: 5, comments: 0 } });
+  });
+
+  it('tells a deleted post and a dead token from an outage', async () => {
+    const gone = graph({ 'GET /18000000000000042': [{ status: 400, body: { error: { message: 'Unsupported get request.', code: 100, error_subcode: 33 } } }] });
+    expect(await new InstagramPublisher(APP, gone.fetchImpl).metrics(metricsInput)).toEqual({ refused: 'gone' });
+    const dead = graph({ 'GET /18000000000000042': [{ status: 400, body: { error: { message: 'Error validating access token', code: 190 } } }] });
+    expect(await new InstagramPublisher(APP, dead.fetchImpl).metrics(metricsInput)).toEqual({ refused: 'token_expired' });
+    const down = graph({ 'GET /18000000000000042': [{ status: 503, body: {} }] });
+    expect(await new InstagramPublisher(APP, down.fetchImpl).metrics(metricsInput)).toBeNull();
+    expect(await new InstagramPublisher(APP, down.fetchImpl).metrics({ ...metricsInput, externalId: 'not-a-media-id' })).toEqual({ refused: 'gone' });
   });
 });

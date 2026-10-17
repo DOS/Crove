@@ -158,3 +158,22 @@ describe('ZaloOaPublisher', () => {
     expect(await publisher.status({ externalAccountId: '579745863508352884', secret: SECRET, externalRef: 'tok-3' })).toMatchObject({ kind: 'rejected', error: 'bad_request' });
   });
 });
+
+describe('ZaloOaPublisher metrics', () => {
+  const metricsInput = { externalAccountId: '579745863508352884', secret: SECRET, externalId: 'a1b2c3d4e5' };
+
+  it('reads the views and shares of an article, as numbers or numeric strings', async () => {
+    const { fetchImpl, calls } = zalo({ 'GET openapi.zalo.me/v2.0/article/getdetail': [{ body: { error: 0, message: 'Success', data: { id: 'a1b2c3d4e5', total_view: '1520', total_share: 7 } } }] });
+    expect(await new ZaloOaPublisher(APP, fetchImpl).metrics(metricsInput)).toEqual({ metrics: { views: 1520, shares: 7 } });
+    expect(calls[0]?.headers.get('access_token')).toBe('zalo-access-1');
+  });
+
+  it('reports no counts when Zalo gives none, maps a refused token, and retries an outage later', async () => {
+    const empty = zalo({ 'GET openapi.zalo.me/v2.0/article/getdetail': [{ body: { error: 0, message: 'Success', data: { id: 'a1b2c3d4e5' } } }] });
+    expect(await new ZaloOaPublisher(APP, empty.fetchImpl).metrics(metricsInput)).toEqual({ metrics: {} });
+    const dead = zalo({ 'GET openapi.zalo.me/v2.0/article/getdetail': [{ body: { error: -216, message: 'Access token is invalid' } }] });
+    expect(await new ZaloOaPublisher(APP, dead.fetchImpl).metrics(metricsInput)).toEqual({ refused: 'token_expired' });
+    const down = zalo({ 'GET openapi.zalo.me/v2.0/article/getdetail': [{ status: 502, body: {} }] });
+    expect(await new ZaloOaPublisher(APP, down.fetchImpl).metrics(metricsInput)).toBeNull();
+  });
+});

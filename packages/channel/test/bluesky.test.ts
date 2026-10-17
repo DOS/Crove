@@ -141,3 +141,25 @@ describe('Bluesky edge answers', () => {
     expect(await new BlueskyPublisher(fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired' });
   });
 });
+
+describe('BlueskyPublisher metrics', () => {
+  const URI = `at://${DID}/app.bsky.feed.post/3kabcdefghi22`;
+  const metricsInput = { externalAccountId: DID, secret: SECRET, externalId: URI };
+
+  it('reads likes, replies, reposts and quotes from the public AppView, without a session', async () => {
+    const { fetchImpl, calls } = xrpc({ 'GET public.api.bsky.app/xrpc/app.bsky.feed.getPosts': [{ body: { posts: [{ uri: URI, likeCount: 9, replyCount: 2, repostCount: 3, quoteCount: 1 }] } }] });
+    expect(await new BlueskyPublisher(fetchImpl).metrics(metricsInput)).toEqual({ metrics: { reactions: 9, comments: 2, shares: 4 }, extra: { quotes: 1 } });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.auth).toBeNull();
+  });
+
+  it("reports a deleted post as gone, never reads another account's post, and retries an outage later", async () => {
+    const deleted = xrpc({ 'GET public.api.bsky.app/xrpc/app.bsky.feed.getPosts': [{ body: { posts: [] } }] });
+    expect(await new BlueskyPublisher(deleted.fetchImpl).metrics(metricsInput)).toEqual({ refused: 'gone' });
+    const other = xrpc({});
+    expect(await new BlueskyPublisher(other.fetchImpl).metrics({ ...metricsInput, externalId: 'at://did:plc:someoneelse0000000000000/app.bsky.feed.post/3kabcdefghi22' })).toEqual({ refused: 'gone' });
+    expect(other.calls).toHaveLength(0);
+    const down = xrpc({ 'GET public.api.bsky.app/xrpc/app.bsky.feed.getPosts': [{ status: 502, body: {} }] });
+    expect(await new BlueskyPublisher(down.fetchImpl).metrics(metricsInput)).toBeNull();
+  });
+});
