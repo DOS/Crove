@@ -450,6 +450,47 @@ function SchedulePanel({ post, onDone }: { post: Post; onDone: () => void }) {
   );
 }
 
+// What happened to a variant on its way out, in words: a retry time, a pending or unknown outcome, a pause on its
+// channel, a refusal with what the platform said.
+function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
+  const t = useTranslations('social');
+  const f = useFormat();
+  const said = v.error?.message ? <p className="text-subtle-foreground [overflow-wrap:anywhere]">{t('outcome.platformSaid', { message: v.error.message })}</p> : null;
+  switch (v.status) {
+    case 'scheduled':
+      return v.error?.retryAt ? <p className="text-warning">{t('outcome.retrying', { when: f.dateTime(v.error.retryAt) })}</p> : null;
+    case 'publishing':
+    case 'processing':
+      return <p>{t(`outcome.${v.status}`)}</p>;
+    case 'ambiguous':
+      return <p className="text-warning">{t('outcome.ambiguous')}</p>;
+    case 'needs_attention':
+      return <p className="text-warning">{t('outcome.needsAttention')}</p>;
+    case 'paused':
+      return (
+        <div className="space-y-1">
+          <p className="text-warning">
+            {t(v.error?.code === 'CHANNEL_OWNER_LEFT' ? 'outcome.ownerLeft' : v.error?.code === 'CHANNEL_REVOKED' ? 'outcome.revoked' : 'outcome.paused')}
+          </p>
+          {v.error?.code !== 'CHANNEL_REVOKED' && (
+            <Link to="/o/$slug/social/channels" params={{ slug }} className="text-link hover:underline">
+              {t('reconnect')}
+            </Link>
+          )}
+        </div>
+      );
+    case 'failed':
+      return (
+        <div className="space-y-1">
+          <p className="text-destructive">{t('outcome.failed')}</p>
+          {said}
+        </div>
+      );
+    default:
+      return null;
+  }
+}
+
 export function SocialPostPage() {
   const { slug, id: postId } = useParams({ strict: false }) as { slug: string; id: string };
   const t = useTranslations('social');
@@ -516,6 +557,11 @@ export function SocialPostPage() {
   const submit = useMutation({ mutationFn: () => client.social.posts.submit({ postId }), onSuccess: refresh });
   const unschedule = useMutation({ mutationFn: (variantId: string) => client.social.variants.unschedule({ variantIds: [variantId] }), onSuccess: refresh });
   const cancel = useMutation({ mutationFn: (variantId: string) => client.social.variants.cancel({ variantIds: [variantId] }), onSuccess: refresh });
+  const retry = useMutation({ mutationFn: (variantId: string) => client.social.variants.retry({ variantIds: [variantId] }), onSuccess: refresh });
+  const resolve = useMutation({
+    mutationFn: (args: { variantId: string; outcome: 'published' | 'dropped' }) => client.social.variants.resolve({ variantIds: [args.variantId], outcome: args.outcome }),
+    onSuccess: refresh,
+  });
 
   if (post.isLoading || !base || !origin) return post.error ? <ErrorText>{errorMessage(post.error)}</ErrorText> : <Spinner />;
   if (!post.data) return null;
@@ -529,7 +575,7 @@ export function SocialPostPage() {
       save.mutate();
     }
   };
-  const error = save.error ?? submit.error ?? unschedule.error ?? cancel.error;
+  const error = save.error ?? submit.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
   const reviewable = !dirty && !stale;
 
   return (
@@ -596,13 +642,28 @@ export function SocialPostPage() {
                       <p>{t(v.status === 'published' ? 'publishedAt' : 'goesOutAt', { when: f.dateTime(v.effectiveAt) })}{v.queueSlotAt && v.status !== 'published' ? ` · ${t('fromQueue')}` : ''}</p>
                     )}
                     {decision && decision.comment && ['changes_requested', 'rejected'].includes(v.status) && <p className="text-warning">{t('reviewerSaid', { comment: decision.comment })}</p>}
-                    {v.error?.message && <p className="text-destructive">{v.error.message}</p>}
+                    <Outcome variant={v} slug={slug} />
                     {v.externalUrl && (
                       <a href={v.externalUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">
                         {t('openPost')}
                       </a>
                     )}
                     <div className="flex flex-wrap gap-2">
+                      {canDecide && (v.status === 'failed' || v.status === 'needs_attention') && (
+                        <Button variant="outline" size="sm" disabled={retry.isPending} onClick={() => retry.mutate(v.id)}>
+                          {t(v.status === 'failed' ? 'retry' : 'retryUnknown')}
+                        </Button>
+                      )}
+                      {canDecide && v.status === 'needs_attention' && (
+                        <>
+                          <Button variant="outline" size="sm" disabled={resolve.isPending} onClick={() => resolve.mutate({ variantId: v.id, outcome: 'published' })}>
+                            {t('confirmPublished')}
+                          </Button>
+                          <Button variant="ghost" size="sm" disabled={resolve.isPending} onClick={() => resolve.mutate({ variantId: v.id, outcome: 'dropped' })}>
+                            {t('dropChannel')}
+                          </Button>
+                        </>
+                      )}
                       {canDecide && ['scheduled', 'paused'].includes(v.status) && (
                         <Button variant="outline" size="sm" disabled={unschedule.isPending} onClick={() => unschedule.mutate(v.id)}>
                           {t('unschedule')}

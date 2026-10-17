@@ -170,6 +170,7 @@ describe('variant lifecycle', () => {
     { type: 'reconciled', found: false },
     { type: 'retry' },
     { type: 'drop' },
+    { type: 'confirm_published' },
   ];
 
   function run(from: VariantStatus, path: VariantEvent[]): VariantStatus {
@@ -225,6 +226,9 @@ describe('variant lifecycle', () => {
     expect(transitionVariant('publishing', { type: 'needs_human' })).toEqual({ ok: true, status: 'needs_attention' });
     expect(transitionVariant('needs_attention', { type: 'retry' })).toEqual({ ok: true, status: 'scheduled' });
     expect(transitionVariant('needs_attention', { type: 'drop' })).toEqual({ ok: true, status: 'cancelled' });
+    // A person who found the post on the platform records it; nothing else is confirmed by hand.
+    expect(transitionVariant('needs_attention', { type: 'confirm_published' })).toEqual({ ok: true, status: 'published' });
+    for (const s of ['failed', 'ambiguous', 'publishing', 'scheduled'] as const) expect(transitionVariant(s, { type: 'confirm_published' }).ok).toBe(false);
   });
 
   it('reschedules a rate-limited call and pauses on an expired token, but never once the provider accepted it', () => {

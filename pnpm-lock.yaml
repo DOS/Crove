@@ -608,6 +608,9 @@ importers:
 
   modules/social:
     dependencies:
+      '@crove/channel':
+        specifier: workspace:*
+        version: link:../../packages/channel
       '@crove/db':
         specifier: workspace:*
         version: link:../../packages/db

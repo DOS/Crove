@@ -4,18 +4,24 @@ import { sql } from 'kysely';
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
-import { DomainError, inboundKey, type AgentProgram, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import { DomainError, inboundKey, type AgentProgram, type BlobStore, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
 import { runAgentWake } from '@crove/kernel';
 import type { InvoiceReader } from '@crove/agent';
+import type { Publisher } from '@crove/channel';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
+import { PUBLISH_STALE_SECONDS, runPublishJob } from '@crove/mod-social';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { ExportSealer } from './export-seal.ts';
-import { JOB_SCHEMA, QUEUES } from './jobs-schema.ts';
+import { JOB_SCHEMA, QUEUES, socialPublishQueue } from './jobs-schema.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
 import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 
+const SOCIAL_PUBLISH_RETRY_LIMIT = 2;
+// The worker looks for due variants this often; a post goes out within this long of its time.
+export const SOCIAL_SWEEP_MS = 15_000;
+const SOCIAL_SWEEP_LIMIT = 500;
 const AGENT_RETRY_LIMIT = 3;
 // Every 10 minutes the worker wakes agents whose wake-up is still pending and that can run now
 // (crove_kernel.agent_wakeups_due): a run refused earlier by the daily cap, a kill switch or a budget that has since
@@ -99,6 +105,33 @@ export interface WorkerDeps {
   exportSealer?: ExportSealer;
   // Days an org export is kept before the retention job deletes it (EXPORT_RETENTION_DAYS, 35 to 90).
   exportRetentionDays?: number;
+  // Social publishing: the credential broker that opens channel tokens, and the providers this deployment can publish
+  // to. Without it, or without the social module, scheduled posts wait.
+  channels?: { broker: CredentialBroker; publishers: Readonly<Record<string, Publisher>> };
+}
+
+interface SocialPublishJob {
+  orgId: string;
+  variantId: string;
+  provider: string;
+}
+
+/** Sends a publish job for each variant with publishing work, for the providers this worker can publish to. */
+export async function sweepSocialPublishing(boss: PgBoss, workerDb: Db, providers: ReadonlySet<string>): Promise<number> {
+  const { rows } = await sql<{ org_id: string; variant_id: string; provider: string }>`
+    SELECT org_id, variant_id, provider FROM crove_social.publish_due(${SOCIAL_SWEEP_LIMIT}::int, ${PUBLISH_STALE_SECONDS}::int, ${[...providers]}::text[])`.execute(workerDb);
+  const due = rows.filter((r) => providers.has(r.provider));
+  await Promise.all(
+    due.map((r) =>
+      boss.send(socialPublishQueue(r.provider), { orgId: r.org_id, variantId: r.variant_id, provider: r.provider } satisfies SocialPublishJob, {
+        singletonKey: `${r.org_id}:${r.variant_id}`,
+        retryLimit: SOCIAL_PUBLISH_RETRY_LIMIT,
+        retryDelay: 30,
+        retryBackoff: true,
+      }),
+    ),
+  );
+  return due.length;
 }
 
 /** Records that this worker is alive (crove_kernel.worker_beat, crove_worker only). */
@@ -261,6 +294,34 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   });
   await boss.schedule(QUEUES.agentSweep, AGENT_SWEEP_CRON, null, { tz: RETENTION_TZ });
 
+  // Social publishing (Social plan §3.4): a sweep finds due, stale and pending variants and queues one job each; the
+  // job runs begin, the provider call and record. A crash anywhere is caught by a later sweep.
+  const channels = deps.channels;
+  const publishers = deps.runtime.installed('social') && channels ? channels.publishers : {};
+  const publishing = new Set(Object.keys(publishers));
+  for (const provider of publishing) {
+    await boss.work<SocialPublishJob>(socialPublishQueue(provider), { batchSize: 1 }, async ([job]) => {
+      if (!job || !channels) return;
+      const { orgId, variantId } = job.data;
+      const outcome = await runPublishJob({ runtime: deps.runtime, broker: channels.broker, publishers }, orgId, variantId, provider);
+      if (outcome.action !== 'none') console.log(`[social-publish] ${provider} variant ${variantId.slice(0, 8)}: ${outcome.action} -> ${outcome.status}`);
+    });
+  }
+  let sweeping = false;
+  const socialSweep = async () => {
+    if (sweeping || publishing.size === 0) return;
+    sweeping = true;
+    try {
+      await sweepSocialPublishing(boss, deps.workerDb, publishing);
+    } catch (error) {
+      console.error('[social-publish] sweep', error);
+    } finally {
+      sweeping = false;
+    }
+  };
+  const socialTimer = publishing.size > 0 ? setInterval(() => void socialSweep(), SOCIAL_SWEEP_MS) : null;
+  void socialSweep();
+
   let running = false;
   let stopped = false;
   const relay = async () => {
@@ -378,6 +439,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     stopped = true;
     clearInterval(timer);
     clearInterval(heartbeatTimer);
+    if (socialTimer) clearInterval(socialTimer);
     await listener.end().catch(() => {});
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});
   };

@@ -196,6 +196,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         schedule: os.social.variants.schedule.handler(socialCommand('social.variant.schedule')),
         unschedule: os.social.variants.unschedule.handler(socialCommand('social.variant.unschedule')),
         cancel: os.social.variants.cancel.handler(socialCommand('social.variant.cancel')),
+        retry: os.social.variants.retry.handler(socialCommand('social.variant.retry')),
+        resolve: os.social.variants.resolve.handler(socialCommand('social.variant.resolve')),
       },
       queues: {
         get: os.social.queues.get.handler(socialQuery('social.queue.get')),

@@ -3,6 +3,7 @@
 // configuration (defaultAdapters); a Crove Cloud entrypoint wires its own adapters into the same factory.
 import { serve } from '@hono/node-server';
 import { InvoiceExtractor, type InvoiceReader } from '@crove/agent';
+import { SandboxPublisher } from '@crove/channel';
 import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
 import { buildKernelCommands, kernelQueries } from '@crove/kernel';
@@ -246,6 +247,8 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             agentPrograms: financeAgentPrograms,
             exportSealer: exportSealer(config),
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,
+            // Platform adapters join the sandbox as they are added (Social plan S6).
+            channels: { broker: resolved.broker, publishers: config.CHANNEL_SANDBOX === 'true' ? { sandbox: new SandboxPublisher() } : {} },
           }),
         );
       }
