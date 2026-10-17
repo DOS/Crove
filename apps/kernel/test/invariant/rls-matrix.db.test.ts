@@ -39,7 +39,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>([]);
+const PENDING_TABLES = new Set<string>(['crove_social.channel_policy']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -282,6 +282,13 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         setup: [...setup, { table: 'crove_social.post_variant', values: variant }],
         row: { org_id: o.id, variant_id: variant.id, capture_key: `rls-${tag()}`, metrics: '{}' },
       };
+    },
+  },
+  // The review policy of a channel (S9, issue #394): how many people approve a variant, one row per connection.
+  'crove_social.channel_policy': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return { setup: [{ table: 'crove_kernel.channel_connection', values: connection }], row: { org_id: o.id, channel_connection_id: connection.id, approvals_required: 2, updated_by: o.owner } };
     },
   },
   // Append-only review decisions: tenant roles may only read and insert.
