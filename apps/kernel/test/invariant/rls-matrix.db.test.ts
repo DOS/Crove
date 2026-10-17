@@ -39,7 +39,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>([]);
+const PENDING_TABLES = new Set<string>(['crove_social.metric_snapshot']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -272,6 +272,16 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => {
       const post = socialPostRow(o);
       return { setup: [{ table: 'crove_social.post', values: post }], row: { org_id: o.id, post_id: post.id, file_id: o.file, position: 1 } };
+    },
+  },
+  // A metrics snapshot of a published variant (S8, issue #238): append-only, one per capture key.
+  'crove_social.metric_snapshot': {
+    make: (o) => {
+      const { setup, variant } = socialVariantRows(o);
+      return {
+        setup: [...setup, { table: 'crove_social.post_variant', values: variant }],
+        row: { org_id: o.id, variant_id: variant.id, capture_key: `rls-${tag()}`, metrics: '{}' },
+      };
     },
   },
   // Append-only review decisions: tenant roles may only read and insert.
