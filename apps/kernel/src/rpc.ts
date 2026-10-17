@@ -65,6 +65,7 @@ function writerChannel(c: { id: string; provider: string; displayName: string })
     provider: c.provider,
     label: `${PROVIDER_LABELS[c.provider] ?? c.provider} (${c.displayName})`,
     maxChars: caps?.body.max ?? null,
+    unit: caps?.body.count === 'bytes' ? 'bytes' : 'characters',
     title: caps?.title ? { required: caps.title.required, max: caps.title.max } : null,
   };
 }

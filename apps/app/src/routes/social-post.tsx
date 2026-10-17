@@ -336,7 +336,10 @@ export function SocialComposePage() {
             <Label htmlFor="social-ai-brief">{t('aiDraftTitle')}</Label>
             {aiEnabled ? (
               <>
-                <Textarea id="social-ai-brief" value={brief} rows={3} maxLength={4000} placeholder={t('aiBriefPlaceholder')} disabled={aiDraft.isPending} onChange={(e) => setBrief(e.target.value)} />
+                <Textarea id="social-ai-brief" value={brief} rows={3} maxLength={4000} placeholder={t('aiBriefPlaceholder')} disabled={aiDraft.isPending} onChange={(e) => {
+                  setBrief(e.target.value);
+                  if (aiDraft.error) aiDraft.reset();
+                }} />
                 <p className="text-xs text-subtle-foreground">{t('aiDraftHint')}</p>
                 <Button variant="outline" size="sm" disabled={!brief.trim() || chosen.length === 0 || aiDraft.isPending} onClick={() => aiDraft.mutate()}>
                   {aiDraft.isPending ? <Spinner className="text-current" /> : null}

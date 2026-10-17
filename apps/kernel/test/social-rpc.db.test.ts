@@ -201,7 +201,7 @@ suite('social posts through the API', () => {
     writerAnswers.push({ body: 'Khai trương chi nhánh Quận 3, giảm 20% tuần đầu!', title: null, variants: [{ key: connectionId, body: 'Bản riêng cho kênh thử', title: null }] });
     const drafted = await rpc('social/posts/draftWithAi', owner_, { brief: 'Khai trương chi nhánh Quận 3, giảm 20% tuần đầu', connectionIds: [connectionId] });
     expect(drafted.status).toBe(200);
-    expect(writerAsked.at(-1)?.channels).toEqual([{ key: connectionId, provider: 'sandbox', label: 'test channel (Trang AI)', maxChars: 1000, title: null }]);
+    expect(writerAsked.at(-1)?.channels).toEqual([{ key: connectionId, provider: 'sandbox', label: 'test channel (Trang AI)', maxChars: 1000, unit: 'characters', title: null }]);
     const post = await rpc('social/posts/get', owner_, { postId: drafted.body?.postId });
     expect(post.body).toMatchObject({ origin: 'ai', tainted: true, body: 'Khai trương chi nhánh Quận 3, giảm 20% tuần đầu!' });
     expect(post.body.variants).toMatchObject([{ status: 'draft', effective: { body: 'Bản riêng cho kênh thử' } }]);
