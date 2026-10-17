@@ -397,7 +397,7 @@ function sameOwn(a: Own, b: Own): boolean {
   return a.custom === b.custom && (!a.custom || (a.body === b.body && a.title === b.title));
 }
 
-function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
+function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, string>; onDone: () => void }) {
   const t = useTranslations('social');
   const me = useQuery(orpc.me.get.queryOptions());
   const self = me.data?.userId;
@@ -432,13 +432,13 @@ function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
   return (
     <Card className="block space-y-3 border-warning/40 p-4">
       <p className="text-sm font-medium text-foreground">{t('reviewTitle')}</p>
-      {done.length > 0 && <p className="text-xs text-subtle-foreground">{t('reviewYouApproved', { channels: done.map((v) => providerName(v.provider)).join(', ') })}</p>}
+      {done.length > 0 && <p className="text-xs text-subtle-foreground">{t('reviewYouApproved', { channels: done.map((v) => names.get(v.connectionId) ?? providerName(v.provider)).join(', ') })}</p>}
       {waiting.length > 0 && (
         <div className="space-y-1.5">
           {waiting.map((v) => (
             <label key={v.id} className="flex items-center gap-2 text-sm text-muted-foreground">
               <Checkbox checked={picked.includes(v.id)} onCheckedChange={(on) => setUnticked(on === true ? unticked.filter((id) => id !== v.id) : [...unticked, v.id])} />
-              {providerName(v.provider)}
+              {names.get(v.connectionId) ?? providerName(v.provider)}
               {v.review.required > 1 && (
                 <span className="text-xs text-subtle-foreground tabular-nums">{t('reviewSteps', { given: String(v.review.approvedBy.length), required: String(v.review.required) })}</span>
               )}
@@ -449,7 +449,7 @@ function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
       <Textarea value={comment} rows={2} aria-label={t('commentPlaceholder')} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
       {decide.error && <ErrorText>{errorMessage(decide.error)}</ErrorText>}
       <div className="flex flex-wrap gap-2">
-        <Button size="lg" disabled={approvable.length === 0 || decide.isPending} onClick={() => decide.mutate('approved')}>
+        <Button size="lg" disabled={self === undefined || approvable.length === 0 || decide.isPending} onClick={() => decide.mutate('approved')}>
           {t('approve')}
         </Button>
         <Button variant="outline" size="lg" disabled={picked.length === 0 || decide.isPending || !comment.trim()} onClick={() => decide.mutate('changes_requested')}>
@@ -755,7 +755,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
           <SharedFields base={base} onChange={setBase} disabled={!editable || save.isPending} needsTitle={p.variants.some((v) => hasTitle(v.provider))} />
-          {canDecide && reviewable && <ReviewPanel post={p} onDone={refresh} />}
+          {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} />}
           {canDecide && reviewable && <SchedulePanel post={p} onDone={refresh} />}
           {canWrite && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
           {dirty && <p className="text-xs text-subtle-foreground">{t('unsaved')}</p>}
