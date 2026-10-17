@@ -74,7 +74,7 @@ The host is one Linux server with Docker Engine and the compose plugin **v2.24 o
 6. Put a TLS reverse proxy in front of `127.0.0.1:${PORT}` (the compose file publishes the port on loopback only).
 7. Read the host key for the workflow from a trusted session on the server (`ssh-keyscan -t ed25519 localhost` on the host itself, then replace `localhost` with the address the runner uses; for a port other than 22 the line starts with `[address]:port`). Do not take it from a scan over the network you are trying to protect.
 
-The first deploy creates `releases/`, `.deploy/` and the active compose files. After it, plain `docker compose` in the stack directory (and `tools/backup`, with `CROVE_DIR` set to it) sees the same stack: `docker-compose.yml` is the running release's file and `docker-compose.override.yml` pins its images.
+The first deploy creates `releases/`, `.deploy/` and the active compose files. After it, plain `docker compose` in the stack directory sees the same stack: `docker-compose.yml` is the running release's file and `docker-compose.override.yml` pins its images. With a `compose.host.yml`, add `COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:compose.host.yml` to the env file so that plain `docker compose` includes it too (the deploy passes the files itself). The nightly backup ([backup-and-restore.md](backup-and-restore.md)) runs `tools/backup` from a checkout with `CROVE_DIR` set to this directory.
 
 ## Settings of each GitHub environment
 
