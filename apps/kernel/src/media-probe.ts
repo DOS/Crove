@@ -5,6 +5,10 @@
 // ISO base media brands of video files; HEIC/AVIF images and M4A audio use the same container and are not videos.
 const MP4_BRANDS = new Set(['isom', 'iso2', 'iso3', 'iso4', 'iso5', 'iso6', 'mp41', 'mp42', 'avc1', 'M4V ', 'M4VH', 'M4VP', 'mmp4', 'dash', 'msnv', '3gp4', '3gp5', '3gp6', '3g2a']);
 
+// Major brands of files in the same container that are not videos (audio, images): never sniffed as video, even when
+// they list a video brand as compatible (M4A lists mp42 and isom).
+const NOT_VIDEO = new Set(['M4A ', 'M4B ', 'M4P ', 'heic', 'heix', 'hevc', 'mif1', 'msf1', 'avif', 'avis', 'crx ']);
+
 const fourcc = (bytes: Uint8Array, at: number) => String.fromCharCode(bytes[at] ?? 0, bytes[at + 1] ?? 0, bytes[at + 2] ?? 0, bytes[at + 3] ?? 0);
 
 // video/mp4, video/quicktime, or null when the bytes are not one of them.
@@ -15,6 +19,9 @@ export function sniffVideo(bytes: Uint8Array): 'video/mp4' | 'video/quicktime' |
   const major = fourcc(bytes, 8);
   if (major === 'qt  ') return 'video/quicktime';
   if (MP4_BRANDS.has(major)) return 'video/mp4';
+  if (NOT_VIDEO.has(major)) return null;
+  // Another major brand: a video when one of its compatible brands is (they follow the minor version, up to the box end).
+  for (let at = 16; at + 4 <= size; at += 4) if (MP4_BRANDS.has(fourcc(bytes, at))) return 'video/mp4';
   return null;
 }
 
@@ -72,7 +79,7 @@ export function videoDurationMs(bytes: Uint8Array): number | null {
       const timescale = readU32(bytes, at);
       const duration = version === 1 ? readU64(bytes, at + 4) : readU32(bytes, at + 4);
       // An unknown duration is all ones.
-      if (timescale === 0 || duration === 0xffffffff || (version === 1 && duration >= 2 ** 53)) return null;
+      if (timescale === 0 || (version === 0 && duration === 0xffffffff) || (version === 1 && duration >= 2 ** 53)) return null;
       const ms = Math.round((duration / timescale) * 1000);
       return Number.isSafeInteger(ms) ? ms : null;
     }

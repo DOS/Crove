@@ -19,6 +19,9 @@ describe('sniffVideo', () => {
     // HEIC images and M4A audio are not videos.
     expect(sniffVideo(file(ftyp('heic')))).toBeNull();
     expect(sniffVideo(file(ftyp('M4A ')))).toBeNull();
+    // Another major brand counts by its compatible brands (ftyp lists isom and mp41).
+    expect(sniffVideo(file(ftyp('XAVC')))).toBe('video/mp4');
+    expect(sniffVideo(file(box('ftyp', [...text('XAVC'), ...u32(0), ...text('abcd')])))).toBeNull();
     expect(sniffVideo(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBeNull();
     expect(sniffVideo(file([...u32(9999), ...text('ftyp'), ...text('isom')]))).toBeNull();
   });
@@ -35,6 +38,8 @@ describe('videoDurationMs', () => {
     expect(videoDurationMs(file(ftyp('isom')))).toBeNull();
     expect(videoDurationMs(file(ftyp('isom'), box('moov', mvhd0(0, 100))))).toBeNull();
     expect(videoDurationMs(file(ftyp('isom'), box('moov', mvhd0(1000, 0xffffffff))))).toBeNull();
+    // In a 64-bit header 0xffffffff is an ordinary duration.
+    expect(videoDurationMs(file(ftyp('isom'), box('moov', mvhd1(1_000_000, 0, 0xffffffff))))).toBe(4_294_967);
     const whole = file(ftyp('isom'), box('moov', mvhd0(1000, 5000)));
     expect(videoDurationMs(whole.slice(0, whole.length - 60))).toBeNull();
     // A file of thousands of tiny boxes is given up on rather than walked to the end.
