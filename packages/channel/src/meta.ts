@@ -180,7 +180,8 @@ function tokenOf(answer: TokenAnswer): string {
 function asProviderError(error: unknown): ConnectorError {
   if (error instanceof ConnectorError) return error;
   if (error instanceof GraphError) return new ConnectorError(error.status === 403 || error.code === 10 || error.code === 200 ? 'denied' : 'provider', error.message, String(error.code ?? error.status));
-  return new ConnectorError('provider', 'Meta could not be reached');
+  // fetch's own message (DNS, TLS, timeout) for the log; our URLs carry no token.
+  return new ConnectorError('provider', `Meta could not be reached: ${error instanceof Error ? `: ${error.message}` : typeof error}`);
 }
 
 function asProviderErrorThrow(error: unknown): never {

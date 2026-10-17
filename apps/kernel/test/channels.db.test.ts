@@ -142,7 +142,7 @@ suite('channel connections through the API (ADR-0025)', () => {
       createHttpApp({ config, runtime, store, authenticate: createAuthenticator(config, db), pool, aiEnabled: false, channels });
     apps = {
       on: make({ broker: vault, sandbox: true, connectors: { facebook_page: fake.connector }, publicUrl: 'https://crove.example/' }),
-      noKey: make({ broker: noCredentialBroker, sandbox: true }),
+      noKey: make({ broker: noCredentialBroker, sandbox: true, connectors: { facebook_page: fake.connector }, publicUrl: 'https://crove.example/' }),
       sandboxOff: make({ broker: vault, sandbox: false }),
     };
 
@@ -330,6 +330,13 @@ suite('channel connections through the API (ADR-0025)', () => {
         expect(JSON.stringify(failed.body)).not.toContain('Meta');
         expect((await rpc('channels/oauthFinish', await tokenFor(owner), input)).body.code).toBe('OAUTH_STATE_USED');
       }
+    });
+
+    it('refuses to start without a credential key, and does not offer the provider', async () => {
+      const noKey = await rpc('channels/oauthStart', await tokenFor(owner), { provider: 'facebook_page' }, { app: 'noKey' });
+      expect(noKey).toMatchObject({ status: 503, body: { code: 'BROKER_NOT_CONFIGURED' } });
+      const config = (await (await apps.noKey.request('/api/config')).json()) as { channels: unknown };
+      expect(config.channels).toEqual({ sandbox: true, oauth: [] });
     });
 
     it('answers 404 for a provider the deployment did not configure', async () => {

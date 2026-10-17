@@ -126,6 +126,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới kết nối được kênh');
     const connector = channels?.connectors?.[provider];
     if (!channels || !connector) throw new DomainError('CHANNEL_PROVIDER_DISABLED', 404, 'Kênh này chưa được cấu hình trên máy chủ');
+    // Checked before an attempt is written or used up: without a key the tokens could never be sealed, and the user
+    // would go through the provider's dialog for nothing.
+    if (channels.broker.id === 'none') throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
     return { orgId, actor: actorOf(context.user), connector, broker: channels.broker };
   };
   const oauthRedirectUri = (provider: string) => `${(channels?.publicUrl ?? '').replace(/\/$/, '')}/channels/oauth/${provider}/callback`;

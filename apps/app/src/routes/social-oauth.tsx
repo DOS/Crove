@@ -27,7 +27,14 @@ function readCallback(): Callback {
 export function OAuthCallbackPage() {
   const { provider } = useParams({ strict: false }) as { provider: string };
   const t = useTranslations('social');
-  const [callback] = useState(readCallback);
+  // Read in an effect, not during render: reading takes the entry out of sessionStorage and cleans the address bar.
+  // The ref keeps the first read when Strict Mode runs the effect twice.
+  const read = useRef<Callback | null>(null);
+  const [callback, setCallback] = useState<Callback | null>(null);
+  useEffect(() => {
+    read.current ??= readCallback();
+    setCallback(read.current);
+  }, []);
   const started = useRef(false);
   const finish = useMutation({
     mutationFn: (c: Extract<Callback, { kind: 'finish' }>) => {
@@ -38,12 +45,14 @@ export function OAuthCallbackPage() {
     onSuccess: () => void queryClient.invalidateQueries(),
   });
   useEffect(() => {
-    if (callback.kind !== 'finish' || started.current) return;
+    if (callback?.kind !== 'finish' || started.current) return;
     started.current = true;
     finish.mutate(callback);
   }, [callback, finish]);
 
-  const slug = callback.kind === 'lost' ? null : callback.slug;
+  const slug = !callback || callback.kind === 'lost' ? null : callback.slug;
+  // Waiting for the first read or for the server.
+  const busy = !callback || (callback.kind === 'finish' && (finish.isPending || finish.isIdle));
   const back = slug ? (
     <Link to="/o/$slug/social/channels" params={{ slug }} className="text-sm font-medium text-primary hover:underline">
       {t('backToChannels')}
@@ -60,16 +69,16 @@ export function OAuthCallbackPage() {
         <h1 className="text-lg font-semibold text-foreground">
           {t('oauthTitle')}: {providerName(provider)}
         </h1>
-        {callback.kind === 'cancelled' && <p className="text-sm text-muted-foreground">{t('oauthCancelled')}</p>}
-        {callback.kind === 'lost' && <ErrorText>{t('oauthLost')}</ErrorText>}
-        {callback.kind === 'finish' && (finish.isPending || finish.isIdle) && (
+        {callback?.kind === 'cancelled' && <p className="text-sm text-muted-foreground">{t('oauthCancelled')}</p>}
+        {callback?.kind === 'lost' && <ErrorText>{t('oauthLost')}</ErrorText>}
+        {busy && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Spinner /> {t('oauthFinishing')}
           </div>
         )}
         {finish.data && <p className="text-sm text-foreground">{t('oauthConnected', { list: finish.data.connections.map((c) => c.displayName).join(', ') })}</p>}
         {finish.error && <ErrorText>{errorMessage(finish.error)}</ErrorText>}
-        {!(callback.kind === 'finish' && (finish.isPending || finish.isIdle)) && back}
+        {!busy && back}
       </Card>
     </main>
   );
