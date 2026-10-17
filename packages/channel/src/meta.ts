@@ -117,23 +117,27 @@ export class FacebookPageConnector implements OAuthConnector {
     url.searchParams.set('state', input.state);
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('scope', FACEBOOK_PAGE_SCOPES.join(','));
+    // Asks again for a permission the user declined last time; without it Meta skips declined permissions for good.
+    url.searchParams.set('auth_type', 'rerequest');
     return url.toString();
   }
 
   async exchange(input: ExchangeInput): Promise<ConnectedAccount[]> {
     const short = await this.graph
-      .call<TokenAnswer>('GET', 'oauth/access_token', {
-        params: { client_id: this.app.appId, client_secret: this.app.appSecret, redirect_uri: input.redirectUri, code: input.code },
+      .call<TokenAnswer>('POST', 'oauth/access_token', {
+        form: { client_id: this.app.appId, client_secret: this.app.appSecret, redirect_uri: input.redirectUri, code: input.code },
       })
       .catch((error: unknown) => {
-        throw error instanceof GraphError && error.status < 500
-          ? new ConnectorError('invalid_grant', 'Meta refused the authorization code', String(error.code ?? error.status))
+        // Code 100 is Meta's answer for a code that is used, expired or issued for another redirect; anything else (a wrong
+        // app secret, a rate limit, an outage) is not the user's code.
+        throw error instanceof GraphError && error.code === 100
+          ? new ConnectorError('invalid_grant', 'Meta refused the authorization code', String(error.code))
           : asProviderError(error);
       });
     const shortToken = tokenOf(short);
     const long = await this.graph
-      .call<TokenAnswer>('GET', 'oauth/access_token', {
-        params: { grant_type: 'fb_exchange_token', client_id: this.app.appId, client_secret: this.app.appSecret, fb_exchange_token: shortToken },
+      .call<TokenAnswer>('POST', 'oauth/access_token', {
+        form: { grant_type: 'fb_exchange_token', client_id: this.app.appId, client_secret: this.app.appSecret, fb_exchange_token: shortToken },
       })
       .catch(asProviderErrorThrow);
     const userToken = tokenOf(long);

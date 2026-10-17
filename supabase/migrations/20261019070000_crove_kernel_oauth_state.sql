@@ -33,7 +33,9 @@ REVOKE ALL ON crove_kernel.oauth_state FROM PUBLIC, crove_tenant, crove_app, cro
 -- Starts a connect attempt for the member and org in context; returns its id. Raises NO_CONTEXT (42501) without a
 -- user context, OAUTH_FORBIDDEN (42501) for anyone but an owner or admin of the org, OAUTH_INVALID (22023) for a
 -- malformed provider, hash, verifier or lifetime (60 to 900 seconds), and OAUTH_TOO_MANY (54000) when the member
--- already has 20 open attempts in the org. Rows older than a day are cleared on the way.
+-- started 20 attempts in the org in the last 2 minutes that are still open (a cancelled dialog leaves its attempt open
+-- until it expires, so a longer window would lock out someone who cancels a few times). Rows older than a day are
+-- cleared on the way.
 CREATE OR REPLACE FUNCTION crove_kernel.oauth_state_create(p_provider text, p_state_hash text, p_code_verifier text, p_ttl_seconds integer)
 RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
@@ -58,7 +60,8 @@ BEGIN
   END IF;
   DELETE FROM crove_kernel.oauth_state s WHERE s.org_id = v_org AND s.created_at < pg_catalog.now() - interval '1 day';
   IF (SELECT count(*) FROM crove_kernel.oauth_state s
-      WHERE s.org_id = v_org AND s.user_id = v_user AND s.consumed_at IS NULL AND s.expires_at > pg_catalog.now()) >= 20 THEN
+      WHERE s.org_id = v_org AND s.user_id = v_user AND s.consumed_at IS NULL AND s.expires_at > pg_catalog.now()
+        AND s.created_at > pg_catalog.now() - interval '2 minutes') >= 20 THEN
     RAISE EXCEPTION 'OAUTH_TOO_MANY' USING ERRCODE = '54000';
   END IF;
   INSERT INTO crove_kernel.oauth_state (org_id, user_id, provider, state_hash, code_verifier, expires_at)

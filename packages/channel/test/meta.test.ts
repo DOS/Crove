@@ -10,6 +10,7 @@ interface Seen {
   url: URL;
   method: string;
   authorization: string | null;
+  form: URLSearchParams;
 }
 
 // Answers by path (and `after` cursor for the accounts list); records what was asked.
@@ -18,8 +19,9 @@ function graphFake(answers: Record<string, { status?: number; body: unknown }>) 
   const fetchImpl: Fetch = async (input, init) => {
     const url = new URL(input);
     const headers = new Headers(init?.headers);
-    seen.push({ url, method: init?.method ?? 'GET', authorization: headers.get('authorization') });
-    const grant = url.searchParams.get('grant_type');
+    const form = new URLSearchParams(typeof init?.body === 'string' ? init.body : '');
+    seen.push({ url, method: init?.method ?? 'GET', authorization: headers.get('authorization'), form });
+    const grant = form.get('grant_type');
     const after = url.searchParams.get('after');
     const key = `${url.pathname}${grant ? `#${grant}` : ''}${after ? `@${after}` : ''}`;
     const answer = answers[key];
@@ -68,6 +70,7 @@ describe('FacebookPageConnector', () => {
       state: 'st',
       response_type: 'code',
       scope: 'pages_show_list,pages_manage_posts,pages_read_engagement',
+      auth_type: 'rerequest',
     });
   });
 
@@ -80,8 +83,11 @@ describe('FacebookPageConnector', () => {
     ]);
     // The code goes to the token endpoint with the same redirect; user tokens travel in the header, never the URL,
     // with appsecret_proof.
-    expect(seen[0]?.url.searchParams.get('code')).toBe('the-code');
-    expect(seen[0]?.url.searchParams.get('redirect_uri')).toBe(REDIRECT);
+    // The code and the app secret go in a POST body, never in a URL.
+    expect(seen[0]).toMatchObject({ method: 'POST' });
+    expect(seen[0]?.form.get('code')).toBe('the-code');
+    expect(seen[0]?.form.get('redirect_uri')).toBe(REDIRECT);
+    for (const s of seen) expect(s.url.toString()).not.toContain(APP.appSecret);
     for (const s of seen.slice(2)) {
       expect(s.url.toString()).not.toContain('long-user-token');
       expect(s.authorization).toBe('Bearer long-user-token');
@@ -93,6 +99,9 @@ describe('FacebookPageConnector', () => {
   it('maps a refused code to invalid_grant and a missing permission to denied', async () => {
     const refused = graphFake({ '/v24.0/oauth/access_token': { status: 400, body: { error: { message: 'This authorization code has been used.', type: 'OAuthException', code: 100, error_subcode: 36009 } } } });
     await expect(new FacebookPageConnector(APP, refused.fetchImpl).exchange({ code: 'used', redirectUri: REDIRECT, codeVerifier: null })).rejects.toMatchObject({ kind: 'invalid_grant' });
+    // A rate limit or a wrong app secret is not the user's code.
+    const limited = graphFake({ '/v24.0/oauth/access_token': { status: 400, body: { error: { message: 'Application request limit reached', type: 'OAuthException', code: 4 } } } });
+    await expect(new FacebookPageConnector(APP, limited.fetchImpl).exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: null })).rejects.toMatchObject({ kind: 'provider' });
 
     const partial = graphFake({ ...happy, '/v24.0/me/permissions': { body: { data: [{ permission: 'pages_show_list', status: 'granted' }, { permission: 'pages_manage_posts', status: 'declined' }] } } });
     const error = await new FacebookPageConnector(APP, partial.fetchImpl).exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: null }).catch((e: unknown) => e);
