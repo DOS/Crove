@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# A stand-in for docker in tools/test/deploy.test.ts. Records each call in $STUB_LOG and answers what deploy.sh
+# asks. Settings (environment): STUB_SERVICES (compose services, space separated), STUB_RUNNING (services that
+# `compose ps --status running` lists), STUB_MIGRATE_EXIT, STUB_PULL_FAIL.
+set -euo pipefail
+
+if [ "${1:-}" = login ]; then
+  # The password arrives on stdin, never as an argument.
+  cat >"$STUB_LOG.password"
+  printf 'login DOCKER_CONFIG=%s %s\n' "${DOCKER_CONFIG:-}" "${*:2}" >>"$STUB_LOG"
+  exit 0
+fi
+if [ "${1:-}" = pull ]; then
+  printf 'pull %s DOCKER_CONFIG=%s\n' "${*: -1}" "${DOCKER_CONFIG:-}" >>"$STUB_LOG"
+  [ -z "${STUB_PULL_FAIL:-}" ] || exit 1
+  exit 0
+fi
+[ "${1:-}" = compose ] || {
+  echo "stub docker: unexpected $*" >&2
+  exit 99
+}
+shift
+if [ "${1:-}" = version ]; then
+  echo '2.30.0'
+  exit 0
+fi
+
+# Skip the global options deploy.sh passes before the subcommand.
+files=()
+while (($# > 0)); do
+  case "$1" in
+    --project-directory | --env-file) shift 2 ;;
+    -f)
+      files+=("$2")
+      shift 2
+      ;;
+    *) break ;;
+  esac
+done
+sub="$1"
+shift
+args="$*"
+printf 'compose %s %s\n' "$sub" "$args" >>"$STUB_LOG"
+
+case "$sub" in
+  config)
+    if [ "${1:-}" = --services ]; then
+      for s in ${STUB_SERVICES:-db migrate auth auth-grants crove-extract mailpit crove}; do echo "$s"; done
+    fi
+    ;;
+  port) echo '127.0.0.1:18080' ;;
+  run)
+    case "$args" in *migrate*) exit "${STUB_MIGRATE_EXIT:-0}" ;; esac
+    ;;
+  ps) for s in ${STUB_RUNNING:-worker}; do echo "$s"; done ;;
+  up | logs) ;;
+  *)
+    echo "stub docker compose: unexpected $sub" >&2
+    exit 99
+    ;;
+esac

@@ -1,0 +1,333 @@
+name: deploy
+
+# Deploys a release to a single docker compose host over SSH (issue #56; docs/runbooks/deploy.md):
+#   - a tag v* on main deploys to the `pilot` environment;
+#   - a push to `dev` deploys to `beta` (no `dev` branch exists yet; it starts with the beta instance, plan §3.5);
+#   - a manual run deploys the selected tag (pilot) or `dev`/a tag (beta), or rolls the environment back.
+# The commit's CI must be green first. Both images are built from that commit, pushed to GHCR and deployed by
+# digest; tools/deploy/deploy.sh on the host migrates, rolls the worker before the API, waits for /readyz, runs the
+# smoke test and rolls back on failure. Until the environment has its secrets, the deploy job only says so and
+# passes.
+
+on:
+  push:
+    tags: ['v*']
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment
+        type: choice
+        options: [pilot, beta]
+        default: pilot
+      action:
+        description: deploy the selected ref, or roll back to the release before the current one
+        type: choice
+        options: [deploy, rollback]
+        default: deploy
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment || (github.ref_type == 'tag' && 'pilot') || 'beta' }}
+  cancel-in-progress: false
+
+jobs:
+  target:
+    name: Release and target
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      environment: ${{ steps.target.outputs.environment }}
+      action: ${{ steps.target.outputs.action }}
+      release: ${{ steps.target.outputs.release }}
+      sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Decide the environment and the release
+        id: target
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+          environment='' action=deploy release=''
+          if [ "$EVENT" = workflow_dispatch ]; then
+            environment="$INPUT_ENVIRONMENT" action="$INPUT_ACTION"
+          elif [ "$REF_TYPE" = tag ]; then
+            environment=pilot
+          elif [ "$REF" = refs/heads/dev ]; then
+            environment=beta
+          fi
+          case "$environment" in pilot | beta) ;; *) echo "::error::no environment for $EVENT on $REF"; exit 1 ;; esac
+          if [ "$action" = deploy ]; then
+            if [ "$REF_TYPE" = tag ]; then
+              release="$REF_NAME"
+            elif [ "$environment" = beta ] && [ "$REF" = refs/heads/dev ]; then
+              release="dev-${SHA:0:12}"
+            else
+              echo "::error::$environment deploys a tag$([ "$environment" = beta ] && echo ' or dev'); run the workflow from one (got $REF)"
+              exit 1
+            fi
+            if ! [[ "$release" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+              echo "::error::release name '$release' must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+              exit 1
+            fi
+            # The pilot runs main: a tag on any other commit is refused.
+            if [ "$environment" = pilot ]; then
+              git fetch --no-tags origin main
+              if [ "$REF_TYPE" != tag ] || [[ "$REF_NAME" != v* ]] || ! git merge-base --is-ancestor "$SHA" origin/main; then
+                echo "::error::pilot deploys only v* tags on commits of main; $REF ($SHA) is not one"
+                exit 1
+              fi
+            fi
+          fi
+          {
+            echo "environment=$environment"
+            echo "action=$action"
+            echo "release=$release"
+            echo "sha=$SHA"
+          } >> "$GITHUB_OUTPUT"
+          echo "### $action to $environment${release:+: $release ($SHA)}" >> "$GITHUB_STEP_SUMMARY"
+
+      # A release must have passed CI: the required check runs on its commit (DEPLOY_REQUIRED_CHECKS, one name per
+      # line) all succeeded. Waits up to 30 minutes for runs that are still going, as after a tag right after a merge.
+      - name: CI is green on the release commit
+        if: steps.target.outputs.action == 'deploy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          REQUIRED: ${{ vars.DEPLOY_REQUIRED_CHECKS }}
+        run: |
+          set -euo pipefail
+          if [ -z "$REQUIRED" ]; then REQUIRED=$'Lint, typecheck, test\nPlaywright on docker compose'; fi
+          deadline=$((SECONDS + 1800))
+          while :; do
+            runs="$(gh api "repos/$REPO/commits/$SHA/check-runs?filter=latest&per_page=100" --paginate \
+              --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv')"
+            pending=() failed=()
+            while IFS= read -r name; do
+              [ -n "$name" ] || continue
+              row="$(awk -F'\t' -v n="$name" '$1 == n { print; exit }' <<<"$runs")"
+              status="$(cut -f2 <<<"$row")" conclusion="$(cut -f3 <<<"$row")"
+              if [ "$status" != completed ]; then pending+=("$name"); elif [ "$conclusion" != success ]; then failed+=("$name: $conclusion"); fi
+            done <<<"$REQUIRED"
+            if ((${#failed[@]} > 0)); then printf '::error::required check not green: %s\n' "${failed[@]}"; exit 1; fi
+            if ((${#pending[@]} == 0)); then echo 'every required check passed'; break; fi
+            if ((SECONDS > deadline)); then printf '::error::required check missing or still running: %s\n' "${pending[@]}"; exit 1; fi
+            echo "waiting for: ${pending[*]}"
+            sleep 30
+          done
+
+  build:
+    name: Build and push the images
+    needs: target
+    if: needs.target.outputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+      extract: ${{ steps.push.outputs.extract }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.target.outputs.sha }}
+
+      - name: Build, push and read the digests
+        id: push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          RELEASE: ${{ needs.target.outputs.release }}
+          SHA: ${{ needs.target.outputs.sha }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+          labels=(--label "org.opencontainers.image.source=$SOURCE" --label "org.opencontainers.image.revision=$SHA" --label "org.opencontainers.image.version=$RELEASE")
+          docker build "${labels[@]}" -t "$repo:$RELEASE" .
+          docker build "${labels[@]}" -f apps/extract/Dockerfile -t "$repo-extract:$RELEASE" .
+          docker push --quiet "$repo:$RELEASE"
+          docker push --quiet "$repo-extract:$RELEASE"
+          image="$(docker image inspect --format '{{index .RepoDigests 0}}' "$repo:$RELEASE")"
+          extract="$(docker image inspect --format '{{index .RepoDigests 0}}' "$repo-extract:$RELEASE")"
+          docker logout ghcr.io
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "extract=$extract" >> "$GITHUB_OUTPUT"
+          printf -- '- image: `%s`\n- extract: `%s`\n' "$image" "$extract" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy to ${{ needs.target.outputs.environment }}
+    needs: [target, build]
+    if: ${{ !cancelled() && needs.target.result == 'success' && (needs.target.outputs.action == 'rollback' || needs.build.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ${{ needs.target.outputs.environment }}
+    # Read only: the token reaches the host for the image pull, so it must not be able to push an image.
+    permissions:
+      contents: read
+      packages: read
+    env:
+      ACTION: ${{ needs.target.outputs.action }}
+      RELEASE: ${{ needs.target.outputs.release }}
+      IMAGE: ${{ needs.build.outputs.image }}
+      EXTRACT: ${{ needs.build.outputs.extract }}
+      PUBLIC_URL: ${{ vars.DEPLOY_PUBLIC_URL }}
+    steps:
+      - name: Check the environment's settings
+        id: config
+        env:
+          ENVIRONMENT: ${{ needs.target.outputs.environment }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+          DEPLOY_ENV_FILE: ${{ vars.DEPLOY_ENV_FILE }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if ((${#missing[@]} > 0)); then
+            msg="Deploy skipped: the $ENVIRONMENT environment has no ${missing[*]} secret(s) yet. See docs/runbooks/deploy.md."
+            echo "::notice title=Deploy not configured::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          port="${DEPLOY_PORT:-22}" dir="${DEPLOY_DIR:-/opt/crove}"
+          env_file="${DEPLOY_ENV_FILE:-$dir/.env}"
+          # Checked here because they become part of the SSH configuration and the remote command line.
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.:-]+$ ]] || { echo '::error::DEPLOY_HOST must be a host name or an IP address'; exit 1; }
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo '::error::DEPLOY_USER must be a plain user name'; exit 1; }
+          [[ "$port" =~ ^[0-9]{1,5}$ ]] || { echo '::error::DEPLOY_PORT must be a port number'; exit 1; }
+          [[ "$dir" =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo '::error::DEPLOY_DIR must be an absolute path of letters, digits, ., _, - and /'; exit 1; }
+          [[ "$env_file" =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo '::error::DEPLOY_ENV_FILE must be an absolute path of letters, digits, ., _, - and /'; exit 1; }
+          if [ -n "$PUBLIC_URL" ] && ! [[ "$PUBLIC_URL" =~ ^https?://[A-Za-z0-9.:-]+/?$ ]]; then
+            echo '::error::DEPLOY_PUBLIC_URL must be an origin such as https://crove.example.com'
+            exit 1
+          fi
+
+          ssh_dir="$RUNNER_TEMP/deploy-ssh"
+          install -m 700 -d "$ssh_dir"
+          (umask 077; printf '%s\n' "$DEPLOY_SSH_KEY" > "$ssh_dir/key"; printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$ssh_dir/known_hosts")
+          # The host key must be listed in DEPLOY_KNOWN_HOSTS: no trust on first use.
+          cat > "$ssh_dir/config" <<EOF
+          Host crove-target
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USER
+            Port $port
+            IdentityFile $ssh_dir/key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile $ssh_dir/known_hosts
+            ServerAliveInterval 30
+            ServerAliveCountMax 10
+          EOF
+          {
+            echo 'ready=true'
+            echo "ssh_config=$ssh_dir/config"
+            echo "dir=$dir"
+            echo "env_file=$env_file"
+            echo "remote=$dir/.deploy/incoming/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          } >> "$GITHUB_OUTPUT"
+
+      # The release's compose file and deploy script; a rollback uses the script of the ref this run started from.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.config.outputs.ready == 'true'
+        with:
+          persist-credentials: false
+          ref: ${{ needs.target.outputs.action == 'deploy' && needs.target.outputs.sha || github.sha }}
+
+      - name: Upload the deploy script and the compose file
+        if: steps.config.outputs.ready == 'true'
+        env:
+          SSH_CONFIG: ${{ steps.config.outputs.ssh_config }}
+          REMOTE: ${{ steps.config.outputs.remote }}
+        run: |
+          set -euo pipefail
+          tar -cf - -C tools/deploy deploy.sh -C "$GITHUB_WORKSPACE" docker-compose.yml \
+            | ssh -F "$SSH_CONFIG" crove-target "umask 077 && mkdir -p '$REMOTE' && tar -xf - -C '$REMOTE'"
+
+      - name: Deploy, or roll back, on the host
+        id: host
+        if: steps.config.outputs.ready == 'true'
+        env:
+          SSH_CONFIG: ${{ steps.config.outputs.ssh_config }}
+          REMOTE: ${{ steps.config.outputs.remote }}
+          DIR: ${{ steps.config.outputs.dir }}
+          ENV_FILE: ${{ steps.config.outputs.env_file }}
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" = rollback ]; then
+            ssh -F "$SSH_CONFIG" crove-target "bash '$REMOTE/deploy.sh' rollback --dir '$DIR' --env-file '$ENV_FILE'" < /dev/null
+          else
+            [[ "$IMAGE" =~ ^[a-z0-9./_:-]+@sha256:[0-9a-f]{64}$ && "$EXTRACT" =~ ^[a-z0-9./_:-]+@sha256:[0-9a-f]{64}$ ]] || { echo '::error::image digests missing'; exit 1; }
+            [[ "$ACTOR" =~ ^[A-Za-z0-9._-]+(\[bot\])?$ ]] || { echo '::error::unexpected actor name'; exit 1; }
+            # The read-only token goes over stdin: never on a command line, and the host keeps it only for the pull.
+            printf '%s\n' "$GH_TOKEN" | ssh -F "$SSH_CONFIG" crove-target \
+              "bash '$REMOTE/deploy.sh' deploy --dir '$DIR' --env-file '$ENV_FILE' --release '$RELEASE' --image '$IMAGE' --extract-image '$EXTRACT' --compose '$REMOTE/docker-compose.yml' --registry ghcr.io --registry-user '$ACTOR' --registry-password-stdin"
+          fi
+
+      # The same checks through the public URL: DNS, TLS and the reverse proxy. Optional (DEPLOY_PUBLIC_URL).
+      - name: Smoke test through the public URL
+        id: public-smoke
+        if: steps.config.outputs.ready == 'true' && env.PUBLIC_URL != ''
+        run: bash tools/deploy/deploy.sh smoke "$PUBLIC_URL"
+
+      - name: Roll back after a failed public smoke test
+        if: failure() && steps.public-smoke.outcome == 'failure' && env.ACTION == 'deploy'
+        env:
+          SSH_CONFIG: ${{ steps.config.outputs.ssh_config }}
+          REMOTE: ${{ steps.config.outputs.remote }}
+          DIR: ${{ steps.config.outputs.dir }}
+          ENV_FILE: ${{ steps.config.outputs.env_file }}
+        run: |
+          echo '::error::the public smoke test failed; rolling back'
+          ssh -F "$SSH_CONFIG" crove-target "bash '$REMOTE/deploy.sh' rollback --dir '$DIR' --env-file '$ENV_FILE'" < /dev/null
+
+      - name: Summary
+        if: always() && steps.config.outputs.ready == 'true'
+        env:
+          HOST_OUTCOME: ${{ steps.host.outcome }}
+          SMOKE_OUTCOME: ${{ steps.public-smoke.outcome }}
+        run: |
+          {
+            echo "- $ACTION on the host: $HOST_OUTCOME"
+            echo "- public smoke test: ${SMOKE_OUTCOME:-not run (no DEPLOY_PUBLIC_URL)}"
+            if [ "$ACTION" = deploy ]; then echo "- release: $RELEASE"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up
+        if: always() && steps.config.outputs.ready == 'true'
+        env:
+          SSH_CONFIG: ${{ steps.config.outputs.ssh_config }}
+          REMOTE: ${{ steps.config.outputs.remote }}
+        run: |
+          ssh -F "$SSH_CONFIG" crove-target "rm -rf '$REMOTE'" < /dev/null || true
+          rm -rf "$(dirname "$SSH_CONFIG")"

@@ -21,6 +21,8 @@ export const PROTECTED_PATHS = [
   [/^\.github\/CODEOWNERS$/, 'code owners'],
   [/^\.githooks\//, 'git hook'],
   [/^tools\/install-git-hooks\.mjs$/, 'git hook installer'],
+  // Runs on the production host with root-equivalent rights (the docker group), from every release tag.
+  [/^tools\/deploy\//, 'deploy pipeline'],
   [/(^|\/)\.gitattributes$/, 'git attributes'],
   [/^\.gitmodules$/, 'git submodules'],
   [/^\.claude\/settings[^/]*$/, 'agent harness settings'],

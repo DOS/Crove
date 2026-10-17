@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# A stand-in for curl in tools/test/deploy.test.ts: answers the kernel's endpoints. The release that runs is the
+# image in $STUB_DEPLOY_DIR/docker-compose.override.yml; when it holds $STUB_BAD_DIGEST, or STUB_READYZ_FAIL is
+# set, /readyz answers 503. STUB_NO_BUNDLE (always) and STUB_NO_BUNDLE_DIGEST (while that image runs) serve a
+# sign-in page without its script.
+set -euo pipefail
+
+out='' url=''
+while (($# > 0)); do
+  case "$1" in
+    --output)
+      out="$2"
+      shift 2
+      ;;
+    --max-time)
+      shift 2
+      ;;
+    http://* | https://*)
+      url="$1"
+      shift
+      ;;
+    *) shift ;;
+  esac
+done
+printf 'curl %s\n' "$url" >>"$STUB_LOG"
+
+running="$(cat "$STUB_DEPLOY_DIR/docker-compose.override.yml" 2>/dev/null || true)"
+status=200 body=''
+case "$url" in
+  */healthz) body='{"ok":true}' ;;
+  */readyz)
+    if [ -n "${STUB_READYZ_FAIL:-}" ] || { [ -n "${STUB_BAD_DIGEST:-}" ] && [[ "$running" == *"$STUB_BAD_DIGEST"* ]]; }; then
+      status=503 body='{"ready":false,"reason":"schema"}'
+    else
+      body='{"ready":true}'
+    fi
+    ;;
+  */api/config) body='{"authUrl":"http://127.0.0.1:18080/auth/v1","modules":[]}' ;;
+  */auth/v1/health) body='{"name":"GoTrue"}' ;;
+  */login)
+    if [ -n "${STUB_NO_BUNDLE:-}" ] || { [ -n "${STUB_NO_BUNDLE_DIGEST:-}" ] && [[ "$running" == *"$STUB_NO_BUNDLE_DIGEST"* ]]; }; then
+      body='<div id="root"></div>'
+    else
+      body='<div id="root"></div><script type="module" crossorigin src="/assets/index-abc123.js"></script>'
+    fi
+    ;;
+  */assets/index-abc123.js) body='console.log(1)' ;;
+  *) status=404 ;;
+esac
+
+if [ -n "$out" ]; then printf '%s' "$body" >"$out"; else printf '%s' "$body"; fi
+# curl --fail exits 22 on an HTTP error.
+if ((status >= 400)); then exit 22; fi
+exit 0
