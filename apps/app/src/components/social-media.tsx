@@ -118,7 +118,7 @@ export function Thumb({ fileId, alt, className, mime, durationMs }: { fileId: st
       {!url.url ? (
         <div className="flex size-full items-center justify-center">{url.isLoading ? <Spinner /> : null}</div>
       ) : video ? (
-        <video src={url.url} aria-label={alt} muted playsInline preload="metadata" className="size-full object-cover" />
+        <video src={`${url.url}#t=0.001`} aria-label={alt} muted playsInline preload="metadata" className="size-full object-cover" />
       ) : (
         <img src={url.url} alt={alt} className="size-full object-cover" />
       )}
