@@ -17,7 +17,8 @@ const ACTOR: SystemActor = { type: 'system', component: 'social.evergreen' };
 // A repost in one of these is no longer on its way; any other status holds the next evergreen repost back.
 const REPOST_DONE = ['published', 'partially_published', 'failed', 'cancelled'] as const;
 
-async function repost(ctx: CommandContext, sourceId: string, submit: boolean): Promise<{ postId: string; submitted: number } | null> {
+// gone: every channel it went out on is disconnected for good; waiting: some are only expired or failing for now.
+async function repost(ctx: CommandContext, sourceId: string, submit: boolean): Promise<{ postId: string; submitted: number } | 'gone' | 'waiting'> {
   const source = await lockPost(ctx.trx, ctx.orgId, sourceId);
   const variants = await lockVariants(ctx.trx, ctx.orgId, source.id);
   // The channels it went out on that are still connected.
@@ -25,18 +26,17 @@ async function repost(ctx: CommandContext, sourceId: string, submit: boolean): P
   if (published.length === 0) throw new DomainError('NOTHING_TO_REPOST', 409, 'Bài này chưa đăng lên kênh nào');
   const live = await ctx.trx
     .selectFrom('crove_kernel.channel_connection')
-    .select('id')
+    .select(['id', 'status'])
     .where('org_id', '=', ctx.orgId)
     .where(
       'id',
       'in',
       published.map((v) => v.channel_connection_id),
     )
-    .where('status', '=', 'active')
     .execute();
-  const liveIds = new Set(live.map((c) => c.id));
+  const liveIds = new Set(live.filter((c) => c.status === 'active').map((c) => c.id));
   const targets = published.filter((v) => liveIds.has(v.channel_connection_id));
-  if (targets.length === 0) return null;
+  if (targets.length === 0) return live.some((c) => c.status !== 'revoked') ? 'waiting' : 'gone';
   const meta = await ctx.trx.selectFrom('crove_social.post').select(['tainted', 'author_user_id', 'origin']).where('org_id', '=', ctx.orgId).where('id', '=', source.id).executeTakeFirstOrThrow();
   const author = ctx.actor.type === 'user' ? ctx.actor.userId : meta.author_user_id;
   const inserted = await ctx.trx
@@ -116,7 +116,7 @@ export const postRepost = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     const done = await repost(ctx, input.postId, false);
-    if (!done) throw new DomainError('NOTHING_TO_REPOST', 409, 'Các kênh của bài này không còn kết nối');
+    if (typeof done === 'string') throw new DomainError('NOTHING_TO_REPOST', 409, 'Các kênh của bài này không còn kết nối');
     return { postId: done.postId };
   },
 });
@@ -152,8 +152,10 @@ export const postRepostEvergreen = defineCommand({
       .executeTakeFirst();
     if (!still) return { postId: null };
     const done = await repost(ctx, input.postId, true);
-    // No channel left: the post stops being evergreen rather than being tried every hour.
-    if (!done) {
+    // A channel that is only expired may be reconnected: try again on a later sweep.
+    if (done === 'waiting') return { postId: null };
+    // No channel left for good: the post stops being evergreen rather than being tried every hour.
+    if (done === 'gone') {
       await ctx.trx.updateTable('crove_social.post').set({ evergreen_days: null, updated_at: ctx.now }).where('org_id', '=', ctx.orgId).where('id', '=', input.postId).execute();
       ctx.audit({ post_id: input.postId, evergreen_days: null, reason: 'no_connected_channel' });
       return { postId: null };

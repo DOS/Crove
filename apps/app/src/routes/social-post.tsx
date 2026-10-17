@@ -569,8 +569,13 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
   }
 }
 
+// Each post gets fresh page state: the route keeps the page mounted when it opens another post (a repost, its source).
 export function SocialPostPage() {
   const { slug, id: postId } = useParams({ strict: false }) as { slug: string; id: string };
+  return <PostScreen key={postId} slug={slug} postId={postId} />;
+}
+
+function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const t = useTranslations('social');
   const f = useFormat();
   const { canDecide, canWrite } = useRole(slug);
@@ -642,11 +647,10 @@ export function SocialPostPage() {
     onSettled: refresh,
   });
   const submit = useMutation({ mutationFn: () => client.social.posts.submit({ postId }), onSuccess: refresh });
-  // A repost opens as a new draft for the same channels; the page takes the new post's content whole.
+  // A repost opens as a new draft for the same channels.
   const repost = useMutation({
     mutationFn: () => client.social.posts.repost({ postId }),
     onSuccess: (made) => {
-      adoptNext.current = 'all';
       refresh();
       void navigate({ to: '/o/$slug/social/$id', params: { slug, id: made.postId } });
     },

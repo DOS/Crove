@@ -237,6 +237,19 @@ suite('social reposts and evergreen posts on PostgreSQL (S9)', () => {
     expect(await repostNow(o, other.postId)).toEqual({ postId: null });
   });
 
+  it('keeps an evergreen post whose channels are only expired, and reposts once they are back', async () => {
+    const o = await org();
+    const { postId, connections } = await published(o);
+    await exec(o, 'social.post.set_evergreen', { postId, days: 7 });
+    await admin((c) => c.query("UPDATE crove_kernel.channel_connection SET status = 'expired' WHERE id = ANY($1::uuid[])", [connections]));
+    await agePublished(postId, 8);
+    await sweep();
+    expect(await reposts(postId)).toEqual([]);
+    expect((await get(o, postId)).evergreenDays).toBe(7);
+    await admin((c) => c.query("UPDATE crove_kernel.channel_connection SET status = 'active' WHERE id = ANY($1::uuid[])", [connections]));
+    await sweep();
+    expect(await reposts(postId)).toHaveLength(1);
+  });
   it('stops being evergreen when none of its channels is connected any more', async () => {
     const o = await org();
     const { postId, connections } = await published(o);
