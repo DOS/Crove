@@ -160,11 +160,12 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'bluesky',
     body: { max: 300, count: 'graphemes', required: false },
     title: null,
-    media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: 1_000_000, maxVideoBytes: 50 * MB, maxVideoSeconds: null },
+    // Images only until video posts are built (#396); 1 MB per image is Bluesky's own blob limit.
+    media: { min: 0, max: 4, kinds: ['image'], mixed: false, maxVideos: 0, imageTypes: ANY_IMAGE, maxImageBytes: 1_000_000, maxVideoBytes: null, maxVideoSeconds: null },
     maxLinks: null,
     scrapesLinkPreview: false,
-    // 50 MB is the PDS cap on any blob, not a documented video limit; Bluesky also caps post text in bytes.
-    unverified: ['body.max', 'media.maxVideoBytes'],
+    // Bluesky also caps post text in bytes.
+    unverified: ['body.max'],
   },
 };
 
