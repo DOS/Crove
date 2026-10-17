@@ -61,15 +61,15 @@ footer{margin-top:48px;color:var(--muted);font-size:14px}
 <p class="lead">Trang này dành cho owner và agent kế tiếp: cái gì đã merge, cái gì đang chờ owner, và các câu hỏi còn mở. Bản tiếng Anh gốc: <a href="status-2026-10-17.md">status-2026-10-17.md</a>.</p>
 
 <div class="grid">
-  <div class="stat"><b>11</b><span>issue đã có PR merge trong phiên</span></div>
+  <div class="stat"><b>12</b><span>issue đã có PR merge trong phiên</span></div>
   <div class="stat"><b>M1</b><span>phần agent làm được đã xong, còn lại chờ owner</span></div>
-  <div class="stat"><b>M2</b><span>4 việc đã merge, #319 đang ở PR #363</span></div>
+  <div class="stat"><b>M2</b><span>5 việc đã merge trong phiên</span></div>
 </div>
 
 <h2>1. Tóm tắt</h2>
 <ul>
   <li><b>M1 (dựng bản pilot):</b> mọi phần agent tự làm được đã merge. Còn lại cần owner: duyệt chi phí server (#52), DNS và email đến (#53), AI endpoint (#312). Sau đó mới dựng server (#306) và deploy thật lần đầu (#56).</li>
-  <li><b>M2 (vòng khóa sổ tháng):</b> đã merge VAT theo kỳ (#316), xuất chứng từ mua sang MISA (#317), số dư đầu kỳ (#320), sổ sách (#321). Tài khoản con (#319) đang ở PR #363. Hóa đơn bán ra, nhập hàng loạt, duyệt hàng loạt (#313 đến #315) do session khác nhận.</li>
+  <li><b>M2 (vòng khóa sổ tháng):</b> đã merge VAT theo kỳ (#316), xuất chứng từ mua sang MISA (#317), số dư đầu kỳ (#320), sổ sách (#321), tài khoản con cùng đủ danh mục TT133 (#319). Hóa đơn bán ra, nhập hàng loạt, duyệt hàng loạt (#313 đến #315) do session khác nhận.</li>
   <li><b>M0:</b> toàn bộ là việc của owner, phiên này chưa có gì thay đổi.</li>
 </ul>
 
@@ -87,6 +87,7 @@ footer{margin-top:48px;color:var(--muted);font-size:14px}
 <tr><td>#317</td><td>#357</td><td>Xuất chứng từ mua theo mẫu MISA SME "Chứng từ mua dịch vụ"; phần bán ra làm sẵn chờ #313</td><td>Đối tác import thành công 1 file</td></tr>
 <tr><td>#321</td><td>#364</td><td>Màn "Sổ sách": cân đối số phát sinh, sổ cái, công nợ 131/331 theo đối tượng, xuất Excel</td><td>P3 #365</td></tr>
 <tr><td>#320</td><td>#367</td><td>Nhập số dư đầu kỳ từ file Excel mẫu, kiểm từng dòng, ghi thành 1 bút toán có xác thực MFA</td><td>P3 #366</td></tr>
+<tr><td>#319</td><td>#360, #363</td><td>Đủ danh mục TT133 (123 mã theo Phụ lục 1 Thông tư 133/2016), tài khoản con theo từng tổ chức (thêm, ngừng dùng), tài khoản mặc định của nhà cung cấp là tài khoản con; sổ sách và số dư đầu kỳ dùng được tài khoản con</td><td>P3 #368</td></tr>
 </table></div>
 
 <h2>3. Đang chờ owner</h2>
@@ -123,7 +124,7 @@ footer{margin-top:48px;color:var(--muted);font-size:14px}
 <h2>6. Ghi chú cho agent kế tiếp</h2>
 <ul>
   <li><b>PR đụng file protected:</b> job "Security review (agent)" trong CI chỉ pass ở chế độ "pending owner setup" khi #95 chưa xong. PR nào sửa file protected (ví dụ <code>apps/kernel/src/http.ts</code>) phải có review độc lập riêng, soi tenancy, quyền và audit.</li>
-  <li><b>Các PR finance chạy song song hay đụng nhau</b> ở <code>http.ts</code>, <code>modules/finance/src/index.ts</code>, <code>e2e/tests/inbox.spec.ts</code>. Rebase lúc merge, và soi cả conflict ngầm mà git không báo (#363 suýt làm tài khoản con rơi khỏi sổ sách).</li>
+  <li><b>Các PR finance chạy song song hay đụng nhau</b> ở <code>http.ts</code>, <code>modules/finance/src/index.ts</code>, <code>e2e/tests/inbox.spec.ts</code>. Rebase lúc merge, và soi cả conflict ngầm mà git không báo (#363 suýt làm tài khoản con rơi khỏi sổ sách, đã sửa trước khi merge).</li>
   <li><b>Chỉ dọn worktree sau khi chắc chắn đã merge</b> (<code>gh pr view &lt;n&gt; --json state</code> trả về <code>MERGED</code>).</li>
   <li><b>Thứ tự migration:</b> kiểm file mới nhất trong <code>supabase/migrations</code> trên <code>origin/main</code> ngay trước mỗi lần merge.</li>
   <li><b>#313 và phần VAT, MISA:</b> bên nào merge sau thì thêm bộ lọc <code>direction</code> trong <code>purchaseInvoices()</code>; #313 gắn route và nút xuất MISA cho hóa đơn bán ra.</li>
