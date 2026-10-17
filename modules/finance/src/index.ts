@@ -1,5 +1,6 @@
 import { recordPurchase, revisePurchase } from './record.ts';
 import { prepareReversal, reverseEntry } from './reversal.ts';
+import { openingBalancePost, openingBalancePreview } from './opening-balance.ts';
 import { fileForExtraction, purchaseLookup } from './extract.ts';
 import { accountsList, documentsList, journalExport, journalGet, journalList, purchaseVouchers, vendorsList, voidedProposals } from './queries.ts';
 import { vatExport, vatPeriodQuery } from './vat.ts';
@@ -24,12 +25,13 @@ export * from './domain/ledger.ts';
 export * from './domain/tt133-reports.ts';
 export * from './domain/vat-return.ts';
 export * from './domain/ledger-reports.ts';
+export * from './domain/opening-balance.ts';
 export { REVERSAL_COMMAND, REVERSAL_KIND, zJournalReversal, type JournalReversal } from './reversal.ts';
 export { JOURNAL_EXPORT_LIMIT, VOIDED_PROPOSALS_QUERY, type JournalEntryView } from './queries.ts';
 export { VAT_PERIOD_LIMIT, VAT_WARNINGS, type VatInvoiceView, type VatReport, type VatSide, type VatWarning } from './vat.ts';
 export { LEDGER_LINE_LIMIT, type AccountLedgerView, type LedgerBook, type LedgerReport } from './ledger-reports.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, openingBalancePost];
 export const financeQueries = [
   fileForExtraction,
   purchaseLookup,
@@ -44,4 +46,5 @@ export const financeQueries = [
   ledgerPeriodQuery,
   ledgerAccountQuery,
   ledgerBookQuery,
+  openingBalancePreview,
 ];

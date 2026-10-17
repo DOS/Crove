@@ -56,6 +56,7 @@ import {
   zLedgerPeriod,
   zLedgerReport,
 } from './schemas.ts';
+import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
 export const contract = {
@@ -198,6 +199,15 @@ export const contract = {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zJournalEntry)),
     // One entry, for example the one a reversal proposal names.
     get: oc.input(z.object({ id: zId })).output(zJournalEntry),
+  },
+  // Opening balances from Excel (#320), owners and admins. preview checks a trial balance read from the template and
+  // writes nothing; post checks it again and posts it as the org's one opening entry (R3: fresh MFA). A retry with the
+  // same idempotencyKey returns the first result. To replace an opening entry, reverse it first.
+  openingBalance: {
+    preview: oc.input(zOpeningBalanceImport).output(zOpeningBalancePreview),
+    post: oc
+      .input(zOpeningBalanceImport.extend({ idempotencyKey: zId }))
+      .output(z.object({ journalEntryId: zId, lines: z.number().int().positive() })),
   },
   accounts: {
     list: oc.output(z.array(zAccount)),
