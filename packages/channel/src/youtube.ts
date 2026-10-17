@@ -65,7 +65,7 @@ class GoogleClient {
   private readonly app: GoogleAppConfig;
 
   constructor(app: GoogleAppConfig, fetchImpl?: Fetch) {
-    if (!/^[0-9]{6,32}-[a-z0-9]{8,64}\.apps\.googleusercontent\.com$/.test(app.clientId)) throw new Error('invalid Google client id');
+    if (!/^[0-9]{6,32}-[A-Za-z0-9_-]{8,64}\.apps\.googleusercontent\.com$/.test(app.clientId)) throw new Error('invalid Google client id');
     if (!app.clientSecret) throw new Error('missing Google client secret');
     this.app = app;
     // A video of up to 100 MB goes in one PUT.
@@ -158,7 +158,8 @@ export class YouTubeConnector implements OAuthConnector {
     if (typeof answer.access_token !== 'string' || !answer.access_token) throw new ConnectorError('provider', 'Google answered without an access token');
     if (typeof answer.refresh_token !== 'string' || !answer.refresh_token) throw new ConnectorError('provider', 'Google answered without a refresh token');
     const granted = typeof answer.scope === 'string' ? answer.scope.split(' ').filter(Boolean) : [];
-    if (!granted.includes(YOUTUBE_SCOPES[0])) throw new ConnectorError('denied', 'Google did not grant youtube.upload', 'MISSING_PERMISSION');
+    // Both: upload posts, readonly finds the channel and reconciles an unclear upload.
+    if (!YOUTUBE_SCOPES.every((s) => granted.includes(s))) throw new ConnectorError('denied', 'Google did not grant the YouTube permissions Crove needs', 'MISSING_PERMISSION');
     const channels = await this.client.call<ChannelList>('GET', `${API}/channels?part=snippet&mine=true`, answer.access_token).catch((error: unknown) => {
       throw connectorError(error);
     });

@@ -53,7 +53,7 @@ describe('YouTubeConnector', () => {
   });
 
   it('refuses an account without a channel, a grant without upload, and a used code', async () => {
-    const token = { body: { access_token: 't', refresh_token: 'r', expires_in: 3599, scope: 'https://www.googleapis.com/auth/youtube.upload' } };
+    const token = { body: { access_token: 't', refresh_token: 'r', expires_in: 3599, scope: 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly' } };
     const none = google({ 'POST oauth2.googleapis.com/token': [token], 'GET www.googleapis.com/youtube/v3/channels': [{ body: { items: [] } }] });
     await expect(new YouTubeConnector(APP, none.fetchImpl).exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: null })).rejects.toMatchObject({ kind: 'denied', code: 'NO_CHANNEL' });
     const narrow = google({ 'POST oauth2.googleapis.com/token': [{ body: { ...token.body, scope: 'https://www.googleapis.com/auth/youtube.readonly' } }] });
