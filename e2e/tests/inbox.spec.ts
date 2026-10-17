@@ -5,6 +5,8 @@ import { expect, test } from '@playwright/test';
 import { Decimal } from 'decimal.js';
 import ExcelJS from 'exceljs';
 import { sql } from '../lib/db.ts';
+import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { nextTotp } from '../lib/totp.ts';
 
 const INVOICE = fileURLToPath(new URL('../../apps/extract/test/fixtures/einvoice-basic.xml', import.meta.url));
 const SELLER = 'CÔNG TY TNHH DỊCH VỤ MẪU';
@@ -15,24 +17,18 @@ const MEMO = `HĐ C26TAB-1234 ${SELLER}`;
 const eq = (value: unknown, expected: string) => new Decimal(String(value)).equals(expected);
 
 test('sign up, upload an e-invoice, approve it, then find it in the lists, the export and the database', async ({ page }) => {
-  const email = `e2e-${Date.now()}@example.com`;
+  const email = newEmail('inbox');
 
-  await test.step('sign up', async () => {
+  await test.step('sign up and confirm the email', async () => {
     await page.goto('/');
     await expect(page).toHaveURL(/\/login$/);
-    await page.getByRole('button', { name: 'Tạo tài khoản' }).click();
-    await page.getByLabel('Email').fill(email);
-    await page.getByLabel('Mật khẩu').fill('e2e-password-0123');
-    await page.getByRole('button', { name: 'Tạo tài khoản' }).click();
-    await expect(page).toHaveURL(/\/onboarding$/);
+    await signUp(page, email);
   });
 
   const slug = await test.step('create the first org', async () => {
-    await page.getByLabel('Tên công ty hoặc hộ kinh doanh').fill('Công ty E2E');
-    await page.getByRole('button', { name: 'Tạo tổ chức' }).click();
-    await expect(page).toHaveURL(/\/o\/[^/]+\/inbox$/);
+    const created = await createOrg(page, 'Công ty E2E');
     await expect(page.getByRole('heading', { name: 'Hộp thư chứng từ' })).toBeVisible();
-    return new URL(page.url()).pathname.split('/')[2] ?? '';
+    return created;
   });
 
   await test.step('upload the e-invoice and wait for the proposal', async () => {
@@ -50,6 +46,14 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     const approve = page.getByRole('button', { name: 'Duyệt và ghi sổ' });
     await expect(approve).toBeEnabled();
     await approve.click();
+    // Approving is R3: without a second factor the kernel answers STEP_UP_REQUIRED and the page offers to enable one,
+    // then approves again by itself.
+    await expect(page.getByText('Việc này cần xác thực hai lớp.')).toBeVisible();
+    await expect(page.getByText('Đang chờ: duyệt và ghi sổ chứng từ này.')).toBeVisible();
+    await page.getByRole('button', { name: 'Bật xác thực hai lớp' }).click();
+    const secret = (await page.getByLabel('Khóa thiết lập').textContent())?.trim() ?? '';
+    await page.getByLabel('Mã xác thực').fill((await nextTotp(secret)).code);
+    await page.getByRole('button', { name: 'Xác nhận' }).click();
     await expect(page).toHaveURL(new RegExp(`/o/${slug}/inbox$`));
     await expect(page.getByText('Không có đề xuất nào chờ duyệt')).toBeVisible();
     await page.getByRole('tab', { name: 'Đã ghi sổ' }).click();
@@ -153,9 +157,21 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
       expect.arrayContaining([
         { command: 'kernel.file.ingest', outcome: 'ok', actor_type: 'user', by_user: true },
         { command: 'kernel.extraction.record', outcome: 'ok', actor_type: 'system', by_user: false },
+        { command: 'kernel.proposal.approve', outcome: 'denied', actor_type: 'user', by_user: true },
         { command: 'kernel.proposal.approve', outcome: 'ok', actor_type: 'user', by_user: true },
         { command: 'finance.purchase.record', outcome: 'ok', actor_type: 'user', by_user: true },
       ]),
     );
+
+    // The denied attempt was aal1; the approval ran with the fresh second factor (policy P11).
+    const approvals = sql<{ outcome: string; code: string | null; aal: string; mfa: boolean }>(
+      `SELECT outcome, detail->>'code' AS code, detail->>'aal' AS aal, detail->>'mfaAt' IS NOT NULL AS mfa
+         FROM crove_kernel.audit_event WHERE org_id = :'org' AND command = 'kernel.proposal.approve' ORDER BY occurred_at, id`,
+      vars,
+    );
+    expect(approvals).toEqual([
+      { outcome: 'denied', code: 'STEP_UP_REQUIRED', aal: 'aal1', mfa: false },
+      { outcome: 'ok', code: null, aal: 'aal2', mfa: true },
+    ]);
   });
 });

@@ -6,9 +6,9 @@
   "license": "AGPL-3.0-only",
   "description": "Playwright end-to-end tests against the docker compose stack (MVP exit criterion 4)",
   "scripts": {
-    "stack:up": "docker compose -p crove-e2e -f ../docker-compose.yml up -d --build",
-    "stack:logs": "docker compose -p crove-e2e -f ../docker-compose.yml logs --no-color",
-    "stack:down": "docker compose -p crove-e2e -f ../docker-compose.yml down -v",
+    "stack:up": "docker compose -p crove-e2e -f ../docker-compose.yml -f compose.e2e.yml up -d --build",
+    "stack:logs": "docker compose -p crove-e2e -f ../docker-compose.yml -f compose.e2e.yml logs --no-color",
+    "stack:down": "docker compose -p crove-e2e -f ../docker-compose.yml -f compose.e2e.yml down -v",
     "test": "playwright test",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

@@ -7,8 +7,9 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { StepUpPrompt, TwoFactorCard } from '../components/two-factor.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
-import { apiFetch, errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { apiFetch, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { ROLES, roleChangeConfirmation, roleChangeKind, type Role, type RoleChangeKind } from '../lib/members.ts';
@@ -86,7 +87,17 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
             {root('common.cancel')}
           </Button>
         </div>
-        {error && <ErrorText>{errorMessage(error)}</ErrorText>}
+        {error &&
+          (isStepUpRequired(error) ? (
+            // R3: after a fresh second factor the confirmed request runs again with its key.
+            <StepUpPrompt
+              enroll={false}
+              action={pending.kind === 'remove' ? t('stepUpRemove', { name }) : t('stepUpRole', { name, role: root(`roles.${pending.role}`) })}
+              onVerified={confirm}
+            />
+          ) : (
+            <ErrorText>{errorMessage(error)}</ErrorText>
+          ))}
       </div>
     );
   }
@@ -112,15 +123,25 @@ function MemberControls({ member, self }: { member: MemberRow; self: boolean }) 
           </Button>
         )}
       </div>
-      {changeRole.error && <ErrorText>{errorMessage(changeRole.error)}</ErrorText>}
+      {changeRole.error &&
+        (isStepUpRequired(changeRole.error) ? (
+          // R3: after a fresh second factor the same request runs again (a refused request stores no key).
+          <StepUpPrompt
+            enroll={false}
+            action={t('stepUpRole', { name, role: root(`roles.${changeRole.variables?.role ?? member.role}`) })}
+            onVerified={() => changeRole.variables && changeRole.mutate(changeRole.variables)}
+            onCancel={() => changeRole.reset()}
+          />
+        ) : (
+          <ErrorText>{errorMessage(changeRole.error)}</ErrorText>
+        ))}
     </div>
   );
 }
 
 // Owner only. One idempotency key per confirmation, so a retried request never rotates twice. R3 (#113): without a
-// second factor in the last 5 minutes the server answers STEP_UP_REQUIRED, shown below the buttons like any error;
-// the key is kept until a rotation succeeds, so a retry after a refusal can still rotate at most once. The fresh
-// MFA challenge screen (StepUpPrompt) lands with the SPA MFA flows (#32).
+// second factor in the last 5 minutes the server answers STEP_UP_REQUIRED and the step-up prompt asks for one; the
+// key is kept until a rotation succeeds, so the retry after the code can still rotate at most once.
 function RotateInboundAddress() {
   const t = useTranslations('settings');
   const tc = useTranslations('common');
@@ -137,6 +158,7 @@ function RotateInboundAddress() {
       },
     }),
   );
+  const rotateNow = () => rotate.mutate({ idempotencyKey });
 
   if (!confirming) {
     return (
@@ -165,21 +187,33 @@ function RotateInboundAddress() {
       <p className="text-muted-foreground">{t('rotateBody')}</p>
       <p className="text-subtle-foreground">{t('rotateMfa')}</p>
       <div className="flex gap-2">
-        <Button variant="destructive" disabled={rotate.isPending} onClick={() => rotate.mutate({ idempotencyKey })}>
+        <Button variant="destructive" disabled={rotate.isPending} onClick={rotateNow}>
           {t('rotateConfirm')}
         </Button>
-        <Button variant="ghost" disabled={rotate.isPending} onClick={() => setConfirming(false)}>
+        <Button
+          variant="ghost"
+          disabled={rotate.isPending}
+          onClick={() => {
+            rotate.reset();
+            setConfirming(false);
+          }}
+        >
           {tc('cancel')}
         </Button>
       </div>
-      {rotate.error && <ErrorText>{errorMessage(rotate.error)}</ErrorText>}
+      {rotate.error &&
+        (isStepUpRequired(rotate.error) ? (
+          <StepUpPrompt enroll={false} action={t('stepUpRotate')} onVerified={rotateNow} />
+        ) : (
+          <ErrorText>{errorMessage(rotate.error)}</ErrorText>
+        ))}
     </div>
   );
 }
 
 // Owner only (issue #212). Starts offboarding (kernel.org.offboard, R3): the owner types the org's slug, and without a
-// second factor in the last 5 minutes the server answers STEP_UP_REQUIRED, shown below the buttons with a plain
-// message; the fresh MFA challenge screen lands with the SPA MFA flows (#32). One idempotency key per confirmation.
+// second factor in the last 5 minutes the server answers STEP_UP_REQUIRED and the step-up prompt asks for one (#32);
+// after the code the refused request runs again as sent, with its key. One idempotency key per confirmation.
 // Then shows the export's state, polling while it is made, and the downloads of the manifest and of each table.
 function Offboarding({ name, slug }: { name: string; slug: string }) {
   const root = useTranslations();
@@ -307,12 +341,31 @@ function Offboarding({ name, slug }: { name: string; slug: string }) {
             <Button type="submit" variant="destructive" disabled={offboard.isPending || !slugConfirmed(typed, slug)}>
               {t('confirm')}
             </Button>
-            <Button type="button" variant="ghost" disabled={offboard.isPending} onClick={() => setConfirming(false)}>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={offboard.isPending}
+              onClick={() => {
+                offboard.reset();
+                setConfirming(false);
+              }}
+            >
               {tc('cancel')}
             </Button>
           </div>
-          {offboard.error && <ErrorText>{offboardErrorMessage(offboard.error, root, locale)}</ErrorText>}
+          {offboard.error && !isStepUpRequired(offboard.error) && <ErrorText>{offboardErrorMessage(offboard.error, root, locale)}</ErrorText>}
         </form>
+      )}
+      {confirming && isStepUpRequired(offboard.error) && (
+        // Outside the form above: the prompt has a form of its own.
+        <div className="mt-4">
+          <StepUpPrompt
+            enroll={false}
+            action={t('stepUpAction', { name })}
+            onVerified={() => offboard.variables && offboard.mutate(offboard.variables)}
+            onCancel={() => offboard.reset()}
+          />
+        </div>
       )}
     </Card>
   );
@@ -388,8 +441,19 @@ function InviteMember({ isOwner }: { isOwner: boolean }) {
             {t('invite')}
           </Button>
         </div>
-        {invite.error && <ErrorText>{errorMessage(invite.error)}</ErrorText>}
+        {invite.error && !isStepUpRequired(invite.error) && <ErrorText>{errorMessage(invite.error)}</ErrorText>}
       </form>
+      {isStepUpRequired(invite.error) && (
+        // Inviting is R3. Outside the form above: the prompt has a form of its own.
+        <div className="mt-4">
+          <StepUpPrompt
+            enroll={false}
+            action={t('stepUpInvite', { email: invite.variables?.email ?? email, role: root(`roles.${invite.variables?.role ?? role}`) })}
+            onVerified={() => invite.variables && invite.mutate(invite.variables)}
+            onCancel={() => invite.reset()}
+          />
+        </div>
+      )}
       {invite.data && <CreatedInvite invite={invite.data} onDone={() => invite.reset()} />}
     </>
   );
@@ -501,6 +565,7 @@ export function SettingsPage() {
             </>
           )}
         </Card>
+        <TwoFactorCard />
         {me.data && <MySessions userId={me.data.userId} />}
         {isOwner && org.data && <Offboarding name={org.data.name} slug={org.data.slug} />}
       </div>

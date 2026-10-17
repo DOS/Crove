@@ -2,9 +2,9 @@ import { Outlet, createRootRoute, createRoute, createRouter, redirect, type Erro
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { errorMessage, getCurrentOrg, isUnauthenticated, orpc, queryClient, setCurrentOrg } from './lib/api.ts';
-import { accessToken, auth, getConfig } from './lib/auth.ts';
-import { signOut } from './lib/session-actions.ts';
+import { accessToken, auth, getConfig, needsSecondFactor } from './lib/auth.ts';
 import { pendingInvite, rememberInvite, takeTokenFromHash } from './lib/invite.ts';
+import { signOut } from './lib/session-actions.ts';
 import { AgentsPage } from './routes/agents.tsx';
 import { AuthPage } from './routes/auth.tsx';
 import { DocumentsPage } from './routes/documents.tsx';
@@ -12,14 +12,22 @@ import { InboxDetailPage } from './routes/inbox-detail.tsx';
 import { InboxPage } from './routes/inbox.tsx';
 import { InvitePage } from './routes/invite.tsx';
 import { JournalPage } from './routes/journal.tsx';
+import { MfaPage } from './routes/mfa.tsx';
 import { OnboardingPage } from './routes/onboarding.tsx';
 import { OrgLayout } from './routes/org-layout.tsx';
+import { ResetPasswordPage } from './routes/reset-password.tsx';
 import { SettingsPage } from './routes/settings.tsx';
 import { TaskDetailPage, TasksPage } from './routes/tasks.tsx';
 import { VendorsPage } from './routes/vendors.tsx';
 
-async function requireAuth() {
+async function requireSession() {
   if (!(await accessToken())) throw redirect({ to: '/login' });
+}
+
+// A user with a verified second factor finishes signing in on /mfa before seeing any data.
+async function requireAuth() {
+  await requireSession();
+  if (await needsSecondFactor()) throw redirect({ to: '/mfa' });
 }
 
 function ErrorPage({ error }: ErrorComponentProps) {
@@ -75,6 +83,24 @@ const inviteRoute = createRoute({
   component: InvitePage,
 });
 
+const mfaRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/mfa',
+  beforeLoad: async () => {
+    await requireSession();
+    if (!(await needsSecondFactor())) throw redirect({ to: '/' });
+  },
+  component: MfaPage,
+});
+
+// Reached from a recovery email link, which signs the user in for this one purpose.
+const resetPasswordRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reset-password',
+  beforeLoad: requireSession,
+  component: ResetPasswordPage,
+});
+
 const onboardingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/onboarding',
@@ -123,6 +149,8 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
   inviteRoute,
+  mfaRoute,
+  resetPasswordRoute,
   onboardingRoute,
   orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, agentsRoute, tasksRoute, taskDetailRoute, settingsRoute]),
 ]);

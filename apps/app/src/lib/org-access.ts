@@ -4,7 +4,7 @@
 // orgs this session can enter) and never signs the device out of Supabase Auth. Any other dead session still signs
 // out, as before. No browser or API imports, so it is unit tested.
 import { ORG_HEADER } from '@crove/kernel-contract';
-import { isOrgAccessRevoked, isUnauthenticated } from './errors.ts';
+import { isMfaRequired, isOrgAccessRevoked, isUnauthenticated } from './errors.ts';
 
 // The request headers for the kernel. `org` is null for org-less calls; the user's own sign-out revoke is one, so
 // an org that refuses this session cannot swallow it (the kernel picks an org that can run it, or none).
@@ -52,6 +52,8 @@ export interface SessionErrorDeps {
   leaveOrg: (slug: string) => void;
   // Signs this device out locally (the session is dead everywhere).
   signOut: () => void;
+  // Opens the MFA challenge: the session is valid but has not passed its second factor yet (MFA_REQUIRED, #126).
+  openMfa: () => void;
 }
 
 // The handler for every failed query and mutation. Several requests can fail at once; the org is left only once.
@@ -64,6 +66,10 @@ export function createSessionErrorHandler(deps: SessionErrorDeps): (error: unkno
         leaving = slug;
         deps.leaveOrg(slug);
       }
+      return;
+    }
+    if (isMfaRequired(error)) {
+      deps.openMfa();
       return;
     }
     if (isUnauthenticated(error)) deps.signOut();

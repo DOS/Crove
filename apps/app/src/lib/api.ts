@@ -32,7 +32,7 @@ export const orpc = createTanstackQueryUtils(client);
 const orglessLink = new RPCLink({ url: `${window.location.origin}/api/rpc`, headers: async () => requestHeaders(await accessToken(), null) });
 export const orglessClient: ContractRouterClient<typeof contract> = createORPCClient(orglessLink);
 
-export { ApiError, ClientError, isMfaRequired, isOrgAccessRevoked, isUnauthenticated } from './errors.ts';
+export { ApiError, ClientError, isMfaRequired, isOrgAccessRevoked, isStepUpRequired, isUnauthenticated } from './errors.ts';
 
 function sessionStore(): Storage | undefined {
   try {
@@ -43,7 +43,8 @@ function sessionStore(): Storage | undefined {
 }
 
 // A stale or revoked session signs the user out locally; main.tsx then routes to /login. A session revoked in this
-// org only leaves the org: the start page then lists only the orgs this session can enter (issue #247).
+// org only leaves the org: the start page then lists only the orgs this session can enter (issue #247). A session that
+// still owes its second factor goes to the challenge instead (issue #32).
 const onError = createSessionErrorHandler({
   currentOrg: getCurrentOrg,
   leaveOrg: (slug) => {
@@ -54,6 +55,9 @@ const onError = createSessionErrorHandler({
     window.location.assign('/');
   },
   signOut: () => void auth().signOut({ scope: 'local' }),
+  openMfa: () => {
+    if (window.location.pathname !== '/mfa') window.location.assign('/mfa');
+  },
 });
 
 export const queryClient = new QueryClient({

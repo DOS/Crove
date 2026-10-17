@@ -69,6 +69,11 @@ services:
       GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
       GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_FROM:-noreply@crove.local}
       GOTRUE_SMTP_SENDER_NAME: Crove
+      # Email links resolve these paths against API_EXTERNAL_URL's origin, so they must include the /auth/v1 proxy prefix.
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
     # Supabase Auth runs all its migrations before it serves /health, so healthy means its schema is complete.
     healthcheck:
       test: ['CMD', 'wget', '-q', '--spider', '-T', '3', 'http://127.0.0.1:9999/health']
@@ -108,9 +113,9 @@ services:
       AUTH_AUTOCONFIRM: ${AUTH_AUTOCONFIRM:-true}
       # Revocation: read Supabase Auth's sessions in the shared database (needs the auth-grants step).
       AUTH_SESSION_CHECK: db
-      # R3 (approve, membership changes) needs MFA in the last 5 minutes. off is accepted on localhost only, until
-      # the MFA enrollment screens ship (issue #32).
-      AUTH_STEP_UP: ${AUTH_STEP_UP:-off}
+      # R3 (approve, membership changes) needs MFA in the last 5 minutes; the app asks for a code, or to enable
+      # two-factor first. off is accepted on localhost only.
+      AUTH_STEP_UP: ${AUTH_STEP_UP:-required}
       DATABASE_URL: postgres://crove_app:${CROVE_APP_DB_PASSWORD:-local-app-password}@db:5432/postgres
       WORKER_DATABASE_URL: postgres://crove_worker:${CROVE_WORKER_DB_PASSWORD:-local-worker-password}@db:5432/postgres
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}

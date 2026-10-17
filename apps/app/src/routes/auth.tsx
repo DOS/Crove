@@ -1,18 +1,17 @@
 import { useNavigate } from '@tanstack/react-router';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
-import { Alert } from '@crove/ui/components/alert';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
-import { ErrorText, Logo } from '../components/ui.tsx';
+import { ErrorText, Logo, Notice } from '../components/ui.tsx';
 import { LocaleSwitcher } from '../i18n/provider.tsx';
-import { auth, authErrorText, authFailure, type AuthFailure } from '../lib/auth.ts';
+import { auth, authErrorText, authFailure, callbackNoticeText, clearCallbackNotice, peekCallbackNotice, type AuthFailure, type CallbackNotice } from '../lib/auth.ts';
 
 type Mode = 'login' | 'signup' | 'reset';
 // The notices the screen shows after sending an email, by message key: state holds no translated text (issue #215).
-type Notice = 'signupSent' | 'resetSent';
+type SentNotice = 'signupSent' | 'resetSent';
 
 export function AuthPage() {
   const navigate = useNavigate();
@@ -23,13 +22,18 @@ export function AuthPage() {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<AuthFailure | null>(null);
-  const [notice, setNotice] = useState<Notice | null>(null);
+  const [notice, setNotice] = useState<SentNotice | null>(null);
+  // The outcome of an email link the app was opened with, if any (see settleCallback). Kept as a code and worded at
+  // render, like the errors above.
+  const [callback, setCallback] = useState<CallbackNotice | null>(peekCallbackNotice);
+  useEffect(clearCallbackNotice, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError(null);
     setNotice(null);
+    setCallback(null);
     try {
       if (mode === 'login') {
         const { error: e } = await auth().signInWithPassword({ email, password });
@@ -41,7 +45,7 @@ export function AuthPage() {
         if (data.session) await navigate({ to: '/' });
         else setNotice('signupSent');
       } else {
-        const { error: e } = await auth().resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/` });
+        const { error: e } = await auth().resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/reset-password` });
         if (e) return setError(authFailure(e));
         setNotice('resetSent');
       }
@@ -81,11 +85,9 @@ export function AuthPage() {
             </Label>
           )}
           {error && <ErrorText>{authErrorText(error, root)}</ErrorText>}
-          {notice && (
-            <Alert role="status" className="border-success/30 bg-success/10 text-success">
-              {t(notice)}
-            </Alert>
-          )}
+          {callback?.error && <ErrorText>{callbackNoticeText(callback, root)}</ErrorText>}
+          {notice && <Notice>{t(notice)}</Notice>}
+          {callback && !callback.error && <Notice>{callbackNoticeText(callback, root)}</Notice>}
           <Button type="submit" size="lg" className="w-full" disabled={busy}>
             {busy ? root('common.processing') : titles[mode]}
           </Button>

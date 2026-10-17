@@ -39,7 +39,7 @@ describe('isOrgAccessRevoked', () => {
 
 describe('createSessionErrorHandler', () => {
   const setup = (org: string | null) => {
-    const deps = { currentOrg: vi.fn(() => org), leaveOrg: vi.fn(), signOut: vi.fn() };
+    const deps = { currentOrg: vi.fn(() => org), leaveOrg: vi.fn(), signOut: vi.fn(), openMfa: vi.fn() };
     return { deps, handle: createSessionErrorHandler(deps) };
   };
 
@@ -58,9 +58,16 @@ describe('createSessionErrorHandler', () => {
     expect(deps.leaveOrg).not.toHaveBeenCalled();
   });
 
-  it('does nothing for MFA_REQUIRED, other errors, or an org refusal outside an org page', () => {
+  it('opens the MFA challenge on MFA_REQUIRED, without signing out or leaving the org', () => {
     const { deps, handle } = setup('acme');
     handle(mfa);
+    expect(deps.openMfa).toHaveBeenCalledOnce();
+    expect(deps.signOut).not.toHaveBeenCalled();
+    expect(deps.leaveOrg).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for other errors, or an org refusal outside an org page', () => {
+    const { deps, handle } = setup('acme');
     handle(new ApiError('FORBIDDEN', 403, 'no'));
     handle(new Error('network'));
     const orgless = setup(null);
@@ -68,6 +75,7 @@ describe('createSessionErrorHandler', () => {
     for (const d of [deps, orgless.deps]) {
       expect(d.signOut).not.toHaveBeenCalled();
       expect(d.leaveOrg).not.toHaveBeenCalled();
+      expect(d.openMfa).not.toHaveBeenCalled();
     }
   });
 });

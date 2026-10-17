@@ -3,12 +3,12 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const COMPOSE_FILE = fileURLToPath(new URL('../../docker-compose.yml', import.meta.url));
+const COMPOSE_FILES = ['../../docker-compose.yml', '../compose.e2e.yml'].map((f) => fileURLToPath(new URL(f, import.meta.url)));
 const PROJECT = process.env.E2E_COMPOSE_PROJECT ?? 'crove-e2e';
 
 // `query` uses psql variables (:'name') for every value in `vars`. Returns the rows as JSON objects.
 export function sql<T>(query: string, vars: Record<string, string> = {}): T[] {
-  const args = ['compose', '-p', PROJECT, '-f', COMPOSE_FILE, 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-t', '-A'];
+  const args = ['compose', '-p', PROJECT, ...COMPOSE_FILES.flatMap((f) => ['-f', f]), 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-t', '-A'];
   args.push('-v', 'ON_ERROR_STOP=1');
   for (const [name, value] of Object.entries(vars)) args.push('-v', `${name}=${value}`);
   const script = `SELECT coalesce(json_agg(row_to_json(q)), '[]'::json) FROM (${query}) q;\n`;
