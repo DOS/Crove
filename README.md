@@ -118,6 +118,16 @@ pnpm usage:report --weeks 4                                     # from a checkou
 
 Options: `--weeks <1-104>` (default 8, the current week included), `--by-org`, `--csv` (RFC 4180; an org name a spreadsheet would read as a formula gets a leading `'`), `--time-zone <name>`. Exit codes: 0 printed, 2 the report could not run. Without Compose, run `node apps/kernel/src/main.ts usage-report` with `REPORTER_DATABASE_URL=postgres://crove_reporter:<password>@<host>:5432/<db>`; it refuses a superuser or BYPASSRLS login. For a Monday summary, schedule it with cron and mail or post the output yourself.
 
+## Pilot readiness
+
+Before real users put real data in a deployment, run the preflight from a checkout holding the deployment's `.env`:
+
+```bash
+pnpm pilot:check -- --url https://crove.example.com
+```
+
+It fails on any secret left at a shipped sample value, a public URL that is not https, `AUTH_AUTOCONFIRM` not `false`, MFA step-up off and sign-up open to anyone (`AUTH_DISABLE_SIGNUP` not `true`), and with `--url` probes the certificate, plain http and the settings the running Supabase Auth reports. It lists what only a person can confirm (sandbox running, RLS matrix green, backups tested). Exit codes: 0 ready, 1 a check failed, 2 bad arguments. The full checklist and how to open sign-up for a pilot's accounts: [docs/runbooks/pilot-readiness.md](./docs/runbooks/pilot-readiness.md).
+
 ## Development
 
 Node 26 and pnpm (any version; the pinned one is downloaded automatically).

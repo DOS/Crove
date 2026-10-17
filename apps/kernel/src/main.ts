@@ -7,18 +7,21 @@
 //   all      api + worker in one process (default for self-host)
 //   prober   health check and alert (plan §4.13): once, or `--every <seconds>`; `--test-alert` sends a test alert
 //   usage-report  the weekly usage counts of the MVP goal, as crove_reporter (issue #311); prints and exits
+//   pilot-check   the pilot readiness preflight (issue #308): checks the settings, and with --url the running
+//                 instance; prints and exits
 // It wires the open-source default adapters into the composition root (createKernel, ADR-0030).
 import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { liveAuthUrl, loadConfig, type Config } from './config.ts';
 import { createKernel, defaultAdapters, type ServerRole } from './kernel.ts';
 import { describeMailer } from './mail.ts';
+import { runPilotCheck } from './pilot-check.ts';
 import { runProber } from './prober.ts';
 import { describeStorage } from './storage.ts';
 import { runUsageReport } from './usage-report.ts';
 import { migrateJobs } from './worker.ts';
 
-type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | ServerRole;
-const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report'];
+type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | 'pilot-check' | ServerRole;
+const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report', 'pilot-check'];
 
 async function runMigrate(config: Config) {
   const adminUrl = config.ADMIN_DATABASE_URL;
@@ -47,6 +50,8 @@ async function main() {
   // The prober needs only its own settings (no auth, storage or AI configuration), so it reads them itself.
   if (role === 'prober') process.exit(await runProber(process.argv.slice(3)));
   if (role === 'usage-report') process.exit(await runUsageReport(process.argv.slice(3)));
+  // Reads the raw settings, not loadConfig(), so it can report every problem instead of stopping at the first.
+  if (role === 'pilot-check') process.exit(await runPilotCheck(process.argv.slice(3)));
   const config = loadConfig();
   if (role === 'migrate') return runMigrate(config);
   if (role === 'auth-grants') return runAuthGrants(config);

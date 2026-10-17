@@ -26,6 +26,7 @@
     "db:auth-grants": "pnpm --filter @crove/kernel-server auth-grants",
     "alert:test": "node --env-file-if-exists=.env apps/kernel/src/main.ts prober --test-alert",
     "usage:report": "node --env-file-if-exists=.env apps/kernel/src/main.ts usage-report",
+    "pilot:check": "node --env-file-if-exists=.env apps/kernel/src/main.ts pilot-check",
     "prepare": "node tools/install-git-hooks.mjs"
   },
   "devDependencies": {
