@@ -7,6 +7,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { getConstructionPlans, getMigrationPlans } from 'pg-boss';
+import { CHANNEL_PROVIDERS } from '@crove/channel';
 
 export const JOB_SCHEMA = 'crove_jobs';
 
@@ -22,6 +23,13 @@ export const QUEUES = {
   agentSweep: 'kernel-agent-sweep',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
+
+// One publish queue per channel provider (Social plan §3.6), so each provider gets its own concurrency; only providers
+// a deployment can publish to are worked. 'stately' with the singleton key <org>:<variant>: one queued and one active
+// job per variant; a job active longer than 300 seconds is retried (its begin then finds the variant in flight and
+// waits until it is stale). Created by the Social publish migration (20261019040000).
+export const socialPublishQueue = (provider: string) => `social-publish-${provider}`;
+export const SOCIAL_PUBLISH_QUEUES: readonly string[] = CHANNEL_PROVIDERS.map(socialPublishQueue);
 
 // The pg-boss policy of each queue that is not 'standard'. kernel-agent-wake is 'stately' with the singleton key
 // <org>:<agent>: at most one queued and one active job per agent, so wake-ups coalesce and an agent runs once at a

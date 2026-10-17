@@ -9,16 +9,18 @@
 //   or cancelled one is history, so its inherited content is copied into it before the base changes.
 // - A reviewer decides on the exact revision and content hash they saw; a decision on anything else is refused.
 // - Scheduling needs the variant's latest decision to be an approval of its current revision and hash.
-import { sql, type Transaction } from 'kysely';
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
-import type { Database, MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
+import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
-import { approvalCovers, contentHash, effectiveContent, type BaseContent } from './domain/approval.ts';
+import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
 import { isProvider } from './domain/channels.ts';
 import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } from './domain/queue.ts';
-import { FROZEN, IN_FLIGHT, postStatus, transitionVariant, type VariantEvent } from './domain/state.ts';
-import { validateVariant, type Issue } from './domain/validate.ts';
+import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
+import type { Issue } from './domain/validate.ts';
+import { publishingCommands } from './publishing.ts';
+import { MOVABLE, POST_COLUMNS, SLOT_FREED, base, editValues, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -26,7 +28,6 @@ const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const MAX_CHANNELS_PER_POST = 20;
 const MAX_SLOTS = 100;
 
-type Trx = Transaction<Database>;
 
 const zBody = z.string().max(100_000);
 const zTitle = z.string().max(500);
@@ -53,187 +54,6 @@ function canonicalJson(value: unknown): string {
 function requireUser(ctx: CommandContext): string {
   if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
   return ctx.actor.userId;
-}
-
-interface PostRow {
-  id: string;
-  body: string;
-  title: string | null;
-  link_url: string | null;
-  time_zone: string;
-  scheduled_at: Date | null;
-  revision: number;
-}
-
-interface VariantRow {
-  id: string;
-  post_id: string;
-  channel_connection_id: string;
-  provider: string;
-  position: number;
-  body: string | null;
-  title: string | null;
-  link_url: string | null;
-  settings: unknown;
-  revision: number;
-  content_hash: string;
-  content_frozen: boolean;
-  status: SocialVariantStatus;
-  scheduled_at: Date | null;
-  queue_slot_at: Date | null;
-  attempt: number;
-}
-
-const POST_COLUMNS = ['id', 'body', 'title', 'link_url', 'time_zone', 'scheduled_at', 'revision'] as const;
-const VARIANT_COLUMNS = [
-  'id',
-  'post_id',
-  'channel_connection_id',
-  'provider',
-  'position',
-  'body',
-  'title',
-  'link_url',
-  'settings',
-  'revision',
-  'content_hash',
-  'content_frozen',
-  'status',
-  'scheduled_at',
-  'queue_slot_at',
-  'attempt',
-] as const;
-
-const base = (post: PostRow): BaseContent => ({ body: post.body, title: post.title, linkUrl: post.link_url });
-const overrides = (v: Pick<VariantRow, 'body' | 'title' | 'link_url'>) => ({ body: v.body, title: v.title, linkUrl: v.link_url });
-const settingsOf = (v: { settings: unknown }): Record<string, unknown> =>
-  v.settings !== null && typeof v.settings === 'object' && !Array.isArray(v.settings) ? (v.settings as Record<string, unknown>) : {};
-
-function providerOf(v: { provider: string }) {
-  if (!isProvider(v.provider)) throw new DomainError('CHANNEL_PROVIDER_UNSUPPORTED', 422, `Kênh ${v.provider} chưa được hỗ trợ`);
-  return v.provider;
-}
-
-// The hash a reviewer's decision binds to: the variant's effective content, settings and target.
-function hashOf(
-  post: BaseContent,
-  v: Pick<VariantRow, 'channel_connection_id' | 'provider' | 'body' | 'title' | 'link_url' | 'settings'> & { content_frozen?: boolean },
-): string {
-  const content = effectiveContent(post, overrides(v), v.content_frozen ?? false);
-  return contentHash([
-    { channelConnectionId: v.channel_connection_id, provider: providerOf(v), body: content.body, title: content.title, linkUrl: content.linkUrl, media: [], settings: settingsOf(v) },
-  ]);
-}
-
-function issuesOf(post: BaseContent, v: VariantRow): Issue[] {
-  const content = effectiveContent(post, overrides(v), v.content_frozen);
-  return validateVariant({ provider: providerOf(v), body: content.body, title: content.title, media: [] });
-}
-
-function step(v: { id: string; status: SocialVariantStatus }, event: VariantEvent): SocialVariantStatus {
-  const t = transitionVariant(v.status, event);
-  if (!t.ok) {
-    throw new DomainError('VARIANT_STATE', 409, `Không thể ${eventLabel(event)} ở trạng thái hiện tại của kênh`, { variantId: v.id, status: v.status, event: event.type });
-  }
-  return t.status;
-}
-
-function eventLabel(event: VariantEvent): string {
-  switch (event.type) {
-    case 'edit':
-      return 'sửa nội dung';
-    case 'submit':
-      return 'gửi duyệt';
-    case 'approve':
-    case 'request_changes':
-    case 'reject':
-      return 'duyệt';
-    case 'schedule':
-      return 'lên lịch';
-    case 'unschedule':
-      return 'bỏ lịch';
-    case 'cancel':
-      return 'hủy';
-    default:
-      return 'thực hiện việc này';
-  }
-}
-
-async function lockPost(trx: Trx, orgId: string, postId: string): Promise<PostRow> {
-  const post = await trx.selectFrom('crove_social.post').select(POST_COLUMNS).where('org_id', '=', orgId).where('id', '=', postId).forUpdate().executeTakeFirst();
-  if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
-  return post;
-}
-
-async function lockVariants(trx: Trx, orgId: string, postId: string): Promise<VariantRow[]> {
-  return trx
-    .selectFrom('crove_social.post_variant')
-    .select(VARIANT_COLUMNS)
-    .where('org_id', '=', orgId)
-    .where('post_id', '=', postId)
-    .orderBy('position')
-    .orderBy('id')
-    .forUpdate()
-    .execute();
-}
-
-// The variants a command names, all of the post; every id must be one of them.
-function pick(variants: VariantRow[], ids: readonly string[] | undefined): VariantRow[] {
-  if (!ids) return variants;
-  const byId = new Map(variants.map((v) => [v.id, v]));
-  const chosen = [...new Set(ids)].map((id) => byId.get(id));
-  if (chosen.some((v) => v === undefined)) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Có kênh không thuộc bài đăng này');
-  return chosen as VariantRow[];
-}
-
-async function variantPost(trx: Trx, orgId: string, variantIds: readonly string[]): Promise<string> {
-  const rows = await trx.selectFrom('crove_social.post_variant').select(['post_id']).where('org_id', '=', orgId).where('id', 'in', [...variantIds]).execute();
-  const posts = new Set(rows.map((r) => r.post_id));
-  if (rows.length !== new Set(variantIds).size) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy kênh này của bài đăng');
-  if (posts.size !== 1) throw new DomainError('VARIANTS_OF_SEVERAL_POSTS', 422, 'Chỉ chọn các kênh của cùng một bài đăng');
-  return [...posts][0] as string;
-}
-
-// Statuses whose queue slot is free again (the post_variant_slot_uq index skips them); every other status holds it.
-const SLOT_FREED: readonly SocialVariantStatus[] = ['cancelled', 'published', 'failed'];
-// Queued variants a queue edit may move: they have not been handed to the publisher.
-const MOVABLE: readonly SocialVariantStatus[] = ['draft', 'in_review', 'changes_requested', 'rejected', 'approved', 'scheduled', 'paused'];
-
-async function setVariant(ctx: CommandContext, id: string, values: Record<string, unknown>): Promise<void> {
-  await ctx.trx
-    .updateTable('crove_social.post_variant')
-    .set({ ...values, updated_at: ctx.now })
-    .where('org_id', '=', ctx.orgId)
-    .where('id', '=', id)
-    .execute()
-    .catch((error: unknown) => {
-      if ((error as { constraint?: string }).constraint === 'post_variant_slot_uq') {
-        throw new DomainError('SLOT_TAKEN', 409, 'Khung giờ này của kênh đã có bài khác, hãy thử lại');
-      }
-      throw error;
-    });
-}
-
-// What a variant moving to draft by an edit keeps: a failed one gives up its old slot and time (another post may
-// hold that slot by now); the others keep their place in the queue while they are reviewed again.
-function editValues(v: VariantRow): Record<string, unknown> {
-  return v.status === 'failed' ? { status: step(v, { type: 'edit' }), queue_slot_at: null, scheduled_at: null } : { status: step(v, { type: 'edit' }) };
-}
-
-// A variant becoming history keeps the content it had: copied into its own columns, which base edits no longer reach.
-function freezeValues(post: PostRow, v: VariantRow): Record<string, unknown> {
-  const kept = effectiveContent(base(post), overrides(v), v.content_frozen);
-  return { body: kept.body, title: kept.title, link_url: kept.linkUrl, content_frozen: true };
-}
-
-async function refreshPostStatus(ctx: CommandContext, postId: string): Promise<void> {
-  const rows = await ctx.trx.selectFrom('crove_social.post_variant').select('status').where('org_id', '=', ctx.orgId).where('post_id', '=', postId).execute();
-  await ctx.trx
-    .updateTable('crove_social.post')
-    .set({ status: postStatus(rows.map((r) => r.status)), updated_at: ctx.now })
-    .where('org_id', '=', ctx.orgId)
-    .where('id', '=', postId)
-    .execute();
 }
 
 // The org's live connections among ids, with their provider; every id must be one.
@@ -546,17 +366,6 @@ export const variantDecide = defineCommand({
   },
 });
 
-async function latestDecision(trx: Trx, orgId: string, variantId: string) {
-  return trx
-    .selectFrom('crove_social.post_approval')
-    .select(['decision', 'revision', 'content_hash'])
-    .where('org_id', '=', orgId)
-    .where('variant_id', '=', variantId)
-    .orderBy('created_at', 'desc')
-    .orderBy('id', 'desc')
-    .executeTakeFirst();
-}
-
 interface QueueState {
   id: string;
   spec: QueueSpec;
@@ -643,11 +452,11 @@ export const variantSchedule = defineCommand({
         if (!queue || queue.spec.slots.length === 0) throw new DomainError('QUEUE_EMPTY', 409, 'Kênh này chưa có khung giờ đăng trong hàng đợi', { variantId: v.id });
         const slot = nextFreeSlot(queue.spec, ctx.now.getTime(), await takenSlots(ctx.trx, ctx.orgId, v.channel_connection_id, v.id));
         if (slot === null) throw new DomainError('QUEUE_FULL', 409, 'Hàng đợi của kênh này đã kín trong năm tới', { variantId: v.id });
-        await setVariant(ctx, v.id, { status, queue_slot_at: new Date(slot), scheduled_at: null });
+        await setVariant(ctx, v.id, { status, queue_slot_at: new Date(slot), scheduled_at: null, error_retry_at: null });
         scheduled.push({ variantId: v.id, at: new Date(slot).toISOString() });
       } else {
         // The time is stored on the variant, so a later change of the post's planned time does not move it.
-        await setVariant(ctx, v.id, { status, queue_slot_at: null, scheduled_at: at });
+        await setVariant(ctx, v.id, { status, queue_slot_at: null, scheduled_at: at, error_retry_at: null });
         scheduled.push({ variantId: v.id, at: (at as Date).toISOString() });
       }
     }
@@ -667,7 +476,7 @@ export const variantUnschedule = defineCommand({
     const postId = await variantPost(ctx.trx, ctx.orgId, input.variantIds);
     await lockPost(ctx.trx, ctx.orgId, postId);
     const chosen = pick(await lockVariants(ctx.trx, ctx.orgId, postId), input.variantIds);
-    for (const v of chosen) await setVariant(ctx, v.id, { status: step(v, { type: 'unschedule' }), queue_slot_at: null, scheduled_at: null });
+    for (const v of chosen) await setVariant(ctx, v.id, { status: step(v, { type: 'unschedule' }), queue_slot_at: null, scheduled_at: null, error_retry_at: null });
     await refreshPostStatus(ctx, postId);
     return { postId, variants: chosen.map((v) => v.id) };
   },
@@ -829,7 +638,7 @@ export interface VariantView {
   revision: number;
   contentHash: string;
   status: SocialVariantStatus;
-  // When it goes out: its queue slot, else its own time, else the post's.
+  // When it goes out: a retry time after a rate limit, else its queue slot, else its own time, else the post's.
   effectiveAt: string | null;
   queueSlotAt: string | null;
   attempt: number;
@@ -922,7 +731,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               revision: v.revision,
               contentHash: v.content_hash,
               status: v.status,
-              effectiveAt: iso(v.status === 'published' ? v.published_at : (v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at)),
+              effectiveAt: iso(v.status === 'published' ? v.published_at : (v.error_retry_at ?? v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at)),
               queueSlotAt: iso(v.queue_slot_at),
               attempt: v.attempt,
               externalUrl: v.external_url,
@@ -1024,5 +833,17 @@ export const queueGet = defineQuery({
   },
 });
 
-export const socialCommands = [postCreate, postAddChannels, postUpdate, variantUpdate, postSubmit, variantDecide, variantSchedule, variantUnschedule, variantCancel, queueSet];
+export const socialCommands = [
+  postCreate,
+  postAddChannels,
+  postUpdate,
+  variantUpdate,
+  postSubmit,
+  variantDecide,
+  variantSchedule,
+  variantUnschedule,
+  variantCancel,
+  queueSet,
+  ...publishingCommands,
+];
 export const socialQueries = [postGet, postList, queueGet];

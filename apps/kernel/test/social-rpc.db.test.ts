@@ -170,6 +170,10 @@ suite('social posts through the API', () => {
     expect((await rpc('social/variants/update', owner_, { variantId, revision: v.revision, body: 'Bản riêng' })).body).toMatchObject({ changed: true });
     const second = await rpc('channels/connectSandbox', owner_, { displayName: 'Trang 2', key: randomUUID() });
     expect((await rpc('social/posts/addChannels', owner_, { postId, channels: [{ connectionId: String(second.body?.connectionId) }] })).status).toBe(200);
+    // Retry and resolve are for failed or needs_attention variants, and for owners and admins.
+    expect((await rpc('social/variants/retry', await tokenFor(viewer), { variantIds: [variantId] })).status).toBe(403);
+    expect((await rpc('social/variants/retry', owner_, { variantIds: [variantId] })).body).toMatchObject({ code: 'VARIANT_STATE' });
+    expect((await rpc('social/variants/resolve', owner_, { variantIds: [variantId], outcome: 'dropped' })).body).toMatchObject({ code: 'VARIANT_STATE' });
     expect((await rpc('social/variants/cancel', owner_, { variantIds: [variantId] })).status).toBe(200);
   });
 

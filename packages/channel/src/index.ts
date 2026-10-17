@@ -50,3 +50,109 @@ export const sandbox = {
     };
   },
 };
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Publishing (Social plan §3.4 and §3.6, step S4). The publish job runs each provider step at most once per attempt
+// unless the step is safe to repeat, so every step declares how it behaves when repeated:
+// - safe: nothing visible happens (for example creating an Instagram container);
+// - idempotent: the provider dedupes a repeat (Bluesky's client-chosen record key);
+// - reconcile_only: the provider can be asked whether it went through;
+// - never: no way to ask; an unknown outcome goes to a human.
+export type RetrySafety = 'safe' | 'idempotent' | 'reconcile_only' | 'never';
+
+export const PUBLISH_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
+export type PublishErrorKind = (typeof PUBLISH_ERROR_KINDS)[number];
+
+export interface PublishContent {
+  body: string;
+  title: string | null;
+  linkUrl: string | null;
+}
+
+export interface PublishInput {
+  externalAccountId: string;
+  // The opened credential (the provider's own JSON); never logged or stored by the adapter.
+  secret: string;
+  content: PublishContent;
+  settings: Record<string, unknown>;
+  // The external_call key of this step: unique per attempt, so a provider with idempotency keys can use it.
+  callKey: string;
+  // sha256:<hex> of the variant's effective content, for reconciling.
+  contentHash: string;
+}
+
+// What a provider answered. `rejected` means nothing was posted; anything the adapter cannot tell apart from a post
+// that went through is `unknown`. An adapter returns these and never throws for a platform answer; a throw is
+// treated as `unknown`.
+export type PublishResult =
+  | { kind: 'accepted'; externalId: string; url: string | null }
+  // Accepted, still processing on the platform (an Instagram container, a Zalo article): check again later.
+  | { kind: 'pending'; externalRef: string; checkAfterSeconds: number }
+  | { kind: 'rejected'; error: Exclude<PublishErrorKind, 'unknown'>; code?: string; message?: string; httpStatus?: number; retryAt?: Date }
+  | { kind: 'unknown'; code?: string; message?: string };
+
+export interface StatusInput {
+  externalAccountId: string;
+  secret: string;
+  externalRef: string;
+}
+
+export interface ReconcileInput {
+  externalAccountId: string;
+  secret: string;
+  callKey: string;
+  contentHash: string;
+  content: PublishContent;
+  // The window the post would have appeared in.
+  after: Date;
+  before: Date;
+}
+
+// found: the post is on the platform; missing: it is not; unknown: the provider cannot be asked or did not answer.
+export type ReconcileResult = { found: true; externalId: string; url: string | null } | { found: false } | { found: 'unknown' };
+
+export interface Publisher {
+  readonly provider: ChannelProviderId;
+  readonly publishSafety: RetrySafety;
+  publish(input: PublishInput): Promise<PublishResult>;
+  // Two-phase providers: where a pending post stands.
+  status?(input: StatusInput): Promise<PublishResult>;
+  // Providers that can be asked whether an earlier call went through.
+  reconcile?(input: ReconcileInput): Promise<ReconcileResult>;
+}
+
+interface SandboxPost {
+  id: string;
+  callKey: string;
+  contentHash: string;
+  body: string;
+  at: Date;
+}
+
+// The sandbox platform: posts live in this process's memory, per account. A worker restart forgets them, so a post
+// whose result was lost in a crash cannot be found again and goes to a human, as on a platform that cannot be asked.
+export class SandboxPublisher implements Publisher {
+  readonly provider = 'sandbox' as const;
+  readonly publishSafety: RetrySafety = 'reconcile_only';
+  private readonly accounts = new Map<string, SandboxPost[]>();
+
+  async publish(input: PublishInput): Promise<PublishResult> {
+    const accessToken = (JSON.parse(input.secret) as { accessToken?: unknown }).accessToken;
+    if (typeof accessToken !== 'string' || !accessToken.startsWith('sbx_')) return { kind: 'rejected', error: 'token_expired', code: 'SANDBOX_TOKEN' };
+    const id = `sbx_post_${randomBytes(9).toString('base64url')}`;
+    const posts = this.accounts.get(input.externalAccountId) ?? [];
+    posts.push({ id, callKey: input.callKey, contentHash: input.contentHash, body: input.content.body, at: new Date() });
+    this.accounts.set(input.externalAccountId, posts);
+    return { kind: 'accepted', externalId: id, url: null };
+  }
+
+  async reconcile(input: ReconcileInput): Promise<ReconcileResult> {
+    const post = (this.accounts.get(input.externalAccountId) ?? []).find((p) => p.callKey === input.callKey || (p.contentHash === input.contentHash && p.at >= input.after && p.at <= input.before));
+    return post ? { found: true, externalId: post.id, url: null } : { found: false };
+  }
+
+  // What the sandbox platform shows for an account (tests and the local demo).
+  posts(externalAccountId: string): readonly SandboxPost[] {
+    return this.accounts.get(externalAccountId) ?? [];
+  }
+}

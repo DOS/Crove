@@ -50,9 +50,11 @@ export type VariantEvent =
   // nextAction said 'manual': the outcome cannot be found out, a human decides.
   | { type: 'needs_human' }
   | { type: 'reconciled'; found: boolean }
-  // A human's call on a failed or needs_attention variant.
+  // A human's call on a failed or needs_attention variant: publish again, drop it, or confirm that it is on the
+  // platform after all (they looked).
   | { type: 'retry' }
-  | { type: 'drop' };
+  | { type: 'drop' }
+  | { type: 'confirm_published' };
 
 export type Refusal = { ok: false; code: 'INVALID_TRANSITION'; from: string; event: string };
 export type Transition<S> = { ok: true; status: S } | Refusal;
@@ -87,6 +89,7 @@ const TABLE: Readonly<Record<Exclude<VariantEvent['type'], 'edit' | 'cancel' | '
   needs_human: { publishing: 'needs_attention', ambiguous: 'needs_attention' },
   retry: { needs_attention: 'scheduled', failed: 'scheduled' },
   drop: { needs_attention: 'cancelled' },
+  confirm_published: { needs_attention: 'published' },
 };
 
 export function transitionVariant(from: VariantStatus, event: VariantEvent): Transition<VariantStatus> {

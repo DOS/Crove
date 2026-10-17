@@ -5,3 +5,5 @@ export * from './domain/approval.ts';
 export * from './domain/publish.ts';
 export * from './domain/queue.ts';
 export * from './posts.ts';
+export * from './publishing.ts';
+export * from './publisher.ts';

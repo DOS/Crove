@@ -31,6 +31,7 @@ export interface CroveKernelSchema {
   'crove_kernel.audit_event': KernelAuditEventTable;
   'crove_kernel.budget_policy': KernelBudgetPolicyTable;
   'crove_kernel.channel_connection': KernelChannelConnectionTable;
+  'crove_kernel.external_call': KernelExternalCallTable;
   'crove_kernel.extraction': KernelExtractionTable;
   'crove_kernel.file': KernelFileTable;
   'crove_kernel.file_upload': KernelFileUploadTable;
@@ -261,6 +262,26 @@ export interface KernelChannelConnectionTable {
   connected_by: string;
   expires_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   connected_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_kernel.external_call */
+export interface KernelExternalCallTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  key: ColumnType<string, string, NotGranted>;
+  module: ColumnType<string, string, NotGranted>;
+  target: ColumnType<string, string, NotGranted>;
+  step: ColumnType<string, string, NotGranted>;
+  retry_safety: ColumnType<string, string, NotGranted>;
+  request_hash: ColumnType<string | null, string | null, NotGranted>;
+  state: Generated<string>;
+  calls: Generated<number>;
+  external_ref: string | null;
+  error_kind: string | null;
+  error_code: string | null;
+  started_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  finished_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 

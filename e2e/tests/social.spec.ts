@@ -1,7 +1,8 @@
-// Crove Social in the browser (Social plan S5): connect the offline sandbox channel, give it a queue, compose a post,
-// submit it, approve it on what is shown, schedule it in the next free slot, and find it in the agenda. The channel
-// rules run as the text is typed.
+// Crove Social in the browser (Social plan S5, S4): connect the offline sandbox channel, give it a queue, compose a
+// post, submit it, approve it on what is shown, schedule it in the next free slot, find it in the agenda, and see the
+// worker publish it to the sandbox once it is due. The channel rules run as the text is typed.
 import { expect, test } from '@playwright/test';
+import { exec } from '../lib/db.ts';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
 
 // Queue slots are set in the queue's time zone (Asia/Ho_Chi_Minh by default) and the agenda shows the viewer's local
@@ -42,10 +43,18 @@ test('composes, reviews and schedules a post on the sandbox channel', async ({ p
   await expect(page.getByText(/Đăng lúc .* · theo hàng đợi/)).toBeVisible();
   await expect(page.getByText('Đã lên lịch')).toBeVisible();
 
+  const postUrl = page.url();
   await page.getByRole('link', { name: 'Quay lại' }).click();
   await expect(page.getByRole('tab', { name: 'Lịch đăng' })).toBeVisible();
   await expect(page.getByText('Ra mắt Crove Social: soạn một lần, duyệt rồi đăng đúng giờ.')).toBeVisible();
   await expect(page.getByText('09:00')).toBeVisible();
+
+  // Its slot comes now instead of at 09:00: the worker's sweep finds it and publishes it to the sandbox, and the page
+  // follows without a reload.
+  await page.goto(postUrl);
+  exec(`UPDATE crove_social.post_variant SET queue_slot_at = now() - interval '1 second' WHERE post_id = :'post'`, { post: postUrl.split('/').pop() ?? '' });
+  await expect(page.getByText('Đã đăng', { exact: true }).first()).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByText(/Đã đăng lúc/)).toBeVisible();
 });
 
 test('keeps unsaved edits when another tab approves the post', async ({ page, context }) => {

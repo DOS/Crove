@@ -126,6 +126,12 @@ export const contract = {
       schedule: oc.input(zSocialSchedule).output(z.object({ postId: zId, scheduled: z.array(z.object({ variantId: zId, at: z.string() })) })),
       unschedule: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
       cancel: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
+      // Publish failed or needs_attention variants again now (a new attempt).
+      retry: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
+      // Settle needs_attention variants: on the platform after all, or dropped.
+      resolve: oc
+        .input(z.strictObject({ variantIds: z.array(zId).min(1).max(20), outcome: z.enum(['published', 'dropped']), url: z.url({ protocol: /^https?$/ }).max(2000).nullable().optional() }))
+        .output(z.object({ postId: zId, variants: z.array(zId), outcome: z.enum(['published', 'dropped']) })),
     },
     queues: {
       get: oc.input(z.object({ connectionId: zId })).output(zSocialQueue),

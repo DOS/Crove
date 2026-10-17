@@ -2,12 +2,10 @@
 // (Social plan §3.4). The visible provider call runs at most once per attempt unless the step is provably safe to
 // repeat. A new attempt starts only when a human retries a failed or needs_attention variant.
 
-// How a provider step behaves when repeated:
-// - safe: nothing visible happens (for example creating an Instagram container);
-// - idempotent: the provider dedupes a repeat (Bluesky's client-chosen record key);
-// - reconcile_only: the provider can be asked whether it went through;
-// - never: no way to ask; an unknown outcome goes to a human.
-export type RetrySafety = 'safe' | 'idempotent' | 'reconcile_only' | 'never';
+// How a provider step behaves when repeated (declared by each adapter in @crove/channel).
+import type { RetrySafety } from '@crove/channel';
+
+export type { RetrySafety };
 
 // crove_kernel.external_call state for this step's key; 'none' when no row exists yet.
 export type CallState = 'none' | 'started' | 'succeeded' | 'failed' | 'ambiguous';

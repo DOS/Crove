@@ -228,6 +228,20 @@ export type ChannelConnectionStatus = (typeof CHANNEL_CONNECTION_STATUSES)[numbe
 // no Kysely type: only the credential_* definers reach it.
 export type ChannelConnectionTable = Refine<G.KernelChannelConnectionTable, { status: Generated<ChannelConnectionStatus> }>;
 
+// The ledger of visible calls to outside services (Social plan §3.4): a call is recorded as started before it is made.
+export const EXTERNAL_CALL_STATES = ['started', 'succeeded', 'failed', 'ambiguous'] as const;
+export type ExternalCallState = (typeof EXTERNAL_CALL_STATES)[number];
+export const EXTERNAL_CALL_RETRY_SAFETIES = ['safe', 'idempotent', 'reconcile_only', 'never'] as const;
+export const EXTERNAL_CALL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
+export type ExternalCallTable = Refine<
+  G.KernelExternalCallTable,
+  {
+    retry_safety: (typeof EXTERNAL_CALL_RETRY_SAFETIES)[number];
+    state: Generated<ExternalCallState>;
+    error_kind: (typeof EXTERNAL_CALL_ERROR_KINDS)[number] | null;
+  }
+>;
+
 export const AGENT_WAKEUP_STATUSES = ['pending', 'claimed', 'done'] as const;
 export type AgentWakeupTable = Refine<G.KernelAgentWakeupTable, { status: Generated<(typeof AGENT_WAKEUP_STATUSES)[number]> }>;
 
@@ -328,6 +342,7 @@ type Refined = Tables<{
   'crove_kernel.kill_switch': KillSwitchTable;
   'crove_kernel.budget_policy': BudgetPolicyTable;
   'crove_kernel.channel_connection': ChannelConnectionTable;
+  'crove_kernel.external_call': ExternalCallTable;
   'crove_finance.purchase_document': PurchaseDocumentTable;
   'crove_finance.journal_entry': JournalEntryTable;
   'crove_social.post': SocialPostTable;
