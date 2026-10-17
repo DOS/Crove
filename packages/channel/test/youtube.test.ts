@@ -83,7 +83,10 @@ describe('YouTubePublisher', () => {
       'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, headers: { location: SESSION } }],
       'PUT www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, body: { id: 'dQw4w9WgXcQ', status: { uploadStatus: 'uploaded' } } }],
     });
-    expect(await new YouTubePublisher(APP, fetchImpl).publish(input({ settings: { privacy: 'unlisted' } }))).toEqual({ kind: 'accepted', externalId: 'dQw4w9WgXcQ', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
+    // An upload has longer than the job's default to finish, and less than the job's stale limit (600 s).
+    expect(new YouTubePublisher(APP, fetchImpl).callTimeoutMs).toBeGreaterThan(300_000);
+    expect(new YouTubePublisher(APP, fetchImpl).callTimeoutMs).toBeLessThan(600_000);
+    expect(await new YouTubePublisher(APP, fetchImpl).publish(input({ settings: { privacy: 'unlisted' }, content: { ...input().content, title: 'Khai trương <chi nhánh>' } }))).toEqual({ kind: 'accepted', externalId: 'dQw4w9WgXcQ', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
     expect(calls[0]?.url.searchParams.get('uploadType')).toBe('resumable');
     expect(calls[0]?.body).toEqual({
       snippet: { title: 'Khai trương chi nhánh', description: 'Video khai trương mới\n\nhttps://example.com/a', categoryId: '22' },

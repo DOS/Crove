@@ -18,6 +18,8 @@ const PRIVACY = ['public', 'unlisted', 'private'] as const;
 // YouTube's own limits on a video's metadata.
 const TITLE_MAX = 100;
 const DESCRIPTION_MAX = 5000;
+// The PUT of a video of up to 100 MB; the job waits a little longer (callTimeoutMs), so this abort is the adapter's.
+const UPLOAD_TIMEOUT_MS = 300_000;
 
 export interface GoogleAppConfig {
   clientId: string;
@@ -68,8 +70,7 @@ class GoogleClient {
     if (!/^[0-9]{6,32}-[A-Za-z0-9_-]{8,64}\.apps\.googleusercontent\.com$/.test(app.clientId)) throw new Error('invalid Google client id');
     if (!app.clientSecret) throw new Error('missing Google client secret');
     this.app = app;
-    // A video of up to 100 MB goes in one PUT.
-    this.fetch = allowlistedFetch(YOUTUBE_HOSTS, fetchImpl, 300_000);
+    this.fetch = allowlistedFetch(YOUTUBE_HOSTS, fetchImpl);
   }
 
   get clientId(): string {
@@ -87,7 +88,8 @@ class GoogleClient {
     return json as TokenAnswer;
   }
 
-  async call<T>(method: 'GET' | 'POST' | 'PUT', url: string, token: string, options: { json?: unknown; bytes?: { data: Uint8Array; type: string } } = {}): Promise<{ body: T | null; location: string | null }> {
+  // timeoutMs: 30 seconds for a JSON call, more for the video bytes (the PUT of up to 100 MB).
+  async call<T>(method: 'GET' | 'POST' | 'PUT', url: string, token: string, options: { json?: unknown; bytes?: { data: Uint8Array; type: string }; timeoutMs?: number } = {}): Promise<{ body: T | null; location: string | null }> {
     const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
     let body: string | Blob | undefined;
     if (options.json !== undefined) {
@@ -97,7 +99,7 @@ class GoogleClient {
       headers['content-type'] = options.bytes.type;
       body = new Blob([new Uint8Array(options.bytes.data)], { type: options.bytes.type });
     }
-    const response = await this.fetch(url, { method, headers, ...(body === undefined ? {} : { body }) });
+    const response = await this.fetch(url, { method, headers, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000), ...(body === undefined ? {} : { body }) });
     const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
     if (!response.ok) throw new YouTubeError(response.status, json);
     return { body: json as T | null, location: response.headers.get('location') };
@@ -216,7 +218,8 @@ function publishResult(error: unknown): PublishResult {
 const beforeUpload = (result: PublishResult): PublishResult =>
   result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
 
-const titleOf = (content: { title: string | null }) => (content.title ?? '').trim().slice(0, TITLE_MAX);
+// YouTube refuses angle brackets in a title, as in a description.
+const titleOf = (content: { title: string | null }) => (content.title ?? '').replace(/[<>]/g, '').trim().slice(0, TITLE_MAX);
 const descriptionOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
   const text = content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
@@ -231,6 +234,8 @@ interface PlaylistItems {
 export class YouTubePublisher implements Publisher {
   readonly provider = 'youtube' as const;
   readonly publishSafety: RetrySafety = 'reconcile_only';
+  // The PUT of up to 100 MB has 300 seconds of its own; the job waits a little longer, so the adapter sees its own abort.
+  readonly callTimeoutMs = 420_000;
   private readonly client: GoogleClient;
 
   constructor(app: GoogleAppConfig, fetchImpl?: Fetch) {
@@ -264,7 +269,7 @@ export class YouTubePublisher implements Publisher {
       return beforeUpload(publishResult(error));
     }
     try {
-      const uploaded = await this.client.call<{ id?: unknown }>('PUT', session, s.accessToken, { bytes: { data: bytes, type: video.mime } });
+      const uploaded = await this.client.call<{ id?: unknown }>('PUT', session, s.accessToken, { bytes: { data: bytes, type: video.mime }, timeoutMs: UPLOAD_TIMEOUT_MS });
       const id = typeof uploaded.body?.id === 'string' ? uploaded.body.id : '';
       if (!VIDEO_ID.test(id)) return { kind: 'unknown', code: 'NO_VIDEO_ID' };
       return { kind: 'accepted', externalId: id, url: `https://www.youtube.com/watch?v=${id}` };
