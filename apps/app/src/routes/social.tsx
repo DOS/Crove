@@ -16,8 +16,8 @@ import { pollEvery, SAFETY_POLL_MS, useStreamLive } from '../lib/stream-hook.ts'
 type Tab = 'upcoming' | 'review' | 'drafts' | 'done';
 const TABS: Tab[] = ['upcoming', 'review', 'drafts', 'done'];
 const DAY = 86_400_000;
-// The agenda covers the next four weeks.
-const AGENDA_DAYS = 28;
+// The agenda lists what goes out in the next year, day by day.
+const AGENDA_DAYS = 366;
 
 type Post = Awaited<ReturnType<typeof orpc.social.posts.list.call>>[number];
 type Variant = Post['variants'][number];
@@ -118,6 +118,9 @@ export function SocialPage() {
     return { from: from.toISOString(), to: new Date(from.getTime() + (AGENDA_DAYS + 1) * DAY).toISOString() };
   }, []);
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
+  const me = useQuery(orpc.me.get.queryOptions());
+  const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
+  const canWrite = role === 'owner' || role === 'admin' || role === 'member';
   const upcoming = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { ...range, limit: 200 } }), enabled: tab === 'upcoming', refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
   const all = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { limit: 200 } }), enabled: tab !== 'upcoming', refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
   const names = new Map((channels.data ?? []).map((c) => [c.id, c.displayName]));
@@ -126,7 +129,7 @@ export function SocialPage() {
   const lists: Record<Exclude<Tab, 'upcoming'>, Post[]> = {
     review: (all.data ?? []).filter((p) => p.variants.some((v) => v.status === 'in_review')),
     drafts: (all.data ?? []).filter((p) => p.status === 'draft' && !p.variants.some((v) => v.status === 'in_review')),
-    done: (all.data ?? []).filter((p) => ['published', 'partially_published', 'failed', 'publishing'].includes(p.status)),
+    done: (all.data ?? []).filter((p) => ['published', 'partially_published', 'failed', 'publishing', 'cancelled'].includes(p.status)),
   };
   const reviewCount = lists.review.length;
 
@@ -140,7 +143,7 @@ export function SocialPage() {
             <Link to="/o/$slug/social/channels" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
               {t('channels')}
             </Link>
-            {noChannels ? (
+            {!canWrite ? null : noChannels ? (
               <Button size="lg" disabled>
                 {t('compose')}
               </Button>

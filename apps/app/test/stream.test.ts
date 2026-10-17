@@ -26,6 +26,8 @@ const FILE = '0190a000-0000-7000-8000-0000000000f1';
 const ENTRY = '0190a000-0000-7000-8000-0000000000e1';
 const DOC = '0190a000-0000-7000-8000-0000000000d1';
 
+const SOCIAL = '0190a000-0000-7000-8000-0000000000c1';
+
 function seeded() {
   const qc = new QueryClient();
   const keys = {
@@ -40,6 +42,10 @@ function seeded() {
     parties: orpc.parties.list.queryKey({ input: {} }),
     me: orpc.me.get.queryKey(),
     org: orpc.org.get.queryKey(),
+    socialList: orpc.social.posts.list.queryKey({ input: {} }),
+    socialPost: orpc.social.posts.get.queryKey({ input: { postId: SOCIAL } }),
+    socialOther: orpc.social.posts.get.queryKey({ input: { postId: '0190a000-0000-7000-8000-0000000000c2' } }),
+    socialQueue: orpc.social.queues.get.queryKey({ input: { connectionId: '0190a000-0000-7000-8000-0000000000c3' } }),
   };
   // Partial records: invalidateHint reads only the ids, so the seeds skip the rest of each response's shape.
   const seed = (key: QueryKey, data: unknown) => qc.setQueryData(key, data);
@@ -79,6 +85,12 @@ describe('invalidateHint', () => {
     const { qc, stale } = seeded();
     await invalidateHint(qc, { type: 'document', id: DOC });
     expect(stale()).toEqual(['detail1', 'documents', 'parties']);
+  });
+
+  it('social_post: the calendar, that post and the queues', async () => {
+    const { qc, stale } = seeded();
+    await invalidateHint(qc, { type: 'social_post', id: SOCIAL });
+    expect(stale()).toEqual(['socialList', 'socialPost', 'socialQueue']);
   });
 
   it('never touches unrelated queries', async () => {

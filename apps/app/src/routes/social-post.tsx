@@ -2,7 +2,7 @@
 // channel rules and a preview, then review (owners and admins decide on what they see), schedule and cancel.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
-import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -24,6 +24,8 @@ import {
   hasTitle,
   providerName,
   SUBMITTABLE,
+  setFlash,
+  takeFlash,
   textBudget,
   toLocalInput,
   VARIANT_TONE,
@@ -154,13 +156,13 @@ function ChannelEditor({
         <Counter provider={provider} body={content.body} />
       </div>
       <label className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Checkbox checked={own.custom} disabled={disabled} onCheckedChange={(checked) => onChange({ custom: checked === true, body: own.body || base.body, title: own.title || base.title })} />
+        <Checkbox checked={own.custom} disabled={disabled} onCheckedChange={(checked) => onChange({ custom: checked === true, body: own.body || base.body, title: own.title })} />
         {t('ownText')}
       </label>
       {own.custom && (
         <div className="space-y-2">
-          {hasTitle(provider) && <Input value={own.title} disabled={disabled} placeholder={t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
-          <Textarea value={own.body} disabled={disabled} rows={5} placeholder={t('ownTextPlaceholder')} onChange={(e) => onChange({ ...own, body: e.target.value })} />
+          {hasTitle(provider) && <Input value={own.title} disabled={disabled} aria-label={t('titleField')} placeholder={base.title || t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
+          <Textarea value={own.body} disabled={disabled} rows={5} aria-label={t('ownTextPlaceholder')} placeholder={t('ownTextPlaceholder')} onChange={(e) => onChange({ ...own, body: e.target.value })} />
         </div>
       )}
       <IssueList issues={issues} />
@@ -170,13 +172,13 @@ function ChannelEditor({
   );
 }
 
-function SharedFields({ base, onChange, disabled, needsTitle }: { base: Base; onChange: (base: Base) => void; disabled: boolean; needsTitle: boolean }) {
+function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false }: { base: Base; onChange: (base: Base) => void; disabled: boolean; needsTitle: boolean; autoFocus?: boolean }) {
   const t = useTranslations('social');
   return (
     <Card className="block space-y-3 p-4">
       <div className="space-y-1.5">
         <Label htmlFor="social-body">{t('sharedText')}</Label>
-        <Textarea id="social-body" autoFocus value={base.body} disabled={disabled} rows={7} placeholder={t('sharedTextPlaceholder')} onChange={(e) => onChange({ ...base, body: e.target.value })} />
+        <Textarea id="social-body" autoFocus={autoFocus} value={base.body} disabled={disabled} rows={7} placeholder={t('sharedTextPlaceholder')} onChange={(e) => onChange({ ...base, body: e.target.value })} />
       </div>
       {needsTitle && (
         <div className="space-y-1.5">
@@ -212,10 +214,12 @@ export function SocialComposePage() {
     if (chosen.length === 0 && live.length === 1 && live[0]) setChosen([live[0].id]);
   }, [live.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // One key for this form: a retry after a lost answer returns the post the first request created.
+  const key = useRef(crypto.randomUUID());
   const create = useMutation({
     mutationFn: async (submit: boolean) => {
       const created = await client.social.posts.create({
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: key.current,
         body: base.body,
         title: orNull(base.title),
         linkUrl: orNull(base.linkUrl),
@@ -225,7 +229,8 @@ export function SocialComposePage() {
           return mine.custom ? { connectionId, body: mine.body, title: orNull(mine.title) } : { connectionId };
         }),
       });
-      if (submit) await client.social.posts.submit({ postId: created.postId });
+      // The draft exists now: a failed submit is shown on its page, never answered with a second post.
+      if (submit) await client.social.posts.submit({ postId: created.postId }).catch((error: unknown) => setFlash(errorMessage(error)));
       return created.postId;
     },
     onSuccess: (postId) => {
@@ -241,9 +246,9 @@ export function SocialComposePage() {
     return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null }).length > 0;
   });
   const onKey = (e: KeyboardEvent) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !create.isPending) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !blocking && !create.isPending) {
       e.preventDefault();
-      create.mutate(!blocking);
+      create.mutate(true);
     }
   };
 
@@ -272,7 +277,7 @@ export function SocialComposePage() {
       )}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
-          <SharedFields base={base} onChange={setBase} disabled={create.isPending} needsTitle={selected.some((c) => hasTitle(c.provider))} />
+          <SharedFields base={base} onChange={setBase} disabled={create.isPending} autoFocus needsTitle={selected.some((c) => hasTitle(c.provider))} />
           <Card className="block p-4">
             <p className="mb-3 text-sm font-medium text-foreground">{t('pickChannels')}</p>
             {live.length === 0 ? (
@@ -337,6 +342,11 @@ function ownOf(v: Variant): Own {
   return { custom: v.overrides.body !== null, body: v.overrides.body ?? '', title: v.overrides.title ?? '' };
 }
 
+// What a post says, not its status: the post's revision and each variant's revision.
+function contentKey(p: Post): string {
+  return `${p.revision}|${p.variants.map((v) => `${v.id}:${v.revision}`).join(',')}`;
+}
+
 function baseOf(p: Post): Base {
   return { body: p.body, title: p.title ?? '', linkUrl: p.linkUrl ?? '' };
 }
@@ -348,7 +358,8 @@ function sameOwn(a: Own, b: Own): boolean {
 function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
   const t = useTranslations('social');
   const waiting = post.variants.filter((v) => v.status === 'in_review');
-  const [picked, setPicked] = useState<string[]>(waiting.map((v) => v.id));
+  const [unticked, setUnticked] = useState<string[]>([]);
+  const picked = waiting.map((v) => v.id).filter((id) => !unticked.includes(id));
   const [comment, setComment] = useState('');
   const decide = useMutation({
     mutationFn: (decision: 'approved' | 'changes_requested' | 'rejected') =>
@@ -361,6 +372,7 @@ function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
       }),
     onSuccess: () => {
       setComment('');
+      setUnticked([]);
       onDone();
     },
   });
@@ -371,12 +383,12 @@ function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
       <div className="space-y-1.5">
         {waiting.map((v) => (
           <label key={v.id} className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Checkbox checked={picked.includes(v.id)} onCheckedChange={(on) => setPicked(on === true ? [...picked, v.id] : picked.filter((id) => id !== v.id))} />
+            <Checkbox checked={picked.includes(v.id)} onCheckedChange={(on) => setUnticked(on === true ? unticked.filter((id) => id !== v.id) : [...unticked, v.id])} />
             {providerName(v.provider)}
           </label>
         ))}
       </div>
-      <Textarea value={comment} rows={2} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
+      <Textarea value={comment} rows={2} aria-label={t('commentPlaceholder')} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
       {decide.error && <ErrorText>{errorMessage(decide.error)}</ErrorText>}
       <div className="flex flex-wrap gap-2">
         <Button size="lg" disabled={picked.length === 0 || decide.isPending} onClick={() => decide.mutate('approved')}>
@@ -410,21 +422,25 @@ function SchedulePanel({ post, onDone }: { post: Post; onDone: () => void }) {
   return (
     <Card className="block space-y-3 border-primary/40 p-4">
       <p className="text-sm font-medium text-foreground">{t('scheduleTitle', { count: ready.length })}</p>
-      <div className="flex flex-wrap gap-2" role="radiogroup">
+      <div className="flex flex-wrap gap-2" role="group" aria-label={t('scheduleTitle', { count: ready.length })}>
         {(['time', 'queue'] as const).map((m) => (
           <button
             key={m}
             type="button"
-            role="radio"
-            aria-checked={mode === m}
+            aria-pressed={mode === m}
             onClick={() => setMode(m)}
-            className={cn('rounded-lg border px-3 py-1.5 text-sm', mode === m ? 'border-primary/50 bg-primary/15 text-foreground' : 'text-muted-foreground hover:text-foreground')}
+            className={cn(
+              'rounded-lg border px-3 py-1.5 text-sm focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
+              mode === m ? 'border-primary/50 bg-primary/15 text-foreground' : 'text-muted-foreground hover:text-foreground',
+            )}
           >
             {t(m === 'time' ? 'atTime' : 'nextSlot')}
           </button>
         ))}
       </div>
-      {mode === 'time' && <Input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} className="max-w-xs" />}
+      {mode === 'time' && (
+        <Input type="datetime-local" aria-label={t('atTime')} value={when} min={toLocalInput(new Date().toISOString())} onChange={(e) => setWhen(e.target.value)} className="max-w-xs" />
+      )}
       {mode === 'queue' && <p className="text-xs text-subtle-foreground">{t('nextSlotHint')}</p>}
       {schedule.error && <ErrorText>{errorMessage(schedule.error)}</ErrorText>}
       <Button size="lg" disabled={schedule.isPending || (mode === 'time' && !fromLocalInput(when))} onClick={() => schedule.mutate()}>
@@ -444,20 +460,42 @@ export function SocialPostPage() {
   const names = useMemo(() => new Map((channels.data ?? []).map((c: Channel) => [c.id, c.displayName])), [channels.data]);
   const [base, setBase] = useState<Base | null>(null);
   const [own, setOwn] = useState<Record<string, Own>>({});
-  // Local edits start from the post as loaded, and again after every save.
+  // The server content the edits started from. A status change elsewhere (a teammate approving another channel, the
+  // publisher) keeps the edits; a content change elsewhere replaces them only when there are none, else it says so.
+  const [origin, setOrigin] = useState<Post | null>(null);
+  const [stale, setStale] = useState(false);
+  const [flash] = useState(takeFlash);
+  // After this page's own save: take the server's content, keeping the channel edits a partly failed save left.
+  const adoptNext = useRef<'all' | 'keep-own' | null>(null);
+  const adopt = (p: Post, keepOwn = false) => {
+    setOrigin(p);
+    setBase(baseOf(p));
+    if (!keepOwn) setOwn(Object.fromEntries(p.variants.map((v) => [v.id, ownOf(v)])));
+    setStale(false);
+  };
+  const editsOf = (o: Post) =>
+    base !== null &&
+    (JSON.stringify(base) !== JSON.stringify(baseOf(o)) ||
+      o.variants.some((v) => EDITABLE.includes(v.status) && own[v.id] !== undefined && !sameOwn(own[v.id] as Own, ownOf(v))));
   useEffect(() => {
-    if (!post.data) return;
-    setBase(baseOf(post.data));
-    setOwn(Object.fromEntries(post.data.variants.map((v) => [v.id, ownOf(v)])));
-  }, [post.data?.revision, post.data?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+    const p = post.data;
+    if (!p) return;
+    if (!origin || adoptNext.current) {
+      adopt(p, adoptNext.current === 'keep-own');
+      adoptNext.current = null;
+    } else if (contentKey(p) === contentKey(origin)) setOrigin(p);
+    else if (!editsOf(origin)) adopt(p);
+    else setStale(true);
+  }, [post.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refresh = () => void queryClient.invalidateQueries();
   const save = useMutation({
     mutationFn: async () => {
-      if (!post.data || !base) return;
-      const before = baseOf(post.data);
+      if (!origin || !base) return;
+      const before = baseOf(origin);
       if (base.body !== before.body || base.title !== before.title || base.linkUrl !== before.linkUrl) {
-        await client.social.posts.update({ postId, revision: post.data.revision, body: base.body, title: orNull(base.title), linkUrl: orNull(base.linkUrl) });
+        await client.social.posts.update({ postId, revision: origin.revision, body: base.body, title: orNull(base.title), linkUrl: orNull(base.linkUrl) });
+        adoptNext.current = 'keep-own';
       }
       // Base edits move the inheriting variants' revisions: read them again before saving overrides.
       const fresh = await client.social.posts.get({ postId });
@@ -471,18 +509,18 @@ export function SocialPostPage() {
           title: mine.custom ? orNull(mine.title) : null,
         });
       }
+      adoptNext.current = 'all';
     },
-    onSuccess: refresh,
+    onSettled: refresh,
   });
   const submit = useMutation({ mutationFn: () => client.social.posts.submit({ postId }), onSuccess: refresh });
   const unschedule = useMutation({ mutationFn: (variantId: string) => client.social.variants.unschedule({ variantIds: [variantId] }), onSuccess: refresh });
   const cancel = useMutation({ mutationFn: (variantId: string) => client.social.variants.cancel({ variantIds: [variantId] }), onSuccess: refresh });
 
-  if (post.isLoading || !base) return post.error ? <ErrorText>{errorMessage(post.error)}</ErrorText> : <Spinner />;
+  if (post.isLoading || !base || !origin) return post.error ? <ErrorText>{errorMessage(post.error)}</ErrorText> : <Spinner />;
   if (!post.data) return null;
   const p = post.data;
-  const dirty =
-    JSON.stringify(base) !== JSON.stringify(baseOf(p)) || p.variants.some((v) => own[v.id] && !sameOwn(own[v.id] as Own, ownOf(v)));
+  const dirty = editsOf(origin);
   const editable = canWrite && p.variants.some((v) => EDITABLE.includes(v.status));
   const submittable = p.variants.filter((v) => SUBMITTABLE.includes(v.status));
   const onKey = (e: KeyboardEvent) => {
@@ -492,6 +530,7 @@ export function SocialPostPage() {
     }
   };
   const error = save.error ?? submit.error ?? unschedule.error ?? cancel.error;
+  const reviewable = !dirty && !stale;
 
   return (
     <div onKeyDown={onKey}>
@@ -517,16 +556,24 @@ export function SocialPostPage() {
           </>
         }
       />
-      {error && (
+      {(error || flash) && (
         <div className="mb-4">
-          <ErrorText>{errorMessage(error)}</ErrorText>
+          <ErrorText>{error ? errorMessage(error) : flash}</ErrorText>
+        </div>
+      )}
+      {stale && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-foreground">
+          <span>{t('changedElsewhere')}</span>
+          <Button variant="outline" size="sm" onClick={() => adopt(p)}>
+            {t('loadLatest')}
+          </Button>
         </div>
       )}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
           <SharedFields base={base} onChange={setBase} disabled={!editable || save.isPending} needsTitle={p.variants.some((v) => hasTitle(v.provider))} />
-          {canDecide && !dirty && <ReviewPanel key={`${p.revision}:${p.updatedAt}`} post={p} onDone={refresh} />}
-          {canDecide && !dirty && <SchedulePanel key={`s:${p.revision}:${p.updatedAt}`} post={p} onDone={refresh} />}
+          {canDecide && reviewable && <ReviewPanel post={p} onDone={refresh} />}
+          {canDecide && reviewable && <SchedulePanel post={p} onDone={refresh} />}
           {dirty && <p className="text-xs text-subtle-foreground">{t('unsaved')}</p>}
         </div>
         <div className="space-y-4">

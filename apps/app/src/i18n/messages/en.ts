@@ -601,7 +601,6 @@ export const en = {
     checkedOut: 'An AI agent is working on this task',
     truncated: 'Showing only the {count} newest tasks.',
   },
-  // Kernel errors worded by the SPA (lib/kernel-errors.ts). Shown instead of the kernel's Vietnamese message.
   social: {
     title: 'Social',
     subtitle: 'Write once, adapt per channel, review, and publish on time.',
@@ -670,6 +669,8 @@ export const en = {
     save: 'Save',
     saveFirst: 'Save your changes before submitting',
     submit: 'Submit for review',
+    changedElsewhere: 'This post was just edited elsewhere. Your changes are not saved; loading the latest drops them.',
+    loadLatest: 'Load the latest',
     unsaved: 'You have unsaved changes. Save before reviewing or scheduling.',
     reviewTitle: 'Review',
     commentPlaceholder: 'A note for the writer',
@@ -717,6 +718,7 @@ export const en = {
     adminsConnect: 'Owners and admins connect channels.',
     comingSoon: 'Coming soon',
   },
+  // Kernel errors worded by the SPA (lib/kernel-errors.ts). Shown instead of the kernel's Vietnamese message.
   kernelErrors: {
     codes: {
       UNAUTHENTICATED: 'Your session has ended. Sign in again.',

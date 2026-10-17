@@ -602,8 +602,6 @@ export const vi = {
     checkedOut: 'Tác tử AI đang xử lý việc này',
     truncated: 'Chỉ hiển thị {count} việc mới nhất.',
   },
-  // Kernel errors worded by the SPA (lib/kernel-errors.ts). The kernel sends the same text with the
-  // code, and Vietnamese screens show the kernel's own message; these are used when an answer has none.
   social: {
     title: 'Mạng xã hội',
     subtitle: 'Soạn một lần, chỉnh theo từng kênh, duyệt rồi đăng đúng giờ.',
@@ -672,6 +670,8 @@ export const vi = {
     save: 'Lưu',
     saveFirst: 'Lưu thay đổi trước khi gửi duyệt',
     submit: 'Gửi duyệt',
+    changedElsewhere: 'Bài vừa được sửa ở nơi khác. Thay đổi của bạn chưa lưu; tải bản mới sẽ bỏ chúng.',
+    loadLatest: 'Tải bản mới',
     unsaved: 'Có thay đổi chưa lưu. Lưu trước khi duyệt hoặc lên lịch.',
     reviewTitle: 'Duyệt bài',
     commentPlaceholder: 'Nhận xét cho người viết',
@@ -719,6 +719,8 @@ export const vi = {
     adminsConnect: 'Chủ sở hữu hoặc quản trị viên kết nối kênh.',
     comingSoon: 'Sắp có',
   },
+  // Kernel errors worded by the SPA (lib/kernel-errors.ts). The kernel sends the same text with the
+  // code, and Vietnamese screens show the kernel's own message; these are used when an answer has none.
   kernelErrors: {
     codes: {
       UNAUTHENTICATED: 'Phiên đăng nhập đã hết hiệu lực, hãy đăng nhập lại',

@@ -99,7 +99,8 @@ export function minuteLabel(minute: number): string {
 }
 
 export function parseMinute(value: string): number | null {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(value);
+  // <input type="time"> may add seconds.
+  const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(value);
   if (!m) return null;
   const minute = Number(m[1]) * 60 + Number(m[2]);
   return minute >= 0 && minute < 1440 ? minute : null;
@@ -109,3 +110,16 @@ export const REVIEWABLE: readonly VariantStatus[] = ['in_review'];
 export const SUBMITTABLE: readonly VariantStatus[] = ['draft', 'changes_requested', 'rejected'];
 export const EDITABLE: readonly VariantStatus[] = ['draft', 'in_review', 'changes_requested', 'rejected', 'approved', 'scheduled', 'paused', 'failed'];
 export const CANCELLABLE: readonly VariantStatus[] = EDITABLE;
+
+// A message for the next post page this tab opens (a submit that failed right after the draft was created).
+let flash: string | null = null;
+
+export function setFlash(message: string): void {
+  flash = message;
+}
+
+export function takeFlash(): string | null {
+  const message = flash;
+  flash = null;
+  return message;
+}

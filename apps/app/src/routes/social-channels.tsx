@@ -79,7 +79,7 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
                 <button
                   type="button"
                   aria-label={t('removeSlot')}
-                  className="text-subtle-foreground hover:text-destructive"
+                  className="rounded text-subtle-foreground hover:text-destructive focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
                   onClick={() => setDraft({ ...current, slots: current.slots.filter((x) => !(x.weekday === s.weekday && x.minute === s.minute)) })}
                 >
                   ×
@@ -98,7 +98,7 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
               </NativeSelectOption>
             ))}
           </NativeSelect>
-          <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="h-7 w-28" aria-label={t('timeLabel')} />
+          <Input type="time" step={60} value={time} onChange={(e) => setTime(e.target.value)} className="h-7 w-28" aria-label={t('timeLabel')} />
           <Button variant="outline" size="sm" onClick={add}>
             {t('addSlot')}
           </Button>
