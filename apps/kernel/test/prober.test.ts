@@ -145,12 +145,40 @@ describe('prober configuration', () => {
     expect(() => loadProberConfig({ PROBER_DEAD_LETTER_WINDOW_SECONDS: '10' })).toThrow(/PROBER_DEAD_LETTER_WINDOW_SECONDS/);
   });
 
-  it('parses --test-alert and --every', () => {
-    expect(parseProberArgs([])).toEqual({ testAlert: false, everySeconds: null });
-    expect(parseProberArgs(['--test-alert'])).toEqual({ testAlert: true, everySeconds: null });
-    expect(parseProberArgs(['--every', '300'])).toEqual({ testAlert: false, everySeconds: 300 });
+  it('parses --test-alert, --backup-failed and --every', () => {
+    expect(parseProberArgs([])).toEqual({ testAlert: false, everySeconds: null, backupFailed: null });
+    expect(parseProberArgs(['--test-alert'])).toEqual({ testAlert: true, everySeconds: null, backupFailed: null });
+    expect(parseProberArgs(['--every', '300'])).toEqual({ testAlert: false, everySeconds: 300, backupFailed: null });
+    expect(parseProberArgs(['--backup-failed', 'disk full'])).toEqual({ testAlert: false, everySeconds: null, backupFailed: 'disk full' });
+    expect(() => parseProberArgs(['--backup-failed'])).toThrow(/--backup-failed needs the reason/);
     expect(() => parseProberArgs(['--every', '1'])).toThrow(/--every/);
     expect(() => parseProberArgs(['--loud'])).toThrow(/unknown prober argument --loud/);
+  });
+});
+
+describe('backup failure alert', () => {
+  it('sends one alert with the reason on one line, needs no database and exits 0 once delivered', async () => {
+    const io = capture();
+    const hook = webhook();
+    const env = { ALERT_WEBHOOK_URL: SECRET_HOOK, ALERT_INSTANCE: 'books.example.test' };
+    const code = await runProber(['--backup-failed', 'pg_dump failed:\nconnection refused'], env, { fetch: hook.fetch, log: io.log, error: io.error });
+    expect(code).toBe(EXIT.ok);
+    expect(hook.calls).toHaveLength(1);
+    const body = hook.body();
+    expect(body.text).toBe('[Crove] ALERT on books.example.test: the backup failed.\n- backup failed: pg_dump failed: connection refused');
+    expect(body.crove).toMatchObject({ kind: 'alert', state: 'new', severity: 'critical', findings: [{ check: 'backup', value: null, threshold: null }] });
+    expect(io.err).toContain('[prober] FAIL backup: backup failed: pg_dump failed: connection refused');
+    expect(io.out.join('\n')).not.toContain('secret-token-123');
+  });
+
+  it('exits 3 when the alert cannot be delivered, and cuts a long reason', async () => {
+    const io = capture();
+    const hook = webhook(500);
+    const code = await runProber(['--backup-failed', 'x'.repeat(2000)], { ALERT_WEBHOOK_URL: SECRET_HOOK }, { fetch: hook.fetch, log: io.log, error: io.error });
+    expect(code).toBe(EXIT.deliveryFailed);
+    const finding = (hook.body().crove as { findings: Array<{ message: string }> }).findings[0];
+    expect(finding?.message).toHaveLength('backup failed: '.length + 500);
+    expect(finding?.message.endsWith('...')).toBe(true);
   });
 });
 

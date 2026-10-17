@@ -15,7 +15,8 @@ export type AlertKind = 'alert' | 'resolved' | 'test';
 export type AlertState = 'new' | 'changed' | 'repeat';
 
 export interface Finding {
-  check: 'outbox' | 'inbound' | 'jobs_schema' | 'job_age' | 'dead_letters' | 'heartbeat' | 'notify_queue' | 'probe';
+  // backup: a failed backup run, reported by tools/backup/backup.sh through `prober --backup-failed` (issue #307).
+  check: 'outbox' | 'inbound' | 'jobs_schema' | 'job_age' | 'dead_letters' | 'heartbeat' | 'notify_queue' | 'probe' | 'backup';
   message: string;
   value: number | null;
   threshold: number | null;
@@ -81,6 +82,9 @@ function headline(alert: Alert): string {
   const n = alert.findings.length;
   const duration = lasted(alert);
   if (alert.kind === 'test') return `[Crove] Test alert from ${alert.instance}: alert delivery works.`;
+  if (alert.kind === 'alert' && n > 0 && alert.findings.every((f) => f.check === 'backup')) {
+    return `[Crove] ALERT on ${alert.instance}: the backup failed.`;
+  }
   if (alert.kind === 'resolved') {
     const after = duration ? ` after ${duration}` : '';
     if (alert.previous?.length === 1 && alert.previous[0] === 'probe') {

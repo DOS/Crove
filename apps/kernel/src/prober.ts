@@ -1,7 +1,8 @@
 // The `prober` image role (plan §4.13, issues #39 and #151): reads crove_kernel.health() as crove_prober, compares
 // it with thresholds and notifies on news only (alert-gate.ts): a new or changed problem, a resolved one, and the
 // same problem again every ALERT_REPEAT_MINUTES. Runs once and exits (cron, a scheduler), or repeats with
-// `--every <seconds>` (the Compose profile). `--test-alert` sends a test alert and needs no database.
+// `--every <seconds>` (the Compose profile). `--test-alert` sends a test alert and needs no database, and so does
+// `--backup-failed <reason>`, which the backup script runs when a backup fails (docs/runbooks/backup-and-restore.md).
 //
 // Exit codes: 0 healthy (or the test alert was delivered), 1 thresholds exceeded, 2 the health check could not run
 // (configuration, connection, permissions), 3 the alert could not be delivered (it was printed to stdout instead).
@@ -401,13 +402,42 @@ export async function sendTestAlert(config: ProberConfig, deps: ProbeDeps = {}):
   return EXIT.ok;
 }
 
+// The longest backup failure reason sent; the backup log keeps the whole story.
+const MAX_BACKUP_REASON = 500;
+
+/**
+ * Sends one alert that a backup run failed (issue #307): `tools/backup/backup.sh` calls `prober --backup-failed
+ * <reason>` when a run fails, so the failure reaches the same webhook as every other alert. Needs no database and
+ * is not de-duplicated: one failed nightly run is one alert. 0 when delivered, 3 when not (printed instead).
+ */
+export async function sendBackupAlert(config: ProberConfig, reason: string, deps: ProbeDeps = {}): Promise<number> {
+  const log = deps.log ?? ((line: string) => console.log(line));
+  const error = deps.error ?? ((line: string) => console.error(line));
+  const at = (deps.now ?? (() => new Date()))().toISOString();
+  // One line, like every finding: a line break could otherwise start a Markdown heading or quote in a chat.
+  const oneLine = reason.replace(/\s+/g, ' ').trim();
+  const short = oneLine.length > MAX_BACKUP_REASON ? `${oneLine.slice(0, MAX_BACKUP_REASON - 3)}...` : oneLine;
+  const finding: Finding = { check: 'backup', value: null, threshold: null, message: `backup failed: ${short || 'no reason given'}` };
+  error(`[prober] FAIL backup: ${finding.message}`);
+  const sink = alertSink(config, deps);
+  const delivery = await safeDeliver(sink, { kind: 'alert', state: 'new', instance: config.instance, at, findings: [finding] });
+  if (!delivery.ok) {
+    error(`[prober] backup alert: ${delivery.error}`);
+    return EXIT.deliveryFailed;
+  }
+  log(`[prober] backup alert sent to ${sink.describe()}`);
+  return EXIT.ok;
+}
+
 export interface ProberArgs {
   testAlert: boolean;
   everySeconds: number | null;
+  // --backup-failed <reason>: send one backup failure alert and exit.
+  backupFailed: string | null;
 }
 
 export function parseProberArgs(argv: readonly string[]): ProberArgs {
-  const args: ProberArgs = { testAlert: false, everySeconds: null };
+  const args: ProberArgs = { testAlert: false, everySeconds: null, backupFailed: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--test-alert') args.testAlert = true;
@@ -415,12 +445,19 @@ export function parseProberArgs(argv: readonly string[]): ProberArgs {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 10 || value > 86_400) throw new Error('--every needs a whole number of seconds from 10 to 86400');
       args.everySeconds = value;
-    } else throw new Error(`unknown prober argument ${arg}; use --test-alert or --every <seconds>`);
+    } else if (arg === '--backup-failed') {
+      const reason = argv[++i];
+      if (reason === undefined) throw new Error('--backup-failed needs the reason');
+      args.backupFailed = reason;
+    } else throw new Error(`unknown prober argument ${arg}; use --test-alert, --backup-failed <reason> or --every <seconds>`);
   }
   return args;
 }
 
-/** Entry point for `main.ts prober [--test-alert] [--every <seconds>]`. Resolves to the exit code of the last probe. */
+/**
+ * Entry point for `main.ts prober [--test-alert] [--backup-failed <reason>] [--every <seconds>]`. Resolves to the
+ * exit code of the last probe.
+ */
 export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv = process.env, deps: ProbeDeps = {}): Promise<number> {
   const error = deps.error ?? ((line: string) => console.error(line));
   let args: ProberArgs;
@@ -433,6 +470,7 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
     return EXIT.probeFailed;
   }
   if (args.testAlert) return sendTestAlert(config, deps);
+  if (args.backupFailed !== null) return sendBackupAlert(config, args.backupFailed, deps);
   if (args.everySeconds === null) return probeOnce(config, deps);
   const every = args.everySeconds;
   const looping = { ...deps, outageGate: deps.outageGate ?? memoryAlertGate(config.repeatSeconds) };
