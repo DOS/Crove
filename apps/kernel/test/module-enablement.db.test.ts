@@ -215,6 +215,7 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
       const exported = await fetch(`${origin}/api/export/journal.xlsx`, { headers });
       expect(exported.status).toBe(404);
       expect(await exported.json()).toEqual({ code: 'NOT_FOUND' });
+      expect((await fetch(`${origin}/api/export/misa/purchases.xlsx`, { headers })).status).toBe(404);
       for (const path of ['journal/list', 'accounts/list', 'parties/list', 'documents/list']) {
         expect((await rpc(path, {})).status, path).toBe(404);
       }

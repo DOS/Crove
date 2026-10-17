@@ -4,6 +4,7 @@ import { zId, zLocalDate } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { OPEN_REVERSAL_STATUSES, REVERSAL_KIND } from './reversal.ts';
+import type { PurchaseVoucher } from './misa.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const zRange = z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() });
@@ -232,14 +233,97 @@ export const journalList = defineQuery({
 // Records one Excel export of the journal (GET /api/export/journal.xlsx) after the workbook is built. It changes
 // nothing: its audit row is the record, counted by crove_kernel.usage_weekly() (issue #311), and holds the number of
 // entries exported, never their content. Same roles as finance.journal.list, which the export reads.
+// The MISA SME purchase voucher export (GET /api/export/misa/purchases.xlsx, #317) records itself here too, with
+// `format`, so the usage report counts every export to the accountant; `entries` is then the number of vouchers.
+export const EXPORT_FORMATS = ['journal', 'misa_sme_purchases'] as const;
 export const journalExport = defineCommand({
   name: 'finance.journal.export',
-  input: zRange.extend({ entries: z.number().int().nonnegative().max(JOURNAL_EXPORT_LIMIT) }),
+  input: zRange.extend({
+    entries: z.number().int().nonnegative().max(JOURNAL_EXPORT_LIMIT),
+    format: z.enum(EXPORT_FORMATS).optional(),
+  }),
   risk: 'R0',
   access: ALL,
   handler: async (ctx, input) => {
-    ctx.audit({ entries: input.entries });
+    ctx.audit(input.format ? { entries: input.entries, format: input.format } : { entries: input.entries });
     return { ok: true as const };
+  },
+});
+
+// Purchase vouchers for the MISA SME export (GET /api/export/misa/purchases.xlsx, issue #317): each recorded purchase
+// document whose journal entry falls in the date range, oldest first, with its lines. A voided document (its entry
+// reversed, #165) is left out: it is no longer a purchase in Crove's books.
+export const purchaseVouchers = defineQuery({
+  name: 'finance.vouchers.purchases',
+  input: zRange.extend({ limit: z.number().int().positive().max(JOURNAL_EXPORT_LIMIT).optional() }),
+  access: ALL,
+  handler: async (ctx, input): Promise<PurchaseVoucher[]> => {
+    let documents = ctx.trx
+      .selectFrom('crove_finance.journal_entry as j')
+      .innerJoin('crove_finance.purchase_document as d', (join) =>
+        join.onRef('d.org_id', '=', 'j.org_id').onRef('d.id', '=', 'j.source_id').on('j.source_type', '=', 'finance.purchase_document'),
+      )
+      .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
+      .leftJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
+      .select([
+        'j.id as entry_id',
+        'j.entry_date',
+        'j.description',
+        'd.id as document_id',
+        'd.invoice_series',
+        'd.invoice_number',
+        'd.invoice_date',
+        'd.vat_amount',
+        'p.name as party_name',
+        'p.tax_code as party_tax_code',
+        'p.address as party_address',
+      ])
+      .where('j.org_id', '=', ctx.orgId)
+      .where('j.reverses_entry_id', 'is', null)
+      .where('v.document_id', 'is', null)
+      .orderBy('j.entry_date')
+      .orderBy('j.created_at')
+      .limit(input.limit ?? 1000);
+    if (input.from) documents = documents.where('j.entry_date', '>=', input.from);
+    if (input.to) documents = documents.where('j.entry_date', '<=', input.to);
+    const rows = await documents.execute();
+    if (rows.length === 0) return [];
+    const lines = await ctx.trx
+      .selectFrom('crove_finance.purchase_line')
+      .select(['document_id', 'line_no', 'description', 'unit', 'quantity', 'unit_price', 'amount', 'vat_rate', 'debit_account'])
+      .where('org_id', '=', ctx.orgId)
+      .where(
+        'document_id',
+        'in',
+        rows.map((r) => r.document_id),
+      )
+      .orderBy('document_id')
+      .orderBy('line_no')
+      .execute();
+    const byDocument = new Map<string, PurchaseVoucher['lines']>();
+    for (const l of lines) {
+      const list = byDocument.get(l.document_id) ?? [];
+      list.push({
+        lineNo: l.line_no,
+        description: l.description,
+        unit: l.unit,
+        quantity: l.quantity,
+        unitPrice: l.unit_price,
+        amount: l.amount,
+        vatRate: l.vat_rate,
+        debitAccount: l.debit_account,
+      });
+      byDocument.set(l.document_id, list);
+    }
+    return rows.map((r) => ({
+      entryId: r.entry_id,
+      entryDate: r.entry_date,
+      description: r.description,
+      invoice: { series: r.invoice_series, number: r.invoice_number, date: r.invoice_date },
+      vendor: { name: r.party_name, taxCode: r.party_tax_code, address: r.party_address },
+      vatAmount: r.vat_amount,
+      lines: byDocument.get(r.document_id) ?? [],
+    }));
   },
 });
 

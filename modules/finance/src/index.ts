@@ -1,10 +1,19 @@
 import { recordPurchase, revisePurchase } from './record.ts';
 import { prepareReversal, reverseEntry } from './reversal.ts';
 import { fileForExtraction, purchaseLookup } from './extract.ts';
-import { accountsList, documentsList, journalExport, journalGet, journalList, vendorsList, voidedProposals } from './queries.ts';
+import { accountsList, documentsList, journalExport, journalGet, journalList, purchaseVouchers, vendorsList, voidedProposals } from './queries.ts';
 
 export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
 export { buildJournalWorkbook } from './export.ts';
+export {
+  MISA_SME_PURCHASE_SERVICE,
+  MISA_SME_SALES,
+  buildMisaWorkbook,
+  purchaseRows,
+  salesRows,
+  type PurchaseVoucher,
+  type SalesVoucher,
+} from './misa.ts';
 export { CHIEF_ACCOUNTANT_TEMPLATE, chiefAccountantReview, financeAgentPrograms, reviewText } from './agent.ts';
 export * from './domain/money.ts';
 export * from './domain/ledger.ts';
@@ -13,4 +22,14 @@ export { REVERSAL_COMMAND, REVERSAL_KIND, zJournalReversal, type JournalReversal
 export { JOURNAL_EXPORT_LIMIT, VOIDED_PROPOSALS_QUERY, type JournalEntryView } from './queries.ts';
 
 export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport];
-export const financeQueries = [fileForExtraction, purchaseLookup, vendorsList, documentsList, journalList, journalGet, accountsList, voidedProposals];
+export const financeQueries = [
+  fileForExtraction,
+  purchaseLookup,
+  vendorsList,
+  documentsList,
+  journalList,
+  journalGet,
+  accountsList,
+  voidedProposals,
+  purchaseVouchers,
+];

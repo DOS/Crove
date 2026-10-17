@@ -116,6 +116,8 @@ export const en = {
     subtitle: 'General journal under Circular 133. Export to Excel with one debit or credit per line for your accountant.',
     export: 'Export to Excel',
     exportFile: 'crove-journal-{org}.xlsx',
+    exportMisa: 'Export purchases for MISA',
+    exportMisaFile: 'crove-misa-purchases-{org}.xlsx',
     from: 'From',
     to: 'To',
     empty: 'No journal entries yet',

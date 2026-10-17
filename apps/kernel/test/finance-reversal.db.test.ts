@@ -15,7 +15,8 @@ import type { ExtractClient } from '@crove/extract-contract';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
-import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
+import { money, sum } from '@crove/l10n-vn';
+import { extractAndPropose, financeCommands, financeQueries, purchaseRows, type PurchaseVoucher } from '@crove/mod-finance';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
@@ -358,6 +359,46 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     // The new document is in force: the same invoice again is a duplicate.
     const copy = await read(await ingest(invoice('7001', '\n\n')));
     await expect(approve(String(copy.proposalId), 1, { acceptFailedChecks: true })).rejects.toMatchObject({ code: 'DUPLICATE_INVOICE', status: 409 });
+  });
+
+  it('exports the documents in force, not the voided one, as MISA SME purchase vouchers (#317)', async () => {
+    const vouchers = await runtime.query<PurchaseVoucher[]>('finance.vouchers.purchases', {}, { actor: asUser(viewer.userId), orgId: org.orgId });
+    // The voided first document is left out; the replacement is there with its corrected accounts.
+    expect(vouchers).toHaveLength(1);
+    const [voucher] = vouchers;
+    const [doc] = await admin(
+      async (c) =>
+        (await c.query(`SELECT subtotal::text, vat_amount::text, invoice_number, invoice_date::text FROM crove_finance.purchase_document WHERE id = $1`, [secondDocument]))
+          .rows,
+    );
+    const [entry] = await admin(
+      async (c) =>
+        (await c.query(`SELECT id, entry_date::text FROM crove_finance.journal_entry WHERE source_type = 'finance.purchase_document' AND source_id = $1`, [secondDocument])).rows,
+    );
+    expect(voucher).toMatchObject({ entryId: entry.id, entryDate: entry.entry_date, invoice: { number: doc.invoice_number, date: doc.invoice_date } });
+    // A multi-line invoice is one row per line; the rows carry the document's amounts and VAT exactly.
+    const rows = purchaseRows(voucher as PurchaseVoucher);
+    expect(rows.length).toBeGreaterThan(1);
+    expect(new Set(rows.map((r) => r.voucherNo)).size).toBe(1);
+    expect(sum(rows.map((r) => r.line.amount)).eq(money(doc.subtotal))).toBe(true);
+    expect(sum(rows.map((r) => r.vatAmount)).eq(money(doc.vat_amount))).toBe(true);
+    expect(rows.map((r) => r.vat.code)).toEqual(rows.map(() => '10'));
+    // Outside the date range: nothing.
+    expect(await runtime.query('finance.vouchers.purchases', { to: '2000-01-01' }, { actor: asUser(viewer.userId), orgId: org.orgId })).toEqual([]);
+
+    // The download, for a viewer like the journal export, and its audit row (counts only, with the format).
+    const response = await app.request('/api/export/misa/purchases.xlsx', {
+      headers: { authorization: `Bearer ${await tokenFor(viewer)}`, 'x-crove-org': org.slug },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    expect(String.fromCharCode(bytes[0] ?? 0, bytes[1] ?? 0)).toBe('PK');
+    const audits = await admin(
+      async (c) =>
+        (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.journal.export' AND outcome = 'ok'`, [org.orgId])).rows,
+    );
+    expect(audits.map((a) => a.detail)).toContainEqual({ entries: 1, format: 'misa_sme_purchases' });
   });
 
   it('holds every writer to the void and replacement rules', async () => {
