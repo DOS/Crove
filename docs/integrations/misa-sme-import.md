@@ -71,7 +71,7 @@ it comes from one listing (S7). Headers marked "also in S6" are spelled the same
 | TK thuế GTGT | 1331, or 1332 for a fixed asset line (211) | also in S6 |
 | Mẫu số HĐ | blank (Crove does not store the invoice form number) | S7 only |
 | Ký hiệu HĐ | invoice series | S7 only |
-| Số hóa đơn | invoice number (max 25) | also in S6 |
+| Số hóa đơn | invoice number (MISA allows 25 characters; never cut: a cut number could make two invoices look the same, so a longer one is left for MISA to flag) | also in S6 |
 | Ngày hóa đơn | invoice date | also in S6 |
 | Nhóm HHDV mua vào | blank (MISA group code) | S7, and in the S6 "Phiếu chi" notes |
 | Mã NCC | blank | S7 only |
@@ -96,7 +96,7 @@ the MISA SME.NET file (S6) and in the MISA SME 2026 listing (S7). Value codes co
 | Ngày hạch toán (*), Ngày chứng từ (*) | journal entry date |
 | Số chứng từ (*) | `CRBH` + last 12 hex digits of the journal entry id |
 | Số phiếu xuất, Lý do xuất | blank |
-| Số hóa đơn (max 25), Ngày hóa đơn | the e-invoice number and date |
+| Số hóa đơn (never cut), Ngày hóa đơn | the e-invoice number and date |
 | Mã khách hàng | blank (MISA catalog code) |
 | Tên khách hàng (max 128), Địa chỉ (max 255), Mã số thuế (max 50) | the buyer |
 | Diễn giải | journal entry description (max 255) |

@@ -249,6 +249,10 @@ describe('allocateVat', () => {
     expect(allocateVat([{ amount: '100', percent: pct('0%') }, { amount: '1000', percent: pct('0%') }], '0')).toEqual(['0', '0']);
   });
 
+  it('gives no line VAT when the invoice has none, whatever rate the lines show', () => {
+    expect(allocateVat([{ amount: '100', percent: pct('10%') }, { amount: '1000', percent: pct('10%') }], '0')).toEqual(['0', '0']);
+  });
+
   it('refuses VAT with no line to carry it', () => {
     expect(allocateVat([], '0')).toEqual([]);
     expect(() => allocateVat([], '10')).toThrow(/no line/);

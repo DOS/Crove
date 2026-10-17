@@ -283,6 +283,7 @@ export const purchaseVouchers = defineQuery({
       .where('v.document_id', 'is', null)
       .orderBy('j.entry_date')
       .orderBy('j.created_at')
+      .orderBy('j.id')
       .limit(input.limit ?? 1000);
     if (input.from) documents = documents.where('j.entry_date', '>=', input.from);
     if (input.to) documents = documents.where('j.entry_date', '<=', input.to);

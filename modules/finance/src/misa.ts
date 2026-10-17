@@ -134,6 +134,8 @@ export function allocateVat(lines: ReadonlyArray<{ amount: string; percent: Deci
     if (!target.isZero()) throw new Error(`VAT ${total} has no line to carry it`);
     return [];
   }
+  // No VAT on the invoice: no line carries any, whatever rate it shows.
+  if (target.isZero()) return lines.map(() => '0');
   const estimates = lines.map((l) => (l.percent ? roundToCurrency(money(l.amount).times(l.percent).dividedBy(100), 'VND') : money(0)));
   const residual = target.minus(sum(estimates));
   if (!residual.isZero()) {
@@ -307,7 +309,8 @@ export const MISA_SME_PURCHASE_SERVICE: MisaTemplate<PurchaseRow> = {
     { header: 'TK thuế GTGT', cell: (r) => text(r.vatAccount) },
     { header: 'Mẫu số HĐ', cell: blank }, // not stored by Crove (KHMSHDon)
     { header: 'Ký hiệu HĐ', cell: (r) => text(r.voucher.invoice.series) },
-    { header: 'Số hóa đơn', maxLength: 25, cell: (r) => text(r.voucher.invoice.number) },
+    // Never cut (MISA allows 25 characters): a cut number could make two invoices look the same.
+    { header: 'Số hóa đơn', cell: (r) => text(r.voucher.invoice.number) },
     { header: 'Ngày hóa đơn', cell: (r) => date(r.voucher.invoice.date) },
     { header: 'Nhóm HHDV mua vào', cell: blank }, // MISA code of the input VAT group
     { header: 'Mã NCC', cell: blank }, // MISA catalog code
@@ -338,7 +341,7 @@ export const MISA_SME_SALES: MisaTemplate<SalesRow> = {
     { header: 'Số chứng từ (*)', maxLength: 20, cell: (r) => text(r.voucherNo) },
     { header: 'Số phiếu xuất', cell: blank },
     { header: 'Lý do xuất', cell: blank },
-    { header: 'Số hóa đơn', maxLength: 25, cell: (r) => text(r.voucher.invoice.number) },
+    { header: 'Số hóa đơn', cell: (r) => text(r.voucher.invoice.number) }, // never cut, as for purchases
     { header: 'Ngày hóa đơn', cell: (r) => date(r.voucher.invoice.date) },
     { header: 'Mã khách hàng', cell: blank }, // MISA catalog code
     { header: 'Tên khách hàng', maxLength: 128, cell: (r) => text(r.voucher.customer.name) },
