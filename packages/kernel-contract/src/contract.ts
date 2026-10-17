@@ -191,6 +191,11 @@ export const contract = {
   },
   parties: {
     list: oc.input(z.object({ q: z.string().max(100).optional() })).output(z.array(zParty)),
+    // Owners and admins (R1, #319): the debit account proposed first for a vendor's invoices, a TT133 account or an
+    // active sub-account; null clears it (the keyword rules apply again).
+    setDefaultAccount: oc
+      .input(z.object({ partyId: zId, accountCode: zAccountCode.nullable() }))
+      .output(z.object({ partyId: zId, accountCode: zAccountCode.nullable() })),
   },
   documents: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zPurchaseDocument)),
@@ -209,8 +214,18 @@ export const contract = {
       .input(zOpeningBalanceImport.extend({ idempotencyKey: zId }))
       .output(z.object({ journalEntryId: zId, lines: z.number().int().positive() })),
   },
+  // The org's chart: the TT133 accounts and its own sub-accounts (#319), inactive ones included (pickers hide them).
   accounts: {
     list: oc.output(z.array(zAccount)),
+    // Owners and admins (R1): a sub-account under a TT133 account or a digit sub-account (11211, 1121.VCB).
+    create: oc
+      .input(z.object({ parentCode: zAccountCode, code: zAccountCode, name: z.string().trim().min(1).max(200) }))
+      .output(z.object({ id: zId, code: zAccountCode })),
+    // Owners and admins (R1): renames, deactivates or reactivates a sub-account. TT133 accounts are read-only; an
+    // account stays active while it is a vendor's default or has active sub-accounts.
+    update: oc
+      .input(z.object({ code: zAccountCode, name: z.string().trim().min(1).max(200).optional(), active: z.boolean().optional() }))
+      .output(z.object({ code: zAccountCode, name: z.string(), active: z.boolean() })),
   },
   // VAT working for one month or quarter (issue #316); the Excel file is GET /api/export/vat.xlsx?period=<period>.
   vat: {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ACCOUNT_CODE_PATTERN } from './accounts.ts';
 
 // Wire conventions: snake_case is not used on the wire for the MVP API; decimals are strings,
 // accounting dates are YYYY-MM-DD, ids are UUIDs.
@@ -15,7 +16,8 @@ export function isCalendarDate(value: string): boolean {
 export const zLocalDate = z.string().refine(isCalendarDate, 'YYYY-MM-DD calendar date');
 // Failed checks that make an invoice impossible to post as-is; confirming them does not help.
 export const BLOCKING_CHECK_IDS: readonly string[] = ['currency', 'lines_sum', 'total'];
-export const zAccountCode = z.string().regex(/^\d{3,5}$/);
+// A TT133 account code or one of the org's sub-accounts (11211, 1121.VCB; see accounts.ts).
+export const zAccountCode = z.string().regex(ACCOUNT_CODE_PATTERN);
 export const zRole = z.enum(['owner', 'admin', 'member', 'viewer']);
 export const zSlug = z.string().regex(/^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$/);
 
@@ -274,6 +276,8 @@ export const zParty = z.object({
   taxCode: z.string().nullable(),
   address: z.string().nullable(),
   documentCount: z.number().int(),
+  // The debit account proposed first for this vendor's invoices (set by approving one, or by hand), or null.
+  defaultAccount: z.string().nullable(),
 });
 
 export const zPurchaseDocument = z.object({
@@ -316,7 +320,16 @@ export const zJournalEntry = z.object({
     .optional(),
 });
 
-export const zAccount = z.object({ code: z.string(), name: z.string(), parentCode: z.string().nullable() });
+// One account of the org's chart: a TT133 account (custom false, always active) or one of the org's sub-accounts
+// (#319). rootCode is the TT133 account it rolls up to (its own code for a TT133 account).
+export const zAccount = z.object({
+  code: z.string(),
+  name: z.string(),
+  parentCode: z.string().nullable(),
+  rootCode: z.string(),
+  active: z.boolean(),
+  custom: z.boolean(),
+});
 
 // VAT working for a month ("2026-09") or a quarter ("2026-Q3") (issue #316): the period's input and output invoices
 // by VAT rate and the form 01/GTGT indicators they feed. The rules are in @crove/mod-finance (domain/vat-return.ts).

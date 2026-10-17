@@ -14,11 +14,11 @@
 // text is written as inert string cells.
 import ExcelJS from 'exceljs';
 import {
-  FIXED_ASSETS,
   PAYABLE_ACCOUNT,
   VAT_INPUT_ASSETS,
   VAT_INPUT_GOODS,
   fixedAssetVat,
+  isFixedAssetAccount,
   money,
   sum,
   type DecimalValue,
@@ -194,8 +194,8 @@ export function purchaseRows(voucher: PurchaseVoucher): PurchaseRow[] {
   const rates = voucher.lines.map((l) => misaVatRate(l.vatRate));
   const vatAmounts: string[] = Array.from({ length: voucher.lines.length }, () => '0');
   const pools: Array<{ account: string; total: DecimalValue; isMember: (debitAccount: string) => boolean }> = [
-    { account: VAT_INPUT_GOODS, total: vat.minus(assetVat), isMember: (a) => a !== FIXED_ASSETS },
-    { account: VAT_INPUT_ASSETS, total: assetVat, isMember: (a) => a === FIXED_ASSETS },
+    { account: VAT_INPUT_GOODS, total: vat.minus(assetVat), isMember: (a) => !isFixedAssetAccount(a) },
+    { account: VAT_INPUT_ASSETS, total: assetVat, isMember: (a) => isFixedAssetAccount(a) },
   ];
   for (const pool of pools) {
     const members = voucher.lines.flatMap((l, i) => (pool.isMember(l.debitAccount) ? [i] : []));
@@ -213,7 +213,7 @@ export function purchaseRows(voucher: PurchaseVoucher): PurchaseRow[] {
     voucherNo,
     vat: rates[i] ?? misaVatRate(null),
     vatAmount: vatAmounts[i] ?? '0',
-    vatAccount: line.debitAccount === FIXED_ASSETS ? VAT_INPUT_ASSETS : VAT_INPUT_GOODS,
+    vatAccount: isFixedAssetAccount(line.debitAccount) ? VAT_INPUT_ASSETS : VAT_INPUT_GOODS,
   }));
 }
 

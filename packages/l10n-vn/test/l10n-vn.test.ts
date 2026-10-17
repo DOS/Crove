@@ -6,6 +6,7 @@ import {
   checkInvoice,
   enterpriseCheckDigit,
   isCalendarDate,
+  isFixedAssetAccount,
   journalIsBalanced,
   looksLikeEInvoiceXml,
   parseTaxCode,
@@ -122,5 +123,22 @@ describe('TT133 accounting', () => {
       ['331', '1100000', '0'],
     ]);
     expect(journalIsBalanced(journal)).toBe(true);
+  });
+
+  it('posts on sub-accounts as given, and books input VAT of a fixed asset sub-account to 1332 (#319)', () => {
+    const lines = [
+      { lineNo: 1, debitAccount: '211.XE', amount: '50000000', vatRate: '10%' },
+      { lineNo: 2, debitAccount: '6422.HCM', amount: '1000000', vatRate: '10%' },
+    ];
+    const journal = buildPurchaseJournal(lines as Parameters<typeof buildPurchaseJournal>[0], '5100000', 'HĐ xe');
+    expect(journal.map((j) => [j.accountCode, j.debit, j.credit])).toEqual([
+      ['211.XE', '50000000', '0'],
+      ['6422.HCM', '1000000', '0'],
+      ['1331', '100000', '0'],
+      ['1332', '5000000', '0'],
+      ['331', '0', '56100000'],
+    ]);
+    expect(isFixedAssetAccount('2111')).toBe(true);
+    expect(isFixedAssetAccount('2141')).toBe(false);
   });
 });

@@ -307,6 +307,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       list: os.parties.list.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.vendors.list', input, { actor, orgId })),
       ),
+      setDefaultAccount: os.parties.setDefaultAccount.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.vendor.set_default_account', input, { actor, orgId })),
+      ),
     },
     documents: {
       list: os.documents.list.handler(({ context, input }) =>
@@ -335,6 +338,12 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     accounts: {
       list: os.accounts.list.handler(({ context }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.accounts.list', {}, { actor, orgId })),
+      ),
+      create: os.accounts.create.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.account.create', input, { actor, orgId })),
+      ),
+      update: os.accounts.update.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.account.update', input, { actor, orgId })),
       ),
     },
     vat: {

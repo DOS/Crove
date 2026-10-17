@@ -8,6 +8,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { StepUpPrompt, TwoFactorCard } from '../components/two-factor.tsx';
+import { ChartOfAccountsCard } from './accounts.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -565,6 +566,8 @@ export function SettingsPage() {
             </>
           )}
         </Card>
+        {/* The chart of accounts belongs to the finance module (#319). */}
+        {getConfig().modules.includes('finance') && <ChartOfAccountsCard canManage={canManage} />}
         <TwoFactorCard />
         {me.data && <MySessions userId={me.data.userId} />}
         {isOwner && org.data && <Offboarding name={org.data.name} slug={org.data.slug} />}

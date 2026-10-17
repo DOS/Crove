@@ -16,6 +16,7 @@ export interface CroveFinanceSchema {
   'crove_finance.account': FinanceAccountTable;
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
+  'crove_finance.org_account': FinanceOrgAccountTable;
   'crove_finance.purchase_document': FinancePurchaseDocumentTable;
   'crove_finance.purchase_document_void': FinancePurchaseDocumentVoidTable;
   'crove_finance.purchase_line': FinancePurchaseLineTable;
@@ -90,6 +91,21 @@ export interface FinanceJournalLineTable {
   credit: ColumnType<string, NotGranted, NotGranted>;
   party_id: ColumnType<string | null, NotGranted, NotGranted>;
   memo: ColumnType<string | null, NotGranted, NotGranted>;
+}
+
+/** crove_finance.org_account */
+export interface FinanceOrgAccountTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  code: ColumnType<string, string, NotGranted>;
+  name: string;
+  parent_code: ColumnType<string, string, NotGranted>;
+  root_code: ColumnType<string, string, NotGranted>;
+  active: Generated<boolean>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_by: string | null;
+  updated_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_finance.purchase_document */

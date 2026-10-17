@@ -79,7 +79,9 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await nav.getByRole('link', { name: 'Nhà cung cấp' }).click();
     const vendor = page.getByRole('row').filter({ hasText: SELLER });
     await expect(vendor).toHaveCount(1);
-    await expect(vendor.getByRole('cell')).toHaveText([SELLER, SELLER_TAX_CODE, /Hà Nội/, '1']);
+    // The last cell is the vendor's default account (#319): for an owner, a picker on the account approving set.
+    await expect(vendor.getByRole('cell')).toHaveText([SELLER, SELLER_TAX_CODE, /Hà Nội/, '1', /6422 · Chi phí quản lý doanh nghiệp/]);
+    await expect(vendor.getByRole('combobox', { name: `Tài khoản mặc định của ${SELLER}` })).toHaveValue('6422');
 
     await nav.getByRole('link', { name: 'Chứng từ mua' }).click();
     const document = page.getByRole('row').filter({ hasText: 'C26TAB-1234' });
@@ -186,6 +188,28 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     expect(rows('Phai tra')[2]).toEqual([SELLER_TAX_CODE, SELLER, 0, 1980000, 0, 1980000]);
   });
 
+  await test.step('add a sub-account in Settings and make it the vendor default (#319)', async () => {
+    const nav = page.getByRole('navigation');
+    await nav.getByRole('link', { name: 'Cài đặt' }).click();
+    const add = page.getByRole('form', { name: 'Thêm tài khoản con' });
+    await add.getByLabel('Tài khoản cha').selectOption('6422');
+    await expect(add.getByLabel('Mã tài khoản con')).toHaveValue('6422');
+    await add.getByLabel('Mã tài khoản con').fill('6422.vp');
+    await add.getByLabel('Tên tài khoản con').fill('Văn phòng Hà Nội');
+    await add.getByRole('button', { name: 'Thêm' }).click();
+    await expect(page.getByText('6422.VP', { exact: true })).toBeVisible();
+
+    await nav.getByRole('link', { name: 'Nhà cung cấp' }).click();
+    const picker = page.getByRole('combobox', { name: `Tài khoản mặc định của ${SELLER}` });
+    await picker.selectOption('6422.VP');
+    await expect(picker).toHaveValue('6422.VP');
+
+    // While it is a vendor's default, the sub-account stays in use, and the refusal names the vendor.
+    await nav.getByRole('link', { name: 'Cài đặt' }).click();
+    await page.getByRole('button', { name: 'Ngừng dùng tài khoản 6422.VP · Văn phòng Hà Nội' }).click();
+    await expect(page.getByText(`Tài khoản 6422.VP đang là tài khoản mặc định của ${SELLER}`, { exact: false })).toBeVisible();
+  });
+
   await test.step('rows in the database', async () => {
     const [org] = sql<{ org_id: string; user_id: string }>(
       `SELECT t.org_id, u.id AS user_id
@@ -201,6 +225,16 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
       vars,
     );
     expect(vendors).toEqual([{ id: expect.any(String), name: SELLER, tax_code: SELLER_TAX_CODE }]);
+    // The vendor default is the sub-account added in Settings, which is still active (#319).
+    expect(sql<{ debit_account: string }>(`SELECT debit_account FROM crove_finance.vendor_account_rule WHERE org_id = :'org'`, vars)).toEqual([
+      { debit_account: '6422.VP' },
+    ]);
+    expect(
+      sql<{ code: string; parent_code: string; root_code: string; active: boolean }>(
+        `SELECT code, parent_code, root_code, active FROM crove_finance.org_account WHERE org_id = :'org'`,
+        vars,
+      ),
+    ).toEqual([{ code: '6422.VP', parent_code: '6422', root_code: '6422', active: true }]);
 
     const documents = sql<{ id: string; party_id: string; invoice_series: string; invoice_number: string; subtotal: string; vat_amount: string; total: string; created_by: string }>(
       `SELECT id, party_id, invoice_series, invoice_number, subtotal::text, vat_amount::text, total::text, created_by

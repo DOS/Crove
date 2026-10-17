@@ -59,7 +59,8 @@ test('import opening balances from the Excel template', async ({ page }) => {
       .getByLabel('File Excel (.xlsx)')
       .setInputFiles(await fill('balanced.xlsx', { '111': [30_000_000, null], '112': [20_000_000, null], '411': [null, 50_000_000] }));
     await expect(page.getByText('Bảng số dư hợp lệ: ghi sổ thành một bút toán 3 dòng.')).toBeVisible();
-    await expect(page.getByRole('row').filter({ hasText: 'Tiền gửi ngân hàng' }).getByRole('cell')).toHaveText(['3', /^112 /, /^20\.000\.000/, '', 'Hợp lệ']);
+    // Row 5 of the sheet: the template lists the whole TT133 chart, 111, 1111 and 1112 before 112 (#319).
+    await expect(page.getByRole('row').filter({ hasText: 'Tiền gửi ngân hàng' }).getByRole('cell')).toHaveText(['5', /^112 /, /^20\.000\.000/, '', 'Hợp lệ']);
     await page.getByRole('button', { name: 'Ghi sổ số dư đầu kỳ' }).click();
     await expect(page.getByText('Đang chờ: ghi sổ số dư đầu kỳ.')).toBeVisible();
     await page.getByRole('button', { name: 'Bật xác thực hai lớp' }).click();

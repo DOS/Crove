@@ -273,6 +273,17 @@ export type JournalEntryTable = Refine<
   }
 >;
 
+// An org's sub-accounts under the TT133 chart (#319). The insert trigger fills root_code (the TT133 account the code
+// rolls up to) and makes every new sub-account active; code, parent and root never change.
+export type OrgAccountTable = Refine<
+  G.FinanceOrgAccountTable,
+  {
+    root_code: ColumnType<string, never, never>;
+    active: ColumnType<boolean, never, boolean>;
+  },
+  'root_code'
+>;
+
 // Crove Social (Social plan §3.2, S3).
 export const SOCIAL_POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled'] as const;
 export const SOCIAL_VARIANT_STATUSES = [
@@ -345,6 +356,7 @@ type Refined = Tables<{
   'crove_kernel.external_call': ExternalCallTable;
   'crove_finance.purchase_document': PurchaseDocumentTable;
   'crove_finance.journal_entry': JournalEntryTable;
+  'crove_finance.org_account': OrgAccountTable;
   'crove_social.post': SocialPostTable;
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.post_approval': SocialPostApprovalTable;

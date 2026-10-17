@@ -76,8 +76,9 @@ export function OpeningBalancePage() {
     }
   };
 
+  // The accounts in use (#319): the TT133 chart and the org's active sub-accounts.
   const download = () =>
-    saveBytes(buildTemplate(accounts.data ?? []), t('templateFile', { org: getCurrentOrg() ?? 'org' }));
+    saveBytes(buildTemplate((accounts.data ?? []).filter((a) => a.active)), t('templateFile', { org: getCurrentOrg() ?? 'org' }));
 
   if (org.isLoading) return <Spinner />;
   if (!allowed) {

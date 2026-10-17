@@ -264,3 +264,32 @@ describe('TT133 B02-DNN (draft)', () => {
     expect(b01['417']).toBe(b02['60']);
   });
 });
+
+// Sub-accounts of an org (#319) extend their parent's code, so the reports count them under the parent with no mapping.
+describe('TT133 reports with sub-accounts (#319)', () => {
+  // The sample year plus moves between 1121 and its sub-accounts 1121.VCB and 11212, and part of the office rent moved
+  // to the cost center 6422.HCM.
+  function withSubAccounts(): Journal {
+    const j = sampleYear();
+    j.post('2026-12-31', [['1121.VCB', 70_000_000, 0], ['1121', 0, 70_000_000]]); // a transfer between bank accounts
+    j.post('2026-12-31', [['11212', 30_000_000, 0], ['1121.VCB', 0, 30_000_000]]);
+    j.post('2026-12-31', [['6422.HCM', 4_000_000, 0], ['6422', 0, 4_000_000]]); // a reclassification to a cost center
+    return j;
+  }
+
+  it('rolls sub-accounts up into their parent lines, so moves between them change nothing', () => {
+    const report = buildB01(withSubAccounts().entries, LE, '2026-12-31');
+    expect(amounts(report)).toEqual(asText(B01_YEAR_END));
+    expect(report.unmapped).toEqual([]);
+    expect(amounts(buildB02(withSubAccounts().entries, LE, '2026-01-01', '2026-12-31'))).toEqual(asText(B02_YEAR));
+  });
+
+  it('counts activity posted only on sub-accounts under the parent line', () => {
+    const j = new Journal();
+    j.post('2026-01-02', [['1121.VCB', 9_000_000, 0], ['4111', 0, 9_000_000]]);
+    j.post('2026-01-03', [['6422.HCM', 2_000_000, 0], ['1121.VCB', 0, 2_000_000]]);
+    const b01 = amounts(buildB01(j.entries, LE, '2026-12-31'));
+    expect([b01['110'], b01['411'], b01['417']]).toEqual(['7000000', '9000000', '-2000000']);
+    expect(amounts(buildB02(j.entries, LE, '2026-01-01', '2026-12-31'))['24']).toBe('2000000');
+  });
+});
