@@ -3,6 +3,8 @@
 # rotation. Every test signs up and recovers from the runner's one address, often for an address just mailed, so
 # the email budgets (#190) are raised: Supabase Auth's deployment-wide one and the proxy's per-client and
 # per-recipient limits, keeping 10 clients' worth of the per-client limit inside the budget as the kernel requires.
+# Failed sign-in attempts from that one address are limited too (#221); the per-client guess budget is raised so the
+# wrong passwords and codes the tests send, and the rate-limit spec's burst, reach Supabase Auth.
 services:
   auth:
     environment:
@@ -14,6 +16,7 @@ services:
       AUTH_RATE_LIMIT_EMAIL_SENT: '10000'
       AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR: '1000'
       AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS: '0'
+      AUTH_GUESS_LIMIT_PER_CLIENT: '1000'
       INBOUND_DOMAIN: in.e2e.test
       INBOUND_SECRET: e2e-only-inbound-secret-0123456789abcdef
       # The shell's feedback and support link (#310).

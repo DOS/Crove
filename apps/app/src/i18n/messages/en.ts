@@ -69,6 +69,7 @@ export const en = {
       mfa_verification_failed: 'The code is wrong or has expired',
       mfa_challenge_expired: 'The code has expired, enter a new one',
       insufficient_aal: 'Enter your two-factor code first',
+      over_request_rate_limit: 'Too many attempts, try again in a few minutes',
     },
   },
   onboarding: {
