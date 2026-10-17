@@ -22,6 +22,7 @@ import { SocialPage } from './routes/social.tsx';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
 import { SocialComposePage, SocialPostPage } from './routes/social-post.tsx';
 import { TaskDetailPage, TasksPage } from './routes/tasks.tsx';
+import { VatPage } from './routes/vat.tsx';
 import { VendorsPage } from './routes/vendors.tsx';
 
 async function requireSession() {
@@ -143,6 +144,8 @@ const requireFinance = ({ params }: { params: { slug: string } }) => {
 const documentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'documents', beforeLoad: requireFinance, component: DocumentsPage });
 const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendors', beforeLoad: requireFinance, component: VendorsPage });
 const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, component: JournalPage });
+// VAT working per month or quarter (issue #316).
+const vatRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vat', beforeLoad: requireFinance, component: VatPage });
 // The Vietnamese quick guide (issue #310), linked from the empty Inbox; it walks through finance screens.
 const guideRoute = createRoute({ getParentRoute: () => orgRoute, path: 'guide', beforeLoad: requireFinance, component: GuidePage });
 // Screens of the social module; without it (CROVE_MODULES) they send you to the inbox.
@@ -167,7 +170,7 @@ const routeTree = rootRoute.addChildren([
   mfaRoute,
   resetPasswordRoute,
   onboardingRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vatRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

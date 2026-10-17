@@ -19,6 +19,7 @@ const ALL_NAV = [
   { to: '/o/$slug/documents', label: 'documents', module: 'finance' },
   { to: '/o/$slug/vendors', label: 'vendors', module: 'finance' },
   { to: '/o/$slug/journal', label: 'journal', module: 'finance' },
+  { to: '/o/$slug/vat', label: 'vat', module: 'finance' },
   { to: '/o/$slug/agents', label: 'agents', module: 'kernel' },
   { to: '/o/$slug/tasks', label: 'tasks', module: 'kernel' },
   { to: '/o/$slug/social', label: 'social', module: 'social' },

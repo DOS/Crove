@@ -318,6 +318,41 @@ export const zJournalEntry = z.object({
 
 export const zAccount = z.object({ code: z.string(), name: z.string(), parentCode: z.string().nullable() });
 
+// VAT working for a month ("2026-09") or a quarter ("2026-Q3") (issue #316): the period's input and output invoices
+// by VAT rate and the form 01/GTGT indicators they feed. The rules are in @crove/mod-finance (domain/vat-return.ts).
+export const VAT_PERIOD_PATTERN = /^(\d{4})-(0[1-9]|1[0-2]|Q[1-4])$/;
+export const zVatPeriod = z.string().regex(VAT_PERIOD_PATTERN, 'YYYY-MM or YYYY-Qn');
+export const VAT_RATES = ['0', '5', '8', '10', 'KCT', 'KKKNT', 'other'] as const;
+export const zVatRate = z.enum(VAT_RATES);
+export const VAT_WARNINGS = ['rate_unknown', 'rate_split', 'reduced_rate_outside_period', 'lines_mismatch'] as const;
+export const zVatWarning = z.enum(VAT_WARNINGS);
+const zRateAmounts = z.object({ rate: zVatRate, taxable: zMoney, vat: zMoney });
+export const zVatInvoice = z.object({
+  id: zId,
+  issueDate: zLocalDate,
+  series: z.string(),
+  number: z.string(),
+  partyName: z.string(),
+  partyTaxCode: z.string().nullable(),
+  subtotal: zMoney,
+  vatAmount: zMoney,
+  total: zMoney,
+  rates: z.array(zRateAmounts),
+  warnings: z.array(zVatWarning),
+});
+const zVatSide = z.object({
+  // false: Crove has no source for this side yet (sales invoices); documents and totals are empty.
+  available: z.boolean(),
+  documents: z.array(zVatInvoice),
+  totals: z.object({ byRate: z.array(zRateAmounts), taxable: zMoney, vat: zMoney, documents: z.number().int().nonnegative() }),
+});
+export const zVatReport = z.object({
+  period: z.object({ period: zVatPeriod, kind: z.enum(['month', 'quarter']), from: zLocalDate, to: zLocalDate }),
+  input: zVatSide,
+  output: zVatSide,
+  indicators: z.array(z.object({ code: z.string(), label: z.string(), amount: zMoney })),
+});
+
 // AI agents as org members (ADR-0029): the chart, the agents, their tasks, budgets and the "Stop AI" kill switch.
 export const zModuleId = z.string().regex(/^[a-z][a-z0-9_]*$/).max(50);
 export const zAgentRoleKey = z.string().regex(/^[a-z][a-z0-9_.]*$/).max(100);
