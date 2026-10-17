@@ -147,6 +147,45 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     expect(values(3).slice(5)).toEqual(['Tổng cộng', undefined, 1800000, 180000]);
   });
 
+  await test.step('ledger reports for September 2026 and their Excel export (#321)', async () => {
+    await page.getByRole('navigation').getByRole('link', { name: 'Sổ sách' }).click();
+    await expect(page.getByRole('heading', { name: 'Sổ sách kế toán' })).toBeVisible();
+    await page.getByLabel('Kỳ báo cáo', { exact: true }).selectOption('month');
+    await page.getByLabel('Năm', { exact: true }).selectOption('2026');
+    await page.getByLabel('Tháng', { exact: true }).selectOption('9');
+    await expect(page.getByText('Từ 01/09/2026 đến 30/09/2026, theo ngày hạch toán')).toBeVisible();
+
+    // Trial balance: 331 owes the invoice total, 1331 holds its VAT and rolls up into 133.
+    const account = (code: string) => page.getByRole('row').filter({ has: page.getByRole('cell', { name: code, exact: true }) });
+    await expect(account('331').getByRole('cell')).toHaveText(['331', 'Phải trả cho người bán', /^0/, /^0/, /^0/, /^1\.980\.000/, /^0/, /^1\.980\.000/]);
+    await expect(account('1331').getByRole('cell')).toHaveText(['1331', /^Thuế GTGT được khấu trừ của hàng hóa/, /^0/, /^0/, /^180\.000/, /^0/, /^180\.000/, /^0/]);
+    await expect(account('133').getByRole('cell')).toHaveText(['133', 'Thuế GTGT được khấu trừ', /^0/, /^0/, /^180\.000/, /^0/, /^180\.000/, /^0/]);
+    const total = page.getByRole('row').filter({ hasText: 'Tổng cộng' });
+    await expect(total.getByRole('cell')).toHaveText(['', 'Tổng cộng', /^0/, /^0/, /^1\.980\.000/, /^1\.980\.000/, /^1\.980\.000/, /^1\.980\.000/]);
+
+    // General ledger of 331: the invoice line and the running balance.
+    await page.getByRole('tab', { name: 'Sổ cái' }).click();
+    await page.getByLabel('Tài khoản', { exact: true }).selectOption('331');
+    const posted = page.getByRole('row').filter({ hasText: 'C26TAB-1234' });
+    await expect(posted.getByRole('cell')).toHaveText(['15/09/2026', 'C26TAB-1234', MEMO, '331', /1331/, SELLER, '', /^1\.980\.000/, /^Có 1\.980\.000/]);
+
+    // Payables per vendor.
+    await page.getByRole('tab', { name: 'Công nợ' }).click();
+    const vendor = page.getByRole('row').filter({ hasText: SELLER });
+    await expect(vendor.getByRole('cell')).toHaveText([SELLER_TAX_CODE, SELLER, /^0/, /^1\.980\.000/, /^0/, /^1\.980\.000/]);
+
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Xuất Excel' }).click();
+    const file = await download;
+    expect(file.suggestedFilename()).toBe(`crove-so-sach-2026-09-${slug}.xlsx`);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(await file.path());
+    expect(workbook.worksheets.map((s) => s.name)).toEqual(['Can doi phat sinh', 'So cai', 'Phai thu', 'Phai tra']);
+    const rows = (name: string) => (workbook.getWorksheet(name)?.getRows(1, workbook.getWorksheet(name)?.rowCount ?? 0) ?? []).map((r) => (r.values as unknown[]).slice(1));
+    expect(rows('Can doi phat sinh').find((r) => r[0] === '331')).toEqual(['331', 'Phải trả cho người bán', 0, 0, 0, 1980000, 0, 1980000]);
+    expect(rows('Phai tra')[2]).toEqual([SELLER_TAX_CODE, SELLER, 0, 1980000, 0, 1980000]);
+  });
+
   await test.step('rows in the database', async () => {
     const [org] = sql<{ org_id: string; user_id: string }>(
       `SELECT t.org_id, u.id AS user_id

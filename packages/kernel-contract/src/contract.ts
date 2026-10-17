@@ -52,6 +52,9 @@ import {
   zSessionRevoke,
   zVatPeriod,
   zVatReport,
+  zAccountLedger,
+  zLedgerPeriod,
+  zLedgerReport,
 } from './schemas.ts';
 
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
@@ -202,6 +205,12 @@ export const contract = {
   // VAT working for one month or quarter (issue #316); the Excel file is GET /api/export/vat.xlsx?period=<period>.
   vat: {
     period: oc.input(z.object({ period: zVatPeriod })).output(zVatReport),
+  },
+  // Ledger reports of a month, quarter or year (issue #321): the trial balance and the receivables and payables per
+  // party, and the general ledger of one account. The Excel workbook is GET /api/export/ledger.xlsx?period=<period>.
+  ledger: {
+    period: oc.input(z.object({ period: zLedgerPeriod })).output(zLedgerReport),
+    account: oc.input(z.object({ period: zLedgerPeriod, accountCode: zAccountCode })).output(zAccountLedger),
   },
   // The org chart (ADR-0029): positions shared by members and AI agents. Every member reads it; changing it is the
   // owner's (R3: role keys, holders and reporting lines decide what agents may do). A retry with the same

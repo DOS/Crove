@@ -353,6 +353,71 @@ export const zVatReport = z.object({
   indicators: z.array(z.object({ code: z.string(), label: z.string(), amount: zMoney })),
 });
 
+// Ledger reports for a month ("2026-09"), a quarter ("2026-Q3") or a year ("2026") (issue #321): the trial balance,
+// the general ledger of one account, and the receivables (131) and payables (331) per party. The rules are in
+// @crove/mod-finance (domain/ledger-reports.ts). Balances of the general ledger are signed: debit minus credit.
+export const LEDGER_PERIOD_PATTERN = /^(20\d{2})(?:-(0[1-9]|1[0-2]|Q[1-4]))?$/;
+export const zLedgerPeriod = z.string().regex(LEDGER_PERIOD_PATTERN, 'YYYY-MM, YYYY-Qn or YYYY');
+const zLedgerPeriodRange = z.object({ period: zLedgerPeriod, kind: z.enum(['month', 'quarter', 'year']), from: zLocalDate, to: zLocalDate });
+const zTrialBalanceAmounts = z.object({
+  openingDebit: zMoney,
+  openingCredit: zMoney,
+  debit: zMoney,
+  credit: zMoney,
+  closingDebit: zMoney,
+  closingCredit: zMoney,
+});
+export const zTrialBalanceRow = zTrialBalanceAmounts.extend({
+  accountCode: z.string(),
+  accountName: z.string(),
+  parentCode: z.string().nullable(),
+  // 0 for an account at the top of the chart, 1 for its sub-accounts, and so on.
+  level: z.number().int().nonnegative(),
+});
+export const zPartyBalance = z.object({
+  partyId: zId.nullable(),
+  partyName: z.string().nullable(),
+  partyTaxCode: z.string().nullable(),
+  opening: zMoney,
+  increase: zMoney,
+  decrease: zMoney,
+  closing: zMoney,
+});
+const zPartyLedger = z.object({
+  accountCode: z.string(),
+  rows: z.array(zPartyBalance),
+  totals: z.object({ opening: zMoney, increase: zMoney, decrease: zMoney, closing: zMoney }),
+});
+export const zLedgerReport = z.object({
+  period: zLedgerPeriodRange,
+  trialBalance: z.object({ rows: z.array(zTrialBalanceRow), totals: zTrialBalanceAmounts, balanced: z.boolean() }),
+  receivables: zPartyLedger,
+  payables: zPartyLedger,
+});
+export const zAccountLedger = z.object({
+  period: zLedgerPeriodRange,
+  account: z.object({ code: z.string(), name: z.string() }),
+  opening: zMoney,
+  lines: z.array(
+    z.object({
+      entryId: zId,
+      entryDate: zLocalDate,
+      reference: z.string().nullable(),
+      description: z.string(),
+      reversal: z.boolean(),
+      accountCode: z.string(),
+      counterAccounts: z.array(z.string()),
+      partyName: z.string().nullable(),
+      debit: zMoney,
+      credit: zMoney,
+      balance: zMoney,
+    }),
+  ),
+  debit: zMoney,
+  credit: zMoney,
+  closing: zMoney,
+});
+
 // AI agents as org members (ADR-0029): the chart, the agents, their tasks, budgets and the "Stop AI" kill switch.
 export const zModuleId = z.string().regex(/^[a-z][a-z0-9_]*$/).max(50);
 export const zAgentRoleKey = z.string().regex(/^[a-z][a-z0-9_.]*$/).max(100);

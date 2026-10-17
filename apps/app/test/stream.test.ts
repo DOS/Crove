@@ -40,6 +40,8 @@ function seeded() {
     entry: orpc.journal.get.queryKey({ input: { id: ENTRY } }),
     documents: orpc.documents.list.queryKey({ input: {} }),
     parties: orpc.parties.list.queryKey({ input: {} }),
+    ledger: orpc.ledger.period.queryKey({ input: { period: '2026-09' } }),
+    ledgerAccount: orpc.ledger.account.queryKey({ input: { period: '2026-09', accountCode: '331' } }),
     me: orpc.me.get.queryKey(),
     org: orpc.org.get.queryKey(),
     socialList: orpc.social.posts.list.queryKey({ input: {} }),
@@ -75,10 +77,10 @@ describe('invalidateHint', () => {
     }
   });
 
-  it('journal_entry: the journal, that entry, the documents and the proposal that posted it', async () => {
+  it('journal_entry: the journal, that entry, the documents, the ledger reports and the proposal that posted it', async () => {
     const { qc, stale } = seeded();
     await invalidateHint(qc, { type: 'journal_entry', id: ENTRY });
-    expect(stale()).toEqual(['detail1', 'documents', 'entry', 'journal']);
+    expect(stale()).toEqual(['detail1', 'documents', 'entry', 'journal', 'ledger', 'ledgerAccount']);
   });
 
   it('document: the documents, the vendors and the proposal that recorded it', async () => {

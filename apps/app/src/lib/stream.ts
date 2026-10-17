@@ -38,7 +38,8 @@ export function hintMatches(hint: StreamHint, query: Query): boolean {
       // extraction carries the id of the file whose reading changed.
       return path === 'files.recent' || path === 'inbox.list' || (path === 'inbox.get' && detail(query)?.file?.id === id);
     case 'journal_entry': {
-      if (path === 'journal.list' || path === 'documents.list') return true;
+      // The ledger reports (#321) read every posted entry, so any new one changes them.
+      if (path === 'journal.list' || path === 'documents.list' || path === 'ledger.period' || path === 'ledger.account') return true;
       if (path === 'journal.get') return inputId(query) === id;
       const result = detail(query)?.result;
       return path === 'inbox.get' && (result?.journalEntryId === id || result?.reversedEntryId === id);

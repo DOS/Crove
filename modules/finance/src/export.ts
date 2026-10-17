@@ -66,6 +66,25 @@ export function textCell(value: string | null | undefined): string {
 
 const TEXT_FORMAT = '@';
 
+/** Writes an amount by the moneyCell rule: a number with its format, or the exact decimal as right-aligned text. */
+export function setMoneyCell(cell: ExcelJS.Cell, amount: string): void {
+  const value = moneyCell(amount);
+  cell.value = value.value;
+  if (value.kind === 'number') {
+    cell.numFmt = value.numFmt;
+  } else {
+    // Exact decimal kept as text (more digits than Excel can hold); aligned like a number.
+    cell.numFmt = TEXT_FORMAT;
+    cell.alignment = { horizontal: 'right' };
+  }
+}
+
+/** Writes text as a string cell with the Text format, never read as a formula. */
+export function setTextCell(cell: ExcelJS.Cell, value: string | null | undefined): void {
+  cell.value = textCell(value);
+  cell.numFmt = TEXT_FORMAT;
+}
+
 export async function buildJournalWorkbook(entries: JournalEntryView[], orgName: string): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Crove';
