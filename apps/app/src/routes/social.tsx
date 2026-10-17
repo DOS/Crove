@@ -7,7 +7,7 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
-import { SOCIAL_IMAGE_TYPES } from '@crove/kernel-contract';
+import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
@@ -180,7 +180,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
               ref={picker}
               type="file"
               multiple
-              accept={SOCIAL_IMAGE_TYPES.join(',')}
+              accept={[...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES].join(',')}
               className="hidden"
               onChange={(e) => {
                 const files = [...(e.target.files ?? [])];
@@ -217,7 +217,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
                     open?.fileId === item.fileId && 'border-primary/60',
                   )}
                 >
-                  <Thumb fileId={item.fileId} alt={item.filename} className="aspect-square" />
+                  <Thumb fileId={item.fileId} alt={item.filename} mime={item.mime} durationMs={item.durationMs} className="aspect-square" />
                   <span className="block truncate text-xs text-foreground" title={item.filename}>
                     {item.filename}
                   </span>
@@ -230,7 +230,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
           </ul>
           {open && (
             <Card className="block h-fit space-y-3 p-4">
-              <Thumb fileId={open.fileId} alt={open.filename} className="aspect-[4/3]" />
+              <Thumb fileId={open.fileId} alt={open.filename} mime={open.mime} durationMs={open.durationMs} className="aspect-[4/3]" />
               <p className="text-sm font-medium [overflow-wrap:anywhere] text-foreground">{open.filename}</p>
               <p className="text-xs text-subtle-foreground">{f.dateTime(open.createdAt)}</p>
               <p className="text-xs font-medium tracking-wide text-subtle-foreground uppercase">{t('libraryUsageTitle')}</p>

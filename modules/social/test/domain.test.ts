@@ -84,7 +84,7 @@ describe('validateVariant', () => {
     const codes = (media: MediaItem[]) => validateVariant({ provider: 'instagram', body: 'caption', title: null, media }).map((i) => i.code);
     expect(codes([])).toEqual(['MEDIA_REQUIRED']);
     expect(codes([png()])).toEqual(['IMAGE_TYPE_NOT_ALLOWED']);
-    expect(codes([jpeg(), mp4()])).toEqual([]);
+    expect(codes([jpeg(), mp4()])).toEqual(['VIDEO_NOT_SUPPORTED_YET']);
     expect(codes(Array.from({ length: 11 }, () => jpeg()))).toEqual(['TOO_MANY_MEDIA']);
   });
 
@@ -106,7 +106,7 @@ describe('validateVariant', () => {
 
   it('refuses images mixed with video where the channel does not mix them', () => {
     const codes = validateVariant({ provider: 'facebook_page', body: '', title: null, media: [jpeg(), mp4()] }).map((i) => i.code);
-    expect(codes).toEqual(['MEDIA_MIX_NOT_ALLOWED']);
+    expect(codes).toEqual(['MEDIA_MIX_NOT_ALLOWED', 'VIDEO_NOT_SUPPORTED_YET']);
   });
 
   it('checks media kinds, sizes and durations', () => {
@@ -115,7 +115,12 @@ describe('validateVariant', () => {
     const zaloBig = validateVariant({ provider: 'zalo_oa', body: 'x', title: 'T', media: [jpeg(2 * 1024 * 1024)] }).map((i) => i.code);
     expect(zaloBig).toEqual(['IMAGE_TOO_LARGE']);
     const tiktokLong = validateVariant({ provider: 'tiktok', body: '', title: null, media: [mp4(601)] }).map((i) => i.code);
-    expect(tiktokLong).toEqual(['VIDEO_TOO_LONG']);
+    expect(tiktokLong).toEqual(['VIDEO_NOT_SUPPORTED_YET', 'VIDEO_TOO_LONG']);
+  });
+
+  it('says when a channel takes video but its Crove adapter does not post it yet', () => {
+    expect(validateVariant({ provider: 'facebook_page', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual(['VIDEO_NOT_SUPPORTED_YET']);
+    expect(validateVariant({ provider: 'sandbox', body: '', title: null, media: [mp4()] })).toEqual([]);
   });
 
   it('limits links on Threads', () => {

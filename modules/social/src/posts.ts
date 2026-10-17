@@ -11,7 +11,7 @@
 // - Scheduling needs the variant's latest decision to be an approval of its current revision and hash.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { SOCIAL_IMAGE_TYPES, zId } from '@crove/kernel-contract';
+import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contract';
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
@@ -54,15 +54,15 @@ const zMedia = z
   .array(z.strictObject({ fileId: zId, altText: z.string().trim().max(1000).nullable().optional() }))
   .max(MAX_MEDIA_PER_POST)
   .refine((list) => new Set(list.map((m) => m.fileId)).size === list.length, 'each image once');
-const MEDIA_TYPES: readonly string[] = SOCIAL_IMAGE_TYPES;
+const MEDIA_TYPES: readonly string[] = [...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES];
 
 // The files a media list names, in its order, as the hash and the channel rules see them. Every file must be an image
-// of the org.
+// or a video of the org uploaded for posts.
 async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): Promise<PostMedia[]> {
   if (list.length === 0) return [];
   const files = await ctx.trx
     .selectFrom('crove_kernel.file')
-    .select(['id', 'generation', 'content_type', 'size_bytes', 'source'])
+    .select(['id', 'generation', 'content_type', 'size_bytes', 'source', 'duration_ms'])
     .where('org_id', '=', ctx.orgId)
     .where(
       'id',
@@ -75,8 +75,8 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
     const f = byId.get(m.fileId);
     // Only images uploaded for posts: an accounting document of the org is never published, whatever its type.
     if (!f || f.source !== 'social') throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này');
-    if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG hoặc WEBP');
-    return { fileId: f.id, generation: f.generation, altText: m.altText || null, mime: f.content_type, sizeBytes: Number(f.size_bytes) };
+    if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG, WEBP và video MP4, MOV');
+    return { fileId: f.id, generation: f.generation, altText: m.altText || null, mime: f.content_type, sizeBytes: Number(f.size_bytes), durationMs: f.duration_ms === null ? null : Number(f.duration_ms) };
   });
 }
 
@@ -742,9 +742,10 @@ export interface MediaView {
   altText: string | null;
   mime: string;
   sizeBytes: number;
+  durationMs: number | null;
 }
 
-const mediaView = (list: readonly PostMedia[]): MediaView[] => list.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime, sizeBytes: m.sizeBytes }));
+const mediaView = (list: readonly PostMedia[]): MediaView[] => list.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs ?? null }));
 
 export interface PostView {
   id: string;
@@ -800,7 +801,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
   const mediaRows = await ctx.trx
     .selectFrom('crove_social.post_media as m')
     .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
-    .select(['m.post_id', 'm.file_id', 'm.alt_text', 'f.generation', 'f.content_type', 'f.size_bytes'])
+    .select(['m.post_id', 'm.file_id', 'm.alt_text', 'f.generation', 'f.content_type', 'f.size_bytes', 'f.duration_ms'])
     .where('m.org_id', '=', ctx.orgId)
     .where('m.post_id', 'in', postIds)
     .orderBy('m.position')
@@ -808,7 +809,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
   const mediaByPost = new Map<string, PostMedia[]>();
   for (const r of mediaRows) {
     const list = mediaByPost.get(r.post_id) ?? [];
-    list.push({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes) });
+    list.push({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes), durationMs: r.duration_ms === null ? null : Number(r.duration_ms) });
     mediaByPost.set(r.post_id, list);
   }
   const byPost = new Map(posts.map((p) => [p.id, p]));

@@ -17,6 +17,8 @@ export interface HashedMedia {
 export interface PostMedia extends HashedMedia {
   mime: string;
   sizeBytes: number;
+  // A video's duration as the server read it from the file (#409); null for images.
+  durationMs?: number | null;
 }
 
 export interface HashedVariant {

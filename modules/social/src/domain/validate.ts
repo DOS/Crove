@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, countLinks, countText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { CAPABILITIES, VIDEO_READY, countLinks, countText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 
 export interface MediaItem {
   kind: MediaKind;
@@ -33,6 +33,8 @@ export type IssueCode =
   | 'IMAGE_TOO_LARGE'
   | 'VIDEO_TOO_LARGE'
   | 'VIDEO_TOO_LONG'
+  // The platform takes video, Crove's adapter for it does not yet.
+  | 'VIDEO_NOT_SUPPORTED_YET'
   | 'TOO_MANY_LINKS';
 
 export interface Issue {
@@ -85,6 +87,7 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
         issues.push({ code: 'IMAGE_TOO_LARGE', field, limit: rule.maxImageBytes, actual: m.sizeBytes });
       }
     } else {
+      if (!VIDEO_READY.has(variant.provider)) issues.push({ code: 'VIDEO_NOT_SUPPORTED_YET', field, limit: null, actual: null });
       if (rule.maxVideoBytes !== null && m.sizeBytes > rule.maxVideoBytes) {
         issues.push({ code: 'VIDEO_TOO_LARGE', field, limit: rule.maxVideoBytes, actual: m.sizeBytes });
       }

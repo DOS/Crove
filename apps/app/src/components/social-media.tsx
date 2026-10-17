@@ -3,7 +3,7 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
-import { SOCIAL_IMAGE_TYPES } from '@crove/kernel-contract';
+import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { cn } from '@crove/ui/lib/utils';
@@ -15,6 +15,8 @@ export interface MediaItem {
   altText: string;
   mime: string;
   sizeBytes: number;
+  // A video's duration as the server read it; unknown (null or absent) until the post is saved.
+  durationMs?: number | null | undefined;
 }
 
 export const MAX_POST_MEDIA = 20;
@@ -47,7 +49,7 @@ function LibraryPicker({ media, onChange }: { media: MediaItem[]; onChange: (med
   const items = library.data?.pages.flatMap((p) => p.items) ?? [];
   const chosen = new Set(media.map((m) => m.fileId));
   const toggle = (item: LibraryItem) =>
-    onChange(chosen.has(item.fileId) ? media.filter((m) => m.fileId !== item.fileId) : media.length >= MAX_POST_MEDIA ? media : [...media, { fileId: item.fileId, altText: '', mime: item.mime, sizeBytes: item.sizeBytes }]);
+    onChange(chosen.has(item.fileId) ? media.filter((m) => m.fileId !== item.fileId) : media.length >= MAX_POST_MEDIA ? media : [...media, { fileId: item.fileId, altText: '', mime: item.mime, sizeBytes: item.sizeBytes, durationMs: item.durationMs }]);
   return (
     <div className="space-y-3 rounded-xl border bg-muted/40 p-3">
       <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('librarySearch')} aria-label={t('librarySearch')} className="h-8 max-w-xs text-sm" />
@@ -72,7 +74,7 @@ function LibraryPicker({ media, onChange }: { media: MediaItem[]; onChange: (med
                   chosen.has(item.fileId) && 'ring-2 ring-primary',
                 )}
               >
-                <Thumb fileId={item.fileId} alt={item.filename} className="aspect-square" />
+                <Thumb fileId={item.fileId} alt={item.filename} mime={item.mime} durationMs={item.durationMs} className="aspect-square" />
                 <span className="sr-only">{t(chosen.has(item.fileId) ? 'libraryChosen' : 'libraryChoose', { name: item.filename })}</span>
               </button>
             </li>
@@ -102,11 +104,29 @@ function useImageUrl(fileId: string) {
   return { url, isLoading: blob.isLoading };
 }
 
-export function Thumb({ fileId, alt, className }: { fileId: string; alt: string; className?: string }) {
+const clock = (ms: number) => {
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+
+// An image, or a video's first frame with its length, from the stored file.
+export function Thumb({ fileId, alt, className, mime, durationMs }: { fileId: string; alt: string; className?: string; mime?: string; durationMs?: number | null | undefined }) {
   const url = useImageUrl(fileId);
+  const video = mime?.startsWith('video/') ?? false;
   return (
-    <div className={cn('overflow-hidden rounded-lg border bg-muted', className)}>
-      {url.url ? <img src={url.url} alt={alt} className="size-full object-cover" /> : <div className="flex size-full items-center justify-center">{url.isLoading ? <Spinner /> : null}</div>}
+    <div className={cn('relative overflow-hidden rounded-lg border bg-muted', className)}>
+      {!url.url ? (
+        <div className="flex size-full items-center justify-center">{url.isLoading ? <Spinner /> : null}</div>
+      ) : video ? (
+        <video src={url.url} aria-label={alt} muted playsInline preload="metadata" className="size-full object-cover" />
+      ) : (
+        <img src={url.url} alt={alt} className="size-full object-cover" />
+      )}
+      {video && (
+        <span className="absolute bottom-1 left-1 rounded bg-background/80 px-1.5 text-xs text-foreground tabular-nums">
+          ▶{durationMs ? ` ${clock(durationMs)}` : ''}
+        </span>
+      )}
     </div>
   );
 }
@@ -120,7 +140,7 @@ export function MediaPreview({ media }: { media: readonly MediaItem[] }) {
     <div className={cn('mt-3 grid gap-1', shown.length === 1 ? 'grid-cols-1' : 'grid-cols-2')}>
       {shown.map((m, i) => (
         <div key={m.fileId} className="relative">
-          <Thumb fileId={m.fileId} alt={m.altText || t('imageAlt', { n: String(i + 1) })} className={shown.length === 1 ? 'aspect-[4/3]' : 'aspect-square'} />
+          <Thumb fileId={m.fileId} alt={m.altText || t('imageAlt', { n: String(i + 1) })} mime={m.mime} durationMs={m.durationMs} className={shown.length === 1 ? 'aspect-[4/3]' : 'aspect-square'} />
           {i === 3 && media.length > 4 && (
             <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/70 text-lg font-semibold text-foreground">+{media.length - 4}</span>
           )}
@@ -164,7 +184,7 @@ export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; 
         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {media.map((m, i) => (
             <li key={m.fileId} className="space-y-1.5">
-              <Thumb fileId={m.fileId} alt={m.altText || t('imageAlt', { n: String(i + 1) })} className="aspect-square" />
+              <Thumb fileId={m.fileId} alt={m.altText || t('imageAlt', { n: String(i + 1) })} mime={m.mime} durationMs={m.durationMs} className="aspect-square" />
               <Input
                 value={m.altText}
                 disabled={disabled}
@@ -193,7 +213,7 @@ export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; 
         ref={picker}
         type="file"
         multiple
-        accept={SOCIAL_IMAGE_TYPES.join(',')}
+        accept={[...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES].join(',')}
         className="hidden"
         onChange={(e) => {
           const files = [...(e.target.files ?? [])];
