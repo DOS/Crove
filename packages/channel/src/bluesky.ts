@@ -117,9 +117,11 @@ class Xrpc {
 export async function connectBluesky(input: { handle: string; appPassword: string }, fetchImpl?: Fetch): Promise<ConnectedAccount> {
   const handle = input.handle.trim().replace(/^@/, '').toLowerCase();
   if (!BLUESKY_HANDLE.test(handle)) throw new BlueskyError(400, 'InvalidHandle', 'not a Bluesky handle');
-  if (!APP_PASSWORD.test(input.appPassword.trim())) throw new BlueskyError(400, 'NotAnAppPassword', 'use an app password, not the account password');
-  const session = await new Xrpc(fetchImpl).session(handle, input.appPassword.trim());
-  const secret: BlueskySecret = { identifier: session.did, appPassword: input.appPassword.trim(), pds: session.pds };
+  // App passwords are lowercase; one typed in capitals is the same password.
+  const appPassword = input.appPassword.trim().toLowerCase();
+  if (!APP_PASSWORD.test(appPassword)) throw new BlueskyError(400, 'NotAnAppPassword', 'use an app password, not the account password');
+  const session = await new Xrpc(fetchImpl).session(handle, appPassword);
+  const secret: BlueskySecret = { identifier: session.did, appPassword, pds: session.pds };
   return { provider: 'bluesky', externalAccountId: session.did, displayName: `@${session.handle}`.slice(0, 200), scopes: ['app_password'], expiresAt: null, secret: JSON.stringify(secret) };
 }
 
