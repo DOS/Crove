@@ -4,6 +4,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
+import { OAUTH_CHANNEL_PROVIDERS } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -14,9 +15,14 @@ import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
+import { rememberOAuthAttempt } from '../lib/oauth.ts';
 import { minuteLabel, parseMinute, providerName } from '../lib/social.ts';
 
 type Channel = Awaited<ReturnType<typeof orpc.channels.list.call>>[number];
+type OAuthProvider = (typeof OAUTH_CHANNEL_PROVIDERS)[number];
+// Platforms in the order Crove adds them (Social plan §6).
+const PLATFORMS = ['facebook_page', 'instagram', 'zalo_oa'] as const;
+const OAUTH_PROVIDERS: readonly string[] = OAUTH_CHANNEL_PROVIDERS;
 type Slot = { weekday: number; minute: number; label?: string };
 
 const CHANNEL_TONE = { active: 'success', expired: 'warning', error: 'destructive', revoked: 'outline' } as const;
@@ -136,6 +142,15 @@ export function SocialChannelsPage() {
       void queryClient.invalidateQueries();
     },
   });
+  const oauth = getConfig().channels?.oauth ?? [];
+  // The provider's dialog runs in this tab; it comes back to the callback screen, which finishes the attempt.
+  const start = useMutation({
+    mutationFn: (provider: OAuthProvider) => client.channels.oauthStart({ provider }),
+    onSuccess: (attempt) => {
+      rememberOAuthAttempt(attempt.state, slug);
+      window.location.assign(attempt.authorizeUrl);
+    },
+  });
   const disconnect = useMutation({
     mutationFn: (connectionId: string) => client.channels.disconnect({ connectionId, idempotencyKey: crypto.randomUUID() }),
     onSuccess: () => {
@@ -223,13 +238,23 @@ export function SocialChannelsPage() {
           ) : (
             <p className="text-xs text-subtle-foreground">{isAdmin ? t('sandboxOff') : t('adminsConnect')}</p>
           )}
-          <div className="space-y-1.5 border-t pt-3">
-            {['facebook_page', 'instagram', 'zalo_oa'].map((p) => (
-              <div key={p} className="flex items-center justify-between text-sm text-muted-foreground">
+          <div className="space-y-2 border-t pt-3">
+            {PLATFORMS.map((p) => (
+              <div key={p} className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
                 {providerName(p)}
-                <Badge variant="secondary">{t('comingSoon')}</Badge>
+                {oauth.includes(p) ? (
+                  isAdmin ? (
+                    <Button variant="outline" size="sm" disabled={start.isPending} onClick={() => start.mutate(p as OAuthProvider)}>
+                      {t('connectWith', { provider: providerName(p) })}
+                    </Button>
+                  ) : null
+                ) : (
+                  <Badge variant="secondary">{OAUTH_PROVIDERS.includes(p) ? t('notConfigured') : t('comingSoon')}</Badge>
+                )}
               </div>
             ))}
+            {isAdmin && oauth.length > 0 && <p className="text-xs text-subtle-foreground">{t('oauthHint')}</p>}
+            {start.error && <ErrorText>{errorMessage(start.error)}</ErrorText>}
           </div>
         </Card>
       </div>

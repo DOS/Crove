@@ -10,6 +10,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries, type SealedChannelCredential } from '@crove/kernel';
 import { CredentialVault, parseVaultKey, Runtime, type BlobStore } from '@crove/kernel-runtime';
+import { ConnectorError, type ConnectedAccount, type OAuthConnector } from '@crove/channel';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { noCredentialBroker } from '../src/credentials.ts';
@@ -29,6 +30,32 @@ interface Account {
   userId: string;
 }
 
+// Stands in for Meta: authorize URLs carry the state, and exchange answers with whatever the test queued.
+function fakeConnector() {
+  const exchanges: { code: string; redirectUri: string; codeVerifier: string | null }[] = [];
+  let next: ConnectedAccount[] | Error = [];
+  const connector: OAuthConnector = {
+    provider: 'facebook_page',
+    pkce: false,
+    authorizeUrl: ({ state, redirectUri }) => `https://www.facebook.com/v24.0/dialog/oauth?state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`,
+    exchange: async (input) => {
+      exchanges.push(input);
+      if (next instanceof Error) throw next;
+      return next;
+    },
+  };
+  return { connector, exchanges, answer: (value: ConnectedAccount[] | Error) => (next = value) };
+}
+
+const page = (id: string, name: string, token: string): ConnectedAccount => ({
+  provider: 'facebook_page',
+  externalAccountId: id,
+  displayName: name,
+  scopes: ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement'],
+  expiresAt: null,
+  secret: JSON.stringify({ accessToken: token }),
+});
+
 suite('channel connections through the API (ADR-0025)', () => {
   const dbName = `crove_test_channels_api_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let adminUrl = '';
@@ -38,6 +65,8 @@ suite('channel connections through the API (ADR-0025)', () => {
   let worker: Runtime;
   let config: ReturnType<typeof loadConfig>;
   let apps: Record<'on' | 'noKey' | 'sandboxOff', ReturnType<typeof createHttpApp>>;
+  // The OAuth connector the 'on' app uses for facebook_page: a stand-in for Meta that records what it was asked.
+  const fake = fakeConnector();
   const vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
   const owner: Account = { subject: randomUUID(), email: 'owner@channels-api.test', session: randomUUID(), userId: '' };
   const viewer: Account = { subject: randomUUID(), email: 'viewer@channels-api.test', session: randomUUID(), userId: '' };
@@ -109,11 +138,11 @@ suite('channel connections through the API (ADR-0025)', () => {
       WEB_DIST: '/nonexistent',
     });
     const store = {} as BlobStore;
-    const make = (channels: { broker: typeof vault | typeof noCredentialBroker; sandbox: boolean }) =>
+    const make = (channels: { broker: typeof vault | typeof noCredentialBroker; sandbox: boolean; connectors?: Record<string, OAuthConnector>; publicUrl?: string }) =>
       createHttpApp({ config, runtime, store, authenticate: createAuthenticator(config, db), pool, aiEnabled: false, channels });
     apps = {
-      on: make({ broker: vault, sandbox: true }),
-      noKey: make({ broker: noCredentialBroker, sandbox: true }),
+      on: make({ broker: vault, sandbox: true, connectors: { facebook_page: fake.connector }, publicUrl: 'https://crove.example/' }),
+      noKey: make({ broker: noCredentialBroker, sandbox: true, connectors: { facebook_page: fake.connector }, publicUrl: 'https://crove.example/' }),
       sandboxOff: make({ broker: vault, sandbox: false }),
     };
 
@@ -208,5 +237,111 @@ suite('channel connections through the API (ADR-0025)', () => {
     await expect(
       worker.query('kernel.channel.credential', { connectionId }, { actor: { type: 'system', component: 'test' }, orgId: org.orgId }),
     ).rejects.toMatchObject({ code: 'CHANNEL_NOT_ACTIVE' });
+  });
+
+  describe('connecting through an OAuth dialog (S6.1)', () => {
+    const REDIRECT = 'https://crove.example/channels/oauth/facebook_page/callback';
+    const start = async (who: Account = owner) => {
+      const started = await rpc('channels/oauthStart', await tokenFor(who), { provider: 'facebook_page' });
+      return started;
+    };
+
+    it('offers only configured providers in /api/config', async () => {
+      const on = (await (await apps.on.request('/api/config')).json()) as { channels: unknown };
+      expect(on.channels).toEqual({ sandbox: true, oauth: ['facebook_page'] });
+      const off = (await (await apps.sandboxOff.request('/api/config')).json()) as { channels: unknown };
+      expect(off.channels).toEqual({ sandbox: false, oauth: [] });
+    });
+
+    it('starts an attempt, then connects every Page the grant covers with its sealed Page token', async () => {
+      const started = await start();
+      expect(started.status).toBe(200);
+      const url = new URL(String(started.body?.authorizeUrl));
+      expect(url.searchParams.get('state')).toBe(started.body?.state);
+      expect(url.searchParams.get('redirect_uri')).toBe(REDIRECT);
+      fake.answer([page('111', 'Quán Cà Phê A', 'page-token-111'), page('333', 'Tiệm Bánh B', 'page-token-333')]);
+      const finished = await rpc('channels/oauthFinish', await tokenFor(owner), { provider: 'facebook_page', state: started.body?.state, code: 'code-1' });
+      expect(finished.status).toBe(200);
+      expect(finished.body.connections).toMatchObject([
+        { displayName: 'Quán Cà Phê A', reconnected: false },
+        { displayName: 'Tiệm Bánh B', reconnected: false },
+      ]);
+      expect(fake.exchanges.at(-1)).toEqual({ code: 'code-1', redirectUri: REDIRECT, codeVerifier: null });
+      const listed = await rpc('channels/list', await tokenFor(viewer), {});
+      expect(listed.body.filter((c: { provider: string }) => c.provider === 'facebook_page').map((c: { externalAccountId: string }) => c.externalAccountId).sort()).toEqual(['111', '333']);
+      // The worker opens each Page token for its own Page.
+      const first = finished.body.connections[0].connectionId as string;
+      const sealed = await worker.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: first }, { actor: { type: 'system', component: 'test' }, orgId: org.orgId });
+      expect(vault.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, { orgId: org.orgId, provider: 'facebook_page', externalAccountId: '111' })).toBe(
+        JSON.stringify({ accessToken: 'page-token-111' }),
+      );
+      // No Page token, code or state in audit rows, events, idempotency records or connection rows.
+      const dump = await admin(async (c) => {
+        const parts: string[] = [];
+        for (const q of [
+          "SELECT detail::text || coalesce(input_sha256, '') AS t FROM crove_kernel.audit_event WHERE org_id = $1",
+          'SELECT payload::text AS t FROM crove_kernel.outbox_event WHERE org_id = $1',
+          "SELECT coalesce(response::text, '') AS t FROM crove_kernel.idempotency_key WHERE org_id = $1",
+          'SELECT row_to_json(c)::text AS t FROM crove_kernel.channel_connection c WHERE org_id = $1',
+        ]) {
+          const { rows } = await c.query<{ t: string }>(q, [org.orgId]);
+          parts.push(...rows.map((r) => r.t));
+        }
+        return parts.join('\n');
+      });
+      for (const secret of ['page-token-111', 'page-token-333', 'code-1', String(started.body?.state)]) expect(dump).not.toContain(secret);
+    });
+
+    it('finishes an attempt once, and reconnects a Page connected before', async () => {
+      const started = await start();
+      fake.answer([page('111', 'Quán Cà Phê A (mới)', 'page-token-111b')]);
+      const input = { provider: 'facebook_page', state: started.body?.state, code: 'code-2' };
+      const first = await rpc('channels/oauthFinish', await tokenFor(owner), input);
+      expect(first.body.connections).toMatchObject([{ displayName: 'Quán Cà Phê A (mới)', reconnected: true }]);
+      const again = await rpc('channels/oauthFinish', await tokenFor(owner), input);
+      expect(again).toMatchObject({ status: 409, body: { code: 'OAUTH_STATE_USED' } });
+    });
+
+    it('refuses a state started by someone else, an unknown state and a viewer', async () => {
+      expect((await start(viewer)).status).toBe(403);
+      const started = await start();
+      const stolen = await rpc('channels/oauthFinish', await tokenFor(viewer), { provider: 'facebook_page', state: started.body?.state, code: 'code-3' });
+      expect(stolen.status).toBe(403);
+      const unknown = await rpc('channels/oauthFinish', await tokenFor(owner), { provider: 'facebook_page', state: 'A'.repeat(43), code: 'code-3' });
+      expect(unknown).toMatchObject({ status: 400, body: { code: 'OAUTH_STATE_INVALID' } });
+      // The owner's own attempt is still usable after those tries.
+      fake.answer([page('444', 'Trang C', 'page-token-444')]);
+      expect((await rpc('channels/oauthFinish', await tokenFor(owner), { provider: 'facebook_page', state: started.body?.state, code: 'code-3' })).status).toBe(200);
+    });
+
+    it('answers a refused code, a missing permission and no Pages with fixed messages, and uses the attempt up', async () => {
+      const cases: [ConnectedAccount[] | Error, number, string][] = [
+        [new ConnectorError('invalid_grant', 'This authorization code has been used.', '100'), 400, 'OAUTH_CODE_REJECTED'],
+        [new ConnectorError('denied', 'Meta did not grant pages_manage_posts', 'MISSING_PERMISSION'), 422, 'OAUTH_PERMISSION_MISSING'],
+        [new ConnectorError('provider', 'Service temporarily unavailable', '2'), 503, 'OAUTH_PROVIDER_FAILED'],
+        [[], 422, 'CHANNEL_NO_ACCOUNTS'],
+      ];
+      for (const [answer, status, code] of cases) {
+        const started = await start();
+        fake.answer(answer);
+        const input = { provider: 'facebook_page', state: started.body?.state, code: 'code-x' };
+        const failed = await rpc('channels/oauthFinish', await tokenFor(owner), input);
+        expect(failed).toMatchObject({ status, body: { code } });
+        expect(JSON.stringify(failed.body)).not.toContain('Meta');
+        expect((await rpc('channels/oauthFinish', await tokenFor(owner), input)).body.code).toBe('OAUTH_STATE_USED');
+      }
+    });
+
+    it('refuses to start without a credential key, and does not offer the provider', async () => {
+      const noKey = await rpc('channels/oauthStart', await tokenFor(owner), { provider: 'facebook_page' }, { app: 'noKey' });
+      expect(noKey).toMatchObject({ status: 503, body: { code: 'BROKER_NOT_CONFIGURED' } });
+      const config = (await (await apps.noKey.request('/api/config')).json()) as { channels: unknown };
+      expect(config.channels).toEqual({ sandbox: true, oauth: [] });
+    });
+
+    it('answers 404 for a provider the deployment did not configure', async () => {
+      const off = await rpc('channels/oauthStart', await tokenFor(owner), { provider: 'facebook_page' }, { app: 'sandboxOff' });
+      expect(off).toMatchObject({ status: 404, body: { code: 'CHANNEL_PROVIDER_DISABLED' } });
+    });
   });
 });

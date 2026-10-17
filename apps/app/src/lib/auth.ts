@@ -17,8 +17,9 @@ export interface PublicConfig {
   stream?: boolean;
   // The feedback and support link (SUPPORT_URL, issue #310): https: or mailto:, null when the deployment has none.
   supportUrl?: string | null;
-  // The offline sandbox channel can be connected (CHANNEL_SANDBOX).
-  channels?: { sandbox: boolean };
+  // The offline sandbox channel can be connected (CHANNEL_SANDBOX); `oauth` lists the providers connected through
+  // their OAuth dialog that the server has app credentials for.
+  channels?: { sandbox: boolean; oauth?: string[] };
 }
 
 let config: PublicConfig | null = null;

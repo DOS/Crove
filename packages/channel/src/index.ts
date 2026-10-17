@@ -3,6 +3,9 @@
 // Each capability is its own small interface, added by the step that first needs it.
 import { randomBytes } from 'node:crypto';
 
+export * from './oauth.ts';
+export * from './meta.ts';
+
 export const CHANNEL_PROVIDERS = [
   'sandbox',
   'facebook_page',

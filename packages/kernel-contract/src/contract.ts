@@ -18,6 +18,8 @@ import {
   zTaskStatus,
   zAccountCode,
   zChannelConnection,
+  zOAuthProvider,
+  zOAuthState,
   zSocialDecide,
   zSocialPost,
   zSocialPostCreate,
@@ -108,6 +110,15 @@ export const contract = {
       .input(z.object({ displayName: z.string().trim().min(1).max(200), key: zId }))
       .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
     disconnect: oc.input(z.object({ connectionId: zId, idempotencyKey: zId })).output(z.object({ connectionId: zId, status: z.literal('revoked') })),
+    // Connecting through a provider's OAuth dialog (Social plan S6). Start returns where to send the browser; the
+    // provider sends it back to /channels/oauth/:provider/callback, and that screen finishes the attempt with the code
+    // and state. Finish connects every account the grant covers (for Facebook, the Pages picked in Meta's dialog).
+    oauthStart: oc
+      .input(z.object({ provider: zOAuthProvider }))
+      .output(z.object({ authorizeUrl: z.url({ protocol: /^https$/ }), state: zOAuthState, expiresAt: z.iso.datetime({ offset: true }) })),
+    oauthFinish: oc
+      .input(z.object({ provider: zOAuthProvider, state: zOAuthState, code: z.string().min(1).max(2048) }))
+      .output(z.object({ connections: z.array(z.object({ connectionId: zId, displayName: z.string(), reconnected: z.boolean() })) })),
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.
   social: {

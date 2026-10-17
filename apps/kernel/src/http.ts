@@ -277,7 +277,8 @@ export function createHttpApp(deps: HttpDeps) {
       // The app subscribes to /api/stream and polls only while it is down (issue #69).
       stream: Boolean(deps.stream),
       // Channels the app may offer to connect without a platform account (ADR-0025).
-      channels: { sandbox: Boolean(deps.channels?.sandbox) },
+      // OAuth providers only with a credential key: their tokens could not be sealed otherwise.
+      channels: { sandbox: Boolean(deps.channels?.sandbox), oauth: deps.channels && deps.channels.broker.id !== 'none' ? Object.keys(deps.channels.connectors ?? {}).sort() : [] },
     }),
   );
 

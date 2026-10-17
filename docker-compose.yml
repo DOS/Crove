@@ -184,6 +184,8 @@ services:
       CREDENTIAL_KEY_PREVIOUS: ${CREDENTIAL_KEY_PREVIOUS:-}
       CREDENTIAL_KEY_FILE: /data/keys/credential.key
       CHANNEL_SANDBOX: ${CHANNEL_SANDBOX:-true}
+      CHANNEL_META_APP_ID: ${CHANNEL_META_APP_ID:-}
+      CHANNEL_META_APP_SECRET: ${CHANNEL_META_APP_SECRET:-}
     volumes:
       - files:/data/files
       - keys:/data/keys
