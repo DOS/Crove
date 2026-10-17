@@ -647,4 +647,28 @@ suite('social publishing on PostgreSQL (S4)', () => {
     );
     expect(roles.map((r) => r.role)).toEqual(['crove_worker']);
   });
+
+  it('keeps a failed metrics try as an empty capture, never asks a gone post again, and shows the last real answer', async () => {
+    const o = await org();
+    const platform = new SandboxPublisher();
+    const { variants } = await duePost(o);
+    const id = variants[0] as string;
+    await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000 }, o.orgId, id, 'sandbox');
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
+    // Six hours later the platform does not answer: an empty capture, and the summary keeps the real numbers.
+    await admin((c) => c.query("UPDATE crove_social.metric_snapshot SET captured_at = captured_at - interval '7 hours' WHERE variant_id = $1", [id]));
+    const silent = Object.assign(Object.create(SandboxPublisher.prototype) as SandboxPublisher, platform, { metrics: async () => null });
+    const later = new Date(Date.now() + 7 * 3_600_000);
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: silent }, now: () => later });
+    const rows = await admin(async (c) => (await c.query<{ extra: unknown }>('SELECT extra FROM crove_social.metric_snapshot WHERE variant_id = $1 ORDER BY captured_at', [id])).rows);
+    expect(rows.map((r) => r.extra)).toEqual([null, { error: 'no_answer' }]);
+    const summary = await api.query<MetricsRow[]>('social.metrics.summary', {}, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(summary.find((r) => r.variantId === id)?.metrics).toMatchObject({ reach: 30 });
+    // A post the platform says is gone is not due any more.
+    await admin((c) => c.query("UPDATE crove_social.metric_snapshot SET captured_at = captured_at - interval '7 hours' WHERE variant_id = $1", [id]));
+    const gone = Object.assign(Object.create(SandboxPublisher.prototype) as SandboxPublisher, platform, { metrics: async () => ({ refused: 'gone' as const }) });
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: gone }, now: () => new Date(Date.now() + 14 * 3_600_000) });
+    const due = await admin(async (c) => (await c.query<{ variant_id: string }>("SELECT variant_id FROM crove_social.metrics_due(1000, ARRAY['sandbox'], 600)")).rows);
+    expect(due.map((r) => r.variant_id)).not.toContain(id);
+  });
 });

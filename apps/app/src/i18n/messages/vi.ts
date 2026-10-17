@@ -824,6 +824,7 @@ export const vi = {
     metricsPost: 'Bài',
     metricsAsOf: 'cập nhật {when}',
     metricsPending: 'chưa có số liệu',
+    metricsCapped: 'Chỉ hiện 500 kênh đăng gần nhất; tổng tính trên các kênh này.',
     metric: { impressions: 'Lượt hiển thị', reach: 'Người tiếp cận', reactions: 'Cảm xúc', comments: 'Bình luận', shares: 'Chia sẻ', saves: 'Lượt lưu', clicks: 'Lượt nhấp', views: 'Lượt xem' },
     emptyText: '(Chưa có nội dung)',
     fromQueue: 'theo hàng đợi',

@@ -5,7 +5,8 @@
 --                               whatever else the platform gave in `extra`. Append-only, one row per capture key, so a
 --                               repeated capture is a no-op and the history shows how a post did over time.
 -- crove_social.metrics_due      the worker's scan, across orgs, of variants published in the last 30 days whose last
---                               capture is older than the interval. It returns ids only.
+--                               capture (an answer, or a failed try kept as an empty snapshot) is older than the
+--                               interval, leaving out posts the platform said are gone. It returns ids only.
 SET LOCAL lock_timeout = '2s';
 
 CREATE TABLE IF NOT EXISTS crove_social.metric_snapshot (
@@ -39,6 +40,10 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
     AND v.external_post_id IS NOT NULL
     AND v.published_at > pg_catalog.now() - interval '30 days'
     AND (last.at IS NULL OR last.at < pg_catalog.now() - pg_catalog.make_interval(secs => GREATEST(p_interval_seconds, 600)))
+    AND NOT EXISTS (
+      SELECT 1 FROM crove_social.metric_snapshot g
+      WHERE g.org_id = v.org_id AND g.variant_id = v.id AND g.extra ->> 'gone' = 'true'
+    )
   ORDER BY last.at NULLS FIRST, v.published_at DESC
   LIMIT LEAST(GREATEST(p_limit, 1), 1000)
 $$;

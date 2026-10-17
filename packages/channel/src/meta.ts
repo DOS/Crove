@@ -356,8 +356,9 @@ export class FacebookPagePublisher implements Publisher {
     } catch (error) {
       const result = graphPublishResult(error);
       if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
-      // Code 100 on a post id: the post was deleted on Facebook.
-      if (error instanceof GraphError && error.code === 100) return { refused: 'gone' };
+      // Code 100 with subcode 33: the post does not exist any more. Code 100 alone also means a missing permission or a
+      // bad field, which is not a deleted post.
+      if (error instanceof GraphError && error.code === 100 && error.subcode === 33) return { refused: 'gone' };
       return null;
     }
   }

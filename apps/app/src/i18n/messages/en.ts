@@ -823,6 +823,7 @@ export const en = {
     metricsPost: 'Post',
     metricsAsOf: 'as of {when}',
     metricsPending: 'no metrics yet',
+    metricsCapped: 'Showing the latest 500 published channels; totals cover these only.',
     metric: { impressions: 'Impressions', reach: 'Reach', reactions: 'Reactions', comments: 'Comments', shares: 'Shares', saves: 'Saves', clicks: 'Clicks', views: 'Views' },
     emptyText: '(No text yet)',
     fromQueue: 'from the queue',

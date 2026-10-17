@@ -92,6 +92,7 @@ function Metrics({ slug, names }: { slug: string; names: Map<string, string> }) 
               </Card>
             ))}
           </div>
+          {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t('metricsCapped')}</p>}
           <div className="overflow-x-auto rounded-xl border">
             <table className="w-full text-sm">
               <thead className="bg-muted text-xs text-subtle-foreground">

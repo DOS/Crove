@@ -99,7 +99,8 @@ export const metricsSummary = defineQuery({
       LEFT JOIN LATERAL (
         SELECT m.metrics, m.captured_at FROM crove_social.metric_snapshot m
         WHERE m.org_id = v.org_id AND m.variant_id = v.id
-        ORDER BY m.captured_at DESC LIMIT 1
+        -- The last real answer; an empty snapshot (a failed try, a gone post) only when there is nothing else.
+        ORDER BY (m.metrics = '{}'::jsonb), m.captured_at DESC LIMIT 1
       ) s ON true
       WHERE v.org_id = ${ctx.orgId} AND v.status = 'published'
         AND v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days}::int)
@@ -137,8 +138,9 @@ export interface MetricsDeps {
   now?: () => Date;
 }
 
-// One pass over the variants due for a capture. A platform that does not answer is asked again next pass; a post gone
-// from the platform gets an empty snapshot marked gone, so it is not asked every pass.
+// One pass over the variants due for a capture. Every try leaves a snapshot of its capture: the answer, an empty one
+// for a platform that did not answer or refused the token (asked again next capture), or one marked gone for a post
+// the platform no longer has (never asked again).
 export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: number; skipped: number }> {
   const providers = Object.entries(deps.publishers).filter(([, p]) => typeof p.metrics === 'function').map(([id]) => id);
   const out = { recorded: 0, skipped: 0 };
@@ -154,13 +156,16 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
       const sealed = await deps.runtime.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: target.connectionId }, options);
       const secret = deps.broker.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, { orgId: row.org_id, provider: sealed.provider, externalAccountId: sealed.externalAccountId });
       const result = await publisher?.metrics?.({ externalAccountId: sealed.externalAccountId, secret, externalId: target.externalPostId });
-      if (!result || ('refused' in result && result.refused === 'token_expired')) {
-        out.skipped += 1;
-        continue;
-      }
-      const input = 'refused' in result ? { metrics: {}, extra: { gone: true } } : { metrics: result.metrics, ...(result.extra ? { extra: result.extra } : {}) };
+      // A failed try is kept as an empty snapshot of this capture, so the variant waits for the next capture like the
+      // others instead of being asked again every pass; the summary shows the last real answer.
+      const input = !result
+        ? { metrics: {}, extra: { error: 'no_answer' } }
+        : 'refused' in result
+          ? { metrics: {}, extra: result.refused === 'gone' ? { gone: true } : { error: result.refused } }
+          : { metrics: result.metrics, ...(result.extra ? { extra: result.extra } : {}) };
+      if (!result || 'refused' in result) out.skipped += 1;
       const done = await deps.runtime.execute<{ recorded: boolean }>('social.metrics.record', { variantId: row.variant_id, captureKey: key, ...input }, options);
-      if (done.recorded) out.recorded += 1;
+      if (done.recorded && result && !('refused' in result)) out.recorded += 1;
     } catch (error) {
       // A connection whose owner left, or a credential that will not open: nothing to read; the publish path reports it.
       if (!(error instanceof DomainError)) console.warn(`[social-metrics] variant ${row.variant_id.slice(0, 8)}`, error instanceof Error ? error.message : error);

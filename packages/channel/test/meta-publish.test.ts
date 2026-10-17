@@ -196,7 +196,10 @@ describe('FacebookPagePublisher.metrics', () => {
     expect(await fake({ body: { reactions: { summary: { total_count: 0 } }, comments: { summary: { total_count: 0 } } } }).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toEqual({
       metrics: { reactions: 0, comments: 0, shares: 0 },
     });
-    expect(await fake(graphError(400, 100, 'Object does not exist')).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toEqual({ refused: 'gone' });
+    const gone = { status: 400, body: { error: { message: 'Object does not exist', type: 'GraphMethodException', code: 100, error_subcode: 33 } } };
+    expect(await fake(gone).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toEqual({ refused: 'gone' });
+    // Code 100 without subcode 33 is a permission or field problem, not a deleted post.
+    expect(await fake(graphError(400, 100, 'Requires pages_read_engagement')).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toBeNull();
     expect(await fake(graphError(400, 190)).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toEqual({ refused: 'token_expired' });
     expect(await fake(graphError(500, 2)).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toBeNull();
   });
