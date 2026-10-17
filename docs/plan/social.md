@@ -171,6 +171,8 @@ S8 (#238): metrics. `crove_social.metric_snapshot` keeps what a platform reporte
 
 S9, Bluesky (#390): accounts connect with their handle and an app password (refused if it is not one), checked once by opening a session and sealed with the account's DID; each publish opens a fresh session, so no rotating refresh token is kept. Posts carry link facets (UTF-8 byte offsets) and up to four images uploaded as blobs first; reconcile lists the account's posts in the call's window. Only Bluesky-hosted accounts (PDS under `bsky.network`) are accepted, since the PDS address comes from the account's DID document. On by default (`CHANNEL_BLUESKY`).
 
+S9, Threads (#391): the Threads use case of a Meta app has its own id (`CHANNEL_THREADS_APP_ID`, `CHANNEL_THREADS_APP_SECRET`). Connect through threads.net's dialog to a 60-day token, renewed a week ahead by the refresh sweep (each refresher now says how far ahead it renews). Publish like Instagram: a text, image or carousel container, a wait for `FINISHED`, `threads_publish` once, pending recognised later by the text's hash; text posts need no public image URL.
+
 What only people can do: trying S6 against the real platforms needs a Meta developer app (development mode works for people with a role on the app) and the Crove callback URL added to a Zalo app linked to an OA. DOS already has a Zalo OA app (used by DOS.Me); Meta has none yet. Open follow-ups: #250, #264, #335, #352.
 
 ## 5. Exit criteria (v1)
