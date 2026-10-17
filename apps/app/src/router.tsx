@@ -22,6 +22,7 @@ import { ResetPasswordPage } from './routes/reset-password.tsx';
 import { SettingsPage } from './routes/settings.tsx';
 import { SocialPage } from './routes/social.tsx';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
+import { OAuthCallbackPage } from './routes/social-oauth.tsx';
 import { SocialComposePage, SocialPostPage } from './routes/social-post.tsx';
 import { TaskDetailPage, TasksPage } from './routes/tasks.tsx';
 import { VatPage } from './routes/vat.tsx';
@@ -108,6 +109,15 @@ const resetPasswordRoute = createRoute({
   component: ResetPasswordPage,
 });
 
+// Where a channel provider's OAuth dialog sends the browser back (Social plan S6). One address for every org: the
+// attempt remembers its org (lib/oauth.ts).
+const oauthCallbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/channels/oauth/$provider/callback',
+  beforeLoad: requireAuth,
+  component: OAuthCallbackPage,
+});
+
 const onboardingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/onboarding',
@@ -176,6 +186,7 @@ const routeTree = rootRoute.addChildren([
   mfaRoute,
   resetPasswordRoute,
   onboardingRoute,
+  oauthCallbackRoute,
   orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vatRoute, ledgerRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
 ]);
 

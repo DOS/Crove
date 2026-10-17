@@ -171,6 +171,68 @@ export const channelMarkExpired = defineCommand({
   },
 });
 
+// Connecting through a provider's OAuth dialog (Social plan §3.5, S6.1): the API hashes a fresh state and starts an
+// attempt for the signed-in owner or admin; the browser comes back with the state, and the same member finishes the
+// attempt once, which hands out its PKCE verifier. Both run in the oauth_state_* definers, which bind the attempt to
+// the org and user in context; the commands never see the state itself, only its hash.
+const zStateHash = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+// 10 minutes, the longest a user takes in a provider's dialog.
+const OAUTH_ATTEMPT_SECONDS = 600;
+
+function oauthError(error: unknown): never {
+  const message = (error as { message?: unknown } | null)?.message;
+  switch (message) {
+    case 'OAUTH_FORBIDDEN':
+      throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới kết nối được kênh');
+    case 'OAUTH_TOO_MANY':
+      throw new DomainError('OAUTH_TOO_MANY', 429, 'Bạn đã mở quá nhiều lượt kết nối chưa hoàn tất, hãy thử lại sau ít phút');
+    case 'OAUTH_STATE_INVALID':
+      throw new DomainError('OAUTH_STATE_INVALID', 400, 'Lượt kết nối này không hợp lệ hoặc không phải của bạn, hãy bắt đầu lại');
+    case 'OAUTH_STATE_USED':
+      throw new DomainError('OAUTH_STATE_USED', 409, 'Lượt kết nối này đã được dùng, hãy bắt đầu lại');
+    case 'OAUTH_STATE_EXPIRED':
+      throw new DomainError('OAUTH_STATE_EXPIRED', 409, 'Lượt kết nối đã hết hạn, hãy bắt đầu lại');
+    default:
+      throw error;
+  }
+}
+
+export const channelOAuthBegin = defineCommand({
+  name: 'kernel.channel.oauth_begin',
+  input: z.strictObject({ provider: zProvider, stateHash: zStateHash, codeVerifier: z.string().regex(/^[A-Za-z0-9._~-]{43,128}$/).nullable() }),
+  risk: 'R1',
+  access: ADMINS,
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const { rows } = await sql<{ id: string }>`
+      SELECT crove_kernel.oauth_state_create(${input.provider}, ${input.stateHash}, ${input.codeVerifier}, ${OAUTH_ATTEMPT_SECONDS}::integer) AS id`
+      .execute(ctx.trx)
+      .catch(oauthError);
+    const attemptId = rows[0]?.id;
+    if (!attemptId) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
+    // The audit row names the attempt and provider only: never the hash or the verifier.
+    ctx.audit({ attempt_id: attemptId, provider: input.provider });
+    return { attemptId, expiresAt: new Date(ctx.now.getTime() + OAUTH_ATTEMPT_SECONDS * 1000).toISOString() };
+  },
+});
+
+export const channelOAuthConsume = defineCommand({
+  name: 'kernel.channel.oauth_consume',
+  input: z.strictObject({ provider: zProvider, stateHash: zStateHash }),
+  risk: 'R1',
+  access: ADMINS,
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const { rows } = await sql<{ code_verifier: string | null }>`
+      SELECT code_verifier FROM crove_kernel.oauth_state_consume(${input.provider}, ${input.stateHash})`
+      .execute(ctx.trx)
+      .catch(oauthError);
+    if (rows.length !== 1) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
+    ctx.audit({ provider: input.provider });
+    return { codeVerifier: rows[0]?.code_verifier ?? null };
+  },
+});
+
 export interface ChannelConnectionView {
   id: string;
   provider: string;
@@ -238,5 +300,5 @@ export const channelCredential = defineQuery({
   },
 });
 
-export const channelCommands = [channelConnect, channelDisconnect, channelMarkExpired];
+export const channelCommands = [channelConnect, channelDisconnect, channelMarkExpired, channelOAuthBegin, channelOAuthConsume];
 export const channelQueries = [channelsList, channelCredential];

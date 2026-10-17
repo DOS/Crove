@@ -167,6 +167,11 @@ export const zChannelConnection = z.object({
   connectedAt: z.string(),
 });
 
+// Providers connected through an OAuth dialog (Social plan S6), and the attempt's state: 32 random bytes, base64url.
+export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page'] as const;
+export const zOAuthProvider = z.enum(OAUTH_CHANNEL_PROVIDERS);
+export const zOAuthState = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+
 // A Supabase Auth session as Crove tracks it (ADR-0028).
 export const zSession = z.object({
   sessionId: zId,

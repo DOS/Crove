@@ -3,7 +3,7 @@
 // configuration (defaultAdapters); a Crove Cloud entrypoint wires its own adapters into the same factory.
 import { serve } from '@hono/node-server';
 import { InvoiceExtractor, type InvoiceReader } from '@crove/agent';
-import { SandboxPublisher } from '@crove/channel';
+import { FacebookPageConnector, SandboxPublisher, type OAuthConnector } from '@crove/channel';
 import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
 import { buildKernelCommands, kernelQueries } from '@crove/kernel';
@@ -112,6 +112,16 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
   return { commands: enabled.flatMap((m) => m.commands), queries: enabled.flatMap((m) => m.queries) };
 }
 
+// OAuth connectors of the providers this deployment has app credentials for (Social plan S6); a provider without
+// them is not offered.
+export function channelConnectors(config: Pick<Config, 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION'>): Partial<Record<string, OAuthConnector>> {
+  const connectors: Partial<Record<string, OAuthConnector>> = {};
+  if (config.CHANNEL_META_APP_ID && config.CHANNEL_META_APP_SECRET) {
+    connectors.facebook_page = new FacebookPageConnector({ appId: config.CHANNEL_META_APP_ID, appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
+  }
+  return connectors;
+}
+
 export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
   // Typed callers cannot omit a port, but an entrypoint assembled at runtime can: fail at boot, not on first use.
   // ai may be null (explicitly no AI), never undefined.
@@ -213,7 +223,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           pool,
           aiEnabled: resolved.ai !== null,
           mailer: resolved.mail,
-          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true' },
+          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL },
           ...(stream ? { stream } : {}),
         });
         const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });

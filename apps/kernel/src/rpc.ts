@@ -2,7 +2,7 @@
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { contract } from '@crove/kernel-contract';
-import { sandbox } from '@crove/channel';
+import { ConnectorError, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
 import {
   createOrg,
   myOrgs,
@@ -57,6 +57,23 @@ export interface RpcChannels {
   broker: CredentialBroker;
   // The offline sandbox channel is enabled (CHANNEL_SANDBOX).
   sandbox: boolean;
+  // Providers connected through an OAuth dialog that this deployment configured (Social plan S6), by provider id.
+  connectors?: Readonly<Partial<Record<string, OAuthConnector>>>;
+  // PUBLIC_URL: the provider sends the browser back to PUBLIC_URL/channels/oauth/:provider/callback.
+  publicUrl?: string;
+}
+
+// A provider's refusal or failure during the code exchange, as the answer the user sees. Never the provider's own
+// message: it is logged, and the user gets a fixed text.
+function connectorFailure(error: unknown): DomainError {
+  if (error instanceof ConnectorError) {
+    console.warn(`[channels] OAuth exchange failed: ${error.kind}${error.code ? ` (${error.code})` : ''}: ${error.message}`);
+    if (error.kind === 'invalid_grant') return new DomainError('OAUTH_CODE_REJECTED', 400, 'Nền tảng từ chối mã cấp quyền (đã dùng hoặc hết hạn), hãy kết nối lại');
+    if (error.kind === 'denied') return new DomainError('OAUTH_PERMISSION_MISSING', 422, 'Bạn chưa cấp đủ quyền cần thiết trong hộp thoại của nền tảng, hãy kết nối lại và chấp nhận mọi quyền');
+    return new DomainError('OAUTH_PROVIDER_FAILED', 503, 'Nền tảng không phản hồi đúng, hãy thử lại sau');
+  }
+  console.error('[channels] OAuth exchange failed', error instanceof Error ? error.name : typeof error);
+  return new DomainError('OAUTH_PROVIDER_FAILED', 503, 'Nền tảng không phản hồi đúng, hãy thử lại sau');
 }
 
 // sendInviteMail unset: invite mail is off (tests, or an embedder without mail). channels unset: no channel can be
@@ -101,6 +118,17 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     (name: string) =>
     <I, O>({ context, input }: { context: RpcContext; input: I }): Promise<O> =>
       inSocial(context, (orgId, actor) => runtime.query<O>(name, input, { actor, orgId }));
+
+  // The connector of an OAuth provider this deployment configured, for an owner or admin of the org in the header.
+  // The commands check the role again; checking first keeps a member from learning how the deployment is set up.
+  const oauthConnector = async (context: RpcContext, provider: string) => {
+    const { orgId, role } = await resolveMembership(runtime, context.user, context.orgSlug);
+    if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới kết nối được kênh');
+    const connector = channels?.connectors?.[provider];
+    if (!channels || !connector) throw new DomainError('CHANNEL_PROVIDER_DISABLED', 404, 'Kênh này chưa được cấu hình trên máy chủ');
+    return { orgId, actor: actorOf(context.user), connector, broker: channels.broker };
+  };
+  const oauthRedirectUri = (provider: string) => `${(channels?.publicUrl ?? '').replace(/\/$/, '')}/channels/oauth/${provider}/callback`;
 
   const router = os.router({
     me: {
@@ -232,6 +260,52 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         inOrg(context, (orgId, actor) => {
           const { idempotencyKey, ...rest } = input;
           return runtime.execute('kernel.channel.disconnect', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+      // The state and the PKCE verifier are made here; only the state's hash and the verifier reach the database.
+      oauthStart: os.channels.oauthStart.handler(({ context, input }) =>
+        guard(async () => {
+          const { orgId, actor, connector } = await oauthConnector(context, input.provider);
+          const attempt = newOAuthAttempt(connector.pkce);
+          const begun = await runtime.execute<{ attemptId: string; expiresAt: string }>(
+            'kernel.channel.oauth_begin',
+            { provider: input.provider, stateHash: attempt.stateHash, codeVerifier: attempt.codeVerifier },
+            { actor, orgId },
+          );
+          const authorizeUrl = connector.authorizeUrl({ state: attempt.state, redirectUri: oauthRedirectUri(input.provider), codeChallenge: attempt.codeChallenge });
+          return { authorizeUrl, state: attempt.state, expiresAt: begun.expiresAt };
+        }),
+      ),
+      // The attempt is consumed before the code is exchanged, so a code and state work once even if the exchange
+      // fails. The tokens the provider returns are sealed here and dropped; only envelopes reach the command.
+      oauthFinish: os.channels.oauthFinish.handler(({ context, input }) =>
+        guard(async () => {
+          const { orgId, actor, connector, broker } = await oauthConnector(context, input.provider);
+          const { codeVerifier } = await runtime.execute<{ codeVerifier: string | null }>(
+            'kernel.channel.oauth_consume',
+            { provider: input.provider, stateHash: oauthStateHash(input.state) },
+            { actor, orgId },
+          );
+          if (connector.pkce && !codeVerifier) throw new DomainError('OAUTH_STATE_INVALID', 400, 'Lượt kết nối này không hợp lệ hoặc không phải của bạn, hãy bắt đầu lại');
+          const accounts = await connector.exchange({ code: input.code, redirectUri: oauthRedirectUri(input.provider), codeVerifier }).catch((error: unknown) => {
+            throw connectorFailure(error);
+          });
+          if (accounts.length === 0) throw new DomainError('CHANNEL_NO_ACCOUNTS', 422, 'Không có tài khoản nào bạn được quyền đăng bài trong lần cấp quyền này');
+          const connections: { connectionId: string; displayName: string; reconnected: boolean }[] = [];
+          for (const account of accounts) {
+            const sealed = broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });
+            const command: ChannelConnectInput = {
+              provider: account.provider,
+              externalAccountId: account.externalAccountId,
+              displayName: account.displayName,
+              scopes: account.scopes,
+              expiresAt: account.expiresAt?.toISOString() ?? null,
+              credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+            };
+            const done = await runtime.execute<{ connectionId: string; reconnected: boolean }>('kernel.channel.connect', command, { actor, orgId });
+            connections.push({ connectionId: done.connectionId, displayName: account.displayName, reconnected: done.reconnected });
+          }
+          return { connections };
         }),
       ),
     },
