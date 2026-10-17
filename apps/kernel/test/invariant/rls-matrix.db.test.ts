@@ -38,7 +38,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>();
+const PENDING_TABLES = new Set<string>(['crove_kernel.external_call']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -313,6 +313,15 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         row: { org_id: o.id, connection_id: connection.id, key_id: 'rls-matrix', envelope: '\\x00' },
       };
     },
+  },
+  // The ledger of visible calls to outside services (Social plan §3.4, S4): one row per call key. Tenant roles read,
+  // insert and update its outcome columns, never delete; the guard trigger refuses any change once a call has its
+  // outcome, so the update probes assign a column of a started call to itself.
+  'crove_kernel.external_call': {
+    update: { set: 'calls = calls' },
+    make: (o) => ({
+      row: { org_id: o.id, key: `rls.matrix:${randomUUID()}`, module: 'social', target: 'sandbox', step: 'publish', retry_safety: 'reconcile_only' },
+    }),
   },
   'crove_finance.purchase_document': {
     make: (o) => ({
