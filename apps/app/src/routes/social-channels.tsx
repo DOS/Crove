@@ -21,11 +21,14 @@ import { minuteLabel, parseMinute, providerName } from '../lib/social.ts';
 type Channel = Awaited<ReturnType<typeof orpc.channels.list.call>>[number];
 type OAuthProvider = (typeof OAUTH_CHANNEL_PROVIDERS)[number];
 // Platforms in the order Crove adds them (Social plan §6).
-const PLATFORMS = ['facebook_page', 'instagram', 'zalo_oa', 'threads'] as const;
+const PLATFORMS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin'] as const;
 const OAUTH_PROVIDERS: readonly string[] = OAUTH_CHANNEL_PROVIDERS;
 type Slot = { weekday: number; minute: number; label?: string };
 
 const CHANNEL_TONE = { active: 'success', expired: 'warning', error: 'destructive', revoked: 'outline' } as const;
+// Platforms whose tokens Crove cannot renew: the member reconnects before the date, and is warned two weeks ahead.
+const NO_RENEWAL: readonly string[] = ['linkedin'];
+const WARN_BEFORE_MS = 14 * 86_400_000;
 // The time zones most Crove orgs post in; the queue keeps any IANA zone it already has.
 const ZONES = ['Asia/Ho_Chi_Minh', 'Asia/Bangkok', 'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney', 'Europe/London', 'America/New_York', 'America/Los_Angeles', 'UTC'];
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const;
@@ -235,6 +238,11 @@ export function SocialChannelsPage() {
                     </div>
                     <p className="mt-1 text-xs text-subtle-foreground">{t('connectedAt', { when: f.dateTime(c.connectedAt) })}</p>
                     {c.status !== 'active' && <p className="mt-1 text-xs text-warning">{t('reconnectHint')}</p>}
+                    {c.status === 'active' && c.expiresAt && NO_RENEWAL.includes(c.provider) && (
+                      <p className={Date.parse(c.expiresAt) - Date.now() < WARN_BEFORE_MS ? 'mt-1 text-xs text-warning' : 'mt-1 text-xs text-subtle-foreground'}>
+                        {t(Date.parse(c.expiresAt) - Date.now() < WARN_BEFORE_MS ? 'expiresSoon' : 'expiresOn', { when: f.date(c.expiresAt) })}
+                      </p>
+                    )}
                   </div>
                   {isAdmin &&
                     (confirming === c.id ? (

@@ -995,6 +995,8 @@ export const vi = {
     policyAdmins: 'Chủ sở hữu và quản trị viên đặt số người duyệt.',
     reviewSteps: 'Đã duyệt {given}/{required}',
     reviewYouApproved: 'Bạn đã duyệt {channels}; cần thêm người khác duyệt.',
+    expiresOn: 'Kết nối dùng được đến {when}; kết nối lại trước ngày này.',
+    expiresSoon: 'Kết nối hết hạn {when}: hãy kết nối lại để bài hẹn giờ vẫn đăng được.',
     imagesHint: 'JPG, PNG hoặc WEBP. Instagram chỉ nhận JPG; Zalo OA cần đúng một ảnh dưới 1 MB.',
     connectWith: 'Kết nối {provider}',
     oauthHint: 'Crove mở hộp thoại của nền tảng; chọn các Trang muốn kết nối và chấp nhận quyền đăng bài.',
