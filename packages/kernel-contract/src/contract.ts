@@ -26,6 +26,8 @@ import {
   zSocialPostUpdate,
   zSocialQueue,
   zSocialMetricsRow,
+  zSocialLibraryItem,
+  zSocialLibraryUse,
   zSocialQueueSet,
   zSocialSchedule,
   zSocialVariantUpdate,
@@ -163,6 +165,13 @@ export const contract = {
     // How published posts did (S8): the latest capture of each variant published in the last days days (30 by default).
     metrics: {
       summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional() })).output(z.array(zSocialMetricsRow)),
+    },
+    // The media library (S9): the org's post images, newest first, and the posts that show one.
+    media: {
+      list: oc
+        .input(z.object({ search: z.string().trim().max(200).optional(), before: z.strictObject({ createdAt: z.iso.datetime({ offset: true }), fileId: zId }).optional(), limit: z.number().int().min(1).max(100).optional() }))
+        .output(z.object({ items: z.array(zSocialLibraryItem), more: z.boolean() })),
+      usage: oc.input(z.object({ fileId: zId })).output(z.array(zSocialLibraryUse)),
     },
     variants: {
       update: oc.input(zSocialVariantUpdate).output(z.object({ variantId: zId, revision: z.number().int(), changed: z.boolean() })),

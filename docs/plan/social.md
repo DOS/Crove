@@ -175,6 +175,8 @@ S9, Threads (#391): the Threads use case of a Meta app has its own id (`CHANNEL_
 
 S9 evergreen (#393): *Repost* on a published post makes a new draft (`post.repost_of` points to the source) for the channels it went out on that are still connected, with its text and images; a channel that went out with its own text or images keeps them, and the copy is as tainted as its source. A post can be marked evergreen every 7 to 365 days (`post.evergreen_days`): every hour the worker asks `crove_social.evergreen_due` (worker only, ids only) for evergreen posts whose last publish or repost is older than that and that have no repost still open, makes the repost and sends it to review, so a person approves each one before it goes out. A post none of whose channels is still connected stops being evergreen.
 
+S9 media library (#395): every image uploaded for posts (`crove_kernel.file` rows with source `social`, one per content) is in the library. `social.media.list` lists them newest first, 60 a page by a (created_at, id) cursor, searchable by file name (wildcards taken literally), each with how many posts show it (in the post's images or a channel's own list); `social.media.usage` lists those posts. The compose and post screens have *Choose from the library* next to *Add images*, and the Social home has an *Image library* tab with uploads, search and where each image is used.
+
 What only people can do: trying S6 against the real platforms needs a Meta developer app (development mode works for people with a role on the app) and the Crove callback URL added to a Zalo app linked to an OA. DOS already has a Zalo OA app (used by DOS.Me); Meta has none yet. Open follow-ups: #250, #264, #335, #352.
 
 ## 5. Exit criteria (v1)

@@ -20,6 +20,7 @@ import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } fr
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { publishingCommands } from './publishing.ts';
+import { libraryQueries } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
 import { MOVABLE, POST_COLUMNS, SLOT_FREED, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
@@ -972,4 +973,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries];
