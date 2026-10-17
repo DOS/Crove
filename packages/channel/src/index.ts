@@ -7,6 +7,7 @@ export * from './oauth.ts';
 export * from './meta.ts';
 export * from './instagram.ts';
 export * from './zalo.ts';
+export * from './bluesky.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',

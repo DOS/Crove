@@ -19,7 +19,7 @@ export interface PublicConfig {
   supportUrl?: string | null;
   // The offline sandbox channel can be connected (CHANNEL_SANDBOX); `oauth` lists the providers connected through
   // their OAuth dialog that the server has app credentials for.
-  channels?: { sandbox: boolean; oauth?: string[] };
+  channels?: { sandbox: boolean; bluesky?: boolean; oauth?: string[] };
 }
 
 let config: PublicConfig | null = null;

@@ -160,6 +160,8 @@ const schema = z.object({
   CREDENTIAL_KEY_PREVIOUS: optional,
   // The offline sandbox channel (Social plan §3.5): connect and publish without any platform account.
   CHANNEL_SANDBOX: z.enum(['true', 'false']).default('true'),
+  // Bluesky (S9): accounts connect with an app password, no app of the deployment's own is needed. On unless false.
+  CHANNEL_BLUESKY: z.enum(['true', 'false']).default('true'),
   // The deployment's Meta app (Facebook Pages, Social plan S6). Set both to offer Facebook Pages; neither hides them.
   // The app's valid OAuth redirect URI is PUBLIC_URL/channels/oauth/facebook_page/callback.
   CHANNEL_META_APP_ID: optional,

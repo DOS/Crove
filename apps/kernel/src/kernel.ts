@@ -4,6 +4,7 @@
 import { serve } from '@hono/node-server';
 import { InvoiceExtractor, SocialWriter, type InvoiceReader } from '@crove/agent';
 import {
+  BlueskyPublisher,
   FacebookPageConnector,
   FacebookPagePublisher,
   InstagramConnector,
@@ -128,7 +129,7 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
 
 // OAuth connectors of the providers this deployment has app credentials for (Social plan S6); a provider without
 // them is not offered.
-type ChannelConfig = Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION' | 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'>;
+type ChannelConfig = Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_BLUESKY' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION' | 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'>;
 const zaloApp = (config: Pick<Config, 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'>) => (config.CHANNEL_ZALO_APP_ID && config.CHANNEL_ZALO_APP_SECRET ? { appId: config.CHANNEL_ZALO_APP_ID, appSecret: config.CHANNEL_ZALO_APP_SECRET } : null);
 
 export function channelConnectors(config: Omit<ChannelConfig, 'CHANNEL_SANDBOX'>): Partial<Record<string, OAuthConnector>> {
@@ -148,6 +149,7 @@ export function channelConnectors(config: Omit<ChannelConfig, 'CHANNEL_SANDBOX'>
 export function channelPublishers(config: ChannelConfig): Record<string, Publisher> {
   const publishers: Record<string, Publisher> = {};
   if (config.CHANNEL_SANDBOX === 'true') publishers.sandbox = new SandboxPublisher();
+  if (config.CHANNEL_BLUESKY === 'true') publishers.bluesky = new BlueskyPublisher();
   if (config.CHANNEL_META_APP_ID && config.CHANNEL_META_APP_SECRET) {
     publishers.facebook_page = new FacebookPagePublisher({ appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
     publishers.instagram = new InstagramPublisher({ appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
@@ -266,7 +268,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           aiEnabled: resolved.ai !== null,
           ...(resolved.writer ? { socialWriter: resolved.writer } : {}),
           mailer: resolved.mail,
-          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL },
+          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL },
           ...(stream ? { stream } : {}),
         });
         const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });

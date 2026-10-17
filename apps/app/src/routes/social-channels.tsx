@@ -143,6 +143,16 @@ export function SocialChannelsPage() {
     },
   });
   const oauth = getConfig().channels?.oauth ?? [];
+  // Bluesky: the account's handle and an app password, checked by the server and sealed; the form forgets them.
+  const blueskyOn = getConfig().channels?.bluesky ?? false;
+  const [bsky, setBsky] = useState({ handle: '', appPassword: '' });
+  const connectBluesky = useMutation({
+    mutationFn: () => client.channels.connectBluesky({ handle: bsky.handle.trim(), appPassword: bsky.appPassword.trim() }),
+    onSuccess: () => {
+      setBsky({ handle: '', appPassword: '' });
+      void queryClient.invalidateQueries();
+    },
+  });
   // The provider's dialog runs in this tab; it comes back to the callback screen, which finishes the attempt.
   const start = useMutation({
     mutationFn: (provider: OAuthProvider) => client.channels.oauthStart({ provider }),
@@ -256,6 +266,26 @@ export function SocialChannelsPage() {
             {isAdmin && oauth.length > 0 && <p className="text-xs text-subtle-foreground">{t('oauthHint')}</p>}
             {start.error && <ErrorText>{errorMessage(start.error)}</ErrorText>}
           </div>
+          {blueskyOn && isAdmin && (
+            <form
+              className="space-y-2 border-t pt-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (bsky.handle.trim() && bsky.appPassword.trim()) connectBluesky.mutate();
+              }}
+            >
+              <p className="text-sm font-medium text-foreground">{providerName('bluesky')}</p>
+              <Label htmlFor="bsky-handle">{t('blueskyHandle')}</Label>
+              <Input id="bsky-handle" value={bsky.handle} autoComplete="off" placeholder="ten.bsky.social" onChange={(e) => setBsky({ ...bsky, handle: e.target.value })} />
+              <Label htmlFor="bsky-password">{t('blueskyAppPassword')}</Label>
+              <Input id="bsky-password" type="password" autoComplete="off" value={bsky.appPassword} placeholder="xxxx-xxxx-xxxx-xxxx" onChange={(e) => setBsky({ ...bsky, appPassword: e.target.value })} />
+              <p className="text-xs text-subtle-foreground">{t('blueskyHint')}</p>
+              <Button type="submit" variant="outline" size="sm" disabled={!bsky.handle.trim() || !bsky.appPassword.trim() || connectBluesky.isPending}>
+                {t('connectWith', { provider: providerName('bluesky') })}
+              </Button>
+              {connectBluesky.error && <ErrorText>{errorMessage(connectBluesky.error)}</ErrorText>}
+            </form>
+          )}
         </Card>
       </div>
     </>
