@@ -9,6 +9,7 @@ export * from './instagram.ts';
 export * from './zalo.ts';
 export * from './bluesky.ts';
 export * from './threads.ts';
+export * from './linkedin.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',

@@ -994,6 +994,8 @@ export const en = {
     policyAdmins: 'Owners and admins set the number of approvers.',
     reviewSteps: 'Approved {given}/{required}',
     reviewYouApproved: 'You approved {channels}; someone else needs to approve too.',
+    expiresOn: 'The connection works until {when}; reconnect before then.',
+    expiresSoon: 'The connection expires {when}: reconnect so scheduled posts still go out.',
     imagesHint: 'JPG, PNG or WEBP. Instagram takes JPG only; Zalo OA needs exactly one image under 1 MB.',
     connectWith: 'Connect {provider}',
     oauthHint: 'Crove opens the platform dialog; pick the Pages to connect and accept the posting permissions.',
