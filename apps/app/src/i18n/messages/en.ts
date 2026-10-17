@@ -856,6 +856,7 @@ export const en = {
       MEDIA_REQUIRED: 'This channel needs at least {limit, number} image or video',
       TOO_MANY_MEDIA: 'This channel allows at most {limit, number} images or videos',
       MEDIA_KIND_NOT_ALLOWED: 'This channel does not take this kind of file',
+      IMAGES_NOT_SUPPORTED_YET: 'Crove posts only video to this channel for now; use one video instead of images',
       PRIVACY_REQUIRED: 'Choose who can see this video on TikTok',
       VIDEO_NOT_SUPPORTED_YET: 'Crove cannot post video to this channel yet; use images or leave the channel out',
       MEDIA_MIX_NOT_ALLOWED: 'This channel does not mix images and video in one post',

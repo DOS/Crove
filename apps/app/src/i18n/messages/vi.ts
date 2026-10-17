@@ -857,6 +857,7 @@ export const vi = {
       MEDIA_REQUIRED: 'Kênh này cần ít nhất {limit, number} ảnh hoặc video',
       TOO_MANY_MEDIA: 'Kênh này cho tối đa {limit, number} ảnh hoặc video',
       MEDIA_KIND_NOT_ALLOWED: 'Kênh này không nhận loại tệp này',
+      IMAGES_NOT_SUPPORTED_YET: 'Crove mới đăng được video lên kênh này; hãy dùng một video thay cho ảnh',
       PRIVACY_REQUIRED: 'Hãy chọn ai được xem video này trên TikTok',
       VIDEO_NOT_SUPPORTED_YET: 'Crove chưa đăng được video lên kênh này; hãy dùng ảnh hoặc bỏ kênh này khỏi bài',
       MEDIA_MIX_NOT_ALLOWED: 'Kênh này không cho vừa ảnh vừa video trong một bài',

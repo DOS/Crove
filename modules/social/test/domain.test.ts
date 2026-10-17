@@ -118,6 +118,9 @@ describe('validateVariant', () => {
     expect(tiktokLong).toEqual(['VIDEO_TOO_LONG', 'PRIVACY_REQUIRED']);
     const tiktokOk = validateVariant({ provider: 'tiktok', body: '', title: null, media: [mp4(30)], settings: { privacyLevel: 'SELF_ONLY' } });
     expect(tiktokOk).toEqual([]);
+    // TikTok's photo mode is not built: images are flagged before they are approved.
+    const tiktokPhoto = validateVariant({ provider: 'tiktok', body: '', title: null, media: [jpeg()], settings: { privacyLevel: 'SELF_ONLY' } }).map((i) => i.code);
+    expect(tiktokPhoto).toEqual(['IMAGES_NOT_SUPPORTED_YET']);
   });
 
   it('says when a channel takes video but its Crove adapter does not post it yet', () => {

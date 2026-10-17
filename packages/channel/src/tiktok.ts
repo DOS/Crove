@@ -73,7 +73,7 @@ class TikTokClient {
     if (!/^[A-Za-z0-9]{8,64}$/.test(app.clientKey)) throw new Error('invalid TikTok client key');
     if (!app.clientSecret) throw new Error('missing TikTok client secret');
     this.app = app;
-    this.fetch = allowlistedFetch(TIKTOK_HOSTS, fetchImpl, 300_000);
+    this.fetch = allowlistedFetch(TIKTOK_HOSTS, fetchImpl, 30_000);
   }
 
   get clientKey(): string {
@@ -117,6 +117,8 @@ class TikTokClient {
     const response = await this.fetch(url, {
       method: 'PUT',
       headers: { 'content-type': type, 'content-range': `bytes ${start}-${end - 1}/${total}` },
+      // One chunk of up to 100 MB; the job waits a little longer (callTimeoutMs), so this abort is the adapter's.
+      signal: AbortSignal.timeout(300_000),
       body: new Blob([new Uint8Array(bytes.subarray(start, end))], { type }),
     });
     if (!response.ok) throw new TikTokError(response.status, null);
@@ -242,6 +244,9 @@ export class TikTokPublisher implements Publisher {
   readonly provider = 'tiktok' as const;
   // Each init opens a new upload; an unclear answer after it is followed through the publish_id.
   readonly publishSafety: RetrySafety = 'never';
+  // Three JSON calls of 30 seconds and one chunk of 300 seconds at most (a video of up to 100 MB is one chunk), within
+  // the job's stale limit; a chunk that runs too long is aborted here and followed by its publish_id.
+  readonly callTimeoutMs = 420_000;
   private readonly client: TikTokClient;
 
   constructor(app: TikTokAppConfig, fetchImpl?: Fetch) {

@@ -124,6 +124,21 @@ describe('TikTokPublisher', () => {
     expect(await new TikTokPublisher(APP, dead.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired' });
   });
 
+  it('keeps the publish_id when the upload is cut off by its own timeout, within the job\'s', async () => {
+    const { fetchImpl } = tiktok({
+      'POST open.tiktokapis.com/v2/post/publish/creator_info/query/': [creator()],
+      'POST open.tiktokapis.com/v2/post/publish/video/init/': [{ body: { data: { publish_id: 'v_pub_file~v2-1.125', upload_url: UPLOAD }, error: ok } }],
+    });
+    const aborting: Fetch = async (input, init) => {
+      if ((init?.method ?? 'GET') === 'PUT') throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      return fetchImpl(input, init);
+    };
+    const publisher = new TikTokPublisher(APP, aborting);
+    expect(publisher.callTimeoutMs).toBeGreaterThan(300_000);
+    expect(publisher.callTimeoutMs).toBeLessThan(600_000);
+    expect(await publisher.publish(input())).toEqual({ kind: 'pending', externalRef: 'v_pub_file~v2-1.125', checkAfterSeconds: 30 });
+  });
+
   it('waits for the status check when the bytes did not all arrive', async () => {
     const { fetchImpl } = tiktok({
       'POST open.tiktokapis.com/v2/post/publish/creator_info/query/': [creator()],
