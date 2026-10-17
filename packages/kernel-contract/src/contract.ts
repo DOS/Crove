@@ -175,7 +175,8 @@ export const contract = {
     },
     variants: {
       update: oc.input(zSocialVariantUpdate).output(z.object({ variantId: zId, revision: z.number().int(), changed: z.boolean() })),
-      decide: oc.input(zSocialDecide).output(z.object({ postId: zId, decision: z.string(), variants: z.array(zId) })),
+      // waiting: variants approved by this reviewer that still need another person's approval (their channel's policy).
+      decide: oc.input(zSocialDecide).output(z.object({ postId: zId, decision: z.string(), variants: z.array(zId), waiting: z.array(zId) })),
       schedule: oc.input(zSocialSchedule).output(z.object({ postId: zId, scheduled: z.array(z.object({ variantId: zId, at: z.string() })) })),
       unschedule: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
       cancel: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
@@ -185,6 +186,13 @@ export const contract = {
       resolve: oc
         .input(z.strictObject({ variantIds: z.array(zId).min(1).max(20), outcome: z.enum(['published', 'dropped']), url: z.url({ protocol: /^https?$/ }).max(2000).nullable().optional() }))
         .output(z.object({ postId: zId, variants: z.array(zId), outcome: z.enum(['published', 'dropped']) })),
+    },
+    // Review policy per channel (S9): how many different people approve a variant before it may be scheduled.
+    policies: {
+      list: oc.input(z.object({})).output(z.array(z.object({ connectionId: zId, approvalsRequired: z.number().int(), updatedBy: zId, updatedAt: z.string() }))),
+      set: oc
+        .input(z.strictObject({ connectionId: zId, approvalsRequired: z.number().int().min(1).max(3) }))
+        .output(z.object({ connectionId: zId, approvalsRequired: z.number().int(), approved: z.array(zId) })),
     },
     queues: {
       get: oc.input(z.object({ connectionId: zId })).output(zSocialQueue),

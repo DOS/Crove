@@ -3,6 +3,7 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
   approvalCovers,
+  approvalsInRound,
   CAPABILITIES,
   contentHash,
   countLinks,
@@ -342,6 +343,20 @@ describe('contentHash and approvalCovers', () => {
     expect(approvalCovers({ revision: 2, contentHash: post.contentHash }, post)).toBe(false);
     expect(approvalCovers({ revision: 3, contentHash: contentHash([other]) }, post)).toBe(false);
     expect(approvalCovers(null, post)).toBe(false);
+  });
+
+  it('counts the approvals of the current content in the open review round, each person once', () => {
+    const cur = { revision: 4, contentHash: contentHash([base]) };
+    const old = contentHash([other]);
+    const d = (decision: string, decidedBy: string, revision = 4, hash = cur.contentHash) => ({ decision, decidedBy, revision, contentHash: hash });
+    // Newest first.
+    expect(approvalsInRound([d('approved', 'b'), d('approved', 'a'), d('approved', 'a')], cur)).toEqual(['b', 'a']);
+    // An approval of another revision or other content never counts.
+    expect(approvalsInRound([d('approved', 'b'), d('approved', 'a', 3), d('approved', 'c', 4, old)], cur)).toEqual(['b']);
+    // A request for changes or a rejection ends the round before it.
+    expect(approvalsInRound([d('approved', 'b'), d('changes_requested', 'c'), d('approved', 'a')], cur)).toEqual(['b']);
+    expect(approvalsInRound([d('rejected', 'c'), d('approved', 'a')], cur)).toEqual([]);
+    expect(approvalsInRound([], cur)).toEqual([]);
   });
 
   it('refuses values JSON would change silently', () => {

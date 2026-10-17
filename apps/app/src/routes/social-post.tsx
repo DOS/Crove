@@ -399,7 +399,12 @@ function sameOwn(a: Own, b: Own): boolean {
 
 function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
   const t = useTranslations('social');
-  const waiting = post.variants.filter((v) => v.status === 'in_review');
+  const me = useQuery(orpc.me.get.queryOptions());
+  const self = me.data?.userId;
+  const inReview = post.variants.filter((v) => v.status === 'in_review');
+  // A channel that needs several approvals waits for another person once this reviewer has approved it.
+  const mine = (v: Variant) => self !== undefined && v.review.approvedBy.includes(self);
+  const waiting = inReview.filter((v) => !mine(v));
   const [unticked, setUnticked] = useState<string[]>([]);
   const picked = waiting.map((v) => v.id).filter((id) => !unticked.includes(id));
   const [comment, setComment] = useState('');
@@ -418,18 +423,33 @@ function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
       onDone();
     },
   });
-  if (waiting.length === 0) return null;
+  if (inReview.length === 0) return null;
+  const done = inReview.filter(mine);
+  if (waiting.length === 0) {
+    return (
+      <Card className="block space-y-2 border-warning/40 p-4">
+        <p className="text-sm font-medium text-foreground">{t('reviewTitle')}</p>
+        <p className="text-xs text-subtle-foreground">{t('reviewYouApproved', { channels: done.map((v) => providerName(v.provider)).join(', ') })}</p>
+      </Card>
+    );
+  }
   return (
     <Card className="block space-y-3 border-warning/40 p-4">
       <p className="text-sm font-medium text-foreground">{t('reviewTitle')}</p>
-      <div className="space-y-1.5">
-        {waiting.map((v) => (
-          <label key={v.id} className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Checkbox checked={picked.includes(v.id)} onCheckedChange={(on) => setUnticked(on === true ? unticked.filter((id) => id !== v.id) : [...unticked, v.id])} />
-            {providerName(v.provider)}
-          </label>
-        ))}
-      </div>
+      {done.length > 0 && <p className="text-xs text-subtle-foreground">{t('reviewYouApproved', { channels: done.map((v) => providerName(v.provider)).join(', ') })}</p>}
+      {waiting.length > 0 && (
+        <div className="space-y-1.5">
+          {waiting.map((v) => (
+            <label key={v.id} className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Checkbox checked={picked.includes(v.id)} onCheckedChange={(on) => setUnticked(on === true ? unticked.filter((id) => id !== v.id) : [...unticked, v.id])} />
+              {providerName(v.provider)}
+              {v.review.required > 1 && (
+                <span className="text-xs text-subtle-foreground tabular-nums">{t('reviewSteps', { given: String(v.review.approvedBy.length), required: String(v.review.required) })}</span>
+              )}
+            </label>
+          ))}
+        </div>
+      )}
       <Textarea value={comment} rows={2} aria-label={t('commentPlaceholder')} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
       {decide.error && <ErrorText>{errorMessage(decide.error)}</ErrorText>}
       <div className="flex flex-wrap gap-2">
@@ -443,7 +463,7 @@ function ReviewPanel({ post, onDone }: { post: Post; onDone: () => void }) {
           {t('reject')}
         </Button>
       </div>
-      {!comment.trim() && <p className="text-xs text-subtle-foreground">{t('changesNeedComment')}</p>}
+      {!comment.trim() && waiting.length > 0 && <p className="text-xs text-subtle-foreground">{t('changesNeedComment')}</p>}
     </Card>
   );
 }
@@ -764,6 +784,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                       <p>{t(v.status === 'published' ? 'publishedAt' : 'goesOutAt', { when: f.dateTime(v.effectiveAt) })}{v.queueSlotAt && v.status !== 'published' ? ` · ${t('fromQueue')}` : ''}</p>
                     )}
                     {decision && decision.comment && ['changes_requested', 'rejected'].includes(v.status) && <p className="text-warning">{t('reviewerSaid', { comment: decision.comment })}</p>}
+                    {v.status === 'in_review' && v.review.required > 1 && <p>{t('reviewSteps', { given: String(v.review.approvedBy.length), required: String(v.review.required) })}</p>}
                     <Outcome variant={v} slug={slug} />
                     {v.externalUrl && (
                       <a href={v.externalUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">

@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { SOCIAL_IMAGE_TYPES, zId } from '@crove/kernel-contract';
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
-import { approvalCovers, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
+import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
 import { isProvider } from './domain/channels.ts';
 import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
@@ -23,6 +23,7 @@ import { publishingCommands } from './publishing.ts';
 import { libraryQueries } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
+import { approvalsRequired, decisionsOf, policyCommands, policyQueries } from './policy.ts';
 import { MOVABLE, POST_COLUMNS, SLOT_FREED, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -365,7 +366,9 @@ const DECISION_EVENT: Record<SocialDecision, VariantEvent> = {
   rejected: { type: 'reject' },
 };
 
-// A reviewer's decision on variants in review, each named with the revision and content hash the reviewer saw.
+// A reviewer's decision on variants in review, each named with the revision and content hash the reviewer saw. A
+// channel may need several approvals (its review policy, S9): each is a different person's approval of the same
+// content, and the variant is approved with the last one; until then it stays in review.
 export const variantDecide = defineCommand({
   name: 'social.variant.decide',
   input: z.strictObject({
@@ -389,12 +392,31 @@ export const variantDecide = defineCommand({
       input.variants.map((x) => x.variantId),
     );
     const seen = new Map(input.variants.map((x) => [x.variantId, x]));
+    const required = await approvalsRequired(
+      ctx.trx,
+      ctx.orgId,
+      chosen.map((v) => v.channel_connection_id),
+    );
+    const decisions = await decisionsOf(
+      ctx.trx,
+      ctx.orgId,
+      chosen.map((v) => v.id),
+    );
+    const waiting: string[] = [];
     for (const v of chosen) {
       const saw = seen.get(v.id);
       if (!saw || saw.revision !== v.revision || saw.contentHash !== v.content_hash) {
         throw new DomainError('STALE_REVISION', 409, 'Nội dung kênh đã đổi sau khi bạn xem, hãy xem lại trước khi duyệt', { variantId: v.id, revision: v.revision });
       }
-      const status = step(v, DECISION_EVENT[input.decision]);
+      let status = step(v, DECISION_EVENT[input.decision]);
+      if (input.decision === 'approved') {
+        const given = approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash });
+        if (given.includes(userId)) throw new DomainError('ALREADY_APPROVED', 409, 'Bạn đã duyệt nội dung này của kênh, cần người khác duyệt tiếp', { variantId: v.id });
+        if (given.length + 1 < (required.get(v.channel_connection_id) ?? 1)) {
+          status = v.status;
+          waiting.push(v.id);
+        }
+      }
       const content = effectiveContent(base(post), overrides(v), v.content_frozen);
       await ctx.trx
         .insertInto('crove_social.post_approval')
@@ -422,9 +444,9 @@ export const variantDecide = defineCommand({
       await setVariant(ctx, v.id, { status });
     }
     await refreshPostStatus(ctx, post.id);
-    ctx.audit({ post_id: post.id, decision: input.decision, variants: chosen.map((v) => v.id) });
-    await ctx.emit('social.variant.decided', { post_id: post.id, decision: input.decision, variant_ids: chosen.map((v) => v.id) });
-    return { postId: post.id, decision: input.decision, variants: chosen.map((v) => v.id) };
+    ctx.audit({ post_id: post.id, decision: input.decision, variants: chosen.map((v) => v.id), waiting });
+    await ctx.emit('social.variant.decided', { post_id: post.id, decision: input.decision, variant_ids: chosen.map((v) => v.id), waiting_variant_ids: waiting });
+    return { postId: post.id, decision: input.decision, variants: chosen.map((v) => v.id), waiting };
   },
 });
 
@@ -711,6 +733,8 @@ export interface VariantView {
   error: { kind: string | null; code: string | null; action: string | null; message: string | null; retryAt: string | null } | null;
   issues: Issue[];
   latestDecision: { decision: SocialDecision; comment: string | null; decidedBy: string; at: string; revision: number; current: boolean } | null;
+  // The approvals its channel needs (S9) and who approved its current content in the open review round.
+  review: { required: number; approvedBy: string[] };
 }
 
 export interface MediaView {
@@ -772,6 +796,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
     : [];
   const latest = new Map<string, (typeof decisions)[number]>();
   for (const d of decisions) if (!latest.has(d.variant_id)) latest.set(d.variant_id, d);
+  const required = await approvalsRequired(ctx.trx, ctx.orgId, [...new Set(variants.map((v) => v.channel_connection_id))]);
   const mediaRows = await ctx.trx
     .selectFrom('crove_social.post_media as m')
     .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
@@ -836,6 +861,13 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               latestDecision: d
                 ? { decision: d.decision, comment: d.comment, decidedBy: d.decided_by, at: iso(d.created_at) ?? '', revision: d.revision, current: d.revision === v.revision && d.content_hash === v.content_hash }
                 : null,
+              review: {
+                required: required.get(v.channel_connection_id) ?? 1,
+                approvedBy: approvalsInRound(
+                  decisions.filter((x) => x.variant_id === v.id).map((x) => ({ decision: x.decision, decidedBy: x.decided_by, revision: x.revision, contentHash: x.content_hash })),
+                  { revision: v.revision, contentHash: v.content_hash },
+                ),
+              },
             };
           }),
       };
@@ -942,6 +974,7 @@ export const socialCommands = [
   ...publishingCommands,
   ...metricsCommands,
   ...evergreenCommands,
+  ...policyCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
 // org shows, so the job never reads another kind of file through it.
@@ -973,4 +1006,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries];

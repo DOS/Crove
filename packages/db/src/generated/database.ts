@@ -51,6 +51,7 @@ export interface CroveKernelSchema {
 }
 
 export interface CroveSocialSchema {
+  'crove_social.channel_policy': SocialChannelPolicyTable;
   'crove_social.metric_snapshot': SocialMetricSnapshotTable;
   'crove_social.post': SocialPostTable;
   'crove_social.post_approval': SocialPostApprovalTable;
@@ -526,6 +527,16 @@ export interface KernelTenantTable {
   base_currency: Generated<string>;
   created_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.channel_policy */
+export interface SocialChannelPolicyTable {
+  org_id: string;
+  id: Generated<string>;
+  channel_connection_id: string;
+  approvals_required: Generated<number>;
+  updated_by: string;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_social.metric_snapshot */
