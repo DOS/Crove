@@ -254,6 +254,8 @@ export function createHttpApp(deps: HttpDeps) {
       uploads: store.direct ? 'presigned' : 'direct',
       inboundEnabled: Boolean(config.INBOUND_DOMAIN && config.INBOUND_SECRET),
       mailEnabled: deps.mailer?.enabled ?? false,
+      // The shell's feedback and support link (SUPPORT_URL, issue #310); null hides it.
+      supportUrl: config.SUPPORT_URL ?? null,
       // The SPA shows the menus of these modules only (plan Decision 12).
       modules: runtime.modules(),
       // The app subscribes to /api/stream and polls only while it is down (issue #69).

@@ -4,6 +4,7 @@ import { Link, Outlet, useNavigate, useParams } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { SupportLink } from '../components/support-link.tsx';
 import { Logo, OrgLeftNotice } from '../components/ui.tsx';
 import { LocaleSwitcher } from '../i18n/provider.tsx';
 import { orpc } from '../lib/api.ts';
@@ -80,6 +81,7 @@ export function OrgLayout() {
           ))}
         </nav>
         <div className="mt-auto border-t px-2 pt-3 text-xs text-subtle-foreground">
+          <SupportLink className="mb-2 block text-sm text-link" />
           <p className="truncate">{me.data?.email}</p>
           <div className="mt-1 flex items-center justify-between gap-2">
             <button className="hover:text-muted-foreground" onClick={() => void signOut()}>
@@ -92,6 +94,7 @@ export function OrgLayout() {
       <div className="min-w-0 flex-1">
         <header className="flex items-center justify-between border-b bg-sidebar px-4 py-3 md:hidden">
           <Logo />
+          <SupportLink className="text-xs text-link" />
           <LocaleSwitcher />
           <NativeSelect
             size="sm"

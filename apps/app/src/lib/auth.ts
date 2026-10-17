@@ -15,6 +15,8 @@ export interface PublicConfig {
   uploads?: 'presigned' | 'direct';
   // The kernel serves /api/stream (issue #69); without it the screens poll.
   stream?: boolean;
+  // The feedback and support link (SUPPORT_URL, issue #310): https: or mailto:, null when the deployment has none.
+  supportUrl?: string | null;
 }
 
 let config: PublicConfig | null = null;

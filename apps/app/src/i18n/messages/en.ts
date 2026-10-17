@@ -36,6 +36,7 @@ export const en = {
     tasks: 'Tasks',
     settings: 'Settings',
     notMember: 'You are not a member of this organization.',
+    support: 'Feedback / Support',
   },
   auth: {
     login: 'Sign in',
@@ -177,6 +178,7 @@ export const en = {
     emptyPending: 'No proposals waiting for approval',
     emptyPendingHint: 'Upload an invoice to get started.',
     emptyOther: 'Nothing here yet',
+    guideLink: 'Read the quick guide: upload, approve, export (in Vietnamese)',
     columns: {
       document: 'Document',
       issueDate: 'Invoice date',
@@ -272,6 +274,11 @@ export const en = {
     documentWillVoid:
       'On approval, Crove voids this document in its own books so the invoice can be posted again with the right accounts (read the file again in the inbox). This corrects the books of Crove only; the e-invoice of the seller is not changed.',
     viewInJournal: 'View in the journal',
+  },
+  guide: {
+    title: 'Quick guide',
+    subtitle: 'Three steps to record purchase invoices: upload, approve and export to Excel. The guide is in Vietnamese.',
+    supportHint: 'Found a problem or need help? Tell us through',
   },
   invite: {
     noInviteTitle: 'No invitation',

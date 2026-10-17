@@ -34,6 +34,7 @@ export const vi = {
     tasks: 'Công việc',
     settings: 'Cài đặt',
     notMember: 'Bạn không thuộc tổ chức này.',
+    support: 'Góp ý / Hỗ trợ',
   },
   auth: {
     login: 'Đăng nhập',
@@ -175,6 +176,7 @@ export const vi = {
     emptyPending: 'Không có đề xuất nào chờ duyệt',
     emptyPendingHint: 'Tải hóa đơn lên để bắt đầu.',
     emptyOther: 'Chưa có mục nào',
+    guideLink: 'Xem hướng dẫn nhanh: tải lên, duyệt, xuất Excel',
     columns: {
       document: 'Chứng từ',
       issueDate: 'Ngày HĐ',
@@ -269,6 +271,11 @@ export const vi = {
     documentWillVoid:
       'Khi duyệt, Crove hủy chứng từ này trong sổ của mình để có thể ghi sổ lại hóa đơn với tài khoản đúng (đọc lại tệp trong Hộp thư). Đây chỉ là chỉnh sửa sổ sách của Crove; hóa đơn điện tử của người bán không thay đổi.',
     viewInJournal: 'Xem trong sổ bút toán',
+  },
+  guide: {
+    title: 'Hướng dẫn nhanh',
+    subtitle: 'Ba bước để ghi sổ hóa đơn đầu vào: tải lên, duyệt và xuất Excel.',
+    supportHint: 'Gặp lỗi hoặc cần hỗ trợ? Gửi cho chúng tôi qua',
   },
   invite: {
     noInviteTitle: 'Không có lời mời',

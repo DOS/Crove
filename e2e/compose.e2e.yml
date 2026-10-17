@@ -16,3 +16,5 @@ services:
       AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS: '0'
       INBOUND_DOMAIN: in.e2e.test
       INBOUND_SECRET: e2e-only-inbound-secret-0123456789abcdef
+      # The shell's feedback and support link (#310).
+      SUPPORT_URL: mailto:support@e2e.test
