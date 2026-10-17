@@ -39,7 +39,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>(['crove_kernel.oauth_state']);
+const PENDING_TABLES = new Set<string>(['crove_kernel.oauth_state', 'crove_finance.org_account']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -381,6 +381,12 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         complete: [line(entry, 1, '6422', '100', '0'), line(entry, 2, '331', '0', '100'), line(reversal, 1, '6422', '0', '100'), line(reversal, 2, '331', '100', '0')],
       };
     },
+  },
+  // An org's sub-accounts under the TT133 chart (#319): one row per (org, code), never deleted. The code extends its
+  // parent's (here 6422.<tag>); a trigger fills root_code. Tenant roles update only name, active and updated_by (a
+  // column grant), so the update probes assign name to itself.
+  'crove_finance.org_account': {
+    make: (o) => ({ row: { org_id: o.id, code: `6422.${tag().toUpperCase()}`, name: 'RLS matrix sub-account', parent_code: '6422' } }),
   },
   'crove_finance.vendor_account_rule': {
     make: (o) => {
