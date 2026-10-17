@@ -291,6 +291,10 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       metrics: {
         summary: os.social.metrics.summary.handler(socialQuery('social.metrics.summary')),
       },
+      media: {
+        list: os.social.media.list.handler(socialQuery('social.media.list')),
+        usage: os.social.media.usage.handler(socialQuery('social.media.usage')),
+      },
       queues: {
         get: os.social.queues.get.handler(socialQuery('social.queue.get')),
         set: os.social.queues.set.handler(socialCommand('social.queue.set')),

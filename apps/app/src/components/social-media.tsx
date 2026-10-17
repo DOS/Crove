@@ -1,13 +1,13 @@
 // Images of a Social post (#372): pick, reorder and remove them, and show them in the channel previews. Files are
 // uploaded with purpose=social, so they are stored like documents but never read as invoices.
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { SOCIAL_IMAGE_TYPES } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { cn } from '@crove/ui/lib/utils';
-import { errorMessage, fetchFile, uploadFiles } from '../lib/api.ts';
+import { client, errorMessage, fetchFile, queryClient, uploadFiles } from '../lib/api.ts';
 import { ErrorText, Spinner } from './ui.tsx';
 
 export interface MediaItem {
@@ -18,6 +18,75 @@ export interface MediaItem {
 }
 
 export const MAX_POST_MEDIA = 20;
+
+export type LibraryItem = Awaited<ReturnType<typeof client.social.media.list>>['items'][number];
+
+// The org's library (S9), page by page, newest first; search matches the file name.
+export function useLibrary(search: string, enabled = true) {
+  const term = search.trim();
+  return useInfiniteQuery({
+    queryKey: ['social-library', term],
+    queryFn: ({ pageParam }) => client.social.media.list({ ...(term ? { search: term } : {}), ...(pageParam ? { before: pageParam } : {}) }),
+    initialPageParam: null as { createdAt: string; fileId: string } | null,
+    getNextPageParam: (page) => {
+      const last = page.items.at(-1);
+      return page.more && last ? { createdAt: last.createdAt, fileId: last.fileId } : null;
+    },
+    placeholderData: keepPreviousData,
+    enabled,
+  });
+}
+
+export const sizeLabel = (bytes: number) => (bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
+
+// Images from the library to add to a post: a click adds one, a second click takes it out again.
+function LibraryPicker({ media, onChange }: { media: MediaItem[]; onChange: (media: MediaItem[]) => void }) {
+  const t = useTranslations('social');
+  const [search, setSearch] = useState('');
+  const library = useLibrary(search);
+  const items = library.data?.pages.flatMap((p) => p.items) ?? [];
+  const chosen = new Set(media.map((m) => m.fileId));
+  const toggle = (item: LibraryItem) =>
+    onChange(chosen.has(item.fileId) ? media.filter((m) => m.fileId !== item.fileId) : media.length >= MAX_POST_MEDIA ? media : [...media, { fileId: item.fileId, altText: '', mime: item.mime, sizeBytes: item.sizeBytes }]);
+  return (
+    <div className="space-y-3 rounded-xl border bg-muted/40 p-3">
+      <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('librarySearch')} aria-label={t('librarySearch')} className="h-8 max-w-xs text-sm" />
+      {library.isLoading ? (
+        <Spinner />
+      ) : library.error ? (
+        <ErrorText>{errorMessage(library.error)}</ErrorText>
+      ) : items.length === 0 ? (
+        <p className="text-xs text-subtle-foreground">{search.trim() ? t('libraryNoMatch') : t('libraryEmpty')}</p>
+      ) : (
+        <ul className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+          {items.map((item) => (
+            <li key={item.fileId}>
+              <button
+                type="button"
+                aria-pressed={chosen.has(item.fileId)}
+                title={item.filename}
+                disabled={!chosen.has(item.fileId) && media.length >= MAX_POST_MEDIA}
+                onClick={() => toggle(item)}
+                className={cn(
+                  'block w-full rounded-lg ring-offset-2 ring-offset-background focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50',
+                  chosen.has(item.fileId) && 'ring-2 ring-primary',
+                )}
+              >
+                <Thumb fileId={item.fileId} alt={item.filename} className="aspect-square" />
+                <span className="sr-only">{t(chosen.has(item.fileId) ? 'libraryChosen' : 'libraryChoose', { name: item.filename })}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {library.hasNextPage && (
+        <Button variant="ghost" size="sm" disabled={library.isFetchingNextPage} onClick={() => void library.fetchNextPage()}>
+          {t('libraryMore')}
+        </Button>
+      )}
+    </div>
+  );
+}
 
 // A stored image, fetched once per file while it is shown (the bytes of a file id never change). Each thumbnail makes
 // its own object URL and revokes it when it goes away.
@@ -64,6 +133,7 @@ export function MediaPreview({ media }: { media: readonly MediaItem[] }) {
 export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; onChange: (media: MediaItem[]) => void; disabled: boolean }) {
   const t = useTranslations('social');
   const picker = useRef<HTMLInputElement>(null);
+  const [browsing, setBrowsing] = useState(false);
   const upload = useMutation({
     mutationFn: async (files: File[]) => {
       const room = MAX_POST_MEDIA - media.length;
@@ -71,7 +141,10 @@ export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; 
       const { files: stored } = await uploadFiles(chosen, 'social');
       return stored.map((s, i) => ({ fileId: s.fileId, altText: '', mime: chosen[i]?.type ?? '', sizeBytes: chosen[i]?.size ?? 0 }));
     },
-    onSuccess: (added) => onChange([...media, ...added.filter((a) => !media.some((m) => m.fileId === a.fileId))]),
+    onSuccess: (added) => {
+      onChange([...media, ...added.filter((a) => !media.some((m) => m.fileId === a.fileId))]);
+      void queryClient.invalidateQueries({ queryKey: ['social-library'] });
+    },
   });
   const move = (i: number, by: number) => {
     const next = [...media];
@@ -132,6 +205,10 @@ export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; 
         {upload.isPending ? <Spinner className="text-current" /> : null}
         {t('addImages')}
       </Button>
+      <Button variant="ghost" size="sm" disabled={disabled} aria-expanded={browsing} onClick={() => setBrowsing(!browsing)}>
+        {t(browsing ? 'libraryClose' : 'libraryOpen')}
+      </Button>
+      {browsing && !disabled && <LibraryPicker media={media} onChange={onChange} />}
       <p className="text-xs text-subtle-foreground">{t('imagesHint')}</p>
       {upload.error && <ErrorText>{errorMessage(upload.error)}</ErrorText>}
     </div>

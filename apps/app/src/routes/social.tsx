@@ -1,20 +1,24 @@
 // Crove Social home: what goes out next (an agenda by day), what waits for review, drafts, and what went out.
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { Input } from '@crove/ui/components/input';
+import { SOCIAL_IMAGE_TYPES } from '@crove/kernel-contract';
+import { cn } from '@crove/ui/lib/utils';
+import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { errorMessage, orpc } from '../lib/api.ts';
+import { errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { dayKey, providerName, VARIANT_TONE } from '../lib/social.ts';
 import { pollEvery, SAFETY_POLL_MS, useStreamLive } from '../lib/stream-hook.ts';
 
-type Tab = 'upcoming' | 'review' | 'drafts' | 'done' | 'metrics';
-const TABS: Tab[] = ['upcoming', 'review', 'drafts', 'done', 'metrics'];
+type Tab = 'upcoming' | 'review' | 'drafts' | 'done' | 'metrics' | 'library';
+const TABS: Tab[] = ['upcoming', 'review', 'drafts', 'done', 'metrics', 'library'];
 // The counts the analytics table shows, in order; a platform that does not report one shows a dash.
 const METRIC_COLUMNS = ['reach', 'reactions', 'comments', 'shares'] as const;
 const DAY = 86_400_000;
@@ -134,6 +138,117 @@ function Metrics({ slug, names }: { slug: string; names: Map<string, string> }) 
   );
 }
 
+// The posts that show an image.
+function Usage({ fileId, slug }: { fileId: string; slug: string }) {
+  const t = useTranslations('social');
+  const f = useFormat();
+  const usage = useQuery(orpc.social.media.usage.queryOptions({ input: { fileId } }));
+  if (usage.isLoading) return <Spinner />;
+  if (usage.error) return <ErrorText>{errorMessage(usage.error)}</ErrorText>;
+  if ((usage.data ?? []).length === 0) return <p className="text-xs text-subtle-foreground">{t('libraryUsageNone')}</p>;
+  return (
+    <ul className="space-y-2">
+      {(usage.data ?? []).map((u) => (
+        <li key={u.postId}>
+          <Link to="/o/$slug/social/$id" params={{ slug, id: u.postId }} className="block rounded-lg border px-3 py-2 text-sm hover:border-ring/60">
+            <span className="line-clamp-2 [overflow-wrap:anywhere] text-foreground">{u.excerpt || t('emptyText')}</span>
+            <span className="text-xs text-subtle-foreground">{f.dateTime(u.updatedAt)}</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// The media library (S9): the org's post images, searchable by name, each with the posts that show it.
+function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
+  const t = useTranslations('social');
+  const f = useFormat();
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState<LibraryItem | null>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const library = useLibrary(search);
+  const upload = useMutation({ mutationFn: (files: File[]) => uploadFiles(files, 'social'), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['social-library'] }) });
+  const items = library.data?.pages.flatMap((p) => p.items) ?? [];
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('librarySearch')} aria-label={t('librarySearch')} className="max-w-xs" />
+        {canWrite && (
+          <>
+            <input
+              ref={picker}
+              type="file"
+              multiple
+              accept={SOCIAL_IMAGE_TYPES.join(',')}
+              className="hidden"
+              onChange={(e) => {
+                const files = [...(e.target.files ?? [])];
+                e.target.value = '';
+                if (files.length > 0) upload.mutate(files);
+              }}
+            />
+            <Button variant="outline" disabled={upload.isPending} onClick={() => picker.current?.click()}>
+              {upload.isPending ? <Spinner className="text-current" /> : null}
+              {t('libraryUpload')}
+            </Button>
+          </>
+        )}
+      </div>
+      <p className="text-xs text-subtle-foreground">{t('libraryHint')}</p>
+      {upload.error && <ErrorText>{errorMessage(upload.error)}</ErrorText>}
+      {library.isLoading ? (
+        <Spinner />
+      ) : library.error ? (
+        <ErrorText>{errorMessage(library.error)}</ErrorText>
+      ) : items.length === 0 ? (
+        <Empty title={search.trim() ? t('libraryNoMatch') : t('libraryEmpty')} />
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-5">
+            {items.map((item) => (
+              <li key={item.fileId}>
+                <button
+                  type="button"
+                  aria-pressed={open?.fileId === item.fileId}
+                  onClick={() => setOpen(open?.fileId === item.fileId ? null : item)}
+                  className={cn(
+                    'block w-full space-y-1.5 rounded-xl border bg-card p-2 text-left transition-colors hover:border-ring/60 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
+                    open?.fileId === item.fileId && 'border-primary/60',
+                  )}
+                >
+                  <Thumb fileId={item.fileId} alt={item.filename} className="aspect-square" />
+                  <span className="block truncate text-xs text-foreground" title={item.filename}>
+                    {item.filename}
+                  </span>
+                  <span className="block text-xs text-subtle-foreground tabular-nums">
+                    {sizeLabel(item.sizeBytes)} · {item.usedIn > 0 ? t('libraryUsedIn', { count: String(item.usedIn) }) : t('libraryUnused')}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {open && (
+            <Card className="block h-fit space-y-3 p-4">
+              <Thumb fileId={open.fileId} alt={open.filename} className="aspect-[4/3]" />
+              <p className="text-sm font-medium [overflow-wrap:anywhere] text-foreground">{open.filename}</p>
+              <p className="text-xs text-subtle-foreground">{f.dateTime(open.createdAt)}</p>
+              <p className="text-xs font-medium tracking-wide text-subtle-foreground uppercase">{t('libraryUsageTitle')}</p>
+              <Usage fileId={open.fileId} slug={slug} />
+
+            </Card>
+          )}
+        </div>
+      )}
+      {library.hasNextPage && (
+        <Button variant="ghost" size="sm" disabled={library.isFetchingNextPage} onClick={() => void library.fetchNextPage()}>
+          {t('libraryMore')}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function Agenda({ posts, slug, names }: { posts: Post[]; slug: string; names: Map<string, string> }) {
   const t = useTranslations('social');
   const f = useFormat();
@@ -201,7 +316,7 @@ export function SocialPage() {
   const names = new Map((channels.data ?? []).map((c) => [c.id, c.displayName]));
   const noChannels = channels.isSuccess && channels.data.length === 0;
 
-  const lists: Record<Exclude<Tab, 'upcoming' | 'metrics'>, Post[]> = {
+  const lists: Record<Exclude<Tab, 'upcoming' | 'metrics' | 'library'>, Post[]> = {
     review: (all.data ?? []).filter((p) => p.variants.some((v) => v.status === 'in_review')),
     drafts: (all.data ?? []).filter((p) => p.status === 'draft' && !p.variants.some((v) => v.status === 'in_review')),
     done: (all.data ?? []).filter((p) => ['published', 'partially_published', 'failed', 'publishing', 'cancelled'].includes(p.status)),
@@ -256,6 +371,7 @@ export function SocialPage() {
         <TabsContent value="metrics">
           <Metrics slug={slug} names={names} />
         </TabsContent>
+        <TabsContent value="library">{tab === 'library' && <Library slug={slug} canWrite={canWrite} />}</TabsContent>
         {(['review', 'drafts', 'done'] as const).map((id) => (
           <TabsContent key={id} value={id}>
             {all.isLoading ? (

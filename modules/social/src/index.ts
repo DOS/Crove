@@ -9,3 +9,4 @@ export * from './publishing.ts';
 export * from './publisher.ts';
 export * from './metrics.ts';
 export * from './evergreen.ts';
+export * from './library.ts';

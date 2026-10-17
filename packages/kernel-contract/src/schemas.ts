@@ -675,6 +675,10 @@ export const zSocialPost = z.object({
 });
 
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
+// A media library item (S9): an image of the org uploaded for posts, and how many posts show it.
+export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), createdAt: z.string(), usedIn: z.number().int() });
+export const zSocialLibraryUse = z.object({ postId: zId, status: z.string(), excerpt: z.string(), updatedAt: z.string() });
+
 export const zSocialMetricsRow = z.object({
   variantId: zId,
   postId: zId,
