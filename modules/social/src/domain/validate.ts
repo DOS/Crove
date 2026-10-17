@@ -3,6 +3,9 @@
 // rule is flagged, never silently cut.
 import { CAPABILITIES, VIDEO_READY, countLinks, countText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 
+// TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
+export const TIKTOK_PRIVACY: readonly string[] = ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'];
+
 export interface MediaItem {
   kind: MediaKind;
   mime: string;
@@ -15,6 +18,8 @@ export interface VariantDraft {
   body: string;
   title: string | null;
   media: readonly MediaItem[];
+  // The variant's provider settings (privacy level and the like); absent is none.
+  settings?: Readonly<Record<string, unknown>>;
 }
 
 export type IssueCode =
@@ -35,6 +40,8 @@ export type IssueCode =
   | 'VIDEO_TOO_LONG'
   // The platform takes video, Crove's adapter for it does not yet.
   | 'VIDEO_NOT_SUPPORTED_YET'
+  // TikTok: the person posting picks who sees the video; there is no default.
+  | 'PRIVACY_REQUIRED'
   | 'TOO_MANY_LINKS';
 
 export interface Issue {
@@ -97,6 +104,9 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
     }
   });
 
+  if (variant.provider === 'tiktok' && !TIKTOK_PRIVACY.includes(String(variant.settings?.privacyLevel ?? ''))) {
+    issues.push({ code: 'PRIVACY_REQUIRED', field: 'settings.privacyLevel', limit: null, actual: null });
+  }
   if (caps.maxLinks !== null) {
     const links = countLinks(variant.body);
     if (links > caps.maxLinks) issues.push({ code: 'TOO_MANY_LINKS', field: 'body', limit: caps.maxLinks, actual: links });

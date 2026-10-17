@@ -120,7 +120,7 @@ suite('social video posts on PostgreSQL (S9)', () => {
     const long = await video(o, 601_000);
     const tiktok = await connection(o, 'tiktok');
     const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: '', media: [{ fileId: long }], channels: [{ connectionId: tiktok }] });
-    expect((await get(o, postId)).variants[0]?.issues.map((i) => i.code)).toEqual(['VIDEO_NOT_SUPPORTED_YET', 'VIDEO_TOO_LONG']);
+    expect((await get(o, postId)).variants[0]?.issues.map((i) => i.code)).toEqual(['VIDEO_TOO_LONG', 'PRIVACY_REQUIRED']);
   });
 
   it('lists videos in the library with their duration', async () => {
