@@ -1,5 +1,5 @@
 // Crove kernel entry point. One image, several roles:
-//   migrate      apply SQL migrations, set role passwords, create the job schema
+//   migrate      apply SQL migrations (the job schema included) and set role passwords
 //   auth-grants  after Supabase Auth has started: let the session check read auth.sessions, auth.users and
 //                auth.mfa_factors (user_id, status)
 //   api          HTTP API + web UI
@@ -18,7 +18,6 @@ import { runPilotCheck } from './pilot-check.ts';
 import { runProber } from './prober.ts';
 import { describeStorage } from './storage.ts';
 import { runUsageReport } from './usage-report.ts';
-import { migrateJobs } from './worker.ts';
 
 type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | 'pilot-check' | ServerRole;
 const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report', 'pilot-check'];
@@ -34,7 +33,6 @@ async function runMigrate(config: Config) {
     crove_reporter: config.CROVE_REPORTER_DB_PASSWORD,
     supabase_auth_admin: config.AUTH_DB_PASSWORD,
   });
-  await migrateJobs(adminUrl);
   console.log(`[migrate] done, ${applied.length} new migration(s)`);
 }
 

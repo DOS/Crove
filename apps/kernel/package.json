@@ -10,7 +10,8 @@
     "start": "node src/main.ts all",
     "migrate": "node --env-file-if-exists=../../.env src/main.ts migrate",
     "auth-grants": "node --env-file-if-exists=../../.env src/main.ts auth-grants",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "vendor:pgboss": "node src/vendor-pgboss.ts"
   },
   "dependencies": {
     "@crove/agent": "workspace:*",

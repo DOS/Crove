@@ -23,6 +23,7 @@
     "docs:check": "node tools/docs-check.mjs",
     "db:migrate": "pnpm --filter @crove/db migrate",
     "db:types": "node tools/db-types.mjs",
+    "db:vendor:pgboss": "pnpm --filter @crove/kernel-server vendor:pgboss",
     "db:auth-grants": "pnpm --filter @crove/kernel-server auth-grants",
     "alert:test": "node --env-file-if-exists=.env apps/kernel/src/main.ts prober --test-alert",
     "usage:report": "node --env-file-if-exists=.env apps/kernel/src/main.ts usage-report",

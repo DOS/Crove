@@ -17,7 +17,7 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 import type { AuthUser } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
-import { migrateJobs, startWorker } from '../src/worker.ts';
+import { startWorker } from '../src/worker.ts';
 import { startExtractService } from './extract-service.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -248,12 +248,7 @@ suite('inbound address rotation on PostgreSQL', () => {
     }
   };
   // Starts the real worker, runs fn, stops it. The job schema is installed once.
-  let jobsReady = false;
   async function withWorker(fn: () => Promise<void>) {
-    if (!jobsReady) {
-      await migrateJobs(adminUrl);
-      jobsReady = true;
-    }
     const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: null, extract, inboundDomain: 'in.test' });
     try {
       await fn();
