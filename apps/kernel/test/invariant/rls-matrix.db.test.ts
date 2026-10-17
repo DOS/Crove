@@ -288,7 +288,10 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_social.channel_policy': {
     make: (o) => {
       const connection = channelConnectionRow(o);
-      return { setup: [{ table: 'crove_kernel.channel_connection', values: connection }], row: { org_id: o.id, channel_connection_id: connection.id, approvals_required: 2, updated_by: o.owner } };
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, channel_connection_id: connection.id, approvals_required: 2, updated_by: o.owner },
+      };
     },
   },
   // Append-only review decisions: tenant roles may only read and insert.
