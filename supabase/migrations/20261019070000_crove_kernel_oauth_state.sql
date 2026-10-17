@@ -29,6 +29,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS oauth_state_hash_uq ON crove_kernel.oauth_stat
 CREATE INDEX IF NOT EXISTS oauth_state_open_idx ON crove_kernel.oauth_state (org_id, user_id) WHERE consumed_at IS NULL;
 ALTER TABLE crove_kernel.oauth_state ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON crove_kernel.oauth_state FROM PUBLIC, crove_tenant, crove_app, crove_worker;
+-- Definer-only tables skip apply_tenant_rls, which installs the agent write guard (#285) on tenant tables; an agent
+-- context never starts or finishes a connect.
+SELECT crove_kernel.agent_write_guard_install('crove_kernel.oauth_state');
 
 -- Starts a connect attempt for the member and org in context; returns its id. Raises NO_CONTEXT (42501) without a
 -- user context, OAUTH_FORBIDDEN (42501) for anyone but an owner or admin of the org, OAUTH_INVALID (22023) for a
