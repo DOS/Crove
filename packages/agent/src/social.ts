@@ -119,7 +119,11 @@ export class SocialWriter {
     const keys = new Set(request.channels.map((c) => c.key));
     const seen = new Set<string>();
     const variants = output.variants
-      .filter((v) => keys.has(v.key) && !seen.has(v.key) && seen.add(v.key))
+      .filter((v) => {
+        if (!keys.has(v.key) || seen.has(v.key)) return false;
+        seen.add(v.key);
+        return true;
+      })
       .map((v) => ({ key: v.key, body: v.body?.trim() ? v.body.trim().slice(0, MAX_BODY) : null, title: v.title?.trim() ? v.title.trim().slice(0, MAX_TITLE) : null }))
       .filter((v) => v.body !== null || v.title !== null);
     return { body: output.body.trim().slice(0, MAX_BODY), title: output.title?.trim() ? output.title.trim().slice(0, MAX_TITLE) : null, variants };
