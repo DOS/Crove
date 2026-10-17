@@ -12,7 +12,8 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { BlobNotFoundError, LocalDiskStore, inboundKey, newInboundBlobId, sha256Hex } from '@crove/kernel-runtime';
 import { INBOUND_BLOB_MAX_AGE_DAYS, sweepInboundBlobs } from '../src/retention.ts';
-import { QUEUES, migrateJobs } from '../src/worker.ts';
+import { QUEUES } from '../src/jobs-schema.ts';
+import { migrateJobs } from '../src/worker.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));

@@ -17,7 +17,7 @@ import { extractAndPropose, financeCommands, financeQueries, recordExtractionFai
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { processInboundEmail } from '../src/inbound.ts';
-import { migrateJobs, startWorker } from '../src/worker.ts';
+import { startWorker } from '../src/worker.ts';
 import { startExtractService } from './extract-service.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -559,9 +559,8 @@ suite('kernel on PostgreSQL', () => {
     await withAdmin((admin) => admin.query(`DELETE FROM crove_kernel.inbound_pending WHERE size_bytes = 1`));
     expect(await pending()).toBe(1);
 
-    await migrateJobs(adminUrl);
-    // pg-boss functions are SECURITY INVOKER, which is why the hardening guard skips them; a rerun of the
-    // runner (and its guard) passes with the job schema installed.
+    // pg-boss functions (from the vendored crove_jobs migration) are SECURITY INVOKER, which is why the hardening
+    // guard skips them; a rerun of the runner (and its guard) passes with the job schema installed.
     await withAdmin(async (admin) => {
       const { rows } = await admin.query<{ total: number; definers: number }>(
         `SELECT count(*)::int AS total, count(*) FILTER (WHERE prosecdef)::int AS definers FROM pg_proc WHERE pronamespace = 'crove_jobs'::regnamespace`,

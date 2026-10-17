@@ -11,25 +11,11 @@ import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { ExportSealer } from './export-seal.ts';
+import { JOB_SCHEMA, QUEUES } from './jobs-schema.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
 import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 
-export const JOB_SCHEMA = 'crove_jobs';
-export const QUEUES = {
-  extract: 'finance-file-extract',
-  inbound: 'kernel-inbound-email',
-  signOut: 'kernel-session-signout',
-  orgExport: 'kernel-org-export',
-  retention: 'kernel-retention-purge',
-  agentDispatch: 'kernel-agent-dispatch',
-  agentWake: 'kernel-agent-wake',
-  agentSweep: 'kernel-agent-sweep',
-} as const;
-// Queue options by queue. kernel-agent-wake is 'stately' with the singleton key <org>:<agent>: at most one queued and
-// one active job per agent, so wake-ups coalesce and an agent runs once at a time (ADR-0029 section 5; the database
-// also allows one running ai_run per agent).
-const QUEUE_OPTIONS: Partial<Record<(typeof QUEUES)[keyof typeof QUEUES], { policy: 'stately' }>> = { [QUEUES.agentWake]: { policy: 'stately' } };
 const AGENT_RETRY_LIMIT = 3;
 // Every 10 minutes the worker wakes agents whose wake-up is still pending and that can run now
 // (crove_kernel.agent_wakeups_due): a run refused earlier by the daily cap, a kill switch or a budget that has since
@@ -397,24 +383,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   };
 }
 
-// Creates the pg-boss schema and queues with an admin connection, then grants the worker role.
-export async function migrateJobs(adminUrl: string): Promise<void> {
-  const boss = new PgBoss({ connectionString: adminUrl, schema: JOB_SCHEMA, migrate: true, supervise: false, schedule: false });
-  boss.on('error', (error) => console.error('[pg-boss migrate]', error));
-  await boss.start();
-  for (const queue of Object.values(QUEUES)) await boss.createQueue(queue, QUEUE_OPTIONS[queue] ?? {});
-  await boss.stop({ graceful: false });
-  const client = new pg.Client({ connectionString: adminUrl, application_name: 'crove-migrate' });
-  await client.connect();
-  try {
-    await client.query(`
-      GRANT USAGE ON SCHEMA ${JOB_SCHEMA} TO crove_worker;
-      GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${JOB_SCHEMA} TO crove_worker;
-      GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${JOB_SCHEMA} TO crove_worker;
-      GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${JOB_SCHEMA} TO crove_worker;
-      ALTER DEFAULT PRIVILEGES IN SCHEMA ${JOB_SCHEMA} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO crove_worker;
-    `);
-  } finally {
-    await client.end();
-  }
-}
+// Kept only because the invariant suite on main still calls it, and protected.yml runs main's copy of that suite
+// against this code. The schema now comes from the vendored migration (#25), so this does nothing; delete it
+// together with those calls once they are gone from main.
+export async function migrateJobs(_adminUrl: string): Promise<void> {}

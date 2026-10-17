@@ -13,7 +13,8 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { EXIT, evaluateHealth, probeOnce, readHealth, runProber, type ProberConfig } from '../src/prober.ts';
-import { JOB_SCHEMA, QUEUES, beat, migrateJobs } from '../src/worker.ts';
+import { JOB_SCHEMA, QUEUES } from '../src/jobs-schema.ts';
+import { beat } from '../src/worker.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -105,26 +106,40 @@ suite('prober on PostgreSQL', () => {
     await root.end();
   });
 
-  it('reports a missing job schema and a missing heartbeat before the worker ever ran', async () => {
+  it('reports a missing heartbeat before the worker ever ran; the job schema comes with the migrations', async () => {
     const health = await readHealth(proberUrl, 3600);
     expect(health).toMatchObject({
       outbox_pending: 0,
       outbox_oldest_age_seconds: null,
       inbound_pending: 0,
       inbound_oldest_age_seconds: null,
-      jobs_schema_present: false,
-      jobs_queued: null,
+      jobs_schema_present: true,
+      jobs_queued: 0,
       job_oldest_queued_age_seconds: null,
-      dead_letter_count: null,
+      dead_letter_count: 0,
       worker_heartbeat_age_seconds: null,
       // pg_notification_queue_usage(), which crove_prober may call like any core function (issue #281).
       notify_queue_usage: 0,
     });
-    expect(evaluateHealth(health, limits, 3600).map((f) => f.check)).toEqual(['jobs_schema', 'heartbeat']);
+    expect(evaluateHealth(health, limits, 3600).map((f) => f.check)).toEqual(['heartbeat']);
   });
 
-  it('is healthy once the job schema exists, the relay is current and the worker beats', async () => {
-    await migrateJobs(adminUrl);
+  it('reports a missing job schema', async () => {
+    // The vendored migration creates crove_jobs (#25); hide it to see what an incomplete migrate looks like.
+    const admin = new pg.Client({ connectionString: adminUrl });
+    await admin.connect();
+    try {
+      await admin.query(`ALTER SCHEMA ${JOB_SCHEMA} RENAME TO ${JOB_SCHEMA}_hidden`);
+      const health = await readHealth(proberUrl, 3600);
+      expect(health).toMatchObject({ jobs_schema_present: false, jobs_queued: null, job_oldest_queued_age_seconds: null, dead_letter_count: null });
+      expect(evaluateHealth(health, limits, 3600).map((f) => f.check)).toEqual(['jobs_schema', 'heartbeat']);
+    } finally {
+      await admin.query(`ALTER SCHEMA ${JOB_SCHEMA}_hidden RENAME TO ${JOB_SCHEMA}`);
+      await admin.end();
+    }
+  });
+
+  it('is healthy once the relay is current and the worker beats', async () => {
     await beat(workerDb, 'worker-a');
     const health = await readHealth(proberUrl, 3600);
     expect(health).toMatchObject({ outbox_pending: 0, outbox_oldest_age_seconds: null, jobs_schema_present: true, jobs_queued: 0, dead_letter_count: 0 });

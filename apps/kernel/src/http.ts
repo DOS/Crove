@@ -30,6 +30,7 @@ import { publicAuthUrl, type Config } from './config.ts';
 import { exportAad, exportSealer } from './export-seal.ts';
 import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts';
 import { createInviteMailSender } from './invite-mail.ts';
+import { pgBossSchemaVersion } from './jobs-schema.ts';
 import type { Mailer } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels } from './rpc.ts';
@@ -232,6 +233,9 @@ export function createHttpApp(deps: HttpDeps) {
     try {
       const missing = await schemaMissing(client, config.MIGRATIONS_DIR);
       if (missing.length > 0) return c.json({ ready: false, reason: 'schema' }, 503);
+      // The vendored crove_jobs schema must be the version this pg-boss release expects (External-tenant gate T6).
+      const jobs = await client.query<{ version: number | null }>('SELECT crove_kernel.jobs_schema_version() AS version');
+      if (jobs.rows[0]?.version !== pgBossSchemaVersion()) return c.json({ ready: false, reason: 'jobs_schema' }, 503);
       // The session check fails closed until it can read Supabase Auth's tables (ADR-0028).
       if (config.AUTH_SESSION_CHECK === 'db') {
         const { rows } = await client.query<{ ok: boolean }>('SELECT crove_kernel.auth_grants_ready() AS ok');

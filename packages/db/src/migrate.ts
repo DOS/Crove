@@ -121,10 +121,12 @@ export const PINNED_SEARCH_PATH = 'search_path=pg_catalog, pg_temp';
  *   on a table the definer writes, a helper) runs with the definer's privileges, so `SET search_path = ''`
  *   there is the same hole, and a later `ALTER FUNCTION ... SECURITY DEFINER` keeps the old settings.
  *   Excluded: extension members (their scripts own them; extensions live in `extensions` anyway) and the
- *   pg-boss schema `crove_jobs`, which pg-boss creates and versions itself (and checks for drift); its
- *   functions are SECURITY INVOKER, so a SECURITY DEFINER function appearing there is still reported.
- * - the `crove_jobs` exemption holds only while no role but the runner (and superusers) may CREATE in that
- *   schema; otherwise such a role could plant an unscanned function there.
+ *   pg-boss schema `crove_jobs`, vendored from pg-boss's own SQL (`pnpm db:vendor:pgboss`, #25; the vendored
+ *   functions pin the same search_path) and version-checked by pg-boss; its functions are SECURITY INVOKER,
+ *   so a SECURITY DEFINER function appearing there is still reported.
+ * - the `crove_jobs` exemption holds only while no role but the runner (roles that act as it, and superusers)
+ *   may CREATE in that schema; otherwise such a role could plant an unscanned function there. A role that acts
+ *   as the runner already has everything the runner has, as in the TEMPORARY check below.
  * - every function outside the `crove_*` schemas that a `crove_*` object reaches without naming it through
  *   search_path either pins `PINNED_SEARCH_PATH`, or sets no search_path and is SECURITY INVOKER (it then runs
  *   with its caller's path, which inside a definer is the pinned one). Reached means a function, or an
@@ -287,6 +289,7 @@ async function listHardeningViolations(client: pg.ClientBase): Promise<string[]>
     `SELECT r.rolname FROM pg_catalog.pg_roles r
      WHERE pg_catalog.to_regnamespace('crove_jobs') IS NOT NULL
        AND r.rolname <> current_user AND NOT r.rolsuper
+       AND NOT ${actsAs('r.oid', 'current_user')}
        AND pg_catalog.has_schema_privilege(r.oid, 'crove_jobs', 'CREATE')
      ORDER BY 1`,
   );

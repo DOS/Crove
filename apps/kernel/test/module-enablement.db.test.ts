@@ -15,8 +15,8 @@ import { createOrg, upsertIdentity } from '@crove/kernel';
 import { DomainError, Runtime, defineCommand, defineQuery, sha256Hex, type BlobStore, type Lookup } from '@crove/kernel-runtime';
 import type { AuthUser } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
+import { QUEUES } from '../src/jobs-schema.ts';
 import { createKernel, defaultAdapters, moduleDefinitions, type IdentityPort } from '../src/kernel.ts';
-import { QUEUES, migrateJobs } from '../src/worker.ts';
 import { startExtractService } from './extract-service.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -111,7 +111,6 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
     adminUrl = url.toString();
     await migrate({ adminUrl, dir: MIGRATIONS });
     await setRolePasswords(adminUrl, { crove_app: 'test-app-pw', crove_worker: 'test-worker-pw' });
-    await migrateJobs(adminUrl);
     const loginUrl = (username: string, password: string) => {
       const u = new URL(adminUrl);
       u.username = username;
