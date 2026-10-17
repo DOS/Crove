@@ -1133,6 +1133,7 @@ export const en = {
       MEDIA_NOT_FOUND: 'This image was not found',
       MEDIA_TYPE_UNSUPPORTED: 'Posts take JPG, PNG or WEBP images only',
       FILE_IS_DOCUMENT: 'This image is already an accounting document of the org; use another image for the post',
+      VIDEO_TOO_LONG: 'The video is longer than 3 hours',
       OAUTH_TOO_MANY: 'You have too many unfinished connect attempts; try again in a few minutes',
       OAUTH_STATE_INVALID: 'This connect attempt is not valid or not yours; start again',
       OAUTH_STATE_USED: 'This connect attempt was already used; start again',

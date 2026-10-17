@@ -3,7 +3,7 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
-import { MAX_UPLOAD_BYTES, type contract, type UploadPurpose } from '@crove/kernel-contract';
+import { MAX_SOCIAL_VIDEO_BYTES, MAX_UPLOAD_BYTES, type contract, type UploadPurpose } from '@crove/kernel-contract';
 import { activeLocale, translator } from '../i18n/runtime.ts';
 import { accessToken, auth, getConfig } from './auth.ts';
 import { ClientError, apiErrorFromResponse, describeError, isMfaRequired, isOrgAccessRevoked, isUnauthenticated, retryWhileBusy } from './errors.ts';
@@ -114,11 +114,14 @@ export async function fetchFile(fileId: string): Promise<Blob> {
 
 type Uploaded = { fileId: string; duplicate: boolean };
 
+// A Social upload may be a video of up to 100 MB (#409); the server checks each type's own limit.
+const maxBytesFor = (purpose: UploadPurpose) => (purpose === 'social' ? MAX_SOCIAL_VIDEO_BYTES : MAX_UPLOAD_BYTES);
+
 // One file through a presigned staging upload (plan §7.6): a single-use form from the kernel, the bytes straight to
 // the bucket, then the kernel reads them back, hashes them and records the file.
 async function uploadStaged(file: File, purpose: UploadPurpose): Promise<Uploaded> {
-  if (file.size > MAX_UPLOAD_BYTES) throw new ClientError('inbox.fileTooLarge', (t) => t('inbox.fileTooLarge', { name: file.name }));
-  const grant = (await (await apiFetch('/api/files/uploads', { method: 'POST' })).json()) as {
+  if (file.size > maxBytesFor(purpose)) throw new ClientError('inbox.fileTooLarge', (t) => t('inbox.fileTooLarge', { name: file.name }));
+  const grant = (await (await apiFetch('/api/files/uploads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ purpose }) })).json()) as {
     uploadId: string;
     url: string;
     fields: Record<string, string>;
@@ -148,9 +151,16 @@ export async function uploadFiles(files: File[], purpose: UploadPurpose = 'docum
     for (const file of files) results.push(await uploadStaged(file, purpose));
     return { files: results };
   }
-  const form = new FormData();
-  form.append('purpose', purpose);
-  for (const file of files) form.append('file', file);
-  const response = await apiFetch('/api/files', { method: 'POST', body: form });
-  return (await response.json()) as { files: Uploaded[] };
+  const send = async (batch: File[]) => {
+    const form = new FormData();
+    form.append('purpose', purpose);
+    for (const file of batch) form.append('file', file);
+    return (await (await retryWhileBusy(() => apiFetch('/api/files', { method: 'POST', body: form }))).json()) as { files: Uploaded[] };
+  };
+  // Social files go one per request, so a video's body stays within the server's limit.
+  if (purpose !== 'social') return send(files);
+  for (const file of files) if (file.size > maxBytesFor(purpose)) throw new ClientError('inbox.fileTooLarge', (t) => t('inbox.fileTooLarge', { name: file.name }));
+  const results: Uploaded[] = [];
+  for (const file of files) results.push(...(await send([file])).files);
+  return { files: results };
 }

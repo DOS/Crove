@@ -226,8 +226,8 @@ suite.each(backends)('staged uploads on PostgreSQL and $name (issue #109)', (bac
     expect(accepted.status).toBe(200);
   }
 
-  async function begin(name = 'owner') {
-    const response = await call('/api/files/uploads', name);
+  async function begin(name = 'owner', purpose?: string) {
+    const response = await call('/api/files/uploads', name, purpose ? { json: { purpose } } : {});
     expect(response.status).toBe(200);
     return (await response.json()) as PresignedUpload & { uploadId: string; expiresAt: string };
   }
@@ -393,6 +393,35 @@ suite.each(backends)('staged uploads on PostgreSQL and $name (issue #109)', (bac
     const odd = await begin();
     expect(await backend.post(odd, png)).toBe(204);
     expect((await call(`/api/files/uploads/${odd.uploadId}/complete`, 'owner', { json: { filename: 'anh.png', purpose: 'payroll' } })).status).toBe(400);
+  });
+
+  // Videos for Social posts (#409): a social grant allows 100 MB, the type and duration come from the file itself.
+  it('records a video for a Social post with the duration read from it, and refuses one it cannot read', async () => {
+    const u32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+    const box = (type: string, body: number[]) => [...u32(8 + body.length), ...Buffer.from(type), ...body];
+    const ftyp = box('ftyp', [...Buffer.from('isom'), ...u32(0), ...Buffer.from('isomavc1')]);
+    const mvhd = box('mvhd', [0, 0, 0, 0, ...u32(0), ...u32(0), ...u32(1000), ...u32(12_500), ...Array.from({ length: 80 }, () => 0)]);
+    const mp4 = Uint8Array.from([...ftyp, ...box('free', [...Buffer.from(randomUUID())]), ...box('moov', mvhd)]);
+
+    const document = await begin();
+    expect(document.maxBytes).toBe(25 * 1024 * 1024);
+    const form = await begin('owner', 'social');
+    expect(form.maxBytes).toBe(100 * 1024 * 1024);
+    expect(await backend.post(form, mp4)).toBe(204);
+    const done = await call(`/api/files/uploads/${form.uploadId}/complete`, 'owner', { json: { filename: 'khai-truong.mp4', purpose: 'social' } });
+    expect(done.status).toBe(200);
+    const { fileId } = (await done.json()) as { fileId: string };
+    const row = await admin(async (c) => (await c.query('SELECT source, content_type, duration_ms, filename FROM crove_kernel.file WHERE id = $1', [fileId])).rows[0]);
+    expect(row).toEqual({ source: 'social', content_type: 'video/mp4', duration_ms: '12500', filename: 'khai-truong.mp4' });
+
+    // A video is never taken as a document, and one without a movie header is refused.
+    const asDocument = await begin();
+    expect(await backend.post(asDocument, mp4)).toBe(204);
+    expect((await call(`/api/files/uploads/${asDocument.uploadId}/complete`, 'owner', { json: { filename: 'a.mp4' } })).status).toBe(415);
+    const broken = await begin('owner', 'social');
+    expect(await backend.post(broken, Uint8Array.from([...ftyp, ...box('mdat', [...Buffer.from(randomUUID())])]))).toBe(204);
+    const refused = await call(`/api/files/uploads/${broken.uploadId}/complete`, 'owner', { json: { filename: 'hong.mp4', purpose: 'social' } });
+    expect(refused.status).toBe(415);
   });
 
   it('keeps documents and post images apart when the same bytes arrive as both', async () => {

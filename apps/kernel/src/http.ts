@@ -7,7 +7,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
 import type pg from 'pg';
 import { schemaMissing } from '@crove/db/migrate';
-import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES, ORG_HEADER, SOCIAL_IMAGE_TYPES, type UploadPurpose } from '@crove/kernel-contract';
+import { ACCEPTED_UPLOAD_TYPES, MAX_SOCIAL_VIDEO_BYTES, MAX_SOCIAL_VIDEO_MS, MAX_UPLOAD_BYTES, ORG_HEADER, SOCIAL_IMAGE_TYPES, type UploadPurpose } from '@crove/kernel-contract';
 import {
   BlobConflictError,
   BlobIntegrityError,
@@ -46,6 +46,7 @@ import { pgBossSchemaVersion } from './jobs-schema.ts';
 import type { Mailer } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
+import { sniffVideo, videoDurationMs } from './media-probe.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 import { directTransferOrigin } from './storage.ts';
 import {
@@ -78,6 +79,8 @@ export interface HttpDeps {
   rateLimiter?: RateLimiter | null;
   // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
   uploadCompletes?: ConcurrencyLimiter;
+  // Uploads that may be larger than MAX_UPLOAD_BYTES (Social videos, #409) running at once. Default: 2 per process.
+  largeUploads?: ConcurrencyLimiter;
   // Channel connections (ADR-0025): the broker that seals tokens, and whether the sandbox channel is on. Unset: no
   // channel can be connected through the API.
   channels?: RpcChannels;
@@ -199,7 +202,8 @@ const SPOOFABLE = new Set(['forwarded', 'x-forwarded-for', 'x-forwarded-host', '
 const AUTH_PUBLIC_PATHS =
   /^\/(?:token|signup|verify|recover|user|logout|otp|resend|settings|health|authorize|callback|reauthenticate|factors(?:\/[\w-]+(?:\/(?:challenge|verify))?)?|\.well-known\/jwks\.json)$/;
 const MAX_FILES_PER_UPLOAD = 5;
-const UPLOAD_BODY_LIMIT = 60 * 1024 * 1024;
+// A Social video (#409) is one file of up to 100 MB; a batch of documents stays under 60 MB.
+const UPLOAD_BODY_LIMIT = MAX_SOCIAL_VIDEO_BYTES + 2 * 1024 * 1024;
 // What a completion refused for lack of a slot tells the client to wait; the grant stays unused for 5 minutes.
 export const UPLOAD_BUSY_RETRY_SECONDS = 3;
 function contentSecurityPolicy(authUrl: string, storageOrigin: string | null): string {
@@ -556,24 +560,54 @@ export function createHttpApp(deps: HttpDeps) {
   // Files are written and recorded the same way on every path: the server computes the sha256 of the bytes it
   // holds, writes them create-only to org/<org_id>/<sha256> and records the triple with the generation the store
   // returned (plan §7.6, ADR-0013).
-  // purpose social: an image for a Social post (#372), recorded with source 'social' so it never goes to extraction.
+  // purpose social: an image or a video for a Social post (#372, #409), recorded with source 'social' so it never goes
+  // to extraction. A video's duration is read from the file and recorded with it.
   async function ingest(user: AuthUser, orgId: string, name: string, bytes: Uint8Array, sha256 = sha256Hex(bytes), purpose: UploadPurpose = 'document') {
     // The content decides the type; the browser's MIME type and the extension are only hints.
-    const type = sniffType(bytes);
-    if (purpose === 'social' && (!type || !SOCIAL_IMAGE_TYPES.includes(type))) {
-      throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: ảnh bài đăng chỉ nhận JPG, PNG, WEBP`);
+    const video = purpose === 'social' ? sniffVideo(bytes) : null;
+    const type = video ?? sniffType(bytes);
+    let durationMs: number | undefined;
+    if (video) {
+      if (bytes.byteLength > MAX_SOCIAL_VIDEO_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 100 MB`);
+      const ms = videoDurationMs(bytes);
+      if (ms === null) throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: không đọc được thời lượng video`);
+      if (ms > MAX_SOCIAL_VIDEO_MS) throw new DomainError('VIDEO_TOO_LONG', 422, `${name}: video dài quá 3 giờ`);
+      durationMs = ms;
+    } else {
+      if (purpose === 'social' && (!type || !SOCIAL_IMAGE_TYPES.includes(type))) {
+        throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: bài đăng chỉ nhận ảnh JPG, PNG, WEBP và video MP4, MOV`);
+      }
+      if (!type || !ACCEPTED_UPLOAD_TYPES.includes(type)) {
+        throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận XML, PDF, JPG, PNG, WEBP`);
+      }
+      if (bytes.byteLength > MAX_UPLOAD_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 25 MB`);
     }
-    if (!type || !ACCEPTED_UPLOAD_TYPES.includes(type)) {
-      throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận XML, PDF, JPG, PNG, WEBP`);
-    }
+    if (!type) throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: không nhận dạng được tệp`);
     const storageKey = fileKey(orgId, sha256);
     const generation = await putFile(store, storageKey, bytes, type, sha256);
     return runtime.execute<{ fileId: string; duplicate: boolean }>(
       'kernel.file.ingest',
-      { filename: safeFilename(name, type), contentType: type, sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: purpose === 'social' ? 'social' : 'upload' },
+      {
+        filename: safeFilename(name, type),
+        contentType: type,
+        sizeBytes: bytes.byteLength,
+        sha256,
+        storageKey,
+        generation,
+        source: purpose === 'social' ? 'social' : 'upload',
+        ...(durationMs === undefined ? {} : { durationMs }),
+      },
       { actor: actorOf(user), orgId },
     );
   }
+
+  // A body larger than a document may be (a Social video) is held whole in memory while it is hashed and stored, so
+  // this process takes at most two of them at once, one per user (#409).
+  const large = deps.largeUploads ?? new ConcurrencyLimiter({ total: 2, perKey: 1 });
+  const busy = (c: Context) => {
+    c.header('retry-after', String(UPLOAD_BUSY_RETRY_SECONDS));
+    return new DomainError('UPLOAD_BUSY', 503, 'Máy chủ đang xử lý nhiều tệp; hãy thử lại sau vài giây');
+  };
 
   // What an upload is for: a document (the default) or an image for a Social post. Anything else is refused.
   function uploadPurpose(value: unknown): UploadPurpose {
@@ -591,8 +625,15 @@ export function createHttpApp(deps: HttpDeps) {
 
   // Bytes through the kernel: always on local disk, and still accepted with S3 (the server hashes them either way).
   app.post('/api/files', bodyLimit({ maxSize: UPLOAD_BODY_LIMIT }), async (c) => {
+    let release: (() => void) | null = null;
     try {
       const { user, orgId } = await uploader(c);
+      // A body that may be larger than a batch of documents (no length, or more than 25 MB) waits for a large slot.
+      const length = Number(c.req.header('content-length'));
+      if (!Number.isFinite(length) || length > MAX_UPLOAD_BYTES + 1024 * 1024) {
+        release = large.tryAcquire(user.userId);
+        if (!release) throw busy(c);
+      }
       const body = await c.req.parseBody({ all: true });
       const files = ([] as unknown[]).concat(body.file ?? []).filter((f): f is File => f instanceof File);
       const purpose = uploadPurpose(body.purpose);
@@ -600,13 +641,16 @@ export function createHttpApp(deps: HttpDeps) {
       if (files.length > MAX_FILES_PER_UPLOAD) throw new DomainError('TOO_MANY_FILES', 413, `Tối đa ${MAX_FILES_PER_UPLOAD} tệp mỗi lần`);
       const results = [];
       for (const file of files) {
-        if (file.size > MAX_UPLOAD_BYTES) throw new DomainError('TOO_LARGE', 413, `${file.name} vượt quá 25 MB`);
+        // A Social video may be up to 100 MB; ingest checks the size against the type it reads from the bytes.
+        if (file.size > (purpose === 'social' ? MAX_SOCIAL_VIDEO_BYTES : MAX_UPLOAD_BYTES)) throw new DomainError('TOO_LARGE', 413, `${file.name} vượt quá ${purpose === 'social' ? 100 : 25} MB`);
         const bytes = new Uint8Array(await file.arrayBuffer());
         results.push(await ingest(user, orgId, file.name, bytes, sha256Hex(bytes), purpose));
       }
       return c.json({ files: results });
     } catch (error) {
       return problem(c, error);
+    } finally {
+      release?.();
     }
   });
 
@@ -622,7 +666,8 @@ export function createHttpApp(deps: HttpDeps) {
     try {
       if (!direct) throw noDirect();
       const { user, orgId } = await uploader(c);
-      const grant = await runtime.execute<{ uploadId: string; stagingKey: string; maxBytes: number }>('kernel.file.upload.begin', {}, {
+      const input = (await c.req.json().catch(() => null)) as { purpose?: unknown } | null;
+      const grant = await runtime.execute<{ uploadId: string; stagingKey: string; maxBytes: number }>('kernel.file.upload.begin', { purpose: uploadPurpose(input?.purpose) }, {
         actor: actorOf(user),
         orgId,
       });
@@ -652,6 +697,12 @@ export function createHttpApp(deps: HttpDeps) {
         c.header('retry-after', String(UPLOAD_BUSY_RETRY_SECONDS));
         throw new DomainError('UPLOAD_BUSY', 503, 'Máy chủ đang xử lý nhiều tệp; hãy thử lại sau vài giây');
       }
+      // A Social upload may be a video of up to 100 MB: it also takes a large slot, before the grant is used.
+      const releaseLarge = purpose === 'social' ? large.tryAcquire(user.userId) : () => undefined;
+      if (!releaseLarge) {
+        release();
+        throw busy(c);
+      }
       try {
         const claim = await runtime.execute<{ stagingKey: string; maxBytes: number }>(
           'kernel.file.upload.claim',
@@ -659,7 +710,8 @@ export function createHttpApp(deps: HttpDeps) {
           { actor: actorOf(user), orgId },
         );
         try {
-          const staged = await direct.readStaged(claim.stagingKey, claim.maxBytes).catch((error: unknown) => {
+          // A document is read up to 25 MB whatever its grant allowed.
+          const staged = await direct.readStaged(claim.stagingKey, Math.min(claim.maxBytes, purpose === 'social' ? MAX_SOCIAL_VIDEO_BYTES : MAX_UPLOAD_BYTES)).catch((error: unknown) => {
             if (error instanceof BlobNotFoundError) throw new DomainError('UPLOAD_MISSING', 409, 'Chưa nhận được tệp cho lượt tải lên này');
             throw error;
           });
@@ -669,6 +721,7 @@ export function createHttpApp(deps: HttpDeps) {
           await store.delete(claim.stagingKey).catch((error: unknown) => console.error('[http] staging object not deleted', error));
         }
       } finally {
+        releaseLarge();
         release();
       }
     } catch (error) {

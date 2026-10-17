@@ -1135,6 +1135,7 @@ export const vi = {
       MEDIA_NOT_FOUND: 'Không tìm thấy ảnh này',
       MEDIA_TYPE_UNSUPPORTED: 'Bài đăng chỉ nhận ảnh JPG, PNG hoặc WEBP',
       FILE_IS_DOCUMENT: 'Ảnh này đã có trong chứng từ kế toán của tổ chức, hãy dùng ảnh khác cho bài đăng',
+      VIDEO_TOO_LONG: 'Video dài quá 3 giờ',
       OAUTH_TOO_MANY: 'Bạn đã mở quá nhiều lượt kết nối chưa hoàn tất, hãy thử lại sau ít phút',
       OAUTH_STATE_INVALID: 'Lượt kết nối này không hợp lệ hoặc không phải của bạn, hãy bắt đầu lại',
       OAUTH_STATE_USED: 'Lượt kết nối này đã được dùng, hãy bắt đầu lại',
