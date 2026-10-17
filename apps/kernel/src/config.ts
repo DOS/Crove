@@ -198,7 +198,9 @@ const schema = z.object({
   SUPPORT_URL: optional.pipe(
     z
       .url({ protocol: /^(https|mailto)$/ })
-      .refine((value) => !/^mailto:\s*$/i.test(value), { message: 'a mailto: link needs an address' })
+      .refine((value) => !value.toLowerCase().startsWith('mailto:') || new URL(value).pathname.trim() !== '', {
+        message: 'a mailto: link needs an address',
+      })
       .optional(),
   ),
   // Inbound email: <token>@INBOUND_DOMAIN, delivered by a mail worker to POST /api/inbound/email.

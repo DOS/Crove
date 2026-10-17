@@ -140,8 +140,8 @@ const requireFinance = ({ params }: { params: { slug: string } }) => {
 const documentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'documents', beforeLoad: requireFinance, component: DocumentsPage });
 const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendors', beforeLoad: requireFinance, component: VendorsPage });
 const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, component: JournalPage });
-// The Vietnamese quick guide (issue #310), linked from the empty Inbox.
-const guideRoute = createRoute({ getParentRoute: () => orgRoute, path: 'guide', component: GuidePage });
+// The Vietnamese quick guide (issue #310), linked from the empty Inbox; it walks through finance screens.
+const guideRoute = createRoute({ getParentRoute: () => orgRoute, path: 'guide', beforeLoad: requireFinance, component: GuidePage });
 const settingsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'settings', component: SettingsPage });
 // AI agents and tasks (ADR-0029) belong to the kernel, so every deployment has them.
 const agentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'agents', component: AgentsPage });

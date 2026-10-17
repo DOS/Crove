@@ -92,7 +92,7 @@ export function OrgLayout() {
         </div>
       </aside>
       <div className="min-w-0 flex-1">
-        <header className="flex items-center justify-between border-b bg-sidebar px-4 py-3 md:hidden">
+        <header className="flex flex-wrap items-center justify-between gap-2 border-b bg-sidebar px-4 py-3 md:hidden">
           <Logo />
           <SupportLink className="text-xs text-link" />
           <LocaleSwitcher />

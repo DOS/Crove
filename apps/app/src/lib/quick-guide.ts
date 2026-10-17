@@ -30,6 +30,7 @@ export const QUICK_GUIDE: readonly GuideStep[] = [
       `Ở tab ${q(vi.inbox.tabs.pending)}, bấm tên người bán để mở đề xuất.`,
       `Đối chiếu số tiền, ${q(vi.inboxDetail.checks)} và ${q(vi.inboxDetail.journal)} với ${q(vi.inboxDetail.original)}.`,
       `Muốn đổi tài khoản, chọn lại ở cột ${q(vi.inboxDetail.debitAccount)} rồi bấm ${q(vi.inboxDetail.saveEdit)}.`,
+      `Nút ${q(vi.inboxDetail.approve)} bị mờ khi còn chỉnh sửa chưa lưu, hoặc khi có kiểm tra không đạt: đối chiếu chứng từ gốc rồi đánh dấu ô ${q(vi.inboxDetail.acceptFailed)} nếu vẫn muốn ghi sổ.`,
       `Bấm ${q(vi.inboxDetail.approve)}. Crove có thể hỏi mã xác thực hai lớp: lần đầu, bấm ${q(vi.twoFactor.enable)}, quét mã QR bằng ứng dụng xác thực (Google Authenticator, Microsoft Authenticator...) rồi nhập mã 6 chữ số.`,
       'Nếu tổ chức có từ hai người duyệt trở lên, người đã tải lên hoặc chỉnh sửa đề xuất không tự duyệt được: một người khác phải duyệt.',
       `Hóa đơn sai thì bấm ${q(vi.inboxDetail.reject)} (lý do không bắt buộc).`,

@@ -182,7 +182,7 @@ export function InboxPage() {
             title={tab === 'pending' ? t('emptyPending') : t('emptyOther')}
             hint={tab === 'pending' ? t('emptyPendingHint') : undefined}
             action={
-              tab === 'pending' ? (
+              tab === 'pending' && config.modules.includes('finance') ? (
                 <Link to="/o/$slug/guide" params={{ slug }} className="text-sm text-link hover:underline">
                   {t('guideLink')}
                 </Link>

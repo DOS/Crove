@@ -121,7 +121,9 @@ describe('configuration guards', () => {
     for (const url of ['http://chat.example.com', 'javascript:alert(1)', 'data:text/html,x', 'support@example.com', 'https://']) {
       expect(() => loadConfig({ ...base, SUPPORT_URL: url }), url).toThrow(/SUPPORT_URL/);
     }
-    expect(() => loadConfig({ ...base, SUPPORT_URL: 'mailto:' })).toThrow(/SUPPORT_URL \(a mailto: link needs an address\)/);
+    for (const url of ['mailto:', 'mailto:?subject=Crove']) {
+      expect(() => loadConfig({ ...base, SUPPORT_URL: url }), url).toThrow(/SUPPORT_URL \(a mailto: link needs an address\)/);
+    }
   });
 
   it('hands SUPPORT_URL to the app through /api/config, or null', async () => {
