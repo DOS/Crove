@@ -652,6 +652,8 @@ export const zSocialVariant = z.object({
   latestDecision: z
     .object({ decision: z.enum(SOCIAL_DECISIONS), comment: z.string().nullable(), decidedBy: zId, at: z.string(), revision: z.number().int(), current: z.boolean() })
     .nullable(),
+  // Approvals the channel needs (S9) and who approved the current content in the open review round.
+  review: z.object({ required: z.number().int(), approvedBy: z.array(zId) }),
 });
 
 export const zSocialPost = z.object({

@@ -32,6 +32,39 @@ const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const;
 const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
 const dayKeyOf = (weekday: number) => DAY_KEYS[(weekday - 1) % 7] ?? 'mon';
 
+// How many different people approve a post for this channel before it may be scheduled (S9 review policy).
+// loading: the policies are still being read, so the select waits instead of showing the default.
+function ReviewPolicy({ channel, required, canEdit, loading }: { channel: Channel; required: number; canEdit: boolean; loading: boolean }) {
+  const t = useTranslations('social');
+  const set = useMutation({
+    mutationFn: (approvalsRequired: number) => client.social.policies.set({ connectionId: channel.id, approvalsRequired }),
+    onSuccess: () => void queryClient.invalidateQueries(),
+  });
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={`policy-${channel.id}`} className="text-xs font-medium tracking-wide text-subtle-foreground uppercase">
+        {t('policyTitle')}
+      </Label>
+      <NativeSelect
+        id={`policy-${channel.id}`}
+        size="sm"
+        className="w-full max-w-xs"
+        value={String(required)}
+        disabled={loading || !canEdit || set.isPending || channel.status === 'revoked'}
+        onChange={(e) => set.mutate(Number(e.target.value))}
+      >
+        {[1, 2, 3].map((n) => (
+          <NativeSelectOption key={n} value={String(n)}>
+            {t('policyApprovals', { count: String(n) })}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      <p className="text-xs text-subtle-foreground">{t(canEdit ? 'policyHint' : 'policyAdmins')}</p>
+      {set.error && <ErrorText>{errorMessage(set.error)}</ErrorText>}
+    </div>
+  );
+}
+
 function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean }) {
   const t = useTranslations('social');
   const f = useFormat();
@@ -132,6 +165,8 @@ export function SocialChannelsPage() {
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
   const isAdmin = role === 'owner' || role === 'admin';
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
+  const policyRows = useQuery(orpc.social.policies.list.queryOptions({ input: {} }));
+  const policies = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.approvalsRequired]));
   const [name, setName] = useState('');
   const [confirming, setConfirming] = useState<string | null>(null);
   const sandbox = getConfig().channels?.sandbox ?? false;
@@ -218,6 +253,9 @@ export function SocialChannelsPage() {
                     ))}
                 </div>
                 {confirming === c.id && <p className="text-xs text-muted-foreground">{t('disconnectHint')}</p>}
+                <div className="border-t pt-3">
+                  <ReviewPolicy channel={c} required={policies.get(c.id) ?? 1} canEdit={isAdmin} loading={policyRows.isLoading} />
+                </div>
                 <div className="border-t pt-3">
                   <p className="mb-2 text-xs font-medium tracking-wide text-subtle-foreground uppercase">{t('queueTitle')}</p>
                   <QueueEditor channel={c} canEdit={isAdmin} />

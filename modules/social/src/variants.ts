@@ -243,7 +243,7 @@ export async function latestDecision(trx: Trx, orgId: string, variantId: string)
     .select(['decision', 'revision', 'content_hash'])
     .where('org_id', '=', orgId)
     .where('variant_id', '=', variantId)
-    .orderBy('created_at', 'desc')
+    // Newest by id (written under the post lock), not by created_at (its transaction's start).
     .orderBy('id', 'desc')
     .executeTakeFirst();
 }

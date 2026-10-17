@@ -83,6 +83,26 @@ export function approvalCovers(approval: ApprovalRecord | null, post: { revision
   return approval !== null && approval.revision === post.revision && approval.contentHash === post.contentHash;
 }
 
+// A review decision as post_approval keeps it.
+export interface DecisionRecord {
+  decision: string;
+  decidedBy: string;
+  revision: number;
+  contentHash: string;
+}
+
+// Who approved a variant's current content in the review round now open (S9 multi-step approval): decisions are
+// newest first; a request for changes or a rejection ends the round before it, and an approval of other content
+// (another revision or hash) never counts.
+export function approvalsInRound(decisions: readonly DecisionRecord[], current: { revision: number; contentHash: string }): string[] {
+  const by = new Set<string>();
+  for (const d of decisions) {
+    if (d.decision !== 'approved') break;
+    if (d.revision === current.revision && d.contentHash === current.contentHash) by.add(d.decidedBy);
+  }
+  return [...by];
+}
+
 // Base content of a post, and a variant's overrides of it: null inherits, any string (also '') overrides.
 export interface BaseContent {
   body: string;
