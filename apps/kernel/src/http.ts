@@ -136,8 +136,10 @@ function problem(c: Context, error: unknown) {
   return c.json({ code: domain.code, message: domain.message }, domain.status);
 }
 
-// The bytes as a one-chunk stream that calls release once the chunk is taken or the stream is cancelled.
+// The bytes as a one-chunk stream that calls release once the chunk is taken or the stream is cancelled, and after five
+// minutes at the latest, so a connection that neither reads nor closes cannot keep a slot for good.
 function held(bytes: Uint8Array, release: () => void): ReadableStream<Uint8Array> {
+  setTimeout(release, 5 * 60_000).unref();
   return new ReadableStream<Uint8Array>({
     pull(controller) {
       controller.enqueue(bytes);
