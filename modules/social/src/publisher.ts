@@ -94,7 +94,8 @@ async function openCredential(deps: PublishDeps, orgId: string, connectionId: st
 }
 
 async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, work: PublishWork, credential: { externalAccountId: string; secret: string }): Promise<PublishRecord> {
-  const timeout = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+  // A deployment's (or a test's) own limit first, then the adapter's (video uploads take minutes), then the default.
+  const timeout = deps.callTimeoutMs ?? publisher.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
   // Only the variant's own images, of this org.
   const mediaFile = async (fileId: string) => {
     if (!work.content.media.some((m) => m.fileId === fileId)) throw new Error('not an image of this variant');

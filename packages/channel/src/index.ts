@@ -10,6 +10,7 @@ export * from './zalo.ts';
 export * from './bluesky.ts';
 export * from './threads.ts';
 export * from './linkedin.ts';
+export * from './youtube.ts';
 export * from './x.ts';
 
 export const CHANNEL_PROVIDERS = [
@@ -159,6 +160,9 @@ export type MetricsResult = { metrics: Partial<Record<MetricName, number>>; extr
 export interface Publisher {
   readonly provider: ChannelProviderId;
   readonly publishSafety: RetrySafety;
+  // How long one call may take (a video upload takes minutes); the job's default when absent. It stays above the
+  // adapter's own fetch timeout, so the adapter classifies its own abort, and under PUBLISH_STALE_SECONDS.
+  readonly callTimeoutMs?: number;
   publish(input: PublishInput): Promise<PublishResult>;
   // Two-phase providers: where a pending post stands.
   status?(input: StatusInput): Promise<PublishResult>;

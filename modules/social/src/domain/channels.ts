@@ -75,7 +75,7 @@ const ANY_IMAGE: readonly string[] = [];
 
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
