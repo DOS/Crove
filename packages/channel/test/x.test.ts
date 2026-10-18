@@ -62,6 +62,8 @@ describe('XConnector', () => {
     await expect(new XConnector(APP, narrow.fetchImpl).exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: null })).rejects.toMatchObject({ kind: 'invalid_grant' });
     const used = x({ 'POST api.x.com/2/oauth2/token': [{ status: 400, body: { error: 'invalid_request', error_description: 'Value passed for the authorization code was invalid.' } }] });
     await expect(new XConnector(APP, used.fetchImpl).exchange({ code: 'used', redirectUri: REDIRECT, codeVerifier: 'v' })).rejects.toMatchObject({ kind: 'invalid_grant', code: 'invalid_request' });
+    const misconfigured = x({ 'POST api.x.com/2/oauth2/token': [{ status: 401, body: { error: 'invalid_client', error_description: 'Missing valid authorization header' } }] });
+    await expect(new XConnector(APP, misconfigured.fetchImpl).exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: 'v' })).rejects.toMatchObject({ kind: 'provider', code: 'invalid_client' });
     expect(() => new XConnector({ clientId: 'short', clientSecret: 's' })).toThrow('invalid X client id');
   });
 });
