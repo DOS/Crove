@@ -57,6 +57,47 @@ describe('FacebookPagePublisher.publish', () => {
     expect(calls[0]?.url.toString()).not.toContain('page-token-1');
   });
 
+  it('uploads a video to the Page through the video host, with the text and link as its description', async () => {
+    const bodies: FormData[] = [];
+    const urls: URL[] = [];
+    const fetchImpl: Fetch = async (url, init) => {
+      urls.push(new URL(url));
+      if (init?.body instanceof FormData) bodies.push(init.body);
+      return new Response(JSON.stringify({ id: '555666777' }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const publisher = new FacebookPagePublisher(APP, fetchImpl);
+    expect(publisher.callTimeoutMs).toBeGreaterThan(300_000);
+    expect(publisher.callTimeoutMs).toBeLessThan(600_000);
+    const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 4, altText: null };
+    const result = await publisher.publish(input({ content: { ...input().content, media: [clip] }, readMedia: async () => new Uint8Array([0, 0, 0, 1]) }));
+    expect(result).toEqual({ kind: 'accepted', externalId: `${PAGE}_555666777`, url: `https://www.facebook.com/${PAGE}/videos/555666777` });
+    expect(urls.map((u) => `${u.host}${u.pathname}`)).toEqual([`graph-video.facebook.com/v24.0/${PAGE}/videos`]);
+    const sent = bodies[0] ?? new FormData();
+    expect(sent.get('description')).toBe('Khai trương chi nhánh mới!\n\nhttps://example.com/khai-truong');
+    expect(sent.get('published')).toBe('true');
+    expect((sent.get('source') as Blob).type).toBe('video/mp4');
+  });
+
+  it('treats an unclear video upload as unknown, a refused one as rejected, and an unreadable file as nothing sent', async () => {
+    const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 4, altText: null };
+    const withClip = (over: Partial<PublishInput> = {}) => input({ content: { ...input().content, media: [clip] }, readMedia: async () => new Uint8Array([1]), ...over });
+    expect((await fake({ status: 500, body: { error: { message: 'Service unavailable', code: 2 } } }).publisher.publish(withClip())).kind).toBe('unknown');
+    expect((await fake(new TypeError('fetch failed')).publisher.publish(withClip())).kind).toBe('unknown');
+    expect(await fake(graphError(400, 100, 'Invalid video')).publisher.publish(withClip())).toMatchObject({ kind: 'rejected', error: 'bad_request' });
+    const none = fake({ body: {} });
+    expect(
+      await none.publisher.publish(
+        withClip({
+          readMedia: async () => {
+            throw new Error('gone');
+          },
+        }),
+      ),
+    ).toMatchObject({ kind: 'rejected', code: 'MEDIA_UNREADABLE' });
+    expect(await none.publisher.publish(withClip({ content: { ...input().content, media: [clip, clip] } }))).toMatchObject({ kind: 'rejected', code: 'ONE_VIDEO_REQUIRED' });
+    expect(none.calls).toHaveLength(0);
+  });
+
   it('maps Graph refusals to what the pipeline needs', async () => {
     const cases: [ReturnType<typeof graphError>, string][] = [
       [graphError(400, 190, 'Error validating access token'), 'token_expired'],

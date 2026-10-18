@@ -104,12 +104,13 @@ suite('social video posts on PostgreSQL (S9)', () => {
     const o = await org();
     const clip = await video(o, 12_500);
     const sandbox = await connection(o, 'sandbox');
-    const facebook = await connection(o, 'facebook_page');
-    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Khai trương', media: [{ fileId: clip }], channels: [{ connectionId: sandbox }, { connectionId: facebook }] });
+    // X takes video, and its Crove adapter does not post it yet.
+    const x = await connection(o, 'x');
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Khai trương', media: [{ fileId: clip }], channels: [{ connectionId: sandbox }, { connectionId: x }] });
     const view = await get(o, postId);
     expect(view.media).toEqual([{ fileId: clip, altText: null, mime: 'video/mp4', sizeBytes: 20_000_000, durationMs: 12_500 }]);
     const issues = Object.fromEntries(view.variants.map((v) => [v.provider, v.issues.map((i) => i.code)]));
-    expect(issues).toEqual({ sandbox: [], facebook_page: ['VIDEO_NOT_SUPPORTED_YET'] });
+    expect(issues).toEqual({ sandbox: [], x: ['VIDEO_NOT_SUPPORTED_YET'] });
     await expect(exec(o, 'social.post.submit', { postId })).rejects.toMatchObject({ code: 'VARIANT_INVALID' });
     await exec(o, 'social.post.submit', { postId, variantIds: [view.variants.find((v) => v.provider === 'sandbox')?.id] });
     expect((await get(o, postId)).variants.find((v) => v.provider === 'sandbox')?.status).toBe('in_review');

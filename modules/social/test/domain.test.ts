@@ -131,7 +131,7 @@ describe('validateVariant', () => {
 
   it('refuses images mixed with video where the channel does not mix them', () => {
     const codes = validateVariant({ provider: 'facebook_page', body: '', title: null, media: [jpeg(), mp4()] }).map((i) => i.code);
-    expect(codes).toEqual(['MEDIA_MIX_NOT_ALLOWED', 'VIDEO_NOT_SUPPORTED_YET']);
+    expect(codes).toEqual(['MEDIA_MIX_NOT_ALLOWED']);
   });
 
   it('checks media kinds, sizes and durations', () => {
@@ -149,7 +149,8 @@ describe('validateVariant', () => {
   });
 
   it('says when a channel takes video but its Crove adapter does not post it yet', () => {
-    expect(validateVariant({ provider: 'facebook_page', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual(['VIDEO_NOT_SUPPORTED_YET']);
+    expect(validateVariant({ provider: 'facebook_page', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);
+    expect(validateVariant({ provider: 'x', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual(['VIDEO_NOT_SUPPORTED_YET']);
     expect(validateVariant({ provider: 'sandbox', body: '', title: null, media: [mp4()] })).toEqual([]);
   });
 
