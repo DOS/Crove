@@ -366,6 +366,26 @@ suite('sales e-invoices (#313)', () => {
     await expect(approve(sale)).resolves.toMatchObject({ documentId: expect.any(String) });
   });
 
+  it('refuses only the stale sale of a bulk approval and approves the rest', async () => {
+    const sale = await read(invoice('5004'));
+    const purchase = await read(invoice('5004', { purchase: true }));
+    expect(await setTaxCode('0312345678')).toMatchObject({ status: 200 });
+    try {
+      const { results } = await runtime.execute<{ results: Array<{ id: string; outcome: string; code?: string }> }>(
+        'kernel.proposal.approve_many',
+        { items: [{ id: sale, revision: 1 }, { id: purchase, revision: 1 }] },
+        { actor: asMfa(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() },
+      );
+      expect(results).toEqual([
+        expect.objectContaining({ id: sale, outcome: 'refused', code: 'NOT_OWN_SALE' }),
+        expect.objectContaining({ id: purchase, outcome: 'approved' }),
+      ]);
+    } finally {
+      expect(await setTaxCode(SELLER_TAX_CODE)).toMatchObject({ status: 200 });
+    }
+    await runtime.execute('kernel.proposal.reject', { id: sale }, { actor: asUser(owner.userId), orgId: org.orgId });
+  });
+
   it('holds every writer to one account per line, the one of its document direction', async () => {
     await admin(async (c) => {
       const refused = async (statement: string, params: unknown[]) => {

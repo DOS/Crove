@@ -1,6 +1,16 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { MAX_SOCIAL_VIDEO_BYTES, MAX_UPLOAD_BYTES, UPLOAD_PURPOSES, zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
+import {
+  MAX_SOCIAL_VIDEO_BYTES,
+  MAX_UPLOAD_BYTES,
+  UPLOAD_PURPOSES,
+  zAccountCode,
+  zBulkApproveItems,
+  zId,
+  zPurchaseProposal,
+  zRole,
+  zSessionRevoke,
+} from '@crove/kernel-contract';
 import type { Db, MemberRole } from '@crove/db';
 import {
   DomainError,
@@ -593,6 +603,93 @@ export const approveProposal = defineCommand({
   },
 });
 
+// The refusals of one item that leave the rest of the batch going: every per-proposal code the nested
+// kernel.proposal.approve can raise for that proposal's state, its approval policy or its content. Listed by code,
+// never by status: any other error aborts the whole batch, including an unknown or newly added code, FORBIDDEN (a
+// proposal command the kernel does not support, the proposal state gate), a second factor that went stale while the
+// batch ran (STEP_UP_REQUIRED: one step-up covers the whole batch or none of it), INVALID, and every server fault.
+export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
+  // The proposal (lockPendingProposal, refuseWhileReextracting): another org's id reads like one that does not exist.
+  'NOT_FOUND',
+  'PROPOSAL_DECIDED',
+  'STALE_REVISION',
+  'EXTRACTION_PENDING',
+  // The approval policy (decideApproval): P10 and P12.
+  'FOUR_EYES_REQUIRED',
+  'NOT_ELIGIBLE',
+  // Recording a purchase (finance.purchase.record and its account check).
+  'CHECKS_BLOCKING',
+  'CHECKS_FAILED',
+  'DUPLICATE_INVOICE',
+  'TOTAL_MISMATCH',
+  'UNBALANCED',
+  'UNKNOWN_LINE',
+  'UNSUPPORTED_CURRENCY',
+  // A sale no longer the org's own, or a purchase the org issued (#313): the org tax code changed since.
+  'NOT_OWN_SALE',
+  'OWN_INVOICE',
+  'UNKNOWN_ACCOUNT',
+  'ACCOUNT_INACTIVE',
+  'PARENT_TAGGED',
+  // Reversing an entry (finance.journal.reverse).
+  'ENTRY_NOT_FOUND',
+  'ALREADY_REVERSED',
+  'ENTRY_IS_REVERSAL',
+  'REVERSAL_DATE_BEFORE_ENTRY',
+  'OPENING_REVERSAL_DATE',
+]);
+
+// Whether a nested approval's error refuses only that item.
+export function isBulkItemRefusal(error: unknown): error is DomainError {
+  return error instanceof DomainError && BULK_ITEM_REFUSALS.has(error.code);
+}
+
+export type BulkApproveResult =
+  | { id: string; outcome: 'approved'; result: Record<string, unknown> }
+  | { id: string; outcome: 'refused'; code: string; rule: string | null };
+
+// Approves many pending proposals in one action (issue #315): one R3 command, so the runtime checks the role, the
+// fresh second factor (P11) and, for a remote Supabase Auth, the live session once, before any item; a stale step-up
+// refuses the whole batch. Each item then runs kernel.proposal.approve as a nested command, which applies its own
+// P12 eligibility and P10 four-eyes decision and writes its own audit row, exactly as approving it alone would. An
+// item refused with a listed per-proposal code (BULK_ITEM_REFUSALS) rolls back to its savepoint and the others go
+// on; the batch's audit row lists every item's outcome. A refused item has no audit row of its own (a refusal row is
+// written only by the runtime, for a whole command); its code and rule are in the batch row. Items run in id order, so two batches over the same proposals lock them in the same order. No line
+// accounts and no acceptFailedChecks: a bulk approval only approves what it would approve as shown, and an invoice
+// with failed checks is refused (CHECKS_FAILED) for a one-by-one review.
+export const approveProposals = defineCommand({
+  name: 'kernel.proposal.approve_many',
+  // At most MAX_BULK_APPROVE (50) items, each once. Each is a ledger posting in the same transaction, so the batch
+  // stays short; the Inbox sends a larger selection in several batches, each under the same step-up freshness rule.
+  input: z.object({ items: zBulkApproveItems }),
+  risk: 'R3',
+  access: APPROVERS,
+  handler: async (ctx, input): Promise<{ results: BulkApproveResult[] }> => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới duyệt được');
+    const outcomes = new Map<string, BulkApproveResult>();
+    for (const item of [...input.items].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
+      await sql`SAVEPOINT bulk_approve_item`.execute(ctx.trx);
+      try {
+        const result = await ctx.run<Record<string, unknown>>('kernel.proposal.approve', { id: item.id, revision: item.revision });
+        await sql`RELEASE SAVEPOINT bulk_approve_item`.execute(ctx.trx);
+        outcomes.set(item.id, { id: item.id, outcome: 'approved', result });
+      } catch (error) {
+        if (!isBulkItemRefusal(error)) throw error;
+        await sql`ROLLBACK TO SAVEPOINT bulk_approve_item`.execute(ctx.trx);
+        const rule = typeof error.details?.rule === 'string' ? error.details.rule : null;
+        outcomes.set(item.id, { id: item.id, outcome: 'refused', code: error.code, rule });
+      }
+    }
+    const results = input.items.map((item) => outcomes.get(item.id) as BulkApproveResult);
+    ctx.audit({
+      approved: results.filter((r) => r.outcome === 'approved').length,
+      refused: results.filter((r) => r.outcome === 'refused').length,
+      items: results.map((r) => (r.outcome === 'approved' ? { id: r.id, outcome: r.outcome } : { id: r.id, outcome: r.outcome, code: r.code, rule: r.rule })),
+    });
+    return { results };
+  },
+});
+
 export const rejectProposal = defineCommand({
   name: 'kernel.proposal.reject',
   input: z.object({ id: zId, reason: z.string().max(500).optional() }),
@@ -722,6 +819,7 @@ const otherKernelCommands = [
   requestProposal,
   editProposal,
   approveProposal,
+  approveProposals,
   rejectProposal,
   revokeSession,
   ...offboardingCommands,

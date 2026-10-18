@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { BLOCKING_CHECK_IDS } from '@crove/kernel-contract';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -17,6 +17,7 @@ import { getConfig } from '../lib/auth.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal } from '../lib/decimal.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { reversalErrorMessage } from '../lib/reversal.ts';
+import { nextPendingId, reviewShortcut, type ReviewAction } from '../lib/review.ts';
 import { pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 const CHECK_TONE = { pass: 'success', warn: 'warning', fail: 'destructive' } as const;
@@ -136,9 +137,17 @@ function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDa
   );
 }
 
+// One page per proposal: moving to the next one (J or N) mounts a fresh page, so no unsaved account, confirmation or
+// approval idempotency key carries over from the previous proposal.
 export function InboxDetailPage() {
-  const locale = useLocale();
   const { slug, id } = useParams({ strict: false }) as { slug: string; id: string };
+  return <InboxDetail key={id} slug={slug} id={id} />;
+}
+
+type ShortcutHandlers = Partial<Record<ReviewAction, () => void>>;
+
+function InboxDetail({ slug, id }: { slug: string; id: string }) {
+  const locale = useLocale();
   const navigate = useNavigate();
   const root = useTranslations();
   const t = useTranslations('inboxDetail');
@@ -198,14 +207,61 @@ export function InboxDetailPage() {
   const dirty = (payload?.lines ?? []).some((l) => (lineAccounts[l.lineNo] ?? l.debitAccount) !== l.debitAccount);
   const busy = approve.isPending || reject.isPending || edit.isPending || reextract.isPending;
 
-  if (detail.isLoading) return <Spinner />;
-  if (detail.error) return <ErrorText>{errorMessage(detail.error)}</ErrorText>;
   const item = detail.data;
-  if (!item) return null;
-  const pending = item.status === 'pending';
-  const reversal = item.reversal;
+  const pending = item?.status === 'pending';
+  const reversal = item?.reversal ?? null;
   const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
   const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
+  // The approve buttons are enabled exactly when this holds, and the A shortcut uses the same value.
+  const approveReady =
+    item !== undefined && pending && item.canApprove && !busy && (reversal ? true : !dirty && !!payload && !blocked && (failed === 0 || acceptFailed));
+  const submitApproval = () => {
+    if (!item) return;
+    if (reversal) {
+      approve.mutate({ id, revision: item.revision, idempotencyKey });
+      return;
+    }
+    approve.mutate({
+      id,
+      revision: item.revision,
+      idempotencyKey,
+      lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
+      ...(failed > 0 ? { acceptFailedChecks: acceptFailed } : {}),
+    });
+  };
+
+  // Review shortcuts (issue #315): J or N the next pending proposal, A approve, E the first account to edit. Each one
+  // does only what its button would do now (A never while the step-up prompt waits for a code). The handlers are
+  // computed on each render and handed to the key listener after it commits, through the ref.
+  const pendingList = useQuery(orpc.inbox.list.queryOptions({ input: { status: 'pending' } }));
+  const linesRef = useRef<HTMLDivElement>(null);
+  const shortcuts = useRef<ShortcutHandlers>({});
+  const nextId = pendingList.data ? nextPendingId(pendingList.data, id) : null;
+  const handlers: ShortcutHandlers = {
+    ...(nextId && nextId !== id ? { next: () => void navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: nextId } }) } : {}),
+    ...(approveReady && !stepUp ? { approve: submitApproval } : {}),
+    ...(pending && item?.canEdit && !busy && payload
+      ? { edit: () => linesRef.current?.querySelector<HTMLSelectElement>('select:not(:disabled)')?.focus() }
+      : {}),
+  };
+  useEffect(() => {
+    shortcuts.current = handlers;
+  });
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const action = reviewShortcut(event);
+      const handler = action ? shortcuts.current[action] : undefined;
+      if (!handler) return;
+      event.preventDefault();
+      handler();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  if (detail.isLoading) return <Spinner />;
+  if (detail.error) return <ErrorText>{errorMessage(detail.error)}</ErrorText>;
+  if (!item) return null;
   const currency = payload?.invoice.currency ?? 'VND';
   const money = (value: string | null | undefined) => f.money(value, currency);
   const reading = item.extraction?.inFlight ?? false;
@@ -228,14 +284,6 @@ export function InboxDetailPage() {
     ) : null;
   const lastRun = item.extraction;
   const lastRunFailed = lastRun !== null && lastRun.status === 'failed' && lastRun.version !== lastRun.proposalVersion;
-  const submitApproval = () =>
-    approve.mutate({
-      id,
-      revision: item.revision,
-      idempotencyKey,
-      lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
-      ...(failed > 0 ? { acceptFailedChecks: acceptFailed } : {}),
-    });
   // After a fresh code the step-up prompt repeats the refused request as sent, not the page as it is now: if someone
   // saved a new revision meanwhile, the kernel answers STALE_REVISION instead of approving what this user never saw.
   // The same idempotency key keeps it one approval.
@@ -297,13 +345,13 @@ export function InboxDetailPage() {
                   </Button>
                 )}
                 {item.canApprove && reversal && (
-                  <Button size="lg" disabled={busy} onClick={() => approve.mutate({ id, revision: item.revision, idempotencyKey })}>
+                  <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
                     {approve.isPending ? <Spinner className="text-current" /> : null}
                     {t('approveReversal')}
                   </Button>
                 )}
                 {item.canApprove && !reversal && (
-                  <Button size="lg" disabled={busy || dirty || !payload || blocked || (failed > 0 && !acceptFailed)} onClick={submitApproval}>
+                  <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
                     {approve.isPending ? <Spinner className="text-current" /> : null}
                     {t('approve')}
                   </Button>
@@ -368,6 +416,7 @@ export function InboxDetailPage() {
           </ErrorText>
         </div>
       )}
+      {pending && (item.canApprove || item.canEdit) && <p className="mb-4 text-xs text-subtle-foreground">{t('shortcuts')}</p>}
       {pending && dirty && (
         <p className="mb-4 text-sm text-muted-foreground">{t('dirty')}</p>
       )}
@@ -443,7 +492,7 @@ export function InboxDetailPage() {
           )}
 
           {payload && (
-            <Card className="block overflow-x-auto p-4">
+            <Card ref={linesRef} className="block overflow-x-auto p-4">
               <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('lines')}</p>
               <table className="mt-3 w-full min-w-[560px] text-sm">
                 <thead className="text-left text-xs text-subtle-foreground">

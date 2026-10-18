@@ -128,7 +128,7 @@ export const inboxList = defineQuery({
       sql<string>`(SELECT count(*) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(payload -> 'checks') = 'array' THEN payload -> 'checks' ELSE '[]'::jsonb END) c WHERE c ->> 'status' = ${status})`;
     let query = ctx.trx
       .selectFrom('crove_kernel.proposal')
-      .select(['id', 'kind', 'status', 'title', 'duplicate_of', 'created_at'])
+      .select(['id', 'kind', 'status', 'title', 'revision', 'duplicate_of', 'created_at'])
       .select([
         sql<string | null>`left(payload #>> '{seller,name}', 500)`.as('seller_name'),
         sql<boolean>`coalesce(payload ->> 'direction' = 'sale', false)`.as('is_sale'),
@@ -148,6 +148,8 @@ export const inboxList = defineQuery({
       status: row.status,
       title: row.title,
       direction: row.kind === PURCHASE_KIND ? (row.is_sale ? ('sale' as const) : ('purchase' as const)) : null,
+      // The revision the list shows, which a bulk approval names (it refuses a proposal edited since: STALE_REVISION).
+      revision: row.revision,
       sellerName: row.seller_name,
       buyerName: row.kind === PURCHASE_KIND && row.is_sale ? row.buyer_name : null,
       total: row.total && zMoney.safeParse(row.total).success ? row.total : null,

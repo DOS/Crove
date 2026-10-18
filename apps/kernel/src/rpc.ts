@@ -13,6 +13,7 @@ import {
   sessionOrgs,
   upstreamAuth,
   type AcceptedInvite,
+  type BulkApproveResult,
   type ChannelConnectInput,
   type OrgSummary,
 } from '@crove/kernel';
@@ -450,6 +451,26 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         inOrg(context, (orgId, actor) => {
           const { idempotencyKey, ...rest } = input;
           return runtime.execute('kernel.proposal.approve', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+      approveMany: os.inbox.approveMany.handler(({ context, input }) =>
+        inOrg(context, async (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          const { results } = await runtime.execute<{ results: BulkApproveResult[] }>('kernel.proposal.approve_many', rest, { actor, orgId, idempotencyKey });
+          return {
+            results: results.map((r) => {
+              if (r.outcome === 'refused') return r;
+              const ids = r.result as { journalEntryId?: string; documentId?: string; reversedEntryId?: string; voidedDocumentId?: string };
+              return {
+                id: r.id,
+                outcome: r.outcome,
+                ...(ids.journalEntryId ? { journalEntryId: ids.journalEntryId } : {}),
+                ...(ids.documentId ? { documentId: ids.documentId } : {}),
+                ...(ids.reversedEntryId ? { reversedEntryId: ids.reversedEntryId } : {}),
+                ...(ids.voidedDocumentId ? { voidedDocumentId: ids.voidedDocumentId } : {}),
+              };
+            }),
+          };
         }),
       ),
       edit: os.inbox.edit.handler(({ context, input }) =>
