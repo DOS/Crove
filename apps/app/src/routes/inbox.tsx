@@ -163,7 +163,7 @@ export function InboxPage() {
           <p className="mt-1 text-xs text-subtle-foreground">{t('formatsZip')}</p>
         </div>
         <Card className="block p-4">
-          <p className="text-xs font-medium tracking-wide text-subtle-foreground uppercase">{t('forwardTitle')}</p>
+          <p className="text-sm font-medium text-muted-foreground">{t('forwardTitle')}</p>
           {org.isLoading ? (
             <div className="mt-3">
               <Spinner />
@@ -185,7 +185,7 @@ export function InboxPage() {
 
       {(files.data?.length ?? 0) > 0 && (
         <div className="mt-6">
-          <p className="mb-2 text-xs font-medium tracking-wide text-subtle-foreground uppercase">
+          <p className="mb-2 text-sm font-medium text-muted-foreground">
             {t('recentFiles')}{' '}
             {processing > 0 && <span className="ml-1 text-link normal-case">· {t('readingCount', { count: processing })}</span>}
           </p>
@@ -324,6 +324,7 @@ export function InboxPage() {
           />
         ) : (
           <DataTable
+            numeric={[bulkEnabled ? 3 : 2]}
             head={[
               ...(bulkEnabled ? [''] : []),
               t('columns.document'),
@@ -363,7 +364,7 @@ export function InboxPage() {
                   <p className="text-xs text-subtle-foreground">{item.title}</p>
                 </TableCell>
                 <TableCell className="px-4 py-3 text-muted-foreground">{f.date(item.issueDate)}</TableCell>
-                <TableCell className="px-4 py-3 text-foreground tabular-nums">{f.money(item.total)}</TableCell>
+                <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">{f.money(item.total)}</TableCell>
                 <TableCell className="px-4 py-3">
                   <div className="flex flex-wrap gap-1">
                     {/* A reversal a user asked for has no invoice checks; its card shows the entry it reverses. */}
