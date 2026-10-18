@@ -1,0 +1,1049 @@
+<title>Crove - Phương án D</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600&display=swap">
+<style>
+:root {
+  --bg: #FFFFFF;
+  --fg: #1C1730;
+  --muted: #5A5470;
+  --surface: #F6F3FE;
+  --surface-2: #ECE6FB;
+  --raised: #FFFFFF;
+  --line: #E2DCF2;
+  --line-strong: #7D7399;
+  --track: #E2DCF2;
+  --primary: #6236E0;
+  --primary-hover: #5129C7;
+  --primary-mid: #9D82F0;
+  --primary-light: #C9B9F8;
+  --on-primary: #FFFFFF;
+  --primary-soft: #EDE7FD;
+  --primary-soft-fg: #4B22C2;
+  --amber: #8A4B00;
+  --amber-bg: #FFF3DC;
+  --amber-line: #B86E00;
+  --green: #1E7A46;
+  --green-bg: #E3F4EA;
+  --device: #1C1730;
+  --device-edge: #2E2742;
+  --cam: #2A2433;
+  --cam-fg: #F4F1FA;
+  --paper: #FFFDF7;
+  --paper-ink: #2A2433;
+  --paper-line: #D8D2C4;
+  --code-bg: #1C1730;
+  --code-fg: #F1ECF8;
+  --code-muted: #B4AAC6;
+  --shadow: 0 28px 56px -24px rgba(48, 26, 110, 0.35), 0 2px 6px rgba(28, 23, 48, 0.08);
+  --focus: #6236E0;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #17121F;
+    --fg: #F1ECF8;
+    --muted: #B4AAC6;
+    --surface: #221B2D;
+    --surface-2: #2C2439;
+    --raised: #2A2236;
+    --line: #3A3148;
+    --line-strong: #8A7FA0;
+    --track: #3A3148;
+    --primary: #A98BFF;
+    --primary-hover: #BBA2FF;
+    --primary-mid: #7458C9;
+    --primary-light: #4E3D86;
+    --on-primary: #17121F;
+    --primary-soft: #2F2547;
+    --primary-soft-fg: #CDBBFF;
+    --amber: #F5B85A;
+    --amber-bg: #3A2A14;
+    --amber-line: #C98A2E;
+    --green: #6FD49A;
+    --green-bg: #173225;
+    --device: #0B0810;
+    --device-edge: #3A3148;
+    --cam: #100C16;
+    --cam-fg: #F1ECF8;
+    --paper: #ECE6D8;
+    --paper-ink: #241E2C;
+    --paper-line: #C9C1B0;
+    --code-bg: #0F0B15;
+    --code-fg: #F1ECF8;
+    --code-muted: #B4AAC6;
+    --shadow: 0 28px 60px -24px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(169, 139, 255, 0.10);
+    --focus: #A98BFF;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #17121F;
+  --fg: #F1ECF8;
+  --muted: #B4AAC6;
+  --surface: #221B2D;
+  --surface-2: #2C2439;
+  --raised: #2A2236;
+  --line: #3A3148;
+  --line-strong: #8A7FA0;
+  --track: #3A3148;
+  --primary: #A98BFF;
+  --primary-hover: #BBA2FF;
+  --primary-mid: #7458C9;
+  --primary-light: #4E3D86;
+  --on-primary: #17121F;
+  --primary-soft: #2F2547;
+  --primary-soft-fg: #CDBBFF;
+  --amber: #F5B85A;
+  --amber-bg: #3A2A14;
+  --amber-line: #C98A2E;
+  --green: #6FD49A;
+  --green-bg: #173225;
+  --device: #0B0810;
+  --device-edge: #3A3148;
+  --cam: #100C16;
+  --cam-fg: #F1ECF8;
+  --paper: #ECE6D8;
+  --paper-ink: #241E2C;
+  --paper-line: #C9C1B0;
+  --code-bg: #0F0B15;
+  --code-fg: #F1ECF8;
+  --code-muted: #B4AAC6;
+  --shadow: 0 28px 60px -24px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(169, 139, 255, 0.10);
+  --focus: #A98BFF;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Lexend", system-ui, sans-serif;
+  font-size: 17px;
+  line-height: 1.6;
+  font-weight: 400;
+  overflow-x: hidden;
+}
+@media (min-width: 900px) { body { font-size: 18px; } }
+h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.015em; line-height: 1.15; }
+p { margin: 0; }
+ul, ol { margin: 0; padding: 0; list-style: none; }
+a { color: var(--primary); text-underline-offset: 3px; }
+a:hover { color: var(--primary-hover); }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
+.num { font-variant-numeric: tabular-nums; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.wrap {
+  max-width: 1232px;
+  margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 44px; padding: 0 20px; border-radius: 8px;
+  font: inherit; font-size: 16px; font-weight: 500; text-decoration: none;
+  border: 1px solid transparent; cursor: pointer; white-space: nowrap;
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+}
+.btn-primary { background: var(--primary); color: var(--on-primary); }
+.btn-primary:hover { background: var(--primary-hover); color: var(--on-primary); }
+.btn-secondary { background: transparent; color: var(--fg); border-color: var(--line-strong); }
+.btn-secondary:hover { background: var(--surface); color: var(--fg); }
+.btn-soft { background: var(--primary-soft); color: var(--primary-soft-fg); min-height: 40px; padding: 0 16px; font-size: 15px; }
+.btn-soft:hover { background: var(--surface-2); color: var(--primary-soft-fg); }
+
+/* Header */
+.site-header {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  background: var(--bg); border-bottom: 1px solid var(--line);
+}
+.nav { display: flex; align-items: center; gap: 24px; min-height: 68px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; color: var(--fg); text-decoration: none; font-weight: 600; font-size: 22px; letter-spacing: -0.015em; }
+.brand:hover { color: var(--fg); }
+.brand svg { width: 32px; height: 32px; color: var(--primary); flex: none; }
+.nav-links { display: flex; gap: 4px; margin-left: 12px; }
+.nav-links a { display: inline-flex; align-items: center; min-height: 40px; padding: 0 12px; border-radius: 8px; color: var(--muted); text-decoration: none; font-size: 16px; }
+.nav-links a:hover { color: var(--fg); background: var(--surface); }
+.nav-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.nav-login { display: inline-flex; align-items: center; min-height: 40px; padding: 0 12px; color: var(--fg); text-decoration: none; font-size: 16px; border-radius: 8px; }
+.nav-login:hover { color: var(--fg); background: var(--surface); }
+.icon-btn {
+  width: 40px; height: 40px; display: inline-grid; place-items: center;
+  border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer;
+}
+.icon-btn:hover { background: var(--surface); }
+.icon-btn svg { width: 20px; height: 20px; }
+.icon-btn .i-sun { display: none; }
+:root[data-theme="dark"] .icon-btn .i-sun { display: block; }
+:root[data-theme="dark"] .icon-btn .i-moon { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-btn .i-sun { display: block; }
+  :root:not([data-theme="light"]) .icon-btn .i-moon { display: none; }
+}
+@media (max-width: 860px) { .nav-links { display: none; } }
+@media (max-width: 480px) { .nav-login { display: none; } .nav { gap: 12px; } }
+
+/* Hero */
+.hero { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); gap: 56px; align-items: center; padding-block: 64px 72px; }
+.hero-text { min-width: 0; }
+.hero h1 { font-size: clamp(38px, 5.4vw, 58px); line-height: 1.12; }
+.hero h1 span { display: block; }
+.lead { margin-top: 24px; font-size: clamp(18px, 1.6vw, 20px); color: var(--muted); max-width: 34em; }
+.hero-cta { margin-top: 32px; display: flex; flex-wrap: wrap; gap: 12px; }
+.hero-points { margin-top: 32px; display: grid; gap: 10px; color: var(--fg); font-size: 16px; }
+.hero-points li { display: flex; gap: 10px; align-items: flex-start; }
+.hero-points svg, .trust-list svg { width: 20px; height: 20px; flex: none; margin-top: 3px; color: var(--green); }
+@media (max-width: 920px) { .hero { grid-template-columns: minmax(0, 1fr); gap: 48px; padding-block: 40px 56px; } }
+
+/* Phone */
+.phone-col { display: flex; flex-direction: column; align-items: center; gap: 18px; min-width: 0; margin: 0; }
+.phone {
+  position: relative; width: 304px; max-width: 100%; height: 624px;
+  background: var(--device); border: 1px solid var(--device-edge);
+  border-radius: 46px; padding: 10px; box-shadow: var(--shadow);
+}
+.screen { position: relative; height: 100%; border-radius: 36px; overflow: hidden; background: var(--bg); }
+.scr { position: absolute; inset: 0; display: flex; flex-direction: column; opacity: 0; visibility: hidden; }
+.phone[data-step="1"] .s1, .phone[data-step="2"] .s2, .phone[data-step="3"] .s3 { opacity: 1; visibility: visible; }
+.sbar { display: flex; justify-content: space-between; padding: 14px 24px 0; font-size: 12px; font-weight: 500; color: var(--fg); }
+.appbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 18px 12px; border-bottom: 1px solid var(--line); }
+.appbar b { font-size: 15px; font-weight: 600; }
+.appbar span { font-size: 12px; color: var(--muted); }
+.scr-body { padding: 14px; display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; }
+
+/* state 1: camera */
+.s1 { background: var(--cam); color: var(--cam-fg); }
+.s1 .sbar { color: var(--cam-fg); }
+.cam-title { text-align: center; font-size: 14px; font-weight: 500; padding: 10px 0 0; }
+.viewfinder { position: relative; margin: 18px 22px 0; height: 380px; display: grid; place-items: center; }
+.corner { position: absolute; width: 28px; height: 28px; border: 3px solid var(--primary-mid); }
+.corner.tl { top: 0; left: 0; border-right: 0; border-bottom: 0; border-top-left-radius: 12px; }
+.corner.tr { top: 0; right: 0; border-left: 0; border-bottom: 0; border-top-right-radius: 12px; }
+.corner.bl { bottom: 0; left: 0; border-right: 0; border-top: 0; border-bottom-left-radius: 12px; }
+.corner.br { bottom: 0; right: 0; border-left: 0; border-top: 0; border-bottom-right-radius: 12px; }
+.paper {
+  width: 196px; padding: 16px 14px; background: var(--paper); color: var(--paper-ink);
+  border-radius: 4px; transform: rotate(-3deg); font-size: 9.5px; line-height: 1.45;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.paper b { font-size: 11px; font-weight: 600; text-align: center; }
+.paper .ctr { text-align: center; }
+.pl { display: flex; justify-content: space-between; gap: 6px; border-top: 1px solid var(--paper-line); padding-top: 4px; font-variant-numeric: tabular-nums; }
+.pl.tot { font-weight: 600; }
+.paper .stamp { margin-top: 6px; height: 22px; border: 1px dashed var(--paper-line); border-radius: 3px; }
+.cam-hint { text-align: center; font-size: 13px; margin-top: 18px; color: var(--cam-fg); }
+.shutter { margin: 20px auto 0; width: 62px; height: 62px; border-radius: 50%; border: 4px solid var(--cam-fg); display: grid; place-items: center; }
+.shutter::after { content: ""; width: 46px; height: 46px; border-radius: 50%; background: var(--cam-fg); }
+
+/* state 2: checked */
+.done-head { display: flex; gap: 10px; align-items: center; padding: 12px; border-radius: 12px; background: var(--green-bg); color: var(--green); font-weight: 500; font-size: 15px; line-height: 1.35; }
+.done-head svg { width: 24px; height: 24px; flex: none; }
+.mini-inv { border: 1px solid var(--line); border-radius: 12px; padding: 12px; font-size: 13px; display: grid; gap: 3px; }
+.mini-inv b { font-weight: 600; font-size: 14px; }
+.mini-inv span { color: var(--muted); }
+.mini-inv .total { display: flex; justify-content: space-between; color: var(--fg); font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.checks { display: grid; gap: 8px; font-size: 14px; }
+.checks li { display: flex; gap: 10px; align-items: center; }
+.checks svg { width: 18px; height: 18px; color: var(--green); flex: none; }
+
+/* state 3: entry card */
+.entry { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 14px; display: grid; gap: 10px; }
+.entry-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.entry-top b { font-size: 14px; font-weight: 600; line-height: 1.35; display: block; }
+.entry-top div span { display: block; font-size: 12px; color: var(--muted); line-height: 1.4; margin-top: 2px; }
+.lines { display: grid; gap: 6px; font-size: 13px; }
+.line { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 6px; align-items: baseline; padding-top: 6px; border-top: 1px solid var(--line); }
+.line .side { font-weight: 600; color: var(--muted); }
+.line .acc { min-width: 0; }
+.line .acc small { display: block; font-size: 11px; color: var(--muted); line-height: 1.3; }
+.line .v { font-variant-numeric: tabular-nums; font-weight: 500; }
+.hint { font-size: 12px; color: var(--muted); line-height: 1.45; }
+.mock-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 2px; }
+.mock-btn { display: flex; align-items: center; justify-content: center; height: 40px; border-radius: 8px; font-size: 14px; font-weight: 500; }
+.mock-btn.pri { background: var(--primary); color: var(--on-primary); }
+.mock-btn.sec { border: 1px solid var(--line-strong); color: var(--fg); }
+.fa-note { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); justify-content: center; }
+.fa-note svg { width: 14px; height: 14px; }
+.next { margin-top: auto; border: 1px solid var(--amber-line); background: var(--amber-bg); border-radius: 12px; padding: 10px 12px; display: grid; gap: 4px; font-size: 13px; justify-items: start; }
+.next-label { font-size: 11px; color: var(--amber); }
+.next-row { display: flex; justify-content: space-between; gap: 8px; width: 100%; font-weight: 500; }
+.next-row .num { white-space: nowrap; }
+
+/* tags */
+.tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; line-height: 1.6; white-space: nowrap; }
+.tag.ok { background: var(--green-bg); color: var(--green); }
+.tag.warn { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber-line); }
+.tag.info { background: var(--primary-soft); color: var(--primary-soft-fg); }
+
+/* sequence labels */
+.seq { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center; font-size: 14px; }
+.seq ol { display: flex; gap: 6px; }
+.seq li { padding: 4px 10px; border-radius: 8px; color: var(--muted); border: 1px solid var(--line); }
+.phone-col[data-step="1"] .seq li:nth-child(1),
+.phone-col[data-step="2"] .seq li:nth-child(2),
+.phone-col[data-step="3"] .seq li:nth-child(3) { color: var(--primary-soft-fg); background: var(--primary-soft); border-color: var(--primary-soft); }
+.replay { font: inherit; font-size: 14px; color: var(--primary); background: none; border: 0; padding: 4px 8px; min-height: 32px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; border-radius: 6px; }
+.phone-col figcaption { font-size: 14px; color: var(--muted); text-align: center; max-width: 30em; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .scr { transition: opacity .55s ease, visibility .55s ease, transform .55s ease; transform: translateY(8px); }
+  .phone[data-step="1"] .s1, .phone[data-step="2"] .s2, .phone[data-step="3"] .s3 { transform: none; }
+  .phone.is-playing .checks li { transition: opacity .3s ease, transform .3s ease; }
+  .phone.is-playing[data-step="1"] .checks li { opacity: 0; transform: translateX(-6px); }
+  .phone.is-playing .checks li:nth-child(2) { transition-delay: .25s; }
+  .phone.is-playing .checks li:nth-child(3) { transition-delay: .5s; }
+  .phone.is-playing .checks li:nth-child(4) { transition-delay: .75s; }
+  .phone.is-playing .checks li:nth-child(5) { transition-delay: 1s; }
+  .seq li { transition: background-color .3s ease, color .3s ease, border-color .3s ease; }
+}
+
+/* Section scaffolding */
+.section { padding-block: 72px; }
+.sec-head { display: grid; gap: 12px; max-width: 46em; margin-bottom: 36px; }
+.sec-head h2 { font-size: clamp(30px, 3.4vw, 42px); }
+.sec-head p { color: var(--muted); font-size: 18px; }
+.sample { display: inline-block; margin-top: 4px; font-size: 14px; color: var(--muted); }
+
+/* Tiles */
+.tiles { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
+.tile { background: var(--surface); border-radius: 16px; padding: 22px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.t-inbox { grid-column: span 7; grid-row: span 2; }
+.t-agent, .t-vat, .t-cal { grid-column: span 5; }
+.t-cost { grid-column: span 7; }
+.tile-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.tile-head h3 { font-size: 20px; }
+.tile-head .meta { font-size: 14px; color: var(--muted); }
+@media (max-width: 1040px) {
+  .t-inbox, .t-agent, .t-vat, .t-cost, .t-cal { grid-column: span 6; grid-row: auto; }
+  .t-inbox, .t-cost { grid-column: span 12; }
+}
+@media (max-width: 680px) {
+  .t-inbox, .t-agent, .t-vat, .t-cost, .t-cal { grid-column: span 12; }
+  .tile { padding: 18px; }
+}
+
+/* inbox */
+.inbox { display: grid; gap: 8px; }
+.inbox li { background: var(--raised); border-radius: 12px; padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; align-items: center; border: 1px solid transparent; }
+.inbox li.attn { background: var(--amber-bg); border-color: var(--amber-line); }
+.inbox .r-title { font-weight: 500; font-size: 16px; line-height: 1.4; }
+.inbox .r-sub { font-size: 14px; color: var(--muted); grid-column: 1; line-height: 1.45; }
+.inbox .r-end { grid-row: 1 / span 3; grid-column: 2; display: grid; justify-items: end; gap: 6px; }
+.inbox .amt { font-weight: 600; font-variant-numeric: tabular-nums; font-size: 16px; white-space: nowrap; }
+.inbox li.attn .r-sub { color: var(--amber); }
+.accs { grid-column: 1; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.accs span { font-size: 13px; padding: 1px 8px; border-radius: 6px; background: var(--surface); color: var(--muted); font-variant-numeric: tabular-nums; }
+.inbox li.attn .accs span { background: var(--raised); }
+.attn-note { grid-column: 1 / -1; font-size: 14px; color: var(--amber); margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--amber-line); line-height: 1.5; }
+.tile-foot { margin-top: auto; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 14px; color: var(--muted); }
+@media (max-width: 480px) {
+  .inbox li { grid-template-columns: minmax(0, 1fr); }
+  .inbox .r-end { grid-row: auto; grid-column: 1; justify-items: start; grid-auto-flow: column; align-items: center; justify-content: start; gap: 10px; margin-top: 6px; }
+}
+
+/* agent */
+.agent-who { display: flex; gap: 12px; align-items: center; }
+.avatar { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--primary-soft); color: var(--primary-soft-fg); flex: none; }
+.avatar svg { width: 24px; height: 24px; }
+.agent-who b { display: block; font-weight: 500; font-size: 16px; line-height: 1.35; }
+.agent-who span { font-size: 14px; color: var(--muted); }
+.budget-label { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; color: var(--muted); flex-wrap: wrap; }
+.budget-label b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.meter { height: 12px; border-radius: 6px; background: var(--track); overflow: hidden; margin-top: 8px; }
+.meter i { display: block; height: 100%; width: 32%; background: var(--primary); border-radius: 6px; }
+.rules { display: grid; gap: 6px; font-size: 14px; }
+.rules li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
+.rules .k { color: var(--muted); }
+
+/* vat */
+.big-num { font-size: clamp(30px, 3.2vw, 38px); font-weight: 600; letter-spacing: -0.015em; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.big-sub { font-size: 14px; color: var(--muted); margin-top: 4px; }
+.vat-body { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 20px; align-items: end; }
+.cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; height: 132px; align-items: end; }
+.col { display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; font-size: 13px; color: var(--muted); }
+.col .stack { width: 30px; display: flex; flex-direction: column-reverse; border-radius: 6px 6px 0 0; overflow: hidden; }
+.col .stack i { display: block; }
+.col .empty { width: 30px; height: 2px; background: var(--line-strong); }
+.legend { display: grid; gap: 6px; font-size: 13px; }
+.legend li { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; }
+.legend .v { font-variant-numeric: tabular-nums; }
+.c1 { background: var(--primary); }
+.c2 { background: var(--primary-mid); }
+.c3 { background: var(--primary-light); }
+.fine { font-size: 14px; color: var(--muted); line-height: 1.5; }
+@media (max-width: 400px) { .vat-body { grid-template-columns: minmax(0, 1fr); } .cols { max-width: 200px; } }
+
+/* cost bars */
+.bars { display: grid; gap: 12px; }
+.bar-row { display: grid; grid-template-columns: 190px minmax(0, 1fr) 118px; gap: 14px; align-items: center; font-size: 15px; }
+.bar-row .name { min-width: 0; line-height: 1.35; }
+.bar-row .name small { display: block; font-size: 13px; color: var(--muted); }
+.bar-row .name small.warn-t { color: var(--amber); }
+.bar-track { position: relative; height: 20px; }
+.bar-track i { position: absolute; left: 0; top: 0; bottom: 0; min-width: 3px; background: var(--primary); border-radius: 0 4px 4px 0; }
+.bar-track i.pending { background: var(--amber-line); }
+.bar-row .v { text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; white-space: nowrap; }
+.axis { display: grid; grid-template-columns: 190px minmax(0, 1fr) 118px; gap: 14px; font-size: 12px; color: var(--muted); }
+.axis .ticks { position: relative; height: 18px; border-top: 1px solid var(--line-strong); }
+.axis .ticks span { position: absolute; top: 2px; transform: translateX(-50%); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.axis .ticks span:first-child { transform: none; }
+.axis .ticks span:last-child { transform: translateX(-100%); }
+.grid-bg { position: relative; }
+.grid-bg::before { content: ""; position: absolute; top: 0; bottom: 0; left: calc(190px + 14px); right: calc(118px + 14px);
+  background-image: linear-gradient(to right, var(--line) 1px, transparent 1px);
+  background-size: calc(100% / 3) 100%; pointer-events: none; }
+@media (max-width: 600px) {
+  .bar-row, .axis { grid-template-columns: minmax(0, 1fr) auto; }
+  .bar-row .name { grid-column: 1; }
+  .bar-row .v { grid-column: 2; grid-row: 1; }
+  .bar-track { grid-column: 1 / -1; }
+  .axis .lbl, .axis .sp { display: none; }
+  .axis .ticks { grid-column: 1 / -1; }
+  .grid-bg::before { display: none; }
+}
+
+/* calendar */
+.week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; text-align: center; }
+.day { border-radius: 12px; padding: 8px 0; background: var(--raised); display: grid; gap: 2px; font-size: 13px; color: var(--muted); }
+.day b { font-size: 17px; color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+.day.today { background: var(--primary); color: var(--on-primary); }
+.day.today b { color: var(--on-primary); }
+.day .mark { width: 6px; height: 6px; border-radius: 50%; margin: 2px auto 0; background: transparent; }
+.day.has .mark { background: var(--amber-line); }
+.day.today.has .mark { background: var(--on-primary); }
+.post { background: var(--raised); border-radius: 12px; padding: 14px 16px; display: grid; gap: 8px; border-left: 4px solid var(--amber-line); }
+.post-top { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+.post-time { font-weight: 600; font-variant-numeric: tabular-nums; }
+.post-title { font-weight: 500; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font-size: 13px; padding: 2px 10px; border-radius: 6px; border: 1px solid var(--line); color: var(--fg); background: var(--surface); }
+
+/* Steps */
+.steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 28px; counter-reset: s; }
+.steps li { position: relative; display: grid; gap: 10px; align-content: start; padding-top: 22px; border-top: 3px solid var(--primary-soft); min-width: 0; }
+.steps li::before { counter-increment: s; content: counter(s); font-size: 40px; font-weight: 600; color: var(--primary); line-height: 1; font-variant-numeric: tabular-nums; }
+.steps h3 { font-size: 20px; line-height: 1.3; }
+.steps p { color: var(--muted); font-size: 16px; }
+.steps .proof { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 6px; }
+.file { display: inline-flex; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 8px; background: var(--green-bg); color: var(--green); font-size: 13px; font-weight: 500; max-width: 100%; overflow-wrap: anywhere; }
+.file svg { width: 16px; height: 16px; flex: none; }
+@media (max-width: 960px) { .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .steps { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+
+/* Who does what */
+.who { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 20px; }
+.flow-box, .org-box { background: var(--surface); border-radius: 16px; padding: 24px; min-width: 0; }
+.flow-box h3, .org-box h3 { font-size: 18px; margin-bottom: 18px; }
+.flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 28px; }
+.node { position: relative; background: var(--raised); border-radius: 12px; padding: 14px; display: grid; gap: 6px; align-content: start; border: 1px solid var(--line); min-width: 0; }
+.node .role { font-size: 13px; font-weight: 500; color: var(--primary-soft-fg); background: var(--primary-soft); justify-self: start; padding: 1px 8px; border-radius: 6px; }
+.node.human .role { color: var(--green); background: var(--green-bg); }
+.node b { font-weight: 500; font-size: 15px; line-height: 1.35; }
+.node p { font-size: 13px; color: var(--muted); line-height: 1.5; }
+.node:not(:last-child)::after {
+  content: ""; position: absolute; top: 50%; right: -22px; width: 16px; height: 16px;
+  background: var(--line-strong);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 8h11M9 4l4 4-4 4' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+          mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 8h11M9 4l4 4-4 4' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  transform: translateY(-50%);
+}
+.reject { margin-top: 16px; display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: var(--amber); background: var(--amber-bg); border: 1px solid var(--amber-line); border-radius: 12px; padding: 12px 14px; }
+.reject svg { width: 18px; height: 18px; flex: none; margin-top: 2px; }
+.log-note { margin-top: 12px; font-size: 14px; color: var(--muted); }
+.org { display: grid; justify-items: center; gap: 0; }
+.org-node { width: 100%; max-width: 300px; background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; gap: 12px; align-items: center; }
+.org-node b { display: block; font-weight: 500; font-size: 15px; line-height: 1.35; }
+.org-node span { font-size: 13px; color: var(--muted); }
+.org-node .avatar { width: 38px; height: 38px; border-radius: 10px; }
+.org-node .avatar.person { background: var(--green-bg); color: var(--green); }
+.org-link { width: 2px; height: 26px; background: var(--line-strong); }
+.org-rules { margin-top: 16px; display: grid; gap: 8px; font-size: 14px; width: 100%; }
+.org-rules li { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; }
+.org-rules .k { font-weight: 500; }
+@media (max-width: 1040px) { .who { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  .flow { grid-template-columns: minmax(0, 1fr); gap: 26px; }
+  .node:not(:last-child)::after { top: auto; bottom: -21px; right: auto; left: 24px; transform: rotate(90deg); }
+}
+
+/* Trust + open source */
+.trust { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; align-items: start; }
+.trust-list { display: grid; gap: 16px; margin-top: 28px; }
+.trust-list li { display: flex; gap: 12px; }
+.trust-list b { font-weight: 500; }
+.trust-list p { color: var(--muted); font-size: 16px; }
+.tech { background: var(--surface); border-radius: 16px; padding: 26px; min-width: 0; display: grid; gap: 14px; }
+.tech h3 { font-size: 20px; }
+.tech p { color: var(--muted); font-size: 16px; }
+.code { position: relative; background: var(--code-bg); color: var(--code-fg); border-radius: 12px; padding: 18px 18px 18px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 14px; line-height: 1.8; overflow-x: auto; }
+.code pre { margin: 0; white-space: pre; }
+.code .c { color: var(--code-muted); }
+.copy-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.copy-status { font-size: 14px; color: var(--green); }
+@media (max-width: 900px) { .trust { grid-template-columns: minmax(0, 1fr); gap: 32px; } }
+
+/* Modules strip */
+.mods { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border-top: 1px solid var(--line); }
+.mods div { padding: 20px 20px 4px 0; min-width: 0; }
+.mods h3 { font-size: 18px; margin-bottom: 6px; }
+.mods p { font-size: 15px; color: var(--muted); }
+@media (max-width: 860px) { .mods { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .mods { grid-template-columns: minmax(0, 1fr); } }
+
+/* Pricing */
+.plans { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.plan { background: var(--surface); border-radius: 16px; padding: 28px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.plan h3 { font-size: 18px; color: var(--muted); font-weight: 500; }
+.plan .price { font-size: clamp(30px, 3vw, 38px); font-weight: 600; letter-spacing: -0.015em; line-height: 1.15; }
+.plan p { color: var(--muted); font-size: 16px; }
+.plan .btn { justify-self: start; margin-top: 6px; }
+.signup { display: grid; gap: 8px; margin-top: 6px; }
+.signup label { font-size: 15px; font-weight: 500; }
+.signup .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.signup input {
+  flex: 1 1 200px; min-width: 0; min-height: 44px; padding: 0 14px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: var(--raised); color: var(--fg); font: inherit; font-size: 16px;
+}
+.signup input::placeholder { color: var(--muted); }
+.signup-ok { font-size: 15px; color: var(--green); }
+@media (max-width: 760px) { .plans { grid-template-columns: minmax(0, 1fr); } }
+
+/* FAQ */
+.faq { display: grid; gap: 10px; max-width: 860px; }
+.faq details { background: var(--surface); border-radius: 12px; }
+.faq summary { cursor: pointer; list-style: none; padding: 18px 20px; font-weight: 500; display: flex; justify-content: space-between; gap: 16px; align-items: center; border-radius: 12px; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary svg { width: 20px; height: 20px; flex: none; color: var(--muted); }
+.faq details[open] summary svg { transform: rotate(45deg); }
+.faq .ans { padding: 0 20px 20px; color: var(--muted); font-size: 16px; display: grid; gap: 10px; }
+
+/* Footer */
+.site-footer { border-top: 1px solid var(--line); padding-block: 40px calc(72px + env(safe-area-inset-bottom, 0px)); margin-top: 32px; }
+.foot { display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+.foot p { color: var(--muted); font-size: 15px; max-width: 34em; margin-top: 10px; }
+.foot ul { display: flex; gap: 20px; flex-wrap: wrap; font-size: 15px; }
+.foot a { color: var(--fg); }
+
+.corner-tag {
+  position: fixed; z-index: 30;
+  left: max(12px, env(safe-area-inset-left, 0px));
+  bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  background: var(--fg); color: var(--bg); font-size: 13px; font-weight: 500;
+  padding: 6px 12px; border-radius: 8px;
+}
+</style>
+
+<header class="site-header">
+  <div class="wrap nav">
+    <a class="brand" href="#top" aria-label="Crove, về đầu trang">
+      <svg viewBox="0 0 144 144" aria-hidden="true" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M141.5 33.7c-4-1.1-7.5-2.4-11.1-3.2-6-1.3-9.4-4.8-10.7-10.7-0.8-3.4-1.9-6.7-2.9-10.1 0-0.2-0.2-0.3-0.3-0.7-1.2 4.1-2.4 8-3.6 11.9-0.3 1-0.7 2.1-1.1 3.1-0.9 2.3-2.5 4.1-4.9 4.9-4.3 1.4-8.7 2.7-13.1 4.1-0.6 0.2-1.3 0.4-2.3 0.7 3.7 1.1 7 2 10.4 3 1.5 0.4 3 0.9 4.4 1.4 2.9 1 4.8 2.9 5.8 5.8 1.5 4.7 2.9 9.4 4.4 14.2 0.1-0.3 0.3-0.6 0.4-0.9 1.3-4.3 2.6-8.6 3.9-12.9 1-3.4 3.3-5.6 6.7-6.6 4.3-1.1 8.8-2.5 13.8-4z" fill="currentColor"/>
+        <path d="M98.1 4c-0.7 2.2-1.3 4-1.7 5.8-0.6 2.3-2 3.6-4.2 4.1-1.8 0.5-3.7 1.1-5.9 1.7 2.3 0.7 4.2 1.3 6.2 1.8 2.1 0.6 3.3 1.8 3.9 3.9 0.5 1.9 1.1 3.7 1.8 5.9 0.6-2.1 1.2-3.7 1.6-5.4 0.6-2.4 2-4 4.5-4.6 1.8-0.4 3.5-1 5.7-1.6-1.2-0.4-2-0.6-2.8-0.9-6.6-1.9-6.2-1.6-8.1-7.9C98.7 6.1 98.4 5.3 98.1 4z" fill="currentColor"/>
+        <path d="M56.4 33.7C26.9 33.7 3 57.6 3 87.2c0 23 14.7 43.4 36.6 50.7 2.7 0.5 3.7-1.1 3.7-2.5 0-0.8 0.1-8.4 0.1-15.5 0-4.4 0.8-7 2.8-8.6-10.3-4.1-17.6-14.2-17.6-25.9 0-15.4 12.5-27.9 27.9-27.9 15.4 0 27.9 12.5 27.9 27.9 0 11.8-7.3 21.8-17.6 25.9 1.4 1.3 3.3 3.3 3.1 9.4-0.3 7.1-0.1 12.9-0.1 14.7 0 1.4 1 3.1 3.7 2.5 21.8-7.3 36.4-27.8 36.4-50.7C109.9 57.6 86 33.7 56.4 33.7z" fill="currentColor"/>
+      </svg>
+      <span>Crove</span>
+    </a>
+    <nav aria-label="Chính">
+      <ul class="nav-links">
+        <li><a href="#san-pham">Sản phẩm</a></li>
+        <li><a href="#ma-nguon-mo">Mã nguồn mở</a></li>
+        <li><a href="#bang-gia">Bảng giá</a></li>
+        <li><a href="https://github.com/DOS/Crove/tree/main/docs">Tài liệu</a></li>
+      </ul>
+    </nav>
+    <div class="nav-actions">
+      <button class="icon-btn" id="themeToggle" type="button" aria-label="Đổi giao diện sáng hoặc tối">
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg>
+      </button>
+      <a class="nav-login" href="#">Đăng nhập</a>
+      <a class="btn btn-soft" href="#bang-gia">Bắt đầu</a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+  <section class="wrap hero" id="san-pham" aria-labelledby="hero-h">
+    <div class="hero-text">
+      <h1 id="hero-h"><span>Chụp hoá đơn.</span> <span>Bấm duyệt.</span> <span>Sổ sách đã xong.</span></h1>
+      <p class="lead">Crove đọc hoá đơn đầu vào, tự kiểm tra từng con số và soạn sẵn bút toán theo Thông tư 133. Bạn xem lại trên điện thoại rồi bấm duyệt. Kế toán nhận file Excel đầy đủ.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#bang-gia">Bắt đầu miễn phí</a>
+        <a class="btn btn-secondary" href="#cach-lam">Xem cách hoạt động</a>
+      </div>
+      <ul class="hero-points">
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Đọc hoá đơn điện tử XML, file PDF và ảnh chụp</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Không có gì vào sổ khi bạn chưa duyệt</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Mã nguồn mở, tự cài trên máy chủ riêng miễn phí</li>
+      </ul>
+    </div>
+
+    <figure class="phone-col" id="phoneCol" data-step="3">
+      <div class="phone" id="phone" data-step="3">
+        <div class="screen">
+          <!-- State 1: photo -->
+          <div class="scr s1" aria-hidden="true">
+            <div class="sbar"><span>14:20</span><span>Crove</span></div>
+            <div class="cam-title">Chụp hoá đơn</div>
+            <div class="viewfinder">
+              <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+              <div class="paper">
+                <b>Hoá đơn giá trị gia tăng</b>
+                <span class="ctr">Ký hiệu 1C26TPT, số 00001284</span>
+                <span class="ctr">Ngày 14/10/2026</span>
+                <span>Bên bán: Công ty CP Bao Bì Phú Thịnh</span>
+                <span>MST: 0312 345 678</span>
+                <div class="pl"><span>Thùng carton 5 lớp</span><span>25.000.000</span></div>
+                <div class="pl"><span>Băng keo 48mm</span><span>5.400.000</span></div>
+                <div class="pl"><span>Thuế GTGT 8%</span><span>2.432.000</span></div>
+                <div class="pl tot"><span>Tổng thanh toán</span><span>32.832.000</span></div>
+                <div class="stamp"></div>
+              </div>
+            </div>
+            <p class="cam-hint">Đặt hoá đơn vào khung, giữ yên tay</p>
+            <div class="shutter"></div>
+          </div>
+
+          <!-- State 2: checked -->
+          <div class="scr s2" aria-hidden="true">
+            <div class="sbar"><span>14:20</span><span>Crove</span></div>
+            <div class="appbar"><b>Hoá đơn mới</b><span>Gạo Sạch Mekong</span></div>
+            <div class="scr-body">
+              <div class="done-head">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.8 2.8L16.5 9.5"/></svg>
+                <span>Đã đọc xong, 5/5 kiểm tra đạt</span>
+              </div>
+              <div class="mini-inv">
+                <b>Công ty CP Bao Bì Phú Thịnh</b>
+                <span>Số 00001284, ngày 14/10/2026</span>
+                <span>Mã CQT: M1-26-7F3A2-00001284</span>
+                <div class="total"><span>Tổng thanh toán</span><span>32.832.000 ₫</span></div>
+              </div>
+              <ul class="checks">
+                <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Tổng dòng khớp</li>
+                <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Thuế suất 8% đúng</li>
+                <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>MST hợp lệ</li>
+                <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Có mã CQT</li>
+                <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Không trùng hoá đơn đã nhập</li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- State 3: proposed entry (final, readable at rest) -->
+          <div class="scr s3">
+            <div class="sbar" aria-hidden="true"><span>14:21</span><span>Crove</span></div>
+            <div class="appbar"><b>AI Inbox</b><span>Gạo Sạch Mekong</span></div>
+            <div class="scr-body">
+              <div class="entry">
+                <div class="entry-top">
+                  <div><b>Bút toán đề xuất</b><span>Bao Bì Phú Thịnh, 14/10/2026</span></div>
+                  <span class="tag ok">Cân</span>
+                </div>
+                <div class="lines">
+                  <div class="line"><span class="side">Nợ</span><span class="acc">152<small>Nguyên liệu, vật liệu</small></span><span class="v">30.400.000</span></div>
+                  <div class="line"><span class="side">Nợ</span><span class="acc">1331<small>Thuế GTGT được khấu trừ</small></span><span class="v">2.432.000</span></div>
+                  <div class="line"><span class="side">Có</span><span class="acc">331<small>Phải trả người bán</small></span><span class="v">32.832.000</span></div>
+                </div>
+                <p class="hint">Tài khoản 152 đã dùng 6 lần cho nhà cung cấp này.</p>
+                <div class="mock-btns" aria-hidden="true"><span class="mock-btn sec">Sửa</span><span class="mock-btn pri">Duyệt</span></div>
+                <p class="fa-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></svg>Duyệt sẽ hỏi mã xác thực hai lớp</p>
+              </div>
+              <div class="next">
+                <span class="next-label">Tiếp theo, còn 3 chứng từ chờ duyệt</span>
+                <div class="next-row"><span>HTX Tân Hồng</span><span class="num">148.500.000 ₫</span></div>
+                <span class="tag warn">Thiếu mã CQT</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="seq">
+        <ol aria-label="Ba bước trên điện thoại">
+          <li>Chụp ảnh</li>
+          <li>Kiểm tra</li>
+          <li>Duyệt</li>
+        </ol>
+        <button class="replay" id="replay" type="button" hidden>Xem lại</button>
+      </div>
+      <figcaption>Trên điện thoại: chụp hoá đơn của Bao Bì Phú Thịnh, Crove kiểm tra 5 điểm, rồi đưa bút toán đã cân để bạn duyệt.</figcaption>
+    </figure>
+  </section>
+
+  <section class="wrap section" id="hom-nay" aria-labelledby="today-h">
+    <div class="sec-head">
+      <h2 id="today-h">Hôm nay của bạn</h2>
+      <p>Mở Crove là thấy việc cần xem, tiền đã chi và lịch sắp tới. Không phải đọc báo cáo dài.</p>
+      <span class="sample">Dữ liệu mẫu: Công ty TNHH Gạo Sạch Mekong, ngày 18/10/2026</span>
+    </div>
+
+    <div class="tiles">
+      <article class="tile t-inbox" aria-labelledby="ib-h">
+        <div class="tile-head"><h3 id="ib-h">AI Inbox</h3><span class="meta">4 chứng từ chờ duyệt</span></div>
+        <ul class="inbox">
+          <li class="attn">
+            <span class="r-title">Hợp tác xã Tân Hồng</span>
+            <span class="r-sub">Phiếu mua gạo nguyên liệu, TK 152</span>
+            <span class="accs"><span>Nợ 152</span><span>Có 331</span></span>
+            <span class="r-end"><span class="amt">148.500.000 ₫</span><span class="tag warn">Thiếu mã CQT</span></span>
+            <span class="attn-note">Cần bạn xem: phiếu này chưa có mã của cơ quan thuế. Hỏi lại bên bán trước khi duyệt.</span>
+          </li>
+          <li>
+            <span class="r-title">Công ty CP Bao Bì Phú Thịnh</span>
+            <span class="r-sub">Hoá đơn 00001284, 14/10/2026, TK 152</span>
+            <span class="accs"><span>Nợ 152</span><span>Nợ 1331</span><span>Có 331</span></span>
+            <span class="r-end"><span class="amt">32.832.000 ₫</span><span class="tag ok">5/5 đạt</span></span>
+          </li>
+          <li>
+            <span class="r-title">Hoá đơn điện EVN tháng 9</span>
+            <span class="r-sub">Chi phí quản lý, TK 6427</span>
+            <span class="accs"><span>Nợ 6427</span><span>Nợ 1331</span><span>Có 331</span></span>
+            <span class="r-end"><span class="amt">1.946.780 ₫</span><span class="tag ok">5/5 đạt</span></span>
+          </li>
+          <li>
+            <span class="r-title">Cước Viettel</span>
+            <span class="r-sub">Chi phí quản lý, TK 6427</span>
+            <span class="accs"><span>Nợ 6427</span><span>Nợ 1331</span><span>Có 331</span></span>
+            <span class="r-end"><span class="amt">880.000 ₫</span><span class="tag ok">5/5 đạt</span></span>
+          </li>
+        </ul>
+        <div class="tile-foot"><span>3 chứng từ sẵn sàng duyệt, 1 cần bạn xem</span><span class="num">Tổng 184.158.780 ₫</span></div>
+      </article>
+
+      <article class="tile t-agent" aria-labelledby="ag-h">
+        <div class="tile-head"><h3 id="ag-h">Agent Kế toán</h3><span class="tag info">Đang làm việc</span></div>
+        <div class="agent-who">
+          <span class="avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="7" width="14" height="11" rx="3"/><path d="M12 7V4.5M9.5 12h.01M14.5 12h.01M9.5 15h5"/></svg></span>
+          <div><b>Báo cáo cho Chị Lan</b><span>Kế toán trưởng</span></div>
+        </div>
+        <div>
+          <div class="budget-label"><span>Ngân sách tháng 10</span><b>640.000 / 2.000.000 ₫</b></div>
+          <div class="meter" role="img" aria-label="Đã dùng 32% ngân sách"><i></i></div>
+        </div>
+        <ul class="rules">
+          <li><span class="k">R1</span><span>Tự đề xuất bút toán vào AI Inbox</span></li>
+          <li><span class="k">R2, R3</span><span>Chuyển Chị Lan duyệt</span></li>
+        </ul>
+      </article>
+
+      <article class="tile t-vat" aria-labelledby="vat-h">
+        <div class="tile-head"><h3 id="vat-h">Thuế GTGT đầu vào quý IV</h3></div>
+        <div>
+          <div class="big-num">2.688.980 ₫</div>
+          <p class="big-sub">Được khấu trừ, tính đến 18/10/2026</p>
+        </div>
+        <div class="vat-body">
+          <div class="cols" role="img" aria-label="Tháng 10: 2.688.980 đồng. Tháng 11 và tháng 12 chưa có.">
+            <div class="col"><div class="stack" style="height: 100px"><i class="c1" style="height: 90.44%"></i><i class="c2" style="height: 6.58%"></i><i class="c3" style="height: 2.98%"></i></div><span>T10</span></div>
+            <div class="col"><div class="empty"></div><span>T11</span></div>
+            <div class="col"><div class="empty"></div><span>T12</span></div>
+          </div>
+          <ul class="legend">
+            <li><i class="c1"></i><span>Bao Bì Phú Thịnh, 8%</span><span class="v">2.432.000</span></li>
+            <li><i class="c2"></i><span>EVN, 10%</span><span class="v">176.980</span></li>
+            <li><i class="c3"></i><span>Viettel, 10%</span><span class="v">80.000</span></li>
+          </ul>
+        </div>
+        <p class="fine">Chưa tính phiếu Tân Hồng đang chờ bạn xem. Hạn nộp tờ khai quý IV: 31/01/2027.</p>
+      </article>
+
+      <article class="tile t-cost" aria-labelledby="cost-h">
+        <div class="tile-head"><h3 id="cost-h">Chi phí tháng 10 theo nhà cung cấp</h3><span class="meta num">Chưa gồm thuế, tổng 181.469.800 ₫</span></div>
+        <div class="bars grid-bg">
+          <div class="bar-row">
+            <span class="name">Hợp tác xã Tân Hồng<small class="warn-t">Chờ bạn xem</small></span>
+            <span class="bar-track"><i class="pending" style="width: 99%"></i></span>
+            <span class="v">148.500.000</span>
+          </div>
+          <div class="bar-row">
+            <span class="name">Bao Bì Phú Thịnh<small>Thùng carton, băng keo</small></span>
+            <span class="bar-track"><i style="width: 20.27%"></i></span>
+            <span class="v">30.400.000</span>
+          </div>
+          <div class="bar-row">
+            <span class="name">EVN<small>Tiền điện tháng 9</small></span>
+            <span class="bar-track"><i style="width: 1.18%"></i></span>
+            <span class="v">1.769.800</span>
+          </div>
+          <div class="bar-row">
+            <span class="name">Viettel<small>Cước viễn thông</small></span>
+            <span class="bar-track"><i style="width: 0.53%"></i></span>
+            <span class="v">800.000</span>
+          </div>
+        </div>
+        <div class="axis" aria-hidden="true">
+          <span class="lbl">Đơn vị: đồng</span>
+          <span class="ticks"><span style="left: 0">0</span><span style="left: 33.333%">50 triệu</span><span style="left: 66.667%">100 triệu</span><span style="left: 100%">150 triệu</span></span>
+          <span class="sp"></span>
+        </div>
+      </article>
+
+      <article class="tile t-cal" aria-labelledby="cal-h">
+        <div class="tile-head"><h3 id="cal-h">Lịch đăng bài tuần này</h3><span class="meta">12/10 đến 18/10/2026</span></div>
+        <ol class="week" aria-label="Các ngày trong tuần">
+          <li class="day"><span>T2</span><b>12</b><span class="mark"></span></li>
+          <li class="day"><span>T3</span><b>13</b><span class="mark"></span></li>
+          <li class="day"><span>T4</span><b>14</b><span class="mark"></span></li>
+          <li class="day"><span>T5</span><b>15</b><span class="mark"></span></li>
+          <li class="day"><span>T6</span><b>16</b><span class="mark"></span></li>
+          <li class="day"><span>T7</span><b>17</b><span class="mark"></span></li>
+          <li class="day today has" aria-label="Chủ nhật 18, hôm nay, có 1 bài"><span>CN</span><b>18</b><span class="mark"></span></li>
+        </ol>
+        <div class="post">
+          <div class="post-top"><span class="post-time">Hôm nay, 19:30</span><span class="tag warn">Chờ Anh Minh duyệt</span></div>
+          <span class="post-title">Gạo ST25 vụ mới đã về</span>
+          <div class="chips"><span class="chip">Facebook</span><span class="chip">TikTok</span></div>
+          <p class="fine">Mỗi kênh duyệt riêng. Chưa duyệt thì bài không đăng.</p>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="wrap section" id="cach-lam" aria-labelledby="how-h">
+    <div class="sec-head">
+      <h2 id="how-h">Bốn bước, mỗi tuần vài phút</h2>
+      <p>Bạn không cần biết định khoản. Crove làm phần ghi chép, bạn chỉ xác nhận.</p>
+    </div>
+    <ol class="steps">
+      <li>
+        <h3>Chụp hoặc chuyển tiếp hoá đơn</h3>
+        <p>Chụp ảnh bằng điện thoại, tải file PDF lên, hoặc chuyển tiếp email có hoá đơn điện tử XML vào địa chỉ riêng của công ty bạn.</p>
+        <div class="proof"><span class="chip">XML</span><span class="chip">PDF</span><span class="chip">Ảnh chụp</span></div>
+      </li>
+      <li>
+        <h3>Crove kiểm tra từng con số</h3>
+        <p>Cộng lại từng dòng, soát thuế suất, kiểm tra mã số thuế bên bán và mã của cơ quan thuế, xem hoá đơn đã nhập lần nào chưa.</p>
+        <div class="proof"><span class="tag ok">5 phép kiểm tra cố định</span></div>
+      </li>
+      <li>
+        <h3>Bạn bấm duyệt</h3>
+        <p>Xem bút toán gợi ý, đổi tài khoản nếu cần, rồi duyệt bằng mã xác thực hai lớp. Lần sau Crove nhớ lựa chọn của bạn cho nhà cung cấp đó.</p>
+      </li>
+      <li>
+        <h3>Kế toán nhận file Excel</h3>
+        <p>Nhà cung cấp, chứng từ và sổ nhật ký chung đã cân. Xuất file gửi kế toán, hoặc mời họ vào Crove xem trực tiếp.</p>
+        <div class="proof"><span class="file"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5M9 13l4 4M13 13l-4 4"/></svg>so-nhat-ky-chung-10-2026.xlsx</span></div>
+      </li>
+    </ol>
+  </section>
+
+  <section class="wrap section" id="ai-lam-gi" aria-labelledby="who-h">
+    <div class="sec-head">
+      <h2 id="who-h">Ai làm gì</h2>
+      <p>AI đọc và soạn. Quy tắc cố định kiểm tra. Người có quyền quyết định. Không con số nào vào sổ chỉ vì AI nói vậy.</p>
+    </div>
+    <div class="who">
+      <div class="flow-box">
+        <h3>Đường đi của một hoá đơn</h3>
+        <ol class="flow">
+          <li class="node"><span class="role">AI</span><b>Đọc và đề xuất</b><p>Lấy số liệu từ ảnh, PDF. Hoá đơn XML được đọc thẳng, không cần AI.</p></li>
+          <li class="node"><span class="role">Quy tắc</span><b>Kiểm tra tự động</b><p>Tổng dòng, thuế suất, MST, mã CQT, trùng lặp. Đạt hoặc không, không đoán.</p></li>
+          <li class="node human"><span class="role">Người</span><b>Bạn hoặc Chị Lan duyệt</b><p>Xem, sửa tài khoản, nhập mã hai lớp.</p></li>
+          <li class="node human"><span class="role">Sổ sách</span><b>Vào sổ, ghi lại</b><p>Bút toán cân. Ai duyệt, lúc nào, đều được ghi.</p></li>
+        </ol>
+        <p class="reject"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg><span>Không đạt kiểm tra: chứng từ nằm lại AI Inbox với lý do rõ ràng, ví dụ "Thiếu mã CQT", chờ bạn xem.</span></p>
+        <p class="log-note">Nhật ký thay đổi chỉ ghi thêm, không ai xoá hay sửa được dòng cũ.</p>
+      </div>
+      <div class="org-box">
+        <h3>Agent cũng có sếp</h3>
+        <div class="org">
+          <div class="org-node">
+            <span class="avatar person"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 19.5a7 7 0 0 1 14 0"/></svg></span>
+            <div><b>Chị Lan</b><span>Kế toán trưởng</span></div>
+          </div>
+          <span class="org-link" aria-hidden="true"></span>
+          <div class="org-node">
+            <span class="avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="7" width="14" height="11" rx="3"/><path d="M12 7V4.5M9.5 12h.01M14.5 12h.01M9.5 15h5"/></svg></span>
+            <div><b>Agent Kế toán</b><span class="num">Ngân sách 2.000.000 ₫/tháng</span></div>
+          </div>
+          <ul class="org-rules">
+            <li><span class="k">Tự làm</span><span>Việc mức R1: đề xuất bút toán</span></li>
+            <li><span class="k">Phải hỏi</span><span>Việc mức R2, R3 chuyển Chị Lan duyệt</span></li>
+            <li><span class="k">Nút dừng</span><span>Chị Lan tắt agent bất cứ lúc nào</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap section" aria-labelledby="mods-h">
+    <div class="sec-head">
+      <h2 id="mods-h">Trong Crove có gì</h2>
+    </div>
+    <div class="mods">
+      <div><h3>Tài chính</h3><p>AI Inbox, chứng từ, sổ nhật ký chung, sổ cái, nhà cung cấp, tờ khai thuế GTGT, số dư đầu kỳ.</p></div>
+      <div><h3>Công việc</h3><p>Giao việc cho người và agent, theo dõi ai đang làm gì.</p></div>
+      <div><h3>AI Agents</h3><p>Agent nằm trong sơ đồ tổ chức như nhân viên: có quản lý, ngân sách, nút dừng.</p></div>
+      <div><h3>Social</h3><p>Lên lịch bài cho Facebook, LinkedIn, X, YouTube, TikTok, duyệt từng kênh, thư viện ảnh và video.</p></div>
+    </div>
+  </section>
+
+  <section class="wrap section" id="ma-nguon-mo" aria-labelledby="trust-h">
+    <div class="trust">
+      <div>
+        <div class="sec-head" style="margin-bottom: 0">
+          <h2 id="trust-h">Số liệu của bạn, quy tắc rõ ràng</h2>
+          <p>Crove là mã nguồn mở. Ai cũng đọc được phần mềm làm gì với sổ sách của bạn.</p>
+        </div>
+        <ul class="trust-list">
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><div><b>Mọi thay đổi đều được ghi</b><p>Nhật ký chỉ ghi thêm. Ai sửa gì, lúc nào, vẫn còn đó.</p></div></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><div><b>Dữ liệu từng công ty tách riêng</b><p>Tách ngay trong cơ sở dữ liệu bằng row-level security của PostgreSQL.</p></div></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><div><b>Duyệt luôn hỏi mã hai lớp</b><p>Mỗi lần duyệt bút toán cần một mã xác thực mới.</p></div></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><div><b>Giấy phép AGPL</b><p>Bạn được dùng, sửa và tự cài Crove. Không bị khoá vào một nhà cung cấp.</p></div></li>
+        </ul>
+      </div>
+      <div class="tech" aria-labelledby="tech-h">
+        <h3 id="tech-h">Cho người làm kỹ thuật</h3>
+        <p>Nếu công ty có người lo IT, Crove chạy trên máy chủ riêng bằng một lệnh. Đọc PDF và ảnh dùng bất kỳ mô hình AI tương thích OpenAI nào bạn chọn.</p>
+        <div class="code" tabindex="0" aria-label="Lệnh cài đặt"><pre><span class="c"># Tải mã nguồn và chạy</span>
+git clone https://github.com/DOS/Crove.git
+cd Crove
+docker compose up
+<span class="c"># Mở http://localhost:8080</span></pre></div>
+        <div class="copy-row">
+          <button class="btn btn-secondary" id="copyBtn" type="button">Chép lệnh</button>
+          <a href="https://github.com/DOS/Crove">Xem trên GitHub</a>
+          <span class="copy-status" id="copyStatus" role="status"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap section" id="bang-gia" aria-labelledby="price-h">
+    <div class="sec-head">
+      <h2 id="price-h">Bảng giá</h2>
+      <p>Hai cách dùng Crove. Tính năng như nhau.</p>
+    </div>
+    <div class="plans">
+      <div class="plan">
+        <h3>Tự host</h3>
+        <p class="price">Miễn phí</p>
+        <p>Mã nguồn mở AGPL. Cài trên máy chủ của bạn, dữ liệu nằm ở chỗ bạn.</p>
+        <a class="btn btn-secondary" href="https://github.com/DOS/Crove">Xem hướng dẫn cài</a>
+      </div>
+      <div class="plan">
+        <h3>Crove Cloud</h3>
+        <p class="price">Sắp ra mắt</p>
+        <p>Chúng tôi lo máy chủ, sao lưu và cập nhật. Đăng ký để được báo khi mở.</p>
+        <form class="signup" id="signup" novalidate>
+          <label for="email">Email của bạn</label>
+          <div class="row">
+            <input id="email" name="email" type="email" autocomplete="email" placeholder="ten@congty.vn">
+            <button class="btn btn-primary" type="submit">Đăng ký nhận tin</button>
+          </div>
+          <p class="signup-ok" id="signupOk" role="status"></p>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap section" id="hoi-dap" aria-labelledby="faq-h">
+    <div class="sec-head"><h2 id="faq-h">Câu hỏi thường gặp</h2></div>
+    <div class="faq">
+      <details open>
+        <summary>Tôi không biết kế toán có dùng được không?<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary>
+        <div class="ans"><p>Được. Bạn chỉ cần chụp hoặc chuyển tiếp hoá đơn. Crove chọn tài khoản theo Thông tư 133 và ghi rõ vì sao, ví dụ "đã dùng 6 lần cho nhà cung cấp này". Nếu chưa chắc, bạn để kế toán trưởng duyệt thay.</p></div>
+      </details>
+      <details>
+        <summary>AI đọc sai số thì sao?<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary>
+        <div class="ans"><p>Sau khi AI đọc, Crove cộng lại từng dòng, soát thuế suất, mã số thuế, mã của cơ quan thuế và xem có trùng không. Sai một điểm là không đạt và chứng từ chờ bạn xem. Chưa ai duyệt thì không có gì vào sổ.</p></div>
+      </details>
+      <details>
+        <summary>Kế toán dịch vụ của tôi có dùng được số liệu không?<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary>
+        <div class="ans"><p>Có. Bạn xuất file Excel gồm nhà cung cấp, chứng từ và sổ nhật ký chung. Hoặc mời kế toán vào Crove với quyền phù hợp để họ tự xem và duyệt.</p></div>
+      </details>
+      <details>
+        <summary>Dữ liệu của tôi để ở đâu?<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary>
+        <div class="ans"><p>Nếu tự host, dữ liệu nằm trên máy chủ của bạn. Crove Cloud đang chuẩn bị ra mắt. Ở cả hai cách, dữ liệu từng công ty được tách riêng trong cơ sở dữ liệu.</p></div>
+      </details>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap foot">
+    <div>
+      <a class="brand" href="#top" aria-label="Crove, về đầu trang">
+        <svg viewBox="0 0 144 144" aria-hidden="true" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M141.5 33.7c-4-1.1-7.5-2.4-11.1-3.2-6-1.3-9.4-4.8-10.7-10.7-0.8-3.4-1.9-6.7-2.9-10.1 0-0.2-0.2-0.3-0.3-0.7-1.2 4.1-2.4 8-3.6 11.9-0.3 1-0.7 2.1-1.1 3.1-0.9 2.3-2.5 4.1-4.9 4.9-4.3 1.4-8.7 2.7-13.1 4.1-0.6 0.2-1.3 0.4-2.3 0.7 3.7 1.1 7 2 10.4 3 1.5 0.4 3 0.9 4.4 1.4 2.9 1 4.8 2.9 5.8 5.8 1.5 4.7 2.9 9.4 4.4 14.2 0.1-0.3 0.3-0.6 0.4-0.9 1.3-4.3 2.6-8.6 3.9-12.9 1-3.4 3.3-5.6 6.7-6.6 4.3-1.1 8.8-2.5 13.8-4z" fill="currentColor"/>
+          <path d="M98.1 4c-0.7 2.2-1.3 4-1.7 5.8-0.6 2.3-2 3.6-4.2 4.1-1.8 0.5-3.7 1.1-5.9 1.7 2.3 0.7 4.2 1.3 6.2 1.8 2.1 0.6 3.3 1.8 3.9 3.9 0.5 1.9 1.1 3.7 1.8 5.9 0.6-2.1 1.2-3.7 1.6-5.4 0.6-2.4 2-4 4.5-4.6 1.8-0.4 3.5-1 5.7-1.6-1.2-0.4-2-0.6-2.8-0.9-6.6-1.9-6.2-1.6-8.1-7.9C98.7 6.1 98.4 5.3 98.1 4z" fill="currentColor"/>
+          <path d="M56.4 33.7C26.9 33.7 3 57.6 3 87.2c0 23 14.7 43.4 36.6 50.7 2.7 0.5 3.7-1.1 3.7-2.5 0-0.8 0.1-8.4 0.1-15.5 0-4.4 0.8-7 2.8-8.6-10.3-4.1-17.6-14.2-17.6-25.9 0-15.4 12.5-27.9 27.9-27.9 15.4 0 27.9 12.5 27.9 27.9 0 11.8-7.3 21.8-17.6 25.9 1.4 1.3 3.3 3.3 3.1 9.4-0.3 7.1-0.1 12.9-0.1 14.7 0 1.4 1 3.1 3.7 2.5 21.8-7.3 36.4-27.8 36.4-50.7C109.9 57.6 86 33.7 56.4 33.7z" fill="currentColor"/>
+        </svg>
+        <span>Crove</span>
+      </a>
+      <p>Hệ điều hành doanh nghiệp mã nguồn mở cho chủ shop và công ty nhỏ. Phát hành theo giấy phép AGPL-3.0.</p>
+    </div>
+    <ul>
+      <li><a href="https://github.com/DOS/Crove">GitHub</a></li>
+      <li><a href="https://github.com/DOS/Crove/tree/main/docs">Tài liệu</a></li>
+      <li><a href="https://github.com/DOS/Crove/blob/main/LICENSE">Giấy phép AGPL</a></li>
+    </ul>
+  </div>
+</footer>
+
+<div class="corner-tag">Phương án D: Ô dữ liệu</div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  try {
+    var saved = localStorage.getItem('crove-theme-d');
+    if (saved === 'light' || saved === 'dark') root.setAttribute('data-theme', saved);
+  } catch (e) {}
+  document.getElementById('themeToggle').addEventListener('click', function () {
+    var current = root.getAttribute('data-theme');
+    if (!current) current = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    var next = current === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('crove-theme-d', next); } catch (e) {}
+  });
+
+  var phone = document.getElementById('phone');
+  var col = document.getElementById('phoneCol');
+  var replay = document.getElementById('replay');
+  var timers = [];
+  function setStep(n) { phone.setAttribute('data-step', n); col.setAttribute('data-step', n); }
+  function play() {
+    timers.forEach(clearTimeout); timers = [];
+    phone.classList.add('is-playing');
+    setStep(1);
+    timers.push(setTimeout(function () { setStep(2); }, 2400));
+    timers.push(setTimeout(function () { setStep(3); }, 5400));
+    timers.push(setTimeout(function () { phone.classList.remove('is-playing'); }, 6200));
+  }
+  var motionOk = window.matchMedia('(prefers-reduced-motion: no-preference)').matches;
+  if (motionOk) {
+    replay.hidden = false;
+    replay.addEventListener('click', play);
+    play();
+  }
+
+  var copyBtn = document.getElementById('copyBtn');
+  var copyStatus = document.getElementById('copyStatus');
+  copyBtn.addEventListener('click', function () {
+    var cmd = 'git clone https://github.com/DOS/Crove.git\ncd Crove\ndocker compose up';
+    function done(ok) { copyStatus.textContent = ok ? 'Đã chép lệnh.' : 'Chưa chép được, hãy chọn và chép thủ công.'; }
+    try {
+      navigator.clipboard.writeText(cmd).then(function () { done(true); }, function () { done(false); });
+    } catch (e) { done(false); }
+  });
+
+  document.getElementById('signup').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var input = document.getElementById('email');
+    var ok = document.getElementById('signupOk');
+    if (!input.value || input.value.indexOf('@') < 1) {
+      ok.textContent = 'Bạn nhập giúp một địa chỉ email hợp lệ.';
+      input.focus();
+      return;
+    }
+    ok.textContent = 'Cảm ơn bạn. Đây là bản mẫu nên chưa gửi đi đâu cả.';
+  });
+})();
+</script>
