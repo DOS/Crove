@@ -122,13 +122,30 @@ describe('YouTubePublisher', () => {
       'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, headers: { location: SESSION } }],
       'PUT www.googleapis.com/upload/youtube/v3/videos': [{ status: 503, body: {} }],
       'GET www.googleapis.com/youtube/v3/playlistItems': [
-        { body: { items: [{ snippet: { title: 'Khai trương chi nhánh', publishedAt: new Date().toISOString(), resourceId: { videoId: 'abcdefghijk' } } }] } },
+        {
+          body: {
+            items: [
+              // The same title in the window, another video: an earlier post repeated with other text.
+              { snippet: { title: 'Khai trương chi nhánh', description: 'Bài cũ', publishedAt: new Date().toISOString(), resourceId: { videoId: 'zyxwvutsrqp' } } },
+              { snippet: { title: 'Khai trương chi nhánh', description: 'Video khai trương mới\r\n\r\nhttps://example.com/a', publishedAt: new Date().toISOString(), resourceId: { videoId: 'abcdefghijk' } } },
+            ],
+          },
+        },
       ],
     });
     const publisher = new YouTubePublisher(APP, fetchImpl);
     expect((await publisher.publish(input())).kind).toBe('unknown');
     const found = await publisher.reconcile({ externalAccountId: CHANNEL, secret: SECRET, callKey: 'call-1', contentHash: input().contentHash, content: input().content, after: new Date(Date.now() - 60_000), before: new Date() });
     expect(found).toEqual({ found: true, externalId: 'abcdefghijk', url: 'https://www.youtube.com/watch?v=abcdefghijk' });
+  });
+
+  it('finds a video without a description when YouTube leaves the field out', async () => {
+    const { fetchImpl } = google({
+      'GET www.googleapis.com/youtube/v3/playlistItems': [{ body: { items: [{ snippet: { title: 'Khai trương chi nhánh', publishedAt: new Date().toISOString(), resourceId: { videoId: 'abcdefghijk' } } }] } }],
+    });
+    const content = { body: '', title: 'Khai trương chi nhánh', linkUrl: null, media: [video] };
+    const found = await new YouTubePublisher(APP, fetchImpl).reconcile({ externalAccountId: CHANNEL, secret: SECRET, callKey: 'call-1', contentHash: input().contentHash, content, after: new Date(Date.now() - 60_000), before: new Date() });
+    expect(found).toMatchObject({ found: true, externalId: 'abcdefghijk' });
   });
 
   it('maps a dead token while opening the session to token_expired, with nothing sent', async () => {

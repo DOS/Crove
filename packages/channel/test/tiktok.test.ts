@@ -104,6 +104,22 @@ describe('TikTokPublisher', () => {
     expect(await new TikTokPublisher(APP, failed.fetchImpl).status(ref)).toMatchObject({ kind: 'rejected', code: 'video_pull_failed' });
   });
 
+  it('stops checking a status TikTok refuses for good, and keeps checking through a rate limit or an outage', async () => {
+    const ref = { externalAccountId: OPEN_ID, secret: SECRET, externalRef: 'v_pub_file~v2-1.123' };
+    const refused = tiktok({ 'POST open.tiktokapis.com/v2/post/publish/status/fetch/': [{ status: 400, body: { error: { code: 'invalid_publish_id', message: 'The publish_id does not exist.' } } }] });
+    expect(await new TikTokPublisher(APP, refused.fetchImpl).status(ref)).toMatchObject({ kind: 'unknown', code: 'invalid_publish_id' });
+    const limited = tiktok({ 'POST open.tiktokapis.com/v2/post/publish/status/fetch/': [{ status: 429, body: { error: { code: 'rate_limit_exceeded', message: 'Too many requests.' } } }] });
+    expect((await new TikTokPublisher(APP, limited.fetchImpl).status(ref)).kind).toBe('pending');
+    const down = tiktok({ 'POST open.tiktokapis.com/v2/post/publish/status/fetch/': [{ status: 503, body: {} }] });
+    expect((await new TikTokPublisher(APP, down.fetchImpl).status(ref)).kind).toBe('pending');
+  });
+
+  it('refuses a video longer than the creator may post, before opening the upload', async () => {
+    const short = tiktok({ 'POST open.tiktokapis.com/v2/post/publish/creator_info/query/': [creator(undefined, { max_video_post_duration_sec: 60 })] });
+    expect(await new TikTokPublisher(APP, short.fetchImpl).publish(input({ content: { ...input().content, media: [{ ...video, durationSeconds: 61.5 }] } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'VIDEO_TOO_LONG' });
+    expect(short.calls.some((c) => c.route.includes('/video/init/'))).toBe(false);
+  });
+
   it('posts nothing without a chosen privacy level, or with one the account does not offer', async () => {
     const none = tiktok({});
     expect(await new TikTokPublisher(APP, none.fetchImpl).publish(input({ settings: {} }))).toMatchObject({ kind: 'rejected', code: 'PRIVACY_REQUIRED' });
