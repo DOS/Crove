@@ -537,10 +537,10 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           )}
 
           {payload && (
-            <Card className={item.status === 'pending' ? 'block border border-dashed border-proposal/60 p-4 ring-0' : 'block p-4'}>
+            <Card className={pending ? 'block border border-dashed border-proposal/60 p-4 ring-0' : 'block p-4'}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('journal')}</p>
-                {item.status === 'pending' && <Badge variant="proposal">{t('proposedNotPosted')}</Badge>}
+                {pending && <Badge variant="proposal">{t('proposedNotPosted')}</Badge>}
               </div>
               <table className="mt-3 w-full text-sm">
                 <thead className="text-left text-xs text-subtle-foreground">
