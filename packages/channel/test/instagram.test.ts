@@ -105,6 +105,37 @@ describe('InstagramPublisher', () => {
     ]);
   });
 
+  it('posts one video as a Reel shown in the feed, and finishes it on the status check while Meta processes it', async () => {
+    const { fetchImpl, calls } = graph({
+      [`POST /${IG}/media`]: [{ body: { id: '9101' } }],
+      'GET /9101': [{ body: { status_code: 'IN_PROGRESS' } }, { body: { status_code: 'FINISHED' } }],
+      [`GET /${IG}/media`]: [{ body: { data: [] } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000101' } }],
+      'GET /18000000000000101': [{ body: { permalink: 'https://www.instagram.com/reel/xyz/' } }],
+    });
+    const publisher = new InstagramPublisher(APP, fetchImpl, fast);
+    const content = { body: 'Khai trương!', title: null, linkUrl: null, media: [{ fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: null }] };
+    expect(await publisher.publish(input({ content }))).toEqual({ kind: 'pending', externalRef: ref('9101'), checkAfterSeconds: 30 });
+    expect(calls[0]?.form).toEqual({ media_type: 'REELS', video_url: 'https://bucket.example/v-1?sig=1', share_to_feed: 'true', caption: 'Khai trương!' });
+    expect(await publisher.status({ externalAccountId: IG, secret: SECRET, externalRef: ref('9101') })).toEqual({ kind: 'accepted', externalId: '18000000000000101', url: 'https://www.instagram.com/reel/xyz/' });
+  });
+
+  it('mixes images and videos in a carousel', async () => {
+    const { fetchImpl, calls } = graph({
+      [`POST /${IG}/media`]: [{ body: { id: '9201' } }, { body: { id: '9202' } }, { body: { id: '9203' } }],
+      'GET /9203': [{ body: { status_code: 'FINISHED' } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000201' } }],
+      'GET /18000000000000201': [{ body: {} }],
+    });
+    const content = { body: 'Ảnh và video', title: null, linkUrl: null, media: [image('f-1'), { fileId: 'v-1', mime: 'video/quicktime', sizeBytes: 4_000_000, altText: null }] };
+    expect(await new InstagramPublisher(APP, fetchImpl, fast).publish(input({ content }))).toMatchObject({ kind: 'accepted', externalId: '18000000000000201' });
+    expect(calls.slice(0, 3).map((c) => c.form)).toEqual([
+      { image_url: 'https://bucket.example/f-1?sig=1', is_carousel_item: 'true' },
+      { media_type: 'VIDEO', video_url: 'https://bucket.example/v-1?sig=1', is_carousel_item: 'true' },
+      { media_type: 'CAROUSEL', children: '9201,9202', caption: 'Ảnh và video' },
+    ]);
+  });
+
   it('posts nothing without a public image URL or without an image', async () => {
     const { fetchImpl, calls } = graph({});
     const publisher = new InstagramPublisher(APP, fetchImpl, fast);

@@ -2,10 +2,11 @@
 // docs (content publishing). The account is the Instagram business account linked to a Facebook Page the user
 // manages; calls use that Page's token, which has no expiry timer.
 //
-// Publishing is a container flow: one container per image (invisible), a carousel container for several, a wait until
+// Publishing is a container flow: one container per image or video (invisible; one video alone is a Reel, issue #437),
+// a carousel container for several (images and videos mixed), a wait until
 // Meta has fetched and processed them (status_code FINISHED), then media_publish, the one visible step. A container
 // whose status_code is PUBLISHED went out already, so a check after a lost answer finds the post instead of posting
-// again. Meta fetches each image from a public URL: deployments whose storage hands out presigned URLs (S3) can post;
+// again. Meta fetches each image and video from a public URL: deployments whose storage hands out presigned URLs (S3) can post;
 // others get MEDIA_URL_UNAVAILABLE with nothing posted.
 import { createHash } from 'node:crypto';
 import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
@@ -84,6 +85,7 @@ interface MediaListAnswer {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const captionOf = (content: { body: string }) => content.body.trim();
+const isVideo = (m: { mime: string }) => m.mime.startsWith('video/');
 // A pending post's reference: the container and a short hash of its caption, so a later status check can recognise the
 // post the container became without the content.
 const captionKey = (caption: string) => createHash('sha256').update(caption).digest('hex').slice(0, 16);
@@ -127,11 +129,15 @@ export class InstagramPublisher implements Publisher {
     let container: string;
     try {
       if (media.length === 1) {
-        container = await this.create(input.externalAccountId, s.accessToken, { image_url: first, caption });
+        // One video is a Reel, shown in the feed too; Meta fetches it from the URL and processes it before publishing.
+        const single = isVideo(media[0] as { mime: string }) ? { media_type: 'REELS', video_url: first, share_to_feed: 'true' } : { image_url: first };
+        container = await this.create(input.externalAccountId, s.accessToken, { ...single, caption });
       } else {
+        // A carousel may mix images and videos.
         const children: string[] = [];
         for (const [i, m] of media.entries()) {
-          children.push(await this.create(input.externalAccountId, s.accessToken, { image_url: i === 0 ? first : await urlOf(m.fileId), is_carousel_item: 'true' }));
+          const url = i === 0 ? first : await urlOf(m.fileId);
+          children.push(await this.create(input.externalAccountId, s.accessToken, { ...(isVideo(m) ? { media_type: 'VIDEO', video_url: url } : { image_url: url }), is_carousel_item: 'true' }));
         }
         container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'CAROUSEL', children: children.join(','), caption });
       }
