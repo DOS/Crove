@@ -520,6 +520,7 @@ export const en = {
     saleNotice:
       'Sales invoice: the seller has your organization\'s tax code. On approval Crove posts Debit 131 receivable from the customer, Credit each line\'s revenue account and Credit 3331 output VAT.',
     journal: 'Proposed entry (Circular 133)',
+    proposedNotPosted: 'Proposed, not posted',
     account: 'Account',
     debit: 'Debit',
     credit: 'Credit',
@@ -1075,7 +1076,7 @@ export const en = {
     libraryUsageNone: 'No post uses this image yet.',
     policyTitle: 'Review before posting',
     policyApprovals: '{count} approvers',
-    policyHint: 'Every post for this channel needs this many different people to approve its current content before it can be scheduled. Lowering it approves posts in review that already have enough approvals.',
+    policyHint: 'Every post for this channel needs this many different people to approve its current content before it can be scheduled. Lowering it approves posts in review that already have enough approvals; raising it applies to posts not approved yet, and posts already approved or scheduled stay as they are.',
     policyAdmins: 'Owners and admins set the number of approvers.',
     reviewSteps: 'Approved {given}/{required}',
     reviewYouApproved: 'You approved {channels}; someone else needs to approve too.',

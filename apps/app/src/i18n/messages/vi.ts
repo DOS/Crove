@@ -517,6 +517,7 @@ export const vi = {
     saleNotice:
       'Hóa đơn bán ra: người bán có mã số thuế của tổ chức. Khi duyệt, Crove ghi Nợ 131 phải thu khách hàng, Có tài khoản doanh thu của từng dòng và Có 3331 thuế GTGT đầu ra.',
     journal: 'Bút toán đề xuất (TT133)',
+    proposedNotPosted: 'Đề xuất, chưa ghi sổ',
     account: 'Tài khoản',
     debit: 'Nợ',
     credit: 'Có',
@@ -1076,7 +1077,7 @@ export const vi = {
     libraryUsageNone: 'Chưa bài nào dùng ảnh này.',
     policyTitle: 'Duyệt trước khi đăng',
     policyApprovals: '{count} người duyệt',
-    policyHint: 'Mỗi bài cho kênh này cần ngần ấy người khác nhau duyệt đúng nội dung hiện tại rồi mới lên lịch được. Hạ số này thì bài đang chờ đã đủ người duyệt sẽ được duyệt ngay.',
+    policyHint: 'Mỗi bài cho kênh này cần ngần ấy người khác nhau duyệt đúng nội dung hiện tại rồi mới lên lịch được. Hạ số này thì bài đang chờ đã đủ người duyệt sẽ được duyệt ngay; nâng số này thì chỉ áp dụng cho bài chưa duyệt, bài đã duyệt hoặc đã lên lịch giữ nguyên.',
     policyAdmins: 'Chủ sở hữu và quản trị viên đặt số người duyệt.',
     reviewSteps: 'Đã duyệt {given}/{required}',
     reviewYouApproved: 'Bạn đã duyệt {channels}; cần thêm người khác duyệt.',
