@@ -18,6 +18,12 @@ export const en = {
     processing: 'Working…',
     backHome: 'Back to home',
     language: 'Language',
+    theme: 'Theme',
+    themes: {
+      system: 'Match the system',
+      light: 'Light',
+      dark: 'Dark',
+    },
     orgLeft: 'The owner of {org} revoked this session in that organization, so you have left it. Your other organizations still work.',
   },
   roles: {
@@ -34,6 +40,7 @@ export const en = {
     hint: 'Arrow keys to choose, Enter to open, Esc to close.',
     switchOrg: 'Switch to {name}',
     switchLocale: 'Change the language to {name}',
+    switchTheme: 'Theme: {name}',
     groups: {
       go: 'Go to',
       proposals: 'Proposals to review',

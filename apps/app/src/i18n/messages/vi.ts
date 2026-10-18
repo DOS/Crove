@@ -16,6 +16,12 @@ export const vi = {
     processing: 'Đang xử lý…',
     backHome: 'Về trang chính',
     language: 'Ngôn ngữ',
+    theme: 'Giao diện',
+    themes: {
+      system: 'Theo hệ thống',
+      light: 'Sáng',
+      dark: 'Tối',
+    },
     orgLeft: 'Chủ sở hữu tổ chức {org} đã thu hồi phiên đăng nhập này trong tổ chức đó, nên bạn đã rời khỏi tổ chức. Các tổ chức khác của bạn vẫn dùng bình thường.',
   },
   roles: {
@@ -32,6 +38,7 @@ export const vi = {
     hint: 'Mũi tên lên xuống để chọn, Enter để mở, Esc để đóng.',
     switchOrg: 'Chuyển sang {name}',
     switchLocale: 'Đổi ngôn ngữ sang {name}',
+    switchTheme: 'Giao diện: {name}',
     groups: {
       go: 'Đi tới',
       proposals: 'Đề xuất chờ duyệt',

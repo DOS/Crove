@@ -5,6 +5,7 @@ import { useTranslations } from 'use-intl';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { CommandPalette, type PaletteEntry } from '../components/command-palette.tsx';
+import { ThemeSwitcher } from '../components/theme-switcher.tsx';
 import { SupportLink } from '../components/support-link.tsx';
 import { Logo, OrgLeftNotice } from '../components/ui.tsx';
 import { LOCALE_NAMES, LOCALES } from '../i18n/locale.ts';
@@ -14,6 +15,8 @@ import { getConfig } from '../lib/auth.ts';
 import { installedItems } from '../lib/modules.ts';
 import { isPaletteShortcut } from '../lib/palette.ts';
 import { proposalName } from '../lib/review.ts';
+import { THEMES } from '../lib/theme.ts';
+import { useThemeSetting } from '../lib/theme-runtime.ts';
 import { signOut } from '../lib/session-actions.ts';
 import { SAFETY_POLL_MS, pollEvery, useInvalidationStream, useStreamLive } from '../lib/stream-hook.ts';
 
@@ -50,6 +53,7 @@ export function OrgLayout() {
   const tp = useTranslations('palette');
   const f = useFormat();
   const { locale, setLocale } = useLocaleSetting();
+  const [theme, setTheme] = useThemeSetting();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const paletteKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘ K' : 'Ctrl K';
 
@@ -94,9 +98,16 @@ export function OrgLayout() {
         keywords: 'language ngon ngu',
         run: () => setLocale(l),
       })),
+      ...THEMES.filter((th) => th !== theme).map((th) => ({
+        id: `theme:${th}`,
+        group: 'actions' as const,
+        label: tp('switchTheme', { name: tc(`themes.${th}`) }),
+        keywords: 'theme giao dien sang toi dark light',
+        run: () => setTheme(th),
+      })),
       { id: 'sign-out', group: 'actions' as const, label: tc('signOut'), run: () => void signOut() },
     ],
-    [NAV, pending.data, me.data, slug, locale, t, tp, tc, f, navigate, setLocale],
+    [NAV, pending.data, me.data, slug, locale, theme, t, tp, tc, f, navigate, setLocale, setTheme],
   );
 
   return (
@@ -153,7 +164,10 @@ export function OrgLayout() {
             <button className="hover:text-muted-foreground" onClick={() => void signOut()}>
               {tc('signOut')}
             </button>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
             <LocaleSwitcher />
+            <ThemeSwitcher />
           </div>
         </div>
       </aside>
@@ -165,6 +179,7 @@ export function OrgLayout() {
           </button>
           <SupportLink className="text-xs text-link" />
           <LocaleSwitcher />
+          <ThemeSwitcher />
           <NativeSelect
             size="sm"
             value={NAV.find((n) => window.location.pathname.split('/')[3] === n.to.split('/').pop())?.to ?? '/o/$slug/inbox'}
