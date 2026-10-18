@@ -78,7 +78,7 @@ const ANY_IMAGE: readonly string[] = [];
 // The channels whose platform takes photos but whose Crove adapter posts only video (TikTok's photo mode is not built).
 export const VIDEO_ONLY_ADAPTERS: ReadonlySet<Provider> = new Set<Provider>(['tiktok']);
 
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'linkedin']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
@@ -171,8 +171,9 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'bluesky',
     body: { max: 300, count: 'graphemes', required: false },
     title: null,
-    // Images only until video posts are built (#396); 1 MB per image is Bluesky's own blob limit.
-    media: { min: 0, max: 4, kinds: ['image'], mixed: false, maxVideos: 0, imageTypes: ANY_IMAGE, maxImageBytes: 1_000_000, maxVideoBytes: null, maxVideoSeconds: null },
+    // Up to 4 images (1 MB each, Bluesky's blob limit) or one video of up to 3 minutes and 100 MB; the Crove adapter
+    // does not post video yet, so it stays out of VIDEO_READY.
+    media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: 1_000_000, maxVideoBytes: 100 * MB, maxVideoSeconds: 180 },
     maxLinks: null,
     scrapesLinkPreview: false,
     // Bluesky also caps post text in bytes.

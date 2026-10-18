@@ -83,9 +83,11 @@ class LinkedInClient {
     return { body: body as T | null, id: response.headers.get('x-restli-id'), status: response.status };
   }
 
-  async upload(url: string, token: string, bytes: Uint8Array, type: string): Promise<void> {
+  // A PUT of bytes to an upload URL LinkedIn handed out; returns the part's ETag (a video's parts are named by it).
+  async upload(url: string, token: string, bytes: Uint8Array, type: string): Promise<string | null> {
     const response = await this.fetch(url, { method: 'PUT', headers: { authorization: `Bearer ${token}`, 'content-type': type }, body: new Blob([new Uint8Array(bytes)], { type }) });
     if (!response.ok) throw new LinkedInError(response.status, null);
+    return response.headers.get('etag');
   }
 }
 
@@ -170,13 +172,24 @@ const textOf = (content: { body: string; linkUrl: string | null }) => {
   return content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
 };
 
+const VIDEO_URN = /^urn:li:video:[A-Za-z0-9_-]{1,64}$/;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+// How long a publish waits for LinkedIn to process a video; with the upload it stays inside callTimeoutMs.
+const PROCESSING_WAIT_MS = 300_000;
+
 export class LinkedInPublisher implements Publisher {
   readonly provider = 'linkedin' as const;
   readonly publishSafety: RetrySafety = 'never';
+  // A video's upload and processing take minutes; within the job's stale limit (600 s).
+  readonly callTimeoutMs = 420_000;
   private readonly client: LinkedInClient;
+  private readonly processingWaitMs: number;
+  private readonly pollMs: number;
 
-  constructor(app: Pick<LinkedInAppConfig, 'version'> = {}, fetchImpl?: Fetch) {
+  constructor(app: Pick<LinkedInAppConfig, 'version'> = {}, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMs?: number } = {}) {
     this.client = new LinkedInClient(app.version ?? LINKEDIN_VERSION, fetchImpl);
+    this.processingWaitMs = timing.processingWaitMs ?? PROCESSING_WAIT_MS;
+    this.pollMs = timing.pollMs ?? 5000;
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -184,6 +197,7 @@ export class LinkedInPublisher implements Publisher {
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
     if (!MEMBER_ID.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
     const author = `urn:li:person:${input.externalAccountId}`;
+    if (input.content.media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, token, author);
     if (input.content.media.length > MAX_IMAGES) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_IMAGES' };
     const images: { id: string; altText?: string }[] = [];
     for (const m of input.content.media) {
@@ -206,6 +220,70 @@ export class LinkedInPublisher implements Publisher {
     }
     const text = textOf(input.content);
     if (!text && images.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    if (images.length === 1) return this.post(token, author, text, { media: images[0] });
+    if (images.length > 1) return this.post(token, author, text, { multiImage: { images } });
+    return this.post(token, author, text, null);
+  }
+
+  // One video (#451): the Videos API's multipart upload (initialize, a PUT per part, finalize with the parts' ETags),
+  // a wait until LinkedIn has processed it, then the post. Nothing is visible before the post, so every failure before
+  // it posted nothing; a video still processing when the wait ends is transient and uploaded again next time.
+  private async publishVideo(input: PublishInput, token: string, author: string): Promise<PublishResult> {
+    const { media } = input.content;
+    const video = media[0];
+    if (!video || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
+    // LinkedIn takes MP4 only.
+    if (video.mime !== 'video/mp4') return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TYPE' };
+    let bytes: Uint8Array;
+    try {
+      bytes = await input.readMedia(video.fileId);
+    } catch {
+      return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
+    }
+    let urn: string;
+    try {
+      const init = await this.client.call<{ value?: { video?: unknown; uploadToken?: unknown; uploadInstructions?: { uploadUrl?: unknown; firstByte?: unknown; lastByte?: unknown }[] } }>(
+        'POST',
+        '/rest/videos?action=initializeUpload',
+        token,
+        { initializeUploadRequest: { owner: author, fileSizeBytes: bytes.byteLength, uploadCaptions: false, uploadThumbnail: false } },
+      );
+      const value = init.body?.value;
+      const parts = value?.uploadInstructions ?? [];
+      if (typeof value?.video !== 'string' || !VIDEO_URN.test(value.video) || parts.length === 0) return { kind: 'rejected', error: 'transient', code: 'NO_UPLOAD_URL' };
+      urn = value.video;
+      const etags: string[] = [];
+      for (const part of parts) {
+        const first = Number(part.firstByte);
+        const last = Number(part.lastByte);
+        if (typeof part.uploadUrl !== 'string' || !Number.isInteger(first) || !Number.isInteger(last) || first < 0 || last < first) return { kind: 'rejected', error: 'transient', code: 'BAD_UPLOAD_PART' };
+        const etag = await this.client.upload(part.uploadUrl, token, bytes.slice(first, last + 1), 'application/octet-stream');
+        if (!etag) return { kind: 'rejected', error: 'transient', code: 'NO_PART_ETAG' };
+        etags.push(etag);
+      }
+      await this.client.call('POST', '/rest/videos?action=finalizeUpload', token, {
+        finalizeUploadRequest: { video: urn, uploadToken: typeof value.uploadToken === 'string' ? value.uploadToken : '', uploadedPartIds: etags },
+      });
+      const deadline = Date.now() + this.processingWaitMs;
+      for (;;) {
+        const got = await this.client.call<{ status?: unknown; processingFailureReason?: unknown }>('GET', `/rest/videos/${encodeURIComponent(urn)}`, token);
+        const status = got.body?.status;
+        if (status === 'AVAILABLE') break;
+        if (status === 'PROCESSING_FAILED') {
+          const reason = got.body?.processingFailureReason;
+          return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_PROCESSING_FAILED', ...(typeof reason === 'string' ? { message: reason.slice(0, 500) } : {}) };
+        }
+        if (Date.now() >= deadline) return { kind: 'rejected', error: 'transient', code: 'VIDEO_STILL_PROCESSING' };
+        await sleep(Math.min(this.pollMs, Math.max(0, deadline - Date.now())));
+      }
+    } catch (error) {
+      return beforePost(publishResult(error));
+    }
+    return this.post(token, author, textOf(input.content), { media: { id: urn } });
+  }
+
+  // The one visible step.
+  private async post(token: string, author: string, text: string, content: Record<string, unknown> | null): Promise<PublishResult> {
     const post: Record<string, unknown> = {
       author,
       commentary: littleText(text),
@@ -214,8 +292,7 @@ export class LinkedInPublisher implements Publisher {
       lifecycleState: 'PUBLISHED',
       isReshareDisabledByAuthor: false,
     };
-    if (images.length === 1) post.content = { media: images[0] };
-    else if (images.length > 1) post.content = { multiImage: { images } };
+    if (content) post.content = content;
     try {
       const answer = await this.client.call('POST', '/rest/posts', token, post);
       const urn = answer.id ?? '';
