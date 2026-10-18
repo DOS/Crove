@@ -183,6 +183,26 @@ suite('social reposts and evergreen posts on PostgreSQL (S9)', () => {
     expect(saved.changedVariants).toEqual([]);
   });
 
+  it('reposts what went out, not a title or link added to the post since, and leaves out a removed image', async () => {
+    const o = await org();
+    const { postId, body } = await published(o);
+    // After publishing, the post gets a title and a link it did not go out with.
+    const before = await get(o, postId);
+    await exec(o, 'social.post.update', { postId, revision: before.revision, title: 'Tiêu đề mới', linkUrl: 'https://example.com/moi' });
+    // The second channel went out with an image that has been removed since.
+    const own = await image(o.orgId);
+    await admin((c) => c.query('UPDATE crove_social.post_variant SET media = $2::jsonb WHERE post_id = $1 AND position = 1', [postId, JSON.stringify([own])]));
+    await admin((c) => c.query('DELETE FROM crove_kernel.file WHERE org_id = $1 AND id = $2', [o.orgId, own.fileId]));
+    const { postId: copy } = await exec<{ postId: string }>(o, 'social.post.repost', { postId });
+    const view = await get(o, copy);
+    expect([view.body, view.title, view.linkUrl]).toEqual([body, null, null]);
+    expect(view.variants.map((v) => [v.effective.title, v.effective.linkUrl])).toEqual([
+      [null, null],
+      [null, null],
+    ]);
+    expect(view.variants[1]?.media).toEqual([]);
+  });
+
   it('marks a post evergreen within 7 to 365 days, and only the worker may scan for due ones', async () => {
     const o = await org();
     const { postId } = await published(o);
