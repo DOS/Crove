@@ -1,0 +1,193 @@
+<title>Crove Redesign 2026</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="color-scheme" content="dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: one reading column (920px) with wide tables in their own scroll boxes. Dark single theme, the house style of Crove's Vietnamese docs. */
+:root{
+  --bg:#0f1113; --surface:#16181d; --card:#1b1e25; --line:#2c303a; --fg:#eef0f4; --muted:#a6acb9;
+  --accent:#ff2e29; --accent-ink:#ff8a85;
+  --ok:#34d399; --ok-bg:#0f2a21; --warn:#fbbf24; --warn-bg:#2a2110; --bad:#f87171; --bad-bg:#2d1515;
+  --code-bg:#23262e;
+  --font-body:"Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased}
+.page{padding-block:32px 72px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+main{max-width:920px;margin-inline:auto;min-width:0}
+a{color:var(--accent-ink);text-decoration:none;overflow-wrap:anywhere}
+a:hover{text-decoration:underline}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px;border-radius:4px}
+.kicker{color:var(--accent-ink);font-weight:600;font-size:14px;margin:0}
+h1{font-size:clamp(28px,4.4vw,38px);line-height:1.22;margin:6px 0 12px;text-wrap:balance;letter-spacing:-0.01em}
+h2{font-size:23px;line-height:1.3;margin:52px 0 12px;padding-top:16px;border-top:1px solid var(--line);text-wrap:balance}
+h3{font-size:18px;margin:28px 0 8px}
+p{margin:0 0 12px}
+.lead{color:var(--muted);font-size:17px;max-width:68ch}
+.muted{color:var(--muted)}
+code{font-family:var(--font-mono);font-size:.88em;background:var(--code-bg);padding:1px 6px;border-radius:4px}
+ul,ol{padding-left:22px;margin:8px 0 14px}
+li{margin:5px 0}
+.callout{border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--surface);border-radius:6px;padding:14px 18px;margin:18px 0}
+.callout p:last-child{margin:0}
+.table-wrap{overflow-x:auto;margin:14px 0;border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:600px}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--line)}
+th{background:var(--surface);color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:0}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.options{display:grid;gap:0;margin:18px 0;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.opt{display:grid;grid-template-columns:170px minmax(0,1fr) auto;gap:6px 20px;align-items:baseline;padding:16px 18px;border-bottom:1px solid var(--line);min-width:0}
+.opt:last-child{border-bottom:0}
+.opt h3{margin:0;font-size:17px}
+.opt h3 span{color:var(--accent-ink);margin-right:6px}
+.opt p{margin:0;color:var(--muted);font-size:15px}
+.opt .go{font-weight:600;white-space:nowrap}
+.opt .go a{display:inline-flex;align-items:center;min-height:32px}
+@media (max-width:700px){.opt{grid-template-columns:1fr}}
+.tag{display:inline-block;font-size:12.5px;font-weight:600;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.yes{background:var(--ok-bg);color:var(--ok)}
+.mid{background:var(--warn-bg);color:var(--warn)}
+.no{background:var(--bad-bg);color:var(--bad)}
+footer{margin-top:56px;color:var(--muted);font-size:14px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+
+<div class="page">
+<main>
+
+<p class="kicker">Crove, giao diện, 18/10/2026</p>
+<h1>Làm lại giao diện Crove: research, nguyên tắc mới và 5 phương án để chọn</h1>
+<p class="lead">Trang này tóm tắt vì sao crove.com cần làm lại, research tháng 10/2026 nói gì, nguyên tắc mới đã ghi vào <code>DESIGN.md</code>, và 5 mockup landing để bạn chọn các phần tốt nhất.</p>
+
+<div class="callout">
+<p><strong>Việc cần bạn:</strong> mở 5 phương án bên dưới, rồi trả lời trong chat theo mẫu ở mục 5, ví dụ "hero B, màu A, font A, sơ đồ tổ chức của E, phần điện thoại của D". Tôi sẽ ghép thành một bản và làm vào <code>apps/web</code>.</p>
+</div>
+
+<h2>1. Vấn đề của crove.com hiện tại</h2>
+<p>Tôi đọc toàn bộ nội dung trang lúc 18/10/2026 và đối chiếu với sản phẩm trong repo:</p>
+<ul>
+<li><strong>Nội dung lệch sản phẩm.</strong> Trang bán một công cụ đăng bài mạng xã hội "28+ kênh" (có cả Farcaster, MeWe, VK, Web3) và "GPT-4o &amp; Claude 3.5 Engine". Sản phẩm thật là Business OS mã nguồn mở, mạnh nhất ở luồng hoá đơn đầu vào thành bút toán TT133 có người duyệt; Social chỉ là một module.</li>
+<li><strong>Hứa thứ không có trong bản mã nguồn mở.</strong> "Single DOS ID login" xuất hiện ở hero, FAQ và nút đăng ký. Theo AGENTS.md, phần riêng của DOS thuộc lớp Crove Cloud, không quảng cáo ở bản OSS.</li>
+<li><strong>Trộn ngôn ngữ.</strong> Bản tiếng Anh vẫn có nút "Khám phá", "28+ Kênh xã hội", "Báo cáo ROI thực".</li>
+<li><strong>Số liệu và lời khen tự đặt.</strong> MRR $12,450, "Save 80%", testimonial không có thật.</li>
+<li><strong>Đúng các dấu hiệu "AI slop" 2026.</strong> Chữ gradient tím hồng, quầng sáng tím, pill badge trên tiêu đề, nút bo tròn và gradient, hàng loạt card giống nhau có icon trong ô bo tròn. Nhiều chữ, ít hình thật của sản phẩm.</li>
+</ul>
+
+<h2>2. Research tháng 10/2026 nói gì</h2>
+
+<h3>Đo trực tiếp các site tham chiếu (18/10/2026)</h3>
+<p class="muted">Tôi chạy script đọc CSS đã tính của tiêu đề hero và nút chính trên trang thật.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Site</th><th>Font</th><th>Tiêu đề hero</th><th>Nút chính</th></tr></thead>
+<tbody>
+<tr><td>Stripe</td><td>Söhne</td><td>weight 300, tracking -0.01em</td><td class="num">bo 4px, cao 44px</td></tr>
+<tr><td>Raycast</td><td>Inter</td><td>weight 600</td><td class="num">bo 6px</td></tr>
+<tr><td>Attio</td><td>Inter Display</td><td>64px, weight 600, -0.02em</td><td class="num">bo 10px, cao 40px, nền gần đen</td></tr>
+<tr><td>Linear</td><td>Inter Variable</td><td>weight 510, -0.022em</td><td>pill, cao 32px, chỉ ở nút nav nhỏ</td></tr>
+<tr><td>Vercel</td><td>Geist</td><td>weight 400, -0.04em</td><td>pill, chỉ ở nút nav nhỏ</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Kết luận rút ra</h3>
+<ul>
+<li><strong>Bo góc:</strong> khảo sát 514 design system (Lazyweb, 07/2026) thấy pill phổ biến nhất (32%) nhưng tập trung ở app tiêu dùng; nhóm tài chính, B2B nằm ở 4 đến 12px, góc vuông hẳn chỉ 2,9%. Crove là công cụ tài chính nên chọn 6px cho nút và ô nhập, 8px cho panel, tối đa 12px.</li>
+<li><strong>Hero cho thấy sản phẩm chạy thật</strong> thay vì ảnh chụp tĩnh hay khối chữ; Linear cho agent nhận một issue thật ngay ở hero.</li>
+<li><strong>Phản ứng với "AI slop":</strong> gradient tím, glass, glow, bento, motion vô cớ bị giới thiết kế chán (Creative Boom 2026); Impeccable liệt kê hơn 30 dấu hiệu và cách thay. Vấn đề là thiếu chủ đích, không phải bản thân style.</li>
+<li><strong>Chữ:</strong> variable font là chuẩn; Inter và Geist vẫn là mặc định cho UI nhưng bị coi là thiếu cá tính ở landing. Với tiếng Việt, điều kiện bắt buộc là có bộ dấu (subset vietnamese) và không ép tracking quá chặt làm dấu chồng dính nhau.</li>
+<li><strong>Agent và duyệt:</strong> màn duyệt tốt cho biết agent định làm gì, dựa vào dữ liệu nào, quy tắc nào kích hoạt, chuyện gì xảy ra tiếp. Chỉ có nút Đồng ý/Từ chối dễ dẫn tới duyệt cho xong.</li>
+<li><strong>Tiếp cận:</strong> WCAG 2.2 (ISO/IEC 40500:2025) là mức pháp lý phổ biến: vùng bấm tối thiểu 24px, focus không bị header che, có cách thay cho thao tác kéo, cho dán mã OTP.</li>
+</ul>
+
+<h2>3. Nguyên tắc mới (đã ghi vào DESIGN.md v3)</h2>
+<ol>
+<li>Cho thấy sản phẩm chạy: mỗi khẳng định quan trọng đi kèm hình vẽ sản phẩm thật với dữ liệu tiếng Việt.</li>
+<li>Đề xuất của AI trông khác dữ liệu đã duyệt, nút duyệt nói rõ sẽ ghi gì.</li>
+<li>Dày đặc nhưng bình tĩnh: hàng gọn, số thẳng cột, khung giao diện nhẹ.</li>
+<li>Tiếng Việt trước: font có dấu, định dạng 32.832.000 ₫, ngày dd/mm/yyyy.</li>
+<li>Số chính xác: tabular-nums, căn phải, tổng khớp nhìn thấy được.</li>
+<li>Một điểm nhấn mỗi màn: một màu nhấn, một nút chính, một hình ấn tượng.</li>
+<li>WCAG 2.2 AA là mức sàn.</li>
+</ol>
+<p>Bo góc 6/8/12px, không pill cho nút chính, không gradient, không glow, không card lồng nhau, không số liệu hay testimonial tự đặt. Chi tiết đầy đủ và nguồn trong <code>DESIGN.md</code>.</p>
+
+<h2>4. Năm phương án</h2>
+<p class="muted">Cả 5 dùng cùng nội dung thật của Crove và cùng bộ dữ liệu mẫu (Công ty TNHH Gạo Sạch Mekong mua thùng carton của Công ty CP Bao Bì Phú Thịnh). Mỗi bản có nút đổi sáng/tối, chạy được trên điện thoại 360px.</p>
+
+<div class="options">
+<article class="opt">
+<h3><span>A</span>Sổ cái</h3>
+<p>Chính xác kiểu Stripe. Nền sáng xanh xám, mực navy, một màu tím Crove. Archivo, số bằng IBM Plex Mono, bo 4px. Hero: hoá đơn rơi vào tài khoản chữ T và cân Nợ = Có.</p>
+<p class="go"><a href="https://claude.ai/artifact/BodDv1a6m584Dp22kuYwnR">Mở phương án A</a></p>
+</article>
+<article class="opt">
+<h3><span>B</span>Bàn điều khiển</h3>
+<p>Kiểu Linear/Raycast, tối trước. Be Vietnam Pro, nút chính trắng, tím chỉ cho vùng chọn, bo 6px. Hero: cả app shell, bảng lệnh ⌘K duyệt bút toán bằng phím A.</p>
+<p class="go"><a href="https://claude.ai/artifact/9kgcp4XVKKSJsJ622uptqS">Mở phương án B</a></p>
+</article>
+<article class="opt">
+<h3><span>C</span>Chứng từ</h3>
+<p>Thế giới chứng từ Việt: giấy trắng xanh, mực xanh đen, con dấu đỏ thay cho tím (thử màu khác). Source Serif 4 và IBM Plex Sans, bo 2px. Hero: hoá đơn GTGT được đánh dấu từng ô rồi đóng dấu.</p>
+<p class="go"><a href="https://claude.ai/artifact/VWwRWKkSbMAxi1NRoQLXS9">Mở phương án C</a></p>
+</article>
+<article class="opt">
+<h3><span>D</span>Ô dữ liệu</h3>
+<p>Cho chủ shop, ưu tiên điện thoại. Lexend chữ to dễ đọc, tím và vàng hổ phách, bo 8px nút, 16px ô. Hero: điện thoại chụp hoá đơn thành bút toán; phần "Hôm nay của bạn" là dashboard thật.</p>
+<p class="go"><a href="https://claude.ai/artifact/HxaQxxDmEc1u5eJW6uU44f">Mở phương án D</a></p>
+</article>
+<article class="opt">
+<h3><span>E</span>Sơ đồ tổ chức</h3>
+<p>AI-native: agent là một vị trí trong sơ đồ, có quản lý, ngân sách, giới hạn rủi ro. Bricolage Grotesque và Manrope, bo 8px. Hero: sơ đồ bấm được, đề xuất chạy lên Chị Lan duyệt; có ma trận quyền R0-R3.</p>
+<p class="go"><a href="https://claude.ai/artifact/TibFiohPeJUFwuzPWkge8R">Mở phương án E</a></p>
+</article>
+</div>
+<p class="muted">Bản trong repo: <a href="mockups/option-a-so-cai.html">A</a>, <a href="mockups/option-b-ban-dieu-khien.html">B</a>, <a href="mockups/option-c-chung-tu.html">C</a>, <a href="mockups/option-d-o-du-lieu.html">D</a>, <a href="mockups/option-e-so-do-to-chuc.html">E</a>.</p>
+
+<h2>5. Chọn từng phần</h2>
+<p>Bảng so sánh để bạn chọn theo từng phần thay vì chọn cả bản. Cột cuối là đề xuất của tôi.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Phần</th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th><th>Tôi đề xuất</th></tr></thead>
+<tbody>
+<tr><td>Hero</td><td>Hoá đơn thành chữ T</td><td>App shell + ⌘K</td><td>Hoá đơn đóng dấu</td><td>Điện thoại</td><td>Sơ đồ tổ chức</td><td>B, vì cho thấy đúng sản phẩm người dùng sẽ mở</td></tr>
+<tr><td>Màu nhấn</td><td>Tím đậm</td><td>Tím chỉ cho vùng chọn</td><td>Đỏ con dấu</td><td>Tím + hổ phách</td><td>Tím + xanh ngọc</td><td>Tím Crove dùng tiết chế như A/B; giữ thương hiệu</td></tr>
+<tr><td>Font</td><td>Archivo + Plex Mono</td><td>Be Vietnam Pro</td><td>Source Serif 4 + Plex Sans</td><td>Lexend</td><td>Bricolage + Manrope</td><td>Be Vietnam Pro cho app (dấu đẹp nhất), Archivo cho tiêu đề landing</td></tr>
+<tr><td>Bo góc</td><td>4px</td><td>6px</td><td>2px</td><td>8px / 16px</td><td>8px / 10px</td><td>6px nút, 8px panel (như DESIGN.md)</td></tr>
+<tr><td>Phần "cách hoạt động"</td><td>4 bước có mảnh UI</td><td>4 bước + phím tắt</td><td>Phiếu luân chuyển có chữ ký</td><td>4 bước ngôn ngữ chủ shop</td><td>Pipeline ngang</td><td>C, rất "Việt Nam" và dễ hiểu với kế toán</td></tr>
+<tr><td>Phần agent</td><td>Dòng trong bảng</td><td>Dòng có thanh ngân sách</td><td>Phụ lục</td><td>Ô dữ liệu</td><td>Sơ đồ + ma trận R0-R3</td><td>E, đây là điểm khác biệt của Crove</td></tr>
+<tr><td>Phần cho chủ shop</td><td>Không có</td><td>Không có</td><td>Không có</td><td>Điện thoại + "Hôm nay của bạn"</td><td>Không có</td><td>D, giữ một mục cho người không làm kế toán</td></tr>
+<tr><td>Sổ cái, thuế</td><td>Sổ cái 331 + tờ khai VAT</td><td>Dòng sổ cái</td><td>Sổ nhật ký chung S03a</td><td>Biểu đồ VAT</td><td>Chữ T 331</td><td>A, chính xác và đọc được</td></tr>
+</tbody>
+</table>
+</div>
+<p class="muted">Gợi ý nhanh: nếu chỉ chọn một bản để làm ngay, tôi chọn B làm khung, ghép phần agent của E và mục điện thoại của D.</p>
+
+<h2>6. Việc tiếp theo</h2>
+<ol>
+<li>Bạn chọn phần (mục 5).</li>
+<li>Tôi chốt giá trị token trong <code>packages/ui/src/styles/globals.css</code> và <code>DESIGN.md</code>, thêm token <code>proposal</code> cho dữ liệu AI đề xuất.</li>
+<li>Làm lại <code>apps/web</code> theo bản đã chọn, sửa nội dung cho đúng sản phẩm (bỏ 28+ kênh, DOS ID, số liệu tự đặt, chữ trộn ngôn ngữ), tách các mục thành component, đủ cả tiếng Việt và tiếng Anh.</li>
+<li>Kiểm tra Core Web Vitals, WCAG 2.2 AA, 360px, sáng và tối trước khi merge.</li>
+</ol>
+<p class="muted">Lưu ý: issue #80 (giữ tên Crove hay đổi sang Bexly) vẫn mở. Các mockup dùng tên Crove; đổi tên chỉ ảnh hưởng logo và chữ, không ảnh hưởng hướng thiết kế.</p>
+
+<h2>Nguồn</h2>
+<ul>
+<li><a href="https://www.lazyweb.com/research/what-button-corner-radius-is-standard">Lazyweb Research: What corner radius do modern products use for primary buttons? (07/2026)</a></li>
+<li><a href="https://www.impeccable.style/slop">Impeccable: The visible tells of AI design</a></li>
+<li><a href="https://creativeboom.com/insight/10-trends-creatives-are-so-over-in-2026/">Creative Boom: 10 trends creatives are so over in 2026</a></li>
+<li><a href="https://www.saasframe.io/blog/10-saas-landing-page-trends-for-2026-with-real-examples">SaaSFrame: 10 SaaS landing page trends for 2026</a></li>
+<li><a href="https://madegooddesigns.com/web-typography-trends-2026/">Made Good Designs: Web typography trends 2026</a></li>
+<li><a href="https://pub.towardsai.net/designing-for-ai-agents-8-ux-patterns-that-build-trust-in-2026-713a0c926933">Towards AI: Designing for AI agents, 8 UX patterns that build trust in 2026</a></li>
+<li><a href="https://understandingdata.com/posts/human-in-the-loop-patterns/">Understanding Data: Human-in-the-loop patterns</a></li>
+<li><a href="https://www.w3.org/TR/WCAG22/">W3C: WCAG 2.2</a></li>
+</ul>
+
+<footer>Crove, AGPL. Nguồn kỹ thuật: <code>DESIGN.md</code> và <code>docs/design/mockups/</code> trong repo DOS/Crove.</footer>
+</main>
+</div>

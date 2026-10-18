@@ -1,0 +1,992 @@
+<title>Crove - Phương án A</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="color-scheme" content="light dark">
+<script>try { var t = localStorage.getItem('crove-theme'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}</script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #F3F5F8;
+  --panel: #FFFFFF;
+  --panel-2: #F7F9FB;
+  --sunken: #EDF0F4;
+  --fg: #0D1323;
+  --fg-2: #384152;
+  --fg-3: #596273;
+  --rule: #DCE1E8;
+  --rule-strong: #838C9C;
+  --ink-line: #0D1323;
+  --accent: #5A32D6;
+  --accent-hover: #4825B5;
+  --accent-fg: #FFFFFF;
+  --accent-soft: #EEEAFB;
+  --focus: #5A32D6;
+  --ok: #11734A;
+  --ok-soft: #E2F3EA;
+  --warn: #8A5300;
+  --warn-soft: #FBF0DA;
+  --err: #B42318;
+  --err-soft: #FCEBE9;
+  --bar-2: #7A8496;
+  --code-bg: #0D1323;
+  --code-fg: #E6E9F0;
+  --code-dim: #9AA3B5;
+  --code-rule: #2A3349;
+  --shadow: 0 1px 0 rgba(13, 19, 35, 0.03), 0 1px 3px rgba(13, 19, 35, 0.05);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0A0E18;
+    --panel: #111726;
+    --panel-2: #161D2F;
+    --sunken: #0D1220;
+    --fg: #E8EBF2;
+    --fg-2: #B9C0CD;
+    --fg-3: #929BAD;
+    --rule: #222B3F;
+    --rule-strong: #5C6883;
+    --ink-line: #AEB6C6;
+    --accent: #A08BFF;
+    --accent-hover: #B7A7FF;
+    --accent-fg: #0A0E18;
+    --accent-soft: #211A45;
+    --focus: #B7A7FF;
+    --ok: #5DD39A;
+    --ok-soft: #0F2A1E;
+    --warn: #F0B75E;
+    --warn-soft: #2C210D;
+    --err: #FF8F85;
+    --err-soft: #331516;
+    --bar-2: #6E7A93;
+    --code-bg: #070A12;
+    --code-fg: #DDE2EB;
+    --code-dim: #8E97A9;
+    --code-rule: #1E2638;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0A0E18;
+  --panel: #111726;
+  --panel-2: #161D2F;
+  --sunken: #0D1220;
+  --fg: #E8EBF2;
+  --fg-2: #B9C0CD;
+  --fg-3: #929BAD;
+  --rule: #222B3F;
+  --rule-strong: #5C6883;
+  --ink-line: #AEB6C6;
+  --accent: #A08BFF;
+  --accent-hover: #B7A7FF;
+  --accent-fg: #0A0E18;
+  --accent-soft: #211A45;
+  --focus: #B7A7FF;
+  --ok: #5DD39A;
+  --ok-soft: #0F2A1E;
+  --warn: #F0B75E;
+  --warn-soft: #2C210D;
+  --err: #FF8F85;
+  --err-soft: #331516;
+  --bar-2: #6E7A93;
+  --code-bg: #070A12;
+  --code-fg: #DDE2EB;
+  --code-dim: #8E97A9;
+  --code-rule: #1E2638;
+  --shadow: none;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 80px; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Archivo", system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, p, ol, ul, dl, dd, figure { margin: 0; }
+ol, ul { padding: 0; list-style: none; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+.num, code, pre { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.num { font-size: 0.94em; letter-spacing: -0.01em; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* Layout: strict 12-column grid */
+.wrap {
+  max-width: 1264px;
+  margin-inline: auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+@media (min-width: 768px) {
+  .wrap {
+    padding-left: max(32px, env(safe-area-inset-left, 0px));
+    padding-right: max(32px, env(safe-area-inset-right, 0px));
+  }
+}
+.grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 24px; row-gap: 32px; }
+.grid > * { min-width: 0; grid-column: 1 / -1; }
+@media (min-width: 1024px) {
+  .c-1-6 { grid-column: 1 / 7; }
+  .c-7-12 { grid-column: 7 / 13; }
+  .c-1-4 { grid-column: 1 / 5; }
+  .c-5-12 { grid-column: 5 / 13; }
+  .c-1-5 { grid-column: 1 / 6; }
+  .c-6-12 { grid-column: 6 / 13; }
+  .c-7-12b { grid-column: 7 / 12; }
+}
+
+/* Type */
+.h1 {
+  font-weight: 600;
+  font-size: clamp(38px, 4.6vw, 60px);
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+.h2 {
+  font-weight: 600;
+  font-size: clamp(28px, 3vw, 40px);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+.h3 { font-weight: 600; font-size: 19px; line-height: 1.3; letter-spacing: -0.01em; }
+.lead { font-size: 18px; line-height: 1.6; color: var(--fg-2); max-width: 60ch; }
+.small { font-size: 14px; line-height: 1.55; color: var(--fg-3); }
+.muted { color: var(--fg-3); }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 42px; padding: 0 18px;
+  border-radius: 4px; border: 1px solid transparent;
+  font: inherit; font-size: 15px; font-weight: 500; line-height: 1;
+  text-decoration: none; cursor: pointer; white-space: nowrap;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.btn svg { width: 16px; height: 16px; flex: none; }
+.btn-primary { background: var(--accent); color: var(--accent-fg); }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-secondary { background: var(--panel); color: var(--fg); border-color: var(--rule-strong); }
+.btn-secondary:hover { background: var(--panel-2); border-color: var(--fg-3); }
+.btn-sm { height: 36px; padding: 0 14px; font-size: 14px; }
+.link { color: var(--accent); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+
+/* Header */
+.site-header {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  background: var(--bg);
+  border-bottom: 1px solid var(--rule);
+}
+.nav { display: flex; align-items: center; gap: 24px; height: 64px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: var(--fg); min-height: 32px; }
+.brand svg { width: 28px; height: 28px; color: var(--accent); }
+.brand span { font-weight: 700; font-size: 20px; letter-spacing: -0.02em; }
+.nav-links { display: flex; gap: 4px; margin-left: 16px; }
+.nav-links a, .nav-login {
+  display: inline-flex; align-items: center; min-height: 36px; padding: 0 10px;
+  text-decoration: none; color: var(--fg-2); font-size: 15px; border-radius: 4px;
+}
+.nav-links a:hover, .nav-login:hover { color: var(--fg); background: var(--sunken); }
+.nav-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.icon-btn {
+  display: inline-grid; place-items: center; width: 36px; height: 36px;
+  border-radius: 4px; border: 1px solid var(--rule); background: transparent; color: var(--fg-2); cursor: pointer;
+}
+.icon-btn:hover { color: var(--fg); border-color: var(--rule-strong); }
+.icon-btn svg { width: 18px; height: 18px; }
+.theme-toggle .i-sun { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .theme-toggle .i-sun { display: block; }
+  :root:not([data-theme="light"]) .theme-toggle .i-moon { display: none; }
+}
+:root[data-theme="dark"] .theme-toggle .i-sun { display: block; }
+:root[data-theme="dark"] .theme-toggle .i-moon { display: none; }
+@media (max-width: 900px) { .nav-links { display: none; } }
+@media (max-width: 560px) { .nav-login { display: none; } .nav { gap: 12px; } .nav-cta { padding: 0 12px; } }
+
+/* Sections */
+.section { padding-block: 96px; }
+.sec-head { border-top: 1px solid var(--rule-strong); padding-top: 20px; margin-bottom: 48px; align-items: start; }
+.sec-head .lead { padding-top: 6px; }
+@media (max-width: 767px) { .section { padding-block: 64px; } .sec-head { margin-bottom: 32px; row-gap: 12px; } }
+
+/* Hero */
+.hero { padding-block: 72px 88px; }
+.hero-grid { align-items: start; }
+.hero-copy { padding-top: 24px; }
+.hero-copy .lead { margin-top: 24px; max-width: 52ch; }
+.cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+.hero-facts { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--rule); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; max-width: 560px; }
+.hero-facts dt { font-size: 13px; color: var(--fg-3); line-height: 1.5; }
+.hero-facts dd { font-size: 15px; font-weight: 500; line-height: 1.45; margin-top: 2px; }
+@media (max-width: 480px) { .hero-facts { grid-template-columns: 1fr; gap: 10px; } }
+@media (max-width: 767px) { .hero { padding-block: 40px 56px; } .hero-copy { padding-top: 0; } }
+
+/* Signature visual: invoice -> checks -> T-account */
+.ledger-card {
+  background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; box-shadow: var(--shadow);
+}
+.lc-section { padding: 18px 24px; }
+.lc-section + .lc-section { border-top: 1px solid var(--rule); }
+@media (max-width: 480px) { .lc-section { padding: 16px; } }
+.lc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.lc-title { font-weight: 600; font-size: 16px; }
+.sample { font-size: 12px; color: var(--fg-3); }
+.lc-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; margin-top: 14px; font-size: 13.5px; line-height: 1.5; }
+.lc-meta dt { color: var(--fg-3); font-size: 12.5px; }
+.lc-meta dd { color: var(--fg); overflow-wrap: anywhere; }
+@media (max-width: 420px) { .lc-meta { grid-template-columns: 1fr; } }
+
+.inv { width: 100%; border-collapse: collapse; font-size: 14px; }
+.inv th { text-align: left; font-weight: 500; font-size: 12.5px; color: var(--fg-3); padding: 0 0 8px; border-bottom: 1px solid var(--rule-strong); }
+.inv th:last-child, .inv td:last-child { text-align: right; }
+.inv td { padding: 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.inv .item { font-weight: 500; }
+.inv .qty { display: block; font-size: 12.5px; color: var(--fg-3); margin-top: 2px; }
+.inv tfoot td { border-bottom: 0; padding: 6px 0 0; color: var(--fg-2); }
+.inv tfoot tr:first-child td { padding-top: 12px; }
+.inv tfoot .grand td { color: var(--fg); font-weight: 600; padding-top: 10px; }
+.inv tfoot .grand .num { border-bottom: 3px double var(--ink-line); padding-bottom: 1px; }
+
+.checks { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.checks li { display: flex; align-items: center; gap: 8px; font-size: 13.5px; line-height: 1.4; color: var(--fg); }
+.tick { flex: none; width: 18px; height: 18px; border-radius: 3px; background: var(--ok-soft); color: var(--ok); display: grid; place-items: center; }
+.tick svg { width: 12px; height: 12px; }
+.checks-label { font-size: 12.5px; color: var(--fg-3); margin-bottom: 10px; }
+
+.entry-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; padding: 2px 8px; border-radius: 3px; line-height: 1.6; }
+.status-wait { background: var(--accent-soft); color: var(--accent); }
+.status-ok { background: var(--ok-soft); color: var(--ok); }
+.status-warn { background: var(--warn-soft); color: var(--warn); }
+
+.t-labels { display: grid; grid-template-columns: 1fr 1fr; font-size: 13px; font-weight: 600; color: var(--fg-2); padding-bottom: 6px; }
+.t-labels span:last-child { text-align: right; }
+.taccount { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid var(--ink-line); }
+.t-side { display: flex; flex-direction: column; min-width: 0; }
+.t-debit { border-right: 1px solid var(--ink-line); }
+.t-row { padding: 12px 14px 10px; border-bottom: 1px solid var(--rule); }
+.t-debit .t-row { padding-left: 0; }
+.t-credit .t-row { padding-right: 0; }
+.t-acct { font-size: 13.5px; line-height: 1.4; color: var(--fg-2); }
+.t-acct .num { color: var(--fg); font-weight: 500; margin-right: 6px; }
+.t-amt { display: block; text-align: right; font-size: 17px; font-weight: 500; margin-top: 4px; color: var(--fg); }
+.t-total { margin-top: auto; padding: 10px 14px 0; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; color: var(--fg-3); }
+.t-debit .t-total { padding-left: 0; }
+.t-credit .t-total { padding-right: 0; }
+.t-total .num { font-size: 14px; color: var(--fg); font-weight: 500; border-bottom: 3px double var(--ink-line); }
+@media (max-width: 420px) { .t-amt { font-size: 15px; } .t-total { flex-direction: column; align-items: flex-end; gap: 0; } }
+
+.balance {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 18px; padding: 10px 14px; border-radius: 4px;
+  border: 1px solid var(--ok); background: var(--ok-soft); color: var(--ok);
+  font-weight: 600; font-size: 15px;
+}
+.balance svg { width: 18px; height: 18px; flex: none; }
+.balance .num { font-weight: 500; }
+.lc-note { margin-top: 12px; font-size: 13px; color: var(--fg-3); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .checks li .tick { animation: tick-bg .3s ease-out both; animation-delay: calc(0.5s + var(--i) * 0.22s); }
+  .checks li .tick path { stroke-dasharray: 16; animation: tick-draw .32s ease-out both; animation-delay: calc(0.55s + var(--i) * 0.22s); }
+  .t-amt { animation: drop .5s cubic-bezier(.2, .7, .2, 1) both; animation-delay: calc(1.75s + var(--i) * 0.2s); }
+  .t-total .num { animation: fade-in .35s ease-out both; animation-delay: 2.4s; }
+  .balance { animation: settle .55s ease-out both; animation-delay: 2.65s; }
+  .balance svg path { stroke-dasharray: 16; animation: tick-draw .35s ease-out both; animation-delay: 2.9s; }
+}
+@keyframes tick-bg { from { background: var(--sunken); color: var(--fg-3); } }
+@keyframes tick-draw { from { stroke-dashoffset: 16; } to { stroke-dashoffset: 0; } }
+@keyframes drop { from { transform: translateY(-14px); opacity: 0.15; } to { transform: none; opacity: 1; } }
+@keyframes fade-in { from { opacity: 0.2; } }
+@keyframes settle { from { background: var(--panel-2); border-color: var(--rule); color: var(--fg-3); } }
+
+/* How it works */
+.steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; counter-reset: step; }
+.step { min-width: 0; display: flex; flex-direction: column; }
+.step-num { display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 14px; color: var(--accent); padding-bottom: 14px; border-bottom: 1px solid var(--ink-line); }
+.step-num b { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 4px; border: 1px solid var(--accent); font-weight: 600; }
+.step .h3 { margin-top: 18px; }
+.step p { margin-top: 8px; font-size: 15px; color: var(--fg-2); line-height: 1.55; }
+.mini { margin-top: 20px; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; line-height: 1.45; flex: 1; }
+.mini-h { padding: 10px 12px; border-bottom: 1px solid var(--rule); font-size: 12.5px; color: var(--fg-3); display: flex; justify-content: space-between; gap: 8px; }
+.mini-row { padding: 9px 12px; border-bottom: 1px solid var(--rule); display: flex; align-items: center; gap: 10px; min-width: 0; }
+.mini-row:last-child { border-bottom: 0; }
+.mini-row .grow { flex: 1; min-width: 0; }
+.mini-row .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.mini-row .sub { display: flex; justify-content: space-between; gap: 8px; color: var(--fg-3); font-size: 12.5px; margin-top: 2px; }
+.ftag { flex: none; min-width: 40px; text-align: center; font-size: 11.5px; font-weight: 600; padding: 2px 6px; border-radius: 3px; border: 1px solid var(--rule-strong); color: var(--fg-2); }
+.mini-checks li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.mini-checks .tick { width: 16px; height: 16px; }
+.warn-ico { flex: none; width: 16px; height: 16px; border-radius: 3px; background: var(--warn-soft); color: var(--warn); display: grid; place-items: center; }
+.warn-ico svg { width: 11px; height: 11px; }
+.otp { display: flex; gap: 6px; padding: 14px 12px 6px; }
+.otp span { width: 30px; height: 36px; border: 1px solid var(--rule-strong); border-radius: 4px; display: grid; place-items: center; }
+.otp span::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--fg); }
+.otp span.cur { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.otp span.cur::after { display: none; }
+.mini-fake-btn { margin: 10px 12px 12px; height: 32px; border-radius: 4px; border: 1px solid var(--rule-strong); display: grid; place-items: center; font-weight: 500; color: var(--fg-2); }
+@media (max-width: 1023px) { .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 48px; } }
+@media (max-width: 600px) { .steps { grid-template-columns: 1fr; } }
+
+/* Ledger table */
+.table-box { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; min-width: 0; }
+.table-scroll { overflow-x: auto; }
+.tb-head { padding: 16px 20px; border-bottom: 1px solid var(--rule); }
+.tb-head strong { display: block; font-weight: 600; font-size: 16px; }
+.tb-head > span { display: block; font-size: 13.5px; color: var(--fg-3); margin-top: 2px; }
+.tb-head.compact { padding: 14px 18px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.tb-head.compact strong { font-size: 15px; }
+.tb-head.compact > span { margin-top: 0; font-size: 13px; }
+.ledger { width: 100%; min-width: 820px; border-collapse: collapse; font-size: 14px; }
+.ledger th, .ledger td { padding: 11px 16px; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; border-radius: 0; }
+.ledger th { font-weight: 500; font-size: 12.5px; color: var(--fg-3); background: var(--panel-2); border-bottom-color: var(--rule-strong); white-space: nowrap; }
+.ledger .r { text-align: right; white-space: nowrap; }
+.ledger td + td, .ledger th + th { border-left: 1px solid var(--rule); }
+.ledger .open td, .ledger .close td { background: var(--panel-2); font-weight: 500; }
+.ledger .sum td { border-top: 1px solid var(--ink-line); font-weight: 600; }
+.ledger .close .num { border-bottom: 3px double var(--ink-line); }
+.ledger tr:last-child td { border-bottom: 0; }
+.ledger .new td { background: var(--accent-soft); }
+.ledger .dash { color: var(--fg-3); }
+
+/* VAT */
+.vat { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; }
+.vat-head { padding: 16px 20px; border-bottom: 1px solid var(--rule); }
+.vat-head strong { display: block; font-weight: 600; font-size: 16px; }
+.vat-head > span { display: block; font-size: 13.5px; color: var(--fg-3); margin-top: 2px; }
+.vat-body { padding: 20px; }
+.bars li { display: grid; grid-template-columns: minmax(0, 220px) minmax(0, 1fr) 120px; align-items: center; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--rule); }
+.bars li:first-child { padding-top: 0; }
+.bar-label { font-size: 14px; line-height: 1.4; }
+.bar-label small { display: block; font-size: 12.5px; color: var(--fg-3); }
+.bar-track { height: 14px; background: var(--sunken); border-radius: 2px; position: relative; }
+.bar-fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 2px; min-width: 3px; }
+.bar-fill.alt { background: var(--bar-2); }
+.bar-val { text-align: right; font-size: 14px; font-weight: 500; }
+.rate-bar { display: flex; height: 14px; border-radius: 2px; overflow: hidden; margin-top: 10px; gap: 2px; }
+.rate-bar span { display: block; }
+.rate-legend { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 10px; font-size: 13px; color: var(--fg-2); }
+.rate-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.swatch-a { background: var(--accent); }
+.swatch-b { background: var(--bar-2); }
+.vat-sub { font-size: 13px; color: var(--fg-3); margin: 24px 0 0; }
+.indicators { margin-top: 20px; border-top: 1px solid var(--ink-line); }
+.indicators div { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--rule); font-size: 14px; align-items: baseline; }
+.indicators dt.ind-code { color: var(--fg-3); }
+.indicators dd { text-align: right; font-weight: 500; }
+.indicators div:last-child { font-weight: 600; }
+.vat-foot { display: flex; gap: 10px; align-items: flex-start; margin-top: 16px; font-size: 13.5px; color: var(--fg-2); }
+@media (max-width: 640px) {
+  .bars li { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; }
+  .bars .bar-track { grid-column: 1 / -1; grid-row: 2; }
+  .vat-body, .vat-head { padding: 16px; }
+}
+
+/* Modules */
+.mods { border-top: 1px solid var(--ink-line); }
+.mod { padding-block: 28px; border-bottom: 1px solid var(--rule); align-items: start; row-gap: 16px; }
+.mod .h3 { font-size: 22px; }
+.mod-desc { font-size: 15.5px; color: var(--fg-2); }
+.mod-desc ul { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.mod-desc li { font-size: 13px; padding: 2px 8px; border: 1px solid var(--rule); border-radius: 3px; color: var(--fg-2); background: var(--panel); }
+@media (min-width: 1024px) {
+  .mod .m-name { grid-column: 1 / 4; }
+  .mod .m-desc { grid-column: 4 / 8; }
+  .mod .m-frag { grid-column: 8 / 13; }
+}
+.frag { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; font-size: 13.5px; line-height: 1.5; }
+.frag-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.frag-row + .frag-row { margin-top: 6px; }
+.frag .k { color: var(--fg-3); }
+.org { display: grid; gap: 0; justify-items: start; }
+.org-node { border: 1px solid var(--rule-strong); border-radius: 4px; padding: 8px 12px; background: var(--panel); width: 100%; }
+.org-node b { font-weight: 600; display: block; }
+.org-node.agent { border-color: var(--accent); }
+.org-link { width: 1px; height: 16px; background: var(--ink-line); margin-left: 20px; }
+.org-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; font-size: 12.5px; color: var(--fg-2); }
+.kill { display: inline-flex; align-items: center; gap: 6px; }
+.kill i { width: 26px; height: 14px; border-radius: 7px; background: var(--ok); position: relative; display: inline-block; }
+.kill i::after { content: ""; position: absolute; top: 2px; right: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--panel); }
+.channels { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.channels span { font-size: 12px; padding: 1px 7px; border: 1px solid var(--rule-strong); border-radius: 3px; color: var(--fg-2); }
+
+/* Trust */
+.points li { padding: 16px 0; border-bottom: 1px solid var(--rule); }
+.points li:first-child { border-top: 1px solid var(--ink-line); }
+.points b { display: block; font-weight: 600; font-size: 16px; }
+.points span { display: block; margin-top: 4px; font-size: 15px; color: var(--fg-2); }
+.audit { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 560px; }
+.audit th, .audit td { text-align: left; padding: 9px 18px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.audit th { font-weight: 500; font-size: 12.5px; color: var(--fg-3); background: var(--panel-2); border-bottom-color: var(--rule-strong); }
+.audit td:first-child { white-space: nowrap; color: var(--fg-2); }
+.audit td:nth-child(2) { white-space: nowrap; font-weight: 500; }
+.audit tr:last-child td { border-bottom: 0; }
+.cmd { margin-top: 32px; }
+.cmd-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.code {
+  margin-top: 12px; background: var(--code-bg); color: var(--code-fg); border-radius: 6px;
+  border: 1px solid var(--code-rule); position: relative;
+}
+.code-bar { display: flex; justify-content: space-between; align-items: center; padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--code-rule); font-size: 12.5px; color: var(--code-dim); }
+.code-copy { height: 30px; padding: 0 10px; border-radius: 4px; border: 1px solid var(--code-rule); background: transparent; color: var(--code-fg); font: inherit; font-size: 13px; cursor: pointer; }
+.code-copy:hover { border-color: var(--code-dim); }
+.code pre { margin: 0; padding: 16px; overflow-x: auto; font-size: 14px; line-height: 1.7; }
+.code pre span { display: block; }
+.code pre span::before { content: "$ "; color: var(--code-dim); user-select: none; }
+.copy-status { font-size: 13px; color: var(--fg-3); min-height: 20px; margin-top: 8px; }
+
+/* Pricing */
+.plans { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--ink-line); }
+.plan { padding: 28px 32px 8px 0; min-width: 0; }
+.plan + .plan { padding-left: 32px; padding-right: 0; border-left: 1px solid var(--rule); }
+.plan .price { color: var(--fg); font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin-top: 8px; line-height: 1.2; }
+.plan p { margin-top: 10px; color: var(--fg-2); font-size: 15px; }
+.plan .actions { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 10px; }
+.field { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
+.field label { flex-basis: 100%; font-size: 13.5px; color: var(--fg-2); }
+.field input {
+  flex: 1 1 220px; min-width: 0; height: 42px; padding: 0 12px; border-radius: 4px;
+  border: 1px solid var(--rule-strong); background: var(--panel); color: var(--fg); font: inherit; font-size: 15px;
+}
+.field input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.form-msg { margin-top: 10px; font-size: 14px; color: var(--ok); min-height: 22px; }
+@media (max-width: 767px) {
+  .plans { grid-template-columns: 1fr; }
+  .plan, .plan + .plan { padding: 24px 0 8px; border-left: 0; }
+  .plan + .plan { border-top: 1px solid var(--rule); margin-top: 24px; }
+}
+
+/* FAQ */
+.faq details { border-bottom: 1px solid var(--rule); }
+.faq details:first-child { border-top: 1px solid var(--ink-line); }
+.faq summary {
+  list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  padding: 18px 0; font-weight: 600; font-size: 17px; line-height: 1.4;
+}
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary svg { width: 18px; height: 18px; flex: none; color: var(--fg-3); transition: transform .2s ease; }
+.faq details[open] summary svg { transform: rotate(45deg); }
+.faq details p { padding: 0 0 20px; color: var(--fg-2); max-width: 68ch; }
+
+/* Footer */
+.site-footer { border-top: 1px solid var(--rule); padding-block: 40px 96px; }
+.foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 24px; align-items: flex-start; }
+.foot p { margin-top: 10px; font-size: 14px; color: var(--fg-3); max-width: 52ch; }
+.foot-links { display: flex; flex-wrap: wrap; gap: 4px 20px; font-size: 14px; }
+.foot-links a { color: var(--fg-2); text-decoration: none; display: inline-flex; min-height: 32px; align-items: center; }
+.foot-links a:hover { color: var(--fg); text-decoration: underline; text-underline-offset: 3px; }
+
+/* Corner tag */
+.corner-tag {
+  position: fixed; z-index: 30;
+  left: max(12px, env(safe-area-inset-left, 0px));
+  bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  background: var(--panel); color: var(--fg); border: 1px solid var(--rule-strong); border-radius: 4px;
+  padding: 5px 10px; font-size: 12.5px; font-weight: 500; line-height: 1.4; box-shadow: var(--shadow);
+}
+</style>
+
+<header class="site-header">
+  <div class="wrap">
+    <nav class="nav" aria-label="Chính">
+      <a class="brand" href="#" aria-label="Crove, trang chủ">
+        <svg viewBox="0 0 144 144" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M141.5 33.7c-4-1.1-7.5-2.4-11.1-3.2-6-1.3-9.4-4.8-10.7-10.7-0.8-3.4-1.9-6.7-2.9-10.1 0-0.2-0.2-0.3-0.3-0.7-1.2 4.1-2.4 8-3.6 11.9-0.3 1-0.7 2.1-1.1 3.1-0.9 2.3-2.5 4.1-4.9 4.9-4.3 1.4-8.7 2.7-13.1 4.1-0.6 0.2-1.3 0.4-2.3 0.7 3.7 1.1 7 2 10.4 3 1.5 0.4 3 0.9 4.4 1.4 2.9 1 4.8 2.9 5.8 5.8 1.5 4.7 2.9 9.4 4.4 14.2 0.1-0.3 0.3-0.6 0.4-0.9 1.3-4.3 2.6-8.6 3.9-12.9 1-3.4 3.3-5.6 6.7-6.6 4.3-1.1 8.8-2.5 13.8-4z" fill="currentColor"/>
+          <path d="M98.1 4c-0.7 2.2-1.3 4-1.7 5.8-0.6 2.3-2 3.6-4.2 4.1-1.8 0.5-3.7 1.1-5.9 1.7 2.3 0.7 4.2 1.3 6.2 1.8 2.1 0.6 3.3 1.8 3.9 3.9 0.5 1.9 1.1 3.7 1.8 5.9 0.6-2.1 1.2-3.7 1.6-5.4 0.6-2.4 2-4 4.5-4.6 1.8-0.4 3.5-1 5.7-1.6-1.2-0.4-2-0.6-2.8-0.9-6.6-1.9-6.2-1.6-8.1-7.9C98.7 6.1 98.4 5.3 98.1 4z" fill="currentColor"/>
+          <path d="M56.4 33.7C26.9 33.7 3 57.6 3 87.2c0 23 14.7 43.4 36.6 50.7 2.7 0.5 3.7-1.1 3.7-2.5 0-0.8 0.1-8.4 0.1-15.5 0-4.4 0.8-7 2.8-8.6-10.3-4.1-17.6-14.2-17.6-25.9 0-15.4 12.5-27.9 27.9-27.9 15.4 0 27.9 12.5 27.9 27.9 0 11.8-7.3 21.8-17.6 25.9 1.4 1.3 3.3 3.3 3.1 9.4-0.3 7.1-0.1 12.9-0.1 14.7 0 1.4 1 3.1 3.7 2.5 21.8-7.3 36.4-27.8 36.4-50.7C109.9 57.6 86 33.7 56.4 33.7z" fill="currentColor"/>
+        </svg>
+        <span>Crove</span>
+      </a>
+      <div class="nav-links">
+        <a href="#cach-hoat-dong">Sản phẩm</a>
+        <a href="#tin-cay">Mã nguồn mở</a>
+        <a href="#bang-gia">Bảng giá</a>
+        <a href="https://github.com/DOS/Crove#readme">Tài liệu</a>
+      </div>
+      <div class="nav-right">
+        <a class="nav-login" href="#">Đăng nhập</a>
+        <button class="icon-btn theme-toggle" id="theme-toggle" type="button" aria-label="Đổi giao diện sáng hoặc tối">
+          <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+          <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/></svg>
+        </button>
+        <a class="btn btn-primary btn-sm nav-cta" href="#tu-host">Tự host Crove</a>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="wrap grid hero-grid">
+      <div class="hero-copy c-1-6">
+        <h1 class="h1" id="hero-title">Hoá đơn đầu vào thành bút toán cân, có người duyệt.</h1>
+        <p class="lead">Crove đọc hoá đơn XML, PDF và ảnh chụp, kiểm tra tổng dòng, thuế suất, MST và mã CQT, rồi đề xuất bút toán theo TT133 để người có quyền duyệt và ghi sổ.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#tu-host">Dùng thử bản tự host</a>
+          <a class="btn btn-secondary" href="https://github.com/DOS/Crove">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg>
+            Xem mã nguồn
+          </a>
+        </div>
+        <dl class="hero-facts">
+          <div><dt>Hoá đơn điện tử</dt><dd>NĐ 123/2020, TT 78/2021</dd></div>
+          <div><dt>Hệ thống tài khoản</dt><dd>Thông tư 133</dd></div>
+          <div><dt>Giấy phép</dt><dd>Mã nguồn mở AGPL</dd></div>
+        </dl>
+      </div>
+
+      <figure class="c-7-12" aria-label="Ví dụ: một hoá đơn mua vào được kiểm tra và chuyển thành bút toán cân">
+        <div class="ledger-card">
+          <div class="lc-section">
+            <div class="lc-head">
+              <span class="lc-title">Hoá đơn GTGT <span class="num">1C26TPT</span> số <span class="num">00001284</span></span>
+              <span class="sample">Dữ liệu mẫu</span>
+            </div>
+            <dl class="lc-meta">
+              <div><dt>Người bán</dt><dd>Công ty CP Bao Bì Phú Thịnh</dd></div>
+              <div><dt>MST người bán</dt><dd class="num">0312 345 678</dd></div>
+              <div><dt>Ngày hoá đơn</dt><dd>14/10/2026</dd></div>
+              <div><dt>Mã CQT</dt><dd class="num">M1-26-7F3A2-00001284</dd></div>
+            </dl>
+          </div>
+          <div class="lc-section">
+            <table class="inv">
+              <thead><tr><th scope="col">Hàng hoá</th><th scope="col">Thành tiền (₫)</th></tr></thead>
+              <tbody>
+                <tr><td><span class="item">Thùng carton 5 lớp 60x40x40</span><span class="qty">2.000 cái x <span class="num">12.500</span></span></td><td class="num">25.000.000</td></tr>
+                <tr><td><span class="item">Băng keo 48mm</span><span class="qty">300 cuộn x <span class="num">18.000</span></span></td><td class="num">5.400.000</td></tr>
+              </tbody>
+              <tfoot>
+                <tr><td>Cộng tiền hàng</td><td class="num">30.400.000</td></tr>
+                <tr><td>Thuế GTGT 8%</td><td class="num">2.432.000</td></tr>
+                <tr class="grand"><td>Tổng thanh toán</td><td><span class="num">32.832.000 ₫</span></td></tr>
+              </tfoot>
+            </table>
+          </div>
+          <div class="lc-section">
+            <p class="checks-label">Kiểm tra cố định, 5 trên 5 đạt</p>
+            <ul class="checks">
+              <li style="--i:0"><span class="tick"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5"/></svg></span>Tổng dòng khớp</li>
+              <li style="--i:1"><span class="tick"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5"/></svg></span>Thuế suất 8% đúng</li>
+              <li style="--i:2"><span class="tick"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5"/></svg></span>MST hợp lệ</li>
+              <li style="--i:3"><span class="tick"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5"/></svg></span>Có mã CQT</li>
+              <li style="--i:4"><span class="tick"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5"/></svg></span>Không trùng hoá đơn đã nhập</li>
+            </ul>
+          </div>
+          <div class="lc-section">
+            <div class="entry-head">
+              <span class="lc-title">Bút toán đề xuất theo TT133</span>
+              <span class="status status-wait">Chờ duyệt</span>
+            </div>
+            <div class="t-labels" aria-hidden="true"><span>Nợ</span><span>Có</span></div>
+            <div class="taccount">
+              <div class="t-side t-debit">
+                <span class="sr-only">Bên Nợ</span>
+                <div class="t-row"><div class="t-acct"><span class="num">152</span>Nguyên liệu, vật liệu</div><span class="t-amt num" style="--i:0">30.400.000</span></div>
+                <div class="t-row"><div class="t-acct"><span class="num">1331</span>Thuế GTGT được khấu trừ</div><span class="t-amt num" style="--i:1">2.432.000</span></div>
+                <div class="t-total"><span>Cộng Nợ</span><span class="num">32.832.000</span></div>
+              </div>
+              <div class="t-side t-credit">
+                <span class="sr-only">Bên Có</span>
+                <div class="t-row"><div class="t-acct"><span class="num">331</span>Phải trả người bán</div><span class="t-amt num" style="--i:2">32.832.000</span></div>
+                <div class="t-total"><span>Cộng Có</span><span class="num">32.832.000</span></div>
+              </div>
+            </div>
+            <div class="balance" role="status">
+              <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.3l3.2 3.2L14 5.5"/></svg>
+              <span>Cân: <span class="num">32.832.000 = 32.832.000</span></span>
+            </div>
+            <p class="lc-note">Tài khoản 152 đã dùng 6 lần cho nhà cung cấp này.</p>
+          </div>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <section class="section" id="cach-hoat-dong" aria-labelledby="steps-title">
+    <div class="wrap">
+      <div class="grid sec-head">
+        <h2 class="h2 c-1-5" id="steps-title">Bốn bước từ hộp thư đến sổ cái</h2>
+        <p class="lead c-7-12b">Mỗi bước để lại dấu vết. Bạn luôn thấy chứng từ gốc, kết quả kiểm tra và người đã duyệt.</p>
+      </div>
+      <ol class="steps">
+        <li class="step">
+          <div class="step-num"><b>1</b>Nhận chứng từ</div>
+          <h3 class="h3">Gửi hoá đơn vào</h3>
+          <p>Chuyển tiếp email từ nhà cung cấp, hoặc tải lên tệp XML, PDF và ảnh chụp.</p>
+          <div class="mini" aria-label="Ví dụ tệp đã nhận">
+            <div class="mini-h"><span>Đã nhận hôm nay</span><span>3 tệp</span></div>
+            <div class="mini-row"><span class="ftag">XML</span><span class="grow"><span class="name">1C26TPT_00001284.xml</span><span class="sub"><span>Bao Bì Phú Thịnh</span></span></span></div>
+            <div class="mini-row"><span class="ftag">PDF</span><span class="grow"><span class="name">EVN_hoa-don-thang-9.pdf</span><span class="sub"><span>Điện lực</span></span></span></div>
+            <div class="mini-row"><span class="ftag">Ảnh</span><span class="grow"><span class="name">phieu-mua-gao-tan-hong.jpg</span><span class="sub"><span>HTX Tân Hồng</span></span></span></div>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-num"><b>2</b>Đọc và kiểm tra</div>
+          <h3 class="h3">Kiểm tra cố định quyết định</h3>
+          <p>XML được đọc trực tiếp. PDF và ảnh đi qua mô hình tương thích OpenAI do bạn chọn, rồi qua cùng bộ kiểm tra.</p>
+          <div class="mini" aria-label="Ví dụ kết quả kiểm tra">
+            <div class="mini-h"><span>Phiếu mua gạo, HTX Tân Hồng</span><span>4/5</span></div>
+            <ul class="mini-checks" style="padding: 8px 12px 10px">
+              <li><span class="tick"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5"/></svg></span>Tổng dòng khớp</li>
+              <li><span class="tick"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5"/></svg></span>Thuế suất đúng</li>
+              <li><span class="tick"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5"/></svg></span>MST hợp lệ</li>
+              <li><span class="warn-ico"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M6 2.5v4.2M6 9.2v.3"/></svg></span><strong style="font-weight:600;color:var(--warn)">Thiếu mã CQT</strong></li>
+              <li><span class="tick"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5"/></svg></span>Không trùng</li>
+            </ul>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-num"><b>3</b>Đề xuất</div>
+          <h3 class="h3">Bút toán vào AI Inbox</h3>
+          <p>Mỗi chứng từ có một bút toán đề xuất. Tài khoản được học theo từng nhà cung cấp.</p>
+          <div class="mini" aria-label="Ví dụ AI Inbox">
+            <div class="mini-h"><span>AI Inbox</span><span>4 chờ duyệt</span></div>
+            <div class="mini-row"><span class="grow"><span class="name">Công ty CP Bao Bì Phú Thịnh</span><span class="sub"><span>TK <span class="num">152</span></span><span class="num">32.832.000 ₫</span></span></span></div>
+            <div class="mini-row"><span class="grow"><span class="name">Hoá đơn điện EVN tháng 9</span><span class="sub"><span>TK <span class="num">6427</span></span><span class="num">1.946.780 ₫</span></span></span></div>
+            <div class="mini-row"><span class="grow"><span class="name">Cước Viettel</span><span class="sub"><span>TK <span class="num">6427</span></span><span class="num">880.000 ₫</span></span></span></div>
+            <div class="mini-row"><span class="grow"><span class="name">Phiếu mua gạo nguyên liệu HTX Tân Hồng</span><span class="sub"><span class="status status-warn" style="padding:0 6px">Thiếu mã CQT</span><span class="num">148.500.000 ₫</span></span></span></div>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-num"><b>4</b>Duyệt và ghi sổ</div>
+          <h3 class="h3">Người duyệt, có mã hai lớp</h3>
+          <p>Người có quyền sửa tài khoản nếu cần, nhập mã hai lớp mới và duyệt. Chỉ khi đó bút toán mới vào sổ.</p>
+          <div class="mini" aria-label="Ví dụ bước duyệt">
+            <div class="mini-h"><span>Duyệt bút toán HĐ <span class="num">00001284</span></span></div>
+            <div class="small" style="padding: 10px 12px 0">Nhập mã 6 số từ ứng dụng xác thực</div>
+            <div class="otp" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span class="cur"></span></div>
+            <div class="mini-fake-btn" aria-hidden="true">Duyệt và ghi sổ</div>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section" id="so-cai" aria-labelledby="ledger-title">
+    <div class="wrap">
+      <div class="grid sec-head">
+        <h2 class="h2 c-1-5" id="ledger-title">Sổ cái đọc được, số dư chạy theo từng dòng</h2>
+        <p class="lead c-7-12b">Bút toán đã duyệt đi vào sổ nhật ký chung và sổ cái. Công nợ được theo dõi đến từng nhà cung cấp. Xuất Excel khi kế toán cần.</p>
+      </div>
+      <div class="table-box">
+        <div class="tb-head">
+          <strong id="ledger-cap">Sổ cái tài khoản <span class="num">331</span>, Phải trả người bán</strong>
+          <span>Đối tượng: Công ty CP Bao Bì Phú Thịnh. Kỳ: tháng 10/2026. Đơn vị: đồng.</span>
+        </div>
+        <div class="table-scroll">
+        <table class="ledger" aria-labelledby="ledger-cap">
+          <thead>
+            <tr>
+              <th scope="col">Ngày ghi sổ</th>
+              <th scope="col">Số chứng từ</th>
+              <th scope="col">Diễn giải</th>
+              <th scope="col">TK đối ứng</th>
+              <th scope="col" class="r">Nợ</th>
+              <th scope="col" class="r">Có</th>
+              <th scope="col" class="r">Số dư Có</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="open"><td>01/10/2026</td><td></td><td>Số dư đầu kỳ</td><td></td><td class="r"></td><td class="r"></td><td class="r num">18.360.000</td></tr>
+            <tr><td>03/10/2026</td><td class="num">UNC0412</td><td>Thanh toán hoá đơn <span class="num">00001197</span></td><td class="num">1121</td><td class="r num">18.360.000</td><td class="r"></td><td class="r num">0</td></tr>
+            <tr class="new"><td>14/10/2026</td><td class="num">00001284</td><td>Mua thùng carton, băng keo</td><td class="num">152</td><td class="r"></td><td class="r num">30.400.000</td><td class="r num">30.400.000</td></tr>
+            <tr class="new"><td>14/10/2026</td><td class="num">00001284</td><td>Thuế GTGT đầu vào, thuế suất 8%</td><td class="num">1331</td><td class="r"></td><td class="r num">2.432.000</td><td class="r num">32.832.000</td></tr>
+            <tr class="sum"><td></td><td></td><td>Cộng phát sinh trong kỳ</td><td></td><td class="r num">18.360.000</td><td class="r num">32.832.000</td><td class="r"></td></tr>
+            <tr class="close"><td>31/10/2026</td><td></td><td>Số dư cuối kỳ</td><td></td><td class="r"></td><td class="r"></td><td class="r"><span class="num">32.832.000</span></td></tr>
+          </tbody>
+        </table>
+        </div>
+      </div>
+      <p class="small" style="margin-top: 12px">Hai dòng tô nền là bút toán của hoá đơn <span class="num">00001284</span> sau khi được duyệt.</p>
+    </div>
+  </section>
+
+  <section class="section" id="thue" aria-labelledby="vat-title">
+    <div class="wrap grid">
+      <div class="c-1-4">
+        <h2 class="h2" id="vat-title">Thuế GTGT đầu vào, lấy từ chứng từ đã duyệt</h2>
+        <p class="lead" style="margin-top: 20px">Tờ khai GTGT tổng hợp số liệu từ chứng từ đã ghi sổ, tách theo thuế suất. Chứng từ còn chờ xử lý chưa có trên tờ khai.</p>
+      </div>
+      <div class="c-6-12">
+        <div class="vat">
+          <div class="vat-head">
+            <strong>Tờ khai thuế GTGT quý IV/2026</strong>
+            <span>Thuế GTGT đầu vào được khấu trừ, số liệu đến 18/10/2026</span>
+          </div>
+          <div class="vat-body">
+            <ol class="bars">
+              <li>
+                <span class="bar-label">Công ty CP Bao Bì Phú Thịnh<small>HĐ <span class="num">00001284</span>, thuế suất 8%</small></span>
+                <span class="bar-track" aria-hidden="true"><span class="bar-fill" style="width:100%"></span></span>
+                <span class="bar-val num">2.432.000</span>
+              </li>
+              <li>
+                <span class="bar-label">Hoá đơn điện EVN tháng 9<small>Thuế suất 10%</small></span>
+                <span class="bar-track" aria-hidden="true"><span class="bar-fill alt" style="width:7.28%"></span></span>
+                <span class="bar-val num">176.980</span>
+              </li>
+              <li>
+                <span class="bar-label">Cước Viettel<small>Thuế suất 10%</small></span>
+                <span class="bar-track" aria-hidden="true"><span class="bar-fill alt" style="width:3.29%"></span></span>
+                <span class="bar-val num">80.000</span>
+              </li>
+            </ol>
+            <p class="vat-sub">Theo thuế suất</p>
+            <div class="rate-bar" aria-hidden="true"><span class="swatch-a" style="width:90.44%"></span><span class="swatch-b" style="width:9.56%"></span></div>
+            <div class="rate-legend">
+              <span><i class="swatch-a"></i>8%: <span class="num">2.432.000</span> (90,4%)</span>
+              <span><i class="swatch-b"></i>10%: <span class="num">256.980</span> (9,6%)</span>
+            </div>
+            <dl class="indicators">
+              <div><dt class="ind-code">[23]</dt><dt>Giá trị hàng hoá, dịch vụ mua vào</dt><dd class="num">32.969.800</dd></div>
+              <div><dt class="ind-code">[24]</dt><dt>Thuế GTGT của hàng hoá, dịch vụ mua vào</dt><dd class="num">2.688.980</dd></div>
+              <div><dt class="ind-code">[25]</dt><dt>Thuế GTGT được khấu trừ kỳ này</dt><dd class="num">2.688.980</dd></div>
+            </dl>
+            <p class="vat-foot"><span class="warn-ico" style="margin-top:3px"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M6 2.5v4.2M6 9.2v.3"/></svg></span><span>Phiếu mua gạo HTX Tân Hồng (<span class="num">148.500.000 ₫</span>) còn cảnh báo thiếu mã CQT, chưa duyệt nên chưa có trên tờ khai.</span></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="phan-he" aria-labelledby="mods-title">
+    <div class="wrap">
+      <div class="grid sec-head">
+        <h2 class="h2 c-1-5" id="mods-title">Các phân hệ dùng chung một nền</h2>
+        <p class="lead c-7-12b">Thành viên, vai trò, xác thực hai lớp và nhật ký kiểm toán là một, cho mọi phân hệ.</p>
+      </div>
+      <div class="mods">
+        <article class="grid mod">
+          <h3 class="h3 m-name">Tài chính</h3>
+          <div class="mod-desc m-desc">
+            <p>Từ hoá đơn đầu vào đến bút toán cân và tờ khai, với hệ thống tài khoản TT133.</p>
+            <ul aria-label="Chức năng tài chính"><li>AI Inbox</li><li>Chứng từ</li><li>Sổ nhật ký chung</li><li>Sổ cái</li><li>Hệ thống tài khoản</li><li>Nhà cung cấp</li><li>Tờ khai VAT</li><li>Số dư đầu kỳ</li></ul>
+          </div>
+          <div class="frag m-frag">
+            <div class="frag-row"><span class="k">Nhà cung cấp</span><span>Công ty CP Bao Bì Phú Thịnh</span></div>
+            <div class="frag-row"><span class="k">Tài khoản đã học</span><span><span class="num">152</span>, dùng 6 lần</span></div>
+            <div class="frag-row"><span class="k">Công nợ hiện tại</span><span class="num">32.832.000 ₫</span></div>
+          </div>
+        </article>
+        <article class="grid mod">
+          <h3 class="h3 m-name">Công việc</h3>
+          <div class="mod-desc m-desc"><p>Giao việc, đặt hạn và theo dõi trạng thái. Việc có thể gắn với chứng từ đang chờ xử lý.</p></div>
+          <div class="frag m-frag">
+            <div class="frag-row"><strong style="font-weight:600">Bổ sung mã CQT cho phiếu mua gạo HTX Tân Hồng</strong></div>
+            <div class="frag-row"><span class="k">Giao cho</span><span>Chị Lan (Kế toán trưởng)</span></div>
+            <div class="frag-row"><span class="k">Hạn</span><span>20/10/2026</span></div>
+          </div>
+        </article>
+        <article class="grid mod">
+          <h3 class="h3 m-name">AI Agents</h3>
+          <div class="mod-desc m-desc"><p>Agent nằm trong sơ đồ tổ chức như nhân viên: có cấp trên, ngân sách, nút dừng và giới hạn rủi ro. Việc vượt giới hạn chuyển cho người duyệt.</p></div>
+          <div class="frag m-frag">
+            <div class="org">
+              <div class="org-node"><b>Chị Lan</b><span class="muted">Kế toán trưởng</span></div>
+              <div class="org-link" aria-hidden="true"></div>
+              <div class="org-node agent">
+                <b>Agent Kế toán</b>
+                <div class="org-meta"><span>Ngân sách <span class="num">2.000.000 ₫</span>/tháng</span><span>Giới hạn R1</span><span class="kill"><i aria-hidden="true"></i>Đang chạy</span></div>
+              </div>
+            </div>
+            <p class="small" style="margin-top:10px">Agent đề xuất bút toán. Việc mức R2, R3 chuyển Chị Lan duyệt.</p>
+          </div>
+        </article>
+        <article class="grid mod">
+          <h3 class="h3 m-name">Social</h3>
+          <div class="mod-desc m-desc"><p>Lên lịch bài đăng cho Facebook, LinkedIn, X, YouTube và TikTok. Mỗi kênh có các bước duyệt riêng, kèm thư viện ảnh và video.</p></div>
+          <div class="frag m-frag">
+            <div class="frag-row"><strong style="font-weight:600">Gạo ST25 vụ mới đã về</strong><span class="status status-wait">Chờ duyệt</span></div>
+            <div class="frag-row"><span class="k">Lịch đăng</span><span>19:30, 18/10/2026</span></div>
+            <div class="frag-row"><span class="k">Người duyệt</span><span>Anh Minh</span></div>
+            <div class="channels"><span>Facebook</span><span>TikTok</span></div>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="tin-cay" aria-labelledby="trust-title">
+    <div class="wrap">
+      <div class="grid sec-head">
+        <h2 class="h2 c-1-5" id="trust-title">AI đề xuất. Kiểm tra quyết định. Người duyệt.</h2>
+        <p class="lead c-7-12b">Kết quả của AI không bao giờ tự được tin. Mọi thay đổi đi qua một đường ghi duy nhất và để lại dòng nhật ký.</p>
+      </div>
+      <div class="grid">
+        <ul class="points c-1-5">
+          <li><b>Kiểm tra bằng mã, không bằng mô hình</b><span>Tổng dòng, thuế suất, chữ số kiểm tra của MST, mã CQT và hoá đơn trùng được kiểm tra theo quy tắc cố định.</span></li>
+          <li><b>Duyệt cần mã hai lớp mới</b><span>Mỗi lần duyệt bút toán đều hỏi lại mã xác thực, kể cả khi bạn đang đăng nhập.</span></li>
+          <li><b>Nhật ký chỉ ghi thêm</b><span>Dòng nhật ký không sửa, không xoá được. Bạn biết ai đã làm gì, lúc nào.</span></li>
+          <li><b>Dữ liệu tách theo tổ chức</b><span>PostgreSQL row-level security giữ dữ liệu mỗi công ty trong phạm vi của nó.</span></li>
+        </ul>
+        <div class="c-6-12">
+          <div class="table-box">
+            <div class="tb-head compact"><strong id="audit-cap">Nhật ký kiểm toán</strong><span>Hoá đơn <span class="num">00001284</span>, chỉ ghi thêm</span></div>
+            <div class="table-scroll">
+            <table class="audit" aria-labelledby="audit-cap">
+              <thead><tr><th scope="col">Thời gian</th><th scope="col">Người thực hiện</th><th scope="col">Hành động</th></tr></thead>
+              <tbody>
+                <tr><td>14/10/2026 08:12:04</td><td>Hệ thống</td><td>Nhận hoá đơn <span class="num">1C26TPT</span> số <span class="num">00001284</span> qua email chuyển tiếp</td></tr>
+                <tr><td>14/10/2026 08:12:05</td><td>Hệ thống</td><td>Đọc XML, 5 trên 5 kiểm tra đạt</td></tr>
+                <tr><td>14/10/2026 08:12:06</td><td>Agent Kế toán</td><td>Đề xuất bút toán Nợ <span class="num">152</span>, Nợ <span class="num">1331</span>, Có <span class="num">331</span></td></tr>
+                <tr><td>14/10/2026 09:40:28</td><td>Chị Lan</td><td>Xác thực hai lớp thành công</td></tr>
+                <tr><td>14/10/2026 09:40:31</td><td>Chị Lan</td><td>Duyệt bút toán, ghi sổ nhật ký chung</td></tr>
+              </tbody>
+            </table>
+            </div>
+          </div>
+
+          <div class="cmd" id="tu-host">
+            <div class="cmd-head">
+              <h3 class="h3">Tự host bằng một lệnh</h3>
+              <span class="small">Không cần dịch vụ nào của chúng tôi</span>
+            </div>
+            <div class="code">
+              <div class="code-bar"><span>Terminal</span><button class="code-copy" id="copy-cmd" type="button">Sao chép</button></div>
+              <pre id="cmd"><span>git clone https://github.com/DOS/Crove.git</span><span>cd Crove</span><span>docker compose up</span></pre>
+            </div>
+            <p class="copy-status" id="copy-status" role="status"></p>
+            <p class="small">Mở <span class="num">http://localhost:8080</span> khi các container đã chạy.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="bang-gia" aria-labelledby="price-title">
+    <div class="wrap">
+      <div class="grid sec-head">
+        <h2 class="h2 c-1-5" id="price-title">Bảng giá</h2>
+        <p class="lead c-7-12b">Chạy trên máy chủ của bạn ngay hôm nay. Bản cloud do chúng tôi vận hành sẽ ra mắt sau.</p>
+      </div>
+      <div class="plans">
+        <div class="plan">
+          <h3 class="h3">Tự host</h3>
+          <p class="price">Miễn phí</p>
+          <p>Mã nguồn mở AGPL. Toàn bộ phân hệ, dữ liệu nằm trên máy chủ của bạn.</p>
+          <div class="actions"><a class="btn btn-secondary" href="#tu-host">Xem lệnh cài đặt</a><a class="btn btn-secondary" href="https://github.com/DOS/Crove">Mã nguồn trên GitHub</a></div>
+        </div>
+        <div class="plan">
+          <h3 class="h3">Crove Cloud</h3>
+          <p class="price">Sắp ra mắt</p>
+          <p>Bản do chúng tôi vận hành. Để lại email để nhận tin khi mở đăng ký.</p>
+          <form class="field" id="notify-form" novalidate>
+            <label for="notify-email">Email của bạn</label>
+            <input id="notify-email" name="email" type="email" autocomplete="email" placeholder="ban@congty.vn" required>
+            <button class="btn btn-primary" type="submit">Đăng ký nhận tin</button>
+          </form>
+          <p class="form-msg" id="form-msg" role="status"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="hoi-dap" aria-labelledby="faq-title">
+    <div class="wrap grid">
+      <h2 class="h2 c-1-4" id="faq-title">Câu hỏi thường gặp</h2>
+      <div class="faq c-5-12">
+        <details>
+          <summary>AI có tự ghi sổ không?<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M9 3.5v11M3.5 9h11"/></svg></summary>
+          <p>Không. AI chỉ đọc chứng từ và đề xuất bút toán. Các kiểm tra cố định quyết định chứng từ có đạt hay không, và chỉ người có quyền, sau khi nhập mã hai lớp, mới ghi được vào sổ.</p>
+        </details>
+        <details>
+          <summary>Bản tự host có cần dịch vụ bên ngoài không?<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M9 3.5v11M3.5 9h11"/></svg></summary>
+          <p>Bản tự host chạy bằng docker compose up trên máy của bạn. Hoá đơn XML được đọc không cần AI. Muốn đọc PDF và ảnh chụp, bạn trỏ Crove tới một endpoint tương thích OpenAI do bạn chọn.</p>
+        </details>
+        <details>
+          <summary>Kế toán viên của tôi dùng số liệu thế nào?<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M9 3.5v11M3.5 9h11"/></svg></summary>
+          <p>Bút toán theo hệ thống tài khoản TT133, sổ nhật ký chung, sổ cái và tờ khai VAT đều xuất được ra Excel. Kế toán viên có thể vào Crove với vai trò riêng để xem và duyệt.</p>
+        </details>
+        <details>
+          <summary>Dữ liệu của các công ty có tách biệt không?<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M9 3.5v11M3.5 9h11"/></svg></summary>
+          <p>Có. Mỗi bảng dữ liệu được bảo vệ bằng row-level security của PostgreSQL, nên một tổ chức không đọc được dữ liệu của tổ chức khác, kể cả khi dùng chung một máy chủ.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap foot">
+    <div>
+      <a class="brand" href="#" aria-label="Crove, về đầu trang">
+        <svg viewBox="0 0 144 144" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M141.5 33.7c-4-1.1-7.5-2.4-11.1-3.2-6-1.3-9.4-4.8-10.7-10.7-0.8-3.4-1.9-6.7-2.9-10.1 0-0.2-0.2-0.3-0.3-0.7-1.2 4.1-2.4 8-3.6 11.9-0.3 1-0.7 2.1-1.1 3.1-0.9 2.3-2.5 4.1-4.9 4.9-4.3 1.4-8.7 2.7-13.1 4.1-0.6 0.2-1.3 0.4-2.3 0.7 3.7 1.1 7 2 10.4 3 1.5 0.4 3 0.9 4.4 1.4 2.9 1 4.8 2.9 5.8 5.8 1.5 4.7 2.9 9.4 4.4 14.2 0.1-0.3 0.3-0.6 0.4-0.9 1.3-4.3 2.6-8.6 3.9-12.9 1-3.4 3.3-5.6 6.7-6.6 4.3-1.1 8.8-2.5 13.8-4z" fill="currentColor"/>
+          <path d="M98.1 4c-0.7 2.2-1.3 4-1.7 5.8-0.6 2.3-2 3.6-4.2 4.1-1.8 0.5-3.7 1.1-5.9 1.7 2.3 0.7 4.2 1.3 6.2 1.8 2.1 0.6 3.3 1.8 3.9 3.9 0.5 1.9 1.1 3.7 1.8 5.9 0.6-2.1 1.2-3.7 1.6-5.4 0.6-2.4 2-4 4.5-4.6 1.8-0.4 3.5-1 5.7-1.6-1.2-0.4-2-0.6-2.8-0.9-6.6-1.9-6.2-1.6-8.1-7.9C98.7 6.1 98.4 5.3 98.1 4z" fill="currentColor"/>
+          <path d="M56.4 33.7C26.9 33.7 3 57.6 3 87.2c0 23 14.7 43.4 36.6 50.7 2.7 0.5 3.7-1.1 3.7-2.5 0-0.8 0.1-8.4 0.1-15.5 0-4.4 0.8-7 2.8-8.6-10.3-4.1-17.6-14.2-17.6-25.9 0-15.4 12.5-27.9 27.9-27.9 15.4 0 27.9 12.5 27.9 27.9 0 11.8-7.3 21.8-17.6 25.9 1.4 1.3 3.3 3.3 3.1 9.4-0.3 7.1-0.1 12.9-0.1 14.7 0 1.4 1 3.1 3.7 2.5 21.8-7.3 36.4-27.8 36.4-50.7C109.9 57.6 86 33.7 56.4 33.7z" fill="currentColor"/>
+        </svg>
+        <span>Crove</span>
+      </a>
+      <p>Business OS mã nguồn mở cho người làm chủ một mình và doanh nghiệp nhỏ, bắt đầu từ Việt Nam. Phát hành theo giấy phép GNU AGPL phiên bản 3.</p>
+    </div>
+    <nav class="foot-links" aria-label="Chân trang">
+      <a href="https://github.com/DOS/Crove">GitHub</a>
+      <a href="https://github.com/DOS/Crove#readme">Tài liệu</a>
+      <a href="https://github.com/DOS/Crove/blob/main/LICENSE">Giấy phép AGPL</a>
+      <a href="#bang-gia">Crove Cloud</a>
+    </nav>
+  </div>
+</footer>
+
+<div class="corner-tag" aria-hidden="true">Phương án A: Sổ cái</div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  try {
+    var saved = localStorage.getItem("crove-theme");
+    if (saved === "light" || saved === "dark") root.setAttribute("data-theme", saved);
+  } catch (e) {}
+
+  function isDark() {
+    var t = root.getAttribute("data-theme");
+    if (t) return t === "dark";
+    return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  }
+  var toggle = document.getElementById("theme-toggle");
+  toggle.addEventListener("click", function () {
+    var next = isDark() ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem("crove-theme", next); } catch (e) {}
+  });
+
+  var copyBtn = document.getElementById("copy-cmd");
+  var copyStatus = document.getElementById("copy-status");
+  copyBtn.addEventListener("click", function () {
+    var text = document.getElementById("cmd").innerText;
+    function ok() { copyStatus.textContent = "Đã sao chép ba dòng lệnh."; }
+    function fail() { copyStatus.textContent = "Không sao chép được. Hãy chọn và sao chép thủ công."; }
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fail);
+      else fail();
+    } catch (e) { fail(); }
+  });
+
+  var form = document.getElementById("notify-form");
+  var msg = document.getElementById("form-msg");
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var input = form.querySelector("input");
+    if (!input.value.trim() || !input.checkValidity()) {
+      msg.style.color = "var(--err)";
+      msg.textContent = "Hãy nhập một địa chỉ email hợp lệ.";
+      input.focus();
+      return;
+    }
+    msg.style.color = "var(--ok)";
+    msg.textContent = "Đã ghi nhận. Đây là bản mẫu, chưa có email nào được gửi đi.";
+    form.reset();
+  });
+})();
+</script>
