@@ -302,6 +302,25 @@ suite('period lock (#329)', () => {
     const inbox = await rpc('inbox/get', await tokenFor(owner), { id: pending });
     expect(inbox.body.status).toBe('pending');
 
+    // In a bulk approval only the item dated in the locked month is refused; the September one is still approved.
+    const september = await propose('2026-09-12');
+    const bulk = await rpc('inbox/approveMany', await tokenFor(adminUser, { mfa: true }), {
+      items: [
+        { id: pending, revision: 1 },
+        { id: september, revision: 1 },
+      ],
+      idempotencyKey: randomUUID(),
+    });
+    expect(bulk.status).toBe(200);
+    expect(bulk.body.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: pending, outcome: 'refused', code: 'PERIOD_LOCKED' }),
+        expect.objectContaining({ id: september, outcome: 'approved' }),
+      ]),
+    );
+    expect(await entriesOn('2026-09-12')).toBe(1);
+    expect((await rpc('inbox/get', await tokenFor(owner), { id: pending })).body.status).toBe('pending');
+
     // A reversal dated in the locked month is refused at approval; dated in September it posts.
     const reverse = async (entryDate: string) => {
       const asked = await rpc('inbox/request', await tokenFor(owner), {

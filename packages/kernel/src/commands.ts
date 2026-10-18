@@ -584,6 +584,8 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   // Posting a cash or bank voucher (finance.voucher.record, #327).
   'VOUCHER_INVALID',
   'PARTY_NOT_FOUND',
+  // Posting into a locked month (#329): the proposal's date is in or before the last locked month.
+  'PERIOD_LOCKED',
 ]);
 
 // Whether a nested approval's error refuses only that item.
