@@ -107,6 +107,13 @@ describe('readZip', () => {
     expect(() => readZip(zip.subarray(0, zip.length - 3))).toThrow(ArchiveError);
   });
 
+  it('caps a long entry name without splitting a surrogate pair', () => {
+    const name = `thang-10/${'a'.repeat(EXTRACT_LIMITS.maxStringChars - 10)}😀.xml`;
+    const [entry] = readZip(buildZip([{ name, data: FIXTURE }])).entries;
+    expect(entry?.name.length).toBe(EXTRACT_LIMITS.maxStringChars - 1);
+    expect(entry?.name.isWellFormed()).toBe(true);
+  });
+
   it('recognises other archives by their first bytes', () => {
     expect(looksLikeArchive(buildZip([{ name: 'a.xml', data: 'x' }]))).toBe(true);
     expect(looksLikeArchive(new Uint8Array([0x1f, 0x8b, 8, 0]))).toBe(true);

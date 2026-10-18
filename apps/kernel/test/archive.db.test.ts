@@ -8,9 +8,9 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import type { ExtractClient } from '@crove/extract-contract';
-import type { BatchFile } from '@crove/kernel-contract';
+import { MAX_BATCH_ENTRIES, type BatchFile } from '@crove/kernel-contract';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
+import { MAX_ARCHIVE_ENTRIES, createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { buildZip, type ZipEntrySpec } from '../../extract/test/zip-fixture.ts';
@@ -193,6 +193,44 @@ suite('bulk intake of a ZIP archive on PostgreSQL (issue #314)', () => {
     expect(await batch([fileId], outsider, orgB)).toEqual([]);
     // The file that is not an archive has no archive source.
     expect(await archiveSource(workerRuntime, orgA, first.fileIds[0] as string)).toBeNull();
+  });
+
+  it('bounds a batch answer to MAX_BATCH_ENTRIES entries in all, and lists only counts in the recent files', async () => {
+    const ids: string[] = [];
+    for (let a = 0; a < 5; a++) {
+      const bytes = new Uint8Array(Buffer.from(`PK\u0005\u0006 bounded batch ${a} ${Date.now()}`));
+      const sha256 = sha256Hex(bytes);
+      const storageKey = fileKey(orgA, sha256);
+      const generation = await store.put(storageKey, bytes);
+      const { fileId } = await runtime.execute<{ fileId: string }>(
+        'kernel.file.ingest',
+        { filename: `lon-${a}.zip`, contentType: 'application/zip', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },
+        { actor: asUser(owner), orgId: orgA },
+      );
+      // The most an archive can hold: 500 entries with the longest names.
+      const entries = Array.from({ length: MAX_ARCHIVE_ENTRIES }, (_, i) => ({ outcome: 'rejected' as const, name: `${String(i).padStart(4, '0')}${'x'.repeat(251)}`, reason: 'unsupported_type' as const }));
+      await workerRuntime.execute('kernel.file.archive.record', { fileId, status: 'done', error: null, entries }, { actor: { type: 'system', component: 'test' }, orgId: orgA });
+      ids.push(fileId);
+    }
+    const answer = await batch(ids);
+    expect(answer.map((f) => f.entryCount)).toEqual([500, 500, 500, 500, 500]);
+    expect(answer.reduce((sum, f) => sum + (f.entries?.length ?? 0), 0)).toBe(MAX_BATCH_ENTRIES);
+    expect(answer.map((f) => [f.entries?.length, f.entriesTruncated])).toEqual([
+      [500, false],
+      [500, false],
+      [500, false],
+      [500, false],
+      [0, true],
+    ]);
+    expect(JSON.stringify(answer).length).toBeLessThan(2_000_000);
+    // Asked about alone, the last one comes whole.
+    const [alone] = await batch([ids[4] as string]);
+    expect(alone).toMatchObject({ entryCount: 500, entriesTruncated: false });
+    expect(alone?.entries).toHaveLength(500);
+    expect(alone?.entries?.[499]?.name.startsWith('0499')).toBe(true);
+    // The recent files never carry entries.
+    const recent = await runtime.query<Array<Record<string, unknown>>>('kernel.files.recent', {}, { actor: asUser(owner), orgId: orgA });
+    expect(recent.find((f) => f.id === ids[0])).not.toHaveProperty('entries');
   });
 
   it(`opens a ZIP of ${INVOICES} e-invoices through the worker into ${INVOICES} proposals, each entry its own document`, { timeout: 400_000 }, async () => {

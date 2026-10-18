@@ -16,12 +16,12 @@ export const zStoredArchiveEntry = z.object({
   fileId: zId.nullable(),
 });
 export type StoredArchiveEntry = z.infer<typeof zStoredArchiveEntry>;
-export const zArchiveResult = z.object({ entries: z.array(zStoredArchiveEntry) });
 
 export interface FileStatusRow {
   status: FileStatus;
-  // The entries of an opened archive; null for any other file, and for an archive not opened (yet, or at all).
-  entries: StoredArchiveEntry[] | null;
+  // How many entries an opened archive has; null for any other file, and for an archive not opened (yet, or at all).
+  // The entries themselves are read apart and in slices (archiveEntries), so no listing loads them all.
+  entryCount: number | null;
 }
 
 export type FileStatusFilter = { ids: readonly string[] } | { recent: number };
@@ -41,8 +41,8 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
             'x.error',
             'x.version',
             'x.method',
-            // Only an archive's result is needed here (its entries); an invoice's stays in the database.
-            sql<unknown>`CASE WHEN x.method = 'archive' THEN x.result END`.as('archive_result'),
+            // Only the size of an opened archive's entry list; neither it nor an invoice's result is loaded here.
+            sql<number | null>`CASE WHEN x.method = 'archive' AND x.status = 'done' THEN pg_catalog.jsonb_array_length(x.result -> 'entries') END`.as('entry_count'),
             sql<boolean>`x.status = 'pending' AND x.created_at > pg_catalog.now() - pg_catalog.make_interval(mins => ${REEXTRACT_STALE_MINUTES}::int)`.as(
               'in_flight',
             ),
@@ -76,7 +76,7 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
       'e.error',
       'e.version',
       'e.method',
-      'e.archive_result',
+      'e.entry_count',
       'e.in_flight',
       'p.id as proposal_id',
       'p.status as proposal_status',
@@ -107,7 +107,6 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
               ? 'duplicate'
               : 'proposed'
             : 'failed';
-    const parsed = r.method === 'archive' ? zArchiveResult.safeParse(r.archive_result) : null;
     return {
       status: {
         id: r.id,
@@ -127,7 +126,24 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
           (r.version ?? 0) < MAX_EXTRACTION_VERSIONS,
         createdAt: r.created_at.toISOString(),
       },
-      entries: parsed?.success && r.extraction_status === 'done' ? parsed.data.entries : null,
+      entryCount: r.entry_count === null || r.entry_count === undefined ? null : Number(r.entry_count),
     };
   });
+}
+
+// The first `limit` entries of each opened archive asked for, sliced in the database (jsonpath), so a response holds at
+// most the sum of the limits. Archives of other orgs, or not opened, read as missing.
+export async function archiveEntries(ctx: QueryContext, slices: ReadonlyArray<{ fileId: string; limit: number }>): Promise<Map<string, StoredArchiveEntry[]>> {
+  const wanted = slices.filter((s) => s.limit > 0);
+  if (wanted.length === 0) return new Map();
+  const { rows } = await sql<{ file_id: string; entries: unknown }>`
+    SELECT x.file_id, pg_catalog.jsonb_path_query_array(x.result, '$.entries[0 to $last]', pg_catalog.jsonb_build_object('last', s.n - 1)) AS entries
+    FROM ROWS FROM (pg_catalog.unnest(${wanted.map((s) => s.fileId)}::uuid[]), pg_catalog.unnest(${wanted.map((s) => s.limit)}::int[])) AS s(file_id, n)
+    JOIN crove_kernel.extraction x ON x.org_id = ${ctx.orgId}::uuid AND x.file_id = s.file_id AND x.method = 'archive' AND x.status = 'done'`.execute(ctx.trx);
+  const out = new Map<string, StoredArchiveEntry[]>();
+  for (const row of rows) {
+    const parsed = z.array(zStoredArchiveEntry).safeParse(row.entries);
+    if (parsed.success) out.set(row.file_id, parsed.data);
+  }
+  return out;
 }

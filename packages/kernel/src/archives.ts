@@ -4,18 +4,16 @@
 // member who uploaded the archive, and goes to extraction like an upload. The archive's single extraction run (method
 // 'archive') keeps what each entry became. An archive is opened once; it is never read again and never has a proposal.
 import { z } from 'zod';
-import { ACCEPTED_UPLOAD_TYPES, ARCHIVE_ENTRY_REASONS, MAX_BATCH_FILES, zId, type BatchFile, type FileStatus } from '@crove/kernel-contract';
+import { ACCEPTED_UPLOAD_TYPES, ARCHIVE_ENTRY_REASONS, MAX_BATCH_ENTRIES, MAX_BATCH_FILES, zId, type BatchFile, type FileStatus } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery } from '@crove/kernel-runtime';
-import { fileStatuses, type StoredArchiveEntry } from './file-status.ts';
+import { archiveEntries, fileStatuses, type StoredArchiveEntry } from './file-status.ts';
 import { ingestFileRow, isArchiveType, zIngestFile } from './files.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
 // Entries one archive may file: the sandbox's limit (EXTRACT_LIMITS.maxArchiveEntries, directories included).
 export const MAX_ARCHIVE_ENTRIES = 500;
-// Entries of opened archives whose files one batch query resolves; past it an entry's file reads as null.
-export const MAX_BATCH_ENTRIES = 2000;
 
 // The archive to open (worker only): null when the file is not an archive. expanded: it already has its run.
 export const archiveSource = defineQuery({
@@ -127,25 +125,40 @@ export const recordArchive = defineCommand({
 
 // The files of an upload batch, as the SPA tracks them (#314): each file's status, and for an opened archive what each
 // entry became, with the entry's own file status. Ids of other orgs, unknown ids and Social images read as missing.
+// The answer holds at most MAX_BATCH_ENTRIES entries in all, given out to the archives in the order asked: an archive
+// past that budget comes with its first entries only (or none) and entriesTruncated, and is asked about again alone.
 export const filesBatch = defineQuery({
   name: 'kernel.files.batch',
   input: z.object({ ids: z.array(zId).min(1).max(MAX_BATCH_FILES) }),
   access: ALL,
   handler: async (ctx, input): Promise<BatchFile[]> => {
-    const rows = new Map((await fileStatuses(ctx, { ids: [...new Set(input.ids)] })).map((row) => [row.status.id, row]));
-    const childIds = [...new Set([...rows.values()].flatMap((row) => (row.entries ?? []).flatMap((e) => (e.fileId ? [e.fileId] : []))))].slice(0, MAX_BATCH_ENTRIES);
+    const ids = [...new Set(input.ids)];
+    const rows = new Map((await fileStatuses(ctx, { ids })).map((row) => [row.status.id, row]));
+    let budget = MAX_BATCH_ENTRIES;
+    const slices: Array<{ fileId: string; limit: number }> = [];
+    for (const id of ids) {
+      const count = rows.get(id)?.entryCount;
+      if (!count) continue;
+      const limit = Math.min(count, budget);
+      slices.push({ fileId: id, limit });
+      budget -= limit;
+    }
+    const entries = await archiveEntries(ctx, slices);
+    const childIds = [...new Set([...entries.values()].flatMap((list) => list.flatMap((e) => (e.fileId ? [e.fileId] : []))))];
     const children = new Map<string, FileStatus>();
     for (let i = 0; i < childIds.length; i += MAX_BATCH_FILES) {
       for (const row of await fileStatuses(ctx, { ids: childIds.slice(i, i + MAX_BATCH_FILES) })) children.set(row.status.id, row.status);
     }
-    return input.ids.flatMap((id) => {
+    return ids.flatMap((id) => {
       const row = rows.get(id);
       if (!row) return [];
-      rows.delete(id);
+      const list = row.entryCount === null ? null : (entries.get(id) ?? []);
       return [
         {
           ...row.status,
-          entries: row.entries ? row.entries.map((e) => ({ name: e.name, outcome: e.outcome, reason: e.reason, file: e.fileId ? (children.get(e.fileId) ?? null) : null })) : null,
+          entryCount: row.entryCount,
+          entriesTruncated: list !== null && list.length < (row.entryCount ?? 0),
+          entries: list ? list.map((e) => ({ name: e.name, outcome: e.outcome, reason: e.reason, file: e.fileId ? (children.get(e.fileId) ?? null) : null })) : null,
         },
       ];
     });

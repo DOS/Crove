@@ -2,10 +2,10 @@
 // file is uploaded on its own (so one bad file never fails the others), then followed through files.batch until it
 // is read: a proposal, a likely duplicate, or a failure. An archive becomes the documents it held, each followed the
 // same way. No React or API imports, so it is unit tested; the Inbox wires it up.
-import type { ArchiveEntryReason, BatchFile, FileStatus } from '@crove/kernel-contract';
+import { MAX_BATCH_ENTRIES, MAX_BATCH_FILES, type ArchiveEntryReason, type BatchFile, type FileStatus } from '@crove/kernel-contract';
 
 // Files one batch may hold (files.batch answers for at most this many); a larger month goes in as ZIP archives.
-export const MAX_INTAKE_FILES = 500;
+export const MAX_INTAKE_FILES = MAX_BATCH_FILES;
 // Uploads running at once.
 export const INTAKE_CONCURRENCY = 3;
 // How often a batch with files still being read is polled.
@@ -93,6 +93,9 @@ export function applyBatch(items: readonly IntakeItem[], batch: readonly BatchFi
   return items.map((item) => {
     const file = item.fileId && !item.existing ? byId.get(item.fileId) : undefined;
     if (!file) return item;
+    // Only the first entries of an archive past the answer's budget came back: it is asked about alone next time, and
+    // keeps what it showed until then, so a partial list never reads as settled.
+    if (file.entriesTruncated) return { ...item, archive: true };
     return {
       ...item,
       state: fromStatus(file.status),
@@ -141,6 +144,32 @@ export function pendingIds(items: readonly IntakeItem[]): string[] {
     if (item.state === 'expanded') return leaves(item.entries).every((entry) => SETTLED.has(entry.state)) ? [] : [item.fileId];
     return item.state === 'processing' ? [item.fileId] : [];
   });
+}
+
+// Archives one files.batch call asks about: each holds at most 500 entries, so their entries always fit one answer.
+export const ARCHIVES_PER_POLL = Math.floor(MAX_BATCH_ENTRIES / 500);
+
+// The calls one poll makes: every pending archive in a group of at most ARCHIVES_PER_POLL (the first group also takes
+// the plain files), and no call with more ids than files.batch takes.
+export function pollGroups(items: readonly IntakeItem[]): string[][] {
+  const archives = new Set(items.flatMap((item) => (item.archive && item.fileId ? [item.fileId] : [])));
+  const pending = pendingIds(items);
+  const plain = pending.filter((id) => !archives.has(id));
+  const zipped = pending.filter((id) => archives.has(id));
+  const groups: string[][] = [];
+  for (let i = 0; i < zipped.length; i += ARCHIVES_PER_POLL) groups.push(zipped.slice(i, i + ARCHIVES_PER_POLL));
+  for (let i = 0; i < plain.length; i += MAX_BATCH_FILES) {
+    const chunk = plain.slice(i, i + MAX_BATCH_FILES);
+    const first = groups[0];
+    if (i === 0 && first && first.length + chunk.length <= MAX_BATCH_FILES) first.push(...chunk);
+    else groups.push(chunk);
+  }
+  return groups;
+}
+
+// Whether `adding` more files fit next to the files still in flight (files.batch answers for MAX_INTAKE_FILES at most).
+export function fitsBatch(current: readonly IntakeItem[], adding: number): boolean {
+  return (isSettled(current) ? 0 : current.length) + adding <= MAX_INTAKE_FILES;
 }
 
 // Runs fn over items with at most `limit` at once.

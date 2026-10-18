@@ -1,7 +1,7 @@
 // Bulk intake state (issue #314): what the Inbox shows for each file of an upload batch, and when it stops polling.
 import { describe, expect, it } from 'vitest';
 import type { BatchFile, FileStatus } from '@crove/kernel-contract';
-import { MAX_INTAKE_FILES, applyBatch, eachLimited, isSettled, newItem, pendingIds, precheck, summarize, uploaded } from '../src/lib/intake.ts';
+import { ARCHIVES_PER_POLL, MAX_INTAKE_FILES, applyBatch, eachLimited, fitsBatch, isSettled, newItem, pendingIds, pollGroups, precheck, summarize, uploaded } from '../src/lib/intake.ts';
 
 const ID = (n: number) => `00000000-0000-7000-8000-${String(n).padStart(12, '0')}`;
 const status = (id: string, value: FileStatus['status'], error: string | null = null): FileStatus => ({
@@ -15,7 +15,12 @@ const status = (id: string, value: FileStatus['status'], error: string | null = 
   canReextract: false,
   createdAt: '2026-10-18T00:00:00.000Z',
 });
-const batchFile = (id: string, value: FileStatus['status'], entries: BatchFile['entries'] = null): BatchFile => ({ ...status(id, value), entries });
+const batchFile = (id: string, value: FileStatus['status'], entries: BatchFile['entries'] = null, truncated = false): BatchFile => ({
+  ...status(id, value),
+  entries,
+  entryCount: entries === null ? null : entries.length + (truncated ? 1 : 0),
+  entriesTruncated: truncated,
+});
 
 describe('bulk intake state', () => {
   it('prechecks size and extension; the server still decides by content', () => {
@@ -85,6 +90,28 @@ describe('bulk intake state', () => {
     const items = applyBatch([uploaded(newItem('z', 'bad.zip'), { fileId: ID(20), duplicate: false })], [{ ...batchFile(ID(20), 'failed'), error: 'Tệp ZIP có đường dẫn không an toàn: ../x' }]);
     expect(items[0]).toMatchObject({ state: 'failed', error: 'Tệp ZIP có đường dẫn không an toàn: ../x' });
     expect(summarize(items)).toEqual({ total: 1, settled: 1, proposed: 0, duplicate: 0, failed: 1 });
+  });
+
+  it('polls archives a few at a time so their entries always fit one answer, and caps the files in flight', () => {
+    const archives = Array.from({ length: ARCHIVES_PER_POLL + 1 }, (_, i) => uploaded(newItem(`z${i}`, `z${i}.zip`), { fileId: ID(100 + i), duplicate: false }));
+    const plain = [uploaded(newItem('a', 'a.xml'), { fileId: ID(200), duplicate: false }), uploaded(newItem('b', 'b.xml'), { fileId: ID(201), duplicate: true })];
+    const groups = pollGroups([...archives, ...plain]);
+    expect(groups).toEqual([[...archives.slice(0, ARCHIVES_PER_POLL).map((a) => a.fileId), ID(200)], [archives[ARCHIVES_PER_POLL]?.fileId]]);
+    expect(groups.every((g) => g.length <= 500)).toBe(true);
+
+    const inFlight = Array.from({ length: 400 }, (_, i) => uploaded(newItem(`p${i}`, `p${i}.xml`), { fileId: ID(1000 + i), duplicate: false }));
+    expect(fitsBatch(inFlight, 100)).toBe(true);
+    expect(fitsBatch(inFlight, 101)).toBe(false);
+    // A finished batch makes way for the next one.
+    expect(fitsBatch([{ ...newItem('x', 'x.xml'), state: 'proposed' }], MAX_INTAKE_FILES)).toBe(true);
+  });
+
+  it('keeps an archive whose entries came back cut short as it was, so it is asked about alone and never settles early', () => {
+    const item = uploaded(newItem('z', 'big.zip'), { fileId: ID(30), duplicate: false });
+    const partial = applyBatch([item], [batchFile(ID(30), 'expanded', [{ name: 'hd-1.xml', outcome: 'stored', reason: null, file: status(ID(31), 'proposed') }], true)]);
+    expect(partial[0]).toMatchObject({ state: 'processing', archive: true, entries: [] });
+    expect(pendingIds(partial)).toEqual([ID(30)]);
+    expect(isSettled(partial)).toBe(false);
   });
 
   it('runs at most the given number of tasks at once', async () => {

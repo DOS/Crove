@@ -52,6 +52,19 @@ function unopenable(result: ExtractFailure): string {
   }
 }
 
+// At most `max` UTF-16 units without splitting a surrogate pair: a lone surrogate is valid in a JS string but not in
+// jsonb, where the entry names are kept, and would fail the whole record.
+export function truncateText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+// The name an entry is listed under (its path in the archive), within what the record command takes.
+export function entryName(name: string): string {
+  return truncateText(name || '(không tên)', 255);
+}
 // The name the entry is filed under: its last path segment, with the extension of the type its bytes have.
 function entryFilename(name: string, contentType: string): string {
   const base = name.split('/').filter(Boolean).pop() ?? '';
@@ -96,7 +109,7 @@ export async function expandArchive(deps: ArchiveDeps, orgId: string, source: Ar
   }
 
   const entries = await mapLimited(listed, STORE_CONCURRENCY, async (entry): Promise<ArchiveEntryInput> => {
-    const name = (entry.name || '(không tên)').slice(0, 255);
+    const name = entryName(entry.name);
     const reject = (reason: ArchiveEntryReason): ArchiveEntryInput => ({ outcome: 'rejected', name, reason });
     if (entry.rejected !== null || entry.content === null) return reject(entry.rejected ?? 'corrupt');
     // A copy of its own: a small Buffer is a view of Node's shared pool, whose other bytes must not travel with it.

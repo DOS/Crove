@@ -12,7 +12,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
 import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
-import { archiveSource, expandArchive, recordArchiveFailure } from './archive.ts';
+import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, socialPublishQueue } from './jobs-schema.ts';
@@ -199,9 +199,11 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (!job) return;
     const { orgId, fileId, version } = job.data;
     // A ZIP archive (#314) is opened into documents of its own instead of being read; it is never read again.
-    const archive = await archiveSource(deps.runtime, orgId, fileId);
-    if (archive && version !== undefined) return;
+    // undefined until it is known; a lookup that fails is retried with the job like any other step.
+    let archive: ArchiveSource | null | undefined;
     try {
+      archive = await archiveSource(deps.runtime, orgId, fileId);
+      if (archive && version !== undefined) return;
       if (archive) {
         const { fileIds } = await expandArchive({ runtime: deps.runtime, store: deps.store, extract: deps.extract }, orgId, archive, job.retryCount);
         console.log(`[extract] archive ${fileId}: ${fileIds.length} file(s)`);
@@ -211,6 +213,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     } catch (error) {
       console.error(`[extract] file ${fileId}${version ? ` version ${version}` : ''} attempt ${job.retryCount + 1}`, error);
       if (job.retryCount < EXTRACT_RETRY_LIMIT) throw error;
+      // The last attempt records a failed run either way, so the file never stays "being read".
+      if (archive === undefined) archive = await archiveSource(deps.runtime, orgId, fileId).catch(() => null);
       if (archive) {
         await recordArchiveFailure(deps.runtime, orgId, fileId, 'Không mở được tệp ZIP sau nhiều lần thử; hãy tải lại tệp');
         return;

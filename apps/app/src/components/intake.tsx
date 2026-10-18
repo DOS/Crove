@@ -1,6 +1,6 @@
 // Bulk intake in the Inbox (issue #314): upload many documents or ZIP archives at once and follow every file until it
 // is read. The batch state lives in lib/intake.ts; this wires it to the uploads, the files.batch query and the screen.
-import { useQuery } from '@tanstack/react-query';
+import { useQueries } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
@@ -15,7 +15,8 @@ import {
   eachLimited,
   isSettled,
   newItem,
-  pendingIds,
+  fitsBatch,
+  pollGroups,
   precheck,
   summarize,
   uploaded,
@@ -52,6 +53,9 @@ export function useIntake(): Intake {
   const [uploading, setUploading] = useState(false);
   const [refused, setRefused] = useState<unknown>(null);
   const counter = useRef(0);
+  // The list as last rendered, for the size check in start (the updates below are functional).
+  const current = useRef<IntakeItem[]>(items);
+  current.current = items;
 
   const update = useCallback((key: string, change: (item: IntakeItem) => IntakeItem) => {
     setItems((current) => current.map((item) => (item.key === key ? change(item) : item)));
@@ -60,7 +64,8 @@ export function useIntake(): Intake {
   const start = useCallback(
     (files: File[]) => {
       if (files.length === 0) return;
-      if (files.length > MAX_INTAKE_FILES) {
+      // With the files still in flight, so files.batch never has to answer for more than it takes.
+      if (!fitsBatch(current.current, files.length)) {
         setRefused(new ClientError('inbox.intake.tooMany', (t) => t('inbox.intake.tooMany', { max: MAX_INTAKE_FILES })));
         return;
       }
@@ -99,15 +104,18 @@ export function useIntake(): Intake {
     [update],
   );
 
-  const ids = pendingIds(items);
-  const batch = useQuery({
-    ...orpc.files.batch.queryOptions({ input: { ids } }),
-    enabled: ids.length > 0,
-    refetchInterval: INTAKE_POLL_MS,
+  // One call per group, so an answer never has to cut an archive's entries short.
+  const polls = useQueries({
+    queries: pollGroups(items).map((ids) => ({ ...orpc.files.batch.queryOptions({ input: { ids } }), refetchInterval: INTAKE_POLL_MS })),
   });
+  // Applied when any answer arrives; stamp changes exactly then.
+  const stamp = polls.map((poll) => poll.dataUpdatedAt).join(',');
+  const latest = useRef(polls);
+  latest.current = polls;
   useEffect(() => {
-    if (batch.data) setItems((current) => applyBatch(current, batch.data));
-  }, [batch.data]);
+    const answers = latest.current.flatMap((poll) => poll.data ?? []);
+    if (answers.length > 0) setItems((list) => applyBatch(list, answers));
+  }, [stamp]);
 
   const clear = useCallback(() => {
     setItems([]);

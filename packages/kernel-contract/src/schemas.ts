@@ -306,7 +306,15 @@ export const zArchiveEntry = z.object({
 export type ArchiveEntry = z.infer<typeof zArchiveEntry>;
 
 // A file of an upload batch (#314): its status and, for a ZIP archive that has been opened, its entries.
-export const zBatchFile = zFileStatus.extend({ entries: z.array(zArchiveEntry).nullable() });
+// entryCount: how many entries the archive was opened into (null for any other file). An answer holds a bounded number
+// of entries in all; an archive past it comes with its first entries only and entriesTruncated, to be asked about alone.
+export const zBatchFile = zFileStatus.extend({
+  entries: z.array(zArchiveEntry).nullable(),
+  entryCount: z.number().int().nonnegative().nullable(),
+  entriesTruncated: z.boolean(),
+});
+// Entries of opened archives one batch answer holds in all (four full archives of 500).
+export const MAX_BATCH_ENTRIES = 2000;
 export type BatchFile = z.infer<typeof zBatchFile>;
 // Files one batch query may ask about (the SPA asks about the files of its current upload batch).
 export const MAX_BATCH_FILES = 500;

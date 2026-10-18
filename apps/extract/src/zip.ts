@@ -200,6 +200,13 @@ function decompress(entry: CentralEntry, data: Uint8Array): Uint8Array | Archive
   return out;
 }
 
+// The name within the contract's string limit, without splitting a surrogate pair (a lone one cannot be stored).
+function capName(name: string): string {
+  if (name.length <= EXTRACT_LIMITS.maxStringChars) return name;
+  const cut = name.slice(0, EXTRACT_LIMITS.maxStringChars);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
 export function readZip(bytes: Uint8Array, limits: ZipLimits = ZIP_LIMITS): ExtractedArchive {
   const { entries: all, directoryStart } = readDirectory(bytes, limits);
   if (all.some((e) => e.name === '[Content_Types].xml' || e.name === 'mimetype')) {
@@ -217,7 +224,7 @@ export function readZip(bytes: Uint8Array, limits: ZipLimits = ZIP_LIMITS): Extr
 
   const result: ExtractedArchive['entries'] = [];
   for (const { entry, range } of files) {
-    const reject = (rejected: ArchiveRejection) => result.push({ name: entry.name.slice(0, EXTRACT_LIMITS.maxStringChars), sizeBytes: entry.size, content: null, rejected });
+    const reject = (rejected: ArchiveRejection) => result.push({ name: capName(entry.name), sizeBytes: entry.size, content: null, rejected });
     if (entry.flags & FLAG_ENCRYPTED) {
       reject('encrypted');
       continue;
@@ -244,7 +251,7 @@ export function readZip(bytes: Uint8Array, limits: ZipLimits = ZIP_LIMITS): Extr
       continue;
     }
     result.push({
-      name: entry.name.slice(0, EXTRACT_LIMITS.maxStringChars),
+      name: capName(entry.name),
       sizeBytes: entry.size,
       content: Buffer.from(out.buffer, out.byteOffset, out.byteLength).toString('base64'),
       rejected: null,
