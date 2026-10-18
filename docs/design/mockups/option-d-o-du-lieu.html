@@ -1,6 +1,8 @@
 <title>Crove - Phương án D</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="color-scheme" content="light dark">
+<script>try { var t = localStorage.getItem('crove-theme-d'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}</script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600&display=swap">
 <style>
 :root {
@@ -1038,7 +1040,7 @@ docker compose up
     e.preventDefault();
     var input = document.getElementById('email');
     var ok = document.getElementById('signupOk');
-    if (!input.value || input.value.indexOf('@') < 1) {
+    if (!input.value || !input.checkValidity()) {
       ok.textContent = 'Bạn nhập giúp một địa chỉ email hợp lệ.';
       input.focus();
       return;
