@@ -72,7 +72,9 @@ export function sheetToRows(sheet: SheetRows): SheetImport {
   let extraColumns = false;
   for (const rowNo of [...sheet.keys()].sort((a, b) => a - b)) {
     const cells = sheet.get(rowNo);
-    if ([...(cells?.entries() ?? [])].some(([col, cell]) => col > 3 && cell.value.trim() !== '')) extraColumns = true;
+    for (const [col, cell] of cells ?? []) {
+      if (col > 3 && cell.value.trim() !== '') extraColumns = true;
+    }
     if (rowNo === 1) continue;
     const values = [0, 1, 2, 3].map((col) => cells?.get(col)?.value.trim() ?? '');
     if (values.every((v) => v === '')) continue;

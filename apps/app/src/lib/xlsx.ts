@@ -249,6 +249,12 @@ function withoutPhonetics(xml: string): string {
   for (;;) {
     const start = xml.indexOf('<rPh', at);
     if (start < 0) return out + xml.slice(at);
+    // Only the element itself, as in elements(): not some other tag that starts with `<rPh`.
+    if (!/[\s/>]/.test(xml.charAt(start + 4))) {
+      out += xml.slice(at, start + 4);
+      at = start + 4;
+      continue;
+    }
     const closeAt = xml.indexOf('</rPh>', start);
     if (closeAt < 0) return out + xml.slice(at, start);
     out += xml.slice(at, start);

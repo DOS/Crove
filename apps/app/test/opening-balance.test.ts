@@ -106,6 +106,13 @@ describe('xlsx reader', () => {
     expect(sheet.get(1)?.get(0)).toEqual({ kind: 'text', value: 'ok' });
   });
 
+  it('drops only <rPh> elements, not another tag that starts with the same letters', async () => {
+    const sheet = await readFirstSheet(
+      excelWorkbook(`<x:row r="1"><x:c r="A1" t="s"><x:v>0</x:v></x:c></x:row>`, ['<x:t>Tiền </x:t><x:rPhX/><x:t>mặt</x:t><x:rPh sb="0" eb="1"><x:t>ignored</x:t></x:rPh>']),
+    );
+    expect(sheet.get(1)?.get(0)).toEqual({ kind: 'text', value: 'Tiền mặt' });
+  });
+
   it('stops inflating a part that grows past the limit', async () => {
     const bomb = zipDeflated({ 'xl/worksheets/sheet1.xml': `<worksheet><sheetData>${' '.repeat(21 * 1024 * 1024)}</sheetData></worksheet>` });
     expect(bomb.byteLength).toBeLessThan(MAX_XLSX_BYTES);
