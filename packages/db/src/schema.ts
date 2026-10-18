@@ -131,7 +131,8 @@ export type FileTable = Refine<
   { [K in Exclude<keyof G.KernelFileTable, 'source'>]: Frozen<G.KernelFileTable[K]> } & { source: Frozen<(typeof FILE_SOURCES)[number]> }
 >;
 
-export const EXTRACTION_METHODS = ['einvoice_xml', 'pdf_text_ai', 'image_ai', 'unsupported'] as const;
+// archive: a ZIP whose entries were filed as files of their own (#314); such a run never has a proposal.
+export const EXTRACTION_METHODS = ['einvoice_xml', 'pdf_text_ai', 'image_ai', 'unsupported', 'archive'] as const;
 export type ExtractionMethod = (typeof EXTRACTION_METHODS)[number];
 
 export const EXTRACTION_STATUSES = ['pending', 'done', 'failed'] as const;

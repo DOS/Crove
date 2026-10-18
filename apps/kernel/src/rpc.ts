@@ -470,6 +470,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       recent: os.files.recent.handler(({ context }) =>
         inOrg(context, (orgId, actor) => runtime.query('kernel.files.recent', {}, { actor, orgId })),
       ),
+      batch: os.files.batch.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.query('kernel.files.batch', input, { actor, orgId })),
+      ),
       reextract: os.files.reextract.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => {
           const { idempotencyKey, ...rest } = input;

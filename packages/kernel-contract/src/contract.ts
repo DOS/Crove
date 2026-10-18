@@ -33,6 +33,8 @@ import {
   zSocialVariantUpdate,
   zSocialChannelInput,
   SOCIAL_POST_STATUSES,
+  MAX_BATCH_FILES,
+  zBatchFile,
   zFileStatus,
   zId,
   zInboxDetail,
@@ -238,6 +240,9 @@ export const contract = {
   },
   files: {
     recent: oc.output(z.array(zFileStatus)),
+    // Every role: the status of the given files of the org, in the order asked (ids it cannot see are left out), and
+    // for a ZIP archive the entries it was opened into, each with its own file's status (bulk intake, #314).
+    batch: oc.input(z.object({ ids: z.array(zId).min(1).max(MAX_BATCH_FILES) })).output(z.array(zBatchFile)),
     // Owners, admins and members: reads the file again (issue #40). The result is a new extraction version and,
     // when it reads an invoice, a new revision of the file's pending proposal (or a new proposal after a rejected
     // one). Refused while a run is in flight and once the invoice is booked. A retry with the same idempotencyKey

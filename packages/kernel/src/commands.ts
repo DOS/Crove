@@ -4,10 +4,7 @@ import { MAX_SOCIAL_VIDEO_BYTES, MAX_UPLOAD_BYTES, UPLOAD_PURPOSES, zAccountCode
 import type { Db, MemberRole } from '@crove/db';
 import {
   DomainError,
-  GENERATION_PATTERN,
-  contentGeneration,
   defineCommand,
-  fileKey,
   newStagingKey,
   type CommandContext,
   type Runtime,
@@ -16,7 +13,9 @@ import {
 import { agentCommands } from './agents.ts';
 import { channelCommands } from './channels.ts';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
+import { archiveCommands } from './archives.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
+import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
 import { offboardingCommands } from './offboarding.ts';
@@ -175,77 +174,14 @@ export const removeMember = defineCommand({
   },
 });
 
-// A file reference is the triple (storageKey, generation, sha256) of plan §7.6 (ADR-0013): generation is what the
-// store's put returned for the bytes it wrote.
-const zIngestFile = z.object({
-  filename: z.string().min(1).max(255),
-  contentType: z.string().min(1).max(100),
-  sizeBytes: z.number().int().nonnegative(),
-  sha256: z.string().regex(/^[0-9a-f]{64}$/),
-  storageKey: z.string().min(1),
-  generation: z.string().regex(GENERATION_PATTERN),
-  // social: an image or video for a Social post (#372, #409), stored like any file but never sent to extraction.
-  source: z.enum(['upload', 'email', 'social']),
-  // A video's duration, read by the server from the file (#409).
-  durationMs: z.number().int().min(0).max(86_400_000).optional(),
-});
-
+// Uploads (the API, as the uploading member) and email attachments (kernel.inbound.receive, system). The uploader is
+// recorded as the file's creator; an email has no authenticated sender, so its files have none.
 export const ingestFile = defineCommand({
   name: 'kernel.file.ingest',
   input: zIngestFile,
   risk: 'R1',
   access: MEMBERS,
-  handler: async (ctx, input) => {
-    if (input.storageKey !== fileKey(ctx.orgId, input.sha256)) throw new DomainError('INVALID_STORAGE_KEY', 400, 'Khóa lưu trữ không hợp lệ');
-    if (input.generation.startsWith('content:') && input.generation !== contentGeneration(input.sha256)) {
-      throw new DomainError('INVALID_GENERATION', 400, 'Phiên bản lưu trữ không khớp nội dung tệp');
-    }
-    const inserted = await ctx.trx
-      .insertInto('crove_kernel.file')
-      .values({
-        org_id: ctx.orgId,
-        sha256: input.sha256,
-        storage_key: input.storageKey,
-        generation: input.generation,
-        filename: input.filename,
-        content_type: input.contentType,
-        size_bytes: String(input.sizeBytes),
-        source: input.source,
-        duration_ms: input.durationMs === undefined ? null : String(input.durationMs),
-        created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
-      })
-      .onConflict((oc) => oc.columns(['org_id', 'sha256']).doNothing())
-      .returning('id')
-      .executeTakeFirst();
-    if (!inserted) {
-      const existing = await ctx.trx
-        .selectFrom('crove_kernel.file')
-        .select(['id', 'source'])
-        .where('org_id', '=', ctx.orgId)
-        .where('sha256', '=', input.sha256)
-        .forUpdate()
-        .executeTakeFirstOrThrow();
-      // Files are deduplicated by content, so the same bytes can arrive as a document and as an image for a Social
-      // post (#372). A document is never offered for publishing: an image upload of a document's bytes is refused.
-      if (input.source === 'social' && existing.source !== 'social') {
-        throw new DomainError('FILE_IS_DOCUMENT', 409, 'Ảnh này đã có trong chứng từ kế toán của tổ chức, hãy dùng ảnh khác cho bài đăng');
-      }
-      // A document whose bytes were first uploaded as a post image is still read as a document, once.
-      if (input.source !== 'social' && existing.source === 'social') {
-        const read = await ctx.trx.selectFrom('crove_kernel.extraction').select('id').where('org_id', '=', ctx.orgId).where('file_id', '=', existing.id).limit(1).executeTakeFirst();
-        if (!read) {
-          await ctx.activity('kernel.file', existing.id, 'file.received', `Nhận chứng từ ${input.filename}`);
-          await ctx.emit('kernel.file.ingested', { fileId: existing.id });
-          return { fileId: existing.id, duplicate: false };
-        }
-      }
-      return { fileId: existing.id, duplicate: true };
-    }
-    if (input.source === 'social') return { fileId: inserted.id, duplicate: false };
-    await ctx.activity('kernel.file', inserted.id, 'file.received', `Nhận chứng từ ${input.filename}`);
-    await ctx.emit('kernel.file.ingested', { fileId: inserted.id });
-    return { fileId: inserted.id, duplicate: false };
-  },
+  handler: (ctx, input) => ingestFileRow(ctx, input, ctx.actor.type === 'user' ? ctx.actor.userId : null),
 });
 
 // Staged uploads (plan §7.6, ADR-0013). At most this many open (unused, unexpired) grants per user and org.
@@ -718,6 +654,7 @@ const otherKernelCommands = [
   claimUpload,
   receiveInbound,
   ...extractionCommands,
+  ...archiveCommands,
   requestProposal,
   editProposal,
   approveProposal,

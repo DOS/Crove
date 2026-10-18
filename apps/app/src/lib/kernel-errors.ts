@@ -60,6 +60,7 @@ export const KERNEL_ERROR_CODES = [
   'CONTENT_CHANGED',
   'EXTRACTION_PENDING',
   'REEXTRACT_LIMIT',
+  'ARCHIVE_NOT_READ',
   // Recording purchases and journal reversals (finance module).
   'CHECKS_BLOCKING',
   'CHECKS_FAILED',

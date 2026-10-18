@@ -12,6 +12,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
 import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
+import { archiveSource, expandArchive, recordArchiveFailure } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, socialPublishQueue } from './jobs-schema.ts';
@@ -40,6 +41,7 @@ function sendAgentWake(boss: PgBoss, orgId: string, agentId: string) {
   });
 }
 const EXTRACT_RETRY_LIMIT = 3;
+export const EXTRACT_POLL_SECONDS = 0.5;
 const INBOUND_RETRY_LIMIT = 3;
 const SIGN_OUT_RETRY_LIMIT = 5;
 const ORG_EXPORT_RETRY_LIMIT = 3;
@@ -190,14 +192,29 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const finance = deps.runtime.installed('finance');
 
   // version: a requested re-extraction (kernel.file.reextract_requested); absent for the first read of a new file.
-  if (finance) await boss.work<ExtractJob>(QUEUES.extract, { batchSize: 1 }, async ([job]) => {
+  // pg-boss waits the polling interval between fetches (2 s by default, less the job's run time), so a batch of 200
+  // documents (bulk intake, #314) would wait about 400 s; 0.5 s, the shortest it allows, lets one sandbox call follow
+  // the other. An idle worker asks for extraction jobs twice a second.
+  if (finance) await boss.work<ExtractJob>(QUEUES.extract, { batchSize: 1, pollingIntervalSeconds: EXTRACT_POLL_SECONDS }, async ([job]) => {
     if (!job) return;
     const { orgId, fileId, version } = job.data;
+    // A ZIP archive (#314) is opened into documents of its own instead of being read; it is never read again.
+    const archive = await archiveSource(deps.runtime, orgId, fileId);
+    if (archive && version !== undefined) return;
     try {
-      await extractAndPropose({ runtime: deps.runtime, store: deps.store, extractor: deps.extractor, extract: deps.extract }, orgId, fileId, version);
+      if (archive) {
+        const { fileIds } = await expandArchive({ runtime: deps.runtime, store: deps.store, extract: deps.extract }, orgId, archive, job.retryCount);
+        console.log(`[extract] archive ${fileId}: ${fileIds.length} file(s)`);
+      } else {
+        await extractAndPropose({ runtime: deps.runtime, store: deps.store, extractor: deps.extractor, extract: deps.extract }, orgId, fileId, version);
+      }
     } catch (error) {
       console.error(`[extract] file ${fileId}${version ? ` version ${version}` : ''} attempt ${job.retryCount + 1}`, error);
       if (job.retryCount < EXTRACT_RETRY_LIMIT) throw error;
+      if (archive) {
+        await recordArchiveFailure(deps.runtime, orgId, fileId, 'Không mở được tệp ZIP sau nhiều lần thử; hãy tải lại tệp');
+        return;
+      }
       await recordExtractionFailure(
         deps.runtime,
         orgId,

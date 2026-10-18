@@ -22,6 +22,7 @@ import {
 import type { AuthUser } from '../src/auth.ts';
 import { assertExportKey, loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
+import { buildZip } from '../../extract/test/zip-fixture.ts';
 
 const SECRET = 'x'.repeat(32);
 const FIXTURE = readFileSync(new URL('../../extract/test/fixtures/einvoice-basic.xml', import.meta.url));
@@ -470,5 +471,65 @@ describe('store errors on the file routes', () => {
     const denied = await download();
     expect(denied.status).toBe(500);
     expect(await denied.json()).toEqual({ code: 'INTERNAL', message: 'Lỗi hệ thống' });
+  });
+});
+
+describe('ZIP uploads (bulk intake, #314)', () => {
+  const user: AuthUser = { userId: randomUUID(), email: 'member@example.com', name: null, aal: 'aal1', sessionId: randomUUID(), mfaAt: null };
+  const orgId = randomUUID();
+  const headers = { authorization: 'Bearer t', [ORG_HEADER]: 'acme' };
+  const stored = new Map<string, Uint8Array>();
+  const executed: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const store: BlobStore = {
+    put: async (key, bytes) => {
+      stored.set(key, bytes);
+      return undefined as unknown as string;
+    },
+    get: async () => {
+      throw new BlobNotFoundError('x');
+    },
+    delete: async () => undefined,
+  };
+  const app = createHttpApp({
+    config: loadConfig({ DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: 'crove-auth', WEB_DIST: '/nonexistent' }),
+    runtime: {
+      installed: () => true,
+      modules: () => ['kernel', 'finance'],
+      forUser: async () => [{ orgId, slug: 'acme', name: 'Acme', role: 'member' }],
+      execute: async (name: string, input: Record<string, unknown>) => {
+        executed.push({ name, input });
+        return { fileId: randomUUID(), duplicate: false };
+      },
+    } as unknown as Runtime,
+    store,
+    authenticate: async () => user,
+    pool: {} as pg.Pool,
+    aiEnabled: false,
+  });
+  const post = (bytes: Uint8Array<ArrayBuffer>, name: string, purpose?: string) => {
+    const form = new FormData();
+    if (purpose) form.append('purpose', purpose);
+    form.append('file', new File([bytes], name, { type: 'application/octet-stream' }));
+    return app.request('/api/files', { method: 'POST', body: form, headers });
+  };
+  const zip = buildZip([{ name: 'hd-001.xml', data: FIXTURE }]);
+
+  it('stores a ZIP of documents as a file for the worker to open, by its content', async () => {
+    const response = await post(zip, 'Thang 10.ZIP');
+    expect(response.status).toBe(200);
+    const ingest = executed.at(-1);
+    expect(ingest?.name).toBe('kernel.file.ingest');
+    expect(ingest?.input).toMatchObject({ contentType: 'application/zip', filename: 'Thang 10.zip', source: 'upload', sizeBytes: zip.byteLength });
+    expect(stored.get(String(ingest?.input.storageKey))).toEqual(zip);
+  });
+
+  it('refuses a ZIP as a Social image, and other archives as documents', async () => {
+    const count = executed.length;
+    const social = await post(zip, 'anh.zip', 'social');
+    expect(social.status).toBe(415);
+    const rar = await post(new Uint8Array([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00, 0x01]), 'thang-10.rar');
+    expect(rar.status).toBe(415);
+    expect(await rar.json()).toMatchObject({ code: 'UNSUPPORTED_TYPE' });
+    expect(executed.length).toBe(count);
   });
 });
