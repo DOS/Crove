@@ -1,223 +1,172 @@
+/* Crove marketing site theme (DESIGN.md v3). Colors are tokens only: light values on :root, dark values when the
+   system prefers dark (unless the visitor picked light) or when the visitor picked dark. Components use the Tailwind
+   names below (bg-surface, text-muted, border-line, ...), never palette classes or literal colors. */
 @import 'tailwindcss';
 
-@custom-variant dark (&:is(.dark *));
+@theme inline {
+  --font-sans: var(--font-body), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-display: var(--font-heading), var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-@theme {
-  /* Tailwind 3 line-heights: absolute values, so nested smaller text inherits the same pixels as before. */
-  --text-xs--line-height: 1rem;
-  --text-sm--line-height: 1.25rem;
-  --text-base--line-height: 1.5rem;
-  --text-lg--line-height: 1.75rem;
-  --text-xl--line-height: 1.75rem;
-  --text-2xl--line-height: 2rem;
-  --text-3xl--line-height: 2.25rem;
-  --text-4xl--line-height: 2.5rem;
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --color-scrim: var(--scrim);
+  --color-canvas-dot: var(--canvas-dot);
+}
 
-  --color-brand-50: #f5f3ff;
-  --color-brand-100: #ede9fe;
-  --color-brand-200: #ddd6fe;
-  --color-brand-300: #c4b5fd;
-  --color-brand-400: #a78bfa;
-  --color-brand-500: #8b5cf6;
-  --color-brand-600: #7c3aed;
-  --color-brand-700: #6d28d9;
-  --color-brand-800: #5b21b6;
-  --color-brand-900: #4c1d95;
-  --color-brand-950: #2e1065;
-  --color-brand: #7c3aed;
-  --color-brand-crove: #612bd3;
-  --color-brand-glow: rgba(124, 58, 237, 0.25);
+:root {
+  color-scheme: light;
+  --bg: oklch(0.985 0.003 290);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.965 0.005 290);
+  --fg: oklch(0.2 0.02 285);
+  --muted: oklch(0.45 0.016 285);
+  --subtle: oklch(0.53 0.014 285);
+  --line: oklch(0.915 0.007 290);
+  --line-strong: oklch(0.72 0.012 290);
+  --accent: oklch(0.49 0.22 290);
+  --accent-fg: oklch(1 0 0);
+  --accent-soft: oklch(0.95 0.03 293);
+  --accent-ink: oklch(0.46 0.2 290);
+  --ok: oklch(0.48 0.11 160);
+  --ok-soft: oklch(0.95 0.035 160);
+  --warn: oklch(0.52 0.12 62);
+  --warn-soft: oklch(0.96 0.045 80);
+  --bad: oklch(0.53 0.2 25);
+  --scrim: oklch(0.2 0.02 285 / 0.18);
+  --canvas-dot: oklch(0.85 0.01 290);
+}
 
-  --color-surface-dark: #08080f;
-  --color-surface-darkCard: #10101a;
-  --color-surface-darkBorder: #1e1e2f;
-  --color-surface-light: #faf9fe;
-  --color-surface-lightCard: #ffffff;
-  --color-surface-lightBorder: #e8e5f2;
-
-  --font-sans:
-    var(--font-jakarta), system-ui, -apple-system, BlinkMacSystemFont, Segoe UI,
-    Roboto, sans-serif;
-
-  --animate-fade-in: fade-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  --animate-float-slow: float-slow 6s ease-in-out infinite;
-  --animate-glow-pulse: glow-pulse 4s ease-in-out infinite;
-  --animate-shimmer: shimmer 2.5s infinite;
-  --animate-marquee: marquee 35s linear infinite;
-
-  @keyframes fade-in {
-    0% {
-      opacity: 0;
-      transform: translateY(10px);
-    }
-    100% {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-  @keyframes float-slow {
-    0%,
-    100% {
-      transform: translateY(0px);
-    }
-    50% {
-      transform: translateY(-8px);
-    }
-  }
-  @keyframes glow-pulse {
-    0%,
-    100% {
-      opacity: 0.4;
-      transform: scale(1);
-    }
-    50% {
-      opacity: 0.75;
-      transform: scale(1.02);
-    }
-  }
-  @keyframes shimmer {
-    0% {
-      transform: translateX(-100%);
-    }
-    100% {
-      transform: translateX(200%);
-    }
-  }
-  @keyframes marquee {
-    0% {
-      transform: translateX(0%);
-    }
-    100% {
-      transform: translateX(-50%);
-    }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: oklch(0.155 0.008 285);
+    --surface: oklch(0.19 0.01 285);
+    --surface-2: oklch(0.225 0.012 285);
+    --fg: oklch(0.97 0.003 285);
+    --muted: oklch(0.75 0.012 285);
+    --subtle: oklch(0.66 0.012 285);
+    --line: oklch(0.285 0.012 285);
+    --line-strong: oklch(0.46 0.015 285);
+    --accent: oklch(0.75 0.13 293);
+    --accent-fg: oklch(0.17 0.03 290);
+    --accent-soft: oklch(0.3 0.06 293);
+    --accent-ink: oklch(0.8 0.11 293);
+    --ok: oklch(0.79 0.13 160);
+    --ok-soft: oklch(0.29 0.05 160);
+    --warn: oklch(0.83 0.13 80);
+    --warn-soft: oklch(0.31 0.05 75);
+    --bad: oklch(0.73 0.16 20);
+    --scrim: oklch(0.08 0.01 285 / 0.5);
+    --canvas-dot: oklch(0.3 0.012 285);
   }
 }
 
-/*
-  The default border color has changed to `currentcolor` in Tailwind CSS v4,
-  so we've added these compatibility styles to make sure everything still
-  looks the same as it did with Tailwind CSS v3.
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: oklch(0.155 0.008 285);
+  --surface: oklch(0.19 0.01 285);
+  --surface-2: oklch(0.225 0.012 285);
+  --fg: oklch(0.97 0.003 285);
+  --muted: oklch(0.75 0.012 285);
+  --subtle: oklch(0.66 0.012 285);
+  --line: oklch(0.285 0.012 285);
+  --line-strong: oklch(0.46 0.015 285);
+  --accent: oklch(0.75 0.13 293);
+  --accent-fg: oklch(0.17 0.03 290);
+  --accent-soft: oklch(0.3 0.06 293);
+  --accent-ink: oklch(0.8 0.11 293);
+  --ok: oklch(0.79 0.13 160);
+  --ok-soft: oklch(0.29 0.05 160);
+  --warn: oklch(0.83 0.13 80);
+  --warn-soft: oklch(0.31 0.05 75);
+  --bad: oklch(0.73 0.16 20);
+  --scrim: oklch(0.08 0.01 285 / 0.5);
+  --canvas-dot: oklch(0.3 0.012 285);
+}
 
-  If we ever want to remove these styles, we need to add an explicit border
-  color utility to any element that depends on these defaults.
-*/
 @layer base {
   *,
   ::after,
   ::before,
-  ::backdrop,
-  ::file-selector-button {
-    border-color: var(--color-gray-200, currentcolor);
+  ::backdrop {
+    border-color: var(--line);
   }
-}
-
-@layer base {
-  :root {
-    --bg-main: #faf9fe;
-    --text-main: #09090b;
-    --card-bg: rgba(255, 255, 255, 0.85);
-    --card-border: rgba(226, 224, 240, 0.85);
-    --brand-glow: rgba(124, 58, 237, 0.12);
-  }
-
-  .dark {
-    --bg-main: #08080f;
-    --text-main: #fafafa;
-    --card-bg: rgba(16, 16, 26, 0.75);
-    --card-border: rgba(255, 255, 255, 0.08);
-    --brand-glow: rgba(124, 58, 237, 0.28);
-  }
-
   html {
     scroll-behavior: smooth;
+    scroll-padding-top: 4.5rem;
+    -webkit-text-size-adjust: 100%;
   }
-
   body {
-    background-color: var(--bg-main);
-    color: var(--text-main);
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
-    transition: background-color 0.25s ease, color 0.25s ease;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: var(--accent-soft);
   }
 }
 
-/* Background grid & subtle dot pattern */
-.bg-grid-pattern {
-  background-size: 36px 36px;
-  background-image: 
-    linear-gradient(to right, rgba(124, 58, 237, 0.05) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(124, 58, 237, 0.05) 1px, transparent 1px);
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  ::before,
+  ::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
 }
 
-.dark .bg-grid-pattern {
-  background-image: 
-    linear-gradient(to right, rgba(168, 85, 247, 0.06) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(168, 85, 247, 0.06) 1px, transparent 1px);
-}
-
-.bg-dot-pattern {
-  background-size: 24px 24px;
-  background-image: radial-gradient(rgba(124, 58, 237, 0.12) 1px, transparent 1px);
-}
-
-.dark .bg-dot-pattern {
-  background-image: radial-gradient(rgba(168, 85, 247, 0.16) 1px, transparent 1px);
-}
-
-/* Purple Glow utility */
-.purple-glow-radial {
-  background: radial-gradient(circle at 50% 30%, rgba(124, 58, 237, 0.18) 0%, rgba(97, 43, 211, 0.06) 45%, transparent 70%);
-}
-
-.dark .purple-glow-radial {
-  background: radial-gradient(circle at 50% 30%, rgba(124, 58, 237, 0.3) 0%, rgba(97, 43, 211, 0.12) 50%, transparent 75%);
-}
-
-/* Glass card styling */
-.glass-card {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-}
-
-.glass-card-hover {
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.glass-card-hover:hover {
-  transform: translateY(-2px);
-  border-color: rgba(168, 85, 247, 0.4);
-  box-shadow: 0 12px 28px -10px rgba(124, 58, 237, 0.18);
-}
-
-/* Gradient Text */
-.text-gradient-purple {
-  background: linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #d946ef 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.dark .text-gradient-purple {
-  background: linear-gradient(135deg, #c084fc 0%, #a855f7 40%, #f472b6 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-/* Custom subtle scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(124, 58, 237, 0.2);
-  border-radius: 9999px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(124, 58, 237, 0.4);
+@layer components {
+  /* The page column: 1200px of content with a side gutter that also clears a phone's side system bar. */
+  .wrap {
+    width: 100%;
+    max-width: calc(1200px + 3rem);
+    margin-inline: auto;
+    padding-left: max(1rem, env(safe-area-inset-left, 0px));
+    padding-right: max(1rem, env(safe-area-inset-right, 0px));
+  }
+  @media (min-width: 640px) {
+    .wrap {
+      padding-left: max(1.5rem, env(safe-area-inset-left, 0px));
+      padding-right: max(1.5rem, env(safe-area-inset-right, 0px));
+    }
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+  /* A faint dot grid, only on the org chart canvas (it is a real canvas). */
+  .canvas-dots {
+    background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
+    background-size: 16px 16px;
+  }
 }

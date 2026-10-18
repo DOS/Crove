@@ -43,9 +43,16 @@ export const zProposedLine = z.object({
   unitPrice: zMoney.nullable(),
   amount: zMoney,
   vatRate: z.string().max(20).nullable(),
+  // The account the line is posted to: the debit (cost or asset) account of a purchase line, the credit (revenue)
+  // account of a sale line (direction 'sale', issue #313). The name predates sales.
   debitAccount: zAccountCode,
   reason: z.string().max(500),
 });
+
+// A purchase invoice (the org is the buyer) or a sales invoice (the org is the seller, issue #313).
+export const DOCUMENT_DIRECTIONS = ['purchase', 'sale'] as const;
+export const zDocumentDirection = z.enum(DOCUMENT_DIRECTIONS);
+export type DocumentDirection = z.infer<typeof zDocumentDirection>;
 
 export const zJournalLineDraft = z.object({
   lineNo: z.number().int().positive(),
@@ -55,8 +62,11 @@ export const zJournalLineDraft = z.object({
   memo: z.string().max(1000),
 });
 
-// Payload stored on a finance.purchase proposal and executed by finance.purchase.record.
+// Payload stored on a finance.purchase proposal and executed by finance.purchase.record. direction 'sale' (issue #313):
+// the seller is the org itself (its tax code), the buyer is the customer, and the journal is Dr 131, Cr revenue, Cr
+// 3331. Absent on purchases, including every proposal raised before sales existed.
 export const zPurchaseProposal = z.object({
+  direction: z.literal('sale').optional(),
   seller: zPartyRef,
   buyer: zPartyRef,
   invoice: z.object({
@@ -92,6 +102,9 @@ export const zOrgDetail = z.object({
   slug: z.string(),
   name: z.string(),
   role: zRole,
+  // The org's own tax code (MST), normalized; null until an owner or admin sets it. An e-invoice whose seller has this
+  // tax code is a sale (issue #313).
+  taxCode: z.string().nullable(),
   inboundAddress: z.string().nullable(),
   // Messages to the org's addresses retired in the last 30 days that were dropped (#139); null when inboundAddress is.
   inboundDroppedCount: z.number().int().nonnegative().nullable(),
@@ -168,7 +181,7 @@ export const zChannelConnection = z.object({
 });
 
 // Providers connected through an OAuth dialog (Social plan S6), and the attempt's state: 32 random bytes, base64url.
-export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok'] as const;
+export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x'] as const;
 export const zOAuthProvider = z.enum(OAUTH_CHANNEL_PROVIDERS);
 export const zOAuthState = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 
@@ -199,12 +212,28 @@ export const zProposalStatus = z.enum(['pending', 'approved', 'executed', 'rejec
 
 export const zExtractionStatus = z.enum(['pending', 'done', 'failed']);
 
+// The most proposals one bulk approval takes (issue #315); the Inbox sends a larger selection in several batches.
+export const MAX_BULK_APPROVE = 50;
+
+// The proposals of one bulk approval, each named once with the revision the caller saw. Shared by the RPC contract
+// and kernel.proposal.approve_many, so the route and the command accept the same input.
+export const zBulkApproveItems = z
+  .array(z.object({ id: zId, revision: z.number().int().positive() }))
+  .min(1)
+  .max(MAX_BULK_APPROVE)
+  .refine((items) => new Set(items.map((i) => i.id)).size === items.length, 'each proposal once');
+
 export const zInboxItem = z.object({
   id: zId,
   kind: z.string(),
   status: zProposalStatus,
   title: z.string(),
+  // An invoice proposal's direction (a sale or a purchase, issue #313); null for other kinds.
+  direction: zDocumentDirection.nullable(),
+  revision: z.number().int().positive(),
   sellerName: z.string().nullable(),
+  // The customer of a sale (the seller is the org itself); null otherwise.
+  buyerName: z.string().nullable(),
   total: zMoney.nullable(),
   issueDate: zLocalDate.nullable(),
   failedChecks: z.number().int(),
@@ -265,7 +294,8 @@ export const zFileStatus = z.object({
   id: zId,
   filename: z.string(),
   contentType: z.string(),
-  status: z.enum(['processing', 'proposed', 'failed', 'duplicate']),
+  // expanded: a ZIP archive whose entries were filed as documents of their own (#314).
+  status: z.enum(['processing', 'proposed', 'failed', 'duplicate', 'expanded']),
   // The newest run's error, when that run failed.
   error: z.string().nullable(),
   proposalId: zId.nullable(),
@@ -274,6 +304,37 @@ export const zFileStatus = z.object({
   canReextract: z.boolean(),
   createdAt: z.string(),
 });
+export type FileStatus = z.infer<typeof zFileStatus>;
+
+// Why an entry of a ZIP archive was not filed (#314): what the sandbox refused (encrypted, a compression other than
+// stored or deflate, an archive inside the archive, larger than a document may be, bytes that do not match the
+// archive's directory), or what the server refused (not XML, PDF, JPG, PNG or WEBP; empty).
+export const ARCHIVE_ENTRY_REASONS = ['encrypted', 'unsupported_method', 'nested_archive', 'too_large', 'corrupt', 'unsupported_type', 'empty'] as const;
+export type ArchiveEntryReason = (typeof ARCHIVE_ENTRY_REASONS)[number];
+
+// One entry of an opened archive: filed as a new document (stored, with that file's status), the same bytes as a
+// document the org already has (duplicate, with that file), or not filed (rejected, with the reason).
+export const zArchiveEntry = z.object({
+  name: z.string(),
+  outcome: z.enum(['stored', 'duplicate', 'rejected']),
+  reason: z.enum(ARCHIVE_ENTRY_REASONS).nullable(),
+  file: zFileStatus.nullable(),
+});
+export type ArchiveEntry = z.infer<typeof zArchiveEntry>;
+
+// A file of an upload batch (#314): its status and, for a ZIP archive that has been opened, its entries.
+// entryCount: how many entries the archive was opened into (null for any other file). An answer holds a bounded number
+// of entries in all; an archive past it comes with its first entries only and entriesTruncated, to be asked about alone.
+export const zBatchFile = zFileStatus.extend({
+  entries: z.array(zArchiveEntry).nullable(),
+  entryCount: z.number().int().nonnegative().nullable(),
+  entriesTruncated: z.boolean(),
+});
+// Entries of opened archives one batch answer holds in all (four full archives of 500).
+export const MAX_BATCH_ENTRIES = 2000;
+export type BatchFile = z.infer<typeof zBatchFile>;
+// Files one batch query may ask about (the SPA asks about the files of its current upload batch).
+export const MAX_BATCH_FILES = 500;
 
 export const zParty = z.object({
   id: zId,
@@ -287,6 +348,8 @@ export const zParty = z.object({
 
 export const zPurchaseDocument = z.object({
   id: zId,
+  // A purchase (partyId is the supplier) or a sale (partyId is the customer), issue #313.
+  direction: zDocumentDirection,
   partyId: zId,
   partyName: z.string(),
   series: z.string(),
@@ -321,7 +384,7 @@ export const zJournalEntry = z.object({
   pendingReversalId: zId.nullable(),
   // The purchase document this entry records, when it does (absent otherwise).
   document: z
-    .object({ id: zId, series: z.string(), number: z.string(), issueDate: zLocalDate, partyName: z.string(), voided: z.boolean() })
+    .object({ id: zId, direction: zDocumentDirection, series: z.string(), number: z.string(), issueDate: zLocalDate, partyName: z.string(), voided: z.boolean() })
     .optional(),
 });
 

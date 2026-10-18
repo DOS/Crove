@@ -6,9 +6,9 @@ instead of typing them again.
 
 - **Purchase vouchers:** Journal screen, button "Xuất chứng từ mua vào cho MISA" (`GET /api/export/misa/purchases.xlsx?from=&to=`).
   One file for the date range (journal entry date), one row per invoice line.
-- **Sales vouchers:** the mapper and the template exist (`MISA_SME_SALES`, `salesRows` in
-  `modules/finance/src/misa.ts`), with tests. There is no sales data on `main` yet; wiring the download waits for
-  sales e-invoices (#313). See "Sales: what remains after #313".
+- **Sales vouchers:** Journal screen, button "Xuất chứng từ bán hàng cho MISA" (`GET /api/export/misa/sales.xlsx?from=&to=`,
+  #313). The recorded sales e-invoices (`finance.vouchers.sales`), one row per invoice line, posted as Crove posts
+  them: Nợ 131, Có each line's revenue account, Có 3331.
 
 The column mapping is one array per template in `modules/finance/src/misa.ts` (`MISA_SME_PURCHASE_SERVICE.columns`,
 `MISA_SME_SALES.columns`): header text, order and the rule that fills each column. When the partner's real template
@@ -115,13 +115,9 @@ the MISA SME.NET file (S6) and in the MISA SME 2026 listing (S7). Value codes co
 `Ban_hang_VND.xls` has no "Ký hiệu HĐ" or "Mẫu số HĐ" column (the non-VND `Ban_hang.xls` has both, S7), so the sales
 file carries the invoice number and date but not the series.
 
-### Sales: what remains after #313
-
-1. A query that loads approved sales vouchers in the `SalesVoucher` shape (`modules/finance/src/misa.ts`) from the
-   tables #313 adds, with the journal entry date, description and accounts.
-2. A route next to the purchase one (`GET /api/export/misa/sales.xlsx`) calling
-   `buildMisaWorkbook(MISA_SME_SALES, vouchers.flatMap(salesRows))`, its audit row (`format: 'misa_sme_sales'`) and a
-   button on the Journal screen.
+Sales come from the e-invoices the org issued (#313): an invoice whose seller has the org's tax code (Settings) is
+recorded as a sale. The export records an audit row like the purchase one, with `format: 'misa_sme_sales'`. Left out
+on purpose: voided sales documents and reversal entries.
 
 ## Value rules
 
@@ -150,6 +146,8 @@ file carries the invoice number and date but not the series.
 3. In MISA SME: Tệp > Nhập khẩu từ Excel > Chứng từ > Mua hàng > Chứng từ mua dịch vụ; choose the file, sheet
    `Chứng từ mua dịch vụ`, header row 1; the columns match by name (S2); import as new vouchers.
 4. Imported vouchers are not posted yet: review and post them (Ghi sổ) in MISA.
+5. Sales: the same steps with "Xuất chứng từ bán hàng cho MISA", filling **Mã hàng (*)**, and in MISA Tệp > Nhập khẩu
+   từ Excel > Chứng từ > Bán hàng > Chứng từ bán hàng, sheet `Chứng từ bán hàng`.
 
 ## Open questions (to settle with the partner's template and one real import)
 

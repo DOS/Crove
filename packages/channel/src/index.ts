@@ -12,6 +12,7 @@ export * from './threads.ts';
 export * from './linkedin.ts';
 export * from './youtube.ts';
 export * from './tiktok.ts';
+export * from './x.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
@@ -80,6 +81,8 @@ export interface PublishMedia {
   mime: string;
   sizeBytes: number;
   altText: string | null;
+  // A video's length, read at upload; null or absent for images and videos uploaded before durations were read.
+  durationSeconds?: number | null;
 }
 
 export interface PublishContent {

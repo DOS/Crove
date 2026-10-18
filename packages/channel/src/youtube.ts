@@ -249,8 +249,12 @@ const descriptionOf = (content: { body: string; linkUrl: string | null }) => {
 };
 
 interface PlaylistItems {
-  items?: { snippet?: { title?: unknown; publishedAt?: unknown; resourceId?: { videoId?: unknown } } }[];
+  items?: { snippet?: { title?: unknown; description?: unknown; publishedAt?: unknown; resourceId?: { videoId?: unknown } } }[];
 }
+
+// YouTube keeps a description as sent, but its line endings and outer spaces may differ.
+// A video without one may come back with no description field at all.
+const sameText = (got: unknown, sent: string) => (typeof got === 'string' ? got : '').replace(/\r\n/g, '\n').trim() === sent.replace(/\r\n/g, '\n').trim();
 
 export class YouTubePublisher implements Publisher {
   readonly provider = 'youtube' as const;
@@ -303,6 +307,7 @@ export class YouTubePublisher implements Publisher {
   async reconcile(input: ReconcileInput): Promise<ReconcileResult> {
     const s = youtubeSecretOf(input.secret);
     const title = titleOf(input.content);
+    const description = descriptionOf(input.content);
     if (!s || !title || !CHANNEL_ID.test(input.externalAccountId)) return { found: 'unknown' };
     try {
       // A channel's uploads playlist is its id with UU in place of UC.
@@ -313,7 +318,8 @@ export class YouTubePublisher implements Publisher {
       for (const item of answer.body?.items ?? []) {
         const id = item.snippet?.resourceId?.videoId;
         const at = typeof item.snippet?.publishedAt === 'string' ? Date.parse(item.snippet.publishedAt) : Number.NaN;
-        if (typeof id === 'string' && VIDEO_ID.test(id) && item.snippet?.title === title && at >= from && at <= to) {
+        // The description too, so a repost with the same title in the window is not taken for this one.
+        if (typeof id === 'string' && VIDEO_ID.test(id) && item.snippet?.title === title && sameText(item.snippet?.description, description) && at >= from && at <= to) {
           return { found: true, externalId: id, url: `https://www.youtube.com/watch?v=${id}` };
         }
       }

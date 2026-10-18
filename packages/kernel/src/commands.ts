@@ -1,13 +1,20 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { MAX_SOCIAL_VIDEO_BYTES, MAX_UPLOAD_BYTES, UPLOAD_PURPOSES, zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
+import {
+  MAX_SOCIAL_VIDEO_BYTES,
+  MAX_UPLOAD_BYTES,
+  UPLOAD_PURPOSES,
+  zAccountCode,
+  zBulkApproveItems,
+  zId,
+  zPurchaseProposal,
+  zRole,
+  zSessionRevoke,
+} from '@crove/kernel-contract';
 import type { Db, MemberRole } from '@crove/db';
 import {
   DomainError,
-  GENERATION_PATTERN,
-  contentGeneration,
   defineCommand,
-  fileKey,
   newStagingKey,
   type CommandContext,
   type Runtime,
@@ -16,11 +23,14 @@ import {
 import { agentCommands } from './agents.ts';
 import { channelCommands } from './channels.ts';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
+import { archiveCommands } from './archives.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
+import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
+import { setTaxCode } from './tax-code.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal', which the runtime checks
@@ -175,77 +185,14 @@ export const removeMember = defineCommand({
   },
 });
 
-// A file reference is the triple (storageKey, generation, sha256) of plan §7.6 (ADR-0013): generation is what the
-// store's put returned for the bytes it wrote.
-const zIngestFile = z.object({
-  filename: z.string().min(1).max(255),
-  contentType: z.string().min(1).max(100),
-  sizeBytes: z.number().int().nonnegative(),
-  sha256: z.string().regex(/^[0-9a-f]{64}$/),
-  storageKey: z.string().min(1),
-  generation: z.string().regex(GENERATION_PATTERN),
-  // social: an image or video for a Social post (#372, #409), stored like any file but never sent to extraction.
-  source: z.enum(['upload', 'email', 'social']),
-  // A video's duration, read by the server from the file (#409).
-  durationMs: z.number().int().min(0).max(86_400_000).optional(),
-});
-
+// Uploads (the API, as the uploading member) and email attachments (kernel.inbound.receive, system). The uploader is
+// recorded as the file's creator; an email has no authenticated sender, so its files have none.
 export const ingestFile = defineCommand({
   name: 'kernel.file.ingest',
   input: zIngestFile,
   risk: 'R1',
   access: MEMBERS,
-  handler: async (ctx, input) => {
-    if (input.storageKey !== fileKey(ctx.orgId, input.sha256)) throw new DomainError('INVALID_STORAGE_KEY', 400, 'Khóa lưu trữ không hợp lệ');
-    if (input.generation.startsWith('content:') && input.generation !== contentGeneration(input.sha256)) {
-      throw new DomainError('INVALID_GENERATION', 400, 'Phiên bản lưu trữ không khớp nội dung tệp');
-    }
-    const inserted = await ctx.trx
-      .insertInto('crove_kernel.file')
-      .values({
-        org_id: ctx.orgId,
-        sha256: input.sha256,
-        storage_key: input.storageKey,
-        generation: input.generation,
-        filename: input.filename,
-        content_type: input.contentType,
-        size_bytes: String(input.sizeBytes),
-        source: input.source,
-        duration_ms: input.durationMs === undefined ? null : String(input.durationMs),
-        created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
-      })
-      .onConflict((oc) => oc.columns(['org_id', 'sha256']).doNothing())
-      .returning('id')
-      .executeTakeFirst();
-    if (!inserted) {
-      const existing = await ctx.trx
-        .selectFrom('crove_kernel.file')
-        .select(['id', 'source'])
-        .where('org_id', '=', ctx.orgId)
-        .where('sha256', '=', input.sha256)
-        .forUpdate()
-        .executeTakeFirstOrThrow();
-      // Files are deduplicated by content, so the same bytes can arrive as a document and as an image for a Social
-      // post (#372). A document is never offered for publishing: an image upload of a document's bytes is refused.
-      if (input.source === 'social' && existing.source !== 'social') {
-        throw new DomainError('FILE_IS_DOCUMENT', 409, 'Ảnh này đã có trong chứng từ kế toán của tổ chức, hãy dùng ảnh khác cho bài đăng');
-      }
-      // A document whose bytes were first uploaded as a post image is still read as a document, once.
-      if (input.source !== 'social' && existing.source === 'social') {
-        const read = await ctx.trx.selectFrom('crove_kernel.extraction').select('id').where('org_id', '=', ctx.orgId).where('file_id', '=', existing.id).limit(1).executeTakeFirst();
-        if (!read) {
-          await ctx.activity('kernel.file', existing.id, 'file.received', `Nhận chứng từ ${input.filename}`);
-          await ctx.emit('kernel.file.ingested', { fileId: existing.id });
-          return { fileId: existing.id, duplicate: false };
-        }
-      }
-      return { fileId: existing.id, duplicate: true };
-    }
-    if (input.source === 'social') return { fileId: inserted.id, duplicate: false };
-    await ctx.activity('kernel.file', inserted.id, 'file.received', `Nhận chứng từ ${input.filename}`);
-    await ctx.emit('kernel.file.ingested', { fileId: inserted.id });
-    return { fileId: inserted.id, duplicate: false };
-  },
+  handler: (ctx, input) => ingestFileRow(ctx, input, ctx.actor.type === 'user' ? ctx.actor.userId : null),
 });
 
 // Staged uploads (plan §7.6, ADR-0013). At most this many open (unused, unexpired) grants per user and org.
@@ -592,6 +539,93 @@ export const approveProposal = defineCommand({
   },
 });
 
+// The refusals of one item that leave the rest of the batch going: every per-proposal code the nested
+// kernel.proposal.approve can raise for that proposal's state, its approval policy or its content. Listed by code,
+// never by status: any other error aborts the whole batch, including an unknown or newly added code, FORBIDDEN (a
+// proposal command the kernel does not support, the proposal state gate), a second factor that went stale while the
+// batch ran (STEP_UP_REQUIRED: one step-up covers the whole batch or none of it), INVALID, and every server fault.
+export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
+  // The proposal (lockPendingProposal, refuseWhileReextracting): another org's id reads like one that does not exist.
+  'NOT_FOUND',
+  'PROPOSAL_DECIDED',
+  'STALE_REVISION',
+  'EXTRACTION_PENDING',
+  // The approval policy (decideApproval): P10 and P12.
+  'FOUR_EYES_REQUIRED',
+  'NOT_ELIGIBLE',
+  // Recording a purchase (finance.purchase.record and its account check).
+  'CHECKS_BLOCKING',
+  'CHECKS_FAILED',
+  'DUPLICATE_INVOICE',
+  'TOTAL_MISMATCH',
+  'UNBALANCED',
+  'UNKNOWN_LINE',
+  'UNSUPPORTED_CURRENCY',
+  // A sale no longer the org's own, or a purchase the org issued (#313): the org tax code changed since.
+  'NOT_OWN_SALE',
+  'OWN_INVOICE',
+  'UNKNOWN_ACCOUNT',
+  'ACCOUNT_INACTIVE',
+  'PARENT_TAGGED',
+  // Reversing an entry (finance.journal.reverse).
+  'ENTRY_NOT_FOUND',
+  'ALREADY_REVERSED',
+  'ENTRY_IS_REVERSAL',
+  'REVERSAL_DATE_BEFORE_ENTRY',
+  'OPENING_REVERSAL_DATE',
+]);
+
+// Whether a nested approval's error refuses only that item.
+export function isBulkItemRefusal(error: unknown): error is DomainError {
+  return error instanceof DomainError && BULK_ITEM_REFUSALS.has(error.code);
+}
+
+export type BulkApproveResult =
+  | { id: string; outcome: 'approved'; result: Record<string, unknown> }
+  | { id: string; outcome: 'refused'; code: string; rule: string | null };
+
+// Approves many pending proposals in one action (issue #315): one R3 command, so the runtime checks the role, the
+// fresh second factor (P11) and, for a remote Supabase Auth, the live session once, before any item; a stale step-up
+// refuses the whole batch. Each item then runs kernel.proposal.approve as a nested command, which applies its own
+// P12 eligibility and P10 four-eyes decision and writes its own audit row, exactly as approving it alone would. An
+// item refused with a listed per-proposal code (BULK_ITEM_REFUSALS) rolls back to its savepoint and the others go
+// on; the batch's audit row lists every item's outcome. A refused item has no audit row of its own (a refusal row is
+// written only by the runtime, for a whole command); its code and rule are in the batch row. Items run in id order, so two batches over the same proposals lock them in the same order. No line
+// accounts and no acceptFailedChecks: a bulk approval only approves what it would approve as shown, and an invoice
+// with failed checks is refused (CHECKS_FAILED) for a one-by-one review.
+export const approveProposals = defineCommand({
+  name: 'kernel.proposal.approve_many',
+  // At most MAX_BULK_APPROVE (50) items, each once. Each is a ledger posting in the same transaction, so the batch
+  // stays short; the Inbox sends a larger selection in several batches, each under the same step-up freshness rule.
+  input: z.object({ items: zBulkApproveItems }),
+  risk: 'R3',
+  access: APPROVERS,
+  handler: async (ctx, input): Promise<{ results: BulkApproveResult[] }> => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới duyệt được');
+    const outcomes = new Map<string, BulkApproveResult>();
+    for (const item of [...input.items].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
+      await sql`SAVEPOINT bulk_approve_item`.execute(ctx.trx);
+      try {
+        const result = await ctx.run<Record<string, unknown>>('kernel.proposal.approve', { id: item.id, revision: item.revision });
+        await sql`RELEASE SAVEPOINT bulk_approve_item`.execute(ctx.trx);
+        outcomes.set(item.id, { id: item.id, outcome: 'approved', result });
+      } catch (error) {
+        if (!isBulkItemRefusal(error)) throw error;
+        await sql`ROLLBACK TO SAVEPOINT bulk_approve_item`.execute(ctx.trx);
+        const rule = typeof error.details?.rule === 'string' ? error.details.rule : null;
+        outcomes.set(item.id, { id: item.id, outcome: 'refused', code: error.code, rule });
+      }
+    }
+    const results = input.items.map((item) => outcomes.get(item.id) as BulkApproveResult);
+    ctx.audit({
+      approved: results.filter((r) => r.outcome === 'approved').length,
+      refused: results.filter((r) => r.outcome === 'refused').length,
+      items: results.map((r) => (r.outcome === 'approved' ? { id: r.id, outcome: r.outcome } : { id: r.id, outcome: r.outcome, code: r.code, rule: r.rule })),
+    });
+    return { results };
+  },
+});
+
 export const rejectProposal = defineCommand({
   name: 'kernel.proposal.reject',
   input: z.object({ id: zId, reason: z.string().max(500).optional() }),
@@ -718,14 +752,17 @@ const otherKernelCommands = [
   claimUpload,
   receiveInbound,
   ...extractionCommands,
+  ...archiveCommands,
   requestProposal,
   editProposal,
   approveProposal,
+  approveProposals,
   rejectProposal,
   revokeSession,
   ...offboardingCommands,
   ...agentCommands,
   ...channelCommands,
+  setTaxCode,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),

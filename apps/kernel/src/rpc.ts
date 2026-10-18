@@ -13,6 +13,7 @@ import {
   sessionOrgs,
   upstreamAuth,
   type AcceptedInvite,
+  type BulkApproveResult,
   type ChannelConnectInput,
   type OrgSummary,
 } from '@crove/kernel';
@@ -171,6 +172,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         guard(() => createOrg(runtime, actorOf(context.user), input.name, input.idempotencyKey)),
       ),
       get: os.org.get.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.get', {}, { actor, orgId }))),
+      setTaxCode: os.org.setTaxCode.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_tax_code', input, { actor, orgId })),
+      ),
       // No idempotency key: the answer carries the invite token, which must never be stored with a key. The mail
       // goes out after the command has committed (invite-mail.ts says why); its outcome is logged and never changes
       // the answer, which stays the same whether or not the email has an account.
@@ -449,6 +453,26 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           return runtime.execute('kernel.proposal.approve', rest, { actor, orgId, idempotencyKey });
         }),
       ),
+      approveMany: os.inbox.approveMany.handler(({ context, input }) =>
+        inOrg(context, async (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          const { results } = await runtime.execute<{ results: BulkApproveResult[] }>('kernel.proposal.approve_many', rest, { actor, orgId, idempotencyKey });
+          return {
+            results: results.map((r) => {
+              if (r.outcome === 'refused') return r;
+              const ids = r.result as { journalEntryId?: string; documentId?: string; reversedEntryId?: string; voidedDocumentId?: string };
+              return {
+                id: r.id,
+                outcome: r.outcome,
+                ...(ids.journalEntryId ? { journalEntryId: ids.journalEntryId } : {}),
+                ...(ids.documentId ? { documentId: ids.documentId } : {}),
+                ...(ids.reversedEntryId ? { reversedEntryId: ids.reversedEntryId } : {}),
+                ...(ids.voidedDocumentId ? { voidedDocumentId: ids.voidedDocumentId } : {}),
+              };
+            }),
+          };
+        }),
+      ),
       edit: os.inbox.edit.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => {
           const { idempotencyKey, ...rest } = input;
@@ -469,6 +493,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     files: {
       recent: os.files.recent.handler(({ context }) =>
         inOrg(context, (orgId, actor) => runtime.query('kernel.files.recent', {}, { actor, orgId })),
+      ),
+      batch: os.files.batch.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.query('kernel.files.batch', input, { actor, orgId })),
       ),
       reextract: os.files.reextract.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => {

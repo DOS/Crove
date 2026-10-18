@@ -20,7 +20,7 @@ function entry(id: string, amount: string, overrides: Partial<JournalEntryView> 
     reverses: null,
     reversedBy: null,
     pendingReversalId: null,
-    document: { id, series: '1C26TAA', number: '00000123', issueDate: '2026-09-30', partyName: 'Công ty TNHH ABC', partyTaxCode: '0101234564', voided: false },
+    document: { id, direction: 'purchase', series: '1C26TAA', number: '00000123', issueDate: '2026-09-30', partyName: 'Công ty TNHH ABC', partyTaxCode: '0101234564', voided: false },
     ...overrides,
   };
 }
@@ -111,7 +111,7 @@ describe('buildJournalWorkbook', () => {
   it('keeps formula payloads as inert text, unchanged, in descriptions, party names and invoice numbers', async () => {
     const hostile = entry('h', '1000', {
       description: '=HYPERLINK("http://evil.example","click")',
-      document: { id: 'h', series: '+1C26', number: '@123', issueDate: '2026-09-30', partyName: '-2+3+cmd|"/C calc"!A0', partyTaxCode: '\t=1', voided: false },
+      document: { id: 'h', direction: 'purchase', series: '+1C26', number: '@123', issueDate: '2026-09-30', partyName: '-2+3+cmd|"/C calc"!A0', partyTaxCode: '\t=1', voided: false },
     });
     const sheet = await readBack([hostile]);
     const row = sheet.getRow(2);

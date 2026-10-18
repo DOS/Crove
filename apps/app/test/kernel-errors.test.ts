@@ -23,6 +23,9 @@ const NOT_SHOWN: Record<string, string> = {
   AGENT_TASK_KIND: 'agents',
   AGENT_DELEGATION_SUBTREE: 'agents',
   AGENT_ESCALATION_TARGET: 'agents',
+  NOT_PROPOSABLE: 'agents',
+  PROPOSAL_NOT_TASK: 'agents',
+  AGENT_NOT_ELIGIBLE: 'agents',
   KILL_SWITCH_ON: 'agents',
   BUDGET_EXHAUSTED: 'agents',
   LEASE_LOST: 'agents',
@@ -48,6 +51,8 @@ const NOT_SHOWN: Record<string, string> = {
   NOT_STREAMED: 'bug',
   INVALID_STORAGE_KEY: 'bug',
   INVALID_GENERATION: 'bug',
+  // Bulk intake (#314): only the worker records an opened archive.
+  NOT_ARCHIVE: 'bug',
 };
 
 function sources(dir: string): string[] {

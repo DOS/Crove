@@ -279,6 +279,11 @@ export class TikTokPublisher implements Publisher {
     }
     const options = Array.isArray(creator.privacy_level_options) ? creator.privacy_level_options : [];
     if (!options.includes(privacy)) return { kind: 'rejected', error: 'permission', code: 'PRIVACY_NOT_ALLOWED', message: `${privacy} is not available for this account` };
+    // The creator's own limit on a video's length (it differs per account); TikTok would refuse the init otherwise.
+    const maxSeconds = Number(creator.max_video_post_duration_sec);
+    if (Number.isFinite(maxSeconds) && maxSeconds > 0 && typeof video.durationSeconds === 'number' && video.durationSeconds > maxSeconds) {
+      return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TOO_LONG', message: `This account posts videos of up to ${Math.floor(maxSeconds)} seconds` };
+    }
     const size = bytes.byteLength;
     const chunk = Math.min(size, CHUNK);
     const count = Math.max(1, Math.floor(size / chunk));
@@ -326,8 +331,13 @@ export class TikTokPublisher implements Publisher {
       ({ data: answer, raw } = await this.client.callRaw<StatusAnswer>('POST', '/post/publish/status/fetch/', s.accessToken, { publish_id: input.externalRef }));
     } catch (error) {
       const result = publishResult(error);
-      // The post may still go out: only a refused token ends the check.
-      return result.kind === 'rejected' && result.error === 'token_expired' ? result : { kind: 'pending', externalRef: input.externalRef, checkAfterSeconds: CHECK_AFTER_SECONDS };
+      // A refused token ends the check. A status call TikTok refuses for good (a 4xx other than a rate limit) will not
+      // start answering: the post may still be out, so a person looks, now rather than at the 24-hour cap. A rate
+      // limit, an outage or the network: check again.
+      if (result.kind === 'rejected' && result.error === 'token_expired') return result;
+      const refused = result.kind === 'rejected' && (result.error === 'bad_request' || result.error === 'permission') && (result.httpStatus ?? 0) >= 400 && (result.httpStatus ?? 0) < 500;
+      if (result.kind === 'rejected' && refused) return { kind: 'unknown', code: result.code ?? 'STATUS_REFUSED', ...(result.message ? { message: result.message } : {}) };
+      return { kind: 'pending', externalRef: input.externalRef, checkAfterSeconds: CHECK_AFTER_SECONDS };
     }
     switch (answer.status) {
       case 'PUBLISH_COMPLETE': {

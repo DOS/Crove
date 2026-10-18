@@ -5,6 +5,7 @@ import PostalMime from 'postal-mime';
 import type { Address } from 'postal-mime';
 import { EXTRACT_LIMITS, zExtractSuccess, type ExtractFailure, type ExtractKind, type ExtractResponse, type ExtractSuccess } from '@crove/extract-contract';
 import { EInvoiceParseError, parseEInvoiceXml } from './einvoice-xml.ts';
+import { ArchiveError, readZip } from './zip.ts';
 
 const MiB = 1024 * 1024;
 
@@ -73,6 +74,9 @@ async function parseKind(kind: ExtractKind, bytes: Uint8Array): Promise<ExtractS
       return pdfText(bytes);
     case 'mime':
       return mime(bytes);
+    case 'zip':
+      // The entries come back as bytes; the worker sniffs and files each one, and each document is then read alone.
+      return { ok: true, kind, archive: readZip(bytes) };
   }
 }
 
@@ -80,6 +84,7 @@ const UNREADABLE: Record<ExtractKind, string> = {
   einvoice_xml: 'Không đọc được XML hóa đơn điện tử',
   pdf_text: 'Không đọc được tệp PDF',
   mime: 'Không đọc được thư điện tử',
+  zip: 'Không mở được tệp ZIP',
 };
 
 export async function parse(kind: ExtractKind, bytes: Uint8Array): Promise<ExtractResponse> {
@@ -87,8 +92,8 @@ export async function parse(kind: ExtractKind, bytes: Uint8Array): Promise<Extra
   try {
     result = await parseKind(kind, bytes);
   } catch (error) {
-    // The e-invoice parser explains what is wrong; other parser errors are not passed on.
-    if (error instanceof EInvoiceParseError) return failure('invalid', error.message);
+    // The e-invoice parser and the ZIP reader explain what is wrong; other parser errors are not passed on.
+    if (error instanceof EInvoiceParseError || error instanceof ArchiveError) return failure('invalid', error.message);
     // A stack overflow (deeply nested input) or an impossible allocation: the input is beyond what we read.
     if (error instanceof RangeError) return failure('invalid', `${UNREADABLE[kind]}: tệp vượt giới hạn xử lý`);
     return failure('invalid', UNREADABLE[kind]);

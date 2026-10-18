@@ -11,11 +11,14 @@ describe('upload type detection', () => {
     expect(sniffType(bytes(0xff, 0xd8, 0xff, 0xe0))).toBe('image/jpeg');
     expect(sniffType(text('RIFF\0\0\0\0WEBPVP8 '))).toBe('image/webp');
     expect(sniffType(new Uint8Array([0xef, 0xbb, 0xbf, ...text('\n  <?xml version="1.0"?><HDon/>')]))).toBe('application/xml');
+    // A ZIP of documents (bulk intake, #314), empty or not; an Office file is a ZIP too, refused when it is opened.
+    expect(sniffType(text('PK\x03\x04\x14\0'))).toBe('application/zip');
+    expect(sniffType(text('PK\x05\x06'))).toBe('application/zip');
   });
 
   it('refuses anything else, whatever its name or declared type', () => {
     expect(sniffType(text('MZ\x90\0'))).toBeNull();
-    expect(sniffType(text('PK\x03\x04'))).toBeNull();
+    expect(sniffType(text('Rar!\x1a\x07\0'))).toBeNull();
     expect(sniffType(new Uint8Array())).toBeNull();
   });
 
@@ -23,5 +26,6 @@ describe('upload type detection', () => {
     expect(safeFilename('hoa-don.exe', 'application/pdf')).toBe('hoa-don.pdf');
     expect(safeFilename('../../etc/passwd', 'application/xml')).toBe('.._.._etc_passwd.xml');
     expect(safeFilename('', 'image/png')).toBe('tep.png');
+    expect(safeFilename('thang-10.ZIP', 'application/zip')).toBe('thang-10.zip');
   });
 });

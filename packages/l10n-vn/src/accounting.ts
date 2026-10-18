@@ -137,6 +137,43 @@ function maxOf(a: ReturnType<typeof money>, b: ReturnType<typeof money>) {
   return a.greaterThan(b) ? a : b;
 }
 
+// Sales e-invoices (issue #313): the org is the seller. TT133 posts a sale on credit as Dr 131 (receivable from the
+// customer) for the total, Cr 511 (revenue) for the goods and services, Cr 3331 (output VAT) for the tax.
+export const RECEIVABLE_ACCOUNT = '131';
+export const REVENUE_ACCOUNT = '511';
+export const VAT_OUTPUT = '3331';
+
+// Every line of a sale is proposed to 511; the accountant may pick a sub-account (5111 goods, 5113 services) per line.
+export function bookableSaleLines(invoice: ParsedInvoice): ProposedLine[] {
+  return bookableLines(invoice, REVENUE_ACCOUNT).map((l) => ({ ...l, reason: 'Doanh thu bán hàng và cung cấp dịch vụ' }));
+}
+
+// Sale on credit: Cr revenue per account (a net discount becomes a debit), Cr output VAT, Dr receivable (131) for the
+// total. `debitAccount` of a sale line is the account the line is posted to, here a revenue (credit) account.
+export function buildSalesJournal(lines: ProposedLine[], vatTotal: Money, memo: string): JournalLineDraft[] {
+  const byAccount = new Map<string, ReturnType<typeof money>>();
+  for (const line of lines) {
+    byAccount.set(line.debitAccount, (byAccount.get(line.debitAccount) ?? money(0)).plus(money(line.amount)));
+  }
+  const credits: Array<Omit<JournalLineDraft, 'lineNo'>> = [];
+  const credit = (account: string, value: ReturnType<typeof money>, text: string) => {
+    if (value.isZero()) return;
+    credits.push(value.isNegative()
+      ? { accountCode: account, debit: toMoney(value.negated()), credit: '0', memo: text }
+      : { accountCode: account, debit: '0', credit: toMoney(value), memo: text });
+  };
+  for (const [account, value] of [...byAccount.entries()].sort(([a], [b]) => a.localeCompare(b))) credit(account, value, memo);
+  credit(VAT_OUTPUT, money(vatTotal), `Thuế GTGT ${memo}`);
+  // The receivable comes first, as an accountant writes a sale.
+  const net = sum(credits.map((d) => money(d.credit).minus(money(d.debit))));
+  const receivable: Array<Omit<JournalLineDraft, 'lineNo'>> = net.isZero()
+    ? []
+    : [net.isPositive()
+        ? { accountCode: RECEIVABLE_ACCOUNT, debit: toMoney(net), credit: '0', memo }
+        : { accountCode: RECEIVABLE_ACCOUNT, debit: '0', credit: toMoney(net.negated()), memo }];
+  return [...receivable, ...credits].map((d, i) => ({ lineNo: i + 1, ...d }));
+}
+
 export function journalIsBalanced(lines: JournalLineDraft[]): boolean {
   return sum(lines.map((l) => money(l.debit).minus(money(l.credit)))).isZero() && lines.length >= 2;
 }

@@ -60,6 +60,7 @@ export const KERNEL_ERROR_CODES = [
   'CONTENT_CHANGED',
   'EXTRACTION_PENDING',
   'REEXTRACT_LIMIT',
+  'ARCHIVE_NOT_READ',
   // Recording purchases and journal reversals (finance module).
   'CHECKS_BLOCKING',
   'CHECKS_FAILED',
@@ -69,6 +70,10 @@ export const KERNEL_ERROR_CODES = [
   'UNKNOWN_LINE',
   'UNSUPPORTED_CURRENCY',
   'TOTAL_MISMATCH',
+  // Sales invoices and the org's tax code (#313).
+  'NOT_OWN_SALE',
+  'OWN_INVOICE',
+  'INVALID_TAX_CODE',
   'ALREADY_REVERSED',
   'ENTRY_IS_REVERSAL',
   'ENTRY_NOT_FOUND',

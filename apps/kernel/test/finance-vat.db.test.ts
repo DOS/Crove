@@ -227,6 +227,7 @@ suite('VAT working per month or quarter (#316)', () => {
       }),
     ]);
     expect(report.body.input.totals).toMatchObject({ taxable: '1800000', vat: '180000', documents: 1 });
+    // No org tax code, so no way to tell sales apart (#313): the output side is not available.
     expect(report.body.output).toMatchObject({ available: false, documents: [], totals: { taxable: '0', vat: '0', documents: 0 } });
     const indicators = new Map((report.body.indicators as Array<{ code: string; amount: string }>).map((i) => [i.code, i.amount]));
     expect(indicators.get('23')).toBe('1800000');

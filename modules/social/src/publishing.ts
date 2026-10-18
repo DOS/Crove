@@ -67,7 +67,7 @@ export interface PublishWork {
   callKey: string;
   contentHash: string;
   // Text and images; the images by file, which the job reads from storage for the provider.
-  content: BaseContent & { media: { fileId: string; mime: string; sizeBytes: number; altText: string | null }[] };
+  content: BaseContent & { media: { fileId: string; mime: string; sizeBytes: number; altText: string | null; durationSeconds: number | null }[] };
   settings: Record<string, unknown>;
   // The pending post's platform id, for a status check.
   externalRef: string | null;
@@ -151,7 +151,7 @@ function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, s
     contentHash: v.content_hash,
     content: {
       ...effectiveContent(base(post), overrides(v), v.content_frozen),
-      media: mediaFor(base(post), v).map((m) => ({ fileId: m.fileId, mime: m.mime, sizeBytes: m.sizeBytes, altText: m.altText })),
+      media: mediaFor(base(post), v).map((m) => ({ fileId: m.fileId, mime: m.mime, sizeBytes: m.sizeBytes, altText: m.altText, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000 })),
     },
     settings: settingsOf(v),
     externalRef: v.external_post_id,

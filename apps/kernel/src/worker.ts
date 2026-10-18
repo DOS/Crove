@@ -12,6 +12,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
 import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
+import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, socialPublishQueue } from './jobs-schema.ts';
@@ -23,6 +24,12 @@ const SOCIAL_PUBLISH_RETRY_LIMIT = 2;
 // The worker looks for due variants this often; a post goes out within this long of its time.
 export const SOCIAL_SWEEP_MS = 15_000;
 const SOCIAL_SWEEP_LIMIT = 500;
+// Agent proposal events and the system command that acts on each (ADR-0029 section 6): the command reads the event
+// from the outbox; the job carries only its id.
+const AGENT_PROPOSAL_COMMANDS: Readonly<Record<string, string>> = {
+  'kernel.agent.proposal_requested': 'kernel.agent.proposal.create',
+  'kernel.agent.proposal_approved': 'kernel.agent.proposal.approve',
+};
 const AGENT_RETRY_LIMIT = 3;
 // Every 10 minutes the worker wakes agents whose wake-up is still pending and that can run now
 // (crove_kernel.agent_wakeups_due): a run refused earlier by the daily cap, a kill switch or a budget that has since
@@ -40,6 +47,7 @@ function sendAgentWake(boss: PgBoss, orgId: string, agentId: string) {
   });
 }
 const EXTRACT_RETRY_LIMIT = 3;
+export const EXTRACT_POLL_SECONDS = 0.5;
 const INBOUND_RETRY_LIMIT = 3;
 const SIGN_OUT_RETRY_LIMIT = 5;
 const ORG_EXPORT_RETRY_LIMIT = 3;
@@ -190,14 +198,33 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const finance = deps.runtime.installed('finance');
 
   // version: a requested re-extraction (kernel.file.reextract_requested); absent for the first read of a new file.
-  if (finance) await boss.work<ExtractJob>(QUEUES.extract, { batchSize: 1 }, async ([job]) => {
+  // pg-boss waits the polling interval between fetches (2 s by default, less the job's run time), so a batch of 200
+  // documents (bulk intake, #314) would wait about 400 s; 0.5 s, the shortest it allows, lets one sandbox call follow
+  // the other. An idle worker asks for extraction jobs twice a second.
+  if (finance) await boss.work<ExtractJob>(QUEUES.extract, { batchSize: 1, pollingIntervalSeconds: EXTRACT_POLL_SECONDS }, async ([job]) => {
     if (!job) return;
     const { orgId, fileId, version } = job.data;
+    // A ZIP archive (#314) is opened into documents of its own instead of being read; it is never read again.
+    // undefined until it is known; a lookup that fails is retried with the job like any other step.
+    let archive: ArchiveSource | null | undefined;
     try {
-      await extractAndPropose({ runtime: deps.runtime, store: deps.store, extractor: deps.extractor, extract: deps.extract }, orgId, fileId, version);
+      archive = await archiveSource(deps.runtime, orgId, fileId);
+      if (archive && version !== undefined) return;
+      if (archive) {
+        const { fileIds } = await expandArchive({ runtime: deps.runtime, store: deps.store, extract: deps.extract }, orgId, archive, job.retryCount);
+        console.log(`[extract] archive ${fileId}: ${fileIds.length} file(s)`);
+      } else {
+        await extractAndPropose({ runtime: deps.runtime, store: deps.store, extractor: deps.extractor, extract: deps.extract }, orgId, fileId, version);
+      }
     } catch (error) {
       console.error(`[extract] file ${fileId}${version ? ` version ${version}` : ''} attempt ${job.retryCount + 1}`, error);
       if (job.retryCount < EXTRACT_RETRY_LIMIT) throw error;
+      // The last attempt records a failed run either way, so the file never stays "being read".
+      if (archive === undefined) archive = await archiveSource(deps.runtime, orgId, fileId).catch(() => null);
+      if (archive) {
+        await recordArchiveFailure(deps.runtime, orgId, fileId, 'Không mở được tệp ZIP sau nhiều lần thử; hãy tải lại tệp');
+        return;
+      }
       await recordExtractionFailure(
         deps.runtime,
         orgId,
@@ -277,6 +304,14 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   await boss.work<AgentDispatchJob>(QUEUES.agentDispatch, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
     await deps.runtime.execute('kernel.agent.dispatch_event', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'kernel.agent' }, orgId: job.data.orgId });
+  });
+
+  // Agent proposals and approvals: the worker acts on what an agent recorded, after checking it again.
+  await boss.work<AgentDispatchJob & { type: string }>(QUEUES.agentProposal, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const command = Object.hasOwn(AGENT_PROPOSAL_COMMANDS, job.data.type) ? AGENT_PROPOSAL_COMMANDS[job.data.type] : undefined;
+    if (!command) return;
+    await deps.runtime.execute(command, { eventId: job.data.eventId }, { actor: { type: 'system', component: 'kernel.agent' }, orgId: job.data.orgId });
   });
 
   const agentPrograms = deps.agentPrograms ?? {};
@@ -416,6 +451,14 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               }
               if (row.type === 'kernel.agent.wakeup_requested') {
                 return sendAgentWake(boss, row.org_id, String(row.payload.agentId));
+              }
+              if (Object.hasOwn(AGENT_PROPOSAL_COMMANDS, row.type)) {
+                return boss.send(QUEUES.agentProposal, { orgId: row.org_id, eventId: row.event_id, type: row.type }, {
+                  singletonKey: `${row.org_id}:${row.event_id}`,
+                  retryLimit: AGENT_RETRY_LIMIT,
+                  retryDelay: 20,
+                  retryBackoff: true,
+                });
               }
               if (row.type === 'kernel.proposal.created') {
                 return boss.send(QUEUES.agentDispatch, { orgId: row.org_id, eventId: row.event_id } satisfies AgentDispatchJob, {

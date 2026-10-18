@@ -1,7 +1,7 @@
 // The approval preview must show exactly the entry the server will post.
 import { describe, expect, it } from 'vitest';
-import { buildPurchaseJournal } from '../../../packages/l10n-vn/src/index.ts';
-import { isZeroAmount, linesBalance, previewPurchaseJournal, type PreviewLine } from '../src/lib/decimal.ts';
+import { buildPurchaseJournal, buildSalesJournal } from '../../../packages/l10n-vn/src/index.ts';
+import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal, type PreviewLine } from '../src/lib/decimal.ts';
 
 function server(lines: PreviewLine[], vat: string) {
   const proposed = lines.map((l, i) => ({ ...l, lineNo: i + 1, description: '', unit: null, quantity: null, unitPrice: null, reason: '' }));
@@ -61,6 +61,35 @@ describe('approval preview', () => {
   });
 });
 
+// Sales (#313): the line's account is its revenue account; the receivable (131) balances the rounded lines.
+function salesServer(lines: PreviewLine[], vat: string) {
+  const proposed = lines.map((l, i) => ({ ...l, lineNo: i + 1, description: '', unit: null, quantity: null, unitPrice: null, reason: '' }));
+  return buildSalesJournal(proposed, vat, 'memo').map((j) => [j.accountCode, j.debit, j.credit]);
+}
+
+const SALES_CASES: Array<[string, PreviewLine[], string]> = [
+  ['a sale with a discount', [
+    { debitAccount: '511', amount: '1000000', vatRate: '10%' },
+    { debitAccount: '511', amount: '1000000', vatRate: '10%' },
+    { debitAccount: '511', amount: '-200000', vatRate: '10%' },
+  ], '180000'],
+  ['revenue sub-accounts', [
+    { debitAccount: '5113', amount: '3000000', vatRate: '8%' },
+    { debitAccount: '5111', amount: '1000000', vatRate: '10%' },
+  ], '340000'],
+  ['an adjustment lowering a sale', [{ debitAccount: '511', amount: '-1000000', vatRate: '10%' }], '-100000'],
+  ['fractional amounts summed before rounding', [
+    { debitAccount: '511', amount: '100.00005', vatRate: '10%' },
+    { debitAccount: '511', amount: '100.00005', vatRate: '10%' },
+  ], '20.00001'],
+  ['no VAT', [{ debitAccount: '511', amount: '500000', vatRate: 'KCT' }], '0'],
+];
+
+describe('approval preview of a sale', () => {
+  it.each(SALES_CASES)('matches the server entry: %s', (_name, lines, vat) => {
+    expect(previewSalesJournal(lines, vat).map((j) => [j.accountCode, j.debit, j.credit])).toEqual(salesServer(lines, vat));
+  });
+});
 describe('zero amounts and balance', () => {
   it('treats every spelling of zero as zero, and nothing else', () => {
     for (const zero of ['0', '0.0000', '0.00', '-0', '-0.0000', '00', '.0', '0.']) expect(isZeroAmount(zero)).toBe(true);

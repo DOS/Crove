@@ -43,7 +43,7 @@ function invoiceSheet(workbook: ExcelJS.Workbook, name: string, side: VatSide, p
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
   if (!side.available) {
     const row = sheet.addRow([]);
-    setText(row.getCell('partyName'), 'Crove chưa ghi nhận hóa đơn bán ra');
+    setText(row.getCell('partyName'), 'Chưa nhập mã số thuế của tổ chức nên Crove chưa nhận ra hóa đơn bán ra');
     return;
   }
   side.documents.forEach((doc: VatInvoiceView, index) => {
@@ -117,7 +117,7 @@ export async function buildVatWorkbook(report: VatReport, orgName: string): Prom
       setMoney(row.getCell('vat'), rate.vat);
     }
     const total = summary.addRow([]);
-    setText(total.getCell('label'), side.available ? `Tổng cộng (${side.totals.documents} hóa đơn)` : 'Crove chưa ghi nhận hóa đơn bán ra');
+    setText(total.getCell('label'), side.available ? `Tổng cộng (${side.totals.documents} hóa đơn)` : 'Chưa nhập mã số thuế của tổ chức nên Crove chưa nhận ra hóa đơn bán ra');
     setMoney(total.getCell('taxable'), side.totals.taxable);
     setMoney(total.getCell('vat'), side.totals.vat);
     total.font = { bold: true };

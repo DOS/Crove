@@ -7,7 +7,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
 import type pg from 'pg';
 import { schemaMissing } from '@crove/db/migrate';
-import { ACCEPTED_UPLOAD_TYPES, MAX_SOCIAL_VIDEO_BYTES, MAX_SOCIAL_VIDEO_MS, MAX_UPLOAD_BYTES, ORG_HEADER, SOCIAL_IMAGE_TYPES, type UploadPurpose } from '@crove/kernel-contract';
+import { ACCEPTED_ARCHIVE_TYPES, ACCEPTED_UPLOAD_TYPES, MAX_SOCIAL_VIDEO_BYTES, MAX_SOCIAL_VIDEO_MS, MAX_UPLOAD_BYTES, ORG_HEADER, SOCIAL_IMAGE_TYPES, type UploadPurpose } from '@crove/kernel-contract';
 import {
   BlobConflictError,
   BlobIntegrityError,
@@ -25,14 +25,17 @@ import type { OrgExportView } from '@crove/kernel';
 import {
   JOURNAL_EXPORT_LIMIT,
   MISA_SME_PURCHASE_SERVICE,
+  MISA_SME_SALES,
   buildJournalWorkbook,
   buildLedgerWorkbook,
   buildMisaWorkbook,
   buildVatWorkbook,
   purchaseRows,
+  salesRows,
   type JournalEntryView,
   type LedgerBook,
   type PurchaseVoucher,
+  type SalesVoucher,
   type VatReport,
 } from '@crove/mod-finance';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
@@ -594,8 +597,9 @@ export function createHttpApp(deps: HttpDeps) {
       if (purpose === 'social' && (!type || !SOCIAL_IMAGE_TYPES.includes(type))) {
         throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: bài đăng chỉ nhận ảnh JPG, PNG, WEBP và video MP4, MOV`);
       }
-      if (!type || !ACCEPTED_UPLOAD_TYPES.includes(type)) {
-        throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận XML, PDF, JPG, PNG, WEBP`);
+      // A ZIP of documents (#314) is stored like one; the worker opens it in the sandbox and files every entry.
+      if (!type || !(ACCEPTED_UPLOAD_TYPES.includes(type) || ACCEPTED_ARCHIVE_TYPES.includes(type))) {
+        throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận XML, PDF, JPG, PNG, WEBP hoặc ZIP`);
       }
       if (bytes.byteLength > MAX_UPLOAD_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 25 MB`);
     }
@@ -850,6 +854,35 @@ export function createHttpApp(deps: HttpDeps) {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': `attachment; filename="crove-misa-mua-dich-vu-${orgSlug}.xlsx"`,
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // Sales vouchers in the MISA SME import template (issue #313), same roles, range and audit as the purchase export.
+    app.get('/api/export/misa/sales.xlsx', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const range = { from: c.req.query('from') || undefined, to: c.req.query('to') || undefined, limit: JOURNAL_EXPORT_LIMIT };
+        const vouchers = await runtime.query<SalesVoucher[]>('finance.vouchers.sales', range, { actor: actorOf(user), orgId });
+        if (vouchers.length >= JOURNAL_EXPORT_LIMIT) {
+          throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều chứng từ để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
+        }
+        const bytes = await buildMisaWorkbook(MISA_SME_SALES, vouchers.flatMap(salesRows));
+        await runtime.execute(
+          'finance.journal.export',
+          { from: range.from, to: range.to, entries: vouchers.length, format: 'misa_sme_sales' },
+          { actor: actorOf(user), orgId },
+        );
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': `attachment; filename="crove-misa-ban-hang-${orgSlug}.xlsx"`,
             'cache-control': 'private, no-store',
           },
         });

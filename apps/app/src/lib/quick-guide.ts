@@ -17,7 +17,7 @@ export const QUICK_GUIDE: readonly GuideStep[] = [
     title: 'Bước 1. Tải hóa đơn lên',
     items: [
       `Mở ${q(vi.nav.inbox)} ở thanh bên trái.`,
-      `Bấm ${q(vi.inbox.upload)}, hoặc kéo thả tệp vào ô ${q(vi.inbox.dropHere)}. Mỗi tệp tối đa 25 MB, chọn được nhiều tệp một lần.`,
+      `Bấm ${q(vi.inbox.upload)}, hoặc kéo thả tệp vào ô ${q(vi.inbox.dropHere)}. Mỗi tệp tối đa 25 MB, chọn được nhiều tệp một lần (tối đa 500), hoặc một tệp ZIP tải về từ cổng thuế: Crove mở ZIP và đọc từng hóa đơn.`,
       'Tệp XML hóa đơn điện tử luôn đọc được. Tệp PDF và ảnh chụp chỉ đọc được khi máy chủ đã cấu hình AI; nếu chưa, ô tải lên sẽ báo.',
       `Nếu máy chủ bật nhận email, bạn có thể forward thư hóa đơn tới địa chỉ trong ô ${q(vi.inbox.forwardTitle)} (bấm ${q(vi.inbox.copyAddress)} để sao chép).`,
       `Tệp vừa gửi hiện ở ${q(vi.inbox.recentFiles)}: ${q(vi.inbox.fileStatus.processing)}, rồi ${q(vi.inbox.fileStatus.proposed)}. Nếu tệp ${q(vi.inbox.fileStatus.failed)}, bấm ${q(vi.inbox.reread)} khi có nút này.`,

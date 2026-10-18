@@ -83,10 +83,10 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await expect(vendor.getByRole('cell')).toHaveText([SELLER, SELLER_TAX_CODE, /Hà Nội/, '1', /6422 · Chi phí quản lý doanh nghiệp/]);
     await expect(vendor.getByRole('combobox', { name: `Tài khoản mặc định của ${SELLER}` })).toHaveValue('6422');
 
-    await nav.getByRole('link', { name: 'Chứng từ mua' }).click();
+    await nav.getByRole('link', { name: 'Chứng từ', exact: true }).click();
     const document = page.getByRole('row').filter({ hasText: 'C26TAB-1234' });
     await expect(document).toHaveCount(1);
-    await expect(document.getByRole('cell')).toHaveText(['15/09/2026', 'C26TAB-1234', SELLER, /^1\.800\.000/, /^180\.000/, /^1\.980\.000/, 'Đã ghi sổ']);
+    await expect(document.getByRole('cell')).toHaveText(['15/09/2026', 'C26TAB-1234', 'Mua vào', SELLER, /^1\.800\.000/, /^180\.000/, /^1\.980\.000/, 'Đã ghi sổ']);
 
     await nav.getByRole('link', { name: 'Bút toán' }).click();
     await expect(page.getByText(MEMO)).toBeVisible();
@@ -107,14 +107,14 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     if (!sheet) throw new Error('the export has no worksheet');
     const header = (sheet.getRow(1).values as unknown[]).slice(1).map(String);
     const col = (name: string) => header.indexOf(name) + 1;
-    expect(header).toEqual(expect.arrayContaining(['Số HĐ', 'MST nhà cung cấp', 'TK Nợ', 'TK Có', 'Số tiền']));
+    expect(header).toEqual(expect.arrayContaining(['Số HĐ', 'MST đối tượng', 'TK Nợ', 'TK Có', 'Số tiền']));
 
     const rows = sheet.getRows(2, sheet.rowCount - 1) ?? [];
     expect(rows.length).toBeGreaterThan(0);
     let total = new Decimal(0);
     for (const row of rows) {
       expect(String(row.getCell(col('Số HĐ')).value)).toBe('1234');
-      expect(String(row.getCell(col('MST nhà cung cấp')).value)).toBe(SELLER_TAX_CODE);
+      expect(String(row.getCell(col('MST đối tượng')).value)).toBe(SELLER_TAX_CODE);
       expect(String(row.getCell(col('TK Có')).value)).toBe('331');
       total = total.plus(String(row.getCell(col('Số tiền')).value));
     }
@@ -131,7 +131,7 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     const indicator = (code: string) => page.getByRole('row').filter({ has: page.getByRole('cell', { name: `[${code}]`, exact: true }) });
     await expect(indicator('23').getByRole('cell').last()).toHaveText(/^1\.800\.000/);
     await expect(indicator('24').getByRole('cell').last()).toHaveText(/^180\.000/);
-    await expect(page.getByText('Crove chưa ghi nhận hóa đơn bán ra')).toBeVisible();
+    await expect(page.getByText('Chưa nhập mã số thuế của tổ chức')).toBeVisible();
     const purchase = page.getByRole('row').filter({ hasText: 'C26TAB-1234' });
     await expect(purchase).toHaveCount(1);
     await expect(purchase.getByRole('cell')).toHaveText(['15/09/2026', 'C26TAB-1234', new RegExp(SELLER), '10%', /^1\.800\.000/, /^180\.000/, '']);
