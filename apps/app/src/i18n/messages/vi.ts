@@ -340,6 +340,7 @@ export const vi = {
     notes: {
       outsidePeriod: 'Ngoài kỳ',
       withoutTaxCode: 'Khớp không theo MST',
+      duplicateInCrove: 'Trùng hóa đơn đã có trong Crove',
       duplicateRows: 'Lặp {count, plural, other {# lần}} trong danh sách',
     },
     differences: {

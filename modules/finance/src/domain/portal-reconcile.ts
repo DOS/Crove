@@ -72,6 +72,8 @@ export interface ReconcileItem {
   outsidePeriod: boolean;
   // Further rows of the same invoice on the period's lists (the same list exported twice, or two overlapping lists).
   duplicateRows: number;
+  // A second copy in Crove of an invoice already matched to a portal row (not_on_portal only): reject or reverse it.
+  duplicateInCrove: boolean;
 }
 
 export interface ReconcileSummary {
@@ -140,6 +142,8 @@ export function reconcilePortalList(rows: readonly PortalRow[], crove: readonly 
     map.set(key, [...(map.get(key) ?? []), entry]);
   }
   const used = new Set<CroveInvoice>();
+  // Crove invoices that repeat one already matched to a portal row.
+  const duplicates = new Set<CroveInvoice>();
 
   // The portal's side, one invoice per key and template; later rows of the same invoice count as duplicates. When the
   // same invoice appears with different statuses (two lists exported at different times), the later list's row wins
@@ -170,9 +174,13 @@ export function reconcilePortalList(rows: readonly PortalRow[], crove: readonly 
         ? (byLooseKey.get(looseKey) ?? []).filter((c) => !used.has(c.invoice) && templatesAgree(c.template, p.template))
         : [];
     const candidates = exact.length > 0 ? exact : loose;
-    for (const c of candidates) used.add(c.invoice);
+    // One Crove invoice answers the portal row, a recorded document before a proposal. Any other candidate is a second
+    // copy of the same invoice in Crove (a pending proposal of a booked invoice, or the invoice booked twice): it is not
+    // used here, so it is reported below as not on the portal and marked as a duplicate.
     const match = candidates.find((c) => c.invoice.kind === 'document') ?? candidates[0];
     const crove = match?.invoice ?? null;
+    if (crove) used.add(crove);
+    for (const c of candidates) if (c.invoice !== crove) duplicates.add(c.invoice);
     const voided = VOID_STATUSES.has(row.status);
     const diffs = crove && !voided ? differences(row, crove) : [];
     const outcome: ReconcileOutcome = voided
@@ -194,13 +202,25 @@ export function reconcilePortalList(rows: readonly PortalRow[], crove: readonly 
       withoutTaxCode: crove !== null && exact.length === 0,
       outsidePeriod: row.issueDate < period.from || row.issueDate > period.to,
       duplicateRows: p.duplicates,
+      duplicateInCrove: false,
     });
   }
 
   for (const { invoice } of normalizedCrove) {
-    if (used.has(invoice) || invoice.issueDate < period.from || invoice.issueDate > period.to) continue;
+    const duplicate = duplicates.has(invoice);
+    // A duplicate is reported whatever its date: the portal row it repeats may be outside the period.
+    if (used.has(invoice) || (!duplicate && (invoice.issueDate < period.from || invoice.issueDate > period.to))) continue;
     used.add(invoice);
-    items.push({ outcome: 'not_on_portal', portal: null, crove: invoice, differences: [], withoutTaxCode: false, outsidePeriod: false, duplicateRows: 0 });
+    items.push({
+      outcome: 'not_on_portal',
+      portal: null,
+      crove: invoice,
+      differences: [],
+      withoutTaxCode: false,
+      outsidePeriod: invoice.issueDate < period.from || invoice.issueDate > period.to,
+      duplicateRows: 0,
+      duplicateInCrove: duplicate,
+    });
   }
 
   items.sort((a, b) => {

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { RECONCILE_OUTCOMES, type PortalReconciliation } from '@crove/kernel-contract';
 import { SECTIONS, canImportPortalList, invoiceLabel, itemsByOutcome, pickProblem, pollWhilePending, type ReconcileItem } from '../src/lib/portal-list.ts';
 
-const item = (outcome: ReconcileItem['outcome']): ReconcileItem => ({ outcome, portal: null, crove: null, differences: [], withoutTaxCode: false, outsidePeriod: false, duplicateRows: 0 });
+const item = (outcome: ReconcileItem['outcome']): ReconcileItem => ({ outcome, portal: null, crove: null, differences: [], withoutTaxCode: false, outsidePeriod: false, duplicateRows: 0, duplicateInCrove: false });
 
 describe('portal reconciliation screen', () => {
   it('lets owners, admins and members import, never viewers', () => {

@@ -342,6 +342,7 @@ export const en = {
     notes: {
       outsidePeriod: 'Outside the period',
       withoutTaxCode: 'Matched without tax code',
+      duplicateInCrove: 'Duplicate of an invoice already in Crove',
       duplicateRows: 'Repeated {count, plural, one {# time} other {# times}} in the lists',
     },
     differences: {

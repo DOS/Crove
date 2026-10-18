@@ -102,6 +102,9 @@ CREATE TRIGGER portal_invoice_list_before_insert
   BEFORE INSERT ON crove_finance.portal_invoice_list
   FOR EACH ROW EXECUTE FUNCTION crove_finance.portal_invoice_list_before_insert();
 
+-- Kept like the ledger (docs/runbooks/org-offboarding.md): a list is the tax authority's own record of the period's
+-- purchases, the evidence the books were checked against it. Tenants are never hard-deleted (the tenant row stays
+-- closed while kept records reference it), so nothing needs to delete a list; tenant roles hold no DELETE either.
 CREATE OR REPLACE FUNCTION crove_finance.reject_portal_list_delete() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
@@ -140,7 +143,9 @@ CREATE TABLE IF NOT EXISTS crove_finance.portal_invoice_row (
   status_label text CHECK (status_label IS NULL OR pg_catalog.length(status_label) <= 200),
   check_result text CHECK (check_result IS NULL OR pg_catalog.length(check_result) <= 200),
   PRIMARY KEY (org_id, list_id, row_no),
-  CONSTRAINT portal_invoice_row_list_fk FOREIGN KEY (org_id, list_id) REFERENCES crove_finance.portal_invoice_list (org_id, id)
+  -- ON DELETE CASCADE as on purchase_line: no role deletes a list (the guard below), so the cascade never runs today; it
+  -- states that rows live and die with their list should staff ever delete one.
+  CONSTRAINT portal_invoice_row_list_fk FOREIGN KEY (org_id, list_id) REFERENCES crove_finance.portal_invoice_list (org_id, id) ON DELETE CASCADE
 );
 SELECT crove_kernel.apply_tenant_rls('crove_finance.portal_invoice_row', true);
 SELECT crove_kernel.make_append_only('crove_finance.portal_invoice_row');

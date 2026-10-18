@@ -74,6 +74,7 @@ export const zReconcileItem = z.object({
   withoutTaxCode: z.boolean(),
   outsidePeriod: z.boolean(),
   duplicateRows: z.number().int().nonnegative(),
+  duplicateInCrove: z.boolean(),
 });
 
 export const zPortalReconciliation = z.object({

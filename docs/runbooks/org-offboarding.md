@@ -58,6 +58,7 @@ Final deletion is not automated. Staff run it after the owner has the export and
 | Store | What happens | When | Why |
 |---|---|---|---|
 | Ledger: `crove_finance.journal_entry`, `journal_line`, `purchase_document`, `purchase_line`, and `org_account` (the sub-accounts the lines name by code; never deleted) | **Kept** | At least 10 years after the fiscal year | Accounting Law 88/2015, Art. 41: accounting records and the documents behind them are kept for the legal period. They are append-only and are never deleted by Crove. |
+| The tax portal's purchase lists: `crove_finance.portal_invoice_list`, `portal_invoice_row` (#465), and the `import` files they were read from | **Kept** | Same as the ledger | The tax authority's record of the period's purchases, the evidence the books were checked against it. Lists are removed from a period, never deleted; rows are append-only. |
 | Source documents behind booked entries (`crove_kernel.file` rows and their blobs that a purchase document references) | **Kept** | Same as the ledger | They are the accounting vouchers for those entries. |
 | `crove_kernel.audit_event` | **Kept** | Same as the ledger (no automatic deletion in v1, plan §4.10) | Proof of who did what to the books; append-only. |
 | `crove_kernel.outbox_event` | **Kept** until the archive exists | Plan §4.9: archived, then deleted by org prefix (13 months, plan §7.9) | Business facts stream; append-only today. |

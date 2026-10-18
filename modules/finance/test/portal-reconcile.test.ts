@@ -135,8 +135,20 @@ describe('reconcilePortalList', () => {
     expect(result.summary.duplicateRows).toBe(2);
   });
 
-  it('prefers the booked document to a pending duplicate of it, and reports neither as not on the portal', () => {
-    expect(outcomes([portal('1')], [crove('1', { kind: 'proposal' }), crove('1')])).toEqual([['1', 'matched', 'document']]);
+  it('matches the booked document before a pending duplicate of it, and reports the duplicate whatever its date', () => {
+    const result = reconcilePortalList([portal('1')], [crove('1', { kind: 'proposal', issueDate: '2026-08-30' }), crove('1')], PERIOD);
+    expect(result.items.map((i) => [i.portal?.number ?? i.crove?.number, i.outcome, i.crove?.kind, i.duplicateInCrove])).toEqual([
+      ['1', 'not_on_portal', 'proposal', true],
+      ['1', 'matched', 'document', false],
+    ]);
+    expect(result.items[0]?.outsidePeriod).toBe(true);
+    // The same invoice booked twice: one matches, the other is a duplicate.
+    const twice = reconcilePortalList([portal('2')], [crove('2'), crove('2')], PERIOD).items;
+    expect(twice.map((i) => [i.outcome, i.duplicateInCrove])).toEqual([
+      ['not_on_portal', true],
+      ['matched', false],
+    ]);
+    expect(reconcilePortalList([portal('3')], [crove('3')], PERIOD).summary.notOnPortal).toBe(0);
   });
 
   it('flags portal rows outside the period, and reports only Crove invoices of the period as not on the portal', () => {

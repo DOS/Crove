@@ -24,6 +24,7 @@ function ItemRow({ item, slug }: { item: ReconcileItem; slug: string }) {
   const notes: string[] = [];
   if (item.outsidePeriod) notes.push(t('notes.outsidePeriod'));
   if (item.withoutTaxCode) notes.push(t('notes.withoutTaxCode'));
+  if (item.duplicateInCrove) notes.push(t('notes.duplicateInCrove'));
   if (item.duplicateRows > 0) notes.push(t('notes.duplicateRows', { count: item.duplicateRows }));
   for (const d of item.differences) notes.push(t(`differences.${d}`));
   return (
