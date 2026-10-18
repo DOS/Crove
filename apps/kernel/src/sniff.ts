@@ -9,6 +9,7 @@ const EXTENSIONS: Record<string, string> = {
   'video/mp4': 'mp4',
   'video/quicktime': 'mov',
   'application/zip': 'zip',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
 };
 
 function startsWith(bytes: Uint8Array, signature: number[], offset = 0): boolean {

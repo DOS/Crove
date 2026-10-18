@@ -1,0 +1,284 @@
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { Link, useParams } from '@tanstack/react-router';
+import { useRef, useState } from 'react';
+import { useTranslations } from 'use-intl';
+import type { ReconcileOutcome } from '@crove/kernel-contract';
+import { Badge } from '@crove/ui/components/badge';
+import { Button } from '@crove/ui/components/button';
+import { Card } from '@crove/ui/components/card';
+import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { TableCell, TableRow } from '@crove/ui/components/table';
+import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { useFormat } from '../i18n/provider.tsx';
+import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
+import { SECTIONS, canImportPortalList, invoiceLabel, itemsByOutcome, pickProblem, pollWhilePending, type ReconcileItem } from '../lib/portal-list.ts';
+import { defaultPeriod, periodKey, switchKind, yearOptions, type PeriodChoice, type PeriodKind } from '../lib/vat.ts';
+
+function ItemRow({ item, slug }: { item: ReconcileItem; slug: string }) {
+  const t = useTranslations('portalList');
+  const f = useFormat();
+  const invoice = item.portal ?? item.crove;
+  if (!invoice) return null;
+  const sellerName = item.portal?.sellerName || item.crove?.sellerName || '';
+  const sellerTaxCode = item.portal?.sellerTaxCode ?? item.crove?.sellerTaxCode ?? null;
+  const notes: string[] = [];
+  if (item.outsidePeriod) notes.push(t('notes.outsidePeriod'));
+  if (item.withoutTaxCode) notes.push(t('notes.withoutTaxCode'));
+  if (item.duplicateRows > 0) notes.push(t('notes.duplicateRows', { count: item.duplicateRows }));
+  for (const d of item.differences) notes.push(t(`differences.${d}`));
+  return (
+    <TableRow>
+      <TableCell className="px-4 py-3 text-muted-foreground">{f.date(invoice.issueDate)}</TableCell>
+      <TableCell className="px-4 py-3 font-mono text-xs text-foreground">{invoiceLabel(invoice)}</TableCell>
+      <TableCell className="px-4 py-3 text-foreground">
+        {sellerName}
+        {sellerTaxCode && <span className="block font-mono text-xs text-subtle-foreground">{sellerTaxCode}</span>}
+      </TableCell>
+      <TableCell className="px-4 py-3 text-foreground tabular-nums">
+        {item.portal?.total != null ? f.money(item.portal.total, item.portal.currency) : <span className="text-subtle-foreground">{t('noAmount')}</span>}
+      </TableCell>
+      <TableCell className="px-4 py-3 text-foreground tabular-nums">{item.crove ? f.money(item.crove.total, item.crove.currency) : '-'}</TableCell>
+      <TableCell className="px-4 py-3">
+        <div className="flex flex-wrap items-center gap-1">
+          {item.portal?.statusLabel && <Badge variant={item.portal.status === 'cancelled' || item.portal.status === 'replaced' ? 'destructive' : 'outline'}>{item.portal.statusLabel}</Badge>}
+          {notes.map((n) => (
+            <Badge key={n} variant="warning">
+              {n}
+            </Badge>
+          ))}
+          {item.crove?.kind === 'proposal' && (
+            <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.crove.id }} className="text-xs text-link underline-offset-4 hover:underline">
+              {t('openProposal')}
+            </Link>
+          )}
+          {item.crove?.kind === 'document' && (
+            <Link to="/o/$slug/documents" params={{ slug }} className="text-xs text-link underline-offset-4 hover:underline">
+              {t('openDocuments')}
+            </Link>
+          )}
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function Section({ outcome, items, folded, slug }: { outcome: ReconcileOutcome; items: ReconcileItem[]; folded: boolean; slug: string }) {
+  const t = useTranslations('portalList');
+  const table = (
+    <DataTable head={[t('columns.issueDate'), t('columns.invoice'), t('columns.seller'), t('columns.portalTotal'), t('columns.croveTotal'), t('columns.notes')]}>
+      {items.map((item) => (
+        <ItemRow key={`${item.portal?.listId ?? 'crove'}-${item.portal?.rowNo ?? item.crove?.id}`} item={item} slug={slug} />
+      ))}
+    </DataTable>
+  );
+  const title = t(`sections.${outcome}.title`, { count: String(items.length) });
+  if (folded) {
+    return (
+      <details className="group">
+        <summary className="cursor-pointer text-base font-semibold text-foreground">{title}</summary>
+        <p className="mt-1 mb-2 text-sm text-muted-foreground">{t(`sections.${outcome}.hint`)}</p>
+        {table}
+      </details>
+    );
+  }
+  return (
+    <section>
+      <h2 className="text-base font-semibold text-foreground">{title}</h2>
+      <p className="mt-1 mb-2 text-sm text-muted-foreground">{t(`sections.${outcome}.hint`)}</p>
+      {table}
+    </section>
+  );
+}
+
+// Reconciliation with the tax portal's purchase list (issue #465): pick the period, upload the .xlsx exported from
+// hoadondientu.gdt.gov.vn, and see which invoices the tax authority has that Crove lacks, and the other way round.
+export function PortalListPage() {
+  const t = useTranslations('portalList');
+  const tv = useTranslations('vat');
+  const f = useFormat();
+  const { slug } = useParams({ strict: false }) as { slug: string };
+  const org = useQuery(orpc.org.get.queryOptions());
+  const [choice, setChoice] = useState<PeriodChoice>(() => defaultPeriod('month'));
+  const period = periodKey(choice);
+  const report = useQuery({ ...orpc.portalList.reconcile.queryOptions({ input: { period } }), refetchInterval: (q) => pollWhilePending(q.state.data) });
+  const data = report.data;
+  const editor = canImportPortalList(org.data?.role);
+  const input = useRef<HTMLInputElement>(null);
+  const [problem, setProblem] = useState<'not_xlsx' | 'too_large' | null>(null);
+
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: orpc.portalList.reconcile.key() });
+  const importList = useMutation({
+    mutationFn: async (file: File) => {
+      const uploaded = await uploadFiles([file], 'import');
+      const fileId = uploaded.files[0]?.fileId;
+      if (!fileId) throw new Error(t('uploadFailed'));
+      return client.portalList.import({ period, fileId });
+    },
+    onSettled: refresh,
+  });
+  const removeList = useMutation(orpc.portalList.remove.mutationOptions({ onSettled: refresh }));
+
+  const choose = (file: File | undefined) => {
+    if (input.current) input.current.value = '';
+    importList.reset();
+    if (!file) return;
+    const found = pickProblem(file);
+    setProblem(found);
+    if (!found) importList.mutate(file);
+  };
+
+  const indexes = choice.kind === 'month' ? Array.from({ length: 12 }, (_, i) => i + 1) : [1, 2, 3, 4];
+  const grouped = data ? itemsByOutcome(data.items) : new Map();
+  const doneLists = data?.lists.filter((l) => l.status === 'done') ?? [];
+
+  return (
+    <>
+      <PageHeader
+        title={t('title')}
+        subtitle={t('subtitle')}
+        actions={
+          editor ? (
+            <>
+              <input ref={input} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" aria-label={t('upload')} onChange={(e) => choose(e.target.files?.[0])} />
+              <Button size="lg" onClick={() => input.current?.click()} disabled={importList.isPending}>
+                {importList.isPending ? <Spinner className="text-current" /> : null}
+                {t('upload')}
+              </Button>
+            </>
+          ) : undefined
+        }
+      />
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        <label className="text-xs">
+          <span className="text-subtle-foreground">{tv('kind')}</span>
+          <NativeSelect aria-label={tv('kind')} className="mt-1 w-32" value={choice.kind} onChange={(e) => setChoice(switchKind(choice, e.target.value as PeriodKind))}>
+            <NativeSelectOption value="month">{tv('month')}</NativeSelectOption>
+            <NativeSelectOption value="quarter">{tv('quarter')}</NativeSelectOption>
+          </NativeSelect>
+        </label>
+        <label className="text-xs">
+          <span className="text-subtle-foreground">{choice.kind === 'month' ? tv('month') : tv('quarter')}</span>
+          <NativeSelect
+            aria-label={choice.kind === 'month' ? tv('month') : tv('quarter')}
+            className="mt-1 w-28"
+            value={choice.index}
+            onChange={(e) => setChoice({ ...choice, index: Number(e.target.value) })}>
+            {indexes.map((n) => (
+              <NativeSelectOption key={n} value={n}>
+                {choice.kind === 'month' ? tv('monthOption', { n: String(n) }) : tv('quarterOption', { n: String(n) })}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </label>
+        <label className="text-xs">
+          <span className="text-subtle-foreground">{tv('year')}</span>
+          <NativeSelect aria-label={tv('year')} className="mt-1 w-28" value={choice.year} onChange={(e) => setChoice({ ...choice, year: Number(e.target.value) })}>
+            {yearOptions().map((y) => (
+              <NativeSelectOption key={y} value={y}>
+                {y}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </label>
+        {data && <p className="pb-1.5 text-sm text-muted-foreground">{t('range', { from: f.date(data.period.from), to: f.date(data.period.to) })}</p>}
+      </div>
+
+      {problem && (
+        <div className="mb-4">
+          <ErrorText>{t(`pickProblems.${problem}`)}</ErrorText>
+        </div>
+      )}
+      {(importList.error || removeList.error) && (
+        <div className="mb-4">
+          <ErrorText>{errorMessage(importList.error ?? removeList.error)}</ErrorText>
+        </div>
+      )}
+
+      {report.isLoading ? (
+        <Spinner />
+      ) : report.error ? (
+        <ErrorText>{errorMessage(report.error)}</ErrorText>
+      ) : data ? (
+        <div className="space-y-8">
+          <Card className="block p-4">
+            <h2 className="text-sm font-medium text-foreground">{t('howTitle')}</h2>
+            <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
+              <li>{t('how.login')}</li>
+              <li>{t('how.search')}</li>
+              <li>{t('how.export')}</li>
+              <li>{t('how.upload')}</li>
+            </ol>
+          </Card>
+
+          <section>
+            <h2 className="mb-2 text-base font-semibold text-foreground">{t('listsTitle', { count: String(data.lists.length) })}</h2>
+            {data.lists.length === 0 ? (
+              <Empty title={t('noLists')} hint={t('noListsHint')} />
+            ) : (
+              <DataTable head={[t('columns.file'), t('columns.importedAt'), t('columns.listRange'), t('columns.status'), '']}>
+                {data.lists.map((list) => (
+                  <TableRow key={list.id}>
+                    <TableCell className="px-4 py-3 text-foreground">{list.filename}</TableCell>
+                    <TableCell className="px-4 py-3 text-muted-foreground">{f.dateTime(list.createdAt)}</TableCell>
+                    <TableCell className="px-4 py-3 text-muted-foreground">
+                      {list.listFrom && list.listTo ? t('listRange', { from: f.date(list.listFrom), to: f.date(list.listTo) }) : '-'}
+                    </TableCell>
+                    <TableCell className="px-4 py-3">
+                      {list.status === 'pending' ? (
+                        <Badge variant="brand">{t('listStatus.pending')}</Badge>
+                      ) : list.status === 'done' ? (
+                        <Badge variant="success">{t('listStatus.done', { count: list.rowCount ?? 0 })}</Badge>
+                      ) : (
+                        <div className="space-y-1">
+                          <Badge variant="destructive">{t('listStatus.failed')}</Badge>
+                          {list.error && <p className="text-xs text-destructive">{list.error}</p>}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="px-4 py-3 text-right">
+                      {editor && (
+                        <Button variant="ghost" size="sm" disabled={removeList.isPending} onClick={() => removeList.mutate({ listId: list.id })}>
+                          {t('remove')}
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </DataTable>
+            )}
+          </section>
+
+          {doneLists.length > 0 && (
+            <>
+              <section aria-label={t('summaryTitle')} className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {(
+                  [
+                    ['missing', data.summary.missing],
+                    ['amount_mismatch', data.summary.amountMismatch],
+                    ['void_in_crove', data.summary.voidInCrove],
+                    ['not_on_portal', data.summary.notOnPortal],
+                  ] as const
+                ).map(([outcome, count]) => (
+                  <Card key={outcome} className="block p-4">
+                    <p className="text-xs text-subtle-foreground">{t(`tiles.${outcome}`)}</p>
+                    <p className={`mt-1 text-2xl font-semibold tabular-nums ${count > 0 ? 'text-warning' : 'text-foreground'}`}>{f.number(count)}</p>
+                  </Card>
+                ))}
+              </section>
+              <p className="text-sm text-muted-foreground">
+                {t('summaryLine', { portal: data.summary.portalInvoices, matched: data.summary.matched, inbox: data.summary.inInbox })}
+              </p>
+              {SECTIONS.map(({ outcome, folded }) => {
+                const items = grouped.get(outcome) ?? [];
+                return items.length > 0 ? <Section key={outcome} outcome={outcome} items={items} folded={folded} slug={slug} /> : null;
+              })}
+              {data.items.length > 0 && data.summary.missing + data.summary.amountMismatch + data.summary.voidInCrove + data.summary.notOnPortal === 0 && (
+                <Empty title={t('allClear')} hint={t('allClearHint')} />
+              )}
+            </>
+          )}
+        </div>
+      ) : null}
+    </>
+  );
+}

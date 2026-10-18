@@ -20,6 +20,7 @@ const ALL_NAV = [
   { to: '/o/$slug/vendors', label: 'vendors', module: 'finance' },
   { to: '/o/$slug/journal', label: 'journal', module: 'finance' },
   { to: '/o/$slug/vat', label: 'vat', module: 'finance' },
+  { to: '/o/$slug/portal-invoices', label: 'portalList', module: 'finance' },
   { to: '/o/$slug/ledger', label: 'ledger', module: 'finance' },
   { to: '/o/$slug/agents', label: 'agents', module: 'kernel' },
   { to: '/o/$slug/tasks', label: 'tasks', module: 'kernel' },

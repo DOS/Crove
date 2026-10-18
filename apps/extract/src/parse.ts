@@ -5,6 +5,7 @@ import PostalMime from 'postal-mime';
 import type { Address } from 'postal-mime';
 import { EXTRACT_LIMITS, zExtractSuccess, type ExtractFailure, type ExtractKind, type ExtractResponse, type ExtractSuccess } from '@crove/extract-contract';
 import { EInvoiceParseError, parseEInvoiceXml } from './einvoice-xml.ts';
+import { PortalListError, readPortalList } from './portal-list.ts';
 import { ArchiveError, readZip } from './zip.ts';
 
 const MiB = 1024 * 1024;
@@ -77,6 +78,9 @@ async function parseKind(kind: ExtractKind, bytes: Uint8Array): Promise<ExtractS
     case 'zip':
       // The entries come back as bytes; the worker sniffs and files each one, and each document is then read alone.
       return { ok: true, kind, archive: readZip(bytes) };
+    case 'portal_invoice_list':
+      // The tax portal's purchase list (#465): the first sheet of an .xlsx, read into checked rows.
+      return { ok: true, kind, list: readPortalList(bytes) };
   }
 }
 
@@ -85,6 +89,7 @@ const UNREADABLE: Record<ExtractKind, string> = {
   pdf_text: 'Không đọc được tệp PDF',
   mime: 'Không đọc được thư điện tử',
   zip: 'Không mở được tệp ZIP',
+  portal_invoice_list: 'Không đọc được danh sách hóa đơn từ cổng thuế',
 };
 
 export async function parse(kind: ExtractKind, bytes: Uint8Array): Promise<ExtractResponse> {
@@ -93,7 +98,7 @@ export async function parse(kind: ExtractKind, bytes: Uint8Array): Promise<Extra
     result = await parseKind(kind, bytes);
   } catch (error) {
     // The e-invoice parser and the ZIP reader explain what is wrong; other parser errors are not passed on.
-    if (error instanceof EInvoiceParseError || error instanceof ArchiveError) return failure('invalid', error.message);
+    if (error instanceof EInvoiceParseError || error instanceof ArchiveError || error instanceof PortalListError) return failure('invalid', error.message);
     // A stack overflow (deeply nested input) or an impossible allocation: the input is beyond what we read.
     if (error instanceof RangeError) return failure('invalid', `${UNREADABLE[kind]}: tệp vượt giới hạn xử lý`);
     return failure('invalid', UNREADABLE[kind]);

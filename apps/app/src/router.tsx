@@ -26,6 +26,7 @@ import { OAuthCallbackPage } from './routes/social-oauth.tsx';
 import { SocialComposePage, SocialPostPage } from './routes/social-post.tsx';
 import { TaskDetailPage, TasksPage } from './routes/tasks.tsx';
 import { VatPage } from './routes/vat.tsx';
+import { PortalListPage } from './routes/portal-list.tsx';
 import { VendorsPage } from './routes/vendors.tsx';
 
 async function requireSession() {
@@ -158,6 +159,8 @@ const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendor
 const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, component: JournalPage });
 // VAT working per month or quarter (issue #316).
 const vatRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vat', beforeLoad: requireFinance, component: VatPage });
+// Reconciliation with the tax portal's purchase list (issue #465).
+const portalListRoute = createRoute({ getParentRoute: () => orgRoute, path: 'portal-invoices', beforeLoad: requireFinance, component: PortalListPage });
 // Ledger reports per month, quarter or year (issue #321).
 const ledgerRoute = createRoute({ getParentRoute: () => orgRoute, path: 'ledger', beforeLoad: requireFinance, component: LedgerPage });
 // Opening balances from Excel (#320), reached from the journal.
@@ -187,7 +190,7 @@ const routeTree = rootRoute.addChildren([
   resetPasswordRoute,
   onboardingRoute,
   oauthCallbackRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vatRoute, ledgerRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vatRoute, portalListRoute, ledgerRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

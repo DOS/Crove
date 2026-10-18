@@ -6,8 +6,12 @@ import { fileForExtraction, purchaseLookup } from './extract.ts';
 import { accountsList, documentsList, journalExport, journalGet, journalList, purchaseVouchers, salesVouchers, vendorsList, voidedProposals } from './queries.ts';
 import { vatExport, vatPeriodQuery } from './vat.ts';
 import { ledgerAccountQuery, ledgerBookQuery, ledgerExport, ledgerPeriodQuery } from './ledger-reports.ts';
+import { portalListImport, portalListReconcile, portalListRecord, portalListRemove, portalListSource } from './portal-list.ts';
 
 export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
+export { checkPortalList, importPortalList, recordPortalListFailure, PORTAL_RECONCILE_LIMIT, type PortalListDeps } from './portal-list.ts';
+export * from './domain/portal-reconcile.ts';
+export { foldVietnamese, portalStatus } from './domain/portal-status.ts';
 export { buildJournalWorkbook } from './export.ts';
 export { buildVatWorkbook, VAT_RATE_LABELS, VAT_WARNING_LABELS } from './vat-export.ts';
 export { buildLedgerWorkbook } from './ledger-export.ts';
@@ -33,7 +37,7 @@ export { JOURNAL_EXPORT_LIMIT, VOIDED_PROPOSALS_QUERY, type JournalEntryView } f
 export { VAT_PERIOD_LIMIT, VAT_WARNINGS, type VatInvoiceView, type VatReport, type VatSide, type VatWarning } from './vat.ts';
 export { LEDGER_LINE_LIMIT, type AccountLedgerView, type LedgerBook, type LedgerReport } from './ledger-reports.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, openingBalancePost, createAccount, updateAccount, setVendorDefaultAccount];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, openingBalancePost, createAccount, updateAccount, setVendorDefaultAccount, portalListImport, portalListRemove, portalListRecord];
 export const financeQueries = [
   fileForExtraction,
   purchaseLookup,
@@ -50,4 +54,6 @@ export const financeQueries = [
   ledgerAccountQuery,
   ledgerBookQuery,
   openingBalancePreview,
+  portalListSource,
+  portalListReconcile,
 ];

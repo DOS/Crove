@@ -10,7 +10,7 @@ import type { InvoiceReader } from '@crove/agent';
 import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
-import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
+import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
 import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
@@ -84,6 +84,12 @@ interface ExtractJob {
 interface OrgExportJob {
   orgId: string;
 }
+
+interface PortalListJob {
+  orgId: string;
+  listId: string;
+}
+const PORTAL_LIST_RETRY_LIMIT = 3;
 
 interface OutboxRow {
   seq: string;
@@ -232,6 +238,21 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML',
         version,
       );
+    }
+  });
+
+  // The tax portal's purchase list (#465): read in crove-extract and recorded on its list. After the last failed
+  // attempt the list is recorded as failed, so it never stays "being read"; the accountant imports the file again.
+  if (finance) await boss.work<PortalListJob>(QUEUES.portalList, { batchSize: 1, pollingIntervalSeconds: EXTRACT_POLL_SECONDS }, async ([job]) => {
+    if (!job) return;
+    const { orgId, listId } = job.data;
+    try {
+      const done = await importPortalList({ runtime: deps.runtime, store: deps.store, extract: deps.extract }, orgId, listId, job.retryCount);
+      if (done) console.log(`[portal-list] list ${listId}: ${done.rows} row(s)`);
+    } catch (error) {
+      console.error(`[portal-list] list ${listId} attempt ${job.retryCount + 1}`, error);
+      if (job.retryCount < PORTAL_LIST_RETRY_LIMIT) throw error;
+      await recordPortalListFailure(deps.runtime, orgId, listId, 'Không đọc được danh sách sau nhiều lần thử; hãy nhập lại tệp');
     }
   });
 
@@ -421,7 +442,18 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           // A failed send rolls back the claim; singletonKey makes the retry idempotent.
           await Promise.all(
             rows.map((row) => {
-              if (!finance && (row.type === 'kernel.file.ingested' || row.type === 'kernel.file.reextract_requested')) return null;
+              if (!finance && (row.type === 'kernel.file.ingested' || row.type === 'kernel.file.reextract_requested' || row.type === 'finance.portal_list.import_requested')) {
+                return null;
+              }
+              if (row.type === 'finance.portal_list.import_requested') {
+                const listId = String(row.payload.listId);
+                return boss.send(QUEUES.portalList, { orgId: row.org_id, listId } satisfies PortalListJob, {
+                  singletonKey: `${row.org_id}:${listId}`,
+                  retryLimit: PORTAL_LIST_RETRY_LIMIT,
+                  retryDelay: 20,
+                  retryBackoff: true,
+                });
+              }
               if (row.type === 'kernel.file.ingested') {
                 const fileId = String(row.payload.fileId);
                 return boss.send(

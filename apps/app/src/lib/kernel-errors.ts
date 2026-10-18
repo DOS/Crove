@@ -84,6 +84,9 @@ export const KERNEL_ERROR_CODES = [
   'OPENING_BALANCE_AFTER_ENTRIES',
   'OPENING_BALANCE_INVALID',
   'OPENING_REVERSAL_DATE',
+  // The tax portal's purchase list (#465).
+  'PORTAL_LIST_EXISTS',
+  'PORTAL_LIST_LIMIT',
   // The chart of accounts and vendor defaults (#319).
   'ACCOUNT_CODE_TAKEN',
   'ACCOUNT_HAS_SUB_ACCOUNTS',

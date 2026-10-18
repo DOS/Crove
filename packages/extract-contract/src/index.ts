@@ -6,7 +6,9 @@ import { z } from 'zod';
 
 // zip: a ZIP archive opened in the sandbox (bulk intake, issue #314); the entries come back as bytes and the worker
 // files each one as a document of its own.
-export const EXTRACT_KINDS = ['einvoice_xml', 'pdf_text', 'mime', 'zip'] as const;
+// portal_invoice_list: the purchase-invoice list exported from the tax authority's e-invoice portal as .xlsx (#465);
+// the rows come back read and normalized, and the worker checks them again before they are stored.
+export const EXTRACT_KINDS = ['einvoice_xml', 'pdf_text', 'mime', 'zip', 'portal_invoice_list'] as const;
 export type ExtractKind = (typeof EXTRACT_KINDS)[number];
 export const zExtractKind = z.enum(EXTRACT_KINDS);
 
@@ -32,6 +34,12 @@ export const EXTRACT_LIMITS = {
   // every entry is decompressed. Base64 grows the entries by a third, which still fits maxResponseBytes.
   maxArchiveEntries: 500,
   maxArchiveTotalBytes: 40 * MiB,
+  // The tax portal's invoice list (#465): an .xlsx of at most this size, with at most this many invoice rows. The
+  // portal searches about a month at a time, so a month of a small company's purchases is far below either.
+  maxPortalListBytes: 10 * MiB,
+  maxPortalListRows: 20_000,
+  // Rows of the sheet that were not read as invoices (a totals row, a row without a number), reported by number.
+  maxPortalListSkipped: 1000,
 } as const;
 
 // Why the sandbox did not return an entry of an archive. The whole archive is refused instead (as invalid) when an
@@ -41,7 +49,9 @@ export const ARCHIVE_REJECTIONS = ['encrypted', 'unsupported_method', 'nested_ar
 export type ArchiveRejection = (typeof ARCHIVE_REJECTIONS)[number];
 
 export function maxRequestBytes(kind: ExtractKind): number {
-  return kind === 'mime' ? EXTRACT_LIMITS.maxEmailBytes : EXTRACT_LIMITS.maxFileBytes;
+  if (kind === 'mime') return EXTRACT_LIMITS.maxEmailBytes;
+  if (kind === 'portal_invoice_list') return EXTRACT_LIMITS.maxPortalListBytes;
+  return EXTRACT_LIMITS.maxFileBytes;
 }
 
 // too_large, timeout, memory and invalid are caused by the input: retrying gives the same answer.
@@ -129,6 +139,68 @@ export const zExtractedArchive = z.strictObject({
 });
 export type ExtractedArchive = z.infer<typeof zExtractedArchive>;
 
+// The fields of the portal's invoice list Crove reads (#465). Required: the reader refuses a sheet whose header lacks
+// any of them. The others are read when their column is there.
+export const PORTAL_LIST_REQUIRED_FIELDS = ['sellerTaxCode', 'series', 'number', 'issueDate'] as const;
+export const PORTAL_LIST_FIELDS = [
+  ...PORTAL_LIST_REQUIRED_FIELDS,
+  'template',
+  'sellerName',
+  'buyerTaxCode',
+  'subtotal',
+  'vatAmount',
+  'total',
+  'currency',
+  'status',
+  'checkResult',
+] as const;
+export type PortalListField = (typeof PORTAL_LIST_FIELDS)[number];
+
+// Why a row of the sheet below the header was not read as an invoice.
+export const PORTAL_LIST_SKIP_REASONS = ['no_tax_code', 'bad_tax_code', 'no_number', 'no_series', 'bad_date', 'bad_amount', 'too_long'] as const;
+export type PortalListSkipReason = (typeof PORTAL_LIST_SKIP_REASONS)[number];
+
+const zLocalDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const zTaxCode = z.string().regex(/^\d{10}(-\d{3})?$|^\d{12}$/);
+
+export const zExtractedPortalList = z.strictObject({
+  sheetName: zText,
+  // The sheet row holding the column headers, and which header each field was read from.
+  headerRow: z.number().int().positive().max(1_048_576),
+  columns: z
+    .array(z.strictObject({ field: z.enum(PORTAL_LIST_FIELDS), header: zText }))
+    .max(PORTAL_LIST_FIELDS.length),
+  // What the sheet says about the lookup above the header, when it says it.
+  listFrom: zLocalDate.nullable(),
+  listTo: zLocalDate.nullable(),
+  buyerTaxCode: zTaxCode.nullable(),
+  rows: z
+    .array(
+      z.strictObject({
+        rowNo: z.number().int().positive().max(1_048_576),
+        sellerTaxCode: zTaxCode,
+        sellerName: z.string().max(500),
+        // The buyer's tax code on the row (the portal's list names both parties); null when the column is absent.
+        buyerTaxCode: zTaxCode.nullable(),
+        template: z.string().regex(/^[0-9A-Z]{1,11}$/).nullable(),
+        series: z.string().min(1).max(20),
+        number: z.string().min(1).max(20),
+        issueDate: zLocalDate,
+        currency: z.string().regex(/^[A-Z]{3}$/),
+        subtotal: zMoney.nullable(),
+        vatAmount: zMoney.nullable(),
+        total: zMoney.nullable(),
+        statusLabel: z.string().max(200).nullable(),
+        checkResult: z.string().max(200).nullable(),
+      }),
+    )
+    .max(EXTRACT_LIMITS.maxPortalListRows),
+  skipped: z
+    .array(z.strictObject({ rowNo: z.number().int().positive().max(1_048_576), reason: z.enum(PORTAL_LIST_SKIP_REASONS) }))
+    .max(EXTRACT_LIMITS.maxPortalListSkipped),
+});
+export type ExtractedPortalList = z.infer<typeof zExtractedPortalList>;
+
 export const zExtractFailure = z.strictObject({
   ok: z.literal(false),
   code: z.enum(EXTRACT_ERROR_CODES),
@@ -146,6 +218,7 @@ export const zExtractSuccess = z.discriminatedUnion('kind', [
   }),
   z.strictObject({ ok: z.literal(true), kind: z.literal('mime'), email: zExtractedEmail }),
   z.strictObject({ ok: z.literal(true), kind: z.literal('zip'), archive: zExtractedArchive }),
+  z.strictObject({ ok: z.literal(true), kind: z.literal('portal_invoice_list'), list: zExtractedPortalList }),
 ]);
 export type ExtractSuccess = z.infer<typeof zExtractSuccess>;
 
