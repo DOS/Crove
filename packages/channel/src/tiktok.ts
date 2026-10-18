@@ -134,7 +134,8 @@ const expiryOf = (a: TokenAnswer, now = Date.now()) => {
 function connectorError(error: unknown, codeStep = false): ConnectorError {
   if (error instanceof ConnectorError) return error;
   if (error instanceof TikTokError) {
-    if (codeStep && error.status >= 400 && error.status < 500) return new ConnectorError('invalid_grant', 'TikTok refused the authorization code', error.code ?? String(error.status));
+    // invalid_client is the deployment's configuration, not the code.
+    if (codeStep && error.status >= 400 && error.status < 500 && error.code !== 'invalid_client') return new ConnectorError('invalid_grant', 'TikTok refused the authorization code', error.code ?? String(error.status));
     return new ConnectorError(error.status === 403 ? 'denied' : 'provider', error.message, error.code ?? String(error.status));
   }
   return new ConnectorError('provider', `TikTok could not be reached: ${error instanceof Error ? `${error.name}: ${error.message}` : typeof error}`);

@@ -114,7 +114,8 @@ const expiryOf = (a: TokenAnswer, now = Date.now()) => {
 function connectorError(error: unknown, codeStep = false): ConnectorError {
   if (error instanceof ConnectorError) return error;
   if (error instanceof YouTubeError) {
-    if (codeStep && error.status >= 400 && error.status < 500) return new ConnectorError('invalid_grant', 'Google refused the authorization code', error.reason ?? String(error.status));
+    // Only invalid_grant is the code itself; invalid_client or redirect_uri_mismatch is the deployment's configuration.
+    if (codeStep && error.reason === 'invalid_grant') return new ConnectorError('invalid_grant', 'Google refused the authorization code', error.reason);
     return new ConnectorError(error.status === 403 ? 'denied' : 'provider', error.message, error.reason ?? String(error.status));
   }
   return new ConnectorError('provider', `Google could not be reached: ${error instanceof Error ? `${error.name}: ${error.message}` : typeof error}`);
@@ -218,13 +219,33 @@ function publishResult(error: unknown): PublishResult {
 const beforeUpload = (result: PublishResult): PublishResult =>
   result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
 
+// Cuts never split a character: a title is limited in characters, a description in UTF-8 bytes (Vietnamese letters
+// with a tone mark take three).
+export function clipCodepoints(s: string, max: number): string {
+  const chars = Array.from(s);
+  return chars.length <= max ? s : chars.slice(0, max).join('');
+}
+export function clipBytes(s: string, max: number): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(s).length <= max) return s;
+  let out = '';
+  let used = 0;
+  for (const ch of s) {
+    const size = encoder.encode(ch).length;
+    if (used + size > max) break;
+    out += ch;
+    used += size;
+  }
+  return out;
+}
+
 // YouTube refuses angle brackets in a title, as in a description.
-const titleOf = (content: { title: string | null }) => (content.title ?? '').replace(/[<>]/g, '').trim().slice(0, TITLE_MAX);
+const titleOf = (content: { title: string | null }) => clipCodepoints((content.title ?? '').replace(/[<>]/g, '').trim(), TITLE_MAX);
 const descriptionOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
   const text = content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
   // YouTube refuses angle brackets in a description.
-  return text.replace(/[<>]/g, '').slice(0, DESCRIPTION_MAX);
+  return clipBytes(text.replace(/[<>]/g, ''), DESCRIPTION_MAX);
 };
 
 interface PlaylistItems {
