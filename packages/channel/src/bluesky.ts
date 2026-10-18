@@ -6,6 +6,7 @@
 // Only Bluesky-hosted accounts are supported for now (PDS hosts under bsky.network, or bsky.social): the PDS address
 // comes from the account's DID document, and an arbitrary host there would let anyone point the worker at any server.
 import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
+import { holdsLink } from './text.ts';
 import type { Fetch } from './oauth.ts';
 
 const ENTRYWAY = 'https://bsky.social';
@@ -140,7 +141,7 @@ export function linkFacets(text: string): { index: { byteStart: number; byteEnd:
 
 const textOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
-  return content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+  return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
 };
 
 function blueskyResult(error: unknown): PublishResult {
