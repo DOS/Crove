@@ -78,7 +78,7 @@ const ANY_IMAGE: readonly string[] = [];
 // The channels whose platform takes photos but whose Crove adapter posts only video (TikTok's photo mode is not built).
 export const VIDEO_ONLY_ADAPTERS: ReadonlySet<Provider> = new Set<Provider>(['tiktok']);
 
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'x']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
@@ -161,8 +161,9 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'x',
     body: { max: 280, count: 'weighted', required: false },
     title: null,
-    // Up to 4 images or one video; 5 MB per image (X media upload). Video waits for the chunked upload.
-    media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'], maxImageBytes: 5 * MB, maxVideoBytes: null, maxVideoSeconds: null },
+    // Up to 4 images or one video; 5 MB per image (X media upload); a video of up to 20 minutes for accounts without X
+    // Premium (POST /2/tweets).
+    media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'], maxImageBytes: 5 * MB, maxVideoBytes: null, maxVideoSeconds: 1200 },
     maxLinks: null,
     scrapesLinkPreview: true,
     unverified: [],
