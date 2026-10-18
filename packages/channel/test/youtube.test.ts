@@ -139,6 +139,15 @@ describe('YouTubePublisher', () => {
     expect(found).toEqual({ found: true, externalId: 'abcdefghijk', url: 'https://www.youtube.com/watch?v=abcdefghijk' });
   });
 
+  it('finds a video without a description when YouTube leaves the field out', async () => {
+    const { fetchImpl } = google({
+      'GET www.googleapis.com/youtube/v3/playlistItems': [{ body: { items: [{ snippet: { title: 'Khai trương chi nhánh', publishedAt: new Date().toISOString(), resourceId: { videoId: 'abcdefghijk' } } }] } }],
+    });
+    const content = { body: '', title: 'Khai trương chi nhánh', linkUrl: null, media: [video] };
+    const found = await new YouTubePublisher(APP, fetchImpl).reconcile({ externalAccountId: CHANNEL, secret: SECRET, callKey: 'call-1', contentHash: input().contentHash, content, after: new Date(Date.now() - 60_000), before: new Date() });
+    expect(found).toMatchObject({ found: true, externalId: 'abcdefghijk' });
+  });
+
   it('maps a dead token while opening the session to token_expired, with nothing sent', async () => {
     const dead = google({ 'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 401, body: { error: { message: 'Invalid Credentials', errors: [{ reason: 'authError' }] } } }] });
     expect(await new YouTubePublisher(APP, dead.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired' });
