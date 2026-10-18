@@ -21,7 +21,7 @@ export const en: Dictionary = {
     toLight: 'Switch to light theme',
     toDark: 'Switch to dark theme',
     otherLang: 'VI',
-    otherLangLabel: 'Xem bằng tiếng Việt',
+    otherLangLabel: 'View in Vietnamese',
     otherLangHref: '/',
   },
   hero: {

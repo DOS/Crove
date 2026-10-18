@@ -20,4 +20,6 @@ export const codeFont = JetBrains_Mono({
   weight: ['400', '500'],
   variable: '--font-code',
   display: 'swap',
+  // Only amounts and codes use it; let the body and heading faces load first.
+  preload: false,
 });

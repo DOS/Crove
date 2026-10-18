@@ -1,9 +1,9 @@
 import type { Dictionary } from '../../content/vi';
-import { DOCS_URL, GITHUB_URL, LICENSE_URL, SECURITY_URL } from '../../content/site';
+import { DOCS_URL, GITHUB_URL, LICENSE_URL, SECURITY_URL, SIGN_IN_URL } from '../../content/site';
 import { CroveMark } from './ui';
 
 export function SiteFooter({ dict }: { dict: Dictionary }) {
-  const { footer } = dict;
+  const { footer, nav } = dict;
   return (
     <footer className="border-t border-line pt-12 pb-[max(3rem,env(safe-area-inset-bottom,0px))]">
       <div className="wrap flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
@@ -15,6 +15,9 @@ export function SiteFooter({ dict }: { dict: Dictionary }) {
           <p className="mt-3 text-sm text-muted">{footer.tagline}</p>
         </div>
         <nav aria-label={footer.navLabel} className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+          <a href={SIGN_IN_URL} className="text-muted hover:text-fg">
+            {nav.signIn}
+          </a>
           <a href={GITHUB_URL} className="text-muted hover:text-fg">
             {footer.github}
           </a>

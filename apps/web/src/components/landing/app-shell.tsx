@@ -18,6 +18,7 @@ export function AppShell({ dict }: { dict: Dictionary }) {
   const [typed, setTyped] = useState(0);
   const [digits, setDigits] = useState(0);
   const [canReplay, setCanReplay] = useState(false);
+  const [showReplay, setShowReplay] = useState(false);
   const root = useRef<HTMLElement>(null);
   const timers = useRef<number[]>([]);
 
@@ -28,6 +29,7 @@ export function AppShell({ dict }: { dict: Dictionary }) {
 
   const play = useCallback(() => {
     clearTimers();
+    setShowReplay(true);
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       setPhase('done');
       setCanReplay(true);
@@ -66,6 +68,7 @@ export function AppShell({ dict }: { dict: Dictionary }) {
     if (!el) return;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       setCanReplay(true);
+      setShowReplay(true);
       return;
     }
     const observer = new IntersectionObserver(
@@ -357,8 +360,14 @@ export function AppShell({ dict }: { dict: Dictionary }) {
       </div>
       <figcaption className="mt-3 flex items-center justify-between gap-3 text-xs text-subtle">
         <span>{hero.sample}</span>
-        {canReplay ? (
-          <button type="button" onClick={play} className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-muted transition-colors hover:bg-surface-2 hover:text-fg">
+        {showReplay ? (
+          // Stays mounted while the run plays, so a keyboard user keeps focus on it; clicks wait until the run ends.
+          <button
+            type="button"
+            onClick={() => canReplay && play()}
+            aria-disabled={!canReplay}
+            className={`inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-muted transition-colors hover:bg-surface-2 hover:text-fg ${canReplay ? '' : 'cursor-default opacity-50'}`}
+          >
             <RotateCcw className="size-3.5" aria-hidden="true" />
             {hero.replay}
           </button>
