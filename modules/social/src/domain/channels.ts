@@ -73,8 +73,6 @@ export interface ChannelCapabilities {
 const MB = 1024 * 1024;
 const ANY_IMAGE: readonly string[] = [];
 
-// The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
-// the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
 // The channels whose platform takes photos but whose Crove adapter posts only video (TikTok's photo mode is not built).
 export const VIDEO_ONLY_ADAPTERS: ReadonlySet<Provider> = new Set<Provider>(['tiktok']);
 
@@ -115,6 +113,8 @@ export function sentText(provider: Provider, body: string, linkUrl: string | nul
   return [text, link].filter(Boolean).join('\n\n');
 }
 
+// The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
+// the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
 export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
