@@ -183,6 +183,8 @@ S9, LinkedIn (#392): member posts through a self-serve app (`CHANNEL_LINKEDIN_CL
 
 S9 video uploads (#409, first part of #396): an upload with `purpose=social` may be an MP4 or QuickTime video of up to 100 MB (the staged grant for a social upload allows that; documents stay at 25 MB). The server reads the type from the `ftyp` box (HEIC and M4A, which share the container, are not videos) and the duration from the movie header (`moov/mvhd`), refuses a video it cannot read or longer than 3 hours, and records the duration on the file (`crove_kernel.file.duration_ms`, immutable like the rest of the row). Bodies are still held in memory while hashed and stored, so each API process takes at most two large uploads at once, one per user. Video on posts, YouTube and TikTok follow in #410, #411 and #412.
 
+S9 video on posts (#410): a post or a channel's own list can hold a video uploaded for posts; its duration, read at upload, feeds the channel checks (kind, count, size, length, mixing with images), and the media library lists videos with their length. A channel whose platform takes video but whose Crove adapter does not post it yet gets `VIDEO_NOT_SUPPORTED_YET` (today only the sandbox posts video; each adapter joins `VIDEO_READY` when it learns video), and the publish job refuses a video for such a channel before any call. The composer shows a video's first frame with its length.
+
 What only people can do: trying S6 against the real platforms needs a Meta developer app (development mode works for people with a role on the app) and the Crove callback URL added to a Zalo app linked to an OA. DOS already has a Zalo OA app (used by DOS.Me); Meta has none yet. Open follow-ups: #250, #264, #335, #352.
 
 ## 5. Exit criteria (v1)

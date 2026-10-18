@@ -202,8 +202,8 @@ function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false 
 
 const orNull = (value: string) => (value.trim() === '' ? null : value);
 const mediaInput = (media: readonly MediaItem[]) => media.map((m) => ({ fileId: m.fileId, altText: orNull(m.altText) }));
-const mediaItems = (media: readonly { fileId: string; altText: string | null; mime: string; sizeBytes: number }[]): MediaItem[] =>
-  media.map((m) => ({ fileId: m.fileId, altText: m.altText ?? '', mime: m.mime, sizeBytes: m.sizeBytes }));
+const mediaItems = (media: readonly { fileId: string; altText: string | null; mime: string; sizeBytes: number; durationMs: number | null }[]): MediaItem[] =>
+  media.map((m) => ({ fileId: m.fileId, altText: m.altText ?? '', mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs }));
 
 // ---------------------------------------------------------------------------------------------------------------------
 // New post

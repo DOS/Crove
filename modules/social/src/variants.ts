@@ -85,9 +85,12 @@ export function mediaOf(value: unknown): PostMedia[] | null {
     if (m === null || typeof m !== 'object') return [];
     const r = m as Record<string, unknown>;
     if (typeof r.fileId !== 'string' || typeof r.mime !== 'string' || typeof r.sizeBytes !== 'number') return [];
-    return [{ fileId: r.fileId, generation: typeof r.generation === 'string' ? r.generation : null, altText: typeof r.altText === 'string' ? r.altText : null, mime: r.mime, sizeBytes: r.sizeBytes }];
+    return [{ fileId: r.fileId, generation: typeof r.generation === 'string' ? r.generation : null, altText: typeof r.altText === 'string' ? r.altText : null, mime: r.mime, sizeBytes: r.sizeBytes, durationMs: typeof r.durationMs === 'number' ? r.durationMs : null }];
   });
 }
+
+// A post file is a video or an image, by its type (the server read it from the bytes).
+export const mediaKind = (mime: string): 'image' | 'video' => (mime.startsWith('video/') ? 'video' : 'image');
 
 // The images a variant shows.
 export const mediaFor = (post: PostContent, v: { media?: unknown; content_frozen?: boolean }) => effectiveMedia(post.media, mediaOf(v.media), v.content_frozen ?? false);
@@ -97,12 +100,12 @@ export async function loadPostMedia(trx: Trx, orgId: string, postId: string): Pr
   const rows = await trx
     .selectFrom('crove_social.post_media as m')
     .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
-    .select(['m.file_id', 'm.alt_text', 'f.generation', 'f.content_type', 'f.size_bytes'])
+    .select(['m.file_id', 'm.alt_text', 'f.generation', 'f.content_type', 'f.size_bytes', 'f.duration_ms'])
     .where('m.org_id', '=', orgId)
     .where('m.post_id', '=', postId)
     .orderBy('m.position')
     .execute();
-  return rows.map((r) => ({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes) }));
+  return rows.map((r) => ({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes), durationMs: r.duration_ms === null ? null : Number(r.duration_ms) }));
 }
 export const settingsOf = (v: { settings: unknown }): Record<string, unknown> =>
   v.settings !== null && typeof v.settings === 'object' && !Array.isArray(v.settings) ? (v.settings as Record<string, unknown>) : {};
@@ -126,7 +129,7 @@ export function hashOf(
 
 export function issuesOf(post: PostContent, v: VariantRow): Issue[] {
   const content = effectiveContent(post, overrides(v), v.content_frozen);
-  const media = mediaFor(post, v).map((m) => ({ kind: 'image' as const, mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: null }));
+  const media = mediaFor(post, v).map((m) => ({ kind: mediaKind(m.mime), mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000 }));
   return validateVariant({ provider: providerOf(v), body: content.body, title: content.title, media });
 }
 

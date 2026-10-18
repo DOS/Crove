@@ -10,6 +10,7 @@
 // - record failing: the job throws, pg-boss retries it, and the retry's begin finds the variant in flight.
 import type { Publisher, PublishResult, ReconcileResult } from '@crove/channel';
 import { DomainError, readVerified, type BlobStore, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
+import { VIDEO_READY, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
 
 export interface PublishDeps {
@@ -116,6 +117,10 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
   try {
     switch (work.action) {
       case 'call':
+        // The channel rules hold a video back from a channel whose adapter cannot post it; this keeps it so if a rule changed.
+        if (!VIDEO_READY.has(publisher.provider as Provider) && work.content.media.some((m) => m.mime.startsWith('video/'))) {
+          return fromPublish({ kind: 'rejected', error: 'bad_request', code: 'VIDEO_NOT_SUPPORTED' });
+        }
         return fromPublish(
           await withTimeout(timeout, () =>
             publisher.publish({ ...credential, content: work.content, readMedia, mediaUrl, settings: work.settings, callKey: work.callKey, contentHash: work.contentHash }),

@@ -3,12 +3,12 @@
 // 'social'; an upload of the same bytes is the same file, so an image is in the library once.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { SOCIAL_IMAGE_TYPES, zId } from '@crove/kernel-contract';
+import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { defineQuery } from '@crove/kernel-runtime';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
-const MEDIA_TYPES: readonly string[] = SOCIAL_IMAGE_TYPES;
+const MEDIA_TYPES: readonly string[] = [...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES];
 export const LIBRARY_PAGE = 60;
 
 export interface LibraryItem {
@@ -16,6 +16,8 @@ export interface LibraryItem {
   filename: string;
   mime: string;
   sizeBytes: number;
+  // A video's duration; null for images.
+  durationMs: number | null;
   createdAt: string;
   // Posts that show the image: in their own images or in a channel's own list.
   usedIn: number;
@@ -51,7 +53,7 @@ export const mediaList = defineQuery({
     const limit = input.limit ?? LIBRARY_PAGE;
     let q = ctx.trx
       .selectFrom('crove_kernel.file as f')
-      .select(['f.id', 'f.filename', 'f.content_type', 'f.size_bytes', 'f.created_at', sql<string>`(SELECT count(*) FROM ${postsUsing} u)`.as('used_in')])
+      .select(['f.id', 'f.filename', 'f.content_type', 'f.size_bytes', 'f.duration_ms', 'f.created_at', sql<string>`(SELECT count(*) FROM ${postsUsing} u)`.as('used_in')])
       .where('f.org_id', '=', ctx.orgId)
       .where('f.source', '=', 'social')
       .where('f.content_type', 'in', [...MEDIA_TYPES]);
@@ -71,6 +73,7 @@ export const mediaList = defineQuery({
         filename: r.filename,
         mime: r.content_type,
         sizeBytes: Number(r.size_bytes),
+        durationMs: r.duration_ms === null ? null : Number(r.duration_ms),
         createdAt: r.created_at.toISOString(),
         usedIn: Number(r.used_in),
       })),
