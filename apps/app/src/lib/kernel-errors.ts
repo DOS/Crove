@@ -73,6 +73,8 @@ export const KERNEL_ERROR_CODES = [
   // Sales invoices and the org's tax code (#313).
   'NOT_OWN_SALE',
   'OWN_INVOICE',
+  'NOT_REVENUE_ACCOUNT',
+  'REVENUE_ACCOUNT_ON_PURCHASE',
   'INVALID_TAX_CODE',
   'ALREADY_REVERSED',
   'ENTRY_IS_REVERSAL',

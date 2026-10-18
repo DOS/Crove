@@ -1,6 +1,6 @@
 // The org's chart of accounts on screen (issue #319): TT133 accounts plus the org's sub-accounts, as
 // finance.accounts.list returns them (inactive sub-accounts included).
-import { isTaggedCode } from '@crove/kernel-contract';
+import { isRevenueAccount, isTaggedCode, type DocumentDirection } from '@crove/kernel-contract';
 
 export interface ChartAccount {
   code: string;
@@ -14,9 +14,11 @@ export interface ChartAccount {
 export const accountLabel = (a: Pick<ChartAccount, 'code' | 'name'>) => (a.name ? `${a.code} · ${a.name}` : a.code);
 
 // The accounts a picker offers: those in use, plus the one already chosen even if it was deactivated since, so the
-// picker never shows a blank. Kept in chart order.
-export function pickableAccounts(accounts: readonly ChartAccount[], current?: string | null): ChartAccount[] {
-  const list = accounts.filter((a) => a.active || a.code === current);
+// picker never shows a blank. Kept in chart order. For an invoice line (`direction`), only the accounts its direction
+// allows (#430): revenue accounts on a sale line, every other account on a purchase line or a vendor's default.
+export function pickableAccounts(accounts: readonly ChartAccount[], current?: string | null, direction?: DocumentDirection): ChartAccount[] {
+  const fits = (a: ChartAccount) => direction === undefined || isRevenueAccount(a.code) === (direction === 'sale');
+  const list = accounts.filter((a) => (a.active && fits(a)) || a.code === current);
   if (current && !list.some((a) => a.code === current)) list.push({ code: current, name: '', parentCode: null, rootCode: current, active: false, custom: true });
   return list;
 }

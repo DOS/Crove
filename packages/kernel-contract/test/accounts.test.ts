@@ -1,6 +1,6 @@
 // Sub-account codes under the TT133 chart (#319): the shape rules the commands, the screen and the database share.
 import { describe, expect, it } from 'vitest';
-import { ACCOUNT_CODE_PATTERN, isTaggedCode, normalizeAccountCode, subAccountCodeProblem, zAccountCode } from '../src/index.ts';
+import { ACCOUNT_CODE_PATTERN, isRevenueAccount, isTaggedCode, normalizeAccountCode, subAccountCodeProblem, zAccountCode } from '../src/index.ts';
 
 describe('sub-account codes', () => {
   it('accepts a code that extends its parent with digits or a dot and a tag', () => {
@@ -37,5 +37,12 @@ describe('sub-account codes', () => {
       expect(zAccountCode.safeParse(bad).success, bad).toBe(false);
     }
     expect(ACCOUNT_CODE_PATTERN.test('1121.VCB')).toBe(true);
+  });
+});
+
+describe('revenue accounts (#430)', () => {
+  it('takes class 5, 711 and 3387 with their sub-accounts, and nothing else', () => {
+    for (const code of ['511', '5111', '5113', '511.DV', '515', '711', '7111', '3387', '3387.TT']) expect(isRevenueAccount(code), code).toBe(true);
+    for (const code of ['131', '331', '3331', '33311', '338', '3388', '642', '6422.VPP', '632', '811', '911']) expect(isRevenueAccount(code), code).toBe(false);
   });
 });
