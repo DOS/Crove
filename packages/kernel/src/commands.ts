@@ -592,6 +592,66 @@ export const approveProposal = defineCommand({
   },
 });
 
+// The most proposals one bulk approval takes. Each is a ledger posting in the same transaction, so the batch stays
+// short; the Inbox sends a larger selection in several batches, each under the same step-up freshness rule.
+export const MAX_BULK_APPROVE = 50;
+
+// Refusals of one item that leave the rest of the batch going: the approval policy and the state of that proposal
+// (NOT_ELIGIBLE, FOUR_EYES_REQUIRED, PROPOSAL_DECIDED, STALE_REVISION, CHECKS_FAILED, DUPLICATE_INVOICE, a foreign or
+// unknown id...). Anything else (a server fault, a broken context) aborts the whole batch, and so does a second
+// factor that went stale while the batch ran (STEP_UP_REQUIRED): one step-up covers the whole batch or none of it.
+const ITEM_REFUSALS: ReadonlySet<number> = new Set([403, 404, 409, 422]);
+const BATCH_REFUSALS: ReadonlySet<string> = new Set(['STEP_UP_REQUIRED']);
+
+export type BulkApproveResult =
+  | { id: string; outcome: 'approved'; result: Record<string, unknown> }
+  | { id: string; outcome: 'refused'; code: string; rule: string | null };
+
+// Approves many pending proposals in one action (issue #315): one R3 command, so the runtime checks the role, the
+// fresh second factor (P11) and, for a remote Supabase Auth, the live session once, before any item; a stale step-up
+// refuses the whole batch. Each item then runs kernel.proposal.approve as a nested command, which applies its own
+// P12 eligibility and P10 four-eyes decision and writes its own audit row, exactly as approving it alone would. An
+// item that is refused rolls back to its savepoint and the others go on; the batch's audit row lists every item's
+// outcome. Items run in id order, so two batches over the same proposals lock them in the same order. No line
+// accounts and no acceptFailedChecks: a bulk approval only approves what it would approve as shown, and an invoice
+// with failed checks is refused (CHECKS_FAILED) for a one-by-one review.
+export const approveProposals = defineCommand({
+  name: 'kernel.proposal.approve_many',
+  input: z.object({
+    items: z
+      .array(z.object({ id: zId, revision: z.number().int().positive() }))
+      .min(1)
+      .max(MAX_BULK_APPROVE)
+      .refine((items) => new Set(items.map((i) => i.id)).size === items.length, 'each proposal once'),
+  }),
+  risk: 'R3',
+  access: APPROVERS,
+  handler: async (ctx, input): Promise<{ results: BulkApproveResult[] }> => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới duyệt được');
+    const outcomes = new Map<string, BulkApproveResult>();
+    for (const item of [...input.items].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
+      await sql`SAVEPOINT bulk_approve_item`.execute(ctx.trx);
+      try {
+        const result = await ctx.run<Record<string, unknown>>('kernel.proposal.approve', { id: item.id, revision: item.revision });
+        await sql`RELEASE SAVEPOINT bulk_approve_item`.execute(ctx.trx);
+        outcomes.set(item.id, { id: item.id, outcome: 'approved', result });
+      } catch (error) {
+        if (!(error instanceof DomainError) || !ITEM_REFUSALS.has(error.status) || BATCH_REFUSALS.has(error.code)) throw error;
+        await sql`ROLLBACK TO SAVEPOINT bulk_approve_item`.execute(ctx.trx);
+        const rule = typeof error.details?.rule === 'string' ? error.details.rule : null;
+        outcomes.set(item.id, { id: item.id, outcome: 'refused', code: error.code, rule });
+      }
+    }
+    const results = input.items.map((item) => outcomes.get(item.id) as BulkApproveResult);
+    ctx.audit({
+      approved: results.filter((r) => r.outcome === 'approved').length,
+      refused: results.filter((r) => r.outcome === 'refused').length,
+      items: results.map((r) => (r.outcome === 'approved' ? { id: r.id, outcome: r.outcome } : { id: r.id, outcome: r.outcome, code: r.code, rule: r.rule })),
+    });
+    return { results };
+  },
+});
+
 export const rejectProposal = defineCommand({
   name: 'kernel.proposal.reject',
   input: z.object({ id: zId, reason: z.string().max(500).optional() }),
@@ -721,6 +781,7 @@ const otherKernelCommands = [
   requestProposal,
   editProposal,
   approveProposal,
+  approveProposals,
   rejectProposal,
   revokeSession,
   ...offboardingCommands,

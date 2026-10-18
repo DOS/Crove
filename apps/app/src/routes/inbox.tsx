@@ -5,15 +5,30 @@ import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { Checkbox } from '@crove/ui/components/checkbox';
+import { Label } from '@crove/ui/components/label';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { cn } from '@crove/ui/lib/utils';
+import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
-import { errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
+import { client, errorMessage, isStepUpRequired, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
+import { bulkSelectable, canApproveProposals, planBatches, sendBatches, type BulkBatch, type BulkProgress } from '../lib/review.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
+
+// One bulk approval (issue #315): the batches planned when it started, how far it got, and the names to report.
+interface BulkRun {
+  batches: BulkBatch[];
+  progress: BulkProgress;
+  names: Readonly<Record<string, string>>;
+  total: number;
+  sending: boolean;
+  // The approver closed the step-up prompt or the error: the batches not sent stay pending.
+  stopped: boolean;
+}
 
 type Tab = 'pending' | 'executed' | 'rejected';
 
@@ -59,6 +74,47 @@ export function InboxPage() {
   }
 
   const processing = (files.data ?? []).filter((f) => f.status === 'processing').length;
+
+  // Bulk approval (issue #315): owners and admins pick pending purchases and approve them under one step-up. The
+  // kernel decides each item as if approved alone and reports the ones it refused.
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  const [bulk, setBulk] = useState<BulkRun | null>(null);
+  const bulkEnabled = tab === 'pending' && canApproveProposals(org.data?.role);
+  const selectable = bulkEnabled ? (items.data ?? []).filter((item) => bulkSelectable(item, REVERSAL_KIND)) : [];
+  const chosen = selectable.filter((item) => selected.has(item.id));
+  const sending = bulk?.sending ?? false;
+
+  async function sendBulk(run: BulkRun) {
+    setBulk({ ...run, sending: true, stopped: false, progress: { ...run.progress, error: null } });
+    const progress = await sendBatches(
+      run.batches,
+      run.progress,
+      (batch) => client.inbox.approveMany({ items: batch.items, idempotencyKey: batch.idempotencyKey }),
+      (step) => setBulk((current) => (current ? { ...current, progress: step } : current)),
+    );
+    setBulk((current) => (current ? { ...current, progress, sending: false } : current));
+    if (!progress.error) setSelected(new Set());
+    await queryClient.invalidateQueries();
+  }
+
+  function startBulk() {
+    if (chosen.length === 0 || sending) return;
+    void sendBulk({
+      batches: planBatches(chosen.map((item) => ({ id: item.id, revision: item.revision }))),
+      progress: { results: [], next: 0, error: null },
+      names: Object.fromEntries(chosen.map((item) => [item.id, item.sellerName ?? item.title])),
+      total: chosen.length,
+      sending: false,
+      stopped: false,
+    });
+  }
+
+  const stopBulk = () => setBulk((current) => (current ? { ...current, stopped: true, progress: { ...current.progress, error: null } } : current));
+  const bulkError = bulk && !bulk.sending && !bulk.stopped ? bulk.progress.error : null;
+  const bulkFinished = bulk && !bulk.sending && (bulk.stopped || bulk.progress.next === bulk.batches.length);
+  const bulkApproved = bulk?.progress.results.filter((r) => r.outcome === 'approved').length ?? 0;
+  const bulkRefused = bulk?.progress.results.flatMap((r) => (r.outcome === 'refused' ? [r] : [])) ?? [];
+  const bulkNotSent = bulk ? bulk.total - bulk.progress.results.length : 0;
 
   return (
     <>
@@ -165,7 +221,14 @@ export function InboxPage() {
         </div>
       )}
 
-      <Tabs className="mt-8 gap-4" value={tab} onValueChange={(value) => setTab(value as Tab)}>
+      <Tabs
+        className="mt-8 gap-4"
+        value={tab}
+        onValueChange={(value) => {
+          setTab(value as Tab);
+          setSelected(new Set());
+        }}
+      >
         <TabsList variant="line" className="w-full justify-start border-b">
           {TABS.map((id) => (
             <TabsTrigger key={id} value={id} className="flex-none px-3">
@@ -175,6 +238,76 @@ export function InboxPage() {
         </TabsList>
 
       <TabsContent value={tab}>
+        {bulk && isStepUpRequired(bulkError) && (
+          <div className="mb-4">
+            <StepUpPrompt action={t('bulk.stepUp', { count: bulkNotSent })} onVerified={() => void sendBulk(bulk)} onCancel={stopBulk} />
+          </div>
+        )}
+        {bulk && bulkError !== null && !isStepUpRequired(bulkError) && (
+          <div className="mb-4 space-y-2">
+            <ErrorText>{errorMessage(bulkError)}</ErrorText>
+            <div className="flex gap-2">
+              <Button size="lg" onClick={() => void sendBulk(bulk)}>
+                {t('bulk.retry')}
+              </Button>
+              <Button variant="ghost" size="lg" onClick={stopBulk}>
+                {t('bulk.dismiss')}
+              </Button>
+            </div>
+          </div>
+        )}
+        {bulk && bulkFinished && (
+          <Card className="mb-4 block space-y-2 p-4" role="status">
+            {bulkApproved > 0 && <p className="text-sm text-foreground">{t('bulk.approved', { count: bulkApproved })}</p>}
+            {bulkRefused.length > 0 && (
+              <>
+                <p className="text-sm text-foreground">{t('bulk.refused', { count: bulkRefused.length })}</p>
+                <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                  {bulkRefused.map((r) => (
+                    <li key={r.id}>
+                      <Link to="/o/$slug/inbox/$id" params={{ slug, id: r.id }} className="text-link hover:underline">
+                        {bulk.names[r.id] ?? r.id}
+                      </Link>
+                      {': '}
+                      {errorMessage({ code: r.code, data: r.rule ? { rule: r.rule } : undefined })}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {bulkNotSent > 0 && <p className="text-sm text-warning">{t('bulk.notSent', { count: bulkNotSent })}</p>}
+            <Button variant="ghost" size="lg" onClick={() => setBulk(null)}>
+              {t('bulk.dismiss')}
+            </Button>
+          </Card>
+        )}
+        {bulkEnabled && selectable.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <Label className="font-normal text-muted-foreground">
+              <Checkbox
+                checked={chosen.length === selectable.length}
+                disabled={sending}
+                onCheckedChange={(checked) => setSelected(checked ? new Set(selectable.map((item) => item.id)) : new Set())}
+              />
+              {t('bulk.selectAll', { count: selectable.length })}
+            </Label>
+            {chosen.length > 0 && <span className="text-sm text-subtle-foreground">{t('bulk.selected', { count: chosen.length })}</span>}
+            <div className="ml-auto flex gap-2">
+              {chosen.length > 0 && !sending && (
+                <Button variant="ghost" size="lg" onClick={() => setSelected(new Set())}>
+                  {t('bulk.clear')}
+                </Button>
+              )}
+              <Button size="lg" disabled={chosen.length === 0 || sending} onClick={startBulk}>
+                {sending ? <Spinner className="text-current" /> : null}
+                {sending && bulk
+                  ? t('bulk.sending', { done: Math.min(bulk.progress.next + 1, bulk.batches.length), total: bulk.batches.length })
+                  : t('bulk.approve', { count: chosen.length })}
+              </Button>
+            </div>
+            <p className="w-full text-xs text-subtle-foreground">{t('bulk.hint')}</p>
+          </div>
+        )}
         {items.isLoading ? (
           <Spinner />
         ) : (items.data?.length ?? 0) === 0 ? (
@@ -190,9 +323,39 @@ export function InboxPage() {
             }
           />
         ) : (
-          <DataTable head={[t('columns.document'), t('columns.issueDate'), t('columns.total'), t('columns.checks'), t('columns.received')]}>
+          <DataTable
+            head={[
+              ...(bulkEnabled ? [''] : []),
+              t('columns.document'),
+              t('columns.issueDate'),
+              t('columns.total'),
+              t('columns.checks'),
+              t('columns.received'),
+            ]}
+          >
             {items.data?.map((item) => (
               <TableRow key={item.id}>
+                {bulkEnabled && (
+                  <TableCell className="w-10 px-4 py-3">
+                    {bulkSelectable(item, REVERSAL_KIND) ? (
+                      <Checkbox
+                        checked={selected.has(item.id)}
+                        disabled={sending}
+                        aria-label={t('bulk.select', { name: item.sellerName ?? item.title })}
+                        onCheckedChange={(checked) =>
+                          setSelected((current) => {
+                            const next = new Set(current);
+                            if (checked) next.add(item.id);
+                            else next.delete(item.id);
+                            return next;
+                          })
+                        }
+                      />
+                    ) : (
+                      <Checkbox checked={false} disabled aria-label={t('bulk.notSelectable')} title={t('bulk.notSelectable')} />
+                    )}
+                  </TableCell>
+                )}
                 <TableCell className="px-4 py-3">
                   <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="font-medium text-foreground hover:text-link">
                     {item.sellerName ?? item.title}

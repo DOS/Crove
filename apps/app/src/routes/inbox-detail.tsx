@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { BLOCKING_CHECK_IDS } from '@crove/kernel-contract';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -17,6 +17,7 @@ import { getConfig } from '../lib/auth.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal } from '../lib/decimal.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { reversalErrorMessage } from '../lib/reversal.ts';
+import { nextPendingId, reviewShortcut, type ReviewAction } from '../lib/review.ts';
 import { pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 const CHECK_TONE = { pass: 'success', warn: 'warning', fail: 'destructive' } as const;
@@ -136,9 +137,17 @@ function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDa
   );
 }
 
+// One page per proposal: moving to the next one (J or N) mounts a fresh page, so no unsaved account, confirmation or
+// approval idempotency key carries over from the previous proposal.
 export function InboxDetailPage() {
-  const locale = useLocale();
   const { slug, id } = useParams({ strict: false }) as { slug: string; id: string };
+  return <InboxDetail key={id} slug={slug} id={id} />;
+}
+
+type ShortcutHandlers = Partial<Record<ReviewAction, () => void>>;
+
+function InboxDetail({ slug, id }: { slug: string; id: string }) {
+  const locale = useLocale();
   const navigate = useNavigate();
   const root = useTranslations();
   const t = useTranslations('inboxDetail');
@@ -193,6 +202,28 @@ export function InboxDetailPage() {
   const dirty = (payload?.lines ?? []).some((l) => (lineAccounts[l.lineNo] ?? l.debitAccount) !== l.debitAccount);
   const busy = approve.isPending || reject.isPending || edit.isPending || reextract.isPending;
 
+  // Review shortcuts (issue #315): J or N the next pending proposal, A approve, E the first account to edit. Each one
+  // does only what its button would do now; the handlers are set on every render below, and cleared while loading.
+  const pendingList = useQuery(orpc.inbox.list.queryOptions({ input: { status: 'pending' } }));
+  const linesRef = useRef<HTMLDivElement>(null);
+  const shortcuts = useRef<ShortcutHandlers>({});
+  shortcuts.current = {};
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const action = reviewShortcut(event);
+      const handler = action ? shortcuts.current[action] : undefined;
+      if (!handler) return;
+      event.preventDefault();
+      handler();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  const nextId = pendingList.data ? nextPendingId(pendingList.data, id) : null;
+  if (nextId && nextId !== id) {
+    shortcuts.current.next = () => void navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: nextId } });
+  }
+
   if (detail.isLoading) return <Spinner />;
   if (detail.error) return <ErrorText>{errorMessage(detail.error)}</ErrorText>;
   const item = detail.data;
@@ -237,6 +268,14 @@ export function InboxDetailPage() {
   const retryApproval = () => {
     if (approve.variables) approve.mutate(approve.variables);
   };
+  // The same conditions as the approve buttons; never while the step-up prompt waits for a code.
+  const canApproveNow = pending && item.canApprove && !busy && !stepUp && (reversal ? true : !dirty && !!payload && !blocked && (failed === 0 || acceptFailed));
+  if (canApproveNow) {
+    shortcuts.current.approve = reversal ? () => approve.mutate({ id, revision: item.revision, idempotencyKey }) : submitApproval;
+  }
+  if (pending && item.canEdit && !busy && payload) {
+    shortcuts.current.edit = () => linesRef.current?.querySelector<HTMLSelectElement>('select:not(:disabled)')?.focus();
+  }
 
   return (
     <>
@@ -363,6 +402,7 @@ export function InboxDetailPage() {
           </ErrorText>
         </div>
       )}
+      {pending && (item.canApprove || item.canEdit) && <p className="mb-4 text-xs text-subtle-foreground">{t('shortcuts')}</p>}
       {pending && dirty && (
         <p className="mb-4 text-sm text-muted-foreground">{t('dirty')}</p>
       )}
@@ -437,7 +477,7 @@ export function InboxDetailPage() {
           )}
 
           {payload && (
-            <Card className="block overflow-x-auto p-4">
+            <Card ref={linesRef} className="block overflow-x-auto p-4">
               <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('lines')}</p>
               <table className="mt-3 w-full min-w-[560px] text-sm">
                 <thead className="text-left text-xs text-subtle-foreground">

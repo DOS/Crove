@@ -204,6 +204,7 @@ export const zInboxItem = z.object({
   kind: z.string(),
   status: zProposalStatus,
   title: z.string(),
+  revision: z.number().int().positive(),
   sellerName: z.string().nullable(),
   total: zMoney.nullable(),
   issueDate: zLocalDate.nullable(),
