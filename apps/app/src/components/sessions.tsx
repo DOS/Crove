@@ -153,7 +153,7 @@ export function MySessions({ userId }: { userId: string }) {
 
   return (
     <Card className="block p-4">
-      <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('title')}</p>
+      <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
       <p className="mt-1 text-xs text-subtle-foreground">{t('intro')}</p>
       {sessions.isLoading || current.isLoading ? (
         <div className="mt-3">

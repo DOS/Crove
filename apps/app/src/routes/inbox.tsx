@@ -17,7 +17,7 @@ import { client, errorMessage, isStepUpRequired, orpc, queryClient } from '../li
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
-import { bulkSelectable, canApproveProposals, planBatches, sendBatches, type BulkBatch, type BulkProgress } from '../lib/review.ts';
+import { bulkSelectable, canApproveProposals, planBatches, proposalName, sendBatches, type BulkBatch, type BulkProgress } from '../lib/review.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 // One bulk approval (issue #315): the batches planned when it started, how far it got, and the names to report.
@@ -44,10 +44,6 @@ function isFileStatus(status: string): status is FileStatus {
 
 // The name a proposal goes by in the list, its checkbox and the bulk report: the customer of a sale (#313; its seller is
 // the org itself), the seller of a purchase, else its title.
-function proposalName(item: { direction: string | null; sellerName: string | null; buyerName: string | null; title: string }): string {
-  return (item.direction === 'sale' ? item.buyerName : item.sellerName) || item.title;
-}
-
 export function InboxPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('inbox');
@@ -167,7 +163,7 @@ export function InboxPage() {
           <p className="mt-1 text-xs text-subtle-foreground">{t('formatsZip')}</p>
         </div>
         <Card className="block p-4">
-          <p className="text-xs font-medium tracking-wide text-subtle-foreground uppercase">{t('forwardTitle')}</p>
+          <p className="text-sm font-medium text-muted-foreground">{t('forwardTitle')}</p>
           {org.isLoading ? (
             <div className="mt-3">
               <Spinner />
@@ -189,7 +185,7 @@ export function InboxPage() {
 
       {(files.data?.length ?? 0) > 0 && (
         <div className="mt-6">
-          <p className="mb-2 text-xs font-medium tracking-wide text-subtle-foreground uppercase">
+          <p className="mb-2 text-sm font-medium text-muted-foreground">
             {t('recentFiles')}{' '}
             {processing > 0 && <span className="ml-1 text-link normal-case">· {t('readingCount', { count: processing })}</span>}
           </p>
@@ -328,6 +324,7 @@ export function InboxPage() {
           />
         ) : (
           <DataTable
+            numeric={[bulkEnabled ? 3 : 2]}
             head={[
               ...(bulkEnabled ? [''] : []),
               t('columns.document'),
@@ -367,7 +364,7 @@ export function InboxPage() {
                   <p className="text-xs text-subtle-foreground">{item.title}</p>
                 </TableCell>
                 <TableCell className="px-4 py-3 text-muted-foreground">{f.date(item.issueDate)}</TableCell>
-                <TableCell className="px-4 py-3 text-foreground tabular-nums">{f.money(item.total)}</TableCell>
+                <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">{f.money(item.total)}</TableCell>
                 <TableCell className="px-4 py-3">
                   <div className="flex flex-wrap gap-1">
                     {/* A reversal a user asked for has no invoice checks; its card shows the entry it reverses. */}

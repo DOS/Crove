@@ -49,6 +49,7 @@ import {
   TASK_SOURCES,
   TASK_STATUSES,
   TENANT_STATUSES,
+  VAT_FILING_PERIODS,
   type Database,
 } from '../src/schema.ts';
 
@@ -107,6 +108,7 @@ const UNIONS = unions({
   'crove_kernel.task.status': TASK_STATUSES,
   'crove_kernel.task_comment.author_type': ACTOR_TYPES,
   'crove_kernel.tenant.status': TENANT_STATUSES,
+  'crove_kernel.tenant.vat_filing_period': VAT_FILING_PERIODS,
   'crove_kernel.tenant_member.role': MEMBER_ROLES,
   'crove_finance.purchase_document.direction': DOCUMENT_DIRECTIONS,
   'crove_finance.portal_invoice_list.status': PORTAL_LIST_STATUSES,

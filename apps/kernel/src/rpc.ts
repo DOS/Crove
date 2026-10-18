@@ -6,6 +6,7 @@ import { BlueskyError, ConnectorError, connectBluesky, newOAuthAttempt, oauthSta
 import type { SocialWriter, WriterChannel } from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider } from '@crove/mod-social/contract';
 import {
+  clientOverviews,
   createOrg,
   myOrgs,
   previewInvite,
@@ -20,6 +21,7 @@ import {
 import type { z } from 'zod';
 import type { zAgentBudget, zAgentTemplate, zTask } from '@crove/kernel-contract';
 import { DomainError, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
+import { DraftBudget } from './ai-draft-limit.ts';
 import { actorOf, type AuthUser } from './auth.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
 
@@ -101,7 +103,7 @@ function connectorFailure(error: unknown): DomainError {
 
 // sendInviteMail unset: invite mail is off (tests, or an embedder without mail). channels unset: no channel can be
 // connected through the API (the list and disconnect still work).
-export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter) {
+export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, drafts: DraftBudget = new DraftBudget()) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -166,6 +168,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           orgs: await runtime.forUser(actorOf(context.user), (db) => sessionOrgs(db, context.user.userId, context.user.sessionId ?? null)),
         })),
       ),
+      // The multi-client home screen (issue #318): each org's figures are read in that org's own context.
+      clients: os.me.clients.handler(({ context }) => guard(() => clientOverviews(runtime, actorOf(context.user)))),
     },
     org: {
       create: os.org.create.handler(({ context, input }) =>
@@ -174,6 +178,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       get: os.org.get.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.get', {}, { actor, orgId }))),
       setTaxCode: os.org.setTaxCode.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_tax_code', input, { actor, orgId })),
+      ),
+      setVatFilingPeriod: os.org.setVatFilingPeriod.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_vat_filing_period', input, { actor, orgId })),
       ),
       // No idempotency key: the answer carries the invite token, which must never be stored with a key. The mail
       // goes out after the command has committed (invite-mail.ts says why); its outcome is logged and never changes
@@ -260,10 +267,22 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             const chosen = input.connectionIds.map((id) => connections.find((c) => c.id === id && c.status === 'active'));
             if (chosen.some((c) => !c)) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
             const channels = (chosen as { id: string; provider: string; displayName: string }[]).map((c) => writerChannel(c));
-            const draft = await socialWriter.draft({ brief: input.brief, channels, language: input.language ?? 'vi', ...(input.tone ? { tone: input.tone } : {}) }).catch((error: unknown) => {
+            // The model call is paid: a member gets a few a minute and one at a time, an org a few more (#386).
+            const ticket = drafts.take(orgId, actor.userId);
+            if (!ticket.allowed) {
+              throw new DomainError('RATE_LIMITED', 429, ticket.reason === 'busy' ? 'Đang soạn một bài bằng AI, hãy đợi xong rồi soạn tiếp' : 'Đã soạn bằng AI nhiều bài trong phút này, hãy thử lại sau ít phút', {
+                retryAfterSeconds: ticket.retryAfterSeconds,
+              });
+            }
+            let draft: Awaited<ReturnType<SocialDrafter['draft']>>;
+            try {
+              draft = await socialWriter.draft({ brief: input.brief, channels, language: input.language ?? 'vi', ...(input.tone ? { tone: input.tone } : {}) });
+            } catch (error: unknown) {
               console.error('[social-ai] draft failed', error instanceof Error ? error.name : typeof error);
               throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
-            });
+            } finally {
+              ticket.release();
+            }
             if (!draft) throw new DomainError('AI_DRAFT_EMPTY', 422, 'AI không soạn được bài từ mô tả này, hãy viết rõ hơn');
             const own = new Map(draft.variants.map((v) => [v.key, v]));
             const created = await runtime.execute<{ postId: string }>(

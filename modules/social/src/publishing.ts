@@ -390,7 +390,9 @@ export const publishRecord = defineCommand({
     if (key !== input.callKey || v.status !== EXPECTED[input.phase]) return { recorded: false as const, reason: 'stale' };
     const r = input.result;
     const done = { finished_at: ctx.now };
-    const published = (externalId: string, url: string | null) => ({ ...NO_ERROR, external_post_id: externalId, external_url: url, published_at: ctx.now, next_check_at: null });
+    // A published channel keeps the content it went out with (#335): copied into its own columns now, so a later edit
+    // of the post's shared text, by any path, never changes what this channel is recorded as having published.
+    const published = (externalId: string, url: string | null) => ({ ...NO_ERROR, external_post_id: externalId, external_url: url, published_at: ctx.now, next_check_at: null, ...freezeValues(post, v) });
     const failure = (kind: string | null, code: string | null, message: string | null, http: number | null) => ({
       ...NO_ERROR,
       error_kind: kind,

@@ -39,7 +39,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>([]);
+const PENDING_TABLES = new Set<string>(['crove_finance.cash_voucher']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -437,6 +437,23 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       return {
         setup: [{ table: 'crove_finance.portal_invoice_list', values: list }],
         row: { org_id: o.id, list_id: list.id, row_no: 1, seller_tax_code: '0100109107', series: 'C26TAA', number: tag(), issue_date: '2026-09-01', status: 'original' },
+      };
+    },
+  },
+  // Cash and bank vouchers (#327): append-only, numbered per org and type by the insert trigger (the row gives no
+  // number). By commit a voucher must have its journal entry, on its date, moving the cash account by its amount, so
+  // seeding completes it with that entry (written as the database owner); the probes roll back before that check.
+  'crove_finance.cash_voucher': {
+    make: (o) => {
+      const id = randomUUID();
+      const entry = randomUUID();
+      return {
+        row: { org_id: o.id, id, voucher_type: 'cash_payment', voucher_date: '2026-10-01', cash_account: '1111', party_id: o.party, description: 'RLS matrix', amount: '100' },
+        complete: [
+          { table: 'crove_finance.journal_entry', values: { ...journalEntry(o.id, entry).values, source_type: 'finance.cash_voucher', source_id: id } },
+          { table: 'crove_finance.journal_line', values: { org_id: o.id, entry_id: entry, line_no: 1, account_code: '331', debit: '100', credit: '0' } },
+          { table: 'crove_finance.journal_line', values: { org_id: o.id, entry_id: entry, line_no: 2, account_code: '1111', debit: '0', credit: '100' } },
+        ],
       };
     },
   },

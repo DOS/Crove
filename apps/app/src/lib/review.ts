@@ -76,9 +76,9 @@ export async function sendBatches(
   return { results, next: batches.length, error: null };
 }
 
-export type ReviewAction = 'next' | 'approve' | 'edit';
+export type ReviewAction = 'next' | 'previous' | 'approve' | 'edit';
 
-const KEYS: Readonly<Record<string, ReviewAction>> = { j: 'next', n: 'next', a: 'approve', e: 'edit' };
+const KEYS: Readonly<Record<string, ReviewAction>> = { j: 'next', n: 'next', k: 'previous', p: 'previous', a: 'approve', e: 'edit' };
 
 interface KeyLike {
   key: string;
@@ -97,7 +97,8 @@ function editable(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true;
 }
 
-// The review action a key press asks for: J or N the next pending proposal, A approve, E edit the accounts. Never
+// The review action a key press asks for: J or N the next pending proposal, K or P the previous one, A approve, E edit
+// the accounts. Never
 // while typing in a field, with a modifier (browser and system shortcuts), or for a held-down key.
 export function reviewShortcut(event: KeyLike): ReviewAction | null {
   if (event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.defaultPrevented) return null;
@@ -111,4 +112,15 @@ export function nextPendingId(items: ReadonlyArray<{ id: string }>, current: str
   const at = items.findIndex((i) => i.id === current);
   if (at === -1) return items[0]?.id ?? null;
   return items[at + 1]?.id ?? null;
+}
+
+// The pending proposal before `current` in the list order; null when `current` is the first or not in the list.
+export function previousPendingId(items: ReadonlyArray<{ id: string }>, current: string): string | null {
+  const at = items.findIndex((i) => i.id === current);
+  return at > 0 ? (items[at - 1]?.id ?? null) : null;
+}
+
+// The name a proposal goes by in lists: the other party (the buyer on a sale, the seller otherwise), or its title.
+export function proposalName(item: { direction: string | null; sellerName: string | null; buyerName: string | null; title: string }): string {
+  return (item.direction === 'sale' ? item.buyerName : item.sellerName) || item.title;
 }

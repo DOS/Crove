@@ -7,7 +7,7 @@
 // comes from the account's DID document, and an arbitrary host there would let anyone point the worker at any server.
 import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
 import { holdsLink } from './text.ts';
-import type { Fetch } from './oauth.ts';
+import { requestSignal, type Fetch } from './oauth.ts';
 
 const ENTRYWAY = 'https://bsky.social';
 // Bluesky's public AppView: post counts without a session, so reading metrics never spends the account's session quota.
@@ -25,7 +25,7 @@ function blueskyFetch(fetchImpl: Fetch = fetch, timeoutMs = 15_000): Fetch {
   return async (input, init) => {
     const url = new URL(input);
     if (url.protocol !== 'https:' || url.port !== '' || !(isBlueskyHost(url.hostname) || url.origin === PUBLIC_APPVIEW)) throw new Error(`host not allowed for Bluesky: ${url.hostname}`);
-    return fetchImpl(url.toString(), { ...init, redirect: 'manual', signal: init?.signal ?? AbortSignal.timeout(timeoutMs) });
+    return fetchImpl(url.toString(), { ...init, redirect: 'manual', signal: requestSignal(init?.signal ?? AbortSignal.timeout(timeoutMs)) });
   };
 }
 

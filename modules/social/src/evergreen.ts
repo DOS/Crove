@@ -39,13 +39,29 @@ async function repost(ctx: CommandContext, sourceId: string, submit: boolean): P
   if (targets.length === 0) return live.some((c) => c.status !== 'revoked') ? 'waiting' : 'gone';
   const meta = await ctx.trx.selectFrom('crove_social.post').select(['tainted', 'author_user_id', 'origin']).where('org_id', '=', ctx.orgId).where('id', '=', source.id).executeTakeFirstOrThrow();
   const author = ctx.actor.type === 'user' ? ctx.actor.userId : meta.author_user_id;
+  // What each channel went out with (the source's base may have been edited since). The repost's own base is built
+  // from it: a title or link is left empty there when any channel went out without one, since a channel's own value
+  // can add a title or link but not take one away; the others then carry theirs as the channel's own.
+  const b = base(source);
+  const baseMedia = JSON.stringify(b.media);
+  // Each channel once: the content it went out with, and its images when they are its own (not the base's).
+  const outs = targets.map((v) => {
+    const media = mediaFor(b, v);
+    return { v, kept: effectiveContent(b, overrides(v), v.content_frozen), ownMedia: JSON.stringify(media) !== baseMedia ? media : null };
+  });
+  const [first] = outs;
+  const shared = {
+    body: first ? first.kept.body : b.body,
+    title: !first || outs.some((o) => o.kept.title === null) ? null : first.kept.title,
+    linkUrl: !first || outs.some((o) => o.kept.linkUrl === null) ? null : first.kept.linkUrl,
+  };
   const inserted = await ctx.trx
     .insertInto('crove_social.post')
     .values({
       org_id: ctx.orgId,
-      body: source.body,
-      title: source.title,
-      link_url: source.link_url,
+      body: shared.body,
+      title: shared.title,
+      link_url: shared.linkUrl,
       time_zone: source.time_zone,
       origin: meta.origin,
       // A repost of something AI wrote or that came from outside is as tainted as its source.
@@ -58,19 +74,24 @@ async function repost(ctx: CommandContext, sourceId: string, submit: boolean): P
     .executeTakeFirstOrThrow();
   await writePostMedia(ctx, inserted.id, source.media);
   const post: PostRow = { ...inserted, media: source.media };
-  // A published variant keeps the content it went out with; where that differs from the base, the repost keeps it as
-  // the channel's own text or images.
-  const b = base(source);
-  const channels = targets.map((v) => {
-    const kept = effectiveContent(b, overrides(v), v.content_frozen);
-    const media = mediaFor(b, v);
+  // A published variant keeps the content it went out with; where that differs from the repost's base, the repost
+  // keeps it as the channel's own text or images. A channel's own images name files with no foreign key: one removed
+  // since is left out, rather than failing at publish time (a channel that then lacks images stays a draft).
+  const ownIds = [...new Set(outs.flatMap((o) => (o.ownMedia ?? []).map((m) => m.fileId)))];
+  const present = new Set(
+    ownIds.length === 0
+      ? []
+      : (await ctx.trx.selectFrom('crove_kernel.file').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', ownIds).execute()).map((f) => f.id),
+  );
+  const channels = outs.map(({ v, kept, ownMedia }) => {
+    const own = ownMedia ? ownMedia.filter((m) => present.has(m.fileId)) : null;
     return {
       connectionId: v.channel_connection_id,
-      ...(kept.body !== b.body ? { body: kept.body } : {}),
-      ...(kept.title !== b.title ? { title: kept.title } : {}),
-      ...(kept.linkUrl !== b.linkUrl ? { linkUrl: kept.linkUrl } : {}),
+      ...(kept.body !== shared.body ? { body: kept.body } : {}),
+      ...(kept.title !== shared.title && kept.title !== null ? { title: kept.title } : {}),
+      ...(kept.linkUrl !== shared.linkUrl && kept.linkUrl !== null ? { linkUrl: kept.linkUrl } : {}),
       settings: settingsOf(v) as Record<string, z.core.util.JSONType>,
-      ownMedia: JSON.stringify(media) !== JSON.stringify(b.media) ? media : null,
+      ownMedia: own,
     };
   });
   const created = await insertVariants(

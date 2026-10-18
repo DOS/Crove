@@ -23,6 +23,8 @@ export const en: Dictionary = {
     otherLang: 'VI',
     otherLangLabel: 'View in Vietnamese',
     otherLangHref: '/',
+    openMenu: 'Open menu',
+    closeMenu: 'Close menu',
   },
   hero: {
     line1: 'Invoices in, journal entries ready.',
