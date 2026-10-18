@@ -39,7 +39,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>(['crove_finance.cash_voucher', 'crove_finance.portal_invoice_list', 'crove_finance.portal_invoice_row']);
+const PENDING_TABLES = new Set<string>(['crove_finance.cash_voucher']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -422,23 +422,6 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   // column grant), so the update probes assign name to itself.
   'crove_finance.org_account': {
     make: (o) => ({ row: { org_id: o.id, code: `6422.${tag().toUpperCase()}`, name: 'RLS matrix sub-account', parent_code: '6422' } }),
-  },
-  // The tax portal's purchase lists (#465): one imported file per period, pending until the worker records its outcome;
-  // the same file once per period while not removed, so every row gets its own period. Tenant roles update only the
-  // outcome and removal columns (a column grant), so the update probes assign error to itself on a pending list.
-  'crove_finance.portal_invoice_list': {
-    update: { set: 'error = error' },
-    make: (o) => ({ row: portalListRow(o) }),
-  },
-  // Its rows (append-only): a row joins only a pending list, created in the same transaction.
-  'crove_finance.portal_invoice_row': {
-    make: (o) => {
-      const list = portalListRow(o);
-      return {
-        setup: [{ table: 'crove_finance.portal_invoice_list', values: list }],
-        row: { org_id: o.id, list_id: list.id, row_no: 1, seller_tax_code: '0100109107', series: 'C26TAA', number: tag(), issue_date: '2026-09-01', status: 'original' },
-      };
-    },
   },
   // Cash and bank vouchers (#327): append-only, numbered per org and type by the insert trigger (the row gives no
   // number). By commit a voucher must have its journal entry, on its date, moving the cash account by its amount, so
