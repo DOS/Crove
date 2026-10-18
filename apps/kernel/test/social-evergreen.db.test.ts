@@ -187,7 +187,8 @@ suite('social reposts and evergreen posts on PostgreSQL (S9)', () => {
     const o = await org();
     const { postId, body } = await published(o);
     // After publishing, the post gets a title and a link it did not go out with.
-    await admin((c) => c.query("UPDATE crove_social.post SET title = 'Tiêu đề mới', link_url = 'https://example.com/moi' WHERE id = $1", [postId]));
+    const before = await get(o, postId);
+    await exec(o, 'social.post.update', { postId, revision: before.revision, title: 'Tiêu đề mới', linkUrl: 'https://example.com/moi' });
     // The second channel went out with an image that has been removed since.
     const own = await image(o.orgId);
     await admin((c) => c.query('UPDATE crove_social.post_variant SET media = $2::jsonb WHERE post_id = $1 AND position = 1', [postId, JSON.stringify([own])]));
