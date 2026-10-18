@@ -23,6 +23,8 @@ export const vi = {
     otherLang: 'EN',
     otherLangLabel: 'Xem bằng tiếng Anh',
     otherLangHref: '/en',
+    openMenu: 'Mở menu',
+    closeMenu: 'Đóng menu',
   },
   hero: {
     line1: 'Hoá đơn về là có bút toán.',
