@@ -99,8 +99,8 @@ export async function expandArchive(deps: ArchiveDeps, orgId: string, source: Ar
     const name = (entry.name || '(không tên)').slice(0, 255);
     const reject = (reason: ArchiveEntryReason): ArchiveEntryInput => ({ outcome: 'rejected', name, reason });
     if (entry.rejected !== null || entry.content === null) return reject(entry.rejected ?? 'corrupt');
-    const decoded = Buffer.from(entry.content, 'base64');
-    const content = new Uint8Array(decoded.buffer, decoded.byteOffset, decoded.byteLength);
+    // A copy of its own: a small Buffer is a view of Node's shared pool, whose other bytes must not travel with it.
+    const content = Uint8Array.from(Buffer.from(entry.content, 'base64'));
     if (content.byteLength !== entry.sizeBytes) return reject('corrupt');
     if (content.byteLength === 0) return reject('empty');
     if (content.byteLength > MAX_UPLOAD_BYTES) return reject('too_large');

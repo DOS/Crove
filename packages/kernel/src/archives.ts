@@ -43,6 +43,17 @@ const zArchiveEntryInput = z.discriminatedUnion('outcome', [
 ]);
 export type ArchiveEntryInput = z.infer<typeof zArchiveEntryInput>;
 
+// The order the stored entries of an archive are filed in: by sha256, then by their place in the archive. Filing
+// locks each file row (an existing one FOR UPDATE, a new one by its unique key), so two archives that share files take
+// those locks in the same order and never deadlock, whatever order their directories list them in; among entries
+// with the same bytes the first in the archive is the one filed, the others are its duplicates.
+export function archiveIngestOrder(entries: readonly ArchiveEntryInput[]): number[] {
+  return entries
+    .flatMap((entry, index) => (entry.outcome === 'stored' ? [{ index, sha256: entry.file.sha256 }] : []))
+    .sort((a, b) => (a.sha256 < b.sha256 ? -1 : a.sha256 > b.sha256 ? 1 : a.index - b.index))
+    .map((item) => item.index);
+}
+
 // Records the opening of an archive (worker only): done with its entries, or failed with the reason (then no entry).
 // A no-op once the archive has its run, so a retried job never files the entries twice.
 export const recordArchive = defineCommand({
@@ -71,17 +82,20 @@ export const recordArchive = defineCommand({
     const existing = await ctx.trx.selectFrom('crove_kernel.extraction').select('id').where('org_id', '=', ctx.orgId).where('file_id', '=', archive.id).limit(1).executeTakeFirst();
     if (existing) return { extractionId: existing.id, duplicate: true, fileIds: [] as string[] };
 
-    const entries: StoredArchiveEntry[] = [];
-    for (const entry of input.entries) {
+    const entries: StoredArchiveEntry[] = input.entries.map((entry) => ({
+      name: entry.name,
+      outcome: 'rejected' as const,
+      reason: entry.outcome === 'rejected' ? entry.reason : 'unsupported_type',
+      fileId: null,
+    }));
+    for (const index of archiveIngestOrder(input.entries)) {
+      const entry = input.entries[index];
       // The worker sniffed the type from the bytes; only documents are filed, whatever it sends.
-      if (entry.outcome === 'rejected' || !ACCEPTED_UPLOAD_TYPES.includes(entry.file.contentType)) {
-        entries.push({ name: entry.name, outcome: 'rejected', reason: entry.outcome === 'rejected' ? entry.reason : 'unsupported_type', fileId: null });
-        continue;
-      }
+      if (!entry || entry.outcome !== 'stored' || !ACCEPTED_UPLOAD_TYPES.includes(entry.file.contentType)) continue;
       // The archive's uploader is the creator of every entry, so approval counts them as an author of each invoice
       // read from it (P10), exactly as if they had uploaded the files one by one.
       const filed = await ingestFileRow(ctx, { ...entry.file, source: 'upload' }, archive.created_by);
-      entries.push({ name: entry.name, outcome: filed.duplicate ? 'duplicate' : 'stored', reason: null, fileId: filed.fileId });
+      entries[index] = { name: entry.name, outcome: filed.duplicate ? 'duplicate' : 'stored', reason: null, fileId: filed.fileId };
     }
     const run = await ctx.trx
       .insertInto('crove_kernel.extraction')
