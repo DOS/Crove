@@ -67,10 +67,10 @@ export function hasTitle(provider: string): boolean {
 }
 
 // The issues a draft would have at submit, checked as it is typed (the server checks again).
-export function draftIssues(provider: string, content: { body: string; title: string | null; media?: readonly { mime: string; sizeBytes: number; durationMs?: number | null | undefined }[] }): Issue[] {
+export function draftIssues(provider: string, content: { body: string; title: string | null; media?: readonly { mime: string; sizeBytes: number; durationMs?: number | null | undefined }[]; settings?: Record<string, unknown> }): Issue[] {
   if (!isProvider(provider)) return [];
   const media = (content.media ?? []).map((m) => ({ kind: m.mime.startsWith('video/') ? ('video' as const) : ('image' as const), mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000 }));
-  return validateVariant({ provider, body: content.body, title: content.title, media });
+  return validateVariant({ provider, body: content.body, title: content.title, media, ...(content.settings ? { settings: content.settings } : {}) });
 }
 
 // Local calendar day (yyyy-mm-dd) of an instant, in the viewer's time zone.

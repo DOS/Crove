@@ -51,9 +51,58 @@ interface Own {
   custom: boolean;
   body: string;
   title: string;
+  // The channel's provider settings (TikTok privacy and interactions, YouTube visibility).
+  settings: Record<string, unknown>;
 }
 
-const EMPTY_OWN: Own = { custom: false, body: '', title: '' };
+const EMPTY_OWN: Own = { custom: false, body: '', title: '', settings: {} };
+const sameSettings = (a: Record<string, unknown> | null | undefined, b: Record<string, unknown> | null | undefined) =>
+  JSON.stringify(Object.entries(a ?? {}).sort()) === JSON.stringify(Object.entries(b ?? {}).sort());
+
+// The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
+function ProviderSettings({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  if (provider === 'youtube') {
+    return (
+      <div className="space-y-1.5">
+        <Label className="text-xs">{t('ytPrivacy')}</Label>
+        <NativeSelect size="sm" className="w-full max-w-xs" value={typeof settings.privacy === 'string' ? settings.privacy : 'public'} disabled={disabled} onChange={(e) => onChange({ ...settings, privacy: e.target.value })}>
+          {(['public', 'unlisted', 'private'] as const).map((p) => (
+            <NativeSelectOption key={p} value={p}>
+              {t(`ytPrivacyOption.${p}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+    );
+  }
+  if (provider !== 'tiktok') return null;
+  const toggle = (key: 'allowComments' | 'allowDuet' | 'allowStitch') => (
+    <label className="flex items-center gap-2 text-sm text-muted-foreground">
+      <Checkbox checked={settings[key] === true} disabled={disabled} onCheckedChange={(on) => onChange({ ...settings, [key]: on === true })} />
+      {t(`ttToggle.${key}`)}
+    </label>
+  );
+  return (
+    <div className="space-y-2 rounded-lg border p-3">
+      <div className="space-y-1.5">
+        <Label className="text-xs">{t('ttPrivacy')}</Label>
+        <NativeSelect size="sm" className="w-full max-w-xs" value={typeof settings.privacyLevel === 'string' ? settings.privacyLevel : ''} disabled={disabled} onChange={(e) => onChange({ ...settings, privacyLevel: e.target.value })}>
+          <NativeSelectOption value="">{t('ttPrivacyChoose')}</NativeSelectOption>
+          {(['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'] as const).map((p) => (
+            <NativeSelectOption key={p} value={p}>
+              {t(`ttPrivacyOption.${p}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      {toggle('allowComments')}
+      {toggle('allowDuet')}
+      {toggle('allowStitch')}
+      <p className="text-xs text-subtle-foreground">{t('ttConsent')}</p>
+    </div>
+  );
+}
 
 function useRole(slug: string) {
   const me = useQuery(orpc.me.get.queryOptions());
@@ -149,7 +198,7 @@ function ChannelEditor({
 }) {
   const t = useTranslations('social');
   const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl: base.linkUrl, media: base.media };
-  const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, media: content.media });
+  const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, media: content.media, settings: own.settings });
   return (
     <Card className="block space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -161,7 +210,7 @@ function ChannelEditor({
         <Counter provider={provider} body={content.body} />
       </div>
       <label className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Checkbox checked={own.custom} disabled={disabled} onCheckedChange={(checked) => onChange({ custom: checked === true, body: own.body || base.body, title: own.title })} />
+        <Checkbox checked={own.custom} disabled={disabled} onCheckedChange={(checked) => onChange({ ...own, custom: checked === true, body: own.body || base.body })} />
         {t('ownText')}
       </label>
       {own.custom && (
@@ -170,6 +219,7 @@ function ChannelEditor({
           <Textarea value={own.body} disabled={disabled} rows={5} aria-label={t('ownTextPlaceholder')} placeholder={t('ownTextPlaceholder')} onChange={(e) => onChange({ ...own, body: e.target.value })} />
         </div>
       )}
+      <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
       <Preview channel={channel} provider={provider} content={content} />
       {footer}
@@ -236,7 +286,8 @@ export function SocialComposePage() {
         media: mediaInput(base.media),
         channels: chosen.map((connectionId) => {
           const mine = own[connectionId] ?? EMPTY_OWN;
-          return mine.custom ? { connectionId, body: mine.body, title: orNull(mine.title) } : { connectionId };
+          const settings = Object.keys(mine.settings).length > 0 ? { settings: mine.settings as Record<string, string | boolean> } : {};
+          return mine.custom ? { connectionId, body: mine.body, title: orNull(mine.title), ...settings } : { connectionId, ...settings };
         }),
       });
       // The draft exists now: a failed submit is shown on its page, never answered with a second post.
@@ -266,7 +317,7 @@ export function SocialComposePage() {
   const blocking = selected.some((c) => {
     const mine = own[c.id] ?? EMPTY_OWN;
     const content = { body: mine.custom ? mine.body : base.body, title: mine.custom ? mine.title : base.title };
-    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null, media: base.media }).length > 0;
+    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null, media: base.media, settings: mine.settings }).length > 0;
   });
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !blocking && !create.isPending) {
@@ -381,7 +432,7 @@ export function SocialComposePage() {
 // ---------------------------------------------------------------------------------------------------------------------
 
 function ownOf(v: Variant): Own {
-  return { custom: v.overrides.body !== null, body: v.overrides.body ?? '', title: v.overrides.title ?? '' };
+  return { custom: v.overrides.body !== null, body: v.overrides.body ?? '', title: v.overrides.title ?? '', settings: v.settings };
 }
 
 // What a post says, not its status: the post's revision and each variant's revision.
@@ -394,7 +445,7 @@ function baseOf(p: Post): Base {
 }
 
 function sameOwn(a: Own, b: Own): boolean {
-  return a.custom === b.custom && (!a.custom || (a.body === b.body && a.title === b.title));
+  return a.custom === b.custom && (!a.custom || (a.body === b.body && a.title === b.title)) && sameSettings(a.settings, b.settings);
 }
 
 function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, string>; onDone: () => void }) {
@@ -656,6 +707,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           revision: v.revision,
           body: mine.custom ? mine.body : null,
           title: mine.custom ? orNull(mine.title) : null,
+          ...(sameSettings(mine.settings, v.settings) ? {} : { settings: mine.settings as Record<string, string | boolean> }),
         });
       }
       adoptNext.current = 'all';
