@@ -47,7 +47,8 @@ export interface VatInvoiceView {
 }
 
 export interface VatSide {
-  // false: Crove has no source for this side; the documents and totals are empty. Both sides have one since #313.
+  // false: Crove has no source for this side: the output side until the org sets its tax code (#313). The documents
+  // and totals are then empty.
   available: boolean;
   documents: VatInvoiceView[];
   totals: SideTotals;
@@ -157,7 +158,11 @@ function side(available: boolean, documents: VatInvoiceView[]): VatSide {
 export async function loadVatReport(ctx: QueryContext, periodText: string): Promise<VatReport> {
   const period = vatPeriod(periodText);
   const input = side(true, await periodInvoices(ctx, period, 'purchase'));
-  const output = side(true, await periodInvoices(ctx, period, 'sale'));
+  // Sales are told apart by the org's tax code (#313). Without one Crove cannot know them, so the output side says it
+  // is not available, unless sales were recorded while a tax code was set (they stay in the books and count).
+  const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
+  const sales = await periodInvoices(ctx, period, 'sale');
+  const output = side(Boolean(org?.tax_code) || sales.length > 0, sales);
   return { period, input, output, indicators: form01Indicators(input.totals, output.totals) };
 }
 

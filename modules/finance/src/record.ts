@@ -98,9 +98,10 @@ async function replaceableDocument(ctx: CommandContext, direction: DocumentDirec
 }
 
 // A sale must be the org's own invoice, and a purchase must not be: the org's tax code (kernel.org.set_tax_code) is
-// read again here, so a proposal raised before it was set or changed cannot book an invoice on the wrong side.
+// read again here, so a proposal raised before it was set or changed cannot book an invoice on the wrong side. The
+// tenant row is read FOR SHARE until commit, so a concurrent kernel.org.set_tax_code waits for this posting.
 async function assertDirection(ctx: CommandContext, payload: PurchaseProposal): Promise<void> {
-  const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
+  const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).forShare().executeTakeFirst();
   const orgTaxCode = org?.tax_code ?? null;
   const sellerTaxCode = parseTaxCode(payload.seller.taxCode)?.normalized ?? null;
   const ownInvoice = orgTaxCode !== null && sellerTaxCode === orgTaxCode;

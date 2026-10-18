@@ -20,6 +20,8 @@ export const setTaxCode = defineCommand({
     const before = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
     if (before.tax_code !== taxCode) {
       await ctx.trx.updateTable('crove_kernel.tenant').set({ tax_code: taxCode }).where('org_id', '=', ctx.orgId).execute();
+      // Members see the change in the activity feed: it decides which invoices are read as sales from now on.
+      await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_code_changed', taxCode ? `Đặt mã số thuế của tổ chức là ${taxCode}` : 'Xóa mã số thuế của tổ chức');
     }
     ctx.audit({ previous: before.tax_code, taxCode });
     return { taxCode };

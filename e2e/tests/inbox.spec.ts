@@ -131,7 +131,7 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     const indicator = (code: string) => page.getByRole('row').filter({ has: page.getByRole('cell', { name: `[${code}]`, exact: true }) });
     await expect(indicator('23').getByRole('cell').last()).toHaveText(/^1\.800\.000/);
     await expect(indicator('24').getByRole('cell').last()).toHaveText(/^180\.000/);
-    await expect(page.getByText('Không có hóa đơn bán ra trong kỳ này')).toBeVisible();
+    await expect(page.getByText('Chưa nhập mã số thuế của tổ chức')).toBeVisible();
     const purchase = page.getByRole('row').filter({ hasText: 'C26TAB-1234' });
     await expect(purchase).toHaveCount(1);
     await expect(purchase.getByRole('cell')).toHaveText(['15/09/2026', 'C26TAB-1234', new RegExp(SELLER), '10%', /^1\.800\.000/, /^180\.000/, '']);
