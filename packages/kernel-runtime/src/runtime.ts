@@ -122,7 +122,19 @@ export interface CommandDef<I = unknown, O = unknown> {
   proposalEditor?: true;
   // Agents that may run it (absent: none).
   agent?: AgentAccess;
+  // access 'proposal' only, R1 or R2 only (ADR-0029 section 6): the role keys of positions whose agents may approve
+  // a proposal of this command, within their max_risk and only when the proposal's outcome names none of P03 to
+  // P07 and the agent is neither an author nor in its causal chain. Absent: humans only. R3 is always human.
+  agentApprovers?: readonly string[];
   handler: (ctx: CommandContext, input: I) => Promise<O>;
+}
+
+// What a handler may learn about a registered command (ADR-0029 section 6): enough to judge a proposal of it.
+export interface CommandInfo {
+  name: string;
+  risk: Risk;
+  access: Access;
+  agentApprovers: readonly string[];
 }
 
 export interface BootstrapEnv {
@@ -170,6 +182,8 @@ export interface QueryContext {
   agent: AgentGrant | null;
   // Whether this runtime registered the module (CROVE_MODULES, ADR-0031), as Runtime.installed().
   installed(module: string): boolean;
+  // A registered command's risk, access and agent approvers, or null when none is registered under that name.
+  command(name: string): CommandInfo | null;
 }
 
 export interface CommandContext extends QueryContext {
@@ -429,6 +443,9 @@ export class Runtime {
       if ((c.access === 'proposal_revision') !== (typeof c.revises === 'string' && c.revises.length > 0)) {
         throw new Error(`command ${c.name}: a reviser (access 'proposal_revision') names the command it revises, and only a reviser does`);
       }
+      if (c.agentApprovers !== undefined && (c.access !== 'proposal' || (c.risk !== 'R1' && c.risk !== 'R2'))) {
+        throw new Error(`command ${c.name}: agent approvers are declared only on an R1 or R2 proposal command (access 'proposal')`);
+      }
       if (c.proposalEditor !== undefined) {
         if (c.proposalEditor !== true || typeof c.access === 'string') {
           throw new Error(`command ${c.name}: the proposal editor declares proposalEditor: true and is run by users (access is a role list)`);
@@ -446,6 +463,13 @@ export class Runtime {
       this.installedModules.add(moduleOf(q.name));
     }
     return this;
+  }
+
+  // A registered command's risk, access and agent approvers (CommandInfo), or null.
+  commandInfo(name: string): CommandInfo | null {
+    const def = this.commands.get(name);
+    if (!def) return null;
+    return { name: def.name, risk: def.risk, access: def.access, agentApprovers: [...(def.agentApprovers ?? [])] };
   }
 
   // Whether this runtime registered any command or query of the module (plan Decision 12). The server asks it
@@ -471,6 +495,7 @@ export class Runtime {
       query: (name, input) => this.lookup(trx, orgId, actor, entered, name, input),
       reviserOf: (command) => this.reviserOf(command),
       installed: (module) => this.installed(module),
+      command: (name) => this.commandInfo(name),
     };
   }
 
@@ -611,6 +636,7 @@ export class Runtime {
     if (typeof def.access === 'string' || !def.agent) refuse('agent_access');
     const access = def.agent as AgentAccess;
     if (access.roles !== 'any' && !access.roles.includes(grant.roleKey)) refuse('agent_access');
+    // R2 and R3 by an agent need review (P05, P06): the agent asks for a proposal instead (kernel.task.propose).
     if (def.risk === 'R3') refuse('P05');
     if (def.risk === 'R2') refuse('P06');
     if (RISK_RANK[def.risk] > RISK_RANK[grant.maxRisk]) refuse('P02');

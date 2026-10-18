@@ -24,6 +24,14 @@ const suite = ADMIN ? describe : describe.skip;
 
 // Commands an agent may run at all; every other command declares no agent access.
 const AGENT_COMMANDS = ['kernel.task.checkout', 'kernel.task.comment', 'kernel.task.set_status', 'kernel.task.escalate', 'kernel.task.delegate'];
+// Agent proposals and approvals (#260, ADR-0029 section 6): two more task commands. Accepted here before the feature
+// lands, so this invariant holds on both sides of it: proposing is R1 and carries the run's taint into the proposal
+// (taint 'propagate'); recording an approval is R1 without it, so the runtime refuses a tainted run (P03). Neither
+// writes a proposal: a system command in the worker acts on what they record, after checking it again.
+const AGENT_PROPOSAL_COMMANDS: Record<string, 'propagate' | undefined> = {
+  'kernel.task.propose': 'propagate',
+  'kernel.task.approve_proposal': undefined,
+};
 
 // Probe commands for the runtime's agent policy, each declaring agent access for any role.
 const probe = (name: string, risk: Risk, taint?: 'propagate'): CommandDef<unknown, unknown> =>
@@ -47,7 +55,40 @@ const whoami = defineCommand({
     return { actor: ctx.actor, orgId: ctx.orgId, positionId: ctx.agent?.positionId ?? null };
   },
 }) as CommandDef<unknown, unknown>;
+// #260: a preparer agents may run (it writes nothing) and proposal commands of each risk, two of which agents with the
+// chief accountant role key may approve.
+const prepare260 = defineCommand({
+  name: 't260.prepare',
+  input: z.object({ command: z.string() }),
+  risk: 'R0',
+  access: ['owner', 'admin', 'member'],
+  agent: { roles: 'any' },
+  handler: async (_ctx, input) => ({ kind: 't260', command: input.command, title: `T260 ${input.command}`, payload: { n: 1 } }),
+}) as CommandDef<unknown, unknown>;
+const proposal260 = (name: string, risk: Risk, agentApprovers?: string[]) =>
+  defineCommand({
+    name,
+    input: z.object({ payload: z.unknown(), acceptFailedChecks: z.boolean().optional() }),
+    risk,
+    access: 'proposal',
+    ...(agentApprovers ? { agentApprovers } : {}),
+    handler: async () => ({ executed: name }),
+  }) as CommandDef<unknown, unknown>;
+// The same preparer without agent access: humans only.
+const prepareHumans260 = defineCommand({
+  name: 't260.prepare_humans',
+  input: z.object({ command: z.string() }),
+  risk: 'R0',
+  access: ['owner', 'admin', 'member'],
+  handler: async (_ctx, input) => ({ kind: 't260', command: input.command, title: `T260 ${input.command}`, payload: { n: 1 } }),
+}) as CommandDef<unknown, unknown>;
 const PROBES = [
+  prepare260,
+  prepareHumans260,
+  proposal260('t260.prop_r1', 'R1', [TEMPLATE]),
+  proposal260('t260.prop_r2', 'R2', [TEMPLATE]),
+  proposal260('t260.prop_r3', 'R3'),
+  proposal260('t260.prop_humans', 'R1'),
   probe('t18.r1', 'R1'),
   probe('t18.r1_propagate', 'R1', 'propagate'),
   probe('t18.r2', 'R2', 'propagate'),
@@ -207,11 +248,16 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
 
   it('declares agent access only on the task commands, never on chart, agent, budget, kill-switch or approval commands', () => {
     const declared = kernelCommands.filter((c) => (c as CommandDef<unknown, unknown>).agent).map((c) => c.name);
-    expect(declared.sort()).toEqual([...AGENT_COMMANDS].sort());
+    expect(declared.filter((name) => !Object.hasOwn(AGENT_PROPOSAL_COMMANDS, name)).sort()).toEqual([...AGENT_COMMANDS].sort());
     expect(financeCommands.filter((c) => (c as CommandDef<unknown, unknown>).agent)).toEqual([]);
     for (const name of AGENT_COMMANDS) {
       const def = agentCommands.find((c) => c.name === name) as CommandDef<unknown, unknown>;
       expect(def.risk, name).toBe('R1');
+    }
+    for (const name of declared.filter((n) => Object.hasOwn(AGENT_PROPOSAL_COMMANDS, n))) {
+      const def = kernelCommands.find((c) => c.name === name) as CommandDef<unknown, unknown>;
+      expect(def.risk, name).toBe('R1');
+      expect(def.agent?.taint, name).toBe(AGENT_PROPOSAL_COMMANDS[name]);
     }
   });
 
@@ -961,5 +1007,298 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
         ),
       ),
     ).rejects.toMatchObject({ code: '42501', message: 'AGENT_DELEGATION_SUBTREE' });
+  });
+  // ---------------------------------------------------------------------------------------------------------------
+  // #260: agent proposals and agent approvals (ADR-0029 section 6)
+  // ---------------------------------------------------------------------------------------------------------------
+
+  async function newestEvent(orgId: string, type: string): Promise<string> {
+    return withAdmin(async (c) =>
+      (await c.query<{ id: string }>('SELECT id FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = $2 ORDER BY id DESC LIMIT 1', [orgId, type])).rows[0]?.id as string,
+    );
+  }
+
+  async function proposalRow(id: string) {
+    return withAdmin(async (c) =>
+      (
+        await c.query(
+          `SELECT command, status, tainted, policy_flags, authors, eligible_approvers, requested_by_agent, requested_by_run, source_task_id,
+                  decided_by, decided_by_agent, result FROM crove_kernel.proposal WHERE id = $1`,
+          [id],
+        )
+      ).rows[0],
+    );
+  }
+
+  // An agent asks for a proposal of `command` from its own task, and the worker creates it.
+  async function agentProposes(agent: Awaited<ReturnType<typeof liveAgent>>, command: string, taskId = agent.taskId) {
+    const as = { actor: agent.actor, orgId: orgA };
+    const { fence } = await worker.execute<{ fence: string }>('kernel.task.checkout', { id: taskId }, as);
+    await worker.execute('kernel.task.propose', { id: taskId, fence, preparer: 't260.prepare', input: { command } }, as);
+    const eventId = await newestEvent(orgA, 'kernel.agent.proposal_requested');
+    const created = await worker.execute<{ proposalId: string | null; reason: string | null }>('kernel.agent.proposal.create', { eventId }, { actor: SYSTEM, orgId: orgA });
+    return { ...created, eventId };
+  }
+
+  // A proposal written as a human or extraction would (admin, no context), and a review task for the approver.
+  async function humanProposal(command: string, extra: { flags?: string[]; authors?: unknown[]; tainted?: boolean } = {}) {
+    return withAdmin(async (c) =>
+      (
+        await c.query<{ id: string }>(
+          `INSERT INTO crove_kernel.proposal (org_id, kind, command, title, payload, eligible_approvers, authors, policy_flags, tainted)
+           VALUES ($1, 't260', $2, 'T260', '{}', ARRAY[$3::uuid], $4, $5, $6) RETURNING id`,
+          [orgA, command, owner, JSON.stringify(extra.authors ?? [{ type: 'user', id: owner }]), extra.flags ?? [], extra.tainted ?? false],
+        )
+      ).rows[0]?.id as string,
+    );
+  }
+
+  async function reviewTaskFor(positionId: string, proposalId: string): Promise<string> {
+    return withAdmin(async (c) =>
+      (
+        await c.query<{ id: string }>(
+          `INSERT INTO crove_kernel.task (org_id, title, kind, assignee_position_id, source, source_ref, created_by_type, created_by_id)
+           VALUES ($1, 'Duyệt', 'proposal_review', $2, 'human', $3, 'user', $4) RETURNING id`,
+          [orgA, positionId, JSON.stringify({ type: 'kernel.proposal', id: proposalId }), owner],
+        )
+      ).rows[0]?.id as string,
+    );
+  }
+
+  // The approver records its approval from a review task (as the agent), and the worker executes it (as the system).
+  async function agentApproves(approver: Awaited<ReturnType<typeof liveAgent>>, proposalId: string) {
+    const as = { actor: approver.actor, orgId: orgA };
+    const taskId = await reviewTaskFor(approver.positionId, proposalId);
+    const { fence } = await worker.execute<{ fence: string }>('kernel.task.checkout', { id: taskId }, as);
+    await worker.execute('kernel.task.approve_proposal', { id: taskId, fence, proposalId, revision: 1 }, as);
+    const eventId = await newestEvent(orgA, 'kernel.agent.proposal_approved');
+    return { eventId, execute: () => worker.execute<{ approved: boolean; reason: string | null }>('kernel.agent.proposal.approve', { eventId }, { actor: SYSTEM, orgId: orgA }) };
+  }
+
+  it('declares agent access on exactly the task commands, proposals and approvals included, with their risk and taint', () => {
+    const declared = kernelCommands.filter((c) => (c as CommandDef<unknown, unknown>).agent).map((c) => c.name);
+    expect(declared.sort()).toEqual([...AGENT_COMMANDS, ...Object.keys(AGENT_PROPOSAL_COMMANDS)].sort());
+  });
+
+  it('turns R2 and R3 work into a proposal for review, created by the worker with its causal chain, taint and flags', async () => {
+    const agent = await liveAgent(orgA, owner);
+    // Direct R2 or R3 work stays refused (P05, P06); the agent asks instead.
+    const r3 = await agentProposes(agent, 't260.prop_r3');
+    expect(r3.reason).toBeNull();
+    const row = await proposalRow(r3.proposalId as string);
+    expect(row).toMatchObject({
+      command: 't260.prop_r3',
+      status: 'pending',
+      tainted: false,
+      policy_flags: ['P05'],
+      requested_by_agent: agent.agentId,
+      requested_by_run: agent.runId,
+      source_task_id: agent.taskId,
+      decided_by: null,
+      decided_by_agent: null,
+    });
+    // Authors: the agent and its run, and the human who created the task (P10, the creator chain); approvers: humans.
+    expect(row.authors).toEqual([{ type: 'agent', id: agent.agentId, run: agent.runId }, { type: 'user', id: owner }]);
+    const task = await withAdmin(async (c) => (await c.query('SELECT status, checkout_run_id FROM crove_kernel.task WHERE id = $1', [agent.taskId])).rows[0]);
+    expect(task).toEqual({ status: 'waiting', checkout_run_id: null });
+    // One proposal per request, however often the job runs.
+    await expect(worker.execute('kernel.agent.proposal.create', { eventId: r3.eventId }, { actor: SYSTEM, orgId: orgA })).resolves.toMatchObject({ proposalId: null, reason: 'duplicate' });
+
+    // R2 is flagged P06; a tainted run's request P03; a chain not started by a human P07.
+    const second = await liveAgent(orgA, owner);
+    const r2 = await agentProposes(second, 't260.prop_r2');
+    expect((await proposalRow(r2.proposalId as string)).policy_flags).toEqual(['P06']);
+    const third = await liveAgent(orgA, owner);
+    await withAdmin((c) => c.query('UPDATE crove_kernel.ai_run SET tainted = true WHERE id = $1', [third.runId]));
+    const tainted = await agentProposes(third, 't260.prop_r1');
+    expect(await proposalRow(tainted.proposalId as string)).toMatchObject({ tainted: true, policy_flags: ['P03'] });
+    const fourth = await liveAgent(orgA, owner);
+    const fromEvent = await withAdmin(async (c) =>
+      (
+        await c.query<{ id: string }>(
+          `INSERT INTO crove_kernel.task (org_id, title, kind, assignee_position_id, source, created_by_type) VALUES ($1, 'Từ sự kiện', 'general', $2, 'event', 'system') RETURNING id`,
+          [orgA, fourth.positionId],
+        )
+      ).rows[0]?.id as string,
+    );
+    const untrusted = await agentProposes(fourth, 't260.prop_r1', fromEvent);
+    expect((await proposalRow(untrusted.proposalId as string)).policy_flags).toEqual(['P07']);
+
+    // A preparer the agent's role may not run, or one that names no proposal command, makes nothing.
+    const fifth = await liveAgent(orgA, owner);
+    const as = { actor: fifth.actor, orgId: orgA };
+    const { fence } = await worker.execute<{ fence: string }>('kernel.task.checkout', { id: fifth.taskId }, as);
+    await expect(
+      worker.execute('kernel.task.propose', { id: fifth.taskId, fence, preparer: 't260.prepare_humans', input: { command: 't260.prop_r1' } }, as),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', details: { rule: 'agent_access' } });
+    await expect(worker.execute('kernel.task.propose', { id: fifth.taskId, fence, preparer: 't260.prepare', input: { command: 'kernel.task.comment' } }, as)).rejects.toMatchObject({
+      code: 'NOT_PROPOSABLE',
+    });
+    // A forged request (another agent's run on this task) creates nothing.
+    const forged = await withAdmin(async (c) =>
+      (
+        await c.query<{ id: string }>(`INSERT INTO crove_kernel.outbox_event (org_id, type, payload) VALUES ($1, 'kernel.agent.proposal_requested', $2) RETURNING id`, [
+          orgA,
+          JSON.stringify({ agentId: fifth.agentId, runId: second.runId, taskId: fifth.taskId, preparer: 't260.prepare', input: { command: 't260.prop_r1' } }),
+        ])
+      ).rows[0]?.id as string,
+    );
+    await expect(worker.execute('kernel.agent.proposal.create', { eventId: forged }, { actor: SYSTEM, orgId: orgA })).resolves.toMatchObject({
+      proposalId: null,
+      reason: 'chain_mismatch',
+    });
+  });
+
+  it('lets an agent approve a clean R1 proposal within its max_risk, executed by the worker through the proposal gate', async () => {
+    const requester = await liveAgent(orgA, owner);
+    const asked = await agentProposes(requester, 't260.prop_r1');
+    expect((await proposalRow(asked.proposalId as string)).policy_flags).toEqual([]);
+    const approver = await liveAgent(orgA, owner);
+    const { execute } = await agentApproves(approver, asked.proposalId as string);
+    await expect(execute()).resolves.toEqual({ approved: true, reason: null });
+    expect(await proposalRow(asked.proposalId as string)).toMatchObject({
+      status: 'executed',
+      decided_by: null,
+      decided_by_agent: approver.agentId,
+      result: { executed: 't260.prop_r1' },
+    });
+    // Replayed, it decides nothing more.
+    await expect(execute()).resolves.toEqual({ approved: false, reason: 'not_pending' });
+  });
+
+  it('never lets an agent approve R3, a flagged or tainted proposal, above its max_risk, its own work or its causal chain', async () => {
+    const approver = await liveAgent(orgA, owner);
+    const refused = async (proposalId: string, rule: string) => {
+      const as = { actor: approver.actor, orgId: orgA };
+      const taskId = await reviewTaskFor(approver.positionId, proposalId);
+      const { fence } = await worker.execute<{ fence: string }>('kernel.task.checkout', { id: taskId }, as);
+      await expect(worker.execute('kernel.task.approve_proposal', { id: taskId, fence, proposalId, revision: 1 }, as), `${proposalId} ${rule}`).rejects.toMatchObject({
+        code: 'AGENT_NOT_ELIGIBLE',
+        details: { rule },
+      });
+    };
+    // R3 always ends at a human (P05, P12).
+    await refused(await humanProposal('t260.prop_r3'), 'P05');
+    // Any of P03 to P07 in the outcome, or tainted content.
+    for (const rule of ['P03', 'P04', 'P05', 'P06', 'P07']) await refused(await humanProposal('t260.prop_r1', { flags: [rule] }), rule);
+    await refused(await humanProposal('t260.prop_r1', { tainted: true }), 'P03');
+    // Above max_risk: the template caps the chief accountant at R1 (P02).
+    await refused(await humanProposal('t260.prop_r2'), 'P02');
+    // A command that names no agent approvers, or names another role key.
+    await refused(await humanProposal('t260.prop_humans'), 'P12');
+    // An author.
+    await refused(await humanProposal('t260.prop_r1', { authors: [{ type: 'agent', id: approver.agentId, run: approver.runId }] }), 'P10');
+    // Its own request, and work from its own subtree (an agent below it asked).
+    const own = await agentProposes(await liveAgent(orgA, owner, approver.positionId), 't260.prop_r1');
+    await refused(own.proposalId as string, 'causal_chain');
+    // Its own proposal: it is an author (and asked for it).
+    const mine = await liveAgent(orgA, owner);
+    const asked = await agentProposes(mine, 't260.prop_r1');
+    const as = { actor: mine.actor, orgId: orgA };
+    const selfTask = await reviewTaskFor(mine.positionId, asked.proposalId as string);
+    const { fence } = await worker.execute<{ fence: string }>('kernel.task.checkout', { id: selfTask }, as);
+    await expect(worker.execute('kernel.task.approve_proposal', { id: selfTask, fence, proposalId: asked.proposalId, revision: 1 }, as)).rejects.toMatchObject({
+      code: 'AGENT_NOT_ELIGIBLE',
+      details: { rule: 'P10' },
+    });
+    // A tainted run cannot even record an approval (P03, the runtime).
+    const clean = await humanProposal('t260.prop_r1');
+    const tainted = await liveAgent(orgA, owner);
+    await withAdmin((c) => c.query('UPDATE crove_kernel.ai_run SET tainted = true WHERE id = $1', [tainted.runId]));
+    const taintedTask = await reviewTaskFor(tainted.positionId, clean);
+    const claimed = await worker.execute<{ fence: string }>('kernel.task.checkout', { id: taintedTask }, { actor: tainted.actor, orgId: orgA });
+    await expect(
+      worker.execute('kernel.task.approve_proposal', { id: taintedTask, fence: claimed.fence, proposalId: clean, revision: 1 }, { actor: tainted.actor, orgId: orgA }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', details: { rule: 'P03' } });
+  });
+
+  it('decides an agent approval again when the worker executes it: run taint, kill switch, revision', async () => {
+    for (const [change, reason] of [
+      ['taint', 'tainted_run'],
+      ['kill', 'stopped'],
+      ['revision', 'stale_revision'],
+    ] as const) {
+      const proposalId = await humanProposal('t260.prop_r1');
+      const approver = await liveAgent(orgA, owner);
+      const { execute } = await agentApproves(approver, proposalId);
+      if (change === 'taint') await withAdmin((c) => c.query('UPDATE crove_kernel.ai_run SET tainted = true WHERE id = $1', [approver.runId]));
+      if (change === 'kill') await withAdmin((c) => c.query(`INSERT INTO crove_kernel.kill_switch (org_id, scope, target, engaged_by) VALUES ($1, 'agent', $2, $3)`, [orgA, approver.agentId, owner]));
+      if (change === 'revision') await withAdmin((c) => c.query('UPDATE crove_kernel.proposal SET revision = 2 WHERE id = $1', [proposalId]));
+      await expect(execute(), change).resolves.toEqual({ approved: false, reason });
+      expect((await proposalRow(proposalId)).status, change).toBe('pending');
+    }
+    // A forged approval (from a task that is not this agent's review of this proposal) executes nothing.
+    const proposalId = await humanProposal('t260.prop_r1');
+    const approver = await liveAgent(orgA, owner);
+    const forged = await withAdmin(async (c) =>
+      (
+        await c.query<{ id: string }>(`INSERT INTO crove_kernel.outbox_event (org_id, type, payload) VALUES ($1, 'kernel.agent.proposal_approved', $2) RETURNING id`, [
+          orgA,
+          JSON.stringify({ agentId: approver.agentId, runId: approver.runId, taskId: approver.taskId, proposalId, revision: 1 }),
+        ])
+      ).rows[0]?.id as string,
+    );
+    await expect(worker.execute('kernel.agent.proposal.approve', { eventId: forged }, { actor: SYSTEM, orgId: orgA })).resolves.toEqual({
+      approved: false,
+      reason: 'chain_mismatch',
+    });
+    expect((await proposalRow(proposalId)).status).toBe('pending');
+  });
+
+  it('holds every writer to the proposal provenance and to clean agent decisions in the database', async () => {
+    const requester = await liveAgent(orgA, owner);
+    const asked = await agentProposes(requester, 't260.prop_r1');
+    const flagged = await humanProposal('t260.prop_r1', { flags: ['P03'] });
+    const taintedRow = await humanProposal('t260.prop_r1', { tainted: true });
+    const statements: Array<[string, unknown[], string]> = [
+      // An agent decision on a flagged proposal, or by the agent that asked for it.
+      [`UPDATE crove_kernel.proposal SET decided_by_agent = $2, status = 'executed' WHERE id = $1`, [flagged, requester.agentId], '23514'],
+      [`UPDATE crove_kernel.proposal SET decided_by_agent = $2, status = 'executed' WHERE id = $1`, [asked.proposalId, requester.agentId], '23514'],
+      // Flags are never removed; the causal chain and the taint never change.
+      [`UPDATE crove_kernel.proposal SET policy_flags = '{}' WHERE id = $1`, [flagged], '23514'],
+      [`UPDATE crove_kernel.proposal SET requested_by_agent = NULL, requested_by_run = NULL, source_task_id = NULL WHERE id = $1`, [asked.proposalId], '23514'],
+      [`UPDATE crove_kernel.proposal SET tainted = false WHERE id = $1`, [taintedRow], '23514'],
+      // A half chain.
+      [`INSERT INTO crove_kernel.proposal (org_id, kind, command, title, payload, requested_by_agent) VALUES ($1, 't', 't', 't', '{}', $2)`, [orgA, requester.agentId], '23514'],
+    ];
+    for (const [text, values, code] of statements) {
+      await expect(withAdmin((c) => c.query(text, values)), text).rejects.toMatchObject({ code });
+    }
+    // A tainted proposal is flagged P03 whoever writes it.
+    expect((await proposalRow(taintedRow)).policy_flags).toEqual(['P03']);
+    // An agent context still never writes a proposal.
+    await expect(
+      inAgentContext(orgA, requester.actor, (c) => c.query(`UPDATE crove_kernel.proposal SET status = 'rejected' WHERE id = $1`, [asked.proposalId])),
+    ).rejects.toMatchObject({ code: '42501', message: 'AGENT_FORBIDDEN' });
+  });
+
+  it('keeps humans for R3 and four-eyes: agent authors never count, and the requesting agent never reviews its proposal', async () => {
+    // P10 counts only humans: an agent author neither blocks nor satisfies four-eyes.
+    const decided = await db.transaction().execute(async (trx) => {
+      await sql`SELECT crove_kernel.enter_context(${owner}::uuid, ${orgA}::uuid)`.execute(trx);
+      const base = { command: 'finance.purchase.record', status: 'pending', eligible_approvers: [owner] };
+      const agentAuthor = { type: 'agent', id: randomUUID(), run: randomUUID() };
+      return {
+        agentOnly: await decideApproval(trx, orgA, asUser(owner), { ...base, authors: [agentAuthor] }, { lock: false }),
+        withOwner: await decideApproval(trx, orgA, asUser(owner), { ...base, authors: [agentAuthor, { type: 'user', id: owner }] }, { lock: false }),
+      };
+    });
+    expect(decided.agentOnly).toMatchObject({ reason: 'ok', fourEyes: 'pass', selfApproved: false });
+    expect(decided.withOwner).toMatchObject({ reason: 'ok', fourEyes: 'self_approved' });
+    // Inbox triage of an agent's proposal skips the agent that asked for it.
+    const requester = await liveAgent(orgA, owner);
+    const asked = await agentProposes(requester, 't260.prop_r3');
+    const created = await newestEvent(orgA, 'kernel.proposal.created');
+    await worker.execute('kernel.agent.dispatch_event', { eventId: created }, { actor: SYSTEM, orgId: orgA });
+    const reviews = await withAdmin(async (c) =>
+      (
+        await c.query<{ assignee_position_id: string }>(`SELECT assignee_position_id FROM crove_kernel.task WHERE org_id = $1 AND kind = 'proposal_review' AND source_ref->>'id' = $2`, [
+          orgA,
+          asked.proposalId,
+        ])
+      ).rows.map((r) => r.assignee_position_id),
+    );
+    expect(reviews.length).toBeGreaterThan(0);
+    expect(reviews).not.toContain(requester.positionId);
   });
 });

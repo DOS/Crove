@@ -469,6 +469,13 @@ export interface KernelProposalTable {
   result: ColumnType<unknown, string | null | undefined, string | null>;
   eligible_approvers: string[] | null;
   authors: ColumnType<unknown, string | null | undefined, string | null>;
+  requested_by_agent: string | null;
+  requested_by_run: string | null;
+  source_task_id: string | null;
+  request_event_id: string | null;
+  tainted: Generated<boolean>;
+  policy_flags: string[] | null;
+  decided_by_agent: string | null;
 }
 
 /** crove_kernel.task_comment */

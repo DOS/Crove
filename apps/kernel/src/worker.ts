@@ -23,6 +23,12 @@ const SOCIAL_PUBLISH_RETRY_LIMIT = 2;
 // The worker looks for due variants this often; a post goes out within this long of its time.
 export const SOCIAL_SWEEP_MS = 15_000;
 const SOCIAL_SWEEP_LIMIT = 500;
+// Agent proposal events and the system command that acts on each (ADR-0029 section 6): the command reads the event
+// from the outbox; the job carries only its id.
+const AGENT_PROPOSAL_COMMANDS: Readonly<Record<string, string>> = {
+  'kernel.agent.proposal_requested': 'kernel.agent.proposal.create',
+  'kernel.agent.proposal_approved': 'kernel.agent.proposal.approve',
+};
 const AGENT_RETRY_LIMIT = 3;
 // Every 10 minutes the worker wakes agents whose wake-up is still pending and that can run now
 // (crove_kernel.agent_wakeups_due): a run refused earlier by the daily cap, a kill switch or a budget that has since
@@ -279,6 +285,14 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await deps.runtime.execute('kernel.agent.dispatch_event', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'kernel.agent' }, orgId: job.data.orgId });
   });
 
+  // Agent proposals and approvals: the worker acts on what an agent recorded, after checking it again.
+  await boss.work<AgentDispatchJob & { type: string }>(QUEUES.agentProposal, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const command = Object.hasOwn(AGENT_PROPOSAL_COMMANDS, job.data.type) ? AGENT_PROPOSAL_COMMANDS[job.data.type] : undefined;
+    if (!command) return;
+    await deps.runtime.execute(command, { eventId: job.data.eventId }, { actor: { type: 'system', component: 'kernel.agent' }, orgId: job.data.orgId });
+  });
+
   const agentPrograms = deps.agentPrograms ?? {};
   await boss.work<AgentWakeJob>(QUEUES.agentWake, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
@@ -416,6 +430,14 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               }
               if (row.type === 'kernel.agent.wakeup_requested') {
                 return sendAgentWake(boss, row.org_id, String(row.payload.agentId));
+              }
+              if (Object.hasOwn(AGENT_PROPOSAL_COMMANDS, row.type)) {
+                return boss.send(QUEUES.agentProposal, { orgId: row.org_id, eventId: row.event_id, type: row.type }, {
+                  singletonKey: `${row.org_id}:${row.event_id}`,
+                  retryLimit: AGENT_RETRY_LIMIT,
+                  retryDelay: 20,
+                  retryBackoff: true,
+                });
               }
               if (row.type === 'kernel.proposal.created') {
                 return boss.send(QUEUES.agentDispatch, { orgId: row.org_id, eventId: row.event_id } satisfies AgentDispatchJob, {
