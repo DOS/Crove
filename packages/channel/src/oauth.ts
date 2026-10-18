@@ -3,6 +3,7 @@
 // finishes it with the code the provider hands back: `exchange` turns the code into the accounts the grant covers,
 // each with the token the kernel seals. Only the OAuth routes and jobs call connectors; command handlers never do
 // network I/O.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomBytes } from 'node:crypto';
 import type { ChannelProviderId, ConnectedAccount } from './index.ts';
 
@@ -58,6 +59,20 @@ export function oauthStateHash(state: string): string {
 
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
+// The provider call a job is making (#382): once the job gives up on it (its timeout), every request the adapter still
+// makes in that call is aborted, so nothing reaches the platform after the job recorded the outcome as unknown.
+const callScope = new AsyncLocalStorage<AbortSignal>();
+
+export function withCallSignal<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+  return callScope.run(signal, run);
+}
+
+// A request's own timeout, joined with the call's signal when there is one.
+export function requestSignal(own: AbortSignal): AbortSignal {
+  const call = callScope.getStore();
+  return call ? AbortSignal.any([own, call]) : own;
+}
+
 // fetch limited to the hosts a connector or publisher talks to, with a timeout. A redirect is not followed: an
 // allowlisted host could otherwise hand the request (and its bearer token) to another one.
 export function allowlistedFetch(hosts: readonly string[], fetchImpl: Fetch = fetch, timeoutMs = 15_000): Fetch {
@@ -65,6 +80,6 @@ export function allowlistedFetch(hosts: readonly string[], fetchImpl: Fetch = fe
   return async (input, init) => {
     const url = new URL(input);
     if (url.protocol !== 'https:' || !allowed.has(url.hostname)) throw new Error(`host not allowed for this channel: ${url.hostname}`);
-    return fetchImpl(url.toString(), { ...init, redirect: 'manual', signal: init?.signal ?? AbortSignal.timeout(timeoutMs) });
+    return fetchImpl(url.toString(), { ...init, redirect: 'manual', signal: requestSignal(init?.signal ?? AbortSignal.timeout(timeoutMs)) });
   };
 }

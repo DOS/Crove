@@ -190,6 +190,9 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect((await get(o, postId)).status).toBe('published');
     expect(await calls(id)).toEqual([{ key: `social.publish:${id}:1:1:publish`, state: 'succeeded', calls: 1 }]);
     expect(platform.posts.map((p) => p.content.body)).toHaveLength(1);
+    // The channel keeps what it went out with in its own columns (#335).
+    const frozen = await admin(async (c) => (await c.query<{ content_frozen: boolean; body: string | null }>('SELECT content_frozen, body FROM crove_social.post_variant WHERE id = $1', [id])).rows[0]);
+    expect(frozen).toEqual({ content_frozen: true, body: platform.posts[0]?.content.body });
 
     // Another run, or the sweep, finds nothing to do.
     expect(await run(o, id, platform)).toEqual({ action: 'none', reason: 'published' });

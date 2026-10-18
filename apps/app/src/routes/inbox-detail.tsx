@@ -447,7 +447,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
 
       {sale && <p className="mb-4 text-sm text-muted-foreground">{t('saleNotice')}</p>}
       <div className="grid gap-6 lg:grid-cols-5">
-        <div className="space-y-6 lg:col-span-3">
+        <div className="min-w-0 space-y-6 lg:col-span-3">
           {payload && (
             <Card className="grid gap-4 p-4 sm:grid-cols-2">
               <div>
@@ -537,8 +537,11 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           )}
 
           {payload && (
-            <Card className="block p-4">
-              <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('journal')}</p>
+            <Card className={pending ? 'block border border-dashed border-proposal/60 p-4 ring-0' : 'block p-4'}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('journal')}</p>
+                {pending && <Badge variant="proposal">{t('proposedNotPosted')}</Badge>}
+              </div>
               <table className="mt-3 w-full text-sm">
                 <thead className="text-left text-xs text-subtle-foreground">
                   <tr>
@@ -564,7 +567,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
         </div>
         {/* A reversal has no source file; its card above shows the entry it reverses. */}
         {!reversal && (
-          <div className="lg:col-span-2">
+          <div className="min-w-0 lg:col-span-2">
             <Card className="block p-4">
               <p className="mb-3 text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('original')}</p>
               {item.file ? <FilePreview fileId={item.file.id} contentType={item.file.contentType} filename={item.file.filename} /> : <p className="text-sm text-subtle-foreground">{t('noFile')}</p>}

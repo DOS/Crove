@@ -3,11 +3,12 @@
 //
 // Connect: threads.net's dialog, a short-lived token, then a long-lived one (60 days) that can be refreshed once it
 // is a day old; the refresh schedule renews it a week before it expires.
-// Publish: a container (text, an image, or a carousel of 2 to 20), a wait until Meta has processed it, then
+// Publish: a container (text, an image, a video, or a carousel of 2 to 20 mixing them), a wait until Meta has processed it, then
 // threads_publish, the one visible step. As for Instagram, a PUBLISHED container went out already, and a pending
 // reference carries the text's hash so a status check recognises the post it became.
 import { createHash } from 'node:crypto';
 import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const THREADS_HOSTS = ['graph.threads.net'] as const;
@@ -186,7 +187,7 @@ function threadsResult(error: unknown): PublishResult {
 
 const textOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
-  return content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+  return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
 };
 const textKey = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
 const refOf = (container: string, text: string) => `${container}.${textKey(text)}`;
@@ -224,15 +225,20 @@ export class ThreadsPublisher implements Publisher {
       if (!url) throw new NoUrl();
       return url;
     };
+    // An image or a video (#446), each fetched by Meta from its presigned URL.
+    const mediaForm = async (m: { fileId: string; mime: string }) =>
+      m.mime.startsWith('video/') ? { media_type: 'VIDEO', video_url: await urlOf(m.fileId) } : { media_type: 'IMAGE', image_url: await urlOf(m.fileId) };
     let container: string;
     try {
       if (media.length === 0) {
         container = await this.create(user, token, { media_type: 'TEXT', text });
       } else if (media.length === 1) {
-        container = await this.create(user, token, { media_type: 'IMAGE', image_url: await urlOf((media[0] as { fileId: string }).fileId), ...(text ? { text } : {}) });
+        const only = media[0] as { fileId: string; mime: string };
+        container = await this.create(user, token, { ...(await mediaForm(only)), ...(text ? { text } : {}) });
       } else {
+        // A carousel may mix images and videos.
         const children: string[] = [];
-        for (const m of media) children.push(await this.create(user, token, { media_type: 'IMAGE', image_url: await urlOf(m.fileId), is_carousel_item: 'true' }));
+        for (const m of media) children.push(await this.create(user, token, { ...(await mediaForm(m)), is_carousel_item: 'true' }));
         container = await this.create(user, token, { media_type: 'CAROUSEL', children: children.join(','), ...(text ? { text } : {}) });
       }
     } catch (error) {

@@ -6,7 +6,8 @@
 // Only Bluesky-hosted accounts are supported for now (PDS hosts under bsky.network, or bsky.social): the PDS address
 // comes from the account's DID document, and an arbitrary host there would let anyone point the worker at any server.
 import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
-import type { Fetch } from './oauth.ts';
+import { holdsLink } from './text.ts';
+import { requestSignal, type Fetch } from './oauth.ts';
 
 const ENTRYWAY = 'https://bsky.social';
 // Bluesky's public AppView: post counts without a session, so reading metrics never spends the account's session quota.
@@ -24,7 +25,7 @@ function blueskyFetch(fetchImpl: Fetch = fetch, timeoutMs = 15_000): Fetch {
   return async (input, init) => {
     const url = new URL(input);
     if (url.protocol !== 'https:' || url.port !== '' || !(isBlueskyHost(url.hostname) || url.origin === PUBLIC_APPVIEW)) throw new Error(`host not allowed for Bluesky: ${url.hostname}`);
-    return fetchImpl(url.toString(), { ...init, redirect: 'manual', signal: init?.signal ?? AbortSignal.timeout(timeoutMs) });
+    return fetchImpl(url.toString(), { ...init, redirect: 'manual', signal: requestSignal(init?.signal ?? AbortSignal.timeout(timeoutMs)) });
   };
 }
 
@@ -140,7 +141,7 @@ export function linkFacets(text: string): { index: { byteStart: number; byteEnd:
 
 const textOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
-  return content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+  return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
 };
 
 function blueskyResult(error: unknown): PublishResult {

@@ -8,6 +8,7 @@ import {
   contentHash,
   countLinks,
   countText,
+  sentText,
   effectiveContent,
   nextAction,
   POST_STATUSES,
@@ -47,6 +48,31 @@ describe('countText', () => {
     expect(countText(family, 'graphemes')).toBe(1);
     expect(countText(family, 'codepoints')).toBe(5);
     expect(countText(family, 'utf16')).toBe(8);
+  });
+
+  it('counts the link an adapter adds to the text', () => {
+    const link = 'https://example.com/khuyen-mai';
+    // Threads appends the link after a blank line: 490 + 2 + 30 is over 500.
+    expect(validateVariant({ provider: 'threads', body: 'a'.repeat(490), title: null, media: [], linkUrl: link })).toEqual([{ code: 'TEXT_TOO_LONG', field: 'body', limit: 500, actual: 522 }]);
+    expect(validateVariant({ provider: 'threads', body: 'a'.repeat(490), title: null, media: [] })).toEqual([]);
+    // A text that already holds the link gets nothing more.
+    expect(sentText('threads', `xem ${link}`, link, 0)).toBe(`xem ${link}`);
+    // Facebook adds it to the text only with media; Instagram and the sandbox never.
+    expect(sentText('facebook_page', 'Bài', link, 0)).toBe('Bài');
+    expect(sentText('facebook_page', 'Bài', link, 1)).toBe(`Bài\n\n${link}`);
+    expect(sentText('facebook_page', `Bài ${link}`, link, 1)).toBe(`Bài ${link}`);
+    // Only the whole link counts as held: a longer URL that starts with it does not, punctuation after it does.
+    expect(sentText('threads', `xem ${link}-2`, link, 0)).toBe(`xem ${link}-2\n\n${link}`);
+    expect(sentText('threads', `xem ${link}.`, link, 0)).toBe(`xem ${link}.`);
+    expect(sentText('instagram', 'Bài', link, 1)).toBe('Bài');
+    expect(sentText('linkedin', '  ', link, 0)).toBe(link);
+    expect(sentText('linkedin', 'Bài', '', 0)).toBe('Bài');
+  });
+
+  it('counts the appended link toward the link limit', () => {
+    const body = Array.from({ length: 5 }, (_, i) => `https://a.vn/${i}`).join(' ');
+    expect(validateVariant({ provider: 'threads', body, title: null, media: [] }).some((i) => i.code === 'TOO_MANY_LINKS')).toBe(false);
+    expect(validateVariant({ provider: 'threads', body, title: null, media: [], linkUrl: 'https://b.vn' }).some((i) => i.code === 'TOO_MANY_LINKS')).toBe(true);
   });
 
   it("counts as X does: tone-marked letters, CJK and emoji count two, every link 23", () => {
@@ -109,7 +135,9 @@ describe('validateVariant', () => {
     const codes = (media: MediaItem[]) => validateVariant({ provider: 'instagram', body: 'caption', title: null, media }).map((i) => i.code);
     expect(codes([])).toEqual(['MEDIA_REQUIRED']);
     expect(codes([png()])).toEqual(['IMAGE_TYPE_NOT_ALLOWED']);
-    expect(codes([jpeg(), mp4()])).toEqual(['VIDEO_NOT_SUPPORTED_YET']);
+    expect(codes([jpeg(), mp4()])).toEqual([]);
+    expect(codes([mp4(901)])).toEqual(['VIDEO_TOO_LONG']);
+    expect(codes([mp4(60)])).toEqual([]);
     expect(codes(Array.from({ length: 11 }, () => jpeg()))).toEqual(['TOO_MANY_MEDIA']);
   });
 
@@ -129,9 +157,16 @@ describe('validateVariant', () => {
     expect(fb).toEqual(['TITLE_NOT_SUPPORTED']);
   });
 
+  it("holds Facebook photos to Meta's types and 4 MB", () => {
+    const codes = (media: MediaItem[]) => validateVariant({ provider: 'facebook_page', body: 'x', title: null, media }).map((i) => i.code);
+    expect(codes([jpeg(), png()])).toEqual([]);
+    expect(codes([{ kind: 'image', mime: 'image/webp', sizeBytes: 1000, durationSeconds: null }])).toEqual(['IMAGE_TYPE_NOT_ALLOWED']);
+    expect(codes([jpeg(5 * 1024 * 1024)])).toEqual(['IMAGE_TOO_LARGE']);
+  });
+
   it('refuses images mixed with video where the channel does not mix them', () => {
     const codes = validateVariant({ provider: 'facebook_page', body: '', title: null, media: [jpeg(), mp4()] }).map((i) => i.code);
-    expect(codes).toEqual(['MEDIA_MIX_NOT_ALLOWED', 'VIDEO_NOT_SUPPORTED_YET']);
+    expect(codes).toEqual(['MEDIA_MIX_NOT_ALLOWED']);
   });
 
   it('checks media kinds, sizes and durations', () => {
@@ -149,7 +184,9 @@ describe('validateVariant', () => {
   });
 
   it('says when a channel takes video but its Crove adapter does not post it yet', () => {
-    expect(validateVariant({ provider: 'facebook_page', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual(['VIDEO_NOT_SUPPORTED_YET']);
+    expect(validateVariant({ provider: 'facebook_page', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);
+    expect(validateVariant({ provider: 'linkedin', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);
+    expect(validateVariant({ provider: 'bluesky', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual(['VIDEO_NOT_SUPPORTED_YET']);
     expect(validateVariant({ provider: 'sandbox', body: '', title: null, media: [mp4()] })).toEqual([]);
   });
 

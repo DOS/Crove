@@ -102,10 +102,10 @@ describe('XPublisher', () => {
     expect(calls[2]?.body).toEqual({ text: 'Khai trương chi nhánh mới & ưu đãi\n\nhttps://example.com/a', media: { media_ids: ['1146654567674912769', '1146654567674912770'] } });
   });
 
-  it('posts nothing for a video, an empty post or an unreadable image', async () => {
+  it('posts nothing for a video with images, an empty post or an unreadable image', async () => {
     const none = x({});
     const publisher = new XPublisher(APP, none.fetchImpl);
-    expect(await publisher.publish(input({ content: { ...input().content, media: [{ ...image, mime: 'video/mp4' }] } }))).toMatchObject({ kind: 'rejected', code: 'VIDEO_NOT_SUPPORTED' });
+    expect(await publisher.publish(input({ content: { ...input().content, media: [{ ...image, mime: 'video/mp4' }, image] } }))).toMatchObject({ kind: 'rejected', code: 'ONE_VIDEO_REQUIRED' });
     expect(await publisher.publish(input({ content: { body: ' ', title: null, linkUrl: null, media: [] } }))).toMatchObject({ kind: 'rejected', code: 'EMPTY_POST' });
     expect(
       await publisher.publish(
@@ -118,6 +118,69 @@ describe('XPublisher', () => {
       ),
     ).toMatchObject({ kind: 'rejected', code: 'MEDIA_UNREADABLE' });
     expect(none.calls).toHaveLength(0);
+  });
+
+  describe('video', () => {
+    const MB4 = 4 * 1024 * 1024;
+    const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: MB4 + 10, altText: null };
+    const withClip = (over: Partial<PublishInput> = {}) => input({ content: { ...input().content, media: [clip] }, readMedia: async () => new Uint8Array(MB4 + 10), ...over });
+    const quick = { processingWaitMs: 1000, pollMinMs: 0 };
+    const MEDIA = '1880000000000000001';
+
+    it('uploads in chunks, waits for processing, then posts the video once', async () => {
+      const { fetchImpl, calls } = x({
+        'POST api.x.com/2/media/upload/initialize': [{ body: { data: { id: MEDIA, media_key: `7_${MEDIA}`, expires_after_secs: 86_400 } } }],
+        [`POST api.x.com/2/media/upload/${MEDIA}/append`]: [{ body: {} }, { body: {} }],
+        [`POST api.x.com/2/media/upload/${MEDIA}/finalize`]: [{ body: { data: { id: MEDIA, processing_info: { state: 'pending', check_after_secs: 0 } } } }],
+        'GET api.x.com/2/media/upload': [{ body: { data: { processing_info: { state: 'in_progress', check_after_secs: 0, progress_percent: 40 } } } }, { body: { data: { processing_info: { state: 'succeeded', progress_percent: 100 } } } }],
+        'POST api.x.com/2/tweets': [{ status: 201, body: { data: { id: '1445880548472328300', text: 'x' } } }],
+      });
+      const publisher = new XPublisher(APP, fetchImpl, quick);
+      expect(publisher.callTimeoutMs).toBeGreaterThan(300_000);
+      expect(publisher.callTimeoutMs).toBeLessThan(600_000);
+      expect(await publisher.publish(withClip())).toEqual({ kind: 'accepted', externalId: '1445880548472328300', url: 'https://x.com/i/status/1445880548472328300' });
+      expect(calls[0]?.body).toEqual({ media_type: 'video/mp4', total_bytes: MB4 + 10, media_category: 'tweet_video' });
+      const appends = calls.filter((c) => c.route.endsWith('/append')).map((c) => c.body as FormData);
+      expect(appends.map((f) => f.get('segment_index'))).toEqual(['0', '1']);
+      expect(appends.map((f) => (f.get('media') as Blob).size)).toEqual([MB4, 10]);
+      expect(calls.find((c) => c.route === 'GET api.x.com/2/media/upload')?.url.searchParams.get('command')).toBe('STATUS');
+      expect(calls.at(-1)?.body).toEqual({ text: 'Khai trương chi nhánh mới & ưu đãi\n\nhttps://example.com/a', media: { media_ids: [MEDIA] } });
+    });
+
+    it('stops before posting once the call budget is spent, and keeps waiting on a status check without processing info', async () => {
+      const spent = x({ 'POST api.x.com/2/media/upload/initialize': [{ body: { data: { id: MEDIA } } }] });
+      expect(await new XPublisher(APP, spent.fetchImpl, { ...quick, budgetMs: 0 }).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'transient', code: 'VIDEO_TOO_SLOW' });
+      expect(spent.calls.map((c) => c.route)).toEqual(['POST api.x.com/2/media/upload/initialize']);
+      const blank = x({
+        'POST api.x.com/2/media/upload/initialize': [{ body: { data: { id: MEDIA } } }],
+        [`POST api.x.com/2/media/upload/${MEDIA}/append`]: [{ body: {} }, { body: {} }],
+        [`POST api.x.com/2/media/upload/${MEDIA}/finalize`]: [{ body: { data: { processing_info: { state: 'pending', check_after_secs: 0 } } } }],
+        'GET api.x.com/2/media/upload': [{ body: {} }, { body: { data: { processing_info: { state: 'succeeded' } } } }],
+        'POST api.x.com/2/tweets': [{ status: 201, body: { data: { id: '1445880548472328301' } } }],
+      });
+      expect(await new XPublisher(APP, blank.fetchImpl, quick).publish(withClip())).toMatchObject({ kind: 'accepted', externalId: '1445880548472328301' });
+      expect(blank.calls.filter((c) => c.route === 'GET api.x.com/2/media/upload')).toHaveLength(2);
+    });
+
+    it('posts nothing when processing fails, outlasts the wait, or a chunk is refused', async () => {
+      const init = { 'POST api.x.com/2/media/upload/initialize': [{ body: { data: { id: MEDIA } } }] };
+      const failed = x({
+        ...init,
+        [`POST api.x.com/2/media/upload/${MEDIA}/append`]: [{ body: {} }, { body: {} }],
+        [`POST api.x.com/2/media/upload/${MEDIA}/finalize`]: [{ body: { data: { processing_info: { state: 'failed', error: { message: 'InvalidMedia' } } } } }],
+      });
+      expect(await new XPublisher(APP, failed.fetchImpl, quick).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'VIDEO_PROCESSING_FAILED', message: 'InvalidMedia' });
+      const slow = x({
+        'POST api.x.com/2/media/upload/initialize': [{ body: { data: { id: MEDIA } } }],
+        [`POST api.x.com/2/media/upload/${MEDIA}/append`]: [{ body: {} }, { body: {} }],
+        [`POST api.x.com/2/media/upload/${MEDIA}/finalize`]: [{ body: { data: { processing_info: { state: 'in_progress', check_after_secs: 0 } } } }],
+        'GET api.x.com/2/media/upload': Array.from({ length: 200 }, () => ({ body: { data: { processing_info: { state: 'in_progress', check_after_secs: 0 } } } })),
+      });
+      expect(await new XPublisher(APP, slow.fetchImpl, { processingWaitMs: 20, pollMinMs: 5 }).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'transient', code: 'VIDEO_STILL_PROCESSING' });
+      const refused = x({ 'POST api.x.com/2/media/upload/initialize': [{ body: { data: { id: MEDIA } } }], [`POST api.x.com/2/media/upload/${MEDIA}/append`]: [{ status: 503, body: {} }] });
+      expect(await new XPublisher(APP, refused.fetchImpl, quick).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'transient' });
+      for (const run of [failed, slow, refused]) expect(run.calls.some((c) => c.route === 'POST api.x.com/2/tweets')).toBe(false);
+    });
   });
 
   it('waits out the rate limit until X resets it, and treats a failed image upload as nothing posted', async () => {

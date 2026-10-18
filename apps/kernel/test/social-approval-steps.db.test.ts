@@ -157,6 +157,9 @@ suite('social multi-step approval on PostgreSQL (S9)', () => {
     const lowered = await exec<{ approved: string[] }>(o, o.owner, 'social.channel.set_policy', { connectionId: strict, approvalsRequired: 2 });
     expect(lowered.approved).toEqual([(await get(o, postId)).variants[0]?.id]);
     expect((await get(o, postId)).variants[0]?.status).toBe('approved');
+    // The approval reaches event consumers as a decision would, marked as made by the policy (#408).
+    const events = await admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.variant.decided' AND payload->>'by_policy' = 'true'", [o.orgId])).rows);
+    expect(events.map((e) => e.payload)).toEqual([{ post_id: postId, decision: 'approved', variant_ids: lowered.approved, waiting_variant_ids: [], by_policy: true }]);
 
     const plain = await inReview(o, await connection(o));
     expect((await get(o, plain)).variants[0]?.review).toEqual({ required: 1, approvedBy: [] });

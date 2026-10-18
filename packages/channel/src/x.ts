@@ -4,9 +4,10 @@
 //
 // Connect: X's dialog for tweet.read, tweet.write, users.read, media.write and offline.access, with PKCE; the access
 // token lives two hours and the refresh schedule renews it, keeping whichever refresh token X hands back.
-// Publish: each image is uploaded first (nothing is visible until a post names it), then one POST /2/tweets. Video
-// waits for the chunked upload. An unclear answer is checked against the account's recent posts by text and time.
+// Publish: each image is uploaded first (nothing is visible until a post names it), then one POST /2/tweets; a video
+// goes through the chunked upload and X's processing first (#449). An unclear answer is checked against the account's recent posts by text and time.
 import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const X_HOSTS = ['api.x.com'] as const;
@@ -224,7 +225,7 @@ const beforePost = (result: PublishResult): PublishResult =>
 
 const textOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
-  return content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+  return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
 };
 
 // Links X finds without a scheme, on the common TLDs (the Social checks count the same ones).
@@ -253,20 +254,43 @@ interface Timeline {
   data?: { id?: unknown; text?: unknown; created_at?: unknown }[];
 }
 
+interface ProcessingInfo {
+  state?: unknown;
+  check_after_secs?: unknown;
+  error?: { message?: unknown };
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const VIDEO_TYPES = ['video/mp4', 'video/quicktime'];
+// Under X's 5 MB per append.
+const VIDEO_CHUNK = 4 * 1024 * 1024;
+// How long a publish waits for X to process a video; with the upload it stays inside callTimeoutMs.
+const PROCESSING_WAIT_MS = 300_000;
+const VIDEO_CALL_MARGIN_MS = 90_000;
+
 export class XPublisher implements Publisher {
   readonly provider = 'x' as const;
   readonly publishSafety: RetrySafety = 'reconcile_only';
+  // A video's upload and processing take minutes; within the job's stale limit (600 s).
+  readonly callTimeoutMs = 420_000;
   private readonly client: XClient;
+  private readonly processingWaitMs: number;
+  private readonly pollMinMs: number;
+  private readonly budgetMs: number;
 
-  constructor(app: XAppConfig, fetchImpl?: Fetch) {
+  constructor(app: XAppConfig, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMinMs?: number; budgetMs?: number } = {}) {
     this.client = new XClient(app, fetchImpl);
+    this.processingWaitMs = timing.processingWaitMs ?? PROCESSING_WAIT_MS;
+    this.pollMinMs = timing.pollMinMs ?? 1000;
+    // The last status check and the post (30 s each at most) plus slack fit between the budget and callTimeoutMs.
+    this.budgetMs = timing.budgetMs ?? this.callTimeoutMs - VIDEO_CALL_MARGIN_MS;
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
     const s = xSecretOf(input.secret);
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
     const { media } = input.content;
-    if (media.some((m) => m.mime.startsWith('video/'))) return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_NOT_SUPPORTED' };
+    if (media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, s.accessToken);
     if (media.length > MAX_IMAGES) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_IMAGES' };
     if (media.some((m) => !IMAGE_TYPES.includes(m.mime))) return { kind: 'rejected', error: 'bad_request', code: 'IMAGE_TYPE' };
     const text = textOf(input.content);
@@ -294,17 +318,77 @@ export class XPublisher implements Publisher {
         return beforePost(publishResult(error));
       }
     }
+    return this.post(s.accessToken, text, mediaIds);
+  }
+
+  // The one visible step.
+  private async post(token: string, text: string, mediaIds: readonly string[]): Promise<PublishResult> {
     const post: Record<string, unknown> = {};
     if (text) post.text = text;
     if (mediaIds.length > 0) post.media = { media_ids: mediaIds };
     try {
-      const answer = await this.client.call<{ data?: { id?: unknown } }>('POST', '/tweets', s.accessToken, { json: post });
+      const answer = await this.client.call<{ data?: { id?: unknown } }>('POST', '/tweets', token, { json: post });
       const id = answer?.data?.id;
       if (typeof id !== 'string' || !POST_ID.test(id)) return { kind: 'unknown', code: 'NO_POST_ID' };
       return { kind: 'accepted', externalId: id, url: postUrl(id) };
     } catch (error) {
       return publishResult(error);
     }
+  }
+
+  // One video (#449): the chunked upload (initialize, append per chunk, finalize), a wait while X processes it, then
+  // the post. The video is invisible until the post names it, so every failure before the post posted nothing, and a
+  // video X is still processing when the wait ends is a transient failure: the next attempt uploads it again. The text
+  // is not kept anywhere on X meanwhile, which is why the post is not left to a later status check.
+  private async publishVideo(input: PublishInput, token: string): Promise<PublishResult> {
+    const { media } = input.content;
+    const video = media[0];
+    if (!video || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
+    if (!VIDEO_TYPES.includes(video.mime)) return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TYPE' };
+    let bytes: Uint8Array;
+    try {
+      bytes = await input.readMedia(video.fileId);
+    } catch {
+      return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
+    }
+    // One budget for the whole call, upload included, ending well before the job gives up on it (callTimeoutMs): past
+    // it nothing is visible yet, so the call stops as transient instead of posting after the job recorded unknown.
+    const budgetEnd = Date.now() + this.budgetMs;
+    const late = (): PublishResult => ({ kind: 'rejected', error: 'transient', code: 'VIDEO_TOO_SLOW' });
+    let id: string;
+    try {
+      const init = await this.client.call<{ data?: { id?: unknown } }>('POST', '/media/upload/initialize', token, {
+        json: { media_type: video.mime, total_bytes: bytes.byteLength, media_category: 'tweet_video' },
+      });
+      const got = init?.data?.id;
+      if (typeof got !== 'string' || !MEDIA_ID.test(got)) return { kind: 'rejected', error: 'transient', code: 'NO_MEDIA_ID' };
+      id = got;
+      for (let i = 0, start = 0; start < bytes.byteLength; i++, start += VIDEO_CHUNK) {
+        if (Date.now() >= budgetEnd) return late();
+        const form = new FormData();
+        form.set('segment_index', String(i));
+        form.set('media', new Blob([bytes.slice(start, start + VIDEO_CHUNK)], { type: 'application/octet-stream' }));
+        await this.client.call('POST', `/media/upload/${id}/append`, token, { form });
+      }
+      const finished = await this.client.call<{ data?: { processing_info?: ProcessingInfo } }>('POST', `/media/upload/${id}/finalize`, token);
+      let info = finished?.data?.processing_info;
+      // No processing info right after finalize: the media is ready. After a status check only "succeeded" is.
+      let ready = info === undefined || info.state === 'succeeded';
+      const deadline = Math.min(Date.now() + this.processingWaitMs, budgetEnd);
+      while (!ready) {
+        if (info?.state === 'failed') return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_PROCESSING_FAILED', ...(typeof info.error?.message === 'string' ? { message: info.error.message } : {}) };
+        if (Date.now() >= deadline) return { kind: 'rejected', error: 'transient', code: 'VIDEO_STILL_PROCESSING' };
+        const after = Number(info?.check_after_secs);
+        await sleep(Math.min(Math.max(Number.isFinite(after) ? after * 1000 : 5000, this.pollMinMs), 30_000, Math.max(0, deadline - Date.now())));
+        const status = await this.client.call<{ data?: { processing_info?: ProcessingInfo } }>('GET', `/media/upload?${new URLSearchParams({ command: 'STATUS', media_id: id }).toString()}`, token);
+        info = status?.data?.processing_info;
+        ready = info?.state === 'succeeded';
+      }
+    } catch (error) {
+      return beforePost(publishResult(error));
+    }
+    if (Date.now() >= budgetEnd) return late();
+    return this.post(token, textOf(input.content), [id]);
   }
 
   // The account's own posts since just before the call, matched by their text with links left out. A post with no

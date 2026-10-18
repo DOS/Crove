@@ -109,6 +109,28 @@ describe('ThreadsPublisher', () => {
     expect(empty.calls).toHaveLength(0);
   });
 
+  it('posts a video alone or in a carousel with images', async () => {
+    const { fetchImpl, calls } = threads({
+      [`POST /v1.0/${USER}/threads`]: [{ body: { id: '9101' } }, { body: { id: '9201' } }, { body: { id: '9202' } }, { body: { id: '9203' } }],
+      'GET /v1.0/9101': [{ body: { status: 'FINISHED' } }],
+      'GET /v1.0/9203': [{ body: { status: 'FINISHED' } }],
+      [`POST /v1.0/${USER}/threads_publish`]: [{ body: { id: '18100000000000101' } }, { body: { id: '18100000000000102' } }],
+      'GET /v1.0/18100000000000101': [{ body: {} }],
+      'GET /v1.0/18100000000000102': [{ body: {} }],
+    });
+    const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 10, altText: null };
+    const publisher = new ThreadsPublisher(fetchImpl, fast);
+    expect((await publisher.publish(input({ content: { body: 'Video', title: null, linkUrl: null, media: [clip] } }))).kind).toBe('accepted');
+    expect(calls[0]?.form).toEqual({ media_type: 'VIDEO', video_url: 'https://bucket.example/v-1', text: 'Video' });
+    const mixed = { body: 'Ảnh và video', title: null, linkUrl: null, media: [{ fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 10, altText: null }, clip] };
+    expect((await publisher.publish(input({ content: mixed }))).kind).toBe('accepted');
+    expect(calls.filter((c) => c.route === `POST /v1.0/${USER}/threads`).slice(1).map((c) => c.form)).toEqual([
+      { media_type: 'IMAGE', image_url: 'https://bucket.example/f-1', is_carousel_item: 'true' },
+      { media_type: 'VIDEO', video_url: 'https://bucket.example/v-1', is_carousel_item: 'true' },
+      { media_type: 'CAROUSEL', children: '9201,9202', text: 'Ảnh và video' },
+    ]);
+  });
+
   it('reports pending, then recognises the post on the status check by its text', async () => {
     const { fetchImpl } = threads({
       [`POST /v1.0/${USER}/threads`]: [{ body: { id: '9001' } }],

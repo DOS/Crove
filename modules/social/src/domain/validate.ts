@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, VIDEO_ONLY_ADAPTERS, VIDEO_READY, countLinks, countText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { CAPABILITIES, VIDEO_ONLY_ADAPTERS, VIDEO_READY, countLinks, countText, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
 export const TIKTOK_PRIVACY: readonly string[] = ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'];
@@ -18,6 +18,8 @@ export interface VariantDraft {
   body: string;
   title: string | null;
   media: readonly MediaItem[];
+  // The post's link: the adapters of some channels add it to the text, which then counts against the limit.
+  linkUrl?: string | null;
   // The variant's provider settings (privacy level and the like); absent is none.
   settings?: Readonly<Record<string, unknown>>;
 }
@@ -67,7 +69,9 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
   const issues: Issue[] = [];
   // No channel takes an empty post: it needs text or media.
   if (variant.body.trim() === '' && variant.media.length === 0) issues.push({ code: 'CONTENT_REQUIRED', field: 'body', limit: null, actual: null });
-  checkText(issues, 'body', variant.body, caps.body);
+  // The text as the adapter sends it, with the link it appends.
+  const sent = sentText(variant.provider, variant.body, variant.linkUrl, variant.media.length);
+  checkText(issues, 'body', sent, caps.body);
   if (caps.title) checkText(issues, 'title', variant.title ?? '', caps.title);
   else if (variant.title !== null && variant.title.trim() !== '') issues.push({ code: 'TITLE_NOT_SUPPORTED', field: 'title', limit: null, actual: null });
 
@@ -111,7 +115,7 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
     issues.push({ code: 'PRIVACY_REQUIRED', field: 'settings.privacyLevel', limit: null, actual: null });
   }
   if (caps.maxLinks !== null) {
-    const links = countLinks(variant.body);
+    const links = countLinks(sent);
     if (links > caps.maxLinks) issues.push({ code: 'TOO_MANY_LINKS', field: 'body', limit: caps.maxLinks, actual: links });
   }
   return issues;
