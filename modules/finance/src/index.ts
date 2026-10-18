@@ -3,7 +3,7 @@ import { recordPurchase, revisePurchase } from './record.ts';
 import { prepareReversal, reverseEntry } from './reversal.ts';
 import { openingBalancePost, openingBalancePreview } from './opening-balance.ts';
 import { fileForExtraction, purchaseLookup } from './extract.ts';
-import { accountsList, documentsList, journalExport, journalGet, journalList, purchaseVouchers, vendorsList, voidedProposals } from './queries.ts';
+import { accountsList, documentsList, journalExport, journalGet, journalList, purchaseVouchers, salesVouchers, vendorsList, voidedProposals } from './queries.ts';
 import { vatExport, vatPeriodQuery } from './vat.ts';
 import { ledgerAccountQuery, ledgerBookQuery, ledgerExport, ledgerPeriodQuery } from './ledger-reports.ts';
 
@@ -44,6 +44,7 @@ export const financeQueries = [
   accountsList,
   voidedProposals,
   purchaseVouchers,
+  salesVouchers,
   vatPeriodQuery,
   ledgerPeriodQuery,
   ledgerAccountQuery,

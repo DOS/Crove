@@ -439,7 +439,7 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
                       SELECT org_id, party_id, invoice_series, $3, invoice_date, subtotal, vat_amount, total, $4::uuid
                       FROM crove_finance.purchase_document WHERE org_id = $1 AND id = $2`;
       // Another document of the same invoice that replaces nothing, or a voided document already replaced: refused.
-      expect(await refused(docRow, [org.orgId, secondDocument, '7001', null])).toMatchObject({ code: '23505', constraint: 'purchase_document_invoice_uq' });
+      expect(await refused(docRow, [org.orgId, secondDocument, '7001', null])).toMatchObject({ code: '23505', constraint: 'purchase_document_purchase_invoice_uq' });
       expect(await refused(docRow, [org.orgId, secondDocument, '7001', firstDocument])).toMatchObject({ code: '23505', constraint: 'purchase_document_replaces_uq' });
       // Replacing a document in force, or a voided document of another invoice: refused.
       expect(await refused(docRow, [org.orgId, secondDocument, '7001', secondDocument])).toMatchObject({ code: '23514', message: expect.stringMatching(/only a voided document/) });

@@ -147,6 +147,10 @@ export function JournalPage() {
   const exportMisa = useMutation({
     mutationFn: () => download('/api/export/misa/purchases.xlsx', t('exportMisaFile', { org: getCurrentOrg() ?? 'org' })),
   });
+  // Sales vouchers in MISA's sales template (#313).
+  const exportMisaSales = useMutation({
+    mutationFn: () => download('/api/export/misa/sales.xlsx', t('exportMisaSalesFile', { org: getCurrentOrg() ?? 'org' })),
+  });
   const nothingToExport = (journal.data?.length ?? 0) === 0;
 
   return (
@@ -165,6 +169,10 @@ export function JournalPage() {
               {exportMisa.isPending ? <Spinner className="text-current" /> : null}
               {t('exportMisa')}
             </Button>
+            <Button size="lg" variant="outline" onClick={() => exportMisaSales.mutate()} disabled={exportMisaSales.isPending || nothingToExport}>
+              {exportMisaSales.isPending ? <Spinner className="text-current" /> : null}
+              {t('exportMisaSales')}
+            </Button>
             <Button size="lg" onClick={() => exportXlsx.mutate()} disabled={exportXlsx.isPending || nothingToExport}>
               {exportXlsx.isPending ? <Spinner className="text-current" /> : null}
               {t('export')}
@@ -182,9 +190,9 @@ export function JournalPage() {
           <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="mt-1 w-44" />
         </label>
       </div>
-      {(exportXlsx.error || exportMisa.error) && (
+      {(exportXlsx.error || exportMisa.error || exportMisaSales.error) && (
         <div className="mb-4">
-          <ErrorText>{errorMessage(exportXlsx.error ?? exportMisa.error)}</ErrorText>
+          <ErrorText>{errorMessage(exportXlsx.error ?? exportMisa.error ?? exportMisaSales.error)}</ErrorText>
         </div>
       )}
       {journal.isLoading ? (
@@ -201,6 +209,7 @@ export function JournalPage() {
                 <p className="text-sm font-medium text-foreground">{entry.description}</p>
                 <div className="flex flex-wrap items-center gap-2">
                   {entry.sourceType === OPENING_BALANCE_SOURCE && <Badge variant="secondary">{ob('badge')}</Badge>}
+                  {entry.document?.direction === 'sale' && <Badge variant="secondary">{t('saleBadge')}</Badge>}
                   {entry.reverses && <Badge variant="secondary">{t('reversalBadge')}</Badge>}
                   {entry.reversedBy && <Badge variant="warning">{t('reversedBadge')}</Badge>}
                   {entry.pendingReversalId && !entry.reversedBy && <Badge variant="secondary">{t('reversalPendingBadge')}</Badge>}

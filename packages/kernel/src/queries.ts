@@ -34,7 +34,7 @@ export function orgDetailQuery(options: OrgDetailOptions) {
     handler: async (ctx) => {
       const tenant = await ctx.trx
         .selectFrom('crove_kernel.tenant')
-        .select(['org_id', 'slug', 'name', 'inbound_token'])
+        .select(['org_id', 'slug', 'name', 'inbound_token', 'tax_code'])
         .where('org_id', '=', ctx.orgId)
         .executeTakeFirstOrThrow();
       const memberRows = await ctx.trx
@@ -62,6 +62,7 @@ export function orgDetailQuery(options: OrgDetailOptions) {
         slug: tenant.slug,
         name: tenant.name,
         role: ctx.role ?? 'viewer',
+        taxCode: tenant.tax_code,
         inboundAddress: seesInbound ? `${tenant.inbound_token}@${options.inboundDomain}` : null,
         inboundDroppedCount,
         members: members.map((m) => ({ userId: m.user_id, email: m.email, displayName: m.display_name, role: m.role })),
@@ -100,12 +101,15 @@ function toInboxItem(row: {
   created_at: Date;
 }) {
   const payload = parsePayload(row.kind, row.payload);
+  const direction = payload ? (payload.direction ?? 'purchase') : null;
   return {
     id: row.id,
     kind: row.kind,
     status: row.status,
     title: row.title,
+    direction,
     sellerName: payload?.seller.name ?? null,
+    buyerName: direction === 'sale' ? (payload?.buyer.name ?? null) : null,
     total: payload?.invoice.total ?? null,
     issueDate: payload?.invoice.issueDate ?? null,
     failedChecks: countChecks(payload, 'fail'),
@@ -127,6 +131,8 @@ export const inboxList = defineQuery({
       .select(['id', 'kind', 'status', 'title', 'duplicate_of', 'created_at'])
       .select([
         sql<string | null>`left(payload #>> '{seller,name}', 500)`.as('seller_name'),
+        sql<boolean>`coalesce(payload ->> 'direction' = 'sale', false)`.as('is_sale'),
+        sql<string | null>`left(payload #>> '{buyer,name}', 500)`.as('buyer_name'),
         sql<string | null>`left(payload #>> '{invoice,total}', 30)`.as('total'),
         sql<string | null>`left(payload #>> '{invoice,issueDate}', 10)`.as('issue_date'),
         countChecksSql('fail').as('failed_checks'),
@@ -141,7 +147,9 @@ export const inboxList = defineQuery({
       kind: row.kind,
       status: row.status,
       title: row.title,
+      direction: row.kind === PURCHASE_KIND ? (row.is_sale ? ('sale' as const) : ('purchase' as const)) : null,
       sellerName: row.seller_name,
+      buyerName: row.kind === PURCHASE_KIND && row.is_sale ? row.buyer_name : null,
       total: row.total && zMoney.safeParse(row.total).success ? row.total : null,
       issueDate: row.issue_date && zLocalDate.safeParse(row.issue_date).success ? row.issue_date : null,
       failedChecks: Number(row.failed_checks),

@@ -4,12 +4,15 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { ExtractClient, ExtractFailure } from '@crove/extract-contract';
-import { zId, zPurchaseProposal, type PurchaseProposal } from '@crove/kernel-contract';
+import { zId, zPurchaseProposal, type DocumentDirection, type PurchaseProposal } from '@crove/kernel-contract';
 import { defineQuery, readVerified, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { AiNotConfiguredError, AmountFormatError, type InvoiceReader } from '@crove/agent';
+import { journalMemo } from './memo.ts';
 import {
   bookableLines,
+  bookableSaleLines,
   buildPurchaseJournal,
+  buildSalesJournal,
   checkInvoice,
   looksLikeEInvoiceXml,
   parseTaxCode,
@@ -42,20 +45,33 @@ export const fileForExtraction = defineQuery({
   },
 });
 
+export interface InvoiceLookup {
+  // 'sale' when the seller's tax code is the org's own (crove_kernel.tenant.tax_code, issue #313).
+  direction: DocumentDirection;
+  vendorDefault: string | null;
+  duplicateDocumentId: string | null;
+  duplicateProposalId: string | null;
+}
+
 export const purchaseLookup = defineQuery({
   name: 'finance.extraction.lookup',
   // fileId: the file being read. Its own proposals are not duplicates of it (a re-extraction revises them).
   input: z.object({ fileId: zId, sellerTaxCode: z.string().nullable(), sellerName: z.string(), series: z.string(), number: z.string() }),
   access: 'system',
-  handler: async (ctx, input) => {
-    const party = input.sellerTaxCode
-      ? await ctx.trx
-          .selectFrom('crove_kernel.party')
-          .select('id')
-          .where('org_id', '=', ctx.orgId)
-          .where('tax_code', '=', input.sellerTaxCode)
-          .executeTakeFirst()
-      : undefined;
+  handler: async (ctx, input): Promise<InvoiceLookup> => {
+    const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
+    // A sale (issue #313): the org issued the invoice and numbers its own invoices, so a duplicate is the same series
+    // and number whoever the customer is, and no account is remembered per customer.
+    const sale = Boolean(input.sellerTaxCode && org?.tax_code && input.sellerTaxCode === org.tax_code);
+    const party =
+      !sale && input.sellerTaxCode
+        ? await ctx.trx
+            .selectFrom('crove_kernel.party')
+            .select('id')
+            .where('org_id', '=', ctx.orgId)
+            .where('tax_code', '=', input.sellerTaxCode)
+            .executeTakeFirst()
+        : undefined;
     const rule = party
       ? await ctx.trx
           .selectFrom('crove_finance.vendor_account_rule')
@@ -64,20 +80,20 @@ export const purchaseLookup = defineQuery({
           .where('party_id', '=', party.id)
           .executeTakeFirst()
       : undefined;
-    // A document voided by a reversal (#165) is no longer in the books, so it is not a duplicate.
-    const document = party
-      ? await ctx.trx
-          .selectFrom('crove_finance.purchase_document as d')
-          .select('d.id')
-          .where('d.org_id', '=', ctx.orgId)
-          .where('d.party_id', '=', party.id)
-          .where('d.invoice_series', '=', input.series)
-          .where('d.invoice_number', '=', input.number)
-          .where(({ not, exists, selectFrom }) =>
-            not(exists(selectFrom('crove_finance.purchase_document_void as v').select('v.document_id').whereRef('v.org_id', '=', 'd.org_id').whereRef('v.document_id', '=', 'd.id'))),
-          )
-          .executeTakeFirst()
-      : undefined;
+    // A document voided by a reversal (#165) is no longer in the books, so it is not a duplicate. A purchase from a
+    // supplier not yet in the books has no document.
+    let documents = ctx.trx
+      .selectFrom('crove_finance.purchase_document as d')
+      .select('d.id')
+      .where('d.org_id', '=', ctx.orgId)
+      .where('d.direction', '=', sale ? 'sale' : 'purchase')
+      .where('d.invoice_series', '=', input.series)
+      .where('d.invoice_number', '=', input.number)
+      .where(({ not, exists, selectFrom }) =>
+        not(exists(selectFrom('crove_finance.purchase_document_void as v').select('v.document_id').whereRef('v.org_id', '=', 'd.org_id').whereRef('v.document_id', '=', 'd.id'))),
+      );
+    if (party) documents = documents.where('d.party_id', '=', party.id);
+    const document = sale || party ? await documents.executeTakeFirst() : undefined;
     const duplicate = await ctx.trx
       .selectFrom('crove_kernel.proposal')
       .select('id')
@@ -97,13 +113,17 @@ export const purchaseLookup = defineQuery({
           ),
         ),
       )
+      .where(sql`coalesce(payload ->> 'direction', 'purchase')`, '=', sale ? 'sale' : 'purchase')
       .where(sql`payload #>> '{invoice,series}'`, '=', input.series)
       .where(sql`payload #>> '{invoice,number}'`, '=', input.number)
-      .where(input.sellerTaxCode ? sql`payload #>> '{seller,taxCode}'` : sql`payload #>> '{seller,name}'`, '=', input.sellerTaxCode ?? input.sellerName)
+      .$if(!sale, (q) =>
+        q.where(input.sellerTaxCode ? sql`payload #>> '{seller,taxCode}'` : sql`payload #>> '{seller,name}'`, '=', input.sellerTaxCode ?? input.sellerName),
+      )
       .orderBy('created_at')
       .limit(1)
       .executeTakeFirst();
     return {
+      direction: sale ? 'sale' : 'purchase',
       vendorDefault: rule?.debit_account ?? null,
       duplicateDocumentId: document?.id ?? null,
       duplicateProposalId: duplicate?.id ?? null,
@@ -230,7 +250,7 @@ export async function extractAndPropose(
   if (!invoice) return fail(error ?? 'Không đọc được chứng từ');
 
   const sellerTaxCode = parseTaxCode(invoice.seller.taxCode)?.normalized ?? null;
-  const lookup = await deps.runtime.query<{ vendorDefault: string | null; duplicateDocumentId: string | null; duplicateProposalId: string | null }>(
+  const lookup = await deps.runtime.query<InvoiceLookup>(
     'finance.extraction.lookup',
     { fileId, sellerTaxCode, sellerName: invoice.seller.name, series: invoice.series, number: invoice.number },
     { actor, orgId },
@@ -240,13 +260,19 @@ export async function extractAndPropose(
   if (lookup.duplicateDocumentId || lookup.duplicateProposalId) {
     checks.unshift({ id: 'duplicate', status: 'fail', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' });
   }
-  const lines = bookableLines(invoice, lookup.vendorDefault);
+  // A sale (issue #313) books every line to revenue; a purchase proposes an expense or asset account per line.
+  const sale = lookup.direction === 'sale';
+  const lines = sale ? bookableSaleLines(invoice) : bookableLines(invoice, lookup.vendorDefault);
   if (lines.length === 0) return fail('Hóa đơn không có dòng hàng hóa, dịch vụ để hạch toán', checks);
 
-  const memo = `HĐ ${invoice.series ? `${invoice.series}-` : ''}${invoice.number} ${invoice.seller.name}`.trim();
+  const seller = { ...invoice.seller, taxCode: sellerTaxCode ?? invoice.seller.taxCode };
+  const buyer = sale ? { ...invoice.buyer, taxCode: parseTaxCode(invoice.buyer.taxCode)?.normalized ?? invoice.buyer.taxCode } : invoice.buyer;
+  const direction = sale ? { direction: 'sale' as const } : {};
+  const memo = journalMemo({ ...direction, seller, buyer, invoice });
   const payload: PurchaseProposal = {
-    seller: { ...invoice.seller, taxCode: sellerTaxCode ?? invoice.seller.taxCode },
-    buyer: invoice.buyer,
+    ...direction,
+    seller,
+    buyer,
     invoice: {
       template: invoice.template,
       series: invoice.series,
@@ -260,7 +286,7 @@ export async function extractAndPropose(
       total: invoice.total,
     },
     lines,
-    journal: buildPurchaseJournal(lines, invoice.vatTotal, memo),
+    journal: sale ? buildSalesJournal(lines, invoice.vatTotal, memo) : buildPurchaseJournal(lines, invoice.vatTotal, memo),
     checks,
     sourceFileId: fileId,
     extractionMethod: method === 'unsupported' ? 'einvoice_xml' : method,

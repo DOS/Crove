@@ -14,7 +14,7 @@ import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { errorMessage, fetchFile, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
-import { isZeroAmount, linesBalance, previewPurchaseJournal } from '../lib/decimal.ts';
+import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal } from '../lib/decimal.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { reversalErrorMessage } from '../lib/reversal.ts';
 import { pollEvery, useStreamLive } from '../lib/stream-hook.ts';
@@ -161,7 +161,12 @@ export function InboxDetailPage() {
     () => (payload?.lines ?? []).map((l) => ({ ...l, debitAccount: lineAccounts[l.lineNo] ?? l.debitAccount })),
     [payload, lineAccounts],
   );
-  const journal = useMemo(() => (payload ? previewPurchaseJournal(lines, payload.invoice.vatTotal) : []), [payload, lines]);
+  // A sale (issue #313): the org issued the invoice, the buyer is the customer, and the lines go to revenue.
+  const sale = payload?.direction === 'sale';
+  const journal = useMemo(
+    () => (payload ? (payload.direction === 'sale' ? previewSalesJournal : previewPurchaseJournal)(lines, payload.invoice.vatTotal) : []),
+    [payload, lines],
+  );
   const accountName = (code: string) => accounts.data?.find((a) => a.code === code)?.name ?? '';
 
   const done = async () => {
@@ -245,7 +250,7 @@ export function InboxDetailPage() {
       </Link>
       <div className="mt-3">
         <PageHeader
-          title={payload?.seller.name ?? item.title}
+          title={(sale ? payload?.buyer.name || null : payload?.seller.name) ?? item.title}
           subtitle={
             payload
               ? payload.invoice.series
@@ -389,18 +394,19 @@ export function InboxDetailPage() {
         </div>
       )}
 
+      {sale && <p className="mb-4 text-sm text-muted-foreground">{t('saleNotice')}</p>}
       <div className="grid gap-6 lg:grid-cols-5">
         <div className="space-y-6 lg:col-span-3">
           {payload && (
             <Card className="grid gap-4 p-4 sm:grid-cols-2">
               <div>
-                <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('seller')}</p>
+                <p className="text-xs tracking-wide uppercase text-subtle-foreground">{sale ? t('sellerOwn') : t('seller')}</p>
                 <p className="mt-1 text-sm font-medium text-foreground">{payload.seller.name}</p>
                 <p className="text-xs text-muted-foreground">{t('taxCode', { code: payload.seller.taxCode ?? t('noTaxCode') })}</p>
                 <p className="text-xs text-subtle-foreground">{payload.seller.address}</p>
               </div>
               <div>
-                <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('buyer')}</p>
+                <p className="text-xs tracking-wide uppercase text-subtle-foreground">{sale ? t('customer') : t('buyer')}</p>
                 <p className="mt-1 text-sm font-medium text-foreground">{payload.buyer.name || t('notStated')}</p>
                 <p className="text-xs text-muted-foreground">{t('taxCode', { code: payload.buyer.taxCode ?? t('noTaxCode') })}</p>
               </div>
@@ -444,7 +450,7 @@ export function InboxDetailPage() {
                   <tr>
                     <th className="py-1.5 pr-2 font-medium">{t('description')}</th>
                     <th className="py-1.5 pr-2 text-right font-medium">{t('amount')}</th>
-                    <th className="py-1.5 font-medium">{t('debitAccount')}</th>
+                    <th className="py-1.5 font-medium">{sale ? t('revenueAccount') : t('debitAccount')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -459,7 +465,7 @@ export function InboxDetailPage() {
                         <NativeSelect
                           size="sm"
                           disabled={!item.canEdit || busy}
-                          aria-label={t('debitAccountFor', { line: String(l.lineNo) })}
+                          aria-label={sale ? t('revenueAccountFor', { line: String(l.lineNo) }) : t('debitAccountFor', { line: String(l.lineNo) })}
                           className="w-48"
                           value={l.debitAccount}
                           onChange={(e) => setLineAccounts((prev) => ({ ...prev, [l.lineNo]: e.target.value }))}

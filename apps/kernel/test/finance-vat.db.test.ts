@@ -227,7 +227,8 @@ suite('VAT working per month or quarter (#316)', () => {
       }),
     ]);
     expect(report.body.input.totals).toMatchObject({ taxable: '1800000', vat: '180000', documents: 1 });
-    expect(report.body.output).toMatchObject({ available: false, documents: [], totals: { taxable: '0', vat: '0', documents: 0 } });
+    // No sales recorded: the output side is available (#313) and empty.
+    expect(report.body.output).toMatchObject({ available: true, documents: [], totals: { taxable: '0', vat: '0', documents: 0 } });
     const indicators = new Map((report.body.indicators as Array<{ code: string; amount: string }>).map((i) => [i.code, i.amount]));
     expect(indicators.get('23')).toBe('1800000');
     expect(indicators.get('24')).toBe('180000');

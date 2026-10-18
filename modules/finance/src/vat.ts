@@ -2,12 +2,11 @@
 // their totals by rate (see domain/vat-return.ts for the rules and their legal sources); finance.vat.export records an
 // Excel export of it (GET /api/export/vat.xlsx), like finance.journal.export.
 //
-// Input invoices are the recorded purchase documents. Output invoices (sales e-invoices, issue #313) are not recorded
-// by Crove yet: the output side answers `available: false` with no documents, and the report keeps its shape so the
-// sales source plugs in without changing the screen or the export.
+// Input invoices are the recorded purchase documents, output invoices the recorded sales documents (sales e-invoices,
+// issue #313); both live in crove_finance.purchase_document, told apart by direction.
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { VAT_WARNINGS, zVatPeriod } from '@crove/kernel-contract';
+import { VAT_WARNINGS, zVatPeriod, type DocumentDirection } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { money, type Money } from '@crove/l10n-vn';
 import {
@@ -48,7 +47,7 @@ export interface VatInvoiceView {
 }
 
 export interface VatSide {
-  // false: Crove has no source for this side yet (sales invoices, #313); the documents and totals are empty.
+  // false: Crove has no source for this side; the documents and totals are empty. Both sides have one since #313.
   available: boolean;
   documents: VatInvoiceView[];
   totals: SideTotals;
@@ -87,13 +86,15 @@ function invoiceView(
   };
 }
 
-// The recorded purchase documents dated in the period, except those voided by a reversal (#165), oldest first.
-async function purchaseInvoices(ctx: QueryContext, period: VatPeriod): Promise<VatInvoiceView[]> {
+// The recorded documents of one direction dated in the period, except those voided by a reversal (#165), oldest first:
+// purchases for the input side, sales (#313) for the output side. The party is the supplier or the customer.
+async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: DocumentDirection): Promise<VatInvoiceView[]> {
   const docs = await ctx.trx
     .selectFrom('crove_finance.purchase_document as d')
     .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
     .select(['d.id', 'd.invoice_date', 'd.invoice_series', 'd.invoice_number', 'd.subtotal', 'd.vat_amount', 'd.total', 'p.name', 'p.tax_code'])
     .where('d.org_id', '=', ctx.orgId)
+    .where('d.direction', '=', direction)
     .where('d.invoice_date', '>=', period.from)
     .where('d.invoice_date', '<=', period.to)
     .where(({ not, exists, selectFrom }) =>
@@ -155,9 +156,8 @@ function side(available: boolean, documents: VatInvoiceView[]): VatSide {
 
 export async function loadVatReport(ctx: QueryContext, periodText: string): Promise<VatReport> {
   const period = vatPeriod(periodText);
-  const input = side(true, await purchaseInvoices(ctx, period));
-  // No sales source yet (#313): the output side stays empty and says so.
-  const output = side(false, []);
+  const input = side(true, await periodInvoices(ctx, period, 'purchase'));
+  const output = side(true, await periodInvoices(ctx, period, 'sale'));
   return { period, input, output, indicators: form01Indicators(input.totals, output.totals) };
 }
 
