@@ -1,6 +1,6 @@
 // Period lock (issue #329, ADR-0021 section 3): filed months must not change silently. An org locks its books one
 // month at a time, in order, and unlocks the last locked month first; nothing posts with an entry date up to the end
-// of the last locked month (20261019200000_crove_finance_period_lock.sql holds every writer to it).
+// of the last locked month (20261019250000_crove_finance_period_lock.sql holds every writer to it).
 // - finance.period.lock_state: every member reads what is locked (the ledger screen shows it).
 // - finance.period.lock: owners and admins lock the next month, once it has ended (in Vietnam time). R2, as ADR-0021
 //   section 7 has the close: no step-up, and an agent may only propose it.
