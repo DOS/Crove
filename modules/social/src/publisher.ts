@@ -8,7 +8,7 @@
 //   tell whether the call went out and reconciles or asks a person; it never calls blindly;
 // - after the call, before record: the same, and that is the case the ledger exists for;
 // - record failing: the job throws, pg-boss retries it, and the retry's begin finds the variant in flight.
-import type { Publisher, PublishResult, ReconcileResult } from '@crove/channel';
+import { withCallSignal, type Publisher, type PublishResult, type ReconcileResult } from '@crove/channel';
 import { DomainError, readVerified, type BlobStore, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { VIDEO_READY, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
@@ -37,10 +37,22 @@ interface SealedChannelCredential {
 
 class Timeout extends Error {}
 
+// The job stops waiting after ms and records unknown; at the same moment it aborts the call, so every request the
+// adapter would still make in it (a post after a slow upload) fails instead of reaching the platform (#382).
 async function withTimeout<T>(ms: number, run: () => Promise<T>): Promise<T> {
+  const call = new AbortController();
   let timer: NodeJS.Timeout | undefined;
   try {
-    return await Promise.race([run(), new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Timeout('provider call timed out')), ms)))]);
+    return await Promise.race([
+      withCallSignal(call.signal, run),
+      new Promise<never>(
+        (_, reject) =>
+          (timer = setTimeout(() => {
+            call.abort(new Timeout('provider call timed out'));
+            reject(new Timeout('provider call timed out'));
+          }, ms)),
+      ),
+    ]);
   } finally {
     clearTimeout(timer);
   }
