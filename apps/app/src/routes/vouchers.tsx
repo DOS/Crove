@@ -127,44 +127,50 @@ function VoucherFormCard({ slug, onClose }: { slug: string; onClose: () => void 
       >
         <p className="text-sm text-muted-foreground">{t('form.intro')}</p>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <label className="block text-xs">
-            <span className="text-subtle-foreground">{t('form.type')}</span>
-            <NativeSelect className="mt-1 w-full" value={type} onChange={(e) => changeType(e.target.value as VoucherType)}>
-              {VOUCHER_TYPES.map((v) => (
-                <NativeSelectOption key={v} value={v}>
-                  {t(`types.${v}`)}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-            <span className="mt-1 block text-subtle-foreground">{t(`typeHints.${type}`)}</span>
-          </label>
+          <div className="text-xs">
+            <label className="block">
+              <span className="text-subtle-foreground">{t('form.type')}</span>
+              <NativeSelect className="mt-1 w-full" value={type} onChange={(e) => changeType(e.target.value as VoucherType)}>
+                {VOUCHER_TYPES.map((v) => (
+                  <NativeSelectOption key={v} value={v}>
+                    {t(`types.${v}`)}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </label>
+            <p className="mt-1 text-subtle-foreground">{t(`typeHints.${type}`)}</p>
+          </div>
           <label className="block text-xs">
             <span className="text-subtle-foreground">{t('form.date')}</span>
             <Input type="date" required value={date} onChange={(e) => setDate(e.target.value)} className="mt-1 w-full" />
           </label>
-          <label className="block text-xs">
-            <span className="text-subtle-foreground">{cashRootOf(type) === '111' ? t('form.cashAccountCash') : t('form.cashAccountBank')}</span>
-            <NativeSelect className="mt-1 w-full" value={cash} onChange={(e) => setCashAccount(e.target.value)}>
-              {cashChoices.map((a) => (
-                <NativeSelectOption key={a.code} value={a.code}>
-                  {accountLabel(a)}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-            {accounts.data && cashChoices.length === 0 && <span className="mt-1 block text-warning">{t('form.noCashAccount', { root: cashRootOf(type) })}</span>}
-          </label>
-          <label className="block text-xs">
-            <span className="text-subtle-foreground">{t('form.party')}</span>
-            <NativeSelect className="mt-1 w-full" value={partyId} onChange={(e) => setPartyId(e.target.value)}>
-              <NativeSelectOption value="">{t('form.noParty')}</NativeSelectOption>
-              {(parties.data ?? []).map((p) => (
-                <NativeSelectOption key={p.id} value={p.id}>
-                  {p.taxCode ? `${p.name} (${p.taxCode})` : p.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-            <span className="mt-1 block text-subtle-foreground">{t('form.partyHint')}</span>
-          </label>
+          <div className="text-xs">
+            <label className="block">
+              <span className="text-subtle-foreground">{cashRootOf(type) === '111' ? t('form.cashAccountCash') : t('form.cashAccountBank')}</span>
+              <NativeSelect className="mt-1 w-full" value={cash} onChange={(e) => setCashAccount(e.target.value)}>
+                {cashChoices.map((a) => (
+                  <NativeSelectOption key={a.code} value={a.code}>
+                    {accountLabel(a)}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </label>
+            {accounts.data && cashChoices.length === 0 && <p className="mt-1 text-warning">{t('form.noCashAccount', { root: cashRootOf(type) })}</p>}
+          </div>
+          <div className="text-xs">
+            <label className="block">
+              <span className="text-subtle-foreground">{t('form.party')}</span>
+              <NativeSelect className="mt-1 w-full" value={partyId} onChange={(e) => setPartyId(e.target.value)}>
+                <NativeSelectOption value="">{t('form.noParty')}</NativeSelectOption>
+                {(parties.data ?? []).map((p) => (
+                  <NativeSelectOption key={p.id} value={p.id}>
+                    {p.taxCode ? `${p.name} (${p.taxCode})` : p.name}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </label>
+            <p className="mt-1 text-subtle-foreground">{t('form.partyHint')}</p>
+          </div>
           <label className="block text-xs">
             <span className="text-subtle-foreground">{inflow ? t('form.personPayer') : t('form.personPayee')}</span>
             <Input maxLength={200} value={personName} onChange={(e) => setPersonName(e.target.value)} placeholder={t('form.personHint')} className="mt-1 w-full" />
