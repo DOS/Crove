@@ -44,7 +44,7 @@ function isFileStatus(status: string): status is FileStatus {
 // The name a proposal goes by in the list, its checkbox and the bulk report: the customer of a sale (#313; its seller is
 // the org itself), the seller of a purchase, else its title.
 function proposalName(item: { direction: string | null; sellerName: string | null; buyerName: string | null; title: string }): string {
-  return (item.direction === 'sale' ? item.buyerName || null : item.sellerName) ?? item.title;
+  return (item.direction === 'sale' ? item.buyerName : item.sellerName) || item.title;
 }
 
 export function InboxPage() {
