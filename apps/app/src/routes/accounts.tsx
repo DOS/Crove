@@ -142,7 +142,7 @@ export function ChartOfAccountsCard({ canManage }: { canManage: boolean }) {
   const own = subAccounts(accounts.data ?? []);
   return (
     <Card className="block p-4" aria-label={t('title')}>
-      <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('title')}</p>
+      <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
       <p className="mt-2 text-sm text-muted-foreground">{t('intro')}</p>
       {accounts.isLoading ? (
         <Spinner />

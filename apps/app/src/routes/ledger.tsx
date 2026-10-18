@@ -47,7 +47,7 @@ function PartyTable({ ledger, partyLabel }: { ledger: PartyLedger; partyLabel: s
   const f = useFormat();
   if (ledger.rows.length === 0) return <Empty title={t('partiesEmpty')} />;
   return (
-    <DataTable head={[t('columns.taxCode'), partyLabel, t('columns.opening'), t('columns.increase'), t('columns.decrease'), t('columns.closing')]}>
+    <DataTable numeric={[2, 3, 4, 5]} head={[t('columns.taxCode'), partyLabel, t('columns.opening'), t('columns.increase'), t('columns.decrease'), t('columns.closing')]}>
       {ledger.rows.map((row) => (
         <TableRow key={row.partyId ?? 'none'}>
           <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{row.partyTaxCode ?? ''}</TableCell>
@@ -80,6 +80,7 @@ function AccountLedger({ period, accountCode }: { period: string; accountCode: s
   if (!ledger) return null;
   return (
     <DataTable
+      numeric={[6, 7, 8]}
       head={[
         t('columns.date'),
         t('columns.reference'),
@@ -256,6 +257,7 @@ export function LedgerPage() {
               <Empty title={t('trialBalanceEmpty')} />
             ) : (
               <DataTable
+                numeric={[2, 3, 4, 5, 6, 7]}
                 head={[
                   t('columns.code'),
                   t('columns.name'),

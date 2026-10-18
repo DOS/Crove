@@ -262,7 +262,7 @@ function Offboarding({ name, slug }: { name: string; slug: string }) {
 
   return (
     <Card className="block p-4 lg:col-span-2">
-      <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('title')}</p>
+      <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
       <p className="mt-3 text-sm text-muted-foreground">{t('intro')}</p>
       {data.status === 'offboarding' && (
         <p className="mt-3 text-sm text-warning" role="status">
@@ -475,7 +475,7 @@ function PendingInvites() {
   if (!invites.data?.length) return null;
   return (
     <div className="mt-4">
-      <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('pendingInvites')}</p>
+      <p className="text-sm font-medium text-muted-foreground">{t('pendingInvites')}</p>
       <ul className="mt-2 divide-y">
         {invites.data.map((i) => (
           <li key={i.id} className="flex items-center justify-between gap-2 py-2 text-sm">
@@ -574,7 +574,7 @@ export function SettingsPage() {
       <PageHeader title={t('title')} subtitle={org.data?.name} />
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="block p-4">
-          <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('org')}</p>
+          <p className="text-sm font-medium text-muted-foreground">{t('org')}</p>
           <dl className="mt-3 space-y-2 text-sm">
             <div>
               <dt className="text-subtle-foreground">{t('name')}</dt>
@@ -599,7 +599,7 @@ export function SettingsPage() {
           {org.data?.role === 'owner' && org.data.inboundAddress && <RotateInboundAddress />}
         </Card>
         <Card className="block p-4">
-          <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('members')}</p>
+          <p className="text-sm font-medium text-muted-foreground">{t('members')}</p>
           <ul className="mt-3 divide-y">
             {org.data?.members.map((m) => (
               <li key={m.userId} className="py-2 text-sm">

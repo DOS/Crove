@@ -156,7 +156,7 @@ export function TwoFactorCard({ onEnabled }: { onEnabled?: () => void }) {
   return (
     <Card className="block p-4">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('title')}</p>
+        <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
         {factors.isSuccess && (verified.length > 0 ? <Badge variant="success">{t('on')}</Badge> : <Badge variant="secondary">{t('off')}</Badge>)}
       </div>
       <p className="mt-2 text-sm text-muted-foreground">{t('intro')}</p>
