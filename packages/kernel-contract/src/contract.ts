@@ -1,6 +1,7 @@
 import { oc } from '@orpc/contract';
 import { z } from 'zod';
 import {
+  zBulkApproveItems,
   zAccount,
   zAgentBudget,
   zAgentRisk,
@@ -216,6 +217,35 @@ export const contract = {
       // A purchase returns its document; a reversal (#138) returns the entry it reversed and, when that entry recorded a
       // purchase, the document it voided (#165).
       .output(z.object({ documentId: zId.optional(), journalEntryId: zId, reversedEntryId: zId.optional(), voidedDocumentId: zId.optional() })),
+    // Approves many pending proposals in one action (issue #315): owners and admins, R3 with one fresh step-up for the
+    // whole batch (a stale one refuses all of it). Each item gets the same four-eyes (P10) and eligibility (P12)
+    // decision and its own audit row as approving it alone; a refused item is reported with its code and the others
+    // are still approved. revision: the one the caller saw in the list. At most 50 items, each once. A retry with the
+    // same idempotencyKey returns the first result.
+    approveMany: oc
+      .input(
+        z.object({
+          items: zBulkApproveItems,
+          idempotencyKey: zId,
+        }),
+      )
+      .output(
+        z.object({
+          results: z.array(
+            z.discriminatedUnion('outcome', [
+              z.object({
+                id: zId,
+                outcome: z.literal('approved'),
+                journalEntryId: zId.optional(),
+                documentId: zId.optional(),
+                reversedEntryId: zId.optional(),
+                voidedDocumentId: zId.optional(),
+              }),
+              z.object({ id: zId, outcome: z.literal('refused'), code: z.string(), rule: z.string().nullable() }),
+            ]),
+          ),
+        }),
+      ),
     // Saves changed line accounts as a new revision authored by the caller; it never approves.
     edit: oc
       .input(
