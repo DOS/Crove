@@ -135,3 +135,61 @@ describe('littleText', () => {
     expect(littleText('Giảm 20% #sale @shop (hôm nay) [mới] <a> *x* _y_ ~z~ {t} a|b \\')).toBe('Giảm 20% \\#sale \\@shop \\(hôm nay\\) \\[mới\\] \\<a\\> \\*x\\* \\_y\\_ \\~z\\~ \\{t\\} a\\|b \\\\');
   });
 });
+
+describe('LinkedInPublisher video', () => {
+  const VIDEO = 'urn:li:video:C5505AQH-oV1qvnFtKA';
+  const PART = 'https://www.linkedin.com/dms-uploads/C5505AQH-oV1qvnFtKA/uploadedVideo';
+  const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 10, altText: null };
+  const withClip = (over: Partial<PublishInput> = {}) => input({ content: { ...input().content, media: [clip] }, readMedia: async () => new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]), ...over });
+  const quick = { processingWaitMs: 1000, pollMs: 0 };
+  const init = () => ({
+    'POST api.linkedin.com/rest/videos?action=initializeUpload': [
+      { body: { value: { video: VIDEO, uploadToken: '', uploadInstructions: [{ uploadUrl: `${PART}?part=0`, firstByte: 0, lastByte: 5 }, { uploadUrl: `${PART}?part=1`, firstByte: 6, lastByte: 9 }] } } },
+    ],
+  });
+  const status = `GET api.linkedin.com/rest/videos/${encodeURIComponent(VIDEO)}`;
+
+  it('uploads each part, finalizes with the ETags, waits until the video is available, then posts it once', async () => {
+    const { fetchImpl, calls } = linkedin({
+      ...init(),
+      [`PUT www.linkedin.com/dms-uploads/C5505AQH-oV1qvnFtKA/uploadedVideo`]: [{ headers: { etag: 'etag-0' } }, { headers: { etag: 'etag-1' } }],
+      'POST api.linkedin.com/rest/videos?action=finalizeUpload': [{ body: {} }],
+      [status]: [{ body: { id: VIDEO, status: 'PROCESSING' } }, { body: { id: VIDEO, status: 'AVAILABLE' } }],
+      'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7300000000000000001' } }],
+    });
+    const publisher = new LinkedInPublisher({}, fetchImpl, quick);
+    expect(publisher.callTimeoutMs).toBeGreaterThan(300_000);
+    expect(publisher.callTimeoutMs).toBeLessThan(600_000);
+    expect(await publisher.publish(withClip())).toEqual({ kind: 'accepted', externalId: 'urn:li:share:7300000000000000001', url: 'https://www.linkedin.com/feed/update/urn:li:share:7300000000000000001/' });
+    expect(calls[0]?.body).toEqual({ initializeUploadRequest: { owner: `urn:li:person:${MEMBER}`, fileSizeBytes: 10, uploadCaptions: false, uploadThumbnail: false } });
+    expect(calls.filter((c) => c.route.startsWith('PUT')).map((c) => (c.body as Blob).size)).toEqual([6, 4]);
+    expect(calls.find((c) => c.route.endsWith('finalizeUpload'))?.body).toEqual({ finalizeUploadRequest: { video: VIDEO, uploadToken: '', uploadedPartIds: ['etag-0', 'etag-1'] } });
+    expect(calls.at(-1)?.body).toMatchObject({ author: `urn:li:person:${MEMBER}`, content: { media: { id: VIDEO } } });
+  });
+
+  it('posts nothing when processing fails, a part is refused, or the file is not MP4', async () => {
+    const failed = linkedin({
+      ...init(),
+      [`PUT www.linkedin.com/dms-uploads/C5505AQH-oV1qvnFtKA/uploadedVideo`]: [{ headers: { etag: 'etag-0' } }, { headers: { etag: 'etag-1' } }],
+      'POST api.linkedin.com/rest/videos?action=finalizeUpload': [{ body: {} }],
+      [status]: [{ body: { id: VIDEO, status: 'PROCESSING_FAILED', processingFailureReason: 'Unsupported codec' } }],
+    });
+    expect(await new LinkedInPublisher({}, failed.fetchImpl, quick).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'VIDEO_PROCESSING_FAILED', message: 'Unsupported codec' });
+    const refused = linkedin({ ...init(), [`PUT www.linkedin.com/dms-uploads/C5505AQH-oV1qvnFtKA/uploadedVideo`]: [{ status: 503 }] });
+    expect(await new LinkedInPublisher({}, refused.fetchImpl, quick).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'transient' });
+    // Parts that leave a gap or run past the file, and a spent budget, stop before any byte is sent.
+    const gap = linkedin({
+      'POST api.linkedin.com/rest/videos?action=initializeUpload': [{ body: { value: { video: VIDEO, uploadToken: '', uploadInstructions: [{ uploadUrl: PART, firstByte: 0, lastByte: 4 }, { uploadUrl: PART, firstByte: 6, lastByte: 9 }] } } }],
+    });
+    expect(await new LinkedInPublisher({}, gap.fetchImpl, quick).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'transient', code: 'BAD_UPLOAD_PART' });
+    const past = linkedin({ 'POST api.linkedin.com/rest/videos?action=initializeUpload': [{ body: { value: { video: VIDEO, uploadToken: '', uploadInstructions: [{ uploadUrl: PART, firstByte: 0, lastByte: 20 }] } } }] });
+    expect(await new LinkedInPublisher({}, past.fetchImpl, quick).publish(withClip())).toMatchObject({ code: 'BAD_UPLOAD_PART' });
+    const spent = linkedin(init());
+    expect(await new LinkedInPublisher({}, spent.fetchImpl, { ...quick, budgetMs: 0 }).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'transient', code: 'VIDEO_TOO_SLOW' });
+    for (const run of [gap, past, spent]) expect(run.calls.some((c) => c.route.startsWith('PUT'))).toBe(false);
+    const mov = linkedin({});
+    expect(await new LinkedInPublisher({}, mov.fetchImpl, quick).publish(withClip({ content: { ...input().content, media: [{ ...clip, mime: 'video/quicktime' }] } }))).toMatchObject({ kind: 'rejected', code: 'VIDEO_TYPE' });
+    expect(mov.calls).toHaveLength(0);
+    for (const run of [failed, refused]) expect(run.calls.some((c) => c.route === 'POST api.linkedin.com/rest/posts')).toBe(false);
+  });
+});
