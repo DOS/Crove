@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="vi" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Đồng bộ hóa đơn đầu vào</title>
+<style>
+:root{
+  --bg:#0f1113; --surface:#16181d; --card:#1b1e25; --line:#2c303a; --fg:#eef0f4; --muted:#a3a9b6;
+  --accent:#ff2e29; --accent-ink:#ff8a85;
+  --ok:#34d399; --ok-bg:#0f2a21; --warn:#fbbf24; --warn-bg:#2a2110; --bad:#f87171; --bad-bg:#2d1515; --info:#60a5fa; --info-bg:#121f35;
+  --code-bg:#23262e;
+  --font-body:"Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased}
+.page{padding:32px clamp(16px,4vw,40px) 72px}
+main{max-width:980px;margin-inline:auto;min-width:0}
+a{color:var(--accent-ink);text-decoration:none;overflow-wrap:anywhere}a:hover{text-decoration:underline}
+.eyebrow{color:var(--accent-ink);font-weight:600;letter-spacing:.08em;text-transform:uppercase;font-size:13px;margin:0}
+h1{font-size:clamp(26px,4vw,34px);line-height:1.25;margin:6px 0 10px}
+h2{font-size:22px;margin:44px 0 12px;padding-top:12px;border-top:1px solid var(--line)}
+h3{font-size:18px;margin:26px 0 8px}
+.lead{color:var(--muted);margin:0 0 8px}
+code{font-family:var(--font-mono);font-size:.88em;background:var(--code-bg);padding:1px 6px;border-radius:4px}
+.callout{border:1px solid var(--line);border-left:4px solid var(--accent);background:var(--surface);border-radius:8px;padding:14px 18px;margin:16px 0}
+.callout.ok{border-left-color:var(--ok)}
+.callout.warn{border-left-color:var(--warn)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:16px 0}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.stat b{display:block;font-size:22px;color:var(--accent-ink);line-height:1.3}
+.stat span{color:var(--muted);font-size:14px}
+.table-wrap{overflow-x:auto;margin:12px 0;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:560px}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--line)}
+th{background:var(--surface);color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;font-size:12px;font-weight:600;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.go{background:var(--ok-bg);color:var(--ok)}
+.nogo{background:var(--bad-bg);color:var(--bad)}
+.mid{background:var(--warn-bg);color:var(--warn)}
+ul,ol{padding-left:22px}
+li{margin:4px 0}
+.muted{color:var(--muted)}
+footer{margin-top:48px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<div class="page">
+<main>
+
+<p class="eyebrow">Crove · spike #322 · 19/10/2026</p>
+<h1>Lấy hóa đơn đầu vào từ cổng thuế: làm được đến đâu</h1>
+<p class="lead">Tóm tắt cho owner. Bản đầy đủ có nguồn trích dẫn (tiếng Anh): <a href="tax-portal-invoice-sync.md">tax-portal-invoice-sync.md</a>. Đây là nghiên cứu trên tài liệu công khai; không đăng nhập cổng thật, không viết công cụ cào dữ liệu, không đụng tới CAPTCHA. Phần pháp lý chưa phải ý kiến luật sư.</p>
+
+<div class="grid">
+  <div class="stat"><b><span class="tag nogo">Không</span></b><span>đồng bộ tự động hằng ngày, lưu mật khẩu (M3-3 như đang viết)</span></div>
+  <div class="stat"><b><span class="tag go">Có</span></b><span>đồng bộ có người: kế toán gõ CAPTCHA mỗi kỳ, Crove tải hóa đơn của kỳ đó</span></div>
+  <div class="stat"><b>2 đến 3 ngày</b><span>nhập file Excel danh sách từ cổng thuế để báo hóa đơn còn thiếu (M2)</span></div>
+  <div class="stat"><b>6 đến 9 ngày</b><span>đồng bộ có người (M3), sau khi owner chốt O1 đến O3</span></div>
+</div>
+
+<h2>1. Hiện trạng thị trường</h2>
+<ul>
+  <li><b>Không có API chính thức nào</b> cho bên mua, hay phần mềm thay mặt bên mua, kéo hóa đơn đầu vào từ cơ quan thuế. Cổng <code>hoadondientu.gdt.gov.vn</code> chỉ cho tra cứu khi đã đăng nhập (mã số thuế, mật khẩu, CAPTCHA mỗi lần), xuất Excel danh sách, tải XML từng hóa đơn một. Kết nối dữ liệu trực tiếp chỉ dành cho cơ quan nhà nước, tổ chức tín dụng và nhà cung cấp hóa đơn có ký thỏa thuận.</li>
+  <li><b>Mọi phần mềm "đồng bộ từ cơ quan thuế" đều dùng mật khẩu cổng thuế của khách hàng</b>, rồi gọi các endpoint nội bộ không công bố của cổng. MISA chạy việc này bằng một công cụ cài trên máy khách hàng; Sapo đồng bộ từ server 4 giờ một lần; vài công cụ quảng cáo tự đọc CAPTCHA.</li>
+  <li><b>Năm 2026 cổng siết dần:</b> giới hạn tần suất (lỗi 429), tường lửa ứng dụng, đổi giao diện tháng 5, thêm yêu cầu mới tháng 9, một số server ở nước ngoài không truy cập được. Các công cụ mã nguồn mở phải vá liên tục.</li>
+  <li><b>Email vẫn là đường chính thống:</b> người bán có nghĩa vụ gửi hóa đơn cho người mua (email, tin nhắn, đường link hoặc mã QR). Crove đã có địa chỉ email nhận hóa đơn riêng cho từng tổ chức.</li>
+</ul>
+
+<h2>2. Pháp lý</h2>
+<div class="callout warn">
+<p><b>Kết luận ngắn:</b> vùng xám, chưa phải "được phép" rõ ràng. Cần luật sư xác nhận trước khi làm phương án 2.</p>
+</div>
+
+<ul>
+  <li><b>Văn bản đã đổi:</b> Nghị định 254/2026/NĐ-CP thay Nghị định 123/2020 và 70/2025 từ 01/7/2026; Thông tư 91/2026 thay Thông tư 32/2025 (vốn đã thay Thông tư 78/2021); Luật Bảo vệ dữ liệu cá nhân 91/2025 và Nghị định 356/2025 thay Nghị định 13/2023 từ 01/01/2026. Nội dung liên quan nhìn chung giữ như cũ.</li>
+  <li><b>Có một đường chính thức cho bên thứ ba:</b> Nghị định 254 (Điều 36.2 điểm g, Điều 37.2) cho tổ chức được doanh nghiệp ủy quyền đăng ký quyền tra cứu riêng với cơ quan thuế, tối đa hai tài khoản, có đầu mối đăng ký. Chưa rõ điểm này có áp cho việc công ty dịch vụ xem hóa đơn mua vào của khách không, và thủ tục theo Thông tư 91 ra sao. Nếu làm được, công ty dịch vụ đăng nhập bằng tài khoản của chính mình, không ai phải đưa mật khẩu của khách.</li>
+  <li><b>Dùng mật khẩu của khách thì không bị cấm rõ, nhưng nằm ngoài đường đó.</b> Nghị định yêu cầu doanh nghiệp giữ an toàn tài khoản; Luật Quản lý thuế 108/2025 cho phép ủy quyền nhưng doanh nghiệp vẫn chịu trách nhiệm về sai sót của bên được ủy quyền. Không tìm thấy điều khoản sử dụng nào của cổng nói về truy cập tự động hay dùng chung tài khoản, cũng không thấy vụ xử lý nào với công cụ tải hóa đơn.</li>
+  <li><b>CAPTCHA là lằn ranh.</b> Bộ luật Hình sự Điều 289 và Luật An ninh mạng 2025 nhắm vào việc vượt qua mã truy cập, biện pháp bảo vệ của hệ thống người khác. Có đồng ý của chủ tài khoản thì khó gọi là "trái phép" với chủ tài khoản, nhưng hệ thống là của cơ quan thuế. Phần mềm tự giải CAPTCHA, lờ trang chặn hay cố vượt giới hạn tần suất là phần dễ bị coi là lách. Vì vậy Crove luôn để người gõ CAPTCHA và dừng lại khi bị chặn.</li>
+  <li><b>Dữ liệu cá nhân:</b> hóa đơn của hộ kinh doanh và người mua cá nhân có tên, địa chỉ, số điện thoại, số giấy tờ. Crove là bên xử lý cho công ty dịch vụ: cần hợp đồng xử lý dữ liệu, đánh giá tác động trong 60 ngày, và lưu dữ liệu ở Việt Nam để khỏi phải làm hồ sơ chuyển dữ liệu ra nước ngoài. Điều này áp cho mọi đường nhận hóa đơn, không riêng đồng bộ cổng thuế.</li>
+</ul>
+
+<h2>3. Giữ thông tin đăng nhập của khách hàng thế nào</h2>
+<ul>
+  <li><b>Đề xuất: không lưu mật khẩu.</b> Kế toán nhập mật khẩu và CAPTCHA ngay lúc đồng bộ; Crove chỉ giữ token phiên của cổng (đã niêm phong) trong lúc job chạy, xong là xóa. Mật khẩu cổng thuế mở được mọi quyền của tài khoản doanh nghiệp, không như token OAuth có phạm vi.</li>
+  <li><b>Dùng lại thiết kế kết nối kênh (ADR-0025):</b> một kết nối <code>gdt_einvoice</code> cho mỗi tổ chức, niêm phong gắn với tổ chức và mã số thuế, chỉ worker mở được, tự ngừng khi người kết nối rời tổ chức hoặc mất quyền owner/admin.</li>
+  <li><b>Đồng ý của khách hàng:</b> màn hình kết nối ghi lại ai đồng ý thay mặt công ty, Crove làm gì, bao lâu một lần, cách rút lại; phiên bản nội dung và thời điểm vào audit.</li>
+  <li><b>Thu hồi:</b> ngắt kết nối trong Crove, hoặc khách hàng tự đổi mật khẩu cổng thuế. Lần đồng bộ sau báo lỗi đăng nhập và hiện cho kế toán trên màn nhiều khách hàng.</li>
+  <li><b>Không để lộ bí mật:</b> audit chỉ ghi kỳ, số lượng, loại lỗi; không bao giờ ghi mật khẩu, CAPTCHA, token, cookie. Không tự thử lại khi đăng nhập sai, vì sai nhiều lần sẽ khóa tài khoản của khách.</li>
+</ul>
+
+<h2>4. Bản mã nguồn mở hay Crove Cloud</h2>
+<p>Đồng bộ có người không cần dịch vụ nào của DOS, nên theo ADR-0027 có thể nằm trong bản mã nguồn mở, bật bằng cấu hình và mặc định tắt. Lý do cân nhắc để ở Cloud: một client công khai cho endpoint không công bố của cổng nhà nước dễ bị người khác fork rồi gắn thêm bộ giải CAPTCHA, và mỗi lần cổng đổi là vỡ công khai. Nếu mua connector thương mại của bên khác thì chắc chắn ở Cloud.</p>
+
+<h2>5. Các phương án, xếp theo thứ tự nên làm</h2>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Phương án</th><th>Công sức</th><th>Được gì</th><th>Rủi ro</th></tr>
+<tr><td>1</td><td><b>Nhập file Excel danh sách từ cổng thuế, kèm email.</b> Kế toán xuất danh sách hóa đơn mua vào của tháng, tải lên Crove; Crove báo hóa đơn nào cơ quan thuế có mà Crove chưa có XML</td><td>2 đến 3 ngày</td><td>Không sót hóa đơn, lỗi tốn tiền nhất (bị truy thu thuế)</td><td><span class="tag go">Thấp</span></td></tr>
+<tr><td>2</td><td><b>Đồng bộ có người.</b> Mỗi khách hàng mỗi kỳ, kế toán nhập mật khẩu và CAPTCHA trong Crove; job tải danh sách và XML của kỳ đó vào Inbox, xong không giữ gì</td><td>6 đến 9 ngày</td><td>Gần bằng đối thủ về thời gian: một CAPTCHA cho mỗi khách mỗi tháng</td><td><span class="tag mid">Trung bình</span> pháp lý chưa rõ, cổng đổi là vỡ, có thể bị chặn IP</td></tr>
+<tr><td>2b</td><td><b>Đăng ký quyền tra cứu chính thức.</b> Công ty dịch vụ đăng ký với cơ quan thuế là tổ chức được khách hàng ủy quyền, có tài khoản riêng; Crove dùng tài khoản đó qua phương án 2</td><td>Như phương án 2, cộng việc của owner và đối tác</td><td>Không phải chia sẻ mật khẩu của khách; nền pháp lý sạch nhất tìm được</td><td><span class="tag mid">Chưa rõ</span> làm được không, thủ tục chưa xác nhận</td></tr>
+<tr><td>3</td><td><b>Tiện ích trình duyệt hoặc app trên máy kế toán</b> (cách MISA làm): kế toán tự đăng nhập cổng, tiện ích đọc dữ liệu từ phiên đó và gửi lên Crove</td><td>8 đến 12 ngày</td><td>Như phương án 2, Crove không bao giờ thấy mật khẩu</td><td><span class="tag mid">Trung bình</span> thêm một app phải bảo trì</td></tr>
+<tr><td>4</td><td><b>Mua connector</b> của bên đã có đồng bộ</td><td>Chưa rõ, tùy hợp đồng</td><td>Bằng đối thủ, kể cả chạy hằng ngày</td><td><span class="tag mid">Trung bình</span> vẫn chia sẻ mật khẩu khách cho bên thứ ba, phụ thuộc nhà cung cấp</td></tr>
+<tr><td>-</td><td>Tự động hằng ngày, phần mềm tự giải CAPTCHA</td><td colspan="3"><span class="tag nogo">Loại</span> là vượt CAPTCHA</td></tr>
+<tr><td>-</td><td>Trở thành nhà cung cấp hóa đơn hoặc T-VAN để có kết nối trực tiếp</td><td colspan="3"><span class="tag nogo">Loại</span> ngoài phạm vi sản phẩm</td></tr>
+</table></div>
+<p>Thứ tự đề xuất: phương án 1 trong M2 (còn giúp đối chiếu số liệu tờ khai GTGT với chính số của cơ quan thuế), phương án 2 thay cho M3-3 khi owner chốt xong O1 và O2; phương án 3 chỉ khi phương án 2 bị chặn IP hoặc owner muốn Crove không bao giờ thấy mật khẩu.</p>
+
+<h2>6. Owner cần quyết</h2>
+<p class="muted">Mỗi câu kèm đề xuất. Owner không phản đối thì giữ đề xuất.</p>
+<ol>
+  <li><b>O1. Crove có chấp nhận vùng xám pháp lý khi đăng nhập cổng thuế thay khách hàng không</b>, với điều kiện có đồng ý bằng văn bản của khách và mỗi CAPTCHA do người gõ? Chưa tìm thấy luật nào cho phép hay cấm rõ việc này; đối thủ đều làm, phần lớn còn tự giải CAPTCHA, điều Crove không làm. <i>Đề xuất:</i> đồng ý cho phương án 2, nhưng chỉ sau khi luật sư Việt Nam xác nhận bằng văn bản (khoảng một giờ tư vấn, gộp vào đợt rà điều khoản và chính sách bảo mật M3-6).</li>
+  <li><b>O2. Đồng bộ có người nằm ở bản mã nguồn mở hay Cloud?</b> <i>Đề xuất:</i> mã nguồn mở, mặc định tắt, CAPTCHA luôn hiện cho người gõ, không có chỗ cắm bộ giải. Chọn Cloud nếu luật sư khuyên không công khai.</li>
+  <li><b>O3. Có lưu mật khẩu cổng thuế không?</b> Lưu thì kế toán đỡ gõ một ô, nhưng mật khẩu toàn quyền của khách nằm trong Crove nhiều tháng, mà lần nào cũng phải có người gõ CAPTCHA. <i>Đề xuất:</i> không lưu.</li>
+  <li><b>O4. Đổi M3-3 từ "đồng bộ hằng ngày" thành "đồng bộ có người theo kỳ", và thêm phương án 1 vào M2?</b> <i>Đề xuất:</i> đồng ý cả hai.</li>
+  <li><b>O5. Nhờ kế toán của đối tác hỏi cơ quan thuế quản lý về đường đăng ký chính thức</b> (Nghị định 254, Điều 36.2 điểm g và Điều 37.2): công ty dịch vụ có đăng ký được quyền tra cứu hóa đơn mua vào của khách hàng không, cần hồ sơ gì. <i>Đề xuất:</i> hỏi, song song với O1. Nếu được, Crove dùng tài khoản của chính công ty dịch vụ thay cho mật khẩu của khách.</li>
+  <li><b>O6. Hỏi thêm đối tác trong buổi phỏng vấn (#57):</b> khách hàng của họ có chịu đưa hoặc tự gõ mật khẩu cổng thuế không, cổng có cho tạo tài khoản chỉ để tra cứu cho công ty dịch vụ không, và hiện mỗi khách mất bao nhiêu phút mỗi tháng để tải hóa đơn. <i>Đề xuất:</i> hỏi.</li>
+</ol>
+
+<h2>7. Việc tiếp theo đề xuất</h2>
+<ul>
+  <li>Nhập danh sách hóa đơn mua vào từ cổng thuế và báo hóa đơn còn thiếu theo khách hàng, theo kỳ (M2).</li>
+  <li>Đổi tên và phạm vi #325 thành đồng bộ có người, chờ O1 đến O3.</li>
+  <li>Ý kiến luật sư về việc truy cập cổng thuế khi có đồng ý của khách hàng, gộp vào M3-6.</li>
+  <li>Rà lại README và bộ đọc XML theo Nghị định 254/2026 và Thông tư 91/2026 (đã thay Nghị định 123/2020 từ 01/7/2026).</li>
+  <li>Spike riêng cho email chỉ có đường link tra cứu (không đính kèm XML), sau khi có chính sách egress.</li>
+</ul>
+
+<footer>Crove · spike #322 · 19/10/2026 · bản gốc: <a href="tax-portal-invoice-sync.md">tax-portal-invoice-sync.md</a></footer>
+</main>
+</div>
+</body>
+</html>
