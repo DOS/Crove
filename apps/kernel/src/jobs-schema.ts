@@ -21,7 +21,7 @@ export const QUEUES = {
   agentDispatch: 'kernel-agent-dispatch',
   agentWake: 'kernel-agent-wake',
   agentSweep: 'kernel-agent-sweep',
-  // Created by the agent proposals migration (20261019140000).
+  // Created by the agent proposals migration (20261019180000).
   agentProposal: 'kernel-agent-proposal',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
