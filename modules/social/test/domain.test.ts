@@ -36,7 +36,7 @@ describe('countText', () => {
     const nfc = 'Tiếng Việt';
     const nfd = nfc.normalize('NFD');
     expect(nfd.length).toBeGreaterThan(nfc.length);
-    for (const mode of ['utf16', 'codepoints', 'graphemes', 'bytes'] as const) {
+    for (const mode of ['utf16', 'codepoints', 'graphemes', 'bytes', 'weighted'] as const) {
       expect(countText(nfd, mode)).toBe(countText(nfc, mode));
     }
     expect(countText(nfc, 'codepoints')).toBe(10);
@@ -47,6 +47,31 @@ describe('countText', () => {
     expect(countText(family, 'graphemes')).toBe(1);
     expect(countText(family, 'codepoints')).toBe(5);
     expect(countText(family, 'utf16')).toBe(8);
+  });
+
+  it("counts as X does: tone-marked letters, CJK and emoji count two, every link 23", () => {
+    // ế and ệ are in U+1EA0..U+1EF9 and count two; đ, ơ, à are below U+10FF and count one.
+    expect(countText('Tiếng Việt', 'weighted')).toBe(12);
+    expect(countText('đơn giá', 'weighted')).toBe(7);
+    expect(countText('日本', 'weighted')).toBe(4);
+    expect(countText('👨‍👩‍👧', 'weighted')).toBe(2);
+    expect(countText('🇻🇳', 'weighted')).toBe(2);
+    // Curly quotes are in the ranges that count one; the ellipsis (U+2026) is not.
+    expect(countText('“a”…', 'weighted')).toBe(5);
+    expect(countText(`xem https://example.com/${'a'.repeat(200)}`, 'weighted')).toBe(4 + 23);
+    expect(countText('ghé crove.vn/gia nhé', 'weighted')).toBe(4 + 23 + 4);
+    // A full stop after a link is text; © and ® count one; a keycap is one emoji.
+    expect(countText('xem https://a.com/x.', 'weighted')).toBe(4 + 23 + 1);
+    expect(countText('© ®', 'weighted')).toBe(3);
+    expect(countText('1️⃣', 'weighted')).toBe(2);
+    expect(countText('giao tại TP.HCM, file.txt, ban@vi-du.vn', 'weighted')).toBe(countText('giao tại TP.HCM, file.txt, ban@vi-du.vn', 'codepoints') + 1);
+  });
+
+  it('flags an X post over 280 by X count, not by code points', () => {
+    const body = 'ệ'.repeat(141);
+    expect(countText(body, 'codepoints')).toBeLessThan(280);
+    expect(validateVariant({ provider: 'x', body, title: null, media: [] })).toEqual([{ code: 'TEXT_TOO_LONG', field: 'body', limit: 280, actual: 282 }]);
+    expect(validateVariant({ provider: 'x', body: `${'a'.repeat(250)} https://example.com/${'b'.repeat(100)}`, title: null, media: [] })).toEqual([]);
   });
 
   it('counts UTF-8 bytes', () => {

@@ -18,6 +18,9 @@ import {
   YouTubePublisher,
   YouTubeRefresher,
   LinkedInPublisher,
+  XConnector,
+  XPublisher,
+  XRefresher,
   ThreadsConnector,
   ThreadsPublisher,
   ThreadsRefresher,
@@ -140,7 +143,8 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
 
 // OAuth connectors of the providers this deployment has app credentials for (Social plan S6); a provider without
 // them is not offered.
-type ChannelConfig = Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_BLUESKY' | 'CHANNEL_THREADS_APP_ID' | 'CHANNEL_THREADS_APP_SECRET' | 'CHANNEL_LINKEDIN_CLIENT_ID' | 'CHANNEL_LINKEDIN_CLIENT_SECRET' | 'CHANNEL_GOOGLE_CLIENT_ID' | 'CHANNEL_GOOGLE_CLIENT_SECRET' | 'CHANNEL_TIKTOK_CLIENT_KEY' | 'CHANNEL_TIKTOK_CLIENT_SECRET' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION' | 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'>;
+type ChannelConfig = Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_BLUESKY' | 'CHANNEL_THREADS_APP_ID' | 'CHANNEL_THREADS_APP_SECRET' | 'CHANNEL_LINKEDIN_CLIENT_ID' | 'CHANNEL_LINKEDIN_CLIENT_SECRET' | 'CHANNEL_GOOGLE_CLIENT_ID' | 'CHANNEL_GOOGLE_CLIENT_SECRET' | 'CHANNEL_TIKTOK_CLIENT_KEY' | 'CHANNEL_TIKTOK_CLIENT_SECRET' | 'CHANNEL_X_CLIENT_ID' | 'CHANNEL_X_CLIENT_SECRET' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION' | 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'>;
+const xApp = (config: Pick<Config, 'CHANNEL_X_CLIENT_ID' | 'CHANNEL_X_CLIENT_SECRET'>) => (config.CHANNEL_X_CLIENT_ID && config.CHANNEL_X_CLIENT_SECRET ? { clientId: config.CHANNEL_X_CLIENT_ID, clientSecret: config.CHANNEL_X_CLIENT_SECRET } : null);
 const zaloApp = (config: Pick<Config, 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'>) => (config.CHANNEL_ZALO_APP_ID && config.CHANNEL_ZALO_APP_SECRET ? { appId: config.CHANNEL_ZALO_APP_ID, appSecret: config.CHANNEL_ZALO_APP_SECRET } : null);
 
 export function channelConnectors(config: Omit<ChannelConfig, 'CHANNEL_SANDBOX'>): Partial<Record<string, OAuthConnector>> {
@@ -157,6 +161,8 @@ export function channelConnectors(config: Omit<ChannelConfig, 'CHANNEL_SANDBOX'>
   if (config.CHANNEL_LINKEDIN_CLIENT_ID && config.CHANNEL_LINKEDIN_CLIENT_SECRET) connectors.linkedin = new LinkedInConnector({ clientId: config.CHANNEL_LINKEDIN_CLIENT_ID, clientSecret: config.CHANNEL_LINKEDIN_CLIENT_SECRET });
   if (config.CHANNEL_TIKTOK_CLIENT_KEY && config.CHANNEL_TIKTOK_CLIENT_SECRET) connectors.tiktok = new TikTokConnector({ clientKey: config.CHANNEL_TIKTOK_CLIENT_KEY, clientSecret: config.CHANNEL_TIKTOK_CLIENT_SECRET });
   if (config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) connectors.youtube = new YouTubeConnector({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
+  const x = xApp(config);
+  if (x) connectors.x = new XConnector(x);
   return connectors;
 }
 
@@ -175,6 +181,8 @@ export function channelPublishers(config: ChannelConfig): Record<string, Publish
   if (config.CHANNEL_LINKEDIN_CLIENT_ID && config.CHANNEL_LINKEDIN_CLIENT_SECRET) publishers.linkedin = new LinkedInPublisher();
   if (config.CHANNEL_TIKTOK_CLIENT_KEY && config.CHANNEL_TIKTOK_CLIENT_SECRET) publishers.tiktok = new TikTokPublisher({ clientKey: config.CHANNEL_TIKTOK_CLIENT_KEY, clientSecret: config.CHANNEL_TIKTOK_CLIENT_SECRET });
   if (config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) publishers.youtube = new YouTubePublisher({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
+  const x = xApp(config);
+  if (x) publishers.x = new XPublisher(x);
   return publishers;
 }
 
@@ -186,6 +194,8 @@ export function channelRefreshers(config: ChannelConfig): Record<string, Refresh
   if (config.CHANNEL_THREADS_APP_ID && config.CHANNEL_THREADS_APP_SECRET) refreshers.threads = new ThreadsRefresher();
   if (config.CHANNEL_TIKTOK_CLIENT_KEY && config.CHANNEL_TIKTOK_CLIENT_SECRET) refreshers.tiktok = new TikTokRefresher({ clientKey: config.CHANNEL_TIKTOK_CLIENT_KEY, clientSecret: config.CHANNEL_TIKTOK_CLIENT_SECRET });
   if (config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) refreshers.youtube = new YouTubeRefresher({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
+  const x = xApp(config);
+  if (x) refreshers.x = new XRefresher(x);
   return refreshers;
 }
 

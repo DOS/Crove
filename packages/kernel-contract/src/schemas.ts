@@ -181,7 +181,7 @@ export const zChannelConnection = z.object({
 });
 
 // Providers connected through an OAuth dialog (Social plan S6), and the attempt's state: 32 random bytes, base64url.
-export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok'] as const;
+export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x'] as const;
 export const zOAuthProvider = z.enum(OAUTH_CHANNEL_PROVIDERS);
 export const zOAuthState = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 
