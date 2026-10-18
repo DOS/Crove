@@ -273,12 +273,12 @@ export function SocialComposePage() {
     if (chosen.length === 0 && live.length === 1 && live[0]) setChosen([live[0].id]);
   }, [live.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // One key for this form: a retry after a lost answer returns the post the first request created.
-  const key = useRef(crypto.randomUUID());
+  // One key per content: a retry of the same content after a lost answer returns the post the first request created;
+  // content edited after a failed attempt is a new request (the server would refuse the old key with other content).
+  const attempt = useRef<{ key: string; payload: string } | null>(null);
   const create = useMutation({
     mutationFn: async (submit: boolean) => {
-      const created = await client.social.posts.create({
-        idempotencyKey: key.current,
+      const request = {
         body: base.body,
         title: orNull(base.title),
         linkUrl: orNull(base.linkUrl),
@@ -289,7 +289,10 @@ export function SocialComposePage() {
           const settings = Object.keys(mine.settings).length > 0 ? { settings: mine.settings as Record<string, string | boolean> } : {};
           return mine.custom ? { connectionId, body: mine.body, title: orNull(mine.title), ...settings } : { connectionId, ...settings };
         }),
-      });
+      };
+      const payload = JSON.stringify(request);
+      if (attempt.current?.payload !== payload) attempt.current = { key: crypto.randomUUID(), payload };
+      const created = await client.social.posts.create({ idempotencyKey: attempt.current.key, ...request });
       // The draft exists now: a failed submit is shown on its page, never answered with a second post.
       if (submit) await client.social.posts.submit({ postId: created.postId }).catch((error: unknown) => setFlash(errorMessage(error)));
       return created.postId;
@@ -435,9 +438,10 @@ function ownOf(v: Variant): Own {
   return { custom: v.overrides.body !== null, body: v.overrides.body ?? '', title: v.overrides.title ?? '', settings: v.settings };
 }
 
-// What a post says, not its status: the post's revision and each variant's revision.
+// What a post says, not its status: the post's revision and each variant's revision and own content (an override
+// change elsewhere shows as an edit even if it did not move the revision).
 function contentKey(p: Post): string {
-  return `${p.revision}|${p.variants.map((v) => `${v.id}:${v.revision}`).join(',')}`;
+  return `${p.revision}|${p.variants.map((v) => `${v.id}:${v.revision}:${JSON.stringify([v.overrides, v.settings])}`).join(',')}`;
 }
 
 function baseOf(p: Post): Base {
@@ -657,8 +661,6 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const [origin, setOrigin] = useState<Post | null>(null);
   const [stale, setStale] = useState(false);
   const [flash] = useState(takeFlash);
-  // After this page's own save: take the server's content, keeping the channel edits a partly failed save left.
-  const adoptNext = useRef<'all' | 'keep-own' | null>(null);
   const adopt = (p: Post, keepOwn = false) => {
     setOrigin(p);
     setBase(baseOf(p));
@@ -672,45 +674,61 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   useEffect(() => {
     const p = post.data;
     if (!p) return;
-    if (!origin || adoptNext.current) {
-      adopt(p, adoptNext.current === 'keep-own');
-      adoptNext.current = null;
-    } else if (contentKey(p) === contentKey(origin)) setOrigin(p);
+    if (!origin) adopt(p);
+    else if (contentKey(p) === contentKey(origin)) setOrigin(p);
     else if (!editsOf(origin)) adopt(p);
     else setStale(true);
   }, [post.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refresh = () => void queryClient.invalidateQueries();
+  // After this page's own save: read the post once and take it as the new starting point here, rather than waiting
+  // for a refetch to notice (a refetch identical to the cache never fires the effect above).
+  const settle = async (keepOwn: boolean) => {
+    const p = await client.social.posts.get({ postId });
+    queryClient.setQueryData(orpc.social.posts.get.queryOptions({ input: { postId } }).queryKey, p);
+    adopt(p, keepOwn);
+  };
   const save = useMutation({
     mutationFn: async () => {
       if (!origin || !base) return;
       const before = baseOf(origin);
       const mediaChanged = JSON.stringify(mediaInput(base.media)) !== JSON.stringify(mediaInput(before.media));
-      if (base.body !== before.body || base.title !== before.title || base.linkUrl !== before.linkUrl || mediaChanged) {
-        await client.social.posts.update({
-          postId,
-          revision: origin.revision,
-          body: base.body,
-          title: orNull(base.title),
-          linkUrl: orNull(base.linkUrl),
-          ...(mediaChanged ? { media: mediaInput(base.media) } : {}),
-        });
-        adoptNext.current = 'keep-own';
+      const baseChanged = base.body !== before.body || base.title !== before.title || base.linkUrl !== before.linkUrl || mediaChanged;
+      let baseSaved = false;
+      try {
+        if (baseChanged) {
+          await client.social.posts.update({
+            postId,
+            revision: origin.revision,
+            body: base.body,
+            title: orNull(base.title),
+            linkUrl: orNull(base.linkUrl),
+            ...(mediaChanged ? { media: mediaInput(base.media) } : {}),
+          });
+          baseSaved = true;
+        }
+        // Base edits move the inheriting variants' revisions: read them again before saving overrides.
+        const fresh = await client.social.posts.get({ postId });
+        for (const v of fresh.variants) {
+          const mine = own[v.id];
+          // Only what was edited here: a channel left as it was loaded keeps what another tab may have saved since.
+          const loaded = origin.variants.find((ov) => ov.id === v.id);
+          if (!mine || (loaded && sameOwn(mine, ownOf(loaded))) || sameOwn(mine, ownOf(v)) || !EDITABLE.includes(v.status)) continue;
+          await client.social.variants.update({
+            variantId: v.id,
+            revision: v.revision,
+            body: mine.custom ? mine.body : null,
+            title: mine.custom ? orNull(mine.title) : null,
+            ...(sameSettings(mine.settings, v.settings) ? {} : { settings: mine.settings as Record<string, string | boolean> }),
+          });
+        }
+      } catch (error) {
+        // A save that failed part way: take what went in (the shared text, some channels) and keep the channel edits
+        // not saved yet. Shared text that did not go in stays as typed, so the server's is not taken over it.
+        if (baseSaved || !baseChanged) await settle(true).catch(() => undefined);
+        throw error;
       }
-      // Base edits move the inheriting variants' revisions: read them again before saving overrides.
-      const fresh = await client.social.posts.get({ postId });
-      for (const v of fresh.variants) {
-        const mine = own[v.id];
-        if (!mine || sameOwn(mine, ownOf(v)) || !EDITABLE.includes(v.status)) continue;
-        await client.social.variants.update({
-          variantId: v.id,
-          revision: v.revision,
-          body: mine.custom ? mine.body : null,
-          title: mine.custom ? orNull(mine.title) : null,
-          ...(sameSettings(mine.settings, v.settings) ? {} : { settings: mine.settings as Record<string, string | boolean> }),
-        });
-      }
-      adoptNext.current = 'all';
+      await settle(false);
     },
     onSettled: refresh,
   });
@@ -738,7 +756,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const editable = canWrite && p.variants.some((v) => EDITABLE.includes(v.status));
   const submittable = p.variants.filter((v) => SUBMITTABLE.includes(v.status));
   const onKey = (e: KeyboardEvent) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 's' && dirty) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 's' && dirty && !save.isPending) {
       e.preventDefault();
       save.mutate();
     }
