@@ -266,7 +266,7 @@ function VoucherFormCard({ slug, onClose }: { slug: string; onClose: () => void 
         )}
 
         {touched && problem && <ErrorText>{problem}</ErrorText>}
-        {request.error && <ErrorText>{refusedProblem ? t(`problems.${refusedProblem as 'PARTY_REQUIRED'}`) : errorMessage(request.error)}</ErrorText>}
+        {request.error && <ErrorText>{refusedProblem ? t(`problems.${refusedProblem}`) : errorMessage(request.error)}</ErrorText>}
         <div className="flex gap-2">
           <Button type="submit" disabled={request.isPending}>
             {request.isPending ? <Spinner className="text-current" /> : null}

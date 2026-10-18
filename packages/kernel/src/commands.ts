@@ -30,7 +30,7 @@ import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type 
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
-import { setTaxCode } from './tax-code.ts';
+import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal', which the runtime checks
@@ -770,6 +770,7 @@ const otherKernelCommands = [
   ...agentCommands,
   ...channelCommands,
   setTaxCode,
+  setVatFilingPeriod,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),

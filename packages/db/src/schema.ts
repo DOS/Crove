@@ -70,12 +70,15 @@ export const ACTOR_TYPES = ['user', 'system', 'agent'] as const;
 type ActorType = (typeof ACTOR_TYPES)[number];
 
 export const TENANT_STATUSES = ['active', 'offboarding', 'closed'] as const;
+// How often the org files its VAT return (issue #318); null until an owner or admin chooses.
+export const VAT_FILING_PERIODS = ['month', 'quarter'] as const;
 
 export type TenantTable = Refine<
   G.KernelTenantTable,
   {
     // 'offboarding': only owners may enter (kernel.org.offboard, issue #38); 'closed' is set by staff.
     status: Generated<(typeof TENANT_STATUSES)[number]>;
+    vat_filing_period: (typeof VAT_FILING_PERIODS)[number] | null;
     // inbound_token is the active inbound token. Every token ever issued, retired ones included, is in
     // crove_kernel.inbound_address, which only definers read and write; rotation is the command kernel.inbound.rotate.
   }

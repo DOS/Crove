@@ -91,10 +91,16 @@ export function previewVoucherJournal(voucher: {
   return isInflow(voucher.type) ? [cash, ...lines] : [...lines, cash];
 }
 
-// The words for a refusal of the voucher's own rules (VOUCHER_INVALID carries which one in its details).
-export function voucherProblem(error: unknown): string | null {
+// The problems finance.voucher.prepare and finance.voucher.record name in a VOUCHER_INVALID refusal; each has words in
+// vouchers.problems of both catalogs.
+export const VOUCHER_PROBLEMS = ['CASH_ACCOUNT_TYPE', 'LINE_IS_CASH_ACCOUNT', 'PARTY_REQUIRED', 'TOTAL_TOO_LARGE', 'TOTAL_MISMATCH'] as const;
+export type VoucherProblemCode = (typeof VOUCHER_PROBLEMS)[number];
+
+// Which of the voucher's own rules a refusal names (VOUCHER_INVALID carries it in its details), or null for any other
+// refusal or a problem this version of the app does not know (then the kernel's message is shown).
+export function voucherProblem(error: unknown): VoucherProblemCode | null {
   const e = error as { code?: unknown; data?: { problems?: unknown } } | null;
   if (e?.code !== 'VOUCHER_INVALID' || !Array.isArray(e.data?.problems)) return null;
-  const first = e.data.problems[0];
-  return typeof first === 'string' ? first : null;
+  const first: unknown = e.data.problems[0];
+  return VOUCHER_PROBLEMS.find((p) => p === first) ?? null;
 }

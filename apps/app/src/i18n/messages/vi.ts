@@ -41,6 +41,7 @@ export const vi = {
   },
   nav: {
     org: 'Tổ chức',
+    allClients: 'Tất cả doanh nghiệp',
     inbox: 'Hộp thư chứng từ',
     documents: 'Chứng từ',
     vendors: 'Nhà cung cấp',
@@ -92,6 +93,27 @@ export const vi = {
     namePlaceholder: 'Công ty TNHH ABC',
     creating: 'Đang tạo…',
     create: 'Tạo tổ chức',
+  },
+  clients: {
+    title: 'Tổng quan các doanh nghiệp',
+    subtitle: 'Việc đang chờ và hạn nộp tờ khai GTGT của từng doanh nghiệp bạn phụ trách. Bấm vào tên để mở.',
+    columns: {
+      company: 'Doanh nghiệp',
+      pending: 'Chờ duyệt',
+      failed: 'Tệp lỗi',
+      lastActivity: 'Hoạt động gần nhất',
+      vatDeadline: 'Hạn nộp tờ khai GTGT',
+    },
+    noActivity: 'Chưa có hoạt động',
+    periodMonth: 'Tháng {month}/{year}',
+    periodQuarter: 'Quý {quarter}/{year}',
+    daysLeft: '{days, plural, =0 {hạn cuối là hôm nay} other {còn # ngày}}',
+    noFilingPeriod: 'Chưa chọn kỳ khai thuế',
+    chooseFilingPeriod: 'Chọn kỳ khai',
+    deadlineNote: 'Hạn rơi vào thứ Bảy hoặc Chủ nhật được lùi sang thứ Hai; Crove chưa tính các ngày nghỉ lễ, Tết.',
+    empty: 'Bạn chưa thuộc doanh nghiệp nào',
+    emptyHint: 'Tạo doanh nghiệp đầu tiên hoặc nhận lời mời từ khách hàng để bắt đầu.',
+    create: 'Tạo doanh nghiệp',
   },
   documents: {
     title: 'Chứng từ',
@@ -710,6 +732,12 @@ export const vi = {
     taxCodeChange: 'Sửa',
     taxCodeSave: 'Lưu',
     taxCodeHint: 'Hóa đơn có người bán là mã số thuế này được ghi sổ như hóa đơn bán ra; các hóa đơn khác là hóa đơn mua vào.',
+    vatFilingPeriod: 'Kỳ khai thuế GTGT',
+    vatFilingUnset: 'Chưa chọn',
+    vatFilingMonth: 'Theo tháng',
+    vatFilingQuarter: 'Theo quý',
+    vatFilingHint:
+      'Crove dựa vào đây để nhắc hạn nộp tờ khai: khai theo tháng thì hạn là ngày 20 tháng sau, khai theo quý thì hạn là ngày cuối cùng của tháng đầu quý sau.',
     inboundAddress: 'Địa chỉ nhận hóa đơn qua email',
     inboundOff: 'Máy chủ chưa bật nhận email',
     inboundDropped:

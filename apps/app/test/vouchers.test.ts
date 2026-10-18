@@ -9,6 +9,7 @@ import {
   isVoucherAmount,
   normalizeAmount,
   previewVoucherJournal,
+  VOUCHER_PROBLEMS,
   voucherFormError,
   voucherProblem,
   voucherTotal,
@@ -111,10 +112,11 @@ describe('voucherProblem', () => {
     expect(voucherProblem({ code: 'VOUCHER_INVALID', data: { problems: ['PARTY_REQUIRED'] } })).toBe('PARTY_REQUIRED');
     expect(voucherProblem({ code: 'ACCOUNT_INACTIVE', data: { problems: ['PARTY_REQUIRED'] } })).toBeNull();
     expect(voucherProblem(null)).toBeNull();
+    expect(voucherProblem({ code: 'VOUCHER_INVALID', data: { problems: ['SOMETHING_NEW'] } })).toBeNull();
   });
 
   it('has words for every problem the kernel names, in both locales', () => {
-    for (const problem of ['CASH_ACCOUNT_TYPE', 'LINE_IS_CASH_ACCOUNT', 'PARTY_REQUIRED', 'TOTAL_TOO_LARGE', 'TOTAL_MISMATCH'] as const) {
+    for (const problem of VOUCHER_PROBLEMS) {
       expect(vi(`vouchers.problems.${problem}`)).not.toContain('vouchers.');
       expect(en(`vouchers.problems.${problem}`)).not.toContain('vouchers.');
     }

@@ -43,6 +43,7 @@ export const en = {
   },
   nav: {
     org: 'Organization',
+    allClients: 'All companies',
     inbox: 'Document inbox',
     documents: 'Documents',
     vendors: 'Vendors',
@@ -94,6 +95,27 @@ export const en = {
     namePlaceholder: 'ABC Company Limited',
     creating: 'Creating…',
     create: 'Create organization',
+  },
+  clients: {
+    title: 'All companies',
+    subtitle: 'What is waiting and when the next VAT return is due, for every company you work on. Click a name to open it.',
+    columns: {
+      company: 'Company',
+      pending: 'Awaiting approval',
+      failed: 'Failed files',
+      lastActivity: 'Last activity',
+      vatDeadline: 'Next VAT return due',
+    },
+    noActivity: 'No activity yet',
+    periodMonth: 'Month {month}/{year}',
+    periodQuarter: 'Q{quarter} {year}',
+    daysLeft: '{days, plural, =0 {due today} one {# day left} other {# days left}}',
+    noFilingPeriod: 'Filing period not set',
+    chooseFilingPeriod: 'Set it',
+    deadlineNote: 'A deadline on a Saturday or Sunday moves to the Monday; public holidays are not taken into account yet.',
+    empty: 'You are not part of any company yet',
+    emptyHint: 'Create your first company or accept an invite from a client to get started.',
+    create: 'Create a company',
   },
   documents: {
     title: 'Documents',
@@ -712,6 +734,12 @@ export const en = {
     taxCodeChange: 'Change',
     taxCodeSave: 'Save',
     taxCodeHint: 'Invoices whose seller has this tax code are posted as sales; all other invoices are purchases.',
+    vatFilingPeriod: 'VAT filing period',
+    vatFilingUnset: 'Not set',
+    vatFilingMonth: 'Monthly',
+    vatFilingQuarter: 'Quarterly',
+    vatFilingHint:
+      'Crove uses this to show when the VAT return is due: the 20th of the following month for monthly filers, the last day of the first month of the following quarter for quarterly filers.',
     inboundAddress: 'Invoice email address',
     inboundOff: 'This server does not receive email',
     inboundDropped:

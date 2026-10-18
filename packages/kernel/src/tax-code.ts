@@ -4,7 +4,7 @@
 // clear it; the runtime audits every change, and the detail keeps the old and the new value (a tax code is public
 // business data, not a secret).
 import { z } from 'zod';
-import { normalizeTaxCode } from '@crove/kernel-contract';
+import { VAT_FILING_PERIODS, normalizeTaxCode } from '@crove/kernel-contract';
 import { DomainError, defineCommand } from '@crove/kernel-runtime';
 
 export const setTaxCode = defineCommand({
@@ -25,5 +25,27 @@ export const setTaxCode = defineCommand({
     }
     ctx.audit({ previous: before.tax_code, taxCode });
     return { taxCode };
+  },
+});
+
+// How often the org files its VAT return (issue #318), for the next deadline on the multi-client home screen. Owners and
+// admins choose it, or clear the choice (null). Audited with the old and the new value, and shown in the activity feed
+// like the tax code.
+export const setVatFilingPeriod = defineCommand({
+  name: 'kernel.org.set_vat_filing_period',
+  input: z.object({ vatFilingPeriod: z.enum(VAT_FILING_PERIODS).nullable() }),
+  risk: 'R1',
+  access: ['owner', 'admin'],
+  handler: async (ctx, input) => {
+    const before = await ctx.trx.selectFrom('crove_kernel.tenant').select('vat_filing_period').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
+    const next = input.vatFilingPeriod;
+    if (before.vat_filing_period !== next) {
+      await ctx.trx.updateTable('crove_kernel.tenant').set({ vat_filing_period: next }).where('org_id', '=', ctx.orgId).execute();
+      const summary =
+        next === 'month' ? 'Chọn kỳ khai thuế GTGT theo tháng' : next === 'quarter' ? 'Chọn kỳ khai thuế GTGT theo quý' : 'Bỏ chọn kỳ khai thuế GTGT';
+      await ctx.activity('kernel.tenant', ctx.orgId, 'org.vat_filing_period_changed', summary);
+    }
+    ctx.audit({ previous: before.vat_filing_period, vatFilingPeriod: next });
+    return { vatFilingPeriod: next };
   },
 });

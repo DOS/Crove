@@ -5,7 +5,7 @@
 // - finance.voucher.record: runs only through kernel.proposal.approve, on the stored payload. It checks everything
 //   again, inserts the voucher (the database numbers it per org and type, PT00001, PC00001 ...) and posts its journal
 //   entry through the posting path, linked by source_type 'finance.cash_voucher'. The database refuses a voucher
-//   whose entry does not move its cash account by its amount on its date (20261019200000).
+//   whose entry does not move its cash account by its amount on its date (20261019270000).
 // - finance.vouchers.list: the posted vouchers, with their reversal when their entry was reversed.
 // A voucher is corrected by reversing its entry (finance.journal.reverse); it keeps its number and shows as reversed.
 // A bank statement line matched to a payable or receivable (#326) is meant to propose a voucher through the same

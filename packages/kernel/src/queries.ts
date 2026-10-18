@@ -24,6 +24,7 @@ import { channelQueries } from './channels.ts';
 import { inviteQueries } from './invites.ts';
 import { offboardingQueries } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
+import { orgOverview, RECENT_FILES } from './overview.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
@@ -39,7 +40,7 @@ export function orgDetailQuery(options: OrgDetailOptions) {
     handler: async (ctx) => {
       const tenant = await ctx.trx
         .selectFrom('crove_kernel.tenant')
-        .select(['org_id', 'slug', 'name', 'inbound_token', 'tax_code'])
+        .select(['org_id', 'slug', 'name', 'inbound_token', 'tax_code', 'vat_filing_period'])
         .where('org_id', '=', ctx.orgId)
         .executeTakeFirstOrThrow();
       const memberRows = await ctx.trx
@@ -68,6 +69,7 @@ export function orgDetailQuery(options: OrgDetailOptions) {
         name: tenant.name,
         role: ctx.role ?? 'viewer',
         taxCode: tenant.tax_code,
+        vatFilingPeriod: tenant.vat_filing_period,
         inboundAddress: seesInbound ? `${tenant.inbound_token}@${options.inboundDomain}` : null,
         inboundDroppedCount,
         members: members.map((m) => ({ userId: m.user_id, email: m.email, displayName: m.display_name, role: m.role })),
@@ -273,7 +275,7 @@ export const filesRecent = defineQuery({
   name: 'kernel.files.recent',
   input: z.object({}),
   access: ALL,
-  handler: async (ctx) => (await fileStatuses(ctx, { recent: 50 })).map((row) => row.status),
+  handler: async (ctx) => (await fileStatuses(ctx, { recent: RECENT_FILES })).map((row) => row.status),
 });
 
 export const fileGet = defineQuery({
@@ -326,5 +328,5 @@ export const streamCheck = defineQuery({
 });
 
 export function kernelQueries(options: OrgDetailOptions) {
-  return [orgDetailQuery(options), streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries];
+  return [orgDetailQuery(options), orgOverview, streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries];
 }

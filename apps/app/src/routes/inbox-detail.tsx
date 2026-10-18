@@ -362,7 +362,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   // After a fresh code the step-up prompt repeats the refused request as sent, not the page as it is now: if someone
   // saved a new revision meanwhile, the kernel answers STALE_REVISION instead of approving what this user never saw.
   // The same idempotency key keeps it one approval.
-  const refusedVoucher = voucherProblem(approve.error) as 'PARTY_REQUIRED' | null;
+  const refusedVoucher = voucherProblem(approve.error);
   const retryApproval = () => {
     if (approve.variables) approve.mutate(approve.variables);
   };
