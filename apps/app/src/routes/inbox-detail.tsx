@@ -202,12 +202,46 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const dirty = (payload?.lines ?? []).some((l) => (lineAccounts[l.lineNo] ?? l.debitAccount) !== l.debitAccount);
   const busy = approve.isPending || reject.isPending || edit.isPending || reextract.isPending;
 
+  const item = detail.data;
+  const pending = item?.status === 'pending';
+  const reversal = item?.reversal ?? null;
+  const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
+  const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
+  // The approve buttons are enabled exactly when this holds, and the A shortcut uses the same value.
+  const approveReady =
+    item !== undefined && pending && item.canApprove && !busy && (reversal ? true : !dirty && !!payload && !blocked && (failed === 0 || acceptFailed));
+  const submitApproval = () => {
+    if (!item) return;
+    if (reversal) {
+      approve.mutate({ id, revision: item.revision, idempotencyKey });
+      return;
+    }
+    approve.mutate({
+      id,
+      revision: item.revision,
+      idempotencyKey,
+      lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
+      ...(failed > 0 ? { acceptFailedChecks: acceptFailed } : {}),
+    });
+  };
+
   // Review shortcuts (issue #315): J or N the next pending proposal, A approve, E the first account to edit. Each one
-  // does only what its button would do now; the handlers are set on every render below, and cleared while loading.
+  // does only what its button would do now (A never while the step-up prompt waits for a code). The handlers are
+  // computed on each render and handed to the key listener after it commits, through the ref.
   const pendingList = useQuery(orpc.inbox.list.queryOptions({ input: { status: 'pending' } }));
   const linesRef = useRef<HTMLDivElement>(null);
   const shortcuts = useRef<ShortcutHandlers>({});
-  shortcuts.current = {};
+  const nextId = pendingList.data ? nextPendingId(pendingList.data, id) : null;
+  const handlers: ShortcutHandlers = {
+    ...(nextId && nextId !== id ? { next: () => void navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: nextId } }) } : {}),
+    ...(approveReady && !stepUp ? { approve: submitApproval } : {}),
+    ...(pending && item?.canEdit && !busy && payload
+      ? { edit: () => linesRef.current?.querySelector<HTMLSelectElement>('select:not(:disabled)')?.focus() }
+      : {}),
+  };
+  useEffect(() => {
+    shortcuts.current = handlers;
+  });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const action = reviewShortcut(event);
@@ -219,19 +253,10 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-  const nextId = pendingList.data ? nextPendingId(pendingList.data, id) : null;
-  if (nextId && nextId !== id) {
-    shortcuts.current.next = () => void navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: nextId } });
-  }
 
   if (detail.isLoading) return <Spinner />;
   if (detail.error) return <ErrorText>{errorMessage(detail.error)}</ErrorText>;
-  const item = detail.data;
   if (!item) return null;
-  const pending = item.status === 'pending';
-  const reversal = item.reversal;
-  const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
-  const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
   const currency = payload?.invoice.currency ?? 'VND';
   const money = (value: string | null | undefined) => f.money(value, currency);
   const reading = item.extraction?.inFlight ?? false;
@@ -254,28 +279,12 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
     ) : null;
   const lastRun = item.extraction;
   const lastRunFailed = lastRun !== null && lastRun.status === 'failed' && lastRun.version !== lastRun.proposalVersion;
-  const submitApproval = () =>
-    approve.mutate({
-      id,
-      revision: item.revision,
-      idempotencyKey,
-      lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
-      ...(failed > 0 ? { acceptFailedChecks: acceptFailed } : {}),
-    });
   // After a fresh code the step-up prompt repeats the refused request as sent, not the page as it is now: if someone
   // saved a new revision meanwhile, the kernel answers STALE_REVISION instead of approving what this user never saw.
   // The same idempotency key keeps it one approval.
   const retryApproval = () => {
     if (approve.variables) approve.mutate(approve.variables);
   };
-  // The same conditions as the approve buttons; never while the step-up prompt waits for a code.
-  const canApproveNow = pending && item.canApprove && !busy && !stepUp && (reversal ? true : !dirty && !!payload && !blocked && (failed === 0 || acceptFailed));
-  if (canApproveNow) {
-    shortcuts.current.approve = reversal ? () => approve.mutate({ id, revision: item.revision, idempotencyKey }) : submitApproval;
-  }
-  if (pending && item.canEdit && !busy && payload) {
-    shortcuts.current.edit = () => linesRef.current?.querySelector<HTMLSelectElement>('select:not(:disabled)')?.focus();
-  }
 
   return (
     <>
@@ -331,13 +340,13 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                   </Button>
                 )}
                 {item.canApprove && reversal && (
-                  <Button size="lg" disabled={busy} onClick={() => approve.mutate({ id, revision: item.revision, idempotencyKey })}>
+                  <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
                     {approve.isPending ? <Spinner className="text-current" /> : null}
                     {t('approveReversal')}
                   </Button>
                 )}
                 {item.canApprove && !reversal && (
-                  <Button size="lg" disabled={busy || dirty || !payload || blocked || (failed > 0 && !acceptFailed)} onClick={submitApproval}>
+                  <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
                     {approve.isPending ? <Spinner className="text-current" /> : null}
                     {t('approve')}
                   </Button>

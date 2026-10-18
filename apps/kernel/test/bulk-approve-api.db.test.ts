@@ -215,7 +215,8 @@ suite('bulk approval through the API (#315)', () => {
     const many = Array.from({ length: 51 }, () => ({ id: randomUUID(), revision: 1 }));
     expect((await rpc('inbox/approveMany', 'owner', { items: [], idempotencyKey: randomUUID() }, { mfaAge: 0 })).status).toBe(400);
     expect((await rpc('inbox/approveMany', 'owner', { items: many, idempotencyKey: randomUUID() }, { mfaAge: 0 })).status).toBe(400);
+    // The contract refuses a repeated proposal before the command runs (the command's own schema refuses it too).
     const twice = await rpc('inbox/approveMany', 'owner', { items: [{ id, revision: 1 }, { id, revision: 1 }], idempotencyKey: randomUUID() }, { mfaAge: 0 });
-    expect(twice).toMatchObject({ status: 422, body: { code: 'VALIDATION' } });
+    expect(twice.status).toBe(400);
   });
 });

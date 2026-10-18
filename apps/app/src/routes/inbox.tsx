@@ -286,6 +286,7 @@ export function InboxPage() {
             <Label className="font-normal text-muted-foreground">
               <Checkbox
                 checked={chosen.length === selectable.length}
+                indeterminate={chosen.length > 0 && chosen.length < selectable.length}
                 disabled={sending}
                 onCheckedChange={(checked) => setSelected(checked ? new Set(selectable.map((item) => item.id)) : new Set())}
               />

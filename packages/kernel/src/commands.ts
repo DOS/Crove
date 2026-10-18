@@ -1,6 +1,16 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { MAX_SOCIAL_VIDEO_BYTES, MAX_UPLOAD_BYTES, UPLOAD_PURPOSES, zAccountCode, zId, zPurchaseProposal, zRole, zSessionRevoke } from '@crove/kernel-contract';
+import {
+  MAX_SOCIAL_VIDEO_BYTES,
+  MAX_UPLOAD_BYTES,
+  UPLOAD_PURPOSES,
+  zAccountCode,
+  zBulkApproveItems,
+  zId,
+  zPurchaseProposal,
+  zRole,
+  zSessionRevoke,
+} from '@crove/kernel-contract';
 import type { Db, MemberRole } from '@crove/db';
 import {
   DomainError,
@@ -592,10 +602,6 @@ export const approveProposal = defineCommand({
   },
 });
 
-// The most proposals one bulk approval takes. Each is a ledger posting in the same transaction, so the batch stays
-// short; the Inbox sends a larger selection in several batches, each under the same step-up freshness rule.
-export const MAX_BULK_APPROVE = 50;
-
 // Refusals of one item that leave the rest of the batch going: the approval policy and the state of that proposal
 // (NOT_ELIGIBLE, FOUR_EYES_REQUIRED, PROPOSAL_DECIDED, STALE_REVISION, CHECKS_FAILED, DUPLICATE_INVOICE, a foreign or
 // unknown id...). Anything else (a server fault, a broken context) aborts the whole batch, and so does a second
@@ -617,13 +623,9 @@ export type BulkApproveResult =
 // with failed checks is refused (CHECKS_FAILED) for a one-by-one review.
 export const approveProposals = defineCommand({
   name: 'kernel.proposal.approve_many',
-  input: z.object({
-    items: z
-      .array(z.object({ id: zId, revision: z.number().int().positive() }))
-      .min(1)
-      .max(MAX_BULK_APPROVE)
-      .refine((items) => new Set(items.map((i) => i.id)).size === items.length, 'each proposal once'),
-  }),
+  // At most MAX_BULK_APPROVE (50) items, each once. Each is a ledger posting in the same transaction, so the batch
+  // stays short; the Inbox sends a larger selection in several batches, each under the same step-up freshness rule.
+  input: z.object({ items: zBulkApproveItems }),
   risk: 'R3',
   access: APPROVERS,
   handler: async (ctx, input): Promise<{ results: BulkApproveResult[] }> => {

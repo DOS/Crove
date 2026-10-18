@@ -17,6 +17,11 @@ describe('bulk approval', () => {
     expect(chunks([])).toEqual([]);
   });
 
+  it('refuses a chunk size that would never advance', () => {
+    for (const size of [0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) expect(() => chunks([1, 2], size)).toThrow(RangeError);
+    expect(chunks([1, 2, 3], 2)).toEqual([[1, 2], [3]]);
+  });
+
   it('selects only pending purchases without a failed check or a duplicate warning', () => {
     const row = { status: 'pending', failedChecks: 0, kind: 'finance.purchase', duplicateOf: null };
     expect(bulkSelectable(row, REVERSAL)).toBe(true);

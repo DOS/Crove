@@ -1,6 +1,7 @@
 import { oc } from '@orpc/contract';
 import { z } from 'zod';
 import {
+  zBulkApproveItems,
   zAccount,
   zAgentBudget,
   zAgentRisk,
@@ -224,10 +225,7 @@ export const contract = {
     approveMany: oc
       .input(
         z.object({
-          items: z
-            .array(z.object({ id: zId, revision: z.number().int().positive() }))
-            .min(1)
-            .max(50),
+          items: zBulkApproveItems,
           idempotencyKey: zId,
         }),
       )

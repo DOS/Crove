@@ -6,6 +6,8 @@
 export const BULK_LIMIT = 50;
 
 export function chunks<T>(items: readonly T[], size: number = BULK_LIMIT): T[][] {
+  // A size below 1 (or a fraction, or NaN) would never advance the loop.
+  if (!Number.isInteger(size) || size < 1) throw new RangeError(`chunk size must be a positive integer, got ${size}`);
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
