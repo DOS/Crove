@@ -425,6 +425,7 @@ export const en: Dictionary = {
     ],
   },
   footer: {
+    navLabel: 'Footer links',
     tagline: 'The open-source Business OS for solo founders and small businesses. Vietnam first.',
     license: 'Open source under the AGPL-3.0 license',
     github: 'GitHub',

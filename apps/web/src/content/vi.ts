@@ -425,6 +425,7 @@ export const vi = {
     ],
   },
   footer: {
+    navLabel: 'Liên kết chân trang',
     tagline: 'Business OS mã nguồn mở cho người làm chủ và doanh nghiệp nhỏ. Việt Nam trước.',
     license: 'Mã nguồn mở theo giấy phép AGPL-3.0',
     github: 'GitHub',

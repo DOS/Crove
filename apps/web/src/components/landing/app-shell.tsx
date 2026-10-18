@@ -36,6 +36,7 @@ export function AppShell({ dict }: { dict: Dictionary }) {
     setPhase('wait');
     setTyped(0);
     setDigits(0);
+    setCanReplay(false);
     const at = (ms: number, step: () => void) => timers.current.push(window.setTimeout(step, ms));
     let t = 700;
     at(t, () => setPhase('open'));

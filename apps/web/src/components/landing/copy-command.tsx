@@ -1,13 +1,20 @@
 'use client';
 
 import { Check, Copy } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 // The self-host command with a copy button. When the clipboard is refused, the command is selected so it can be
 // copied by hand, and the message says so.
 export function CopyCommand({ command, copy, copied, copyFail }: { command: string; copy: string; copied: string; copyFail: string }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const pre = useRef<HTMLPreElement>(null);
+
+  // "Copied" goes back to the button label after two seconds; the timer is cleared if the component unmounts first.
+  useEffect(() => {
+    if (state !== 'copied') return;
+    const id = window.setTimeout(() => setState('idle'), 2000);
+    return () => window.clearTimeout(id);
+  }, [state]);
 
   const selectText = () => {
     const el = pre.current;
@@ -23,7 +30,6 @@ export function CopyCommand({ command, copy, copied, copyFail }: { command: stri
     try {
       await navigator.clipboard.writeText(command);
       setState('copied');
-      window.setTimeout(() => setState('idle'), 2000);
     } catch {
       selectText();
       setState('failed');

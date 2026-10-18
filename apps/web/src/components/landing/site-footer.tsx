@@ -14,7 +14,7 @@ export function SiteFooter({ dict }: { dict: Dictionary }) {
           </div>
           <p className="mt-3 text-sm text-muted">{footer.tagline}</p>
         </div>
-        <nav aria-label={footer.docs} className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+        <nav aria-label={footer.navLabel} className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
           <a href={GITHUB_URL} className="text-muted hover:text-fg">
             {footer.github}
           </a>
