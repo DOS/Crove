@@ -115,7 +115,7 @@ export function sentText(provider: Provider, body: string, linkUrl: string | nul
   return [text, link].filter(Boolean).join('\n\n');
 }
 
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
@@ -141,7 +141,8 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'instagram',
     body: { max: 2200, count: 'utf16', required: false },
     title: null,
-    media: { min: 1, max: 10, kinds: ['image', 'video'], mixed: true, maxVideos: 10, imageTypes: ['image/jpeg'], maxImageBytes: null, maxVideoBytes: null, maxVideoSeconds: null },
+    // A Reel runs up to 15 minutes and 300 MB (Meta's Reels specs); a carousel mixes images and videos.
+    media: { min: 1, max: 10, kinds: ['image', 'video'], mixed: true, maxVideos: 10, imageTypes: ['image/jpeg'], maxImageBytes: null, maxVideoBytes: 300 * MB, maxVideoSeconds: 900 },
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: ['body.max'],

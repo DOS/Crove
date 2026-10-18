@@ -135,7 +135,9 @@ describe('validateVariant', () => {
     const codes = (media: MediaItem[]) => validateVariant({ provider: 'instagram', body: 'caption', title: null, media }).map((i) => i.code);
     expect(codes([])).toEqual(['MEDIA_REQUIRED']);
     expect(codes([png()])).toEqual(['IMAGE_TYPE_NOT_ALLOWED']);
-    expect(codes([jpeg(), mp4()])).toEqual(['VIDEO_NOT_SUPPORTED_YET']);
+    expect(codes([jpeg(), mp4()])).toEqual([]);
+    expect(codes([mp4(901)])).toEqual(['VIDEO_TOO_LONG']);
+    expect(codes([mp4(60)])).toEqual([]);
     expect(codes(Array.from({ length: 11 }, () => jpeg()))).toEqual(['TOO_MANY_MEDIA']);
   });
 
