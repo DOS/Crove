@@ -176,6 +176,7 @@ const VIDEO_URN = /^urn:li:video:[A-Za-z0-9_-]{1,64}$/;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // How long a publish waits for LinkedIn to process a video; with the upload it stays inside callTimeoutMs.
 const PROCESSING_WAIT_MS = 300_000;
+const VIDEO_CALL_MARGIN_MS = 90_000;
 
 export class LinkedInPublisher implements Publisher {
   readonly provider = 'linkedin' as const;
@@ -185,11 +186,14 @@ export class LinkedInPublisher implements Publisher {
   private readonly client: LinkedInClient;
   private readonly processingWaitMs: number;
   private readonly pollMs: number;
+  private readonly budgetMs: number;
 
-  constructor(app: Pick<LinkedInAppConfig, 'version'> = {}, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMs?: number } = {}) {
+  constructor(app: Pick<LinkedInAppConfig, 'version'> = {}, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMs?: number; budgetMs?: number } = {}) {
     this.client = new LinkedInClient(app.version ?? LINKEDIN_VERSION, fetchImpl);
     this.processingWaitMs = timing.processingWaitMs ?? PROCESSING_WAIT_MS;
     this.pollMs = timing.pollMs ?? 5000;
+    // The last status check and the post (30 s each at most) plus slack fit between the budget and callTimeoutMs.
+    this.budgetMs = timing.budgetMs ?? this.callTimeoutMs - VIDEO_CALL_MARGIN_MS;
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -240,6 +244,10 @@ export class LinkedInPublisher implements Publisher {
     } catch {
       return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
     }
+    // One budget for the whole call, upload included, ending well before the job gives up on it (callTimeoutMs): past
+    // it nothing is visible yet, so the call stops as transient instead of posting after the job recorded unknown.
+    const budgetEnd = Date.now() + this.budgetMs;
+    const late = (): PublishResult => ({ kind: 'rejected', error: 'transient', code: 'VIDEO_TOO_SLOW' });
     let urn: string;
     try {
       const init = await this.client.call<{ value?: { video?: unknown; uploadToken?: unknown; uploadInstructions?: { uploadUrl?: unknown; firstByte?: unknown; lastByte?: unknown }[] } }>(
@@ -252,19 +260,26 @@ export class LinkedInPublisher implements Publisher {
       const parts = value?.uploadInstructions ?? [];
       if (typeof value?.video !== 'string' || !VIDEO_URN.test(value.video) || parts.length === 0) return { kind: 'rejected', error: 'transient', code: 'NO_UPLOAD_URL' };
       urn = value.video;
-      const etags: string[] = [];
+      // The parts must cover the file exactly, in order: each starts where the last ended, the last ends at its end.
+      let next = 0;
       for (const part of parts) {
         const first = Number(part.firstByte);
         const last = Number(part.lastByte);
-        if (typeof part.uploadUrl !== 'string' || !Number.isInteger(first) || !Number.isInteger(last) || first < 0 || last < first) return { kind: 'rejected', error: 'transient', code: 'BAD_UPLOAD_PART' };
-        const etag = await this.client.upload(part.uploadUrl, token, bytes.slice(first, last + 1), 'application/octet-stream');
+        if (typeof part.uploadUrl !== 'string' || first !== next || !Number.isInteger(last) || last < first || last >= bytes.byteLength) return { kind: 'rejected', error: 'transient', code: 'BAD_UPLOAD_PART' };
+        next = last + 1;
+      }
+      if (next !== bytes.byteLength) return { kind: 'rejected', error: 'transient', code: 'BAD_UPLOAD_PART' };
+      const etags: string[] = [];
+      for (const part of parts) {
+        if (Date.now() >= budgetEnd) return late();
+        const etag = await this.client.upload(part.uploadUrl as string, token, bytes.slice(Number(part.firstByte), Number(part.lastByte) + 1), 'application/octet-stream');
         if (!etag) return { kind: 'rejected', error: 'transient', code: 'NO_PART_ETAG' };
         etags.push(etag);
       }
       await this.client.call('POST', '/rest/videos?action=finalizeUpload', token, {
         finalizeUploadRequest: { video: urn, uploadToken: typeof value.uploadToken === 'string' ? value.uploadToken : '', uploadedPartIds: etags },
       });
-      const deadline = Date.now() + this.processingWaitMs;
+      const deadline = Math.min(Date.now() + this.processingWaitMs, budgetEnd);
       for (;;) {
         const got = await this.client.call<{ status?: unknown; processingFailureReason?: unknown }>('GET', `/rest/videos/${encodeURIComponent(urn)}`, token);
         const status = got.body?.status;
@@ -279,6 +294,7 @@ export class LinkedInPublisher implements Publisher {
     } catch (error) {
       return beforePost(publishResult(error));
     }
+    if (Date.now() >= budgetEnd) return late();
     return this.post(token, author, textOf(input.content), { media: { id: urn } });
   }
 

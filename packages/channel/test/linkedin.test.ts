@@ -177,6 +177,16 @@ describe('LinkedInPublisher video', () => {
     expect(await new LinkedInPublisher({}, failed.fetchImpl, quick).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'VIDEO_PROCESSING_FAILED', message: 'Unsupported codec' });
     const refused = linkedin({ ...init(), [`PUT www.linkedin.com/dms-uploads/C5505AQH-oV1qvnFtKA/uploadedVideo`]: [{ status: 503 }] });
     expect(await new LinkedInPublisher({}, refused.fetchImpl, quick).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'transient' });
+    // Parts that leave a gap or run past the file, and a spent budget, stop before any byte is sent.
+    const gap = linkedin({
+      'POST api.linkedin.com/rest/videos?action=initializeUpload': [{ body: { value: { video: VIDEO, uploadToken: '', uploadInstructions: [{ uploadUrl: PART, firstByte: 0, lastByte: 4 }, { uploadUrl: PART, firstByte: 6, lastByte: 9 }] } } }],
+    });
+    expect(await new LinkedInPublisher({}, gap.fetchImpl, quick).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'transient', code: 'BAD_UPLOAD_PART' });
+    const past = linkedin({ 'POST api.linkedin.com/rest/videos?action=initializeUpload': [{ body: { value: { video: VIDEO, uploadToken: '', uploadInstructions: [{ uploadUrl: PART, firstByte: 0, lastByte: 20 }] } } }] });
+    expect(await new LinkedInPublisher({}, past.fetchImpl, quick).publish(withClip())).toMatchObject({ code: 'BAD_UPLOAD_PART' });
+    const spent = linkedin(init());
+    expect(await new LinkedInPublisher({}, spent.fetchImpl, { ...quick, budgetMs: 0 }).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'transient', code: 'VIDEO_TOO_SLOW' });
+    for (const run of [gap, past, spent]) expect(run.calls.some((c) => c.route.startsWith('PUT'))).toBe(false);
     const mov = linkedin({});
     expect(await new LinkedInPublisher({}, mov.fetchImpl, quick).publish(withClip({ content: { ...input().content, media: [{ ...clip, mime: 'video/quicktime' }] } }))).toMatchObject({ kind: 'rejected', code: 'VIDEO_TYPE' });
     expect(mov.calls).toHaveLength(0);
