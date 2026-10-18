@@ -552,6 +552,23 @@ export const zLedgerReport = z.object({
   receivables: zPartyLedger,
   payables: zPartyLedger,
 });
+// Period lock (issue #329): the org's books are locked from lockedFrom to lockedThrough (YYYY-MM-DD, both null when
+// nothing is locked). Months are YYYY-MM; nextMonth is the only month a lock may name (null: any month that has
+// ended), lastMonth the only one an unlock may name. updatedBy and updatedAt describe the last lock or unlock
+// (updatedBy null once that person left the org).
+export const zPeriodMonth = z.string().regex(/^(20\d{2})-(0[1-9]|1[0-2])$/, 'YYYY-MM');
+export const zPeriodLockInput = z.object({ month: zPeriodMonth });
+export const zPeriodUnlockInput = z.object({ month: zPeriodMonth, reason: z.string().trim().min(1).max(500) });
+export const zPeriodLockState = z.object({
+  lockedFrom: zLocalDate.nullable(),
+  lockedThrough: zLocalDate.nullable(),
+  nextMonth: zPeriodMonth.nullable(),
+  lastMonth: zPeriodMonth.nullable(),
+  updatedBy: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+});
+export type PeriodLockState = z.infer<typeof zPeriodLockState>;
+
 export const zAccountLedger = z.object({
   period: zLedgerPeriodRange,
   account: z.object({ code: z.string(), name: z.string() }),

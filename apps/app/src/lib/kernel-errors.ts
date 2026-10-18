@@ -87,6 +87,13 @@ export const KERNEL_ERROR_CODES = [
   // The tax portal's purchase list (#465).
   'PORTAL_LIST_EXISTS',
   'PORTAL_LIST_LIMIT',
+  // Period lock (#329).
+  'PERIOD_LOCKED',
+  'PERIOD_ALREADY_LOCKED',
+  'EARLIER_PERIOD_OPEN',
+  'PERIOD_NOT_LOCKED',
+  'LATER_PERIOD_LOCKED',
+  'PERIOD_NOT_ENDED',
   // The chart of accounts and vendor defaults (#319).
   'ACCOUNT_CODE_TAKEN',
   'ACCOUNT_HAS_SUB_ACCOUNTS',
