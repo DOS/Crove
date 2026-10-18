@@ -8,6 +8,7 @@
 // reference carries the text's hash so a status check recognises the post it became.
 import { createHash } from 'node:crypto';
 import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const THREADS_HOSTS = ['graph.threads.net'] as const;
@@ -186,7 +187,7 @@ function threadsResult(error: unknown): PublishResult {
 
 const textOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
-  return content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+  return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
 };
 const textKey = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
 const refOf = (container: string, text: string) => `${container}.${textKey(text)}`;

@@ -8,6 +8,7 @@
 // names them), then one POST /rest/posts. A member app cannot list the member's posts, so an unclear answer cannot be
 // checked: publishSafety 'never', and such a post waits for a person.
 import type { ConnectedAccount, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
+import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 // Upload URLs LinkedIn hands out are on www.linkedin.com (dms-uploads) or api.linkedin.com (mediaUpload).
@@ -167,7 +168,7 @@ const beforePost = (result: PublishResult): PublishResult =>
 
 const textOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
-  return content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+  return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
 };
 
 export class LinkedInPublisher implements Publisher {

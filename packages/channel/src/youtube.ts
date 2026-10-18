@@ -7,6 +7,7 @@
 // answer names the video. The project's quota allows about 100 uploads a day; a quota refusal waits, never fails.
 // An unclear answer is checked by listing the channel's latest uploads (one quota unit), matched by title and time.
 import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const YOUTUBE_HOSTS = ['oauth2.googleapis.com', 'www.googleapis.com'] as const;
@@ -243,7 +244,7 @@ export function clipBytes(s: string, max: number): string {
 const titleOf = (content: { title: string | null }) => clipCodepoints((content.title ?? '').replace(/[<>]/g, '').trim(), TITLE_MAX);
 const descriptionOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
-  const text = content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+  const text = content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
   // YouTube refuses angle brackets in a description.
   return clipBytes(text.replace(/[<>]/g, ''), DESCRIPTION_MAX);
 };

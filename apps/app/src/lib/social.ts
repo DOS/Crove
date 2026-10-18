@@ -1,6 +1,6 @@
 // Shared pieces of the Social screens: status tones, provider names, the effective text of a variant as the composer
 // shows it, and grouping by day for the agenda.
-import { CAPABILITIES, countText, isProvider, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
+import { CAPABILITIES, countText, isProvider, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
 
 export type VariantStatus =
   | 'draft'
@@ -55,11 +55,11 @@ export function providerName(provider: string): string {
   return isProvider(provider) ? PROVIDER_NAMES[provider] : provider;
 }
 
-// A variant's text against its channel's limit, the way the platform counts.
-export function textBudget(provider: string, body: string): { used: number; max: number | null } {
+// A variant's text against its channel's limit, the way the platform counts, with the link the channel's adapter adds.
+export function textBudget(provider: string, body: string, link: { linkUrl?: string | null; mediaCount?: number } = {}): { used: number; max: number | null } {
   if (!isProvider(provider)) return { used: body.length, max: null };
   const rule = CAPABILITIES[provider].body;
-  return { used: countText(body, rule.count), max: rule.max };
+  return { used: countText(sentText(provider, body, link.linkUrl, link.mediaCount ?? 0), rule.count), max: rule.max };
 }
 
 export function hasTitle(provider: string): boolean {
@@ -67,10 +67,10 @@ export function hasTitle(provider: string): boolean {
 }
 
 // The issues a draft would have at submit, checked as it is typed (the server checks again).
-export function draftIssues(provider: string, content: { body: string; title: string | null; media?: readonly { mime: string; sizeBytes: number; durationMs?: number | null | undefined }[]; settings?: Record<string, unknown> }): Issue[] {
+export function draftIssues(provider: string, content: { body: string; title: string | null; linkUrl?: string | null; media?: readonly { mime: string; sizeBytes: number; durationMs?: number | null | undefined }[]; settings?: Record<string, unknown> }): Issue[] {
   if (!isProvider(provider)) return [];
   const media = (content.media ?? []).map((m) => ({ kind: m.mime.startsWith('video/') ? ('video' as const) : ('image' as const), mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000 }));
-  return validateVariant({ provider, body: content.body, title: content.title, media, ...(content.settings ? { settings: content.settings } : {}) });
+  return validateVariant({ provider, body: content.body, title: content.title, linkUrl: content.linkUrl ?? null, media, ...(content.settings ? { settings: content.settings } : {}) });
 }
 
 // Local calendar day (yyyy-mm-dd) of an instant, in the viewer's time zone.
