@@ -76,6 +76,8 @@ export const policySet = defineCommand({
       .orderBy('post_id')
       .execute();
     const approved: string[] = [];
+    // Each post's approvals reach the event consumers as a decision would (#408), marked as made by the policy.
+    const decided: { postId: string; variantIds: string[] }[] = [];
     for (const { post_id } of waiting) {
       await lockPost(ctx.trx, ctx.orgId, post_id);
       const variants = (await lockVariants(ctx.trx, ctx.orgId, post_id)).filter((v) => v.channel_connection_id === input.connectionId && v.status === 'in_review');
@@ -84,13 +86,19 @@ export const policySet = defineCommand({
         ctx.orgId,
         variants.map((v) => v.id),
       );
+      const here: string[] = [];
       for (const v of variants) {
         const given = approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash });
         if (given.length < input.approvalsRequired) continue;
         await setVariant(ctx, v.id, { status: step(v, { type: 'approve' }) });
         approved.push(v.id);
+        here.push(v.id);
       }
       await refreshPostStatus(ctx, post_id);
+      if (here.length > 0) decided.push({ postId: post_id, variantIds: here });
+    }
+    for (const d of decided) {
+      await ctx.emit('social.variant.decided', { post_id: d.postId, decision: 'approved', variant_ids: d.variantIds, waiting_variant_ids: [], by_policy: true });
     }
     ctx.audit({ connection_id: input.connectionId, approvals_required: input.approvalsRequired, approved_variants: approved });
     return { connectionId: input.connectionId, approvalsRequired: input.approvalsRequired, approved };

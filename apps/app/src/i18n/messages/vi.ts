@@ -1076,7 +1076,7 @@ export const vi = {
     libraryUsageNone: 'Chưa bài nào dùng ảnh này.',
     policyTitle: 'Duyệt trước khi đăng',
     policyApprovals: '{count} người duyệt',
-    policyHint: 'Mỗi bài cho kênh này cần ngần ấy người khác nhau duyệt đúng nội dung hiện tại rồi mới lên lịch được. Hạ số này thì bài đang chờ đã đủ người duyệt sẽ được duyệt ngay.',
+    policyHint: 'Mỗi bài cho kênh này cần ngần ấy người khác nhau duyệt đúng nội dung hiện tại rồi mới lên lịch được. Hạ số này thì bài đang chờ đã đủ người duyệt sẽ được duyệt ngay; nâng số này thì chỉ áp dụng cho bài chưa duyệt, bài đã duyệt hoặc đã lên lịch giữ nguyên.',
     policyAdmins: 'Chủ sở hữu và quản trị viên đặt số người duyệt.',
     reviewSteps: 'Đã duyệt {given}/{required}',
     reviewYouApproved: 'Bạn đã duyệt {channels}; cần thêm người khác duyệt.',
