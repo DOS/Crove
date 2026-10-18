@@ -140,8 +140,8 @@ function IssueList({ issues }: { issues: Issue[] }) {
   );
 }
 
-function Counter({ provider, body }: { provider: string; body: string }) {
-  const { used, max } = textBudget(provider, body);
+function Counter({ provider, body, linkUrl, mediaCount }: { provider: string; body: string; linkUrl: string; mediaCount: number }) {
+  const { used, max } = textBudget(provider, body, { linkUrl, mediaCount });
   if (max === null) return null;
   const over = used > max;
   return <span className={cn('font-mono text-xs tabular-nums', over ? 'text-destructive' : used > max * 0.9 ? 'text-warning' : 'text-subtle-foreground')}>{used}/{max}</span>;
@@ -198,7 +198,7 @@ function ChannelEditor({
 }) {
   const t = useTranslations('social');
   const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl: base.linkUrl, media: base.media };
-  const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, media: content.media, settings: own.settings });
+  const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   return (
     <Card className="block space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -207,7 +207,7 @@ function ChannelEditor({
           <span className="truncate text-sm font-medium text-foreground">{channel}</span>
           {status && <Badge variant={VARIANT_TONE[status]}>{t(`status.${status}`)}</Badge>}
         </div>
-        <Counter provider={provider} body={content.body} />
+        <Counter provider={provider} body={content.body} linkUrl={content.linkUrl} mediaCount={content.media.length} />
       </div>
       <label className="flex items-center gap-2 text-sm text-muted-foreground">
         <Checkbox checked={own.custom} disabled={disabled} onCheckedChange={(checked) => onChange({ ...own, custom: checked === true, body: own.body || base.body })} />
@@ -317,7 +317,7 @@ export function SocialComposePage() {
   const blocking = selected.some((c) => {
     const mine = own[c.id] ?? EMPTY_OWN;
     const content = { body: mine.custom ? mine.body : base.body, title: mine.custom ? mine.title : base.title };
-    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null, media: base.media, settings: mine.settings }).length > 0;
+    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null, linkUrl: base.linkUrl, media: base.media, settings: mine.settings }).length > 0;
   });
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !blocking && !create.isPending) {
