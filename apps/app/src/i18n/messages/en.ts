@@ -520,6 +520,7 @@ export const en = {
     saleNotice:
       'Sales invoice: the seller has your organization\'s tax code. On approval Crove posts Debit 131 receivable from the customer, Credit each line\'s revenue account and Credit 3331 output VAT.',
     journal: 'Proposed entry (Circular 133)',
+    proposedNotPosted: 'Proposed, not posted',
     account: 'Account',
     debit: 'Debit',
     credit: 'Credit',
