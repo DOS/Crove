@@ -471,6 +471,7 @@ export const en = {
     reading: 'Reading the file…',
     checking: 'Checking…',
     chooseDate: 'Choose the date of the opening balances.',
+    extraColumns: 'The file has data after column D (credit balance). Crove reads only the four columns of the template, so that data is left out. Move the amounts into the debit or credit column if needed.',
     fileProblems: {
       template: 'The file does not follow the template: the first row must hold the columns Mã tài khoản, Tên tài khoản, Dư Nợ, Dư Có. Download the template and fill it in.',
       empty: 'The file has no balance rows.',
