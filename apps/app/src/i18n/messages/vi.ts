@@ -346,6 +346,8 @@ export const vi = {
       'Đảo bút toán ghi một bút toán mới với các dòng đối xứng (đổi Nợ và Có), không sửa bút toán gốc. Mỗi bút toán chỉ đảo được một lần và bút toán đảo không đảo lại được.',
     documentNote:
       'Bút toán này ghi chứng từ mua {document} của {vendor}. Khi đề xuất được duyệt, Crove hủy chứng từ này trong sổ của mình để có thể ghi sổ lại hóa đơn với tài khoản đúng. Hóa đơn điện tử của người bán không thay đổi.',
+    saleDocumentNote:
+      'Bút toán này ghi chứng từ bán {document} cho {customer}. Khi đề xuất được duyệt, Crove hủy chứng từ này trong sổ của mình để có thể ghi sổ lại hóa đơn với tài khoản đúng. Hóa đơn điện tử tổ chức đã phát hành không thay đổi; muốn hủy hoặc điều chỉnh hóa đơn đó, hãy làm với nhà cung cấp hóa đơn điện tử.',
     openingNote: 'Đây là bút toán số dư đầu kỳ: bút toán đảo được ghi đúng ngày {date} để số dư đầu kỳ nhập lại thay thế trọn vẹn.',
     date: 'Ngày bút toán đảo',
     reason: 'Lý do (bắt buộc)',
@@ -509,6 +511,7 @@ export const vi = {
     hiddenLines:
       'Bạn chỉ thấy các dòng bạn được xem, và các dòng này không cân, nên bút toán còn dòng bạn không được xem. Khi duyệt, Crove đảo toàn bộ các dòng; nếu người duyệt không được xem hết thì đề xuất bị từ chối.',
     purchaseDocument: 'Bút toán ghi chứng từ mua {document} của {vendor}.',
+    saleDocument: 'Bút toán ghi chứng từ bán {document} cho {customer}.',
     documentAlreadyVoided: 'Chứng từ này đã bị hủy trong sổ của Crove.',
     documentWillVoid:
       'Khi duyệt, Crove hủy chứng từ này trong sổ của mình để có thể ghi sổ lại hóa đơn với tài khoản đúng (đọc lại tệp trong Hộp thư). Đây chỉ là chỉnh sửa sổ sách của Crove; hóa đơn điện tử của người bán không thay đổi.',
