@@ -122,7 +122,15 @@ describe('YouTubePublisher', () => {
       'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, headers: { location: SESSION } }],
       'PUT www.googleapis.com/upload/youtube/v3/videos': [{ status: 503, body: {} }],
       'GET www.googleapis.com/youtube/v3/playlistItems': [
-        { body: { items: [{ snippet: { title: 'Khai trương chi nhánh', publishedAt: new Date().toISOString(), resourceId: { videoId: 'abcdefghijk' } } }] } },
+        {
+          body: {
+            items: [
+              // The same title in the window, another video: an earlier post repeated with other text.
+              { snippet: { title: 'Khai trương chi nhánh', description: 'Bài cũ', publishedAt: new Date().toISOString(), resourceId: { videoId: 'zyxwvutsrqp' } } },
+              { snippet: { title: 'Khai trương chi nhánh', description: 'Video khai trương mới\r\n\r\nhttps://example.com/a', publishedAt: new Date().toISOString(), resourceId: { videoId: 'abcdefghijk' } } },
+            ],
+          },
+        },
       ],
     });
     const publisher = new YouTubePublisher(APP, fetchImpl);

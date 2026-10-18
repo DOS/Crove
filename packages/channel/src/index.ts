@@ -80,6 +80,8 @@ export interface PublishMedia {
   mime: string;
   sizeBytes: number;
   altText: string | null;
+  // A video's length, read at upload; null or absent for images and videos uploaded before durations were read.
+  durationSeconds?: number | null;
 }
 
 export interface PublishContent {
