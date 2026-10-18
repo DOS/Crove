@@ -18,7 +18,7 @@ import {
   type JournalLineDraft,
   type ProposedLine,
 } from '@crove/l10n-vn';
-import { assertUsableAccounts } from './accounts.ts';
+import { assertUsableAccounts, isInactiveDefaultRefusal } from './accounts.ts';
 import { postJournalEntry } from './ledger.ts';
 import { journalMemo } from './memo.ts';
 
@@ -273,9 +273,9 @@ export const recordPurchase = defineCommand({
           }),
         )
         .execute()
-        .catch((error: { code?: string }) => {
+        .catch((error: unknown) => {
           // The sub-account was deactivated after the check above (the database checks it again under a lock).
-          if (error?.code === '23503') throw new DomainError('ACCOUNT_INACTIVE', 422, `Tài khoản ${main.debitAccount} đã ngừng sử dụng; hãy chọn tài khoản khác`);
+          if (isInactiveDefaultRefusal(error)) throw new DomainError('ACCOUNT_INACTIVE', 422, `Tài khoản ${main.debitAccount} đã ngừng sử dụng; hãy chọn tài khoản khác`);
           throw error;
         });
     }
