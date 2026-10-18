@@ -6,7 +6,8 @@
 // Publish: a resumable upload session (the video's title, description and privacy), then one PUT of the bytes; the
 // answer names the video. The project's quota allows about 100 uploads a day; a quota refusal waits, never fails.
 // An unclear answer is checked by listing the channel's latest uploads (one quota unit), matched by title and time.
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+// Metrics: views, likes and comments from videos.list (one quota unit each).
+import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -301,6 +302,36 @@ export class YouTubePublisher implements Publisher {
       return { kind: 'accepted', externalId: id, url: `https://www.youtube.com/watch?v=${id}` };
     } catch (error) {
       return publishResult(error);
+    }
+  }
+
+  // Views, likes and comments of a published video (videos.list part=statistics, one quota unit). YouTube hides the
+  // like count when the owner turned it off, and leaves it out then; a video that is gone answers no item.
+  async metrics(input: MetricsInput): Promise<MetricsResult> {
+    const s = youtubeSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (!VIDEO_ID.test(input.externalId)) return { refused: 'gone' };
+    try {
+      const answer = await this.client.call<{ items?: { id?: unknown; statistics?: { viewCount?: unknown; likeCount?: unknown; commentCount?: unknown } }[] }>(
+        'GET',
+        `${API}/videos?part=statistics&id=${input.externalId}`,
+        s.accessToken,
+      );
+      const item = (answer.body?.items ?? []).find((i) => i.id === input.externalId);
+      if (!item) return { refused: 'gone' };
+      // Counts come as decimal strings.
+      const n = (v: unknown) => (typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : undefined);
+      const metrics: Partial<Record<MetricName, number>> = {};
+      const views = n(item.statistics?.viewCount);
+      const likes = n(item.statistics?.likeCount);
+      const comments = n(item.statistics?.commentCount);
+      if (views !== undefined) metrics.views = views;
+      if (likes !== undefined) metrics.reactions = likes;
+      if (comments !== undefined) metrics.comments = comments;
+      return { metrics };
+    } catch (error) {
+      if (error instanceof YouTubeError && error.status === 401) return { refused: 'token_expired' };
+      return null;
     }
   }
 

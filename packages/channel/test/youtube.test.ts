@@ -153,3 +153,31 @@ describe('YouTubePublisher', () => {
     expect(await new YouTubePublisher(APP, dead.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired' });
   });
 });
+
+describe('YouTubePublisher metrics', () => {
+  const at = { externalAccountId: CHANNEL, secret: SECRET, externalId: 'dQw4w9WgXcQ' };
+
+  it('reads views, likes and comments, and leaves out a hidden like count', async () => {
+    const { fetchImpl, calls } = google({
+      'GET www.googleapis.com/youtube/v3/videos': [
+        { body: { items: [{ id: 'dQw4w9WgXcQ', statistics: { viewCount: '1520', likeCount: '87', favoriteCount: '0', commentCount: '12' } }] } },
+        { body: { items: [{ id: 'dQw4w9WgXcQ', statistics: { viewCount: '1600', commentCount: '13' } }] } },
+      ],
+    });
+    const publisher = new YouTubePublisher(APP, fetchImpl);
+    expect(await publisher.metrics(at)).toEqual({ metrics: { views: 1520, reactions: 87, comments: 12 } });
+    expect(calls[0]?.url.searchParams.get('part')).toBe('statistics');
+    expect(calls[0]?.url.searchParams.get('id')).toBe('dQw4w9WgXcQ');
+    expect(await publisher.metrics(at)).toEqual({ metrics: { views: 1600, comments: 13 } });
+  });
+
+  it('tells a deleted video and a dead token from an outage', async () => {
+    const gone = google({ 'GET www.googleapis.com/youtube/v3/videos': [{ body: { items: [] } }] });
+    expect(await new YouTubePublisher(APP, gone.fetchImpl).metrics(at)).toEqual({ refused: 'gone' });
+    const dead = google({ 'GET www.googleapis.com/youtube/v3/videos': [{ status: 401, body: { error: { message: 'Invalid Credentials', errors: [{ reason: 'authError' }] } } }] });
+    expect(await new YouTubePublisher(APP, dead.fetchImpl).metrics(at)).toEqual({ refused: 'token_expired' });
+    const down = google({ 'GET www.googleapis.com/youtube/v3/videos': [{ status: 503, body: {} }] });
+    expect(await new YouTubePublisher(APP, down.fetchImpl).metrics(at)).toBeNull();
+    expect(await new YouTubePublisher(APP, down.fetchImpl).metrics({ ...at, externalId: 'not a video id' })).toEqual({ refused: 'gone' });
+  });
+});
