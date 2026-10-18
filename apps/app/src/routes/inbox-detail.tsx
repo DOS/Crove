@@ -124,7 +124,9 @@ function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDa
           {entry.data.reversedBy && <p className="mt-3 text-sm text-warning">{t('alreadyReversed', { date: f.date(entry.data.reversedBy.entryDate) })}</p>}
           {document && (
             <p className="mt-3 text-sm text-warning">
-              {t('purchaseDocument', { document: `${document.series ? `${document.series}-` : ''}${document.number}`, vendor: document.partyName })}{' '}
+              {document.direction === 'sale'
+                ? t('saleDocument', { document: `${document.series ? `${document.series}-` : ''}${document.number}`, customer: document.partyName })
+                : t('purchaseDocument', { document: `${document.series ? `${document.series}-` : ''}${document.number}`, vendor: document.partyName })}{' '}
               {document.voided ? t('documentAlreadyVoided') : t('documentWillVoid')}
             </p>
           )}

@@ -42,6 +42,12 @@ function isFileStatus(status: string): status is FileStatus {
   return Object.hasOwn(FILE_STATUS, status);
 }
 
+// The name a proposal goes by in the list, its checkbox and the bulk report: the customer of a sale (#313; its seller is
+// the org itself), the seller of a purchase, else its title.
+function proposalName(item: { direction: string | null; sellerName: string | null; buyerName: string | null; title: string }): string {
+  return (item.direction === 'sale' ? item.buyerName : item.sellerName) || item.title;
+}
+
 export function InboxPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('inbox');
@@ -101,7 +107,7 @@ export function InboxPage() {
     void sendBulk({
       batches: planBatches(chosen.map((item) => ({ id: item.id, revision: item.revision }))),
       progress: { results: [], next: 0, error: null },
-      names: Object.fromEntries(chosen.map((item) => [item.id, item.sellerName ?? item.title])),
+      names: Object.fromEntries(chosen.map((item) => [item.id, proposalName(item)])),
       total: chosen.length,
       sending: false,
       stopped: false,
@@ -339,7 +345,7 @@ export function InboxPage() {
                       <Checkbox
                         checked={selected.has(item.id)}
                         disabled={sending}
-                        aria-label={t('bulk.select', { name: (item.direction === 'sale' ? item.buyerName || null : item.sellerName) ?? item.title })}
+                        aria-label={t('bulk.select', { name: proposalName(item) })}
                         onCheckedChange={(checked) =>
                           setSelected((current) => {
                             const next = new Set(current);
@@ -356,7 +362,7 @@ export function InboxPage() {
                 )}
                 <TableCell className="px-4 py-3">
                   <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="font-medium text-foreground hover:text-link">
-                    {(item.direction === 'sale' ? item.buyerName || null : item.sellerName) ?? item.title}
+                    {proposalName(item)}
                   </Link>
                   <p className="text-xs text-subtle-foreground">{item.title}</p>
                 </TableCell>
