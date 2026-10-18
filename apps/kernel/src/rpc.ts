@@ -20,6 +20,7 @@ import {
 import type { z } from 'zod';
 import type { zAgentBudget, zAgentTemplate, zTask } from '@crove/kernel-contract';
 import { DomainError, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
+import { DraftBudget } from './ai-draft-limit.ts';
 import { actorOf, type AuthUser } from './auth.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
 
@@ -101,7 +102,7 @@ function connectorFailure(error: unknown): DomainError {
 
 // sendInviteMail unset: invite mail is off (tests, or an embedder without mail). channels unset: no channel can be
 // connected through the API (the list and disconnect still work).
-export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter) {
+export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, drafts: DraftBudget = new DraftBudget()) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -260,10 +261,20 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             const chosen = input.connectionIds.map((id) => connections.find((c) => c.id === id && c.status === 'active'));
             if (chosen.some((c) => !c)) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
             const channels = (chosen as { id: string; provider: string; displayName: string }[]).map((c) => writerChannel(c));
-            const draft = await socialWriter.draft({ brief: input.brief, channels, language: input.language ?? 'vi', ...(input.tone ? { tone: input.tone } : {}) }).catch((error: unknown) => {
-              console.error('[social-ai] draft failed', error instanceof Error ? error.name : typeof error);
-              throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
-            });
+            // The model call is paid: a member gets a few a minute and one at a time, an org a few more (#386).
+            const ticket = drafts.take(orgId, actor.userId);
+            if (!ticket.allowed) {
+              throw new DomainError('RATE_LIMITED', 429, ticket.reason === 'busy' ? 'Đang soạn một bài bằng AI, hãy đợi xong rồi soạn tiếp' : 'Đã soạn bằng AI nhiều bài trong phút này, hãy thử lại sau ít phút', {
+                retryAfterSeconds: ticket.retryAfterSeconds,
+              });
+            }
+            const draft = await socialWriter
+              .draft({ brief: input.brief, channels, language: input.language ?? 'vi', ...(input.tone ? { tone: input.tone } : {}) })
+              .catch((error: unknown) => {
+                console.error('[social-ai] draft failed', error instanceof Error ? error.name : typeof error);
+                throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
+              })
+              .finally(() => ticket.release());
             if (!draft) throw new DomainError('AI_DRAFT_EMPTY', 422, 'AI không soạn được bài từ mô tả này, hãy viết rõ hơn');
             const own = new Map(draft.variants.map((v) => [v.key, v]));
             const created = await runtime.execute<{ postId: string }>(
