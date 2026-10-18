@@ -1081,7 +1081,7 @@ export const en = {
     reviewYouApproved: 'You approved {channels}; someone else needs to approve too.',
     expiresOn: 'The connection works until {when}; reconnect before then.',
     expiresSoon: 'The connection expires {when}: reconnect so scheduled posts still go out.',
-    imagesHint: 'JPG, PNG or WEBP images; MP4 or MOV video up to 100 MB. Instagram takes JPG images only; Zalo OA needs exactly one image under 1 MB.',
+    imagesHint: 'JPG, PNG or WEBP images; MP4 or MOV video up to 100 MB. Instagram takes JPG images only; Facebook takes images up to 4 MB and no WEBP; Zalo OA needs exactly one image under 1 MB.',
     connectWith: 'Connect {provider}',
     oauthHint: 'Crove opens the platform dialog; pick the Pages to connect and accept the posting permissions.',
     notConfigured: 'Not configured',

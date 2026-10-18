@@ -132,7 +132,8 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'facebook_page',
     body: { max: 63206, count: 'utf16', required: false },
     title: null,
-    media: { min: 0, max: 10, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: null, maxVideoSeconds: null },
+    // Page photos: JPEG, BMP, PNG, GIF or TIFF up to 4 MB (Graph API /{page-id}/photos); Meta lists no WEBP.
+    media: { min: 0, max: 10, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/tiff'], maxImageBytes: 4 * MB, maxVideoBytes: null, maxVideoSeconds: null },
     maxLinks: null,
     scrapesLinkPreview: true,
     unverified: ['body.max', 'media.max'],

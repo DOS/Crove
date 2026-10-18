@@ -1082,7 +1082,7 @@ export const vi = {
     reviewYouApproved: 'Bạn đã duyệt {channels}; cần thêm người khác duyệt.',
     expiresOn: 'Kết nối dùng được đến {when}; kết nối lại trước ngày này.',
     expiresSoon: 'Kết nối hết hạn {when}: hãy kết nối lại để bài hẹn giờ vẫn đăng được.',
-    imagesHint: 'Ảnh JPG, PNG hoặc WEBP; video MP4 hoặc MOV đến 100 MB. Instagram chỉ nhận ảnh JPG; Zalo OA cần đúng một ảnh dưới 1 MB.',
+    imagesHint: 'Ảnh JPG, PNG hoặc WEBP; video MP4 hoặc MOV đến 100 MB. Instagram chỉ nhận ảnh JPG; Facebook nhận ảnh đến 4 MB và không nhận WEBP; Zalo OA cần đúng một ảnh dưới 1 MB.',
     connectWith: 'Kết nối {provider}',
     oauthHint: 'Crove mở hộp thoại của nền tảng; chọn các Trang muốn kết nối và chấp nhận quyền đăng bài.',
     notConfigured: 'Chưa cấu hình',
