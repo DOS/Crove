@@ -36,5 +36,8 @@ describe('archive entry names', () => {
     expect(truncateText(`${'b'.repeat(253)}😀x`, 255)).toBe(`${'b'.repeat(253)}😀`);
     expect(entryName('')).toBe('(không tên)');
     expect(entryName('thang-10/hd.xml')).toBe('thang-10/hd.xml');
+    // A lone surrogate in the middle of a name, as an untrusted sandbox answer could carry.
+    expect(entryName('hd-\ud800-1.xml')).toBe('hd-\ufffd-1.xml');
+    expect(entryName('hd-\ud800-1.xml').isWellFormed()).toBe(true);
   });
 });

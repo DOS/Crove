@@ -63,7 +63,8 @@ export function truncateText(text: string, max: number): string {
 
 // The name an entry is listed under (its path in the archive), within what the record command takes.
 export function entryName(name: string): string {
-  return truncateText(name || '(không tên)', 255);
+  // toWellFormed: a lone surrogate anywhere in a name the sandbox sent becomes U+FFFD instead of failing the write.
+  return truncateText((name || '(không tên)').toWellFormed(), 255);
 }
 // The name the entry is filed under: its last path segment, with the extension of the type its bytes have.
 function entryFilename(name: string, contentType: string): string {
