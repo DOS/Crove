@@ -31,6 +31,11 @@ describe('bestTimes', () => {
     expect(bestTimes(few, 'UTC', { minPostsPerChannel: 2 }).get('c2')).toEqual([{ weekday: 2, hour: 12, posts: 2, engagement: 50 }]);
   });
 
+  it('falls back to UTC for a zone the runtime does not know', () => {
+    const samples = Array.from({ length: 5 }, (_, i) => post('c3', at(13 + 7 * (i % 2), 12), 10));
+    expect(bestTimes(samples, 'Not/AZone').get('c3')?.[0]).toMatchObject({ weekday: 2, hour: 12 });
+  });
+
   it('counts reactions, comments, shares and saves, not views', () => {
     expect(engagementOf({ reactions: 3, comments: 2, shares: 1, saves: 4, views: 1000, impressions: 5000 })).toBe(10);
   });

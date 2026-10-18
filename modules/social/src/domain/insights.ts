@@ -32,13 +32,23 @@ export function engagementOf(metrics: Readonly<Record<string, number>>): number 
   return ['reactions', 'comments', 'shares', 'saves'].reduce((sum, name) => sum + (Number.isFinite(metrics[name]) ? (metrics[name] as number) : 0), 0);
 }
 
-const WEEKDAYS: Readonly<Record<string, number>> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+const WEEKDAYS: Readonly<Record<string, number>> = { mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6, sun: 7 };
+
+function slotFormat(timeZone: string): Intl.DateTimeFormat {
+  const options = { weekday: 'short', hour: 'numeric', hourCycle: 'h23' } as const;
+  try {
+    return new Intl.DateTimeFormat('en-US', { ...options, timeZone });
+  } catch {
+    // A zone this runtime does not know: UTC rather than no suggestions.
+    return new Intl.DateTimeFormat('en-US', { ...options, timeZone: 'UTC' });
+  }
+}
 
 export function bestTimes(samples: readonly PublishedSample[], timeZone: string, options: BestTimesOptions = {}): Map<string, BestTime[]> {
   const minSlot = options.minPostsPerSlot ?? 2;
   const minChannel = options.minPostsPerChannel ?? 5;
   const top = options.top ?? 3;
-  const format = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short', hour: 'numeric', hourCycle: 'h23' });
+  const format = slotFormat(timeZone);
   const byChannel = new Map<string, { counted: number; slots: Map<string, { weekday: number; hour: number; posts: number; total: number }> }>();
   for (const s of samples) {
     // A post without a capture yet tells nothing about its time.
@@ -46,7 +56,8 @@ export function bestTimes(samples: readonly PublishedSample[], timeZone: string,
     const at = new Date(s.publishedAt);
     if (Number.isNaN(at.getTime())) continue;
     const parts = format.formatToParts(at);
-    const weekday = WEEKDAYS[parts.find((p) => p.type === 'weekday')?.value ?? ''];
+    // Runtimes differ in case and trailing dots ('Mon', 'Mon.').
+    const weekday = WEEKDAYS[(parts.find((p) => p.type === 'weekday')?.value ?? '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 3)];
     const hour = Number(parts.find((p) => p.type === 'hour')?.value);
     if (weekday === undefined || !Number.isInteger(hour)) continue;
     const channel = byChannel.get(s.connectionId) ?? { counted: 0, slots: new Map() };
