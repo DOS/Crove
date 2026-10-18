@@ -229,16 +229,16 @@ const textOf = (content: { body: string; linkUrl: string | null }) => {
 
 // Links X finds without a scheme, on the common TLDs (the Social checks count the same ones).
 const BARE_LINK = /(?<![@\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|vn|io|co|ai|app|dev|me|info|biz|xyz|shop|store|online|site|tech|asia|edu|gov|us|uk|jp|sg|tv|ly|gg|link)\b(?:\/\S*)?/giu;
+const ENTITIES: Readonly<Record<string, string>> = { lt: '<', gt: '>', amp: '&' };
 // Something that may still be a link to X (a host on a rarer TLD).
 const MAYBE_LINK = /[a-z0-9-]\.[a-z]{2,}/iu;
 
 // A post's text as X returns it, comparable with what was sent: X replaces links with t.co links and escapes &, < and
 // >, so links are dropped and entities decoded before comparing.
 export function comparableText(text: string): string {
+  // One pass over the three entities X writes, so "&amp;lt;" stays "&lt;" as it was sent. Only compared, never shown.
   return text
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
+    .replace(/&(lt|gt|amp);/g, (_, name: string) => ENTITIES[name] ?? '')
     .replace(/\bhttps?:\/\/\S+/g, '')
     .replace(BARE_LINK, '')
     .normalize('NFC')

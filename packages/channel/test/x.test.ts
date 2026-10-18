@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { XConnector, XPublisher, XRefresher, comparableText, newOAuthAttempt, type Fetch, type PublishInput } from '../src/index.ts';
 
 const APP = { clientId: 'M1M5R3BMVy13QmpScXkzTUt5OE46MTpjaQ', clientSecret: 'test-x-secret-not-real' };
-const USER = '2244994945';
+const USER = '1580661436147937281';
 const SECRET = JSON.stringify({ accessToken: 'x-access-1', refreshToken: 'x-refresh-1' });
 const REDIRECT = 'https://crove.example/channels/oauth/x/callback';
 const SCOPE = 'tweet.read tweet.write users.read media.write offline.access';
@@ -140,7 +140,7 @@ describe('XPublisher', () => {
   it('treats a lost answer to the post as unknown and finds the post among the account’s latest by its text', async () => {
     const { fetchImpl, calls } = x({
       'POST api.x.com/2/tweets': [{ status: 503, body: {} }],
-      'GET api.x.com/2/users/2244994945/tweets': [
+      'GET api.x.com/2/users/1580661436147937281/tweets': [
         {
           body: {
             data: [
@@ -159,7 +159,7 @@ describe('XPublisher', () => {
     expect(calls[1]?.url.searchParams.get('exclude')).toBe('replies,retweets');
     expect(await publisher.reconcile(window)).toEqual({ found: false });
     // A bare link X turned into t.co still matches; a host on a rare TLD makes a miss unknown, not missing.
-    const bare = x({ 'GET api.x.com/2/users/2244994945/tweets': [{ body: { data: [{ id: '1445880548472328193', text: 'ghé https://t.co/zz nhé', created_at: new Date().toISOString() }] } }, { body: { data: [] } }] });
+    const bare = x({ 'GET api.x.com/2/users/1580661436147937281/tweets': [{ body: { data: [{ id: '1445880548472328193', text: 'ghé https://t.co/zz nhé', created_at: new Date().toISOString() }] } }, { body: { data: [] } }] });
     const content = { body: 'ghé crove.vn/gia nhé', title: null, linkUrl: null, media: [] };
     expect(await new XPublisher(APP, bare.fetchImpl).reconcile({ ...window, content })).toMatchObject({ found: true, externalId: '1445880548472328193' });
     expect(await new XPublisher(APP, bare.fetchImpl).reconcile({ ...window, content: { ...content, body: 'ghé crove.studio nhé' } })).toEqual({ found: 'unknown' });
@@ -169,6 +169,7 @@ describe('XPublisher', () => {
 
   it('compares text the way X returns it', () => {
     expect(comparableText('a &lt;b&gt; &amp; c https://t.co/x')).toBe('a <b> & c');
+    expect(comparableText('&amp;lt;')).toBe('&lt;');
     expect(comparableText('Việt'.normalize('NFD'))).toBe('Việt');
   });
 });
