@@ -125,8 +125,17 @@ export interface CommandDef<I = unknown, O = unknown> {
   // access 'proposal' only, R1 or R2 only (ADR-0029 section 6): the role keys of positions whose agents may approve
   // a proposal of this command, within their max_risk and only when the proposal's outcome names none of P03 to
   // P07 and the agent is neither an author nor in its causal chain. Absent: humans only. R3 is always human.
-  agentApprovers?: readonly string[];
+  // No code classifies P04 (contact or payment fields) yet, so the command declares it writes none of them; an
+  // agent's proposal of any other command is flagged P04.
+  agentApprovers?: AgentApprovers;
   handler: (ctx: CommandContext, input: I) => Promise<O>;
+}
+
+// Who may approve a proposal of a command besides humans (ADR-0029 section 6).
+export interface AgentApprovers {
+  roles: readonly string[];
+  // The command writes no contact or payment field (P04).
+  noContactOrPayment: true;
 }
 
 // What a handler may learn about a registered command (ADR-0029 section 6): enough to judge a proposal of it.
@@ -443,8 +452,14 @@ export class Runtime {
       if ((c.access === 'proposal_revision') !== (typeof c.revises === 'string' && c.revises.length > 0)) {
         throw new Error(`command ${c.name}: a reviser (access 'proposal_revision') names the command it revises, and only a reviser does`);
       }
-      if (c.agentApprovers !== undefined && (c.access !== 'proposal' || (c.risk !== 'R1' && c.risk !== 'R2'))) {
-        throw new Error(`command ${c.name}: agent approvers are declared only on an R1 or R2 proposal command (access 'proposal')`);
+      if (c.agentApprovers !== undefined) {
+        if (c.access !== 'proposal' || (c.risk !== 'R1' && c.risk !== 'R2')) {
+          throw new Error(`command ${c.name}: agent approvers are declared only on an R1 or R2 proposal command (access 'proposal')`);
+        }
+        const { roles, noContactOrPayment } = c.agentApprovers;
+        if (!Array.isArray(roles) || roles.length === 0 || roles.some((r) => typeof r !== 'string' || r.length === 0) || noContactOrPayment !== true) {
+          throw new Error(`command ${c.name}: agent approvers name at least one role key and declare noContactOrPayment: true (P04)`);
+        }
       }
       if (c.proposalEditor !== undefined) {
         if (c.proposalEditor !== true || typeof c.access === 'string') {
@@ -469,7 +484,7 @@ export class Runtime {
   commandInfo(name: string): CommandInfo | null {
     const def = this.commands.get(name);
     if (!def) return null;
-    return { name: def.name, risk: def.risk, access: def.access, agentApprovers: [...(def.agentApprovers ?? [])] };
+    return { name: def.name, risk: def.risk, access: def.access, agentApprovers: [...(def.agentApprovers?.roles ?? [])] };
   }
 
   // Whether this runtime registered any command or query of the module (plan Decision 12). The server asks it

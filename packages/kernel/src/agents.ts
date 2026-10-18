@@ -1335,15 +1335,16 @@ export const budgetList = defineQuery({
 // ---------------------------------------------------------------------------------------------------------------
 // An agent never writes a proposal: its command, under the lease of the task it works on, records the request (or its
 // approval) as an outbox event, and a system command in the worker acts on it after checking everything again from
-// the database. The event carries ids and the agent's input only, never a decision.
+// the database. The event carries ids and what the agent's run prepared, never a decision.
 
 const zPrepared = z.object({ kind: z.string().min(1), command: z.string().min(1), title: z.string().min(1).max(300), payload: z.record(z.string(), z.unknown()) });
-const zProposalRequested = z.object({ agentId: zId, runId: zId, taskId: zId, preparer: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()) });
+const zProposalRequested = z.object({ agentId: zId, runId: zId, taskId: zId, preparer: z.string().min(1).max(200), draft: zPrepared });
 const zProposalApproved = z.object({ agentId: zId, runId: zId, taskId: zId, proposalId: zId, revision: z.number().int().positive() });
 
-// Asks for a proposal instead of running R2 or R3 work (P05, P06): the preparer (a module command the agent's role key
-// may run, which writes nothing) builds it, and the task waits for the review. The proposal carries the run's and the
-// task's taint.
+// Asks for a proposal instead of running R2 or R3 work (P05, P06): the preparer (an R0 module command the agent's role
+// key may run, so it writes nothing) builds it in the agent's run, and the task waits for the review. The event carries
+// what it built: the worker never runs the preparer again, so nothing the agent names runs as the system. The proposal
+// carries the run's and the task's taint.
 export const proposeFromTask = defineCommand({
   name: 'kernel.task.propose',
   input: z.object({ id: zId, fence: zFence, preparer: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()) }),
@@ -1354,7 +1355,9 @@ export const proposeFromTask = defineCommand({
   handler: async (ctx, input) => {
     const agent = requireAgent(ctx);
     const task = await requireLease(ctx, input.id, input.fence);
-    // Runs as the agent: the preparer must declare agent access for its role key (the runtime checks it).
+    // Read-only preparers only. It runs as the agent: it must declare agent access for its role key (the runtime
+    // checks it).
+    if (ctx.command(input.preparer)?.risk !== 'R0') throw new DomainError('NOT_PROPOSABLE', 422, 'Việc này không tạo được đề xuất', { preparer: input.preparer });
     const draft = zPrepared.safeParse(await ctx.run(input.preparer, input.input));
     const info = draft.success ? ctx.command(draft.data.command) : null;
     if (!draft.success || !info || info.access !== 'proposal') {
@@ -1365,7 +1368,7 @@ export const proposeFromTask = defineCommand({
       runId: agent.runId,
       taskId: task.id,
       preparer: input.preparer,
-      input: input.input,
+      draft: draft.data,
     } satisfies z.infer<typeof zProposalRequested>);
     await ctx.trx
       .updateTable('crove_kernel.task')
@@ -1379,7 +1382,9 @@ export const proposeFromTask = defineCommand({
 });
 
 // Records an agent's approval of the proposal its review task is about. R1 without taint propagation, so the runtime
-// refuses a tainted run (P03). The decision is checked here and again by the worker before anything executes.
+// refuses a tainted run (P03). Only from the review task the dispatch created for its position (system, kind
+// 'proposal_review'), never a delegated or escalated copy. The decision is checked here and again by the worker
+// before anything executes.
 export const approveFromTask = defineCommand({
   name: 'kernel.task.approve_proposal',
   input: z.object({ id: zId, fence: zFence, proposalId: zId, revision: z.number().int().positive() }),
@@ -1391,7 +1396,9 @@ export const approveFromTask = defineCommand({
     const agent = requireAgent(ctx);
     const task = await requireLease(ctx, input.id, input.fence);
     const ref = zProposalRef.safeParse(task.source_ref);
-    if (!ref.success || ref.data.id !== input.proposalId) throw new DomainError('PROPOSAL_NOT_TASK', 422, 'Việc này không phải để duyệt đề xuất đó');
+    if (!ref.success || ref.data.id !== input.proposalId || task.kind !== 'proposal_review' || task.created_by_type !== 'system') {
+      throw new DomainError('PROPOSAL_NOT_TASK', 422, 'Việc này không phải để duyệt đề xuất đó');
+    }
     const proposal = await ctx.trx.selectFrom('crove_kernel.proposal').selectAll().where('org_id', '=', ctx.orgId).where('id', '=', input.proposalId).executeTakeFirst();
     if (!proposal) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy đề xuất');
     const decision = await decideAgentApproval(ctx.trx, ctx.orgId, agent, proposal, ctx.command(proposal.command), input.revision);
@@ -1446,10 +1453,12 @@ async function taskChain(trx: Trx, orgId: string, taskId: string): Promise<{ use
   return { users, humanRoot: root !== undefined && root.parent_task_id === null && root.source === 'human' && root.created_by_type === 'user' };
 }
 
-// Creates the proposal an agent asked for (worker, system): the run is the agent's, the task is its position's, the
-// preparer runs again here, as the system, on the agent's input. Flags: P03 when the run or the task is tainted, P05
-// for R3 and P06 for R2 (work asked for by a non-user actor), P07 when the chain did not start from a human. Authors:
-// the agent and the run, and every user who created a task in the chain. One proposal per event.
+// Creates the proposal an agent asked for (worker, system), from what the agent's run prepared: the run is the
+// agent's and live, the task is its position's, and the preparer is still R0. Flags: P03 when the run or the task is
+// tainted; P04 unless the command declares agent approvers (which declare it writes no contact or payment field: no
+// code classifies P04 yet); P05 for R3 and P06 for R2 (work asked for by a non-user actor); P07 when the chain did not
+// start from a human. Authors: the agent and the run, and every user who created a task in the chain. One proposal per
+// event.
 export const createAgentProposal = defineCommand({
   name: 'kernel.agent.proposal.create',
   input: z.object({ eventId: zId }),
@@ -1458,9 +1467,9 @@ export const createAgentProposal = defineCommand({
   handler: async (ctx, input) => {
     const event = await outboxEvent(ctx, input.eventId, 'kernel.agent.proposal_requested', zProposalRequested);
     if (!event) return { proposalId: null, reason: 'no_event' as const };
-    const { agentId, runId, taskId, preparer } = event.data;
-    const { rows } = await sql<{ run_tainted: boolean; task_tainted: boolean }>`
-      SELECT r.tainted AS run_tainted, t.tainted AS task_tainted
+    const { agentId, runId, taskId, preparer, draft } = event.data;
+    const { rows } = await sql<{ run_tainted: boolean; run_status: string; task_tainted: boolean }>`
+      SELECT r.tainted AS run_tainted, r.status AS run_status, t.tainted AS task_tainted
       FROM crove_kernel.ai_run r
       JOIN crove_kernel.task t ON t.org_id = r.org_id AND t.id = ${taskId}::uuid
       JOIN crove_kernel.position p ON p.org_id = t.org_id AND p.id = t.assignee_position_id AND p.holder_agent_id = r.agent_id
@@ -1470,13 +1479,21 @@ export const createAgentProposal = defineCommand({
       ctx.audit({ event: event.id, created: false, reason: 'chain_mismatch' });
       return { proposalId: null, reason: 'chain_mismatch' as const };
     }
-    const draft = zPrepared.parse(await ctx.run(preparer, event.data.input));
+    // A run cancelled by a kill switch or a stop (or failed, or expired) asks for nothing.
+    if (facts.run_status !== 'running' && facts.run_status !== 'succeeded') {
+      ctx.audit({ event: event.id, created: false, reason: 'run_not_live', run_status: facts.run_status });
+      return { proposalId: null, reason: 'run_not_live' as const };
+    }
     const info = ctx.command(draft.command);
-    if (!info || info.access !== 'proposal') throw new DomainError('NOT_PROPOSABLE', 422, 'Việc này không tạo được đề xuất');
+    if (ctx.command(preparer)?.risk !== 'R0' || !info || info.access !== 'proposal') {
+      ctx.audit({ event: event.id, created: false, reason: 'not_proposable' });
+      return { proposalId: null, reason: 'not_proposable' as const };
+    }
     const tainted = facts.run_tainted || facts.task_tainted;
     const chain = await taskChain(ctx.trx, ctx.orgId, taskId);
     const flags = [
       ...(tainted ? ['P03'] : []),
+      ...(info.agentApprovers.length > 0 ? [] : ['P04']),
       ...(info.risk === 'R3' ? ['P05'] : info.risk === 'R2' ? ['P06'] : []),
       ...(chain.humanRoot ? [] : ['P07']),
     ];
@@ -1527,12 +1544,13 @@ export const executeAgentApproval = defineCommand({
     const event = await outboxEvent(ctx, input.eventId, 'kernel.agent.proposal_approved', zProposalApproved);
     if (!event) return { approved: false, reason: 'no_event' };
     const { agentId, runId, taskId, proposalId, revision } = event.data;
-    // The review task it was recorded from is about this proposal and belongs to a position the agent holds.
+    // The review task it was recorded from is the dispatch-created review of this proposal (system, kind
+    // 'proposal_review', not a delegated or escalated copy) and belongs to a position the agent holds.
     const { rows: reviews } = await sql<{ source_ref: unknown }>`
       SELECT t.source_ref
       FROM crove_kernel.task t
       JOIN crove_kernel.position p ON p.org_id = t.org_id AND p.id = t.assignee_position_id AND p.holder_agent_id = ${agentId}::uuid
-      WHERE t.org_id = ${ctx.orgId}::uuid AND t.id = ${taskId}::uuid`.execute(ctx.trx);
+      WHERE t.org_id = ${ctx.orgId}::uuid AND t.id = ${taskId}::uuid AND t.kind = 'proposal_review' AND t.created_by_type = 'system'`.execute(ctx.trx);
     const ref = zProposalRef.safeParse(reviews[0]?.source_ref);
     if (!ref.success || ref.data.id !== proposalId) {
       ctx.audit({ event: event.id, proposal: proposalId, agent: agentId, run: runId, decision: 'chain_mismatch' });

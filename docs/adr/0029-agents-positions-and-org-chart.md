@@ -180,31 +180,34 @@ Migration `20261018050000_crove_kernel_agents_org_chart.sql`, commands and queri
   - **Archived positions.** An agent never delegates to an archived position (`kernel.task.delegate` with `POSITION_ARCHIVED`, the insert trigger with `AGENT_DELEGATION_SUBTREE`).
   - **Chart reads stay unlocked.** The delegation and escalation checks read the chart without locks. A concurrent re-parent or holder change can race them, but a mismatch fails closed. Locking the chart there would invert the lock order of `kernel.position.assign` (position, then the tasks whose leases it releases) against an agent's delegation (task, then chart) and risk deadlocks.
 - **Agent proposals and approvals (issue #260).** Migration `20261019180000_crove_kernel_agent_proposals.sql`, commands in `packages/kernel/src/agents.ts`, the decision in `decideAgentApproval` (`packages/kernel/src/approval.ts`):
-  - **Never in an agent context.** An agent context never writes a proposal (the write guards stay as they are). The agent's command records what it wants as an outbox event, under the lease of the task it works on. A system command in the worker then acts on the event, after checking it again from the database. The event carries ids and the agent's input, never a decision.
-  - **Proposals instead of refusal (P05, P06).** The runtime still refuses an agent R2 and R3 work. The agent asks with `kernel.task.propose` instead: R1, taint `propagate`, naming a preparer the agent's role key may run. The task then waits.
-    - **The worker creates the proposal.** `kernel.agent.proposal.create` checks that the run is the agent's and that the task belongs to a position the agent holds. It runs the preparer again as the system, and creates one proposal per event.
+  - **Never in an agent context.** An agent context never writes a proposal (the write guards stay as they are). The agent's command records what it wants as an outbox event, under the lease of the task it works on. A system command in the worker then acts on the event, after checking it again from the database. The event carries ids and what the agent's run prepared, never a decision.
+  - **Proposals instead of refusal (P05, P06).** The runtime still refuses an agent R2 and R3 work. The agent asks with `kernel.task.propose` instead: R1, taint `propagate`, naming a preparer the agent's role key may run. The preparer must be R0, so it writes nothing; it runs in the agent's run, and the event carries the draft it built. The task then waits.
+    - **The worker creates the proposal.** `kernel.agent.proposal.create` checks that the run is the agent's and live (running or succeeded; a run cancelled by a kill switch or a stop asks for nothing), that the task belongs to a position the agent holds, and that the preparer is still R0. It never runs the preparer again, so nothing an agent names runs as the system. It creates one proposal per event.
     - **The proposal records its causal chain** (`requested_by_agent`, `requested_by_run`, `source_task_id`) and its taint.
-    - **Flags.** P03 when the run or the task is tainted; P05 for R3; P06 for R2; P07 when the task chain did not start from a human.
+    - **Flags.** P03 when the run or the task is tainted; P04 unless the command declares agent approvers (no code classifies contact or payment fields yet, so the declaration says the command writes none); P05 for R3; P06 for R2; P07 when the task chain did not start from a human.
+    - **Unassessed flags.** An empty `policy_flags` means "assessed, none applies", and only the writer that assessed them may say so. Every other writer (`kernel.proposal.request`, extraction) leaves them NULL, and NULL never becomes an array. Agents never approve a proposal with NULL flags.
     - **Authors.** The agent and its run, plus every user who created a task in the chain (P10).
     - **Approvers.** The eligible approvers are humans (P12). The asking agent gets no review task for its own proposal.
   - **Agent approvals within `max_risk`.**
-    - **Who may approve.** A proposal command declares `agentApprovers`: the role keys whose agents may approve it. Only R1 and R2 proposal commands may declare them, and the runtime refuses any other.
-    - **Recording.** The agent records its approval with `kernel.task.approve_proposal`, from a review task about that proposal. The command is R1 without taint propagation, so the runtime refuses a tainted run (P03).
-    - **Execution.** The worker's `kernel.agent.proposal.approve` checks that the review task is about this proposal and belongs to a position the agent holds, waits while a re-extraction of its file is in flight, decides again on the locked proposal and executes the command through the proposal gate, as the system. It records `decided_by_agent`.
+    - **Who may approve.** A proposal command declares `agentApprovers: { roles, noContactOrPayment: true }`: the role keys whose agents may approve it, and that it writes no contact or payment field (P04). Only R1 and R2 proposal commands may declare them, and the runtime refuses any other declaration or one without `noContactOrPayment: true`.
+    - **Recording.** The agent records its approval with `kernel.task.approve_proposal`, only from the review task the dispatch created for its position (`created_by_type` system, kind `proposal_review`). A delegated or escalated copy names the proposal too, but records nothing. The command is R1 without taint propagation, so the runtime refuses a tainted run (P03).
+    - **Execution.** The worker's `kernel.agent.proposal.approve` checks that the review task is that dispatch-created review of this proposal and belongs to a position the agent holds. It waits while a re-extraction of the proposal's file is in flight, decides again on the locked proposal and executes the command through the proposal gate, as the system. It records `decided_by_agent`.
     - **Conditions.** `decideAgentApproval` allows it only when all of these hold:
       - the command is a proposal command below R3, and the agent's role key is one of its agent approvers;
-      - the outcome names none of P03 to P07, and the content is untainted (a proposal created before flags were recorded is never agent-approved);
+      - the outcome names none of P03 to P07, the content is untainted, and the flags were assessed (never NULL);
       - the risk is within the agent's `max_risk` (P02);
-      - the run is the agent's and untainted, and no kill switch covers it (P01);
+      - the run is the agent's, untainted and live (running, or succeeded after recording; never cancelled, failed or expired), and no kill switch covers it (P01);
       - the agent is not an author (P10);
-      - the agent is not in the causal chain: it did not ask for the proposal, no task in the chain was its own or its position's, and the asking agent's position is not in its subtree.
+      - the agent is not in the causal chain: it did not ask for the proposal, and no task in the chain was its own or its position's;
+      - four-eyes along the reporting line: the approver and the asking agent are not on one line in either direction. Neither position is in the other's subtree, for the asking agent's position when it asked (the source task's assignee) and the one it holds now. A report could otherwise approve its superior's proposal, which the superior can route to it.
     - **Revision.** The approval names the revision it judged.
   - **Database.** For every writer:
     - a proposal's taint comes from its extraction too, and a tainted proposal is flagged P03;
-    - the causal chain never changes, and the taint and the flags only grow;
+    - the causal chain never changes, the taint and the flags only grow, and NULL flags stay NULL;
     - an agent-decided proposal is untainted, flagged with none of P03 to P07, and not decided by the agent that asked for it.
   - **R3 stays human.** Human approval is unchanged: P10 counts only human eligible approvers, and an agent author neither blocks four-eyes nor satisfies it. With today's proposal commands all R3, agents approve nothing yet. The chief accountant template's `R1` ceiling also keeps it from approving R2.
   - **Two steps.** #341 first let the invariant suite accept the two new task commands, so that its base copy held on both sides of this change.
+  - **Follow-ups (#435).** Binding create and approve to the emitting command; a budget re-check (P01); the kill switch of the approved command's module; whether approvers must differ in template from the requester (today every agent shares one template, so such a rule would refuse all); waking waiting and done tasks when the worker refuses; agent proposals of commands outside the human allowlist; P12 legal-entity scope; database enforcement of R3-human; taint from data the preparer reads.
 - **Not in Phase 1** (follow-up issue): the oRPC contract and UI for the chart, tasks and switches; the language-model runner behind the template program (the Phase 1 program is deterministic: it records the proposal's checks and escalates the approval); recording `ai_run` cost; schedules; editing `le_scope` and `flags`.
 
 ## Consequences

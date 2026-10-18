@@ -9,12 +9,14 @@
 --   requested_by_agent, requested_by_run, source_task_id  the causal chain of an agent's proposal;
 --   request_event_id   the outbox event it was created from (one proposal per event);
 --   tainted            the content came from tainted input (a tainted run or task, or a tainted extraction);
---   policy_flags       the review rules in the proposal's outcome (P03 to P07). NULL only on proposals created before
---                      this migration, which agents never approve;
+--   policy_flags       the review rules (P03 to P07) its writer assessed in the proposal's outcome. NULL when no writer
+--                      assessed them: proposals created before this migration, and today every proposal not created
+--                      from an agent's request. Agents never approve those;
 --   decided_by_agent   the agent whose approval executed it.
 -- The database holds every writer to:
 --   - tainted is derived from the extraction too, and a tainted proposal is flagged P03;
---   - the causal chain, the request event and the taint never change, and flags are never removed;
+--   - the causal chain, the request event and the taint never change, flags are never removed, and flags nobody
+--     assessed (NULL) stay NULL;
 --   - an agent-decided proposal is untainted, flagged with none of P03 to P07, and not decided by the agent that
 --     requested it.
 SET LOCAL lock_timeout = '2s';
@@ -68,8 +70,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS proposal_request_event_uq ON crove_kernel.prop
 CREATE INDEX IF NOT EXISTS proposal_requested_by_agent_idx ON crove_kernel.proposal (org_id, requested_by_agent) WHERE requested_by_agent IS NOT NULL;
 CREATE INDEX IF NOT EXISTS proposal_source_task_idx ON crove_kernel.proposal (org_id, source_task_id) WHERE source_task_id IS NOT NULL;
 
--- On insert: taint from the extraction (a missing extraction row counts as tainted), flags always recorded, and a
--- tainted proposal flagged P03.
+-- On insert: taint from the extraction (a missing extraction row counts as tainted), and a tainted proposal with
+-- assessed flags flagged P03. Flags stay NULL unless the writer computed them: an empty array means "assessed, none
+-- applies", which only the writer that assessed them may say.
 CREATE OR REPLACE FUNCTION crove_kernel.proposal_before_insert() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
@@ -79,8 +82,7 @@ BEGIN
     SELECT e.tainted INTO v_tainted FROM crove_kernel.extraction e WHERE e.org_id = NEW.org_id AND e.id = NEW.extraction_id;
     NEW.tainted := NEW.tainted OR coalesce(v_tainted, true);
   END IF;
-  NEW.policy_flags := coalesce(NEW.policy_flags, '{}'::text[]);
-  IF NEW.tainted AND NOT ('P03' = ANY (NEW.policy_flags)) THEN
+  IF NEW.tainted AND NEW.policy_flags IS NOT NULL AND NOT ('P03' = ANY (NEW.policy_flags)) THEN
     NEW.policy_flags := NEW.policy_flags || 'P03'::text;
   END IF;
   RETURN NEW;
@@ -90,7 +92,8 @@ DROP TRIGGER IF EXISTS proposal_before_insert ON crove_kernel.proposal;
 CREATE TRIGGER proposal_before_insert BEFORE INSERT ON crove_kernel.proposal
   FOR EACH ROW EXECUTE FUNCTION crove_kernel.proposal_before_insert();
 
--- On update: the provenance is fixed, taint and the review flags only grow, and a new reading of the file (a
+-- On update: the provenance is fixed, taint and the review flags only grow, flags nobody assessed stay unassessed
+-- (NULL never becomes an array, so no later write can clear a proposal for agents), and a new reading of the file (a
 -- re-extraction names another extraction) brings its taint along.
 CREATE OR REPLACE FUNCTION crove_kernel.proposal_keep_provenance() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
@@ -100,6 +103,7 @@ BEGIN
   IF (NEW.requested_by_agent, NEW.requested_by_run, NEW.source_task_id, NEW.request_event_id)
      IS DISTINCT FROM (OLD.requested_by_agent, OLD.requested_by_run, OLD.source_task_id, OLD.request_event_id)
      OR (OLD.tainted AND NOT NEW.tainted)
+     OR (OLD.policy_flags IS NULL AND NEW.policy_flags IS NOT NULL)
      OR (OLD.policy_flags IS NOT NULL AND (NEW.policy_flags IS NULL OR NOT (NEW.policy_flags @> OLD.policy_flags))) THEN
     RAISE EXCEPTION 'PROPOSAL_PROVENANCE' USING ERRCODE = '23514';
   END IF;

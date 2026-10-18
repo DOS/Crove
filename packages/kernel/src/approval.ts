@@ -173,9 +173,11 @@ export type AgentApproveReason =
   | 'not_eligible'
   | 'above_max_risk'
   | 'tainted_run'
+  | 'run_not_live'
   | 'stopped'
   | 'author'
-  | 'causal_chain';
+  | 'causal_chain'
+  | 'reporting_line';
 
 export interface AgentApprovalDecision {
   reason: AgentApproveReason;
@@ -197,13 +199,18 @@ export interface AgentProposalInput {
 // Decides whether an agent, in one of its runs, may approve the proposal's current revision. Every fact is read from
 // the database here; the caller supplies only who asks and the registered command's facts (ctx.command):
 // - the command is a proposal command declaring agent approvers, below R3 (R3 is always human: P05, P12);
-// - the outcome names none of P03 to P07, and the content is not tainted; a proposal without recorded flags (made
-//   before they were recorded) is never approved by an agent;
+// - the outcome names none of P03 to P07, and the content is not tainted; a proposal whose flags no writer assessed
+//   (NULL: every proposal not created from an agent's request) is never approved by an agent;
 // - the agent is active, holds an active position whose role key is its template's and one of the command's agent
 //   approvers, and the command's risk is within its max_risk (the lower of the agent's and the template's, P02);
-// - the run is the agent's and untainted (P03), and no kill switch covers the org, the module or the agent (P01);
-// - the agent is not an author, and not in the proposal's causal chain: it did not ask for it, no task in the chain
-//   was its own or its position's, and the asking agent's position is not in its subtree (work it delegated).
+// - the run is the agent's, untainted (P03), and live: running, or succeeded after recording the approval; a run
+//   cancelled by a kill switch or a stop, failed or expired decides nothing (P01). No kill switch covers the org, the
+//   module or the agent (P01);
+// - the agent is not an author, and not in the proposal's causal chain: it did not ask for it, and no task in the
+//   chain was its own or its position's;
+// - four-eyes along the reporting line: the approver and the asking agent are not on one line in either direction
+//   (neither position is in the other's subtree), for the asking agent's position when it asked (the source task's
+//   assignee) and the one it holds now.
 export async function decideAgentApproval(
   trx: Transaction<Database>,
   orgId: string,
@@ -233,8 +240,8 @@ export async function decideAgentApproval(
   const maxRisk = RISK_RANK[seat.agent_risk] < RISK_RANK[seat.template_risk] ? seat.agent_risk : seat.template_risk;
   if (RISK_RANK[info.risk] > RISK_RANK[maxRisk]) return { reason: 'above_max_risk', rule: 'P02' };
 
-  const { rows: runs } = await sql<{ tainted: boolean; stopped: boolean }>`
-    SELECT r.tainted,
+  const { rows: runs } = await sql<{ tainted: boolean; status: string; stopped: boolean }>`
+    SELECT r.tainted, r.status,
            EXISTS (SELECT 1 FROM crove_kernel.kill_switch k
                    WHERE k.org_id = r.org_id AND k.released_at IS NULL
                      AND (k.scope = 'org' OR (k.scope = 'module' AND k.target = ${seat.module}) OR (k.scope = 'agent' AND k.target = r.agent_id::text))) AS stopped
@@ -243,6 +250,7 @@ export async function decideAgentApproval(
   const run = runs[0];
   if (!run) return { reason: 'not_eligible', rule: 'P12' };
   if (run.tainted) return { reason: 'tainted_run', rule: 'P03' };
+  if (run.status !== 'running' && run.status !== 'succeeded') return { reason: 'run_not_live', rule: 'P01' };
   if (run.stopped) return { reason: 'stopped', rule: 'P01' };
 
   const authors = parseAuthors(proposal.authors);
@@ -260,14 +268,27 @@ export async function decideAgentApproval(
         FROM chain c JOIN crove_kernel.task t ON t.org_id = ${orgId}::uuid AND t.id = c.parent_task_id
         WHERE c.depth < 20
       )
-      SELECT
-        EXISTS (SELECT 1 FROM chain c
-                WHERE c.assignee_position_id = ${seat.position_id}::uuid
-                   OR (c.created_by_type = 'agent' AND c.created_by_id = ${approver.agentId}::uuid))
-        OR EXISTS (SELECT 1 FROM chain c
-                   WHERE c.depth = 0 AND c.assignee_position_id IS NOT NULL
-                     AND crove_kernel.position_in_subtree(${orgId}::uuid, ${seat.position_id}::uuid, c.assignee_position_id)) AS in_chain`.execute(trx);
+      SELECT EXISTS (SELECT 1 FROM chain c
+                     WHERE c.assignee_position_id = ${seat.position_id}::uuid
+                        OR (c.created_by_type = 'agent' AND c.created_by_id = ${approver.agentId}::uuid)) AS in_chain`.execute(trx);
     if (rows[0]?.in_chain !== false) return { reason: 'causal_chain', rule: 'causal_chain' };
+  }
+  if (proposal.source_task_id || proposal.requested_by_agent) {
+    // The asking agent's positions: the source task's assignee (where it asked from) and any it holds now, whatever
+    // their status. One line in either direction refuses: a superior approving work of its report, or a report
+    // approving work of its superior (who could route the review to it).
+    const { rows } = await sql<{ same_line: boolean }>`
+      WITH asker (pos) AS (
+        SELECT t.assignee_position_id FROM crove_kernel.task t
+        WHERE t.org_id = ${orgId}::uuid AND t.id = ${proposal.source_task_id}::uuid AND t.assignee_position_id IS NOT NULL
+        UNION
+        SELECT p.id FROM crove_kernel.position p WHERE p.org_id = ${orgId}::uuid AND p.holder_agent_id = ${proposal.requested_by_agent}::uuid
+      )
+      SELECT EXISTS (SELECT 1 FROM asker a
+                     WHERE a.pos = ${seat.position_id}::uuid
+                        OR crove_kernel.position_in_subtree(${orgId}::uuid, ${seat.position_id}::uuid, a.pos)
+                        OR crove_kernel.position_in_subtree(${orgId}::uuid, a.pos, ${seat.position_id}::uuid)) AS same_line`.execute(trx);
+    if (rows[0]?.same_line !== false) return { reason: 'reporting_line', rule: 'reporting_line' };
   }
   return { reason: 'ok' };
 }
