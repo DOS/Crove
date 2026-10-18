@@ -711,7 +711,9 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
         const fresh = await client.social.posts.get({ postId });
         for (const v of fresh.variants) {
           const mine = own[v.id];
-          if (!mine || sameOwn(mine, ownOf(v)) || !EDITABLE.includes(v.status)) continue;
+          // Only what was edited here: a channel left as it was loaded keeps what another tab may have saved since.
+          const loaded = origin.variants.find((ov) => ov.id === v.id);
+          if (!mine || (loaded && sameOwn(mine, ownOf(loaded))) || sameOwn(mine, ownOf(v)) || !EDITABLE.includes(v.status)) continue;
           await client.social.variants.update({
             variantId: v.id,
             revision: v.revision,
@@ -754,7 +756,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const editable = canWrite && p.variants.some((v) => EDITABLE.includes(v.status));
   const submittable = p.variants.filter((v) => SUBMITTABLE.includes(v.status));
   const onKey = (e: KeyboardEvent) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 's' && dirty) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 's' && dirty && !save.isPending) {
       e.preventDefault();
       save.mutate();
     }
