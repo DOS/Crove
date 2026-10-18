@@ -26,6 +26,21 @@ export const en = {
     member: 'Member',
     viewer: 'Viewer',
   },
+  palette: {
+    label: 'Command palette',
+    open: 'Search or go to',
+    placeholder: 'Type a page, a vendor or a command',
+    empty: 'Nothing matches.',
+    hint: 'Arrow keys to choose, Enter to open, Esc to close.',
+    switchOrg: 'Switch to {name}',
+    switchLocale: 'Change the language to {name}',
+    groups: {
+      go: 'Go to',
+      proposals: 'Proposals to review',
+      orgs: 'Organizations',
+      actions: 'Commands',
+    },
+  },
   nav: {
     org: 'Organization',
     allClients: 'All companies',
@@ -501,7 +516,7 @@ export const en = {
     approve: 'Approve and post',
     stepUpApprove: 'approve and post this document',
     stepUpApproveReversal: 'approve and post this reversal',
-    shortcuts: 'Shortcuts: J or N next pending proposal · A approve · E edit accounts',
+    shortcuts: 'Shortcuts: J or N next pending proposal · K or P previous one · A approve · E edit accounts · Ctrl K command palette',
     executedAt: 'Posted {at}',
     rejected: 'Rejected',
     reading:

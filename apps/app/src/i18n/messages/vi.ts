@@ -24,6 +24,21 @@ export const vi = {
     member: 'Thành viên',
     viewer: 'Chỉ xem',
   },
+  palette: {
+    label: 'Bảng lệnh',
+    open: 'Tìm hoặc mở trang',
+    placeholder: 'Gõ tên trang, nhà cung cấp hoặc lệnh',
+    empty: 'Không tìm thấy kết quả phù hợp.',
+    hint: 'Mũi tên lên xuống để chọn, Enter để mở, Esc để đóng.',
+    switchOrg: 'Chuyển sang {name}',
+    switchLocale: 'Đổi ngôn ngữ sang {name}',
+    groups: {
+      go: 'Đi tới',
+      proposals: 'Đề xuất chờ duyệt',
+      orgs: 'Tổ chức',
+      actions: 'Lệnh',
+    },
+  },
   nav: {
     org: 'Tổ chức',
     allClients: 'Tất cả doanh nghiệp',
@@ -499,7 +514,7 @@ export const vi = {
     approve: 'Duyệt và ghi sổ',
     stepUpApprove: 'duyệt và ghi sổ chứng từ này',
     stepUpApproveReversal: 'duyệt và ghi sổ bút toán đảo này',
-    shortcuts: 'Phím tắt: J hoặc N sang đề xuất chờ duyệt tiếp theo · A duyệt · E sửa tài khoản',
+    shortcuts: 'Phím tắt: J hoặc N sang đề xuất chờ duyệt tiếp theo · K hoặc P về đề xuất trước · A duyệt · E sửa tài khoản · Ctrl K mở bảng lệnh',
     executedAt: 'Đã ghi sổ {at}',
     rejected: 'Đã từ chối',
     reading:
