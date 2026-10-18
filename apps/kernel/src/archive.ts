@@ -3,13 +3,14 @@
 // is decoded, checked against its declared size, sniffed by content and stored under the org's content address before
 // kernel.file.archive.record files it, in one transaction, as a document of its own. Each document is then read by
 // the ordinary extraction job, one sandbox call per file, so a batch of 200 never runs as one long request.
-import { EXTRACT_LIMITS, EXTRACT_LIMIT_RETRIES, type ExtractClient, type ExtractFailure } from '@crove/extract-contract';
-import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES, type ArchiveEntryReason } from '@crove/kernel-contract';
+import { EXTRACT_LIMITS, EXTRACT_LIMIT_RETRIES, type ExtractClient, type ExtractFailure, type ExtractedArchive } from '@crove/extract-contract';
+import { ACCEPTED_UPLOAD_TYPES, MAX_EMAIL_ARCHIVE_DOCUMENTS, MAX_UPLOAD_BYTES, type ArchiveEntryReason } from '@crove/kernel-contract';
 import type { ArchiveEntryInput } from '@crove/kernel';
 import { fileKey, putFile, readVerified, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { safeFilename, sniffType } from './sniff.ts';
 
 export const ARCHIVE_ACTOR = { type: 'system' as const, component: 'kernel.archive' };
+type ArchiveEntry = ExtractedArchive['entries'][number];
 // Entries stored at once while an archive is filed (a bucket round trip each).
 const STORE_CONCURRENCY = 4;
 
@@ -26,6 +27,8 @@ export interface ArchiveSource {
   storage_key: string;
   generation: string | null;
   sha256: string;
+  // 'upload' or 'email' (#432): an emailed archive files at most MAX_EMAIL_ARCHIVE_DOCUMENTS documents.
+  source: string;
   expanded: boolean;
 }
 
@@ -86,6 +89,22 @@ async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T
   return results;
 }
 
+// An entry's bytes and type when it is a document Crove files, or why it is not. The sandbox's answer is untrusted, so
+// the size is checked again and the content, not the name, decides the type, as for an upload; an archive inside the
+// archive is never opened.
+function entryDocument(entry: ArchiveEntry): { content: Uint8Array; contentType: string } | { reason: ArchiveEntryReason } {
+  if (entry.rejected !== null || entry.content === null) return { reason: entry.rejected ?? 'corrupt' };
+  // A copy of its own: a small Buffer is a view of Node's shared pool, whose other bytes must not travel with it.
+  const content = Uint8Array.from(Buffer.from(entry.content, 'base64'));
+  if (content.byteLength !== entry.sizeBytes) return { reason: 'corrupt' };
+  if (content.byteLength === 0) return { reason: 'empty' };
+  if (content.byteLength > MAX_UPLOAD_BYTES) return { reason: 'too_large' };
+  const contentType = sniffType(content);
+  if (contentType === 'application/zip') return { reason: 'nested_archive' };
+  if (!contentType || !ACCEPTED_UPLOAD_TYPES.includes(contentType)) return { reason: 'unsupported_type' };
+  return { content, contentType };
+}
+
 // Opens the archive and files its entries. `attempt` is the job's retry count (0 on the first run). A sandbox that
 // cannot answer throws (ExtractServiceError) and the job is retried; an archive the sandbox refuses is recorded as
 // failed. A timeout or memory answer may come from load, so it is retried EXTRACT_LIMIT_RETRIES times first: a hostile
@@ -109,19 +128,24 @@ export async function expandArchive(deps: ArchiveDeps, orgId: string, source: Ar
     return { fileIds: [] };
   }
 
-  const entries = await mapLimited(listed, STORE_CONCURRENCY, async (entry): Promise<ArchiveEntryInput> => {
+  // An emailed archive (#432) files its first MAX_EMAIL_ARCHIVE_DOCUMENTS documents in archive order; the others are
+  // listed as rejected and never stored. kernel.file.archive.record holds the same limit.
+  const overLimit = new Set<number>();
+  if (source.source === 'email') {
+    let documents = 0;
+    listed.forEach((entry, index) => {
+      if (!('reason' in entryDocument(entry)) && ++documents > MAX_EMAIL_ARCHIVE_DOCUMENTS) overLimit.add(index);
+    });
+  }
+
+  const indexed = listed.map((entry, index) => ({ entry, index }));
+  const entries = await mapLimited(indexed, STORE_CONCURRENCY, async ({ entry, index }): Promise<ArchiveEntryInput> => {
     const name = entryName(entry.name);
     const reject = (reason: ArchiveEntryReason): ArchiveEntryInput => ({ outcome: 'rejected', name, reason });
-    if (entry.rejected !== null || entry.content === null) return reject(entry.rejected ?? 'corrupt');
-    // A copy of its own: a small Buffer is a view of Node's shared pool, whose other bytes must not travel with it.
-    const content = Uint8Array.from(Buffer.from(entry.content, 'base64'));
-    if (content.byteLength !== entry.sizeBytes) return reject('corrupt');
-    if (content.byteLength === 0) return reject('empty');
-    if (content.byteLength > MAX_UPLOAD_BYTES) return reject('too_large');
-    // The content decides the type, as for an upload; an archive inside the archive is never opened.
-    const contentType = sniffType(content);
-    if (contentType === 'application/zip') return reject('nested_archive');
-    if (!contentType || !ACCEPTED_UPLOAD_TYPES.includes(contentType)) return reject('unsupported_type');
+    if (overLimit.has(index)) return reject('email_limit');
+    const document = entryDocument(entry);
+    if ('reason' in document) return reject(document.reason);
+    const { content, contentType } = document;
     const sha256 = sha256Hex(content);
     const storageKey = fileKey(orgId, sha256);
     const generation = await putFile(deps.store, storageKey, content, contentType, sha256);
