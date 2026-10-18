@@ -149,7 +149,7 @@ export function createExtractApp(options: ExtractAppOptions = {}) {
 
   app.post('/extract', async (c) => {
     const kind = zExtractKind.safeParse(c.req.query('kind'));
-    if (!kind.success) return answer(c, failure('bad_request', 'kind must be one of einvoice_xml, pdf_text, mime'));
+    if (!kind.success) return answer(c, failure('bad_request', 'kind must be one of einvoice_xml, pdf_text, mime, zip'));
     const max = maxRequestBytes(kind.data);
     const tooLarge = failure('too_large', `input is larger than ${max} bytes`);
     const declared = Number(c.req.header('content-length') ?? Number.NaN);

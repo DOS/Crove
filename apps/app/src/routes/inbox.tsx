@@ -10,9 +10,10 @@ import { Label } from '@crove/ui/components/label';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { cn } from '@crove/ui/lib/utils';
+import { IntakePanel, useIntake } from '../components/intake.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
-import { client, errorMessage, isStepUpRequired, orpc, queryClient, uploadFiles } from '../lib/api.ts';
+import { client, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
@@ -34,11 +35,17 @@ type Tab = 'pending' | 'executed' | 'rejected';
 
 const TABS: Tab[] = ['pending', 'executed', 'rejected'];
 
-const FILE_STATUS = { processing: 'brand', proposed: 'success', duplicate: 'warning', failed: 'destructive' } as const;
+const FILE_STATUS = { processing: 'brand', proposed: 'success', duplicate: 'warning', failed: 'destructive', expanded: 'success' } as const;
 type FileStatus = keyof typeof FILE_STATUS;
 
 function isFileStatus(status: string): status is FileStatus {
   return Object.hasOwn(FILE_STATUS, status);
+}
+
+// The name a proposal goes by in the list, its checkbox and the bulk report: the customer of a sale (#313; its seller is
+// the org itself), the seller of a purchase, else its title.
+function proposalName(item: { direction: string | null; sellerName: string | null; buyerName: string | null; title: string }): string {
+  return (item.direction === 'sale' ? item.buyerName : item.sellerName) || item.title;
 }
 
 export function InboxPage() {
@@ -59,10 +66,8 @@ export function InboxPage() {
   });
   const items = useQuery({ ...orpc.inbox.list.queryOptions({ input: { status: tab } }), refetchInterval: pollEvery(live, 5000, SAFETY_POLL_MS) });
 
-  const upload = useMutation({
-    mutationFn: (files: File[]) => uploadFiles(files),
-    onSuccess: () => void queryClient.invalidateQueries(),
-  });
+  // Many documents or ZIP archives at once, each file uploaded and followed on its own (#314).
+  const intake = useIntake();
   // Reads a file that could not be read again (for example after AI was configured).
   const reextract = useMutation(orpc.files.reextract.mutationOptions({ onSuccess: () => void queryClient.invalidateQueries() }));
 
@@ -70,7 +75,7 @@ export function InboxPage() {
     event.preventDefault();
     setDragging(false);
     const dropped = [...event.dataTransfer.files];
-    if (dropped.length) upload.mutate(dropped);
+    if (dropped.length) intake.start(dropped);
   }
 
   const processing = (files.data ?? []).filter((f) => f.status === 'processing').length;
@@ -102,7 +107,7 @@ export function InboxPage() {
     void sendBulk({
       batches: planBatches(chosen.map((item) => ({ id: item.id, revision: item.revision }))),
       progress: { results: [], next: 0, error: null },
-      names: Object.fromEntries(chosen.map((item) => [item.id, item.sellerName ?? item.title])),
+      names: Object.fromEntries(chosen.map((item) => [item.id, proposalName(item)])),
       total: chosen.length,
       sending: false,
       stopped: false,
@@ -122,8 +127,8 @@ export function InboxPage() {
         title={t('title')}
         subtitle={t('subtitle')}
         actions={
-          <Button size="lg" onClick={() => inputRef.current?.click()} disabled={upload.isPending}>
-            {upload.isPending ? <Spinner className="text-current" /> : null}
+          <Button size="lg" onClick={() => inputRef.current?.click()} disabled={intake.uploading}>
+            {intake.uploading ? <Spinner className="text-current" /> : null}
             {t('upload')}
           </Button>
         }
@@ -133,10 +138,10 @@ export function InboxPage() {
         type="file"
         multiple
         hidden
-        accept=".xml,.pdf,image/jpeg,image/png,image/webp"
+        accept=".xml,.pdf,.zip,application/zip,image/jpeg,image/png,image/webp"
         onChange={(e) => {
           const chosen = [...(e.target.files ?? [])];
-          if (chosen.length) upload.mutate(chosen);
+          if (chosen.length) intake.start(chosen);
           e.target.value = '';
         }}
       />
@@ -159,11 +164,7 @@ export function InboxPage() {
           {!config.aiEnabled && (
             <p className="mt-3 text-xs text-warning">{t('noAi')}</p>
           )}
-          {upload.error && (
-            <div className="mt-3">
-              <ErrorText>{errorMessage(upload.error)}</ErrorText>
-            </div>
-          )}
+          <p className="mt-1 text-xs text-subtle-foreground">{t('formatsZip')}</p>
         </div>
         <Card className="block p-4">
           <p className="text-xs font-medium tracking-wide text-subtle-foreground uppercase">{t('forwardTitle')}</p>
@@ -183,6 +184,8 @@ export function InboxPage() {
           )}
         </Card>
       </div>
+
+      <IntakePanel intake={intake} />
 
       {(files.data?.length ?? 0) > 0 && (
         <div className="mt-6">
@@ -342,7 +345,7 @@ export function InboxPage() {
                       <Checkbox
                         checked={selected.has(item.id)}
                         disabled={sending}
-                        aria-label={t('bulk.select', { name: (item.direction === 'sale' ? item.buyerName || null : item.sellerName) ?? item.title })}
+                        aria-label={t('bulk.select', { name: proposalName(item) })}
                         onCheckedChange={(checked) =>
                           setSelected((current) => {
                             const next = new Set(current);
@@ -359,7 +362,7 @@ export function InboxPage() {
                 )}
                 <TableCell className="px-4 py-3">
                   <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="font-medium text-foreground hover:text-link">
-                    {(item.direction === 'sale' ? item.buyerName || null : item.sellerName) ?? item.title}
+                    {proposalName(item)}
                   </Link>
                   <p className="text-xs text-subtle-foreground">{item.title}</p>
                 </TableCell>

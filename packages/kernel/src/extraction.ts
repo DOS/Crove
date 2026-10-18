@@ -12,6 +12,7 @@ import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { actorRef, addAuthor, eligibleApprovers, parseAuthors, type ActorRef } from './approval.ts';
+import { isArchiveType } from './files.ts';
 
 // Who may ask for a re-extraction: the roles that may edit a proposal (EDITOR_ROLES in approval.ts). A
 // re-extraction changes a pending proposal's content as an edit does, and never approves anything.
@@ -103,12 +104,14 @@ export async function refuseWhileReextracting(ctx: CommandContext, fileId: strin
 async function lockFile(ctx: CommandContext, fileId: string) {
   const file = await ctx.trx
     .selectFrom('crove_kernel.file')
-    .select(['id', 'filename', 'created_by'])
+    .select(['id', 'filename', 'created_by', 'content_type'])
     .where('org_id', '=', ctx.orgId)
     .where('id', '=', fileId)
     .forUpdate()
     .executeTakeFirst();
   if (!file) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy tệp');
+  // A ZIP archive (#314) is opened once by kernel.file.archive.record; it is never read as a document.
+  if (isArchiveType(file.content_type)) throw new DomainError('ARCHIVE_NOT_READ', 409, 'Tệp ZIP đã được mở thành từng chứng từ; hãy đọc lại từng chứng từ');
   return file;
 }
 
