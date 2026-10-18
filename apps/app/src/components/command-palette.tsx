@@ -32,6 +32,8 @@ export function CommandPalette({ entries, open, onOpenChange }: { entries: reado
   }, [open]);
 
   useEffect(() => setActive(0), [query]);
+  // A refresh of the pending proposals can shorten the results under the same query: keep the active one in range.
+  useEffect(() => setActive((current) => Math.min(current, Math.max(results.length - 1, 0))), [results]);
 
   const run = (entry: PaletteEntry | undefined) => {
     if (!entry) return;
@@ -40,6 +42,8 @@ export function CommandPalette({ entries, open, onOpenChange }: { entries: reado
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    // Enter and the arrows pick a candidate while an input method is composing; leave them to it.
+    if (event.nativeEvent.isComposing) return;
     const next = moveActive(event.key, active, results.length);
     if (next !== null) {
       event.preventDefault();
