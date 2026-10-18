@@ -19,7 +19,7 @@ interface Entry {
   id: string;
   entryDate: string;
   sourceType: string;
-  document?: { series: string; number: string; partyName: string } | undefined;
+  document?: { direction: 'purchase' | 'sale'; series: string; number: string; partyName: string } | undefined;
 }
 
 // Asks for a reversal (#165): a proposal that an owner or admin approves like any posting (R3, four-eyes, fresh MFA).
@@ -68,10 +68,15 @@ function ReversalForm({ entry, slug, onClose }: { entry: Entry; slug: string; on
       <p className="text-sm text-muted-foreground">{t('intro')}</p>
       {entry.document && (
         <p className="text-sm text-warning">
-          {t('documentNote', {
-            document: `${entry.document.series ? `${entry.document.series}-` : ''}${entry.document.number}`,
-            vendor: entry.document.partyName,
-          })}
+          {entry.document.direction === 'sale'
+            ? t('saleDocumentNote', {
+                document: `${entry.document.series ? `${entry.document.series}-` : ''}${entry.document.number}`,
+                customer: entry.document.partyName,
+              })
+            : t('documentNote', {
+                document: `${entry.document.series ? `${entry.document.series}-` : ''}${entry.document.number}`,
+                vendor: entry.document.partyName,
+              })}
         </p>
       )}
       {opening && <p className="text-sm text-muted-foreground">{t('openingNote', { date: f.date(entry.entryDate) })}</p>}

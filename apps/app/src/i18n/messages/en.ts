@@ -348,6 +348,8 @@ export const en = {
       'A reversal posts a new entry with mirrored lines (debit and credit swapped); the original entry is not changed. An entry can be reversed once, and a reversal cannot be reversed.',
     documentNote:
       'This entry records purchase document {document} from {vendor}. When the proposal is approved, Crove voids this document in its own books so the invoice can be posted again with the right accounts. The e-invoice of the seller is not changed.',
+    saleDocumentNote:
+      'This entry records sales document {document} to {customer}. When the proposal is approved, Crove voids this document in its own books so the invoice can be posted again with the right accounts. The e-invoice your organization issued is not changed; to cancel or adjust it, use your e-invoice provider.',
     openingNote: 'This is the opening entry: its reversal is dated {date}, the same day, so the opening balances imported again replace it whole.',
     date: 'Reversal date',
     reason: 'Reason (required)',
@@ -512,6 +514,7 @@ export const en = {
     hiddenLines:
       'You see only the lines you may view, and they do not balance, so the entry has lines hidden from you. On approval, Crove reverses every line; if the approver cannot view them all, the approval is refused.',
     purchaseDocument: 'The entry records purchase document {document} from {vendor}.',
+    saleDocument: 'The entry records sales document {document} to {customer}.',
     documentAlreadyVoided: 'This document is already voided in the books of Crove.',
     documentWillVoid:
       'On approval, Crove voids this document in its own books so the invoice can be posted again with the right accounts (read the file again in the inbox). This corrects the books of Crove only; the e-invoice of the seller is not changed.',
