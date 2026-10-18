@@ -1,6 +1,6 @@
 // Bulk approval batches and review shortcuts (issue #315).
 import { describe, expect, it } from 'vitest';
-import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextPendingId, planBatches, reviewShortcut, sendBatches, type BulkBatch } from '../src/lib/review.ts';
+import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, type BulkBatch } from '../src/lib/review.ts';
 
 const REVERSAL = 'finance.reversal';
 
@@ -76,8 +76,9 @@ describe('bulk approval', () => {
 });
 
 describe('review shortcuts', () => {
-  it('maps J and N to next, A to approve and E to edit, in either case', () => {
+  it('maps J and N to next, K and P to previous, A to approve and E to edit, in either case', () => {
     expect([key('j'), key('n'), key('a'), key('e'), key('A'), key('E')]).toEqual(['next', 'next', 'approve', 'edit', 'approve', 'edit']);
+    expect([key('k'), key('p'), key('K')]).toEqual(['previous', 'previous', 'previous']);
     expect(key('x')).toBeNull();
     expect(key('Enter')).toBeNull();
   });
@@ -100,5 +101,19 @@ describe('review shortcuts', () => {
     // The current one was just decided and left the pending list.
     expect(nextPendingId(items, 'gone')).toBe('p1');
     expect(nextPendingId([], 'gone')).toBeNull();
+  });
+
+  it('finds the previous pending proposal', () => {
+    const items = [{ id: 'p1' }, { id: 'p2' }, { id: 'p3' }];
+    expect(previousPendingId(items, 'p3')).toBe('p2');
+    expect(previousPendingId(items, 'p1')).toBeNull();
+    expect(previousPendingId(items, 'gone')).toBeNull();
+  });
+
+  it('names a proposal after the other party, or its title', () => {
+    const base = { sellerName: 'Bao Bì Phú Thịnh', buyerName: 'Gạo Sạch Mekong', title: 'HĐ 00001284' };
+    expect(proposalName({ ...base, direction: 'purchase' })).toBe('Bao Bì Phú Thịnh');
+    expect(proposalName({ ...base, direction: 'sale' })).toBe('Gạo Sạch Mekong');
+    expect(proposalName({ ...base, direction: null, sellerName: '' })).toBe('HĐ 00001284');
   });
 });

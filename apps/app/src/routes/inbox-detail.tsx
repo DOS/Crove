@@ -17,7 +17,7 @@ import { getConfig } from '../lib/auth.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal } from '../lib/decimal.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { reversalErrorMessage } from '../lib/reversal.ts';
-import { nextPendingId, reviewShortcut, type ReviewAction } from '../lib/review.ts';
+import { nextPendingId, previousPendingId, reviewShortcut, type ReviewAction } from '../lib/review.ts';
 import { pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 const CHECK_TONE = { pass: 'success', warn: 'warning', fail: 'destructive' } as const;
@@ -239,8 +239,10 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const linesRef = useRef<HTMLDivElement>(null);
   const shortcuts = useRef<ShortcutHandlers>({});
   const nextId = pendingList.data ? nextPendingId(pendingList.data, id) : null;
+  const previousId = pendingList.data ? previousPendingId(pendingList.data, id) : null;
   const handlers: ShortcutHandlers = {
     ...(nextId && nextId !== id ? { next: () => void navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: nextId } }) } : {}),
+    ...(previousId ? { previous: () => void navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: previousId } }) } : {}),
     ...(approveReady && !stepUp ? { approve: submitApproval } : {}),
     ...(pending && item?.canEdit && !busy && payload
       ? { edit: () => linesRef.current?.querySelector<HTMLSelectElement>('select:not(:disabled)')?.focus() }
