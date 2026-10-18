@@ -81,6 +81,9 @@ describe('XRefresher', () => {
     expect(await new XRefresher(APP, dead.fetchImpl).refresh(SECRET)).toEqual({ refused: 'invalid_request' });
     const down = x({ 'POST api.x.com/2/oauth2/token': [{ status: 503, body: {} }] });
     expect(await new XRefresher(APP, down.fetchImpl).refresh(SECRET)).toEqual({ failed: '503' });
+    // A wrong client secret keeps the connections.
+    const misconfigured = x({ 'POST api.x.com/2/oauth2/token': [{ status: 401, body: { error: 'invalid_client', error_description: 'Missing valid authorization header' } }] });
+    expect(await new XRefresher(APP, misconfigured.fetchImpl).refresh(SECRET)).toEqual({ failed: 'invalid_client' });
     expect(await refresher.refresh('{}')).toEqual({ refused: 'NO_REFRESH_TOKEN' });
   });
 });
@@ -127,6 +130,8 @@ describe('XPublisher', () => {
     expect(await new XPublisher(APP, broke.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'permission', httpStatus: 402 });
     const dead = x({ 'POST api.x.com/2/tweets': [{ status: 401, body: { title: 'Unauthorized', type: 'about:blank', status: 401, detail: 'Unauthorized' } }] });
     expect(await new XPublisher(APP, dead.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    const long = x({ 'POST api.x.com/2/tweets': [{ status: 403, body: { title: 'Forbidden', detail: 'Your Tweet text is too long.', type: 'about:blank', status: 403 } }] });
+    expect(await new XPublisher(APP, long.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'TEXT_TOO_LONG' });
     const upload = x({ 'POST api.x.com/2/media/upload': [{ status: 503, body: {} }] });
     expect(await new XPublisher(APP, upload.fetchImpl).publish(input({ content: { ...input().content, media: [image] } }))).toMatchObject({ kind: 'rejected', error: 'transient' });
     expect(upload.calls.map((c) => c.route)).toEqual(['POST api.x.com/2/media/upload']);
@@ -153,6 +158,11 @@ describe('XPublisher', () => {
     expect(await publisher.reconcile(window)).toEqual({ found: true, externalId: '1445880548472328192', url: 'https://x.com/i/status/1445880548472328192' });
     expect(calls[1]?.url.searchParams.get('exclude')).toBe('replies,retweets');
     expect(await publisher.reconcile(window)).toEqual({ found: false });
+    // A bare link X turned into t.co still matches; a host on a rare TLD makes a miss unknown, not missing.
+    const bare = x({ 'GET api.x.com/2/users/2244994945/tweets': [{ body: { data: [{ id: '1445880548472328193', text: 'ghé https://t.co/zz nhé', created_at: new Date().toISOString() }] } }, { body: { data: [] } }] });
+    const content = { body: 'ghé crove.vn/gia nhé', title: null, linkUrl: null, media: [] };
+    expect(await new XPublisher(APP, bare.fetchImpl).reconcile({ ...window, content })).toMatchObject({ found: true, externalId: '1445880548472328193' });
+    expect(await new XPublisher(APP, bare.fetchImpl).reconcile({ ...window, content: { ...content, body: 'ghé crove.studio nhé' } })).toEqual({ found: 'unknown' });
     // An image-only post has nothing to match by.
     expect(await publisher.reconcile({ ...window, content: { body: '', title: null, linkUrl: null, media: [image] } })).toEqual({ found: 'unknown' });
   });

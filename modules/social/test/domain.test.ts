@@ -60,6 +60,10 @@ describe('countText', () => {
     expect(countText('“a”…', 'weighted')).toBe(5);
     expect(countText(`xem https://example.com/${'a'.repeat(200)}`, 'weighted')).toBe(4 + 23);
     expect(countText('ghé crove.vn/gia nhé', 'weighted')).toBe(4 + 23 + 4);
+    // A full stop after a link is text; © and ® count one; a keycap is one emoji.
+    expect(countText('xem https://a.com/x.', 'weighted')).toBe(4 + 23 + 1);
+    expect(countText('© ®', 'weighted')).toBe(3);
+    expect(countText('1️⃣', 'weighted')).toBe(2);
     expect(countText('giao tại TP.HCM, file.txt, ban@vi-du.vn', 'weighted')).toBe(countText('giao tại TP.HCM, file.txt, ban@vi-du.vn', 'codepoints') + 1);
   });
 

@@ -195,6 +195,8 @@ export class XRefresher implements Refresher {
       const next: XSecret = { accessToken: answer.access_token, refreshToken: typeof answer.refresh_token === 'string' && answer.refresh_token ? answer.refresh_token : s.refreshToken };
       return { secret: JSON.stringify(next), expiresAt: expiryOf(answer) };
     } catch (error) {
+      // A wrong client secret is the deployment's to fix: keep the connections and try again later.
+      if (error instanceof XError && error.code === 'invalid_client') return { failed: 'invalid_client' };
       // X answers a revoked, expired or already used refresh token with 400 invalid_request (or 401): reconnect.
       if (error instanceof XError && (error.status === 400 || error.status === 401)) return { refused: error.code ?? 'invalid_grant' };
       return { failed: error instanceof XError ? (error.code ?? String(error.status)) : 'NETWORK' };
@@ -209,6 +211,8 @@ function publishResult(error: unknown): PublishResult {
   if (error.status === 401) return { kind: 'rejected', error: 'token_expired', code, message: error.message, httpStatus: error.status };
   // 100 posts per 15 minutes per user, or the app's monthly cap: wait for the window X names.
   if (error.status === 429 || code === 'usage-capped') return { kind: 'rejected', error: 'rate_limited', code, message: error.message, httpStatus: error.status, ...(error.resetAt ? { retryAt: error.resetAt } : {}) };
+  // Text over the account's limit (the checks cannot see the link the adapter appends): fix the post, not the account.
+  if (/too long|shorter/i.test(error.message)) return { kind: 'rejected', error: 'bad_request', code: 'TEXT_TOO_LONG', message: error.message, httpStatus: error.status };
   // 402: the app's account has no credit left for posts; 403: the app or the account may not post this.
   if (error.status === 402 || error.status === 403) return { kind: 'rejected', error: 'permission', code, message: error.message, httpStatus: error.status };
   return { kind: 'rejected', error: 'bad_request', code, message: error.message, httpStatus: error.status };
@@ -223,6 +227,11 @@ const textOf = (content: { body: string; linkUrl: string | null }) => {
   return content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
 };
 
+// Links X finds without a scheme, on the common TLDs (the Social checks count the same ones).
+const BARE_LINK = /(?<![@\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|vn|io|co|ai|app|dev|me|info|biz|xyz|shop|store|online|site|tech|asia|edu|gov|us|uk|jp|sg|tv|ly|gg|link)\b(?:\/\S*)?/giu;
+// Something that may still be a link to X (a host on a rarer TLD).
+const MAYBE_LINK = /[a-z0-9-]\.[a-z]{2,}/iu;
+
 // A post's text as X returns it, comparable with what was sent: X replaces links with t.co links and escapes &, < and
 // >, so links are dropped and entities decoded before comparing.
 export function comparableText(text: string): string {
@@ -231,6 +240,7 @@ export function comparableText(text: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&')
     .replace(/\bhttps?:\/\/\S+/g, '')
+    .replace(BARE_LINK, '')
     .normalize('NFC')
     .replace(/\s+/g, ' ')
     .trim();
@@ -273,7 +283,7 @@ export class XPublisher implements Publisher {
     for (const f of files) {
       const form = new FormData();
       form.set('media', new Blob([new Uint8Array(f.bytes)], { type: f.mime }));
-      form.set('media_category', 'tweet_image');
+      form.set('media_category', f.mime === 'image/gif' ? 'tweet_gif' : 'tweet_image');
       try {
         const uploaded = await this.client.call<{ data?: { id?: unknown } }>('POST', '/media/upload', s.accessToken, { form });
         const id = uploaded?.data?.id;
@@ -313,7 +323,8 @@ export class XPublisher implements Publisher {
           return { found: true, externalId: p.id, url: postUrl(p.id) };
         }
       }
-      return { found: false };
+      // X may have made a link of a host this cannot tell from text, so a miss there proves nothing.
+      return MAYBE_LINK.test(comparableText(textOf(input.content))) ? { found: 'unknown' } : { found: false };
     } catch {
       return { found: 'unknown' };
     }

@@ -209,7 +209,9 @@ const LIGHT_RANGES: readonly (readonly [number, number])[] = [
   [0x2032, 0x2037],
 ];
 const X_LINK_LENGTH = 23;
-const EMOJI = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
+// An emoji as X sees one: a pictograph above U+10FF (so a bare © or ® counts one), one with the emoji
+// presentation selector, a flag or a keycap.
+const EMOJI = /[\u{1100}-\u{10FFFF}](?<=\p{Extended_Pictographic})|\p{Extended_Pictographic}\uFE0F|\p{Regional_Indicator}|\u20E3/u;
 
 function weightedCount(nfc: string): number {
   let n = 0;
@@ -236,7 +238,8 @@ const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+/giu;
 // the common ones, so "TP.HCM" stays text, and a bare link on a rarer TLD counts its own length (X then refuses an
 // over-long post at publish, never silently).
 const BARE_TLDS = 'com|net|org|vn|io|co|ai|app|dev|me|info|biz|xyz|shop|store|online|site|tech|asia|edu|gov|us|uk|jp|sg|tv|ly|gg|link';
-const X_LINK = new RegExp(`\\bhttps?:\\/\\/[^\\s<>"']+|(?<![@\\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:${BARE_TLDS})\\b(?:\\/[^\\s<>"']*)?`, 'giu');
+// Punctuation that ends a sentence after a link is not part of it, as for X.
+const X_LINK = new RegExp(`\\bhttps?:\\/\\/[^\\s<>"']*[^\\s<>"'.,!?;:)\\]]|(?<![@\\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:${BARE_TLDS})\\b(?:\\/(?:[^\\s<>"']*[^\\s<>"'.,!?;:)\\]])?)?`, 'giu');
 
 export function countLinks(text: string): number {
   return text.match(URL_PATTERN)?.length ?? 0;
