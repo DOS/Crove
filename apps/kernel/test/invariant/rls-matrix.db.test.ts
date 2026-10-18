@@ -39,7 +39,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>(['crove_finance.cash_voucher']);
+const PENDING_TABLES = new Set<string>(['crove_finance.cash_voucher', 'crove_finance.portal_invoice_list', 'crove_finance.portal_invoice_row']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -117,6 +117,14 @@ const socialVariantRows = (o: { id: string; owner: string }) => {
     variant,
   };
 };
+let portalListYear = 2000;
+const portalListRow = (o: { id: string; file: string }) => ({
+  org_id: o.id,
+  id: randomUUID(),
+  period: `${portalListYear++}-09`,
+  file_id: o.file,
+  filename: 'rls-matrix.xlsx',
+});
 const journalEntry = (org: string, id: string): Row => ({
   table: 'crove_finance.journal_entry',
   values: { org_id: org, id, entry_date: '2026-10-01', description: 'rls matrix', source_type: 'rls.matrix', source_id: randomUUID() },
@@ -429,6 +437,23 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
           { table: 'crove_finance.journal_line', values: { org_id: o.id, entry_id: entry, line_no: 1, account_code: '331', debit: '100', credit: '0' } },
           { table: 'crove_finance.journal_line', values: { org_id: o.id, entry_id: entry, line_no: 2, account_code: '1111', debit: '0', credit: '100' } },
         ],
+      };
+    },
+  },
+  // The tax portal's purchase lists (#465): one imported file per period, pending until the worker records its outcome;
+  // the same file once per period while not removed, so every row gets its own period. Tenant roles update only the
+  // outcome and removal columns (a column grant), so the update probes assign error to itself on a pending list.
+  'crove_finance.portal_invoice_list': {
+    update: { set: 'error = error' },
+    make: (o) => ({ row: portalListRow(o) }),
+  },
+  // Its rows (append-only): a row joins only a pending list, created in the same transaction.
+  'crove_finance.portal_invoice_row': {
+    make: (o) => {
+      const list = portalListRow(o);
+      return {
+        setup: [{ table: 'crove_finance.portal_invoice_list', values: list }],
+        row: { org_id: o.id, list_id: list.id, row_no: 1, seller_tax_code: '0100109107', series: 'C26TAA', number: tag(), issue_date: '2026-09-01', status: 'original' },
       };
     },
   },
