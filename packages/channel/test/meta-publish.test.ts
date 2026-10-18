@@ -160,6 +160,13 @@ describe('FacebookPagePublisher with images', () => {
     });
   });
 
+  it('puts the link in a photo post once when the text already holds it', async () => {
+    const { calls, publisher } = sequence([{ body: { id: 'photo-1' } }, { body: { id: `${PAGE}_8` } }]);
+    const one = input({ content: { body: 'Xem https://example.com/a nhé', title: null, linkUrl: 'https://example.com/a', media: [media[0]!] }, readMedia: async () => new Uint8Array([1]) });
+    expect((await publisher.publish(one)).kind).toBe('accepted');
+    expect(Object.fromEntries(calls[1]?.form ?? []).message).toBe('Xem https://example.com/a nhé');
+  });
+
   it('finds a post with photos and a link again by the text it was sent with', async () => {
     const { publisher } = sequence([{ body: { data: [{ id: `${PAGE}_7`, message: 'Ảnh khai trương\n\nhttps://example.com/a', permalink_url: 'https://www.facebook.com/p/7' }] } }]);
     const found = await publisher.reconcile({

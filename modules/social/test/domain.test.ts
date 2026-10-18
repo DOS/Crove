@@ -60,6 +60,7 @@ describe('countText', () => {
     // Facebook adds it to the text only with media; Instagram and the sandbox never.
     expect(sentText('facebook_page', 'Bài', link, 0)).toBe('Bài');
     expect(sentText('facebook_page', 'Bài', link, 1)).toBe(`Bài\n\n${link}`);
+    expect(sentText('facebook_page', `Bài ${link}`, link, 1)).toBe(`Bài ${link}`);
     expect(sentText('instagram', 'Bài', link, 1)).toBe('Bài');
     expect(sentText('linkedin', '  ', link, 0)).toBe(link);
     expect(sentText('linkedin', 'Bài', '', 0)).toBe('Bài');

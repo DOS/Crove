@@ -99,7 +99,7 @@ export function sentText(provider: Provider, body: string, linkUrl: string | nul
   const placement = LINK_PLACEMENT[provider];
   if (!link || placement === 'apart' || (placement === 'text_with_media' && mediaCount === 0)) return body;
   const text = body.trim();
-  if (placement === 'text' && text.includes(link)) return body;
+  if (text.includes(link)) return body;
   return [text, link].filter(Boolean).join('\n\n');
 }
 

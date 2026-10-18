@@ -256,8 +256,11 @@ function pageToken(secret: string): string | null {
 // What Facebook shows as the post's text, built the same way for publishing and reconciling. Facebook Pages have no
 // title; a link is sent apart and previewed, except on a post with photos, which has no link preview: there the link
 // goes at the end of the text.
-const feedMessage = (content: { body: string; linkUrl: string | null; media: readonly unknown[] }) =>
-  content.linkUrl && content.media.length > 0 ? [content.body.trim(), content.linkUrl].filter(Boolean).join('\n\n') : content.body.trim();
+// A photo post has no link field, so its link goes in the text, once.
+const feedMessage = (content: { body: string; linkUrl: string | null; media: readonly unknown[] }) => {
+  const body = content.body.trim();
+  return content.linkUrl && content.media.length > 0 && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+};
 const postUrl = (id: string) => `https://www.facebook.com/${encodeURIComponent(id)}`;
 
 export function graphPublishResult(error: unknown): PublishResult {
