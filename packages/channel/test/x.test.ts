@@ -147,6 +147,21 @@ describe('XPublisher', () => {
       expect(calls.at(-1)?.body).toEqual({ text: 'Khai trương chi nhánh mới & ưu đãi\n\nhttps://example.com/a', media: { media_ids: [MEDIA] } });
     });
 
+    it('stops before posting once the call budget is spent, and keeps waiting on a status check without processing info', async () => {
+      const spent = x({ 'POST api.x.com/2/media/upload/initialize': [{ body: { data: { id: MEDIA } } }] });
+      expect(await new XPublisher(APP, spent.fetchImpl, { ...quick, budgetMs: 0 }).publish(withClip())).toMatchObject({ kind: 'rejected', error: 'transient', code: 'VIDEO_TOO_SLOW' });
+      expect(spent.calls.map((c) => c.route)).toEqual(['POST api.x.com/2/media/upload/initialize']);
+      const blank = x({
+        'POST api.x.com/2/media/upload/initialize': [{ body: { data: { id: MEDIA } } }],
+        [`POST api.x.com/2/media/upload/${MEDIA}/append`]: [{ body: {} }, { body: {} }],
+        [`POST api.x.com/2/media/upload/${MEDIA}/finalize`]: [{ body: { data: { processing_info: { state: 'pending', check_after_secs: 0 } } } }],
+        'GET api.x.com/2/media/upload': [{ body: {} }, { body: { data: { processing_info: { state: 'succeeded' } } } }],
+        'POST api.x.com/2/tweets': [{ status: 201, body: { data: { id: '1445880548472328301' } } }],
+      });
+      expect(await new XPublisher(APP, blank.fetchImpl, quick).publish(withClip())).toMatchObject({ kind: 'accepted', externalId: '1445880548472328301' });
+      expect(blank.calls.filter((c) => c.route === 'GET api.x.com/2/media/upload')).toHaveLength(2);
+    });
+
     it('posts nothing when processing fails, outlasts the wait, or a chunk is refused', async () => {
       const init = { 'POST api.x.com/2/media/upload/initialize': [{ body: { data: { id: MEDIA } } }] };
       const failed = x({

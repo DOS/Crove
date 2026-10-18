@@ -265,6 +265,7 @@ const VIDEO_TYPES = ['video/mp4', 'video/quicktime'];
 const VIDEO_CHUNK = 4 * 1024 * 1024;
 // How long a publish waits for X to process a video; with the upload it stays inside callTimeoutMs.
 const PROCESSING_WAIT_MS = 300_000;
+const VIDEO_CALL_MARGIN_MS = 90_000;
 
 export class XPublisher implements Publisher {
   readonly provider = 'x' as const;
@@ -274,11 +275,14 @@ export class XPublisher implements Publisher {
   private readonly client: XClient;
   private readonly processingWaitMs: number;
   private readonly pollMinMs: number;
+  private readonly budgetMs: number;
 
-  constructor(app: XAppConfig, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMinMs?: number } = {}) {
+  constructor(app: XAppConfig, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMinMs?: number; budgetMs?: number } = {}) {
     this.client = new XClient(app, fetchImpl);
     this.processingWaitMs = timing.processingWaitMs ?? PROCESSING_WAIT_MS;
     this.pollMinMs = timing.pollMinMs ?? 1000;
+    // The last status check and the post (30 s each at most) plus slack fit between the budget and callTimeoutMs.
+    this.budgetMs = timing.budgetMs ?? this.callTimeoutMs - VIDEO_CALL_MARGIN_MS;
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -346,6 +350,10 @@ export class XPublisher implements Publisher {
     } catch {
       return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
     }
+    // One budget for the whole call, upload included, ending well before the job gives up on it (callTimeoutMs): past
+    // it nothing is visible yet, so the call stops as transient instead of posting after the job recorded unknown.
+    const budgetEnd = Date.now() + this.budgetMs;
+    const late = (): PublishResult => ({ kind: 'rejected', error: 'transient', code: 'VIDEO_TOO_SLOW' });
     let id: string;
     try {
       const init = await this.client.call<{ data?: { id?: unknown } }>('POST', '/media/upload/initialize', token, {
@@ -355,6 +363,7 @@ export class XPublisher implements Publisher {
       if (typeof got !== 'string' || !MEDIA_ID.test(got)) return { kind: 'rejected', error: 'transient', code: 'NO_MEDIA_ID' };
       id = got;
       for (let i = 0, start = 0; start < bytes.byteLength; i++, start += VIDEO_CHUNK) {
+        if (Date.now() >= budgetEnd) return late();
         const form = new FormData();
         form.set('segment_index', String(i));
         form.set('media', new Blob([bytes.slice(start, start + VIDEO_CHUNK)], { type: 'application/octet-stream' }));
@@ -362,18 +371,22 @@ export class XPublisher implements Publisher {
       }
       const finished = await this.client.call<{ data?: { processing_info?: ProcessingInfo } }>('POST', `/media/upload/${id}/finalize`, token);
       let info = finished?.data?.processing_info;
-      const deadline = Date.now() + this.processingWaitMs;
-      while (info && info.state !== 'succeeded') {
-        if (info.state === 'failed') return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_PROCESSING_FAILED', ...(typeof info.error?.message === 'string' ? { message: info.error.message } : {}) };
+      // No processing info right after finalize: the media is ready. After a status check only "succeeded" is.
+      let ready = info === undefined || info.state === 'succeeded';
+      const deadline = Math.min(Date.now() + this.processingWaitMs, budgetEnd);
+      while (!ready) {
+        if (info?.state === 'failed') return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_PROCESSING_FAILED', ...(typeof info.error?.message === 'string' ? { message: info.error.message } : {}) };
         if (Date.now() >= deadline) return { kind: 'rejected', error: 'transient', code: 'VIDEO_STILL_PROCESSING' };
-        const after = Number(info.check_after_secs);
+        const after = Number(info?.check_after_secs);
         await sleep(Math.min(Math.max(Number.isFinite(after) ? after * 1000 : 5000, this.pollMinMs), 30_000, Math.max(0, deadline - Date.now())));
         const status = await this.client.call<{ data?: { processing_info?: ProcessingInfo } }>('GET', `/media/upload?${new URLSearchParams({ command: 'STATUS', media_id: id }).toString()}`, token);
         info = status?.data?.processing_info;
+        ready = info?.state === 'succeeded';
       }
     } catch (error) {
       return beforePost(publishResult(error));
     }
+    if (Date.now() >= budgetEnd) return late();
     return this.post(token, textOf(input.content), [id]);
   }
 
