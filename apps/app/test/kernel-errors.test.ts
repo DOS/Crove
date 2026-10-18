@@ -48,6 +48,8 @@ const NOT_SHOWN: Record<string, string> = {
   NOT_STREAMED: 'bug',
   INVALID_STORAGE_KEY: 'bug',
   INVALID_GENERATION: 'bug',
+  // Bulk intake (#314): only the worker records an opened archive.
+  NOT_ARCHIVE: 'bug',
 };
 
 function sources(dir: string): string[] {

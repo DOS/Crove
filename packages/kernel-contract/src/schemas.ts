@@ -294,7 +294,8 @@ export const zFileStatus = z.object({
   id: zId,
   filename: z.string(),
   contentType: z.string(),
-  status: z.enum(['processing', 'proposed', 'failed', 'duplicate']),
+  // expanded: a ZIP archive whose entries were filed as documents of their own (#314).
+  status: z.enum(['processing', 'proposed', 'failed', 'duplicate', 'expanded']),
   // The newest run's error, when that run failed.
   error: z.string().nullable(),
   proposalId: zId.nullable(),
@@ -303,6 +304,37 @@ export const zFileStatus = z.object({
   canReextract: z.boolean(),
   createdAt: z.string(),
 });
+export type FileStatus = z.infer<typeof zFileStatus>;
+
+// Why an entry of a ZIP archive was not filed (#314): what the sandbox refused (encrypted, a compression other than
+// stored or deflate, an archive inside the archive, larger than a document may be, bytes that do not match the
+// archive's directory), or what the server refused (not XML, PDF, JPG, PNG or WEBP; empty).
+export const ARCHIVE_ENTRY_REASONS = ['encrypted', 'unsupported_method', 'nested_archive', 'too_large', 'corrupt', 'unsupported_type', 'empty'] as const;
+export type ArchiveEntryReason = (typeof ARCHIVE_ENTRY_REASONS)[number];
+
+// One entry of an opened archive: filed as a new document (stored, with that file's status), the same bytes as a
+// document the org already has (duplicate, with that file), or not filed (rejected, with the reason).
+export const zArchiveEntry = z.object({
+  name: z.string(),
+  outcome: z.enum(['stored', 'duplicate', 'rejected']),
+  reason: z.enum(ARCHIVE_ENTRY_REASONS).nullable(),
+  file: zFileStatus.nullable(),
+});
+export type ArchiveEntry = z.infer<typeof zArchiveEntry>;
+
+// A file of an upload batch (#314): its status and, for a ZIP archive that has been opened, its entries.
+// entryCount: how many entries the archive was opened into (null for any other file). An answer holds a bounded number
+// of entries in all; an archive past it comes with its first entries only and entriesTruncated, to be asked about alone.
+export const zBatchFile = zFileStatus.extend({
+  entries: z.array(zArchiveEntry).nullable(),
+  entryCount: z.number().int().nonnegative().nullable(),
+  entriesTruncated: z.boolean(),
+});
+// Entries of opened archives one batch answer holds in all (four full archives of 500).
+export const MAX_BATCH_ENTRIES = 2000;
+export type BatchFile = z.infer<typeof zBatchFile>;
+// Files one batch query may ask about (the SPA asks about the files of its current upload batch).
+export const MAX_BATCH_FILES = 500;
 
 export const zParty = z.object({
   id: zId,

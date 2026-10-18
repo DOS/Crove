@@ -4,7 +4,9 @@
 // and treats the result as tainted. This package holds no parser, so importing it never pulls one in.
 import { z } from 'zod';
 
-export const EXTRACT_KINDS = ['einvoice_xml', 'pdf_text', 'mime'] as const;
+// zip: a ZIP archive opened in the sandbox (bulk intake, issue #314); the entries come back as bytes and the worker
+// files each one as a document of its own.
+export const EXTRACT_KINDS = ['einvoice_xml', 'pdf_text', 'mime', 'zip'] as const;
 export type ExtractKind = (typeof EXTRACT_KINDS)[number];
 export const zExtractKind = z.enum(EXTRACT_KINDS);
 
@@ -26,7 +28,17 @@ export const EXTRACT_LIMITS = {
   maxAttachments: 20,
   maxErrorChars: 500,
   maxPages: 100_000,
+  // A ZIP archive (bulk intake, #314): at most this many entries (directories included) and this many bytes once
+  // every entry is decompressed. Base64 grows the entries by a third, which still fits maxResponseBytes.
+  maxArchiveEntries: 500,
+  maxArchiveTotalBytes: 40 * MiB,
 } as const;
+
+// Why the sandbox did not return an entry of an archive. The whole archive is refused instead (as invalid) when an
+// entry name escapes the archive (an absolute path, a drive letter or a .. segment), entries overlap, it is ZIP64 or
+// split, or it holds more entries or decompressed bytes than allowed.
+export const ARCHIVE_REJECTIONS = ['encrypted', 'unsupported_method', 'nested_archive', 'too_large', 'corrupt'] as const;
+export type ArchiveRejection = (typeof ARCHIVE_REJECTIONS)[number];
 
 export function maxRequestBytes(kind: ExtractKind): number {
   return kind === 'mime' ? EXTRACT_LIMITS.maxEmailBytes : EXTRACT_LIMITS.maxFileBytes;
@@ -98,6 +110,25 @@ export const zExtractedEmail = z.strictObject({
 });
 export type ExtractedEmail = z.infer<typeof zExtractedEmail>;
 
+// The file entries of a ZIP archive, in central directory order (directories and __MACOSX entries left out). name is
+// the path inside the archive with / separators; sizeBytes is the decompressed size the archive declares, checked
+// against the bytes for every returned entry. content is null exactly when the entry was rejected.
+export const zExtractedArchive = z.strictObject({
+  entries: z
+    .array(
+      z
+        .strictObject({
+          name: zText,
+          sizeBytes: z.number().int().min(0).max(0xffff_ffff),
+          content: z.base64().nullable(),
+          rejected: z.enum(ARCHIVE_REJECTIONS).nullable(),
+        })
+        .refine((entry) => (entry.content === null) === (entry.rejected !== null), 'content is null exactly when the entry is rejected'),
+    )
+    .max(EXTRACT_LIMITS.maxArchiveEntries),
+});
+export type ExtractedArchive = z.infer<typeof zExtractedArchive>;
+
 export const zExtractFailure = z.strictObject({
   ok: z.literal(false),
   code: z.enum(EXTRACT_ERROR_CODES),
@@ -114,6 +145,7 @@ export const zExtractSuccess = z.discriminatedUnion('kind', [
     pages: z.number().int().min(0).max(EXTRACT_LIMITS.maxPages),
   }),
   z.strictObject({ ok: z.literal(true), kind: z.literal('mime'), email: zExtractedEmail }),
+  z.strictObject({ ok: z.literal(true), kind: z.literal('zip'), archive: zExtractedArchive }),
 ]);
 export type ExtractSuccess = z.infer<typeof zExtractSuccess>;
 

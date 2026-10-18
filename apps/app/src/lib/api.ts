@@ -148,6 +148,24 @@ async function uploadStaged(file: File, purpose: UploadPurpose): Promise<Uploade
   return (await response.json()) as Uploaded;
 }
 
+// Bulk intake (#314) sends a file this small through the kernel even when the store takes presigned uploads: a batch of
+// 200 e-invoice XML files would otherwise open 200 upload grants, past the per-user grant rate.
+export const DIRECT_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
+
+// One document of an upload batch, alone in its request, so a refused file never fails the others.
+export async function uploadDocument(file: File): Promise<Uploaded> {
+  if (file.size > MAX_UPLOAD_BYTES) throw tooLarge(file, 'document');
+  if (getConfig().uploads === 'presigned' && file.size > DIRECT_UPLOAD_MAX_BYTES) return uploadStaged(file, 'document');
+  const form = new FormData();
+  form.append('purpose', 'document');
+  form.append('file', file);
+  const response = await retryWhileBusy(() => apiFetch('/api/files', { method: 'POST', body: form }));
+  const { files } = (await response.json()) as { files: Uploaded[] };
+  const first = files[0];
+  if (!first) throw new ClientError('inbox.storageUploadFailed', (t) => t('inbox.storageUploadFailed', { name: file.name }));
+  return first;
+}
+
 // purpose social: images for a Social post (#372), stored but never read as documents.
 export async function uploadFiles(files: File[], purpose: UploadPurpose = 'document'): Promise<{ files: Uploaded[] }> {
   if (getConfig().uploads === 'presigned') {
