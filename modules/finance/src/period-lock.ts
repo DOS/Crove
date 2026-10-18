@@ -2,8 +2,8 @@
 // month at a time, in order, and unlocks the last locked month first; nothing posts with an entry date up to the end
 // of the last locked month (20261019200000_crove_finance_period_lock.sql holds every writer to it).
 // - finance.period.lock_state: every member reads what is locked (the ledger screen shows it).
-// - finance.period.lock: owners and admins lock the next month, once it has ended (in Vietnam time). R1: it only
-//   protects the books, and unlocking undoes it.
+// - finance.period.lock: owners and admins lock the next month, once it has ended (in Vietnam time). R2, as ADR-0021
+//   section 7 has the close: no step-up, and an agent may only propose it.
 // - finance.period.unlock: owners only, R3 (fresh MFA, P11) with a reason, which the audit row records together with
 //   the month. The audit rows of both commands are the history of the lock.
 // A refused posting answers PERIOD_LOCKED (ledger.ts), so recording, approving, reversing and importing opening
@@ -114,7 +114,7 @@ function lockRefusal(error: unknown, month: string): never {
 export const periodLock = defineCommand({
   name: 'finance.period.lock',
   input: zPeriodLockInput,
-  risk: 'R1',
+  risk: 'R2',
   access: LOCKERS,
   handler: async (ctx, input): Promise<PeriodLockState> => {
     ctx.audit({ month: input.month });

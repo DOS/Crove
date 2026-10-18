@@ -98,6 +98,8 @@ Reading the numbers:
   - Dates before `locked_from` are refused too: an entry there would change the opening balances of the closed months.
   - The guard, `FOR SHARE` and `FOR UPDATE` are as above. The first lock and the first posting create the org's row, whichever comes first, so they meet on the same row.
   - The history is the audit rows of `finance.period.lock` and `finance.period.unlock` (actor, month, reason, and for unlock the R3 assurance), not a `period_event` table. The hash chain is not built yet.
+  - The commands are `finance.period.lock` (R2) and `finance.period.unlock` (R3, reason required), the close and reopen of section 7 under the words of the issue.
+  - The definers and the trigger are owned by the table owner, not `crove_definer_tenant`: the trigger must see the row of any org, including for the database owner's direct inserts, which carry no context. `lock_period()` and `unlock_period()` check the caller's role in `tenant_member` themselves.
   - Unlock is for owners only until a chief accountant role exists. The errors are `PERIOD_LOCKED`, `EARLIER_PERIOD_OPEN`, `LATER_PERIOD_LOCKED`, `PERIOD_ALREADY_LOCKED`, `PERIOD_NOT_LOCKED` and `PERIOD_NOT_ENDED` (a month locks once it has ended, in Vietnam time).
 
 Measured races, each with one transaction held open for 2 s and the other starting 0.5 s later:
