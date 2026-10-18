@@ -48,8 +48,10 @@ async function withTimeout<T>(ms: number, run: () => Promise<T>): Promise<T> {
       new Promise<never>(
         (_, reject) =>
           (timer = setTimeout(() => {
-            call.abort(new Timeout('provider call timed out'));
+            // The race settles on Timeout first; only then are the adapter's requests aborted (an adapter that catches
+            // the abort and answers cannot win the race).
             reject(new Timeout('provider call timed out'));
+            call.abort(new Timeout('provider call timed out'));
           }, ms)),
       ),
     ]);
