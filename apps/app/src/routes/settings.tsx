@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { MemberSessions, MySessions } from '../components/sessions.tsx';
 import { Badge } from '@crove/ui/components/badge';
@@ -555,6 +555,53 @@ function TaxCodeField({ taxCode, canManage }: { taxCode: string | null; canManag
   );
 }
 
+// How often the org files its VAT return (issue #318), for the deadline on the multi-client home screen. Owners and
+// admins choose it; everyone else sees it.
+function VatFilingPeriodField({ period, canManage }: { period: 'month' | 'quarter' | null; canManage: boolean }) {
+  const t = useTranslations('settings');
+  const id = useId();
+  const save = useMutation(
+    orpc.org.setVatFilingPeriod.mutationOptions({
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: orpc.org.get.key() });
+        await queryClient.invalidateQueries({ queryKey: orpc.me.clients.key() });
+      },
+    }),
+  );
+  const label = (value: 'month' | 'quarter' | null) => (value === 'month' ? t('vatFilingMonth') : value === 'quarter' ? t('vatFilingQuarter') : t('vatFilingUnset'));
+  return (
+    <div>
+      <dt className="text-subtle-foreground">
+        <label htmlFor={id}>{t('vatFilingPeriod')}</label>
+      </dt>
+      <dd className="mt-1 flex flex-wrap items-center gap-2">
+        {canManage ? (
+          <>
+            <NativeSelect
+              id={id}
+              size="sm"
+              value={period ?? ''}
+              disabled={save.isPending}
+              onChange={(e) => save.mutate({ vatFilingPeriod: e.target.value === 'month' || e.target.value === 'quarter' ? e.target.value : null })}
+            >
+              <NativeSelectOption value="">{t('vatFilingUnset')}</NativeSelectOption>
+              <NativeSelectOption value="month">{t('vatFilingMonth')}</NativeSelectOption>
+              <NativeSelectOption value="quarter">{t('vatFilingQuarter')}</NativeSelectOption>
+            </NativeSelect>
+            {save.isPending && <Spinner />}
+          </>
+        ) : (
+          <span id={id} className={period ? 'text-foreground' : 'text-subtle-foreground'}>
+            {label(period)}
+          </span>
+        )}
+      </dd>
+      <dd className="mt-1 text-xs text-subtle-foreground">{t('vatFilingHint')}</dd>
+      {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const root = useTranslations();
   const t = useTranslations('settings');
@@ -585,6 +632,7 @@ export function SettingsPage() {
               <dd className="font-mono text-foreground">{org.data?.slug}</dd>
             </div>
             {getConfig().modules.includes('finance') && <TaxCodeField key={org.data?.taxCode ?? ''} taxCode={org.data?.taxCode ?? null} canManage={canManage} />}
+            {getConfig().modules.includes('finance') && <VatFilingPeriodField period={org.data?.vatFilingPeriod ?? null} canManage={canManage} />}
             <div>
               <dt className="text-subtle-foreground">{t('inboundAddress')}</dt>
               <dd className="break-all font-mono text-foreground">{org.data?.inboundAddress ?? t('inboundOff')}</dd>

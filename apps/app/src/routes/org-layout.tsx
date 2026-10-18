@@ -51,6 +51,11 @@ export function OrgLayout() {
           <Logo />
         </div>
         <div className="mt-6 px-2">
+          {(me.data?.orgs.length ?? 0) > 1 && (
+            <Link to="/clients" className="mb-3 block text-sm text-link hover:underline">
+              {t('allClients')}
+            </Link>
+          )}
           <Label htmlFor={orgSelectId} className="text-xs font-normal text-subtle-foreground">
             {t('org')}
           </Label>
@@ -97,6 +102,11 @@ export function OrgLayout() {
       <div className="min-w-0 flex-1">
         <header className="flex flex-wrap items-center justify-between gap-2 border-b bg-sidebar px-4 py-3 md:hidden">
           <Logo />
+          {(me.data?.orgs.length ?? 0) > 1 && (
+            <Link to="/clients" className="text-xs text-link">
+              {t('allClients')}
+            </Link>
+          )}
           <SupportLink className="text-xs text-link" />
           <LocaleSwitcher />
           <NativeSelect

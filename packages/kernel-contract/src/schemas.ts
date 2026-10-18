@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ACCOUNT_CODE_PATTERN } from './accounts.ts';
+import { VAT_FILING_PERIODS } from './vat-deadline.ts';
 
 // Wire conventions: snake_case is not used on the wire for the MVP API; decimals are strings,
 // accounting dates are YYYY-MM-DD, ids are UUIDs.
@@ -97,6 +98,9 @@ export const zMe = z.object({
   orgs: z.array(zOrgSummary),
 });
 
+// How often an org files its VAT return (issue #318).
+export const zVatFilingPeriod = z.enum(VAT_FILING_PERIODS);
+
 export const zOrgDetail = z.object({
   orgId: zId,
   slug: z.string(),
@@ -105,10 +109,32 @@ export const zOrgDetail = z.object({
   // The org's own tax code (MST), normalized; null until an owner or admin sets it. An e-invoice whose seller has this
   // tax code is a sale (issue #313).
   taxCode: z.string().nullable(),
+  // How often the org files its VAT return (issue #318); null until an owner or admin chooses.
+  vatFilingPeriod: zVatFilingPeriod.nullable(),
   inboundAddress: z.string().nullable(),
   // Messages to the org's addresses retired in the last 30 days that were dropped (#139); null when inboundAddress is.
   inboundDroppedCount: z.number().int().nonnegative().nullable(),
   members: z.array(z.object({ userId: zId, email: z.string(), displayName: z.string().nullable(), role: zRole })),
+});
+
+// One org on the multi-client home screen (issue #318): the org as me.get lists it, and its figures read in its own
+// context. pendingProposals: proposals waiting in the Inbox. failedFiles: files that could not be read among the ones
+// the Inbox lists. lastActivityAt: the newest entry of the org's activity feed. vatDeadline: the next VAT return due,
+// from the org's filing period (null while none is chosen).
+export const zClientOverview = zOrgSummary.extend({
+  overview: z.object({
+    pendingProposals: z.number().int().nonnegative(),
+    failedFiles: z.number().int().nonnegative(),
+    lastActivityAt: z.string().nullable(),
+    vatFilingPeriod: zVatFilingPeriod.nullable(),
+    vatDeadline: z
+      .object({
+        period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/),
+        dueDate: zLocalDate,
+        daysLeft: z.number().int().nonnegative(),
+      })
+      .nullable(),
+  }),
 });
 
 // Org offboarding and its export (issue #38, #212). Each table downloads as NDJSON (one row per line) from

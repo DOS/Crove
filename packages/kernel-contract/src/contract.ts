@@ -11,6 +11,7 @@ import {
   zAgentTemplate,
   zAiAmount,
   zChart,
+  zClientOverview,
   zJobDescription,
   zModuleId,
   zPositionStatus,
@@ -59,6 +60,7 @@ import {
   zSession,
   zSessionRevoke,
   zVatPeriod,
+  zVatFilingPeriod,
   zVatReport,
   zAccountLedger,
   zLedgerPeriod,
@@ -70,6 +72,9 @@ import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance
 export const contract = {
   me: {
     get: oc.output(zMe),
+    // The multi-client home screen (issue #318): the orgs of me.get (at most 200) with their figures, each read in its
+    // own org.
+    clients: oc.output(z.array(zClientOverview)),
   },
   org: {
     // A retry with the same idempotencyKey returns the org the first request created.
@@ -78,6 +83,10 @@ export const contract = {
     // Owners and admins (issue #313): the org's own tax code (MST), or null to clear it. Stored normalized; a value
     // that is not a Vietnamese tax code is refused. Invoices read from then on whose seller has it become sales.
     setTaxCode: oc.input(z.object({ taxCode: z.string().trim().max(20).nullable() })).output(z.object({ taxCode: z.string().nullable() })),
+    // Owners and admins (issue #318): how often the org files its VAT return, or null to clear it.
+    setVatFilingPeriod: oc
+      .input(z.object({ vatFilingPeriod: zVatFilingPeriod.nullable() }))
+      .output(z.object({ vatFilingPeriod: zVatFilingPeriod.nullable() })),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
     invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),

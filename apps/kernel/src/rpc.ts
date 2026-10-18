@@ -6,6 +6,7 @@ import { BlueskyError, ConnectorError, connectBluesky, newOAuthAttempt, oauthSta
 import type { SocialWriter, WriterChannel } from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider } from '@crove/mod-social/contract';
 import {
+  clientOverviews,
   createOrg,
   myOrgs,
   previewInvite,
@@ -166,6 +167,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           orgs: await runtime.forUser(actorOf(context.user), (db) => sessionOrgs(db, context.user.userId, context.user.sessionId ?? null)),
         })),
       ),
+      // The multi-client home screen (issue #318): each org's figures are read in that org's own context.
+      clients: os.me.clients.handler(({ context }) => guard(() => clientOverviews(runtime, actorOf(context.user)))),
     },
     org: {
       create: os.org.create.handler(({ context, input }) =>
@@ -174,6 +177,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       get: os.org.get.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.get', {}, { actor, orgId }))),
       setTaxCode: os.org.setTaxCode.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_tax_code', input, { actor, orgId })),
+      ),
+      setVatFilingPeriod: os.org.setVatFilingPeriod.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_vat_filing_period', input, { actor, orgId })),
       ),
       // No idempotency key: the answer carries the invite token, which must never be stored with a key. The mail
       // goes out after the command has committed (invite-mail.ts says why); its outcome is logged and never changes
