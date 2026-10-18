@@ -8,6 +8,7 @@ import {
   contentHash,
   countLinks,
   countText,
+  sentText,
   effectiveContent,
   nextAction,
   POST_STATUSES,
@@ -47,6 +48,31 @@ describe('countText', () => {
     expect(countText(family, 'graphemes')).toBe(1);
     expect(countText(family, 'codepoints')).toBe(5);
     expect(countText(family, 'utf16')).toBe(8);
+  });
+
+  it('counts the link an adapter adds to the text', () => {
+    const link = 'https://example.com/khuyen-mai';
+    // Threads appends the link after a blank line: 490 + 2 + 30 is over 500.
+    expect(validateVariant({ provider: 'threads', body: 'a'.repeat(490), title: null, media: [], linkUrl: link })).toEqual([{ code: 'TEXT_TOO_LONG', field: 'body', limit: 500, actual: 522 }]);
+    expect(validateVariant({ provider: 'threads', body: 'a'.repeat(490), title: null, media: [] })).toEqual([]);
+    // A text that already holds the link gets nothing more.
+    expect(sentText('threads', `xem ${link}`, link, 0)).toBe(`xem ${link}`);
+    // Facebook adds it to the text only with media; Instagram and the sandbox never.
+    expect(sentText('facebook_page', 'Bài', link, 0)).toBe('Bài');
+    expect(sentText('facebook_page', 'Bài', link, 1)).toBe(`Bài\n\n${link}`);
+    expect(sentText('facebook_page', `Bài ${link}`, link, 1)).toBe(`Bài ${link}`);
+    // Only the whole link counts as held: a longer URL that starts with it does not, punctuation after it does.
+    expect(sentText('threads', `xem ${link}-2`, link, 0)).toBe(`xem ${link}-2\n\n${link}`);
+    expect(sentText('threads', `xem ${link}.`, link, 0)).toBe(`xem ${link}.`);
+    expect(sentText('instagram', 'Bài', link, 1)).toBe('Bài');
+    expect(sentText('linkedin', '  ', link, 0)).toBe(link);
+    expect(sentText('linkedin', 'Bài', '', 0)).toBe('Bài');
+  });
+
+  it('counts the appended link toward the link limit', () => {
+    const body = Array.from({ length: 5 }, (_, i) => `https://a.vn/${i}`).join(' ');
+    expect(validateVariant({ provider: 'threads', body, title: null, media: [] }).some((i) => i.code === 'TOO_MANY_LINKS')).toBe(false);
+    expect(validateVariant({ provider: 'threads', body, title: null, media: [], linkUrl: 'https://b.vn' }).some((i) => i.code === 'TOO_MANY_LINKS')).toBe(true);
   });
 
   it("counts as X does: tone-marked letters, CJK and emoji count two, every link 23", () => {
