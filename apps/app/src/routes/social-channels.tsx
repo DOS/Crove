@@ -21,7 +21,7 @@ import { minuteLabel, parseMinute, providerName } from '../lib/social.ts';
 type Channel = Awaited<ReturnType<typeof orpc.channels.list.call>>[number];
 type OAuthProvider = (typeof OAUTH_CHANNEL_PROVIDERS)[number];
 // Platforms in the order Crove adds them (Social plan §6).
-const PLATFORMS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin'] as const;
+const PLATFORMS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'x'] as const;
 const OAUTH_PROVIDERS: readonly string[] = OAUTH_CHANNEL_PROVIDERS;
 type Slot = { weekday: number; minute: number; label?: string };
 

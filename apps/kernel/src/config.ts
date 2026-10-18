@@ -179,6 +179,10 @@ const schema = z.object({
   // PUBLIC_URL/channels/oauth/linkedin/callback.
   CHANNEL_LINKEDIN_CLIENT_ID: optional,
   CHANNEL_LINKEDIN_CLIENT_SECRET: optional,
+  // The deployment's X app (OAuth 2.0, a confidential client with PKCE), S9; X bills each post to its account.
+  // Callback URL: PUBLIC_URL/channels/oauth/x/callback.
+  CHANNEL_X_CLIENT_ID: optional,
+  CHANNEL_X_CLIENT_SECRET: optional,
   // Requests per minute per signed-in user on /api (429 RATE_LIMITED with Retry-After past it), per API process; see
   // rate-limit.ts. 0 turns it off, for a deployment whose edge (proxy, CDN or WAF) limits per user instead.
   API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(0).max(999_999).default(600),
@@ -290,6 +294,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.CHANNEL_THREADS_APP_ID && !/^\d{1,32}$/.test(config.CHANNEL_THREADS_APP_ID)) throw new Error('CHANNEL_THREADS_APP_ID is the numeric id of the Threads app');
   if (Boolean(config.CHANNEL_LINKEDIN_CLIENT_ID) !== Boolean(config.CHANNEL_LINKEDIN_CLIENT_SECRET)) throw new Error('set both CHANNEL_LINKEDIN_CLIENT_ID and CHANNEL_LINKEDIN_CLIENT_SECRET, or neither');
   if (config.CHANNEL_LINKEDIN_CLIENT_ID && !/^[A-Za-z0-9]{8,64}$/.test(config.CHANNEL_LINKEDIN_CLIENT_ID)) throw new Error('CHANNEL_LINKEDIN_CLIENT_ID is the client id of the LinkedIn app');
+  if (Boolean(config.CHANNEL_X_CLIENT_ID) !== Boolean(config.CHANNEL_X_CLIENT_SECRET)) throw new Error('set both CHANNEL_X_CLIENT_ID and CHANNEL_X_CLIENT_SECRET, or neither');
+  if (config.CHANNEL_X_CLIENT_ID && !/^[A-Za-z0-9_-]{16,64}$/.test(config.CHANNEL_X_CLIENT_ID)) throw new Error('CHANNEL_X_CLIENT_ID is the OAuth 2.0 client id of the X app');
   if (Boolean(config.CHANNEL_ZALO_APP_ID) !== Boolean(config.CHANNEL_ZALO_APP_SECRET)) throw new Error('set both CHANNEL_ZALO_APP_ID and CHANNEL_ZALO_APP_SECRET, or neither');
   if (config.CHANNEL_ZALO_APP_ID && !/^\d{1,32}$/.test(config.CHANNEL_ZALO_APP_ID)) throw new Error('CHANNEL_ZALO_APP_ID is the numeric id of the Zalo app');
   if (!isLocalUrl(config.PUBLIC_URL)) {

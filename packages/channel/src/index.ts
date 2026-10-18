@@ -10,6 +10,7 @@ export * from './zalo.ts';
 export * from './bluesky.ts';
 export * from './threads.ts';
 export * from './linkedin.ts';
+export * from './x.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
