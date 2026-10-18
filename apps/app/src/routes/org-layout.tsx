@@ -32,7 +32,7 @@ const ALL_NAV = [
 ] as const;
 
 export function OrgLayout() {
-  const NAV = installedItems(getConfig().modules, ALL_NAV);
+  const NAV = useMemo(() => installedItems(getConfig().modules, ALL_NAV), []);
   const { slug } = useParams({ strict: false }) as { slug: string };
   const navigate = useNavigate();
   const t = useTranslations('nav');
@@ -51,7 +51,7 @@ export function OrgLayout() {
   const f = useFormat();
   const { locale, setLocale } = useLocaleSetting();
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const paletteKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘ K' : 'Ctrl K';
+  const paletteKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘ K' : 'Ctrl K';
 
   // Ctrl K (Cmd K on a Mac) opens or closes the command palette from any screen of the org.
   useEffect(() => {
@@ -96,8 +96,7 @@ export function OrgLayout() {
       })),
       { id: 'sign-out', group: 'actions' as const, label: tc('signOut'), run: () => void signOut() },
     ],
-    // NAV is rebuilt each render from the deployment config, which does not change while the page is open.
-    [pending.data, me.data, slug, locale, t, tp, tc, f, navigate, setLocale],
+    [NAV, pending.data, me.data, slug, locale, t, tp, tc, f, navigate, setLocale],
   );
 
   return (

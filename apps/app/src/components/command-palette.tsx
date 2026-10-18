@@ -33,10 +33,6 @@ export function CommandPalette({ entries, open, onOpenChange }: { entries: reado
 
   useEffect(() => setActive(0), [query]);
 
-  useEffect(() => {
-    document.getElementById(`${listId}-${active}`)?.scrollIntoView({ block: 'nearest' });
-  }, [active, listId]);
-
   const run = (entry: PaletteEntry | undefined) => {
     if (!entry) return;
     onOpenChange(false);
@@ -48,6 +44,8 @@ export function CommandPalette({ entries, open, onOpenChange }: { entries: reado
     if (next !== null) {
       event.preventDefault();
       setActive(next);
+      // Only keyboard moves scroll the list; a pointer hovering an option must not make it jump.
+      document.getElementById(`${listId}-${next}`)?.scrollIntoView({ block: 'nearest' });
     } else if (event.key === 'Enter') {
       event.preventDefault();
       run(results[active]);
