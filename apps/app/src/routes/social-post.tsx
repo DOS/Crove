@@ -693,9 +693,10 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
       if (!origin || !base) return;
       const before = baseOf(origin);
       const mediaChanged = JSON.stringify(mediaInput(base.media)) !== JSON.stringify(mediaInput(before.media));
+      const baseChanged = base.body !== before.body || base.title !== before.title || base.linkUrl !== before.linkUrl || mediaChanged;
       let baseSaved = false;
       try {
-        if (base.body !== before.body || base.title !== before.title || base.linkUrl !== before.linkUrl || mediaChanged) {
+        if (baseChanged) {
           await client.social.posts.update({
             postId,
             revision: origin.revision,
@@ -720,8 +721,9 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           });
         }
       } catch (error) {
-        // A save that failed part way: the shared text went in, so take it, and keep the channel edits not saved yet.
-        if (baseSaved) await settle(true).catch(() => undefined);
+        // A save that failed part way: take what went in (the shared text, some channels) and keep the channel edits
+        // not saved yet. Shared text that did not go in stays as typed, so the server's is not taken over it.
+        if (baseSaved || !baseChanged) await settle(true).catch(() => undefined);
         throw error;
       }
       await settle(false);
