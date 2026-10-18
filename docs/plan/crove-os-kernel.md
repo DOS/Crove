@@ -1414,7 +1414,7 @@ Data residency requirements are handled with a legal opinion plus a copy in Viet
 
 **Job `kernel.file.extract`** (keyed on sha256, schema and extractor version):
 1. Classify the document with `crove-fast`.
-2. **E-invoice XML first:** parsed deterministically in the sandbox, no LLM (Decree 123/2020 as amended by 70/2025).
+2. **E-invoice XML first:** parsed deterministically in the sandbox, no LLM (Decree 254/2026 and Circular 91/2026 from 2026-07-01; before that Decree 123/2020 as amended by 70/2025).
 3. PDFs with a text layer: `unpdf`, then structured output.
 4. Scanned images: `crove-vision`.
 5. Keep field-level evidence: `{file_id, extraction_id, page, bbox, text_span}`.

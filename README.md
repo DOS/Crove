@@ -21,7 +21,7 @@ The defaults are for local use. Before anyone else can reach your instance, copy
 ## What works today (MVP)
 
 - Email + password sign-up and sign-in (bundled [Supabase Auth](https://github.com/supabase/auth)), organizations, members and roles
-- Upload of e-invoice XML (Decree 123/2020, Circular 78/2021), PDF and images; inbound email per organization
+- Upload of e-invoice XML (the tax authority's format under Decree 254/2026 and Circular 91/2026, as before under Decree 123/2020), PDF and images; inbound email per organization
 - Deterministic checks: line totals, VAT, tax-code check digit, tax-authority code, duplicates
 - AI Inbox: proposals with suggested TT133 accounts that learn per vendor; approve, edit or reject
 - Purchase documents, vendors, journal entries that always balance, Excel export

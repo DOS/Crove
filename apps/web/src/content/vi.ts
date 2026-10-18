@@ -133,7 +133,7 @@ export const vi = {
     steps: [
       {
         name: 'Nhận',
-        body: 'Chuyển tiếp email hoặc tải lên. Crove nhận XML theo Nghị định 123/2020 và Thông tư 78/2021, cả PDF và ảnh chụp.',
+        body: 'Chuyển tiếp email hoặc tải lên. Crove nhận hoá đơn XML theo Nghị định 254/2026 và Thông tư 91/2026, cả PDF và ảnh chụp.',
         actor: 'Crove',
         time: '14/10/2026 15:58',
         confirm: 'Tự động, đã vào sổ đăng ký',
@@ -414,7 +414,7 @@ export const vi = {
       },
       {
         q: 'Crove đọc được những loại hoá đơn nào?',
-        a: 'Hoá đơn điện tử XML theo Nghị định 123/2020 và Thông tư 78/2021 được đọc chính xác mà không cần AI. PDF và ảnh chụp dùng một model tương thích OpenAI do bạn cấu hình, kể cả model chạy trên máy như Ollama hay vLLM.',
+        a: 'Hoá đơn điện tử XML theo Nghị định 254/2026 và Thông tư 91/2026 (cả hoá đơn lập theo Nghị định 123/2020 trước đó) được đọc chính xác mà không cần AI. PDF và ảnh chụp dùng một model tương thích OpenAI do bạn cấu hình, kể cả model chạy trên máy như Ollama hay vLLM.',
       },
       {
         q: 'Dữ liệu của tôi nằm ở đâu?',
