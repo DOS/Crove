@@ -43,11 +43,17 @@ async function repost(ctx: CommandContext, sourceId: string, submit: boolean): P
   // from it: a title or link is left empty there when any channel went out without one, since a channel's own value
   // can add a title or link but not take one away; the others then carry theirs as the channel's own.
   const b = base(source);
-  const went = targets.map((v) => effectiveContent(b, overrides(v), v.content_frozen));
+  const baseMedia = JSON.stringify(b.media);
+  // Each channel once: the content it went out with, and its images when they are its own (not the base's).
+  const outs = targets.map((v) => {
+    const media = mediaFor(b, v);
+    return { v, kept: effectiveContent(b, overrides(v), v.content_frozen), ownMedia: JSON.stringify(media) !== baseMedia ? media : null };
+  });
+  const [first] = outs;
   const shared = {
-    body: went[0]?.body ?? b.body,
-    title: went.some((w) => w.title === null) ? null : (went[0]?.title ?? null),
-    linkUrl: went.some((w) => w.linkUrl === null) ? null : (went[0]?.linkUrl ?? null),
+    body: first ? first.kept.body : b.body,
+    title: !first || outs.some((o) => o.kept.title === null) ? null : first.kept.title,
+    linkUrl: !first || outs.some((o) => o.kept.linkUrl === null) ? null : first.kept.linkUrl,
   };
   const inserted = await ctx.trx
     .insertInto('crove_social.post')
@@ -71,16 +77,14 @@ async function repost(ctx: CommandContext, sourceId: string, submit: boolean): P
   // A published variant keeps the content it went out with; where that differs from the repost's base, the repost
   // keeps it as the channel's own text or images. A channel's own images name files with no foreign key: one removed
   // since is left out, rather than failing at publish time (a channel that then lacks images stays a draft).
-  const ownIds = [...new Set(targets.flatMap((v) => (JSON.stringify(mediaFor(b, v)) !== JSON.stringify(b.media) ? mediaFor(b, v).map((m) => m.fileId) : [])))];
+  const ownIds = [...new Set(outs.flatMap((o) => (o.ownMedia ?? []).map((m) => m.fileId)))];
   const present = new Set(
     ownIds.length === 0
       ? []
       : (await ctx.trx.selectFrom('crove_kernel.file').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', ownIds).execute()).map((f) => f.id),
   );
-  const channels = targets.map((v, i) => {
-    const kept = went[i] ?? effectiveContent(b, overrides(v), v.content_frozen);
-    const media = mediaFor(b, v);
-    const own = JSON.stringify(media) !== JSON.stringify(b.media) ? media.filter((m) => present.has(m.fileId)) : null;
+  const channels = outs.map(({ v, kept, ownMedia }) => {
+    const own = ownMedia ? ownMedia.filter((m) => present.has(m.fileId)) : null;
     return {
       connectionId: v.channel_connection_id,
       ...(kept.body !== shared.body ? { body: kept.body } : {}),
