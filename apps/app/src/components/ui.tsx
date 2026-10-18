@@ -89,7 +89,7 @@ export function DataTable({ head, numeric = [], children }: { head: string[]; nu
         <TableHeader className="bg-muted">
           <TableRow className="hover:bg-transparent">
             {head.map((h, i) => (
-              <TableHead key={h || i} className={cn('px-4 text-xs font-medium text-subtle-foreground', numeric.includes(i) && 'text-right')}>
+              <TableHead key={i} className={cn('px-4 text-xs font-medium text-subtle-foreground', numeric.includes(i) && 'text-right')}>
                 {h}
               </TableHead>
             ))}
