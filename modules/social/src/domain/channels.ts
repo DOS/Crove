@@ -96,13 +96,22 @@ export const LINK_PLACEMENT: Readonly<Record<Provider, LinkPlacement>> = {
   bluesky: 'text',
 };
 
+// The link as a whole: followed by the end, a space, or sentence punctuation and then the end or a space (the
+// adapters' holdsLink in @crove/channel, which the browser cannot import).
+function holdsLink(text: string, link: string): boolean {
+  for (let i = text.indexOf(link); i !== -1; i = text.indexOf(link, i + 1)) {
+    if (/^[.,!?;:)\]]*(?:\s|$)/.test(text.slice(i + link.length))) return true;
+  }
+  return false;
+}
+
 // The text an adapter sends for this body and link.
 export function sentText(provider: Provider, body: string, linkUrl: string | null | undefined, mediaCount: number): string {
   const link = linkUrl?.trim();
   const placement = LINK_PLACEMENT[provider];
   if (!link || placement === 'apart' || (placement === 'text_with_media' && mediaCount === 0)) return body;
   const text = body.trim();
-  if (text.includes(link)) return body;
+  if (holdsLink(text, link)) return body;
   return [text, link].filter(Boolean).join('\n\n');
 }
 

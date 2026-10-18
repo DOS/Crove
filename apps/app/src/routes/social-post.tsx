@@ -821,7 +821,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 key={v.id}
                 provider={v.provider}
                 channel={names.get(v.connectionId) ?? providerName(v.provider)}
-                base={frozen ? { body: v.effective.body, title: v.effective.title ?? '', linkUrl: v.effective.linkUrl ?? '', media: mediaItems(v.media) } : base}
+                // A channel's own link (set on the variant) is the one its adapter sends, so its checks count that one.
+                base={frozen ? { body: v.effective.body, title: v.effective.title ?? '', linkUrl: v.effective.linkUrl ?? '', media: mediaItems(v.media) } : v.overrides.linkUrl != null ? { ...base, linkUrl: v.overrides.linkUrl } : base}
                 own={frozen ? EMPTY_OWN : (own[v.id] ?? ownOf(v))}
                 disabled={frozen || !canWrite || save.isPending}
                 status={v.status}

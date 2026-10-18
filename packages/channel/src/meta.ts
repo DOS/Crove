@@ -8,6 +8,7 @@
 // long-lived user token has no expiry timer, so it is sealed as is; the user token is dropped.
 import { createHmac } from 'node:crypto';
 import type { ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
+import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const META_GRAPH_HOST = 'graph.facebook.com';
@@ -259,7 +260,7 @@ function pageToken(secret: string): string | null {
 // A photo post has no link field, so its link goes in the text, once.
 const feedMessage = (content: { body: string; linkUrl: string | null; media: readonly unknown[] }) => {
   const body = content.body.trim();
-  return content.linkUrl && content.media.length > 0 && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+  return content.linkUrl && content.media.length > 0 && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
 };
 const postUrl = (id: string) => `https://www.facebook.com/${encodeURIComponent(id)}`;
 

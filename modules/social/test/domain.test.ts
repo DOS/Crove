@@ -61,6 +61,9 @@ describe('countText', () => {
     expect(sentText('facebook_page', 'Bài', link, 0)).toBe('Bài');
     expect(sentText('facebook_page', 'Bài', link, 1)).toBe(`Bài\n\n${link}`);
     expect(sentText('facebook_page', `Bài ${link}`, link, 1)).toBe(`Bài ${link}`);
+    // Only the whole link counts as held: a longer URL that starts with it does not, punctuation after it does.
+    expect(sentText('threads', `xem ${link}-2`, link, 0)).toBe(`xem ${link}-2\n\n${link}`);
+    expect(sentText('threads', `xem ${link}.`, link, 0)).toBe(`xem ${link}.`);
     expect(sentText('instagram', 'Bài', link, 1)).toBe('Bài');
     expect(sentText('linkedin', '  ', link, 0)).toBe(link);
     expect(sentText('linkedin', 'Bài', '', 0)).toBe('Bài');
