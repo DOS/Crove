@@ -239,8 +239,9 @@ export function comparableText(text: string): string {
   // One pass over the three entities X writes, so "&amp;lt;" stays "&lt;" as it was sent. Only compared, never shown.
   return text
     .replace(/&(lt|gt|amp);/g, (_, name: string) => ENTITIES[name] ?? '')
-    .replace(/\bhttps?:\/\/\S+/g, '')
-    .replace(BARE_LINK, '')
+    // A link becomes a space (the spaces collapse below), on both sides of the comparison alike.
+    .replace(/\bhttps?:\/\/\S+/g, ' ')
+    .replace(BARE_LINK, ' ')
     .normalize('NFC')
     .replace(/\s+/g, ' ')
     .trim();
