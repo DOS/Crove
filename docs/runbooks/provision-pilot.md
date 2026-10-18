@@ -25,24 +25,25 @@ How to set up the one server that runs the pilot (backlog item M1-5, issue #306)
 
 ## 2. Base setup
 
-As root on a fresh server:
+As root on a fresh server (`sudo -i` from the provider's default user, such as `ubuntu`, works too):
 
 ```bash
 apt-get update && apt-get -y full-upgrade
 apt-get -y install unattended-upgrades ufw curl ca-certificates git
 dpkg-reconfigure -f noninteractive unattended-upgrades     # security updates every day
 
-# An admin account with your SSH key, then no password logins and no root login over SSH.
-adduser --disabled-password --gecos '' admin && usermod -aG sudo admin
+# An admin account with the SSH keys of the account you logged in with (root, or the default user you ran sudo from),
+# then no password logins and no root login over SSH. The password adduser asks for is for sudo only.
+adduser --gecos '' admin && usermod -aG sudo admin
 install -d -m 700 -o admin -g admin /home/admin/.ssh
-cp ~/.ssh/authorized_keys /home/admin/.ssh/ && chown admin:admin /home/admin/.ssh/authorized_keys
+install -m 600 -o admin -g admin "$(getent passwd "${SUDO_USER:-root}" | cut -d: -f6)/.ssh/authorized_keys" /home/admin/.ssh/authorized_keys
 printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\n' > /etc/ssh/sshd_config.d/10-crove.conf
 systemctl reload ssh                                       # log in as admin in a second session before closing this one
 
 # Only SSH and the reverse proxy are reachable from outside.
 ufw default deny incoming && ufw default allow outgoing
 ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 443/udp
-ufw enable
+ufw --force enable                                         # SSH is allowed above, so this session stays open
 ```
 
 Ports that Docker publishes bypass ufw. The compose file publishes the app (`127.0.0.1:${PORT}`) and Mailpit on loopback only, and the reverse proxy below runs on the host's network so ufw still applies to it. Never publish another port on `0.0.0.0`.
@@ -58,8 +59,9 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.
 apt-get update && apt-get -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 docker compose version                                     # v2.24 or newer
 
-# Rotate container logs, or a busy service fills the disk.
-printf '{\n  "log-driver": "local"\n}\n' > /etc/docker/daemon.json && systemctl restart docker
+# Rotate container logs, or a busy service fills the disk. If /etc/docker/daemon.json already exists, add the key to it.
+test -e /etc/docker/daemon.json || printf '{\n  "log-driver": "local"\n}\n' > /etc/docker/daemon.json
+systemctl restart docker
 ```
 
 Then the deploy user, its SSH key for the workflow, the stack directory `/opt/crove` and the host key: steps 1 to 3 and 7 of [deploy.md](deploy.md), "One-time setup of the host".
@@ -150,11 +152,14 @@ The kernel refuses to start on a public `PUBLIC_URL` with unsafe settings: a sam
 
 ## 8. The TLS reverse proxy
 
-`tools/deploy/caddy/` holds a reverse proxy for this layout: Caddy on ports 80 and 443 in front of the app on loopback. Copy both files into the stack directory:
+`tools/deploy/caddy/` holds a reverse proxy for this layout: Caddy on ports 80 and 443 in front of the app on loopback. Copy both files into the stack directory from a checkout. The server needs one anyway, since the nightly backup runs from it ([backup-and-restore.md](backup-and-restore.md)):
 
 ```bash
-cp tools/deploy/caddy/compose.host.yml tools/deploy/caddy/Caddyfile /opt/crove/
+git clone --depth 1 --branch main https://github.com/DOS/Crove.git /opt/crove-src   # or the release tag you deploy
+cp /opt/crove-src/tools/deploy/caddy/compose.host.yml /opt/crove-src/tools/deploy/caddy/Caddyfile /opt/crove/
 ```
+
+Or copy the two files from your own checkout with `scp`.
 
 - Caddy gets and renews a Let's Encrypt certificate for `CROVE_DOMAIN` and redirects plain http to https. The certificates live in the `caddy-data` volume; keep it, or every restart asks Let's Encrypt again (which rate-limits repeated requests for the same name).
 - It runs on the host's network so it sees each client's real address, and it replaces any `X-Forwarded-For` a client sends with that address. With `TRUSTED_PROXY_HOPS=1` the kernel's per-client limits (sign-in, sign-up, recovery, email) then count each client separately. Behind a published port instead, Docker shows the proxy its bridge address for IPv6 clients, and every one of them would share one budget.
