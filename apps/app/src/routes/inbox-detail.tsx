@@ -81,11 +81,11 @@ function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDa
     <Card className="block space-y-4 p-4">
       <div className="grid gap-4 sm:grid-cols-3">
         <div>
-          <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('reversalDate')}</p>
+          <p className="text-xs text-subtle-foreground">{t('reversalDate')}</p>
           <p className="mt-1 text-sm font-medium text-foreground">{f.date(reversal.entryDate)}</p>
         </div>
         <div className="sm:col-span-2">
-          <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('reason')}</p>
+          <p className="text-xs text-subtle-foreground">{t('reason')}</p>
           <p className="mt-1 text-sm whitespace-pre-wrap text-foreground">{reversal.reason}</p>
         </div>
       </div>
@@ -95,7 +95,7 @@ function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDa
         <ErrorText>{errorMessage(entry.error)}</ErrorText>
       ) : entry.data ? (
         <div>
-          <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">
+          <p className="text-sm font-medium text-muted-foreground">
             {t('originalEntry', { date: f.date(entry.data.entryDate), description: entry.data.description })}
           </p>
           <p className="mt-1 text-xs text-subtle-foreground">{t('mirrorHint')}</p>
@@ -544,13 +544,13 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           {payload && (
             <Card className="grid gap-4 p-4 sm:grid-cols-2">
               <div>
-                <p className="text-xs tracking-wide uppercase text-subtle-foreground">{sale ? t('sellerOwn') : t('seller')}</p>
+                <p className="text-xs text-subtle-foreground">{sale ? t('sellerOwn') : t('seller')}</p>
                 <p className="mt-1 text-sm font-medium text-foreground">{payload.seller.name}</p>
                 <p className="text-xs text-muted-foreground">{t('taxCode', { code: payload.seller.taxCode ?? t('noTaxCode') })}</p>
                 <p className="text-xs text-subtle-foreground">{payload.seller.address}</p>
               </div>
               <div>
-                <p className="text-xs tracking-wide uppercase text-subtle-foreground">{sale ? t('customer') : t('buyer')}</p>
+                <p className="text-xs text-subtle-foreground">{sale ? t('customer') : t('buyer')}</p>
                 <p className="mt-1 text-sm font-medium text-foreground">{payload.buyer.name || t('notStated')}</p>
                 <p className="text-xs text-muted-foreground">{t('taxCode', { code: payload.buyer.taxCode ?? t('noTaxCode') })}</p>
               </div>
@@ -574,7 +574,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
 
           {payload && (
             <Card className="block p-4">
-              <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('checks')}</p>
+              <p className="text-sm font-medium text-muted-foreground">{t('checks')}</p>
               <ul className="mt-3 space-y-1.5">
                 {payload.checks.map((c) => (
                   <li key={c.id} className="flex items-start gap-2 text-sm">
@@ -588,7 +588,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
 
           {payload && (
             <Card ref={linesRef} className="block overflow-x-auto p-4">
-              <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('lines')}</p>
+              <p className="text-sm font-medium text-muted-foreground">{t('lines')}</p>
               <table className="mt-3 w-full min-w-[560px] text-sm">
                 <thead className="text-left text-xs text-subtle-foreground">
                   <tr>
@@ -632,7 +632,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           {payload && (
             <Card className={pending ? 'block border border-dashed border-proposal/60 p-4 ring-0' : 'block p-4'}>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('journal')}</p>
+                <p className="text-sm font-medium text-muted-foreground">{t('journal')}</p>
                 {pending && <Badge variant="proposal">{t('proposedNotPosted')}</Badge>}
               </div>
               <table className="mt-3 w-full text-sm">
@@ -662,7 +662,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
         {!plain && (
           <div className="min-w-0 lg:col-span-2">
             <Card className="block p-4">
-              <p className="mb-3 text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('original')}</p>
+              <p className="mb-3 text-sm font-medium text-muted-foreground">{t('original')}</p>
               {item.file ? <FilePreview fileId={item.file.id} contentType={item.file.contentType} filename={item.file.filename} /> : <p className="text-sm text-subtle-foreground">{t('noFile')}</p>}
             </Card>
           </div>

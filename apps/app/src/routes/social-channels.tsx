@@ -45,7 +45,7 @@ function ReviewPolicy({ channel, required, canEdit, loading }: { channel: Channe
   });
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={`policy-${channel.id}`} className="text-xs font-medium tracking-wide text-subtle-foreground uppercase">
+      <Label htmlFor={`policy-${channel.id}`} className="text-sm font-medium text-muted-foreground">
         {t('policyTitle')}
       </Label>
       <NativeSelect
@@ -265,7 +265,7 @@ export function SocialChannelsPage() {
                   <ReviewPolicy channel={c} required={policies.get(c.id) ?? 1} canEdit={isAdmin} loading={policyRows.isLoading} />
                 </div>
                 <div className="border-t pt-3">
-                  <p className="mb-2 text-xs font-medium tracking-wide text-subtle-foreground uppercase">{t('queueTitle')}</p>
+                  <p className="mb-2 text-sm font-medium text-muted-foreground">{t('queueTitle')}</p>
                   <QueueEditor channel={c} canEdit={isAdmin} />
                 </div>
               </Card>

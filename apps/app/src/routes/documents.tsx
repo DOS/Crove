@@ -21,6 +21,7 @@ export function DocumentsPage() {
         <Empty title={t('empty')} hint={t('emptyHint')} />
       ) : (
         <DataTable
+          numeric={[4, 5, 6]}
           head={[
             t('columns.issueDate'),
             t('columns.number'),
@@ -43,9 +44,9 @@ export function DocumentsPage() {
                 <Badge variant={d.direction === 'sale' ? 'secondary' : 'outline'}>{t(d.direction === 'sale' ? 'direction.sale' : 'direction.purchase')}</Badge>
               </TableCell>
               <TableCell className="px-4 py-3 text-foreground">{d.partyName}</TableCell>
-              <TableCell className="px-4 py-3 text-muted-foreground tabular-nums">{f.money(d.subtotal)}</TableCell>
-              <TableCell className="px-4 py-3 text-muted-foreground tabular-nums">{f.money(d.vatAmount)}</TableCell>
-              <TableCell className="px-4 py-3 font-medium text-foreground tabular-nums">{f.money(d.total)}</TableCell>
+              <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">{f.money(d.subtotal)}</TableCell>
+              <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">{f.money(d.vatAmount)}</TableCell>
+              <TableCell className="px-4 py-3 text-right font-medium text-foreground tabular-nums">{f.money(d.total)}</TableCell>
               <TableCell className="px-4 py-3">
                 {/* Voided by reversing its entry (#165): Crove no longer counts it; the supplier's invoice is unchanged. */}
                 {d.voided ? (
