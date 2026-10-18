@@ -186,7 +186,7 @@ export function VatPage() {
             {!data.output.available ? (
               <Empty title={t('outputUnavailable')} hint={t('outputUnavailableHint')} />
             ) : data.output.documents.length === 0 ? (
-              <Empty title={t('emptyOutput')} />
+              <Empty title={t('emptyOutput')} hint={t('emptyOutputHint')} />
             ) : (
               <InvoiceTable invoices={data.output.documents} partyLabel={t('columns.buyer')} />
             )}

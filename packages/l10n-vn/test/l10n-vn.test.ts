@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   bookableLines,
+  bookableSaleLines,
   buildPurchaseJournal,
+  buildSalesJournal,
   checkInvoice,
   enterpriseCheckDigit,
   isCalendarDate,
@@ -140,5 +142,63 @@ describe('TT133 accounting', () => {
     ]);
     expect(isFixedAssetAccount('2111')).toBe(true);
     expect(isFixedAssetAccount('2141')).toBe(false);
+  });
+});
+
+describe('TT133 sales entries (#313)', () => {
+  it('proposes every line of a sale to 511 and posts Dr 131, Cr 511, Cr 3331', () => {
+    const source = invoice();
+    const lines = bookableSaleLines(source);
+    expect(lines.map((l) => [l.debitAccount, l.amount])).toEqual([
+      ['511', '1000000'],
+      ['511', '1000000'],
+      ['511', '-200000'],
+    ]);
+    expect(new Set(lines.map((l) => l.reason))).toEqual(new Set(['Doanh thu bán hàng và cung cấp dịch vụ']));
+    const journal = buildSalesJournal(lines, source.vatTotal, 'HĐ bán C26TAB-1234');
+    expect(journal.map((j) => [j.lineNo, j.accountCode, j.debit, j.credit])).toEqual([
+      [1, '131', '1980000', '0'],
+      [2, '511', '0', '1800000'],
+      [3, '3331', '0', '180000'],
+    ]);
+    expect(journal.find((j) => j.accountCode === '3331')?.memo).toBe('Thuế GTGT HĐ bán C26TAB-1234');
+    expect(journalIsBalanced(journal)).toBe(true);
+  });
+
+  it('credits each revenue account, and debits one whose lines net below zero', () => {
+    const lines = [
+      { lineNo: 1, debitAccount: '5113', amount: '3000000' },
+      { lineNo: 2, debitAccount: '5111', amount: '1000000' },
+      { lineNo: 3, debitAccount: '5211', amount: '-500000' },
+    ];
+    const journal = buildSalesJournal(lines as Parameters<typeof buildSalesJournal>[0], '350000', 'HĐ bán');
+    expect(journal.map((j) => [j.accountCode, j.debit, j.credit])).toEqual([
+      ['131', '3850000', '0'],
+      ['5111', '0', '1000000'],
+      ['5113', '0', '3000000'],
+      ['5211', '500000', '0'],
+      ['3331', '0', '350000'],
+    ]);
+    expect(journalIsBalanced(journal)).toBe(true);
+  });
+
+  it('reverses the sides for an adjustment invoice that lowers a sale', () => {
+    const lines = [{ lineNo: 1, debitAccount: '511', amount: '-1000000' }];
+    const journal = buildSalesJournal(lines as Parameters<typeof buildSalesJournal>[0], '-100000', 'HĐ điều chỉnh giảm');
+    expect(journal.map((j) => [j.accountCode, j.debit, j.credit])).toEqual([
+      ['131', '0', '1100000'],
+      ['511', '1000000', '0'],
+      ['3331', '100000', '0'],
+    ]);
+    expect(journalIsBalanced(journal)).toBe(true);
+  });
+
+  it('posts nothing on 3331 for a sale without VAT', () => {
+    const lines = [{ lineNo: 1, debitAccount: '511', amount: '500000' }];
+    const journal = buildSalesJournal(lines as Parameters<typeof buildSalesJournal>[0], '0', 'HĐ bán KCT');
+    expect(journal.map((j) => [j.accountCode, j.debit, j.credit])).toEqual([
+      ['131', '500000', '0'],
+      ['511', '0', '500000'],
+    ]);
   });
 });

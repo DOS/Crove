@@ -254,11 +254,17 @@ export type KillSwitchTable = Refine<G.KernelKillSwitchTable, { scope: AgentScop
 
 export type BudgetPolicyTable = Refine<G.KernelBudgetPolicyTable, { scope: AgentScope }>;
 
+// A purchase (the org bought; party_id is the seller) or a sale (the org issued the invoice; party_id is the
+// customer), issue #313. Both live in purchase_document; the table keeps its name.
+export const DOCUMENT_DIRECTIONS = ['purchase', 'sale'] as const;
+export type DocumentDirection = (typeof DOCUMENT_DIRECTIONS)[number];
+
 export type PurchaseDocumentTable = Refine<
   G.FinancePurchaseDocumentTable,
   {
-    // The voided document of the same supplier invoice that this one replaces (#165), or null for the first one.
+    // The voided document of the same invoice that this one replaces (#165), or null for the first one.
     replaces_document_id: ColumnType<string | null, string | null | undefined, never>;
+    direction: ColumnType<DocumentDirection, DocumentDirection | undefined, never>;
   }
 >;
 

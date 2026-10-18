@@ -30,6 +30,7 @@ import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type 
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
+import { setTaxCode } from './tax-code.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal', which the runtime checks
@@ -560,6 +561,9 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   'UNBALANCED',
   'UNKNOWN_LINE',
   'UNSUPPORTED_CURRENCY',
+  // A sale no longer the org's own, or a purchase the org issued (#313): the org tax code changed since.
+  'NOT_OWN_SALE',
+  'OWN_INVOICE',
   'UNKNOWN_ACCOUNT',
   'ACCOUNT_INACTIVE',
   'PARENT_TAGGED',
@@ -758,6 +762,7 @@ const otherKernelCommands = [
   ...offboardingCommands,
   ...agentCommands,
   ...channelCommands,
+  setTaxCode,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),

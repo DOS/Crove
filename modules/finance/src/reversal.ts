@@ -15,7 +15,7 @@
 // only with its void (20261018150000).
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zJournalReversal, type JournalReversal } from '@crove/kernel-contract';
+import { zJournalReversal, type DocumentDirection, type JournalReversal } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { OPENING_BALANCE_SOURCE } from './domain/opening-balance.ts';
 import { postJournalEntry } from './ledger.ts';
@@ -102,8 +102,22 @@ async function refuseOpenReversal(ctx: CommandContext, entryId: string): Promise
   }
 }
 
-const reversalTitle = (entry: { entry_date: string; description: string; source_type: string }) =>
-  `Đảo bút toán ngày ${entry.entry_date}${entry.source_type === PURCHASE_SOURCE ? ' (hủy chứng từ mua)' : ''}: ${entry.description}`.slice(0, 300);
+// The direction of the document an entry records (a purchase or a sale, #313), or null for an entry with no document.
+async function documentDirection(ctx: CommandContext, entry: { source_type: string; source_id: string }): Promise<DocumentDirection | null> {
+  if (entry.source_type !== PURCHASE_SOURCE) return null;
+  const document = await ctx.trx
+    .selectFrom('crove_finance.purchase_document')
+    .select('direction')
+    .where('org_id', '=', ctx.orgId)
+    .where('id', '=', entry.source_id)
+    .executeTakeFirst();
+  return document?.direction ?? 'purchase';
+}
+
+const VOID_LABELS: Record<DocumentDirection, string> = { purchase: 'hủy chứng từ mua', sale: 'hủy chứng từ bán' };
+
+const reversalTitle = (entry: { entry_date: string; description: string }, direction: DocumentDirection | null) =>
+  `Đảo bút toán ngày ${entry.entry_date}${direction ? ` (${VOID_LABELS[direction]})` : ''}: ${entry.description}`.slice(0, 300);
 
 export const prepareReversal = defineCommand({
   name: 'finance.journal.prepare_reversal',
@@ -116,7 +130,7 @@ export const prepareReversal = defineCommand({
     const request = { ...input, entryId: input.entryId.toLowerCase() };
     await refuseOpenReversal(ctx, request.entryId);
     const entry = await reversibleEntry(ctx, request);
-    return { kind: REVERSAL_KIND, command: REVERSAL_COMMAND, title: reversalTitle(entry), payload: request };
+    return { kind: REVERSAL_KIND, command: REVERSAL_COMMAND, title: reversalTitle(entry, await documentDirection(ctx, entry)), payload: request };
   },
 });
 
@@ -175,8 +189,11 @@ export const reverseEntry = defineCommand({
           voided_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
         })
         .execute();
-      await ctx.activity('finance.purchase_document', voidedDocumentId, 'purchase.voided', `Hủy chứng từ do đảo bút toán: ${entry.description}`);
-      await ctx.emit('finance.purchase.voided', { documentId: voidedDocumentId, reversalEntryId: journalEntryId });
+      // The event keeps its name for sales too (finance.purchase_document holds both directions) and says which it was.
+      const direction = (await documentDirection(ctx, entry)) ?? 'purchase';
+      const voided = direction === 'sale' ? 'Hủy chứng từ bán do đảo bút toán' : 'Hủy chứng từ mua do đảo bút toán';
+      await ctx.activity('finance.purchase_document', voidedDocumentId, direction === 'sale' ? 'sale.voided' : 'purchase.voided', `${voided}: ${entry.description}`);
+      await ctx.emit('finance.purchase.voided', { documentId: voidedDocumentId, reversalEntryId: journalEntryId, direction });
     }
     ctx.audit({ reversed_entry_id: entry.id, reversal_entry_id: journalEntryId, voided_document_id: voidedDocumentId });
     await ctx.activity('finance.journal_entry', entry.id, 'journal_entry.reversed', `Đảo bút toán: ${entry.description}`);
