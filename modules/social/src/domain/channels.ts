@@ -73,11 +73,48 @@ export interface ChannelCapabilities {
 const MB = 1024 * 1024;
 const ANY_IMAGE: readonly string[] = [];
 
-// The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
-// the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
 // The channels whose platform takes photos but whose Crove adapter posts only video (TikTok's photo mode is not built).
 export const VIDEO_ONLY_ADAPTERS: ReadonlySet<Provider> = new Set<Provider>(['tiktok']);
 
+// Where each adapter puts the post's link, so the checks count the text the platform receives:
+// - text: after a blank line at the end of the text, unless the text already holds it;
+// - text_with_media: the same, but only when the post has media (a Facebook Page text post sends it as its own field);
+// - apart: never in the text (a field of its own, an article paragraph, or not sent).
+export type LinkPlacement = 'text' | 'text_with_media' | 'apart';
+export const LINK_PLACEMENT: Readonly<Record<Provider, LinkPlacement>> = {
+  sandbox: 'apart',
+  facebook_page: 'text_with_media',
+  instagram: 'apart',
+  zalo_oa: 'apart',
+  tiktok: 'text',
+  youtube: 'text',
+  threads: 'text',
+  linkedin: 'text',
+  x: 'text',
+  bluesky: 'text',
+};
+
+// The link as a whole: followed by the end, a space, or sentence punctuation and then the end or a space (the
+// adapters' holdsLink in @crove/channel, which the browser cannot import).
+function holdsLink(text: string, link: string): boolean {
+  for (let i = text.indexOf(link); i !== -1; i = text.indexOf(link, i + 1)) {
+    if (/^[.,!?;:)\]]*(?:\s|$)/.test(text.slice(i + link.length))) return true;
+  }
+  return false;
+}
+
+// The text an adapter sends for this body and link.
+export function sentText(provider: Provider, body: string, linkUrl: string | null | undefined, mediaCount: number): string {
+  const link = linkUrl?.trim();
+  const placement = LINK_PLACEMENT[provider];
+  if (!link || placement === 'apart' || (placement === 'text_with_media' && mediaCount === 0)) return body;
+  const text = body.trim();
+  if (holdsLink(text, link)) return body;
+  return [text, link].filter(Boolean).join('\n\n');
+}
+
+// The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
+// the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
 export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'x']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
