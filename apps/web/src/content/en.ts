@@ -5,7 +5,7 @@ import type { Dictionary } from './vi';
 export const en: Dictionary = {
   lang: 'en',
   meta: {
-    title: 'Crove: purchase invoices become journal entries a person approves',
+    title: 'Crove: invoices in, journal entries ready for your approval',
     description:
       'The open-source Business OS for solo founders and small businesses. Crove reads e-invoices, checks every number, proposes a TT133 journal entry and posts it only after a person approves.',
   },
@@ -25,9 +25,9 @@ export const en: Dictionary = {
     otherLangHref: '/',
   },
   hero: {
-    line1: 'Purchase invoices become journal entries.',
-    line2: 'You approve with one key.',
-    lead: 'Crove reads Vietnamese e-invoices, checks every number and proposes a journal entry under Circular 133. You review it, change an account if needed, and press A to approve.',
+    line1: 'Invoices in, journal entries ready.',
+    line2: 'You just review and approve.',
+    lead: 'Crove reads Vietnamese e-invoices, checks every number and proposes a journal entry under Circular 133. You review it, change an account if needed, and approve.',
     primary: 'Self-host for free',
     secondary: 'View the source on GitHub',
     sample: 'Example data',

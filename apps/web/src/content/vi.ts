@@ -5,7 +5,7 @@ export type Tone = 'ok' | 'warn' | 'accent' | 'neutral';
 export const vi = {
   lang: 'vi',
   meta: {
-    title: 'Crove: hoá đơn đầu vào thành bút toán, có người duyệt',
+    title: 'Crove: hoá đơn về là có bút toán, bạn chỉ cần duyệt',
     description:
       'Business OS mã nguồn mở cho người làm chủ và doanh nghiệp nhỏ. Crove đọc hoá đơn điện tử, kiểm tra từng con số, đề xuất bút toán TT133 và chỉ ghi sổ khi có người duyệt.',
   },
@@ -17,7 +17,7 @@ export const vi = {
     pricing: 'Bảng giá',
     docs: 'Tài liệu',
     signIn: 'Đăng nhập',
-    cta: 'Tự host miễn phí',
+    cta: 'Tự cài đặt miễn phí',
     toLight: 'Chuyển sang giao diện sáng',
     toDark: 'Chuyển sang giao diện tối',
     otherLang: 'EN',
@@ -25,10 +25,10 @@ export const vi = {
     otherLangHref: '/en',
   },
   hero: {
-    line1: 'Hoá đơn đầu vào thành bút toán.',
-    line2: 'Bạn duyệt bằng một phím.',
-    lead: 'Crove đọc hoá đơn điện tử, kiểm tra từng con số và đề xuất bút toán theo Thông tư 133. Bạn xem lại, sửa tài khoản nếu cần, rồi nhấn A để duyệt.',
-    primary: 'Tự host miễn phí',
+    line1: 'Hoá đơn về là có bút toán.',
+    line2: 'Bạn chỉ cần kiểm tra và duyệt.',
+    lead: 'Crove đọc hoá đơn điện tử, kiểm tra từng con số và soạn sẵn bút toán theo Thông tư 133. Bạn xem lại, sửa tài khoản nếu cần, rồi bấm duyệt.',
+    primary: 'Tự cài đặt miễn phí',
     secondary: 'Xem mã nguồn trên GitHub',
     sample: 'Dữ liệu mẫu',
     replay: 'Xem lại',
@@ -112,7 +112,7 @@ export const vi = {
     ],
   },
   keys: {
-    title: 'Cả tháng chứng từ, làm bằng bàn phím',
+    title: 'Xử lý chứng từ cả tháng chỉ bằng bàn phím',
     items: [
       { keys: ['J', 'K'], label: 'Di chuyển', body: 'Lên xuống giữa các dòng trong AI Inbox.' },
       { keys: ['A'], label: 'Duyệt', body: 'Hỏi mã hai lớp rồi ghi sổ.' },
@@ -121,8 +121,8 @@ export const vi = {
     ],
   },
   flow: {
-    title: 'Mỗi chứng từ đi qua bốn chữ ký',
-    lead: 'Như phiếu luân chuyển trong phòng kế toán. Ba bước đầu Crove làm và ghi lại. Bước cuối luôn là người có thẩm quyền.',
+    title: 'Mỗi chứng từ qua bốn bước, người có thẩm quyền ký duyệt cuối cùng',
+    lead: 'Giống phiếu luân chuyển chứng từ ở phòng kế toán: Crove làm ba bước đầu và ghi lại từng bước, bước cuối luôn do người có thẩm quyền ký duyệt.',
     slipTitle: 'Phiếu luân chuyển chứng từ',
     slipRef: 'HĐ 1C26TPT số 00001284, Công ty CP Bao Bì Phú Thịnh',
     actorLabel: 'Xử lý',
@@ -139,7 +139,7 @@ export const vi = {
       },
       {
         name: 'Kiểm tra',
-        body: 'Đối chiếu tổng dòng, thuế suất, chữ số kiểm tra của MST, mã CQT và hoá đơn trùng. Kiểm tra bằng quy tắc cố định, không nhờ AI.',
+        body: 'Đối chiếu tổng tiền từng dòng, thuế suất, mã số thuế, mã của cơ quan thuế và hoá đơn trùng. Việc kiểm tra dùng quy tắc cố định, không dùng AI.',
         actor: 'Crove',
         time: '14/10/2026 15:58',
         confirm: '5/5 kiểm tra đạt',
@@ -147,7 +147,7 @@ export const vi = {
       },
       {
         name: 'Đề xuất',
-        body: 'Bút toán theo TT133 vào AI Inbox, kèm lý do chọn tài khoản. Tài khoản học dần theo từng nhà cung cấp.',
+        body: 'Bút toán theo TT133 được đưa vào AI Inbox, kèm lý do chọn tài khoản. Crove nhớ tài khoản đã dùng cho từng nhà cung cấp.',
         actor: 'Agent Kế toán',
         time: '14/10/2026 15:59',
         confirm: 'Đề xuất, chưa ghi sổ',
@@ -164,7 +164,7 @@ export const vi = {
     ],
   },
   ledger: {
-    title: 'Sổ cái đọc được, số dư chạy theo từng dòng',
+    title: 'Sổ sách rõ ràng, số dư cập nhật sau từng bút toán',
     lead: 'Bút toán đã duyệt đi vào sổ nhật ký chung và sổ cái. Công nợ theo dõi tới từng nhà cung cấp. Xuất Excel khi kế toán cần.',
     tableTitle: 'Sổ chi tiết tài khoản 331, Phải trả người bán',
     tableSub: 'Đối tượng: Công ty CP Bao Bì Phú Thịnh. Kỳ: tháng 10/2026. Đơn vị: đồng.',
@@ -192,7 +192,7 @@ export const vi = {
   },
   agents: {
     title: 'Agent AI làm việc dưới quyền của bạn',
-    lead: 'Mỗi agent là một vị trí trong sơ đồ tổ chức: có người quản lý, ngân sách tháng, giới hạn rủi ro và nút dừng. Agent đề xuất, phép kiểm tra cố định quyết định số liệu đúng hay sai, người duyệt mới ghi sổ.',
+    lead: 'Mỗi agent là một vị trí trong sơ đồ tổ chức: có người quản lý, ngân sách tháng, giới hạn rủi ro và nút dừng. Agent chỉ đề xuất, quy tắc kiểm tra quyết định số liệu đúng hay sai, và chỉ khi có người duyệt thì mới ghi sổ.',
     chartTitle: 'Sơ đồ tổ chức',
     chartSub: 'Gạo Sạch Mekong, dữ liệu mẫu',
     legendPerson: 'Người',
@@ -268,7 +268,7 @@ export const vi = {
     edgeLabel: 'Agent đề xuất, người duyệt',
     matrix: {
       title: 'Agent làm được gì, không được làm gì',
-      lead: 'Mỗi việc có một mức rủi ro. Agent chỉ tự làm tới giới hạn của nó; vượt giới hạn thì chuyển cho người quản lý trong sơ đồ.',
+      lead: 'Mỗi việc có một mức rủi ro. Agent chỉ được tự làm trong giới hạn của mình; việc vượt giới hạn được chuyển cho người quản lý trực tiếp.',
       selfLabel: 'Agent tự làm (giới hạn R1)',
       humanLabel: 'Chuyển cho người',
       taskCol: 'Việc',
@@ -320,7 +320,7 @@ export const vi = {
     },
   },
   modules: {
-    title: 'Các phân hệ dùng chung một sổ',
+    title: 'Các phân hệ dùng chung một bộ sổ sách',
     lead: 'Bật phân hệ nào thì dùng phân hệ đó. Tất cả dùng chung thành viên, quy trình duyệt và nhật ký thay đổi.',
     items: [
       {
@@ -352,23 +352,23 @@ export const vi = {
   },
   trust: {
     title: 'AI đề xuất, người duyệt, mọi thay đổi đều được ghi lại',
-    lead: 'Crove không tin kết quả của AI một mình. Mỗi con số đi qua phép kiểm tra cố định, mỗi bút toán cần người duyệt.',
+    lead: 'Crove không để AI tự quyết. Mọi con số đều được kiểm tra bằng quy tắc, mọi bút toán đều cần người duyệt.',
     points: [
-      { title: 'Phép kiểm tra cố định quyết định', body: 'Tổng dòng, thuế suất, MST, mã CQT và trùng lặp được kiểm bằng quy tắc, không bằng AI.' },
-      { title: 'Người duyệt mới ghi sổ', body: 'Duyệt bút toán và thay đổi thành viên hỏi mã hai lớp nhập trong 5 phút gần nhất.' },
-      { title: 'Nhật ký chỉ ghi thêm', body: 'Không ai trong tổ chức sửa hay xoá được lịch sử thay đổi.' },
-      { title: 'Dữ liệu tách theo tổ chức', body: 'Row-level security của PostgreSQL chặn mọi truy vấn chéo giữa các tổ chức.' },
+      { title: 'Kiểm tra bằng quy tắc, không dựa vào AI', body: 'Tổng tiền, thuế suất, mã số thuế, mã cơ quan thuế và hoá đơn trùng đều được kiểm tra bằng quy tắc cố định.' },
+      { title: 'Chỉ ghi sổ khi có người duyệt', body: 'Duyệt bút toán hoặc thay đổi thành viên đều phải nhập mã xác thực hai lớp trong vòng 5 phút.' },
+      { title: 'Lịch sử thay đổi không sửa được', body: 'Không ai trong công ty sửa hay xoá được nhật ký thay đổi.' },
+      { title: 'Dữ liệu mỗi công ty tách riêng', body: 'Cơ chế row-level security của PostgreSQL chặn mọi truy vấn chéo giữa các công ty.' },
     ],
     logTitle: 'Nhật ký thay đổi',
     logCols: ['Lúc', 'Ai', 'Hành động'],
     log: [
       ['14/10/2026 15:58', 'Crove', 'Nhận HĐ 00001284 qua hộp thư hoá đơn'],
-      ['14/10/2026 15:58', 'Phép kiểm tra', '5/5 đạt: tổng dòng, thuế suất, MST, mã CQT, trùng lặp'],
+      ['14/10/2026 15:58', 'Bộ kiểm tra', '5/5 đạt: tổng tiền, thuế suất, MST, mã CQT, trùng lặp'],
       ['14/10/2026 15:59', 'Agent Kế toán', 'Đề xuất bút toán Nợ 152, 1331 / Có 331'],
       ['14/10/2026 16:05', 'Chị Lan', 'Duyệt bằng mã hai lớp, ghi sổ'],
     ],
-    selfHostTitle: 'Chạy trên máy của bạn',
-    selfHostBody: 'Mã nguồn mở theo giấy phép AGPL. Một lệnh là chạy đủ ứng dụng, cơ sở dữ liệu, đăng nhập và hộp thư thử nghiệm.',
+    selfHostTitle: 'Cài trên máy chủ của bạn',
+    selfHostBody: 'Mã nguồn mở theo giấy phép AGPL. Chỉ một lệnh là chạy đủ ứng dụng, cơ sở dữ liệu, đăng nhập và hộp thư thử nghiệm.',
     command: 'git clone https://github.com/DOS/Crove.git\ncd Crove\ndocker compose up',
     copy: 'Chép lệnh',
     copied: 'Đã chép',
@@ -377,10 +377,10 @@ export const vi = {
   },
   pricing: {
     title: 'Bảng giá',
-    lead: 'Tự host miễn phí. Bản cloud đang được chuẩn bị.',
+    lead: 'Tự cài đặt thì miễn phí. Bản cloud đang được chuẩn bị.',
     plans: [
       {
-        name: 'Tự host',
+        name: 'Tự cài đặt',
         price: 'Miễn phí',
         body: 'Mã nguồn mở AGPL. Toàn bộ dữ liệu nằm trên máy chủ của bạn.',
         items: ['Đủ mọi phân hệ', 'Chạy bằng docker compose', 'Dùng model AI bạn chọn, kể cả model chạy tại chỗ'],
@@ -408,7 +408,7 @@ export const vi = {
       },
       {
         q: 'AI có tự ghi sổ không?',
-        a: 'Không. AI chỉ đề xuất. Phép kiểm tra cố định quyết định số liệu đúng hay sai, và bút toán chỉ vào sổ khi người có quyền duyệt bằng mã hai lớp.',
+        a: 'Không. AI chỉ đề xuất. Quy tắc kiểm tra quyết định số liệu đúng hay sai, và bút toán chỉ được ghi sổ khi người có quyền duyệt bằng mã xác thực hai lớp.',
       },
       {
         q: 'Crove đọc được những loại hoá đơn nào?',
@@ -416,7 +416,7 @@ export const vi = {
       },
       {
         q: 'Dữ liệu của tôi nằm ở đâu?',
-        a: 'Với bản tự host, dữ liệu nằm trên máy chủ và kho lưu trữ của bạn. Mỗi tổ chức được tách riêng bằng row-level security, và bạn có thể xuất toàn bộ dữ liệu khi cần.',
+        a: 'Với bản tự cài đặt, dữ liệu nằm trên máy chủ và kho lưu trữ của bạn. Dữ liệu mỗi công ty được tách riêng, và bạn có thể xuất toàn bộ dữ liệu khi cần.',
       },
       {
         q: 'Kế toán dịch vụ bên ngoài làm việc cùng thế nào?',
