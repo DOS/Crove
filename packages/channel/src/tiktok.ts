@@ -9,6 +9,7 @@
 // has not audited can only post SELF_ONLY. A post is visible only after the bytes are in, so a failure before then
 // posted nothing; after init, the publish_id says where it stands.
 import type { ConnectedAccount, Publisher, PublishInput, PublishResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const TIKTOK_HOSTS = ['open.tiktokapis.com', 'open-upload.tiktokapis.com'] as const;
@@ -239,7 +240,7 @@ interface StatusAnswer {
 
 const captionOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
-  return (content.linkUrl && !body.includes(content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body).slice(0, TITLE_MAX);
+  return (content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body).slice(0, TITLE_MAX);
 };
 
 export class TikTokPublisher implements Publisher {

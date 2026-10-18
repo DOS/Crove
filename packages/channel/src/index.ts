@@ -4,6 +4,7 @@
 import { randomBytes } from 'node:crypto';
 
 export * from './oauth.ts';
+export * from './text.ts';
 export * from './meta.ts';
 export * from './instagram.ts';
 export * from './zalo.ts';
