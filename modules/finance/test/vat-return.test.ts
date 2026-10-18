@@ -96,8 +96,10 @@ describe('vatMismatch', () => {
     expect(vatMismatch({ vatAmount: '0', lines: [line('1000000', '10%')] })).toBe(true);
     // 8% charged on a line marked 10%.
     expect(vatMismatch({ vatAmount: '80000', lines: [line('1000000', '10%')] })).toBe(true);
-    // VAT on an invoice with no taxed line.
+    // VAT on an invoice with no taxed line, even one dong: there is nothing to round.
     expect(vatMismatch({ vatAmount: '10000', lines: [line('1000000', 'KCT')] })).toBe(true);
+    expect(vatMismatch({ vatAmount: '1', lines: [line('1000000', '0%')] })).toBe(true);
+    expect(vatMismatch({ vatAmount: '0', lines: [line('1000000', '0%')] })).toBe(false);
   });
 
   it('flags a mixed-rate invoice whose VAT is far from the estimates, even where the split would go negative', () => {

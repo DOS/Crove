@@ -164,8 +164,8 @@ export function documentVatByRate(doc: VatDocumentInput): DocumentBreakdown {
 /**
  * Whether an invoice's VAT is far from what its lines' rates give (issue #358): the invoice's VAT against the sum of
  * each line's amount x its rate (0 for 0%, KCT and KKKNT). Sellers round VAT to whole dong per line or on the total,
- * so up to one dong per taxed line (at least one dong) is rounding, not a mismatch. Invoices with a line of unknown
- * rate are not judged: Crove cannot say what VAT that line carries, and `rate_unknown` already flags them.
+ * so up to one dong per taxed line is rounding, not a mismatch; with no taxed line, any VAT is. Invoices with a line
+ * of unknown rate are not judged: Crove cannot say what VAT that line carries, and `rate_unknown` already flags them.
  */
 export function vatMismatch(doc: VatDocumentInput): boolean {
   let expected = money(0);
@@ -178,7 +178,7 @@ export function vatMismatch(doc: VatDocumentInput): boolean {
     expected = expected.plus(money(line.amount).times(percent).dividedBy(100));
     taxedLines += 1;
   }
-  return money(doc.vatAmount).minus(expected).abs().greaterThan(money(Math.max(1, taxedLines)));
+  return money(doc.vatAmount).minus(expected).abs().greaterThan(money(taxedLines));
 }
 
 export interface SideTotals {
