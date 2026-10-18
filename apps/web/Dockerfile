@@ -9,9 +9,14 @@ ENV CI=true \
     NEXT_STANDALONE=true
 # pnpm 10 is plain JavaScript; it downloads the pnpm version pinned in package.json (packageManager).
 RUN npm install -g pnpm@10.34.7 --no-fund --no-audit
+# Dependencies first, from the manifests only, so a source change reuses the installed layer.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/web/package.json ./apps/web/
+# The root `prepare` script; it skips hook installation when there is no .git, as in an image build.
+COPY tools/install-git-hooks.mjs ./tools/
+RUN pnpm install --frozen-lockfile --filter "@crove/web..."
 COPY . .
-RUN pnpm install --frozen-lockfile --filter "@crove/web..." \
- && pnpm --filter @crove/web build
+RUN pnpm --filter @crove/web build
 
 FROM node:26-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0
 ENV NODE_ENV=production \
