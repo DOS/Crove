@@ -437,6 +437,11 @@ suite('period lock (#329)', () => {
     await expect(raw('test.period.lock_raw', adminUser)).resolves.toEqual({ ok: true });
     await expect(raw('test.period.unlock_raw', owner)).resolves.toEqual({ ok: true });
     expect(await state()).toMatchObject({ status: 200, body: { lockedThrough: '2025-11-30' } });
+    // The month in progress is refused by the database too, for a caller who may lock (the other org has nothing locked,
+    // so any month may come first).
+    const current = runtime.execute('test.period.lock_raw', { month: vietnamMonth(new Date()) }, { actor: asUser(outsider), orgId: otherOrg.orgId });
+    await expect(current).rejects.toMatchObject({ status: 500 });
+    expect(await state(outsider, otherOrg)).toMatchObject({ status: 200, body: { lockedThrough: null } });
   });
 
   it('refuses a non-member', async () => {

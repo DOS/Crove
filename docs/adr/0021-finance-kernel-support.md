@@ -93,7 +93,7 @@ Reading the numbers:
 - **Corrections to a closed period are new entries in an open period**: a reversal of a January entry is dated in October and posts normally (measured).
 - `period_balance` stays as the plan has it (written only by the posting definer, reconciled nightly); the spike did not build it.
 - A terminal "locked" state (after year-end finalization or a tax audit) is deferred to the customer interviews; it would be a status that `reopen_period()` refuses.
-- **As built for #329** (`supabase/migrations/20261019250000_crove_finance_period_lock.sql`, months only):
+- **As built for #329** (`supabase/migrations/20261020010000_crove_finance_period_lock.sql`, months only):
   - Because months close in order and reopen newest first, the closed months are always one range. They are stored as one `period_lock` row per org (`locked_from`, `locked_through`), not one `accounting_period` row per month.
   - Dates before `locked_from` are refused too: an entry there would change the opening balances of the closed months.
   - The guard, `FOR SHARE` and `FOR UPDATE` are as above. The first lock and the first posting create the org's row, whichever comes first, so they meet on the same row.

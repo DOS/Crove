@@ -80,8 +80,9 @@ BEGIN
 END $$;
 
 -- Locks the month starting p_month (its first day) for the org in context and returns the new locked_through. Raises
--- PERIOD_ALREADY_LOCKED when the month is already locked and EARLIER_PERIOD_OPEN when it is not the month right after
--- the last locked one, both with the current locked_through as JSON DETAIL.
+-- PERIOD_ALREADY_LOCKED when the month is already locked, EARLIER_PERIOD_OPEN when it is not the month right after
+-- the last locked one and PERIOD_NOT_ENDED when it is not over yet in Vietnam time (so the entries of its last days
+-- can still be posted), all with the current locked_through as JSON DETAIL.
 CREATE OR REPLACE FUNCTION crove_finance.lock_period(p_month date) RETURNS date
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
@@ -105,6 +106,9 @@ BEGIN
   END IF;
   IF v_through IS NOT NULL AND p_month <> v_through + 1 THEN
     RAISE EXCEPTION 'EARLIER_PERIOD_OPEN' USING DETAIL = pg_catalog.json_build_object('lockedThrough', v_through)::text;
+  END IF;
+  IF p_month >= pg_catalog.date_trunc('month', pg_catalog.now() AT TIME ZONE 'Asia/Ho_Chi_Minh')::date THEN
+    RAISE EXCEPTION 'PERIOD_NOT_ENDED' USING DETAIL = pg_catalog.json_build_object('lockedThrough', v_through)::text;
   END IF;
   UPDATE crove_finance.period_lock p
   SET locked_from = COALESCE(v_from, p_month), locked_through = v_end, updated_by = crove_kernel.ctx_user_id(), updated_at = pg_catalog.now()

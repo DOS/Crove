@@ -1,6 +1,6 @@
 // Period lock (issue #329, ADR-0021 section 3): filed months must not change silently. An org locks its books one
 // month at a time, in order, and unlocks the last locked month first; nothing posts with an entry date up to the end
-// of the last locked month (20261019250000_crove_finance_period_lock.sql holds every writer to it).
+// of the last locked month (20261020010000_crove_finance_period_lock.sql holds every writer to it).
 // - finance.period.lock_state: every member reads what is locked (the ledger screen shows it).
 // - finance.period.lock: owners and admins lock the next month, once it has ended (in Vietnam time). R2, as ADR-0021
 //   section 7 has the close: no step-up, and an agent may only propose it.
@@ -84,6 +84,9 @@ function lockedThroughOf(error: PgError): string | null {
   }
 }
 
+const notEnded = (month: string) =>
+  new DomainError('PERIOD_NOT_ENDED', 422, `Tháng ${monthLabel(month)} chưa kết thúc nên chưa khóa sổ được`, { month });
+
 // The refusals of lock_period() and unlock_period() (P0001 with the current locked_through as JSON detail) as the
 // domain errors the commands answer. Anything else is rethrown for the runtime to map.
 function lockRefusal(error: unknown, month: string): never {
@@ -106,6 +109,8 @@ function lockRefusal(error: unknown, month: string): never {
         throw new DomainError('PERIOD_NOT_LOCKED', 409, `Tháng ${monthLabel(month)} chưa khóa sổ`, details);
       case 'LATER_PERIOD_LOCKED':
         throw new DomainError('LATER_PERIOD_LOCKED', 409, `Hãy mở khóa tháng ${last} trước: chỉ mở khóa được tháng khóa sau cùng`, details);
+      case 'PERIOD_NOT_ENDED':
+        throw notEnded(month);
     }
   }
   throw error;
@@ -123,11 +128,10 @@ export const periodLock = defineCommand({
     } catch (error) {
       lockRefusal(error, input.month);
     }
-    // A month is locked once it is over, so the entries of its last days can still be posted. Checked after the order
-    // (the refusal rolls the lock back), so a month out of order says which month comes first.
-    if (input.month >= vietnamMonth(ctx.now)) {
-      throw new DomainError('PERIOD_NOT_ENDED', 422, `Tháng ${monthLabel(input.month)} chưa kết thúc nên chưa khóa sổ được`, { month: input.month });
-    }
+    // A month is locked once it is over, so the entries of its last days can still be posted. lock_period() refuses it
+    // by the database clock; this says the same by the runtime's (the refusal rolls the lock back). Both come after the
+    // order, so a month out of order says which month comes first.
+    if (input.month >= vietnamMonth(ctx.now)) throw notEnded(input.month);
     await ctx.activity('finance.period', ctx.orgId, 'period.locked', `Khóa sổ tháng ${monthLabel(input.month)}`);
     return periodLockState(ctx);
   },
