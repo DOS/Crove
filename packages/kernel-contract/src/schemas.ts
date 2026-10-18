@@ -43,9 +43,16 @@ export const zProposedLine = z.object({
   unitPrice: zMoney.nullable(),
   amount: zMoney,
   vatRate: z.string().max(20).nullable(),
+  // The account the line is posted to: the debit (cost or asset) account of a purchase line, the credit (revenue)
+  // account of a sale line (direction 'sale', issue #313). The name predates sales.
   debitAccount: zAccountCode,
   reason: z.string().max(500),
 });
+
+// A purchase invoice (the org is the buyer) or a sales invoice (the org is the seller, issue #313).
+export const DOCUMENT_DIRECTIONS = ['purchase', 'sale'] as const;
+export const zDocumentDirection = z.enum(DOCUMENT_DIRECTIONS);
+export type DocumentDirection = z.infer<typeof zDocumentDirection>;
 
 export const zJournalLineDraft = z.object({
   lineNo: z.number().int().positive(),
@@ -55,8 +62,11 @@ export const zJournalLineDraft = z.object({
   memo: z.string().max(1000),
 });
 
-// Payload stored on a finance.purchase proposal and executed by finance.purchase.record.
+// Payload stored on a finance.purchase proposal and executed by finance.purchase.record. direction 'sale' (issue #313):
+// the seller is the org itself (its tax code), the buyer is the customer, and the journal is Dr 131, Cr revenue, Cr
+// 3331. Absent on purchases, including every proposal raised before sales existed.
 export const zPurchaseProposal = z.object({
+  direction: z.literal('sale').optional(),
   seller: zPartyRef,
   buyer: zPartyRef,
   invoice: z.object({
@@ -92,6 +102,9 @@ export const zOrgDetail = z.object({
   slug: z.string(),
   name: z.string(),
   role: zRole,
+  // The org's own tax code (MST), normalized; null until an owner or admin sets it. An e-invoice whose seller has this
+  // tax code is a sale (issue #313).
+  taxCode: z.string().nullable(),
   inboundAddress: z.string().nullable(),
   // Messages to the org's addresses retired in the last 30 days that were dropped (#139); null when inboundAddress is.
   inboundDroppedCount: z.number().int().nonnegative().nullable(),
@@ -199,12 +212,28 @@ export const zProposalStatus = z.enum(['pending', 'approved', 'executed', 'rejec
 
 export const zExtractionStatus = z.enum(['pending', 'done', 'failed']);
 
+// The most proposals one bulk approval takes (issue #315); the Inbox sends a larger selection in several batches.
+export const MAX_BULK_APPROVE = 50;
+
+// The proposals of one bulk approval, each named once with the revision the caller saw. Shared by the RPC contract
+// and kernel.proposal.approve_many, so the route and the command accept the same input.
+export const zBulkApproveItems = z
+  .array(z.object({ id: zId, revision: z.number().int().positive() }))
+  .min(1)
+  .max(MAX_BULK_APPROVE)
+  .refine((items) => new Set(items.map((i) => i.id)).size === items.length, 'each proposal once');
+
 export const zInboxItem = z.object({
   id: zId,
   kind: z.string(),
   status: zProposalStatus,
   title: z.string(),
+  // An invoice proposal's direction (a sale or a purchase, issue #313); null for other kinds.
+  direction: zDocumentDirection.nullable(),
+  revision: z.number().int().positive(),
   sellerName: z.string().nullable(),
+  // The customer of a sale (the seller is the org itself); null otherwise.
+  buyerName: z.string().nullable(),
   total: zMoney.nullable(),
   issueDate: zLocalDate.nullable(),
   failedChecks: z.number().int(),
@@ -287,6 +316,8 @@ export const zParty = z.object({
 
 export const zPurchaseDocument = z.object({
   id: zId,
+  // A purchase (partyId is the supplier) or a sale (partyId is the customer), issue #313.
+  direction: zDocumentDirection,
   partyId: zId,
   partyName: z.string(),
   series: z.string(),
@@ -321,7 +352,7 @@ export const zJournalEntry = z.object({
   pendingReversalId: zId.nullable(),
   // The purchase document this entry records, when it does (absent otherwise).
   document: z
-    .object({ id: zId, series: z.string(), number: z.string(), issueDate: zLocalDate, partyName: z.string(), voided: z.boolean() })
+    .object({ id: zId, direction: zDocumentDirection, series: z.string(), number: z.string(), issueDate: zLocalDate, partyName: z.string(), voided: z.boolean() })
     .optional(),
 });
 

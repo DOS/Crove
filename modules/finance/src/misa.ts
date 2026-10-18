@@ -67,10 +67,7 @@ export interface PurchaseVoucher {
   lines: Array<VoucherLine & { debitAccount: string }>;
 }
 
-/**
- * A sales voucher. There is no sales data on main yet (sales e-invoices are issue #313); this shape is what the
- * sales export needs from it, so #313 only has to load it.
- */
+/** An approved sales document (issue #313) with its journal entry, loaded by finance.vouchers.sales. */
 export interface SalesVoucher {
   entryId: string;
   entryDate: string;

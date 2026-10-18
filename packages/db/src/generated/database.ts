@@ -130,6 +130,7 @@ export interface FinancePurchaseDocumentTable {
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   replaces_document_id: ColumnType<string | null, string | null, NotGranted>;
+  direction: ColumnType<string, string | undefined, NotGranted>;
 }
 
 /** crove_finance.purchase_document_void */
@@ -154,7 +155,8 @@ export interface FinancePurchaseLineTable {
   amount: ColumnType<string, string, NotGranted>;
   vat_rate: ColumnType<string | null, string | null, NotGranted>;
   vat_amount: ColumnType<string, string | undefined, NotGranted>;
-  debit_account: ColumnType<string, string, NotGranted>;
+  debit_account: ColumnType<string | null, string | null, NotGranted>;
+  credit_account: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_finance.vendor_account_rule */
@@ -535,6 +537,7 @@ export interface KernelTenantTable {
   base_currency: Generated<string>;
   created_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  tax_code: string | null;
 }
 
 /** crove_social.channel_policy */
