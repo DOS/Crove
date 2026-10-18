@@ -230,6 +230,7 @@ export const vi = {
     indicatorsTitle: 'Chỉ tiêu tờ khai 01/GTGT',
     indicatorsNote:
       'Chỉ tiêu [25] (thuế GTGT được khấu trừ) và các chỉ tiêu từ [36] do kế toán xác định. Hàng hóa, dịch vụ thuế suất 8% kê khai ở [32], [33] và kèm phụ lục giảm thuế GTGT. Không gồm chứng từ đã hủy.',
+    otherSales: '{amount} doanh thu bán ra chưa rõ thuế suất nên không nằm trong chỉ tiêu nào. Hãy kiểm tra các hóa đơn đó trước khi nộp tờ khai.',
     ratesTitle: 'Tổng theo thuế suất',
     outputTitle: 'Hóa đơn bán ra ({count})',
     inputTitle: 'Hóa đơn mua vào ({count})',
@@ -269,7 +270,8 @@ export const vi = {
       rate_unknown: 'Có dòng chưa rõ thuế suất',
       rate_split: 'Thuế chia theo thuế suất là số ước tính',
       reduced_rate_outside_period: 'Thuế suất 8% ngoài thời gian giảm thuế',
-      lines_mismatch: 'Tổng các dòng lệch tiền trước thuế',
+      lines_mismatch: 'Tổng các dòng lệch tiền trước thuế; số tổng cộng theo các dòng',
+      vat_mismatch: 'Thuế GTGT lệch giá trị trước thuế nhân thuế suất',
     },
   },
   ledger: {

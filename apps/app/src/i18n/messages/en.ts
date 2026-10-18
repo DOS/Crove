@@ -232,6 +232,7 @@ export const en = {
     indicatorsTitle: 'Form 01/GTGT indicators',
     indicatorsNote:
       'Indicator [25] (deductible input VAT) and those from [36] on are for your accountant to decide. Sales at the reduced 8% rate go in [32] and [33] with the VAT reduction appendix. Voided documents are left out.',
+    otherSales: '{amount} of sales have no known VAT rate, so no indicator includes them. Check those invoices before you file.',
     ratesTitle: 'Totals by VAT rate',
     outputTitle: 'Sales invoices ({count})',
     inputTitle: 'Purchase invoices ({count})',
@@ -271,7 +272,8 @@ export const en = {
       rate_unknown: 'A line has no known VAT rate',
       rate_split: 'VAT split across rates is an estimate',
       reduced_rate_outside_period: '8% rate outside the reduction period',
-      lines_mismatch: 'Lines do not add up to the amount before VAT',
+      lines_mismatch: 'Lines do not add up to the amount before VAT; the totals use the lines',
+      vat_mismatch: 'VAT is not the value before VAT times the rate',
     },
   },
   ledger: {
