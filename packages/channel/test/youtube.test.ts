@@ -1,6 +1,6 @@
 // YouTube against recorded answers (shapes from the YouTube Data API v3 and Google OAuth docs); no live call.
 import { describe, expect, it } from 'vitest';
-import { YouTubeConnector, YouTubePublisher, YouTubeRefresher, newOAuthAttempt, type Fetch, type PublishInput } from '../src/index.ts';
+import { YouTubeConnector, YouTubePublisher, YouTubeRefresher, clipBytes, clipCodepoints, newOAuthAttempt, type Fetch, type PublishInput } from '../src/index.ts';
 
 const APP = { clientId: '123456789012-abcdefgh12345678.apps.googleusercontent.com', clientSecret: 'test-google-secret-not-real' };
 const CHANNEL = 'UCabcdefghijklmnopqrstuv';
@@ -60,6 +60,18 @@ describe('YouTubeConnector', () => {
     await expect(new YouTubeConnector(APP, narrow.fetchImpl).exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: null })).rejects.toMatchObject({ kind: 'denied' });
     const used = google({ 'POST oauth2.googleapis.com/token': [{ status: 400, body: { error: 'invalid_grant', error_description: 'Bad Request' } }] });
     await expect(new YouTubeConnector(APP, used.fetchImpl).exchange({ code: 'used', redirectUri: REDIRECT, codeVerifier: null })).rejects.toMatchObject({ kind: 'invalid_grant' });
+    // A wrong client secret is the deployment's to fix, not a refused code.
+    const misconfigured = google({ 'POST oauth2.googleapis.com/token': [{ status: 401, body: { error: 'invalid_client', error_description: 'Unauthorized' } }] });
+    await expect(new YouTubeConnector(APP, misconfigured.fetchImpl).exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: null })).rejects.toMatchObject({ kind: 'provider', code: 'invalid_client' });
+  });
+});
+
+describe('clipping', () => {
+  it('cuts a description by UTF-8 bytes and a title by characters, never inside one', () => {
+    const viet = 'ệ'.repeat(2000);
+    expect(new TextEncoder().encode(clipBytes(viet, 5000)).length).toBe(4998);
+    expect(clipBytes('abc', 5000)).toBe('abc');
+    expect(clipCodepoints('😀'.repeat(101), 100)).toBe('😀'.repeat(100));
   });
 });
 

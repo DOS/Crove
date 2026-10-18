@@ -1,7 +1,10 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, VIDEO_READY, countLinks, countText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { CAPABILITIES, VIDEO_ONLY_ADAPTERS, VIDEO_READY, countLinks, countText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+
+// TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
+export const TIKTOK_PRIVACY: readonly string[] = ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'];
 
 export interface MediaItem {
   kind: MediaKind;
@@ -15,6 +18,8 @@ export interface VariantDraft {
   body: string;
   title: string | null;
   media: readonly MediaItem[];
+  // The variant's provider settings (privacy level and the like); absent is none.
+  settings?: Readonly<Record<string, unknown>>;
 }
 
 export type IssueCode =
@@ -35,6 +40,10 @@ export type IssueCode =
   | 'VIDEO_TOO_LONG'
   // The platform takes video, Crove's adapter for it does not yet.
   | 'VIDEO_NOT_SUPPORTED_YET'
+  // TikTok: the person posting picks who sees the video; there is no default.
+  | 'PRIVACY_REQUIRED'
+  // The platform takes photos, Crove's adapter for it posts only video.
+  | 'IMAGES_NOT_SUPPORTED_YET'
   | 'TOO_MANY_LINKS';
 
 export interface Issue {
@@ -80,6 +89,7 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
       return;
     }
     if (m.kind === 'image') {
+      if (VIDEO_ONLY_ADAPTERS.has(variant.provider)) issues.push({ code: 'IMAGES_NOT_SUPPORTED_YET', field, limit: null, actual: null });
       if (rule.imageTypes.length > 0 && !rule.imageTypes.includes(m.mime.toLowerCase())) {
         issues.push({ code: 'IMAGE_TYPE_NOT_ALLOWED', field, limit: null, actual: null });
       }
@@ -97,6 +107,9 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
     }
   });
 
+  if (variant.provider === 'tiktok' && !TIKTOK_PRIVACY.includes(String(variant.settings?.privacyLevel ?? ''))) {
+    issues.push({ code: 'PRIVACY_REQUIRED', field: 'settings.privacyLevel', limit: null, actual: null });
+  }
   if (caps.maxLinks !== null) {
     const links = countLinks(variant.body);
     if (links > caps.maxLinks) issues.push({ code: 'TOO_MANY_LINKS', field: 'body', limit: caps.maxLinks, actual: links });

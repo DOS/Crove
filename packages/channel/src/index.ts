@@ -11,6 +11,7 @@ export * from './bluesky.ts';
 export * from './threads.ts';
 export * from './linkedin.ts';
 export * from './youtube.ts';
+export * from './tiktok.ts';
 export * from './x.ts';
 
 export const CHANNEL_PROVIDERS = [

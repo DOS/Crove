@@ -140,7 +140,12 @@ describe('validateVariant', () => {
     const zaloBig = validateVariant({ provider: 'zalo_oa', body: 'x', title: 'T', media: [jpeg(2 * 1024 * 1024)] }).map((i) => i.code);
     expect(zaloBig).toEqual(['IMAGE_TOO_LARGE']);
     const tiktokLong = validateVariant({ provider: 'tiktok', body: '', title: null, media: [mp4(601)] }).map((i) => i.code);
-    expect(tiktokLong).toEqual(['VIDEO_NOT_SUPPORTED_YET', 'VIDEO_TOO_LONG']);
+    expect(tiktokLong).toEqual(['VIDEO_TOO_LONG', 'PRIVACY_REQUIRED']);
+    const tiktokOk = validateVariant({ provider: 'tiktok', body: '', title: null, media: [mp4(30)], settings: { privacyLevel: 'SELF_ONLY' } });
+    expect(tiktokOk).toEqual([]);
+    // TikTok's photo mode is not built: images are flagged before they are approved.
+    const tiktokPhoto = validateVariant({ provider: 'tiktok', body: '', title: null, media: [jpeg()], settings: { privacyLevel: 'SELF_ONLY' } }).map((i) => i.code);
+    expect(tiktokPhoto).toEqual(['IMAGES_NOT_SUPPORTED_YET']);
   });
 
   it('says when a channel takes video but its Crove adapter does not post it yet', () => {
