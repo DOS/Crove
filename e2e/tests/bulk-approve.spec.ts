@@ -34,12 +34,20 @@ test('review shortcuts, then approve several proposals under one step-up', async
 
   const slug = new URL(page.url()).pathname.split('/')[2] ?? '';
 
-  await test.step('J moves to the next pending proposal, A approves, E focuses the first account', async () => {
+  await test.step('J and K move between pending proposals, A approves, E focuses the first account', async () => {
     await page.getByRole('link', { name: SELLER }).first().click();
-    await expect(page.getByText('Phím tắt: J hoặc N sang đề xuất chờ duyệt tiếp theo · A duyệt · E sửa tài khoản')).toBeVisible();
+    await expect(
+      page.getByText('Phím tắt: J hoặc N sang đề xuất chờ duyệt tiếp theo · K hoặc P về đề xuất trước · A duyệt · E sửa tài khoản · Ctrl K mở bảng lệnh'),
+    ).toBeVisible();
     const first = page.url();
     await page.keyboard.press('j');
     await expect(page).not.toHaveURL(first);
+    const next = page.url();
+    // K goes back to the previous pending proposal, J forward again (#439).
+    await page.keyboard.press('k');
+    await expect(page).toHaveURL(first);
+    await page.keyboard.press('j');
+    await expect(page).toHaveURL(next);
     await expect(page.getByRole('heading', { name: SELLER })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Duyệt và ghi sổ' })).toBeEnabled();
     // A asks for the same approval as the button: without a second factor, the step-up prompt.
@@ -55,6 +63,20 @@ test('review shortcuts, then approve several proposals under one step-up', async
     await expect(page.getByRole('combobox', { name: 'Tài khoản nợ cho dòng 1' })).toBeFocused();
     expect(page.url()).toBe(second);
     await page.getByRole('link', { name: '← Hộp thư chứng từ' }).click();
+  });
+
+  await test.step('the command palette opens with Ctrl K and goes where the user types (#439)', async () => {
+    await page.keyboard.press('Control+k');
+    const palette = page.getByRole('combobox', { name: 'Bảng lệnh' });
+    await expect(palette).toBeFocused();
+    // Matching ignores Vietnamese marks.
+    await palette.fill('so sach');
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(new RegExp(`/o/${slug}/ledger$`));
+    await page.keyboard.press('Control+k');
+    await palette.fill('hop thu');
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(new RegExp(`/o/${slug}/inbox$`));
   });
 
   await test.step('select all and approve them under one step-up', async () => {

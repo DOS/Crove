@@ -18,7 +18,7 @@ import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
 import { VOUCHER_KIND } from '../lib/vouchers.ts';
-import { bulkSelectable, canApproveProposals, planBatches, sendBatches, type BulkBatch, type BulkProgress } from '../lib/review.ts';
+import { bulkSelectable, canApproveProposals, planBatches, proposalName, sendBatches, type BulkBatch, type BulkProgress } from '../lib/review.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 // One bulk approval (issue #315): the batches planned when it started, how far it got, and the names to report.
@@ -45,10 +45,6 @@ function isFileStatus(status: string): status is FileStatus {
 
 // The name a proposal goes by in the list, its checkbox and the bulk report: the customer of a sale (#313; its seller is
 // the org itself), the seller of a purchase, else its title.
-function proposalName(item: { direction: string | null; sellerName: string | null; buyerName: string | null; title: string }): string {
-  return (item.direction === 'sale' ? item.buyerName : item.sellerName) || item.title;
-}
-
 export function InboxPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('inbox');

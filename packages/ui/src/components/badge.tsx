@@ -18,6 +18,8 @@ const badgeVariants = cva(
         brand: "border-primary/30 bg-primary/15 text-link",
         success: "border-success/30 bg-success/10 text-success",
         warning: "border-warning/30 bg-warning/10 text-warning",
+        // An AI proposal nobody has approved yet: its own hue, never the accent (DESIGN.md principle 2).
+        proposal: "border-proposal/40 bg-proposal/10 text-proposal",
         outline:
           "border-border text-foreground [a]:hover:bg-muted [a]:hover:text-muted-foreground",
         ghost:
