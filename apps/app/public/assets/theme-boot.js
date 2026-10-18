@@ -8,7 +8,8 @@
   } catch {
     // Storage blocked: the default applies.
   }
-  var dark = setting === 'system' ? window.matchMedia('(prefers-color-scheme: dark)').matches : setting !== 'light';
+  var system = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)').matches : true;
+  var dark = setting === 'system' ? system : setting !== 'light';
   var root = document.documentElement;
   root.classList.toggle('dark', dark);
   root.style.colorScheme = dark ? 'dark' : 'light';

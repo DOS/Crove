@@ -5,6 +5,9 @@ import { resolveTheme, THEME_STORAGE_KEY, themeSetting, type ThemeSetting } from
 
 const listeners = new Set<() => void>();
 let current: ThemeSetting = themeSetting(readStored());
+// Held for the page's life: some browsers drop an unreferenced MediaQueryList, and its change listener with it.
+let query: MediaQueryList | null = null;
+let syncing = false;
 
 function readStored(): string | null {
   try {
@@ -15,7 +18,9 @@ function readStored(): string | null {
 }
 
 function systemQuery(): MediaQueryList | null {
-  return typeof window === 'undefined' || !window.matchMedia ? null : window.matchMedia('(prefers-color-scheme: dark)');
+  if (typeof window === 'undefined' || !window.matchMedia) return null;
+  query ??= window.matchMedia('(prefers-color-scheme: dark)');
+  return query;
 }
 
 function apply(): void {
@@ -52,6 +57,9 @@ function subscribe(listener: () => void): () => void {
 // Follows the system while the setting is "system", and a choice made in another tab.
 export function startThemeSync(): void {
   apply();
+  // Once per page, even if a dev reload runs main.tsx again.
+  if (syncing) return;
+  syncing = true;
   systemQuery()?.addEventListener('change', () => {
     if (current === 'system') notify();
   });
