@@ -4,7 +4,7 @@ Version 3.0 (2026-10-18). Applies to the marketing site (`apps/web`), the web ap
 
 Version 2 described a glow-and-gradient landing style and an older stack (SWR, Next.js links in the app). Both are gone: this version replaces it entirely. The research behind each rule, with sources and measurements, is summarized in [docs/design/ui-ux-research-2026-10.vi.html](docs/design/ui-ux-research-2026-10.vi.html).
 
-**Visual direction (picked 2026-10-18).** Of the five mockups in [docs/design/mockups/](docs/design/mockups/), the owner picked a composition: the frame of B (the product UI is the hero, keyboard-first, graphite neutrals), the agents section of E (org chart and R0 to R3 matrix), the phone section of D, the routing slip of C and the ledger of A. Crove violet is the single, restrained accent; controls use a 6px radius. Type: Archivo for display headings, Be Vietnam Pro for body and UI, JetBrains Mono for amounts and codes. The marketing site implements it in `apps/web` (tokens in `apps/web/src/app/globals.css`); bringing the web app's `packages/ui` tokens and radius in line is a separate change.
+**Visual direction (picked 2026-10-18).** Of the five mockups in [docs/design/mockups/](docs/design/mockups/), the owner picked a composition: the frame of B (the product UI is the hero, keyboard-first, graphite neutrals), the agents section of E (org chart and R0 to R3 matrix), the phone section of D, the routing slip of C and the ledger of A. Crove violet is the single, restrained accent; controls use a 6px radius. Type: Archivo for display headings, Be Vietnam Pro for body and UI, JetBrains Mono for amounts and codes. The marketing site implements it in `apps/web` (tokens in `apps/web/src/app/globals.css`); the web app's `packages/ui` tokens use the same values, with `--radius: 0.375rem` (controls 6px, cards about 8px) and the `proposal` token for AI proposals nobody has approved yet.
 
 ---
 
@@ -52,7 +52,7 @@ Rules:
 - Neutrals carry a slight hue bias toward the accent. No pure mid-grey.
 - No gradients on text, buttons or backgrounds. No radial glows, no glass blur as decoration, no colored shadows.
 - Both themes are designed, not inverted: check contrast and the accent separately in each. The app defaults to dark today (`class="dark"` on `<html>`); the marketing site follows `prefers-color-scheme` with a manual toggle.
-- Planned token (added in the implementation PR): `proposal` for AI-proposed, not yet approved data (outline and chip color), so principle 2 has one consistent look.
+- `proposal`: AI-proposed data nobody has approved yet. Use the `proposal` badge variant and a dashed `border-proposal` outline (the AI Inbox journal card does), never the accent, so principle 2 has one consistent look.
 
 ### 3.2 Typography
 
@@ -82,7 +82,7 @@ Feedback on v2 was that controls looked dated because they were too round. Measu
 
 | Element | Radius |
 | :--- | :--- |
-| Buttons, inputs, selects, segmented controls | 6px (target `--radius: 0.5rem`, buttons use `rounded-md`) |
+| Buttons, inputs, selects, segmented controls | 6px (`--radius: 0.375rem`; components use `rounded-lg`, which is `--radius`) |
 | Cards, panels, table containers | 8px |
 | Dialogs, sheets, large marketing tiles | 12px maximum |
 | Chips, status badges, avatars, toggles | Full round allowed; these are small and not actions |

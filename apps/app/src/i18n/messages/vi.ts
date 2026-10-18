@@ -517,6 +517,7 @@ export const vi = {
     saleNotice:
       'Hóa đơn bán ra: người bán có mã số thuế của tổ chức. Khi duyệt, Crove ghi Nợ 131 phải thu khách hàng, Có tài khoản doanh thu của từng dòng và Có 3331 thuế GTGT đầu ra.',
     journal: 'Bút toán đề xuất (TT133)',
+    proposedNotPosted: 'Đề xuất, chưa ghi sổ',
     account: 'Tài khoản',
     debit: 'Nợ',
     credit: 'Có',
