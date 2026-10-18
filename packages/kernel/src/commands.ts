@@ -602,12 +602,43 @@ export const approveProposal = defineCommand({
   },
 });
 
-// Refusals of one item that leave the rest of the batch going: the approval policy and the state of that proposal
-// (NOT_ELIGIBLE, FOUR_EYES_REQUIRED, PROPOSAL_DECIDED, STALE_REVISION, CHECKS_FAILED, DUPLICATE_INVOICE, a foreign or
-// unknown id...). Anything else (a server fault, a broken context) aborts the whole batch, and so does a second
-// factor that went stale while the batch ran (STEP_UP_REQUIRED): one step-up covers the whole batch or none of it.
-const ITEM_REFUSALS: ReadonlySet<number> = new Set([403, 404, 409, 422]);
-const BATCH_REFUSALS: ReadonlySet<string> = new Set(['STEP_UP_REQUIRED']);
+// The refusals of one item that leave the rest of the batch going: every per-proposal code the nested
+// kernel.proposal.approve can raise for that proposal's state, its approval policy or its content. Listed by code,
+// never by status: any other error aborts the whole batch, including an unknown or newly added code, FORBIDDEN (a
+// proposal command the kernel does not support, the proposal state gate), a second factor that went stale while the
+// batch ran (STEP_UP_REQUIRED: one step-up covers the whole batch or none of it), INVALID, and every server fault.
+export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
+  // The proposal (lockPendingProposal, refuseWhileReextracting): another org's id reads like one that does not exist.
+  'NOT_FOUND',
+  'PROPOSAL_DECIDED',
+  'STALE_REVISION',
+  'EXTRACTION_PENDING',
+  // The approval policy (decideApproval): P10 and P12.
+  'FOUR_EYES_REQUIRED',
+  'NOT_ELIGIBLE',
+  // Recording a purchase (finance.purchase.record and its account check).
+  'CHECKS_BLOCKING',
+  'CHECKS_FAILED',
+  'DUPLICATE_INVOICE',
+  'TOTAL_MISMATCH',
+  'UNBALANCED',
+  'UNKNOWN_LINE',
+  'UNSUPPORTED_CURRENCY',
+  'UNKNOWN_ACCOUNT',
+  'ACCOUNT_INACTIVE',
+  'PARENT_TAGGED',
+  // Reversing an entry (finance.journal.reverse).
+  'ENTRY_NOT_FOUND',
+  'ALREADY_REVERSED',
+  'ENTRY_IS_REVERSAL',
+  'REVERSAL_DATE_BEFORE_ENTRY',
+  'OPENING_REVERSAL_DATE',
+]);
+
+// Whether a nested approval's error refuses only that item.
+export function isBulkItemRefusal(error: unknown): error is DomainError {
+  return error instanceof DomainError && BULK_ITEM_REFUSALS.has(error.code);
+}
 
 export type BulkApproveResult =
   | { id: string; outcome: 'approved'; result: Record<string, unknown> }
@@ -617,8 +648,9 @@ export type BulkApproveResult =
 // fresh second factor (P11) and, for a remote Supabase Auth, the live session once, before any item; a stale step-up
 // refuses the whole batch. Each item then runs kernel.proposal.approve as a nested command, which applies its own
 // P12 eligibility and P10 four-eyes decision and writes its own audit row, exactly as approving it alone would. An
-// item that is refused rolls back to its savepoint and the others go on; the batch's audit row lists every item's
-// outcome. Items run in id order, so two batches over the same proposals lock them in the same order. No line
+// item refused with a listed per-proposal code (BULK_ITEM_REFUSALS) rolls back to its savepoint and the others go
+// on; the batch's audit row lists every item's outcome. A refused item has no audit row of its own (a refusal row is
+// written only by the runtime, for a whole command); its code and rule are in the batch row. Items run in id order, so two batches over the same proposals lock them in the same order. No line
 // accounts and no acceptFailedChecks: a bulk approval only approves what it would approve as shown, and an invoice
 // with failed checks is refused (CHECKS_FAILED) for a one-by-one review.
 export const approveProposals = defineCommand({
@@ -638,7 +670,7 @@ export const approveProposals = defineCommand({
         await sql`RELEASE SAVEPOINT bulk_approve_item`.execute(ctx.trx);
         outcomes.set(item.id, { id: item.id, outcome: 'approved', result });
       } catch (error) {
-        if (!(error instanceof DomainError) || !ITEM_REFUSALS.has(error.status) || BATCH_REFUSALS.has(error.code)) throw error;
+        if (!isBulkItemRefusal(error)) throw error;
         await sql`ROLLBACK TO SAVEPOINT bulk_approve_item`.execute(ctx.trx);
         const rule = typeof error.details?.rule === 'string' ? error.details.rule : null;
         outcomes.set(item.id, { id: item.id, outcome: 'refused', code: error.code, rule });

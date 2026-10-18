@@ -96,7 +96,8 @@ suite('bulk approval through the API (#315)', () => {
     return { status: response.status, body: (body && 'json' in body ? body.json : body) as any };
   }
 
-  async function propose(uploader: Who): Promise<string> {
+  async function propose(uploader: Who, inOrg: string = orgId): Promise<string> {
+    const orgId = inOrg;
     invoiceNo += 1;
     const bytes = new TextEncoder().encode(FIXTURE.toString('utf8').replace('<SHDon>1234</SHDon>', `<SHDon>${invoiceNo}</SHDon>`));
     const sha256 = sha256Hex(bytes);
@@ -208,6 +209,38 @@ suite('bulk approval through the API (#315)', () => {
     // The owner can approve what four-eyes kept from the admin.
     const owner = await rpc('inbox/approveMany', 'owner', { items: [{ id: mine, revision: 1 }], idempotencyKey: randomUUID() }, { mfaAge: 0 });
     expect(owner.body.results).toEqual([expect.objectContaining({ id: mine, outcome: 'approved' })]);
+  });
+
+  it('holds an owner to four-eyes per item, and reads a proposal of another org as not found', async () => {
+    const own = await propose('owner');
+    const byAdmin = await propose('admin');
+    // A second org of the same owner, with a pending proposal of its own.
+    const other = await rpc('org/create', 'owner', { name: 'Công ty khác', idempotencyKey: randomUUID() }, { org: null });
+    expect(other.status).toBe(200);
+    const foreign = await propose('owner', String(other.body?.orgId));
+    const done = await rpc(
+      'inbox/approveMany',
+      'owner',
+      {
+        items: [
+          { id: own, revision: 1 },
+          { id: byAdmin, revision: 1 },
+          { id: foreign, revision: 1 },
+        ],
+        idempotencyKey: randomUUID(),
+      },
+      { mfaAge: 30 },
+    );
+    expect(done.status).toBe(200);
+    expect(done.body.results).toEqual([
+      // The owner uploaded it and the admin may approve it too, so four-eyes refuses the owner.
+      { id: own, outcome: 'refused', code: 'FOUR_EYES_REQUIRED', rule: 'P10' },
+      { id: byAdmin, outcome: 'approved', journalEntryId: expect.any(String), documentId: expect.any(String) },
+      { id: foreign, outcome: 'refused', code: 'NOT_FOUND', rule: null },
+    ]);
+    // The other org's proposal is untouched, still pending there.
+    const there = await rpc('inbox/list', 'owner', { status: 'pending' }, { org: String(other.body?.slug) });
+    expect(there.body).toContainEqual(expect.objectContaining({ id: foreign }));
   });
 
   it('takes 1 to 50 distinct items', async () => {

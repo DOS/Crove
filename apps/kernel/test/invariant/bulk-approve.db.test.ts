@@ -2,21 +2,22 @@
 // - a batch never approves an item the caller could not approve alone: each item gets the same P12 eligibility and
 //   P10 four-eyes decision, and the same refusal code, as kernel.proposal.approve on that item by itself, and only
 //   the approved items are posted, each with its own approval audit row;
-// - a stale or missing step-up (P11) refuses the whole batch before any item, and a role that may not approve gets
-//   nothing approved either.
+// - a stale or missing step-up (P11) refuses the whole batch before any item, a step-up that goes stale between two
+//   items commits nothing, and a role that may not approve, or an AI agent, gets nothing approved either;
+// - only listed per-proposal codes refuse one item; any other refusal aborts the whole batch.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createExtractApp } from '@crove/extract';
 import { createExtractClient } from '@crove/extract-contract';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
+import { Runtime, fileKey, sha256Hex, type BlobStore, type CommandDef } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -278,5 +279,86 @@ suite('bulk approval on PostgreSQL (#315)', () => {
       expect(state).toMatchObject({ status: 'executed', documents: 1 });
       expect(state.approvals).toEqual([expect.objectContaining({ actor_id: admin, detail: expect.objectContaining({ aal: 'aal2', sessionId: SESSION }) })]);
     }
+  });
+
+  it('commits nothing when the step-up goes stale between two items (P11)', async () => {
+    const { orgId, owner, people } = await orgWith('Bulk stale midway', ['admin']);
+    const admin = people[0] as string;
+    const items = [
+      { id: await proposeIn(orgId, owner), revision: 1 },
+      { id: await proposeIn(orgId, owner), revision: 1 },
+    ];
+    // The clock moves past the 5-minute window right after the first item is posted.
+    const realNow = Date.now.bind(Date);
+    let skewMs = 0;
+    const skewing = ([...kernelCommands, ...financeCommands] as CommandDef<unknown, unknown>[]).map(
+      (def): CommandDef<unknown, unknown> =>
+        def.name === 'finance.purchase.record'
+          ? {
+              ...def,
+              handler: async (ctx, input) => {
+                const out = await def.handler(ctx, input);
+                skewMs = 400_000;
+                return out;
+              },
+            }
+          : def,
+    );
+    const clocked = new Runtime(db).register({ commands: skewing, queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries] });
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skewMs);
+    try {
+      expect(await refusalOf(clocked.execute('kernel.proposal.approve_many', { items }, { actor: asMfa(admin, 30), orgId }))).toEqual({
+        code: 'STEP_UP_REQUIRED',
+        status: 403,
+      });
+      // The first item really was posted inside the batch before the clock moved.
+      expect(skewMs).toBe(400_000);
+    } finally {
+      now.mockRestore();
+    }
+    for (const { id } of items) expect(await proposalState(id)).toEqual({ status: 'pending', documents: 0, approvals: [] });
+  });
+
+  it('aborts the whole batch on a refusal that is not a per-proposal code', async () => {
+    const { orgId, owner } = await orgWith('Bulk abort', []);
+    const fine = await proposeIn(orgId, owner);
+    const odd = await proposeIn(orgId, owner);
+    // A proposal of a command the kernel does not approve: approving it alone is FORBIDDEN (403), which is not an
+    // item refusal, so the batch posts nothing, not even the proposal that would pass alone.
+    await withAdmin(async (a) => {
+      await a.query('SET session_replication_role = replica');
+      await a.query("UPDATE crove_kernel.proposal SET command = 'test.unsupported' WHERE id = $1", [odd]);
+    });
+    const items = [
+      { id: fine, revision: 1 },
+      { id: odd, revision: 1 },
+    ];
+    expect(await refusalOf(bulk(orgId, asMfa(owner), items))).toEqual({ code: 'FORBIDDEN', status: 403 });
+    expect(await proposalState(fine)).toEqual({ status: 'pending', documents: 0, approvals: [] });
+    expect(await proposalState(odd)).toEqual({ status: 'pending', documents: 0, approvals: [] });
+    // Alone, the good one still goes through.
+    expect((await bulk(orgId, asMfa(owner), [{ id: fine, revision: 1 }])).results).toEqual([expect.objectContaining({ id: fine, outcome: 'approved' })]);
+  });
+
+  it('refuses an AI agent, which never approves (P05)', async () => {
+    const { orgId, owner } = await orgWith('Bulk agent', []);
+    const id = await proposeIn(orgId, owner);
+    const { agentId, positionId } = await runtime.execute<{ agentId: string; positionId: string }>(
+      'kernel.agent.template.install',
+      { templateKey: 'finance.chief_accountant', reportsTo: null },
+      { actor: asMfa(owner), orgId },
+    );
+    await runtime.execute('kernel.task.create', { title: 'Việc thử', assigneePositionId: positionId }, { actor: asUser(owner), orgId });
+    const started = await workerRuntime.execute<{ runId: string | null }>('kernel.agent.run.start', { agentId }, {
+      actor: { type: 'system', component: 'kernel.agent' },
+      orgId,
+    });
+    if (!started.runId) throw new Error('no run');
+    const agent = { type: 'agent' as const, agentId, runId: started.runId };
+    expect(await refusalOf(runtime.execute('kernel.proposal.approve_many', { items: [{ id, revision: 1 }] }, { actor: agent, orgId }))).toEqual({
+      code: 'FORBIDDEN',
+      status: 403,
+    });
+    expect(await proposalState(id)).toEqual({ status: 'pending', documents: 0, approvals: [] });
   });
 });
