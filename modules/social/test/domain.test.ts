@@ -157,6 +157,13 @@ describe('validateVariant', () => {
     expect(fb).toEqual(['TITLE_NOT_SUPPORTED']);
   });
 
+  it("holds Facebook photos to Meta's types and 4 MB", () => {
+    const codes = (media: MediaItem[]) => validateVariant({ provider: 'facebook_page', body: 'x', title: null, media }).map((i) => i.code);
+    expect(codes([jpeg(), png()])).toEqual([]);
+    expect(codes([{ kind: 'image', mime: 'image/webp', sizeBytes: 1000, durationSeconds: null }])).toEqual(['IMAGE_TYPE_NOT_ALLOWED']);
+    expect(codes([jpeg(5 * 1024 * 1024)])).toEqual(['IMAGE_TOO_LARGE']);
+  });
+
   it('refuses images mixed with video where the channel does not mix them', () => {
     const codes = validateVariant({ provider: 'facebook_page', body: '', title: null, media: [jpeg(), mp4()] }).map((i) => i.code);
     expect(codes).toEqual(['MEDIA_MIX_NOT_ALLOWED']);
