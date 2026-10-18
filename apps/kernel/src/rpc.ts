@@ -268,13 +268,15 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
                 retryAfterSeconds: ticket.retryAfterSeconds,
               });
             }
-            const draft = await socialWriter
-              .draft({ brief: input.brief, channels, language: input.language ?? 'vi', ...(input.tone ? { tone: input.tone } : {}) })
-              .catch((error: unknown) => {
-                console.error('[social-ai] draft failed', error instanceof Error ? error.name : typeof error);
-                throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
-              })
-              .finally(() => ticket.release());
+            let draft: Awaited<ReturnType<SocialDrafter['draft']>>;
+            try {
+              draft = await socialWriter.draft({ brief: input.brief, channels, language: input.language ?? 'vi', ...(input.tone ? { tone: input.tone } : {}) });
+            } catch (error: unknown) {
+              console.error('[social-ai] draft failed', error instanceof Error ? error.name : typeof error);
+              throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
+            } finally {
+              ticket.release();
+            }
             if (!draft) throw new DomainError('AI_DRAFT_EMPTY', 422, 'AI không soạn được bài từ mô tả này, hãy viết rõ hơn');
             const own = new Map(draft.variants.map((v) => [v.key, v]));
             const created = await runtime.execute<{ postId: string }>(

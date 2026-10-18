@@ -27,6 +27,20 @@ describe('DraftBudget', () => {
     expect(budget.take('org-a', 'u1').allowed).toBe(true);
   });
 
+  it('charges a member nothing for a draft the org budget refuses', () => {
+    let now = 0;
+    // One draft a minute per member, two per org (one back every 30 seconds).
+    const budget = new DraftBudget({ perUserPerMinute: 1, perOrgPerMinute: 2, now: () => now });
+    for (const user of ['u1', 'u2']) {
+      const t = budget.take('org-a', user);
+      if (t.allowed) t.release();
+    }
+    expect(budget.take('org-a', 'u3')).toMatchObject({ allowed: false, reason: 'org' });
+    // 30 seconds later the org has one draft back; u3 was not charged, so it gets it (charged, it would wait a minute).
+    now += 30_000;
+    expect(budget.take('org-a', 'u3').allowed).toBe(true);
+  });
+
   it('releases a ticket once, whatever calls it again', () => {
     const budget = new DraftBudget();
     const t = budget.take('org', 'u');
