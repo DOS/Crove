@@ -12,6 +12,8 @@ import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const META_GRAPH_HOST = 'graph.facebook.com';
+// Video uploads go to Graph's video host.
+export const META_VIDEO_HOST = 'graph-video.facebook.com';
 export const META_DEFAULT_GRAPH_VERSION = 'v24.0';
 // What a Page connection needs: list the Pages, post to them, read posts back to reconcile and for metrics.
 export const FACEBOOK_PAGE_SCOPES = ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement'] as const;
@@ -57,16 +59,17 @@ export class Graph {
     if (!/^v\d{1,3}\.\d{1,2}$/.test(version)) throw new Error('invalid Graph API version');
     this.version = version;
     this.appSecret = appSecret;
-    this.fetch = allowlistedFetch([META_GRAPH_HOST], fetchImpl);
+    this.fetch = allowlistedFetch([META_GRAPH_HOST, META_VIDEO_HOST], fetchImpl);
   }
 
-  url(path: string, params: Record<string, string> = {}): string {
-    const url = new URL(`https://${META_GRAPH_HOST}/${this.version}/${path.replace(/^\//, '')}`);
+  url(path: string, params: Record<string, string> = {}, host: string = META_GRAPH_HOST): string {
+    const url = new URL(`https://${host}/${this.version}/${path.replace(/^\//, '')}`);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     return url.toString();
   }
 
-  async call<T>(method: 'GET' | 'POST', path: string, options: { token?: string; params?: Record<string, string>; form?: Record<string, string>; multipart?: FormData } = {}): Promise<T> {
+  // video: the call goes to Graph's video host; timeoutMs: longer than the default for an upload.
+  async call<T>(method: 'GET' | 'POST', path: string, options: { token?: string; params?: Record<string, string>; form?: Record<string, string>; multipart?: FormData; video?: boolean; timeoutMs?: number } = {}): Promise<T> {
     const params = { ...options.params };
     const headers: Record<string, string> = { accept: 'application/json' };
     if (options.token) {
@@ -81,7 +84,12 @@ export class Graph {
       // fetch sets the multipart content type with its boundary.
       body = options.multipart;
     }
-    const response = await this.fetch(this.url(path, params), { method, headers, ...(body === undefined ? {} : { body }) });
+    const response = await this.fetch(this.url(path, params, options.video ? META_VIDEO_HOST : META_GRAPH_HOST), {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body }),
+      ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
+    });
     const json = (await response.json().catch(() => null)) as ({ error?: GraphErrorBody } & Record<string, unknown>) | null;
     if (!response.ok || !json || json.error) throw new GraphError(response.status, json?.error);
     return json as T;
@@ -276,9 +284,14 @@ export function graphPublishResult(error: unknown): PublishResult {
   return { kind: 'unknown', code: base.code, message: base.message };
 }
 
+// The upload of a video of up to 100 MB; the job waits a little longer (callTimeoutMs), so the adapter sees its own abort.
+const VIDEO_UPLOAD_TIMEOUT_MS = 300_000;
+
 export class FacebookPagePublisher implements Publisher {
   readonly provider = 'facebook_page' as const;
   readonly publishSafety: RetrySafety = 'reconcile_only';
+  // A video upload takes minutes; within the job's stale limit (600 s).
+  readonly callTimeoutMs = 420_000;
   private readonly graph: Graph;
 
   constructor(app: Pick<MetaAppConfig, 'appSecret' | 'graphVersion'>, fetchImpl?: Fetch) {
@@ -291,6 +304,7 @@ export class FacebookPagePublisher implements Publisher {
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_PAGE_TOKEN' };
     if (!/^\d{1,32}$/.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_PAGE_ID' };
     const media = input.content.media;
+    if (media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, token);
     const form: Record<string, string> = { message: feedMessage(input.content) };
     if (input.content.linkUrl && media.length === 0) form.link = input.content.linkUrl;
     if (!form.message && !form.link && media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
@@ -304,6 +318,33 @@ export class FacebookPagePublisher implements Publisher {
       // Meta answered 200 without an id: it may have posted.
       if (typeof answer.id !== 'string' || !answer.id) return { kind: 'unknown', code: 'NO_POST_ID' };
       return { kind: 'accepted', externalId: answer.id, url: postUrl(answer.id) };
+    } catch (error) {
+      return graphPublishResult(error);
+    }
+  }
+
+  // A video post (#443): the bytes in one non-resumable upload to the Page's videos, with the post text as its
+  // description. The post goes live once Meta takes the upload, so an unclear answer is unknown and reconciled from
+  // the Page's posts by text, like a feed post. Meta names the video; its post on the Page is "{page id}_{video id}"
+  // (an inference from how Page post ids are formed, which the metrics read relies on).
+  private async publishVideo(input: PublishInput, token: string): Promise<PublishResult> {
+    const media = input.content.media;
+    const video = media[0];
+    if (!video || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
+    let bytes: Uint8Array;
+    try {
+      bytes = await input.readMedia(video.fileId);
+    } catch {
+      return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
+    }
+    const body = new FormData();
+    body.set('description', feedMessage(input.content));
+    body.set('published', 'true');
+    body.set('source', new Blob([new Uint8Array(bytes)], { type: video.mime }), video.mime === 'video/quicktime' ? 'video.mov' : 'video.mp4');
+    try {
+      const answer = await this.graph.call<FeedAnswer>('POST', `${input.externalAccountId}/videos`, { token, multipart: body, video: true, timeoutMs: VIDEO_UPLOAD_TIMEOUT_MS });
+      if (typeof answer.id !== 'string' || !/^\d{1,32}$/.test(answer.id)) return { kind: 'unknown', code: 'NO_VIDEO_ID' };
+      return { kind: 'accepted', externalId: `${input.externalAccountId}_${answer.id}`, url: `https://www.facebook.com/${input.externalAccountId}/videos/${answer.id}` };
     } catch (error) {
       return graphPublishResult(error);
     }
