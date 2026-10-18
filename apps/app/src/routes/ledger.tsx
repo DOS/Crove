@@ -179,8 +179,9 @@ function StatementTable({ title, lines, unmapped }: { title: string; lines: Stat
         <Alert className="border-warning/30 bg-warning/10 text-warning" role="note">
           <p className="font-medium">{t('unmappedTitle')}</p>
           <ul className="mt-1 space-y-0.5 text-sm">
-            {unmapped.map((u) => (
-              <li key={`${u.accountCode}-${u.partyName ?? ''}`}>
+            {/* One row per account and party; two parties may share a name, so the position keeps keys apart. */}
+            {unmapped.map((u, index) => (
+              <li key={`${index}-${u.accountCode}`}>
                 <span className="font-mono">{u.accountCode}</span> {[u.accountName, u.partyName].filter(Boolean).join(', ')}: <Balance value={u.amount} />
               </li>
             ))}
