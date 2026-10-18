@@ -214,6 +214,7 @@ export function JournalPage() {
                 <p className="text-sm font-medium text-foreground">{entry.description}</p>
                 <div className="flex flex-wrap items-center gap-2">
                   {entry.sourceType === OPENING_BALANCE_SOURCE && <Badge variant="secondary">{ob('badge')}</Badge>}
+                  {entry.voucher && <Badge variant="secondary">{entry.voucher.code}</Badge>}
                   {entry.document?.direction === 'sale' && <Badge variant="secondary">{t('saleBadge')}</Badge>}
                   {entry.reverses && <Badge variant="secondary">{t('reversalBadge')}</Badge>}
                   {entry.reversedBy && <Badge variant="warning">{t('reversedBadge')}</Badge>}

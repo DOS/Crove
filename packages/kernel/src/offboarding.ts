@@ -42,6 +42,8 @@ export const EXPORT_TABLES = {
   'finance.vendor_account_rule': { from: 'crove_finance.vendor_account_rule', omit: [] },
   // The org's sub-accounts (#319): journal lines name them by code.
   'finance.org_account': { from: 'crove_finance.org_account', omit: [] },
+  // Cash and bank vouchers (#327): their journal entries name them.
+  'finance.cash_voucher': { from: 'crove_finance.cash_voucher', omit: [] },
   'social.post': { from: 'crove_social.post', omit: [] },
   'social.post_variant': { from: 'crove_social.post_variant', omit: [] },
   'social.post_approval': { from: 'crove_social.post_approval', omit: [] },

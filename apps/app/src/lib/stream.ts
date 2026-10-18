@@ -38,8 +38,9 @@ export function hintMatches(hint: StreamHint, query: Query): boolean {
       // extraction carries the id of the file whose reading changed.
       return path === 'files.recent' || path === 'inbox.list' || (path === 'inbox.get' && detail(query)?.file?.id === id);
     case 'journal_entry': {
-      // The ledger reports (#321) read every posted entry, so any new one changes them.
-      if (path === 'journal.list' || path === 'documents.list' || path === 'ledger.period' || path === 'ledger.account') return true;
+      // The ledger reports (#321) read every posted entry, so any new one changes them. A voucher (#327) is posted, and
+      // shown as reversed, with an entry.
+      if (path === 'journal.list' || path === 'documents.list' || path === 'ledger.period' || path === 'ledger.account' || path === 'vouchers.list') return true;
       if (path === 'journal.get') return inputId(query) === id;
       const result = detail(query)?.result;
       return path === 'inbox.get' && (result?.journalEntryId === id || result?.reversedEntryId === id);

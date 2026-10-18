@@ -47,6 +47,7 @@ import {
   TASK_SOURCES,
   TASK_STATUSES,
   TENANT_STATUSES,
+  VOUCHER_TYPES,
   type Database,
 } from '../src/schema.ts';
 
@@ -107,6 +108,7 @@ const UNIONS = unions({
   'crove_kernel.tenant.status': TENANT_STATUSES,
   'crove_kernel.tenant_member.role': MEMBER_ROLES,
   'crove_finance.purchase_document.direction': DOCUMENT_DIRECTIONS,
+  'crove_finance.cash_voucher.voucher_type': VOUCHER_TYPES,
   'crove_social.post.actor_origin': SOCIAL_ACTOR_ORIGINS,
   'crove_social.post.origin': SOCIAL_ORIGINS,
   'crove_social.post.status': SOCIAL_POST_STATUSES,

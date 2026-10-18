@@ -415,6 +415,23 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_finance.org_account': {
     make: (o) => ({ row: { org_id: o.id, code: `6422.${tag().toUpperCase()}`, name: 'RLS matrix sub-account', parent_code: '6422' } }),
   },
+  // Cash and bank vouchers (#327): append-only, numbered per org and type by the insert trigger (the row gives no
+  // number). By commit a voucher must have its journal entry, on its date, moving the cash account by its amount, so
+  // seeding completes it with that entry (written as the database owner); the probes roll back before that check.
+  'crove_finance.cash_voucher': {
+    make: (o) => {
+      const id = randomUUID();
+      const entry = randomUUID();
+      return {
+        row: { org_id: o.id, id, voucher_type: 'cash_payment', voucher_date: '2026-10-01', cash_account: '1111', party_id: o.party, description: 'RLS matrix', amount: '100' },
+        complete: [
+          { table: 'crove_finance.journal_entry', values: { ...journalEntry(o.id, entry).values, source_type: 'finance.cash_voucher', source_id: id } },
+          { table: 'crove_finance.journal_line', values: { org_id: o.id, entry_id: entry, line_no: 1, account_code: '331', debit: '100', credit: '0' } },
+          { table: 'crove_finance.journal_line', values: { org_id: o.id, entry_id: entry, line_no: 2, account_code: '1111', debit: '0', credit: '100' } },
+        ],
+      };
+    },
+  },
   'crove_finance.vendor_account_rule': {
     make: (o) => {
       const party = randomUUID();

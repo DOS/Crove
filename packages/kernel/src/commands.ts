@@ -35,10 +35,14 @@ import { setTaxCode } from './tax-code.ts';
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // Commands a proposal may execute when approved (they must also declare access: 'proposal', which the runtime checks
 // against the proposal row: state 'approved' for that command, approved by the running kernel.proposal.approve).
-const PROPOSAL_COMMANDS = new Set(['finance.purchase.record', 'finance.journal.reverse']);
+const PROPOSAL_COMMANDS = new Set(['finance.purchase.record', 'finance.journal.reverse', 'finance.voucher.record']);
 // Proposals a user may ask for (kernel.proposal.request), and the module command that checks the request and builds
 // the proposal from the database; it writes nothing. The title and payload come from it, never from the requester.
-const PROPOSAL_PREPARERS = { 'finance.journal.reverse': 'finance.journal.prepare_reversal' } as const;
+// A cash or bank voucher (#327) is entered by hand this way.
+const PROPOSAL_PREPARERS = {
+  'finance.journal.reverse': 'finance.journal.prepare_reversal',
+  'finance.voucher.record': 'finance.voucher.prepare',
+} as const;
 type RequestableCommand = keyof typeof PROPOSAL_PREPARERS;
 const REQUESTABLE = Object.keys(PROPOSAL_PREPARERS) as [RequestableCommand, ...RequestableCommand[]];
 const ADMINS = ['owner', 'admin'] as const;
@@ -573,6 +577,9 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   'ENTRY_IS_REVERSAL',
   'REVERSAL_DATE_BEFORE_ENTRY',
   'OPENING_REVERSAL_DATE',
+  // Posting a cash or bank voucher (finance.voucher.record, #327).
+  'VOUCHER_INVALID',
+  'PARTY_NOT_FOUND',
 ]);
 
 // Whether a nested approval's error refuses only that item.

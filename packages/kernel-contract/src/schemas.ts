@@ -242,6 +242,45 @@ export const zInboxItem = z.object({
   createdAt: z.string(),
 });
 
+// Cash and bank vouchers (issue #327; cash-voucher.ts has the rest).
+// cash_receipt: phiếu thu (money into the cash box, 111); cash_payment: phiếu chi (out of it); bank_credit: giấy báo
+// Có (money into a bank account, 112); bank_debit: giấy báo Nợ (out of it).
+export const VOUCHER_TYPES = ['cash_receipt', 'cash_payment', 'bank_credit', 'bank_debit'] as const;
+export const zVoucherType = z.enum(VOUCHER_TYPES);
+export type VoucherType = z.infer<typeof zVoucherType>;
+
+export const VOUCHER_MAX_LINES = 20;
+
+// A whole number of VND above zero, at most 15 digits (the money columns hold 16 integer digits).
+export const zVoucherAmount = z
+  .string()
+  .regex(/^\d{1,15}$/, 'whole VND amount')
+  .refine((v) => /[1-9]/.test(v), 'amount above zero');
+
+// One line of the voucher: the account the money settles (131 a customer's debt, 331 a vendor's, 6422 an expense, ...)
+// and how much of the voucher's total goes to it.
+export const zVoucherLine = z.object({
+  account: zAccountCode,
+  amount: zVoucherAmount,
+  // Diễn giải of the line; the voucher's reason when empty.
+  memo: z.string().trim().max(300).optional(),
+});
+export type VoucherLine = z.infer<typeof zVoucherLine>;
+
+// The payload of a finance.cash_voucher proposal, built by the server from the request (the party as found, the total
+// computed). finance.voucher.record checks it all again when the proposal is approved.
+export const zCashVoucherProposal = z.object({
+  type: zVoucherType,
+  date: zLocalDate,
+  cashAccount: zAccountCode,
+  party: z.object({ id: zId, name: z.string().max(500), taxCode: z.string().max(20).nullable() }).nullable(),
+  personName: z.string().max(200).nullable(),
+  description: z.string().min(1).max(300),
+  lines: z.array(zVoucherLine).min(1).max(VOUCHER_MAX_LINES),
+  total: zVoucherAmount,
+});
+export type CashVoucherProposal = z.infer<typeof zCashVoucherProposal>;
+
 // Payload of a finance.journal_reversal proposal (#138), asked for with inbox.request and executed by
 // finance.journal.reverse on approval.
 export const zJournalReversal = z.object({
@@ -254,17 +293,25 @@ export type JournalReversal = z.infer<typeof zJournalReversal>;
 
 export const zInboxDetail = zInboxItem.extend({
   revision: z.number().int(),
-  // Parsed by kind: a purchase (kind finance.purchase) or a reversal (kind finance.journal_reversal); the other is null.
+  // Parsed by kind: a purchase (kind finance.purchase), a reversal (kind finance.journal_reversal) or a cash or bank
+  // voucher (kind finance.cash_voucher, #327); the others are null.
   payload: zPurchaseProposal.nullable(),
   reversal: zJournalReversal.nullable(),
+  voucher: zCashVoucherProposal.nullable(),
   error: z.string().nullable(),
   file: z.object({ id: zId, filename: z.string(), contentType: z.string(), sizeBytes: z.string() }).nullable(),
   decidedAt: z.string().nullable(),
   decisionNote: z.string().nullable(),
   // A purchase returns its document; a reversal returns the entry it reversed and, for a purchase entry, the
-  // document it voided (#165).
+  // document it voided (#165); a voucher returns the voucher (#327).
   result: z
-    .object({ documentId: zId.optional(), journalEntryId: zId, reversedEntryId: zId.optional(), voidedDocumentId: zId.optional() })
+    .object({
+      documentId: zId.optional(),
+      journalEntryId: zId,
+      reversedEntryId: zId.optional(),
+      voidedDocumentId: zId.optional(),
+      voucherId: zId.optional(),
+    })
     .nullable(),
   // An executed purchase whose document was voided by reversing its journal entry (#165): the file may be read again
   // and the invoice recorded anew.
@@ -386,6 +433,8 @@ export const zJournalEntry = z.object({
   document: z
     .object({ id: zId, direction: zDocumentDirection, series: z.string(), number: z.string(), issueDate: zLocalDate, partyName: z.string(), voided: z.boolean() })
     .optional(),
+  // The cash or bank voucher this entry posts, when it does (#327; absent otherwise).
+  voucher: z.object({ id: zId, type: zVoucherType, code: z.string(), partyName: z.string().nullable() }).optional(),
 });
 
 // One account of the org's chart: a TT133 account (custom false, always active) or one of the org's sub-accounts
