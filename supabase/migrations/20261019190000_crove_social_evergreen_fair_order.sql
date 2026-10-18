@@ -25,8 +25,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
       SELECT 1 FROM crove_social.post r
       WHERE r.org_id = p.org_id AND r.repost_of = p.id AND r.status NOT IN ('published', 'partially_published', 'failed', 'cancelled')
     )
-  -- The same order within an hour (two runs agree), another one the next hour.
-  ORDER BY pg_catalog.md5(p.id::text || pg_catalog.to_char(pg_catalog.date_trunc('hour', pg_catalog.now()), 'YYYYMMDDHH24')), p.id
+  -- The same order within an hour of UTC (two runs agree, whatever their session time zone), another one the next.
+  ORDER BY pg_catalog.md5(p.id::text || pg_catalog.to_char(pg_catalog.date_trunc('hour', pg_catalog.timezone('UTC', pg_catalog.now())), 'YYYYMMDDHH24')), p.id
   LIMIT LEAST(GREATEST(p_limit, 1), 500)
 $$;
 
