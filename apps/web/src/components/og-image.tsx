@@ -10,11 +10,12 @@ export const OG_SIZE = { width: 1200, height: 630 };
 // Vietnamese marks included). This runs at build time, like next/font itself.
 async function font(weight: 400 | 600, text: string): Promise<ArrayBuffer> {
   const url = `https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@${weight}&text=${encodeURIComponent(text)}`;
-  // Google Fonts picks the format from the User-Agent; an old one gets TrueType, which Satori reads (it cannot read
-  // WOFF2), whatever fetch would send by default.
-  const css = await (await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; rv:2.0) Gecko/20100101 Firefox/4.0' } })).text();
-  const src = css.match(/src: url\((.+?)\) format\('(?:truetype|opentype)'\)/)?.[1];
-  if (!src) throw new Error('Be Vietnam Pro: no TrueType or OpenType source in the Google Fonts answer');
+  // Google Fonts picks the format from the User-Agent. An old Safari gets TrueType, which Satori reads (it cannot read
+  // WOFF2), whatever fetch would send by default; WOFF is accepted too in case the answer changes.
+  const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_6_8) AppleWebKit/533.21.1 (KHTML, like Gecko) Version/5.0.5 Safari/533.21.1';
+  const css = await (await fetch(url, { headers: { 'User-Agent': userAgent } })).text();
+  const src = css.match(/src: url\((.+?)\) format\('(?:truetype|opentype|woff)'\)/)?.[1];
+  if (!src) throw new Error('Be Vietnam Pro: no TrueType, OpenType or WOFF source in the Google Fonts answer');
   return (await fetch(src)).arrayBuffer();
 }
 
