@@ -4,7 +4,7 @@ Version 3.0 (2026-10-18). Applies to the marketing site (`apps/web`), the web ap
 
 Version 2 described a glow-and-gradient landing style and an older stack (SWR, Next.js links in the app). Both are gone: this version replaces it entirely. The research behind each rule, with sources and measurements, is summarized in [docs/design/ui-ux-research-2026-10.vi.html](docs/design/ui-ux-research-2026-10.vi.html).
 
-**Status of the visual direction.** Five landing-page directions are mocked up in [docs/design/mockups/](docs/design/mockups/) (A Sổ cái, B Bàn điều khiển, C Chứng từ, D Ô dữ liệu, E Sơ đồ tổ chức). The owner picks the direction and the elements to keep; the implementation PR then sets the final token values in [globals.css](packages/ui/src/styles/globals.css) and in section 3 below. Every rule outside the token values holds whichever direction wins.
+**Visual direction (picked 2026-10-18).** Of the five mockups in [docs/design/mockups/](docs/design/mockups/), the owner picked a composition: the frame of B (the product UI is the hero, keyboard-first, graphite neutrals), the agents section of E (org chart and R0 to R3 matrix), the phone section of D, the routing slip of C and the ledger of A. Crove violet is the single, restrained accent; controls use a 6px radius. Type: Archivo for display headings, Be Vietnam Pro for body and UI, JetBrains Mono for amounts and codes. The marketing site implements it in `apps/web` (tokens in `apps/web/src/app/globals.css`); bringing the web app's `packages/ui` tokens and radius in line is a separate change.
 
 ---
 
@@ -234,7 +234,7 @@ Approve, edit and reject have equal visual access (reject is not hidden in a men
 
 - Vietnamese is the default locale; English is the second (`apps/app/src/i18n/locale.ts`).
 - App: `use-intl`, messages in `apps/app/src/i18n/messages/vi.ts` and `en.ts`; every visible string, including toasts, errors and aria labels, has a key in both.
-- Marketing site: `apps/web/src/i18n/translations.ts`, both `vi` and `en` complete. A page never mixes languages (no Vietnamese button in the English page).
+- Marketing site: one route per language (`/` Vietnamese, `/en` English), copy in `apps/web/src/content/vi.ts` and `en.ts`; the `Dictionary` type keeps them in step, so a missing English string fails typecheck. A page never mixes languages (no Vietnamese button in the English page); example company names and documents stay Vietnamese in both.
 - Vietnamese text runs about 10 to 30 percent longer than English: layouts must not depend on English string lengths.
 
 ## 9. App engineering notes
