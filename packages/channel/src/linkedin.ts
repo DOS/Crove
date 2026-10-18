@@ -264,8 +264,9 @@ export class LinkedInPublisher implements Publisher {
       // The parts must cover the file exactly, in order: each starts where the last ended, the last ends at its end.
       let next = 0;
       for (const part of parts) {
-        const first = Number(part.firstByte);
-        const last = Number(part.lastByte);
+        // Numbers as LinkedIn sends them (Number(null) would read 0).
+        const first = typeof part.firstByte === 'number' ? part.firstByte : Number.NaN;
+        const last = typeof part.lastByte === 'number' ? part.lastByte : Number.NaN;
         if (typeof part.uploadUrl !== 'string' || first !== next || !Number.isInteger(last) || last < first || last >= bytes.byteLength) return { kind: 'rejected', error: 'transient', code: 'BAD_UPLOAD_PART' };
         next = last + 1;
       }
