@@ -63,6 +63,7 @@ import {
   zVatFilingPeriod,
   zVatReport,
   zAccountLedger,
+  zFinancialStatements,
   zLedgerPeriod,
   zLedgerReport,
   zPeriodLockInput,
@@ -378,6 +379,9 @@ export const contract = {
   ledger: {
     period: oc.input(z.object({ period: zLedgerPeriod })).output(zLedgerReport),
     account: oc.input(z.object({ period: zLedgerPeriod, accountCode: zAccountCode })).output(zAccountLedger),
+    // Issue #154: the DRAFT B01-DNN at the period's last day and B02-DNN for the period. The Excel workbook is
+    // GET /api/export/statements.xlsx?period=<period>.
+    statements: oc.input(z.object({ period: zLedgerPeriod })).output(zFinancialStatements),
   },
   // Period lock (#329): every member reads it; owners and admins lock the next month once it has ended; only owners
   // unlock the last locked month (R3: fresh MFA), with a reason. A retry with the same idempotencyKey returns the first

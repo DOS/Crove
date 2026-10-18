@@ -39,12 +39,14 @@ import {
   MISA_SME_SALES,
   buildJournalWorkbook,
   buildLedgerWorkbook,
+  buildStatementsWorkbook,
   buildMisaWorkbook,
   buildVat01Xml,
   buildVatWorkbook,
   purchaseRows,
   salesRows,
   type JournalEntryView,
+  type FinancialStatements,
   type LedgerBook,
   type PurchaseVoucher,
   type SalesVoucher,
@@ -993,6 +995,30 @@ export function createHttpApp(deps: HttpDeps) {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': attachmentDisposition(orgSlug, ['crove', 'so-sach', book.period.period, ORG_SLUG], 'xlsx'),
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // The DRAFT financial statements of one month, quarter or year (issue #154), ?period= as for the ledger reports.
+    // The query checks the period (422 otherwise) and the roles, so the file name below only ever holds a valid period.
+    app.get('/api/export/statements.xlsx', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const period = c.req.query('period') ?? '';
+        const statements = await runtime.query<FinancialStatements>('finance.statements.period', { period }, { actor: actorOf(user), orgId });
+        const bytes = await buildStatementsWorkbook(statements, orgSlug ?? '');
+        // The export's audit row (the period). No row, no download.
+        await runtime.execute('finance.statements.export', { period: statements.period.period }, { actor: actorOf(user), orgId });
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': `attachment; filename="crove-bao-cao-tai-chinh-${statements.period.period}-${orgSlug}.xlsx"`,
             'cache-control': 'private, no-store',
           },
         });

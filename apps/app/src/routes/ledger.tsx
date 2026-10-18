@@ -1,9 +1,11 @@
 // Ledger reports (issue #321): for a month, quarter or year, the trial balance, the general ledger of one account and
 // the receivables and payables per party, from posted entries, with one Excel workbook of all of them. The period
-// lock (#329) sits above the reports.
+// lock (#329) sits above the reports. The financial statements tab (issue #154) shows the DRAFT B01-DNN and B02-DNN
+// of the same period, with a workbook of its own.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
+import { Alert } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
@@ -16,8 +18,8 @@ import { apiFetch, errorMessage, getCurrentOrg, orpc } from '../lib/api.ts';
 import { balanceSide, defaultLedgerPeriod, ledgerPeriodKey, switchLedgerKind, type LedgerPeriodChoice, type LedgerPeriodKind } from '../lib/ledger.ts';
 import { yearOptions } from '../lib/vat.ts';
 
-type Tab = 'trialBalance' | 'generalLedger' | 'parties';
-const TABS: Tab[] = ['trialBalance', 'generalLedger', 'parties'];
+type Tab = 'trialBalance' | 'generalLedger' | 'parties' | 'statements';
+const TABS: Tab[] = ['trialBalance', 'generalLedger', 'parties', 'statements'];
 
 interface PartyRow {
   partyId: string | null;
@@ -148,6 +150,99 @@ function AccountLedger({ period, accountCode }: { period: string; accountCode: s
         </TableCell>
       </TableRow>
     </DataTable>
+  );
+}
+
+interface StatementLine {
+  code: string;
+  label: string;
+  amount: string;
+  // A line that adds up earlier ones, bold as on the form.
+  total: boolean;
+}
+
+interface UnmappedRow {
+  accountCode: string;
+  accountName: string | null;
+  partyName: string | null;
+  amount: string;
+}
+
+// One statement: its lines with the codes of the form, totals in bold, then the balances no line reads.
+function StatementTable({ title, lines, unmapped }: { title: string; lines: StatementLine[]; unmapped: UnmappedRow[] }) {
+  const t = useTranslations('ledger');
+  const f = useFormat();
+  return (
+    <section className="space-y-3">
+      <h2 className="text-base font-semibold text-foreground">{title}</h2>
+      {unmapped.length > 0 && (
+        <Alert className="border-warning/30 bg-warning/10 text-warning" role="note">
+          <p className="font-medium">{t('unmappedTitle')}</p>
+          <ul className="mt-1 space-y-0.5 text-sm">
+            {unmapped.map((u) => (
+              <li key={`${u.accountCode}-${u.partyName ?? ''}`}>
+                <span className="font-mono">{u.accountCode}</span> {[u.accountName, u.partyName].filter(Boolean).join(', ')}: <Balance value={u.amount} />
+              </li>
+            ))}
+          </ul>
+        </Alert>
+      )}
+      <DataTable head={[t('columns.item'), t('columns.lineCode'), t('columns.amount')]}>
+        {lines.map((line) => (
+          <TableRow key={line.code} className={line.total ? 'font-medium' : ''}>
+            <TableCell className="px-4 py-3 text-foreground">{line.label}</TableCell>
+            <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{line.code}</TableCell>
+            <TableCell className={NUM}>{f.money(line.amount)}</TableCell>
+          </TableRow>
+        ))}
+      </DataTable>
+    </section>
+  );
+}
+
+function Statements({ period }: { period: string }) {
+  const t = useTranslations('ledger');
+  const f = useFormat();
+  const query = useQuery(orpc.ledger.statements.queryOptions({ input: { period } }));
+  const exportXlsx = useMutation({
+    mutationFn: async () => {
+      const response = await apiFetch(`/api/export/statements.xlsx?${new URLSearchParams({ period })}`);
+      const url = URL.createObjectURL(await response.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = t('statementsFile', { period, org: getCurrentOrg() ?? 'org' });
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+  });
+  if (query.isLoading) return <Spinner />;
+  if (query.error) return <ErrorText>{errorMessage(query.error)}</ErrorText>;
+  const data = query.data;
+  if (!data) return null;
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <Alert className="max-w-3xl flex-1 border-warning/30 bg-warning/10 text-warning" role="note">
+          {t('statementsDraft')}
+        </Alert>
+        <Button variant="outline" onClick={() => exportXlsx.mutate()} disabled={exportXlsx.isPending}>
+          {exportXlsx.isPending ? <Spinner className="text-current" /> : null}
+          {t('statementsExport')}
+        </Button>
+      </div>
+      {exportXlsx.error && <ErrorText>{errorMessage(exportXlsx.error)}</ErrorText>}
+      {!data.b01.balanced && (
+        <Alert className="border-warning/30 bg-warning/10 text-warning" role="status">
+          {t('statementsUnbalanced')}
+        </Alert>
+      )}
+      <StatementTable title={t('b01Title', { date: f.date(data.b01.asOf) })} lines={data.b01.lines} unmapped={data.b01.unmapped} />
+      <StatementTable
+        title={t('b02Title', { from: f.date(data.b02.from), to: f.date(data.b02.to) })}
+        lines={data.b02.lines}
+        unmapped={data.b02.unmapped}
+      />
+    </div>
   );
 }
 
@@ -329,6 +424,9 @@ export function LedgerPage() {
               </section>
               <p className="text-xs text-subtle-foreground">{t('partiesNote')}</p>
             </div>
+          </TabsContent>
+          <TabsContent value="statements">
+            <Statements period={period} />
           </TabsContent>
         </Tabs>
       ) : null}

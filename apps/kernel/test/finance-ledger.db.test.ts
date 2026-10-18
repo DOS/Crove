@@ -347,4 +347,91 @@ suite('ledger reports per month, quarter or year (#321)', () => {
     expect((await exportFile(await tokenFor(owner), '2026-Q9')).status).toBe(422);
     expect(await exportAudits()).toHaveLength(before + 2);
   });
+
+  // The DRAFT financial statements (issue #154) from the same entries; the mapping itself is unit-tested in
+  // modules/finance/test/tt133-reports.test.ts.
+  const statementsFile = async (token: string, period: string, slug = org.slug) =>
+    app.request(`/api/export/statements.xlsx?${new URLSearchParams({ period })}`, { headers: { authorization: `Bearer ${token}`, 'x-crove-org': slug } });
+  const statementAudits = (orgId = org.orgId) =>
+    admin(
+      async (c) =>
+        (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.statements.export' AND outcome = 'ok' ORDER BY occurred_at`, [orgId]))
+          .rows,
+    );
+  type StatementLine = { code: string; amount: string; total: boolean };
+  const nonZero = (lines: StatementLine[]) => lines.filter((l) => l.amount !== '0').map((l) => [l.code, l.amount, l.total]);
+
+  it('builds B01 at the period end and B02 for the period, counting the reversal as undoing its invoice', async () => {
+    const statements = await rpc('ledger/statements', await tokenFor(viewer), { period: '2026-09' });
+    expect(statements.status).toBe(200);
+    expect(statements.body.period).toEqual({ period: '2026-09', kind: 'month', from: '2026-09-01', to: '2026-09-30' });
+    // At 30 September: two invoices stand (August's and one of September's): their VAT to deduct, what is owed to the
+    // seller, and the unclosed expenses as a loss in undistributed profit.
+    expect(statements.body.b01.asOf).toBe('2026-09-30');
+    expect(nonZero(statements.body.b01.lines)).toEqual([
+      ['181', '360000', false],
+      ['180', '360000', true],
+      ['200', '360000', true],
+      ['311', '3960000', false],
+      ['300', '3960000', true],
+      ['417', '-3600000', false],
+      ['400', '-3600000', true],
+      ['500', '360000', true],
+    ]);
+    expect(statements.body.b01).toMatchObject({ balanced: true, unmapped: [] });
+    // September: two invoices and the reversal of one leave one invoice's expense.
+    expect(statements.body.b02).toMatchObject({ from: '2026-09-01', to: '2026-09-30', unmapped: [] });
+    expect(nonZero(statements.body.b02.lines)).toEqual([
+      ['24', '1800000', false],
+      ['30', '-1800000', true],
+      ['50', '-1800000', true],
+      ['60', '-1800000', true],
+    ]);
+    // B01's payable is the trial balance's closing credit on 331.
+    const report = await rpc('ledger/period', await tokenFor(viewer), { period: '2026-09' });
+    expect(rowOf(report.body.trialBalance.rows, '331')?.closingCredit).toBe('3960000');
+  });
+
+  it('reads a quarter and a year the same way, and an empty period as zeros', async () => {
+    const quarter = await rpc('ledger/statements', await tokenFor(owner), { period: '2026-Q3' });
+    expect(quarter.body.b01.asOf).toBe('2026-09-30');
+    expect(nonZero(quarter.body.b02.lines)[0]).toEqual(['24', '3600000', false]);
+    const year = await rpc('ledger/statements', await tokenFor(owner), { period: '2026' });
+    expect(year.body.b01.asOf).toBe('2026-12-31');
+    expect(nonZero(year.body.b01.lines).filter(([code]) => ['181', '311', '417', '500'].includes(String(code)))).toEqual([
+      ['181', '540000', false],
+      ['311', '5940000', false],
+      ['417', '-5400000', false],
+      ['500', '540000', true],
+    ]);
+    expect(nonZero(year.body.b02.lines)[0]).toEqual(['24', '5400000', false]);
+    const empty = await rpc('ledger/statements', await tokenFor(owner), { period: '2026-07' });
+    expect(nonZero(empty.body.b01.lines)).toEqual([]);
+    expect(nonZero(empty.body.b02.lines)).toEqual([]);
+    expect(empty.body.b01.balanced).toBe(true);
+    for (const period of ['2026-13', '2026-Q5', '']) expect((await rpc('ledger/statements', await tokenFor(owner), { period })).status, period).toBe(400);
+  });
+
+  it('keeps each org to its own statements', async () => {
+    const own = await rpc('ledger/statements', await tokenFor(outsider), { period: '2026-09' }, otherOrg.slug);
+    expect(nonZero(own.body.b02.lines)[0]).toEqual(['24', '1800000', false]);
+    const foreign = await rpc('ledger/statements', await tokenFor(outsider), { period: '2026-09' }, org.slug);
+    expect(foreign.status).toBeGreaterThanOrEqual(400);
+    expect(foreign.body?.b01).toBeUndefined();
+    expect((await statementsFile(await tokenFor(outsider), '2026-09')).status).toBeGreaterThanOrEqual(400);
+    expect(await statementAudits()).toEqual([]);
+  });
+
+  it('exports the statements to Excel and records the export first, for a viewer too', async () => {
+    const response = await statementsFile(await tokenFor(viewer), '2026-09');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-disposition')).toBe(`attachment; filename="crove-bao-cao-tai-chinh-2026-09-${org.slug}.xlsx"`);
+    expect(response.headers.get('content-type')).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    // The workbook's content is checked in modules/finance/test/statements-export.test.ts.
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()).subarray(0, 4))).toEqual([0x50, 0x4b, 0x03, 0x04]);
+    expect((await statementAudits()).map((r) => r.detail)).toEqual([{ period: '2026-09' }]);
+    expect((await statementsFile(await tokenFor(owner), '2026-Q9')).status).toBe(422);
+    expect(await statementAudits()).toHaveLength(1);
+  });
 });

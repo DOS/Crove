@@ -570,6 +570,17 @@ export const zPeriodLockState = z.object({
 });
 export type PeriodLockState = z.infer<typeof zPeriodLockState>;
 
+// Financial statements for a period (issue #154): B01-DNN at its last day and B02-DNN for the period, with the DRAFT
+// TT133 line codes and mapping an accountant has not verified. `unmapped` lists balances no line reads (the statement
+// is then incomplete); `balanced` is whether B01's total assets equal its total sources.
+const zStatementLine = z.object({ code: z.string(), label: z.string(), amount: zMoney, total: z.boolean() });
+const zUnmappedRow = z.object({ accountCode: z.string(), accountName: z.string().nullable(), partyName: z.string().nullable(), amount: zMoney });
+export const zFinancialStatements = z.object({
+  period: zLedgerPeriodRange,
+  b01: z.object({ asOf: zLocalDate, lines: z.array(zStatementLine), unmapped: z.array(zUnmappedRow), balanced: z.boolean() }),
+  b02: z.object({ from: zLocalDate, to: zLocalDate, lines: z.array(zStatementLine), unmapped: z.array(zUnmappedRow) }),
+});
+
 export const zAccountLedger = z.object({
   period: zLedgerPeriodRange,
   account: z.object({ code: z.string(), name: z.string() }),
