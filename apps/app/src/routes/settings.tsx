@@ -500,6 +500,61 @@ function PendingInvites() {
   );
 }
 
+// The org's own tax code (MST, issue #313): an e-invoice whose seller has it is read as a sale. Owners and admins edit
+// it; everyone else sees it.
+function TaxCodeField({ taxCode, canManage }: { taxCode: string | null; canManage: boolean }) {
+  const t = useTranslations('settings');
+  const tc = useTranslations('common');
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(taxCode ?? '');
+  const save = useMutation(
+    orpc.org.setTaxCode.mutationOptions({
+      onSuccess: async () => {
+        setEditing(false);
+        await queryClient.invalidateQueries({ queryKey: orpc.org.get.key() });
+      },
+    }),
+  );
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    save.mutate({ taxCode: value.trim() ? value.trim() : null });
+  };
+  return (
+    <div>
+      <dt className="text-subtle-foreground">{t('taxCode')}</dt>
+      {editing ? (
+        <form onSubmit={submit} aria-label={t('taxCode')} className="mt-1 flex flex-wrap items-center gap-2">
+          <Input value={value} onChange={(e) => setValue(e.target.value)} maxLength={20} placeholder="0101234567" aria-label={t('taxCode')} className="w-48 font-mono" />
+          <Button type="submit" size="sm" disabled={save.isPending}>
+            {save.isPending ? <Spinner className="text-current" /> : null}
+            {t('taxCodeSave')}
+          </Button>
+          <Button type="button" size="sm" variant="outline" 
+            onClick={() => {
+              setEditing(false);
+              setValue(taxCode ?? '');
+              save.reset();
+            }}
+          >
+            {tc('cancel')}
+          </Button>
+        </form>
+      ) : (
+        <dd className="flex flex-wrap items-center gap-2">
+          <span className={taxCode ? 'font-mono text-foreground' : 'text-subtle-foreground'}>{taxCode ?? t('taxCodeUnset')}</span>
+          {canManage && (
+            <Button type="button" size="sm" variant="outline" onClick={() => setEditing(true)}>
+              {taxCode ? t('taxCodeChange') : t('taxCodeSet')}
+            </Button>
+          )}
+        </dd>
+      )}
+      <dd className="mt-1 text-xs text-subtle-foreground">{t('taxCodeHint')}</dd>
+      {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const root = useTranslations();
   const t = useTranslations('settings');
@@ -529,6 +584,7 @@ export function SettingsPage() {
               <dt className="text-subtle-foreground">{t('slug')}</dt>
               <dd className="font-mono text-foreground">{org.data?.slug}</dd>
             </div>
+            {getConfig().modules.includes('finance') && <TaxCodeField key={org.data?.taxCode ?? ''} taxCode={org.data?.taxCode ?? null} canManage={canManage} />}
             <div>
               <dt className="text-subtle-foreground">{t('inboundAddress')}</dt>
               <dd className="break-all font-mono text-foreground">{org.data?.inboundAddress ?? t('inboundOff')}</dd>

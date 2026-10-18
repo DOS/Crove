@@ -101,3 +101,22 @@ export function previewPurchaseJournal(lines: PreviewLine[], vatTotal: string): 
   if (net !== 0n) out.push(net > 0n ? { accountCode: '331', debit: '0', credit: fromUnits(net) } : { accountCode: '331', debit: fromUnits(-net), credit: '0' });
   return out;
 }
+
+// Mirrors @crove/l10n-vn buildSalesJournal (issue #313): Cr each line's revenue account, Cr 3331 for the VAT, and the
+// receivable (131) first, balancing the rounded lines. `debitAccount` of a sale line is its revenue account.
+export function previewSalesJournal(lines: PreviewLine[], vatTotal: string): PreviewJournalLine[] {
+  const ledger = (exact: bigint) => fromUnits(divRound(exact, TO_LEDGER));
+  const byAccount = new Map<string, bigint>();
+  for (const l of lines) byAccount.set(l.debitAccount, (byAccount.get(l.debitAccount) ?? 0n) + toExact(l.amount));
+  const credits: PreviewJournalLine[] = [];
+  const credit = (accountCode: string, exact: bigint) => {
+    if (exact === 0n) return;
+    credits.push(exact < 0n ? { accountCode, debit: ledger(-exact), credit: '0' } : { accountCode, debit: '0', credit: ledger(exact) });
+  };
+  for (const [account, exact] of [...byAccount.entries()].sort(([a], [b]) => a.localeCompare(b))) credit(account, exact);
+  credit('3331', toExact(vatTotal));
+  const net = credits.reduce((acc, l) => acc + toUnits(l.credit) - toUnits(l.debit), 0n);
+  if (net === 0n) return credits;
+  const receivable = net > 0n ? { accountCode: '131', debit: fromUnits(net), credit: '0' } : { accountCode: '131', debit: '0', credit: fromUnits(-net) };
+  return [receivable, ...credits];
+}

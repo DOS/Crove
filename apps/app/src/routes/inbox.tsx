@@ -342,7 +342,7 @@ export function InboxPage() {
                       <Checkbox
                         checked={selected.has(item.id)}
                         disabled={sending}
-                        aria-label={t('bulk.select', { name: item.sellerName ?? item.title })}
+                        aria-label={t('bulk.select', { name: (item.direction === 'sale' ? item.buyerName || null : item.sellerName) ?? item.title })}
                         onCheckedChange={(checked) =>
                           setSelected((current) => {
                             const next = new Set(current);
@@ -359,7 +359,7 @@ export function InboxPage() {
                 )}
                 <TableCell className="px-4 py-3">
                   <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="font-medium text-foreground hover:text-link">
-                    {item.sellerName ?? item.title}
+                    {(item.direction === 'sale' ? item.buyerName || null : item.sellerName) ?? item.title}
                   </Link>
                   <p className="text-xs text-subtle-foreground">{item.title}</p>
                 </TableCell>
@@ -369,6 +369,7 @@ export function InboxPage() {
                   <div className="flex flex-wrap gap-1">
                     {/* A reversal a user asked for has no invoice checks; its card shows the entry it reverses. */}
                     {item.kind === REVERSAL_KIND && <Badge variant="secondary">{t('reversalKind')}</Badge>}
+                    {item.direction === 'sale' && <Badge variant="secondary">{t('saleKind')}</Badge>}
                     {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
                     {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
                     {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}

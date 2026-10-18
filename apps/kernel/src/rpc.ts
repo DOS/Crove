@@ -172,6 +172,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         guard(() => createOrg(runtime, actorOf(context.user), input.name, input.idempotencyKey)),
       ),
       get: os.org.get.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.get', {}, { actor, orgId }))),
+      setTaxCode: os.org.setTaxCode.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_tax_code', input, { actor, orgId })),
+      ),
       // No idempotency key: the answer carries the invite token, which must never be stored with a key. The mail
       // goes out after the command has committed (invite-mail.ts says why); its outcome is logged and never changes
       // the answer, which stays the same whether or not the email has an account.

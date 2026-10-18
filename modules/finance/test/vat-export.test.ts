@@ -61,7 +61,7 @@ describe('buildVatWorkbook', () => {
     expect(byCode.get('[23]')).toBe(3133334);
     expect(byCode.get('[24]')).toBe(306668);
     expect(byCode.get('[32]')).toBe(0);
-    expect(summary.some((r) => r.includes('Crove chưa ghi nhận hóa đơn bán ra'))).toBe(true);
+    expect(summary.some((r) => r.includes('Chưa nhập mã số thuế của tổ chức nên Crove chưa nhận ra hóa đơn bán ra'))).toBe(true);
 
     const sales = rowsOf(workbook.getWorksheet('Ban ra') as ExcelJS.Worksheet);
     expect(sales[0]).toEqual(['STT', 'Ngày hóa đơn', 'Ký hiệu HĐ', 'Số HĐ', 'MST người mua', 'Tên người mua', 'Thuế suất', 'Giá trị chưa có thuế', 'Thuế GTGT', 'Ghi chú']);

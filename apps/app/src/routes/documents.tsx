@@ -24,7 +24,8 @@ export function DocumentsPage() {
           head={[
             t('columns.issueDate'),
             t('columns.number'),
-            t('columns.vendor'),
+            t('columns.direction'),
+            t('columns.party'),
             t('columns.subtotal'),
             t('columns.vat'),
             t('columns.total'),
@@ -37,6 +38,9 @@ export function DocumentsPage() {
               <TableCell className="px-4 py-3 font-mono text-xs text-foreground">
                 {d.series ? `${d.series}-` : ''}
                 {d.number}
+              </TableCell>
+              <TableCell className="px-4 py-3">
+                <Badge variant={d.direction === 'sale' ? 'secondary' : 'outline'}>{t(d.direction === 'sale' ? 'direction.sale' : 'direction.purchase')}</Badge>
               </TableCell>
               <TableCell className="px-4 py-3 text-foreground">{d.partyName}</TableCell>
               <TableCell className="px-4 py-3 text-muted-foreground tabular-nums">{f.money(d.subtotal)}</TableCell>
