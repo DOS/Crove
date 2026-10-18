@@ -73,12 +73,49 @@ export interface ChannelCapabilities {
 const MB = 1024 * 1024;
 const ANY_IMAGE: readonly string[] = [];
 
-// The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
-// the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
 // The channels whose platform takes photos but whose Crove adapter posts only video (TikTok's photo mode is not built).
 export const VIDEO_ONLY_ADAPTERS: ReadonlySet<Provider> = new Set<Provider>(['tiktok']);
 
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok']);
+// Where each adapter puts the post's link, so the checks count the text the platform receives:
+// - text: after a blank line at the end of the text, unless the text already holds it;
+// - text_with_media: the same, but only when the post has media (a Facebook Page text post sends it as its own field);
+// - apart: never in the text (a field of its own, an article paragraph, or not sent).
+export type LinkPlacement = 'text' | 'text_with_media' | 'apart';
+export const LINK_PLACEMENT: Readonly<Record<Provider, LinkPlacement>> = {
+  sandbox: 'apart',
+  facebook_page: 'text_with_media',
+  instagram: 'apart',
+  zalo_oa: 'apart',
+  tiktok: 'text',
+  youtube: 'text',
+  threads: 'text',
+  linkedin: 'text',
+  x: 'text',
+  bluesky: 'text',
+};
+
+// The link as a whole: followed by the end, a space, or sentence punctuation and then the end or a space (the
+// adapters' holdsLink in @crove/channel, which the browser cannot import).
+function holdsLink(text: string, link: string): boolean {
+  for (let i = text.indexOf(link); i !== -1; i = text.indexOf(link, i + 1)) {
+    if (/^[.,!?;:)\]]*(?:\s|$)/.test(text.slice(i + link.length))) return true;
+  }
+  return false;
+}
+
+// The text an adapter sends for this body and link.
+export function sentText(provider: Provider, body: string, linkUrl: string | null | undefined, mediaCount: number): string {
+  const link = linkUrl?.trim();
+  const placement = LINK_PLACEMENT[provider];
+  if (!link || placement === 'apart' || (placement === 'text_with_media' && mediaCount === 0)) return body;
+  const text = body.trim();
+  if (holdsLink(text, link)) return body;
+  return [text, link].filter(Boolean).join('\n\n');
+}
+
+// The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
+// the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
@@ -104,7 +141,8 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'instagram',
     body: { max: 2200, count: 'utf16', required: false },
     title: null,
-    media: { min: 1, max: 10, kinds: ['image', 'video'], mixed: true, maxVideos: 10, imageTypes: ['image/jpeg'], maxImageBytes: null, maxVideoBytes: null, maxVideoSeconds: null },
+    // A Reel runs up to 15 minutes and 300 MB (Meta's Reels specs); a carousel mixes images and videos.
+    media: { min: 1, max: 10, kinds: ['image', 'video'], mixed: true, maxVideos: 10, imageTypes: ['image/jpeg'], maxImageBytes: null, maxVideoBytes: 300 * MB, maxVideoSeconds: 900 },
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: ['body.max'],
@@ -160,8 +198,9 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'x',
     body: { max: 280, count: 'weighted', required: false },
     title: null,
-    // Up to 4 images or one video; 5 MB per image (X media upload). Video waits for the chunked upload.
-    media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'], maxImageBytes: 5 * MB, maxVideoBytes: null, maxVideoSeconds: null },
+    // Up to 4 images or one video; 5 MB per image (X media upload); a video of up to 20 minutes for accounts without X
+    // Premium (POST /2/tweets).
+    media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'], maxImageBytes: 5 * MB, maxVideoBytes: null, maxVideoSeconds: 1200 },
     maxLinks: null,
     scrapesLinkPreview: true,
     unverified: [],

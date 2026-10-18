@@ -130,7 +130,7 @@ export function hashOf(
 export function issuesOf(post: PostContent, v: VariantRow): Issue[] {
   const content = effectiveContent(post, overrides(v), v.content_frozen);
   const media = mediaFor(post, v).map((m) => ({ kind: mediaKind(m.mime), mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000 }));
-  return validateVariant({ provider: providerOf(v), body: content.body, title: content.title, media, settings: settingsOf(v) });
+  return validateVariant({ provider: providerOf(v), body: content.body, title: content.title, linkUrl: content.linkUrl, media, settings: settingsOf(v) });
 }
 
 export function step(v: { id: string; status: SocialVariantStatus }, event: VariantEvent): SocialVariantStatus {
