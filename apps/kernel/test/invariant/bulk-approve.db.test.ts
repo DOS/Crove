@@ -657,6 +657,8 @@ suite('bulk approval on PostgreSQL (#315)', () => {
       ['RETRY', 409],
       ['LEASE_LOST', 409],
       ['IDEMPOTENCY_MISMATCH', 422],
+      ['BUDGET_EXHAUSTED', 409],
+      ['ORG_CLOSED', 409],
     ];
     let asked = 0;
     const probe = ownerCommand('test.never', async (ctx, input) => {
@@ -774,6 +776,97 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     expect(await refusalOf(forking.execute('test.dangling', { id }, { actor: asUser(owner), orgId }))).toEqual({ code: 'INTERNAL', status: 500 });
     expect(await auditRows(orgId, 'test.dangling')).toEqual([]);
     expect((await auditRows(orgId, 'test.fine')).map((r) => r.outcome)).toEqual(['ok', 'ok']);
+  });
+
+  it('still records a refusal whose facts have no JSON form (a cycle, a BigInt), without them, and rolls it back (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit unserializable', []);
+    const cyclic: Record<string, unknown> = { note: 'cyclic' };
+    cyclic.self = cyclic;
+    const zKind = z.object({ id: z.string().uuid(), kind: z.enum(['cycle', 'bigint']) });
+    const odd = defineCommand({
+      name: 'test.odd_facts',
+      input: zKind,
+      risk: 'R1',
+      access: ['owner'],
+      target: thingTarget,
+      handler: async (ctx, input) => {
+        await ctx.activity('test.thing', input.id, 'test.written', 'written before the refusal');
+        const facts = input.kind === 'cycle' ? cyclic : { amount: 10n };
+        throw new DomainError('NOT_ELIGIBLE', 403, 'x', { rule: 'T1', ...(input.kind === 'bigint' ? { big: 1n } : {}) }, { audit: facts });
+      },
+    });
+    const caller = ownerCommand('test.odd_caller', async (ctx, input) => {
+      const seen: unknown[] = [];
+      for (const kind of ['cycle', 'bigint'] as const) {
+        const attempt = await ctx.tryRun('test.odd_facts', { id: input.id, kind }, { recover: () => true });
+        if (attempt.status !== 'refused') throw new Error('expected a refusal');
+        seen.push({ code: attempt.refusal.code, rule: attempt.refusal.details?.rule, audit: attempt.refusal.audit ?? null });
+      }
+      return { seen };
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(odd, caller).execute('test.odd_caller', { id }, { actor: asUser(owner), orgId })).toEqual({
+      seen: [
+        { code: 'NOT_ELIGIBLE', rule: 'T1', audit: null },
+        { code: 'NOT_ELIGIBLE', rule: 'T1', audit: null },
+      ],
+    });
+    const [parent] = await auditRows(orgId, 'test.odd_caller');
+    const rows = await auditRows(orgId, 'test.odd_facts');
+    expect(rows.map((r) => r.detail)).toEqual(
+      ['cycle', 'bigint'].map(() => ({
+        code: 'NOT_ELIGIBLE',
+        rule: 'T1',
+        aal: 'aal1',
+        sessionId: null,
+        mfaAt: null,
+        parentCommand: 'test.odd_caller',
+        parentCommandId: parent?.command_id,
+      })),
+    );
+    const activity = await withAdmin(
+      async (a) => (await a.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2', [orgId, id])).rows[0]?.n,
+    );
+    expect(activity).toBe(0);
+  });
+
+  it('closes the context when the handler returns: work it left running cannot write, run or roll back (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit closed', []);
+    const refuses = ownerCommand('test.late_refuses', async () => {
+      throw new DomainError('NOT_ELIGIBLE', 403, 'x');
+    });
+    let late: Promise<string[]> = Promise.resolve([]);
+    const leaves = ownerCommand('test.leaves_work', async (ctx, input) => {
+      late = (async () => {
+        // Starts after the handler returned, while the runtime writes this command's rows.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const refused: string[] = [];
+        const calls: Array<() => Promise<unknown>> = [
+          () => ctx.tryRun('test.late_refuses', input, { recover: () => true }),
+          () => ctx.run('test.fine', input),
+          () => ctx.activity('test.thing', input.id, 'test.late', 'late'),
+          () => ctx.emit('test.late', {}),
+          async () => ctx.audit({ late: true }),
+        ];
+        for (const call of calls) {
+          try {
+            await call();
+            refused.push('ran');
+          } catch (error) {
+            refused.push(/after the handler returned/.test((error as Error).message) ? 'closed' : 'other');
+          }
+        }
+        return refused;
+      })();
+      return { returned: true };
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(fineCommand, refuses, leaves).execute('test.leaves_work', { id }, { actor: asUser(owner), orgId })).toEqual({ returned: true });
+    expect(await late).toEqual(['closed', 'closed', 'closed', 'closed', 'closed']);
+    // The command's own ok row committed, untouched; nothing the late work tried is there.
+    expect((await auditRows(orgId, 'test.leaves_work')).map((r) => [r.outcome, r.detail])).toEqual([['ok', {}]]);
+    expect(await auditRows(orgId, 'test.late_refuses')).toEqual([]);
+    expect(await auditRows(orgId, 'test.fine')).toEqual([]);
   });
 
   it("keeps the runtime's keys on an ok row: ctx.audit sets no refusal link and does not replace the assurance (#429)", async () => {

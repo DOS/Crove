@@ -223,7 +223,9 @@ export interface CommandContext extends QueryContext {
   // error, or a refusal `recover` declines, propagates, so the whole command fails as with run(); on every path but
   // success the nested command is rolled back to the savepoint first, so a caller that catches the error and goes on
   // keeps none of its writes. One tryRun at a time per command (a second one while another is
-  // in flight throws, and so does a handler that returns while one is), since they share one connection's savepoints.
+  // in flight throws, and so does a handler that returns while one is), since they share one connection's savepoints;
+  // and once the handler has returned, tryRun, run, emit, activity and audit all throw, so nothing it left running
+  // can write or roll back while the runtime writes this command's rows.
   // The row is built from a snapshot the runtime takes when it catches the refusal, before `recover` sees it, and from
   // the nested input as parsed before the nested command ran: neither the caller (with the refusal copy or the
   // original error) nor the nested handler can change it afterwards. A command can make a command it runs refuse,
@@ -353,6 +355,8 @@ export const NEVER_RECOVERED: ReadonlySet<string> = new Set([
   'KILL_SWITCH_ON',
   'IDEMPOTENCY_MISMATCH',
   'CONTEXT_REENTRY',
+  'BUDGET_EXHAUSTED',
+  'ORG_CLOSED',
 ]);
 
 export function isNeverRecovered(code: string): boolean {
@@ -362,10 +366,21 @@ export function isNeverRecovered(code: string): boolean {
 // Keys of an ok audit row that only ctx.tryRun's refusal rows carry, so ctx.audit never sets them.
 const RESERVED_OK_KEYS = ['parentCommand', 'parentCommandId'] as const;
 
-// A JSON copy of an error's details or audit facts, frozen all the way down (what the audit row stores is JSON).
-function frozenJson(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+// A JSON copy of an error's details or audit facts, frozen all the way down (what the audit row stores is JSON), or
+// null when the value has no JSON form (a cycle, a BigInt).
+function frozenJson(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined | null {
   if (value === undefined) return undefined;
-  return deepFreeze(JSON.parse(JSON.stringify(value)) as Record<string, unknown>);
+  try {
+    return deepFreeze(JSON.parse(JSON.stringify(value)) as Record<string, unknown>);
+  } catch {
+    return null;
+  }
+}
+
+// The policy rule a refusal names, if any.
+function ruleOf(error: DomainError): string | undefined {
+  const rule = error.details?.rule;
+  return typeof rule === 'string' ? rule : undefined;
 }
 
 function deepFreeze<T>(value: T): T {
@@ -378,9 +393,23 @@ function deepFreeze<T>(value: T): T {
 
 // The refusal ctx.tryRun hands to `recover` and to its caller: a frozen copy, so nothing they do reaches the original
 // or the row.
+// Details or facts without a JSON form are dropped; the rule is kept.
 function frozenRefusal(error: DomainError): DomainError {
   const audit = frozenJson(error.audit);
-  return Object.freeze(new DomainError(error.code, error.status, error.message, frozenJson(error.details), audit ? { audit } : {}));
+  const copied = frozenJson(error.details);
+  const rule = ruleOf(error);
+  const details = copied === null ? (rule === undefined ? undefined : Object.freeze({ rule })) : copied;
+  return Object.freeze(new DomainError(error.code, error.status, error.message, details, audit ? { audit } : {}));
+}
+
+// The detail of a caught refusal's row: refusalAuditDetail as JSON. When the command's facts have no JSON form, the
+// row keeps what the runtime writes (code, rule, session) without them, so the refusal is still recorded.
+function caughtRefusalDetail(error: DomainError, actor: Actor): Record<string, unknown> {
+  const full = frozenJson(refusalAuditDetail(error, actor));
+  if (full) return full;
+  const rule = ruleOf(error);
+  const bare = new DomainError(error.code, error.status, error.message, rule === undefined ? undefined : { rule });
+  return frozenJson(refusalAuditDetail(bare, actor)) ?? { code: error.code };
 }
 
 // The detail of a denied/failed audit row (plan §4.10): the command's facts about the refusal (for example the roles
@@ -892,17 +921,25 @@ export class Runtime {
     const caught: CaughtRefusal[] = [];
     // The ctx.tryRun running now, if any (one at a time: they share this transaction's savepoints).
     let inFlight: Promise<void> | null = null;
+    // Set once the handler settled: from then on the runtime writes this command's rows, and nothing the handler
+    // left running may write, run a command or roll back to a savepoint in this transaction.
+    let closed = false;
+    const refuseClosed = (what: string) => {
+      if (closed) throw new Error(`command ${def.name}: ${what} after the handler returned`);
+    };
     const ctx: CommandContext = {
       ...this.queryContext(trx, base.orgId, base.actor, base.entered),
       commandId,
       proposalId: base.proposalId,
       now: new Date(),
       emit: async (type, payload) => {
+        refuseClosed('ctx.emit');
         if (!type.startsWith(`${def.name.split('.')[0]}.`)) throw new Error(`command ${def.name} cannot emit ${type}`);
         const { rows } = await sql<{ id: string }>`SELECT crove_kernel.emit(${type}, ${JSON.stringify(payload)}::jsonb, ${commandId}::uuid) AS id`.execute(trx);
         return rows[0]?.id ?? '';
       },
       activity: async (recordType, recordId, kind, summary) => {
+        refuseClosed('ctx.activity');
         await trx
           .insertInto('crove_kernel.activity')
           .values({
@@ -918,15 +955,18 @@ export class Runtime {
           .execute();
       },
       audit: (detail) => {
+        refuseClosed('ctx.audit');
         const own = { ...detail };
         for (const key of RESERVED_OK_KEYS) delete own[key];
         auditDetail = { ...auditDetail, ...own };
       },
       run: async <R>(name: string, nestedInput: unknown, options?: { proposalId?: string }): Promise<R> => {
+        refuseClosed('ctx.run');
         const nested = resolveNested(name, nestedInput, options?.proposalId);
         return runNested<R>(nested);
       },
       tryRun: <R>(name: string, nestedInput: unknown, options: TryRunOptions): Promise<TryRunResult<R>> => {
+        if (closed) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun after the handler returned`));
         if (inFlight) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun runs one nested command at a time`));
         // Set before the attempt starts and cleared before its answer reaches the caller, so the next call after an
         // awaited one always runs.
@@ -999,21 +1039,25 @@ export class Runtime {
           await discardQuietly(error);
           throw error;
         }
-        const snapshot: CaughtRefusal = Object.freeze({
-          command: nested.def.name,
-          code,
-          security: isSecurityRefusal(error),
-          outcome: status === 403 ? 'denied' : 'failed',
-          inputSha256,
-          target,
-          proposalId: nested.proposalId,
-          detail: deepFreeze({
-            ...(JSON.parse(JSON.stringify(refusalAuditDetail(error, base.actor))) as Record<string, unknown>),
-            parentCommand: def.name,
-            parentCommandId: commandId,
-          }),
-        });
-        const refusal = frozenRefusal(error);
+        let snapshot: CaughtRefusal;
+        let refusal: DomainError;
+        try {
+          snapshot = Object.freeze({
+            command: nested.def.name,
+            code,
+            security: isSecurityRefusal(error),
+            outcome: status === 403 ? 'denied' : 'failed',
+            inputSha256,
+            target,
+            proposalId: nested.proposalId,
+            detail: deepFreeze({ ...caughtRefusalDetail(error, base.actor), parentCommand: def.name, parentCommandId: commandId }),
+          });
+          refusal = frozenRefusal(error);
+        } catch (snapshotError) {
+          // Not expected (the copies above fall back), but never leave the savepoint open or replace the refusal.
+          await discardQuietly(snapshotError);
+          throw error;
+        }
         let recovered: boolean;
         try {
           recovered = options.recover(refusal) === true;
@@ -1047,7 +1091,9 @@ export class Runtime {
     let output: O;
     try {
       output = (await def.handler(ctx, input)) as O;
+      closed = true;
     } catch (error) {
+      closed = true;
       // A tryRun the handler left running still uses this transaction's connection: let it settle before the
       // transaction rolls back.
       if (inFlight) await inFlight;
