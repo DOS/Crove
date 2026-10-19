@@ -15,7 +15,7 @@ Without a checkout of the deployment's `.env` (another secret store, Kubernetes)
 
 Each line is `PASS`, `FAIL` or `MANUAL`. Exit codes: 0 every automatic check passed, 1 a check failed, 2 bad arguments. `MANUAL` lines are what only a person can confirm; the sections below say how.
 
-`--url` probes three things on the running instance: `/healthz` over https (the certificate chain and host name are verified), plain http on port 80 (the connection is refused, or it redirects to https on the same host; a timeout fails as inconclusive), and the settings the running Supabase Auth reports (`GET <auth URL>/settings`, the Auth URL taken from `/api/config`): `disable_signup` must be `true` and `mailer_autoconfirm` `false`. The probe follows no redirect and only reads an Auth URL on the same origin as `--url` (the bundled Supabase Auth behind `/auth/v1`); a remote Auth URL fails and is checked by hand. The probe sees what the auth service really runs with, so it catches a `.env` change that was never applied (`docker compose up -d` recreates the services whose settings changed).
+`--url` probes three things on the running instance: `/healthz` over https (the certificate chain and host name are verified), plain http on port 80 (the connection is refused, or it redirects to https on the same host; a timeout fails as inconclusive), and the settings the running Supabase Auth reports (`GET <auth URL>/settings`, the Auth URL taken from `/api/config`): `disable_signup` must be `true` (or `/api/config` reports a `signupPolicy` of `invite_only` or `allowlist`) and `mailer_autoconfirm` `false`. The probe follows no redirect and only reads an Auth URL on the same origin as `--url` (the bundled Supabase Auth behind `/auth/v1`); a remote Auth URL fails and is checked by hand. The probe sees what the auth service really runs with, so it catches a `.env` change that was never applied (`docker compose up -d` recreates the services whose settings changed).
 
 ## 1. TLS on every public endpoint; every secret changed from the defaults
 
@@ -58,10 +58,24 @@ With another orchestrator, `crove-extract` runs from its own image with no secre
 
 ## 5. Sign-up limited to invited users or an allowlisted domain
 
-What exists today is a closed sign-up: `AUTH_DISABLE_SIGNUP=true` (`GOTRUE_DISABLE_SIGNUP` of the bundled Supabase Auth), which refuses every new account while existing accounts sign in as usual. There is no invite-only or domain-allowlist sign-up yet.
+Two ways hold this item. Pick one and record which in issue #308.
+
+**Invite-only sign-up (recommended for the pilot).** `AUTH_SIGNUP_POLICY=invite_only` with `AUTH_DISABLE_SIGNUP=false`. The kernel's `/auth/v1` proxy forwards a sign-up to Supabase Auth only for an email that holds a valid member invite: pending, unexpired, in an active org, sent by someone who may still grant that role. Revoked, accepted and expired invites do not count, and the address must match the invited one exactly apart from letter case (`an+x@partner.vn` is not `an@partner.vn`). So the owner creates the org, sends the member invites, and each invitee signs up with the invited address, confirms it from the email and accepts the invite; no sign-up window is needed.
+
+- `AUTH_SIGNUP_POLICY=allowlist` with `AUTH_SIGNUP_ALLOWED_DOMAINS=partner.vn` (comma separated, exact domains: `sub.partner.vn` is not included) admits any address at those domains, plus anyone holding a valid invite (an outside accountant).
+- Unset or `open`: the proxy checks nothing, as before; `AUTH_DISABLE_SIGNUP` alone decides.
+- Every refused sign-up gets the same answer (403 `signup_not_allowed`, "Email này chưa được phép đăng ký tài khoản"), whatever the reason, and never reaches Supabase Auth. A refused attempt still uses one slot of the client's email budget (`AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR`), which bounds how many addresses one client can try. The cost: several mistyped addresses from one office address (a shared NAT) can hold up that office's sign-up and recovery emails for up to an hour; raise the limit for the partner's sign-up day if needed. The bound holds only with email confirmation on (`AUTH_AUTOCONFIRM=false`, which a public deployment requires).
+- Create the owner's account before setting the policy (or use `allowlist` with the owner's domain): under `invite_only` nobody can sign up until an org exists to send invites.
+- Addresses are checked as plain ASCII: an invite to an address with non-ASCII characters (an internationalized domain) cannot be used to sign up while the policy is restricted.
+- While the policy is `invite_only` or `allowlist`, the proxy also refuses what could create an account from an identity it cannot read: phone and anonymous sign-ups, OAuth sign-in (`/authorize`, `/callback`), ID-token and Web3 grants (these answer 403 `signup_method_not_allowed`), and email codes (`/otp`) that may create an account (a client signing existing users in by code sends `create_user: false`). Password sign-in, refresh, password recovery and email confirmation work as before.
+- The kernel refuses to start with `allowlist` and no domains, with domains under another policy, with a domain it cannot parse, or with a restricted policy and no bundled Supabase Auth behind the proxy (`AUTH_UPSTREAM_URL`; a remote Supabase Auth is restricted in its own settings). If the database cannot answer the invite check, the sign-up is refused with 503.
+- Checked by `pilot:check`: `AUTH_SIGNUP_POLICY` is `invite_only`, or `allowlist` with `AUTH_SIGNUP_ALLOWED_DOMAINS`. With `--url`: `/api/config` reports `signupPolicy` `invite_only` or `allowlist` (the domains are never published).
+- After the partner's users joined, check that only expected accounts exist (step 4 below).
+
+**Closed sign-up.** `AUTH_DISABLE_SIGNUP=true` (`GOTRUE_DISABLE_SIGNUP` of the bundled Supabase Auth) refuses every new account while existing accounts sign in as usual. It still works with any `AUTH_SIGNUP_POLICY`.
 
 - Checked by `pilot:check`: `AUTH_DISABLE_SIGNUP=true`. With `--url`: the running Supabase Auth reports `disable_signup: true`.
-- A member invite needs the invitee to have an account (the invite binds to the signed-in, confirmed email), so new accounts are created in a short sign-up window:
+- A member invite needs the invitee to have an account (the invite binds to the signed-in, confirmed email), so with sign-up closed new accounts are created in a short sign-up window:
   1. Set `AUTH_DISABLE_SIGNUP=false` and run `docker compose up -d auth`.
   2. The partner's users create their accounts and confirm their emails; the org owner sends the member invites, and each invitee accepts while signed in.
   3. Set `AUTH_DISABLE_SIGNUP=true`, run `docker compose up -d auth`, then `pnpm pilot:check -- --url <public URL>`.
@@ -72,7 +86,7 @@ What exists today is a closed sign-up: `AUTH_DISABLE_SIGNUP=true` (`GOTRUE_DISAB
      ```
 
      An unexpected account means someone else used the window: note it in issue #308 and do not sign off until the owner decided what to do with it.
-- Keep the window short: while it is open, anyone who reaches `PUBLIC_URL` can create an account and an org (bounded by `ORG_CREATE_LIMIT_PER_DAY` and the email limits).
+- Keep the window short: while it is open with the policy `open`, anyone who reaches `PUBLIC_URL` can create an account and an org (bounded by `ORG_CREATE_LIMIT_PER_DAY` and the email limits). Setting `AUTH_SIGNUP_POLICY=invite_only` for the window (`docker compose up -d crove`) removes that risk.
 
 ## 6. Alerts reach the owner's phone
 

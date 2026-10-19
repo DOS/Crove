@@ -94,6 +94,9 @@ export const vi = {
       mfa_verification_failed: 'Mã xác thực không đúng hoặc đã hết hạn',
       mfa_challenge_expired: 'Mã xác thực đã hết hạn, hãy nhập mã mới',
       insufficient_aal: 'Hãy nhập mã xác thực hai lớp trước',
+      signup_not_allowed: 'Email này chưa được phép đăng ký. Hãy dùng đúng email đã nhận lời mời, hoặc hỏi quản trị viên của tổ chức.',
+      signup_method_not_allowed: 'Cách đăng nhập này đang tắt trên máy chủ. Hãy đăng nhập bằng email và mật khẩu.',
+      signup_disabled: 'Máy chủ này đang tạm đóng đăng ký tài khoản mới. Hãy hỏi quản trị viên của tổ chức.',
     },
   },
   onboarding: {

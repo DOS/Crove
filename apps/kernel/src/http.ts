@@ -54,6 +54,7 @@ import {
   type VatReport,
 } from '@crove/mod-finance';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
+import { createDbInviteCheck, methodRefused, signupAllowed, signupGate, signupRefused, type SignupRules } from './auth-signup-policy.ts';
 import { actorOf, bearerIssuedToOAuthClient, oauthClientRefused, type Authenticate, type AuthUser } from './auth.ts';
 import { ConcurrencyLimiter, type Semaphore } from './concurrency.ts';
 import { publicAuthUrl, type Config } from './config.ts';
@@ -95,6 +96,8 @@ export interface HttpDeps {
   mailer?: Mailer;
   // Per-client budget for Supabase Auth's emails (#190). Unset: the database limiter on `pool`.
   emailLimiter?: EmailLimiter;
+  // Whether an email holds a valid member invite, for AUTH_SIGNUP_POLICY (#350). Unset: the database check on `pool`.
+  signupInviteCheck?: (email: string) => Promise<boolean>;
   // Per-user request limit on /api (issue #162). Default: built from API_RATE_LIMIT_PER_MINUTE; null turns it off.
   rateLimiter?: RateLimiter | null;
   // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
@@ -331,6 +334,8 @@ export function createHttpApp(deps: HttpDeps) {
       modules: runtime.modules(),
       // The app subscribes to /api/stream and polls only while it is down (issue #69).
       stream: Boolean(deps.stream),
+      // Who may create an account (#350): open, invite_only or allowlist. The allowed domains stay on the server.
+      signupPolicy: config.AUTH_SIGNUP_POLICY,
       // Channels the app may offer to connect without a platform account (ADR-0025).
       // OAuth providers only with a credential key: their tokens could not be sealed otherwise.
       channels: { sandbox: Boolean(deps.channels?.sandbox), bluesky: Boolean(deps.channels?.bluesky), oauth: deps.channels && deps.channels.broker.id !== 'none' ? Object.keys(deps.channels.connectors ?? {}).sort() : [] },
@@ -347,6 +352,8 @@ export function createHttpApp(deps: HttpDeps) {
         addressIntervalSeconds: config.AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS,
       });
     const autoconfirm = config.AUTH_AUTOCONFIRM === 'true';
+    const signupRules: SignupRules = { policy: config.AUTH_SIGNUP_POLICY, domains: new Set(config.AUTH_SIGNUP_ALLOWED_DOMAINS) };
+    const inviteValid = deps.signupInviteCheck ?? createDbInviteCheck(deps.pool);
     app.all('/auth/v1/*', bodyLimit({ maxSize: 1024 * 1024 }), async (c) => {
       const url = new URL(c.req.url);
       const path = url.pathname.replace(/^\/auth\/v1/, '');
@@ -363,6 +370,11 @@ export function createHttpApp(deps: HttpDeps) {
       if (ip) headers.set('x-real-ip', ip);
       const method = c.req.method;
       const payload = method === 'GET' || method === 'HEAD' ? null : new Uint8Array(await c.req.arrayBuffer());
+      // A request that could create an account under a restricted sign-up policy (#350): one the proxy cannot check
+      // is refused here; one with a readable email is checked below, after it took its email slot.
+      const gate = signupGate(signupRules, { path, search: url.searchParams, contentType: headers.get('content-type'), body: payload });
+      if (gate.kind === 'refuse') return signupRefused();
+      if (gate.kind === 'method') return methodRefused();
       // A request that makes Supabase Auth send an email takes a slot of its client's budget first (#190).
       const sends = emailSendRequest(method, path, payload, autoconfirm);
       const client = clientBucket(ip);
@@ -376,6 +388,23 @@ export function createHttpApp(deps: HttpDeps) {
         if (!verdict) return c.json({ code: 'AUTH_UNAVAILABLE', message: 'Dịch vụ đăng nhập không phản hồi' }, 503);
         if (!verdict.allowed) return emailRateLimited(verdict.retryAfterSeconds);
         reservation = verdict.reservation;
+      }
+      if (gate.kind === 'check') {
+        const allowed = await signupAllowed(signupRules, gate.email, inviteValid).catch((error: unknown) => {
+          console.error('[auth-proxy] sign-up policy check unavailable:', error instanceof Error ? error.message : error);
+          return null;
+        });
+        if (allowed === null) {
+          if (reservation) {
+            await emailLimiter.release(reservation, client).catch((error: unknown) => {
+              console.error('[auth-proxy] email reservation not released:', error instanceof Error ? error.message : error);
+            });
+          }
+          return c.json({ code: 'AUTH_UNAVAILABLE', message: 'Dịch vụ đăng nhập không phản hồi' }, 503);
+        }
+        // A refused sign-up keeps its email slot: the per-client budget (AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR) also bounds
+        // how many addresses one client can try, which caps probing for who holds an invite.
+        if (!allowed) return signupRefused();
       }
       const response = await fetch(`${upstream}${path}${url.search}`, {
         method,

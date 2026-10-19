@@ -185,16 +185,20 @@ export function checkEnv(env: Env): CheckResult[] {
   if (stepUp !== undefined && stepUp !== 'required') auth.push(`AUTH_STEP_UP=${stepUp}: approvals and member changes must need MFA; set AUTH_STEP_UP=required`);
   add('Email confirmation and MFA step-up', auth, 'AUTH_AUTOCONFIRM=false with an SMTP server, and AUTH_STEP_UP=required');
 
-  // Sign-up closed: the bundled Supabase Auth refuses new accounts (GOTRUE_DISABLE_SIGNUP).
+  // Sign-up closed (the bundled Supabase Auth refuses new accounts, GOTRUE_DISABLE_SIGNUP), or limited by the kernel's
+  // /auth/v1 proxy to invited emails or allowed domains (AUTH_SIGNUP_POLICY, #350).
   const signup = value(env, 'AUTH_DISABLE_SIGNUP');
+  const policy = value(env, 'AUTH_SIGNUP_POLICY');
+  const domains = value(env, 'AUTH_SIGNUP_ALLOWED_DOMAINS');
+  const restricted = policy === 'invite_only' || (policy === 'allowlist' && domains !== undefined);
   add(
     'Sign-up limited',
     [
-      signup === 'true'
+      signup === 'true' || restricted
         ? null
-        : `AUTH_DISABLE_SIGNUP is ${signup ?? 'unset'}: anyone who reaches PUBLIC_URL can create an account; set AUTH_DISABLE_SIGNUP=true once the partner's accounts exist (docs/runbooks/pilot-readiness.md)`,
+        : `AUTH_DISABLE_SIGNUP is ${signup ?? 'unset'} and AUTH_SIGNUP_POLICY is ${policy ?? 'unset'}${policy === 'allowlist' ? ' without AUTH_SIGNUP_ALLOWED_DOMAINS' : ''}: anyone who reaches PUBLIC_URL can create an account; set AUTH_SIGNUP_POLICY=invite_only, or AUTH_DISABLE_SIGNUP=true once the partner's accounts exist (docs/runbooks/pilot-readiness.md)`,
     ],
-    'AUTH_DISABLE_SIGNUP=true: Supabase Auth creates no new accounts',
+    signup === 'true' ? 'AUTH_DISABLE_SIGNUP=true: Supabase Auth creates no new accounts' : `AUTH_SIGNUP_POLICY=${policy}: Crove forwards only sign-ups it admits`,
   );
 
   // Alerts (M1-9, issue #309): the prober posts to a channel the owner reads, and it runs.
@@ -331,7 +335,7 @@ export async function probeDeployment(origin: string, fetchFn: Fetch = fetch): P
   try {
     const config = await fetchFn(`${origin}/api/config`, init({ redirect: 'error' }));
     if (!config.ok) throw new Error(`${origin}/api/config answered ${config.status}`);
-    const { authUrl } = (await config.json()) as { authUrl?: unknown };
+    const { authUrl, signupPolicy } = (await config.json()) as { authUrl?: unknown; signupPolicy?: unknown };
     if (typeof authUrl !== 'string' || !URL.canParse(authUrl)) throw new Error(`${origin}/api/config names no valid authUrl`);
     const auth = new URL(authUrl);
     if (auth.origin !== url.origin) {
@@ -344,7 +348,9 @@ export async function probeDeployment(origin: string, fetchFn: Fetch = fetch): P
     results.push(
       settings.disable_signup === true
         ? { item: 'Sign-up limited', status: 'pass', message: 'the running Supabase Auth refuses new sign-ups' }
-        : { item: 'Sign-up limited', status: 'fail', message: 'the running Supabase Auth accepts sign-ups from anyone (disable_signup is not true)' },
+        : signupPolicy === 'invite_only' || signupPolicy === 'allowlist'
+          ? { item: 'Sign-up limited', status: 'pass', message: `the running Crove admits sign-ups by its ${signupPolicy} policy` }
+          : { item: 'Sign-up limited', status: 'fail', message: 'the running Supabase Auth accepts sign-ups from anyone (disable_signup is not true, and the sign-up policy is open)' },
       settings.mailer_autoconfirm === false
         ? { item: 'Email confirmation and MFA step-up', status: 'pass', message: 'the running Supabase Auth requires email confirmation' }
         : { item: 'Email confirmation and MFA step-up', status: 'fail', message: 'the running Supabase Auth skips email confirmation (mailer_autoconfirm is not false)' },

@@ -100,6 +100,9 @@ const AUTH_ERRORS = [
   'mfa_verification_failed',
   'mfa_challenge_expired',
   'insufficient_aal',
+  'signup_not_allowed',
+  'signup_method_not_allowed',
+  'signup_disabled',
 ] as const;
 type AuthErrorCode = (typeof AUTH_ERRORS)[number];
 

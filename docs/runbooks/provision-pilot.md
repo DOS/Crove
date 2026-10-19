@@ -141,7 +141,8 @@ Write `/opt/crove/.env` (owner the deploy user, mode 600) from `.env.example`. G
 | `COMPOSE_PROFILES` | `prober` |
 | Every `*_PASSWORD`, `AUTH_JWT_SECRET`, `EXPORT_ENCRYPTION_KEY` (`openssl rand -base64 32`) | generated, never a sample value |
 | `AUTH_AUTOCONFIRM` | `false` |
-| `AUTH_DISABLE_SIGNUP` | `true` (open it only for the partner's sign-up window, [pilot-readiness.md](pilot-readiness.md)) |
+| `AUTH_DISABLE_SIGNUP` | `true` (open it only for the partner's sign-up window, [pilot-readiness.md](pilot-readiness.md)); or `false` with `AUTH_SIGNUP_POLICY=invite_only` |
+| `AUTH_SIGNUP_POLICY`, `AUTH_SIGNUP_ALLOWED_DOMAINS` | `invite_only` (no window needed), or unset with sign-up closed ([pilot-readiness.md](pilot-readiness.md), section 5) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | the provider's, `SMTP_FROM` on the verified domain |
 | `STORAGE` and `S3_*` | `s3`, the endpoint, region, bucket and Crove's key from section 4 |
 | `INBOUND_DOMAIN`, `INBOUND_SECRET` | per #53 |
