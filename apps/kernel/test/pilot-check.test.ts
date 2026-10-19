@@ -11,6 +11,7 @@ const fake = (name: string, length = 20) => `${name}-`.padEnd(length, '7');
 
 const READY: Env = {
   PUBLIC_URL: 'https://crove.example.com',
+  TRUSTED_PROXY_HOPS: '1',
   POSTGRES_PASSWORD: fake('pg'),
   CROVE_APP_DB_PASSWORD: fake('app'),
   CROVE_WORKER_DB_PASSWORD: fake('worker'),
@@ -38,6 +39,13 @@ const failures = (results: readonly CheckResult[]) => results.filter((r) => r.st
 const failing = (env: Env) => failures(checkEnv(env)).map((r) => `${r.item}: ${r.message}`);
 
 describe('pilot-check settings', () => {
+  it('fails TLS when TRUSTED_PROXY_HOPS does not count the reverse proxy (#564)', () => {
+    for (const hops of [undefined, '0', ' ', 'one', '6']) {
+      expect(failing({ ...READY, TRUSTED_PROXY_HOPS: hops }), String(hops)).toEqual([expect.stringMatching(/^TLS: TRUSTED_PROXY_HOPS is .*one email budget/)]);
+    }
+    expect(failing({ ...READY, TRUSTED_PROXY_HOPS: '2' })).toEqual([]);
+  });
+
   it('passes a ready deployment and leaves the human items as manual', () => {
     const results = checkEnv(READY);
     expect(failures(results)).toEqual([]);
@@ -172,11 +180,18 @@ function fakeFetch(routes: Record<string, Route>): Fetch {
   };
 }
 
-const json = (body: unknown) => () => Response.json(body);
+const json = (body: unknown, status = 200) => () => Response.json(body, { status });
+// What the sign-up probe meets: Crove's policy refusal, Supabase Auth with sign-up closed, or Supabase Auth refusing
+// the password-less body (sign-up open).
+const SIGNUP = 'https://crove.example.com/auth/v1/signup';
+const refusedByPolicy = json({ code: 403, error_code: 'signup_not_allowed', msg: 'Email này chưa được phép đăng ký tài khoản' }, 403);
+const signupDisabled = json({ code: 422, error_code: 'signup_disabled', msg: 'Signups not allowed for this instance' }, 422);
+const reachedAuth = json({ code: 400, error_code: 'validation_failed', msg: 'Signup requires a valid password' }, 400);
 const healthy = {
   'https://crove.example.com/healthz': json({ ok: true }),
   'https://crove.example.com/api/config': json({ authUrl: 'https://crove.example.com/auth/v1', authAnonKey: null }),
   'https://crove.example.com/auth/v1/settings': json({ disable_signup: true, mailer_autoconfirm: false }),
+  [SIGNUP]: signupDisabled,
 };
 
 describe('pilot-check probe', () => {
@@ -184,6 +199,7 @@ describe('pilot-check probe', () => {
     const results = await probeDeployment('https://crove.example.com', fakeFetch(healthy));
     expect(failures(results)).toEqual([]);
     expect(results.map((r) => r.item)).toEqual(['TLS', 'TLS', 'Sign-up limited', 'Email confirmation and MFA step-up']);
+    expect(results.find((r) => r.item === 'Sign-up limited')?.message).toBe('the running Supabase Auth refuses new sign-ups (422 signup_disabled)');
   });
 
   it('accepts a plain-http redirect to https on the same host and refuses plain-http service', async () => {
@@ -230,14 +246,16 @@ describe('pilot-check probe', () => {
   });
 
   it('reads what the running Supabase Auth does', async () => {
-    const open = { ...healthy, 'https://crove.example.com/auth/v1/settings': json({ disable_signup: false, mailer_autoconfirm: true }) };
+    const open = { ...healthy, 'https://crove.example.com/auth/v1/settings': json({ disable_signup: false, mailer_autoconfirm: true }), [SIGNUP]: reachedAuth };
     expect(failures(await probeDeployment('https://crove.example.com', fakeFetch(open))).map((r) => r.item)).toEqual(['Sign-up limited', 'Email confirmation and MFA step-up']);
-    // Supabase Auth open behind a restricting kernel (#350) passes; the policy comes from /api/config.
-    const settingsOpen = { ...healthy, 'https://crove.example.com/auth/v1/settings': json({ disable_signup: false, mailer_autoconfirm: false }) };
+    // Supabase Auth open behind a restricting kernel (#350) passes when the kernel really refuses the probe.
+    const settingsOpen = { ...healthy, 'https://crove.example.com/auth/v1/settings': json({ disable_signup: false, mailer_autoconfirm: false }), [SIGNUP]: reachedAuth };
     expect(failures(await probeDeployment('https://crove.example.com', fakeFetch(settingsOpen))).map((r) => r.item)).toEqual(['Sign-up limited']);
     for (const signupPolicy of ['invite_only', 'allowlist']) {
-      const restricted = { ...settingsOpen, 'https://crove.example.com/api/config': json({ authUrl: 'https://crove.example.com/auth/v1', authAnonKey: null, signupPolicy }) };
-      expect(failures(await probeDeployment('https://crove.example.com', fakeFetch(restricted)))).toEqual([]);
+      const restricted = { ...settingsOpen, 'https://crove.example.com/api/config': json({ authUrl: 'https://crove.example.com/auth/v1', authAnonKey: null, signupPolicy }), [SIGNUP]: refusedByPolicy };
+      const results = await probeDeployment('https://crove.example.com', fakeFetch(restricted));
+      expect(failures(results)).toEqual([]);
+      expect(results.find((r) => r.item === 'Sign-up limited')?.message).toContain(`403 signup_not_allowed, policy ${signupPolicy}`);
     }
     // Every fetch refuses redirects, except the ones that inspect them.
     const modes: (RequestRedirect | undefined)[] = [];
@@ -246,7 +264,68 @@ describe('pilot-check probe', () => {
       return fakeFetch(healthy)(input, init);
     };
     await probeDeployment('https://crove.example.com', record);
-    expect(modes).toEqual(['manual', 'manual', 'error', 'error']);
+    expect(modes).toEqual(['manual', 'manual', 'error', 'error', 'error']);
+  });
+
+  it('trusts a live sign-up probe over the policy the instance reports (#564)', async () => {
+    const reported = (signupPolicy: string, signup: Route) => ({
+      ...healthy,
+      'https://crove.example.com/api/config': json({ authUrl: 'https://crove.example.com/auth/v1', authAnonKey: null, signupPolicy }),
+      'https://crove.example.com/auth/v1/settings': json({ disable_signup: false, mailer_autoconfirm: false }),
+      [SIGNUP]: signup,
+    });
+    const signupResult = async (routes: Record<string, Route>) => (await probeDeployment('https://crove.example.com', fakeFetch(routes))).find((r) => r.item === 'Sign-up limited')!;
+
+    // The instance says invite_only, but a sign-up reaches Supabase Auth: not limited.
+    const lying = await signupResult(reported('invite_only', reachedAuth));
+    expect(lying.status).toBe('fail');
+    expect(lying.message).toContain('reached Supabase Auth (400 validation_failed, although /api/config reports the policy invite_only)');
+    // Sign-up closed in Supabase Auth passes whatever the policy says.
+    expect((await signupResult(reported('open', signupDisabled))).status).toBe('pass');
+    // An accepted sign-up fails and names the address to delete.
+    const accepted = await signupResult(reported('open', json({ id: 'x' })));
+    expect(accepted.status).toBe('fail');
+    expect(accepted.message).toMatch(/accepted a sign-up for pilot-check-[0-9a-f]{16}@pilot-check\.invalid/);
+    // Answers that prove nothing either way fail as inconclusive, never pass.
+    const unknown: Route[] = [
+      json({ code: 429, error_code: 'over_email_send_rate_limit' }, 429),
+      json({ code: 'AUTH_UNAVAILABLE' }, 503),
+      json({ code: 403, error_code: 'something_else' }, 403),
+      () => new Response('<html>blocked</html>', { status: 403 }),
+      () => new Response('not found', { status: 404 }),
+      // A 400 or 422 without Supabase Auth's error code may be a proxy or firewall in front, not Supabase Auth.
+      () => new Response('<html>Bad Request</html>', { status: 400 }),
+      json({ message: 'unprocessable' }, 422),
+      () => {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      },
+    ];
+    for (const signup of unknown) {
+      const result = await signupResult(reported('invite_only', signup));
+      expect(result.status).toBe('fail');
+      expect(result.message).toMatch(/^could not tell whether sign-up is limited/);
+    }
+    expect((await signupResult(reported('invite_only', () => new Response('<html>Bad Request</html>', { status: 400 })))).message).toContain(
+      "got 400 without Supabase Auth's error code",
+    );
+  });
+
+  it('probes with a fresh random address at a reserved domain and no password', async () => {
+    const bodies: { email?: unknown }[] = [];
+    const record: Fetch = async (input, init) => {
+      if (input === SIGNUP) {
+        expect(init?.method).toBe('POST');
+        expect(new Headers(init?.headers).get('content-type')).toBe('application/json');
+        bodies.push(JSON.parse(String(init?.body)) as { email?: unknown });
+      }
+      return fakeFetch(healthy)(input, init);
+    };
+    await probeDeployment('https://crove.example.com', record);
+    await probeDeployment('https://crove.example.com', record);
+    expect(bodies.map((b) => Object.keys(b))).toEqual([['email'], ['email']]);
+    const [first, second] = bodies.map((b) => b.email);
+    expect(first).toMatch(/^pilot-check-[0-9a-f]{16}@pilot-check\.invalid$/);
+    expect(first).not.toBe(second);
   });
 
   it('never fetches an Auth URL the instance names on another origin', async () => {
