@@ -250,7 +250,7 @@ export const vi = {
     year: 'Năm',
     monthOption: 'Tháng {n}',
     quarterOption: 'Quý {n}',
-    range: 'Từ {from} đến {to}, theo ngày lập hóa đơn',
+    range: 'Từ {from} đến {to}: bán ra theo ngày lập hóa đơn, mua vào theo ngày ghi sổ',
     indicatorsTitle: 'Chỉ tiêu tờ khai 01/GTGT',
     indicatorsNote:
       'Chỉ tiêu [25] (thuế GTGT được khấu trừ) và các chỉ tiêu từ [36] do kế toán xác định. Hàng hóa, dịch vụ thuế suất 8% kê khai ở [32], [33] và kèm phụ lục giảm thuế GTGT. Không gồm chứng từ đã hủy.',

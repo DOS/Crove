@@ -252,7 +252,7 @@ export const en = {
     year: 'Year',
     monthOption: 'Month {n}',
     quarterOption: 'Q{n}',
-    range: 'From {from} to {to}, by invoice date',
+    range: 'From {from} to {to}: sales by invoice date, purchases by posting date',
     indicatorsTitle: 'Form 01/GTGT indicators',
     indicatorsNote:
       'Indicator [25] (deductible input VAT) and those from [36] on are for your accountant to decide. Sales at the reduced 8% rate go in [32] and [33] with the VAT reduction appendix. Voided documents are left out.',

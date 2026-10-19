@@ -127,7 +127,7 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await page.getByLabel('Kỳ khai', { exact: true }).selectOption('month');
     await page.getByLabel('Năm', { exact: true }).selectOption('2026');
     await page.getByLabel('Tháng', { exact: true }).selectOption('9');
-    await expect(page.getByText('Từ 01/09/2026 đến 30/09/2026, theo ngày lập hóa đơn')).toBeVisible();
+    await expect(page.getByText('Từ 01/09/2026 đến 30/09/2026: bán ra theo ngày lập hóa đơn, mua vào theo ngày ghi sổ')).toBeVisible();
     const indicator = (code: string) => page.getByRole('row').filter({ has: page.getByRole('cell', { name: `[${code}]`, exact: true }) });
     await expect(indicator('23').getByRole('cell').last()).toHaveText(/^1\.800\.000/);
     await expect(indicator('24').getByRole('cell').last()).toHaveText(/^180\.000/);
