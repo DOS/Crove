@@ -2,7 +2,7 @@
 // position labelled AI (section 9), the agent templates, the agents' status, max risk and daily run cap, the monthly
 // budgets, and "Stop AI". The server enforces every rule; the screen hides what the viewer's role can never do.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
 import { Alert, AlertDescription, AlertTitle } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
@@ -15,7 +15,7 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { agentPermissions, budgetUsage, chartTree, isBudgetAmount, type AgentPermissions, type ChartNode } from '../lib/agents.ts';
+import { agentPermissions, budgetUsage, chartTree, holderCandidates, isBudgetAmount, type AgentPermissions, type ChartNode } from '../lib/agents.ts';
 import { errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 
@@ -63,8 +63,12 @@ function Refusal<V>({
   return <p className={className}>{errorMessage(error)}</p>;
 }
 
-// "Stop AI": owners and admins, R1, so it never waits for a second factor. One idempotency key per confirmation.
-function StopAi() {
+// "Stop AI": owners and admins, R1, so it never waits for a second factor. One idempotency key per confirmation and per
+// reason: a retry of the same request (a lost answer) replays with the same key, but the key is renewed whenever the
+// reason is edited, so a changed reason is never sent under a key the server already holds for another reason
+// (IDEMPOTENCY_MISMATCH). Renewing is safer than reading that error as "already stopped": the stop is not assumed, the
+// new request is simply processed, and stopping twice only engages the switch again.
+export function StopAi() {
   const t = useTranslations('agents');
   const tc = useTranslations('common');
   const [open, setOpen] = useState(false);
@@ -87,7 +91,15 @@ function StopAi() {
       <p className="text-muted-foreground">{t('stopBody')}</p>
       <label className="block text-xs">
         <span className="text-subtle-foreground">{t('stopReason')}</span>
-        <Input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} className="mt-1" />
+        <Input
+          value={reason}
+          maxLength={500}
+          onChange={(e) => {
+            setReason(e.target.value);
+            setKey(crypto.randomUUID());
+          }}
+          className="mt-1"
+        />
       </label>
       <div className="flex gap-2">
         <Button
@@ -167,11 +179,31 @@ function holderValue(holder: Position['holder']): string {
   return holder.type === 'agent' ? `agent:${holder.agentId}` : `user:${holder.userId}`;
 }
 
-// Owner control: gives the position to a member or an agent, or vacates it.
+// Owner control: gives the position to a member or an agent, or vacates it. Picking only proposes the change: the R3
+// assign is sent after an inline confirmation, since it changes who acts in the organization's name.
 function AssignHolder({ position, members, agents }: { position: Position; members: Member[]; agents: Agent[] }) {
   const t = useTranslations('agents');
-  const assign = useMutation(orpc.chart.assign.mutationOptions({ onSuccess: refresh }));
-  const pick = (value: string) => {
+  const tc = useTranslations('common');
+  const [pending, setPending] = useState<string | null>(null);
+  const assign = useMutation(
+    orpc.chart.assign.mutationOptions({
+      onSuccess: () => {
+        setPending(null);
+        refresh();
+      },
+    }),
+  );
+  const current = holderValue(position.holder);
+  const locked = isStepUpRequired(assign.error);
+  const labelOf = (value: string): string => {
+    const [type, id] = value.split(':');
+    if (type === 'user') {
+      const m = members.find((x) => x.userId === id);
+      return t('holderMember', { name: m ? (m.displayName ?? m.email) : (id ?? '') });
+    }
+    return t('holderAgent', { name: agents.find((a) => a.id === id)?.displayName ?? id ?? '' });
+  };
+  const send = (value: string) => {
     const [type, id] = value.split(':');
     const holder = type === 'user' && id ? { type: 'user' as const, userId: id } : type === 'agent' && id ? { type: 'agent' as const, agentId: id } : null;
     assign.mutate({ id: position.id, holder, idempotencyKey: crypto.randomUUID() });
@@ -183,9 +215,12 @@ function AssignHolder({ position, members, agents }: { position: Position; membe
         <NativeSelect
           size="sm"
           className="mt-1 w-full"
-          value={holderValue(position.holder)}
-          disabled={assign.isPending || isStepUpRequired(assign.error)}
-          onChange={(e) => pick(e.target.value)}
+          value={pending ?? current}
+          disabled={assign.isPending || locked}
+          onChange={(e) => {
+            assign.reset();
+            setPending(e.target.value === current ? null : e.target.value);
+          }}
         >
           <NativeSelectOption value="">{t('holderVacant')}</NativeSelectOption>
           {members.map((m) => (
@@ -193,15 +228,27 @@ function AssignHolder({ position, members, agents }: { position: Position; membe
               {t('holderMember', { name: m.displayName ?? m.email })}
             </NativeSelectOption>
           ))}
-          {agents
-            .filter((a) => a.status === 'active')
-            .map((a) => (
-              <NativeSelectOption key={a.id} value={`agent:${a.id}`}>
-                {t('holderAgent', { name: a.displayName })}
-              </NativeSelectOption>
-            ))}
+          {agents.map((a) => (
+            <NativeSelectOption key={a.id} value={`agent:${a.id}`}>
+              {t('holderAgent', { name: a.displayName })}
+            </NativeSelectOption>
+          ))}
         </NativeSelect>
       </label>
+      {pending !== null && !locked && (
+        <div className="mt-2 space-y-2 rounded-lg border border-warning/30 bg-warning/10 p-2 text-xs" role="alertdialog" aria-label={t('assignConfirmTitle')}>
+          <p className="text-foreground">{pending === '' ? t('assignConfirmVacate', { title: position.title }) : t('assignConfirm', { title: position.title, holder: labelOf(pending) })}</p>
+          <div className="flex gap-2">
+            <Button size="sm" disabled={assign.isPending} onClick={() => send(pending)}>
+              {assign.isPending ? <Spinner /> : null}
+              {t('assignConfirmButton')}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={assign.isPending} onClick={() => setPending(null)}>
+              {tc('cancel')}
+            </Button>
+          </div>
+        </div>
+      )}
       <Refusal
         error={assign.error}
         variables={assign.variables}
@@ -214,7 +261,9 @@ function AssignHolder({ position, members, agents }: { position: Position; membe
   );
 }
 
-function PositionNode({ node, members, agents, perms }: { node: ChartNode<Position>; members: Member[]; agents: Agent[]; perms: AgentPermissions }) {
+type PositionContext = { members: Member[]; agents: Agent[]; positions: Position[]; templateRoles: ReadonlyMap<string, string>; perms: AgentPermissions };
+
+export function PositionNode({ node, ctx }: { node: ChartNode<Position>; ctx: PositionContext }) {
   const t = useTranslations('agents');
   const p = node.position;
   const holder = p.holder;
@@ -240,12 +289,12 @@ function PositionNode({ node, members, agents, perms }: { node: ChartNode<Positi
               ? t('holderAgent', { name: holder.name ?? '' })
               : t('holderMember', { name: holder.displayName ?? holder.email ?? holder.userId })}
         </p>
-        {perms.manage && <AssignHolder position={p} members={members} agents={agents} />}
+        {ctx.perms.manage && <AssignHolder position={p} members={ctx.members} agents={holderCandidates(p, ctx.agents, ctx.positions, ctx.templateRoles)} />}
       </Card>
       {node.children.length > 0 && (
         <ul className="mt-2 space-y-2 border-l border-border pl-4">
           {node.children.map((child) => (
-            <PositionNode key={child.position.id} node={child} members={members} agents={agents} perms={perms} />
+            <PositionNode key={child.position.id} node={child} ctx={ctx} />
           ))}
         </ul>
       )}
@@ -329,17 +378,30 @@ function AddPosition({ positions }: { positions: Position[] }) {
 }
 
 // Owner controls for one agent: status, max risk and daily run cap, saved together.
-function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissions }) {
+export function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissions }) {
   const t = useTranslations('agents');
+  const tc = useTranslations('common');
   const [status, setStatus] = useState(agent.status);
   const [maxRisk, setMaxRisk] = useState(agent.maxRisk);
   const [cap, setCap] = useState(String(agent.dailyRunCap));
+  const [confirmRetire, setConfirmRetire] = useState(false);
   const update = useMutation(orpc.agents.update.mutationOptions({ onSuccess: refresh }));
   const capValue = Number(cap);
   const capValid = Number.isInteger(capValue) && capValue >= 1 && capValue <= 10000;
   const changed = status !== agent.status || maxRisk !== agent.maxRisk || capValue !== agent.dailyRunCap;
   const editable = perms.manage && agent.status !== 'retired';
   const locked = isStepUpRequired(update.error);
+  const retiring = status === 'retired' && agent.status !== 'retired';
+  const send = () => {
+    setConfirmRetire(false);
+    update.mutate({
+      id: agent.id,
+      ...(status !== agent.status ? { status } : {}),
+      ...(maxRisk !== agent.maxRisk ? { maxRisk } : {}),
+      ...(capValue !== agent.dailyRunCap ? { dailyRunCap: capValue } : {}),
+      idempotencyKey: crypto.randomUUID(),
+    });
+  };
   return (
     <TableRow data-testid="agent-row">
       <TableCell className="px-4">
@@ -349,7 +411,10 @@ function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissions }) {
       <TableCell className="px-4 text-xs text-muted-foreground">{agent.templateKey}</TableCell>
       <TableCell className="px-4">
         {editable ? (
-          <NativeSelect size="sm" aria-label={t('colStatus')} value={status} disabled={locked} onChange={(e) => setStatus(e.target.value as typeof status)}>
+          <NativeSelect size="sm" aria-label={t('colStatus')} value={status} disabled={locked} onChange={(e) => {
+              setStatus(e.target.value as typeof status);
+              setConfirmRetire(false);
+            }}>
             {AGENT_STATUSES.map((s) => (
               <NativeSelectOption key={s} value={s}>
                 {t(`status.${s}`)}
@@ -382,22 +447,24 @@ function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissions }) {
         )}
       </TableCell>
       <TableCell className="px-4">
-        {editable && (
-          <Button
-            size="sm"
-            disabled={!changed || !capValid || update.isPending || locked}
-            onClick={() =>
-              update.mutate({
-                id: agent.id,
-                ...(status !== agent.status ? { status } : {}),
-                ...(maxRisk !== agent.maxRisk ? { maxRisk } : {}),
-                ...(capValue !== agent.dailyRunCap ? { dailyRunCap: capValue } : {}),
-                idempotencyKey: crypto.randomUUID(),
-              })
-            }
-          >
+        {editable && !confirmRetire && (
+          <Button size="sm" disabled={!changed || !capValid || update.isPending || locked} onClick={() => (retiring ? setConfirmRetire(true) : send())}>
             {t('save')}
           </Button>
+        )}
+        {editable && confirmRetire && (
+          // Retiring cannot be undone, so it is sent only after this confirmation.
+          <div className="max-w-56 space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2 text-xs" role="alertdialog" aria-label={t('retireConfirmTitle')}>
+            <p className="text-foreground">{t('retireConfirm', { name: agent.displayName })}</p>
+            <div className="flex gap-2">
+              <Button size="sm" variant="destructive" onClick={send}>
+                {t('retireConfirmButton')}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setConfirmRetire(false)}>
+                {tc('cancel')}
+              </Button>
+            </div>
+          </div>
         )}
         <Refusal
           error={update.error}
@@ -603,6 +670,10 @@ export function AgentsPage() {
   const chart = useQuery(orpc.chart.get.queryOptions());
   const perms = agentPermissions(org.data?.role);
   const members: Member[] = org.data?.members ?? [];
+  // The role each template fills: an agent can only hold a position of its template's role (the server answers
+  // AGENT_ROLE_MISMATCH otherwise). Shared with the templates list, which asks for the same query.
+  const templates = useQuery(orpc.chart.templates.queryOptions());
+  const templateRoles = useMemo(() => new Map((templates.data ?? []).map((tpl) => [tpl.key, tpl.roleKey])), [templates.data]);
 
   return (
     <div>
@@ -626,7 +697,7 @@ export function AgentsPage() {
             ) : (
               <ul className="space-y-2 border-l border-border pl-4">
                 {chartTree(chart.data.positions).map((node) => (
-                  <PositionNode key={node.position.id} node={node} members={members} agents={chart.data.agents} perms={perms} />
+                  <PositionNode key={node.position.id} node={node} ctx={{ members, agents: chart.data.agents, positions: chart.data.positions, templateRoles, perms }} />
                 ))}
               </ul>
             )}

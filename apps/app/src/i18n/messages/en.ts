@@ -1165,6 +1165,13 @@ export const en = {
     },
   },
   agents: {
+    assignConfirmTitle: 'Confirm the new holder',
+    assignConfirm: 'Give the position {title} to {holder}? This changes who acts in this position.',
+    assignConfirmVacate: 'Leave the position {title} vacant?',
+    assignConfirmButton: 'Confirm',
+    retireConfirmTitle: 'Confirm retiring the agent',
+    retireConfirm: 'Retire {name} for good? This cannot be undone.',
+    retireConfirmButton: 'Retire for good',
     stepUpRelease: 'release the AI stop',
     stepUpAssign: 'assign the position {title}',
     stepUpAddPosition: 'add the position {title}',

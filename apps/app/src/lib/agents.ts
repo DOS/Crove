@@ -29,6 +29,25 @@ export function chartTree<P extends { id: string; reportsTo: string | null }>(po
   return tree;
 }
 
+// The agents a position's holder select offers: active, of a template whose role is the position's role (the server
+// refuses any other, AGENT_ROLE_MISMATCH), and not holding another position (AGENT_ALREADY_PLACED). The agent that holds
+// this very position stays in the list, so the select can show it. Until the templates are known no agent is offered.
+export function holderCandidates<A extends { id: string; templateKey: string; status: string }>(
+  position: { id: string; roleKey: string },
+  agents: readonly A[],
+  positions: ReadonlyArray<{ id: string; holder: { type: string; agentId?: string } | null }>,
+  templateRoles: ReadonlyMap<string, string>,
+): A[] {
+  const placedElsewhere = new Set(
+    positions.filter((p) => p.id !== position.id && p.holder?.type === 'agent' && p.holder.agentId).map((p) => p.holder?.agentId as string),
+  );
+  const here = positions.find((p) => p.id === position.id)?.holder;
+  const holderHere = here?.type === 'agent' ? here.agentId : undefined;
+  return agents.filter(
+    (a) => a.id === holderHere || (a.status === 'active' && templateRoles.get(a.templateKey) === position.roleKey && !placedElsewhere.has(a.id)),
+  );
+}
+
 export interface AgentPermissions {
   // Owners and admins: "Stop AI" is R1, never behind a second factor.
   stop: boolean;

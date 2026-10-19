@@ -1,5 +1,5 @@
 // Locale-aware money, number and date formatting (issue #47).
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { previewPurchaseJournal, toUnits } from '../src/lib/decimal.ts';
 import { formatDate, formatDateTime, formatDecimal, formatMoney, formatNumber } from '../src/lib/format.ts';
 
@@ -96,5 +96,21 @@ describe('formatDecimal', () => {
     expect(formatDecimal('0.000049', 'vi', 6)).toBe('0,000049');
     expect(formatDecimal('150.500000', 'vi', 6)).toBe('150,5');
     expect(formatDecimal('n/a', 'en', 6)).toBe('n/a');
+  });
+
+  it('builds one Intl.NumberFormat per locale and number of digits', () => {
+    const spy = vi.spyOn(Intl, 'NumberFormat');
+    try {
+      // Digits no other test uses, so the first call of each pair is a miss.
+      for (let i = 0; i < 3; i++) formatDecimal('1.5', 'en', 11);
+      expect(spy).toHaveBeenCalledTimes(1);
+      formatDecimal('1.5', 'vi', 11);
+      formatDecimal('1.5', 'en', 12);
+      expect(spy).toHaveBeenCalledTimes(3);
+      expect(formatDecimal('1.5', 'vi', 11)).toBe('1,5');
+      expect(spy).toHaveBeenCalledTimes(3);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

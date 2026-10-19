@@ -1166,6 +1166,13 @@ export const vi = {
     },
   },
   agents: {
+    assignConfirmTitle: 'Xác nhận người đảm nhận mới',
+    assignConfirm: 'Giao vị trí {title} cho {holder}? Việc này đổi người hành động ở vị trí đó.',
+    assignConfirmVacate: 'Để trống vị trí {title}?',
+    assignConfirmButton: 'Xác nhận',
+    retireConfirmTitle: 'Xác nhận ngừng hẳn tác tử',
+    retireConfirm: 'Ngừng hẳn {name}? Việc này không hoàn tác được.',
+    retireConfirmButton: 'Ngừng hẳn',
     stepUpRelease: 'gỡ lệnh dừng AI',
     stepUpAssign: 'giao vị trí {title}',
     stepUpAddPosition: 'thêm vị trí {title}',

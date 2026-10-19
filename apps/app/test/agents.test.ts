@@ -1,6 +1,6 @@
 // What the AI agents screens decide on their own (ADR-0029, issue #258).
 import { describe, expect, it } from 'vitest';
-import { agentPermissions, budgetUsage, chartTree, isBudgetAmount } from '../src/lib/agents.ts';
+import { agentPermissions, budgetUsage, chartTree, holderCandidates, isBudgetAmount } from '../src/lib/agents.ts';
 
 const titles = (nodes: ReturnType<typeof chartTree<{ id: string; reportsTo: string | null }>>): unknown =>
   nodes.map((n) => (n.children.length ? { [n.position.id]: titles(n.children) } : n.position.id));
@@ -54,5 +54,37 @@ describe('budgets', () => {
     expect(budgetUsage('0.2', '0.3', 50)).toEqual({ percent: 66, state: 'warn' });
     expect(budgetUsage('50000', '1', 80)).toEqual({ percent: 999, state: 'spent' });
     expect(budgetUsage('0', '0', 80).state).toBe('spent');
+  });
+});
+
+describe('holderCandidates', () => {
+  const templateRoles = new Map([
+    ['accountant', 'accountant'],
+    ['clerk', 'clerk'],
+  ]);
+  const agents = [
+    { id: 'acc1', templateKey: 'accountant', status: 'active' },
+    { id: 'acc2', templateKey: 'accountant', status: 'active' },
+    { id: 'accOff', templateKey: 'accountant', status: 'paused' },
+    { id: 'clk', templateKey: 'clerk', status: 'active' },
+  ];
+  const positions = [
+    { id: 'p1', holder: { type: 'agent', agentId: 'acc1' } },
+    { id: 'p2', holder: null },
+    { id: 'p3', holder: { type: 'user' } },
+  ];
+  const ids = (list: Array<{ id: string }>) => list.map((a) => a.id);
+
+  it('offers active agents of the position role that hold no other position', () => {
+    expect(ids(holderCandidates({ id: 'p2', roleKey: 'accountant' }, agents, positions, templateRoles))).toEqual(['acc2']);
+  });
+
+  it('keeps the agent that holds this very position, so the select can show it', () => {
+    expect(ids(holderCandidates({ id: 'p1', roleKey: 'accountant' }, agents, positions, templateRoles))).toEqual(['acc1', 'acc2']);
+  });
+
+  it('offers none of another role, or any before the templates are known', () => {
+    expect(ids(holderCandidates({ id: 'p2', roleKey: 'auditor' }, agents, positions, templateRoles))).toEqual([]);
+    expect(ids(holderCandidates({ id: 'p2', roleKey: 'accountant' }, agents, positions, new Map()))).toEqual([]);
   });
 });
