@@ -10,6 +10,7 @@ import {
   normalizeVatRate,
   reducedRateApplies,
   sideTotals,
+  vatMismatch,
   vatPeriod,
   VAT_RATES,
   type DocumentBreakdown,
@@ -73,6 +74,47 @@ describe('reducedRateApplies', () => {
     expect(reducedRateApplies('2026-09-15')).toBe(true);
     expect(reducedRateApplies('2026-12-31')).toBe(true);
     expect(reducedRateApplies('2027-01-01')).toBe(false);
+  });
+});
+
+describe('vatMismatch', () => {
+  it('accepts VAT that is the lines times their rates, within a dong of rounding per taxed line', () => {
+    // The e-invoice fixture: 1,800,000 at 10%, VAT 180,000.
+    expect(vatMismatch({ vatAmount: '180000', lines: [line('1000000', '10%'), line('1000000', '10%'), line('-200000', '10%')] })).toBe(false);
+    // 3,333 at 10% is 333.3: 333 and 334 are rounding, 335 is not.
+    expect(vatMismatch({ vatAmount: '333', lines: [line('3333', '10%')] })).toBe(false);
+    expect(vatMismatch({ vatAmount: '334', lines: [line('3333', '10%')] })).toBe(false);
+    expect(vatMismatch({ vatAmount: '335', lines: [line('3333', '10%')] })).toBe(true);
+    // Untaxed lines carry no VAT: 5% of 1,000,000 only.
+    expect(vatMismatch({ vatAmount: '50000', lines: [line('1000000', '5%'), line('200000', 'KCT'), line('300000', '0%'), line('100000', 'KKKNT')] })).toBe(false);
+    // A negative (adjusting) invoice.
+    expect(vatMismatch({ vatAmount: '-26667', lines: [line('-333333', '8%')] })).toBe(false);
+  });
+
+  it('flags a one-rate invoice whose VAT is not its taxable value times the rate', () => {
+    // The review's example: a 10% line of 1,000,000 with VAT 0.
+    expect(vatMismatch({ vatAmount: '0', lines: [line('1000000', '10%')] })).toBe(true);
+    // 8% charged on a line marked 10%.
+    expect(vatMismatch({ vatAmount: '80000', lines: [line('1000000', '10%')] })).toBe(true);
+    // VAT on an invoice with no taxed line, even one dong: there is nothing to round.
+    expect(vatMismatch({ vatAmount: '10000', lines: [line('1000000', 'KCT')] })).toBe(true);
+    expect(vatMismatch({ vatAmount: '1', lines: [line('1000000', '0%')] })).toBe(true);
+    expect(vatMismatch({ vatAmount: '0', lines: [line('1000000', '0%')] })).toBe(false);
+  });
+
+  it('flags a mixed-rate invoice whose VAT is far from the estimates, even where the split would go negative', () => {
+    // 10% of 1,000,001 + 8% of 333,333 = 126,666.74: 126,667 and 126,668 are rounding (two taxed lines).
+    expect(vatMismatch({ vatAmount: '126667', lines: [line('1000001', '10%'), line('333333', '8%')] })).toBe(false);
+    expect(vatMismatch({ vatAmount: '126668', lines: [line('1000001', '10%'), line('333333', '8%')] })).toBe(false);
+    expect(vatMismatch({ vatAmount: '126669', lines: [line('1000001', '10%'), line('333333', '8%')] })).toBe(true);
+    // VAT 10,000 against estimates of 100,000 and 26,667: the split leaves 10% with 100,000 - 116,667 = -16,667.
+    expect(documentVatByRate({ vatAmount: '10000', lines: [line('1000001', '10%'), line('333333', '8%')] }).rates[1]?.vat).toBe('-16667');
+    expect(vatMismatch({ vatAmount: '10000', lines: [line('1000001', '10%'), line('333333', '8%')] })).toBe(true);
+  });
+
+  it('does not judge an invoice with a line of unknown rate', () => {
+    expect(vatMismatch({ vatAmount: '0', lines: [line('1000000', '10%'), line('500000', 'KHAC:3.5%')] })).toBe(false);
+    expect(vatMismatch({ vatAmount: '100000', lines: [line('1000000', null)] })).toBe(false);
   });
 });
 

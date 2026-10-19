@@ -4,6 +4,7 @@
 // moneyCell, text never read as a formula. Headers and labels stay Vietnamese in every locale: the file goes to
 // Vietnamese accountants and their software.
 import ExcelJS from 'exceljs';
+import { money } from '@crove/l10n-vn';
 import { setMoneyCell as setMoney, setTextCell as setText } from './export.ts';
 import type { VatRate } from './domain/vat-return.ts';
 import type { VatInvoiceView, VatReport, VatSide, VatWarning } from './vat.ts';
@@ -22,7 +23,8 @@ export const VAT_WARNING_LABELS: Readonly<Record<VatWarning, string>> = {
   rate_unknown: 'Có dòng chưa rõ thuế suất',
   rate_split: 'Thuế GTGT chia theo thuế suất là số ước tính',
   reduced_rate_outside_period: 'Thuế suất 8% ngoài thời gian được giảm thuế',
-  lines_mismatch: 'Tổng các dòng lệch tiền trước thuế của hóa đơn',
+  lines_mismatch: 'Tổng các dòng lệch tiền trước thuế của hóa đơn; số tổng cộng theo các dòng',
+  vat_mismatch: 'Thuế GTGT lệch giá trị trước thuế nhân thuế suất',
 };
 
 function invoiceSheet(workbook: ExcelJS.Workbook, name: string, side: VatSide, partyHeader: string, taxCodeHeader: string): void {
@@ -99,6 +101,13 @@ export async function buildVatWorkbook(report: VatReport, orgName: string): Prom
   }
   const note = summary.addRow([]);
   setText(note.getCell('label'), 'Chỉ tiêu [25] (thuế GTGT được khấu trừ) do kế toán xác định; hàng hóa 8% kê khai thêm phụ lục giảm thuế GTGT.');
+  // Sales at a rate Crove cannot place are in the totals but in no indicator (issue #358).
+  const otherSales = report.output.totals.byRate.find((r) => r.rate === 'other')?.taxable ?? '0';
+  if (!money(otherSales).isZero()) {
+    const row = summary.addRow([]);
+    setText(row.getCell('label'), 'Doanh thu bán ra chưa rõ thuế suất, không nằm trong chỉ tiêu nào: kiểm tra các hóa đơn đó trước khi nộp tờ khai');
+    setMoney(row.getCell('taxable'), otherSales);
+  }
 
   for (const [title, side] of [
     ['Hóa đơn bán ra theo thuế suất', report.output],
