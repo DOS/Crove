@@ -7,6 +7,8 @@
 // - only listed per-proposal codes refuse one item; any other refusal aborts the whole batch;
 // - a refused item gets its own denied/failed audit row (#429), the row a refused approval of it alone gets, linked
 //   to the batch, and an aborted batch leaves no item rows; ctx.tryRun records only a refusal of a command it ran.
+//   The row comes from a snapshot nobody can change after the catch; refusals about the actor, session, run or
+//   request are never recovered; one tryRun at a time; and ctx.audit cannot set the runtime's keys of an ok row.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { randomUUID } from 'node:crypto';
@@ -552,5 +554,200 @@ suite('bulk approval on PostgreSQL (#315)', () => {
       parentCommand: 'test.forge',
       parentCommandId: parent?.command_id,
     });
+  });
+
+  // Test commands for ctx.tryRun's guarantees (#429 review), run by the org's owner.
+  const zThingInput = z.object({ id: z.string().uuid() });
+  const thingTarget = (input: { id: string }) => ({ type: 'test.thing', id: input.id });
+  const ownerCommand = <O>(name: string, handler: CommandDef<{ id: string }, O>['handler'], risk: 'R1' | 'R3' = 'R1') =>
+    defineCommand({ name, input: zThingInput, risk, access: ['owner'], target: thingTarget, handler });
+  const fineCommand = ownerCommand('test.fine', async () => ({ done: true }));
+  const runtimeWith = (...commands: CommandDef<any, any>[]) =>
+    new Runtime(db).register({
+      commands: [...kernelCommands, ...financeCommands, ...commands],
+      queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
+    });
+  // Tries every way to change a refusal; each try may throw (the copy ctx.tryRun hands out is frozen).
+  const tamper = (error: DomainError) => {
+    const attempts = [
+      () => ((error.details as Record<string, unknown>).rule = 'P12'),
+      () => ((error.audit as Record<string, unknown>).note = 'forged'),
+      () => ((error as { code: string }).code = 'FORGED'),
+      () => ((error as { status: number }).status = 403),
+    ];
+    for (const attempt of attempts) {
+      try {
+        attempt();
+      } catch {
+        // frozen
+      }
+    }
+  };
+
+  it('writes the refusal row from a snapshot taken when it was caught: recover, the caller and the nested handler cannot change it (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit snapshot', []);
+    let kept: DomainError | null = null;
+    const mutable = ownerCommand('test.mutable', async (_ctx, input) => {
+      // The nested handler changes its input, then keeps the error it throws to change it later.
+      (input as { id: string }).id = randomUUID();
+      kept = new DomainError('NOT_FOUND', 404, 'x', { rule: 'T1' }, { audit: { note: 'kept' } });
+      throw kept;
+    });
+    const mutate = ownerCommand('test.mutate', async (ctx, input) => {
+      const attempt = await ctx.tryRun('test.mutable', input, {
+        recover: (refusal) => {
+          tamper(refusal);
+          return true;
+        },
+      });
+      if (attempt.status !== 'refused') throw new Error('expected a refusal');
+      tamper(attempt.refusal);
+      if (kept) tamper(kept);
+      const { refusal } = attempt;
+      return { code: refusal.code, status: refusal.status, rule: refusal.details?.rule, note: refusal.audit?.note, frozen: Object.isFrozen(refusal) };
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(mutable, mutate).execute('test.mutate', { id }, { actor: asUser(owner), orgId })).toEqual({
+      code: 'NOT_FOUND',
+      status: 404,
+      rule: 'T1',
+      note: 'kept',
+      frozen: true,
+    });
+    // The original error did change; the row did not.
+    expect((kept as DomainError | null)?.code).toBe('FORGED');
+    const [parent] = await auditRows(orgId, 'test.mutate');
+    const rows = await auditRows(orgId, 'test.mutable');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ outcome: 'failed', target_type: 'test.thing', target_id: id, input_sha256: sha256Hex(JSON.stringify({ id })) });
+    expect(rows[0]?.detail).toEqual({
+      note: 'kept',
+      code: 'NOT_FOUND',
+      rule: 'T1',
+      aal: 'aal1',
+      sessionId: null,
+      mfaAt: null,
+      parentCommand: 'test.mutate',
+      parentCommandId: parent?.command_id,
+    });
+  });
+
+  it('never recovers a refusal about the actor, the session, the run or the request, whatever recover says (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit never', []);
+    const zCoded = z.object({ id: z.string().uuid(), code: z.string(), status: z.union([z.literal(403), z.literal(409), z.literal(422)]) });
+    const coded = defineCommand({
+      name: 'test.coded',
+      input: zCoded,
+      risk: 'R1',
+      access: ['owner'],
+      target: thingTarget,
+      handler: async (_ctx, input) => {
+        throw new DomainError(input.code, input.status, 'x');
+      },
+    });
+    const never: Array<[string, 403 | 409 | 422]> = [
+      ['STEP_UP_REQUIRED', 403],
+      ['NOT_A_MEMBER', 403],
+      ['USER_DISABLED', 403],
+      ['KILL_SWITCH_ON', 403],
+      ['AGENT_FORBIDDEN', 403],
+      ['AGENT_SOMETHING_NEW', 409],
+      ['SESSION_REVOKED_IN_ORG', 403],
+      ['RETRY', 409],
+      ['LEASE_LOST', 409],
+      ['IDEMPOTENCY_MISMATCH', 422],
+    ];
+    let asked = 0;
+    const probe = ownerCommand('test.never', async (ctx, input) => {
+      const thrown: string[] = [];
+      for (const [code, status] of never) {
+        try {
+          await ctx.tryRun('test.coded', { id: input.id, code, status }, {
+            recover: () => {
+              asked += 1;
+              return true;
+            },
+          });
+          thrown.push('recovered');
+        } catch (error) {
+          thrown.push(error instanceof DomainError ? error.code : 'other');
+        }
+      }
+      // An item refusal is still recovered.
+      const item = await ctx.tryRun('test.coded', { id: input.id, code: 'NOT_ELIGIBLE', status: 403 }, { recover: () => true });
+      return { thrown, item: item.status };
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(coded, probe).execute('test.never', { id }, { actor: asUser(owner), orgId })).toEqual({
+      thrown: never.map(([code]) => code),
+      item: 'refused',
+    });
+    expect(asked).toBe(0);
+    expect((await auditRows(orgId, 'test.coded')).map((r) => [r.outcome, r.detail.code])).toEqual([['denied', 'NOT_ELIGIBLE']]);
+  });
+
+  it('rolls the nested command back when recover throws (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit recover throws', []);
+    const writes = ownerCommand('test.writes', async (ctx, input) => {
+      await ctx.activity('test.thing', input.id, 'test.written', 'written before the refusal');
+      throw new DomainError('NOT_ELIGIBLE', 403, 'x');
+    });
+    const caller = ownerCommand('test.recover_throws', async (ctx, input) => {
+      try {
+        await ctx.tryRun('test.writes', input, {
+          recover: () => {
+            throw new Error('recover failed');
+          },
+        });
+        return { thrown: null };
+      } catch (error) {
+        return { thrown: (error as Error).message };
+      }
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(writes, caller).execute('test.recover_throws', { id }, { actor: asUser(owner), orgId })).toEqual({ thrown: 'recover failed' });
+    const activity = await withAdmin(
+      async (a) => (await a.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2', [orgId, id])).rows[0]?.n,
+    );
+    expect(activity).toBe(0);
+    expect(await auditRows(orgId, 'test.writes')).toEqual([]);
+  });
+
+  it('runs one tryRun at a time per command, and fails a command that returns while one runs (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit in flight', []);
+    const always = { recover: () => true };
+    const parallel = ownerCommand('test.parallel', async (ctx, input) => {
+      const settled = await Promise.allSettled([ctx.tryRun('test.fine', input, always), ctx.tryRun('test.fine', input, always)]);
+      // After an awaited one, the next one runs.
+      const next = await ctx.tryRun('test.fine', input, always);
+      return { settled: settled.map((s) => s.status), next: next.status };
+    });
+    const dangling = ownerCommand('test.dangling', async (ctx, input) => {
+      void ctx.tryRun('test.fine', input, always).catch(() => undefined);
+      return { returned: true };
+    });
+    const forking = runtimeWith(fineCommand, parallel, dangling);
+    const id = randomUUID();
+    expect(await forking.execute('test.parallel', { id }, { actor: asUser(owner), orgId })).toEqual({ settled: ['fulfilled', 'rejected'], next: 'ok' });
+    expect((await auditRows(orgId, 'test.fine')).map((r) => r.outcome)).toEqual(['ok', 'ok']);
+    expect(await refusalOf(forking.execute('test.dangling', { id }, { actor: asUser(owner), orgId }))).toEqual({ code: 'INTERNAL', status: 500 });
+    expect(await auditRows(orgId, 'test.dangling')).toEqual([]);
+    expect((await auditRows(orgId, 'test.fine')).map((r) => r.outcome)).toEqual(['ok', 'ok']);
+  });
+
+  it("keeps the runtime's keys on an ok row: ctx.audit sets no refusal link and does not replace the assurance (#429)", async () => {
+    const { orgId, owner } = await orgWith('Bulk audit ok keys', []);
+    const forged = ownerCommand(
+      'test.ok_forge',
+      async (ctx) => {
+        ctx.audit({ parentCommand: 'forged', parentCommandId: randomUUID(), aal: 'aal1', sessionId: 'forged', mfaAt: 1, note: 'kept' });
+        return { done: true };
+      },
+      'R3',
+    );
+    const actor = asMfa(owner);
+    await runtimeWith(forged).execute('test.ok_forge', { id: randomUUID() }, { actor, orgId });
+    const rows = await auditRows(orgId, 'test.ok_forge');
+    expect(rows.map((r) => r.detail)).toEqual([{ note: 'kept', aal: 'aal2', sessionId: SESSION, mfaAt: actor.mfaAt }]);
   });
 });

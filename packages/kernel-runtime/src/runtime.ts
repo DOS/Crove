@@ -214,20 +214,26 @@ export interface CommandContext extends QueryContext {
   // Runs another registered command as run() does, inside a savepoint, for a command that goes on when that one is
   // refused (issue #429: each item of kernel.proposal.approve_many). When the nested command is refused after its
   // input parsed (a DomainError with status 403, 404, 409 or 422 from the runtime's checks or from its handler, as a
-  // refused top-level command is audited) and `recover` accepts the refusal, the runtime rolls the nested command
-  // back to the savepoint and answers 'refused'. Once this command's handler returns, the runtime writes that
-  // command's own denied/failed audit row in this transaction: the row a refused top-level run of it would get,
-  // linked to this command (detail parentCommand and parentCommandId, the command_id of this command's own audit
-  // row), and under the same bound (RuntimeOptions.refusalAudit). The row commits with this command, and a command
-  // that fails writes none. Any other error, or a refusal `recover` does not accept,
-  // propagates untouched, so the whole command fails as with run(). Only the runtime writes these rows, and only for
-  // a refusal it caught from a command it ran here: there is no way to hand it a refusal or a row.
+  // refused top-level command is audited, and not one of NEVER_RECOVERED) and `recover` accepts the refusal, the
+  // runtime rolls the nested command back to the savepoint and answers 'refused' with a frozen copy of the refusal.
+  // Once this command's handler returns, the runtime writes that command's own denied/failed audit row in this
+  // transaction: the row a refused top-level run of it would get, linked to this command (detail parentCommand and
+  // parentCommandId, the command_id of this command's own audit row), and under the same bound
+  // (RuntimeOptions.refusalAudit). The row commits with this command, and a command that fails writes none. Any other
+  // error, or a refusal `recover` declines, propagates untouched, so the whole command fails as with run(); a `recover`
+  // that throws rolls the nested command back first. One tryRun at a time per command (a second one while another is
+  // in flight throws, and so does a handler that returns while one is), since they share one connection's savepoints.
+  // The row is built from a snapshot the runtime takes when it catches the refusal, before `recover` sees it, and from
+  // the nested input as parsed before the nested command ran: neither the caller (with the refusal copy or the
+  // original error) nor the nested handler can change it afterwards. A command can make a command it runs refuse,
+  // which is that command's own refusal, but it cannot write a refusal row for a command it did not run, nor an ok row.
   tryRun<O>(name: string, input: unknown, options: TryRunOptions): Promise<TryRunResult<O>>;
 }
 
 export interface TryRunOptions {
   proposalId?: string;
-  // Whether this refusal of the nested command lets the calling command go on. Called only for an audited refusal.
+  // Whether this refusal of the nested command lets the calling command go on. Called only for an audited refusal
+  // that is not one of NEVER_RECOVERED, with a frozen copy of it.
   recover: (refusal: DomainError) => boolean;
 }
 
@@ -329,6 +335,52 @@ const RESERVED_REFUSAL_KEYS = ['code', 'rule', 'aal', 'sessionId', 'mfaAt', 'com
 
 // The statuses a refused command is audited for once its org was entered (executeIn, ctx.tryRun).
 const AUDITED_REFUSAL_STATUSES: ReadonlySet<number> = new Set([403, 404, 409, 422]);
+
+// Refusals ctx.tryRun never lets a command go on after, whatever its `recover` answers: they are about the actor, the
+// session, the run or the request, never about one item, so the whole command fails. Every code starting with AGENT_
+// or SESSION_ is one too. Keep this list explicit; a code added here is recovered less, never more.
+export const NEVER_RECOVERED: ReadonlySet<string> = new Set([
+  'STEP_UP_REQUIRED',
+  'MFA_REQUIRED',
+  'NOT_A_MEMBER',
+  'USER_DISABLED',
+  'UNAUTHENTICATED',
+  'AUTH_UNAVAILABLE',
+  'REVOKED_ACCESS_TOKEN',
+  'RETRY',
+  'LEASE_LOST',
+  'KILL_SWITCH_ON',
+  'IDEMPOTENCY_MISMATCH',
+  'CONTEXT_REENTRY',
+]);
+
+export function isNeverRecovered(code: string): boolean {
+  return NEVER_RECOVERED.has(code) || code.startsWith('AGENT_') || code.startsWith('SESSION_');
+}
+
+// Keys of an ok audit row that only ctx.tryRun's refusal rows carry, so ctx.audit never sets them.
+const RESERVED_OK_KEYS = ['parentCommand', 'parentCommandId'] as const;
+
+// A JSON copy of an error's details or audit facts, frozen all the way down (what the audit row stores is JSON).
+function frozenJson(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  return deepFreeze(JSON.parse(JSON.stringify(value)) as Record<string, unknown>);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const v of Object.values(value)) deepFreeze(v);
+  }
+  return value;
+}
+
+// The refusal ctx.tryRun hands to `recover` and to its caller: a frozen copy, so nothing they do reaches the original
+// or the row.
+function frozenRefusal(error: DomainError): DomainError {
+  const audit = frozenJson(error.audit);
+  return Object.freeze(new DomainError(error.code, error.status, error.message, frozenJson(error.details), audit ? { audit } : {}));
+}
 
 // The detail of a denied/failed audit row (plan §4.10): the command's facts about the refusal (for example the roles
 // of a LAST_OWNER), then the code, the rule that refused when the error names one (for example P10 or P12) and,
@@ -454,6 +506,18 @@ interface NestedRun {
   def: CommandDef<unknown, unknown>;
   input: unknown;
   proposalId: string | null;
+}
+
+// Everything the audit row of a refusal ctx.tryRun caught is written from, taken when it was caught.
+interface CaughtRefusal {
+  command: string;
+  code: string;
+  security: boolean;
+  outcome: 'denied' | 'failed';
+  inputSha256: string;
+  target: { type: string; id: string } | null;
+  proposalId: string | null;
+  detail: Record<string, unknown>;
 }
 
 export class Runtime {
@@ -824,7 +888,9 @@ export class Runtime {
     const commandId = uuidv7();
     let auditDetail: Record<string, unknown> | undefined;
     // Refusals ctx.tryRun caught and rolled back, written after the handler returns.
-    const caught: Array<{ nested: NestedRun; refusal: DomainError }> = [];
+    const caught: CaughtRefusal[] = [];
+    // The ctx.tryRun running now, if any (one at a time: they share this transaction's savepoints).
+    let inFlight: Promise<void> | null = null;
     const ctx: CommandContext = {
       ...this.queryContext(trx, base.orgId, base.actor, base.entered),
       commandId,
@@ -851,32 +917,30 @@ export class Runtime {
           .execute();
       },
       audit: (detail) => {
-        auditDetail = { ...auditDetail, ...detail };
+        const own = { ...detail };
+        for (const key of RESERVED_OK_KEYS) delete own[key];
+        auditDetail = { ...auditDetail, ...own };
       },
       run: async <R>(name: string, nestedInput: unknown, options?: { proposalId?: string }): Promise<R> => {
         const nested = resolveNested(name, nestedInput, options?.proposalId);
         return runNested<R>(nested);
       },
-      tryRun: async <R>(name: string, nestedInput: unknown, options: TryRunOptions): Promise<TryRunResult<R>> => {
-        // An unknown command or an input that does not parse is the caller's bug, never a recorded refusal, as for a
-        // top-level command (refused before its org is entered, so never audited).
-        const nested = resolveNested(name, nestedInput, options.proposalId);
-        // Unique per call, so a tryRun nested in another one never rolls back to the outer savepoint.
-        this.savepointSeq += 1;
-        const savepoint = sql.raw(`crove_try_run_${this.savepointSeq}`);
-        await sql`SAVEPOINT ${savepoint}`.execute(trx);
-        let value: R;
-        try {
-          value = await runNested<R>(nested);
-        } catch (error) {
-          if (!(error instanceof DomainError) || !AUDITED_REFUSAL_STATUSES.has(error.status) || options.recover(error) !== true) throw error;
-          await sql`ROLLBACK TO SAVEPOINT ${savepoint}`.execute(trx);
-          await sql`RELEASE SAVEPOINT ${savepoint}`.execute(trx);
-          caught.push({ nested, refusal: error });
-          return { status: 'refused', refusal: error };
-        }
-        await sql`RELEASE SAVEPOINT ${savepoint}`.execute(trx);
-        return { status: 'ok', value };
+      tryRun: <R>(name: string, nestedInput: unknown, options: TryRunOptions): Promise<TryRunResult<R>> => {
+        if (inFlight) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun runs one nested command at a time`));
+        // Set before the attempt starts and cleared before its answer reaches the caller, so the next call after an
+        // awaited one always runs.
+        let settle = () => {};
+        inFlight = new Promise<void>((resolve) => {
+          settle = resolve;
+        });
+        return (async () => {
+          try {
+            return await tryNested<R>(name, nestedInput, options);
+          } finally {
+            inFlight = null;
+            settle();
+          }
+        })();
       },
     };
     // ctx.run and ctx.tryRun call these only while the handler runs, after both are defined.
@@ -884,6 +948,59 @@ export class Runtime {
       const nested = this.commands.get(name);
       if (!nested || nested.bootstrap) throw new DomainError('COMMAND_NOT_FOUND', 404, `Không có lệnh ${name}`);
       return { def: nested, input: parseInput(nested.input, nestedInput), proposalId: proposalIdOption ?? base.proposalId };
+    };
+    const tryNested = async <R>(name: string, nestedInput: unknown, options: TryRunOptions): Promise<TryRunResult<R>> => {
+      // An unknown command or an input that does not parse is the caller's bug, never a recorded refusal, as for a
+      // top-level command (refused before its org is entered, so never audited).
+      const nested = resolveNested(name, nestedInput, options.proposalId);
+      // The row's input hash and target, from the input as parsed, before the nested handler can change it.
+      const inputSha256 = sha256Hex(stableStringify(nested.input));
+      const declared = nested.def.target?.(nested.input) ?? null;
+      const target = declared ? Object.freeze({ type: String(declared.type), id: String(declared.id) }) : null;
+      // Unique per call, so a tryRun nested in another one never rolls back to the outer savepoint.
+      this.savepointSeq += 1;
+      const savepoint = sql.raw(`crove_try_run_${this.savepointSeq}`);
+      await sql`SAVEPOINT ${savepoint}`.execute(trx);
+      let value: R;
+      try {
+        value = await runNested<R>(nested);
+      } catch (error) {
+        if (!(error instanceof DomainError)) throw error;
+        // The snapshot the row is written from, taken before anyone else sees the refusal again.
+        const code = error.code;
+        const status = error.status;
+        if (!AUDITED_REFUSAL_STATUSES.has(status) || isNeverRecovered(code)) throw error;
+        const snapshot: CaughtRefusal = Object.freeze({
+          command: nested.def.name,
+          code,
+          security: isSecurityRefusal(error),
+          outcome: status === 403 ? 'denied' : 'failed',
+          inputSha256,
+          target,
+          proposalId: nested.proposalId,
+          detail: deepFreeze({
+            ...(JSON.parse(JSON.stringify(refusalAuditDetail(error, base.actor))) as Record<string, unknown>),
+            parentCommand: def.name,
+            parentCommandId: commandId,
+          }),
+        });
+        const refusal = frozenRefusal(error);
+        let recovered: boolean;
+        try {
+          recovered = options.recover(refusal) === true;
+        } catch (recoverError) {
+          await sql`ROLLBACK TO SAVEPOINT ${savepoint}`.execute(trx);
+          await sql`RELEASE SAVEPOINT ${savepoint}`.execute(trx);
+          throw recoverError;
+        }
+        if (!recovered) throw error;
+        await sql`ROLLBACK TO SAVEPOINT ${savepoint}`.execute(trx);
+        await sql`RELEASE SAVEPOINT ${savepoint}`.execute(trx);
+        caught.push(snapshot);
+        return { status: 'refused', refusal };
+      }
+      await sql`RELEASE SAVEPOINT ${savepoint}`.execute(trx);
+      return { status: 'ok', value };
     };
     const runNested = async <R>(nested: NestedRun): Promise<R> => {
       const { proposalId } = nested;
@@ -896,20 +1013,32 @@ export class Runtime {
       if (def.risk !== 'R3') await this.requireLiveSession(nested.def, base.actor);
       return this.runInTx<R>(trx, nested.def, nested.input, { ...base, proposalId });
     };
-    const output = (await def.handler(ctx, input)) as O;
+    let output: O;
+    try {
+      output = (await def.handler(ctx, input)) as O;
+    } catch (error) {
+      // A tryRun the handler left running still uses this transaction's connection: let it settle before the
+      // transaction rolls back.
+      if (inFlight) await inFlight;
+      throw error;
+    }
+    if (inFlight) {
+      await inFlight;
+      throw new Error(`command ${def.name}: the handler returned while a ctx.tryRun was still running`);
+    }
     // Each refusal row first counts the refusal in its refusal_tally row (actor, command, code), which stays locked
     // until commit. Written only now, after every nested command ran, and in (command, code) order, so two commands of
     // one actor never wait on each other's tally rows while either still waits for a lock its nested commands take.
-    const byKey = (a: (typeof caught)[number], b: (typeof caught)[number]) =>
-      compareText(a.nested.def.name, b.nested.def.name) || compareText(a.refusal.code, b.refusal.code);
-    for (const { nested, refusal } of [...caught].sort(byKey)) {
-      await this.writeNestedRefusalAudit(trx, nested, base, { def, commandId }, refusal);
+    const byKey = (a: CaughtRefusal, b: CaughtRefusal) => compareText(a.command, b.command) || compareText(a.code, b.code);
+    for (const refusal of [...caught].sort(byKey)) {
+      await this.writeNestedRefusalAudit(trx, base, refusal);
     }
-    // R3 rows record the assurance used: aal, session_id and the MFA timestamp (ADR-0028 section 5).
+    // R3 rows record the assurance used: aal, session_id and the MFA timestamp (ADR-0028 section 5). The runtime's
+    // keys come last, so a command's ctx.audit facts never replace them.
     const assurance = def.risk === 'R3' && base.actor.type === 'user' ? this.sessionDetail(base.actor) : undefined;
     const detail =
       auditDetail || assurance
-        ? { ...actorDetail(base.actor), ...assurance, ...auditDetail }
+        ? { ...auditDetail, ...actorDetail(base.actor), ...assurance }
         : undefined;
     await this.writeAudit(trx, {
       orgId: base.orgId,
@@ -1052,7 +1181,7 @@ export class Runtime {
       const db = await this.cells.resolveTenant(orgId);
       await db.transaction().execute(async (trx) => {
         await this.enter(trx, actor, orgId);
-        if (!(await this.countRefusal(trx, name, refusal, actor, orgId))) return;
+        if (!(await this.countRefusal(trx, name, { code: refusal.code, security: isSecurityRefusal(refusal) }, actor, orgId))) return;
         await this.writeAudit(trx, {
           orgId,
           actor,
@@ -1089,39 +1218,38 @@ export class Runtime {
   // a refused top-level run of that command (its name, target, input hash and proposal, the refusal's code, rule and
   // the actor's session), plus the calling command and its command id, and under the same bound. A failed write fails
   // the calling command, which then commits nothing.
-  private async writeNestedRefusalAudit(
-    trx: Transaction<Database>,
-    nested: NestedRun,
-    base: { orgId: string; actor: Actor },
-    parent: { def: CommandDef<unknown, unknown>; commandId: string },
-    refusal: DomainError,
-  ): Promise<void> {
-    const name = nested.def.name;
-    if (!(await this.countRefusal(trx, name, refusal, base.actor, base.orgId))) return;
+  private async writeNestedRefusalAudit(trx: Transaction<Database>, base: { orgId: string; actor: Actor }, refusal: CaughtRefusal): Promise<void> {
+    if (!(await this.countRefusal(trx, refusal.command, refusal, base.actor, base.orgId))) return;
     await this.writeAudit(trx, {
       orgId: base.orgId,
       actor: base.actor,
-      command: name,
+      command: refusal.command,
       commandId: uuidv7(),
-      outcome: refusal.status === 403 ? 'denied' : 'failed',
-      inputSha256: sha256Hex(stableStringify(nested.input)),
-      target: nested.def.target?.(nested.input) ?? null,
-      proposalId: nested.proposalId,
-      detail: { ...refusalAuditDetail(refusal, base.actor), parentCommand: parent.def.name, parentCommandId: parent.commandId },
+      outcome: refusal.outcome,
+      inputSha256: refusal.inputSha256,
+      target: refusal.target,
+      proposalId: refusal.proposalId,
+      detail: refusal.detail,
     });
   }
 
   // Counts the refusal in crove_kernel.refusal_tally (in the refusal transaction, after the context is entered) and
   // answers whether its audit row is written. A failing count never suppresses the row: the count is rolled back to
   // a savepoint, logged with ids and codes only, and the row is written as without a bound.
-  private async countRefusal(trx: Transaction<Database>, name: string, refusal: DomainError, actor: Actor, orgId: string): Promise<boolean> {
+  private async countRefusal(
+    trx: Transaction<Database>,
+    name: string,
+    refusal: { code: string; security: boolean },
+    actor: Actor,
+    orgId: string,
+  ): Promise<boolean> {
     const limits = this.refusalAudit;
     if (limits === 'unbounded') return true;
     const code = refusal.code;
     await sql`SAVEPOINT refusal_tally`.execute(trx);
     try {
       const { rows } = await sql<{ audit: boolean }>`
-        SELECT crove_kernel.refusal_tally_note(${name}, ${code}, ${isSecurityRefusal(refusal)}::boolean,
+        SELECT crove_kernel.refusal_tally_note(${name}, ${code}, ${refusal.security}::boolean,
           ${limits.perActor}::integer, ${limits.perOrg}::integer, ${limits.reserve}::integer,
           ${limits.windowSeconds}::integer) AS audit`.execute(trx);
       await sql`RELEASE SAVEPOINT refusal_tally`.execute(trx);
