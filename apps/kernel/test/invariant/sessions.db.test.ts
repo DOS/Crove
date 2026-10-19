@@ -19,7 +19,7 @@ import { createAuthenticator } from '../../src/auth.ts';
 import { loadConfig } from '../../src/config.ts';
 import { createHttpApp } from '../../src/http.ts';
 import { createSessionStatusSource, type SignOutTarget } from '../../src/sessions.ts';
-import { migrateJobs, startWorker } from '../../src/worker.ts';
+import { startWorker } from '../../src/worker.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -425,7 +425,6 @@ suite('sessions and revocation on PostgreSQL (ADR-0028, self-host db adapter)', 
 
   it("revokes the user's own session globally and signs it out in Supabase Auth; revoke-all signs out globally", async () => {
     const signOuts: SignOutTarget[] = [];
-    await migrateJobs(adminUrl);
     const stop = await startWorker({
       connectionString: workerUrl,
       workerDb,
