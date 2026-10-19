@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { Decimal, type DecimalValue } from '@crove/l10n-vn';
 import { buildJournalWorkbook, csvSafeText, moneyCell } from '../src/export.ts';
 import type { JournalEntryView } from '../src/queries.ts';
+import { expectExcelSheetNames } from './sheet-names.ts';
 
 const AMOUNT_COLUMN = 10;
 
@@ -29,7 +30,7 @@ async function readBack(entries: JournalEntryView[]): Promise<ExcelJS.Worksheet>
   const bytes = await buildJournalWorkbook(entries, 'demo');
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
-  const sheet = workbook.getWorksheet('But toan');
+  const sheet = workbook.getWorksheet('Bút toán');
   if (!sheet) throw new Error('sheet missing');
   return sheet;
 }
@@ -79,6 +80,15 @@ describe('csvSafeText', () => {
 });
 
 describe('buildJournalWorkbook', () => {
+  it('names its sheet and title in Vietnamese with diacritics (#365)', async () => {
+    const bytes = await buildJournalWorkbook([entry('e1', '1500000')], 'demo');
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+    expect(workbook.worksheets.map((s) => s.name)).toEqual(['Bút toán']);
+    expectExcelSheetNames(workbook);
+    expect(workbook.title).toBe('Bút toán demo');
+  });
+
   it('round-trips large and 4-decimal amounts exactly', async () => {
     const amounts = [
       '1234567890123456.7891', // 20 significant digits, the numeric(20,4) maximum shape

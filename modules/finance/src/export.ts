@@ -88,7 +88,7 @@ export function setTextCell(cell: ExcelJS.Cell, value: string | null | undefined
 export async function buildJournalWorkbook(entries: JournalEntryView[], orgName: string): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Crove';
-  const sheet = workbook.addWorksheet('But toan');
+  const sheet = workbook.addWorksheet('Bút toán');
   sheet.columns = [
     { header: 'Ngày hạch toán', key: 'entryDate', width: 14 },
     { header: 'Ngày hóa đơn', key: 'invoiceDate', width: 14 },
@@ -142,6 +142,6 @@ export async function buildJournalWorkbook(entries: JournalEntryView[], orgName:
   }
   sheet.getRow(1).font = { bold: true };
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
-  workbook.title = `But toan ${orgName}`;
+  workbook.title = `Bút toán ${orgName}`;
   return new Uint8Array(await workbook.xlsx.writeBuffer());
 }
