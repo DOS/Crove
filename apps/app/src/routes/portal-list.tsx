@@ -260,7 +260,7 @@ export function PortalListPage() {
 
           {doneLists.length > 0 && (
             <>
-              {skipped.length > 0 && (
+              {skippedTotal > 0 && (
                 <Alert role="alert" className="border-warning/30 bg-warning/10 text-warning">
                   <AlertTitle>{t('incompleteTitle', { count: skippedTotal })}</AlertTitle>
                   <AlertDescription>
@@ -270,7 +270,7 @@ export function PortalListPage() {
                         <li key={`${s.filename}-${s.rowNo}`}>{t('skippedRow', { file: s.filename, row: String(s.rowNo), reason: t(`skipReasons.${s.reason}`) })}</li>
                       ))}
                     </ul>
-                    {skipped.length > SKIPPED_SHOWN && <p className="mt-1">{t('skippedMore', { count: skippedTotal - SKIPPED_SHOWN })}</p>}
+                    {skippedTotal > Math.min(skipped.length, SKIPPED_SHOWN) && <p className="mt-1">{t('skippedMore', { count: skippedTotal - Math.min(skipped.length, SKIPPED_SHOWN) })}</p>}
                   </AlertDescription>
                 </Alert>
               )}

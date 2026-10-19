@@ -150,22 +150,45 @@ export function reconcilePortalList(rows: readonly PortalRow[], crove: readonly 
   // only if it voids the invoice: once replaced or cancelled, an invoice stays so.
   // Rows are the same invoice by the same rule as a match: key, and templates that do not contradict (a row without a
   // template joins the invoice its key names; a template seen later fills one that was missing).
-  const groups = new Map<string, Array<{ row: PortalRow; template: string | null; series: string; duplicates: number }>>();
+  // Per key, the invoices by template and the one without a template (there is at most one: it is only created first,
+  // and the first templated row fills it), so each row finds its invoice in constant time.
+  type PortalInvoice = { row: PortalRow; template: string | null; series: string; duplicates: number };
+  const groups = new Map<string, { first: PortalInvoice; byTemplate: Map<string, PortalInvoice>; untemplated: PortalInvoice | null }>();
+  const invoices: PortalInvoice[] = [];
   for (const row of rows) {
     const symbol = invoiceSymbol(row.template, row.series);
     const key = keyOf(row.sellerTaxCode, symbol.series, row.number);
-    const group = groups.get(key) ?? [];
-    groups.set(key, group);
-    const seen = group.find((g) => templatesAgree(g.template, symbol.template));
+    const group = groups.get(key);
+    let seen: PortalInvoice | null = null;
+    if (group) {
+      if (symbol.template === null) {
+        seen = group.first;
+      } else {
+        seen = group.byTemplate.get(symbol.template) ?? group.untemplated;
+        if (seen && seen === group.untemplated) {
+          seen.template = symbol.template;
+          group.byTemplate.set(symbol.template, seen);
+          group.untemplated = null;
+        }
+      }
+    }
     if (!seen) {
-      group.push({ row, ...symbol, duplicates: 0 });
+      const created: PortalInvoice = { row, ...symbol, duplicates: 0 };
+      invoices.push(created);
+      if (!group) {
+        groups.set(key, {
+          first: created,
+          byTemplate: new Map(created.template === null ? [] : [[created.template, created]]),
+          untemplated: created.template === null ? created : null,
+        });
+      } else if (created.template !== null) {
+        group.byTemplate.set(created.template, created);
+      }
       continue;
     }
     seen.duplicates += 1;
-    seen.template ??= symbol.template;
     if (VOID_STATUSES.has(row.status) && !VOID_STATUSES.has(seen.row.status)) seen.row = row;
   }
-  const invoices = [...groups.values()].flat();
   // How many portal invoices share a series and number, for the match without a tax code.
   const looseCount = new Map<string, number>();
   for (const p of invoices) looseCount.set(looseKeyOf(p.series, p.row.number), (looseCount.get(looseKeyOf(p.series, p.row.number)) ?? 0) + 1);

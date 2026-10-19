@@ -3,8 +3,9 @@
 // directory, refuses overlapping or escaping entries and caps every inflated part; only the parts a plain table needs
 // are inflated (workbook, its relationships, the first sheet, shared strings, styles). DOCTYPE and ENTITY are refused
 // in every part, so no entity is ever expanded. The sheet and the shared strings are read by a forward tokenizer
-// (nextTag below): each search starts where the last one ended and a missing closing tag refuses the file at once, so
-// the time is one pass over the part, whatever it holds, and no tree of the whole sheet is built. The small structural
+// (nextTag below) and attributes by a forward scanner, without regular expressions: each search starts where the last
+// one ended and a missing closing tag refuses the file at once, so the time is one pass over the part, whatever it
+// holds, and no tree of the whole sheet is built. The small structural
 // parts (workbook, relationships, styles) go through fast-xml-parser and are capped at 4 MB each.
 //
 // What it returns is a grid of text: a number cell keeps the exact digits Excel stored ("1500000", "1.5E+16"), never
@@ -154,6 +155,8 @@ const BUILTIN_DATE_FORMATS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46
 // A custom format code shows a date when, outside quoted text, escapes and [colour] or [$-locale] blocks, it has a
 // day, month or year token.
 export function isDateFormat(code: string): boolean {
+  // Real format codes are short; a long one is not read (the replacements below would rescan it).
+  if (code.length > 255) return false;
   const bare = code
     .replace(/"[^"]*"/g, '')
     .replace(/\\./g, '')
@@ -204,7 +207,8 @@ interface Tag {
 }
 
 // The next tag at or after `from` and before `limit`, skipping comments and processing instructions; null when none.
-// CDATA sections are refused (Excel and the portal's exporter never write them), and DOCTYPE never gets this far.
+// A CDATA section met as a tag is refused (Excel and the portal's exporter never write them); inside a <v> or <t> the
+// text is taken as written, a "<![CDATA[" included, never interpreted. DOCTYPE never gets this far.
 export function nextTag(xml: string, from: number, limit: number): Tag | null {
   let i = xml.indexOf('<', from);
   while (i >= 0 && i < limit) {
@@ -270,12 +274,40 @@ function closeOf(xml: string, tag: Tag, limit: number): { at: number; end: numbe
   return { at, end: gt + 1 };
 }
 
-const ATTRIBUTE = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+const SPACE = ' \t\r\n';
 
-// The tag's attributes by local name. The tokenizer guarantees balanced quotes, so this is one pass.
-function attributes(raw: string): Map<string, string> {
+// The tag's attributes by local name, read in one forward pass (no regular expression, so no backtracking on a hostile
+// name without '='). Something that is not name="value" or name='value' is skipped up to the next white space.
+export function attributes(raw: string): Map<string, string> {
   const out = new Map<string, string>();
-  for (const m of raw.matchAll(ATTRIBUTE)) out.set((m[1] ?? '').replace(/^[\w.-]+:/, ''), decodeXmlText(m[2] ?? m[3] ?? ''));
+  let i = 0;
+  const n = raw.length;
+  while (i < n) {
+    while (i < n && SPACE.includes(raw[i] ?? '')) i += 1;
+    const start = i;
+    while (i < n && !SPACE.includes(raw[i] ?? '') && raw[i] !== '=') i += 1;
+    const name = raw.slice(start, i);
+    while (i < n && SPACE.includes(raw[i] ?? '')) i += 1;
+    if (raw[i] !== '=') {
+      // A name without a value (not XML): skip it.
+      if (i === start) i += 1;
+      continue;
+    }
+    i += 1;
+    while (i < n && SPACE.includes(raw[i] ?? '')) i += 1;
+    const quote = raw[i];
+    if (quote !== '"' && quote !== "'") {
+      while (i < n && !SPACE.includes(raw[i] ?? '')) i += 1;
+      continue;
+    }
+    const close = raw.indexOf(quote, i + 1);
+    if (close < 0) break;
+    if (name !== '') {
+      const colon = name.lastIndexOf(':');
+      out.set(colon >= 0 ? name.slice(colon + 1) : name, decodeXmlText(raw.slice(i + 1, close)));
+    }
+    i = close + 1;
+  }
   return out;
 }
 

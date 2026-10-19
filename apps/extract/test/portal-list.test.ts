@@ -5,7 +5,7 @@ import { EXTRACT_LIMITS, zExtractResponse } from '@crove/extract-contract';
 import { parse } from '../src/parse.ts';
 import { PortalListError, readAmount, readDate, readPortalList } from '../src/portal-list.ts';
 import { runSandboxed } from '../src/sandbox.ts';
-import { XlsxError, columnOf, decodeXmlText, isDateFormat, readFirstSheet, serialToDate } from '../src/xlsx.ts';
+import { XlsxError, attributes, columnOf, decodeXmlText, isDateFormat, readFirstSheet, serialToDate } from '../src/xlsx.ts';
 import { FIXTURE_BUYER, PORTAL_HEADER, PORTAL_SCO_HEADER, buildXlsx, portalListXlsx, portalRow, type XlsxCell } from './xlsx-fixture.ts';
 import { buildZip } from './zip-fixture.ts';
 
@@ -244,6 +244,31 @@ describe('xlsx reader', () => {
       expect(() => readFirstSheet(file), part).toThrow(XlsxError);
       expect(performance.now() - started, `${part}: ${xml.slice(0, 40)}`).toBeLessThan(1000);
     }
+  });
+
+  it('reads attributes in one pass, whatever a hostile tag holds', () => {
+    const MB = 1024 * 1024;
+    // A huge date format code (unclosed brackets) is not read at all.
+    const styles = buildXlsx([['x']], { override: { 'xl/styles.xml': `<styleSheet><numFmts><numFmt numFmtId="164" formatCode="${'['.repeat(MB)}"/></numFmts><cellXfs><xf numFmtId="164"/></cellXfs></styleSheet>` } });
+    const styled = performance.now();
+    readFirstSheet(styles);
+    expect(performance.now() - styled).toBeLessThan(1000);
+    const tags = [`<row ${'a'.repeat(200_000)}>`, `<row r="1"><c ${'a b= '.repeat(MB / 6)}>`, `<row ${'x:y'.repeat(70_000)} r="1">`];
+    for (const tag of tags) {
+      const file = buildXlsx([['x']], { override: { 'xl/worksheets/sheet1.xml': `<worksheet><sheetData>${tag}</row></sheetData></worksheet>` } });
+      const started = performance.now();
+      try {
+        readFirstSheet(file);
+      } catch (error) {
+        expect(error).toBeInstanceOf(XlsxError);
+      }
+      expect(performance.now() - started, tag.slice(0, 30)).toBeLessThan(1000);
+    }
+    expect([...attributes(' r="7" x:s=\'2\' bogus t = "inlineStr" ="z"').entries()]).toEqual([
+      ['r', '7'],
+      ['s', '2'],
+      ['t', 'inlineStr'],
+    ]);
   });
 
   it('reads a full-size sheet quickly', () => {

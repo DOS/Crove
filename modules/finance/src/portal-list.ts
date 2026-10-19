@@ -190,6 +190,9 @@ export const portalListRecord = defineCommand({
       .executeTakeFirst();
     // A list already recorded (a retried job) or gone is left as it is.
     if (!list || list.status !== 'pending') return { listId: input.listId, recorded: false };
+    if (input.status === 'done' && input.skippedCount < input.skipped.length) {
+      throw new DomainError('INVALID', 400, 'Số dòng bỏ qua ít hơn số dòng được liệt kê');
+    }
     if (input.status === 'failed') {
       await ctx.trx
         .updateTable('crove_finance.portal_invoice_list')

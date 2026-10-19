@@ -173,6 +173,16 @@ describe('portal duplicates and templates', () => {
   });
 });
 
+describe('reconciliation size', () => {
+  it('groups many rows under one key with distinct templates in linear time', () => {
+    const rows = Array.from({ length: 50_000 }, (_, i) => portal('1', { template: `T${i}` }));
+    const started = performance.now();
+    const result = reconcilePortalList(rows, [crove('1', { template: 'T7' })], PERIOD);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(result.summary).toMatchObject({ portalInvoices: 50_000, matched: 1, missing: 49_999, duplicateRows: 0 });
+  });
+});
+
 describe('invoiceSymbol', () => {
   it('splits a template written into the series, and leaves anything else as written', () => {
     expect(invoiceSymbol(null, '1C26TAA')).toEqual({ template: '1', series: 'C26TAA' });
