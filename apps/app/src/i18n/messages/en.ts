@@ -1260,6 +1260,8 @@ export const en = {
       publishing: 'Publishing to the channel.',
       processing: 'The platform took the post and is processing it; Crove checks until it is live.',
       ambiguous: 'The connection dropped mid-way, so it is not yet known whether the post went out. Crove is asking the platform and will not post it again on its own.',
+      policyRaised: 'This channel now needs more approvals, so the post needs more reviewers.',
+      policyRaisedReschedule: 'This channel now needs more approvals. Once they are given, the post goes out at its planned time if that is still ahead.',
       needsAttention: 'Crove cannot tell whether the post reached the channel. Check the page, then pick one of the options below.',
       paused: 'This channel needs reconnecting. The post is paused, not lost, and goes out once the channel is reconnected.',
       ownerLeft: 'The member who connected this channel has left the organization. Reconnect the channel to let the post go out.',

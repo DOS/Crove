@@ -164,12 +164,27 @@ suite('social multi-step approval on PostgreSQL (S9)', () => {
     for (const postId of [approvedPost, scheduledPost, reviewPost]) {
       expect((await get(o, postId)).variants[0]).toMatchObject({ status: 'in_review' });
     }
-    // The earlier approval still counts: one more person approves, and the scheduled one keeps its time.
+    // The reason shows on each, and the one that was scheduled is marked to go back to its time.
+    expect((await get(o, scheduledPost)).variants[0]?.error).toMatchObject({ code: 'POLICY_RAISED', action: 'reschedule' });
+    expect((await get(o, approvedPost)).variants[0]?.error).toMatchObject({ code: 'POLICY_RAISED', action: null });
+    // The earlier approval still counts: one more person approves, and the scheduled one is back on its time.
     expect((await get(o, scheduledPost)).variants[0]).toMatchObject({ review: { required: 2, approvedBy: [o.owner] }, effectiveAt: slotBefore });
     await decide(o, o.admin, scheduledPost, 'approved');
-    expect((await get(o, scheduledPost)).variants[0]?.status).toBe('approved');
+    expect((await get(o, scheduledPost)).variants[0]).toMatchObject({ status: 'scheduled', effectiveAt: slotBefore, error: null });
+    await decide(o, o.admin, approvedPost, 'approved');
+    expect((await get(o, approvedPost)).variants[0]).toMatchObject({ status: 'approved', error: null });
     const events = await admin(async (c) => (await c.query<{ payload: { post_id: string } }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.post.submitted' AND payload->>'by_policy' = 'true'", [o.orgId])).rows);
     expect(events.map((e) => e.payload.post_id).sort()).toEqual([approvedPost, scheduledPost].sort());
+  });
+
+  it('refuses to schedule a variant approved under a bar its channel has raised since', async () => {
+    const o = await org();
+    const conn = await connection(o);
+    const postId = await inReview(o, conn);
+    await decide(o, o.owner, postId, 'approved');
+    // The policy rose without set_policy re-checking (an approval that raced it).
+    await admin((c) => c.query('INSERT INTO crove_social.channel_policy (org_id, channel_connection_id, approvals_required, updated_by) VALUES ($1, $2, 2, $3)', [o.orgId, conn, o.owner]));
+    await expect(schedule(o, postId)).rejects.toMatchObject({ code: 'APPROVALS_MISSING' });
   });
 
   it('hides the policy of a revoked channel', async () => {
@@ -179,6 +194,7 @@ suite('social multi-step approval on PostgreSQL (S9)', () => {
     await admin((c) => c.query("UPDATE crove_kernel.channel_connection SET status = 'revoked' WHERE id = $1", [conn]));
     expect(await rt.query('social.channel.policies', {}, { actor: asUser(o.member), orgId: o.orgId })).toEqual([]);
   });
+
   it('approves what already meets a lowered policy, and leaves a channel without one at a single approval', async () => {
     const o = await org();
     const strict = await connection(o);

@@ -6,7 +6,7 @@ import { zId } from '@crove/kernel-contract';
 import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery } from '@crove/kernel-runtime';
 import { approvalsInRound } from './domain/approval.ts';
-import { lockPost, lockVariants, refreshPostStatus, setVariant, step, type Trx } from './variants.ts';
+import { approvedValues, lockPost, lockVariants, refreshPostStatus, regateValues, setVariant, type Trx, type VariantRow } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
@@ -43,6 +43,13 @@ export async function decisionsOf(trx: Trx, orgId: string, variantIds: readonly 
     .execute();
   for (const r of rows) out.set(r.variant_id, [...(out.get(r.variant_id) ?? []), { decision: r.decision, decidedBy: r.decided_by, revision: r.revision, contentHash: r.content_hash }]);
   return out;
+}
+
+// Whether a variant has fewer approvals of its current content than its channel's review policy asks for now.
+export async function shortOfPolicy(trx: Trx, orgId: string, v: Pick<VariantRow, 'id' | 'channel_connection_id' | 'revision' | 'content_hash'>): Promise<boolean> {
+  const required = (await approvalsRequired(trx, orgId, [v.channel_connection_id])).get(v.channel_connection_id) ?? 1;
+  const decisions = (await decisionsOf(trx, orgId, [v.id])).get(v.id) ?? [];
+  return approvalsInRound(decisions, { revision: v.revision, contentHash: v.content_hash }).length < required;
 }
 
 export const policySet = defineCommand({
@@ -84,6 +91,7 @@ export const policySet = defineCommand({
     // Each post's changes reach the event consumers as a decision or a submission would, marked as made by the policy.
     const decided: { postId: string; variantIds: string[] }[] = [];
     const resubmitted: { postId: string; variantIds: string[] }[] = [];
+    const backOnSchedule: { postId: string; variantIds: string[] }[] = [];
     for (const { post_id } of touched) {
       await lockPost(ctx.trx, ctx.orgId, post_id);
       const variants = (await lockVariants(ctx.trx, ctx.orgId, post_id)).filter((v) => v.channel_connection_id === input.connectionId && GATED.includes(v.status));
@@ -94,13 +102,16 @@ export const policySet = defineCommand({
       );
       const up: string[] = [];
       const back: string[] = [];
+      const rescheduled: string[] = [];
       for (const v of variants) {
         const given = approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash });
         if (v.status === 'in_review' && given.length >= input.approvalsRequired) {
-          await setVariant(ctx, v.id, { status: step(v, { type: 'approve' }) });
+          const values = approvedValues(v, ctx.now);
+          await setVariant(ctx, v.id, values);
           up.push(v.id);
+          if (values.status === 'scheduled') rescheduled.push(v.id);
         } else if (v.status !== 'in_review' && given.length < input.approvalsRequired) {
-          await setVariant(ctx, v.id, { status: step(v, { type: 'regate' }), error_retry_at: null });
+          await setVariant(ctx, v.id, regateValues(v));
           back.push(v.id);
         }
       }
@@ -109,13 +120,16 @@ export const policySet = defineCommand({
       regated.push(...back);
       if (up.length > 0) decided.push({ postId: post_id, variantIds: up });
       if (back.length > 0) resubmitted.push({ postId: post_id, variantIds: back });
+      if (rescheduled.length > 0) backOnSchedule.push({ postId: post_id, variantIds: rescheduled });
     }
     for (const d of decided) {
       await ctx.emit('social.variant.decided', { post_id: d.postId, decision: 'approved', variant_ids: d.variantIds, waiting_variant_ids: [], by_policy: true });
     }
     for (const r of resubmitted) await ctx.emit('social.post.submitted', { post_id: r.postId, variant_ids: r.variantIds, by_policy: true });
+    for (const s of backOnSchedule) await ctx.emit('social.variant.scheduled', { post_id: s.postId, variant_ids: s.variantIds, by_policy: true });
     ctx.audit({ connection_id: input.connectionId, approvals_required: input.approvalsRequired, approved_variants: approved, regated_variants: regated });
-    return { connectionId: input.connectionId, approvalsRequired: input.approvalsRequired, approved, regated };  },
+    return { connectionId: input.connectionId, approvalsRequired: input.approvalsRequired, approved, regated };
+  },
 });
 
 export const policyList = defineQuery({

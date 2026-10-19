@@ -1261,6 +1261,8 @@ export const vi = {
       publishing: 'Đang đăng lên kênh.',
       processing: 'Nền tảng đã nhận bài và đang xử lý; Crove sẽ kiểm tra lại cho đến khi bài lên.',
       ambiguous: 'Mất kết nối giữa chừng nên chưa rõ bài đã lên chưa. Crove đang hỏi lại nền tảng và sẽ không tự đăng lại.',
+      policyRaised: 'Kênh này vừa được đổi sang cần nhiều người duyệt hơn, nên bài cần thêm người duyệt.',
+      policyRaisedReschedule: 'Kênh này vừa được đổi sang cần nhiều người duyệt hơn. Khi đủ người duyệt, bài sẽ đăng đúng giờ đã hẹn nếu giờ đó chưa qua.',
       needsAttention: 'Crove không xác định được bài đã lên kênh hay chưa. Hãy mở trang để kiểm tra, rồi chọn một trong các cách dưới đây.',
       paused: 'Kênh cần được kết nối lại. Bài đang tạm dừng, không bị mất, và sẽ tự đăng sau khi kênh được kết nối lại.',
       ownerLeft: 'Người đã kết nối kênh này không còn trong tổ chức. Hãy kết nối lại kênh để bài tiếp tục đăng.',

@@ -606,6 +606,8 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
   const f = useFormat();
   const said = v.error?.message ? <p className="text-subtle-foreground [overflow-wrap:anywhere]">{t('outcome.platformSaid', { message: v.error.message })}</p> : null;
   switch (v.status) {
+    case 'in_review':
+      return v.error?.code === 'POLICY_RAISED' ? <p className="text-warning">{t(v.error.action === 'reschedule' ? 'outcome.policyRaisedReschedule' : 'outcome.policyRaised')}</p> : null;
     case 'scheduled':
       return v.error?.retryAt ? <p className="text-warning">{t('outcome.retrying', { when: f.dateTime(v.error.retryAt) })}</p> : null;
     case 'publishing':

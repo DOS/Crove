@@ -23,8 +23,8 @@ import { publishingCommands } from './publishing.ts';
 import { libraryQueries } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
-import { approvalsRequired, decisionsOf, policyCommands, policyQueries } from './policy.ts';
-import { MOVABLE, POST_COLUMNS, SLOT_FREED, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
+import { approvalsRequired, decisionsOf, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
+import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -403,6 +403,7 @@ export const variantDecide = defineCommand({
       chosen.map((v) => v.id),
     );
     const waiting: string[] = [];
+    const rescheduled: string[] = [];
     for (const v of chosen) {
       const saw = seen.get(v.id);
       if (!saw || saw.revision !== v.revision || saw.contentHash !== v.content_hash) {
@@ -441,11 +442,17 @@ export const variantDecide = defineCommand({
           }),
         })
         .execute();
-      await setVariant(ctx, v.id, { status });
+      // The approval that completes the count may put a variant a raised policy took out of the schedule back on it;
+      // a request for changes or a rejection ends that.
+      const values =
+        input.decision !== 'approved' ? { status, ...(v.error_code === POLICY_RAISED ? CLEAR_ERROR : {}) } : waiting.includes(v.id) ? { status } : approvedValues(v, ctx.now);
+      await setVariant(ctx, v.id, values);
+      if (values.status === 'scheduled') rescheduled.push(v.id);
     }
     await refreshPostStatus(ctx, post.id);
     ctx.audit({ post_id: post.id, decision: input.decision, variants: chosen.map((v) => v.id), waiting });
     await ctx.emit('social.variant.decided', { post_id: post.id, decision: input.decision, variant_ids: chosen.map((v) => v.id), waiting_variant_ids: waiting });
+    if (rescheduled.length > 0) await ctx.emit('social.variant.scheduled', { post_id: post.id, variant_ids: rescheduled });
     return { postId: post.id, decision: input.decision, variants: chosen.map((v) => v.id), waiting };
   },
 });
@@ -530,6 +537,8 @@ export const variantSchedule = defineCommand({
       if (decision?.decision !== 'approved' || !approvalCovers({ revision: decision.revision, contentHash: decision.content_hash }, { revision: v.revision, contentHash: v.content_hash })) {
         throw new DomainError('APPROVAL_REQUIRED', 409, 'Kênh này chưa được duyệt đúng nội dung hiện tại', { variantId: v.id });
       }
+      // Approved under a bar its channel has raised since (#408).
+      if (await shortOfPolicy(ctx.trx, ctx.orgId, v)) throw new DomainError('APPROVALS_MISSING', 409, 'Kênh này cần thêm người duyệt trước khi lên lịch', { variantId: v.id });
       const status = step(v, { type: 'schedule' });
       if (input.queue) {
         const queue = queues.get(v.channel_connection_id) ?? null;

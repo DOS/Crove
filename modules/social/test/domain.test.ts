@@ -268,7 +268,7 @@ describe('variant lifecycle', () => {
 
   it('sends an approved, scheduled or paused variant back to review when its channel asks for more approvals, and nothing else', () => {
     for (const from of ['approved', 'scheduled', 'paused'] as const) expect(run(from, [{ type: 'regate' }])).toBe('in_review');
-    for (const s of ['draft', 'in_review', 'publishing', 'processing', 'published', 'failed', 'needs_attention', 'cancelled'] as const) expect(transitionVariant(s, { type: 'regate' }).ok).toBe(false);
+    for (const s of VARIANT_STATUSES) expect(transitionVariant(s, { type: 'regate' }).ok).toBe(['approved', 'scheduled', 'paused'].includes(s));
   });
 
   it('never edits or cancels a variant in flight, waiting on a human, or history', () => {

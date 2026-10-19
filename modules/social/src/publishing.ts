@@ -15,8 +15,8 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
-import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent } from './domain/approval.ts';
-import { approvalsRequired, decisionsOf } from './policy.ts';
+import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
+import { shortOfPolicy } from './policy.ts';
 import { nextAction, publishCallKey, type RetrySafety } from './domain/publish.ts';
 import { startsNewAttempt, type VariantEvent } from './domain/state.ts';
 import {
@@ -29,6 +29,7 @@ import {
   overrides,
   pick,
   refreshPostStatus,
+  regateValues,
   setVariant,
   settingsOf,
   step,
@@ -233,13 +234,6 @@ async function channelChanged(ctx: CommandContext, connectionId: string, version
   return connection !== null && connection.updatedAt.getTime() !== Date.parse(version);
 }
 
-// Whether the variant has fewer approvals of its current content than its channel's review policy asks for now.
-async function shortOfPolicy(ctx: CommandContext, v: VariantRow): Promise<boolean> {
-  const required = (await approvalsRequired(ctx.trx, ctx.orgId, [v.channel_connection_id])).get(v.channel_connection_id) ?? 1;
-  const decisions = (await decisionsOf(ctx.trx, ctx.orgId, [v.id])).get(v.id) ?? [];
-  return approvalsInRound(decisions, { revision: v.revision, contentHash: v.content_hash }).length < required;
-}
-
 // A variant waiting in a queue that was paused after the sweep read it waits on.
 async function queuePaused(ctx: CommandContext, v: VariantRow): Promise<boolean> {
   if (v.error_retry_at || v.scheduled_at || !v.queue_slot_at) return false;
@@ -278,10 +272,10 @@ export const publishBegin = defineCommand({
           result = none('approval');
           break;
         }
-        if (await shortOfPolicy(ctx, v)) {
+        if (await shortOfPolicy(ctx.trx, ctx.orgId, v)) {
           // Its channel now asks for more approvals than it has (set_policy re-checks too; a retry or a resume can
           // bring one back to scheduled): back to review, never published short.
-          await move(ctx, v, { type: 'regate' }, { error_retry_at: null });
+          await move(ctx, v, { type: 'regate' }, regateValues(v));
           await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: [v.id], by_policy: true });
           result = none('approval');
           break;
