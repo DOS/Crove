@@ -11,6 +11,7 @@ How the owner of a Crove deployment (the pilot setup, backlog item M1-9, issue #
 | The worker, the relay or the job queue stalls; jobs fail after their last retry | the prober |
 | The database cannot be reached | the prober, and the heartbeat monitor once the pings stop |
 | A nightly backup fails | the backup script, through the prober's webhook |
+| A nightly backup stops running (the timer disabled, the server off) | the backup heartbeat monitor (`BACKUP_HEARTBEAT_URL`, [backup-and-restore.md](backup-and-restore.md)) |
 | The API, the reverse proxy or the TLS certificate fails | the uptime check |
 | The whole server is down | the uptime check and the heartbeat monitor |
 | The prober is stopped, or its alerts cannot be delivered | the heartbeat monitor |
@@ -76,6 +77,8 @@ The prober pings `PROBER_HEARTBEAT_URL` with a GET after every probe that read t
    The URL is the check's secret (anyone who has it can keep the check green), so keep it with the other secrets. `pnpm pilot:check` fails when it is not https.
 3. After `docker compose up -d prober`, the prober logs `[prober] heartbeat sent to heartbeat monitor at <host>` after each probe, and the monitor shows the pings.
 4. Test it once: `docker compose stop prober`, wait for the period plus the grace, check that the phone gets the alert, then `docker compose start prober`.
+
+A second heartbeat watches the nightly backup: `BACKUP_HEARTBEAT_URL`, pinged after each complete backup run (period 1 day, grace 2 hours). Setting it up and testing it: [backup-and-restore.md](backup-and-restore.md), "Set up", step 6.
 
 ## 4. Record it
 

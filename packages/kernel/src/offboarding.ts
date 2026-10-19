@@ -288,6 +288,18 @@ function summarize(parts: readonly ExportPart[]): ExportTableSummary[] {
   });
 }
 
+// The detail of a kernel.org.export.record audit row (format 2 and later).
+const zRecordedExport = z.object({
+  format: z.literal(EXPORT_FORMAT),
+  manifest_key: z.string(),
+  manifest_sha256: zSha256,
+  manifest_generation: zGeneration,
+  file_count: z.number().int(),
+  encryption: zExportEncryption,
+  expires_at: z.iso.datetime(),
+  parts: z.array(zPart),
+});
+
 // The org's offboarding state and its newest export, for owners. Read from the audit rows of kernel.org.offboard and
 // kernel.org.export.record. An export older than the newest request is still shown, so the owner always has the last
 // one that finished.
@@ -313,20 +325,7 @@ export const orgExportGet = defineQuery({
     const requested = await newest('kernel.org.offboard');
     const recorded = await newest('kernel.org.export.record');
     // A v1 record (before #212) does not parse and reads as no export.
-    const detail = recorded
-      ? z
-          .object({
-            format: z.literal(EXPORT_FORMAT),
-            manifest_key: z.string(),
-            manifest_sha256: zSha256,
-            manifest_generation: zGeneration,
-            file_count: z.number().int(),
-            encryption: zExportEncryption,
-            expires_at: z.iso.datetime(),
-            parts: z.array(zPart),
-          })
-          .safeParse(recorded.detail)
-      : null;
+    const detail = recorded ? zRecordedExport.safeParse(recorded.detail) : null;
     return {
       status: tenant.status,
       requestedAt: requested ? requested.occurred_at.toISOString() : null,
@@ -378,4 +377,40 @@ export const exportLiveKeys = defineQuery({
   },
 });
 
-export const offboardingQueries = [exportSnapshot, orgExportGet, exportLiveKeys];
+// The org's newest export record, in the form kernel.org.export.record took it (system only). A restore into a new
+// bucket gives every object a new version, so the export no longer downloads; the restore re-records it with the
+// restored versions (issue #351, apps/kernel/src/export-rebind.ts). null when there is none, it predates #212 or it
+// expired.
+export const exportCurrent = defineQuery({
+  name: 'kernel.org.export.current',
+  input: z.object({}),
+  access: 'system',
+  handler: async (ctx): Promise<ExportRecord | null> => {
+    const row = await ctx.trx
+      .selectFrom('crove_kernel.audit_event')
+      .select('detail')
+      .where('org_id', '=', ctx.orgId)
+      .where('command', '=', 'kernel.org.export.record')
+      .where('outcome', '=', 'ok')
+      .where('actor_type', '<>', 'agent')
+      .orderBy('occurred_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(1)
+      .executeTakeFirst();
+    const parsed = row ? zRecordedExport.safeParse(row.detail) : null;
+    if (!parsed?.success || Date.parse(parsed.data.expires_at) <= Date.now()) return null;
+    const d = parsed.data;
+    return {
+      format: d.format,
+      manifestKey: d.manifest_key,
+      manifestSha256: d.manifest_sha256,
+      manifestGeneration: d.manifest_generation,
+      fileCount: d.file_count,
+      encryption: d.encryption,
+      expiresAt: d.expires_at,
+      parts: d.parts,
+    };
+  },
+});
+
+export const offboardingQueries = [exportSnapshot, orgExportGet, exportLiveKeys, exportCurrent];

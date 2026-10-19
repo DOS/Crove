@@ -271,3 +271,25 @@ jobs:
       - name: Tear down
         if: always()
         run: $COMPOSE down -v
+
+  # Backups (issues #307, #351): tools/backup/drill.mjs seeds a split stack (files in MinIO), backs it up twice into
+  # a throwaway MinIO (sealed with a throwaway key; the second run uploads only new blobs and prunes a stray one),
+  # checks the failure alerts, wipes the stack, restores the newest run onto a scratch stack with empty volumes and an
+  # empty bucket, and checks the data through the API. It removes everything it made, even on failure.
+  backup-drill:
+    name: Backup and restore drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Back up, wipe, restore and verify (s3 to s3, sealed)
+        run: node tools/backup/drill.mjs

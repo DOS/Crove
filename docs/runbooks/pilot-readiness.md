@@ -54,7 +54,11 @@ With another orchestrator, `crove-extract` runs from its own image with no secre
 
 ## 4. Backups tested
 
-`MANUAL` in `pilot:check`. Nightly backups and a timed restore drill are M1-7 (issue #307). Confirm a restore onto a scratch instance passed, and the RPO and RTO it measured, before sign-off.
+Nightly backups and a timed restore drill are M1-7 (issue #307); setting them up: [backup-and-restore.md](backup-and-restore.md).
+
+- Checked by `pilot:check`: `BACKUP_S3_ENDPOINT` is set, https and not on this server, with `BACKUP_S3_BUCKET` and its keys, and the bucket is not the files bucket itself; `BACKUP_ENCRYPTION_KEY`, when set, is a valid 32-byte key of its own (not `EXPORT_ENCRYPTION_KEY`); `BACKUP_HEARTBEAT_URL`, when set, is https.
+- `MANUAL`: without `BACKUP_ENCRYPTION_KEY`, that the owner accepts a backup bucket that holds the books unsealed; without `BACKUP_HEARTBEAT_URL`, that nothing pages when the nightly backup stops running.
+- `MANUAL`: a restore onto a scratch stack passed this month (`restore.sh` ends with `restore of <run> passed`), with the RPO and RTO it measured, before sign-off.
 
 ## 5. Sign-up limited to invited users or an allowlisted domain
 

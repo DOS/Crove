@@ -48,6 +48,7 @@ import { socialCommands, socialQueries } from '@crove/mod-social';
 import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, assertExportKey, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
+import { rebindExports as rebindOrgExports } from './export-rebind.ts';
 import { exportSealer } from './export-seal.ts';
 import { ConcurrencyLimiter, Semaphore } from './concurrency.ts';
 import { createHttpApp, type StreamDeps } from './http.ts';
@@ -108,6 +109,9 @@ export interface Kernel {
   readonly adapters: Readonly<ResolvedAdapters>;
   // Starts the role's servers and resolves to a function that stops them in reverse order.
   start(role: ServerRole): Promise<() => Promise<void>>;
+  // After a restore into a new bucket: re-records each org's export with the restored object versions, as the worker
+  // (issue #351, export-rebind.ts). Resolves to the exit code.
+  rebindExports(orgIds: readonly string[]): Promise<number>;
 }
 
 // No-op defaults for the optional ports: nothing can be bound, no connector is installed, every module is on.
@@ -350,7 +354,21 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     return stopAll;
   }
 
-  return { config, modules: config.CROVE_MODULES, adapters: resolved, start };
+  async function rebindExports(orgIds: readonly string[]): Promise<number> {
+    // System commands need system context, which only the worker's login role may enter (External-tenant gate T5).
+    const workerUrl = config.WORKER_DATABASE_URL;
+    if (!workerUrl) throw new Error('WORKER_DATABASE_URL is required for exports-rebind; run it in the worker container');
+    const { pool, runtime } = buildRuntime(workerUrl, 'crove-restore');
+    try {
+      await assertRlsEnforced(pool);
+      await assertSystemContextAccess(pool, 'granted');
+      return await rebindOrgExports({ runtime, store: resolved.storage }, orgIds);
+    } finally {
+      await pool.end();
+    }
+  }
+
+  return { config, modules: config.CROVE_MODULES, adapters: resolved, start, rebindExports };
 }
 
 // The open-source defaults, built from configuration: Supabase Auth identity (ADR-0028), any OpenAI-compatible
