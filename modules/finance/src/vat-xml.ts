@@ -5,6 +5,10 @@ import { HtkkAmountError, buildForm01Xml, vietnamToday } from './domain/vat-01gt
 import type { VatDeclaration } from './vat.ts';
 
 export function buildVat01Xml(declaration: VatDeclaration, today: string = vietnamToday()): string {
+  // A return names the taxpayer; a blank name would write an empty <tenNNT/> that GDT may refuse, so refuse it here.
+  if (declaration.taxpayer.name.replace(/\s+/g, ' ').trim() === '') {
+    throw new DomainError('TAXPAYER_NAME_REQUIRED', 422, 'Tổ chức chưa có tên. Nhập tên tổ chức trong Cài đặt rồi xuất lại.');
+  }
   try {
     return buildForm01Xml({ period: declaration.report.period, indicators: declaration.report.indicators }, declaration.taxpayer, { today });
   } catch (error) {

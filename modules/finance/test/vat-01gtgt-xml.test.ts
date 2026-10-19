@@ -237,6 +237,14 @@ describe('form01XmlValues', () => {
     const d = declaration('2026-09', [invoice('big', [{ rate: '10', taxable: '100000000000000', vat: '0' }])], []);
     expect(() => buildVat01Xml(d, '2026-10-19')).toThrow(expect.objectContaining({ code: 'INVALID', status: 422 }));
   });
+
+  it('refuses a taxpayer whose name is empty once trimmed, with a 422', () => {
+    for (const name of ['', '   ', '\n\t ']) {
+      expect(() => buildVat01Xml(declaration('2026-09', purchases, sales, name), '2026-10-19'), JSON.stringify(name)).toThrow(
+        expect.objectContaining({ code: 'TAXPAYER_NAME_REQUIRED', status: 422 }),
+      );
+    }
+  });
 });
 
 describe('buildVat01Xml', () => {
