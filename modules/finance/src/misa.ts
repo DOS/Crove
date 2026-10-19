@@ -19,6 +19,7 @@ import {
   VAT_INPUT_GOODS,
   fixedAssetVat,
   isFixedAssetAccount,
+  parseVatRate,
   money,
   sum,
   type DecimalValue,
@@ -101,24 +102,25 @@ const STANDARD_RATES = new Set(['0', '5', '8', '10']);
 
 /** Maps an invoice VAT rate (TSuat of Decree 123 e-invoices, or what extraction read) to MISA's code. */
 export function misaVatRate(rate: string | null): MisaVatRate {
-  const text = (rate ?? '').trim().toUpperCase().replace(/\s+/g, '');
-  if (text === 'KCT' || text === 'KKKNT') return { code: text, otherRate: null, percent: money(0) };
-  const other = /^KHAC(?::(\d{1,3}(?:\.\d+)?)%?)?$/.exec(text);
-  if (other) {
-    const ratio = other[1] === undefined ? null : money(other[1]);
-    return ratio && ratio.greaterThan(0) && ratio.lessThanOrEqualTo(100)
-      ? { code: 'KHAC', otherRate: canonical(ratio), percent: ratio }
-      : { code: 'KHAC', otherRate: null, percent: null };
+  const parsed = parseVatRate(rate);
+  switch (parsed.kind) {
+    case 'exempt':
+      return { code: parsed.code, otherRate: null, percent: parsed.percent };
+    case 'other':
+      return parsed.percent
+        ? { code: 'KHAC', otherRate: canonical(parsed.percent), percent: parsed.percent }
+        : { code: 'KHAC', otherRate: null, percent: null };
+    case 'percent': {
+      const key = canonical(parsed.percent);
+      if (STANDARD_RATES.has(key)) return { code: key as MisaVatCode, otherRate: null, percent: parsed.percent };
+      return parsed.percent.greaterThan(0) ? { code: 'KHAC', otherRate: key, percent: parsed.percent } : NO_RATE;
+    }
+    default:
+      return NO_RATE;
   }
-  const plain = /^(\d{1,3}(?:\.\d+)?)%?$/.exec(text);
-  if (plain?.[1] !== undefined) {
-    const percent = money(plain[1]);
-    const key = canonical(percent);
-    if (STANDARD_RATES.has(key)) return { code: key as MisaVatCode, otherRate: null, percent };
-    if (percent.greaterThan(0) && percent.lessThanOrEqualTo(100)) return { code: 'KHAC', otherRate: key, percent };
-  }
-  return { code: null, otherRate: null, percent: null };
 }
+
+const NO_RATE: MisaVatRate = { code: null, otherRate: null, percent: null };
 
 /**
  * Spreads a VAT total over lines so the line amounts add up to it exactly. Each line gets its amount times its

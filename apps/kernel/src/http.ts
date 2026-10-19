@@ -50,6 +50,7 @@ import { createInviteMailSender } from './invite-mail.ts';
 import { pgBossSchemaVersion } from './jobs-schema.ts';
 import type { Mailer } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
+import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
 import { hasVideoTrack, sniffVideo, videoDurationMs } from './media-probe.ts';
 import { safeFilename, sniffType } from './sniff.ts';
@@ -825,7 +826,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'content-disposition': `attachment; filename="crove-but-toan-${orgSlug}.xlsx"`,
+            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'but-toan', ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });
@@ -855,7 +856,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'content-disposition': `attachment; filename="crove-misa-mua-dich-vu-${orgSlug}.xlsx"`,
+            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'misa-mua-dich-vu', ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });
@@ -884,7 +885,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'content-disposition': `attachment; filename="crove-misa-ban-hang-${orgSlug}.xlsx"`,
+            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'misa-ban-hang', ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });
@@ -909,7 +910,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'content-disposition': `attachment; filename="crove-gtgt-${report.period.period}-${orgSlug}.xlsx"`,
+            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'gtgt', report.period.period, ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });
@@ -939,7 +940,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(new TextEncoder().encode(xml)), {
           headers: {
             'content-type': 'application/xml; charset=utf-8',
-            'content-disposition': `attachment; filename="crove-01gtgt-${declaration.report.period.period}-${orgSlug}.xml"`,
+            'content-disposition': attachmentDisposition(orgSlug, ['crove', '01gtgt', declaration.report.period.period, ORG_SLUG], 'xml'),
             'cache-control': 'private, no-store',
           },
         });
@@ -963,7 +964,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'content-disposition': `attachment; filename="crove-so-sach-${book.period.period}-${orgSlug}.xlsx"`,
+            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'so-sach', book.period.period, ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });
@@ -998,7 +999,7 @@ export function createHttpApp(deps: HttpDeps) {
       const headers = (type: string, extension: string, length: number) => ({
         'content-type': type,
         'content-length': String(length),
-        'content-disposition': `attachment; filename="crove-${orgSlug}-${part}.${extension}"`,
+        'content-disposition': attachmentDisposition(orgSlug, ['crove', ORG_SLUG, part], extension),
         'x-content-type-options': 'nosniff',
         'cache-control': 'private, no-store',
       });
