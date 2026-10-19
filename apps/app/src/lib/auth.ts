@@ -17,6 +17,8 @@ export interface PublicConfig {
   stream?: boolean;
   // The feedback and support link (SUPPORT_URL, issue #310): https: or mailto:, null when the deployment has none.
   supportUrl?: string | null;
+  // The server can look up a tax code in the public registry to prefill a new org (TAX_CODE_LOOKUP_URL, issue #324).
+  taxCodeLookup?: boolean;
   // The offline sandbox channel can be connected (CHANNEL_SANDBOX); `oauth` lists the providers connected through
   // their OAuth dialog that the server has app credentials for.
   channels?: { sandbox: boolean; bluesky?: boolean; oauth?: string[] };
@@ -64,6 +66,21 @@ export async function accessToken(): Promise<string | null> {
 export async function needsSecondFactor(): Promise<boolean> {
   const { data } = await auth().mfa.getAuthenticatorAssuranceLevel();
   return data?.currentLevel === 'aal1' && data.nextLevel === 'aal2';
+}
+
+// The same question, asked of the server when the session's answer is no (#345). The session keeps the factors the
+// user had when it was issued, so a factor enabled since on another device is missing there until the token refreshes.
+// /mfa asks this one: on the cached answer it would send that user back to the app, whose next request the kernel
+// refuses with MFA_REQUIRED, which opens /mfa again, page load after page load. For the same reason a failed answer
+// throws (the router shows its error page) instead of counting as "no factor".
+export async function needsSecondFactorNow(client: Pick<Client, 'mfa'> = auth()): Promise<boolean> {
+  const { data, error } = await client.mfa.getAuthenticatorAssuranceLevel();
+  if (error) throw error;
+  if (data?.currentLevel !== 'aal1') return false;
+  if (data.nextLevel === 'aal2') return true;
+  const factors = await client.mfa.listFactors();
+  if (factors.error) throw factors.error;
+  return (factors.data?.all ?? []).some((factor) => factor.status === 'verified');
 }
 
 export type { Session };

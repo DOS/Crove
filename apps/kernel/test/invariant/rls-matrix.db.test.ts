@@ -39,7 +39,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>(['crove_finance.bank_line', 'crove_finance.period_lock']);
+const PENDING_TABLES = new Set<string>([]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 

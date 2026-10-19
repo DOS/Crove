@@ -21,7 +21,7 @@ const line = (amount: string, vatRate: string | null): VatLineInput => ({ amount
 const indicator = (list: ReturnType<typeof form01Indicators>, code: string) => list.find((i) => i.code === code)?.amount;
 
 describe('normalizeVatRate', () => {
-  it('reads the rates of Decree 123 e-invoices and common variants', () => {
+  it('reads the rates of e-invoice XML and common variants', () => {
     expect(normalizeVatRate('10%')).toBe('10');
     expect(normalizeVatRate(' 8 % ')).toBe('8');
     expect(normalizeVatRate('8.0%')).toBe('8');

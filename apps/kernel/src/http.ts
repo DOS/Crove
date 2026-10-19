@@ -63,6 +63,7 @@ import type { Mailer } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
+import type { TaxCodeLookup } from './tax-lookup.ts';
 import { hasVideoTrack, sniffVideo, videoDurationMs } from './media-probe.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 import { directTransferOrigin } from './storage.ts';
@@ -103,6 +104,8 @@ export interface HttpDeps {
   channels?: RpcChannels;
   // Drafts Social posts with the deployment's model (Social plan S7); unset: AI drafting answers 503.
   socialWriter?: SocialDrafter;
+  // The public tax registry lookup for onboarding (issue #324); unset: off (TAX_CODE_LOOKUP_URL).
+  taxLookup?: TaxCodeLookup;
   // Realtime invalidation (issue #69). Unset: /api/stream answers 404 and the app keeps polling.
   stream?: StreamDeps;
 }
@@ -280,7 +283,7 @@ function clientIp(c: Context, trustedHops: number): string | null {
 export function createHttpApp(deps: HttpDeps) {
   const { config, runtime, store, authenticate } = deps;
   const app = new Hono<{ Variables: { user: AuthUser } }>();
-  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL) : undefined, deps.channels, deps.socialWriter);
+  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL) : undefined, deps.channels, deps.socialWriter, deps.taxLookup);
   const perMinute = config.API_RATE_LIMIT_PER_MINUTE;
   const limiter = deps.rateLimiter !== undefined ? deps.rateLimiter : perMinute > 0 ? new RateLimiter({ perMinute }) : null;
 
@@ -320,6 +323,8 @@ export function createHttpApp(deps: HttpDeps) {
       mailEnabled: deps.mailer?.enabled ?? false,
       // The shell's feedback and support link (SUPPORT_URL, issue #310); null hides it.
       supportUrl: config.SUPPORT_URL ?? null,
+      // Onboarding offers "look up" next to the tax code only when the server has a registry to ask (issue #324).
+      taxCodeLookup: Boolean(deps.taxLookup),
       // The SPA shows the menus of these modules only (plan Decision 12).
       modules: runtime.modules(),
       // The app subscribes to /api/stream and polls only while it is down (issue #69).

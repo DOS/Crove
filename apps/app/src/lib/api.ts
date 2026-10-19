@@ -32,6 +32,11 @@ export const orpc = createTanstackQueryUtils(client);
 const orglessLink = new RPCLink({ url: `${window.location.origin}/api/rpc`, headers: async () => requestHeaders(await accessToken(), null) });
 export const orglessClient: ContractRouterClient<typeof contract> = createORPCClient(orglessLink);
 
+// The API for one org named here rather than by the page: onboarding sets up the org it has just created (issue #324).
+export function clientForOrg(slug: string): ContractRouterClient<typeof contract> {
+  return createORPCClient(new RPCLink({ url: `${window.location.origin}/api/rpc`, headers: async () => requestHeaders(await accessToken(), slug) }));
+}
+
 export { ApiError, ClientError, isMfaRequired, isOrgAccessRevoked, isStepUpRequired, isUnauthenticated } from './errors.ts';
 
 function sessionStore(): Storage | undefined {

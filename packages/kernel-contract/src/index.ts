@@ -6,6 +6,7 @@ export * from './tax-code.ts';
 export * from './cash-voucher.ts';
 export * from './portal-list.ts';
 export * from './vat-deadline.ts';
+export * from './bank-statement.ts';
 
 export const ORG_HEADER = 'x-crove-org';
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
@@ -13,6 +14,11 @@ export const ACCEPTED_UPLOAD_TYPES = ['application/xml', 'text/xml', 'applicatio
 // Bulk intake (#314): a ZIP of documents, up to MAX_UPLOAD_BYTES like any document. It is stored as a file, opened in
 // the parsing sandbox by the worker, and every entry the sandbox returns becomes a document of its own.
 export const ACCEPTED_ARCHIVE_TYPES = ['application/zip'];
+// Inbound email (#432): a ZIP attached to a message is opened like an uploaded one, but bounded, since anyone who knows
+// the org's address can send mail: at most MAX_EMAIL_ARCHIVES ZIPs of a message are kept, and an emailed ZIP files at
+// most MAX_EMAIL_ARCHIVE_DOCUMENTS documents (an e-invoice ZIP holds its XML and PDF; a month of invoices is uploaded).
+export const MAX_EMAIL_ARCHIVES = 2;
+export const MAX_EMAIL_ARCHIVE_DOCUMENTS = 20;
 // Images for Social posts (#372): an upload with purpose=social takes these only.
 export const SOCIAL_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 // Videos for Social posts (#409): MP4 and QuickTime, up to 100 MB (a staged upload grant allows at most that), at most

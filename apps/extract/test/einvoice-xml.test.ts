@@ -1,4 +1,4 @@
-// The e-invoice XML parser (Decree 123/2020/ND-CP). It lives in crove-extract and runs only in its parser
+// The e-invoice XML parser (Decree 254/2026/ND-CP, formerly Decree 123/2020/ND-CP). It lives in crove-extract and runs only in its parser
 // processes (External-tenant gate T12); these tests call it directly.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';

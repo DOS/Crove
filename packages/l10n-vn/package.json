@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
-  "description": "Vietnam localization: e-invoice types and checks (Decree 123/2020, Circular 78/2021), tax codes, TT133 accounts. No parser: e-invoice XML is parsed in crove-extract",
+  "description": "Vietnam localization: e-invoice types and checks (Decree 254/2026 and Circular 91/2026, formerly Decree 123/2020), tax codes, TT133 accounts. No parser: e-invoice XML is parsed in crove-extract",
   "exports": {
     ".": "./src/index.ts"
   },

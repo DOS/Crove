@@ -19,7 +19,7 @@ import { readFirstSheet, XlsxError } from '../lib/xlsx.ts';
 type FileState =
   | { status: 'none' }
   | { status: 'reading' }
-  | { status: 'read'; name: string; rows: OpeningBalanceRow[] }
+  | { status: 'read'; name: string; rows: OpeningBalanceRow[]; extraColumns: boolean }
   | { status: 'problem'; problem: SheetProblem | XlsxError['reason'] };
 
 function saveBytes(bytes: Uint8Array, filename: string) {
@@ -69,7 +69,7 @@ export function OpeningBalancePage() {
     try {
       const result = sheetToRows(await readFirstSheet(new Uint8Array(await picked.arrayBuffer())));
       if (current !== pick.current) return;
-      setFile(result.ok ? { status: 'read', name: picked.name, rows: result.rows } : { status: 'problem', problem: result.problem });
+      setFile(result.ok ? { status: 'read', name: picked.name, rows: result.rows, extraColumns: result.extraColumns } : { status: 'problem', problem: result.problem });
     } catch (error) {
       if (current !== pick.current) return;
       setFile({ status: 'problem', problem: error instanceof XlsxError ? error.reason : 'not_xlsx' });
@@ -140,6 +140,11 @@ export function OpeningBalancePage() {
           {file.status === 'problem' && (
             <div className="mt-3">
               <ErrorText>{t(`fileProblems.${file.problem}`, { max: OPENING_BALANCE_MAX_ROWS })}</ErrorText>
+            </div>
+          )}
+          {file.status === 'read' && file.extraColumns && (
+            <div className="mt-3">
+              <Notice>{t('extraColumns')}</Notice>
             </div>
           )}
           {file.status === 'read' && !asOf && <p className="mt-3 text-sm text-muted-foreground">{t('chooseDate')}</p>}

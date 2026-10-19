@@ -8,11 +8,11 @@ describe('theme', () => {
     expect([null, undefined, '', 'Dark', 'blue', 1].some(isThemeSetting)).toBe(false);
   });
 
-  it('falls back to dark, as the app has always opened', () => {
-    expect(DEFAULT_THEME).toBe('dark');
-    expect(themeSetting(null)).toBe('dark');
-    expect(themeSetting('nonsense')).toBe('dark');
-    expect(themeSetting('light')).toBe('light');
+  it('falls back to light', () => {
+    expect(DEFAULT_THEME).toBe('light');
+    expect(themeSetting(null)).toBe('light');
+    expect(themeSetting('nonsense')).toBe('light');
+    expect(themeSetting('dark')).toBe('dark');
   });
 
   it('follows the system only when the setting says so', () => {

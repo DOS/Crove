@@ -33,6 +33,7 @@ import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type 
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
+import { setAddress } from './org-address.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
@@ -572,6 +573,9 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   // A sale no longer the org's own, or a purchase the org issued (#313): the org tax code changed since.
   'NOT_OWN_SALE',
   'OWN_INVOICE',
+  // A line's account against its direction (#430): revenue on a sale line only.
+  'NOT_REVENUE_ACCOUNT',
+  'REVENUE_ACCOUNT_ON_PURCHASE',
   'UNKNOWN_ACCOUNT',
   'ACCOUNT_INACTIVE',
   'PARENT_TAGGED',
@@ -584,6 +588,8 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   // Posting a cash or bank voucher (finance.voucher.record, #327).
   'VOUCHER_INVALID',
   'PARTY_NOT_FOUND',
+  // Posting into a locked month (#329): the proposal's date is in or before the last locked month.
+  'PERIOD_LOCKED',
 ]);
 
 // Whether a nested approval's error refuses only that item.
@@ -800,6 +806,7 @@ const otherKernelCommands = [
   ...channelCommands,
   setTaxCode,
   setVatFilingPeriod,
+  setAddress,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),

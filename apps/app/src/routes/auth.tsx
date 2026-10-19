@@ -58,7 +58,6 @@ export function AuthPage() {
 
   return (
     <main className="flex min-h-full items-center justify-center bg-background px-4 py-16">
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_at_top,color-mix(in_oklch,var(--primary)_18%,transparent),transparent_60%)]" />
       <Card className="relative block w-full max-w-sm p-6">
         <div className="flex items-center justify-between gap-2">
           <Logo />

@@ -111,6 +111,8 @@ export const zOrgDetail = z.object({
   taxCode: z.string().nullable(),
   // How often the org files its VAT return (issue #318); null until an owner or admin chooses.
   vatFilingPeriod: zVatFilingPeriod.nullable(),
+  // The org's address as the tax registry records it (issue #324); null until an owner or admin sets it.
+  address: z.string().nullable(),
   inboundAddress: z.string().nullable(),
   // Messages to the org's addresses retired in the last 30 days that were dropped (#139); null when inboundAddress is.
   inboundDroppedCount: z.number().int().nonnegative().nullable(),
@@ -136,6 +138,9 @@ export const zClientOverview = zOrgSummary.extend({
       .nullable(),
   }),
 });
+// What the public tax registry says about a tax code (issue #324), to prefill a new org: the normalized tax code, the
+// registered name and the address (null when the registry has none).
+export const zTaxRegistryEntry = z.object({ taxCode: z.string(), name: z.string(), address: z.string().nullable() });
 
 // Org offboarding and its export (issue #38, #212). Each table downloads as NDJSON (one row per line) from
 // GET /api/org-export/<table>, and the manifest (the parts with their sha256 and row counts) as JSON from
@@ -383,7 +388,8 @@ export type FileStatus = z.infer<typeof zFileStatus>;
 // Why an entry of a ZIP archive was not filed (#314): what the sandbox refused (encrypted, a compression other than
 // stored or deflate, an archive inside the archive, larger than a document may be, bytes that do not match the
 // archive's directory), or what the server refused (not XML, PDF, JPG, PNG or WEBP; empty).
-export const ARCHIVE_ENTRY_REASONS = ['encrypted', 'unsupported_method', 'nested_archive', 'too_large', 'corrupt', 'unsupported_type', 'empty'] as const;
+// email_limit: past the documents an emailed ZIP files (MAX_EMAIL_ARCHIVE_DOCUMENTS, #432).
+export const ARCHIVE_ENTRY_REASONS = ['encrypted', 'unsupported_method', 'nested_archive', 'too_large', 'corrupt', 'unsupported_type', 'empty', 'email_limit'] as const;
 export type ArchiveEntryReason = (typeof ARCHIVE_ENTRY_REASONS)[number];
 
 // One entry of an opened archive: filed as a new document (stored, with that file's status), the same bytes as a
@@ -552,6 +558,23 @@ export const zLedgerReport = z.object({
   receivables: zPartyLedger,
   payables: zPartyLedger,
 });
+// Period lock (issue #329): the org's books are locked from lockedFrom to lockedThrough (YYYY-MM-DD, both null when
+// nothing is locked). Months are YYYY-MM; nextMonth is the only month a lock may name (null: any month that has
+// ended), lastMonth the only one an unlock may name. updatedBy and updatedAt describe the last lock or unlock
+// (updatedBy null once that person left the org).
+export const zPeriodMonth = z.string().regex(/^(20\d{2})-(0[1-9]|1[0-2])$/, 'YYYY-MM');
+export const zPeriodLockInput = z.object({ month: zPeriodMonth });
+export const zPeriodUnlockInput = z.object({ month: zPeriodMonth, reason: z.string().trim().min(1).max(500) });
+export const zPeriodLockState = z.object({
+  lockedFrom: zLocalDate.nullable(),
+  lockedThrough: zLocalDate.nullable(),
+  nextMonth: zPeriodMonth.nullable(),
+  lastMonth: zPeriodMonth.nullable(),
+  updatedBy: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+});
+export type PeriodLockState = z.infer<typeof zPeriodLockState>;
+
 export const zAccountLedger = z.object({
   period: zLedgerPeriodRange,
   account: z.object({ code: z.string(), name: z.string() }),

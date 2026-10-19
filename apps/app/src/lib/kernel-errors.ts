@@ -73,7 +73,14 @@ export const KERNEL_ERROR_CODES = [
   // Sales invoices and the org's tax code (#313).
   'NOT_OWN_SALE',
   'OWN_INVOICE',
+  'NOT_REVENUE_ACCOUNT',
+  'REVENUE_ACCOUNT_ON_PURCHASE',
   'INVALID_TAX_CODE',
+  // Onboarding by tax code and the org's address (#324).
+  'TAX_CODE_NOT_FOUND',
+  'TAX_LOOKUP_UNAVAILABLE',
+  'TAX_LOOKUP_DISABLED',
+  'INVALID_ADDRESS',
   'ALREADY_REVERSED',
   'ENTRY_IS_REVERSAL',
   'ENTRY_NOT_FOUND',
@@ -87,6 +94,16 @@ export const KERNEL_ERROR_CODES = [
   // The tax portal's purchase list (#465).
   'PORTAL_LIST_EXISTS',
   'PORTAL_LIST_LIMIT',
+  // Period lock (#329).
+  'PERIOD_LOCKED',
+  'PERIOD_ALREADY_LOCKED',
+  'EARLIER_PERIOD_OPEN',
+  'PERIOD_NOT_LOCKED',
+  'LATER_PERIOD_LOCKED',
+  'PERIOD_NOT_ENDED',
+  // Bank statements (#326).
+  'NOT_A_BANK_ACCOUNT',
+  'BANK_IMPORT_INVALID',
   // The chart of accounts and vendor defaults (#319).
   'ACCOUNT_CODE_TAKEN',
   'ACCOUNT_HAS_SUB_ACCOUNTS',
@@ -142,6 +159,7 @@ export const KERNEL_ERROR_CODES = [
   'VARIANT_INVALID',
   'VARIANT_IN_FLIGHT',
   'APPROVAL_REQUIRED',
+  'VARIANT_MEDIA_INVALID',
   'CHANNEL_ALREADY_IN_POST',
   'CHANNEL_PROVIDER_UNSUPPORTED',
   'TOO_MANY_CHANNELS',

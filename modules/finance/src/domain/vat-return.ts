@@ -29,7 +29,7 @@ export type VatRate = (typeof VAT_RATES)[number];
 // The percentage charged at each taxed rate. KCT, KKKNT and 0% charge none.
 const RATE_PERCENT: Readonly<Partial<Record<VatRate, number>>> = { '5': 5, '8': 8, '10': 10 };
 
-// TSuat as written on Decree 123 e-invoices ("10%", "8%", "KCT", "KKKNT", "KHAC:3.5%") or as extracted from a PDF.
+// TSuat as written in e-invoice XML ("10%", "8%", "KCT", "KKKNT", "KHAC:3.5%") or as extracted from a PDF.
 export function normalizeVatRate(raw: string | null | undefined): VatRate {
   const value = (raw ?? '').trim().toUpperCase().replace(/\s+/g, '');
   if (value === 'KCT') return 'KCT';

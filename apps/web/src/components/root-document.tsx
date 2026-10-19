@@ -5,7 +5,7 @@ import { bodyFont, codeFont, headingFont } from '../app/fonts';
 import type { Dictionary } from '../content/vi';
 import { SITE_URL } from '../content/site';
 
-// Applies a theme the visitor picked earlier before the first paint; without one the CSS follows the system.
+// Applies a theme the visitor picked earlier before the first paint; without one the page is light.
 const THEME_SCRIPT = `try{var t=localStorage.getItem('crove-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}`;
 
 export function landingMetadata(dict: Dictionary, path: string): Metadata {
@@ -23,10 +23,7 @@ export const landingViewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   viewportFit: 'cover',
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#fbfbfd' },
-    { media: '(prefers-color-scheme: dark)', color: '#121216' },
-  ],
+  themeColor: '#fbfbfd',
 };
 
 export function RootDocument({ lang, children }: { lang: string; children: ReactNode }) {

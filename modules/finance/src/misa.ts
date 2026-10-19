@@ -100,7 +100,7 @@ export interface MisaVatRate {
 
 const STANDARD_RATES = new Set(['0', '5', '8', '10']);
 
-/** Maps an invoice VAT rate (TSuat of Decree 123 e-invoices, or what extraction read) to MISA's code. */
+/** Maps an invoice VAT rate (TSuat of the e-invoice XML, or what extraction read) to MISA's code. */
 export function misaVatRate(rate: string | null): MisaVatRate {
   const parsed = parseVatRate(rate);
   switch (parsed.kind) {

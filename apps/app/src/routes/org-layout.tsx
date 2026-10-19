@@ -30,6 +30,7 @@ const ALL_NAV = [
   { to: '/o/$slug/vat', label: 'vat', module: 'finance' },
   { to: '/o/$slug/portal-invoices', label: 'portalList', module: 'finance' },
   { to: '/o/$slug/ledger', label: 'ledger', module: 'finance' },
+  { to: '/o/$slug/bank', label: 'bank', module: 'finance' },
   { to: '/o/$slug/agents', label: 'agents', module: 'kernel' },
   { to: '/o/$slug/tasks', label: 'tasks', module: 'kernel' },
   { to: '/o/$slug/social', label: 'social', module: 'social' },
@@ -139,6 +140,10 @@ export function OrgLayout() {
               </NativeSelectOption>
             ))}
           </NativeSelect>
+          {/* A firm adds its next client company from here (issue #324). */}
+          <Link to="/onboarding" className="mt-1 inline-block text-xs text-link">
+            {t('addOrg')}
+          </Link>
         </div>
         <button
           type="button"
@@ -172,11 +177,10 @@ export function OrgLayout() {
             <button className="hover:text-muted-foreground" onClick={() => void signOut()}>
               {tc('signOut')}
             </button>
-          </div>
-          <div className="mt-2 grid grid-cols-2 gap-2">
             <LocaleSwitcher />
-            <ThemeSwitcher />
           </div>
+          {/* Its own row: next to the language switch both labels were cut off at the sidebar's width. */}
+          <ThemeSwitcher className="mt-2 w-full text-muted-foreground" />
         </div>
       </aside>
       <div className="min-w-0 flex-1">

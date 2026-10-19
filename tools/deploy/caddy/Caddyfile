@@ -1,0 +1,18 @@
+# TLS reverse proxy in front of Crove on one server (issue #306, docs/runbooks/provision-pilot.md). Copy this file
+# and compose.host.yml into the stack directory (/opt/crove).
+#
+# - Caddy gets and renews a Let's Encrypt certificate for CROVE_DOMAIN (the host name of PUBLIC_URL, whose DNS points
+#   at this server) and redirects plain http to https.
+# - It drops any X-Forwarded-For a client sends and sets the address it sees, so the kernel reads the client address
+#   with TRUSTED_PROXY_HOPS=1 (the rate limits on sign-in, sign-up, recovery and email are per client address).
+# - No response compression: the app's event stream (text/event-stream) must reach the browser unbuffered, and the
+#   kernel already sets the security headers (HSTS among them).
+{
+	# On the host's network the admin API (localhost:2019) would be open to every local process; a changed Caddyfile
+	# takes effect with `docker compose restart caddy` instead.
+	admin off
+}
+
+{$CROVE_DOMAIN} {
+	reverse_proxy {$CROVE_UPSTREAM:127.0.0.1:8080}
+}

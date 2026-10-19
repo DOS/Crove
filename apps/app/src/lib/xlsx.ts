@@ -211,16 +211,66 @@ function attributes(tag: string): Map<string, string> {
   return out;
 }
 
+// The elements named `name` in `xml`, in order: their attribute text and inner text (null when self-closing). A scan
+// with indexOf, not a lazy regex: on a crafted part with many unterminated tags a regex rescans to the end for each
+// one (quadratic, #366), while here an element without its closing tag ends the scan. No element read here nests
+// inside one of its own name.
+function* elements(xml: string, name: string): Generator<{ attrs: string; body: string | null }> {
+  const open = `<${name}`;
+  const close = `</${name}>`;
+  let at = 0;
+  for (;;) {
+    const start = xml.indexOf(open, at);
+    if (start < 0) return;
+    const next = start + open.length;
+    // `<c` must not be the start of `<cols` or `<cfRule`.
+    if (!/[\s/>]/.test(xml.charAt(next))) {
+      at = next;
+      continue;
+    }
+    const end = xml.indexOf('>', next);
+    if (end < 0) return;
+    if (xml.charAt(end - 1) === '/') {
+      yield { attrs: xml.slice(next, end - 1), body: null };
+      at = end + 1;
+      continue;
+    }
+    const closeAt = xml.indexOf(close, end + 1);
+    if (closeAt < 0) return;
+    yield { attrs: xml.slice(next, end), body: xml.slice(end + 1, closeAt) };
+    at = closeAt + close.length;
+  }
+}
+
+// `xml` without its <rPh> elements (phonetic runs), in one scan.
+function withoutPhonetics(xml: string): string {
+  let out = '';
+  let at = 0;
+  for (;;) {
+    const start = xml.indexOf('<rPh', at);
+    if (start < 0) return out + xml.slice(at);
+    // Only the element itself, as in elements(): not some other tag that starts with `<rPh`.
+    if (!/[\s/>]/.test(xml.charAt(start + 4))) {
+      out += xml.slice(at, start + 4);
+      at = start + 4;
+      continue;
+    }
+    const closeAt = xml.indexOf('</rPh>', start);
+    if (closeAt < 0) return out + xml.slice(at, start);
+    out += xml.slice(at, start);
+    at = closeAt + '</rPh>'.length;
+  }
+}
+
 // The text of a string item or inline string: every <t> run, phonetic runs (<rPh>) left out.
 function runText(xml: string): string {
-  const body = xml.replace(/<rPh\b[\s\S]*?<\/rPh>/g, '');
   let out = '';
-  for (const m of body.matchAll(/<t\b[^>]*?(?:\/>|>([\s\S]*?)<\/t>)/g)) out += decodeXml(m[1] ?? '');
+  for (const t of elements(withoutPhonetics(xml), 't')) out += decodeXml(t.body ?? '');
   return out;
 }
 
 function sharedStrings(xml: string): string[] {
-  return [...unprefix(xml).matchAll(/<si\b[^>]*?(?:\/>|>([\s\S]*?)<\/si>)/g)].map((m) => runText(m[1] ?? ''));
+  return [...elements(unprefix(xml), 'si')].map((si) => runText(si.body ?? ''));
 }
 
 // "AB12" -> column 27 (0-based), row 12.
@@ -235,18 +285,18 @@ function cellRef(ref: string): { col: number; row: number } | null {
 function sheetRows(xml: string, strings: readonly string[]): SheetRows {
   const rows: SheetRows = new Map();
   let nextRow = 1;
-  for (const rowMatch of unprefix(xml).matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)) {
-    const rowAttrs = attributes(rowMatch[1] ?? '');
+  for (const row of elements(unprefix(xml), 'row')) {
+    const rowAttrs = attributes(row.attrs);
     const rowNo = Number(rowAttrs.get('r') ?? nextRow);
     nextRow = rowNo + 1;
     const cells = new Map<number, SheetCell>();
     let nextCol = 0;
-    for (const cellMatch of (rowMatch[2] ?? '').matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
-      const attrs = attributes(cellMatch[1] ?? '');
+    for (const c of elements(row.body ?? '', 'c')) {
+      const attrs = attributes(c.attrs);
       const ref = attrs.get('r');
       const col = (ref ? cellRef(ref)?.col : undefined) ?? nextCol;
       nextCol = col + 1;
-      const body = cellMatch[2] ?? '';
+      const body = c.body ?? '';
       const type = attrs.get('t') ?? 'n';
       const v = /<v\b[^>]*>([\s\S]*?)<\/v>/.exec(body);
       const value = v ? decodeXml(v[1] as string) : null;

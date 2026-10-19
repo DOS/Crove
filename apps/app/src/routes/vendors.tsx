@@ -27,7 +27,7 @@ function DefaultAccount({ vendor, accounts, canManage }: { vendor: { id: string;
         onChange={(e) => set.mutate({ partyId: vendor.id, accountCode: e.target.value || null })}
       >
         <NativeSelectOption value="">{t('noDefault')}</NativeSelectOption>
-        {pickableAccounts(accounts, vendor.defaultAccount).map((a) => (
+        {pickableAccounts(accounts, vendor.defaultAccount, 'purchase').map((a) => (
           <NativeSelectOption key={a.code} value={a.code}>
             {accountLabel(a)}
           </NativeSelectOption>
