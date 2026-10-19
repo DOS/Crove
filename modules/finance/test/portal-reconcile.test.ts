@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { PORTAL_LIST_SKIP_REASONS as EXTRACT_SKIP_REASONS, type ExtractedPortalList } from '@crove/extract-contract';
 import { PORTAL_LIST_SKIP_REASONS } from '@crove/kernel-contract';
-import { checkPortalList, invoiceSymbol, portalStatus, reconcilePortalList, type CroveInvoice, type PortalRow } from '../src/index.ts';
+import { checkPortalList, firstPerOutcome, invoiceSymbol, portalStatus, reconcilePortalList, type CroveInvoice, type PortalRow } from '../src/index.ts';
 
 const LIST = '00000000-0000-7000-8000-000000000001';
 const SELLER = '0100109107';
@@ -210,6 +210,14 @@ describe('portalStatus', () => {
   });
 });
 
+describe('firstPerOutcome', () => {
+  it('keeps the first items of each outcome, in order', () => {
+    const items = ['missing', 'missing', 'matched', 'missing', 'matched', 'void'].map((outcome, i) => ({ outcome, i }));
+    expect(firstPerOutcome(items, 2).map((x) => x.i)).toEqual([0, 1, 2, 4, 5]);
+    expect(firstPerOutcome(items, 10)).toEqual(items);
+  });
+});
+
 describe('checkPortalList', () => {
   const list = (rows: Array<Partial<ExtractedPortalList['rows'][number]>>, extra: Partial<ExtractedPortalList> = {}): ExtractedPortalList => ({
     sheetName: 'Sheet1',
@@ -250,7 +258,28 @@ describe('checkPortalList', () => {
 
   it('normalizes amounts and reads the status into the stored rows', () => {
     const checked = checkPortalList(list([{}]), OTHER);
-    expect(checked).toEqual({ ok: true, rows: [expect.objectContaining({ subtotal: '100.5', vatAmount: null, total: '110', status: 'cancelled' })] });
+    expect(checked).toEqual({
+      ok: true,
+      rows: [expect.objectContaining({ subtotal: '100.5', vatAmount: null, total: '110', status: 'cancelled' })],
+      listFrom: '2026-09-01',
+      listTo: '2026-09-30',
+      ownSales: 0,
+      otherBuyers: 0,
+    });
+  });
+
+  it('refuses impossible dates and a row number given twice with the reason, before anything reaches the database', () => {
+    expect(checkPortalList(list([{ issueDate: '2026-02-30' }]), OTHER)).toEqual({ ok: false, error: 'Dòng 4: ngày lập hóa đơn không hợp lệ (2026-02-30)' });
+    expect(checkPortalList(list([{}], { listFrom: '2026-09-31' }), OTHER)).toEqual({ ok: false, error: expect.stringContaining('ngày không hợp lệ (2026-09-31)') });
+    expect(checkPortalList(list([{}], { listFrom: '2026-10-01', listTo: '2026-09-30' }), OTHER)).toEqual({ ok: false, error: expect.stringContaining('từ 2026-10-01 đến 2026-09-30') });
+    expect(checkPortalList(list([{ rowNo: 9 }, { rowNo: 9 }]), OTHER)).toEqual({ ok: false, error: expect.stringContaining('dòng 9 hai lần') });
+    expect(checkPortalList(list([{}], { listFrom: null, listTo: null }), OTHER)).toMatchObject({ ok: true, listFrom: null, listTo: null });
+  });
+
+  it("counts the rows it drops as the org's own sales or another buyer's", () => {
+    const checked = checkPortalList(list([{ sellerTaxCode: OTHER }, { buyerTaxCode: '0101234564' }, { buyerTaxCode: '0101234564' }, {}]), OTHER);
+    expect(checked).toMatchObject({ ok: true, ownSales: 1, otherBuyers: 2 });
+    expect(checked.ok && checked.rows.map((r) => r.number)).toEqual(['4']);
   });
 
   it("refuses another company's list, by its rows' buyer or the line above the header", () => {

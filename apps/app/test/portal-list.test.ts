@@ -1,7 +1,7 @@
 // The tax portal reconciliation screen's helpers (issue #465).
 import { describe, expect, it } from 'vitest';
 import { RECONCILE_OUTCOMES, type PortalReconciliation } from '@crove/kernel-contract';
-import { SECTIONS, canImportPortalList, invoiceLabel, itemsByOutcome, pickProblem, pollWhilePending, type ReconcileItem } from '../src/lib/portal-list.ts';
+import { SECTIONS, canImportPortalList, invoiceLabel, itemsByOutcome, outcomeTotal, pickProblem, pollWhilePending, type ReconcileItem } from '../src/lib/portal-list.ts';
 
 const item = (outcome: ReconcileItem['outcome']): ReconcileItem => ({ outcome, portal: null, crove: null, differences: [], withoutTaxCode: false, outsidePeriod: false, duplicateRows: 0, duplicateInCrove: false });
 
@@ -19,6 +19,19 @@ describe('portal reconciliation screen', () => {
     const grouped = itemsByOutcome([item('missing'), item('matched'), item('missing')]);
     expect(grouped.get('missing')).toHaveLength(2);
     expect(grouped.get('void')).toBeUndefined();
+  });
+
+  it('titles a section with its total from the summary, however many items are listed', () => {
+    const summary: PortalReconciliation['summary'] = { portalInvoices: 0, matched: 1, inInbox: 2, amountMismatch: 3, missing: 4, voidInCrove: 5, void: 6, notOnPortal: 7, duplicateRows: 0 };
+    expect(Object.fromEntries(RECONCILE_OUTCOMES.map((o) => [o, outcomeTotal(summary, o)]))).toEqual({
+      matched: 1,
+      in_inbox: 2,
+      amount_mismatch: 3,
+      missing: 4,
+      void_in_crove: 5,
+      void: 6,
+      not_on_portal: 7,
+    });
   });
 
   it('polls only while a list is being read', () => {

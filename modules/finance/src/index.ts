@@ -14,7 +14,16 @@ import { periodLock, periodLockStateQuery, periodUnlock } from './period-lock.ts
 import { statementsExport, statementsPeriodQuery } from './statements.ts';
 
 export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
-export { checkPortalList, importPortalList, recordPortalListFailure, PORTAL_RECONCILE_LIMIT, type PortalListDeps } from './portal-list.ts';
+export {
+  checkPortalList,
+  firstPerOutcome,
+  importPortalList,
+  recordPortalListFailure,
+  PORTAL_PERIOD_ROW_LIMIT,
+  PORTAL_RECONCILE_ITEMS_PER_OUTCOME,
+  PORTAL_RECONCILE_LIMIT,
+  type PortalListDeps,
+} from './portal-list.ts';
 export * from './domain/portal-reconcile.ts';
 export { foldVietnamese, portalStatus } from './domain/portal-status.ts';
 export { buildJournalWorkbook } from './export.ts';

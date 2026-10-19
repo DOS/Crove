@@ -184,6 +184,8 @@ export interface FinancePortalInvoiceListTable {
   recorded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   removed_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   removed_by: string | null;
+  own_sales_count: Generated<number>;
+  other_buyer_count: Generated<number>;
 }
 
 /** crove_finance.portal_invoice_row */
