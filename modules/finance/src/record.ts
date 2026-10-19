@@ -150,6 +150,8 @@ export const recordPurchase = defineCommand({
   }),
   risk: 'R3',
   access: 'proposal',
+  // The kind extraction gives its proposals (extract.ts).
+  proposalKind: 'finance.purchase',
   handler: async (ctx, { payload, acceptFailedChecks }) => {
     const { invoice } = payload;
     const direction = directionOf(payload);

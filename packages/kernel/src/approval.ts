@@ -207,12 +207,14 @@ export interface AgentProposalInput {
 //   approvers, and the command's risk is within its max_risk (the lower of the agent's and the template's, P02);
 // - the run is the agent's, untainted (P03), and live: running, or succeeded after recording the approval; a run
 //   cancelled by a kill switch or a stop, failed or expired decides nothing (P01). No kill switch covers the org, the
-//   module or the agent (P01);
+//   module or the agent (P01), and with options.stoppedSince (when the approval was recorded) none covering them was
+//   engaged after it, even one released since (#435);
 // - the agent is not an author, and not in the proposal's causal chain: it did not ask for it, and no task in the
 //   chain was its own or its position's;
 // - four-eyes along the reporting line: the approver and the asking agent are not on one line in either direction
 //   (neither position is in the other's subtree), for the asking agent's position when it asked (the source task's
-//   assignee) and the one it holds now.
+//   assignee) and the one it holds now. With neither known, the line cannot be checked, and the approval is refused
+//   (#435).
 export async function decideAgentApproval(
   trx: Transaction<Database>,
   orgId: string,
@@ -220,6 +222,7 @@ export async function decideAgentApproval(
   proposal: AgentProposalInput,
   info: CommandInfo | null,
   revision?: number,
+  options: { stoppedSince?: Date } = {},
 ): Promise<AgentApprovalDecision> {
   if (proposal.status !== 'pending') return { reason: 'not_pending' };
   if (revision !== undefined && proposal.revision !== revision) return { reason: 'stale_revision' };
@@ -245,7 +248,7 @@ export async function decideAgentApproval(
   const { rows: runs } = await sql<{ tainted: boolean; status: string; stopped: boolean }>`
     SELECT r.tainted, r.status,
            EXISTS (SELECT 1 FROM crove_kernel.kill_switch k
-                   WHERE k.org_id = r.org_id AND k.released_at IS NULL
+                   WHERE k.org_id = r.org_id AND (k.released_at IS NULL OR k.engaged_at > ${options.stoppedSince ?? null}::timestamptz)
                      AND (k.scope = 'org' OR (k.scope = 'module' AND k.target = ${seat.module}) OR (k.scope = 'agent' AND k.target = r.agent_id::text))) AS stopped
     FROM crove_kernel.ai_run r
     WHERE r.org_id = ${orgId}::uuid AND r.id = ${approver.runId}::uuid AND r.agent_id = ${approver.agentId}::uuid`.execute(trx);
@@ -286,10 +289,11 @@ export async function decideAgentApproval(
         UNION
         SELECT p.id FROM crove_kernel.position p WHERE p.org_id = ${orgId}::uuid AND p.holder_agent_id = ${proposal.requested_by_agent}::uuid
       )
-      SELECT EXISTS (SELECT 1 FROM asker a
-                     WHERE a.pos = ${seat.position_id}::uuid
-                        OR crove_kernel.position_in_subtree(${orgId}::uuid, ${seat.position_id}::uuid, a.pos)
-                        OR crove_kernel.position_in_subtree(${orgId}::uuid, a.pos, ${seat.position_id}::uuid)) AS same_line`.execute(trx);
+      SELECT NOT EXISTS (SELECT 1 FROM asker)
+             OR EXISTS (SELECT 1 FROM asker a
+                        WHERE a.pos = ${seat.position_id}::uuid
+                           OR crove_kernel.position_in_subtree(${orgId}::uuid, ${seat.position_id}::uuid, a.pos)
+                           OR crove_kernel.position_in_subtree(${orgId}::uuid, a.pos, ${seat.position_id}::uuid)) AS same_line`.execute(trx);
     if (rows[0]?.same_line !== false) return { reason: 'reporting_line', rule: 'reporting_line' };
   }
   return { reason: 'ok' };

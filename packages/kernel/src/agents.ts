@@ -1337,9 +1337,20 @@ export const budgetList = defineQuery({
 // approval) as an outbox event, and a system command in the worker acts on it after checking everything again from
 // the database. The event carries ids and what the agent's run prepared, never a decision.
 
-const zPrepared = z.object({ kind: z.string().min(1), command: z.string().min(1), title: z.string().min(1).max(300), payload: z.record(z.string(), z.unknown()) });
+// What a preparer builds. Only the command and the payload travel: the proposal's kind comes from the command and its
+// title from the kernel (#435), so nothing the agent's run supplies is rendered as the proposal's label. A preparer
+// may still return a kind and a title (the human path uses them); they are dropped here.
+const zPrepared = z.object({ command: z.string().min(1).max(200), payload: z.record(z.string(), z.unknown()) });
 const zProposalRequested = z.object({ agentId: zId, runId: zId, taskId: zId, preparer: z.string().min(1).max(200), draft: zPrepared });
 const zProposalApproved = z.object({ agentId: zId, runId: zId, taskId: zId, proposalId: zId, revision: z.number().int().positive() });
+
+// The largest draft payload an agent's request carries (UTF-8 bytes of its JSON), checked when it is recorded and
+// again when the proposal is created.
+export const MAX_DRAFT_PAYLOAD_BYTES = 64 * 1024;
+
+function payloadTooLarge(payload: Record<string, unknown>): boolean {
+  return Buffer.byteLength(JSON.stringify(payload), 'utf8') > MAX_DRAFT_PAYLOAD_BYTES;
+}
 
 // Asks for a proposal instead of running R2 or R3 work (P05, P06): the preparer (an R0 module command the agent's role
 // key may run, so it writes nothing) builds it in the agent's run, and the task waits for the review. The event carries
@@ -1363,12 +1374,15 @@ export const proposeFromTask = defineCommand({
     if (!draft.success || !info || info.access !== 'proposal') {
       throw new DomainError('NOT_PROPOSABLE', 422, 'Việc này không tạo được đề xuất', { preparer: input.preparer });
     }
+    if (payloadTooLarge(draft.data.payload)) {
+      throw new DomainError('NOT_PROPOSABLE', 422, 'Đề xuất quá lớn', { preparer: input.preparer, reason: 'payload_too_large' });
+    }
     await ctx.emit('kernel.agent.proposal_requested', {
       agentId: agent.agentId,
       runId: agent.runId,
       taskId: task.id,
       preparer: input.preparer,
-      draft: draft.data,
+      draft: { command: draft.data.command, payload: draft.data.payload },
     } satisfies z.infer<typeof zProposalRequested>);
     await ctx.trx
       .updateTable('crove_kernel.task')
@@ -1423,16 +1437,51 @@ export const approveFromTask = defineCommand({
   },
 });
 
-async function outboxEvent<T>(ctx: CommandContext, eventId: string, type: string, schema: z.ZodType<T>): Promise<{ id: string; data: T } | null> {
+interface AgentEvent<T> {
+  id: string;
+  data: T;
+  commandId: string | null;
+  createdAt: Date;
+}
+
+async function outboxEvent<T>(ctx: CommandContext, eventId: string, type: string, schema: z.ZodType<T>): Promise<AgentEvent<T> | null> {
   const event = await ctx.trx
     .selectFrom('crove_kernel.outbox_event')
-    .select(['id', 'type', 'payload'])
+    .select(['id', 'type', 'payload', 'command_id', 'created_at'])
     .where('org_id', '=', ctx.orgId)
     .where('id', '=', eventId)
     .executeTakeFirst();
   if (!event || event.type !== type) return null;
   const parsed = schema.safeParse(event.payload);
-  return parsed.success ? { id: event.id, data: parsed.data } : null;
+  return parsed.success ? { id: event.id, data: parsed.data, commandId: event.command_id, createdAt: event.created_at } : null;
+}
+
+// Whether the event was emitted by a successful run of `command` by the agent it names, in the run it names, about
+// `target` and the task it names, with `detail` in the audit row (#435): the event's command_id is that command's
+// audit row. The database stamps an agent's audit rows with the agent and the run of the sealed context
+// (agent_write_guard), so the payload cannot name another agent, run or task, and an event that any other command
+// emitted, or that was written outside emit(), binds to nothing.
+async function emittedBy(
+  trx: Trx,
+  orgId: string,
+  event: AgentEvent<{ agentId: string; runId: string; taskId: string }>,
+  command: string,
+  target: { type: string; id: string },
+  detail: Record<string, unknown>,
+): Promise<boolean> {
+  if (!event.commandId) return false;
+  // The audit row and the event come from one transaction, so they carry the same now(): the time index finds it.
+  const { rows } = await sql<{ bound: boolean }>`
+    SELECT EXISTS (
+      SELECT 1 FROM crove_kernel.outbox_event e
+      JOIN crove_kernel.audit_event a ON a.org_id = e.org_id AND a.occurred_at = e.created_at AND a.command_id = e.command_id
+      WHERE e.org_id = ${orgId}::uuid AND e.id = ${event.id}::uuid AND a.command = ${command} AND a.outcome = 'ok'
+        AND a.actor_type = 'agent' AND a.actor_id = ${event.data.agentId}::uuid AND a.detail ->> 'agentRun' = ${event.data.runId}
+        AND a.target_type = ${target.type} AND a.target_id = ${target.id}::uuid
+        AND a.detail ->> 'task' = ${event.data.taskId}
+        AND a.detail @> ${JSON.stringify(detail)}::jsonb
+    ) AS bound`.execute(trx);
+  return rows[0]?.bound === true;
 }
 
 // The users who created tasks in the chain up from a task: authors of what the agent proposes (P10: the creator chain
@@ -1453,8 +1502,11 @@ async function taskChain(trx: Trx, orgId: string, taskId: string): Promise<{ use
   return { users, humanRoot: root !== undefined && root.parent_task_id === null && root.source === 'human' && root.created_by_type === 'user' };
 }
 
-// Creates the proposal an agent asked for (worker, system), from what the agent's run prepared: the run is the
-// agent's and live, the task is its position's, and the preparer is still R0. Flags: P03 when the run or the task is
+// Creates the proposal an agent asked for (worker, system), from what the agent's run prepared: the event was emitted
+// by the agent's kernel.task.propose in that run on that task (#435), the run is the agent's and live, the task is its
+// position's, no kill switch covering the agent is engaged or was engaged since the request (#435), the preparer is
+// still R0 and the payload within MAX_DRAFT_PAYLOAD_BYTES. The kind comes from the command and the title from the
+// kernel. Flags: P03 when the run or the task is
 // tainted; P04 unless the command declares agent approvers (which declare it writes no contact or payment field: no
 // code classifies P04 yet); P05 for R3 and P06 for R2 (work asked for by a non-user actor); P07 when the chain did not
 // start from a human. Authors: the agent and the run, and every user who created a task in the chain. One proposal per
@@ -1468,12 +1520,20 @@ export const createAgentProposal = defineCommand({
     const event = await outboxEvent(ctx, input.eventId, 'kernel.agent.proposal_requested', zProposalRequested);
     if (!event) return { proposalId: null, reason: 'no_event' as const };
     const { agentId, runId, taskId, preparer, draft } = event.data;
-    const { rows } = await sql<{ run_tainted: boolean; run_status: string; task_tainted: boolean }>`
-      SELECT r.tainted AS run_tainted, r.status AS run_status, t.tainted AS task_tainted
-      FROM crove_kernel.ai_run r
-      JOIN crove_kernel.task t ON t.org_id = r.org_id AND t.id = ${taskId}::uuid
-      JOIN crove_kernel.position p ON p.org_id = t.org_id AND p.id = t.assignee_position_id AND p.holder_agent_id = r.agent_id
-      WHERE r.org_id = ${ctx.orgId}::uuid AND r.id = ${runId}::uuid AND r.agent_id = ${agentId}::uuid`.execute(ctx.trx);
+    const bound = await emittedBy(ctx.trx, ctx.orgId, event, 'kernel.task.propose', { type: 'kernel.task', id: taskId }, { preparer, proposal_command: draft.command });
+    const { rows } = bound
+      ? await sql<{ run_tainted: boolean; run_status: string; task_tainted: boolean; agent_name: string; stopped: boolean }>`
+          SELECT r.tainted AS run_tainted, r.status AS run_status, t.tainted AS task_tainted, a.display_name AS agent_name,
+                 EXISTS (SELECT 1 FROM crove_kernel.kill_switch k
+                         WHERE k.org_id = r.org_id AND (k.released_at IS NULL OR k.engaged_at > ${event.createdAt}::timestamptz)
+                           AND (k.scope = 'org' OR (k.scope = 'module' AND k.target IN (r.module, p.module))
+                                OR (k.scope = 'agent' AND k.target = r.agent_id::text))) AS stopped
+          FROM crove_kernel.ai_run r
+          JOIN crove_kernel.agent a ON a.org_id = r.org_id AND a.id = r.agent_id
+          JOIN crove_kernel.task t ON t.org_id = r.org_id AND t.id = ${taskId}::uuid
+          JOIN crove_kernel.position p ON p.org_id = t.org_id AND p.id = t.assignee_position_id AND p.holder_agent_id = r.agent_id
+          WHERE r.org_id = ${ctx.orgId}::uuid AND r.id = ${runId}::uuid AND r.agent_id = ${agentId}::uuid`.execute(ctx.trx)
+      : { rows: [] };
     const facts = rows[0];
     if (!facts) {
       ctx.audit({ event: event.id, created: false, reason: 'chain_mismatch' });
@@ -1484,11 +1544,20 @@ export const createAgentProposal = defineCommand({
       ctx.audit({ event: event.id, created: false, reason: 'run_not_live', run_status: facts.run_status });
       return { proposalId: null, reason: 'run_not_live' as const };
     }
+    // Nor does a run a kill switch covers, including one engaged and released since the request (P01).
+    if (facts.stopped) {
+      ctx.audit({ event: event.id, created: false, reason: 'stopped' });
+      return { proposalId: null, reason: 'stopped' as const };
+    }
     const info = ctx.command(draft.command);
-    if (ctx.command(preparer)?.risk !== 'R0' || !info || info.access !== 'proposal') {
+    if (ctx.command(preparer)?.risk !== 'R0' || !info || info.access !== 'proposal' || payloadTooLarge(draft.payload)) {
       ctx.audit({ event: event.id, created: false, reason: 'not_proposable' });
       return { proposalId: null, reason: 'not_proposable' as const };
     }
+    // The Inbox renders a proposal by its kind and title: the command's kind, and a title from the agent's name (set
+    // by an owner) and that kind, never text the agent's run supplied.
+    const kind = info.proposalKind;
+    const title = `Tác tử AI ${facts.agent_name} đề xuất: ${kind}`.slice(0, 300);
     const tainted = facts.run_tainted || facts.task_tainted;
     const chain = await taskChain(ctx.trx, ctx.orgId, taskId);
     const flags = [
@@ -1502,9 +1571,9 @@ export const createAgentProposal = defineCommand({
       .insertInto('crove_kernel.proposal')
       .values({
         org_id: ctx.orgId,
-        kind: draft.kind,
+        kind,
         command: draft.command,
-        title: draft.title,
+        title,
         payload: JSON.stringify(draft.payload),
         // P12: the humans who may approve it; agents are judged at approval (decideAgentApproval).
         eligible_approvers: await eligibleApprovers(ctx.trx, ctx.orgId, draft.command),
@@ -1523,16 +1592,19 @@ export const createAgentProposal = defineCommand({
     ctx.audit({ event: event.id, proposal_id: proposal.id, proposal_command: draft.command, policy_flags: flags, tainted });
     await ctx.trx
       .insertInto('crove_kernel.task_comment')
-      .values({ org_id: ctx.orgId, task_id: taskId, body: `Đã gửi đề xuất chờ duyệt: ${draft.title}`.slice(0, 10000), author_type: 'system' })
+      .values({ org_id: ctx.orgId, task_id: taskId, body: `Đã gửi đề xuất chờ duyệt: ${title}`.slice(0, 10000), author_type: 'system' })
       .execute();
-    await ctx.activity('kernel.proposal', proposal.id, 'proposal.created', draft.title);
-    await ctx.emit('kernel.proposal.created', { proposalId: proposal.id, kind: draft.kind });
+    await ctx.activity('kernel.proposal', proposal.id, 'proposal.created', title);
+    await ctx.emit('kernel.proposal.created', { proposalId: proposal.id, kind });
     return { proposalId: proposal.id, reason: null };
   },
 });
 
-// Executes an agent's approval (worker, system), after deciding it again on the locked proposal: the agent, its run,
-// the command's agent approvers, the flags and the causal chain as they are now. A refusal is recorded and ends the
+// Executes an agent's approval (worker, system), after deciding it again on the locked proposal: the event was emitted
+// by the agent's kernel.task.approve_proposal in that run, from that task, for that proposal and revision (#435); the
+// agent, its run, the command's agent approvers, the flags and the causal chain as they are now; and no kill switch
+// covering the approver was engaged after the approval was recorded, even one released since (#435). A refusal is
+// recorded and ends the
 // job; nothing executes. The approved command runs through the proposal gate as the system, and the proposal names the
 // agent that decided it.
 export const executeAgentApproval = defineCommand({
@@ -1544,6 +1616,10 @@ export const executeAgentApproval = defineCommand({
     const event = await outboxEvent(ctx, input.eventId, 'kernel.agent.proposal_approved', zProposalApproved);
     if (!event) return { approved: false, reason: 'no_event' };
     const { agentId, runId, taskId, proposalId, revision } = event.data;
+    if (!(await emittedBy(ctx.trx, ctx.orgId, event, 'kernel.task.approve_proposal', { type: 'kernel.proposal', id: proposalId }, { proposal: proposalId, revision }))) {
+      ctx.audit({ event: event.id, proposal: proposalId, agent: agentId, run: runId, decision: 'chain_mismatch' });
+      return { approved: false, reason: 'chain_mismatch' };
+    }
     // The review task it was recorded from is the dispatch-created review of this proposal (system, kind
     // 'proposal_review', not a delegated or escalated copy) and belongs to a position the agent holds.
     const { rows: reviews } = await sql<{ source_ref: unknown }>`
@@ -1560,7 +1636,9 @@ export const executeAgentApproval = defineCommand({
     if (!proposal) return { approved: false, reason: 'not_found' };
     // A re-extraction in flight would replace the content the agent judged (issue #40); the job retries.
     await refuseWhileReextracting(ctx, proposal.source_file_id);
-    const decision = await decideAgentApproval(ctx.trx, ctx.orgId, { agentId, runId }, proposal, ctx.command(proposal.command), revision);
+    const decision = await decideAgentApproval(ctx.trx, ctx.orgId, { agentId, runId }, proposal, ctx.command(proposal.command), revision, {
+      stoppedSince: event.createdAt,
+    });
     ctx.audit({ event: event.id, proposal: proposal.id, agent: agentId, run: runId, decision: decision.reason, rule: decision.rule ?? null });
     if (decision.reason !== 'ok') return { approved: false, reason: decision.reason };
     await ctx.trx
