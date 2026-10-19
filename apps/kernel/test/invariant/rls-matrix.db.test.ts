@@ -478,8 +478,11 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     update: { set: 'error = error' },
     make: (o) => ({ row: portalListRow(o) }),
   },
-  // Its rows (append-only): a row joins only a pending list, created in the same transaction.
+  // Its rows (append-only): a row joins only a pending list, created in the same transaction. Only the system context
+  // adds rows (the worker recording a list; a trigger refuses member contexts from #506), so the own-org control, which
+  // also runs in member contexts, is skipped. finance-portal-list.db.test.ts covers both sides.
   'crove_finance.portal_invoice_row': {
+    noInsertControl: 'only the system context adds rows (the worker recording a list); a member context is refused',
     make: (o) => {
       const list = portalListRow(o);
       return {

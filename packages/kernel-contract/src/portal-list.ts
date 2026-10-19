@@ -38,6 +38,10 @@ export const zPortalList = z.object({
   // Rows that name an invoice but could not be read: the comparison is incomplete while there are any.
   skippedCount: z.number().int().nonnegative(),
   skipped: z.array(z.object({ rowNo: z.number().int().positive(), reason: z.enum(PORTAL_LIST_SKIP_REASONS) })),
+  // Rows left out because they are not the org's purchases: its own sales, and invoices naming another buyer (#506).
+  // Expected on a mixed export; a misread buyer code would hide an invoice, so the screen shows them.
+  ownSalesCount: z.number().int().nonnegative(),
+  otherBuyerCount: z.number().int().nonnegative(),
   createdAt: z.iso.datetime(),
 });
 export type PortalListView = z.infer<typeof zPortalList>;
@@ -99,6 +103,9 @@ export const zPortalReconciliation = z.object({
     notOnPortal: z.number().int().nonnegative(),
     duplicateRows: z.number().int().nonnegative(),
   }),
+  // At most a fixed number of items per outcome (the first ones, what needs work first); the summary counts all of
+  // them. truncated: some outcome has more items than are listed.
   items: z.array(zReconcileItem),
+  truncated: z.boolean(),
 });
 export type PortalReconciliation = z.infer<typeof zPortalReconciliation>;

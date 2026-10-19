@@ -7,10 +7,18 @@ VAT period and shows which invoices the tax authority has that Crove lacks, and 
 
 - **Screen:** "Đối chiếu cổng thuế" (`/o/<org>/portal-invoices`). Pick the month or quarter, upload the `.xlsx`.
 - **API:** upload with `POST /api/files` (or the staged upload) with `purpose=import`, then `portalList.import`
-  (`finance.portal_list.import`, owners, admins and members, R1). The worker reads the file in `crove-extract`
-  (kind `portal_invoice_list`), checks the answer again and records the rows (`finance.portal_list.record`, system
-  only). `portalList.reconcile` (every role) answers the period's lists and the comparison; `portalList.remove` takes
-  a list out of its period (it is kept).
+  (`finance.portal_list.import`, owners, admins and members, R1). The import takes only a file stored that way
+  (source `import`, recorded as `.xlsx`); an uploaded or emailed document, even a ZIP, is refused. The same bytes are
+  not both: a direct document upload of a file stored as an import is refused (`FILE_IS_IMPORT`, it would open the
+  workbook's own parts as a ZIP of documents), and an import upload of a document's bytes is refused
+  (`FILE_IS_NOT_IMPORT`); an emailed copy of an import stays a duplicate, so the message is not refused. The worker
+  reads the file in `crove-extract` (kind `portal_invoice_list`), checks the answer again and records the rows
+  (`finance.portal_list.record`, system only; the database also refuses the outcome and the rows from any context
+  but the system one, #506). `portalList.reconcile` (every role) answers the period's lists and the comparison;
+  `portalList.remove` takes a list out of its period (it is kept).
+- **Load:** a period holds at most 50,000 rows of done lists (a list that would pass it is recorded as failed), and
+  the reconciliation lists at most 500 items per outcome; the summary and the section titles count all of them, and
+  the screen says when a section is cut short.
 - **Only purchases.** The org's sales (#313) are the org's own invoices and are not compared here.
 
 ## How the accountant gets the file
@@ -130,8 +138,10 @@ runs only in the parsing sandbox like every untrusted file:
 
 The worker then checks the answer again (`checkPortalList` in `modules/finance/src/portal-list.ts`): a purchase list
 is one where the org is the buyer, so the org's tax code must be set (the import refuses without it). Rows where the org is the seller (its sales) or another company is the buyer are
-dropped; a list with none left is recorded as failed, as the sales list or as another company's list (the accountant
-picked the wrong client).
+dropped and counted (the list keeps both counts and the screen shows them next to the skipped rows: a misread buyer
+code would hide a purchase); a list with none left is recorded as failed, as the sales list or as another company's
+list (the accountant picked the wrong client). An answer with an impossible date (an issue date or the file's own
+range) or a row number given twice is refused with the reason, before anything is written.
 
 ## How Crove compares
 

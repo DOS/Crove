@@ -107,9 +107,15 @@ test('import the tax portal purchase list and see which invoices Crove lacks', a
   });
 
   await test.step('upload the portal list; it is read and compared', async () => {
-    const buffer = await portalList([row(1, '1234', SELLER_TAX_CODE, SELLER, 1_980_000), row(2, '5555', OTHER_SELLER_TAX_CODE, 'CÔNG TY TNHH BÊN BÁN KHÁC', 1_100_000)]);
+    // The third row names another buyer: it is left out, and the screen says so (#506).
+    const otherBuyer = row(3, '7777', SELLER_TAX_CODE, SELLER, 550_000);
+    otherBuyer[7] = OTHER_SELLER_TAX_CODE;
+    const buffer = await portalList([row(1, '1234', SELLER_TAX_CODE, SELLER, 1_980_000), row(2, '5555', OTHER_SELLER_TAX_CODE, 'CÔNG TY TNHH BÊN BÁN KHÁC', 1_100_000), otherBuyer]);
     await page.getByLabel('Tải danh sách lên').setInputFiles({ name: 'DANH SÁCH HÓA ĐƠN.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer });
     await expect(page.getByText('Đã đọc 2 hóa đơn')).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText('1 dòng của người mua khác, đã bỏ qua')).toBeVisible();
+    await expect(page.getByText('Đã bỏ qua 1 dòng không phải hóa đơn mua vào của công ty')).toBeVisible();
+    await expect(page.getByText('DANH SÁCH HÓA ĐƠN.xlsx: 1 dòng ghi người mua là doanh nghiệp khác')).toBeVisible();
     await expect(page.getByRole('cell', { name: '01/09/2026 đến 30/09/2026', exact: true })).toBeVisible();
 
     const missing = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Cơ quan thuế có, Crove chưa có (1)' }) });

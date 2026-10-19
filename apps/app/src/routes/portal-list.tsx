@@ -12,7 +12,7 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
-import { SECTIONS, canImportPortalList, invoiceLabel, itemsByOutcome, pickProblem, pollWhilePending, type ReconcileItem } from '../lib/portal-list.ts';
+import { SECTIONS, canImportPortalList, invoiceLabel, itemsByOutcome, outcomeTotal, pickProblem, pollWhilePending, type ReconcileItem } from '../lib/portal-list.ts';
 import { defaultPeriod, periodKey, switchKind, yearOptions, type PeriodChoice, type PeriodKind } from '../lib/vat.ts';
 
 const SKIPPED_SHOWN = 20;
@@ -66,8 +66,10 @@ function ItemRow({ item, slug }: { item: ReconcileItem; slug: string }) {
   );
 }
 
-function Section({ outcome, items, folded, slug }: { outcome: ReconcileOutcome; items: ReconcileItem[]; folded: boolean; slug: string }) {
+function Section({ outcome, items, total, folded, slug }: { outcome: ReconcileOutcome; items: ReconcileItem[]; total: number; folded: boolean; slug: string }) {
   const t = useTranslations('portalList');
+  // The server lists the first items of a long section; the count and the summary still cover all of them.
+  const truncated = total > items.length ? <p className="mt-2 text-sm text-muted-foreground">{t('truncatedSection', { shown: items.length, total })}</p> : null;
   const table = (
     <DataTable head={[t('columns.issueDate'), t('columns.invoice'), t('columns.seller'), t('columns.portalTotal'), t('columns.croveTotal'), t('columns.notes')]}>
       {items.map((item) => (
@@ -75,13 +77,14 @@ function Section({ outcome, items, folded, slug }: { outcome: ReconcileOutcome; 
       ))}
     </DataTable>
   );
-  const title = t(`sections.${outcome}.title`, { count: String(items.length) });
+  const title = t(`sections.${outcome}.title`, { count: String(total) });
   if (folded) {
     return (
       <details className="group">
         <summary className="cursor-pointer text-base font-semibold text-foreground">{title}</summary>
         <p className="mt-1 mb-2 text-sm text-muted-foreground">{t(`sections.${outcome}.hint`)}</p>
         {table}
+        {truncated}
       </details>
     );
   }
@@ -90,6 +93,7 @@ function Section({ outcome, items, folded, slug }: { outcome: ReconcileOutcome; 
       <h2 className="text-base font-semibold text-foreground">{title}</h2>
       <p className="mt-1 mb-2 text-sm text-muted-foreground">{t(`sections.${outcome}.hint`)}</p>
       {table}
+      {truncated}
     </section>
   );
 }
@@ -137,6 +141,10 @@ export function PortalListPage() {
   // Rows of the period's lists that name an invoice but could not be read: the comparison misses them.
   const skipped = doneLists.flatMap((l) => l.skipped.map((s) => ({ ...s, filename: l.filename })));
   const skippedTotal = doneLists.reduce((sum, l) => sum + l.skippedCount, 0);
+  // Rows left out as not the org's purchases (its own sales, another buyer): expected on a mixed export, but a misread
+  // buyer code would hide a purchase, so they are shown next to the skipped rows (#506).
+  const droppedLists = doneLists.filter((l) => l.ownSalesCount + l.otherBuyerCount > 0);
+  const droppedTotal = droppedLists.reduce((sum, l) => sum + l.ownSalesCount + l.otherBuyerCount, 0);
 
   return (
     <>
@@ -237,6 +245,8 @@ export function PortalListPage() {
                         <div className="flex flex-wrap gap-1">
                           <Badge variant="success">{t('listStatus.done', { count: list.rowCount ?? 0 })}</Badge>
                           {list.skippedCount > 0 && <Badge variant="warning">{t('listStatus.skipped', { count: list.skippedCount })}</Badge>}
+                          {list.ownSalesCount > 0 && <Badge variant="outline">{t('listStatus.ownSales', { count: list.ownSalesCount })}</Badge>}
+                          {list.otherBuyerCount > 0 && <Badge variant="outline">{t('listStatus.otherBuyers', { count: list.otherBuyerCount })}</Badge>}
                         </div>
                       ) : (
                         <div className="space-y-1">
@@ -274,6 +284,20 @@ export function PortalListPage() {
                   </AlertDescription>
                 </Alert>
               )}
+              {droppedTotal > 0 && (
+                <Alert>
+                  <AlertTitle>{t('droppedTitle', { count: droppedTotal })}</AlertTitle>
+                  <AlertDescription>
+                    <p>{t('droppedHint')}</p>
+                    <ul className="mt-1 list-disc pl-5">
+                      {droppedLists.flatMap((l) => [
+                        ...(l.ownSalesCount > 0 ? [<li key={`${l.id}-own`}>{t('droppedOwnSales', { file: l.filename, count: l.ownSalesCount })}</li>] : []),
+                        ...(l.otherBuyerCount > 0 ? [<li key={`${l.id}-other`}>{t('droppedOtherBuyers', { file: l.filename, count: l.otherBuyerCount })}</li>] : []),
+                      ])}
+                    </ul>
+                  </AlertDescription>
+                </Alert>
+              )}
               <section aria-label={t('summaryTitle')} className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {(
                   [
@@ -294,7 +318,7 @@ export function PortalListPage() {
               </p>
               {SECTIONS.map(({ outcome, folded }) => {
                 const items = grouped.get(outcome) ?? [];
-                return items.length > 0 ? <Section key={outcome} outcome={outcome} items={items} folded={folded} slug={slug} /> : null;
+                return items.length > 0 ? <Section key={outcome} outcome={outcome} items={items} total={outcomeTotal(data.summary, outcome)} folded={folded} slug={slug} /> : null;
               })}
               {data.items.length > 0 && data.summary.missing + data.summary.amountMismatch + data.summary.voidInCrove + data.summary.notOnPortal === 0 && (
                 <Empty title={t('allClear')} hint={t('allClearHint')} />
