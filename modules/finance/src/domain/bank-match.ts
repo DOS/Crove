@@ -82,11 +82,14 @@ function words(text: string): string[] {
     .filter((w) => w.length > 0);
 }
 
-// Tax codes written in a text: 10 digits, or 10 digits, a dash and 3 digits (a branch), not part of a longer number.
+// Tax codes written in a text: 10 digits, or 10 digits, a dash and 3 digits (a branch), not part of a longer number. Ten
+// digits followed by a dash and any other count of digits (a reference such as 1234567890-12) are not a tax code.
 export function taxCodesIn(text: string): string[] {
   const found = new Set<string>();
-  for (const m of text.matchAll(/(?<![0-9])([0-9]{10})(?:\s*-\s*([0-9]{3}))?(?![0-9])/g)) {
-    found.add(m[2] ? `${m[1]}-${m[2]}` : (m[1] as string));
+  for (const m of text.matchAll(/(?<![0-9])([0-9]{10})(?:\s*-\s*([0-9]+))?(?![0-9])/g)) {
+    const branch = m[2];
+    if (branch === undefined) found.add(m[1] as string);
+    else if (branch.length === 3) found.add(`${m[1]}-${branch}`);
   }
   return [...found];
 }

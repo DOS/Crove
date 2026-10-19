@@ -28,6 +28,8 @@ describe('matchLine', () => {
 
   it('reads a branch tax code and ignores digits that only contain a tax code', () => {
     expect(taxCodesIn('MST 0101234564-001; ref 20101234564 and 0309876546')).toEqual(['0101234564-001', '0309876546']);
+    // A dash and other than three digits make a reference, not a tax code.
+    expect(taxCodesIn('ma GD 0101234564-12, 0309876546-1234')).toEqual([]);
     const branch: MatchParty[] = [{ id: P1, name: 'Chi nhánh Hòa Bình', taxCode: '0101234564-001' }];
     expect(matchLine(line('TT MST 0101234564 - 001'), branch, [], []).suggested).toEqual({ partyId: P1, reason: 'tax_code' });
     expect(matchLine(line('ref 20101234564'), parties, [], []).suggested).toBeNull();

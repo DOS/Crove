@@ -185,14 +185,14 @@ export const bankLineVoucher = defineQuery({
       .execute();
     // Parties whose open balance on the line's side equals the amount on the line's date: owed to the org on 131 for
     // money in, owed by the org on 331 for money out.
-    const side = inflow ? sql`pg_catalog.sum(l.debit) - pg_catalog.sum(l.credit)` : sql`pg_catalog.sum(l.credit) - pg_catalog.sum(l.debit)`;
+    const side = inflow ? sql<string>`pg_catalog.sum(l.debit) - pg_catalog.sum(l.credit)` : sql<string>`pg_catalog.sum(l.credit) - pg_catalog.sum(l.debit)`;
     const balances = await ctx.trx
       .selectFrom('crove_finance.journal_line as l')
       .innerJoin('crove_finance.journal_entry as e', (join) => join.onRef('e.org_id', '=', 'l.org_id').onRef('e.id', '=', 'l.entry_id'))
-      .select(['l.party_id', sql<string>`${side}`.as('balance')])
+      .select(['l.party_id', side.as('balance')])
       .where('l.org_id', '=', ctx.orgId)
       .where('l.party_id', 'is not', null)
-      .where(sql`pg_catalog.left(l.account_code, 3)`, '=', inflow ? '131' : '331')
+      .where('l.account_code', 'like', inflow ? '131%' : '331%')
       .where('e.entry_date', '<=', line.date)
       .groupBy('l.party_id')
       .having(side, '=', amount.toFixed())
