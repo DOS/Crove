@@ -46,6 +46,8 @@ const POLICIES: Record<string, CommandPolicy> = {
   'finance.purchase.record': { roles: ['owner', 'admin'], fourEyes: true },
   // A reversal is itself a posting (#138): the same roles approve it, with four-eyes.
   'finance.journal.reverse': { roles: ['owner', 'admin'], fourEyes: true },
+  // A cash or bank voucher (phiếu thu, phiếu chi, báo Có, báo Nợ, #327) posts to the ledger: the same rule.
+  'finance.voucher.record': { roles: ['owner', 'admin'], fourEyes: true },
 };
 
 const NOBODY: CommandPolicy = { roles: [], fourEyes: true };

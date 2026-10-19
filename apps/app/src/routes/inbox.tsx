@@ -17,6 +17,7 @@ import { client, errorMessage, isStepUpRequired, orpc, queryClient } from '../li
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
+import { VOUCHER_KIND } from '../lib/vouchers.ts';
 import { bulkSelectable, canApproveProposals, planBatches, proposalName, sendBatches, type BulkBatch, type BulkProgress } from '../lib/review.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
@@ -369,11 +370,12 @@ export function InboxPage() {
                   <div className="flex flex-wrap gap-1">
                     {/* A reversal a user asked for has no invoice checks; its card shows the entry it reverses. */}
                     {item.kind === REVERSAL_KIND && <Badge variant="secondary">{t('reversalKind')}</Badge>}
+                    {item.kind === VOUCHER_KIND && <Badge variant="secondary">{t('voucherKind')}</Badge>}
                     {item.direction === 'sale' && <Badge variant="secondary">{t('saleKind')}</Badge>}
                     {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
                     {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
                     {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}
-                    {item.kind !== REVERSAL_KIND && item.failedChecks === 0 && item.warnChecks === 0 && !item.duplicateOf && (
+                    {item.kind !== REVERSAL_KIND && item.kind !== VOUCHER_KIND && item.failedChecks === 0 && item.warnChecks === 0 && !item.duplicateOf && (
                       <Badge variant="success">{t('matched')}</Badge>
                     )}
                   </div>
