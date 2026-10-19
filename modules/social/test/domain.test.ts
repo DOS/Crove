@@ -148,6 +148,13 @@ describe('validateVariant', () => {
     ]);
   });
 
+  it('flags Bluesky text within 300 graphemes but over 3000 UTF-8 bytes (#250)', () => {
+    // A family emoji is one grapheme of 25 bytes: 200 of them are 5000 bytes.
+    const family = '\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}';
+    expect(validateVariant({ provider: 'bluesky', body: family.repeat(200), title: null, media: [] })).toEqual([{ code: 'TEXT_TOO_MANY_BYTES', field: 'body', limit: 3000, actual: 5000 }]);
+    expect(validateVariant({ provider: 'bluesky', body: family.repeat(120), title: null, media: [] })).toEqual([]);
+  });
+
   it('requires a title where the channel has one and refuses one where it has none', () => {
     const zalo = validateVariant({ provider: 'zalo_oa', body: 'nội dung', title: '', media: [jpeg()] }).map((i) => i.code);
     expect(zalo).toEqual(['TITLE_REQUIRED']);

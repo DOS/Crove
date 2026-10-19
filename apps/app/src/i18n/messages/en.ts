@@ -1205,6 +1205,7 @@ export const en = {
       CONTENT_REQUIRED: 'The post has no content',
       TEXT_REQUIRED: 'This channel needs text',
       TEXT_TOO_LONG: 'The text is {actual, number} characters; this channel allows {limit, number}',
+      TEXT_TOO_MANY_BYTES: 'The text takes {actual, number} bytes; this channel allows {limit, number}, and emoji and accented letters take more bytes than plain ones',
       TITLE_REQUIRED: 'This channel needs a title',
       TITLE_TOO_LONG: 'The title is {actual, number} characters; this channel allows {limit, number}',
       TITLE_NOT_SUPPORTED: 'This channel has no title',
