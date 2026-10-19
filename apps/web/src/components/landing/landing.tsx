@@ -2,11 +2,11 @@ import type { Dictionary } from '../../content/vi';
 import { Agents } from './agents';
 import { Faq } from './faq';
 import { Hero } from './hero';
+import { HowItWorks } from './how-it-works';
 import { Ledger } from './ledger';
 import { Modules } from './modules';
 import { OwnerPhone } from './owner-phone';
 import { Pricing } from './pricing';
-import { RoutingSlip } from './routing-slip';
 import { SiteFooter } from './site-footer';
 import { SiteHeader } from './site-header';
 import { Trust } from './trust';
@@ -19,7 +19,7 @@ export function Landing({ dict }: { dict: Dictionary }) {
       <SiteHeader dict={dict} />
       <main id="main">
         <Hero dict={dict} />
-        <RoutingSlip dict={dict} />
+        <HowItWorks dict={dict} />
         <Ledger dict={dict} />
         <Agents dict={dict} />
         <OwnerPhone dict={dict} />

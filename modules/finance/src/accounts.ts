@@ -76,6 +76,13 @@ export async function assertUsableAccounts(ctx: QueryContext, codes: readonly st
 
 const pgCode = (error: unknown) => (error as { code?: string } | null)?.code;
 
+// The database's refusal of a vendor default on an inactive sub-account (check_account_ref, 23503). Matched on the
+// message too: a foreign key failure (the party) has the same SQLSTATE and must not read as an inactive account.
+export function isInactiveDefaultRefusal(error: unknown): boolean {
+  const message = (error as { message?: unknown } | null)?.message;
+  return pgCode(error) === '23503' && typeof message === 'string' && message.includes('is inactive and cannot be a vendor default');
+}
+
 export const createAccount = defineCommand({
   name: 'finance.account.create',
   input: z.object({ parentCode: zAccountCode, code: zAccountCode, name: zName }),
@@ -248,29 +255,55 @@ export const setVendorDefaultAccount = defineCommand({
       .where('id', '=', partyId)
       .executeTakeFirst();
     if (!party) throw new DomainError('PARTY_NOT_FOUND', 404, 'Không tìm thấy nhà cung cấp');
-    const previous = await ctx.trx
-      .selectFrom('crove_finance.vendor_account_rule')
-      .select('debit_account')
-      .where('org_id', '=', ctx.orgId)
-      .where('party_id', '=', partyId)
-      .executeTakeFirst();
-    const before = previous?.debit_account ?? null;
+    // The current default, locked: two changes for one vendor wait for each other, so each audit row records the
+    // account it replaced. Approving an invoice (finance.purchase.record) writes the same row and waits too.
+    const current = async () =>
+      (
+        await ctx.trx
+          .selectFrom('crove_finance.vendor_account_rule')
+          .select('debit_account')
+          .where('org_id', '=', ctx.orgId)
+          .where('party_id', '=', partyId)
+          .forUpdate()
+          .executeTakeFirst()
+      )?.debit_account ?? null;
+    let before = await current();
     if (before === accountCode) return { partyId, accountCode };
     const by = ctx.actor.type === 'user' ? ctx.actor.userId : null;
+    const inactive = (error: unknown) => {
+      // The sub-account was deactivated meanwhile (the database checks it under a lock).
+      if (isInactiveDefaultRefusal(error)) throw new DomainError('ACCOUNT_INACTIVE', 422, `Tài khoản ${accountCode} đã ngừng sử dụng; hãy chọn tài khoản khác`);
+      throw error;
+    };
     if (accountCode === null) {
       await ctx.trx.deleteFrom('crove_finance.vendor_account_rule').where('org_id', '=', ctx.orgId).where('party_id', '=', partyId).execute();
     } else {
       await assertUsableAccounts(ctx, [accountCode]);
-      await ctx.trx
-        .insertInto('crove_finance.vendor_account_rule')
-        .values({ org_id: ctx.orgId, party_id: partyId, debit_account: accountCode, confirmed_by: by })
-        .onConflict((oc) => oc.columns(['org_id', 'party_id']).doUpdateSet({ debit_account: accountCode, confirmed_by: by, updated_at: ctx.now }))
-        .execute()
-        .catch((error: unknown) => {
-          // The sub-account was deactivated meanwhile (the database checks it under a lock).
-          if (pgCode(error) === '23503') throw new DomainError('ACCOUNT_INACTIVE', 422, `Tài khoản ${accountCode} đã ngừng sử dụng; hãy chọn tài khoản khác`);
-          throw error;
-        });
+      // With no default there was no row to lock. The insert claims it; if another change inserted one first, the
+      // insert waits for it, does nothing, and that default is read back (locked) and replaced like any other.
+      const inserted =
+        before === null
+          ? await ctx.trx
+              .insertInto('crove_finance.vendor_account_rule')
+              .values({ org_id: ctx.orgId, party_id: partyId, debit_account: accountCode, confirmed_by: by })
+              .onConflict((oc) => oc.columns(['org_id', 'party_id']).doNothing())
+              .returning('party_id')
+              .executeTakeFirst()
+              .catch(inactive)
+          : undefined;
+      if (!inserted) {
+        if (before === null) {
+          before = await current();
+          if (before === accountCode) return { partyId, accountCode };
+        }
+        await ctx.trx
+          .updateTable('crove_finance.vendor_account_rule')
+          .set({ debit_account: accountCode, confirmed_by: by, updated_at: ctx.now })
+          .where('org_id', '=', ctx.orgId)
+          .where('party_id', '=', partyId)
+          .execute()
+          .catch(inactive);
+      }
     }
     ctx.audit({ partyId, accountCode, previous: before });
     await ctx.activity(

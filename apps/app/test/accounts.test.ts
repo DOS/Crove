@@ -21,6 +21,14 @@ describe('chart of accounts on screen', () => {
     expect(pickableAccounts([], '6422').map((a) => accountLabel(a))).toEqual(['6422']);
   });
 
+  it('offers revenue accounts on a sale line and every other account on a purchase line (#430)', () => {
+    const chart = [...CHART, tt133('511', 'Doanh thu bán hàng và cung cấp dịch vụ'), own('5113', '511', '511'), tt133('711', 'Thu nhập khác'), tt133('3387', 'Doanh thu chưa thực hiện')];
+    expect(pickableAccounts(chart, '511', 'sale').map((a) => a.code)).toEqual(['511', '5113', '711', '3387']);
+    expect(pickableAccounts(chart, '6422', 'purchase').map((a) => a.code)).toEqual(['112', '1121', '1121.VCB', '6422']);
+    // The line's own account stays, even when it does not fit, so the picker shows what the proposal holds.
+    expect(pickableAccounts(chart, '6422', 'sale').map((a) => a.code)).toEqual(['6422', '511', '5113', '711', '3387']);
+  });
+
   it('puts sub-accounts only under accounts in use without a tag', () => {
     expect(parentChoices(CHART).map((a) => a.code)).toEqual(['112', '1121', '6422']);
   });

@@ -23,6 +23,8 @@ export const QUEUES = {
   agentSweep: 'kernel-agent-sweep',
   // Created by the agent proposals migration (20261019180000).
   agentProposal: 'kernel-agent-proposal',
+  // Created by the portal invoice list migration (20261020060000).
+  portalList: 'finance-portal-list',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 

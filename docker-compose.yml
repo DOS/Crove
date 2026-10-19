@@ -128,6 +128,7 @@ services:
       AI_MODEL: ${AI_MODEL:-}
       # The app's feedback and support link (https: or mailto:); empty hides it.
       SUPPORT_URL: ${SUPPORT_URL:-}
+      TAX_CODE_LOOKUP_URL: ${TAX_CODE_LOOKUP_URL:-}
       INBOUND_DOMAIN: ${INBOUND_DOMAIN:-}
       INBOUND_SECRET: ${INBOUND_SECRET:-}
       # Invite mails go through the same SMTP server as Supabase Auth's (Mailpit at http://localhost:8025 locally).
@@ -259,6 +260,7 @@ services:
       ALERT_WEBHOOK_FORMAT: ${ALERT_WEBHOOK_FORMAT:-auto}
       ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-}
       ALERT_REPEAT_MINUTES: ${ALERT_REPEAT_MINUTES:-60}
+      PROBER_HEARTBEAT_URL: ${PROBER_HEARTBEAT_URL:-}
       PROBER_MAX_OUTBOX_AGE_SECONDS: ${PROBER_MAX_OUTBOX_AGE_SECONDS:-300}
       PROBER_MAX_JOB_AGE_SECONDS: ${PROBER_MAX_JOB_AGE_SECONDS:-900}
       PROBER_MAX_HEARTBEAT_AGE_SECONDS: ${PROBER_MAX_HEARTBEAT_AGE_SECONDS:-120}

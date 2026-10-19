@@ -21,7 +21,7 @@ The defaults are for local use. Before anyone else can reach your instance, copy
 ## What works today (MVP)
 
 - Email + password sign-up and sign-in (bundled [Supabase Auth](https://github.com/supabase/auth)), organizations, members and roles
-- Upload of e-invoice XML (Decree 123/2020, Circular 78/2021), PDF and images; inbound email per organization
+- Upload of e-invoice XML (the tax authority's format under Decree 254/2026 and Circular 91/2026, as before under Decree 123/2020), PDF and images; inbound email per organization
 - Deterministic checks: line totals, VAT, tax-code check digit, tax-authority code, duplicates
 - AI Inbox: proposals with suggested TT133 accounts that learn per vendor; approve, edit or reject
 - Purchase documents, vendors, journal entries that always balance, Excel export
@@ -34,6 +34,7 @@ The defaults are for local use. Before anyone else can reach your instance, copy
 | Modules | `CROVE_MODULES`: comma-separated modules to run, such as `finance` (default: every module; `kernel` is always on). A module left out registers no commands, routes, jobs or menus; migrations still apply to every schema. Give the `api` and `worker` roles the same value (ADR-0031) |
 | AI for PDFs and photos | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` (any OpenAI-compatible endpoint: OpenAI, Ollama, vLLM, ...) |
 | Feedback and support link | `SUPPORT_URL`: where the app's "Góp ý / Hỗ trợ" link goes, an `https:` page (a chat group, a help desk) or a `mailto:` address. Unset hides the link; any other scheme stops the boot. Browsers read it from `/api/config` |
+| Onboarding by tax code | `TAX_CODE_LOOKUP_URL`: an https URL template with `{taxCode}` (for example `https://api.vietqr.io/v2/business/{taxCode}`, which answers in the shape the kernel reads). With it, the new-organization form looks up a client's tax code and fills in the name and address; unset hides the button, since the lookup sends the tax codes users type to that provider. Answers are cached in the process for a day |
 | Inbound email | `INBOUND_DOMAIN`, `INBOUND_SECRET`; your mail worker POSTs raw MIME to `/api/inbound/email` |
 | Org exports (offboarding) | `EXPORT_ENCRYPTION_KEY` (32 random bytes, `openssl rand -base64 32`; required on a public URL) seals exports at rest with AES-256-GCM; `EXPORT_RETENTION_DAYS` (35 to 90, default 35) before the worker deletes them; `EXPORT_ENCRYPTION_KEY_PREVIOUS` to read exports sealed before a key rotation. Give the bucket a lifecycle rule for noncurrent versions under `export/` and `inbound/` too |
 | Email delivery | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `AUTH_AUTOCONFIRM=false`. Supabase Auth and Crove's member invites use the same server; port 465 is implicit TLS, other ports with credentials require STARTTLS. Without `SMTP_HOST` Crove sends no invite mail and the inviter passes the one-time link on |
@@ -93,7 +94,7 @@ docker compose --profile prober up -d
 */5 * * * * cd /path/to/Crove && docker compose run --rm -e PROBER_DEAD_LETTER_WINDOW_SECONDS=360 prober prober >> /var/log/crove-prober.log 2>&1
 ```
 
-Without Compose, run `node apps/kernel/src/main.ts prober` from any scheduler with `PROBER_DATABASE_URL=postgres://crove_prober:<password>@<host>:5432/<db>`. The prober cannot report its own absence or a whole-host outage: for those, add an external uptime check on `/healthz`.
+Without Compose, run `node apps/kernel/src/main.ts prober` from any scheduler with `PROBER_DATABASE_URL=postgres://crove_prober:<password>@<host>:5432/<db>`. The prober cannot report its own absence or a whole-host outage: for those, add an outside uptime check on `/healthz` and set `PROBER_HEARTBEAT_URL` to an outside heartbeat monitor (a dead man's switch), which the prober pings after each probe that read the database and delivered every alert it owed, so the monitor pages when the pings stop. Setting up all three for the owner's phone, step by step: [docs/runbooks/alerts.md](./docs/runbooks/alerts.md).
 
 ## Weekly usage report
 
@@ -126,7 +127,7 @@ Before real users put real data in a deployment, run the preflight from a checko
 pnpm pilot:check -- --url https://crove.example.com
 ```
 
-It fails on any secret left at a shipped sample value, a public URL that is not https, `AUTH_AUTOCONFIRM` not `false`, MFA step-up off and sign-up open to anyone (`AUTH_DISABLE_SIGNUP` not `true`), and with `--url` probes the certificate, plain http and the settings the running Supabase Auth reports. It lists what only a person can confirm (sandbox running, RLS matrix green, backups tested). Exit codes: 0 ready, 1 a check failed, 2 bad arguments. The full checklist and how to open sign-up for a pilot's accounts: [docs/runbooks/pilot-readiness.md](./docs/runbooks/pilot-readiness.md).
+It fails on any secret left at a shipped sample value, a public URL that is not https, `AUTH_AUTOCONFIRM` not `false`, MFA step-up off, sign-up open to anyone (`AUTH_DISABLE_SIGNUP` not `true`) and alerts that reach nobody (`ALERT_WEBHOOK_URL` unset or not https), and with `--url` probes the certificate, plain http and the settings the running Supabase Auth reports. It lists what only a person can confirm (the outside uptime check and a test alert on the phone, sandbox running, RLS matrix green, backups tested). Exit codes: 0 ready, 1 a check failed, 2 bad arguments. The full checklist and how to open sign-up for a pilot's accounts: [docs/runbooks/pilot-readiness.md](./docs/runbooks/pilot-readiness.md).
 
 ## Development
 

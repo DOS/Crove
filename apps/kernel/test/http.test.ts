@@ -92,6 +92,16 @@ describe('configuration guards', () => {
     expect(loadConfig({ ...base, AUTH_STEP_UP: 'off' }).AUTH_STEP_UP).toBe('off');
   });
 
+  // #375: a provider sends the OAuth code to PUBLIC_URL/channels/oauth/<provider>/callback.
+  it('refuses a public plain-http PUBLIC_URL when a channel OAuth app is set', () => {
+    const meta = { CHANNEL_META_APP_ID: '1234567890', CHANNEL_META_APP_SECRET: 'meta-secret-0123456789abcdef' };
+    const auth = { PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' };
+    expect(() => loadConfig({ ...base, ...auth, ...meta, PUBLIC_URL: 'http://books.example.com' })).toThrow(/must be https/);
+    expect(loadConfig({ ...base, ...auth, PUBLIC_URL: 'http://books.example.com' }).PUBLIC_URL).toBe('http://books.example.com');
+    expect(loadConfig({ ...base, ...auth, ...meta, PUBLIC_URL: 'https://books.example.com' }).CHANNEL_META_APP_ID).toBe('1234567890');
+    expect(loadConfig({ ...base, ...meta }).CHANNEL_META_APP_ID).toBe('1234567890');
+  });
+
   // #212: org exports are sealed at rest on every public deployment; a key must be 32 bytes.
   it('requires a well-formed export key to serve a public URL', () => {
     const publicUrl = { ...base, PUBLIC_URL: 'https://books.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' };
@@ -206,7 +216,7 @@ describe('auth proxy', () => {
   it('forwards public endpoints with the client address from the socket, not from headers', async () => {
     const request = new Request('http://localhost/auth/v1/token?grant_type=password', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-forwarded-for': '1.2.3.4', 'x-real-ip': '1.2.3.4' },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': '1.2.3.4', 'x-real-ip': '1.2.3.4', 'sb-forwarded-for': '1.2.3.4' },
       body: '{}',
     });
     const response = await app.fetch(request, { incoming: { socket: { remoteAddress: '203.0.113.9' } } });
@@ -214,6 +224,7 @@ describe('auth proxy', () => {
     expect(seen?.path).toBe('/token?grant_type=password');
     expect(seen?.headers['x-real-ip']).toBe('203.0.113.9');
     expect(seen?.headers['x-forwarded-for']).toBeUndefined();
+    expect(seen?.headers['sb-forwarded-for']).toBeUndefined();
   });
 
   // Issue #277: Supabase Auth authenticates /user, /logout, /reauthenticate and /factors with the user's access token

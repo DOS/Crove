@@ -8,6 +8,7 @@ import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
+import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
@@ -97,6 +98,7 @@ function Metrics({ slug, names }: { slug: string; names: Map<string, string> }) 
             ))}
           </div>
           {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t('metricsCapped')}</p>}
+          <BestTimes rows={data} names={names} />
           <div className="overflow-x-auto rounded-xl border">
             <table className="w-full text-sm">
               <thead className="bg-muted text-xs text-subtle-foreground">
@@ -135,6 +137,37 @@ function Metrics({ slug, names }: { slug: string; names: Map<string, string> }) 
         </>
       )}
     </div>
+  );
+}
+
+const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+
+// When each channel's posts drew the most engagement, in the viewer's time zone, from the posts in the window.
+function BestTimes({ rows, names }: { rows: readonly PublishedSample[]; names: Map<string, string> }) {
+  const t = useTranslations('social');
+  const f = useFormat();
+  const best = useMemo(() => bestTimes(rows, Intl.DateTimeFormat().resolvedOptions().timeZone), [rows]);
+  if (best.size === 0) return null;
+  return (
+    <Card className="block space-y-3 p-4">
+      <div>
+        <p className="text-sm font-medium text-foreground">{t('bestTimesTitle')}</p>
+        <p className="text-xs text-subtle-foreground">{t('bestTimesHint')}</p>
+      </div>
+      <ul className="space-y-2">
+        {[...best.entries()].map(([connectionId, slots]) => (
+          <li key={connectionId} className="text-sm">
+            <span className="text-foreground">{names.get(connectionId) ?? connectionId.slice(0, 8)}</span>
+            <span className="text-subtle-foreground">
+              {': '}
+              {slots
+                .map((s) => t('bestTimesSlot', { day: t(`weekday.${DAY_KEYS[s.weekday - 1] ?? 'mon'}`), hour: String(s.hour).padStart(2, '0'), engagement: f.number(Math.round(s.engagement)), posts: String(s.posts) }))
+                .join(' · ')}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }
 

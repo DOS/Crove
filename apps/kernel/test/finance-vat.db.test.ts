@@ -247,6 +247,9 @@ suite('VAT working per month or quarter (#316)', () => {
   });
 
   it('refuses a malformed period', async () => {
+    // 400 here and 422 on the export route below: the RPC handler checks its input against the oRPC contract before
+    // any query runs (BAD_REQUEST), while the export route hands the query string to the runtime, whose own input check
+    // refuses it as VALIDATION (422). Both refuse the same periods.
     for (const period of ['2026-13', '2026-Q5', '2026-9', '']) {
       expect((await rpc('vat/period', await tokenFor(owner), { period })).status, period).toBe(400);
     }

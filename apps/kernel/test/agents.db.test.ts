@@ -170,6 +170,28 @@ suite('agent positions, tasks and wake-ups on PostgreSQL (ADR-0029 Phase 1)', ()
     expect(after.wakeups).toEqual([{ status: 'done' }]);
     // checkout, comment and escalate for each task, each on its own agent audit row.
     expect(after.audit.n).toBe(6);
+    // The events record who emitted them (#333): the owner installed the agent, the system's dispatch asked for the
+    // wake-up, and the agent's run escalated (not a system event any more). The proposal events this test inserts as
+    // the database owner, outside emit(), carry no actor.
+    const events = await admin(
+      async (c) =>
+        (
+          await c.query<{ type: string; actor_type: string; actor_id: string | null; agent_id: string | null; agent_run: string | null }>(
+            `SELECT type, actor_type, actor_id, agent_id, agent_run FROM crove_kernel.outbox_event
+             WHERE org_id = $1 AND type IN ('kernel.agent.installed', 'kernel.agent.wakeup_requested', 'kernel.task.escalated', 'kernel.proposal.created')
+             ORDER BY created_at, id`,
+            [orgId],
+          )
+        ).rows,
+    );
+    const runId = (result as { runId: string }).runId;
+    expect(events.find((e) => e.type === 'kernel.agent.installed')).toEqual({ type: 'kernel.agent.installed', actor_type: 'user', actor_id: owner, agent_id: null, agent_run: null });
+    expect(new Set(events.filter((e) => e.type === 'kernel.agent.wakeup_requested').map((e) => e.actor_type))).toEqual(new Set(['system']));
+    expect(events.filter((e) => e.type === 'kernel.proposal.created').map((e) => e.actor_type)).toEqual([null, null]);
+    expect(events.filter((e) => e.type === 'kernel.task.escalated')).toEqual([
+      { type: 'kernel.task.escalated', actor_type: 'agent', actor_id: null, agent_id: agentId, agent_run: runId },
+      { type: 'kernel.task.escalated', actor_type: 'agent', actor_id: null, agent_id: agentId, agent_run: runId },
+    ]);
 
     // The owner sees the escalations as their own tasks, and the chart shows the AI seat.
     const mine = await app.query<{ tasks: Array<{ kind: string }> }>('kernel.task.list', { mine: true }, { actor: asUser(owner), orgId });

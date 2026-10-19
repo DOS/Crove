@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="vi" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Crove Email: plan module</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+/* Layout: trang đọc ngắn một cột theo house style báo cáo DOS (nền tối trước), mục lục dính bên trái từ 1180px. */
+:root{
+  --bg:#101114; --surface:#16181d; --card:#1b1e25; --line:#2c303a; --fg:#eef0f4; --muted:#a3a9b6;
+  --accent:#ff2e29; --accent-ink:#ff8a85; --org:#8b93ff;
+  --ok:#34d399; --ok-bg:#0f2a21; --warn:#fbbf24; --warn-bg:#2a2110; --bad:#f87171; --bad-bg:#2d1515; --info:#60a5fa; --info-bg:#121f35;
+  --code-bg:#23262e;
+  --font-body:"Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f5f5f7; --surface:#ffffff; --card:#ffffff; --line:#dcdfe6; --fg:#15171c; --muted:#596070;
+    --accent:#d61f1a; --accent-ink:#b02420; --org:#4f46e5;
+    --ok:#047857; --ok-bg:#e6f5ee; --warn:#9a5b06; --warn-bg:#fcf1d9; --bad:#b91c1c; --bad-bg:#fcebeb; --info:#1d4ed8; --info-bg:#e7eefc;
+    --code-bg:#eceef2; color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f5f5f7; --surface:#ffffff; --card:#ffffff; --line:#dcdfe6; --fg:#15171c; --muted:#596070;
+  --accent:#d61f1a; --accent-ink:#b02420; --org:#4f46e5;
+  --ok:#047857; --ok-bg:#e6f5ee; --warn:#9a5b06; --warn-bg:#fcf1d9; --bad:#b91c1c; --bad-bg:#fcebeb; --info:#1d4ed8; --info-bg:#e7eefc;
+  --code-bg:#eceef2; color-scheme:light;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased}
+.page{padding-block:32px 72px;padding-inline:clamp(16px,4vw,40px)}
+.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:32px;max-width:1260px;margin-inline:auto}
+@media (min-width:1180px){.layout{grid-template-columns:230px minmax(0,1fr)}}
+main{min-width:0;max-width:980px}
+a{color:var(--accent-ink);text-decoration:none;overflow-wrap:anywhere}a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+/* Mục lục */
+nav.toc{font-size:14px;line-height:1.5}
+nav.toc .toc-title{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:0 0 8px}
+nav.toc ol{list-style:none;margin:0;padding:0 0 6px;display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px}
+nav.toc li{flex:0 0 auto}
+nav.toc a{display:block;color:var(--muted);padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface)}
+nav.toc a:hover{color:var(--fg);text-decoration:none;border-color:var(--muted)}
+@media (min-width:1180px){
+  nav.toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 24px);align-self:start;max-height:calc(100vh - 48px);overflow:auto;padding-right:4px}
+  nav.toc ol{display:block;overflow:visible;padding:0}
+  nav.toc a{border:0;background:none;border-left:2px solid var(--line);border-radius:0;padding:5px 12px}
+  nav.toc a:hover{border-left-color:var(--accent)}
+}
+
+/* Chữ */
+.eyebrow{color:var(--accent-ink);font-weight:600;letter-spacing:.08em;text-transform:uppercase;font-size:13px;margin:0}
+h1{font-size:clamp(30px,4.6vw,44px);line-height:1.15;letter-spacing:-.015em;margin:10px 0 12px;text-wrap:balance}
+h2{font-size:24px;line-height:1.3;margin:56px 0 14px;padding-top:20px;border-top:1px solid var(--line);text-wrap:balance;scroll-margin-top:16px}
+h3{font-size:18px;line-height:1.4;margin:28px 0 10px;color:var(--accent-ink);text-wrap:balance}
+h4{font-size:16px;margin:22px 0 8px;text-wrap:balance}
+p{margin:0 0 12px;max-width:72ch}
+.lede{font-size:18px;color:var(--muted);max-width:68ch}
+.muted{color:var(--muted)}
+.small{font-size:14px}
+ul,ol{padding-left:22px;margin:0 0 12px}
+li{margin:5px 0}
+li>ul,li>ol{margin:4px 0 0}
+code{font-family:var(--font-mono);font-size:.86em;background:var(--code-bg);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
+pre{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--font-mono);font-size:12.5px;line-height:1.55;margin:12px 0}
+pre code{background:none;padding:0;font-size:inherit;overflow-wrap:normal}
+strong{font-weight:600}
+.meta{display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted);font-size:14px;margin:6px 0 24px}
+.meta span{display:inline-flex;gap:6px;align-items:baseline}
+
+/* Khối */
+.callout{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;background:var(--card);padding:16px 20px;margin:18px 0}
+.callout.info{border-left-color:var(--info)}
+.callout.warn{border-left-color:var(--warn)}
+.callout>*:last-child{margin-bottom:0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:20px 0}
+.tile{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:2px}
+.tile b{font-size:26px;line-height:1.2;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.tile span{font-size:13.5px;color:var(--muted);line-height:1.45}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:16px 0}
+.grid>*{min-width:0}
+.card{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:16px 18px}
+.card h4{margin:0 0 8px;font-size:16px}
+.card p:last-child,.card ul:last-child{margin-bottom:0}
+.card .num{font-family:var(--font-mono);font-size:12px;color:var(--muted);letter-spacing:.04em}
+.card .pick{margin:8px 0 0;font-size:14.5px}
+.col-title{font-size:13px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;margin:0 0 8px}
+.c-reuse .col-title{color:var(--ok)} .c-lib .col-title{color:var(--info)} .c-new .col-title{color:var(--accent-ink)}
+
+/* Bảng */
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;margin:16px 0;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14.5px;line-height:1.55}
+table.fit{min-width:0}table.fit td:first-child{width:30%}
+th,td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}
+th{background:var(--surface);font-weight:600;font-size:13.5px;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td ul{margin:0;padding-left:18px}
+td li{margin:2px 0}
+.tnum{font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* Nhãn */
+.b{display:inline-block;padding:0 8px;border-radius:999px;font-size:12px;font-weight:600;line-height:20px;border:1px solid currentColor;white-space:nowrap;vertical-align:1px}
+.b-ok{color:var(--ok);background:var(--ok-bg)} .b-warn{color:var(--warn);background:var(--warn-bg)}
+.b-bad{color:var(--bad);background:var(--bad-bg)} .b-info{color:var(--info);background:var(--info-bg)}
+.b-mute{color:var(--muted);background:var(--surface)}
+td.m-allow{background:var(--ok-bg);color:var(--ok);font-weight:500}
+td.m-review{background:var(--warn-bg);color:var(--warn);font-weight:500}
+td.m-deny{background:var(--bad-bg);color:var(--bad);font-weight:500}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 14px}
+.chip{font-family:var(--font-mono);font-size:12.5px;border:1px solid var(--line);background:var(--surface);padding:2px 8px;border-radius:6px;line-height:1.6}
+.chip.later{color:var(--muted);border-style:dashed}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:14px 0}
+.flow .st{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:6px 12px;font-size:14px}
+.flow .st.hl{border-color:var(--accent)}
+.flow .ar{color:var(--muted)}
+
+/* Hình */
+figure{margin:20px 0}
+.fig-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:8px}
+.fig-scroll svg{display:block;width:100%;min-width:860px;height:auto}
+figcaption{font-size:14px;color:var(--muted);margin-top:10px;max-width:80ch}
+.d-group{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:6 5}
+.d-box{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+.d-hl{stroke:var(--accent);stroke-width:2}
+.d-dashbox{stroke-dasharray:6 4}
+.d-t{fill:var(--fg);font:600 13px var(--font-body)}
+.d-s{fill:var(--muted);font:400 11.5px var(--font-body)}
+.d-m{font-family:var(--font-mono);font-size:11px}
+.d-a{fill:var(--accent-ink)}
+.d-ln{fill:none;stroke:var(--muted);stroke-width:1.5}
+.d-acc{stroke:var(--accent);stroke-width:2.2}
+.d-dash{stroke-dasharray:5 4}
+.d-mk{fill:var(--muted)} .d-mk-acc{fill:var(--accent)}
+
+/* Lộ trình */
+.gantt{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:14px 16px;margin:16px 0}
+.g-row{display:grid;grid-template-columns:minmax(118px,200px) minmax(0,1fr);gap:12px;align-items:center;padding:5px 0}
+.g-label{font-size:13.5px;line-height:1.3}
+.g-label small{display:block;color:var(--muted);font-size:12px}
+.g-track{position:relative;height:22px;background:var(--surface);border-radius:5px}
+.g-bar{position:absolute;top:3px;bottom:3px;border-radius:4px;min-width:6px}
+.g-base{background:var(--muted)} .g-fin{background:var(--accent)} .g-mod{background:var(--org)} .g-ppl{background:var(--info)}
+.g-axis{position:relative;height:18px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.g-axis span{position:absolute;top:0;transform:translateX(-50%);white-space:nowrap}
+.g-axis span:first-child{transform:none}
+.g-axis span:last-child{transform:translateX(-100%)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin:16px 0}
+.phase{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:14px 16px;min-width:0}
+.phase header{display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:6px}
+.phase h4{margin:0;font-size:15.5px}
+.phase .dur{font-size:12.5px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.phase p{font-size:14.5px;margin-bottom:8px}
+.phase ul{font-size:14px;margin:0;padding-left:18px}
+.phase .ex{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:8px 0 2px}
+
+/* Bản đầy đủ */
+.ref-tools{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 14px}
+button{font:500 14px var(--font-body);color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 14px;cursor:pointer}
+button:hover{border-color:var(--muted)}
+details.ref{border:1px solid var(--line);border-radius:10px;background:var(--card);margin:10px 0}
+details.ref>summary{cursor:pointer;padding:12px 18px;font-weight:600;list-style-position:inside}
+details.ref[open]>summary{border-bottom:1px solid var(--line)}
+details.ref .body{padding:8px 20px 18px;min-width:0}
+details.ref .body h4{color:var(--accent-ink)}
+details.ref blockquote{margin:12px 0;padding:10px 16px;border-left:3px solid var(--info);background:var(--surface);border-radius:6px}
+footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-size:14px;color:var(--muted)}
+@media (prefers-reduced-motion: reduce){*{scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<div class="page">
+<div class="layout">
+<nav class="toc" aria-label="Mục lục">
+  <p class="toc-title">Mục lục</p>
+  <ol>
+    <li><a href="#tom-tat">Tóm tắt</a></li>
+    <li><a href="#hai-luong">Hai luồng email</a></li>
+    <li><a href="#pham-vi">Phạm vi v1</a></li>
+    <li><a href="#kien-truc">Kiến trúc</a></li>
+    <li><a href="#phap-ly">Pháp lý và chuẩn hộp thư</a></li>
+    <li><a href="#buoc">Các bước</a></li>
+    <li><a href="#exit">Tiêu chí xong</a></li>
+    <li><a href="#quyet-dinh">Cần owner quyết</a></li>
+    <li><a href="#rui-ro">Rủi ro</a></li>
+  </ol>
+</nav>
+<main>
+<p class="eyebrow">Crove OS · Plan module</p>
+<h1>Crove Email</h1>
+<p class="lede">Gửi đúng email doanh nghiệp cần, từ tên miền của chính mình, chắc chắn tới nơi và đúng luật: email giao dịch (hóa đơn, nhắc thanh toán, nhắc khách hàng gửi chứng từ, lời mời thành viên) và email marketing (bản tin, khuyến mãi) cho người đã đồng ý nhận.</p>
+<div class="meta"><span>Ngày: 19/10/2026</span><span>Quyết định: D18 (owner chốt 19/10)</span><span>Nguồn chuẩn: <a href="email.md"><code>docs/plan/email.md</code></a></span></div>
+
+<div class="callout warn"><p><strong>Trang tóm tắt cho owner.</strong> Nguồn chuẩn là bản tiếng Anh <a href="email.md"><code>docs/plan/email.md</code></a> và <a href="../adr/0034-outbound-email.md">ADR-0034</a> (đề xuất). Khi hai bản khác nhau, bản tiếng Anh thắng.</p></div>
+
+<h2 id="tom-tat">Tóm tắt</h2>
+<div class="tiles">
+  <div class="tile"><b>2 luồng</b><span>giao dịch và marketing, tách riêng từ hàng đợi tới nhà cung cấp gửi mail, để thư marketing bị báo spam không kéo thư hóa đơn vào spam theo</span></div>
+  <div class="tile"><b>Kernel gửi</b><span>mọi module (lời mời, hóa đơn, nhắc việc) gửi qua một đường chung trong kernel: có log từng thư, danh sách chặn, mỗi thư gửi đúng 1 lần</span></div>
+  <div class="tile"><b>Module Email</b><span>thêm phần org tự quản: tên miền gửi, mẫu thư, danh bạ có đồng ý, chiến dịch, thống kê. Tắt module thì thư hệ thống vẫn đi</span></div>
+  <div class="tile"><b>Mailpit</b><span>chạy local với <code>docker compose up</code>: mọi thư, kể cả chiến dịch, rơi vào Mailpit, không cần tài khoản nhà cung cấp nào</span></div>
+</div>
+<div class="callout info"><p><strong>Quyết định D18.</strong> Plan cũ ghi "email marketing hàng loạt chỉ làm khi khách thật sự đòi". Owner chốt 19/10/2026: thêm module Email gồm cả email giao dịch và email marketing. Thứ tự milestone của backlog review không đổi: E1, E2 vào M2 với P2, E3 đến E9 chờ xong M3 (D11 của backlog review, quyết định E-1 bên dưới).</p></div>
+
+<h2 id="hai-luong">Hai luồng email</h2>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Giao dịch</th><th>Marketing</th></tr></thead>
+<tbody>
+<tr><td>Khi nào gửi</td><td>Một lệnh hoặc một người; 1 người nhận; người nhận chờ thư đó</td><td>Một chiến dịch gửi cho một tập người nhận</td></tr>
+<tr><td>Đồng ý trước</td><td>Không cần với thư dịch vụ (hợp đồng, hóa đơn, thông báo tài khoản)</td><td>Bắt buộc, theo từng chủ đề, có bằng chứng</td></tr>
+<tr><td>Hủy đăng ký</td><td>Không bắt buộc</td><td>Bấm 1 lần là hủy (RFC 8058), cộng link cuối thư bằng tiếng Việt và tiếng Anh</td></tr>
+<tr><td>Nhãn tiêu đề (Việt Nam)</td><td>Không</td><td><code>[QC]</code> hoặc <code>[AD]</code> ở đầu tiêu đề</td></tr>
+<tr><td>Duyệt</td><td>Duyệt mẫu thư một lần</td><td>Mỗi lần gửi chiến dịch là R2: một người duyệt đúng phiên bản hiện tại</td></tr>
+<tr><td>Chặn gửi</td><td>Địa chỉ hỏng hẳn (hard bounce), bị báo spam</td><td>Như bên trái, cộng người đã hủy đăng ký</td></tr>
+<tr><td>Tốc độ</td><td>Gửi ngay, hàng đợi ưu tiên</td><td>Gửi từ từ theo org và theo tên miền nhận; có hạn mức và giai đoạn làm nóng</td></tr>
+</tbody></table></div>
+
+<h2 id="pham-vi">Phạm vi v1</h2>
+<div class="grid">
+  <div class="card c-reuse"><p class="col-title">Có trong v1</p><ul>
+    <li>Đường gửi chung trong kernel: xếp hàng qua outbox, log từng thư, gửi đúng 1 lần qua sổ <code>external_call</code>, kiểm danh sách chặn. Lời mời thành viên chuyển sang đường này.</li>
+    <li>Nhận báo lỗi giao thư (bounce) và báo spam (complaint) từ nhà cung cấp; với SMTP thường thì nhận thư báo lỗi qua địa chỉ inbound.</li>
+    <li>Org xác minh tên miền gửi của mình (SPF, DKIM, DMARC), kiểm lại hằng ngày.</li>
+    <li>Mẫu thư dạng khối, ra HTML và bản chữ thường, tiếng Việt và tiếng Anh; có mẫu mặc định cho mọi thư Crove gửi, org sửa được.</li>
+    <li>Nhật ký thư: trạng thái từng thư (đã gửi, đã tới, bị trả về, bị báo spam, bị chặn), tìm theo người nhận.</li>
+    <li>Danh bạ và đồng ý: chủ đề đăng ký, sổ đồng ý chỉ ghi thêm, xác nhận 2 bước (double opt-in), nhập CSV kèm căn cứ đồng ý, form đăng ký.</li>
+    <li>Trang hủy đăng ký và chọn chủ đề, không cần đăng nhập.</li>
+    <li>Chiến dịch: tập người nhận (danh sách, phân khúc), soạn, xem trước, gửi thử, duyệt, hẹn giờ, gửi từ từ, tạm dừng, hủy.</li>
+    <li>Thống kê: đã tới, bị trả về, báo spam, hủy đăng ký; đếm click chỉ khi org bật.</li>
+    <li>AI soạn và viết lại tiêu đề, nội dung; kết quả luôn là bản nháp.</li>
+  </ul></div>
+  <div class="card c-lib"><p class="col-title">Sau v1 (cùng plan)</p><ul>
+    <li>Chuỗi thư tự động (chào mừng, nuôi dưỡng).</li>
+    <li>Thử A/B tiêu đề.</li>
+    <li>Org dùng tài khoản nhà cung cấp riêng của mình.</li>
+    <li>API <code>/v1</code> gửi email giao dịch cho lập trình viên (sau khi có API key ở Phase 3).</li>
+    <li>Thư trả lời rơi vào hộp thư chung của Service (Phase 4).</li>
+    <li>IP gửi riêng, gợi ý giờ gửi, template agent <code>email.marketer</code>.</li>
+  </ul></div>
+  <div class="card c-new"><p class="col-title">Không làm</p><ul>
+    <li>Hộp thư chung để trả lời khách (thuộc Service).</li>
+    <li>SMS, tin Zalo (thuộc lớp kênh, không phải email).</li>
+    <li>Mua, thuê hay cào danh sách email: không bao giờ.</li>
+    <li>Tự động gửi thư chào hàng lạnh (cold outreach).</li>
+  </ul></div>
+</div>
+
+<h2 id="kien-truc">Kiến trúc</h2>
+<ul>
+<li><strong>Vì sao đường gửi nằm trong kernel:</strong> module nào cũng gửi mail (kernel gửi lời mời, Finance sẽ gửi hóa đơn và nhắc chứng từ, Social báo kênh hết hạn). ADR-0031 yêu cầu module chạy được khi module khác tắt, nên phần gửi và các luật không ai được bỏ qua (danh sách chặn, log, gửi đúng 1 lần) nằm trong kernel.</li>
+<li><strong>Kernel thêm 3 bảng:</strong> <code>mail_message</code> (mỗi thư 1 dòng), <code>mail_suppression</code> (danh sách chặn, khóa bằng mã băm địa chỉ nên vẫn giữ được sau khi xóa dữ liệu cá nhân), <code>mail_event</code> (sự kiện từ nhà cung cấp). Hai hàng đợi: gửi ngay cho thư hệ thống và giao dịch, gửi từ từ cho marketing.</li>
+<li><strong>Gửi đúng 1 lần:</strong> mỗi lần gọi nhà cung cấp đi qua <code>external_call</code>. Nếu hết giờ mà không biết thư đã đi chưa: thư marketing không bao giờ gửi lại (lỡ 1 bản tin còn hơn gửi trùng); thư giao dịch chỉ gửi lại khi nhà cung cấp tự chống trùng hoặc tra được, nếu không thì hiện "không rõ kết quả" để người bấm gửi lại.</li>
+<li><strong>Danh sách chặn:</strong> địa chỉ hỏng hẳn thì chặn mọi thư của org tới đó; bị báo spam hoặc hủy đăng ký thì chặn marketing. Gỡ chặn là lệnh R2 có lý do; chặn do báo spam chỉ gỡ khi chính người nhận đăng ký lại và xác nhận.</li>
+<li><strong>Cầu dao:</strong> trong 7 ngày, tỷ lệ báo spam trên 0,3% hoặc địa chỉ hỏng trên 5% thì tự dừng marketing của org và báo owner.</li>
+<li><strong>Nhà cung cấp gửi mail</strong> nằm sau một interface trong <code>@crove/mail</code>: SMTP (đang có), log, và adapter HTTP đầu tiên (ứng viên: Amazon SES, Postmark, Resend; chọn ở bước E2). Marketing có thể dùng tài khoản hoặc luồng riêng để không ảnh hưởng thư giao dịch.</li>
+<li><strong>Tên miền:</strong> marketing chỉ gửi từ tên miền org đã xác minh, SPF hoặc DKIM khớp tên miền người gửi, có bản ghi DMARC. Thư giao dịch khi org chưa có tên miền thì gửi từ địa chỉ mặc định của hệ thống, tên hiển thị là tên org, trả lời về địa chỉ của org. Crove không bao giờ giả tên miền chưa xác minh.</li>
+<li><strong>Đồng ý:</strong> sổ <code>consent_event</code> chỉ ghi thêm (hành động, căn cứ, nguồn, bằng chứng); trạng thái đăng ký luôn tính từ sổ này. Đây là bằng chứng mà Nghị định 91/2020 và Luật Bảo vệ dữ liệu cá nhân yêu cầu.</li>
+<li><strong>Hủy đăng ký:</strong> link ký bằng khóa riêng, không chứa địa chỉ hay tên; bấm 1 lần là hủy, không cần đăng nhập, có hiệu lực trước đợt gửi kế tiếp. Link sai hay hết hạn chỉ hiện trang chung, không lộ gì.</li>
+<li><strong>Theo dõi:</strong> mặc định tắt; không có pixel đếm mở thư ở v1. Bật đếm click thì link chỉ chuyển tới đúng URL đã ghi trong chiến dịch (không thành công cụ chuyển hướng mở).</li>
+<li><strong>AI:</strong> chỉ soạn nháp, không chọn người nhận, không hẹn giờ, không gửi. Mọi chiến dịch cần người duyệt.</li>
+</ul>
+
+<h2 id="phap-ly">Pháp lý và chuẩn hộp thư</h2>
+<div class="callout warn"><p><strong>Cần luật sư xác nhận</strong> số điều cụ thể và nghị định xử phạt mới nhất trước khi mở marketing cho khách. Dưới đây là tóm tắt từ các nguồn pháp lý tiếng Việt.</p></div>
+<ul>
+<li><strong>Nghị định 91/2020/NĐ-CP</strong> (chống tin nhắn rác, thư điện tử rác, cuộc gọi rác): thư quảng cáo cần người nhận đồng ý trước; tiêu đề bắt đầu bằng nhãn <code>[QC]</code> hoặc <code>[AD]</code>; có thông tin người quảng cáo; cuối thư có chức năng từ chối, rõ ràng, bằng tiếng Việt và tiếng Anh; dừng gửi ngay khi người nhận từ chối; tối đa 3 thư quảng cáo tới 1 địa chỉ trong 24 giờ trừ khi người nhận đồng ý khác.</li>
+<li><strong>Luật Bảo vệ dữ liệu cá nhân 91/2025/QH15</strong> (hiệu lực từ 01/01/2026) và Nghị định 356/2025: dùng dữ liệu cá nhân để quảng cáo cần sự đồng ý của chủ thể, phải chứng minh được, và chủ thể rút lại được bất cứ lúc nào. Org là bên kiểm soát danh bạ của mình; Crove là bên xử lý.</li>
+<li><strong>Thư dịch vụ không phải quảng cáo:</strong> mẫu thư giao dịch không được chèn khối khuyến mãi.</li>
+<li><strong>Gmail, Yahoo (từ 02/2024), Outlook.com (từ 2025)</strong> với người gửi khoảng 5.000 thư/ngày trở lên: SPF, DKIM, DMARC khớp tên miền người gửi, hủy đăng ký 1 lần bấm xử lý trong 2 ngày, tỷ lệ báo spam dưới 0,3%. Crove áp cho mọi org, không kể số lượng, vì các org dùng chung uy tín gửi.</li>
+</ul>
+
+<h2 id="buoc">Các bước (mỗi bước 1 PR, làm trọn từ đầu tới cuối)</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Bước</th><th>Phụ thuộc</th><th>Đụng đường dẫn bảo vệ</th></tr></thead>
+<tbody>
+<tr><td class="tnum">E0</td><td>Plan này, D18, ADR-0034 (đề xuất)</td><td>-</td><td>Không</td></tr>
+<tr><td class="tnum">E1</td><td>Đường gửi trong kernel: <code>mail_message</code>, <code>mail_suppression</code>, 2 hàng đợi với <code>external_call</code>, kiểm chặn, dòng log của thư mời. Chia 2 phần: E1a gồm các bảng, mã băm địa chỉ có khóa, lệnh chặn và bỏ chặn, dòng log của thư mời (thư mời vẫn gửi ngay trong request vì liên kết chứa mã bí mật, database không lưu mã này); E1b gồm hàng đợi và <code>external_call</code>, cùng nơi gửi đầu tiên qua hàng đợi (nhắc khách hàng gửi chứng từ của Finance)</td><td>-</td><td>Có</td></tr>
+<tr><td class="tnum">E2</td><td>Sự kiện giao thư: <code>mail_event</code>, <code>@crove/mail</code>, adapter HTTP đầu tiên, webhook có chữ ký, thư báo lỗi qua inbound; hiện trạng thái lời mời</td><td>E1</td><td>Có</td></tr>
+<tr><td class="tnum">E3</td><td>Module <code>email</code> và schema <code>crove_email</code>, bật tắt qua <code>CROVE_MODULES</code>; tên miền gửi và job kiểm DNS</td><td>E1</td><td>Có</td></tr>
+<tr><td class="tnum">E4</td><td>Mẫu thư dạng khối, render HTML và chữ, xem trước an toàn, mẫu mặc định, nhật ký thư</td><td>E3</td><td>Có</td></tr>
+<tr><td class="tnum">E5</td><td>Danh bạ và đồng ý: <code>contact_point</code> trong kernel, chủ đề, đăng ký, sổ đồng ý, nhập CSV, xác nhận 2 bước, form đăng ký</td><td>E3</td><td>Có</td></tr>
+<tr><td class="tnum">E6</td><td>Hủy đăng ký và chọn chủ đề: link ký, trang <code>/-/u/</code>, bấm 1 lần, hủy qua email</td><td>E2, E5</td><td>Có</td></tr>
+<tr><td class="tnum">E7</td><td>Tập người nhận và chiến dịch: soạn, gửi thử, duyệt, hẹn giờ, gửi từ từ, luật 3 thư/24 giờ, nhãn <code>[QC]</code>, cầu dao</td><td>E4, E5, E6</td><td>Có</td></tr>
+<tr><td class="tnum">E8</td><td>Thống kê chiến dịch; đếm click tùy chọn</td><td>E7</td><td>Có</td></tr>
+<tr><td class="tnum">E9</td><td>AI soạn và viết lại; kiểm nội dung bằng luật cố định</td><td>E4</td><td>Không</td></tr>
+</tbody></table></div>
+
+<h2 id="exit">Tiêu chí xong (v1)</h2>
+<ol>
+<li>Không thư nào tới địa chỉ đang bị chặn, kể cả khi worker khởi động lại.</li>
+<li>Mỗi người nhận của chiến dịch nhận tối đa 1 bản, kể cả khi worker chết giữa đợt gửi.</li>
+<li>Mọi thư marketing có hủy đăng ký bấm 1 lần và link tiếng Việt, tiếng Anh; hủy có hiệu lực trước đợt kế tiếp; link giả không lộ gì.</li>
+<li>Marketing chỉ đi từ tên miền đã xác minh, có nhãn <code>[QC]</code> khi bật, và chỉ tới người có đồng ý cho chủ đề đó.</li>
+<li>Chiến dịch chỉ gửi sau khi người duyệt đúng phiên bản hiện tại; agent và bản nháp AI không bao giờ tự gửi.</li>
+<li>Cầu dao dừng marketing khi báo spam trên 0,3% hoặc địa chỉ hỏng trên 5% trong 7 ngày.</li>
+<li>Tắt <code>email</code> qua <code>CROVE_MODULES</code> thì kernel, Finance, Social chạy y như cũ và lời mời vẫn gửi bằng mẫu mặc định.</li>
+<li><code>docker compose up</code>: mọi thư vào Mailpit; Playwright chạy được soạn, duyệt, gửi, hủy đăng ký.</li>
+</ol>
+
+<h2 id="quyet-dinh">Cần owner quyết</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Câu hỏi</th><th>Đề xuất</th></tr></thead>
+<tbody>
+<tr><td class="tnum">E-1</td><td>Phần nào làm lúc nào?</td><td>E1, E2 (đường gửi và xử lý thư lỗi) vào M2 với P2, vì pilot đã gửi lời mời qua mail và nhắc khách hàng gửi chứng từ là việc của vòng chốt sổ hằng tháng. E3 đến E9 (marketing) làm sau M3, giống Social theo D5, trừ khi khách pilot cần sớm. Theo luật của backlog review, đề xuất có hiệu lực nếu owner không phản đối (D11).</td></tr>
+<tr><td class="tnum">E-2</td><td>Pilot và Crove Cloud dùng nhà cung cấp nào?</td><td>Trước mắt một tài khoản luồng giao dịch (M1-5 đã định gửi SMTP qua nhà cung cấp giao dịch); bước E2 so sánh Amazon SES, Postmark, Resend theo giá và tỷ lệ vào hộp thư.</td></tr>
+<tr><td class="tnum">E-3</td><td>Trên Crove Cloud, org nào cũng được gửi marketing, hay chỉ org được duyệt?</td><td>Lúc đầu chỉ org được operator duyệt, vì các org dùng chung uy tín gửi.</td></tr>
+<tr><td class="tnum">E-4</td><td>Bật nhãn <code>[QC]</code> mặc định cho mọi org?</td><td>Có; org không có người nhận ở Việt Nam thì tự tắt được.</td></tr>
+</tbody></table></div>
+
+<h2 id="rui-ro">Rủi ro</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Rủi ro</th><th>Giảm thiểu</th></tr></thead>
+<tbody>
+<tr><td>Một org gửi spam làm hỏng uy tín gửi của mọi org (Cloud)</td><td>Luồng marketing riêng; hạn mức và làm nóng cho org mới; cầu dao; bắt buộc có đồng ý; operator duyệt (E-3).</td></tr>
+<tr><td>Bị phạt theo Nghị định 91/2020 hoặc Luật Bảo vệ dữ liệu cá nhân</td><td>Bằng chứng đồng ý theo từng người và chủ đề, nhãn <code>[QC]</code>, từ chối bằng tiếng Việt và tiếng Anh, luật 3 thư/24 giờ chạy trong code; luật sư rà trước khi mở cho khách.</td></tr>
+<tr><td>Gửi trùng sau khi hết giờ chờ</td><td><code>external_call</code> cho từng thư; marketing không bao giờ gửi lại khi không rõ kết quả.</td></tr>
+<tr><td>HTML trong thư thành chỗ tấn công</td><td>Mẫu dạng khối, không cho HTML thô ở v1; xem trước trong khung cô lập; trường trộn được escape; theo dõi tắt mặc định.</td></tr>
+<tr><td>SMTP thường không báo spam về</td><td>Màn hình chiến dịch nói rõ; khuyên dùng nhà cung cấp cho marketing; cầu dao dựa vào thư lỗi.</td></tr>
+<tr><td>Phình thành bộ marketing automation đầy đủ</td><td>v1 dừng ở chiến dịch; chuỗi tự động để sau; không bao giờ mua danh sách.</td></tr>
+<tr><td>Lấy mất sức agent khỏi các milestone pilot</td><td>Quyết định E-1 để marketing sau M3 trừ khi owner kéo sớm.</td></tr>
+</tbody></table></div>
+
+<footer>
+  <p>Trang tóm tắt, không thay thế nguồn chuẩn <a href="email.md"><code>docs/plan/email.md</code></a>.</p>
+</footer>
+</main>
+</div>
+</div>
+</body>
+</html>

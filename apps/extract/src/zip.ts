@@ -200,6 +200,31 @@ function decompress(entry: CentralEntry, data: Uint8Array): Uint8Array | Archive
   return out;
 }
 
+// The parts of a ZIP container a caller names (an xlsx workbook, #465), decompressed and checked like the entries of
+// readZip: the same directory, overlap and name checks, the declared sizes of the chosen parts capped in total before
+// anything is inflated, and every part's size and CRC-32 checked. Any problem with a chosen part refuses the whole
+// container, since a reader cannot go on without it. Parts not chosen are never inflated.
+export function readZipParts(bytes: Uint8Array, wanted: (name: string) => boolean, limits: ZipLimits): Map<string, Uint8Array> {
+  const { entries: all, directoryStart } = readDirectory(bytes, limits);
+  const ranges = dataRanges(bytes, all, directoryStart);
+  const chosen = all.map((entry, i) => ({ entry, range: ranges[i] })).filter(({ entry }) => !isSkipped(entry.name) && wanted(entry.name));
+  let declared = 0;
+  for (const { entry } of chosen) {
+    if (entry.size > limits.maxEntryBytes) throw new ArchiveError(`Phần ${entry.name.slice(0, 100)} của tệp quá lớn để đọc`);
+    declared += entry.size;
+  }
+  if (declared > limits.maxTotalBytes) throw new ArchiveError('Tệp giải nén ra quá lớn để đọc');
+  const parts = new Map<string, Uint8Array>();
+  for (const { entry, range } of chosen) {
+    if (entry.flags & FLAG_ENCRYPTED) throw new ArchiveError('Tệp được đặt mật khẩu; hãy lưu lại không có mật khẩu');
+    if (parts.has(entry.name)) throw new ArchiveError('Tệp có hai phần trùng tên');
+    const out = range ? decompress(entry, bytes.subarray(range.start, range.end)) : 'corrupt';
+    if (typeof out === 'string') throw new ArchiveError(`Tệp bị hỏng (phần ${entry.name.slice(0, 100)} không đọc được)`);
+    parts.set(entry.name, out);
+  }
+  return parts;
+}
+
 // The name within the contract's string limit, without splitting a surrogate pair (a lone one cannot be stored).
 function capName(name: string): string {
   if (name.length <= EXTRACT_LIMITS.maxStringChars) return name;

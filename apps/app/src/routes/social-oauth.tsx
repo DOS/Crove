@@ -4,7 +4,7 @@ import { useMutation } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
-import type { OAUTH_CHANNEL_PROVIDERS } from '@crove/kernel-contract';
+import { OAUTH_MAX_ACCOUNTS_PER_GRANT, type OAUTH_CHANNEL_PROVIDERS } from '@crove/kernel-contract';
 import { Card } from '@crove/ui/components/card';
 import { ErrorText, Spinner } from '../components/ui.tsx';
 import { client, errorMessage, queryClient, setCurrentOrg } from '../lib/api.ts';
@@ -79,6 +79,8 @@ export function OAuthCallbackPage() {
           </div>
         )}
         {finish.data && <p className="text-sm text-foreground">{t('oauthConnected', { list: finish.data.connections.map((c) => c.displayName).join(', ') })}</p>}
+        {finish.data && (finish.data.failed?.length ?? 0) > 0 && <ErrorText>{t('oauthFailed', { list: (finish.data.failed ?? []).map((c) => c.displayName).join(', ') })}</ErrorText>}
+        {finish.data && (finish.data.skipped ?? 0) > 0 && <p className="text-sm text-muted-foreground">{t('oauthSkipped', { count: finish.data.skipped, max: OAUTH_MAX_ACCOUNTS_PER_GRANT })}</p>}
         {finish.error && <ErrorText>{errorMessage(finish.error)}</ErrorText>}
         {!busy && back}
       </Card>

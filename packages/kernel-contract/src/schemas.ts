@@ -111,6 +111,8 @@ export const zOrgDetail = z.object({
   taxCode: z.string().nullable(),
   // How often the org files its VAT return (issue #318); null until an owner or admin chooses.
   vatFilingPeriod: zVatFilingPeriod.nullable(),
+  // The org's address as the tax registry records it (issue #324); null until an owner or admin sets it.
+  address: z.string().nullable(),
   inboundAddress: z.string().nullable(),
   // Messages to the org's addresses retired in the last 30 days that were dropped (#139); null when inboundAddress is.
   inboundDroppedCount: z.number().int().nonnegative().nullable(),
@@ -136,6 +138,11 @@ export const zClientOverview = zOrgSummary.extend({
       .nullable(),
   }),
 });
+// The home screen's answer (#495): at most 200 orgs, and how many the user has, so a cut list says so.
+export const zClientOverviews = z.object({ clients: z.array(zClientOverview), total: z.number().int().nonnegative() });
+// What the public tax registry says about a tax code (issue #324), to prefill a new org: the normalized tax code, the
+// registered name and the address (null when the registry has none).
+export const zTaxRegistryEntry = z.object({ taxCode: z.string(), name: z.string(), address: z.string().nullable() });
 
 // Org offboarding and its export (issue #38, #212). Each table downloads as NDJSON (one row per line) from
 // GET /api/org-export/<table>, and the manifest (the parts with their sha256 and row counts) as JSON from
@@ -208,6 +215,8 @@ export const zChannelConnection = z.object({
 
 // Providers connected through an OAuth dialog (Social plan S6), and the attempt's state: 32 random bytes, base64url.
 export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x'] as const;
+// Accounts one OAuth grant connects in a request, one command each (#375): a Meta user may manage hundreds of Pages.
+export const OAUTH_MAX_ACCOUNTS_PER_GRANT = 100;
 export const zOAuthProvider = z.enum(OAUTH_CHANNEL_PROVIDERS);
 export const zOAuthState = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 
@@ -308,6 +317,8 @@ export const zCashVoucherProposal = z.object({
   description: z.string().min(1).max(300),
   lines: z.array(zVoucherLine).min(1).max(VOUCHER_MAX_LINES),
   total: zVoucherAmount,
+  // The bank statement line the voucher settles (#326); absent on vouchers entered by hand.
+  bankLineId: zId.optional(),
 });
 export type CashVoucherProposal = z.infer<typeof zCashVoucherProposal>;
 
@@ -387,7 +398,8 @@ export type FileStatus = z.infer<typeof zFileStatus>;
 // Why an entry of a ZIP archive was not filed (#314): what the sandbox refused (encrypted, a compression other than
 // stored or deflate, an archive inside the archive, larger than a document may be, bytes that do not match the
 // archive's directory), or what the server refused (not XML, PDF, JPG, PNG or WEBP; empty).
-export const ARCHIVE_ENTRY_REASONS = ['encrypted', 'unsupported_method', 'nested_archive', 'too_large', 'corrupt', 'unsupported_type', 'empty'] as const;
+// email_limit: past the documents an emailed ZIP files (MAX_EMAIL_ARCHIVE_DOCUMENTS, #432).
+export const ARCHIVE_ENTRY_REASONS = ['encrypted', 'unsupported_method', 'nested_archive', 'too_large', 'corrupt', 'unsupported_type', 'empty', 'email_limit'] as const;
 export type ArchiveEntryReason = (typeof ARCHIVE_ENTRY_REASONS)[number];
 
 // One entry of an opened archive: filed as a new document (stored, with that file's status), the same bytes as a
@@ -486,7 +498,7 @@ export const VAT_PERIOD_PATTERN = /^(20\d{2}|2100)-(0[1-9]|1[0-2]|Q[1-4])$/;
 export const zVatPeriod = z.string().regex(VAT_PERIOD_PATTERN, 'YYYY-MM or YYYY-Qn');
 export const VAT_RATES = ['0', '5', '8', '10', 'KCT', 'KKKNT', 'other'] as const;
 export const zVatRate = z.enum(VAT_RATES);
-export const VAT_WARNINGS = ['rate_unknown', 'rate_split', 'reduced_rate_outside_period', 'lines_mismatch'] as const;
+export const VAT_WARNINGS = ['rate_unknown', 'rate_split', 'reduced_rate_outside_period', 'lines_mismatch', 'vat_mismatch'] as const;
 export const zVatWarning = z.enum(VAT_WARNINGS);
 const zRateAmounts = z.object({ rate: zVatRate, taxable: zMoney, vat: zMoney });
 export const zVatInvoice = z.object({
@@ -556,6 +568,34 @@ export const zLedgerReport = z.object({
   receivables: zPartyLedger,
   payables: zPartyLedger,
 });
+// Period lock (issue #329): the org's books are locked from lockedFrom to lockedThrough (YYYY-MM-DD, both null when
+// nothing is locked). Months are YYYY-MM; nextMonth is the only month a lock may name (null: any month that has
+// ended), lastMonth the only one an unlock may name. updatedBy and updatedAt describe the last lock or unlock
+// (updatedBy null once that person left the org).
+export const zPeriodMonth = z.string().regex(/^(20\d{2})-(0[1-9]|1[0-2])$/, 'YYYY-MM');
+export const zPeriodLockInput = z.object({ month: zPeriodMonth });
+export const zPeriodUnlockInput = z.object({ month: zPeriodMonth, reason: z.string().trim().min(1).max(500) });
+export const zPeriodLockState = z.object({
+  lockedFrom: zLocalDate.nullable(),
+  lockedThrough: zLocalDate.nullable(),
+  nextMonth: zPeriodMonth.nullable(),
+  lastMonth: zPeriodMonth.nullable(),
+  updatedBy: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+});
+export type PeriodLockState = z.infer<typeof zPeriodLockState>;
+
+// Financial statements for a period (issue #154): B01-DNN at its last day and B02-DNN for the period, with the DRAFT
+// TT133 line codes and mapping an accountant has not verified. `unmapped` lists balances no line reads (the statement
+// is then incomplete); `balanced` is whether B01's total assets equal its total sources.
+const zStatementLine = z.object({ code: z.string(), label: z.string(), amount: zMoney, total: z.boolean() });
+const zUnmappedRow = z.object({ accountCode: z.string(), accountName: z.string().nullable(), partyName: z.string().nullable(), amount: zMoney });
+export const zFinancialStatements = z.object({
+  period: zLedgerPeriodRange,
+  b01: z.object({ asOf: zLocalDate, lines: z.array(zStatementLine), unmapped: z.array(zUnmappedRow), balanced: z.boolean() }),
+  b02: z.object({ from: zLocalDate, to: zLocalDate, lines: z.array(zStatementLine), unmapped: z.array(zUnmappedRow) }),
+});
+
 export const zAccountLedger = z.object({
   period: zLedgerPeriodRange,
   account: z.object({ code: z.string(), name: z.string() }),

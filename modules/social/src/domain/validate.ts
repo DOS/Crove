@@ -28,6 +28,8 @@ export type IssueCode =
   | 'CONTENT_REQUIRED'
   | 'TEXT_REQUIRED'
   | 'TEXT_TOO_LONG'
+  // Within the count, over the channel's cap in UTF-8 bytes.
+  | 'TEXT_TOO_MANY_BYTES'
   | 'TITLE_REQUIRED'
   | 'TITLE_TOO_LONG'
   | 'TITLE_NOT_SUPPORTED'
@@ -60,9 +62,17 @@ function checkText(issues: Issue[], field: 'body' | 'title', text: string, rule:
   const required: IssueCode = field === 'body' ? 'TEXT_REQUIRED' : 'TITLE_REQUIRED';
   const tooLong: IssueCode = field === 'body' ? 'TEXT_TOO_LONG' : 'TITLE_TOO_LONG';
   if (rule.required && text.trim() === '') issues.push({ code: required, field, limit: null, actual: null });
-  if (rule.max === null) return;
-  const n = countText(text, rule.count);
-  if (n > rule.max) issues.push({ code: tooLong, field, limit: rule.max, actual: n });
+  if (rule.max !== null) {
+    const n = countText(text, rule.count);
+    if (n > rule.max) {
+      issues.push({ code: tooLong, field, limit: rule.max, actual: n });
+      return;
+    }
+  }
+  if (rule.maxBytes !== undefined) {
+    const bytes = countText(text, 'bytes');
+    if (bytes > rule.maxBytes) issues.push({ code: 'TEXT_TOO_MANY_BYTES', field, limit: rule.maxBytes, actual: bytes });
+  }
 }
 
 export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities = CAPABILITIES[variant.provider]): Issue[] {

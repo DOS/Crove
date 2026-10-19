@@ -123,21 +123,18 @@ export const vi = {
     ],
   },
   flow: {
-    title: 'Mỗi chứng từ qua bốn bước, người có thẩm quyền ký duyệt cuối cùng',
-    lead: 'Giống phiếu luân chuyển chứng từ ở phòng kế toán: Crove làm ba bước đầu và ghi lại từng bước, bước cuối luôn do người có thẩm quyền ký duyệt.',
-    slipTitle: 'Phiếu luân chuyển chứng từ',
-    slipRef: 'HĐ 1C26TPT số 00001284, Công ty CP Bao Bì Phú Thịnh',
+    title: 'Bốn bước từ hộp thư đến sổ cái',
+    lead: 'Crove làm ba bước đầu và ghi lại từng bước. Bước cuối luôn do người có thẩm quyền duyệt bằng mã xác thực hai lớp.',
     actorLabel: 'Xử lý',
     timeLabel: 'Lúc',
-    confirmLabel: 'Xác nhận',
     steps: [
       {
         name: 'Nhận',
-        body: 'Chuyển tiếp email hoặc tải lên. Crove nhận XML theo Nghị định 123/2020 và Thông tư 78/2021, cả PDF và ảnh chụp.',
+        body: 'Chuyển tiếp email hoặc tải lên. Crove nhận hoá đơn XML theo Nghị định 254/2026 và Thông tư 91/2026, cả PDF và ảnh chụp.',
         actor: 'Crove',
         time: '14/10/2026 15:58',
-        confirm: 'Tự động, đã vào sổ đăng ký',
-        signed: false,
+        confirm: 'Đã nhận',
+        final: false,
       },
       {
         name: 'Kiểm tra',
@@ -145,7 +142,7 @@ export const vi = {
         actor: 'Crove',
         time: '14/10/2026 15:58',
         confirm: '5/5 kiểm tra đạt',
-        signed: false,
+        final: false,
       },
       {
         name: 'Đề xuất',
@@ -153,15 +150,15 @@ export const vi = {
         actor: 'Agent Kế toán',
         time: '14/10/2026 15:59',
         confirm: 'Đề xuất, chưa ghi sổ',
-        signed: false,
+        final: false,
       },
       {
         name: 'Duyệt',
         body: 'Người duyệt xem, sửa tài khoản nếu cần, rồi nhập mã hai lớp mới. Lúc đó bút toán mới vào sổ.',
         actor: 'Chị Lan, Kế toán trưởng',
         time: '14/10/2026 16:05',
-        confirm: 'Chị Lan đã ký bằng mã hai lớp',
-        signed: true,
+        confirm: 'Đã duyệt và ghi sổ',
+        final: true,
       },
     ],
   },
@@ -414,7 +411,7 @@ export const vi = {
       },
       {
         q: 'Crove đọc được những loại hoá đơn nào?',
-        a: 'Hoá đơn điện tử XML theo Nghị định 123/2020 và Thông tư 78/2021 được đọc chính xác mà không cần AI. PDF và ảnh chụp dùng một model tương thích OpenAI do bạn cấu hình, kể cả model chạy trên máy như Ollama hay vLLM.',
+        a: 'Hoá đơn điện tử XML theo Nghị định 254/2026 và Thông tư 91/2026 (cả hoá đơn lập theo Nghị định 123/2020 trước đó) được đọc chính xác mà không cần AI. PDF và ảnh chụp dùng một model tương thích OpenAI do bạn cấu hình, kể cả model chạy trên máy như Ollama hay vLLM.',
       },
       {
         q: 'Dữ liệu của tôi nằm ở đâu?',

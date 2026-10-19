@@ -32,6 +32,9 @@ export type VariantEvent =
   | { type: 'approve' }
   | { type: 'request_changes' }
   | { type: 'reject' }
+  // The channel's review policy now asks for more approvals than the variant has: back to review, keeping its place in
+  // the queue, until the missing approvals are given.
+  | { type: 'regate' }
   | { type: 'schedule' }
   | { type: 'unschedule' }
   | { type: 'cancel' }
@@ -76,6 +79,7 @@ const TABLE: Readonly<Record<Exclude<VariantEvent['type'], 'edit' | 'cancel' | '
   approve: { in_review: 'approved' },
   request_changes: { in_review: 'changes_requested' },
   reject: { in_review: 'rejected' },
+  regate: { approved: 'in_review', scheduled: 'in_review', paused: 'in_review' },
   schedule: { approved: 'scheduled' },
   unschedule: { scheduled: 'approved', paused: 'approved' },
   pause: { scheduled: 'paused', publishing: 'paused' },

@@ -34,11 +34,12 @@ export function SiteHeader({ dict }: { dict: Dictionary }) {
           <a
             href={nav.otherLangHref}
             hrefLang={dict.lang === 'vi' ? 'en' : 'vi'}
-            aria-label={nav.otherLangLabel}
             title={nav.otherLangLabel}
             className="inline-flex h-9 items-center rounded-md px-2 text-xs font-semibold text-muted transition-colors hover:bg-surface-2 hover:text-fg"
           >
+            {/* The accessible name starts with the visible text (WCAG 2.5.3, label in name). */}
             {nav.otherLang}
+            <span className="sr-only">, {nav.otherLangLabel}</span>
           </a>
           <ThemeToggle toLight={nav.toLight} toDark={nav.toDark} />
           <a href={SIGN_IN_URL} className="hidden h-9 items-center rounded-md px-3 text-sm text-muted transition-colors hover:text-fg sm:inline-flex">

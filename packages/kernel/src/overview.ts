@@ -3,7 +3,9 @@
 // the same list as me.get and the org switcher), and each org's figures are read by kernel.org.overview in that org's
 // own context (runtime.query: session check, enter_context, membership, RLS), exactly as if the user had opened the
 // org. An org the user cannot read just then (they left it, or its owner revoked this session there, since the list
-// was read) is left out.
+// was read) is left out. Reading an org checks the session there, which records it as first seen in that org
+// (auth_session_org): after one visit to the home screen, the session is listed among each org's member sessions,
+// which is accurate, since it did read every one of them.
 //
 // The org's VAT filing period (monthly or quarterly) is set by owners and admins (kernel.org.set_vat_filing_period,
 // tax-code.ts).
@@ -37,6 +39,12 @@ export interface OrgOverview {
 
 export interface ClientOverview extends OrgSummary {
   overview: OrgOverview;
+}
+
+// total: the orgs the user has, of which the first MAX_CLIENT_ORGS are read (#495).
+export interface ClientOverviews {
+  clients: ClientOverview[];
+  total: number;
 }
 
 export function orgOverviewQuery(options: { now?: () => Date } = {}) {
@@ -73,35 +81,52 @@ export function orgOverviewQuery(options: { now?: () => Date } = {}) {
 
 export const orgOverview = orgOverviewQuery();
 
-// Runs fn over items with at most `limit` calls in flight, keeping the order of items.
-async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+// Runs fn over items with at most `limit` calls in flight, keeping the order of items. Once a call fails, or `signal`
+// aborts (the client went away), no worker starts another item (#495): the answer is lost anyway, and each item is a
+// transaction on the API's pool. The calls already running finish before the first error is thrown, so the caller's
+// slot (rpc.ts) is released only when no transaction of this answer is left.
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>, signal?: AbortSignal): Promise<R[]> {
   const out: R[] = Array.from({ length: items.length });
   let next = 0;
+  let failure: { error: unknown } | null = null;
   const worker = async () => {
-    while (next < items.length) {
+    while (next < items.length && !failure && !signal?.aborted) {
       const index = next++;
-      out[index] = await fn(items[index] as T);
+      try {
+        out[index] = await fn(items[index] as T);
+      } catch (error) {
+        failure ??= { error };
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  if (failure) throw (failure as { error: unknown }).error;
+  signal?.throwIfAborted();
   return out;
 }
 
 // Refusals that mean the user may no longer read the org: leave it out of the list.
 const GONE = new Set(['NOT_A_MEMBER', 'SESSION_REVOKED_IN_ORG']);
 
-// The home screen: the user's orgs (the same list as me.get), each with its figures read in its own context. Any other
-// failure of one org fails the whole answer, so the screen never shows a partial list as if it were complete.
-export async function clientOverviews(runtime: Runtime, actor: UserActor): Promise<ClientOverview[]> {
-  const orgs = (await runtime.forUser(actor, (db) => sessionOrgs(db, actor.userId, actor.sessionId ?? null))).slice(0, MAX_CLIENT_ORGS);
-  const rows = await mapLimit(orgs, OVERVIEW_CONCURRENCY, async (org): Promise<ClientOverview | null> => {
-    try {
-      const overview = await runtime.query<OrgOverview>('kernel.org.overview', {}, { actor, orgId: org.orgId });
-      return { ...org, overview };
-    } catch (error) {
-      if (error instanceof DomainError && GONE.has(error.code)) return null;
-      throw error;
-    }
-  });
-  return rows.filter((row): row is ClientOverview => row !== null);
+// The home screen: the user's orgs (the same list as me.get), each with its figures read in its own context, and how
+// many orgs the user has, so a list cut at MAX_CLIENT_ORGS says so. Any other failure of one org fails the whole
+// answer, so the screen never shows a partial list as if it were complete.
+export async function clientOverviews(runtime: Runtime, actor: UserActor, options: { signal?: AbortSignal } = {}): Promise<ClientOverviews> {
+  const all = await runtime.forUser(actor, (db) => sessionOrgs(db, actor.userId, actor.sessionId ?? null));
+  const orgs = all.slice(0, MAX_CLIENT_ORGS);
+  const rows = await mapLimit(
+    orgs,
+    OVERVIEW_CONCURRENCY,
+    async (org): Promise<ClientOverview | null> => {
+      try {
+        const overview = await runtime.query<OrgOverview>('kernel.org.overview', {}, { actor, orgId: org.orgId });
+        return { ...org, overview };
+      } catch (error) {
+        if (error instanceof DomainError && GONE.has(error.code)) return null;
+        throw error;
+      }
+    },
+    options.signal,
+  );
+  return { clients: rows.filter((row): row is ClientOverview => row !== null), total: all.length };
 }

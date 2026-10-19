@@ -9,6 +9,7 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc } from '../lib/api.ts';
+import { isZeroAmount } from '../lib/decimal.ts';
 import { defaultPeriod, periodKey, switchKind, yearOptions, type PeriodChoice, type PeriodKind } from '../lib/vat.ts';
 
 type Rate = (typeof VAT_RATES)[number];
@@ -106,6 +107,8 @@ export function VatPage() {
   });
   const indexes = choice.kind === 'month' ? Array.from({ length: 12 }, (_, i) => i + 1) : [1, 2, 3, 4];
   const rateRows = data ? data.input.totals.byRate.map((input, i) => ({ input, output: data.output.totals.byRate[i] })) : [];
+  // Sales at a rate Crove cannot place count in the totals but in no form indicator (issue #358).
+  const otherSales = data?.output.totals.byRate.find((r) => r.rate === 'other')?.taxable ?? '0';
 
   return (
     <>
@@ -189,6 +192,7 @@ export function VatPage() {
             </DataTable>
             <p className="mt-2 text-xs text-subtle-foreground">{t('indicatorsNote')}</p>
             <p className="mt-1 text-xs text-subtle-foreground">{t('xmlNote')}</p>
+            {!isZeroAmount(otherSales) && <p className="mt-2 text-sm text-warning">{t('otherSales', { amount: f.money(otherSales) })}</p>}
           </section>
 
           <section>

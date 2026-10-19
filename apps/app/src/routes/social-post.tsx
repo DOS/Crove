@@ -119,6 +119,8 @@ function IssueList({ issues }: { issues: Issue[] }) {
     switch (issue.code) {
       case 'TEXT_TOO_LONG':
         return t('TEXT_TOO_LONG', { limit, actual });
+      case 'TEXT_TOO_MANY_BYTES':
+        return t('TEXT_TOO_MANY_BYTES', { limit, actual });
       case 'TITLE_TOO_LONG':
         return t('TITLE_TOO_LONG', { limit, actual });
       case 'MEDIA_REQUIRED':
@@ -606,6 +608,11 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
   const f = useFormat();
   const said = v.error?.message ? <p className="text-subtle-foreground [overflow-wrap:anywhere]">{t('outcome.platformSaid', { message: v.error.message })}</p> : null;
   switch (v.status) {
+    case 'in_review':
+      // The kept time counts only while it is ahead: past it, or with no slot left, a person schedules again.
+      return v.error?.code === 'POLICY_RAISED' ? (
+        <p className="text-warning">{t(v.error.action === 'reschedule' && v.effectiveAt && Date.parse(v.effectiveAt) > Date.now() ? 'outcome.policyRaisedReschedule' : 'outcome.policyRaised')}</p>
+      ) : null;
     case 'scheduled':
       return v.error?.retryAt ? <p className="text-warning">{t('outcome.retrying', { when: f.dateTime(v.error.retryAt) })}</p> : null;
     case 'publishing':
