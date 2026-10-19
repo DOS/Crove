@@ -9,7 +9,7 @@ import { BlobIntegrityError, BlobNotFoundError, readVerified, sha256Hex, type Ac
 import type { ExportRecord } from '@crove/kernel';
 
 const RESTORE: Actor = { type: 'system', component: 'restore' };
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface ExportRebindDeps {
   runtime: Pick<Runtime, 'query' | 'execute'>;
@@ -56,12 +56,14 @@ export async function rebindExport(deps: ExportRebindDeps, orgId: string): Promi
 export async function rebindExports(deps: ExportRebindDeps, orgIds: readonly string[]): Promise<number> {
   const log = deps.log ?? ((line: string) => console.log(line));
   let failed = 0;
-  for (const orgId of orgIds) {
-    if (!UUID.test(orgId)) {
-      log(`[exports-rebind] ${orgId}: not an org id`);
+  for (const given of orgIds) {
+    if (!UUID.test(given)) {
+      log(`[exports-rebind] ${given}: not an org id`);
       failed++;
       continue;
     }
+    // Storage keys and PostgreSQL's uuid text are lower case: an id typed in upper case names the same org.
+    const orgId = given.toLowerCase();
     try {
       const outcome = await rebindExport(deps, orgId);
       const said = { none: 'no live export', readable: 'export reads at its recorded versions', rebound: 'export re-recorded with the restored object versions' };

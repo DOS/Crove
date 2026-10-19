@@ -109,5 +109,11 @@ describe('backup sealing (seal.mjs)', () => {
     ]);
     writeFileSync(list, 'a\tb\n');
     expect(() => readList(list)).toThrow(/line 1/);
+    // Written on Windows: the \r ends the line, not the label.
+    writeFileSync(list, 'a\tb\trun/x/a\r\nc\td\tblobs/org/o/s\r\n');
+    expect(readList(list)).toEqual([
+      { from: 'a', to: 'b', label: 'run/x/a' },
+      { from: 'c', to: 'd', label: 'blobs/org/o/s' },
+    ]);
   });
 });

@@ -167,6 +167,8 @@ export function keysFromEnv(env, { previous }) {
 export function readList(file) {
   return readFileSync(file, 'utf8')
     .split('\n')
+    // A list written on Windows ends its lines with \r\n; the \r is never part of a label.
+    .map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line))
     .filter((line) => line !== '')
     .map((line, i) => {
       const fields = line.split('\t');
