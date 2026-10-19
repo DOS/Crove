@@ -7,7 +7,18 @@ import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
 import type pg from 'pg';
 import { schemaMissing } from '@crove/db/migrate';
-import { ACCEPTED_ARCHIVE_TYPES, ACCEPTED_UPLOAD_TYPES, MAX_SOCIAL_VIDEO_BYTES, MAX_SOCIAL_VIDEO_MS, MAX_UPLOAD_BYTES, ORG_HEADER, SOCIAL_IMAGE_TYPES, type UploadPurpose } from '@crove/kernel-contract';
+import {
+  ACCEPTED_ARCHIVE_TYPES,
+  ACCEPTED_UPLOAD_TYPES,
+  MAX_IMPORT_BYTES,
+  MAX_SOCIAL_VIDEO_BYTES,
+  MAX_SOCIAL_VIDEO_MS,
+  MAX_UPLOAD_BYTES,
+  ORG_HEADER,
+  SOCIAL_IMAGE_TYPES,
+  XLSX_CONTENT_TYPE,
+  type UploadPurpose,
+} from '@crove/kernel-contract';
 import {
   BlobConflictError,
   BlobIntegrityError,
@@ -584,12 +595,19 @@ export function createHttpApp(deps: HttpDeps) {
   // returned (plan §7.6, ADR-0013).
   // purpose social: an image or a video for a Social post (#372, #409), recorded with source 'social' so it never goes
   // to extraction. A video's duration is read from the file and recorded with it.
+  // purpose import: an .xlsx workbook for a module's import (the tax portal's purchase list, #465), recorded with source
+  // 'import' so it never goes to extraction either; the module has it read in the parsing sandbox. Only its container
+  // is checked here (a ZIP of at most MAX_IMPORT_BYTES); the sandbox decides whether it is a workbook.
   async function ingest(user: AuthUser, orgId: string, name: string, bytes: Uint8Array, sha256 = sha256Hex(bytes), purpose: UploadPurpose = 'document') {
     // The content decides the type; the browser's MIME type and the extension are only hints.
     const video = purpose === 'social' ? sniffVideo(bytes) : null;
-    const type = video ?? sniffType(bytes);
+    let type = video ?? sniffType(bytes);
     let durationMs: number | undefined;
-    if (video) {
+    if (purpose === 'import') {
+      if (type !== 'application/zip') throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận tệp Excel dạng .xlsx`);
+      if (bytes.byteLength > MAX_IMPORT_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 10 MB`);
+      type = XLSX_CONTENT_TYPE;
+    } else if (video) {
       if (bytes.byteLength > MAX_SOCIAL_VIDEO_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 100 MB`);
       const ms = videoDurationMs(bytes);
       if (ms === null || ms === 0) throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: không đọc được thời lượng video`);
@@ -618,7 +636,7 @@ export function createHttpApp(deps: HttpDeps) {
         sha256,
         storageKey,
         generation,
-        source: purpose === 'social' ? 'social' : 'upload',
+        source: purpose === 'social' ? 'social' : purpose === 'import' ? 'import' : 'upload',
         ...(durationMs === undefined ? {} : { durationMs }),
       },
       { actor: actorOf(user), orgId },
@@ -637,6 +655,7 @@ export function createHttpApp(deps: HttpDeps) {
   function uploadPurpose(value: unknown): UploadPurpose {
     if (value === undefined || value === null || value === '' || value === 'document') return 'document';
     if (value === 'social') return 'social';
+    if (value === 'import') return 'import';
     throw new DomainError('INVALID', 400, 'Mục đích tải lên không hợp lệ');
   }
 

@@ -7,8 +7,12 @@ import { fileForExtraction, purchaseLookup } from './extract.ts';
 import { accountsList, documentsList, journalExport, journalGet, journalList, purchaseVouchers, salesVouchers, vendorsList, voidedProposals } from './queries.ts';
 import { vatDeclarationQuery, vatExport, vatPeriodQuery } from './vat.ts';
 import { ledgerAccountQuery, ledgerBookQuery, ledgerExport, ledgerPeriodQuery } from './ledger-reports.ts';
+import { portalListImport, portalListReconcile, portalListRecord, portalListRemove, portalListSource } from './portal-list.ts';
 
 export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
+export { checkPortalList, importPortalList, recordPortalListFailure, PORTAL_RECONCILE_LIMIT, type PortalListDeps } from './portal-list.ts';
+export * from './domain/portal-reconcile.ts';
+export { foldVietnamese, portalStatus } from './domain/portal-status.ts';
 export { buildJournalWorkbook } from './export.ts';
 export { buildVatWorkbook, VAT_RATE_LABELS, VAT_WARNING_LABELS } from './vat-export.ts';
 export { buildVat01Xml } from './vat-xml.ts';
@@ -47,7 +51,7 @@ export {
 } from './vat.ts';
 export { LEDGER_LINE_LIMIT, type AccountLedgerView, type LedgerBook, type LedgerReport } from './ledger-reports.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, openingBalancePost, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, openingBalancePost, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, portalListImport, portalListRemove, portalListRecord];
 export const financeQueries = [
   fileForExtraction,
   purchaseLookup,
@@ -66,4 +70,6 @@ export const financeQueries = [
   ledgerBookQuery,
   openingBalancePreview,
   vouchersList,
+  portalListSource,
+  portalListReconcile,
 ];

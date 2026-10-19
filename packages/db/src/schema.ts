@@ -126,8 +126,9 @@ export type PartyTable = Refine<
 // generation is the object version the bytes were written as (ADR-0013); null only on rows from before it.
 // A file row never changes, for every role (trigger file_guard; a move to another org is refused by RLS): crove_tenant
 // keeps UPDATE only to lock the row (SELECT ... FOR UPDATE), so no column has an update type here.
-// social: an image uploaded for a Social post (#372); never extracted, never in the Inbox.
-export const FILE_SOURCES = ['upload', 'email', 'social'] as const;
+// social: an image uploaded for a Social post (#372); import: a spreadsheet for a module's import (#465). Neither is
+// extracted or shown in the Inbox.
+export const FILE_SOURCES = ['upload', 'email', 'social', 'import'] as const;
 type Frozen<T> = ColumnType<SelectType<T>, InsertType<T>, G.NotGranted>;
 export type FileTable = Refine<
   G.KernelFileTable,
@@ -308,6 +309,20 @@ export type CashVoucherTable = Refine<
   'number'
 >;
 
+// The tax portal's purchase-invoice lists (#465). A list starts pending; the insert trigger stamps created_at and the
+// update trigger stamps recorded_at and removed_at with the database clock. Rows are append-only.
+export const PORTAL_LIST_STATUSES = ['pending', 'done', 'failed'] as const;
+export const PORTAL_INVOICE_STATUSES = ['original', 'replacement', 'adjustment', 'replaced', 'adjusted', 'cancelled', 'unknown'] as const;
+
+export type PortalInvoiceListTable = Refine<
+  G.FinancePortalInvoiceListTable,
+  {
+    status: ColumnType<(typeof PORTAL_LIST_STATUSES)[number], (typeof PORTAL_LIST_STATUSES)[number] | undefined, (typeof PORTAL_LIST_STATUSES)[number]>;
+  }
+>;
+
+export type PortalInvoiceRowTable = Refine<G.FinancePortalInvoiceRowTable, { status: ColumnType<(typeof PORTAL_INVOICE_STATUSES)[number], (typeof PORTAL_INVOICE_STATUSES)[number], never> }>;
+
 // Crove Social (Social plan §3.2, S3).
 export const SOCIAL_POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled'] as const;
 export const SOCIAL_VARIANT_STATUSES = [
@@ -382,6 +397,8 @@ type Refined = Tables<{
   'crove_finance.journal_entry': JournalEntryTable;
   'crove_finance.org_account': OrgAccountTable;
   'crove_finance.cash_voucher': CashVoucherTable;
+  'crove_finance.portal_invoice_list': PortalInvoiceListTable;
+  'crove_finance.portal_invoice_row': PortalInvoiceRowTable;
   'crove_social.post': SocialPostTable;
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.post_approval': SocialPostApprovalTable;

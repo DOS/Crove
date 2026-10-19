@@ -69,6 +69,7 @@ import {
 } from './schemas.ts';
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
+import { zPortalReconciliation } from './portal-list.ts';
 
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
 export const contract = {
@@ -358,6 +359,15 @@ export const contract = {
   // VAT working for one month or quarter (issue #316); the Excel file is GET /api/export/vat.xlsx?period=<period>.
   vat: {
     period: oc.input(z.object({ period: zVatPeriod })).output(zVatReport),
+  },
+  // The tax portal's purchase-invoice list (issue #465) for one VAT period. reconcile: every role; the lists of the
+  // period and how their invoices compare with Crove's purchases. import (owners, admins, members; R1): files an .xlsx
+  // uploaded with purpose 'import' as a list of the period; the worker reads it (poll reconcile until no list is
+  // pending). remove (owners, admins, members; R1): takes a list out of its period; it is kept.
+  portalList: {
+    reconcile: oc.input(z.object({ period: zVatPeriod })).output(zPortalReconciliation),
+    import: oc.input(z.object({ period: zVatPeriod, fileId: zId })).output(z.object({ listId: zId })),
+    remove: oc.input(z.object({ listId: zId })).output(z.object({ listId: zId })),
   },
   // Ledger reports of a month, quarter or year (issue #321): the trial balance and the receivables and payables per
   // party, and the general ledger of one account. The Excel workbook is GET /api/export/ledger.xlsx?period=<period>.

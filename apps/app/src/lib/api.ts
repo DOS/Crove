@@ -3,7 +3,7 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
-import { MAX_SOCIAL_VIDEO_BYTES, MAX_UPLOAD_BYTES, type contract, type UploadPurpose } from '@crove/kernel-contract';
+import { MAX_IMPORT_BYTES, MAX_SOCIAL_VIDEO_BYTES, MAX_UPLOAD_BYTES, type contract, type UploadPurpose } from '@crove/kernel-contract';
 import { activeLocale, translator } from '../i18n/runtime.ts';
 import { accessToken, auth, getConfig } from './auth.ts';
 import { ClientError, apiErrorFromResponse, describeError, isMfaRequired, isOrgAccessRevoked, isUnauthenticated, retryWhileBusy } from './errors.ts';
@@ -115,7 +115,8 @@ export async function fetchFile(fileId: string): Promise<Blob> {
 type Uploaded = { fileId: string; duplicate: boolean };
 
 // A Social upload may be a video of up to 100 MB (#409); the server checks each type's own limit.
-const maxBytesFor = (purpose: UploadPurpose) => (purpose === 'social' ? MAX_SOCIAL_VIDEO_BYTES : MAX_UPLOAD_BYTES);
+// An import spreadsheet (#465) is at most 10 MB.
+const maxBytesFor = (purpose: UploadPurpose) => (purpose === 'social' ? MAX_SOCIAL_VIDEO_BYTES : purpose === 'import' ? MAX_IMPORT_BYTES : MAX_UPLOAD_BYTES);
 const tooLarge = (file: File, purpose: UploadPurpose) =>
   purpose === 'social'
     ? new ClientError('inbox.socialFileTooLarge', (t) => t('inbox.socialFileTooLarge', { name: file.name }))
@@ -166,7 +167,8 @@ export async function uploadDocument(file: File): Promise<Uploaded> {
   return first;
 }
 
-// purpose social: images for a Social post (#372), stored but never read as documents.
+// purpose social: images for a Social post (#372); purpose import: a spreadsheet for a module's import (#465). Both are
+// stored but never read as documents.
 export async function uploadFiles(files: File[], purpose: UploadPurpose = 'document'): Promise<{ files: Uploaded[] }> {
   if (getConfig().uploads === 'presigned') {
     const results: Uploaded[] = [];

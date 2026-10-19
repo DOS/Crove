@@ -4,6 +4,7 @@ export * from './opening-balance.ts';
 export * from './accounts.ts';
 export * from './tax-code.ts';
 export * from './cash-voucher.ts';
+export * from './portal-list.ts';
 export * from './vat-deadline.ts';
 
 export const ORG_HEADER = 'x-crove-org';
@@ -19,7 +20,12 @@ export const SOCIAL_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 export const SOCIAL_VIDEO_TYPES = ['video/mp4', 'video/quicktime'];
 export const MAX_SOCIAL_VIDEO_BYTES = 100 * 1024 * 1024;
 export const MAX_SOCIAL_VIDEO_MS = 3 * 3600 * 1000;
-export const UPLOAD_PURPOSES = ['document', 'social'] as const;
+// import: a spreadsheet for a module's import (the tax portal's purchase list, #465). Stored with source 'import' and
+// never read as a document; the module that imports it has it read in the parsing sandbox.
+export const UPLOAD_PURPOSES = ['document', 'social', 'import'] as const;
+// An import spreadsheet is an .xlsx workbook (a ZIP container) of at most this size.
+export const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
+export const XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 export type UploadPurpose = (typeof UPLOAD_PURPOSES)[number];
 
 // Realtime invalidation (issue #69): GET /api/stream sends hints `{ type, id }` only, never row data; the SPA re-fetches

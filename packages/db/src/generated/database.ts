@@ -18,6 +18,8 @@ export interface CroveFinanceSchema {
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
   'crove_finance.org_account': FinanceOrgAccountTable;
+  'crove_finance.portal_invoice_list': FinancePortalInvoiceListTable;
+  'crove_finance.portal_invoice_row': FinancePortalInvoiceRowTable;
   'crove_finance.purchase_document': FinancePurchaseDocumentTable;
   'crove_finance.purchase_document_void': FinancePurchaseDocumentVoidTable;
   'crove_finance.purchase_line': FinancePurchaseLineTable;
@@ -127,6 +129,48 @@ export interface FinanceOrgAccountTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   updated_by: string | null;
   updated_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_finance.portal_invoice_list */
+export interface FinancePortalInvoiceListTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  period: ColumnType<string, string, NotGranted>;
+  file_id: ColumnType<string, string, NotGranted>;
+  filename: ColumnType<string, string, NotGranted>;
+  status: Generated<string>;
+  error: string | null;
+  row_count: number | null;
+  list_from: string | null;
+  list_to: string | null;
+  buyer_tax_code: string | null;
+  skipped_count: Generated<number>;
+  skipped: ColumnType<unknown, string | null | undefined, string | null>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  recorded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  removed_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  removed_by: string | null;
+}
+
+/** crove_finance.portal_invoice_row */
+export interface FinancePortalInvoiceRowTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  list_id: ColumnType<string, string, NotGranted>;
+  row_no: ColumnType<number, number, NotGranted>;
+  seller_tax_code: ColumnType<string, string, NotGranted>;
+  seller_name: ColumnType<string, string | undefined, NotGranted>;
+  template: ColumnType<string | null, string | null, NotGranted>;
+  series: ColumnType<string, string, NotGranted>;
+  number: ColumnType<string, string, NotGranted>;
+  issue_date: ColumnType<string, string, NotGranted>;
+  currency: ColumnType<string, string | undefined, NotGranted>;
+  subtotal: ColumnType<string | null, string | null, NotGranted>;
+  vat_amount: ColumnType<string | null, string | null, NotGranted>;
+  total: ColumnType<string | null, string | null, NotGranted>;
+  status: ColumnType<string, string, NotGranted>;
+  status_label: ColumnType<string | null, string | null, NotGranted>;
+  check_result: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_finance.purchase_document */

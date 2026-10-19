@@ -220,6 +220,8 @@ suite('org offboarding on PostgreSQL (#38)', () => {
 
     const generatedAt = new Date('2026-10-16T00:00:00Z');
     const record = await runOrgExport({ runtime: workerRuntime, store, sealer, retentionDays: 40 }, org.orgId, { now: () => generatedAt });
+    // The tax portal's purchase lists are kept records (#465): an export carries them.
+    expect(EXPORT_TABLE_NAMES).toEqual(expect.arrayContaining(['finance.portal_invoice_list', 'finance.portal_invoice_row']));
     // One chunk per table here, in table order; everything sealed under the org's export prefix.
     expect(record.parts.map((p) => [p.table, p.chunk])).toEqual(EXPORT_TABLE_NAMES.map((t) => [t, 0]));
     expect(record).toMatchObject({ format: 'crove.org-export.v2', encryption: 'aes-256-gcm', fileCount: 1, expiresAt: '2026-11-25T00:00:00.000Z' });

@@ -77,7 +77,7 @@ describe('Database', () => {
     // @ts-expect-error an invite's email is fixed; crove_tenant updates only status, revoked_at and revoked_by
     const invite: Updateable<Database['crove_kernel.member_invite']> = { email: 'a@b.c' };
     // A file row never changes (trigger file_guard): the refinement keeps the union and drops every update.
-    expectTypeOf<Selectable<Database['crove_kernel.file']>['source']>().toEqualTypeOf<'upload' | 'email' | 'social'>();
+    expectTypeOf<Selectable<Database['crove_kernel.file']>['source']>().toEqualTypeOf<'upload' | 'email' | 'social' | 'import'>();
     // @ts-expect-error crove_tenant holds UPDATE on file only to lock the row
     const fileUpdate: Updateable<Database['crove_kernel.file']> = { filename: 'renamed.pdf' };
     expect([outbox, entry, audit, auditUpdate, member, roleChange, memberMove, extraction, invite, fileUpdate]).toHaveLength(10);
