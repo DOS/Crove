@@ -23,7 +23,7 @@ import {
 } from '../src/index.ts';
 
 function invoice(id: string, rates: VatInvoiceView['rates']): VatInvoiceView {
-  return { id, issueDate: '2026-09-15', series: 'C26TAB', number: id, partyName: 'Công ty TNHH ABC', partyTaxCode: '0101234564', subtotal: '0', vatAmount: '0', total: '0', rates, warnings: [] };
+  return { id, issueDate: '2026-09-15', postingDate: '2026-09-15', series: 'C26TAB', number: id, partyName: 'Công ty TNHH ABC', partyTaxCode: '0101234564', subtotal: '0', vatAmount: '0', total: '0', rates, warnings: [] };
 }
 
 function declaration(period: string, input: VatInvoiceView[], output: VatInvoiceView[], name = 'Công ty TNHH Crove Demo'): VatDeclaration {

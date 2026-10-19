@@ -10,6 +10,7 @@ import {
   zAccountCode,
   zBulkApproveItems,
   zId,
+  zLocalDate,
   zPurchaseProposal,
   zRole,
   zSessionRevoke,
@@ -38,9 +39,11 @@ import { setAddress } from './org-address.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
+// The command that records an invoice proposal (a purchase or a sale).
+const PURCHASE_COMMAND = 'finance.purchase.record';
 // Commands a proposal may execute when approved (they must also declare access: 'proposal', which the runtime checks
 // against the proposal row: state 'approved' for that command, approved by the running kernel.proposal.approve).
-const PROPOSAL_COMMANDS = new Set(['finance.purchase.record', 'finance.journal.reverse', 'finance.voucher.record']);
+const PROPOSAL_COMMANDS = new Set([PURCHASE_COMMAND, 'finance.journal.reverse', 'finance.voucher.record']);
 // Proposals a user may ask for (kernel.proposal.request), and the module command that checks the request and builds
 // the proposal from the database; it writes nothing. The title and payload come from it, never from the requester.
 // A cash or bank voucher (#327) is entered by hand this way.
@@ -492,6 +495,10 @@ export const approveProposal = defineCommand({
     lineAccounts: zLineAccounts.optional(),
     note: z.string().max(500).optional(),
     acceptFailedChecks: z.boolean().optional(),
+    // A purchase invoice dated in a locked month (#478): the approver posts its entry on this date, in an open month.
+    // An approval-time choice like acceptFailedChecks, never part of the revision: finance.purchase.record checks it
+    // and the audit row records it. Only a user's single approval sets it; a bulk approval and an agent never do.
+    postingDate: zLocalDate.optional(),
   }),
   risk: 'R3',
   access: APPROVERS,
@@ -499,6 +506,9 @@ export const approveProposal = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới duyệt được');
     const proposal = await lockPendingProposal(ctx, input.id, input.revision);
+    if (input.postingDate !== undefined && proposal.command !== PURCHASE_COMMAND) {
+      throw new DomainError('POSTING_DATE_NOT_ALLOWED', 422, 'Chỉ hóa đơn mua vào mới chọn được ngày ghi sổ khác ngày hóa đơn');
+    }
     // A re-extraction in flight would replace this revision's content (issue #40).
     await refuseWhileReextracting(ctx, proposal.source_file_id);
     if (!PROPOSAL_COMMANDS.has(proposal.command)) throw new DomainError('FORBIDDEN', 403, 'Loại đề xuất không được hỗ trợ');
@@ -520,6 +530,7 @@ export const approveProposal = defineCommand({
       eligible_approvers: decision.eligibleCount,
       self_approved: decision.selfApproved,
       accept_failed_checks: input.acceptFailedChecks ?? false,
+      ...(input.postingDate !== undefined ? { posting_date: input.postingDate } : {}),
     });
     // Approved for its command by this command: the runtime's proposal state gate lets the command run only now.
     // The same transaction ends 'executed', or rolls back to 'pending' if the command fails.
@@ -531,7 +542,11 @@ export const approveProposal = defineCommand({
       .execute();
     const result = await ctx.run<Record<string, unknown>>(
       proposal.command,
-      { payload: proposal.payload, acceptFailedChecks: input.acceptFailedChecks ?? false },
+      {
+        payload: proposal.payload,
+        acceptFailedChecks: input.acceptFailedChecks ?? false,
+        ...(input.postingDate !== undefined ? { postingDate: input.postingDate } : {}),
+      },
       { proposalId: proposal.id },
     );
     await ctx.trx

@@ -25,6 +25,7 @@ export const VAT_WARNING_LABELS: Readonly<Record<VatWarning, string>> = {
   reduced_rate_outside_period: 'Thuế suất 8% ngoài thời gian được giảm thuế',
   lines_mismatch: 'Tổng các dòng lệch tiền trước thuế của hóa đơn; số tổng cộng theo các dòng',
   vat_mismatch: 'Thuế GTGT lệch giá trị trước thuế nhân thuế suất',
+  declared_late: 'Hóa đơn của kỳ trước, ghi sổ và kê khai vào kỳ này vì tháng của hóa đơn đã khóa sổ',
 };
 
 function invoiceSheet(workbook: ExcelJS.Workbook, name: string, side: VatSide, partyHeader: string, taxCodeHeader: string): void {

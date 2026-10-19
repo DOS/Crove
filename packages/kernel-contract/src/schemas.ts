@@ -343,11 +343,13 @@ export const zInboxDetail = zInboxItem.extend({
   file: z.object({ id: zId, filename: z.string(), contentType: z.string(), sizeBytes: z.string() }).nullable(),
   decidedAt: z.string().nullable(),
   decisionNote: z.string().nullable(),
-  // A purchase returns its document; a reversal returns the entry it reversed and, for a purchase entry, the
-  // document it voided (#165); a voucher returns the voucher and the code it was given (PC00001 and the like; #327).
+  // A purchase returns its document, and the posting date when its invoice month was locked and the approver posted
+  // it in an open month (#478); a reversal returns the entry it reversed and, for a purchase entry, the document it
+  // voided (#165); a voucher returns the voucher and the code it was given (PC00001 and the like; #327).
   result: z
     .object({
       documentId: zId.optional(),
+      postingDate: zLocalDate.optional(),
       journalEntryId: zId,
       reversedEntryId: zId.optional(),
       voidedDocumentId: zId.optional(),
@@ -498,12 +500,17 @@ export const VAT_PERIOD_PATTERN = /^(20\d{2}|2100)-(0[1-9]|1[0-2]|Q[1-4])$/;
 export const zVatPeriod = z.string().regex(VAT_PERIOD_PATTERN, 'YYYY-MM or YYYY-Qn');
 export const VAT_RATES = ['0', '5', '8', '10', 'KCT', 'KKKNT', 'other'] as const;
 export const zVatRate = z.enum(VAT_RATES);
-export const VAT_WARNINGS = ['rate_unknown', 'rate_split', 'reduced_rate_outside_period', 'lines_mismatch', 'vat_mismatch'] as const;
+// declared_late (#478): a purchase invoice of an earlier period, recorded late (its own month was locked), so it is
+// declared in the period of its posting date.
+export const VAT_WARNINGS = ['rate_unknown', 'rate_split', 'reduced_rate_outside_period', 'lines_mismatch', 'vat_mismatch', 'declared_late'] as const;
 export const zVatWarning = z.enum(VAT_WARNINGS);
 const zRateAmounts = z.object({ rate: zVatRate, taxable: zMoney, vat: zMoney });
 export const zVatInvoice = z.object({
   id: zId,
   issueDate: zLocalDate,
+  // The date its journal entry is posted on: the issue date, or a later date in an open month for a purchase invoice
+  // whose own month was locked (#478). The period is chosen by this date.
+  postingDate: zLocalDate,
   series: z.string(),
   number: z.string(),
   partyName: z.string(),

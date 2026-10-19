@@ -8,6 +8,7 @@ function invoice(id: string, overrides: Partial<VatInvoiceView> = {}): VatInvoic
   return {
     id,
     issueDate: '2026-09-15',
+    postingDate: '2026-09-15',
     series: 'C26TAB',
     number: '1234',
     partyName: 'Công ty TNHH ABC',

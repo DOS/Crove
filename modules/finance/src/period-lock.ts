@@ -25,6 +25,13 @@ export function vietnamMonth(date: Date): string {
   return `${part('year')}-${part('month')}`;
 }
 
+// 'YYYY-MM-DD' of `date` in Vietnam.
+export function vietnamDate(date: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: PERIOD_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
 // 'YYYY-MM' of a YYYY-MM-DD date, and the month after or before one.
 export const monthOf = (date: string) => date.slice(0, 7);
 export function shiftMonth(month: string, by: 1 | -1): string {
@@ -67,7 +74,7 @@ export const periodLockStateQuery = defineQuery({
 });
 
 const monthLabel = (month: string) => `${month.slice(5, 7)}/${month.slice(0, 4)}`;
-const dateLabel = (date: string) => `${date.slice(8, 10)}/${date.slice(5, 7)}/${date.slice(0, 4)}`;
+export const dateLabel = (date: string) => `${date.slice(8, 10)}/${date.slice(5, 7)}/${date.slice(0, 4)}`;
 
 interface PgError {
   code?: string;

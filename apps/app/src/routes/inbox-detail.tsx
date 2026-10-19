@@ -7,6 +7,7 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Checkbox } from '@crove/ui/components/checkbox';
+import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { StepUpPrompt } from '../components/two-factor.tsx';
@@ -15,6 +16,7 @@ import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { errorMessage, fetchFile, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal } from '../lib/decimal.ts';
+import { currentDate, nextDay, postingDateAllowed } from '../lib/period-lock.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { reversalErrorMessage } from '../lib/reversal.ts';
 import { previewVoucherJournal, voucherProblem } from '../lib/vouchers.ts';
@@ -236,10 +238,16 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
     refetchInterval: (query) => (query.state.data?.extraction?.inFlight ? pollEvery(live, 2000) : false),
   });
   // The chart of accounts is the finance module's; without it (CROVE_MODULES) the screen does not ask for it.
-  const accounts = useQuery({ ...orpc.accounts.list.queryOptions(), enabled: getConfig().modules.includes('finance') });
+  const finance = getConfig().modules.includes('finance');
+  const accounts = useQuery({ ...orpc.accounts.list.queryOptions(), enabled: finance });
   const [lineAccounts, setLineAccounts] = useState<Record<number, string>>({});
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [acceptFailed, setAcceptFailed] = useState(false);
+  // A purchase invoice dated in a locked month (#478): the approver may post it on a date in an open month, by choice
+  // only (unticked, the approval posts on the invoice date and the kernel refuses it, as before). The date starts at
+  // the first open day.
+  const [postLate, setPostLate] = useState(false);
+  const [postingDate, setPostingDate] = useState<string | null>(null);
 
   const payload = detail.data?.payload ?? null;
   const lines = useMemo(
@@ -248,6 +256,13 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   );
   // A sale (issue #313): the org issued the invoice, the buyer is the customer, and the lines go to revenue.
   const sale = payload?.direction === 'sale';
+  const lockState = useQuery({ ...orpc.periodLock.state.queryOptions(), enabled: finance && !!payload && !sale });
+  const lockedThrough = lockState.data?.lockedThrough ?? null;
+  const invoiceLocked = !!payload && !sale && lockedThrough !== null && payload.invoice.issueDate <= lockedThrough;
+  const firstOpenDay = lockedThrough ? nextDay(lockedThrough) : null;
+  const chosenPostingDate = postingDate ?? firstOpenDay;
+  const latePosting = invoiceLocked && postLate ? chosenPostingDate : null;
+  const latePostingValid = latePosting === null || (lockedThrough !== null && postingDateAllowed(latePosting, lockedThrough, currentDate()));
   const journal = useMemo(
     () => (payload ? (payload.direction === 'sale' ? previewSalesJournal : previewPurchaseJournal)(lines, payload.invoice.vatTotal) : []),
     [payload, lines],
@@ -295,7 +310,11 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
   // The approve buttons are enabled exactly when this holds, and the A shortcut uses the same value.
   const approveReady =
-    item !== undefined && pending && item.canApprove && !busy && (plain ? true : !dirty && !!payload && !blocked && (failed === 0 || acceptFailed));
+    item !== undefined &&
+    pending &&
+    item.canApprove &&
+    !busy &&
+    (plain ? true : !dirty && !!payload && !blocked && (failed === 0 || acceptFailed) && latePostingValid);
   const submitApproval = () => {
     if (!item) return;
     if (plain) {
@@ -308,6 +327,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
       idempotencyKey,
       lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
       ...(failed > 0 ? { acceptFailedChecks: acceptFailed } : {}),
+      ...(latePosting ? { postingDate: latePosting } : {}),
     });
   };
 
@@ -550,6 +570,40 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
         </div>
       )}
 
+      {pending && invoiceLocked && payload && lockedThrough && firstOpenDay && (
+        <Card className="mb-4 block space-y-3 border border-warning/60 p-4 ring-0" data-testid="late-posting">
+          <p className="text-sm font-medium text-foreground">{t('lateTitle', { through: f.date(lockedThrough) })}</p>
+          <p className="text-sm text-muted-foreground">{t('lateNotice', { date: f.date(payload.invoice.issueDate) })}</p>
+          {item.canApprove && (
+            <Label className="font-normal text-muted-foreground">
+              <Checkbox checked={postLate} disabled={busy} onCheckedChange={(checked) => setPostLate(checked)} />
+              {t('latePost')}
+            </Label>
+          )}
+          {item.canApprove && postLate && (
+            <div className="space-y-1">
+              <Label htmlFor="posting-date">{t('lateDate')}</Label>
+              <Input
+                id="posting-date"
+                type="date"
+                className="w-44"
+                min={firstOpenDay}
+                max={currentDate()}
+                disabled={busy}
+                value={chosenPostingDate ?? ''}
+                onChange={(e) => setPostingDate(e.target.value)}
+              />
+              <p className="text-xs text-subtle-foreground">{t('lateHint', { date: f.date(payload.invoice.issueDate) })}</p>
+              {!latePostingValid && <p className="text-sm text-destructive">{t('lateDateInvalid', { from: f.date(firstOpenDay) })}</p>}
+            </div>
+          )}
+        </Card>
+      )}
+      {item.status === 'executed' && payload && item.result?.postingDate && (
+        <p className="mb-4 text-sm text-muted-foreground" data-testid="late-posted">
+          {t('latePosted', { date: f.date(item.result.postingDate), invoiceDate: f.date(payload.invoice.issueDate) })}
+        </p>
+      )}
       {sale && <p className="mb-4 text-sm text-muted-foreground">{t('saleNotice')}</p>}
       <div className="grid gap-6 lg:grid-cols-5">
         <div className="min-w-0 space-y-6 lg:col-span-3">
