@@ -116,7 +116,9 @@ function toInboxItem(row: {
   payload: unknown;
   duplicate_of: string | null;
   created_at: Date;
-}) {
+  extraction_id: string | null;
+  requested_by_agent: string | null;
+}, agentName: string | null) {
   const payload = parsePayload(row.kind, row.payload);
   const voucher = parseVoucher(row.kind, row.payload);
   const direction = payload ? (payload.direction ?? 'purchase') : null;
@@ -134,6 +136,16 @@ function toInboxItem(row: {
     warnChecks: countChecks(payload, 'warn'),
     duplicateOf: row.duplicate_of,
     createdAt: row.created_at.toISOString(),
+    ...agentFields(row, agentName),
+  };
+}
+
+// Whether an AI agent asked for the proposal and whether an extraction run read it (#435). An agent's proposal has no
+// extraction, so no invoice checks ran and the Inbox must not show it as matched.
+function agentFields(row: { extraction_id: string | null; requested_by_agent: string | null }, agentName: string | null) {
+  return {
+    requestedByAgent: row.requested_by_agent ? { id: row.requested_by_agent, name: agentName ?? '' } : null,
+    extracted: row.extraction_id !== null,
   };
 }
 
@@ -146,7 +158,7 @@ export const inboxList = defineQuery({
       sql<string>`(SELECT count(*) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(payload -> 'checks') = 'array' THEN payload -> 'checks' ELSE '[]'::jsonb END) c WHERE c ->> 'status' = ${status})`;
     let query = ctx.trx
       .selectFrom('crove_kernel.proposal')
-      .select(['id', 'kind', 'status', 'title', 'revision', 'duplicate_of', 'created_at'])
+      .select(['id', 'kind', 'status', 'title', 'revision', 'duplicate_of', 'created_at', 'extraction_id', 'requested_by_agent'])
       .select([
         sql<string | null>`left(payload #>> '{seller,name}', 500)`.as('seller_name'),
         sql<boolean>`coalesce(payload ->> 'direction' = 'sale', false)`.as('is_sale'),
@@ -154,6 +166,8 @@ export const inboxList = defineQuery({
         // A voucher (#327) keeps its total and date at the top of its payload.
         sql<string | null>`left(CASE WHEN kind = ${VOUCHER_KIND} THEN payload ->> 'total' ELSE payload #>> '{invoice,total}' END, 30)`.as('total'),
         sql<string | null>`left(CASE WHEN kind = ${VOUCHER_KIND} THEN payload ->> 'date' ELSE payload #>> '{invoice,issueDate}' END, 10)`.as('issue_date'),
+        // The requesting agent's name, read in the same org under the agent table's own row security (no cross-org read).
+        sql<string | null>`(SELECT a.display_name FROM crove_kernel.agent a WHERE a.org_id = crove_kernel.proposal.org_id AND a.id = crove_kernel.proposal.requested_by_agent)`.as('agent_name'),
         countChecksSql('fail').as('failed_checks'),
         countChecksSql('warn').as('warn_checks'),
       ])
@@ -177,6 +191,7 @@ export const inboxList = defineQuery({
       warnChecks: Number(row.warn_checks),
       duplicateOf: row.duplicate_of,
       createdAt: row.created_at.toISOString(),
+      ...agentFields(row, row.agent_name),
     }));
   },
 });
@@ -230,12 +245,15 @@ export const inboxGet = defineQuery({
           .limit(1)
           .executeTakeFirst()
       : undefined;
+    const agent = row.requested_by_agent
+      ? await ctx.trx.selectFrom('crove_kernel.agent').select('display_name').where('org_id', '=', ctx.orgId).where('id', '=', row.requested_by_agent).executeTakeFirst()
+      : undefined;
     const canChange = row.status === 'pending' && editor && !reading;
     // The purchase this proposal recorded was voided by a reversal (#165); its file may then be read again.
     const voided = await executedButVoided(ctx, row);
     const newestReopened = newest?.id === row.id ? voided : await executedButVoided(ctx, newest);
     return {
-      ...toInboxItem(row),
+      ...toInboxItem(row, agent?.display_name ?? null),
       revision: row.revision,
       payload: parsePayload(row.kind, row.payload),
       reversal: parseReversal(row.kind, row.payload),

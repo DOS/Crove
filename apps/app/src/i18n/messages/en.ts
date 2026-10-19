@@ -817,6 +817,7 @@ export const en = {
     failedChecks: '{count, plural, one {# error} other {# errors}}',
     warnChecks: '{count, plural, one {# warning} other {# warnings}}',
     matched: 'All checks pass',
+    agentProposed: 'Proposed by AI agent: {name}',
     reversalKind: 'Reversal',
     voucherKind: 'Cash or bank voucher',
     saleKind: 'Sale',
@@ -905,6 +906,7 @@ export const en = {
     confirmRereadVoided:
       'Read the document again? The document posted earlier was voided by a reversal; if it can be read, a new proposal is created to post the invoice again.',
     voidedBadge: 'Document voided by a reversal',
+    agentProposed: 'Proposed by AI agent: {name}',
     voidedNotice: 'The entry of this invoice was reversed, so Crove voided the document in its own books.',
     voidedReread: 'Press Read again to create a new proposal and post the invoice again with the right accounts.',
     voidedNoReread:

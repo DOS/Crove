@@ -18,7 +18,7 @@ import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
 import { VOUCHER_KIND } from '../lib/vouchers.ts';
-import { bulkSelectable, canApproveProposals, planBatches, proposalName, sendBatches, type BulkBatch, type BulkProgress } from '../lib/review.ts';
+import { bulkSelectable, canApproveProposals, planBatches, proposalName, sendBatches, showMatched, type BulkBatch, type BulkProgress } from '../lib/review.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 // One bulk approval (issue #315): the batches planned when it started, how far it got, and the names to report.
@@ -375,7 +375,8 @@ export function InboxPage() {
                     {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
                     {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
                     {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}
-                    {item.kind !== REVERSAL_KIND && item.kind !== VOUCHER_KIND && item.failedChecks === 0 && item.warnChecks === 0 && !item.duplicateOf && (
+                    {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
+                    {showMatched(item, REVERSAL_KIND, VOUCHER_KIND) && (
                       <Badge variant="success">{t('matched')}</Badge>
                     )}
                   </div>
