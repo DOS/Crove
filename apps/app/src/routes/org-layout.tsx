@@ -172,11 +172,10 @@ export function OrgLayout() {
             <button className="hover:text-muted-foreground" onClick={() => void signOut()}>
               {tc('signOut')}
             </button>
-          </div>
-          <div className="mt-2 grid grid-cols-2 gap-2">
             <LocaleSwitcher />
-            <ThemeSwitcher />
           </div>
+          {/* Its own row: next to the language switch both labels were cut off at the sidebar's width. */}
+          <ThemeSwitcher className="mt-2 w-full text-muted-foreground" />
         </div>
       </aside>
       <div className="min-w-0 flex-1">
