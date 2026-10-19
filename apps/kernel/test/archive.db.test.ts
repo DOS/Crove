@@ -202,10 +202,10 @@ suite('bulk intake of a ZIP archive on PostgreSQL (issue #314)', () => {
       get(target, property, receiver) {
         if (property === 'query') {
           return (name: string, ...rest: unknown[]) =>
-            name === 'kernel.file.archive.source' ? Promise.reject(new Error('connection refused')) : (target.query as (...args: unknown[]) => unknown)(name, ...rest);
+            name === 'kernel.file.archive.source' ? Promise.reject(new Error('connection refused')) : Reflect.apply(target.query, target, [name, ...rest]);
         }
         const value = Reflect.get(target, property, receiver);
-        return typeof value === 'function' ? value.bind(target) : value;
+        return typeof value === 'function' ? value.bind(receiver) : value;
       },
     }) as Runtime;
     const zip = await uploadZip([{ name: 'hd.xml', data: invoiceXml(-50) }], 'that-bai.zip');
