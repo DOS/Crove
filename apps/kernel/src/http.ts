@@ -52,6 +52,7 @@ import {
   type VatReport,
 } from '@crove/mod-finance';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
+import { createGuessLimiter, guessRequest, type GuessLimiter } from './auth-guess-limit.ts';
 import { actorOf, bearerIssuedToOAuthClient, oauthClientRefused, type Authenticate, type AuthUser } from './auth.ts';
 import { ConcurrencyLimiter, type Semaphore } from './concurrency.ts';
 import { publicAuthUrl, type Config } from './config.ts';
@@ -105,6 +106,8 @@ export interface HttpDeps {
   socialWriter?: SocialDrafter;
   // Realtime invalidation (issue #69). Unset: /api/stream answers 404 and the app keeps polling.
   stream?: StreamDeps;
+  // Limits on guessing passwords and codes through /auth/v1 (#221). Unset: built from the AUTH_GUESS_LIMIT_* settings.
+  guessLimiter?: GuessLimiter;
 }
 
 export interface StreamDeps {
@@ -190,14 +193,23 @@ function oauthClientTokenRefused(): Response {
   return new Response(JSON.stringify(error), { status: refused.status, headers: { 'content-type': 'application/json' } });
 }
 
-// With TRUSTED_PROXY_HOPS=0 behind a reverse proxy, every client shares the proxy's address and so one email budget
-// and one budget of failed stream ticket redeems.
+// Over a guess budget (#221). error_code is Supabase Auth's own for its rate limits, so the SPA (auth-js) reads it.
+function guessRateLimited(retryAfterSeconds: number): Response {
+  const error = { code: 'RATE_LIMITED', error_code: 'over_request_rate_limit', message: 'Bạn thử quá nhiều lần, hãy thử lại sau', retryAfterSeconds };
+  return new Response(JSON.stringify(error), {
+    status: 429,
+    headers: { 'content-type': 'application/json', 'retry-after': String(retryAfterSeconds) },
+  });
+}
+
+// With TRUSTED_PROXY_HOPS=0 behind a reverse proxy, every client shares the proxy's address and so one email budget,
+// one budget of failed stream ticket redeems and one budget of failed sign-in attempts.
 let proxyWarned = false;
 function warnIfUntrustedProxy(c: Context, trustedHops: number): void {
   if (proxyWarned || trustedHops > 0 || !c.req.header('x-forwarded-for')) return;
   proxyWarned = true;
   console.warn(
-    '[http] requests carry X-Forwarded-For but TRUSTED_PROXY_HOPS=0: behind a reverse proxy every client shares its address, and so one email budget and one budget of failed stream ticket redeems; set TRUSTED_PROXY_HOPS',
+    '[http] requests carry X-Forwarded-For but TRUSTED_PROXY_HOPS=0: behind a reverse proxy every client shares its address, and so one email budget, one budget of failed stream ticket redeems and one budget of failed sign-in attempts; set TRUSTED_PROXY_HOPS',
   );
 }
 
@@ -330,6 +342,13 @@ export function createHttpApp(deps: HttpDeps) {
         perClientPerHour: config.AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR,
         addressIntervalSeconds: config.AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS,
       });
+    const guessLimiter =
+      deps.guessLimiter ??
+      createGuessLimiter({
+        perClient: config.AUTH_GUESS_LIMIT_PER_CLIENT,
+        perAccountClient: config.AUTH_GUESS_LIMIT_PER_ACCOUNT_CLIENT,
+        perAccount: config.AUTH_GUESS_LIMIT_PER_ACCOUNT,
+      });
     const autoconfirm = config.AUTH_AUTOCONFIRM === 'true';
     app.all('/auth/v1/*', bodyLimit({ maxSize: 1024 * 1024 }), async (c) => {
       const url = new URL(c.req.url);
@@ -347,9 +366,19 @@ export function createHttpApp(deps: HttpDeps) {
       if (ip) headers.set('x-real-ip', ip);
       const method = c.req.method;
       const payload = method === 'GET' || method === 'HEAD' ? null : new Uint8Array(await c.req.arrayBuffer());
+      const client = clientBucket(ip);
+      // A password sign-in, or a one-time or MFA code to check, takes a slot of its client's and its account's guess
+      // budgets first (#221).
+      const guess = guessRequest(method, path, url.searchParams, c.req.header('content-type') ?? null, payload);
+      let releaseGuess: (() => void) | null = null;
+      if (guess) {
+        warnIfUntrustedProxy(c, config.TRUSTED_PROXY_HOPS);
+        const verdict = guessLimiter.reserve(client, guess);
+        if (!verdict.allowed) return guessRateLimited(verdict.retryAfterSeconds);
+        releaseGuess = verdict.release;
+      }
       // A request that makes Supabase Auth send an email takes a slot of its client's budget first (#190).
       const sends = emailSendRequest(method, path, payload, autoconfirm);
-      const client = clientBucket(ip);
       let reservation: string | null = null;
       if (sends) {
         warnIfUntrustedProxy(c, config.TRUSTED_PROXY_HOPS);
@@ -375,6 +404,9 @@ export function createHttpApp(deps: HttpDeps) {
           console.error('[auth-proxy] email reservation not released:', error instanceof Error ? error.message : error);
         });
       }
+      // An attempt Supabase Auth accepted, or did not check because of its own limit, gives its guess slots back. A
+      // refusal (wrong password or code) keeps them, and so does no answer: the secret may have been checked.
+      if (releaseGuess && response && (response.ok || response.status === 429)) releaseGuess();
       if (!response) return c.json({ code: 'AUTH_UNAVAILABLE', message: 'Dịch vụ đăng nhập không phản hồi' }, 503);
       // fetch() already decoded the body, so the upstream content-encoding no longer applies.
       const out = forwardable(response.headers, new Set(['content-encoding']));

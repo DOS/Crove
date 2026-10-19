@@ -83,6 +83,8 @@ const AUTH_ERRORS = [
   'mfa_verification_failed',
   'mfa_challenge_expired',
   'insufficient_aal',
+  // Supabase Auth's own per-address limits, and the proxy's limits on guessing passwords and codes (#221).
+  'over_request_rate_limit',
 ] as const;
 type AuthErrorCode = (typeof AUTH_ERRORS)[number];
 

@@ -85,6 +85,7 @@ export const vi = {
       mfa_verification_failed: 'Mã xác thực không đúng hoặc đã hết hạn',
       mfa_challenge_expired: 'Mã xác thực đã hết hạn, hãy nhập mã mới',
       insufficient_aal: 'Hãy nhập mã xác thực hai lớp trước',
+      over_request_rate_limit: 'Thử quá nhiều lần, hãy thử lại sau ít phút',
     },
   },
   onboarding: {

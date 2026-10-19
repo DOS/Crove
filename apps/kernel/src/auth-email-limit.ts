@@ -54,15 +54,21 @@ export function emailSendRequest(method: string, path: string, body: Uint8Array 
   // sign-in) send nothing.
   if (path === '/user' && emails.length === 0) return null;
   if (path === '/signup' && emails.length === 0 && phones.length === 0) return null;
-  const email = recipient(emails, (v) => v.trim().toLowerCase());
-  if (email !== undefined) return { target: email ? `email:${email}` : null };
-  const phone = recipient(phones, (v) => v.replace(/[^\d]/g, ''));
-  if (phone !== undefined) return { target: phone ? `phone:${phone}` : null };
-  return { target: null };
+  return { target: bodyAccount(fields) };
+}
+
+// The account a JSON body names, read as Supabase Auth reads it: `email:<address>` when it has an email, otherwise
+// `phone:<digits>`. null when it names neither, or not as one clear string.
+export function bodyAccount(fields: Record<string, unknown>): string | null {
+  const email = recipient(fieldValues(fields, 'email'), (v) => v.trim().toLowerCase());
+  if (email !== undefined) return email ? `email:${email}` : null;
+  const phone = recipient(fieldValues(fields, 'phone'), (v) => v.replace(/[^\d]/g, ''));
+  if (phone !== undefined) return phone ? `phone:${phone}` : null;
+  return null;
 }
 
 // Values of every key equal to `name` ignoring case, as Go's decoder matches struct fields.
-function fieldValues(fields: Record<string, unknown>, name: string): unknown[] {
+export function fieldValues(fields: Record<string, unknown>, name: string): unknown[] {
   return Object.entries(fields)
     .filter(([key]) => key.toLowerCase() === name)
     .map(([, value]) => value);
@@ -77,7 +83,7 @@ function recipient(values: unknown[], normalize: (value: string) => string): str
   return normalized.size === 1 && only ? only : '';
 }
 
-function jsonFields(body: Uint8Array | null): Record<string, unknown> | null {
+export function jsonFields(body: Uint8Array | null): Record<string, unknown> | null {
   if (!body || body.byteLength === 0) return null;
   try {
     const value: unknown = JSON.parse(new TextDecoder().decode(body));
