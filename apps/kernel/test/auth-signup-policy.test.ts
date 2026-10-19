@@ -1,7 +1,18 @@
 // The sign-up policy's decisions (#350) without a database: which requests can create an account, how the email is
 // read from a body the way Supabase Auth's Go decoder reads it, and the configuration that stops the boot.
 import { describe, expect, it } from 'vitest';
-import { goFoldKey, methodRefused, parseAllowedDomains, signupAllowed, signupEmail, signupGate, signupRefused, type SignupRules } from '../src/auth-signup-policy.ts';
+import {
+  goFoldKey,
+  methodRefused,
+  parseAllowedDomains,
+  signupAllowed,
+  signupEmail,
+  signupGate,
+  signupInviteToken,
+  signupRefused,
+  type InviteChecks,
+  type SignupRules,
+} from '../src/auth-signup-policy.ts';
 import { loadConfig } from '../src/config.ts';
 
 const rules = (policy: SignupRules['policy'], domains: string[] = []): SignupRules => ({ policy, domains: new Set(domains) });
@@ -88,16 +99,50 @@ describe('signupGate', () => {
 });
 
 describe('signupAllowed', () => {
-  const never = async () => false;
-  const always = async () => true;
-  it('admits allowed domains exactly, and otherwise asks for an invite', async () => {
+  const TOKEN = 'T'.repeat(43);
+  // held: the address holds some valid invite; matches: TOKEN is the token of a valid invite for it.
+  const checks = (held: boolean, matches: boolean): InviteChecks & { asked: string[] } => {
+    const asked: string[] = [];
+    return {
+      asked,
+      held: async (email) => (asked.push(`held ${email}`), held),
+      matches: async (email, token) => (asked.push(`matches ${email}`), matches && token === TOKEN),
+    };
+  };
+  it('admits allowed domains exactly while the address holds no invite, and otherwise asks for the invite token', async () => {
     const r = rules('allowlist', ['corp.test']);
-    expect(await signupAllowed(r, 'a+b@corp.test', never)).toBe(true);
-    expect(await signupAllowed(r, 'a@sub.corp.test', never)).toBe(false);
-    expect(await signupAllowed(r, 'a@evilcorp.test', never)).toBe(false);
-    expect(await signupAllowed(r, 'a@else.test', always)).toBe(true);
-    expect(await signupAllowed(rules('invite_only'), 'a@corp.test', never)).toBe(false);
-    expect(await signupAllowed(rules('invite_only'), 'a@corp.test', always)).toBe(true);
+    expect(await signupAllowed(r, 'a+b@corp.test', null, checks(false, false))).toBe(true);
+    expect(await signupAllowed(r, 'a@sub.corp.test', null, checks(false, false))).toBe(false);
+    expect(await signupAllowed(r, 'a@evilcorp.test', null, checks(false, false))).toBe(false);
+    expect(await signupAllowed(r, 'a@else.test', TOKEN, checks(true, true))).toBe(true);
+    // An invited address at an allowed domain needs its link too (#563): someone else could otherwise sign up first.
+    expect(await signupAllowed(r, 'a@corp.test', null, checks(true, false))).toBe(false);
+    expect(await signupAllowed(r, 'a@corp.test', TOKEN, checks(true, true))).toBe(true);
+    expect(await signupAllowed(r, 'a@else.test', null, checks(true, true))).toBe(false);
+  });
+  it('under invite_only admits only a sign-up carrying the token of a valid invite for its email (#563)', async () => {
+    const r = rules('invite_only');
+    // Holding an invite is not enough: whoever knows an invited address could sign up first with their own password.
+    const held = checks(true, false);
+    expect(await signupAllowed(r, 'a@corp.test', null, held)).toBe(false);
+    expect(held.asked).toEqual([]);
+    expect(await signupAllowed(r, 'a@corp.test', TOKEN, checks(true, false))).toBe(false);
+    expect(await signupAllowed(r, 'a@corp.test', 'U'.repeat(43), checks(true, true))).toBe(false);
+    const ok = checks(true, true);
+    expect(await signupAllowed(r, 'a@corp.test', TOKEN, ok)).toBe(true);
+    expect(ok.asked).toEqual(['matches a@corp.test']);
+  });
+  it('asks nothing under open', async () => {
+    const asked = checks(true, true);
+    expect(await signupAllowed(rules('open'), 'a@corp.test', null, asked)).toBe(true);
+    expect(asked.asked).toEqual([]);
+  });
+  it('reads the token header only when it is one well-formed token', () => {
+    expect(signupInviteToken(TOKEN)).toBe(TOKEN);
+    expect(signupInviteToken('A-_b'.repeat(10) + 'xyz')).toBe('A-_b'.repeat(10) + 'xyz');
+    for (const bad of [undefined, null, '', 'T'.repeat(42), 'T'.repeat(44), `${'T'.repeat(42)}=`, ` ${'T'.repeat(43)}`, `${'T'.repeat(43)}, ${'T'.repeat(43)}`]) {
+      expect(signupInviteToken(bad)).toBeNull();
+    }
   });
 });
 

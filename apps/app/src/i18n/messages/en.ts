@@ -96,7 +96,7 @@ export const en = {
       mfa_verification_failed: 'The code is wrong or has expired',
       mfa_challenge_expired: 'The code has expired, enter a new one',
       insufficient_aal: 'Enter your two-factor code first',
-      signup_not_allowed: "This email can't sign up here. Use the address your invite was sent to, or ask your organization's admin.",
+      signup_not_allowed: "This email can't sign up here. If you were invited, open the link in the invite email on this device and sign up from there, with the address it was sent to; otherwise ask your organization's admin.",
       signup_method_not_allowed: 'This sign-in method is turned off on this server. Sign in with your email and password.',
       signup_disabled: "Sign-up is closed on this server. Ask your organization's admin.",
     },

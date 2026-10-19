@@ -54,7 +54,17 @@ import {
   type VatReport,
 } from '@crove/mod-finance';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
-import { createDbInviteCheck, methodRefused, signupAllowed, signupGate, signupRefused, type SignupRules } from './auth-signup-policy.ts';
+import {
+  createDbInviteChecks,
+  INVITE_TOKEN_HEADER,
+  methodRefused,
+  signupAllowed,
+  signupGate,
+  signupInviteToken,
+  signupRefused,
+  type InviteChecks,
+  type SignupRules,
+} from './auth-signup-policy.ts';
 import { actorOf, bearerIssuedToOAuthClient, oauthClientRefused, type Authenticate, type AuthUser } from './auth.ts';
 import { ConcurrencyLimiter, type Semaphore } from './concurrency.ts';
 import { publicAuthUrl, type Config } from './config.ts';
@@ -96,8 +106,8 @@ export interface HttpDeps {
   mailer?: Mailer;
   // Per-client budget for Supabase Auth's emails (#190). Unset: the database limiter on `pool`.
   emailLimiter?: EmailLimiter;
-  // Whether an email holds a valid member invite, for AUTH_SIGNUP_POLICY (#350). Unset: the database check on `pool`.
-  signupInviteCheck?: (email: string) => Promise<boolean>;
+  // The member invite checks for AUTH_SIGNUP_POLICY (#350, #563). Unset: the database checks on `pool`.
+  signupInviteChecks?: InviteChecks;
   // Per-user request limit on /api (issue #162). Default: built from API_RATE_LIMIT_PER_MINUTE; null turns it off.
   rateLimiter?: RateLimiter | null;
   // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
@@ -248,6 +258,9 @@ const SPOOFABLE = new Set([
   'x-client-ip',
   'sb-forwarded-for',
 ]);
+// Dropped from every request the auth proxy forwards: the forwarding headers above, and the invite token a sign-up
+// carries for the sign-up policy (#563), which is the proxy's to read and none of Supabase Auth's business.
+const PROXY_DROPPED = new Set([...SPOOFABLE, INVITE_TOKEN_HEADER]);
 // Public Supabase Auth endpoints the web app needs. Everything else (notably /admin) is not reachable.
 const AUTH_PUBLIC_PATHS =
   /^\/(?:token|signup|verify|recover|user|logout|otp|resend|settings|health|authorize|callback|reauthenticate|factors(?:\/[\w-]+(?:\/(?:challenge|verify))?)?|\.well-known\/jwks\.json)$/;
@@ -353,12 +366,12 @@ export function createHttpApp(deps: HttpDeps) {
       });
     const autoconfirm = config.AUTH_AUTOCONFIRM === 'true';
     const signupRules: SignupRules = { policy: config.AUTH_SIGNUP_POLICY, domains: new Set(config.AUTH_SIGNUP_ALLOWED_DOMAINS) };
-    const inviteValid = deps.signupInviteCheck ?? createDbInviteCheck(deps.pool);
+    const inviteChecks = deps.signupInviteChecks ?? createDbInviteChecks(deps.pool);
     app.all('/auth/v1/*', bodyLimit({ maxSize: 1024 * 1024 }), async (c) => {
       const url = new URL(c.req.url);
       const path = url.pathname.replace(/^\/auth\/v1/, '');
       if (!AUTH_PUBLIC_PATHS.test(path)) return c.json({ code: 'NOT_FOUND' }, 404);
-      const headers = forwardable(c.req.raw.headers, SPOOFABLE);
+      const headers = forwardable(c.req.raw.headers, PROXY_DROPPED);
       // Supabase Auth accepts the access tokens its OAuth server issues to third-party clients wherever it accepts a
       // browser's (ADR-0028 fact 11). Of the paths above, it authenticates /user, /logout, /reauthenticate and every
       // /factors path with that token (`requireAuthentication`, v2.197.0), so an OAuth client could change the
@@ -390,7 +403,9 @@ export function createHttpApp(deps: HttpDeps) {
         reservation = verdict.reservation;
       }
       if (gate.kind === 'check') {
-        const allowed = await signupAllowed(signupRules, gate.email, inviteValid).catch((error: unknown) => {
+        // The invite token the web app sends with a sign-up from an accept link (#563); the header is never forwarded.
+        const token = signupInviteToken(c.req.header(INVITE_TOKEN_HEADER));
+        const allowed = await signupAllowed(signupRules, gate.email, token, inviteChecks).catch((error: unknown) => {
           console.error('[auth-proxy] sign-up policy check unavailable:', error instanceof Error ? error.message : error);
           return null;
         });

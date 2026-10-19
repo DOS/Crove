@@ -1,6 +1,7 @@
 import { AuthClient, type Session } from '@supabase/auth-js';
 import type { Translate } from '../i18n/runtime.ts';
 import { ClientError } from './errors.ts';
+import { withInviteToken } from './invite.ts';
 
 export interface PublicConfig {
   authUrl: string;
@@ -48,6 +49,8 @@ export function auth(): Client {
     url: authUrl,
     headers: authAnonKey ? { apikey: authAnonKey, Authorization: `Bearer ${authAnonKey}` } : {},
     storageKey: 'crove-auth',
+    // A sign-up from an accept link carries the invite token for the proxy's sign-up policy (#563).
+    fetch: withInviteToken((input, init) => fetch(input, init), window.location.origin),
     // Email links (confirmation, recovery) come back with a one-time code that only this browser can exchange.
     flowType: 'pkce',
     autoRefreshToken: true,
