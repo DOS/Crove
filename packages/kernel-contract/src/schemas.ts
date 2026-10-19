@@ -111,6 +111,8 @@ export const zOrgDetail = z.object({
   taxCode: z.string().nullable(),
   // How often the org files its VAT return (issue #318); null until an owner or admin chooses.
   vatFilingPeriod: zVatFilingPeriod.nullable(),
+  // The org's address as the tax registry records it (issue #324); null until an owner or admin sets it.
+  address: z.string().nullable(),
   inboundAddress: z.string().nullable(),
   // Messages to the org's addresses retired in the last 30 days that were dropped (#139); null when inboundAddress is.
   inboundDroppedCount: z.number().int().nonnegative().nullable(),
@@ -136,6 +138,9 @@ export const zClientOverview = zOrgSummary.extend({
       .nullable(),
   }),
 });
+// What the public tax registry says about a tax code (issue #324), to prefill a new org: the normalized tax code, the
+// registered name and the address (null when the registry has none).
+export const zTaxRegistryEntry = z.object({ taxCode: z.string(), name: z.string(), address: z.string().nullable() });
 
 // Org offboarding and its export (issue #38, #212). Each table downloads as NDJSON (one row per line) from
 // GET /api/org-export/<table>, and the manifest (the parts with their sha256 and row counts) as JSON from

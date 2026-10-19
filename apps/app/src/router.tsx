@@ -190,7 +190,13 @@ const socialIndexRoute = createRoute({ getParentRoute: () => socialRoute, path: 
 const socialNewRoute = createRoute({ getParentRoute: () => socialRoute, path: 'new', component: SocialComposePage });
 const socialChannelsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'channels', component: SocialChannelsPage });
 const socialPostRoute = createRoute({ getParentRoute: () => socialRoute, path: '$id', component: SocialPostPage });
-const settingsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'settings', component: SettingsPage });
+// ?invite=<email> fills the invite form: onboarding sends a firm here to invite the new client's contact (issue #324).
+const settingsRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: 'settings',
+  validateSearch: (search: Record<string, unknown>): { invite?: string } => (typeof search.invite === 'string' ? { invite: search.invite.slice(0, 320) } : {}),
+  component: SettingsPage,
+});
 // AI agents and tasks (ADR-0029) belong to the kernel, so every deployment has them.
 const agentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'agents', component: AgentsPage });
 const tasksRoute = createRoute({ getParentRoute: () => orgRoute, path: 'tasks', component: TasksPage });

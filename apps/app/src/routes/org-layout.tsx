@@ -140,6 +140,10 @@ export function OrgLayout() {
               </NativeSelectOption>
             ))}
           </NativeSelect>
+          {/* A firm adds its next client company from here (issue #324). */}
+          <Link to="/onboarding" className="mt-1 inline-block text-xs text-link">
+            {t('addOrg')}
+          </Link>
         </div>
         <button
           type="button"

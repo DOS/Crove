@@ -17,6 +17,8 @@ export interface PublicConfig {
   stream?: boolean;
   // The feedback and support link (SUPPORT_URL, issue #310): https: or mailto:, null when the deployment has none.
   supportUrl?: string | null;
+  // The server can look up a tax code in the public registry to prefill a new org (TAX_CODE_LOOKUP_URL, issue #324).
+  taxCodeLookup?: boolean;
   // The offline sandbox channel can be connected (CHANNEL_SANDBOX); `oauth` lists the providers connected through
   // their OAuth dialog that the server has app credentials for.
   channels?: { sandbox: boolean; bluesky?: boolean; oauth?: string[] };

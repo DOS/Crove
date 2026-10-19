@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { useSearch } from '@tanstack/react-router';
 import { useId, useState, type FormEvent } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { MemberSessions, MySessions } from '../components/sessions.tsx';
@@ -408,10 +409,11 @@ function CreatedInvite({ invite, onDone }: { invite: { email: string; expiresAt:
   );
 }
 
-function InviteMember({ isOwner }: { isOwner: boolean }) {
+// `initialEmail`: the contact onboarding asked to invite (?invite=, issue #324).
+function InviteMember({ isOwner, initialEmail }: { isOwner: boolean; initialEmail?: string | undefined }) {
   const root = useTranslations();
   const t = useTranslations('settings');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(initialEmail ?? '');
   const [role, setRole] = useState<InviteRole>('member');
   const invite = useMutation(
     orpc.org.invite.mutationOptions({
@@ -602,11 +604,68 @@ function VatFilingPeriodField({ period, canManage }: { period: 'month' | 'quarte
   );
 }
 
+// The org's address as the tax registry records it (issue #324). Owners and admins edit it; everyone else sees it.
+function AddressField({ address, canManage }: { address: string | null; canManage: boolean }) {
+  const t = useTranslations('settings');
+  const tc = useTranslations('common');
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(address ?? '');
+  const save = useMutation(
+    orpc.org.setAddress.mutationOptions({
+      onSuccess: async () => {
+        setEditing(false);
+        await queryClient.invalidateQueries({ queryKey: orpc.org.get.key() });
+      },
+    }),
+  );
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    save.mutate({ address: value.trim() ? value.trim() : null });
+  };
+  return (
+    <div>
+      <dt className="text-subtle-foreground">{t('address')}</dt>
+      {editing ? (
+        <form onSubmit={submit} aria-label={t('address')} className="mt-1 flex flex-wrap items-center gap-2">
+          <Input value={value} onChange={(e) => setValue(e.target.value)} maxLength={500} aria-label={t('address')} className="min-w-64 flex-1" />
+          <Button type="submit" size="sm" disabled={save.isPending}>
+            {save.isPending ? <Spinner className="text-current" /> : null}
+            {t('addressSave')}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setEditing(false);
+              setValue(address ?? '');
+              save.reset();
+            }}
+          >
+            {tc('cancel')}
+          </Button>
+        </form>
+      ) : (
+        <dd className="flex flex-wrap items-center gap-2">
+          <span className={address ? 'text-foreground' : 'text-subtle-foreground'}>{address ?? t('addressUnset')}</span>
+          {canManage && (
+            <Button type="button" size="sm" variant="outline" onClick={() => setEditing(true)}>
+              {address ? t('addressChange') : t('addressSet')}
+            </Button>
+          )}
+        </dd>
+      )}
+      {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const root = useTranslations();
   const t = useTranslations('settings');
   const org = useQuery(orpc.org.get.queryOptions());
   const me = useQuery(orpc.me.get.queryOptions());
+  const search: { invite?: string } = useSearch({ strict: false });
 
   if (org.isLoading) return <Spinner />;
   if (org.error) return <ErrorText>{errorMessage(org.error)}</ErrorText>;
@@ -631,8 +690,12 @@ export function SettingsPage() {
               <dt className="text-subtle-foreground">{t('slug')}</dt>
               <dd className="font-mono text-foreground">{org.data?.slug}</dd>
             </div>
-            {getConfig().modules.includes('finance') && <TaxCodeField key={org.data?.taxCode ?? ''} taxCode={org.data?.taxCode ?? null} canManage={canManage} />}
+            {/* Keyed by org too: a value typed in one org must not stay in the form when the page shows another. */}
+            {getConfig().modules.includes('finance') && (
+              <TaxCodeField key={`${org.data?.slug}:${org.data?.taxCode ?? ''}`} taxCode={org.data?.taxCode ?? null} canManage={canManage} />
+            )}
             {getConfig().modules.includes('finance') && <VatFilingPeriodField period={org.data?.vatFilingPeriod ?? null} canManage={canManage} />}
+            <AddressField key={`${org.data?.slug}:${org.data?.address ?? ''}`} address={org.data?.address ?? null} canManage={canManage} />
             <div>
               <dt className="text-subtle-foreground">{t('inboundAddress')}</dt>
               <dd className="break-all font-mono text-foreground">{org.data?.inboundAddress ?? t('inboundOff')}</dd>
@@ -665,7 +728,7 @@ export function SettingsPage() {
           </ul>
           {canManage && (
             <>
-              <InviteMember isOwner={isOwner} />
+              <InviteMember isOwner={isOwner} initialEmail={search.invite} />
               <PendingInvites />
             </>
           )}

@@ -634,6 +634,7 @@ export interface KernelTenantTable {
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   tax_code: string | null;
   vat_filing_period: string | null;
+  address: string | null;
 }
 
 /** crove_social.channel_policy */

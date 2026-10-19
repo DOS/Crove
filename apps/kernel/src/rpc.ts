@@ -24,6 +24,7 @@ import { DomainError, type CredentialBroker, type Runtime, type UserActor } from
 import { DraftBudget } from './ai-draft-limit.ts';
 import { actorOf, type AuthUser } from './auth.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
+import type { TaxCodeLookup } from './tax-lookup.ts';
 
 export interface RpcContext {
   user: AuthUser;
@@ -103,7 +104,8 @@ function connectorFailure(error: unknown): DomainError {
 
 // sendInviteMail unset: invite mail is off (tests, or an embedder without mail). channels unset: no channel can be
 // connected through the API (the list and disconnect still work).
-export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, drafts: DraftBudget = new DraftBudget()) {
+// taxLookup unset: the public tax registry lookup is off (issue #324, TAX_CODE_LOOKUP_URL).
+export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, taxLookup?: TaxCodeLookup, drafts: DraftBudget = new DraftBudget()) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -181,6 +183,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       ),
       setVatFilingPeriod: os.org.setVatFilingPeriod.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_vat_filing_period', input, { actor, orgId })),
+      ),
+      setAddress: os.org.setAddress.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_address', input, { actor, orgId })),
       ),
       // No idempotency key: the answer carries the invite token, which must never be stored with a key. The mail
       // goes out after the command has committed (invite-mail.ts says why); its outcome is logged and never changes
@@ -429,6 +434,15 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             connections.push({ connectionId: done.connectionId, displayName: account.displayName, reconnected: done.reconnected });
           }
           return { connections };
+        }),
+      ),
+    },
+    // Org-less: any signed-in user may look up a tax code before the org exists. Nothing is written, so no command.
+    taxRegistry: {
+      lookup: os.taxRegistry.lookup.handler(({ context, input }) =>
+        guard(async () => {
+          if (!taxLookup) throw new DomainError('TAX_LOOKUP_DISABLED', 404, 'Máy chủ chưa bật tra cứu mã số thuế; hãy nhập tên và địa chỉ');
+          return taxLookup.lookup(input.taxCode, context.user.userId);
         }),
       ),
     },
