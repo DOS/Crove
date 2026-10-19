@@ -137,7 +137,8 @@ export function OrgLayout() {
           {tp('open')}
           <kbd className="rounded-sm border px-1 font-mono text-[11px]">{paletteKeys}</kbd>
         </button>
-        <nav className="mt-4 flex flex-col gap-0.5">
+        {/* The menu scrolls on a short window, so the account footer below it always stays on screen. */}
+        <nav className="mt-4 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
           {NAV.map((item) => (
             <Link
               key={item.to}
@@ -153,7 +154,7 @@ export function OrgLayout() {
             </Link>
           ))}
         </nav>
-        <div className="mt-auto border-t px-2 pt-3 text-xs text-subtle-foreground">
+        <div className="mt-3 shrink-0 border-t px-2 pt-3 text-xs text-subtle-foreground">
           <SupportLink className="mb-2 block text-sm text-link" />
           <p className="truncate">{me.data?.email}</p>
           <div className="mt-1 flex items-center justify-between gap-2">
