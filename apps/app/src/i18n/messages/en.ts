@@ -214,7 +214,13 @@ export const en = {
     exportXml: 'Export XML for HTKK',
     exportXmlFile: 'crove-01gtgt-{period}-{org}.xml',
     xmlNote:
-      'The XML file for HTKK (form 01/GTGT of Circular 80/2021, XML version 2.8.3) carries the indicators above. Indicators [22], [25] and [37] to [39a], the tax office and the signer are left blank; until [25] is entered, the payable VAT in the file assumes no input VAT is deducted. Your accountant completes and checks it in HTKK or on eTax before filing.',
+      'The XML file for HTKK (form 01/GTGT of Circular 80/2021, XML version 2.8.3) carries the indicators above. Indicators [21], [22], [23a], [24a], [25], [37], [38], [39a], [40b] and [42] are written as 0, and the tax office and the signer are left blank; until [25] is entered, the payable VAT in the file assumes no input VAT is deducted. Your accountant completes and checks it in HTKK or on eTax before filing.',
+    exportXmlWrongKind:
+      'Your organization files VAT {kind}, so the XML for HTKK is only available for a {kindOne}. The Excel export works for any period.',
+    filingMonthly: 'monthly',
+    filingQuarterly: 'quarterly',
+    kindMonth: 'month',
+    kindQuarter: 'quarter',
     exportXmlNeedsTaxCode: 'To export the return as XML for HTKK, set the tax code of your organization in Settings.',
     kind: 'Period',
     month: 'Month',
@@ -1337,6 +1343,8 @@ export const en = {
       EXPORT_TOO_LARGE: 'Too many journal entries to export at once. Choose a shorter date range.',
       PERIOD_TOO_LARGE: 'This period has too many invoices or entries to report at once; choose a shorter period.',
       TAX_CODE_REQUIRED: 'Your organization has no tax code yet. Set it in Settings, then export again.',
+      PERIOD_KIND_MISMATCH: 'Your organization files VAT by a different period kind, so this XML cannot be exported. Pick a period of the filing kind, or change the VAT filing period in Settings.',
+      TAXPAYER_NAME_REQUIRED: 'Your organization has no name yet. Set it in Settings, then export again.',
       // Crove Social and connected channels.
       POST_NOT_FOUND: 'This post was not found',
       VARIANT_NOT_FOUND: 'This channel of the post was not found',

@@ -69,14 +69,19 @@ function InvoiceTable({ invoices, partyLabel }: { invoices: Invoice[]; partyLabe
 export function VatPage() {
   const t = useTranslations('vat');
   const f = useFormat();
-  const [choice, setChoice] = useState<PeriodChoice>(() => defaultPeriod('month'));
-  const period = periodKey(choice);
-  const report = useQuery(orpc.vat.period.queryOptions({ input: { period } }));
-  const data = report.data;
-
   // The org's tax code goes into the HTKK file (#332); without one the server refuses it, so the button waits for it.
   const org = useQuery(orpc.org.get.queryOptions());
   const taxCode = org.data?.taxCode ?? null;
+  // The org's filing period (#318) picks the kind the screen opens on, until the user picks another one.
+  const filing = org.data?.vatFilingPeriod ?? null;
+  const [picked, setPicked] = useState<PeriodChoice | null>(null);
+  const choice = picked ?? defaultPeriod(filing ?? 'month');
+  const setChoice = setPicked;
+  const period = periodKey(choice);
+  const report = useQuery(orpc.vat.period.queryOptions({ input: { period } }));
+  const data = report.data;
+  // The XML is a filing, so the server refuses the other kind (PERIOD_KIND_MISMATCH); the button says why first.
+  const wrongKind = filing !== null && filing !== choice.kind;
 
   const download = async (path: string, filename: string) => {
     const response = await apiFetch(`${path}?${new URLSearchParams({ period })}`);
@@ -95,6 +100,10 @@ export function VatPage() {
   });
   const exportError = exportXlsx.error ?? exportXml.error;
 
+  const wrongKindText = t('exportXmlWrongKind', {
+    kind: filing === 'quarter' ? t('filingQuarterly') : t('filingMonthly'),
+    kindOne: filing === 'quarter' ? t('kindQuarter') : t('kindMonth'),
+  });
   const indexes = choice.kind === 'month' ? Array.from({ length: 12 }, (_, i) => i + 1) : [1, 2, 3, 4];
   const rateRows = data ? data.input.totals.byRate.map((input, i) => ({ input, output: data.output.totals.byRate[i] })) : [];
 
@@ -109,8 +118,8 @@ export function VatPage() {
               size="lg"
               variant="outline"
               onClick={() => exportXml.mutate()}
-              disabled={exportXml.isPending || !data || !taxCode}
-              title={org.data && !taxCode ? t('exportXmlNeedsTaxCode') : undefined}>
+              disabled={exportXml.isPending || !data || !taxCode || wrongKind}
+              title={org.data && !taxCode ? t('exportXmlNeedsTaxCode') : wrongKind ? wrongKindText : undefined}>
               {exportXml.isPending ? <Spinner className="text-current" /> : null}
               {t('exportXml')}
             </Button>
@@ -122,6 +131,7 @@ export function VatPage() {
         }
       />
       {org.data && !taxCode && <p className="mb-4 text-sm text-muted-foreground">{t('exportXmlNeedsTaxCode')}</p>}
+      {org.data && taxCode && wrongKind && <p className="mb-4 text-sm text-muted-foreground">{wrongKindText}</p>}
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <label className="text-xs">
           <span className="text-subtle-foreground">{t('kind')}</span>

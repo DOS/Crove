@@ -15,7 +15,7 @@ const NAME = /^[A-Za-z_][A-Za-z0-9_.:-]*$/;
 // Characters XML 1.0 does not allow at all (C0 controls other than tab, newline and carriage return, lone surrogates,
 // U+FFFE and U+FFFF). They are dropped rather than escaped: no character reference can express them.
 // eslint-disable-next-line no-control-regex
-const NOT_XML = /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+const NOT_XML = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 export function escapeXml(value: string): string {
   return value

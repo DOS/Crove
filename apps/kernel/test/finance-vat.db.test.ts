@@ -328,6 +328,45 @@ suite('VAT working per month or quarter (#316)', () => {
     expect(await xmlAudits()).toHaveLength(2);
   });
 
+  it('refuses an out-of-range year with a 422 and records nothing, for the XML and the Excel working', async () => {
+    const owned = await tokenFor(owner);
+    const xmlBefore = (await xmlAudits()).length;
+    const allBefore = (await exportAudits()).length;
+    for (const period of ['1999-01', '2101-Q1']) {
+      expect((await exportXml(owned, period)).status, period).toBe(422);
+      const xlsx = await app.request(`/api/export/vat.xlsx?${new URLSearchParams({ period })}`, { headers: { authorization: `Bearer ${owned}`, 'x-crove-org': org.slug } });
+      expect(xlsx.status, period).toBe(422);
+    }
+    expect(await xmlAudits()).toHaveLength(xmlBefore);
+    expect(await exportAudits()).toHaveLength(allBefore);
+  });
+
+  it('refuses the XML of the other period kind than the org files, keeps the Excel working open, and allows both when unset', async () => {
+    const owned = await tokenFor(owner);
+    const before = (await xmlAudits()).length;
+    expect((await rpc('org/setVatFilingPeriod', owned, { vatFilingPeriod: 'month' }, org.slug)).status).toBe(200);
+    const quarter = await exportXml(owned, '2026-Q3');
+    expect(quarter.status).toBe(422);
+    expect(await quarter.json()).toMatchObject({ code: 'PERIOD_KIND_MISMATCH' });
+    expect(quarter.headers.get('content-disposition')).toBeNull();
+    expect((await exportXml(owned, '2026-09')).status).toBe(200);
+    // The Excel working is an analysis tool, not a filing: any period stays allowed.
+    const xlsx = await app.request(`/api/export/vat.xlsx?period=2026-Q3`, { headers: { authorization: `Bearer ${owned}`, 'x-crove-org': org.slug } });
+    expect(xlsx.status).toBe(200);
+
+    expect((await rpc('org/setVatFilingPeriod', owned, { vatFilingPeriod: 'quarter' }, org.slug)).status).toBe(200);
+    const month = await exportXml(owned, '2026-09');
+    expect(month.status).toBe(422);
+    expect(await month.json()).toMatchObject({ code: 'PERIOD_KIND_MISMATCH' });
+    expect((await exportXml(owned, '2026-Q3')).status).toBe(200);
+
+    expect((await rpc('org/setVatFilingPeriod', owned, { vatFilingPeriod: null }, org.slug)).status).toBe(200);
+    expect((await exportXml(owned, '2026-Q3')).status).toBe(200);
+    expect((await exportXml(owned, '2026-09')).status).toBe(200);
+    // Only the four accepted XML exports above were recorded; the refusals and the Excel working add no XML row.
+    expect(await xmlAudits()).toHaveLength(before + 4);
+  });
+
   it('keeps the HTKK XML to members of the org', async () => {
     const before = (await xmlAudits()).length;
     const foreign = await exportXml(await tokenFor(outsider), '2026-09');

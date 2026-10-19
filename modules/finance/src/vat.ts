@@ -191,9 +191,22 @@ export const vatDeclarationQuery = defineQuery({
   input: zVatPeriodInput,
   access: ALL,
   handler: async (ctx, input): Promise<VatDeclaration> => {
-    const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['tax_code', 'name']).where('org_id', '=', ctx.orgId).executeTakeFirst();
+    const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['tax_code', 'name', 'vat_filing_period']).where('org_id', '=', ctx.orgId).executeTakeFirst();
     if (!org?.tax_code) {
       throw new DomainError('TAX_CODE_REQUIRED', 422, 'Tổ chức chưa có mã số thuế. Nhập mã số thuế trong Cài đặt rồi xuất lại.');
+    }
+    // A return is filed for the org's filing period (#318): a monthly filer does not file a quarterly return. Unset
+    // means nobody said, so either kind is allowed. Only the XML is refused; the Excel working stays open for any
+    // period as an analysis tool (it is not a filing).
+    const kind = vatPeriod(input.period).kind;
+    if (org.vat_filing_period && org.vat_filing_period !== kind) {
+      throw new DomainError(
+        'PERIOD_KIND_MISMATCH',
+        422,
+        org.vat_filing_period === 'month'
+          ? 'Tổ chức khai thuế GTGT theo tháng nên không xuất được tờ khai XML theo quý. Chọn một tháng, hoặc đổi kỳ khai trong Cài đặt.'
+          : 'Tổ chức khai thuế GTGT theo quý nên không xuất được tờ khai XML theo tháng. Chọn một quý, hoặc đổi kỳ khai trong Cài đặt.',
+      );
     }
     return { report: await loadVatReport(ctx, input.period), taxpayer: { taxCode: org.tax_code, name: org.name } };
   },

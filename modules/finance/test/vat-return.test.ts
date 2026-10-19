@@ -3,6 +3,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { Decimal } from '@crove/l10n-vn';
+import { zVatPeriod } from '@crove/kernel-contract';
 import {
   documentVatByRate,
   form01Indicators,
@@ -53,6 +54,11 @@ describe('vatPeriod', () => {
     for (const bad of ['2026-13', '2026-00', '2026-Q5', '2026-Q0', '26-01', '2026-1', '2026-09-01', '', '1999-01']) {
       expect(() => vatPeriod(bad), bad).toThrow();
     }
+  });
+
+  it('keeps the year within 2000 to 2100 at the edge, so the schema refuses it before vatPeriod can throw', () => {
+    for (const bad of ['1999-01', '2101-Q1', '0000-01', '9999-12']) expect(zVatPeriod.safeParse(bad).success, bad).toBe(false);
+    for (const good of ['2000-01', '2100-Q4', '2026-09']) expect(zVatPeriod.safeParse(good).success, good).toBe(true);
   });
 });
 

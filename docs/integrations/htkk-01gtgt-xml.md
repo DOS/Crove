@@ -6,7 +6,9 @@ them as the XML file HTKK itself produces for that form, checks and completes it
 
 - **Where:** "Tờ khai GTGT" screen, button "Xuất XML cho HTKK" (`GET /api/export/vat-01gtgt.xml?period=2026-09` or
   `?period=2026-Q3`). The button waits for the org's tax code (Settings, #313); the route refuses an org without one
-  (422 `TAX_CODE_REQUIRED`).
+  (422 `TAX_CODE_REQUIRED`). When the org sets its VAT filing period (Settings, #318), the XML of the other kind is
+  refused (422 `PERIOD_KIND_MISMATCH`; unset allows both); the Excel working stays open for any period as an analysis
+  tool. A blank org name is refused too (422 `TAXPAYER_NAME_REQUIRED`), and a year outside 2000-2100 is a 422 at the edge.
 - **Who:** every member of the org (the roles of the VAT working). Each download writes one audit row
   (`finance.vat.export`, detail `{ period, documents, format: "htkk_01gtgt_xml" }`, never the figures); no row, no file.
   The response is `private, no-store`.

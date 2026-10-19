@@ -115,6 +115,8 @@ export const KERNEL_ERROR_CODES = [
   'EXPORT_TOO_LARGE',
   'PERIOD_TOO_LARGE',
   'TAX_CODE_REQUIRED',
+  'PERIOD_KIND_MISMATCH',
+  'TAXPAYER_NAME_REQUIRED',
   'SLUG_MISMATCH',
   // AI agents: the chart, templates, agents, budgets and tasks (ADR-0029, issue #258).
   'MODULE_DISABLED',
