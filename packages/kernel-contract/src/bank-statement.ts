@@ -1,0 +1,137 @@
+// Bank statement import (issue #326, ADR-0021 section 6): the lines of a bank's Excel or CSV export, read in the
+// browser and sent as plain strings, then checked and deduplicated by the finance module. The module decides every
+// rule; the SPA only finds the columns and shows the answer.
+import { z } from 'zod';
+import { zAccountCode, zId, zLocalDate, zMoney } from './schemas.ts';
+
+// A month of a busy account has a few thousand lines; the cap keeps a request well under the API's body limit.
+export const BANK_IMPORT_MAX_ROWS = 5000;
+
+// One line of the file as read, cells as text: a number cell's stored value as is (an Excel date is its serial
+// number), a text cell as typed. moneyIn is the statement's credit ("ghi có"), moneyOut its debit ("ghi nợ"); a file
+// with one signed amount column sends it as moneyIn. balance and reference are '' when the file has no such column.
+// rowNo is the file's row number, for messages.
+export const zBankStatementRow = z.object({
+  rowNo: z.number().int().positive(),
+  date: z.string().max(40),
+  description: z.string().max(1000),
+  moneyIn: z.string().max(50),
+  moneyOut: z.string().max(50),
+  balance: z.string().max(50),
+  reference: z.string().max(100),
+});
+export type BankStatementRow = z.infer<typeof zBankStatementRow>;
+
+export const zBankStatementImport = z.object({
+  // A bank account of the org: a 112 account or a sub-account under one.
+  bankAccount: zAccountCode,
+  filename: z.string().max(200),
+  rows: z.array(zBankStatementRow).min(1).max(BANK_IMPORT_MAX_ROWS),
+});
+export type BankStatementImport = z.infer<typeof zBankStatementImport>;
+
+export const BANK_ROW_ERRORS = [
+  // Not a day: dd/mm/yyyy (a time may follow), yyyy-mm-dd, or an Excel date.
+  'DATE_INVALID',
+  // Not a number, negative where a side is expected, more than 2 decimals, or too large.
+  'AMOUNT_INVALID',
+  // Neither money in nor money out.
+  'AMOUNT_MISSING',
+  // Both money in and money out on one line.
+  'AMOUNT_BOTH',
+  'BALANCE_INVALID',
+] as const;
+export type BankRowError = (typeof BANK_ROW_ERRORS)[number];
+
+// new: stored by the import. duplicate: the account already has this line (same reference, or same date, amount,
+// balance and occurrence), or the file repeats it. ambiguous: no reference and no balance, and an earlier import has a
+// line of the same date and amount; stored, flagged for a person to decide.
+export const BANK_LINE_STATUSES = ['new', 'duplicate', 'ambiguous'] as const;
+export type BankLineStatus = (typeof BANK_LINE_STATUSES)[number];
+
+export const zBankImportPreview = z.object({
+  bankAccount: z.string(),
+  // The file's order as found: statements list either the oldest or the newest line first.
+  order: z.enum(['oldest_first', 'newest_first']),
+  rows: z.array(
+    z.object({
+      rowNo: z.number().int().positive(),
+      date: zLocalDate.nullable(),
+      description: z.string(),
+      // Signed: money in positive, money out negative. Null when the row has an amount error.
+      amount: zMoney.nullable(),
+      balance: zMoney.nullable(),
+      reference: z.string().nullable(),
+      // Null for a row with errors.
+      status: z.enum(BANK_LINE_STATUSES).nullable(),
+      errors: z.array(z.enum(BANK_ROW_ERRORS)),
+    }),
+  ),
+  counts: z.object({
+    new: z.number().int().nonnegative(),
+    duplicate: z.number().int().nonnegative(),
+    ambiguous: z.number().int().nonnegative(),
+    invalid: z.number().int().nonnegative(),
+  }),
+  // Where the account's running balance would not follow from the lines once these are stored: the line's balance
+  // is not the balance before it plus its amount. rowNo is the file row, or null for a line stored earlier. A break
+  // means a line is missing, doubled or out of order; the import goes ahead and the screen shows it.
+  breaks: z.array(z.object({ date: zLocalDate, rowNo: z.number().int().positive().nullable(), expected: zMoney, balance: zMoney })),
+  from: zLocalDate.nullable(),
+  to: zLocalDate.nullable(),
+  // No row has an error: the import can go ahead.
+  ok: z.boolean(),
+});
+export type BankImportPreview = z.infer<typeof zBankImportPreview>;
+
+export const zBankImportResult = z.object({
+  importId: zId,
+  counts: zBankImportPreview.shape.counts,
+  breaks: zBankImportPreview.shape.breaks,
+});
+export type BankImportResult = z.infer<typeof zBankImportResult>;
+
+// The stored lines of one bank account for a period, oldest first.
+export const zBankLines = z.object({
+  bankAccount: z.string(),
+  from: zLocalDate,
+  to: zLocalDate,
+  lines: z.array(
+    z.object({
+      id: zId,
+      date: zLocalDate,
+      description: z.string(),
+      amount: zMoney,
+      balance: zMoney.nullable(),
+      reference: z.string().nullable(),
+      ambiguous: z.boolean(),
+      importId: zId,
+    }),
+  ),
+  // Money in and out over the period.
+  moneyIn: zMoney,
+  moneyOut: zMoney,
+});
+export type BankLines = z.infer<typeof zBankLines>;
+
+// A text cell of an amount as banks print them, made plain for the module. Spaces, a "VND", "đ" or "₫" suffix and a
+// leading "+" are dropped; "" or "-" means none. With both "." and "," the one written last is the decimal point
+// ("1,500,000.50", "1.500.000,50"). With one kind only, groups of three are thousands ("1.500.000", "1,500"), and a
+// lone comma followed by other than three digits is a decimal comma ("1,5"). Anything else is returned compacted for
+// the module to judge. Number cells never go through this: their stored value is sent as it is.
+const STATEMENT_GROUPED = /^-?[1-9]\d{0,2}(?:([.,])\d{3})(?:\1\d{3})*$/;
+export function normalizeStatementAmount(text: string): string {
+  let compact = text.replace(/[\s  ]/g, '').replace(/(?:VND|VNĐ|đ|₫)$/i, '');
+  if (compact.startsWith('+')) compact = compact.slice(1);
+  if (compact === '' || compact === '-') return '';
+  const lastDot = compact.lastIndexOf('.');
+  const lastComma = compact.lastIndexOf(',');
+  if (lastDot >= 0 && lastComma >= 0) {
+    const decimal = lastDot > lastComma ? '.' : ',';
+    const group = decimal === '.' ? ',' : '.';
+    return compact.split(group).join('').replace(decimal, '.');
+  }
+  if (STATEMENT_GROUPED.test(compact)) return compact.replace(/[.,]/g, '');
+  if (lastComma >= 0 && compact.indexOf(',') === lastComma) return compact.replace(',', '.');
+  return compact;
+}

@@ -94,6 +94,9 @@ export const KERNEL_ERROR_CODES = [
   'PERIOD_NOT_LOCKED',
   'LATER_PERIOD_LOCKED',
   'PERIOD_NOT_ENDED',
+  // Bank statements (#326).
+  'NOT_A_BANK_ACCOUNT',
+  'BANK_IMPORT_INVALID',
   // The chart of accounts and vendor defaults (#319).
   'ACCOUNT_CODE_TAKEN',
   'ACCOUNT_HAS_SUB_ACCOUNTS',

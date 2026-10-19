@@ -6,6 +6,7 @@ export * from './tax-code.ts';
 export * from './cash-voucher.ts';
 export * from './portal-list.ts';
 export * from './vat-deadline.ts';
+export * from './bank-statement.ts';
 
 export const ORG_HEADER = 'x-crove-org';
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
