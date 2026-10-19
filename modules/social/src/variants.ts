@@ -84,11 +84,18 @@ export const overrides = (v: Pick<VariantRow, 'body' | 'title' | 'link_url'>) =>
 export function mediaOf(value: unknown): PostMedia[] | null {
   if (!Array.isArray(value)) return null;
   return value.map((m: unknown) => {
-    const r = m !== null && typeof m === 'object' ? (m as Record<string, unknown>) : {};
-    if (typeof r.fileId !== 'string' || typeof r.mime !== 'string' || typeof r.sizeBytes !== 'number') {
+    const { fileId, mime, sizeBytes, generation, altText, durationMs } = m !== null && typeof m === 'object' ? (m as Record<string, unknown>) : {};
+    if (typeof fileId !== 'string' || typeof mime !== 'string' || typeof sizeBytes !== 'number') {
       throw new DomainError('VARIANT_MEDIA_INVALID', 500, 'Danh sách ảnh của kênh bị hỏng, cần kiểm tra dữ liệu');
     }
-    return { fileId: r.fileId, generation: typeof r.generation === 'string' ? r.generation : null, altText: typeof r.altText === 'string' ? r.altText : null, mime: r.mime, sizeBytes: r.sizeBytes, durationMs: typeof r.durationMs === 'number' ? r.durationMs : null };
+    return {
+      fileId,
+      generation: typeof generation === 'string' ? generation : null,
+      altText: typeof altText === 'string' ? altText : null,
+      mime,
+      sizeBytes,
+      durationMs: typeof durationMs === 'number' ? durationMs : null,
+    };
   });
 }
 
