@@ -146,6 +146,39 @@ suite('social multi-step approval on PostgreSQL (S9)', () => {
     expect((await get(o, postId)).variants[0]?.status).toBe('approved');
   });
 
+  it('sends approved and scheduled variants back to review when the policy rises, keeping their place (#408)', async () => {
+    const o = await org();
+    const conn = await connection(o);
+    const approvedPost = await inReview(o, conn);
+    await decide(o, o.owner, approvedPost, 'approved');
+    const scheduledPost = await inReview(o, conn);
+    await decide(o, o.owner, scheduledPost, 'approved');
+    await schedule(o, scheduledPost);
+    const slotBefore = (await get(o, scheduledPost)).variants[0]?.effectiveAt;
+    const reviewPost = await inReview(o, conn);
+
+    const raised = await exec<{ approved: string[]; regated: string[] }>(o, o.owner, 'social.channel.set_policy', { connectionId: conn, approvalsRequired: 2 });
+    const ids = async (postId: string) => (await get(o, postId)).variants.map((v) => v.id);
+    expect(raised.approved).toEqual([]);
+    expect([...raised.regated].sort()).toEqual([...(await ids(approvedPost)), ...(await ids(scheduledPost))].sort());
+    for (const postId of [approvedPost, scheduledPost, reviewPost]) {
+      expect((await get(o, postId)).variants[0]).toMatchObject({ status: 'in_review' });
+    }
+    // The earlier approval still counts: one more person approves, and the scheduled one keeps its time.
+    expect((await get(o, scheduledPost)).variants[0]).toMatchObject({ review: { required: 2, approvedBy: [o.owner] }, effectiveAt: slotBefore });
+    await decide(o, o.admin, scheduledPost, 'approved');
+    expect((await get(o, scheduledPost)).variants[0]?.status).toBe('approved');
+    const events = await admin(async (c) => (await c.query<{ payload: { post_id: string } }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.post.submitted' AND payload->>'by_policy' = 'true'", [o.orgId])).rows);
+    expect(events.map((e) => e.payload.post_id).sort()).toEqual([approvedPost, scheduledPost].sort());
+  });
+
+  it('hides the policy of a revoked channel', async () => {
+    const o = await org();
+    const conn = await connection(o);
+    await exec(o, o.owner, 'social.channel.set_policy', { connectionId: conn, approvalsRequired: 2 });
+    await admin((c) => c.query("UPDATE crove_kernel.channel_connection SET status = 'revoked' WHERE id = $1", [conn]));
+    expect(await rt.query('social.channel.policies', {}, { actor: asUser(o.member), orgId: o.orgId })).toEqual([]);
+  });
   it('approves what already meets a lowered policy, and leaves a channel without one at a single approval', async () => {
     const o = await org();
     const strict = await connection(o);
