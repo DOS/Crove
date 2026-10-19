@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveComposeProject } from '../../e2e/lib/db.ts';
+import { resolveComposeProject } from '../../e2e/lib/compose.ts';
 
 describe('e2e database helper project guard (#496)', () => {
   it('uses the shared stack only when nothing points elsewhere', () => {
