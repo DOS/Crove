@@ -16,7 +16,7 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { buildZip, type ZipEntrySpec } from '../../extract/test/zip-fixture.ts';
 import { archiveSource, expandArchive } from '../src/archive.ts';
 import { processInboundEmail } from '../src/inbound.ts';
-import { migrateJobs, startWorker } from '../src/worker.ts';
+import { migrateJobs, recordLastAttemptFailure, startWorker } from '../src/worker.ts';
 import { inProcessExtract } from './extract-service.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -194,6 +194,36 @@ suite('bulk intake of a ZIP archive on PostgreSQL (issue #314)', () => {
     expect(await batch([fileId], outsider, orgB)).toEqual([]);
     // The file that is not an archive has no archive source.
     expect(await archiveSource(workerRuntime, orgA, first.fileIds[0] as string)).toBeNull();
+  });
+
+  it('records a failed opening on the last attempt even when the archive lookup failed (#432)', async () => {
+    // The worker's runtime, but the lookup of the archive behind a job fails, as while the database is unreachable.
+    const lookupFails = new Proxy(workerRuntime, {
+      get(target, property, receiver) {
+        if (property === 'query') {
+          return (name: string, ...rest: unknown[]) =>
+            name === 'kernel.file.archive.source' ? Promise.reject(new Error('connection refused')) : Reflect.apply(target.query, target, [name, ...rest]);
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(receiver) : value;
+      },
+    }) as Runtime;
+    const zip = await uploadZip([{ name: 'hd.xml', data: invoiceXml(-50) }], 'that-bai.zip');
+    await recordLastAttemptFailure(lookupFails, orgA, zip, undefined, undefined);
+    const [archive] = await batch([zip]);
+    expect(archive).toMatchObject({ status: 'failed', error: 'Không mở được tệp ZIP sau nhiều lần thử; hãy tải lại tệp', entries: null });
+    // A document whose lookup failed is recorded as a failed read, as before.
+    const bytes = new TextEncoder().encode(invoiceXml(-51));
+    const sha256 = sha256Hex(bytes);
+    const storageKey = fileKey(orgA, sha256);
+    const generation = await store.put(storageKey, bytes);
+    const { fileId: document } = await runtime.execute<{ fileId: string }>(
+      'kernel.file.ingest',
+      { filename: 'hd.xml', contentType: 'application/xml', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },
+      { actor: asUser(owner), orgId: orgA },
+    );
+    await recordLastAttemptFailure(lookupFails, orgA, document, undefined, undefined);
+    expect((await batch([document]))[0]).toMatchObject({ status: 'failed' });
   });
 
   it('bounds a batch answer to MAX_BATCH_ENTRIES entries in all, and lists only counts in the recent files', async () => {
