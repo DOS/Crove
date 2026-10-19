@@ -142,7 +142,17 @@ function main() {
     if (summaryPath) appendFileSync(summaryPath, `### Invariant suite: no report\n\n${text}\n`);
     return;
   }
-  const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+  let report;
+  try {
+    report = JSON.parse(readFileSync(reportPath, 'utf8'));
+  } catch (error) {
+    // A run stopped while writing (the job's timeout, a killed runner) leaves a cut file.
+    const text = 'The vitest report cannot be read: the run may have stopped while writing it. The log of the step that ran the suite has the details.';
+    const reason = String(error instanceof Error ? error.message : error).slice(0, 500);
+    console.log(`${text}\n    ${reason}`);
+    if (summaryPath) appendFileSync(summaryPath, `### Invariant suite: unreadable report\n\n${text}\n\n${fenced(reason)}\n`);
+    return;
+  }
   const problems = findProblems(report, process.cwd());
   for (const line of [...logLines(report, problems), ...annotations(problems)]) console.log(line);
   if (summaryPath) appendFileSync(summaryPath, markdown(report, problems));
