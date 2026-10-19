@@ -65,7 +65,9 @@ import {
   zAccountLedger,
   zLedgerPeriod,
   zLedgerReport,
+  zVoucherType,
 } from './schemas.ts';
+import { zCashVoucherRequest, zCashVoucherView } from './cash-voucher.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { zPortalReconciliation } from './portal-list.ts';
 
@@ -230,8 +232,16 @@ export const contract = {
         }),
       )
       // A purchase returns its document; a reversal (#138) returns the entry it reversed and, when that entry recorded a
-      // purchase, the document it voided (#165).
-      .output(z.object({ documentId: zId.optional(), journalEntryId: zId, reversedEntryId: zId.optional(), voidedDocumentId: zId.optional() })),
+      // purchase, the document it voided (#165); a cash or bank voucher (#327) returns the voucher.
+      .output(
+        z.object({
+          documentId: zId.optional(),
+          journalEntryId: zId,
+          reversedEntryId: zId.optional(),
+          voidedDocumentId: zId.optional(),
+          voucherId: zId.optional(),
+        }),
+      ),
     // Approves many pending proposals in one action (issue #315): owners and admins, R3 with one fresh step-up for the
     // whole batch (a stale one refuses all of it). Each item gets the same four-eyes (P10) and eligibility (P12)
     // decision and its own audit row as approving it alone; a refused item is reported with its code and the others
@@ -255,6 +265,7 @@ export const contract = {
                 documentId: zId.optional(),
                 reversedEntryId: zId.optional(),
                 voidedDocumentId: zId.optional(),
+                voucherId: zId.optional(),
               }),
               z.object({ id: zId, outcome: z.literal('refused'), code: z.string(), rule: z.string().nullable() }),
             ]),
@@ -273,12 +284,18 @@ export const contract = {
       )
       .output(z.object({ revision: z.number().int(), changed: z.boolean() })),
     reject: oc.input(z.object({ id: zId, reason: z.string().max(500).optional() })).output(z.object({ ok: z.literal(true) })),
-    // Asks for a proposal that no file produced (kernel.proposal.request; owners, admins and members): today only
-    // reversing a posted journal entry (#138, #165). It posts nothing; the proposal is approved like any other (R3,
-    // P10 four-eyes, P11 step-up). Reversing a purchase entry also voids Crove's record of the document on approval.
-    // A retry with the same idempotencyKey returns the first proposal.
+    // Asks for a proposal that no file produced (kernel.proposal.request; owners, admins and members): reversing a
+    // posted journal entry (#138, #165), or a cash or bank voucher entered by hand (#327). It posts nothing; the
+    // proposal is approved like any other (R3, P10 four-eyes, P11 step-up). Reversing a purchase entry also voids
+    // Crove's record of the document on approval; approving a voucher numbers it and posts it. A retry with the same
+    // idempotencyKey returns the first proposal.
     request: oc
-      .input(z.object({ command: z.literal('finance.journal.reverse'), input: zJournalReversal, idempotencyKey: zId }))
+      .input(
+        z.discriminatedUnion('command', [
+          z.object({ command: z.literal('finance.journal.reverse'), input: zJournalReversal, idempotencyKey: zId }),
+          z.object({ command: z.literal('finance.voucher.record'), input: zCashVoucherRequest, idempotencyKey: zId }),
+        ]),
+      )
       .output(z.object({ proposalId: zId })),
   },
   files: {
@@ -293,7 +310,8 @@ export const contract = {
     reextract: oc.input(z.object({ fileId: zId, idempotencyKey: zId })).output(z.object({ fileId: zId, version: z.number().int() })),
   },
   parties: {
-    list: oc.input(z.object({ q: z.string().max(100).optional() })).output(z.array(zParty)),
+    // Vendors by default; all: true lists customers too (the party picker of vouchers, #327).
+    list: oc.input(z.object({ q: z.string().max(100).optional(), all: z.boolean().optional() })).output(z.array(zParty)),
     // Owners and admins (R1, #319): the debit account proposed first for a vendor's invoices, a TT133 account or an
     // active sub-account; null clears it (the keyword rules apply again).
     setDefaultAccount: oc
@@ -307,6 +325,13 @@ export const contract = {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zJournalEntry)),
     // One entry, for example the one a reversal proposal names.
     get: oc.input(z.object({ id: zId })).output(zJournalEntry),
+  },
+  // Cash and bank vouchers (#327): the posted vouchers of a date range, newest first. A voucher is entered with
+  // inbox.request (command finance.voucher.record) and posted when its proposal is approved.
+  vouchers: {
+    list: oc
+      .input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional(), type: zVoucherType.optional() }))
+      .output(z.array(zCashVoucherView)),
   },
   // Opening balances from Excel (#320), owners and admins. preview checks a trial balance read from the template and
   // writes nothing; post checks it again and posts it as the org's one opening entry (R3: fresh MFA). A retry with the

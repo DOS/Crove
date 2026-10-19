@@ -49,6 +49,7 @@ import {
   TASK_SOURCES,
   TASK_STATUSES,
   TENANT_STATUSES,
+  VOUCHER_TYPES,
   VAT_FILING_PERIODS,
   type Database,
 } from '../src/schema.ts';
@@ -111,6 +112,7 @@ const UNIONS = unions({
   'crove_kernel.tenant.vat_filing_period': VAT_FILING_PERIODS,
   'crove_kernel.tenant_member.role': MEMBER_ROLES,
   'crove_finance.purchase_document.direction': DOCUMENT_DIRECTIONS,
+  'crove_finance.cash_voucher.voucher_type': VOUCHER_TYPES,
   'crove_finance.portal_invoice_list.status': PORTAL_LIST_STATUSES,
   'crove_finance.portal_invoice_row.status': PORTAL_INVOICE_STATUSES,
   'crove_social.post.actor_origin': SOCIAL_ACTOR_ORIGINS,

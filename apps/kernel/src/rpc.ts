@@ -479,7 +479,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           return {
             results: results.map((r) => {
               if (r.outcome === 'refused') return r;
-              const ids = r.result as { journalEntryId?: string; documentId?: string; reversedEntryId?: string; voidedDocumentId?: string };
+              const ids = r.result as { journalEntryId?: string; documentId?: string; reversedEntryId?: string; voidedDocumentId?: string; voucherId?: string };
               return {
                 id: r.id,
                 outcome: r.outcome,
@@ -487,6 +487,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
                 ...(ids.documentId ? { documentId: ids.documentId } : {}),
                 ...(ids.reversedEntryId ? { reversedEntryId: ids.reversedEntryId } : {}),
                 ...(ids.voidedDocumentId ? { voidedDocumentId: ids.voidedDocumentId } : {}),
+                ...(ids.voucherId ? { voucherId: ids.voucherId } : {}),
               };
             }),
           };
@@ -501,7 +502,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       reject: os.inbox.reject.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.proposal.reject', input, { actor, orgId })),
       ),
-      // Today only a journal reversal can be asked for, a finance command.
+      // A journal reversal or a cash or bank voucher (#327), both finance commands.
       request: os.inbox.request.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => {
           const { idempotencyKey, ...rest } = input;
@@ -542,6 +543,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       ),
       get: os.journal.get.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.journal.get', input, { actor, orgId })),
+      ),
+    },
+    vouchers: {
+      list: os.vouchers.list.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.vouchers.list', input, { actor, orgId })),
       ),
     },
     openingBalance: {

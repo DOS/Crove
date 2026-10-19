@@ -4,7 +4,7 @@
 import type { ColumnType, Generated } from 'kysely';
 
 /** Every table of crove_kernel, crove_finance, crove_social that crove_tenant may read. */
-export type Database = CroveKernelSchema & CroveSocialSchema & CroveFinanceSchema;
+export type Database = CroveFinanceSchema & CroveKernelSchema & CroveSocialSchema;
 
 /**
  * The insert or update type of a column crove_tenant may not insert or update: no value but undefined, which
@@ -14,6 +14,7 @@ export type NotGranted = undefined;
 
 export interface CroveFinanceSchema {
   'crove_finance.account': FinanceAccountTable;
+  'crove_finance.cash_voucher': FinanceCashVoucherTable;
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
   'crove_finance.org_account': FinanceOrgAccountTable;
@@ -69,6 +70,23 @@ export interface FinanceAccountTable {
   name: ColumnType<string, NotGranted, NotGranted>;
   parent_code: ColumnType<string | null, NotGranted, NotGranted>;
   standard: ColumnType<string, NotGranted, NotGranted>;
+}
+
+/** crove_finance.cash_voucher */
+export interface FinanceCashVoucherTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  voucher_type: ColumnType<string, string, NotGranted>;
+  number: ColumnType<number, number, NotGranted>;
+  voucher_date: ColumnType<string, string, NotGranted>;
+  cash_account: ColumnType<string, string, NotGranted>;
+  party_id: ColumnType<string | null, string | null, NotGranted>;
+  person_name: ColumnType<string | null, string | null, NotGranted>;
+  description: ColumnType<string, string, NotGranted>;
+  amount: ColumnType<string, string, NotGranted>;
+  proposal_id: ColumnType<string | null, string | null, NotGranted>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_finance.journal_entry */

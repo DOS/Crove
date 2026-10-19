@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { BLOCKING_CHECK_IDS } from '@crove/kernel-contract';
+import { BLOCKING_CHECK_IDS, type CashVoucherProposal } from '@crove/kernel-contract';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
@@ -17,6 +17,7 @@ import { getConfig } from '../lib/auth.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal } from '../lib/decimal.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { reversalErrorMessage } from '../lib/reversal.ts';
+import { previewVoucherJournal, voucherProblem } from '../lib/vouchers.ts';
 import { nextPendingId, previousPendingId, reviewShortcut, type ReviewAction } from '../lib/review.ts';
 import { pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
@@ -139,6 +140,73 @@ function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDa
   );
 }
 
+// A cash or bank voucher entered by hand (#327): what it says and the entry its approval posts. The number is given
+// on approval.
+function VoucherCard({ voucher, slug, accountName }: { voucher: CashVoucherProposal; slug: string; accountName: (code: string) => string }) {
+  const t = useTranslations('inboxDetail');
+  const f = useFormat();
+  const journal = previewVoucherJournal(voucher);
+  return (
+    <Card className="block space-y-4 p-4">
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div>
+          <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('voucherCashAccount')}</p>
+          <p className="mt-1 text-sm font-medium text-foreground">
+            <span className="font-mono">{voucher.cashAccount}</span> <span className="text-subtle-foreground">{accountName(voucher.cashAccount)}</span>
+          </p>
+        </div>
+        <div>
+          <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('voucherParty')}</p>
+          <p className="mt-1 text-sm text-foreground">{voucher.party ? voucher.party.name : t('notStated')}</p>
+          {voucher.party?.taxCode && <p className="text-xs text-muted-foreground">{t('taxCode', { code: voucher.party.taxCode })}</p>}
+        </div>
+        <div>
+          <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('voucherTotal')}</p>
+          <p className="mt-1 text-base font-semibold text-foreground tabular-nums">{f.money(voucher.total)}</p>
+        </div>
+        <div className="sm:col-span-2">
+          <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('voucherReason')}</p>
+          <p className="mt-1 text-sm whitespace-pre-wrap text-foreground">{voucher.description}</p>
+        </div>
+        {voucher.personName && (
+          <div>
+            <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('voucherPerson')}</p>
+            <p className="mt-1 text-sm text-foreground">{voucher.personName}</p>
+          </div>
+        )}
+      </div>
+      <div>
+        <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('journal')}</p>
+        <table className="mt-3 w-full text-sm">
+          <thead className="text-left text-xs text-subtle-foreground">
+            <tr>
+              <th className="py-1.5 font-medium">{t('account')}</th>
+              <th className="py-1.5 text-right font-medium">{t('debit')}</th>
+              <th className="py-1.5 text-right font-medium">{t('credit')}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {journal.map((j, i) => (
+              <tr key={`${i}-${j.accountCode}`}>
+                <td className="py-2 text-foreground">
+                  <span className="font-mono">{j.accountCode}</span> <span className="text-subtle-foreground">{accountName(j.accountCode)}</span>
+                  {j.memo && <p className="text-xs text-subtle-foreground">{j.memo}</p>}
+                </td>
+                <td className="py-2 text-right text-foreground tabular-nums">{isZeroAmount(j.debit) ? '' : f.money(j.debit)}</td>
+                <td className="py-2 text-right text-foreground tabular-nums">{isZeroAmount(j.credit) ? '' : f.money(j.credit)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="mt-3 text-xs text-subtle-foreground">{t('voucherNumberLater')}</p>
+        <Link to="/o/$slug/vouchers" params={{ slug }} className="mt-2 inline-block text-sm text-link hover:underline">
+          {t('viewVouchers')}
+        </Link>
+      </div>
+    </Card>
+  );
+}
+
 // One page per proposal: moving to the next one (J or N) mounts a fresh page, so no unsaved account, confirmation or
 // approval idempotency key carries over from the previous proposal.
 export function InboxDetailPage() {
@@ -212,14 +280,17 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const item = detail.data;
   const pending = item?.status === 'pending';
   const reversal = item?.reversal ?? null;
+  // A voucher (#327) is approved as shown, like a reversal: no line accounts, no invoice checks.
+  const voucher = item?.voucher ?? null;
+  const plain = reversal !== null || voucher !== null;
   const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
   const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
   // The approve buttons are enabled exactly when this holds, and the A shortcut uses the same value.
   const approveReady =
-    item !== undefined && pending && item.canApprove && !busy && (reversal ? true : !dirty && !!payload && !blocked && (failed === 0 || acceptFailed));
+    item !== undefined && pending && item.canApprove && !busy && (plain ? true : !dirty && !!payload && !blocked && (failed === 0 || acceptFailed));
   const submitApproval = () => {
     if (!item) return;
-    if (reversal) {
+    if (plain) {
       approve.mutate({ id, revision: item.revision, idempotencyKey });
       return;
     }
@@ -291,6 +362,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   // After a fresh code the step-up prompt repeats the refused request as sent, not the page as it is now: if someone
   // saved a new revision meanwhile, the kernel answers STALE_REVISION instead of approving what this user never saw.
   // The same idempotency key keeps it one approval.
+  const refusedVoucher = voucherProblem(approve.error);
   const retryApproval = () => {
     if (approve.variables) approve.mutate(approve.variables);
   };
@@ -310,7 +382,9 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                 : t('invoice', { number: payload.invoice.number, date: f.date(payload.invoice.issueDate) })
               : reversal
                 ? t('reversalSubtitle')
-                : undefined
+                : voucher
+                  ? t('voucherSubtitle', { type: root(`vouchers.types.${voucher.type}`), date: f.date(voucher.date) })
+                  : undefined
           }
           actions={
             pending ? (
@@ -354,7 +428,13 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                     {t('approveReversal')}
                   </Button>
                 )}
-                {item.canApprove && !reversal && (
+                {item.canApprove && voucher && (
+                  <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
+                    {approve.isPending ? <Spinner className="text-current" /> : null}
+                    {t('approveVoucher')}
+                  </Button>
+                )}
+                {item.canApprove && !plain && (
                   <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
                     {approve.isPending ? <Spinner className="text-current" /> : null}
                     {t('approve')}
@@ -379,7 +459,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
       </div>
       {stepUp && (
         <div className="mb-4">
-          <StepUpPrompt action={reversal ? t('stepUpApproveReversal') : t('stepUpApprove')} onVerified={retryApproval} onCancel={() => approve.reset()} />
+          <StepUpPrompt action={reversal ? t('stepUpApproveReversal') : voucher ? t('stepUpApproveVoucher') : t('stepUpApprove')} onVerified={retryApproval} onCancel={() => approve.reset()} />
         </div>
       )}
       {((approve.error && !stepUp) || reject.error || edit.error || reextract.error) && (
@@ -387,6 +467,8 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           <ErrorText>
             {reversal && approve.error && !stepUp
               ? reversalErrorMessage(approve.error, root, locale)
+              : voucher && approve.error && !stepUp && refusedVoucher
+                ? root(`vouchers.problems.${refusedVoucher}`)
               : errorMessage((stepUp ? null : approve.error) ?? reject.error ?? edit.error ?? reextract.error)}
           </ErrorText>
         </div>
@@ -404,6 +486,15 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
             <p className="mb-4 text-sm text-subtle-foreground">{t('reversalNotEligible')}</p>
           )}
           <ReversalCard reversal={reversal} slug={slug} />
+        </div>
+      )}
+      {voucher && (
+        <div className="mb-6">
+          {pending && !item.canApprove && item.approveReason === 'four_eyes' && <p className="mb-4 text-sm text-muted-foreground">{t('voucherFourEyes')}</p>}
+          {pending && !item.canApprove && item.approveReason === 'not_eligible' && (
+            <p className="mb-4 text-sm text-subtle-foreground">{t('voucherNotEligible')}</p>
+          )}
+          <VoucherCard voucher={voucher} slug={slug} accountName={accountName} />
         </div>
       )}
       {reading && (
@@ -424,10 +515,10 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
       {pending && dirty && (
         <p className="mb-4 text-sm text-muted-foreground">{t('dirty')}</p>
       )}
-      {pending && !reversal && !dirty && item.approveReason === 'four_eyes' && (
+      {pending && !plain && !dirty && item.approveReason === 'four_eyes' && (
         <p className="mb-4 text-sm text-muted-foreground">{t('fourEyes')}</p>
       )}
-      {pending && !reversal && !dirty && item.approveReason === 'not_eligible' && (
+      {pending && !plain && !dirty && item.approveReason === 'not_eligible' && (
         <p className="mb-4 text-sm text-subtle-foreground">{t('notEligible')}</p>
       )}
       {pending && blocked && (
@@ -567,8 +658,8 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
             </Card>
           )}
         </div>
-        {/* A reversal has no source file; its card above shows the entry it reverses. */}
-        {!reversal && (
+        {/* A reversal or a voucher has no source file; its card above shows what it posts. */}
+        {!plain && (
           <div className="min-w-0 lg:col-span-2">
             <Card className="block p-4">
               <p className="mb-3 text-sm font-medium text-muted-foreground">{t('original')}</p>

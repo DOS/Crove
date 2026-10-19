@@ -296,6 +296,19 @@ export type OrgAccountTable = Refine<
   'root_code'
 >;
 
+// Cash and bank vouchers (#327): phiếu thu, phiếu chi, giấy báo Có, giấy báo Nợ. The insert trigger numbers each one
+// per org and type (any number given is replaced), and rows never change.
+export const VOUCHER_TYPES = ['cash_receipt', 'cash_payment', 'bank_credit', 'bank_debit'] as const;
+export type VoucherType = (typeof VOUCHER_TYPES)[number];
+export type CashVoucherTable = Refine<
+  G.FinanceCashVoucherTable,
+  {
+    voucher_type: ColumnType<VoucherType, VoucherType, never>;
+    number: ColumnType<number, never, never>;
+  },
+  'number'
+>;
+
 // The tax portal's purchase-invoice lists (#465). A list starts pending; the insert trigger stamps created_at and the
 // update trigger stamps recorded_at and removed_at with the database clock. Rows are append-only.
 export const PORTAL_LIST_STATUSES = ['pending', 'done', 'failed'] as const;
@@ -383,6 +396,7 @@ type Refined = Tables<{
   'crove_finance.purchase_document': PurchaseDocumentTable;
   'crove_finance.journal_entry': JournalEntryTable;
   'crove_finance.org_account': OrgAccountTable;
+  'crove_finance.cash_voucher': CashVoucherTable;
   'crove_finance.portal_invoice_list': PortalInvoiceListTable;
   'crove_finance.portal_invoice_row': PortalInvoiceRowTable;
   'crove_social.post': SocialPostTable;

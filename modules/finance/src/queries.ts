@@ -1,11 +1,12 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zId, zLocalDate, type DocumentDirection } from '@crove/kernel-contract';
+import { voucherCode, zId, zLocalDate, type DocumentDirection, type VoucherType } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { RECEIVABLE_ACCOUNT, VAT_OUTPUT } from '@crove/l10n-vn';
 import { chartAccounts, type OrgChartAccount } from './accounts.ts';
 import { OPEN_REVERSAL_STATUSES, REVERSAL_KIND } from './reversal.ts';
+import { VOUCHER_SOURCE } from './domain/cash-voucher.ts';
 import type { PurchaseVoucher, SalesVoucher } from './misa.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -13,7 +14,8 @@ const zRange = z.object({ from: zLocalDate.optional(), to: zLocalDate.optional()
 
 export const vendorsList = defineQuery({
   name: 'finance.vendors.list',
-  input: z.object({ q: z.string().max(100).optional() }),
+  // all: customers of sales too (the party picker of cash and bank vouchers, #327); vendors only otherwise.
+  input: z.object({ q: z.string().max(100).optional(), all: z.boolean().optional() }),
   access: ALL,
   handler: async (ctx, input) => {
     let query = ctx.trx
@@ -37,8 +39,11 @@ export const vendorsList = defineQuery({
           .as('document_count'),
       )
       .where('p.org_id', '=', ctx.orgId)
-      // Vendors: every party but the customers of sales (issue #313) that never sold to the org.
-      .where(({ not, exists, selectFrom, and }) =>
+      .orderBy('p.name')
+      .limit(500);
+    // Vendors: every party but the customers of sales (issue #313) that never sold to the org.
+    if (!input.all) {
+      query = query.where(({ not, exists, selectFrom, and }) =>
         not(
           and([
             exists(selectFrom('crove_finance.purchase_document as s').select('s.id').whereRef('s.org_id', '=', 'p.org_id').whereRef('s.party_id', '=', 'p.id').where('s.direction', '=', 'sale')),
@@ -49,9 +54,8 @@ export const vendorsList = defineQuery({
             ),
           ]),
         ),
-      )
-      .orderBy('p.name')
-      .limit(500);
+      );
+    }
     if (input.q) {
       const term = `%${input.q.toLowerCase()}%`;
       query = query.where((eb) => eb.or([eb(eb.fn('lower', ['p.name']), 'like', term), eb('p.tax_code', 'like', term)]));
@@ -154,6 +158,8 @@ export interface JournalEntryView {
     partyTaxCode: string | null;
     voided: boolean;
   };
+  // The cash or bank voucher the entry posts (#327).
+  voucher?: { id: string; type: VoucherType; code: string; partyName: string | null };
 }
 
 export const JOURNAL_EXPORT_LIMIT = 20_000;
@@ -170,6 +176,11 @@ async function loadEntries(
     )
     .leftJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
     .leftJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
+    // The cash or bank voucher the entry posts (#327), and its party.
+    .leftJoin('crove_finance.cash_voucher as cv', (join) =>
+      join.onRef('cv.org_id', '=', 'j.org_id').onRef('cv.id', '=', 'j.source_id').on('j.source_type', '=', VOUCHER_SOURCE),
+    )
+    .leftJoin('crove_kernel.party as vp', (join) => join.onRef('vp.org_id', '=', 'cv.org_id').onRef('vp.id', '=', 'cv.party_id'))
     // The original this entry reverses, and the reversal of this entry (at most one each, by the unique index).
     .leftJoin('crove_finance.journal_entry as o', (join) => join.onRef('o.org_id', '=', 'j.org_id').onRef('o.id', '=', 'j.reverses_entry_id'))
     .leftJoin('crove_finance.journal_entry as r', (join) => join.onRef('r.org_id', '=', 'j.org_id').onRef('r.reverses_entry_id', '=', 'j.id'))
@@ -191,6 +202,10 @@ async function loadEntries(
       'o.entry_date as reverses_date',
       'r.id as reversed_by_id',
       'r.entry_date as reversed_by_date',
+      'cv.id as voucher_id',
+      'cv.voucher_type',
+      'cv.number as voucher_number',
+      'vp.name as voucher_party_name',
     ])
     .where('j.org_id', '=', ctx.orgId)
     .orderBy('j.entry_date', 'desc')
@@ -260,6 +275,9 @@ async function loadEntries(
             voided: r.voided_document_id !== null,
           },
         }
+      : {}),
+    ...(r.voucher_id && r.voucher_type && r.voucher_number !== null
+      ? { voucher: { id: r.voucher_id, type: r.voucher_type, code: voucherCode(r.voucher_type, r.voucher_number), partyName: r.voucher_party_name } }
       : {}),
   }));
 }
