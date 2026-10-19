@@ -869,6 +869,48 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     expect(await auditRows(orgId, 'test.fine')).toEqual([]);
   });
 
+  it('fails a command whose handler returned while a ctx.run it started still ran, with nothing written (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit unawaited run', []);
+    const refuses = ownerCommand('test.late_refuses', async () => {
+      throw new DomainError('NOT_ELIGIBLE', 403, 'x');
+    });
+    // Like approve_many: a recovered refusal rolls back to its savepoint.
+    const batchlike = ownerCommand('test.batchlike', async (ctx, input) => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const attempt = await ctx.tryRun('test.late_refuses', input, { recover: () => true });
+      return { status: attempt.status };
+    });
+    const fires = ownerCommand('test.fires_batch', async (ctx, input) => {
+      await ctx.activity('test.thing', input.id, 'test.before', 'written before the unawaited run');
+      void ctx.run('test.batchlike', input).catch(() => undefined);
+      return { returned: true };
+    });
+    let mixed: string | null = null;
+    const mixes = ownerCommand('test.mixes', async (ctx, input) => {
+      const run = ctx.run('test.fine', input);
+      // A tryRun never runs beside another nested command: its rollback would undo that one's writes.
+      mixed = await ctx.tryRun('test.late_refuses', input, { recover: () => true }).then(
+        () => 'ran',
+        (error: Error) => error.message,
+      );
+      await run;
+      return { done: true };
+    });
+    const forking = runtimeWith(fineCommand, refuses, batchlike, fires, mixes);
+    const id = randomUUID();
+    expect(await refusalOf(forking.execute('test.fires_batch', { id }, { actor: asUser(owner), orgId }))).toEqual({ code: 'INTERNAL', status: 500 });
+    for (const command of ['test.fires_batch', 'test.batchlike', 'test.late_refuses']) expect(await auditRows(orgId, command)).toEqual([]);
+    const activity = await withAdmin(
+      async (a) => (await a.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2', [orgId, id])).rows[0]?.n,
+    );
+    expect(activity).toBe(0);
+
+    expect(await forking.execute('test.mixes', { id }, { actor: asUser(owner), orgId })).toEqual({ done: true });
+    expect(mixed).toMatch(/ctx\.tryRun runs only while no other nested command runs/);
+    expect((await auditRows(orgId, 'test.fine')).map((r) => r.outcome)).toEqual(['ok']);
+    expect(await auditRows(orgId, 'test.late_refuses')).toEqual([]);
+  });
+
   it("keeps the runtime's keys on an ok row: ctx.audit sets no refusal link and does not replace the assurance (#429)", async () => {
     const { orgId, owner } = await orgWith('Bulk audit ok keys', []);
     const forged = ownerCommand(
