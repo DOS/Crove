@@ -121,8 +121,12 @@ export const KERNEL_ERROR_CODES = [
   'PARENT_TAGGED',
   'PARENT_NOT_DEEPEST',
   'PARTY_NOT_FOUND',
-  // Cash and bank vouchers (#327).
+  // Cash and bank vouchers (#327), and bank vouchers made from a statement line (#326).
   'VOUCHER_INVALID',
+  'BANK_LINE_NOT_FOUND',
+  'BANK_LINE_MISMATCH',
+  'BANK_LINE_PROPOSED',
+  'BANK_LINE_MATCHED',
   // Files, uploads and exports.
   'TOO_LARGE',
   'TOO_MANY_FILES',

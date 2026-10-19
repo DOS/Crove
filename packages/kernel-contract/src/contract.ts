@@ -75,7 +75,7 @@ import {
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { zPortalReconciliation } from './portal-list.ts';
-import { zBankImportPreview, zBankImportResult, zBankLines, zBankStatementImport } from './bank-statement.ts';
+import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankStatementImport } from './bank-statement.ts';
 
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
 export const contract = {
@@ -411,12 +411,17 @@ export const contract = {
     unlock: oc.input(zPeriodUnlockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
   },
   // Bank statements (#326): owners, admins and members import a bank's export into an account's statement lines
-  // (preview writes nothing; import stores the new and ambiguous lines); every member reads them. A retry with the same
+  // (preview writes nothing; import stores the new and ambiguous lines); every member reads them, each with its state
+  // (open, proposed as a voucher, settled by one). A retry with the same
   // idempotencyKey returns the first result.
   bank: {
     preview: oc.input(zBankStatementImport).output(zBankImportPreview),
     import: oc.input(zBankStatementImport.extend({ idempotencyKey: zId })).output(zBankImportResult),
     lines: oc.input(z.object({ bankAccount: zAccountCode, period: zLedgerPeriod })).output(zBankLines),
+    // The báo Có or báo Nợ a line makes and the party it is probably about (#326, stage 2a), for the voucher form; the
+    // voucher itself is asked for with inbox.request (finance.voucher.record, bankLineId set). Owners, admins and
+    // members, who may ask for vouchers.
+    lineVoucher: oc.input(z.object({ bankLineId: zId })).output(zBankLineVoucher),
   },
   // The org chart (ADR-0029): positions shared by members and AI agents. Every member reads it; changing it is the
   // owner's (R3: role keys, holders and reporting lines decide what agents may do). A retry with the same

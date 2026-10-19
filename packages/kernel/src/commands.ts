@@ -589,6 +589,10 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   // Posting a cash or bank voucher (finance.voucher.record, #327).
   'VOUCHER_INVALID',
   'PARTY_NOT_FOUND',
+  // A voucher made from a bank statement line (#326): the line no longer fits it, or another voucher settled it.
+  'BANK_LINE_NOT_FOUND',
+  'BANK_LINE_MISMATCH',
+  'BANK_LINE_MATCHED',
   // Posting into a locked month (#329): the proposal's date is in or before the last locked month.
   'PERIOD_LOCKED',
 ]);
@@ -602,7 +606,9 @@ export function isBulkItemRefusal(error: unknown): error is DomainError {
 // but a cash or bank voucher comes first, in id order, so two batches over the same proposals lock them in the same
 // order. Vouchers (#327) follow, by voucher type (VOUCHER_TYPES order) and then id: posting one holds its org's
 // numbering lock for its type until commit (20261019270000), so a batch taking PT then PC and another taking PC then
-// PT would deadlock (40P01, both users told to retry). In one type order the second batch waits for the first.
+// PT would deadlock (40P01, both users told to retry). In one type order the second batch waits for the first. A voucher
+// made from a bank statement line (#326) also locks that line, always after its numbering lock (20261020130000), and a
+// line takes vouchers of one type only, so the order holds.
 // voucherTypes: the voucher type of each voucher item, by proposal id; items not in it are not vouchers.
 export function bulkApproveOrder<T extends { id: string }>(items: readonly T[], voucherTypes: ReadonlyMap<string, string>): T[] {
   const rank = (id: string) => {

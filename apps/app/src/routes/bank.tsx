@@ -1,10 +1,12 @@
-// Bank statements (issue #326, stage 1): import a bank's Excel or CSV export into one bank account's statement lines,
-// checked line by line before anything is stored (new, already there, needs a look, unreadable), then read the
-// account's lines per month. Matching lines to payables and receivables comes with the bank vouchers of #327.
+// Bank statements (issue #326): import a bank's Excel or CSV export into one bank account's statement lines, checked
+// line by line before anything is stored (new, already there, needs a look, unreadable), then read the account's lines
+// per month. Each line shows its voucher (stage 2a): none yet, a báo Có or báo Nợ waiting for approval, or the posted
+// one; "Enter voucher" opens the voucher form prefilled from the line, with the party Crove suggests.
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { Link, useParams } from '@tanstack/react-router';
 import { useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
-import type { BankImportResult, BankLineStatus, BankRowError } from '@crove/kernel-contract';
+import type { BankImportResult, BankLine, BankLineStatus, BankRowError } from '@crove/kernel-contract';
 import { Alert, AlertDescription } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -15,6 +17,7 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { VoucherFormCard } from './vouchers.tsx';
 import {
   MAX_STATEMENT_BYTES,
   STATEMENT_COLUMNS,
@@ -186,9 +189,59 @@ function StatementImport({ bankAccount, onImported }: { bankAccount: string; onI
   );
 }
 
+// The voucher form for one line, once Crove has read what the line makes.
+function LineVoucher({ slug, line, onClose }: { slug: string; line: BankLine; onClose: () => void }) {
+  const t = useTranslations('vouchers');
+  const made = useQuery(orpc.bank.lineVoucher.queryOptions({ input: { bankLineId: line.id } }));
+  if (made.isLoading) return <Spinner />;
+  if (made.error) return <ErrorText>{errorMessage(made.error)}</ErrorText>;
+  if (!made.data) return null;
+  if (!made.data.voucher) {
+    return (
+      <Alert className="mb-6">
+        <AlertDescription>
+          {t('form.noVoucher')}{' '}
+          <button type="button" className="text-link underline" onClick={onClose}>
+            {t('form.close')}
+          </button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  return <VoucherFormCard slug={slug} onClose={onClose} fromLine={made.data} />;
+}
+
+function LineState({ slug, line, canEnter, onEnter }: { slug: string; line: BankLine; canEnter: boolean; onEnter: () => void }) {
+  const t = useTranslations('bank');
+  const f = useFormat();
+  if (line.state.status === 'matched') {
+    return <Badge variant="success">{line.state.code}</Badge>;
+  }
+  if (line.state.status === 'proposed') {
+    return (
+      <Link to="/o/$slug/inbox/$id" params={{ slug, id: line.state.proposalId }} className="text-link underline">
+        {t('state.proposed')}
+      </Link>
+    );
+  }
+  if (!canEnter) return <span className="text-subtle-foreground">{t('state.open')}</span>;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      aria-label={t('makeVoucherFor', { date: f.date(line.date), amount: f.money(line.amount.replace(/^-/, '')) })}
+      onClick={onEnter}
+    >
+      {t('makeVoucher')}
+    </Button>
+  );
+}
+
 export function BankPage() {
   const t = useTranslations('bank');
   const f = useFormat();
+  const { slug } = useParams({ strict: false }) as { slug: string };
   const org = useQuery(orpc.org.get.queryOptions());
   const accounts = useQuery(orpc.accounts.list.queryOptions());
   // The org's bank accounts: TT133 accounts under 112 and its sub-accounts rolling up to one (the 112 group itself
@@ -200,6 +253,8 @@ export function BankPage() {
   const [month, setMonth] = useState(thisMonth);
   const canImport = org.data?.role === 'owner' || org.data?.role === 'admin' || org.data?.role === 'member';
   const lines = useQuery({ ...orpc.bank.lines.queryOptions({ input: { bankAccount: account ?? '1121', period: month } }), enabled: account !== null && /^\d{4}-\d{2}$/.test(month) });
+  // The line whose voucher is being entered.
+  const [entering, setEntering] = useState<BankLine | null>(null);
 
   return (
     <>
@@ -231,6 +286,7 @@ export function BankPage() {
           {canImport && current?.active && (
             <StatementImport key={account} bankAccount={account} onImported={(_result, to) => to && setMonth(to.slice(0, 7))} />
           )}
+          {entering && <LineVoucher key={entering.id} slug={slug} line={entering} onClose={() => setEntering(null)} />}
           {lines.isLoading ? (
             <Spinner />
           ) : lines.error ? (
@@ -238,7 +294,9 @@ export function BankPage() {
           ) : lines.data && lines.data.lines.length === 0 ? (
             <Empty title={t('empty')} />
           ) : lines.data ? (
-            <DataTable head={[t('columns.date'), t('columns.reference'), t('columns.description'), t('columns.moneyIn'), t('columns.moneyOut'), t('columns.balance')]}>
+            <DataTable
+              head={[t('columns.date'), t('columns.reference'), t('columns.description'), t('columns.moneyIn'), t('columns.moneyOut'), t('columns.balance'), t('voucherColumn')]}
+            >
               {lines.data.lines.map((line) => (
                 <TableRow key={line.id}>
                   <TableCell className="px-4 py-3 text-muted-foreground">{f.date(line.date)}</TableCell>
@@ -254,6 +312,9 @@ export function BankPage() {
                   <TableCell className={NUM}>{line.amount.startsWith('-') ? '' : f.money(line.amount)}</TableCell>
                   <TableCell className={NUM}>{line.amount.startsWith('-') ? f.money(line.amount.slice(1)) : ''}</TableCell>
                   <TableCell className={NUM}>{line.balance === null ? '' : f.money(line.balance)}</TableCell>
+                  <TableCell className="px-4 py-3 text-xs">
+                    <LineState slug={slug} line={line} canEnter={canImport} onEnter={() => setEntering(line)} />
+                  </TableCell>
                 </TableRow>
               ))}
               <TableRow className="font-medium">
@@ -262,6 +323,7 @@ export function BankPage() {
                 </TableCell>
                 <TableCell className={NUM}>{f.money(lines.data.moneyIn)}</TableCell>
                 <TableCell className={NUM}>{f.money(lines.data.moneyOut)}</TableCell>
+                <TableCell className="px-4 py-3" />
                 <TableCell className="px-4 py-3" />
               </TableRow>
             </DataTable>

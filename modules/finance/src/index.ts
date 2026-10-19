@@ -9,6 +9,7 @@ import { vatDeclarationQuery, vatExport, vatPeriodQuery } from './vat.ts';
 import { ledgerAccountQuery, ledgerBookQuery, ledgerExport, ledgerPeriodQuery } from './ledger-reports.ts';
 import { portalListImport, portalListReconcile, portalListRecord, portalListRemove, portalListSource } from './portal-list.ts';
 import { bankImport, bankLines, bankPreview } from './bank.ts';
+import { bankLineVoucher } from './bank-match.ts';
 import { periodLock, periodLockStateQuery, periodUnlock } from './period-lock.ts';
 import { statementsExport, statementsPeriodQuery } from './statements.ts';
 
@@ -40,6 +41,7 @@ export * from './domain/ledger-reports.ts';
 export * from './domain/opening-balance.ts';
 export * from './domain/cash-voucher.ts';
 export * from './domain/bank-statement.ts';
+export * from './domain/bank-match.ts';
 export { type OrgChartAccount } from './accounts.ts';
 export { REVERSAL_COMMAND, REVERSAL_KIND, zJournalReversal, type JournalReversal } from './reversal.ts';
 export { JOURNAL_EXPORT_LIMIT, VOIDED_PROPOSALS_QUERY, type JournalEntryView } from './queries.ts';
@@ -83,4 +85,5 @@ export const financeQueries = [
   periodLockStateQuery,
   bankPreview,
   bankLines,
+  bankLineVoucher,
 ];

@@ -699,6 +699,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       lines: os.bank.lines.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.bank.lines', input, { actor, orgId })),
       ),
+      lineVoucher: os.bank.lineVoucher.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.bank.line_voucher', input, { actor, orgId })),
+      ),
     },
     // AI agents (ADR-0029). The kernel module owns them; a template of a module that is off answers MODULE_DISABLED.
     chart: {
