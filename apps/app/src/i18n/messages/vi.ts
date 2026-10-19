@@ -1208,6 +1208,7 @@ export const vi = {
       CONTENT_REQUIRED: 'Bài chưa có nội dung',
       TEXT_REQUIRED: 'Kênh này cần có nội dung',
       TEXT_TOO_LONG: 'Nội dung dài {actual, number} ký tự, kênh này cho tối đa {limit, number}',
+      TEXT_TOO_MANY_BYTES: 'Nội dung chiếm {actual, number} byte, kênh này cho tối đa {limit, number}; biểu tượng cảm xúc và chữ có dấu tốn nhiều byte hơn chữ thường',
       TITLE_REQUIRED: 'Kênh này cần tiêu đề',
       TITLE_TOO_LONG: 'Tiêu đề dài {actual, number} ký tự, kênh này cho tối đa {limit, number}',
       TITLE_NOT_SUPPORTED: 'Kênh này không có tiêu đề',
