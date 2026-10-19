@@ -399,6 +399,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           actions={
             pending ? (
               <>
+                {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
                 {reextractButton}
                 {item.canReject && (
                   <Button
@@ -453,6 +454,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
               </>
             ) : (
               <>
+                {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
                 {reextractButton}
                 <Badge variant={item.status === 'executed' ? 'success' : 'secondary'}>
                   {item.status === 'executed'

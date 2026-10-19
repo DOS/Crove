@@ -275,6 +275,10 @@ export const zInboxItem = z.object({
   warnChecks: z.number().int(),
   duplicateOf: zId.nullable(),
   createdAt: z.string(),
+  // The AI agent that asked for the proposal (#435); null for a proposal a person or an upload made.
+  requestedByAgent: z.object({ id: zId, name: z.string() }).nullable(),
+  // Whether an extraction run read the proposal's source (so its invoice checks ran); an agent's proposal has none.
+  extracted: z.boolean(),
 });
 
 // Cash and bank vouchers (issue #327; cash-voucher.ts has the rest).
