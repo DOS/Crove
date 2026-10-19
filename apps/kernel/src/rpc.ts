@@ -22,6 +22,7 @@ import type { z } from 'zod';
 import type { zAgentBudget, zAgentTemplate, zTask } from '@crove/kernel-contract';
 import { DomainError, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { DraftBudget } from './ai-draft-limit.ts';
+import { BlueskyLoginBudget } from './bluesky-login-limit.ts';
 import { actorOf, type AuthUser } from './auth.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
 
@@ -103,7 +104,7 @@ function connectorFailure(error: unknown): DomainError {
 
 // sendInviteMail unset: invite mail is off (tests, or an embedder without mail). channels unset: no channel can be
 // connected through the API (the list and disconnect still work).
-export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, drafts: DraftBudget = new DraftBudget()) {
+export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, drafts: DraftBudget = new DraftBudget(), blueskyLogins: BlueskyLoginBudget = new BlueskyLoginBudget()) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -365,9 +366,17 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới kết nối được kênh');
           if (!channels?.bluesky) throw new DomainError('CHANNEL_PROVIDER_DISABLED', 404, 'Kênh này chưa được bật trên máy chủ');
           if (channels.broker.id === 'none') throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
+          // Each try is a login on Bluesky, which limits them per account (#399).
+          const ticket = blueskyLogins.take(orgId, context.user.userId, input.handle.trim().replace(/^@/, '').toLowerCase());
+          if (!ticket.allowed) {
+            throw new DomainError('RATE_LIMITED', 429, 'Đã thử kết nối Bluesky nhiều lần trong phút này, hãy đợi một lát rồi thử lại', { retryAfterSeconds: ticket.retryAfterSeconds });
+          }
           const account = await connectBluesky({ handle: input.handle, appPassword: input.appPassword }).catch((error: unknown) => {
             if (error instanceof BlueskyError) {
               if (error.code === 'NotAnAppPassword') throw new DomainError('BLUESKY_APP_PASSWORD', 422, 'Hãy dùng mật khẩu ứng dụng (app password) của Bluesky, không dùng mật khẩu tài khoản');
+              if (error.code === 'PrivilegedAppPassword') {
+                throw new DomainError('BLUESKY_APP_PASSWORD_PRIVILEGED', 422, 'Mật khẩu ứng dụng này được đọc cả tin nhắn riêng; hãy tạo mật khẩu ứng dụng mới không bật quyền tin nhắn');
+              }
               if (error.code === 'UnsupportedPds') throw new DomainError('BLUESKY_PDS_UNSUPPORTED', 422, 'Hiện Crove chỉ hỗ trợ tài khoản lưu trên máy chủ của Bluesky');
               if (error.status === 401 || error.status === 400) throw new DomainError('BLUESKY_LOGIN_FAILED', 422, 'Bluesky không chấp nhận tên tài khoản hoặc mật khẩu ứng dụng này');
             }
