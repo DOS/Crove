@@ -103,6 +103,20 @@ jobs:
         if: steps.detect.outputs.protected == 'true'
         run: pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "crove-monorepo"
 
+      # The runner prints the service container's log at the end of the job. Each statement the suite refuses on
+      # purpose would add ERROR and STATEMENT lines there, thousands in all, and push the test report out of the
+      # log tail that the API returns (#498). FATAL and PANIC are still logged.
+      - name: Keep the database log short
+        if: steps.detect.outputs.protected == 'true'
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$PG_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET log_min_messages = 'fatal'" \
+            -c "ALTER SYSTEM SET log_min_error_statement = 'panic'" \
+            -c "SELECT pg_reload_conf()"
+
       - name: Run the invariant suite against this PR's code (PostgreSQL 17)
         if: steps.detect.outputs.protected == 'true'
         run: pnpm exec vitest run --config vitest.invariant.config.ts --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/invariant.json"
@@ -117,6 +131,22 @@ jobs:
             console.log(`invariant tests: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${skipped} skipped`);
             if (r.numPassedTests === 0 || skipped > 0 || r.numPassedTests !== r.numTotalTests) process.exit(1);
           ' "$RUNNER_TEMP/invariant.json"
+
+      # Also after a failure: the failed and skipped tests go to the job summary, to error annotations and to this
+      # step's log (#498). The script comes from the base branch, like the detection script, so a PR cannot change
+      # what its own report says. It never decides the job.
+      - name: Report the failed tests
+        if: always() && steps.detect.outputs.protected == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if git cat-file -e "$BASE_SHA:tools/ci/invariant-summary.mjs" 2>/dev/null; then
+            git show "$BASE_SHA:tools/ci/invariant-summary.mjs" > "$RUNNER_TEMP/invariant-summary.mjs"
+          else
+            echo "::notice::The base branch has no tools/ci/invariant-summary.mjs yet; using this PR's copy (bootstrap)."
+            cp tools/ci/invariant-summary.mjs "$RUNNER_TEMP/invariant-summary.mjs"
+          fi
+          node "$RUNNER_TEMP/invariant-summary.mjs" "$RUNNER_TEMP/invariant.json"
 
   security-review:
     name: Security review (agent)
