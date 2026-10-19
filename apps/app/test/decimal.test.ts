@@ -1,7 +1,7 @@
 // The approval preview must show exactly the entry the server will post.
 import { describe, expect, it } from 'vitest';
-import { buildPurchaseJournal, buildSalesJournal } from '../../../packages/l10n-vn/src/index.ts';
-import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal, type PreviewLine } from '../src/lib/decimal.ts';
+import { buildPurchaseJournal, buildSalesJournal, vatPercent as serverVatPercent } from '../../../packages/l10n-vn/src/index.ts';
+import { vatPercent, isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal, type PreviewLine } from '../src/lib/decimal.ts';
 
 function server(lines: PreviewLine[], vat: string) {
   const proposed = lines.map((l, i) => ({ ...l, lineNo: i + 1, description: '', unit: null, quantity: null, unitPrice: null, reason: '' }));
@@ -24,6 +24,12 @@ const CASES: Array<[string, PreviewLine[], string]> = [
     { debitAccount: '211', amount: '35000000', vatRate: '10%' },
     { debitAccount: '153', amount: '1000000', vatRate: '8%' },
   ], '3580000'],
+  ['mixed invoice with a bare, a fractional and an other rate', [
+    { debitAccount: '211', amount: '10000000', vatRate: '10' },
+    { debitAccount: '211', amount: '10000000', vatRate: '3.5%' },
+    { debitAccount: '211', amount: '10000000', vatRate: 'KHAC:5.26%' },
+    { debitAccount: '153', amount: '1000000', vatRate: 'KCT' },
+  ], '2000000'],
   ['rounding on a mixed invoice', [
     { debitAccount: '211', amount: '33333333', vatRate: '8%' },
     { debitAccount: '6422', amount: '1000001', vatRate: '10%' },
@@ -100,4 +106,14 @@ describe('zero amounts and balance', () => {
     expect(linesBalance([{ debit: '100.0000', credit: '0' }, { debit: '0', credit: '100' }])).toBe(true);
     expect(linesBalance([{ debit: '100', credit: '0.0000' }, { debit: '0', credit: '99.9999' }])).toBe(false);
   });
+});
+
+
+describe('vatPercent parity with @crove/l10n-vn', () => {
+  it.each(['10%', '10', '8%', '3.5%', 'KCT', 'KKKNT', 'KHAC', 'KHAC:5.26%', 'KHAC:0%', '101', '150%', '100%', 'abc', '', null])(
+    'reads %j the same as the server',
+    (rate) => {
+      expect(Number(vatPercent(rate)) / 1e8).toBeCloseTo(serverVatPercent(rate), 8);
+    },
+  );
 });

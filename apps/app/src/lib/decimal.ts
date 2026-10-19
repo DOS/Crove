@@ -54,9 +54,16 @@ function divRound(n: bigint, d: bigint): bigint {
   return negative ? -q : q;
 }
 
-function vatPercent(rate: string | null): bigint {
-  const match = /^(\d{1,2})%$/.exec(rate?.trim() ?? '');
-  return match ? BigInt(match[1] ?? '0') : 0n;
+// Mirrors vatPercent / parseVatRate in @crove/l10n-vn (apps/app does not depend on it; decimal.test.ts keeps the two
+// in step): a rate 0-100 with an optional "%", or "KHAC:r%" with 0 < r <= 100, as exact units (8 decimals); exempt,
+// untaxed, bare "KHAC" and unreadable rates count as 0.
+export function vatPercent(rate: string | null): bigint {
+  const text = (rate ?? '').trim().toUpperCase().replace(/\s+/g, '');
+  const match = /^(?:KHAC:)?(\d{1,3}(?:\.\d+)?)%?$/.exec(text);
+  if (!match?.[1]) return 0n;
+  const percent = parse(match[1], EXACT, 8);
+  if (percent > 100n * EXACT) return 0n;
+  return percent;
 }
 
 // Mirrors fixedAssetVat in @crove/l10n-vn: 1332 for fixed assets, estimated per line on mixed invoices and rounded
@@ -67,7 +74,7 @@ function fixedAssetVat(lines: PreviewLine[], vat: bigint): bigint {
   if (assets.length === lines.length) return vat;
   const estimate = divRound(
     assets.reduce((acc, l) => acc + toExact(l.amount) * vatPercent(l.vatRate), 0n),
-    100n * EXACT,
+    100n * EXACT * EXACT,
   ) * EXACT;
   const clamp = (v: bigint, lo: bigint, hi: bigint) => (v < lo ? lo : v > hi ? hi : v);
   return vat > 0n ? clamp(estimate, 0n, vat) : clamp(estimate, vat, 0n);
