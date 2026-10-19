@@ -13,7 +13,7 @@ export function HowItWorks({ dict }: { dict: Dictionary }) {
       <SectionHead id="flow-title" title={flow.title} lead={flow.lead} />
       <ol className="relative grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {flow.steps.map((step, i) => (
-          <li key={step.name} className="flex min-w-0 flex-col rounded-lg border border-line bg-surface p-5">
+          <li key={i} className="flex min-w-0 flex-col rounded-lg border border-line bg-surface p-5">
             <div className="flex items-center gap-3">
               <span
                 className={`inline-flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${
