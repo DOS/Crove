@@ -19,7 +19,7 @@ Each line is `PASS`, `FAIL` or `MANUAL`. Exit codes: 0 every automatic check pas
 
 ## 1. TLS on every public endpoint; every secret changed from the defaults
 
-**TLS.** Compose publishes Crove on loopback only; a TLS reverse proxy (Caddy, nginx, a cloud load balancer) serves it to others. Set `PUBLIC_URL` to the https URL and `TRUSTED_PROXY_HOPS` to the number of proxies in front.
+**TLS.** Compose publishes Crove on loopback only; a TLS reverse proxy (Caddy, nginx, a cloud load balancer) serves it to others. Set `PUBLIC_URL` to the https URL and `TRUSTED_PROXY_HOPS` to the number of proxies in front. The pilot's server setup, with a ready Caddy configuration in `tools/deploy/caddy/`: [provision-pilot.md](provision-pilot.md).
 
 - Checked by `pilot:check`: `PUBLIC_URL` is https and not a loopback host; `PUBLIC_AUTH_URL`, when set, is https; with `STORAGE=s3` and presigned transfers (the default), the bucket endpoint browsers reach (`S3_PUBLIC_ENDPOINT`, else `S3_ENDPOINT`) is https.
 - With `--url`: the certificate is valid for the host, and plain http does not serve the app.
