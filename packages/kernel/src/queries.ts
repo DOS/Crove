@@ -41,7 +41,7 @@ export function orgDetailQuery(options: OrgDetailOptions) {
     handler: async (ctx) => {
       const tenant = await ctx.trx
         .selectFrom('crove_kernel.tenant')
-        .select(['org_id', 'slug', 'name', 'inbound_token', 'tax_code', 'vat_filing_period'])
+        .select(['org_id', 'slug', 'name', 'inbound_token', 'tax_code', 'vat_filing_period', 'address'])
         .where('org_id', '=', ctx.orgId)
         .executeTakeFirstOrThrow();
       const memberRows = await ctx.trx
@@ -71,6 +71,7 @@ export function orgDetailQuery(options: OrgDetailOptions) {
         role: ctx.role ?? 'viewer',
         taxCode: tenant.tax_code,
         vatFilingPeriod: tenant.vat_filing_period,
+        address: tenant.address,
         inboundAddress: seesInbound ? `${tenant.inbound_token}@${options.inboundDomain}` : null,
         inboundDroppedCount,
         members: members.map((m) => ({ userId: m.user_id, email: m.email, displayName: m.display_name, role: m.role })),

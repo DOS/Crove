@@ -234,6 +234,17 @@ const schema = z.object({
       })
       .optional(),
   ),
+  // The public tax registry lookup that prefills a new org from its tax code (issue #324): an https URL template with
+  // {taxCode}, answering in the VietQR business shape (https://api.vietqr.io/v2/business/{taxCode}). Unset turns the
+  // lookup off: it sends the tax codes your users type to that provider.
+  TAX_CODE_LOOKUP_URL: optional.pipe(
+    z
+      .string()
+      .refine((value) => value.includes('{taxCode}') && URL.canParse(value.replace('{taxCode}', '0100109106')) && new URL(value.replace('{taxCode}', '0100109106')).protocol === 'https:', {
+        message: 'an https URL with {taxCode} in it',
+      })
+      .optional(),
+  ),
   // Inbound email: <token>@INBOUND_DOMAIN, delivered by a mail worker to POST /api/inbound/email.
   INBOUND_DOMAIN: optional,
   INBOUND_SECRET: optional,

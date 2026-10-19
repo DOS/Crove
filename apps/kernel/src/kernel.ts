@@ -55,6 +55,7 @@ import { createLogMailer, createMailer, type Mailer } from './mail.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
 import { createBlobStore } from './storage.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource } from './stream.ts';
+import { createTaxCodeLookup } from './tax-lookup.ts';
 import { startWorker } from './worker.ts';
 
 // Identity (ADR-0027, ADR-0028): who the caller is and whether their session still holds. When
@@ -301,6 +302,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           pool,
           aiEnabled: resolved.ai !== null,
           ...(resolved.writer ? { socialWriter: resolved.writer } : {}),
+          ...(config.TAX_CODE_LOOKUP_URL ? { taxLookup: createTaxCodeLookup(config.TAX_CODE_LOOKUP_URL) } : {}),
           mailer: resolved.mail,
           channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL },
           ...(stream ? { stream } : {}),

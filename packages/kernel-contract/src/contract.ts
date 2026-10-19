@@ -68,6 +68,7 @@ import {
   zPeriodLockInput,
   zPeriodLockState,
   zPeriodUnlockInput,
+  zTaxRegistryEntry,
   zVoucherType,
 } from './schemas.ts';
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
@@ -93,6 +94,9 @@ export const contract = {
     setVatFilingPeriod: oc
       .input(z.object({ vatFilingPeriod: zVatFilingPeriod.nullable() }))
       .output(z.object({ vatFilingPeriod: zVatFilingPeriod.nullable() })),
+    // Owners and admins (issue #324): the org's address, or null to clear it. Stored on one line, at most 500
+    // characters; a value with control characters is refused.
+    setAddress: oc.input(z.object({ address: z.string().max(2000).nullable() })).output(z.object({ address: z.string().nullable() })),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
     invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),
@@ -114,6 +118,12 @@ export const contract = {
       .output(z.object({ status: z.literal('offboarding'), exportRequested: z.literal(true) })),
     // Owner only: the offboarding state and the newest finished export.
     export: oc.output(zOrgExport),
+  },
+  // Org-less (issue #324): the public tax registry's name and address for a tax code, to prefill a new org. Answers
+  // TAX_LOOKUP_DISABLED (404) when the server has no lookup configured (TAX_CODE_LOOKUP_URL), INVALID_TAX_CODE (422),
+  // TAX_CODE_NOT_FOUND (404) when the registry does not know the code, and TAX_LOOKUP_UNAVAILABLE (503).
+  taxRegistry: {
+    lookup: oc.input(z.object({ taxCode: z.string().trim().max(20) })).output(zTaxRegistryEntry),
   },
   // Org-less: the signed-in invitee previews and accepts an invite by its token. Only the invited email may.
   invites: {

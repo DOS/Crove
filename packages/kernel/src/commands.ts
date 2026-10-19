@@ -33,6 +33,7 @@ import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type 
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
+import { setAddress } from './org-address.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
@@ -802,6 +803,7 @@ const otherKernelCommands = [
   ...channelCommands,
   setTaxCode,
   setVatFilingPeriod,
+  setAddress,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),

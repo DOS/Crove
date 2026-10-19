@@ -74,6 +74,11 @@ export const KERNEL_ERROR_CODES = [
   'NOT_OWN_SALE',
   'OWN_INVOICE',
   'INVALID_TAX_CODE',
+  // Onboarding by tax code and the org's address (#324).
+  'TAX_CODE_NOT_FOUND',
+  'TAX_LOOKUP_UNAVAILABLE',
+  'TAX_LOOKUP_DISABLED',
+  'INVALID_ADDRESS',
   'ALREADY_REVERSED',
   'ENTRY_IS_REVERSAL',
   'ENTRY_NOT_FOUND',
