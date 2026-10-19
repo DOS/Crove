@@ -1514,6 +1514,8 @@ export const vi = {
       TOTAL_MISMATCH: 'Tổng các dòng và thuế không khớp tổng thanh toán của hóa đơn',
       NOT_OWN_SALE: 'Mã số thuế người bán không phải mã số thuế của tổ chức nên không ghi sổ như hóa đơn bán ra được; hãy kiểm tra mã số thuế trong Cài đặt rồi đọc lại tệp',
       OWN_INVOICE: 'Người bán là chính tổ chức nên đây là hóa đơn bán ra; hãy đọc lại tệp để ghi sổ như hóa đơn bán ra',
+      NOT_REVENUE_ACCOUNT: 'Dòng bán ra phải ghi vào tài khoản doanh thu (511, 515, 711, 3387 hoặc tài khoản con của chúng)',
+      REVENUE_ACCOUNT_ON_PURCHASE: 'Dòng mua vào không ghi vào tài khoản doanh thu; hãy chọn tài khoản chi phí, hàng hóa hoặc tài sản',
       INVALID_TAX_CODE: 'Mã số thuế không hợp lệ: 10 chữ số, 10 chữ số kèm 3 chữ số đơn vị phụ thuộc, hoặc 12 chữ số',
       ALREADY_REVERSED: 'Bút toán này đã được đảo',
       ENTRY_IS_REVERSAL: 'Đây là bút toán đảo nên không đảo lại được; hãy ghi một bút toán mới',

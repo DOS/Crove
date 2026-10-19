@@ -1512,6 +1512,8 @@ export const en = {
       TOTAL_MISMATCH: 'The lines and VAT do not add up to the invoice total.',
       NOT_OWN_SALE: 'The seller\'s tax code is not your organization\'s, so this cannot be posted as a sale. Check the tax code in Settings, then read the file again.',
       OWN_INVOICE: 'The seller is your own organization, so this is a sales invoice. Read the file again to post it as a sale.',
+      NOT_REVENUE_ACCOUNT: 'A sales line goes to a revenue account (511, 515, 711, 3387 or one of their sub-accounts).',
+      REVENUE_ACCOUNT_ON_PURCHASE: 'A purchase line cannot go to a revenue account. Choose an expense, inventory or asset account.',
       INVALID_TAX_CODE: 'Not a valid tax code: 10 digits, 10 digits and a 3-digit dependent unit, or 12 digits.',
       ALREADY_REVERSED: 'This journal entry was already reversed.',
       ENTRY_IS_REVERSAL: 'This is a reversal, so it cannot be reversed. Post a new entry instead.',

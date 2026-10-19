@@ -59,6 +59,7 @@ const suite = ADMIN ? describe : describe.skip;
 suite('sales e-invoices (#313)', () => {
   const dbName = `crove_test_sales_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let adminUrl = '';
+  let appUrl = '';
   let pool: pg.Pool;
   let db: Db;
   let runtime: Runtime;
@@ -160,7 +161,7 @@ suite('sales e-invoices (#313)', () => {
       url.password = password;
       return url.toString();
     };
-    const appUrl = login('crove_app', 'test-app-pw');
+    appUrl = login('crove_app', 'test-app-pw');
     pool = createPool({ connectionString: appUrl, max: 4 });
     db = createDb(pool);
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
@@ -403,9 +404,63 @@ suite('sales e-invoices (#313)', () => {
       expect(await refused(insertLine, [org.orgId, saleDocument, '6422', null])).toBe('23514');
       expect(await refused(insertLine, [org.orgId, purchaseDocument, null, '511'])).toBe('23514');
       expect(await refused(insertLine, [org.orgId, saleDocument, '6422', '511'])).toBe('23514');
-      expect(await refused(insertLine, [org.orgId, saleDocument, null, '9999'])).toBe('23503');
+      // A revenue code (#430) the chart does not have.
+      expect(await refused(insertLine, [org.orgId, saleDocument, null, '5199'])).toBe('23503');
       expect(await refused(`UPDATE crove_finance.purchase_document SET direction = 'purchase' WHERE id = $1`, [saleDocument])).not.toBeNull();
     });
+  });
+
+  it('credits a sale line only to a revenue account and never debits a purchase line to one, for every writer (#430)', async () => {
+    const insertLine = `INSERT INTO crove_finance.purchase_line (org_id, document_id, line_no, description, amount, debit_account, credit_account) VALUES ($1, $2, 99, 'x', 1, $3, $4)`;
+    // Each statement in its own transaction, rolled back: as the superuser, and as crove_app in the owner's context of
+    // the org (crove_tenant, row security on), which writes the accepted rows too, so a refusal is the trigger's.
+    const outcome = async (c: pg.Client, enter: boolean, params: unknown[]) => {
+      await c.query('BEGIN');
+      try {
+        if (enter) await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner.userId, org.orgId]);
+        await c.query(insertLine, params);
+        return null;
+      } catch (error) {
+        return (error as { code?: string }).code ?? 'error';
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    };
+    for (const [url, enter] of [
+      [adminUrl, false],
+      [appUrl, true],
+    ] as const) {
+      const c = new pg.Client({ connectionString: url });
+      await c.connect();
+      try {
+        const where = enter ? 'as crove_tenant' : 'as the superuser';
+        for (const account of ['511', '5113', '515', '711', '3387']) expect(await outcome(c, enter, [org.orgId, saleDocument, null, account]), `${where}: sale on ${account}`).toBeNull();
+        for (const account of ['6422', '131', '3331', '338']) expect(await outcome(c, enter, [org.orgId, saleDocument, null, account]), `${where}: sale on ${account}`).toBe('23514');
+        for (const account of ['511', '5113', '711', '3387']) expect(await outcome(c, enter, [org.orgId, purchaseDocument, account, null]), `${where}: purchase on ${account}`).toBe('23514');
+        expect(await outcome(c, enter, [org.orgId, purchaseDocument, '6422', null]), `${where}: purchase on 6422`).toBeNull();
+        // One account per line, the one of the document's direction, holds for crove_tenant as for the superuser.
+        expect(await outcome(c, enter, [org.orgId, saleDocument, '6422', null]), `${where}: sale with a debit account`).toBe('23514');
+        expect(await outcome(c, enter, [org.orgId, purchaseDocument, null, '511']), `${where}: purchase with a credit account`).toBe('23514');
+        expect(await outcome(c, enter, [org.orgId, saleDocument, '6422', '511']), `${where}: both accounts`).toBe('23514');
+      } finally {
+        await c.end();
+      }
+    }
+  });
+
+  it('answers a non-revenue account on a sale line, and a revenue account on a purchase line, with the line (#430)', async () => {
+    const sale = await read(invoice('5010'));
+    const purchase = await read(invoice('5010', { purchase: true }));
+    const edit = async (id: string, debitAccount: string, revision = 1) =>
+      rpc('inbox/edit', await tokenFor(owner), { id, revision, lineAccounts: [{ lineNo: 2, debitAccount }], idempotencyKey: randomUUID() });
+    expect(await edit(sale, '6422')).toMatchObject({ status: 422, body: { code: 'NOT_REVENUE_ACCOUNT' } });
+    expect(await edit(purchase, '511')).toMatchObject({ status: 422, body: { code: 'REVENUE_ACCOUNT_ON_PURCHASE' } });
+    expect(await edit(purchase, '5113.DV')).toMatchObject({ status: 422, body: { code: 'REVENUE_ACCOUNT_ON_PURCHASE' } });
+    expect(await edit(sale, '5113')).toMatchObject({ status: 200 });
+    // A stored revision with a wrong account (written past the edit, here by the superuser) is refused when approved.
+    await admin((c) => c.query(`UPDATE crove_kernel.proposal SET payload = jsonb_set(payload, '{lines,0,debitAccount}', '"511"') WHERE org_id = $1 AND id = $2`, [org.orgId, purchase]));
+    await expect(approve(purchase)).rejects.toMatchObject({ code: 'REVENUE_ACCOUNT_ON_PURCHASE', status: 422 });
+    for (const id of [sale, purchase]) await runtime.execute('kernel.proposal.reject', { id }, { actor: asUser(owner.userId), orgId: org.orgId });
   });
 
   it('voids a sale by reversing its entry, and records the invoice again in its place', async () => {
