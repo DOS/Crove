@@ -624,6 +624,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       account: os.ledger.account.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.ledger.account', input, { actor, orgId })),
       ),
+      statements: os.ledger.statements.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.statements.period', input, { actor, orgId })),
+      ),
     },
     periodLock: {
       state: os.periodLock.state.handler(({ context }) =>
