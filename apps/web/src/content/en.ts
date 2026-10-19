@@ -133,7 +133,7 @@ export const en: Dictionary = {
     steps: [
       {
         name: 'Receive',
-        body: 'Forward an email or upload a file. Crove takes XML under Decree 123/2020 and Circular 78/2021, plus PDFs and photos.',
+        body: 'Forward an email or upload a file. Crove takes e-invoice XML under Decree 254/2026 and Circular 91/2026, plus PDFs and photos.',
         actor: 'Crove',
         time: '14/10/2026 15:58',
         confirm: 'Received',
@@ -412,7 +412,7 @@ export const en: Dictionary = {
       },
       {
         q: 'Which invoices can Crove read?',
-        a: 'XML e-invoices under Decree 123/2020 and Circular 78/2021 are read exactly, without AI. PDFs and photos use an OpenAI-compatible model you configure, including models that run locally such as Ollama or vLLM.',
+        a: 'XML e-invoices under Decree 254/2026 and Circular 91/2026 (and those issued under Decree 123/2020 before) are read exactly, without AI. PDFs and photos use an OpenAI-compatible model you configure, including models that run locally such as Ollama or vLLM.',
       },
       {
         q: 'Where is my data?',

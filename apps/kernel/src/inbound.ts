@@ -8,7 +8,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { sql } from 'kysely';
 import { EXTRACT_LIMIT_RETRIES, type ExtractClient } from '@crove/extract-contract';
-import { ACCEPTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '@crove/kernel-contract';
+import { ACCEPTED_ARCHIVE_TYPES, ACCEPTED_UPLOAD_TYPES, MAX_EMAIL_ARCHIVES, MAX_UPLOAD_BYTES } from '@crove/kernel-contract';
 import { DomainError, fileKey, inboundKey, newInboundBlobId, putFile, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { safeFilename, sniffType } from './sniff.ts';
 
@@ -141,13 +141,22 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
   }
 
   const files = [];
+  let archives = 0;
   for (const attachment of email.attachments.slice(0, 20)) {
     const decoded = Buffer.from(attachment.content, 'base64');
     const bytes = new Uint8Array(decoded.buffer, decoded.byteOffset, decoded.byteLength);
     if (bytes.byteLength === 0 || bytes.byteLength > MAX_UPLOAD_BYTES) continue;
     // Signatures, logos and other attachments that are not invoices are skipped by their content.
     const contentType = sniffType(bytes);
-    if (!contentType || !ACCEPTED_UPLOAD_TYPES.includes(contentType)) continue;
+    if (!contentType) continue;
+    // A ZIP (#432) is filed like an uploaded one and opened by the extraction job (archive.ts), which files at most
+    // MAX_EMAIL_ARCHIVE_DOCUMENTS of its documents; past MAX_EMAIL_ARCHIVES ZIPs the message's others are skipped.
+    if (ACCEPTED_ARCHIVE_TYPES.includes(contentType)) {
+      if (archives >= MAX_EMAIL_ARCHIVES) continue;
+      archives += 1;
+    } else if (!ACCEPTED_UPLOAD_TYPES.includes(contentType)) {
+      continue;
+    }
     const filename = safeFilename(attachment.filename ?? 'tep-dinh-kem', contentType);
     const sha256 = sha256Hex(bytes);
     const storageKey = fileKey(orgId, sha256);

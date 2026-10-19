@@ -51,7 +51,7 @@ Rules:
 - About 90 percent of any screen is neutral. The accent marks what to do next; semantic colors mark state.
 - Neutrals carry a slight hue bias toward the accent. No pure mid-grey.
 - No gradients on text, buttons or backgrounds. No radial glows, no glass blur as decoration, no colored shadows.
-- Both themes are designed, not inverted: check contrast and the accent separately in each. The app opens dark and lets each user pick system, light or dark (next to the language switch and in the command palette; applied before first paint by `apps/app/public/assets/theme-boot.js`); the marketing site follows `prefers-color-scheme` with a manual toggle.
+- Both themes are designed, not inverted: check contrast and the accent separately in each. Light is the default everywhere (the owner's decision, 2026-10-19): the app opens light and lets each user pick light, dark or system (next to the language switch and in the command palette; applied before first paint by `apps/app/public/assets/theme-boot.js`); the marketing site is light unless the visitor turns dark on with its toggle. The marketing site offers only light and dark (it is another origin, so the app's setting does not reach it); only the app can follow the system, when the user chooses "system".
 - `proposal`: AI-proposed data nobody has approved yet. Use the `proposal` badge variant and a dashed `border-proposal` outline (the AI Inbox journal card does), never the accent, so principle 2 has one consistent look.
 
 ### 3.2 Typography
@@ -227,7 +227,7 @@ Approve, edit and reject have equal visual access (reject is not hidden in a men
 - Semantic landmarks and heading order; icon-only buttons have `aria-label`; tables use real `<table>` markup.
 - Color is never the only signal (chips have text, charts have labels).
 - Help is in the same place on every screen (3.2.6): the "Góp ý / Hỗ trợ" link.
-- Respect `prefers-reduced-motion` and `prefers-color-scheme`.
+- Respect `prefers-reduced-motion`. Light is the default theme; follow `prefers-color-scheme` only when the user picks "system".
 - Test with keyboard only and with a screen reader (NVDA or VoiceOver) on the approval flow before release.
 
 ## 8. Internationalization

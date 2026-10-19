@@ -7,8 +7,8 @@ export type Theme = 'light' | 'dark';
 
 export const THEME_STORAGE_KEY = 'crove-theme';
 
-// Dark until the user picks something else, as the app has always opened.
-export const DEFAULT_THEME: ThemeSetting = 'dark';
+// Light until the user picks something else (the owner's call, 2026-10-19).
+export const DEFAULT_THEME: ThemeSetting = 'light';
 
 export function isThemeSetting(value: unknown): value is ThemeSetting {
   return typeof value === 'string' && (THEMES as readonly string[]).includes(value);

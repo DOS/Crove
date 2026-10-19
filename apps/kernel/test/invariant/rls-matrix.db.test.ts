@@ -39,7 +39,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>(['crove_finance.period_lock']);
+const PENDING_TABLES = new Set<string>(['crove_finance.bank_line']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -420,6 +420,13 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   // An org's sub-accounts under the TT133 chart (#319): one row per (org, code), never deleted. The code extends its
   // parent's (here 6422.<tag>); a trigger fills root_code. Tenant roles update only name, active and updated_by (a
   // column grant), so the update probes assign name to itself.
+  // Bank statement lines (#326): append-only, one row per line of an import, on a bank account (112 or an org
+  // sub-account under it). Tenant roles read and insert; nothing updates or deletes a line.
+  'crove_finance.bank_line': {
+    make: (o) => ({
+      row: { org_id: o.id, bank_account: '1121', import_id: randomUUID(), position: 1, value_date: '2026-10-01', description: 'RLS matrix', amount: '100' },
+    }),
+  },
   'crove_finance.org_account': {
     make: (o) => ({ row: { org_id: o.id, code: `6422.${tag().toUpperCase()}`, name: 'RLS matrix sub-account', parent_code: '6422' } }),
   },

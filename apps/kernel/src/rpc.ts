@@ -596,6 +596,23 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         inFinance(context, (orgId, actor) => runtime.query('finance.ledger.account', input, { actor, orgId })),
       ),
     },
+    periodLock: {
+      state: os.periodLock.state.handler(({ context }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.period.lock_state', {}, { actor, orgId })),
+      ),
+      lock: os.periodLock.lock.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('finance.period.lock', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+      unlock: os.periodLock.unlock.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('finance.period.unlock', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+    },
     // AI agents (ADR-0029). The kernel module owns them; a template of a module that is off answers MODULE_DISABLED.
     chart: {
       get: os.chart.get.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.chart.get', {}, { actor, orgId }))),

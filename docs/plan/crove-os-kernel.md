@@ -956,7 +956,7 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
   - Cloud Scheduler runs the `crove-prober` job every minute. The prober calls `crove_kernel.health()` as `crove_prober` and reads: age of the oldest unpublished outbox row, longest-queued job, DLQ, relay/worker heartbeats, purge results.
   - Results become Cloud Monitoring metrics, with absence alerts.
   - SEV1 pages the owner's phone and also opens an issue for an agent to handle per runbook.
-  - Open-source core (issue #39): the image's `prober` role and `crove_kernel.health()` (outbox and inbound relay age, oldest queued job, dead letters, worker heartbeat), with a webhook (Slack, Discord, Telegram or generic JSON) or stdout alert and `--test-alert`. Alerts are de-duplicated (issue #151): a notification on a new, changed or resolved problem and a repeat every `ALERT_REPEAT_MINUTES`, with the state in `crove_kernel.prober_alert_state` behind `prober_alert_gate()`, locked while one prober delivers. Self-hosters schedule it with cron or the Compose `prober` profile (README); Cloud Scheduler, Cloud Monitoring and paging stay in Crove Cloud.
+  - Open-source core (issue #39): the image's `prober` role and `crove_kernel.health()` (outbox and inbound relay age, oldest queued job, dead letters, worker heartbeat), with a webhook (Slack, Discord, Telegram or generic JSON) or stdout alert and `--test-alert`. Alerts are de-duplicated (issue #151): a notification on a new, changed or resolved problem and a repeat every `ALERT_REPEAT_MINUTES`, with the state in `crove_kernel.prober_alert_state` behind `prober_alert_gate()`, locked while one prober delivers. Self-hosters schedule it with cron or the Compose `prober` profile (README); Cloud Scheduler, Cloud Monitoring and paging stay in Crove Cloud. Absence on a self-hosted deployment (issue #309): with `PROBER_HEARTBEAT_URL` the prober pings an outside heartbeat monitor after each probe that read the database and delivered what it owed, and an outside uptime check requests `/healthz` every 5 minutes, so a stopped prober, a broken alert path or a dead host still pages the owner ([docs/runbooks/alerts.md](../runbooks/alerts.md)); `pilot:check` fails without an https `ALERT_WEBHOOK_URL`.
 
 ## 5. Modules
 
@@ -1414,7 +1414,7 @@ Data residency requirements are handled with a legal opinion plus a copy in Viet
 
 **Job `kernel.file.extract`** (keyed on sha256, schema and extractor version):
 1. Classify the document with `crove-fast`.
-2. **E-invoice XML first:** parsed deterministically in the sandbox, no LLM (Decree 123/2020 as amended by 70/2025).
+2. **E-invoice XML first:** parsed deterministically in the sandbox, no LLM (Decree 254/2026 and Circular 91/2026 from 2026-07-01; before that Decree 123/2020 as amended by 70/2025).
 3. PDFs with a text layer: `unpdf`, then structured output.
 4. Scanned images: `crove-vision`.
 5. Keep field-level evidence: `{file_id, extraction_id, page, bbox, text_span}`.
