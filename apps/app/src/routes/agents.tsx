@@ -12,10 +12,11 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { agentPermissions, budgetUsage, chartTree, isBudgetAmount, type AgentPermissions, type ChartNode } from '../lib/agents.ts';
-import { errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 
 type Chart = Awaited<ReturnType<typeof orpc.chart.get.call>>;
@@ -29,6 +30,36 @@ const AGENT_STATUSES = ['active', 'paused', 'retired'] as const;
 const SCOPES = ['org', 'module', 'agent'] as const;
 
 const refresh = () => void queryClient.invalidateQueries();
+
+// The refusal of a request this screen sent. The chart, agent, template and budget commands and releasing a stop are
+// R3 (ADR-0029), so they need a second factor verified in the last 5 minutes (P11): on STEP_UP_REQUIRED the step-up
+// prompt asks for one, then `retry` sends the refused request again as it was (a refused request stores no
+// idempotency key, so the same key is fine), and cancel drops it (#345). Any other refusal shows as text.
+function Refusal<V>({
+  error,
+  variables,
+  retry,
+  reset,
+  action,
+  className,
+}: {
+  error: unknown;
+  variables: V | undefined;
+  retry: (variables: V) => void;
+  reset: () => void;
+  action: string;
+  className: string;
+}) {
+  if (!error) return null;
+  if (isStepUpRequired(error)) {
+    return (
+      <div className="mt-2">
+        <StepUpPrompt action={action} onVerified={() => variables !== undefined && retry(variables)} onCancel={reset} />
+      </div>
+    );
+  }
+  return <p className={className}>{errorMessage(error)}</p>;
+}
 
 // "Stop AI": owners and admins, R1, so it never waits for a second factor. One idempotency key per confirmation.
 function StopAi() {
@@ -116,7 +147,14 @@ function KillSwitches({ switches, agents, perms }: { switches: KillSwitch[]; age
           ))}
         </ul>
         <p className="mt-2 text-xs">{t('releaseHint')}</p>
-        {release.error && <p className="mt-2 text-xs">{errorMessage(release.error)}</p>}
+        <Refusal
+          error={release.error}
+          variables={release.variables}
+          retry={(v) => release.mutate(v)}
+          reset={() => release.reset()}
+          action={t('stepUpRelease')}
+          className="mt-2 text-xs"
+        />
       </AlertDescription>
     </Alert>
   );
@@ -156,7 +194,14 @@ function AssignHolder({ position, members, agents }: { position: Position; membe
             ))}
         </NativeSelect>
       </label>
-      {assign.error && <p className="mt-1 text-xs text-destructive">{errorMessage(assign.error)}</p>}
+      <Refusal
+        error={assign.error}
+        variables={assign.variables}
+        retry={(v) => assign.mutate(v)}
+        reset={() => assign.reset()}
+        action={t('stepUpAssign', { title: position.title })}
+        className="mt-1 text-xs text-destructive"
+      />
     </div>
   );
 }
@@ -209,18 +254,16 @@ function AddPosition({ positions }: { positions: Position[] }) {
   const [reportsTo, setReportsTo] = useState('');
   const [key, setKey] = useState(() => crypto.randomUUID());
   const create = useMutation(orpc.chart.createPosition.mutationOptions({ onSuccess: refresh }));
+  const cleared = {
+    onSuccess: () => {
+      setTitle('');
+      setRoleKey('');
+      setKey(crypto.randomUUID());
+    },
+  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    create.mutate(
-      { title: title.trim(), module, roleKey: roleKey.trim(), reportsTo: reportsTo || null, idempotencyKey: key },
-      {
-        onSuccess: () => {
-          setTitle('');
-          setRoleKey('');
-          setKey(crypto.randomUUID());
-        },
-      },
-    );
+    create.mutate({ title: title.trim(), module, roleKey: roleKey.trim(), reportsTo: reportsTo || null, idempotencyKey: key }, cleared);
   };
   return (
     <form onSubmit={submit} className="mt-4 grid gap-3 rounded-lg border bg-muted/40 p-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -258,8 +301,20 @@ function AddPosition({ positions }: { positions: Position[] }) {
           {create.isPending ? <Spinner /> : null}
           {t('addPosition')}
         </Button>
-        {create.error && <span className="text-xs text-destructive">{errorMessage(create.error)}</span>}
+        {create.error && !isStepUpRequired(create.error) && <span className="text-xs text-destructive">{errorMessage(create.error)}</span>}
       </div>
+      {isStepUpRequired(create.error) && (
+        <div className="sm:col-span-2 lg:col-span-5">
+          <Refusal
+            error={create.error}
+            variables={create.variables}
+            retry={(v) => create.mutate(v, cleared)}
+            reset={() => create.reset()}
+            action={t('stepUpAddPosition', { title: create.variables?.title ?? '' })}
+            className="text-xs text-destructive"
+          />
+        </div>
+      )}
     </form>
   );
 }
@@ -334,7 +389,14 @@ function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissions }) {
             {t('save')}
           </Button>
         )}
-        {update.error && <p className="mt-1 text-xs text-destructive">{errorMessage(update.error)}</p>}
+        <Refusal
+          error={update.error}
+          variables={update.variables}
+          retry={(v) => update.mutate(v)}
+          reset={() => update.reset()}
+          action={t('stepUpUpdateAgent', { name: agent.displayName })}
+          className="mt-1 text-xs text-destructive"
+        />
       </TableCell>
     </TableRow>
   );
@@ -385,10 +447,20 @@ function Templates({ perms }: { perms: AgentPermissions }) {
         </ul>
       )}
       {install.data && <p className="mt-2 text-sm text-success">{t('installed')}</p>}
-      {install.error && (
+      {install.error && !isStepUpRequired(install.error) && (
         <div className="mt-2">
           <ErrorText>{errorMessage(install.error)}</ErrorText>
         </div>
+      )}
+      {isStepUpRequired(install.error) && (
+        <Refusal
+          error={install.error}
+          variables={install.variables}
+          retry={(v) => install.mutate(v)}
+          reset={() => install.reset()}
+          action={t('stepUpInstall', { title: templates.data?.find((tpl) => tpl.key === install.variables?.templateKey)?.title ?? install.variables?.templateKey ?? '' })}
+          className="text-sm text-destructive"
+        />
       )}
     </section>
   );
@@ -463,8 +535,13 @@ function BudgetForm({ agents }: { agents: Agent[] }) {
         {touched && !amountOk && <span className="text-xs text-destructive">{t('budgetAmountInvalid')}</span>}
         {touched && !warnOk && <span className="text-xs text-destructive">{t('warnPercentInvalid')}</span>}
         {touched && !target && <span className="text-xs text-destructive">{t('budgetTargetMissing')}</span>}
-        {set.error && <span className="text-xs text-destructive">{errorMessage(set.error)}</span>}
+        {set.error && !isStepUpRequired(set.error) && <span className="text-xs text-destructive">{errorMessage(set.error)}</span>}
       </div>
+      {isStepUpRequired(set.error) && (
+        <div className="sm:col-span-2 lg:col-span-5">
+          <Refusal error={set.error} variables={set.variables} retry={(v) => set.mutate(v)} reset={() => set.reset()} action={t('stepUpBudget')} className="text-xs text-destructive" />
+        </div>
+      )}
     </form>
   );
 }

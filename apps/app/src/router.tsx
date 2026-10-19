@@ -2,7 +2,7 @@ import { Outlet, createRootRoute, createRoute, createRouter, redirect, type Erro
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { errorMessage, getCurrentOrg, isUnauthenticated, orpc, queryClient, setCurrentOrg } from './lib/api.ts';
-import { accessToken, auth, getConfig, needsSecondFactor } from './lib/auth.ts';
+import { accessToken, auth, getConfig, needsSecondFactor, needsSecondFactorNow } from './lib/auth.ts';
 import { landingFor } from './lib/clients.ts';
 import { pendingInvite, rememberInvite, takeTokenFromHash } from './lib/invite.ts';
 import { signOut } from './lib/session-actions.ts';
@@ -106,7 +106,7 @@ const mfaRoute = createRoute({
   path: '/mfa',
   beforeLoad: async () => {
     await requireSession();
-    if (!(await needsSecondFactor())) throw redirect({ to: '/' });
+    if (!(await needsSecondFactorNow())) throw redirect({ to: '/' });
   },
   component: MfaPage,
 });

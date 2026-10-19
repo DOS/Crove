@@ -66,6 +66,18 @@ export async function needsSecondFactor(): Promise<boolean> {
   return data?.currentLevel === 'aal1' && data.nextLevel === 'aal2';
 }
 
+// The same question, asked of the server when the session's answer is no (#345). The session keeps the factors the
+// user had when it was issued, so a factor enabled since on another device is missing there until the token refreshes.
+// /mfa asks this one: on the cached answer it would send that user back to the app, whose next request the kernel
+// refuses with MFA_REQUIRED, which opens /mfa again, page load after page load.
+export async function needsSecondFactorNow(client: Pick<Client, 'mfa'> = auth()): Promise<boolean> {
+  const { data } = await client.mfa.getAuthenticatorAssuranceLevel();
+  if (data?.currentLevel !== 'aal1') return false;
+  if (data.nextLevel === 'aal2') return true;
+  const factors = await client.mfa.listFactors();
+  return (factors.data?.all ?? []).some((factor) => factor.status === 'verified');
+}
+
 export type { Session };
 
 // Supabase Auth error codes with a message of their own; any other error shows the server's message.
