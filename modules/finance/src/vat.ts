@@ -173,15 +173,49 @@ export const vatPeriodQuery = defineQuery({
   handler: (ctx, input): Promise<VatReport> => loadVatReport(ctx, input.period),
 });
 
-// Records one Excel export of a period's VAT working after the workbook is built. It changes nothing: its audit row
-// is the record, with the period and the number of invoices, never their content. Same roles as finance.vat.period.
+// The taxpayer block of the HTKK return (issue #332): the org's tax code (#313) and name.
+export interface VatTaxpayer {
+  taxCode: string;
+  name: string;
+}
+
+export interface VatDeclaration {
+  report: VatReport;
+  taxpayer: VatTaxpayer;
+}
+
+// The VAT working of a period with the taxpayer it is declared for, for the HTKK XML export
+// (GET /api/export/vat-01gtgt.xml). A return names the taxpayer's tax code, so an org without one is refused.
+export const vatDeclarationQuery = defineQuery({
+  name: 'finance.vat.declaration',
+  input: zVatPeriodInput,
+  access: ALL,
+  handler: async (ctx, input): Promise<VatDeclaration> => {
+    const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['tax_code', 'name']).where('org_id', '=', ctx.orgId).executeTakeFirst();
+    if (!org?.tax_code) {
+      throw new DomainError('TAX_CODE_REQUIRED', 422, 'Tổ chức chưa có mã số thuế. Nhập mã số thuế trong Cài đặt rồi xuất lại.');
+    }
+    return { report: await loadVatReport(ctx, input.period), taxpayer: { taxCode: org.tax_code, name: org.name } };
+  },
+});
+
+// The file formats of a VAT export: the Excel working (#316, no format in the audit row, as before) or the HTKK XML
+// of form 01/GTGT (#332).
+export const VAT_EXPORT_FORMATS = ['htkk_01gtgt_xml'] as const;
+
+// Records one export of a period's VAT working after the file is built. It changes nothing: its audit row is the
+// record, with the period, the number of invoices and the format, never their content. Same roles as
+// finance.vat.period.
 export const vatExport = defineCommand({
   name: 'finance.vat.export',
-  input: zVatPeriodInput.extend({ documents: z.number().int().nonnegative().max(2 * VAT_PERIOD_LIMIT) }),
+  input: zVatPeriodInput.extend({
+    documents: z.number().int().nonnegative().max(2 * VAT_PERIOD_LIMIT),
+    format: z.enum(VAT_EXPORT_FORMATS).optional(),
+  }),
   risk: 'R0',
   access: ALL,
   handler: async (ctx, input) => {
-    ctx.audit({ period: input.period, documents: input.documents });
+    ctx.audit(input.format ? { period: input.period, documents: input.documents, format: input.format } : { period: input.period, documents: input.documents });
     return { ok: true as const };
   },
 });

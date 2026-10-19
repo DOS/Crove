@@ -74,17 +74,26 @@ export function VatPage() {
   const report = useQuery(orpc.vat.period.queryOptions({ input: { period } }));
   const data = report.data;
 
+  // The org's tax code goes into the HTKK file (#332); without one the server refuses it, so the button waits for it.
+  const org = useQuery(orpc.org.get.queryOptions());
+  const taxCode = org.data?.taxCode ?? null;
+
+  const download = async (path: string, filename: string) => {
+    const response = await apiFetch(`${path}?${new URLSearchParams({ period })}`);
+    const url = URL.createObjectURL(await response.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
   const exportXlsx = useMutation({
-    mutationFn: async () => {
-      const response = await apiFetch(`/api/export/vat.xlsx?${new URLSearchParams({ period })}`);
-      const url = URL.createObjectURL(await response.blob());
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = t('exportFile', { period, org: getCurrentOrg() ?? 'org' });
-      a.click();
-      URL.revokeObjectURL(url);
-    },
+    mutationFn: () => download('/api/export/vat.xlsx', t('exportFile', { period, org: getCurrentOrg() ?? 'org' })),
   });
+  const exportXml = useMutation({
+    mutationFn: () => download('/api/export/vat-01gtgt.xml', t('exportXmlFile', { period, org: getCurrentOrg() ?? 'org' })),
+  });
+  const exportError = exportXlsx.error ?? exportXml.error;
 
   const indexes = choice.kind === 'month' ? Array.from({ length: 12 }, (_, i) => i + 1) : [1, 2, 3, 4];
   const rateRows = data ? data.input.totals.byRate.map((input, i) => ({ input, output: data.output.totals.byRate[i] })) : [];
@@ -95,12 +104,24 @@ export function VatPage() {
         title={t('title')}
         subtitle={t('subtitle')}
         actions={
-          <Button size="lg" onClick={() => exportXlsx.mutate()} disabled={exportXlsx.isPending || !data}>
-            {exportXlsx.isPending ? <Spinner className="text-current" /> : null}
-            {t('export')}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="lg"
+              variant="outline"
+              onClick={() => exportXml.mutate()}
+              disabled={exportXml.isPending || !data || !taxCode}
+              title={org.data && !taxCode ? t('exportXmlNeedsTaxCode') : undefined}>
+              {exportXml.isPending ? <Spinner className="text-current" /> : null}
+              {t('exportXml')}
+            </Button>
+            <Button size="lg" onClick={() => exportXlsx.mutate()} disabled={exportXlsx.isPending || !data}>
+              {exportXlsx.isPending ? <Spinner className="text-current" /> : null}
+              {t('export')}
+            </Button>
+          </div>
         }
       />
+      {org.data && !taxCode && <p className="mb-4 text-sm text-muted-foreground">{t('exportXmlNeedsTaxCode')}</p>}
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <label className="text-xs">
           <span className="text-subtle-foreground">{t('kind')}</span>
@@ -134,9 +155,9 @@ export function VatPage() {
         </label>
         {data && <p className="pb-1.5 text-sm text-muted-foreground">{t('range', { from: f.date(data.period.from), to: f.date(data.period.to) })}</p>}
       </div>
-      {exportXlsx.error && (
+      {exportError && (
         <div className="mb-4">
-          <ErrorText>{errorMessage(exportXlsx.error)}</ErrorText>
+          <ErrorText>{errorMessage(exportError)}</ErrorText>
         </div>
       )}
       {report.isLoading ? (
@@ -157,6 +178,7 @@ export function VatPage() {
               ))}
             </DataTable>
             <p className="mt-2 text-xs text-subtle-foreground">{t('indicatorsNote')}</p>
+            <p className="mt-1 text-xs text-subtle-foreground">{t('xmlNote')}</p>
           </section>
 
           <section>
