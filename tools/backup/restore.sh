@@ -126,7 +126,18 @@ if [ "$STORAGE" = s3 ]; then
     { STEP="settings: S3_BUCKET=$S3_BUCKET here, but the target compose project uses $(echo $stack_bucket) (set S3_BUCKET to match)"; false; }
 fi
 
-mkdir -p "$WORK" "$BACKUP_DIR/logs"
+mkdir -p "$BACKUP_DIR/logs"
+# Each restore gets a directory of its own: one started in the same second as another (or as a failed one, which
+# keeps its downloaded run) waits for the next second instead of reading the other's files.
+tries=0
+until mkdir "$WORK" 2>/dev/null; do
+  tries=$((tries + 1))
+  [ "$tries" -le 10 ] || { STEP="creating a restore directory in $BACKUP_DIR"; false; }
+  sleep 1
+  STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+  WORK="$BACKUP_DIR/restore-$STAMP"
+  LOG_FILE="$BACKUP_DIR/logs/restore-$STAMP.log"
+done
 chmod 700 "$BACKUP_DIR"
 exec > >(tee -a "$LOG_FILE") 2>&1
 log "restoring $SOURCE onto compose project ${COMPOSE_PROJECT_NAME:-of $CROVE_DIR} (storage $STORAGE)"
