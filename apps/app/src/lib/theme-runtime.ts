@@ -24,7 +24,7 @@ function systemQuery(): MediaQueryList | null {
 }
 
 function apply(): void {
-  const dark = resolveTheme(current, systemQuery()?.matches ?? true) === 'dark';
+  const dark = resolveTheme(current, systemQuery()?.matches ?? false) === 'dark';
   const root = document.documentElement;
   root.classList.toggle('dark', dark);
   root.style.colorScheme = dark ? 'dark' : 'light';
