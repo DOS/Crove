@@ -11,14 +11,13 @@
 // (issue #309): after each probe that read the database and delivered every notification it owed (exit 0 or 1). The
 // outside monitor then pages when the pings stop: the prober or the host is down, the database cannot be read, or
 // the alert path is broken.
-import { hostname } from 'node:os';
 import pg from 'pg';
 import { z } from 'zod';
 import { effectiveRepeatSeconds, memoryAlertGate, pgAlertGate, problemKey, type AlertGate, type GateResult } from './alert-gate.ts';
 import {
-  WEBHOOK_FORMATS,
-  detectWebhookFormat,
+  WEBHOOK_ENV,
   webhookAlertSink,
+  webhookTarget,
   type Alert,
   type AlertSink,
   type AlertSinkOptions,
@@ -38,20 +37,14 @@ const seconds = (fallback: number) => z.coerce.number().int().min(0).max(604_800
 const schema = z.object({
   // Connect as crove_prober (password CROVE_PROBER_DB_PASSWORD, set by `migrate`).
   PROBER_DATABASE_URL: optional,
-  ALERT_WEBHOOK_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
-  // auto: Slack, Discord and Telegram by their API hosts, generic otherwise (alert.ts).
-  ALERT_WEBHOOK_FORMAT: z.enum(['auto', ...WEBHOOK_FORMATS]).default('auto'),
-  // Telegram only: the chat the bot posts to, a numeric id (groups and channels are negative) or @channelname.
-  ALERT_TELEGRAM_CHAT_ID: optional.pipe(z.string().regex(/^(?:-?\d{1,20}|@[A-Za-z0-9_]{5,32})$/).optional()),
+  // ALERT_WEBHOOK_URL, ALERT_WEBHOOK_FORMAT, ALERT_TELEGRAM_CHAT_ID, ALERT_INSTANCE and PUBLIC_URL (alert.ts).
+  ...WEBHOOK_ENV,
   // While the same problem lasts, notify again every this many minutes; 0 notifies only when it starts, changes
   // or ends.
   ALERT_REPEAT_MINUTES: z.coerce.number().int().min(0).max(10_080).default(60),
-  // Names this deployment in alerts. Default: the host of PUBLIC_URL, else the machine's host name.
-  ALERT_INSTANCE: optional,
   // An outside heartbeat monitor's ping URL (Healthchecks.io, Uptime Kuma push, Better Stack heartbeat): a GET after
   // each probe that read the database and delivered what it owed. Like the webhook, it usually carries a secret.
   PROBER_HEARTBEAT_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
-  PUBLIC_URL: optional,
   PROBER_MAX_OUTBOX_AGE_SECONDS: seconds(300),
   PROBER_MAX_JOB_AGE_SECONDS: seconds(900),
   PROBER_MAX_HEARTBEAT_AGE_SECONDS: seconds(120),
@@ -96,20 +89,14 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
     throw new Error(`invalid prober configuration: ${fields}`);
   }
   const raw = parsed.data;
-  const webhookFormat = raw.ALERT_WEBHOOK_FORMAT === 'auto' ? (raw.ALERT_WEBHOOK_URL ? detectWebhookFormat(raw.ALERT_WEBHOOK_URL) : 'generic') : raw.ALERT_WEBHOOK_FORMAT;
-  if (raw.ALERT_WEBHOOK_URL && webhookFormat === 'telegram') {
-    if (!raw.ALERT_TELEGRAM_CHAT_ID) throw new Error('invalid prober configuration: ALERT_TELEGRAM_CHAT_ID (a Telegram webhook needs the chat id)');
-    if (!/\/bot[^/]+\/sendMessage$/.test(new URL(raw.ALERT_WEBHOOK_URL).pathname)) {
-      throw new Error('invalid prober configuration: ALERT_WEBHOOK_URL (a Telegram webhook is https://api.telegram.org/bot<token>/sendMessage)');
-    }
-  }
+  const target = webhookTarget(raw, 'prober');
   return {
     databaseUrl: raw.PROBER_DATABASE_URL,
-    webhookUrl: raw.ALERT_WEBHOOK_URL,
-    webhookFormat,
-    telegramChatId: raw.ALERT_TELEGRAM_CHAT_ID,
+    webhookUrl: target.webhookUrl,
+    webhookFormat: target.webhookFormat,
+    telegramChatId: target.telegramChatId,
     repeatSeconds: raw.ALERT_REPEAT_MINUTES * 60,
-    instance: raw.ALERT_INSTANCE ?? hostOf(raw.PUBLIC_URL) ?? hostname(),
+    instance: target.instance,
     thresholds: {
       outboxAgeSeconds: raw.PROBER_MAX_OUTBOX_AGE_SECONDS,
       jobAgeSeconds: raw.PROBER_MAX_JOB_AGE_SECONDS,
@@ -120,15 +107,6 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
     deadLetterWindowSeconds: raw.PROBER_DEAD_LETTER_WINDOW_SECONDS ?? (everySeconds === null ? 3600 : Math.min(everySeconds + 60, 604_800)),
     heartbeatUrl: raw.PROBER_HEARTBEAT_URL,
   };
-}
-
-function hostOf(url: string | undefined): string | undefined {
-  if (!url) return undefined;
-  try {
-    return new URL(url).host || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /**
