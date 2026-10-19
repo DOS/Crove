@@ -21,7 +21,7 @@ The two streams follow different rules, so they are kept apart from the queue to
 | Pace | At once, priority queue | Throttled per org and per receiving domain; caps and warm-up |
 
 **v1 (this plan):**
-- Kernel mail pipeline: every send queued through the outbox, logged per recipient, sent once through the `external_call` ledger (or flagged when the outcome is unknown), and checked against the suppression list. Member invites move onto it.
+- Kernel mail pipeline: every send queued through the outbox, logged per recipient, sent once through the `external_call` ledger (or flagged when the outcome is unknown), and checked against the suppression list. Member invites get their log row and the suppression check, and stay sent by the request (their link holds a secret, §3.2).
 - Delivery events: bounces and complaints from provider webhooks, and bounce reports (DSNs) through the inbound mail route for plain SMTP; hard bounces and complaints suppress the address.
 - Sender domains: an org verifies its own domain (SPF, DKIM, DMARC), with a daily re-check.
 - Templates: a block model rendered to HTML and plain text, in Vietnamese and English; built-in defaults for every mail Crove sends, and org overrides; preview in a sandboxed frame.
@@ -41,7 +41,7 @@ The two streams follow different rules, so they are kept apart from the queue to
 
 | Email needs | In core today | Plan |
 |---|---|---|
-| Sending | `apps/kernel/src/mail.ts`: one SMTP adapter (nodemailer, `SMTP_*` settings, Mailpit locally) or a log-only mailer; the member invite is sent synchronously from the RPC right after `kernel.member.invite.create` | Keep the `Mailer` port; sends move behind the outbox and a worker queue (E1) |
+| Sending | `apps/kernel/src/mail.ts`: one SMTP adapter (nodemailer, `SMTP_*` settings, Mailpit locally) or a log-only mailer; the member invite is sent synchronously from the RPC right after `kernel.member.invite.create` | Keep the `Mailer` port; sends move behind the outbox and a worker queue (E1), except mail that carries a secret, such as the invite (§3.2) |
 | One send per recipient | `crove_kernel.external_call` ledger (Social S4) | Reuse: one call per mail (E1) |
 | Suppression | None | Kernel table checked in the transaction that queues every send (E1) |
 | Bounces and complaints | None | Provider webhooks; DSNs through the inbound route (E2) |
@@ -87,7 +87,7 @@ Every module sends mail: the kernel sends invites, Finance will send invoices an
 - A command that sends mail inserts the `mail_message` row in its own transaction, after the suppression check for `(org, to_hash, stream)`. A suppressed transactional send is recorded as `suppressed` and the command learns it (`MAIL.SUPPRESSED`); a suppressed campaign recipient is skipped and counted. No handler calls a provider.
 - Two worker queues: `kernel-mail-send` (system and transactional, sent at once) and `kernel-mail-bulk` (marketing, throttled). A marketing burst never delays an invite or an invoice.
 - One send per mail: the job writes `external_call` with the key `mail:<message>:<attempt>` in state `started`, commits, then calls the provider. Plain SMTP and most provider APIs have no idempotency key, so a timeout after the provider may have accepted the mail leaves the call `ambiguous`. Marketing never retries an ambiguous send (a missed newsletter is better than a duplicate). Transactional mail retries only when the adapter declares the step `idempotent` (the provider dedupes) or can look the mail up by its Message-ID; otherwise the log shows "outcome unknown" with a "send again" action for a person.
-- The invite moves from the synchronous send to the queue: the RPC answer says `queued`, and the members screen shows the delivery status.
+- Mail whose body carries a secret is sent by the request that holds the secret, never queued. The member invite's accept link holds the raw invite token, and the database keeps only its hash (`invite-mail.db.test.ts` checks that the token is stored nowhere), so no worker could build the link. The invite command writes the invite's `mail_message` row in its own transaction: `suppressed` when the org stopped the address, `sending` otherwise. The API reads the row back (`kernel.mail.direct.get`), sends the mail only while it is `sending`, and records the outcome with `kernel.mail.record_direct` (only the member who created the row, once, within 10 minutes). The invite answer stays the one #35 defined, the same for every address (the invariant suite pins it); the members screen shows the delivery status from the row (E2).
 - Supabase Auth's own mails (confirmation, recovery, magic link) stay with Supabase Auth and its SMTP settings; the pipeline does not see them.
 - Logs never carry a body, an address or a provider error message (as `mail.ts` today): codes only.
 
@@ -189,7 +189,7 @@ Epic: #537. E1 and E2 are in M2 at P2; E3 to E9 are in Icebox at P3 until M3 is 
 | # | Step | Depends on | Touches protected paths |
 |---|---|---|---|
 | E0 (#535) | This plan, Decision 18, ADR-0034 (proposed) | - | No |
-| E1 (#538) | Kernel mail pipeline: `mail_message`, `mail_suppression`, the send and bulk queues with `external_call`, the suppression check, the invite moved onto the queue; RLS matrix factories first | - | Yes (migrations, kernel) |
+| E1 (#538) | Kernel mail pipeline: `mail_message`, `mail_suppression`, the send and bulk queues with `external_call`, the suppression check, the invite's log row; RLS matrix factories first. In two parts: E1a, the tables, the keyed address hash, the suppression commands and the invite's row (the invite is still sent by the request, §3.2); E1b, the queues and `external_call`, with the first queued sender (Finance's reminders to client companies) | - | Yes (migrations, kernel) |
 | E2 (#539) | Delivery events: `mail_event`, `@crove/mail` with the provider interface, the first HTTP adapter, the signed webhook route, DSNs through the inbound route (VERP); hard bounces and complaints suppress; invite delivery status on the members screen | E1 | Yes (migrations, `http.ts`) |
 | E3 (#540) | `modules/email` and the `crove_email` schema, registered under `CROVE_MODULES` with its menu; sender domains with the DNS check job and the From rules | E1 | Yes (migrations) |
 | E4 (#541) | Templates: block model, renderer (HTML and text), sandboxed preview, built-in defaults for every slot, org overrides; the message log screen | E3 | Yes (migrations) |

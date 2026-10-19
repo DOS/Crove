@@ -248,6 +248,21 @@ export type ExternalCallTable = Refine<
   }
 >;
 
+// Outbound mail (Email plan §3.2-3.3, #538): one row per mail, and the addresses an org must not mail.
+export const MAIL_STREAMS = ['system', 'transactional', 'marketing'] as const;
+export const MAIL_STATUSES = ['queued', 'sending', 'sent', 'delivered', 'bounced', 'complained', 'suppressed', 'failed', 'ambiguous'] as const;
+export type MailStatus = (typeof MAIL_STATUSES)[number];
+export type MailMessageTable = Refine<
+  G.KernelMailMessageTable,
+  { stream: (typeof MAIL_STREAMS)[number]; status: Generated<MailStatus> }
+>;
+export const MAIL_SUPPRESSION_SCOPES = ['all', 'marketing'] as const;
+export const MAIL_SUPPRESSION_REASONS = ['hard_bounce', 'complaint', 'unsubscribe_all', 'manual', 'provider'] as const;
+export type MailSuppressionTable = Refine<
+  G.KernelMailSuppressionTable,
+  { scope: (typeof MAIL_SUPPRESSION_SCOPES)[number]; reason: (typeof MAIL_SUPPRESSION_REASONS)[number] }
+>;
+
 export const AGENT_WAKEUP_STATUSES = ['pending', 'claimed', 'done'] as const;
 export type AgentWakeupTable = Refine<G.KernelAgentWakeupTable, { status: Generated<(typeof AGENT_WAKEUP_STATUSES)[number]> }>;
 
@@ -393,6 +408,8 @@ type Refined = Tables<{
   'crove_kernel.budget_policy': BudgetPolicyTable;
   'crove_kernel.channel_connection': ChannelConnectionTable;
   'crove_kernel.external_call': ExternalCallTable;
+  'crove_kernel.mail_message': MailMessageTable;
+  'crove_kernel.mail_suppression': MailSuppressionTable;
   'crove_finance.purchase_document': PurchaseDocumentTable;
   'crove_finance.journal_entry': JournalEntryTable;
   'crove_finance.org_account': OrgAccountTable;

@@ -16,6 +16,7 @@ import {
   type AcceptedInvite,
   type BulkApproveResult,
   type ChannelConnectInput,
+  type DirectMail,
   type OrgSummary,
 } from '@crove/kernel';
 import type { z } from 'zod';
@@ -25,6 +26,7 @@ import { DraftBudget } from './ai-draft-limit.ts';
 import { actorOf, type AuthUser } from './auth.ts';
 import { ConcurrencyLimiter } from './concurrency.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
+import type { Delivery } from './mail.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
 
 export interface RpcContext {
@@ -50,6 +52,10 @@ export async function resolveMembership(runtime: Runtime, user: AuthUser, slug: 
 export async function resolveOrg(runtime: Runtime, user: AuthUser, slug: string | null): Promise<string> {
   return (await resolveMembership(runtime, user, slug)).orgId;
 }
+
+// The error code a mail_message row gets when the invite mail did not go out: no mail server configured, the server
+// refused it or the deadline passed, or the template threw.
+const DELIVERY_ERROR: Record<Exclude<Delivery, 'sent'> | 'error', string> = { off: 'MAIL_OFF', failed: 'SEND_FAILED', error: 'SEND_ERROR' };
 
 interface CreatedInvite {
   inviteId: string;
@@ -203,24 +209,44 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_address', input, { actor, orgId })),
       ),
       // No idempotency key: the answer carries the invite token, which must never be stored with a key. The mail
-      // goes out after the command has committed (invite-mail.ts says why); its outcome is logged and never changes
-      // the answer, which stays the same whether or not the email has an account.
+      // goes out after the command has committed (invite-mail.ts says why), unless the org stopped mail to the
+      // address (#538); its outcome is recorded on the invite's mail_message row and never changes the answer, which
+      // stays the same whether or not the email has an account.
       invite: os.org.invite.handler(({ context, input }) =>
         guard(async () => {
           const org = await resolveMembership(runtime, context.user, context.orgSlug);
-          const created = await runtime.execute<CreatedInvite>('kernel.member.invite.create', input, { actor: actorOf(context.user), orgId: org.orgId });
-          try {
-            await sendInviteMail?.({
-              to: created.email,
-              orgName: org.name,
-              inviterName: context.user.name,
-              inviterEmail: context.user.email,
-              role: created.role,
-              expiresAt: created.expiresAt,
-              acceptPath: created.acceptPath,
+          const actor = actorOf(context.user);
+          const created = await runtime.execute<CreatedInvite>('kernel.member.invite.create', input, { actor, orgId: org.orgId });
+          // The invite's mail row, as the command wrote it: no row, or a read that fails, sends nothing, since an
+          // address the org stopped must never get mail; the inviter still has the link.
+          const mail = await runtime
+            .query<DirectMail | null>('kernel.mail.direct.get', { source: 'kernel.member.invite.create', sourceId: created.inviteId }, { actor, orgId: org.orgId })
+            .catch((error: unknown) => {
+              console.error(`[mail] invite mail not sent, its record was not read: ${error instanceof Error ? error.name : 'unknown error'}`);
+              return null;
             });
-          } catch (error) {
-            console.error(`[mail] invite mail not sent: ${error instanceof Error ? error.name : 'unknown error'}`);
+          if (mail?.status === 'sending') {
+            let delivery: Delivery | 'error' = 'off';
+            try {
+              delivery =
+                (await sendInviteMail?.({
+                  to: created.email,
+                  orgName: org.name,
+                  inviterName: context.user.name,
+                  inviterEmail: context.user.email,
+                  role: created.role,
+                  expiresAt: created.expiresAt,
+                  acceptPath: created.acceptPath,
+                  messageId: mail.messageIdHeader,
+                })) ?? 'off';
+            } catch (error) {
+              delivery = 'error';
+              console.error(`[mail] invite mail not sent: ${error instanceof Error ? error.name : 'unknown error'}`);
+            }
+            const outcome = delivery === 'sent' ? { outcome: 'sent' as const } : { outcome: 'failed' as const, errorCode: DELIVERY_ERROR[delivery] };
+            await runtime.execute('kernel.mail.record_direct', { messageId: mail.messageId, ...outcome }, { actor, orgId: org.orgId }).catch((error: unknown) => {
+              console.error(`[mail] invite mail outcome not recorded: ${error instanceof Error ? error.name : 'unknown error'}`);
+            });
           }
           return created;
         }),

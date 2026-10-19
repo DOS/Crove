@@ -1529,6 +1529,8 @@ export const en = {
       INVITE_USED: 'This invite was already used.',
       INVITE_RATE_LIMITED: 'Too many invites were sent. Try again later.',
       TOO_MANY_INVITES: 'The organization has too many pending invites. Revoke some first.',
+      NOT_SUPPRESSED: 'Mail to this address is not stopped.',
+      MAIL_COMPLAINT_LIFT: 'The recipient reported this mail as spam. Only their own new sign-up can resume it.',
       PROPOSAL_DECIDED: 'This proposal was already decided.',
       STALE_REVISION: 'The proposal has changed. Reload it.',
       NOT_EDITABLE: 'This proposal cannot be edited.',

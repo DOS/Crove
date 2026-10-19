@@ -29,7 +29,7 @@ The questions: where the sending pipeline lives, which rules every sender must p
 
 - Every module gets reliable, logged mail with bounce handling without depending on the Email module.
 - The kernel grows three tables, two queues and a webhook route; each is a protected-path change with its own security review, and each new table lands its RLS matrix row factory first.
-- The invite RPC no longer sends synchronously: it answers `queued`, and the members screen shows the delivery status.
+- The invite RPC still sends synchronously: its link holds the raw invite token, which no table stores, so no worker could build it. The invite gets its `mail_message` row and the suppression check in the command, the API records the outcome on that row, and the members screen shows the delivery status (E2). The invite answer is unchanged. In general, mail whose body carries a secret is sent by the request that holds it.
 - Marketing over plain SMTP sees no complaints (feedback loops go to ESPs); the product says so and the guard uses bounces only.
 - Erasure keeps an address hash in `mail_suppression`; the deletion map (ADR-0017) records this.
 - The plan's "bulk email marketing only on real customer demand" (§13, §15) is replaced by this module.
@@ -47,4 +47,4 @@ The questions: where the sending pipeline lives, which rules every sender must p
 - A worker killed after the provider call and before recording it: the campaign recipient is `ambiguous` and gets no second mail.
 - A one-click POST to `/-/u/<token>` with no cookie unsubscribes; a tampered token returns the generic page and changes nothing.
 - A campaign without an approval of its current revision is refused by `email.campaign.schedule`; an agent actor cannot decide one.
-- With `CROVE_MODULES=kernel`, an invite is queued and delivered to Mailpit with the built-in template.
+- With `CROVE_MODULES=kernel`, an invite is logged and delivered to Mailpit with the built-in template.

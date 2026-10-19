@@ -21,6 +21,8 @@ export interface InviteMailInput {
   expiresAt: string;
   // The accept path from the command (`/-/invite#<token>`), joined to PUBLIC_URL here.
   acceptPath: string;
+  // The Message-ID of the invite's mail_message row (#538), so the mail and its row name the same message.
+  messageId?: string;
 }
 
 export type SendInviteMail = (invite: InviteMailInput) => Promise<Delivery>;
@@ -90,7 +92,7 @@ export function inviteMail(input: InviteMailInput, publicUrl: string): OutboundM
 <p>Hãy đăng nhập hoặc tạo tài khoản bằng đúng địa chỉ email này (${escapeHtml(input.to)}); lời mời chỉ dành cho email được mời. Liên kết dùng được một lần và hết hạn lúc ${escapeHtml(expires)}.</p>
 <p style="font-size:13px;color:#57606a">Nếu bạn không mong đợi lời mời này, hãy bỏ qua email. Bạn chỉ vào tổ chức khi tự chấp nhận lời mời.</p>
 </body></html>`;
-  return { to: input.to, subject, text, html };
+  return { to: input.to, subject, text, html, ...(input.messageId ? { messageId: input.messageId } : {}) };
 }
 
 export function createInviteMailSender(mailer: Mailer, publicUrl: string, options: DeliverOptions = {}): SendInviteMail {

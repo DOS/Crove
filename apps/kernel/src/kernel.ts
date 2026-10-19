@@ -51,7 +51,7 @@ import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
 import { exportSealer } from './export-seal.ts';
 import { ConcurrencyLimiter, Semaphore } from './concurrency.ts';
 import { createHttpApp, type StreamDeps } from './http.ts';
-import { createLogMailer, createMailer, type Mailer } from './mail.ts';
+import { createLogMailer, createMailer, messageIdDomain, type Mailer } from './mail.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
 import { createBlobStore } from './storage.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource } from './stream.ts';
@@ -132,6 +132,7 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
         inboundRotateLimits: { perDay: config.INBOUND_ROTATE_LIMIT_PER_DAY, total: config.INBOUND_ROTATE_LIMIT_TOTAL },
         uploadBeginLimits: { perMinute: config.UPLOAD_BEGIN_LIMIT_PER_MINUTE },
         inviteLimits: { perRecipientPerDay: config.INVITE_LIMIT_PER_RECIPIENT_PER_DAY },
+        messageIdDomain: messageIdDomain(config),
       }),
       queries: kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null }),
     }),

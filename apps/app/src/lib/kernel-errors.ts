@@ -51,6 +51,9 @@ export const KERNEL_ERROR_CODES = [
   'INVITE_USED',
   'INVITE_RATE_LIMITED',
   'TOO_MANY_INVITES',
+  // Outbound mail (#538).
+  'NOT_SUPPRESSED',
+  'MAIL_COMPLAINT_LIFT',
   // Proposals and extraction.
   'PROPOSAL_DECIDED',
   'STALE_REVISION',
