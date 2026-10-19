@@ -383,7 +383,8 @@ export type FileStatus = z.infer<typeof zFileStatus>;
 // Why an entry of a ZIP archive was not filed (#314): what the sandbox refused (encrypted, a compression other than
 // stored or deflate, an archive inside the archive, larger than a document may be, bytes that do not match the
 // archive's directory), or what the server refused (not XML, PDF, JPG, PNG or WEBP; empty).
-export const ARCHIVE_ENTRY_REASONS = ['encrypted', 'unsupported_method', 'nested_archive', 'too_large', 'corrupt', 'unsupported_type', 'empty'] as const;
+// email_limit: past the documents an emailed ZIP files (MAX_EMAIL_ARCHIVE_DOCUMENTS, #432).
+export const ARCHIVE_ENTRY_REASONS = ['encrypted', 'unsupported_method', 'nested_archive', 'too_large', 'corrupt', 'unsupported_type', 'empty', 'email_limit'] as const;
 export type ArchiveEntryReason = (typeof ARCHIVE_ENTRY_REASONS)[number];
 
 // One entry of an opened archive: filed as a new document (stored, with that file's status), the same bytes as a

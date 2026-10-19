@@ -698,6 +698,7 @@ export const vi = {
         corrupt: 'Tệp bị hỏng trong ZIP',
         unsupported_type: 'Không phải tệp XML, PDF, JPG, PNG hoặc WEBP',
         empty: 'Tệp rỗng',
+        email_limit: 'ZIP gửi qua thư chỉ mở 20 tệp đầu; hãy giải nén rồi tải các tệp còn lại lên',
       },
     },
     emptyPending: 'Không có đề xuất nào chờ duyệt',

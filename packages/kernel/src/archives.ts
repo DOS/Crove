@@ -1,10 +1,11 @@
 // Bulk intake (issue #314): a ZIP archive of documents. The API stores the archive as a file like any upload
-// (kernel.file.ingest, created by the uploading member); the worker has it opened in the parsing sandbox, sniffs and
-// stores every entry, and records them here in one transaction: each entry becomes a file of its own, created by the
-// member who uploaded the archive, and goes to extraction like an upload. The archive's single extraction run (method
+// (kernel.file.ingest, created by the uploading member), and so does inbound email for a ZIP attachment (#432, no
+// creator); the worker has it opened in the parsing sandbox, sniffs and stores every entry, and records them here in
+// one transaction: each entry becomes a file of its own, created by the member who uploaded the archive, and goes to
+// extraction like an upload. The archive's single extraction run (method
 // 'archive') keeps what each entry became. An archive is opened once; it is never read again and never has a proposal.
 import { z } from 'zod';
-import { ACCEPTED_UPLOAD_TYPES, ARCHIVE_ENTRY_REASONS, MAX_BATCH_ENTRIES, MAX_BATCH_FILES, zId, type BatchFile, type FileStatus } from '@crove/kernel-contract';
+import { ACCEPTED_UPLOAD_TYPES, ARCHIVE_ENTRY_REASONS, MAX_BATCH_ENTRIES, MAX_BATCH_FILES, MAX_EMAIL_ARCHIVE_DOCUMENTS, zId, type BatchFile, type FileStatus } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery } from '@crove/kernel-runtime';
 import { archiveEntries, fileStatuses, type StoredArchiveEntry } from './file-status.ts';
@@ -23,7 +24,7 @@ export const archiveSource = defineQuery({
   handler: async (ctx, input) => {
     const file = await ctx.trx
       .selectFrom('crove_kernel.file')
-      .select(['id', 'filename', 'content_type', 'storage_key', 'generation', 'sha256'])
+      .select(['id', 'filename', 'content_type', 'storage_key', 'generation', 'sha256', 'source'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.fileId)
       .executeTakeFirst();
@@ -70,7 +71,7 @@ export const recordArchive = defineCommand({
   handler: async (ctx, input) => {
     const archive = await ctx.trx
       .selectFrom('crove_kernel.file')
-      .select(['id', 'filename', 'content_type', 'created_by'])
+      .select(['id', 'filename', 'content_type', 'created_by', 'source'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.fileId)
       .forUpdate()
@@ -80,19 +81,31 @@ export const recordArchive = defineCommand({
     const existing = await ctx.trx.selectFrom('crove_kernel.extraction').select('id').where('org_id', '=', ctx.orgId).where('file_id', '=', archive.id).limit(1).executeTakeFirst();
     if (existing) return { extractionId: existing.id, duplicate: true, fileIds: [] as string[] };
 
-    const entries: StoredArchiveEntry[] = input.entries.map((entry) => ({
+    // An archive that came by email (#432) files its entries as email attachments, and only its first
+    // MAX_EMAIL_ARCHIVE_DOCUMENTS documents in archive order: anyone who knows the org's address can send one.
+    const email = archive.source === 'email';
+    const fileable = (entry: ArchiveEntryInput | undefined): entry is Extract<ArchiveEntryInput, { outcome: 'stored' }> =>
+      entry?.outcome === 'stored' && ACCEPTED_UPLOAD_TYPES.includes(entry.file.contentType);
+    const overLimit = new Set<number>();
+    if (email) {
+      let documents = 0;
+      input.entries.forEach((entry, index) => {
+        if (fileable(entry) && ++documents > MAX_EMAIL_ARCHIVE_DOCUMENTS) overLimit.add(index);
+      });
+    }
+    const entries: StoredArchiveEntry[] = input.entries.map((entry, index) => ({
       name: entry.name,
       outcome: 'rejected' as const,
-      reason: entry.outcome === 'rejected' ? entry.reason : 'unsupported_type',
+      reason: overLimit.has(index) ? 'email_limit' : entry.outcome === 'rejected' ? entry.reason : 'unsupported_type',
       fileId: null,
     }));
     for (const index of archiveIngestOrder(input.entries)) {
       const entry = input.entries[index];
       // The worker sniffed the type from the bytes; only documents are filed, whatever it sends.
-      if (!entry || entry.outcome !== 'stored' || !ACCEPTED_UPLOAD_TYPES.includes(entry.file.contentType)) continue;
+      if (!fileable(entry) || overLimit.has(index)) continue;
       // The archive's uploader is the creator of every entry, so approval counts them as an author of each invoice
-      // read from it (P10), exactly as if they had uploaded the files one by one.
-      const filed = await ingestFileRow(ctx, { ...entry.file, source: 'upload' }, archive.created_by);
+      // read from it (P10), exactly as if they had uploaded the files one by one. An emailed archive has none.
+      const filed = await ingestFileRow(ctx, { ...entry.file, source: email ? 'email' : 'upload' }, archive.created_by);
       entries[index] = { name: entry.name, outcome: filed.duplicate ? 'duplicate' : 'stored', reason: null, fileId: filed.fileId };
     }
     const run = await ctx.trx

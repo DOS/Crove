@@ -700,6 +700,7 @@ export const en = {
         corrupt: 'Damaged inside the ZIP',
         unsupported_type: 'Not an XML, PDF, JPG, PNG or WEBP file',
         empty: 'Empty file',
+        email_limit: 'A ZIP sent by email opens its first 20 files only; unzip it and upload the other files',
       },
     },
     emptyPending: 'No proposals waiting for approval',

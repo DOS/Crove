@@ -8,13 +8,14 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import type { ExtractClient } from '@crove/extract-contract';
-import { MAX_BATCH_ENTRIES, type BatchFile } from '@crove/kernel-contract';
+import { MAX_BATCH_ENTRIES, MAX_EMAIL_ARCHIVE_DOCUMENTS, MAX_EMAIL_ARCHIVES, type BatchFile } from '@crove/kernel-contract';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { MAX_ARCHIVE_ENTRIES, createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
+import { Runtime, contentGeneration, fileKey, inboundKey, newInboundBlobId, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { buildZip, type ZipEntrySpec } from '../../extract/test/zip-fixture.ts';
 import { archiveSource, expandArchive } from '../src/archive.ts';
+import { processInboundEmail } from '../src/inbound.ts';
 import { migrateJobs, startWorker } from '../src/worker.ts';
 import { inProcessExtract } from './extract-service.ts';
 
@@ -231,6 +232,95 @@ suite('bulk intake of a ZIP archive on PostgreSQL (issue #314)', () => {
     // The recent files never carry entries.
     const recent = await runtime.query<Array<Record<string, unknown>>>('kernel.files.recent', {}, { actor: asUser(owner), orgId: orgA });
     expect(recent.find((f) => f.id === ids[0])).not.toHaveProperty('entries');
+  });
+
+  it('opens ZIPs attached to an email as email documents, bounded per message and per ZIP (#432)', async () => {
+    // Org B, so the counts of org A's other cases stay as they are.
+    const token = await admin(async (c) => (await c.query<{ t: string }>('SELECT inbound_token AS t FROM crove_kernel.tenant WHERE org_id = $1', [orgB])).rows[0]?.t);
+    const extra = 5;
+    const big = Array.from({ length: MAX_EMAIL_ARCHIVE_DOCUMENTS + extra }, (_, i) => ({ name: `thang-10/hd-${String(i + 1).padStart(2, '0')}.xml`, data: invoiceXml(1000 + i) }));
+    const zips = [buildZip(big), buildZip([{ name: 'hd.xml', data: invoiceXml(2000) }]), buildZip([{ name: 'hd.xml', data: invoiceXml(2001) }])];
+    expect(zips.length).toBeGreaterThan(MAX_EMAIL_ARCHIVES);
+    const part = (filename: string, contentType: string, bytes: Uint8Array) => [
+      '--b1',
+      `Content-Type: ${contentType}; name="${filename}"`,
+      `Content-Disposition: attachment; filename="${filename}"`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      Buffer.from(bytes).toString('base64').replace(/.{76}/g, '$&\r\n'),
+    ];
+    const mime = [
+      'From: Nha cung cap <hoadon@vendor.example>',
+      `To: ${token}@in.test`,
+      'Subject: Hoa don thang 10',
+      'Message-ID: <zip-432@vendor.example>',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary="b1"',
+      '',
+      ...zips.flatMap((bytes, i) => part(`hoa-don-${i + 1}.zip`, 'application/zip', bytes)),
+      ...part('hd-3000.xml', 'application/xml', new TextEncoder().encode(invoiceXml(3000))),
+      '--b1--',
+      '',
+    ].join('\r\n');
+    const raw = new TextEncoder().encode(mime);
+    const blobId = newInboundBlobId();
+    await store.put(inboundKey(blobId), raw);
+    const received = await processInboundEmail(
+      { runtime: workerRuntime, store, domain: 'in.test', extract },
+      { blobId, sha256: sha256Hex(raw), sizeBytes: raw.byteLength, recipient: `${token}@in.test` },
+    );
+    // The first MAX_EMAIL_ARCHIVES ZIPs and the XML are filed; the third ZIP is skipped.
+    expect(received.fileIds).toHaveLength(MAX_EMAIL_ARCHIVES + 1);
+    const filed = await admin(async (c) =>
+      (await c.query<{ id: string; filename: string; content_type: string; source: string; created_by: string | null }>(
+        'SELECT id, filename, content_type, source, created_by FROM crove_kernel.file WHERE org_id = $1 AND id = ANY($2::uuid[]) ORDER BY filename',
+        [orgB, received.fileIds],
+      )).rows,
+    );
+    expect(filed.map((f) => [f.filename, f.content_type, f.source, f.created_by])).toEqual([
+      ['hd-3000.xml', 'application/xml', 'email', null],
+      ['hoa-don-1.zip', 'application/zip', 'email', null],
+      ['hoa-don-2.zip', 'application/zip', 'email', null],
+    ]);
+
+    // The big ZIP files its first MAX_EMAIL_ARCHIVE_DOCUMENTS documents, as email documents with no creator; the rest
+    // are listed with the reason and never stored.
+    const bigId = filed.find((f) => f.filename === 'hoa-don-1.zip')?.id as string;
+    const source = await archiveSource(workerRuntime, orgB, bigId);
+    expect(source).toMatchObject({ source: 'email', expanded: false });
+    const opened = await expandArchive({ runtime: workerRuntime, store, extract }, orgB, source!);
+    expect(opened.fileIds).toHaveLength(MAX_EMAIL_ARCHIVE_DOCUMENTS);
+    const [listing] = await batch([bigId], outsider, orgB);
+    expect(listing?.entries?.map((e) => [e.name, e.outcome, e.reason])).toEqual(
+      big.map((entry, i) => [entry.name, i < MAX_EMAIL_ARCHIVE_DOCUMENTS ? 'stored' : 'rejected', i < MAX_EMAIL_ARCHIVE_DOCUMENTS ? null : 'email_limit']),
+    );
+    const documents = await admin(async (c) =>
+      (await c.query<{ source: string; created_by: string | null }>('SELECT source, created_by FROM crove_kernel.file WHERE org_id = $1 AND id = ANY($2::uuid[])', [orgB, opened.fileIds])).rows,
+    );
+    expect(documents).toEqual(opened.fileIds.map(() => ({ source: 'email', created_by: null })));
+    for (const entry of big.slice(MAX_EMAIL_ARCHIVE_DOCUMENTS)) {
+      expect(store.blobs.has(fileKey(orgB, sha256Hex(new TextEncoder().encode(entry.data))))).toBe(false);
+    }
+
+    // The kernel holds the limit whatever the worker sends: a recording of the second ZIP with more stored entries
+    // than the limit files only the first MAX_EMAIL_ARCHIVE_DOCUMENTS.
+    const smallId = filed.find((f) => f.filename === 'hoa-don-2.zip')?.id as string;
+    const crafted = Array.from({ length: MAX_EMAIL_ARCHIVE_DOCUMENTS + 2 }, (_, i) => {
+      const sha256 = sha256Hex(`crafted-${i}`);
+      return {
+        outcome: 'stored' as const,
+        name: `crafted-${i}.xml`,
+        file: { filename: `crafted-${i}.xml`, contentType: 'application/xml', sizeBytes: 10, sha256, storageKey: fileKey(orgB, sha256), generation: contentGeneration(sha256) },
+      };
+    });
+    const recorded = await workerRuntime.execute<{ fileIds: string[] }>(
+      'kernel.file.archive.record',
+      { fileId: smallId, status: 'done', error: null, entries: crafted },
+      { actor: { type: 'system', component: 'test' }, orgId: orgB },
+    );
+    expect(recorded.fileIds).toHaveLength(MAX_EMAIL_ARCHIVE_DOCUMENTS);
+    const [small] = await batch([smallId], outsider, orgB);
+    expect(small?.entries?.filter((e) => e.reason === 'email_limit').map((e) => e.name)).toEqual([`crafted-${MAX_EMAIL_ARCHIVE_DOCUMENTS}.xml`, `crafted-${MAX_EMAIL_ARCHIVE_DOCUMENTS + 1}.xml`]);
   });
 
   it(`opens a ZIP of ${INVOICES} e-invoices through the worker into ${INVOICES} proposals, each entry its own document`, { timeout: 400_000 }, async () => {
