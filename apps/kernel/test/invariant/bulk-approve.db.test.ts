@@ -4,7 +4,11 @@
 //   the approved items are posted, each with its own approval audit row;
 // - a stale or missing step-up (P11) refuses the whole batch before any item, a step-up that goes stale between two
 //   items commits nothing, and a role that may not approve, or an AI agent, gets nothing approved either;
-// - only listed per-proposal codes refuse one item; any other refusal aborts the whole batch.
+// - only listed per-proposal codes refuse one item; any other refusal aborts the whole batch;
+// - a refused item gets its own denied/failed audit row (#429), the row a refused approval of it alone gets, linked
+//   to the batch, and an aborted batch leaves no item rows; ctx.tryRun records only a refusal of a command it ran.
+//   The row comes from a snapshot nobody can change after the catch; refusals about the actor, session, run or
+//   request are never recovered; one tryRun at a time; and ctx.audit cannot set the runtime's keys of an ok row.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { randomUUID } from 'node:crypto';
@@ -17,8 +21,10 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createExtractApp } from '@crove/extract';
 import { createExtractClient } from '@crove/extract-contract';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime, fileKey, sha256Hex, type BlobStore, type CommandDef } from '@crove/kernel-runtime';
+import { DomainError, Runtime, defineCommand, fileKey, sha256Hex, type BlobStore, type CommandDef } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
+import { sql } from 'kysely';
+import { z } from 'zod';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -360,5 +366,580 @@ suite('bulk approval on PostgreSQL (#315)', () => {
       status: 403,
     });
     expect(await proposalState(id)).toEqual({ status: 'pending', documents: 0, approvals: [] });
+  });
+
+  // Audit rows of `command` in the org, oldest first.
+  const auditRows = (orgId: string, command: string) =>
+    withAdmin(
+      async (a) =>
+        (
+          await a.query<{
+            actor_type: string;
+            actor_id: string | null;
+            command_id: string;
+            outcome: string;
+            target_type: string | null;
+            target_id: string | null;
+            input_sha256: string;
+            proposal_id: string | null;
+            detail: Record<string, unknown>;
+          }>(
+            'SELECT actor_type, actor_id, command_id, outcome, target_type, target_id, input_sha256, proposal_id, detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = $2 ORDER BY id',
+            [orgId, command],
+          )
+        ).rows,
+    );
+
+  it('gives each refused item its own audit row, the one a refused approval of it alone gets, linked to the batch (#429)', async () => {
+    const { orgId, owner, people } = await orgWith('Bulk audit', ['admin']);
+    const admin = people[0] as string;
+    const other = await orgWith('Bulk audit other', []);
+    const own = await proposeIn(orgId, admin);
+    const fine = await proposeIn(orgId, owner);
+    const edited = await proposeIn(orgId, owner);
+    expect(await editAs(orgId, owner, edited)).toBe(2);
+    const foreign = await proposeIn(other.orgId, other.owner);
+    const actor = asMfa(admin);
+    const { results } = await bulk(orgId, actor, [
+      { id: own, revision: 1 },
+      { id: fine, revision: 1 },
+      { id: edited, revision: 1 },
+      { id: foreign, revision: 1 },
+    ]);
+    expect(results.map((r) => r.outcome)).toEqual(['refused', 'approved', 'refused', 'refused']);
+    const [batch] = await auditRows(orgId, 'kernel.proposal.approve_many');
+    expect(batch?.outcome).toBe('ok');
+    const inBatch = await auditRows(orgId, 'kernel.proposal.approve');
+    const link = { parentCommand: 'kernel.proposal.approve_many', parentCommandId: batch?.command_id };
+    const session = { aal: 'aal2', sessionId: SESSION, mfaAt: actor.mfaAt };
+    const rowsOf = (id: string) => inBatch.filter((r) => r.target_id === id);
+    // 403 is denied; 409 and 404 are failed, as for a refused top-level command.
+    for (const [id, outcome, code, rule] of [
+      [own, 'denied', 'FOUR_EYES_REQUIRED', 'P10'],
+      [edited, 'failed', 'STALE_REVISION', null],
+      [foreign, 'failed', 'NOT_FOUND', null],
+    ] as const) {
+      const rows = rowsOf(id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ actor_type: 'user', actor_id: admin, outcome, target_type: 'kernel.proposal', target_id: id, proposal_id: null });
+      expect(rows[0]?.detail).toEqual({ code, ...(rule ? { rule } : {}), ...session, ...link });
+      expect(rows[0]?.command_id).not.toBe(batch?.command_id);
+    }
+    // The approved item has its own ok row only, and that row carries no link.
+    expect(rowsOf(fine).map((r) => r.outcome)).toEqual(['ok']);
+    expect(rowsOf(fine)[0]?.detail).not.toHaveProperty('parentCommandId');
+
+    // The same approval alone, refused, writes the same row but for the link.
+    for (const id of [own, edited, foreign]) {
+      await refusalOf(runtime.execute('kernel.proposal.approve', { id, revision: 1 }, { actor, orgId }));
+      const [nested, alone] = (await auditRows(orgId, 'kernel.proposal.approve')).filter((r) => r.target_id === id);
+      expect(alone).toBeDefined();
+      const { parentCommand, parentCommandId, ...nestedDetail } = nested?.detail ?? {};
+      expect([parentCommand, parentCommandId]).toEqual([link.parentCommand, link.parentCommandId]);
+      expect(alone?.detail).toEqual(nestedDetail);
+      for (const key of ['actor_type', 'actor_id', 'outcome', 'target_type', 'target_id', 'input_sha256', 'proposal_id'] as const) {
+        expect(alone?.[key]).toEqual(nested?.[key]);
+      }
+    }
+  });
+
+  it('leaves no item audit rows when the whole batch aborts; the batch refusal row records it (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit abort', []);
+    // The batch runs items in id order: the stale one first (refused, recorded), then one that aborts the batch.
+    const [first, second] = [await proposeIn(orgId, owner), await proposeIn(orgId, owner)].sort();
+    const stale = first as string;
+    const odd = second as string;
+    expect(await editAs(orgId, owner, stale)).toBe(2);
+    await withAdmin(async (a) => {
+      await a.query('SET session_replication_role = replica');
+      await a.query("UPDATE crove_kernel.proposal SET command = 'test.unsupported' WHERE id = $1", [odd]);
+    });
+    const items = [
+      { id: stale, revision: 1 },
+      { id: odd, revision: 1 },
+    ];
+    expect(await refusalOf(bulk(orgId, asMfa(owner), items))).toEqual({ code: 'FORBIDDEN', status: 403 });
+    expect((await auditRows(orgId, 'kernel.proposal.approve')).filter((r) => r.target_id === stale || r.target_id === odd)).toEqual([]);
+    const batch = await auditRows(orgId, 'kernel.proposal.approve_many');
+    expect(batch.map((r) => [r.outcome, r.detail.code])).toEqual([['denied', 'FORBIDDEN']]);
+    expect(batch[0]?.detail).not.toHaveProperty('parentCommandId');
+    // Alone, the stale item is still refused, so it would have been recorded had the batch committed.
+    expect((await bulk(orgId, asMfa(owner), [{ id: stale, revision: 1 }])).results).toEqual([{ id: stale, outcome: 'refused', code: 'STALE_REVISION', rule: null }]);
+    expect((await auditRows(orgId, 'kernel.proposal.approve')).filter((r) => r.target_id === stale).map((r) => r.outcome)).toEqual(['failed']);
+  });
+
+  it('records through ctx.tryRun only a refusal of a command it ran, with the runtime keys, never a forged row (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit forge', []);
+    const FORGED = randomUUID();
+    const zThing = z.object({ id: z.string().uuid() });
+    const target = (input: { id: string }) => ({ type: 'test.thing', id: input.id });
+    const refuse = defineCommand({
+      name: 'test.refuse',
+      input: zThing,
+      risk: 'R1',
+      access: ['owner'],
+      target,
+      handler: async () => {
+        // Audit facts that try to set the keys only the runtime writes.
+        throw new DomainError('NOT_FOUND', 404, 'x', { rule: 'T1' }, { audit: { note: 'kept', code: 'FORGED', parentCommand: 'forged', parentCommandId: FORGED } });
+      },
+    });
+    const unauthenticated = defineCommand({
+      name: 'test.unauthenticated',
+      input: zThing,
+      risk: 'R1',
+      access: ['owner'],
+      target,
+      handler: async () => {
+        throw new DomainError('UNAUTHENTICATED', 401, 'x');
+      },
+    });
+    const fine = defineCommand({ name: 'test.fine', input: zThing, risk: 'R1', access: ['owner'], target, handler: async () => ({ done: true }) });
+    const codeOf = async (attempt: Promise<unknown>) => {
+      try {
+        await attempt;
+        return 'none';
+      } catch (error) {
+        return error instanceof DomainError ? error.code : 'other';
+      }
+    };
+    const forge = defineCommand({
+      name: 'test.forge',
+      input: zThing,
+      risk: 'R1',
+      access: ['owner'],
+      handler: async (ctx, input) => {
+        const always = { recover: () => true };
+        return {
+          // A command that does not exist, an input that does not parse (a 422) and a status a refusal is never
+          // audited for: thrown to the caller and nothing recorded, though `recover` accepts everything.
+          missing: await codeOf(ctx.tryRun('test.missing', input, always)),
+          invalid: await codeOf(ctx.tryRun('test.refuse', { id: 'not-a-uuid' }, always)),
+          unauthenticated: await codeOf(ctx.tryRun('test.unauthenticated', input, always)),
+          // A refusal `recover` does not accept propagates, unrecorded.
+          declined: await codeOf(ctx.tryRun('test.refuse', input, { recover: () => false })),
+          fine: (await ctx.tryRun('test.fine', input, always)).status,
+          refused: await ctx.tryRun('test.refuse', input, always).then((r) => (r.status === 'refused' ? r.refusal.code : r.status)),
+        };
+      },
+    });
+    const forging = new Runtime(db).register({
+      commands: [...kernelCommands, ...financeCommands, refuse, unauthenticated, fine, forge],
+      queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
+    });
+    const id = randomUUID();
+    expect(await forging.execute('test.forge', { id }, { actor: asUser(owner), orgId })).toEqual({
+      missing: 'COMMAND_NOT_FOUND',
+      invalid: 'VALIDATION',
+      unauthenticated: 'UNAUTHENTICATED',
+      declined: 'NOT_FOUND',
+      fine: 'ok',
+      refused: 'NOT_FOUND',
+    });
+    const [parent] = await auditRows(orgId, 'test.forge');
+    expect(parent?.outcome).toBe('ok');
+    expect(await auditRows(orgId, 'test.missing')).toEqual([]);
+    expect(await auditRows(orgId, 'test.unauthenticated')).toEqual([]);
+    expect((await auditRows(orgId, 'test.fine')).map((r) => [r.outcome, r.target_id])).toEqual([['ok', id]]);
+    // One row, for the one refusal tryRun caught and recovered: failed (404), never ok, with the runtime's keys.
+    const refused = await auditRows(orgId, 'test.refuse');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toMatchObject({ outcome: 'failed', actor_id: owner, target_type: 'test.thing', target_id: id, proposal_id: null });
+    expect(refused[0]?.detail).toEqual({
+      note: 'kept',
+      code: 'NOT_FOUND',
+      rule: 'T1',
+      aal: 'aal1',
+      sessionId: null,
+      mfaAt: null,
+      parentCommand: 'test.forge',
+      parentCommandId: parent?.command_id,
+    });
+  });
+
+  // Test commands for ctx.tryRun's guarantees (#429 review), run by the org's owner.
+  const zThingInput = z.object({ id: z.string().uuid() });
+  const thingTarget = (input: { id: string }) => ({ type: 'test.thing', id: input.id });
+  const ownerCommand = <O>(name: string, handler: CommandDef<{ id: string }, O>['handler'], risk: 'R1' | 'R3' = 'R1') =>
+    defineCommand({ name, input: zThingInput, risk, access: ['owner'], target: thingTarget, handler });
+  const fineCommand = ownerCommand('test.fine', async () => ({ done: true }));
+  const runtimeWith = (...commands: CommandDef<any, any>[]) =>
+    new Runtime(db).register({
+      commands: [...kernelCommands, ...financeCommands, ...commands],
+      queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
+    });
+  // Tries every way to change a refusal; each try may throw (the copy ctx.tryRun hands out is frozen).
+  const tamper = (error: DomainError) => {
+    const attempts = [
+      () => ((error.details as Record<string, unknown>).rule = 'P12'),
+      () => ((error.audit as Record<string, unknown>).note = 'forged'),
+      () => ((error as { code: string }).code = 'FORGED'),
+      () => ((error as { status: number }).status = 403),
+    ];
+    for (const attempt of attempts) {
+      try {
+        attempt();
+      } catch {
+        // frozen
+      }
+    }
+  };
+
+  it('writes the refusal row from a snapshot taken when it was caught: recover, the caller and the nested handler cannot change it (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit snapshot', []);
+    let kept: DomainError | null = null;
+    const mutable = ownerCommand('test.mutable', async (_ctx, input) => {
+      // The nested handler changes its input, then keeps the error it throws to change it later.
+      (input as { id: string }).id = randomUUID();
+      kept = new DomainError('NOT_FOUND', 404, 'x', { rule: 'T1' }, { audit: { note: 'kept' } });
+      throw kept;
+    });
+    const mutate = ownerCommand('test.mutate', async (ctx, input) => {
+      const attempt = await ctx.tryRun('test.mutable', input, {
+        recover: (refusal) => {
+          tamper(refusal);
+          return true;
+        },
+      });
+      if (attempt.status !== 'refused') throw new Error('expected a refusal');
+      tamper(attempt.refusal);
+      if (kept) tamper(kept);
+      const { refusal } = attempt;
+      return { code: refusal.code, status: refusal.status, rule: refusal.details?.rule, note: refusal.audit?.note, frozen: Object.isFrozen(refusal) };
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(mutable, mutate).execute('test.mutate', { id }, { actor: asUser(owner), orgId })).toEqual({
+      code: 'NOT_FOUND',
+      status: 404,
+      rule: 'T1',
+      note: 'kept',
+      frozen: true,
+    });
+    // The original error did change; the row did not.
+    expect((kept as DomainError | null)?.code).toBe('FORGED');
+    const [parent] = await auditRows(orgId, 'test.mutate');
+    const rows = await auditRows(orgId, 'test.mutable');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ outcome: 'failed', target_type: 'test.thing', target_id: id, input_sha256: sha256Hex(JSON.stringify({ id })) });
+    expect(rows[0]?.detail).toEqual({
+      note: 'kept',
+      code: 'NOT_FOUND',
+      rule: 'T1',
+      aal: 'aal1',
+      sessionId: null,
+      mfaAt: null,
+      parentCommand: 'test.mutate',
+      parentCommandId: parent?.command_id,
+    });
+  });
+
+  it('never recovers a refusal about the actor, the session, the run or the request, whatever recover says (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit never', []);
+    const zCoded = z.object({ id: z.string().uuid(), code: z.string(), status: z.union([z.literal(403), z.literal(409), z.literal(422)]) });
+    const coded = defineCommand({
+      name: 'test.coded',
+      input: zCoded,
+      risk: 'R1',
+      access: ['owner'],
+      target: thingTarget,
+      handler: async (_ctx, input) => {
+        throw new DomainError(input.code, input.status, 'x');
+      },
+    });
+    const never: Array<[string, 403 | 409 | 422]> = [
+      ['STEP_UP_REQUIRED', 403],
+      ['NOT_A_MEMBER', 403],
+      ['USER_DISABLED', 403],
+      ['KILL_SWITCH_ON', 403],
+      ['AGENT_FORBIDDEN', 403],
+      ['AGENT_SOMETHING_NEW', 409],
+      ['SESSION_REVOKED_IN_ORG', 403],
+      ['RETRY', 409],
+      ['LEASE_LOST', 409],
+      ['IDEMPOTENCY_MISMATCH', 422],
+      ['BUDGET_EXHAUSTED', 409],
+      ['ORG_CLOSED', 409],
+    ];
+    let asked = 0;
+    const probe = ownerCommand('test.never', async (ctx, input) => {
+      const thrown: string[] = [];
+      for (const [code, status] of never) {
+        try {
+          await ctx.tryRun('test.coded', { id: input.id, code, status }, {
+            recover: () => {
+              asked += 1;
+              return true;
+            },
+          });
+          thrown.push('recovered');
+        } catch (error) {
+          thrown.push(error instanceof DomainError ? error.code : 'other');
+        }
+      }
+      // An item refusal is still recovered.
+      const item = await ctx.tryRun('test.coded', { id: input.id, code: 'NOT_ELIGIBLE', status: 403 }, { recover: () => true });
+      return { thrown, item: item.status };
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(coded, probe).execute('test.never', { id }, { actor: asUser(owner), orgId })).toEqual({
+      thrown: never.map(([code]) => code),
+      item: 'refused',
+    });
+    expect(asked).toBe(0);
+    expect((await auditRows(orgId, 'test.coded')).map((r) => [r.outcome, r.detail.code])).toEqual([['denied', 'NOT_ELIGIBLE']]);
+  });
+
+  it('rolls the nested command back on every path but success, also when the caller catches and goes on (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit discard', []);
+    const zWrite = z.object({ id: z.string().uuid(), fail: z.enum(['declined', 'never', 'sql']) });
+    const writesThenFails = defineCommand({
+      name: 'test.writes_then_fails',
+      input: zWrite,
+      risk: 'R1',
+      access: ['owner'],
+      target: thingTarget,
+      handler: async (ctx, input) => {
+        await ctx.activity('test.thing', input.id, 'test.written', 'written before the failure');
+        if (input.fail === 'sql') await sql`SELECT 1 / 0`.execute(ctx.trx);
+        throw new DomainError(input.fail === 'never' ? 'STEP_UP_REQUIRED' : 'NOT_ELIGIBLE', 403, 'x');
+      },
+    });
+    const caller = ownerCommand('test.catches', async (ctx, input) => {
+      const thrown: string[] = [];
+      for (const fail of ['declined', 'never', 'sql'] as const) {
+        try {
+          await ctx.tryRun('test.writes_then_fails', { id: input.id, fail }, { recover: () => fail !== 'declined' });
+        } catch (error) {
+          thrown.push(error instanceof DomainError ? error.code : String((error as { code?: unknown }).code));
+        }
+      }
+      // The transaction is still usable after the database error.
+      const { rows } = await sql<{ one: number }>`SELECT 1 AS one`.execute(ctx.trx);
+      return { thrown, usable: rows[0]?.one === 1 };
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(writesThenFails, caller).execute('test.catches', { id }, { actor: asUser(owner), orgId })).toEqual({
+      thrown: ['NOT_ELIGIBLE', 'STEP_UP_REQUIRED', '22012'],
+      usable: true,
+    });
+    const activity = await withAdmin(
+      async (a) => (await a.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2', [orgId, id])).rows[0]?.n,
+    );
+    expect(activity).toBe(0);
+    expect(await auditRows(orgId, 'test.writes_then_fails')).toEqual([]);
+  });
+
+  it('rolls the nested command back when recover throws (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit recover throws', []);
+    const writes = ownerCommand('test.writes', async (ctx, input) => {
+      await ctx.activity('test.thing', input.id, 'test.written', 'written before the refusal');
+      throw new DomainError('NOT_ELIGIBLE', 403, 'x');
+    });
+    const caller = ownerCommand('test.recover_throws', async (ctx, input) => {
+      try {
+        await ctx.tryRun('test.writes', input, {
+          recover: () => {
+            throw new Error('recover failed');
+          },
+        });
+        return { thrown: null };
+      } catch (error) {
+        return { thrown: (error as Error).message };
+      }
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(writes, caller).execute('test.recover_throws', { id }, { actor: asUser(owner), orgId })).toEqual({ thrown: 'recover failed' });
+    const activity = await withAdmin(
+      async (a) => (await a.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2', [orgId, id])).rows[0]?.n,
+    );
+    expect(activity).toBe(0);
+    expect(await auditRows(orgId, 'test.writes')).toEqual([]);
+  });
+
+  it('runs one tryRun at a time per command, and fails a command that returns while one runs (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit in flight', []);
+    const always = { recover: () => true };
+    const parallel = ownerCommand('test.parallel', async (ctx, input) => {
+      const settled = await Promise.allSettled([ctx.tryRun('test.fine', input, always), ctx.tryRun('test.fine', input, always)]);
+      // After an awaited one, the next one runs.
+      const next = await ctx.tryRun('test.fine', input, always);
+      return { settled: settled.map((s) => s.status), next: next.status };
+    });
+    const dangling = ownerCommand('test.dangling', async (ctx, input) => {
+      void ctx.tryRun('test.fine', input, always).catch(() => undefined);
+      return { returned: true };
+    });
+    const forking = runtimeWith(fineCommand, parallel, dangling);
+    const id = randomUUID();
+    expect(await forking.execute('test.parallel', { id }, { actor: asUser(owner), orgId })).toEqual({ settled: ['fulfilled', 'rejected'], next: 'ok' });
+    expect((await auditRows(orgId, 'test.fine')).map((r) => r.outcome)).toEqual(['ok', 'ok']);
+    expect(await refusalOf(forking.execute('test.dangling', { id }, { actor: asUser(owner), orgId }))).toEqual({ code: 'INTERNAL', status: 500 });
+    expect(await auditRows(orgId, 'test.dangling')).toEqual([]);
+    expect((await auditRows(orgId, 'test.fine')).map((r) => r.outcome)).toEqual(['ok', 'ok']);
+  });
+
+  it('still records a refusal whose facts have no JSON form (a cycle, a BigInt), without them, and rolls it back (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit unserializable', []);
+    const cyclic: Record<string, unknown> = { note: 'cyclic' };
+    cyclic.self = cyclic;
+    const zKind = z.object({ id: z.string().uuid(), kind: z.enum(['cycle', 'bigint']) });
+    const odd = defineCommand({
+      name: 'test.odd_facts',
+      input: zKind,
+      risk: 'R1',
+      access: ['owner'],
+      target: thingTarget,
+      handler: async (ctx, input) => {
+        await ctx.activity('test.thing', input.id, 'test.written', 'written before the refusal');
+        const facts = input.kind === 'cycle' ? cyclic : { amount: 10n };
+        throw new DomainError('NOT_ELIGIBLE', 403, 'x', { rule: 'T1', ...(input.kind === 'bigint' ? { big: 1n } : {}) }, { audit: facts });
+      },
+    });
+    const caller = ownerCommand('test.odd_caller', async (ctx, input) => {
+      const seen: unknown[] = [];
+      for (const kind of ['cycle', 'bigint'] as const) {
+        const attempt = await ctx.tryRun('test.odd_facts', { id: input.id, kind }, { recover: () => true });
+        if (attempt.status !== 'refused') throw new Error('expected a refusal');
+        seen.push({ code: attempt.refusal.code, rule: attempt.refusal.details?.rule, audit: attempt.refusal.audit ?? null });
+      }
+      return { seen };
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(odd, caller).execute('test.odd_caller', { id }, { actor: asUser(owner), orgId })).toEqual({
+      seen: [
+        { code: 'NOT_ELIGIBLE', rule: 'T1', audit: null },
+        { code: 'NOT_ELIGIBLE', rule: 'T1', audit: null },
+      ],
+    });
+    const [parent] = await auditRows(orgId, 'test.odd_caller');
+    const rows = await auditRows(orgId, 'test.odd_facts');
+    expect(rows.map((r) => r.detail)).toEqual(
+      ['cycle', 'bigint'].map(() => ({
+        code: 'NOT_ELIGIBLE',
+        rule: 'T1',
+        aal: 'aal1',
+        sessionId: null,
+        mfaAt: null,
+        parentCommand: 'test.odd_caller',
+        parentCommandId: parent?.command_id,
+      })),
+    );
+    const activity = await withAdmin(
+      async (a) => (await a.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2', [orgId, id])).rows[0]?.n,
+    );
+    expect(activity).toBe(0);
+  });
+
+  it('closes the context when the handler returns: work it left running cannot write, run or roll back (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit closed', []);
+    const refuses = ownerCommand('test.late_refuses', async () => {
+      throw new DomainError('NOT_ELIGIBLE', 403, 'x');
+    });
+    let late: Promise<string[]> = Promise.resolve([]);
+    const leaves = ownerCommand('test.leaves_work', async (ctx, input) => {
+      late = (async () => {
+        // Starts after the handler returned, while the runtime writes this command's rows.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const refused: string[] = [];
+        const calls: Array<() => Promise<unknown>> = [
+          () => ctx.tryRun('test.late_refuses', input, { recover: () => true }),
+          () => ctx.run('test.fine', input),
+          () => ctx.activity('test.thing', input.id, 'test.late', 'late'),
+          () => ctx.emit('test.late', {}),
+          async () => ctx.audit({ late: true }),
+        ];
+        for (const call of calls) {
+          try {
+            await call();
+            refused.push('ran');
+          } catch (error) {
+            refused.push(/after the handler returned/.test((error as Error).message) ? 'closed' : 'other');
+          }
+        }
+        return refused;
+      })();
+      return { returned: true };
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(fineCommand, refuses, leaves).execute('test.leaves_work', { id }, { actor: asUser(owner), orgId })).toEqual({ returned: true });
+    expect(await late).toEqual(['closed', 'closed', 'closed', 'closed', 'closed']);
+    // The command's own ok row committed, untouched; nothing the late work tried is there.
+    expect((await auditRows(orgId, 'test.leaves_work')).map((r) => [r.outcome, r.detail])).toEqual([['ok', {}]]);
+    expect(await auditRows(orgId, 'test.late_refuses')).toEqual([]);
+    expect(await auditRows(orgId, 'test.fine')).toEqual([]);
+  });
+
+  it('fails a command whose handler returned while a ctx.run it started still ran, with nothing written (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit unawaited run', []);
+    const refuses = ownerCommand('test.late_refuses', async () => {
+      throw new DomainError('NOT_ELIGIBLE', 403, 'x');
+    });
+    // Like approve_many: a recovered refusal rolls back to its savepoint.
+    const batchlike = ownerCommand('test.batchlike', async (ctx, input) => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const attempt = await ctx.tryRun('test.late_refuses', input, { recover: () => true });
+      return { status: attempt.status };
+    });
+    const fires = ownerCommand('test.fires_batch', async (ctx, input) => {
+      await ctx.activity('test.thing', input.id, 'test.before', 'written before the unawaited run');
+      void ctx.run('test.batchlike', input).catch(() => undefined);
+      return { returned: true };
+    });
+    let mixed: string | null = null;
+    const mixes = ownerCommand('test.mixes', async (ctx, input) => {
+      const run = ctx.run('test.fine', input);
+      // A tryRun never runs beside another nested command: its rollback would undo that one's writes.
+      mixed = await ctx.tryRun('test.late_refuses', input, { recover: () => true }).then(
+        () => 'ran',
+        (error: Error) => error.message,
+      );
+      await run;
+      return { done: true };
+    });
+    const forking = runtimeWith(fineCommand, refuses, batchlike, fires, mixes);
+    const id = randomUUID();
+    expect(await refusalOf(forking.execute('test.fires_batch', { id }, { actor: asUser(owner), orgId }))).toEqual({ code: 'INTERNAL', status: 500 });
+    for (const command of ['test.fires_batch', 'test.batchlike', 'test.late_refuses']) expect(await auditRows(orgId, command)).toEqual([]);
+    const activity = await withAdmin(
+      async (a) => (await a.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2', [orgId, id])).rows[0]?.n,
+    );
+    expect(activity).toBe(0);
+
+    expect(await forking.execute('test.mixes', { id }, { actor: asUser(owner), orgId })).toEqual({ done: true });
+    expect(mixed).toMatch(/ctx\.tryRun runs only while no other nested command runs/);
+    expect((await auditRows(orgId, 'test.fine')).map((r) => r.outcome)).toEqual(['ok']);
+    expect(await auditRows(orgId, 'test.late_refuses')).toEqual([]);
+  });
+
+  it('runs the nested commands of one command one at a time: a concurrent ctx.run is refused (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit siblings', []);
+    const siblings = ownerCommand('test.siblings', async (ctx, input) => {
+      // Like Promise.all([ctx.run('kernel.proposal.approve_many', ...), ctx.run('x', ...)]): the second would run beside
+      // the first one's tryRun, whose rollback could undo it.
+      const settled = await Promise.allSettled([ctx.run('test.fine', input), ctx.run('test.fine', input)]);
+      return {
+        settled: settled.map((r) => (r.status === 'fulfilled' ? 'fulfilled' : /ctx\.run runs only while no other nested command runs/.test((r.reason as Error).message) ? 'refused' : 'other')),
+      };
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(fineCommand, siblings).execute('test.siblings', { id }, { actor: asUser(owner), orgId })).toEqual({ settled: ['fulfilled', 'refused'] });
+    expect((await auditRows(orgId, 'test.fine')).map((r) => [r.outcome, r.target_id])).toEqual([['ok', id]]);
+    expect((await auditRows(orgId, 'test.siblings')).map((r) => r.outcome)).toEqual(['ok']);
+  });
+
+  it("keeps the runtime's keys on an ok row: ctx.audit sets no refusal link and does not replace the assurance (#429)", async () => {
+    const { orgId, owner } = await orgWith('Bulk audit ok keys', []);
+    const forged = ownerCommand(
+      'test.ok_forge',
+      async (ctx) => {
+        ctx.audit({ parentCommand: 'forged', parentCommandId: randomUUID(), aal: 'aal1', sessionId: 'forged', mfaAt: 1, note: 'kept' });
+        return { done: true };
+      },
+      'R3',
+    );
+    const actor = asMfa(owner);
+    await runtimeWith(forged).execute('test.ok_forge', { id: randomUUID() }, { actor, orgId });
+    const rows = await auditRows(orgId, 'test.ok_forge');
+    expect(rows.map((r) => r.detail)).toEqual([{ note: 'kept', aal: 'aal2', sessionId: SESSION, mfaAt: actor.mfaAt }]);
   });
 });

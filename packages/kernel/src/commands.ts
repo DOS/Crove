@@ -627,8 +627,11 @@ export type BulkApproveResult =
 // refuses the whole batch. Each item then runs kernel.proposal.approve as a nested command, which applies its own
 // P12 eligibility and P10 four-eyes decision and writes its own audit row, exactly as approving it alone would. An
 // item refused with a listed per-proposal code (BULK_ITEM_REFUSALS) rolls back to its savepoint and the others go
-// on; the batch's audit row lists every item's outcome. A refused item has no audit row of its own (a refusal row is
-// written only by the runtime, for a whole command); its code and rule are in the batch row. Items run in the order of
+// on. Each item runs under ctx.tryRun (issue #429), so a refused item also gets its own denied/failed audit row for
+// kernel.proposal.approve with the proposal as its target, written by the runtime once the items ran, the
+// row approving it alone would have left, linked to the batch (detail parentCommandId, the batch row's command_id).
+// The batch's audit row lists every item's outcome. When the whole batch aborts, the item rows roll back with it and
+// the batch's own refusal row records it. Items run in the order of
 // bulkApproveOrder, so concurrent batches take their locks in the same order. No line
 // accounts and no acceptFailedChecks: a bulk approval only approves what it would approve as shown, and an invoice
 // with failed checks is refused (CHECKS_FAILED) for a one-by-one review.
@@ -653,16 +656,13 @@ export const approveProposals = defineCommand({
     const voucherTypes = new Map(vouchers.map((v) => [v.id, v.voucher_type ?? '']));
     const outcomes = new Map<string, BulkApproveResult>();
     for (const item of bulkApproveOrder(input.items, voucherTypes)) {
-      await sql`SAVEPOINT bulk_approve_item`.execute(ctx.trx);
-      try {
-        const result = await ctx.run<Record<string, unknown>>('kernel.proposal.approve', { id: item.id, revision: item.revision });
-        await sql`RELEASE SAVEPOINT bulk_approve_item`.execute(ctx.trx);
-        outcomes.set(item.id, { id: item.id, outcome: 'approved', result });
-      } catch (error) {
-        if (!isBulkItemRefusal(error)) throw error;
-        await sql`ROLLBACK TO SAVEPOINT bulk_approve_item`.execute(ctx.trx);
-        const rule = typeof error.details?.rule === 'string' ? error.details.rule : null;
-        outcomes.set(item.id, { id: item.id, outcome: 'refused', code: error.code, rule });
+      const attempt = await ctx.tryRun<Record<string, unknown>>('kernel.proposal.approve', { id: item.id, revision: item.revision }, { recover: isBulkItemRefusal });
+      if (attempt.status === 'ok') {
+        outcomes.set(item.id, { id: item.id, outcome: 'approved', result: attempt.value });
+      } else {
+        const { refusal } = attempt;
+        const rule = typeof refusal.details?.rule === 'string' ? refusal.details.rule : null;
+        outcomes.set(item.id, { id: item.id, outcome: 'refused', code: refusal.code, rule });
       }
     }
     const results = input.items.map((item) => outcomes.get(item.id) as BulkApproveResult);
