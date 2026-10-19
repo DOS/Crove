@@ -12,6 +12,8 @@ export interface OutboundMail {
   subject: string;
   text: string;
   html: string;
+  // The Message-ID header, "<id@domain>"; unset, the transport makes one.
+  messageId?: string;
 }
 
 export interface Mailer {
@@ -53,7 +55,14 @@ export function createSmtpMailer(options: SmtpOptions): Mailer {
   return {
     enabled: true,
     async send(mail) {
-      await transport.sendMail({ from, to: mail.to, subject: mail.subject, text: mail.text, html: mail.html });
+      await transport.sendMail({
+        from,
+        to: mail.to,
+        subject: mail.subject,
+        text: mail.text,
+        html: mail.html,
+        ...(mail.messageId ? { messageId: mail.messageId } : {}),
+      });
     },
   };
 }
@@ -70,6 +79,14 @@ export function createLogMailer(log: (line: string) => void = (line) => console.
 export function createMailer(config: Pick<Config, 'SMTP_HOST' | 'SMTP_PORT' | 'SMTP_USER' | 'SMTP_PASS' | 'SMTP_FROM'>): Mailer {
   if (!config.SMTP_HOST || !config.SMTP_FROM) return createLogMailer();
   return createSmtpMailer({ host: config.SMTP_HOST, port: config.SMTP_PORT, user: config.SMTP_USER, pass: config.SMTP_PASS, from: config.SMTP_FROM });
+}
+
+// The right-hand side of the Message-ID of the mail Crove sends (#538): the domain of SMTP_FROM, else the host of
+// PUBLIC_URL. Mail systems weigh a Message-ID whose domain matches the sender's.
+export function messageIdDomain(config: Pick<Config, 'SMTP_FROM' | 'PUBLIC_URL'>): string {
+  const from = config.SMTP_FROM?.match(/@([^@\s>]+)>?\s*$/)?.[1];
+  if (from) return from.toLowerCase();
+  return new URL(config.PUBLIC_URL).hostname;
 }
 
 export function describeMailer(config: Pick<Config, 'SMTP_HOST' | 'SMTP_PORT'>): string {

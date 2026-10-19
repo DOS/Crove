@@ -1,6 +1,7 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import {
+  MAX_IMPORT_BYTES,
   MAX_SOCIAL_VIDEO_BYTES,
   MAX_UPLOAD_BYTES,
   UPLOAD_PURPOSES,
@@ -30,8 +31,10 @@ import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
+import { mailCommands } from './mail.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
+import { setAddress } from './org-address.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
@@ -228,7 +231,8 @@ export function beginUploadCommand(limits: UploadBeginLimits = DEFAULT_UPLOAD_BE
     handler: async (ctx, input) => {
       if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới tải tệp lên được');
       const userId = ctx.actor.userId;
-      const maxBytes = input.purpose === 'social' ? MAX_SOCIAL_VIDEO_BYTES : MAX_UPLOAD_BYTES;
+      // import: a spreadsheet for a module's import (#465), at most 10 MB.
+      const maxBytes = input.purpose === 'social' ? MAX_SOCIAL_VIDEO_BYTES : input.purpose === 'import' ? MAX_IMPORT_BYTES : MAX_UPLOAD_BYTES;
       // Serializes begins of one user in one org, so concurrent requests cannot pass either cap together.
       await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove.file_upload:${ctx.orgId}:${userId}`}, 0))`.execute(ctx.trx);
       // Both counts use the database clock: the insert trigger sets created_at and expires_at from now(), the start
@@ -570,6 +574,9 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   // A sale no longer the org's own, or a purchase the org issued (#313): the org tax code changed since.
   'NOT_OWN_SALE',
   'OWN_INVOICE',
+  // A line's account against its direction (#430): revenue on a sale line only.
+  'NOT_REVENUE_ACCOUNT',
+  'REVENUE_ACCOUNT_ON_PURCHASE',
   'UNKNOWN_ACCOUNT',
   'ACCOUNT_INACTIVE',
   'PARENT_TAGGED',
@@ -582,6 +589,12 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   // Posting a cash or bank voucher (finance.voucher.record, #327).
   'VOUCHER_INVALID',
   'PARTY_NOT_FOUND',
+  // A voucher made from a bank statement line (#326): the line no longer fits it, or another voucher settled it.
+  'BANK_LINE_NOT_FOUND',
+  'BANK_LINE_MISMATCH',
+  'BANK_LINE_MATCHED',
+  // Posting into a locked month (#329): the proposal's date is in or before the last locked month.
+  'PERIOD_LOCKED',
 ]);
 
 // Whether a nested approval's error refuses only that item.
@@ -593,7 +606,9 @@ export function isBulkItemRefusal(error: unknown): error is DomainError {
 // but a cash or bank voucher comes first, in id order, so two batches over the same proposals lock them in the same
 // order. Vouchers (#327) follow, by voucher type (VOUCHER_TYPES order) and then id: posting one holds its org's
 // numbering lock for its type until commit (20261019270000), so a batch taking PT then PC and another taking PC then
-// PT would deadlock (40P01, both users told to retry). In one type order the second batch waits for the first.
+// PT would deadlock (40P01, both users told to retry). In one type order the second batch waits for the first. A voucher
+// made from a bank statement line (#326) also locks that line, always after its numbering lock (20261020130000), and a
+// line takes vouchers of one type only, so the order holds.
 // voucherTypes: the voucher type of each voucher item, by proposal id; items not in it are not vouchers.
 export function bulkApproveOrder<T extends { id: string }>(items: readonly T[], voucherTypes: ReadonlyMap<string, string>): T[] {
   const rank = (id: string) => {
@@ -798,23 +813,29 @@ const otherKernelCommands = [
   ...channelCommands,
   setTaxCode,
   setVatFilingPeriod,
+  setAddress,
+  ...mailCommands,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),
 // options.inboundRotateLimits the inbound address rotation limits (default DEFAULT_INBOUND_ROTATE_LIMITS),
 // options.uploadBeginLimits the presigned upload grant rate (default DEFAULT_UPLOAD_BEGIN_LIMITS), options.inviteLimits
-// the invite mails one address may get from all orgs (default DEFAULT_INVITE_LIMITS).
+// the invite mails one address may get from all orgs (default DEFAULT_INVITE_LIMITS), options.messageIdDomain the
+// right-hand side of the Message-ID of the mail the kernel records (default DEFAULT_MESSAGE_ID_DOMAIN).
 export function buildKernelCommands(
   options: {
     orgCreateLimits?: OrgCreateLimits;
     inboundRotateLimits?: InboundRotateLimits;
     uploadBeginLimits?: UploadBeginLimits;
     inviteLimits?: InviteLimits;
+    messageIdDomain?: string;
   } = {},
 ) {
   return [
     options.orgCreateLimits ? orgCreateCommand(options.orgCreateLimits) : createOrgCommand,
-    options.inviteLimits ? inviteCreateCommand(options.inviteLimits) : createInvite,
+    options.inviteLimits || options.messageIdDomain
+      ? inviteCreateCommand(options.inviteLimits, { messageIdDomain: options.messageIdDomain })
+      : createInvite,
     ...otherKernelCommands,
     options.uploadBeginLimits ? beginUploadCommand(options.uploadBeginLimits) : beginUpload,
     options.inboundRotateLimits ? inboundRotateCommand(options.inboundRotateLimits) : rotateInbound,

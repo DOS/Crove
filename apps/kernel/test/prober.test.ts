@@ -6,6 +6,7 @@ import { alertPayload, deliverAlert } from '../src/alert.ts';
 import { EXIT, evaluateHealth, loadProberConfig, parseProberArgs, probeOnce, runProber, type HealthSnapshot, type ProberConfig } from '../src/prober.ts';
 
 const SECRET_HOOK = 'https://hooks.example.test/services/T000/B000/secret-token-123';
+const SECRET_PING = 'https://hc.example.test/ping/secret-check-456';
 
 const healthy: HealthSnapshot = {
   checked_at: '2026-10-15 12:00:00+00',
@@ -141,6 +142,9 @@ describe('prober configuration', () => {
 
   it('refuses a webhook that is not http(s) and limits that are not whole seconds', () => {
     expect(() => loadProberConfig({ ALERT_WEBHOOK_URL: 'file:///etc/passwd' })).toThrow(/ALERT_WEBHOOK_URL/);
+    expect(() => loadProberConfig({ PROBER_HEARTBEAT_URL: 'ftp://hc.example.test/ping' })).toThrow(/PROBER_HEARTBEAT_URL/);
+    expect(loadProberConfig({ PROBER_HEARTBEAT_URL: SECRET_PING }).heartbeatUrl).toBe(SECRET_PING);
+    expect(loadProberConfig({ PROBER_HEARTBEAT_URL: '' }).heartbeatUrl).toBeUndefined();
     expect(() => loadProberConfig({ PROBER_MAX_JOB_AGE_SECONDS: '1.5' })).toThrow(/PROBER_MAX_JOB_AGE_SECONDS/);
     expect(() => loadProberConfig({ PROBER_DEAD_LETTER_WINDOW_SECONDS: '10' })).toThrow(/PROBER_DEAD_LETTER_WINDOW_SECONDS/);
   });
@@ -252,6 +256,74 @@ describe('prober exit codes', () => {
       '[Crove] ALERT on crove.example.test: 1 health check(s) failed.\n- no worker heartbeat recorded: the worker has never started',
       '[prober] alert sent to stdout (ALERT_WEBHOOK_URL is not set)',
     ]);
+  });
+});
+
+// The outside dead man's switch (issue #309): a ping after each probe that read the database and delivered every
+// notification it owed, so the monitor pages when the pings stop.
+describe('prober heartbeat', () => {
+  // The webhook and the heartbeat monitor behind one fake fetch, answering each with its own status.
+  function endpoints(hookStatus = 200, pingStatus = 200) {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response('ok', { status: String(url) === SECRET_PING ? pingStatus : hookStatus });
+    }) as unknown as typeof globalThis.fetch;
+    return { fetch, pings: () => calls.filter((c) => c.url === SECRET_PING), hooks: () => calls.filter((c) => c.url === SECRET_HOOK) };
+  }
+
+  it('pings after a healthy probe and after an unhealthy one whose alert went out', async () => {
+    const io = capture();
+    const net = endpoints();
+    expect(await probeOnce(config({ heartbeatUrl: SECRET_PING }), { ...io, fetch: net.fetch, readHealth: async () => healthy })).toBe(EXIT.ok);
+    expect(net.pings()).toHaveLength(1);
+    expect(net.pings()[0]?.init).toMatchObject({ method: 'GET', redirect: 'error' });
+    expect(io.out).toContain('[prober] heartbeat sent to heartbeat monitor at hc.example.test');
+
+    const sick = { ...healthy, dead_letter_count: 2 };
+    expect(await probeOnce(config({ heartbeatUrl: SECRET_PING }), { ...io, fetch: net.fetch, readHealth: async () => sick })).toBe(EXIT.unhealthy);
+    expect(net.hooks()).toHaveLength(1);
+    expect(net.pings()).toHaveLength(2);
+  });
+
+  it('stays silent when the database cannot be read, the configuration is incomplete or an alert could not be delivered', async () => {
+    const io = capture();
+    const net = endpoints();
+    const down = async (): Promise<HealthSnapshot> => {
+      throw new Error('connect ECONNREFUSED 10.0.0.5:5432');
+    };
+    expect(await probeOnce(config({ heartbeatUrl: SECRET_PING }), { ...io, fetch: net.fetch, readHealth: down })).toBe(EXIT.probeFailed);
+    expect(await probeOnce(config({ heartbeatUrl: SECRET_PING, databaseUrl: undefined }), { ...io, fetch: net.fetch })).toBe(EXIT.probeFailed);
+    const refused = endpoints(500);
+    const sick = { ...healthy, worker_heartbeat_age_seconds: 900 };
+    expect(await probeOnce(config({ heartbeatUrl: SECRET_PING }), { ...capture(), fetch: refused.fetch, readHealth: async () => sick })).toBe(EXIT.deliveryFailed);
+    expect(net.pings()).toEqual([]);
+    expect(refused.pings()).toEqual([]);
+  });
+
+  it('logs a failed ping by host only and keeps the exit code of the probe', async () => {
+    const io = capture();
+    const net = endpoints(200, 503);
+    expect(await probeOnce(config({ heartbeatUrl: SECRET_PING }), { ...io, fetch: net.fetch, readHealth: async () => healthy })).toBe(EXIT.ok);
+    expect(io.err).toEqual(['[prober] heartbeat: heartbeat monitor at hc.example.test failed: HTTP 503']);
+    const unreachable = vi.fn(async (url: string | URL | Request) => {
+      if (String(url) === SECRET_PING) throw new TypeError('fetch failed');
+      return new Response('ok');
+    }) as unknown as typeof globalThis.fetch;
+    const quiet = capture();
+    expect(await probeOnce(config({ heartbeatUrl: SECRET_PING }), { ...quiet, fetch: unreachable, readHealth: async () => healthy })).toBe(EXIT.ok);
+    expect(quiet.err).toEqual(['[prober] heartbeat: heartbeat monitor at hc.example.test failed: fetch failed']);
+    expect([...io.out, ...io.err, ...quiet.out, ...quiet.err].join('\n')).not.toContain('secret-check-456');
+  });
+
+  it('pings nothing without PROBER_HEARTBEAT_URL, and nothing for a test or backup alert', async () => {
+    const net = endpoints();
+    expect(await probeOnce(config(), { ...capture(), fetch: net.fetch, readHealth: async () => healthy })).toBe(EXIT.ok);
+    const env = { ALERT_WEBHOOK_URL: SECRET_HOOK, PROBER_HEARTBEAT_URL: SECRET_PING };
+    expect(await runProber(['--test-alert'], env, { ...capture(), fetch: net.fetch })).toBe(EXIT.ok);
+    expect(await runProber(['--backup-failed', 'disk full'], env, { ...capture(), fetch: net.fetch })).toBe(EXIT.ok);
+    expect(net.pings()).toEqual([]);
+    expect(net.hooks()).toHaveLength(2);
   });
 });
 

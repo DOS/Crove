@@ -5,7 +5,7 @@
 // finance.purchase.revise: computes the payload of a new revision when a user edits a pending proposal
 // (kernel.proposal.edit); it writes nothing.
 import { z } from 'zod';
-import { BLOCKING_CHECK_IDS, zAccountCode, zPurchaseProposal, type DocumentDirection, type PurchaseProposal } from '@crove/kernel-contract';
+import { BLOCKING_CHECK_IDS, isRevenueAccount, zAccountCode, zPurchaseProposal, type DocumentDirection, type PurchaseProposal } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import {
   PAYABLE_ACCOUNT,
@@ -18,7 +18,7 @@ import {
   type JournalLineDraft,
   type ProposedLine,
 } from '@crove/l10n-vn';
-import { assertUsableAccounts } from './accounts.ts';
+import { assertUsableAccounts, isInactiveDefaultRefusal } from './accounts.ts';
 import { postJournalEntry } from './ledger.ts';
 import { journalMemo } from './memo.ts';
 
@@ -113,6 +113,29 @@ async function assertDirection(ctx: CommandContext, payload: PurchaseProposal): 
   }
 }
 
+// A sale line goes to a revenue account and a purchase line never does (#430, isRevenueAccount); the database holds
+// every writer to the same rule (crove_finance.check_line_direction). Checked here first to name the line.
+function assertDirectionAccounts(direction: DocumentDirection, lines: ReadonlyArray<Pick<ProposedLine, 'lineNo' | 'debitAccount'>>): void {
+  for (const line of lines) {
+    if (direction === 'sale' && !isRevenueAccount(line.debitAccount)) {
+      throw new DomainError(
+        'NOT_REVENUE_ACCOUNT',
+        422,
+        `Dòng ${line.lineNo} là doanh thu nên phải ghi vào tài khoản doanh thu (511, 515, 711, 3387 hoặc tài khoản con của chúng), không phải ${line.debitAccount}`,
+        { lineNo: line.lineNo, account: line.debitAccount },
+      );
+    }
+    if (direction === 'purchase' && isRevenueAccount(line.debitAccount)) {
+      throw new DomainError(
+        'REVENUE_ACCOUNT_ON_PURCHASE',
+        422,
+        `Dòng ${line.lineNo} là hàng hóa, dịch vụ mua vào nên không ghi vào tài khoản doanh thu ${line.debitAccount}; hãy chọn tài khoản chi phí, hàng hóa hoặc tài sản`,
+        { lineNo: line.lineNo, account: line.debitAccount },
+      );
+    }
+  }
+}
+
 export const revisePurchase = defineCommand({
   name: 'finance.purchase.revise',
   input: z.object({
@@ -127,16 +150,17 @@ export const revisePurchase = defineCommand({
     const lineNos = new Set(payload.lines.map((l) => l.lineNo));
     if (lineAccounts.some((l) => !lineNos.has(l.lineNo))) throw new DomainError('UNKNOWN_LINE', 422, 'Có dòng không thuộc hóa đơn này');
     const overrides = new Map(lineAccounts.map((l) => [l.lineNo, l.debitAccount]));
-    const chosen: string[] = [];
+    const chosen: Array<{ lineNo: number; debitAccount: string }> = [];
     const lines = payload.lines.map((l) => {
       const account = overrides.get(l.lineNo);
       if (!account || account === l.debitAccount) return l;
-      chosen.push(account);
+      chosen.push({ lineNo: l.lineNo, debitAccount: account });
       return { ...l, debitAccount: account, reason: 'Người dùng chọn' };
     });
     if (chosen.length === 0) return { changed: false as const, payload };
     // The accounts the user picked now; the others are checked again when the proposal is approved.
-    await assertUsableAccounts(ctx, chosen);
+    assertDirectionAccounts(directionOf(payload), chosen);
+    await assertUsableAccounts(ctx, chosen.map((l) => l.debitAccount));
     const revised = { ...payload, lines, journal: invoiceJournal(directionOf(payload), lines, payload.invoice.vatTotal, journalMemo(payload)) };
     return { changed: true as const, payload: revised };
   },
@@ -150,6 +174,8 @@ export const recordPurchase = defineCommand({
   }),
   risk: 'R3',
   access: 'proposal',
+  // The kind extraction gives its proposals (extract.ts).
+  proposalKind: 'finance.purchase',
   handler: async (ctx, { payload, acceptFailedChecks }) => {
     const { invoice } = payload;
     const direction = directionOf(payload);
@@ -169,6 +195,7 @@ export const recordPurchase = defineCommand({
     // Line accounts come from the approved revision; changing them is an edit (kernel.proposal.edit). A sub-account
     // deactivated since the proposal was made is refused here, with its code.
     const { lines } = payload;
+    assertDirectionAccounts(direction, lines);
     await assertUsableAccounts(ctx, lines.map((l) => l.debitAccount));
 
     const memo = journalMemo(payload);
@@ -271,9 +298,9 @@ export const recordPurchase = defineCommand({
           }),
         )
         .execute()
-        .catch((error: { code?: string }) => {
+        .catch((error: unknown) => {
           // The sub-account was deactivated after the check above (the database checks it again under a lock).
-          if (error?.code === '23503') throw new DomainError('ACCOUNT_INACTIVE', 422, `Tài khoản ${main.debitAccount} đã ngừng sử dụng; hãy chọn tài khoản khác`);
+          if (isInactiveDefaultRefusal(error)) throw new DomainError('ACCOUNT_INACTIVE', 422, `Tài khoản ${main.debitAccount} đã ngừng sử dụng; hãy chọn tài khoản khác`);
           throw error;
         });
     }

@@ -39,6 +39,9 @@ export interface TextRule {
   max: number | null;
   count: CountMode;
   required: boolean;
+  // A second cap in UTF-8 bytes, besides the count (Bluesky: 300 graphemes and 3000 bytes, so a long run of emoji or
+  // combined characters can be refused under 300).
+  maxBytes?: number;
 }
 
 export interface MediaRule {
@@ -208,7 +211,7 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   },
   bluesky: {
     provider: 'bluesky',
-    body: { max: 300, count: 'graphemes', required: false },
+    body: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
     title: null,
     // Up to 4 images (1 MB each, Bluesky's blob limit) or one video of up to 3 minutes and 100 MB; the Crove adapter
     // does not post video yet, so it stays out of VIDEO_READY.

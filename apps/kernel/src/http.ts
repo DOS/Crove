@@ -7,7 +7,18 @@ import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
 import type pg from 'pg';
 import { schemaMissing } from '@crove/db/migrate';
-import { ACCEPTED_ARCHIVE_TYPES, ACCEPTED_UPLOAD_TYPES, MAX_SOCIAL_VIDEO_BYTES, MAX_SOCIAL_VIDEO_MS, MAX_UPLOAD_BYTES, ORG_HEADER, SOCIAL_IMAGE_TYPES, type UploadPurpose } from '@crove/kernel-contract';
+import {
+  ACCEPTED_ARCHIVE_TYPES,
+  ACCEPTED_UPLOAD_TYPES,
+  MAX_IMPORT_BYTES,
+  MAX_SOCIAL_VIDEO_BYTES,
+  MAX_SOCIAL_VIDEO_MS,
+  MAX_UPLOAD_BYTES,
+  ORG_HEADER,
+  SOCIAL_IMAGE_TYPES,
+  XLSX_CONTENT_TYPE,
+  type UploadPurpose,
+} from '@crove/kernel-contract';
 import {
   BlobConflictError,
   BlobIntegrityError,
@@ -28,12 +39,14 @@ import {
   MISA_SME_SALES,
   buildJournalWorkbook,
   buildLedgerWorkbook,
+  buildStatementsWorkbook,
   buildMisaWorkbook,
   buildVat01Xml,
   buildVatWorkbook,
   purchaseRows,
   salesRows,
   type JournalEntryView,
+  type FinancialStatements,
   type LedgerBook,
   type PurchaseVoucher,
   type SalesVoucher,
@@ -52,6 +65,7 @@ import type { Mailer } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
+import type { TaxCodeLookup } from './tax-lookup.ts';
 import { hasVideoTrack, sniffVideo, videoDurationMs } from './media-probe.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 import { directTransferOrigin } from './storage.ts';
@@ -92,6 +106,8 @@ export interface HttpDeps {
   channels?: RpcChannels;
   // Drafts Social posts with the deployment's model (Social plan S7); unset: AI drafting answers 503.
   socialWriter?: SocialDrafter;
+  // The public tax registry lookup for onboarding (issue #324); unset: off (TAX_CODE_LOOKUP_URL).
+  taxLookup?: TaxCodeLookup;
   // Realtime invalidation (issue #69). Unset: /api/stream answers 404 and the app keeps polling.
   stream?: StreamDeps;
 }
@@ -218,8 +234,17 @@ function forwardable(source: Headers, extraDrop: ReadonlySet<string> = new Set()
   });
   return out;
 }
-// Client-supplied forwarding headers are dropped; the proxy sets X-Real-IP from the socket instead.
-const SPOOFABLE = new Set(['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'x-client-ip']);
+// Client-supplied forwarding headers are dropped; the proxy sets X-Real-IP from the socket instead. Supabase Auth keys
+// its rate limits on X-Real-IP, or on Sb-Forwarded-For when GOTRUE_SECURITY_SB_FORWARDED_FOR_ENABLED is on (#34).
+const SPOOFABLE = new Set([
+  'forwarded',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-real-ip',
+  'x-client-ip',
+  'sb-forwarded-for',
+]);
 // Public Supabase Auth endpoints the web app needs. Everything else (notably /admin) is not reachable.
 const AUTH_PUBLIC_PATHS =
   /^\/(?:token|signup|verify|recover|user|logout|otp|resend|settings|health|authorize|callback|reauthenticate|factors(?:\/[\w-]+(?:\/(?:challenge|verify))?)?|\.well-known\/jwks\.json)$/;
@@ -260,7 +285,7 @@ function clientIp(c: Context, trustedHops: number): string | null {
 export function createHttpApp(deps: HttpDeps) {
   const { config, runtime, store, authenticate } = deps;
   const app = new Hono<{ Variables: { user: AuthUser } }>();
-  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL) : undefined, deps.channels, deps.socialWriter);
+  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL) : undefined, deps.channels, deps.socialWriter, deps.taxLookup);
   const perMinute = config.API_RATE_LIMIT_PER_MINUTE;
   const limiter = deps.rateLimiter !== undefined ? deps.rateLimiter : perMinute > 0 ? new RateLimiter({ perMinute }) : null;
 
@@ -300,6 +325,8 @@ export function createHttpApp(deps: HttpDeps) {
       mailEnabled: deps.mailer?.enabled ?? false,
       // The shell's feedback and support link (SUPPORT_URL, issue #310); null hides it.
       supportUrl: config.SUPPORT_URL ?? null,
+      // Onboarding offers "look up" next to the tax code only when the server has a registry to ask (issue #324).
+      taxCodeLookup: Boolean(deps.taxLookup),
       // The SPA shows the menus of these modules only (plan Decision 12).
       modules: runtime.modules(),
       // The app subscribes to /api/stream and polls only while it is down (issue #69).
@@ -584,12 +611,19 @@ export function createHttpApp(deps: HttpDeps) {
   // returned (plan §7.6, ADR-0013).
   // purpose social: an image or a video for a Social post (#372, #409), recorded with source 'social' so it never goes
   // to extraction. A video's duration is read from the file and recorded with it.
+  // purpose import: an .xlsx workbook for a module's import (the tax portal's purchase list, #465), recorded with source
+  // 'import' so it never goes to extraction either; the module has it read in the parsing sandbox. Only its container
+  // is checked here (a ZIP of at most MAX_IMPORT_BYTES); the sandbox decides whether it is a workbook.
   async function ingest(user: AuthUser, orgId: string, name: string, bytes: Uint8Array, sha256 = sha256Hex(bytes), purpose: UploadPurpose = 'document') {
     // The content decides the type; the browser's MIME type and the extension are only hints.
     const video = purpose === 'social' ? sniffVideo(bytes) : null;
-    const type = video ?? sniffType(bytes);
+    let type = video ?? sniffType(bytes);
     let durationMs: number | undefined;
-    if (video) {
+    if (purpose === 'import') {
+      if (type !== 'application/zip') throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận tệp Excel dạng .xlsx`);
+      if (bytes.byteLength > MAX_IMPORT_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 10 MB`);
+      type = XLSX_CONTENT_TYPE;
+    } else if (video) {
       if (bytes.byteLength > MAX_SOCIAL_VIDEO_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 100 MB`);
       const ms = videoDurationMs(bytes);
       if (ms === null || ms === 0) throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: không đọc được thời lượng video`);
@@ -618,7 +652,7 @@ export function createHttpApp(deps: HttpDeps) {
         sha256,
         storageKey,
         generation,
-        source: purpose === 'social' ? 'social' : 'upload',
+        source: purpose === 'social' ? 'social' : purpose === 'import' ? 'import' : 'upload',
         ...(durationMs === undefined ? {} : { durationMs }),
       },
       { actor: actorOf(user), orgId },
@@ -637,6 +671,7 @@ export function createHttpApp(deps: HttpDeps) {
   function uploadPurpose(value: unknown): UploadPurpose {
     if (value === undefined || value === null || value === '' || value === 'document') return 'document';
     if (value === 'social') return 'social';
+    if (value === 'import') return 'import';
     throw new DomainError('INVALID', 400, 'Mục đích tải lên không hợp lệ');
   }
 
@@ -965,6 +1000,30 @@ export function createHttpApp(deps: HttpDeps) {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': attachmentDisposition(orgSlug, ['crove', 'so-sach', book.period.period, ORG_SLUG], 'xlsx'),
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // The DRAFT financial statements of one month, quarter or year (issue #154), ?period= as for the ledger reports.
+    // The query checks the period (422 otherwise) and the roles, so the file name below only ever holds a valid period.
+    app.get('/api/export/statements.xlsx', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const period = c.req.query('period') ?? '';
+        const statements = await runtime.query<FinancialStatements>('finance.statements.period', { period }, { actor: actorOf(user), orgId });
+        const bytes = await buildStatementsWorkbook(statements, orgSlug ?? '');
+        // The export's audit row (the period). No row, no download.
+        await runtime.execute('finance.statements.export', { period: statements.period.period }, { actor: actorOf(user), orgId });
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': `attachment; filename="crove-bao-cao-tai-chinh-${statements.period.period}-${orgSlug}.xlsx"`,
             'cache-control': 'private, no-store',
           },
         });

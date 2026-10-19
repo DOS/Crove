@@ -35,6 +35,9 @@ export const EXPORT_TABLES = {
   'kernel.task_comment': { from: 'crove_kernel.task_comment', omit: [] },
   // Connected channel accounts (ADR-0025). Their sealed tokens (crove_kernel.credential) are secrets and stay out.
   'kernel.channel_connection': { from: 'crove_kernel.channel_connection', omit: [] },
+  // Outbound mail (#538): the mail log and the org's suppression list. The address hashes are keyed by the deployment.
+  'kernel.mail_message': { from: 'crove_kernel.mail_message', omit: [] },
+  'kernel.mail_suppression': { from: 'crove_kernel.mail_suppression', omit: [] },
   'finance.purchase_document': { from: 'crove_finance.purchase_document', omit: [] },
   'finance.purchase_line': { from: 'crove_finance.purchase_line', omit: [] },
   'finance.journal_entry': { from: 'crove_finance.journal_entry', omit: [] },
@@ -44,6 +47,9 @@ export const EXPORT_TABLES = {
   'finance.org_account': { from: 'crove_finance.org_account', omit: [] },
   // Cash and bank vouchers (#327): their journal entries name them.
   'finance.cash_voucher': { from: 'crove_finance.cash_voucher', omit: [] },
+  // The tax portal's purchase lists and their rows (#465), kept like the ledger; the files are in kernel.file.
+  'finance.portal_invoice_list': { from: 'crove_finance.portal_invoice_list', omit: [] },
+  'finance.portal_invoice_row': { from: 'crove_finance.portal_invoice_row', omit: [] },
   'social.post': { from: 'crove_social.post', omit: [] },
   'social.post_variant': { from: 'crove_social.post_variant', omit: [] },
   'social.post_approval': { from: 'crove_social.post_approval', omit: [] },

@@ -83,8 +83,9 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
       'p.duplicate_of',
     ])
     .where('f.org_id', '=', ctx.orgId)
-    // Images of Social posts are not documents (#372), unless the same bytes were also uploaded as one and read.
-    .where((eb) => eb.or([eb('f.source', '<>', 'social'), eb('e.status', 'is not', null)]));
+    // Images of Social posts (#372) and import spreadsheets (#465) are not documents, unless the same bytes were also
+    // uploaded as one and read.
+    .where((eb) => eb.or([eb('f.source', 'not in', ['social', 'import']), eb('e.status', 'is not', null)]));
   query = 'ids' in filter ? query.where('f.id', 'in', [...filter.ids]) : query.orderBy('f.created_at', 'desc').limit(filter.recent);
   const rows = await query.execute();
   // An executed purchase whose document was voided by a reversal (#165) may be read again.

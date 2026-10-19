@@ -4,7 +4,7 @@ Version 3.0 (2026-10-18). Applies to the marketing site (`apps/web`), the web ap
 
 Version 2 described a glow-and-gradient landing style and an older stack (SWR, Next.js links in the app). Both are gone: this version replaces it entirely. The research behind each rule, with sources and measurements, is summarized in [docs/design/ui-ux-research-2026-10.vi.html](docs/design/ui-ux-research-2026-10.vi.html).
 
-**Visual direction (picked 2026-10-18).** Of the five mockups in [docs/design/mockups/](docs/design/mockups/), the owner picked a composition: the frame of B (the product UI is the hero, keyboard-first, graphite neutrals), the agents section of E (org chart and R0 to R3 matrix), the phone section of D, the routing slip of C and the ledger of A. Crove violet is the single, restrained accent; controls use a 6px radius. Type: Archivo for display headings, Be Vietnam Pro for body and UI, JetBrains Mono for amounts and codes. The marketing site implements it in `apps/web` (tokens in `apps/web/src/app/globals.css`); the web app's `packages/ui` tokens use the same values, with `--radius: 0.375rem` (controls 6px, cards about 8px) and the `proposal` token for AI proposals nobody has approved yet.
+**Visual direction (picked 2026-10-18).** From the mockups in [docs/design/mockups/](docs/design/mockups/), the owner picked a composition: the frame of B (the product UI is the hero, keyboard-first, graphite neutrals, which also gives the four-step how-it-works), the agents section of E (org chart and R0 to R3 matrix), the phone section of D and the ledger of A. Option C (paper invoice, seal and routing slip) was dropped on 2026-10-19. Crove violet is the single, restrained accent; controls use a 6px radius. Type: Archivo for display headings, Be Vietnam Pro for body and UI, JetBrains Mono for amounts and codes. The marketing site implements it in `apps/web` (tokens in `apps/web/src/app/globals.css`); the web app's `packages/ui` tokens use the same values, with `--radius: 0.375rem` (controls 6px, cards about 8px) and the `proposal` token for AI proposals nobody has approved yet.
 
 ---
 
@@ -51,7 +51,7 @@ Rules:
 - About 90 percent of any screen is neutral. The accent marks what to do next; semantic colors mark state.
 - Neutrals carry a slight hue bias toward the accent. No pure mid-grey.
 - No gradients on text, buttons or backgrounds. No radial glows, no glass blur as decoration, no colored shadows.
-- Both themes are designed, not inverted: check contrast and the accent separately in each. The app defaults to dark today (`class="dark"` on `<html>`); the marketing site follows `prefers-color-scheme` with a manual toggle.
+- Both themes are designed, not inverted: check contrast and the accent separately in each. Light is the default everywhere (the owner's decision, 2026-10-19): the app opens light and lets each user pick light, dark or system (next to the language switch and in the command palette; applied before first paint by `apps/app/public/assets/theme-boot.js`); the marketing site is light unless the visitor turns dark on with its toggle. The marketing site offers only light and dark (it is another origin, so the app's setting does not reach it); only the app can follow the system, when the user chooses "system".
 - `proposal`: AI-proposed data nobody has approved yet. Use the `proposal` badge variant and a dashed `border-proposal` outline (the AI Inbox journal card does), never the accent, so principle 2 has one consistent look.
 
 ### 3.2 Typography
@@ -227,7 +227,7 @@ Approve, edit and reject have equal visual access (reject is not hidden in a men
 - Semantic landmarks and heading order; icon-only buttons have `aria-label`; tables use real `<table>` markup.
 - Color is never the only signal (chips have text, charts have labels).
 - Help is in the same place on every screen (3.2.6): the "Góp ý / Hỗ trợ" link.
-- Respect `prefers-reduced-motion` and `prefers-color-scheme`.
+- Respect `prefers-reduced-motion`. Light is the default theme; follow `prefers-color-scheme` only when the user picks "system".
 - Test with keyboard only and with a screen reader (NVDA or VoiceOver) on the approval flow before release.
 
 ## 8. Internationalization

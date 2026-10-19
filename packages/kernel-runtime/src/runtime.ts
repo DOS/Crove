@@ -128,6 +128,10 @@ export interface CommandDef<I = unknown, O = unknown> {
   // No code classifies P04 (contact or payment fields) yet, so the command declares it writes none of them; an
   // agent's proposal of any other command is flagged P04.
   agentApprovers?: AgentApprovers;
+  // access 'proposal' only: the kind its proposals carry (the Inbox renders a proposal by its kind), within the
+  // command's module. Absent: the command's name. A proposal an agent asks for always takes its kind from here,
+  // never from what the agent's run prepared (#435).
+  proposalKind?: string;
   handler: (ctx: CommandContext, input: I) => Promise<O>;
 }
 
@@ -144,6 +148,8 @@ export interface CommandInfo {
   risk: Risk;
   access: Access;
   agentApprovers: readonly string[];
+  // The kind of its proposals: the declared proposalKind, or the command's name.
+  proposalKind: string;
 }
 
 export interface BootstrapEnv {
@@ -498,6 +504,12 @@ export class Runtime {
           throw new Error(`command ${c.name}: agent approvers name at least one role key and declare noContactOrPayment: true (P04)`);
         }
       }
+      if (c.proposalKind !== undefined) {
+        const kind = c.proposalKind;
+        if (c.access !== 'proposal' || typeof kind !== 'string' || kind.length > 100 || !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(kind) || moduleOf(kind) !== moduleOf(c.name)) {
+          throw new Error(`command ${c.name}: a proposal kind is declared only on a proposal command (access 'proposal'), as <module>.<name> in its own module`);
+        }
+      }
       if (c.proposalEditor !== undefined) {
         if (c.proposalEditor !== true || typeof c.access === 'string') {
           throw new Error(`command ${c.name}: the proposal editor declares proposalEditor: true and is run by users (access is a role list)`);
@@ -517,11 +529,11 @@ export class Runtime {
     return this;
   }
 
-  // A registered command's risk, access and agent approvers (CommandInfo), or null.
+  // A registered command's risk, access, agent approvers and proposal kind (CommandInfo), or null.
   commandInfo(name: string): CommandInfo | null {
     const def = this.commands.get(name);
     if (!def) return null;
-    return { name: def.name, risk: def.risk, access: def.access, agentApprovers: [...(def.agentApprovers?.roles ?? [])] };
+    return { name: def.name, risk: def.risk, access: def.access, agentApprovers: [...(def.agentApprovers?.roles ?? [])], proposalKind: def.proposalKind ?? def.name };
   }
 
   // Whether this runtime registered any command or query of the module (plan Decision 12). The server asks it

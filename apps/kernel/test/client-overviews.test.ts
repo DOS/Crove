@@ -32,7 +32,8 @@ describe('clientOverviews', () => {
   it("reads each org's figures in that org, as the caller, keeping the list's order", async () => {
     const orgs = [org(1), org(2), org(3)];
     const { runtime, calls } = fakeRuntime(orgs, (orgId) => figures(Number(orgId.slice(-1))));
-    const rows = await clientOverviews(runtime, actor);
+    const { clients: rows, total } = await clientOverviews(runtime, actor);
+    expect(total).toBe(3);
     expect(rows.map((r) => [r.slug, r.overview.pendingProposals])).toEqual([
       ['org-1', 1],
       ['org-2', 2],
@@ -49,7 +50,7 @@ describe('clientOverviews', () => {
       if (orgId.endsWith('2')) throw new DomainError('SESSION_REVOKED_IN_ORG', 401, 'revoked');
       return figures(3);
     });
-    expect((await clientOverviews(runtime, actor)).map((r) => r.slug)).toEqual(['org-3']);
+    expect((await clientOverviews(runtime, actor)).clients.map((r) => r.slug)).toEqual(['org-3']);
   });
 
   it('fails the answer on any other error, so a partial list never looks complete', async () => {
@@ -60,13 +61,40 @@ describe('clientOverviews', () => {
     await expect(clientOverviews(runtime, actor)).rejects.toMatchObject({ code: 'INTERNAL' });
   });
 
-  it('reads a few orgs at a time and at most MAX_CLIENT_ORGS', async () => {
+  it('reads a few orgs at a time and at most MAX_CLIENT_ORGS, and says how many the user has (#495)', async () => {
     const orgs = Array.from({ length: MAX_CLIENT_ORGS + 5 }, (_, i) => org(i + 1));
     const { runtime, calls, peak } = fakeRuntime(orgs, () => figures(0));
-    const rows = await clientOverviews(runtime, actor);
+    const { clients: rows, total } = await clientOverviews(runtime, actor);
     expect(rows).toHaveLength(MAX_CLIENT_ORGS);
+    expect(total).toBe(MAX_CLIENT_ORGS + 5);
     expect(calls).toHaveLength(MAX_CLIENT_ORGS);
     expect(peak()).toBeLessThanOrEqual(4);
     expect(peak()).toBeGreaterThan(1);
+  });
+
+  it('starts no other org once one fails (#495)', async () => {
+    const orgs = Array.from({ length: 40 }, (_, i) => org(i + 1));
+    const { runtime, calls } = fakeRuntime(orgs, (orgId) => {
+      if (orgId.endsWith('000000000001')) throw new DomainError('INTERNAL', 500, 'boom');
+      return figures(0);
+    });
+    // The answer fails only once the calls already running have finished, so this count is final: the first four
+    // started together, and nothing new starts after the failure.
+    await expect(clientOverviews(runtime, actor)).rejects.toMatchObject({ code: 'INTERNAL' });
+    const settled = calls.length;
+    expect(settled).toBeLessThanOrEqual(4);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls.length).toBe(settled);
+  });
+
+  it('starts no other org once the client went away (#495)', async () => {
+    const orgs = Array.from({ length: 40 }, (_, i) => org(i + 1));
+    const controller = new AbortController();
+    const { runtime, calls } = fakeRuntime(orgs, () => {
+      controller.abort();
+      return figures(0);
+    });
+    await expect(clientOverviews(runtime, actor, { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(calls.length).toBeLessThanOrEqual(4);
   });
 });

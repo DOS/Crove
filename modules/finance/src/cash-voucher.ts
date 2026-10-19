@@ -12,8 +12,8 @@
 //   writes it right after the insert, for a voucher id the database has just generated.
 // - finance.vouchers.list: the posted vouchers, page by page, with their reversal when their entry was reversed.
 // A voucher is corrected by reversing its entry (finance.journal.reverse); it keeps its number and shows as reversed.
-// A bank statement line matched to a payable or receivable (#326) is meant to propose a voucher through the same
-// preparer, so the approval path stays one.
+// A bank voucher may be made from a bank statement line (#326, bank-match.ts): it then names the line (bankLineId),
+// follows it (account, date, direction, amount) and settles it; both commands check that, and the database holds it.
 import { z } from 'zod';
 import { sql } from 'kysely';
 import {
@@ -34,6 +34,7 @@ import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { journalIsBalanced } from '@crove/l10n-vn';
 import { assertUsableAccounts } from './accounts.ts';
+import { checkBankLineVoucher, lockBankLine } from './bank-match.ts';
 import {
   VOUCHER_LABELS,
   VOUCHER_SOURCE,
@@ -88,6 +89,13 @@ export const prepareVoucher = defineCommand({
   handler: async (ctx, input) => {
     const partyId = input.partyId ?? null;
     await checkVoucher(ctx, { type: input.type, cashAccount: input.cashAccount, partyId, lines: input.lines });
+    if (input.bankLineId) {
+      // One voucher proposal per line at a time: a second request for the line waits here for the first to commit,
+      // then sees its proposal.
+      await lockBankLine(ctx, input.bankLineId);
+      const voucher = { type: input.type, date: input.date, cashAccount: input.cashAccount, total: voucherTotal(input.lines) };
+      await checkBankLineVoucher(ctx, input.bankLineId, voucher, { pendingToo: true });
+    }
     const party = partyId ? await findParty(ctx, partyId, false) : null;
     const built: CashVoucherProposal = {
       type: input.type,
@@ -98,6 +106,7 @@ export const prepareVoucher = defineCommand({
       description: input.description.trim(),
       lines: input.lines.map((l) => ({ account: l.account, amount: l.amount, ...(l.memo?.trim() ? { memo: l.memo.trim() } : {}) })),
       total: voucherTotal(input.lines),
+      ...(input.bankLineId ? { bankLineId: input.bankLineId } : {}),
     };
     // The payload is stored as the proposal and parsed again with this schema when it is approved
     // (finance.voucher.record). A payload the schema refuses (a party whose stored name or tax code is longer than a
@@ -120,6 +129,7 @@ export const recordVoucher = defineCommand({
   input: z.object({ payload: zCashVoucherProposal, acceptFailedChecks: z.boolean().default(false) }),
   risk: 'R3',
   access: 'proposal',
+  proposalKind: VOUCHER_KIND,
   handler: async (ctx, { payload }) => {
     if (!ctx.proposalId) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt');
     const partyId = payload.party?.id ?? null;
@@ -128,6 +138,11 @@ export const recordVoucher = defineCommand({
     await checkVoucher(ctx, { type: payload.type, cashAccount: payload.cashAccount, partyId, lines: payload.lines });
     const total = voucherTotal(payload.lines);
     if (total !== payload.total) throw new DomainError('VOUCHER_INVALID', 422, 'Tổng số tiền không khớp các dòng của chứng từ', { problems: ['TOTAL_MISMATCH'] });
+    // The line it settles is checked again: another voucher may have settled it since the proposal was made. The
+    // database checks it once more under the line's lock when the voucher is inserted.
+    if (payload.bankLineId) {
+      await checkBankLineVoucher(ctx, payload.bankLineId, { type: payload.type, date: payload.date, cashAccount: payload.cashAccount, total }, { pendingToo: false });
+    }
     const party = partyId ? await findParty(ctx, partyId, true) : null;
     const journal = buildVoucherJournal(payload);
     if (!journalIsBalanced(journal)) throw new DomainError('UNBALANCED', 422, 'Bút toán không cân');
@@ -144,10 +159,19 @@ export const recordVoucher = defineCommand({
         description: payload.description,
         amount: total,
         proposal_id: ctx.proposalId,
+        bank_line_id: payload.bankLineId ?? null,
         created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
       })
       .returning(['id', 'number'])
-      .executeTakeFirstOrThrow();
+      .executeTakeFirstOrThrow()
+      .catch((error: { code?: string; message?: string }) => {
+        // A voucher of the same line committed between the check above and this insert (the database's check waits for
+        // it under the line's lock, then sees it).
+        if (error?.code === '23505' && /is already settled by another cash voucher/.test(error.message ?? '')) {
+          throw new DomainError('BANK_LINE_MATCHED', 409, 'Dòng sao kê này vừa được ghi chứng từ khác; hãy tải lại trang ngân hàng');
+        }
+        throw error;
+      });
     const code = voucherCode(payload.type, voucher.number);
     // The party as it is now (its name may have changed since the voucher was asked for).
     const described = { description: payload.description, party: party ? { name: party.name } : null };

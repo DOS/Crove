@@ -6,6 +6,11 @@
 //
 // Exit codes: 0 healthy (or the test alert was delivered), 1 thresholds exceeded, 2 the health check could not run
 // (configuration, connection, permissions), 3 the alert could not be delivered (it was printed to stdout instead).
+//
+// The prober cannot report its own absence, so with PROBER_HEARTBEAT_URL it also pings an outside dead man's switch
+// (issue #309): after each probe that read the database and delivered every notification it owed (exit 0 or 1). The
+// outside monitor then pages when the pings stop: the prober or the host is down, the database cannot be read, or
+// the alert path is broken.
 import { hostname } from 'node:os';
 import pg from 'pg';
 import { z } from 'zod';
@@ -43,6 +48,9 @@ const schema = z.object({
   ALERT_REPEAT_MINUTES: z.coerce.number().int().min(0).max(10_080).default(60),
   // Names this deployment in alerts. Default: the host of PUBLIC_URL, else the machine's host name.
   ALERT_INSTANCE: optional,
+  // An outside heartbeat monitor's ping URL (Healthchecks.io, Uptime Kuma push, Better Stack heartbeat): a GET after
+  // each probe that read the database and delivered what it owed. Like the webhook, it usually carries a secret.
+  PROBER_HEARTBEAT_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
   PUBLIC_URL: optional,
   PROBER_MAX_OUTBOX_AGE_SECONDS: seconds(300),
   PROBER_MAX_JOB_AGE_SECONDS: seconds(900),
@@ -68,6 +76,8 @@ export interface ProberConfig {
   instance: string;
   thresholds: Thresholds;
   deadLetterWindowSeconds: number;
+  // The outside heartbeat monitor's ping URL; unset: no heartbeat.
+  heartbeatUrl?: string | undefined;
 }
 
 export interface Thresholds {
@@ -108,6 +118,7 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
       notifyQueuePercent: raw.PROBER_MAX_NOTIFY_QUEUE_PERCENT,
     },
     deadLetterWindowSeconds: raw.PROBER_DEAD_LETTER_WINDOW_SECONDS ?? (everySeconds === null ? 3600 : Math.min(everySeconds + 60, 604_800)),
+    heartbeatUrl: raw.PROBER_HEARTBEAT_URL,
   };
 }
 
@@ -307,10 +318,38 @@ async function safeDeliver(sink: AlertSink, alert: Alert): Promise<Delivery> {
 }
 
 /**
- * One probe: returns the exit code. Never throws. The exit code reports health (0, 1, 2) whether or not a
- * notification went out, and 3 when one was due and could not be delivered.
+ * One probe, then the heartbeat ping when it is due: returns the exit code. Never throws. The exit code reports
+ * health (0, 1, 2) whether or not a notification went out, and 3 when one was due and could not be delivered; a
+ * failed ping is logged and leaves it as it is (the outside monitor notices the missing ping by itself).
  */
 export async function probeOnce(config: ProberConfig, deps: ProbeDeps = {}): Promise<number> {
+  const code = await probe(config, deps);
+  if (config.heartbeatUrl && (code === EXIT.ok || code === EXIT.unhealthy)) await pingHeartbeat(config.heartbeatUrl, deps);
+  return code;
+}
+
+const HEARTBEAT_TIMEOUT_MS = 10_000;
+
+// Logs only the host: the ping URL usually carries the check's secret.
+function describeHeartbeat(url: string): string {
+  return `heartbeat monitor at ${new URL(url).host}`;
+}
+
+async function pingHeartbeat(url: string, deps: ProbeDeps): Promise<void> {
+  const log = deps.log ?? ((line: string) => console.log(line));
+  const error = deps.error ?? ((line: string) => console.error(line));
+  try {
+    const response = await (deps.fetch ?? fetch)(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(HEARTBEAT_TIMEOUT_MS) });
+    // Drain the body so the connection is released; its content is not logged.
+    await response.arrayBuffer().catch(() => undefined);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    log(`[prober] heartbeat sent to ${describeHeartbeat(url)}`);
+  } catch (e) {
+    error(`[prober] heartbeat: ${describeHeartbeat(url)} failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+async function probe(config: ProberConfig, deps: ProbeDeps): Promise<number> {
   const log = deps.log ?? ((line: string) => console.log(line));
   const error = deps.error ?? ((line: string) => console.error(line));
   const now = (deps.now ?? (() => new Date()))();
@@ -476,7 +515,8 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   const looping = { ...deps, outageGate: deps.outageGate ?? memoryAlertGate(config.repeatSeconds) };
   // Under Docker this is PID 1, which gets no default SIGTERM handling: stop between probes at once.
   process.once('SIGTERM', () => process.exit(EXIT.ok));
-  (deps.log ?? console.log)(`[prober] probing every ${every} s, alerts to ${alertSink(config, deps).describe()}`);
+  const heartbeat = config.heartbeatUrl ? `, heartbeat to ${describeHeartbeat(config.heartbeatUrl)}` : '';
+  (deps.log ?? console.log)(`[prober] probing every ${every} s, alerts to ${alertSink(config, deps).describe()}${heartbeat}`);
   for (;;) {
     await probeOnce(config, looping);
     await new Promise((resolve) => setTimeout(resolve, every * 1000));

@@ -5,6 +5,7 @@ import { useTranslations } from 'use-intl';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { CommandPalette, type PaletteEntry } from '../components/command-palette.tsx';
+import { ThemeSwitcher } from '../components/theme-switcher.tsx';
 import { SupportLink } from '../components/support-link.tsx';
 import { Logo, OrgLeftNotice } from '../components/ui.tsx';
 import { LOCALE_NAMES, LOCALES } from '../i18n/locale.ts';
@@ -14,6 +15,8 @@ import { getConfig } from '../lib/auth.ts';
 import { installedItems } from '../lib/modules.ts';
 import { isPaletteShortcut } from '../lib/palette.ts';
 import { proposalName } from '../lib/review.ts';
+import { THEMES } from '../lib/theme.ts';
+import { useThemeSetting } from '../lib/theme-runtime.ts';
 import { signOut } from '../lib/session-actions.ts';
 import { SAFETY_POLL_MS, pollEvery, useInvalidationStream, useStreamLive } from '../lib/stream-hook.ts';
 
@@ -25,7 +28,9 @@ const ALL_NAV = [
   { to: '/o/$slug/journal', label: 'journal', module: 'finance' },
   { to: '/o/$slug/vouchers', label: 'vouchers', module: 'finance' },
   { to: '/o/$slug/vat', label: 'vat', module: 'finance' },
+  { to: '/o/$slug/portal-invoices', label: 'portalList', module: 'finance' },
   { to: '/o/$slug/ledger', label: 'ledger', module: 'finance' },
+  { to: '/o/$slug/bank', label: 'bank', module: 'finance' },
   { to: '/o/$slug/agents', label: 'agents', module: 'kernel' },
   { to: '/o/$slug/tasks', label: 'tasks', module: 'kernel' },
   { to: '/o/$slug/social', label: 'social', module: 'social' },
@@ -51,6 +56,7 @@ export function OrgLayout() {
   const tp = useTranslations('palette');
   const f = useFormat();
   const { locale, setLocale } = useLocaleSetting();
+  const [theme, setTheme] = useThemeSetting();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const paletteKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘ K' : 'Ctrl K';
 
@@ -95,9 +101,16 @@ export function OrgLayout() {
         keywords: 'language ngon ngu',
         run: () => setLocale(l),
       })),
+      ...THEMES.filter((th) => th !== theme).map((th) => ({
+        id: `theme:${th}`,
+        group: 'actions' as const,
+        label: tp('switchTheme', { name: tc(`themes.${th}`) }),
+        keywords: 'theme giao dien sang toi dark light',
+        run: () => setTheme(th),
+      })),
       { id: 'sign-out', group: 'actions' as const, label: tc('signOut'), run: () => void signOut() },
     ],
-    [NAV, pending.data, me.data, slug, locale, t, tp, tc, f, navigate, setLocale],
+    [NAV, pending.data, me.data, slug, locale, theme, t, tp, tc, f, navigate, setLocale, setTheme],
   );
 
   return (
@@ -127,6 +140,10 @@ export function OrgLayout() {
               </NativeSelectOption>
             ))}
           </NativeSelect>
+          {/* A firm adds its next client company from here (issue #324). */}
+          <Link to="/onboarding" className="mt-1 inline-block text-xs text-link">
+            {t('addOrg')}
+          </Link>
         </div>
         <button
           type="button"
@@ -136,7 +153,8 @@ export function OrgLayout() {
           {tp('open')}
           <kbd className="rounded-sm border px-1 font-mono text-[11px]">{paletteKeys}</kbd>
         </button>
-        <nav className="mt-4 flex flex-col gap-0.5">
+        {/* The menu scrolls on a short window, so the account footer below it always stays on screen. */}
+        <nav className="mt-4 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
           {NAV.map((item) => (
             <Link
               key={item.to}
@@ -152,7 +170,7 @@ export function OrgLayout() {
             </Link>
           ))}
         </nav>
-        <div className="mt-auto border-t px-2 pt-3 text-xs text-subtle-foreground">
+        <div className="mt-3 shrink-0 border-t px-2 pt-3 text-xs text-subtle-foreground">
           <SupportLink className="mb-2 block text-sm text-link" />
           <p className="truncate">{me.data?.email}</p>
           <div className="mt-1 flex items-center justify-between gap-2">
@@ -161,6 +179,8 @@ export function OrgLayout() {
             </button>
             <LocaleSwitcher />
           </div>
+          {/* Its own row: next to the language switch both labels were cut off at the sidebar's width. */}
+          <ThemeSwitcher className="mt-2 w-full text-muted-foreground" />
         </div>
       </aside>
       <div className="min-w-0 flex-1">
@@ -176,6 +196,7 @@ export function OrgLayout() {
           </button>
           <SupportLink className="text-xs text-link" />
           <LocaleSwitcher />
+          <ThemeSwitcher />
           <NativeSelect
             size="sm"
             value={NAV.find((n) => window.location.pathname.split('/')[3] === n.to.split('/').pop())?.to ?? '/o/$slug/inbox'}

@@ -58,9 +58,11 @@ export function ClientsPage() {
   const f = useFormat();
   const { locale } = useLocaleSetting();
   const me = useQuery(orpc.me.get.queryOptions());
-  const clients = useQuery(orpc.me.clients.queryOptions());
+  // Each load reads every org on the server, one screen per user at a time (#495): refetched after a minute, not every
+  // ten seconds, and a failed refetch keeps the list already shown.
+  const clients = useQuery({ ...orpc.me.clients.queryOptions(), staleTime: 60_000 });
   const finance = getConfig().modules.includes('finance');
-  const rows = clients.data ? sortClients(clients.data, locale) : [];
+  const rows = clients.data ? sortClients(clients.data.clients, locale) : [];
   const head = [t('columns.company'), t('columns.pending'), t('columns.failed'), t('columns.lastActivity'), ...(finance ? [t('columns.vatDeadline')] : [])];
 
   return (
@@ -81,7 +83,7 @@ export function ClientsPage() {
         <PageHeader title={t('title')} subtitle={t('subtitle')} />
         {clients.isLoading ? (
           <Spinner />
-        ) : clients.error ? (
+        ) : clients.error && !clients.data ? (
           <ErrorText>{errorMessage(clients.error)}</ErrorText>
         ) : rows.length === 0 ? (
           <Empty
@@ -135,6 +137,9 @@ export function ClientsPage() {
                 ))}
               </DataTable>
             </div>
+            {clients.data && clients.data.total > clients.data.clients.length && (
+              <p className="mt-3 text-xs text-muted-foreground">{t('truncated', { shown: f.number(clients.data.clients.length), total: f.number(clients.data.total) })}</p>
+            )}
             {finance && <p className="mt-3 text-xs text-subtle-foreground">{t('deadlineNote')}</p>}
           </>
         )}

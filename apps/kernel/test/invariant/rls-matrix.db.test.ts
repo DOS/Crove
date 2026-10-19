@@ -39,7 +39,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>(['crove_finance.portal_invoice_list', 'crove_finance.portal_invoice_row']);
+const PENDING_TABLES = new Set<string>([]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -359,6 +359,30 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       row: { org_id: o.id, key: `rls.matrix:${randomUUID()}`, module: 'social', target: 'sandbox', step: 'publish', retry_safety: 'reconcile_only' },
     }),
   },
+  // Outbound mail (Email plan §3.2, ADR-0034, #538): one row per mail to one recipient. Tenant roles read and insert,
+  // update only the status columns, never delete; the guard keeps the identity columns fixed, so the update probes
+  // assign the status to itself.
+  'crove_kernel.mail_message': {
+    update: { set: 'status = status' },
+    make: (o) => ({
+      row: {
+        org_id: o.id,
+        stream: 'transactional',
+        source: 'rls.matrix',
+        template_key: 'rls.matrix',
+        to_address: `rls-${tag()}@example.com`,
+        to_hash: hex64(),
+        subject: 'RLS matrix',
+        message_id_header: `<${randomUUID()}@rls.matrix>`,
+      },
+    }),
+  },
+  // The suppression list (Email plan §3.3, #538): keyed on the address hash, never deleted; lifting writes the lift
+  // columns once, so the update probes assign lift_reason to itself on a live row.
+  'crove_kernel.mail_suppression': {
+    update: { set: 'lift_reason = lift_reason' },
+    make: (o) => ({ row: { org_id: o.id, to_hash: hex64(), scope: 'all', reason: 'manual' } }),
+  },
   // Definer-only machinery (Social plan §3.5, S6): one single-use OAuth state per connect attempt, holding the hash of
   // the state parameter and the PKCE verifier; only the start and callback definers touch it.
   'crove_kernel.oauth_state': {
@@ -420,6 +444,13 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   // An org's sub-accounts under the TT133 chart (#319): one row per (org, code), never deleted. The code extends its
   // parent's (here 6422.<tag>); a trigger fills root_code. Tenant roles update only name, active and updated_by (a
   // column grant), so the update probes assign name to itself.
+  // Bank statement lines (#326): append-only, one row per line of an import, on a bank account (112 or an org
+  // sub-account under it). Tenant roles read and insert; nothing updates or deletes a line.
+  'crove_finance.bank_line': {
+    make: (o) => ({
+      row: { org_id: o.id, bank_account: '1121', import_id: randomUUID(), position: 1, value_date: '2026-10-01', description: 'RLS matrix', amount: '100' },
+    }),
+  },
   'crove_finance.org_account': {
     make: (o) => ({ row: { org_id: o.id, code: `6422.${tag().toUpperCase()}`, name: 'RLS matrix sub-account', parent_code: '6422' } }),
   },
@@ -456,6 +487,15 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         row: { org_id: o.id, list_id: list.id, row_no: 1, seller_tax_code: '0100109107', series: 'C26TAA', number: tag(), issue_date: '2026-09-01', status: 'original' },
       };
     },
+  },
+  // The period lock of an org (#329): one row per org, the months locked so far. Tenant roles only read it; the lock
+  // and unlock definers write it. The rows exist for both orgs: the posting guard creates an org's row (nothing locked)
+  // at its first journal entry, and the fixtures above post one per org. Locked in 2020, so a probe row would not
+  // cover any factory's journal entry.
+  'crove_finance.period_lock': {
+    seed: false,
+    noInsertControl: 'one row per org, which the posting guard already created',
+    make: (o) => ({ row: { org_id: o.id, locked_from: '2020-01-01', locked_through: '2020-01-31', updated_by: o.owner } }),
   },
   'crove_finance.vendor_account_rule': {
     make: (o) => {

@@ -1,6 +1,7 @@
 // Invite mail (issue #129) against a real PostgreSQL 17, through the HTTP API: one mail per created invite with the
 // accept link, none when the invite is refused, the same mail whether or not the invitee has an account, a failed or
-// missing mail server never failing the invite, and the raw token in no table and no log line. Set
+// missing mail server never failing the invite, and the raw token in no table and no log line. Each invite mail has a
+// crove_kernel.mail_message row with its outcome, and an address the org stopped gets none (#538). Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -113,6 +114,19 @@ suite('invite mail on PostgreSQL', () => {
 
   const tokenOf = (acceptPath: unknown) => String(acceptPath).split('#')[1] ?? '';
 
+  // The mail_message row of an invite's mail (#538).
+  async function mailRow(inviteId: unknown) {
+    return admin(async (c) => {
+      const { rows } = await c.query<{ status: string; error_code: string | null; to_address: string; message_id_header: string; created_by: string; attempts: number }>(
+        `SELECT status, error_code, to_address, message_id_header, created_by::text, attempts FROM crove_kernel.mail_message
+          WHERE source = 'kernel.member.invite.create' AND source_id = $1`,
+        [inviteId],
+      );
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    });
+  }
+
   // Every row of every table outside the system schemas, as text, that contains `needle`.
   async function tablesContaining(needle: string): Promise<string[]> {
     return admin(async (c) => {
@@ -202,6 +216,16 @@ suite('invite mail on PostgreSQL', () => {
     expect(mail?.text).toContain(`${PUBLIC_URL}/-/invite#${token}`);
     expect(mail?.text).toContain(`Chủ Lan (${owner.email}) mời bạn tham gia tổ chức "${org.name}" trên Crove với vai trò thành viên.`);
     expect(mail?.html).toContain(`href="${PUBLIC_URL}/-/invite#${token}"`);
+    // Its row: sent, by the owner, under the Message-ID the mail carried; never the body.
+    expect(await mailRow(created.body?.inviteId)).toEqual({
+      status: 'sent',
+      error_code: null,
+      to_address: invitee.email,
+      message_id_header: mail?.messageId,
+      created_by: owner.userId,
+      attempts: 1,
+    });
+    expect(mail?.messageId).toMatch(/^<[0-9a-f-]{36}@crove\.invalid>$/);
 
     // The link works for the invitee.
     expect(await rpc('invites/accept', await tokenFor(invitee), { token }, null)).toMatchObject({ status: 200, body: { slug: org.slug } });
@@ -270,8 +294,9 @@ suite('invite mail on PostgreSQL', () => {
     expect(b.status).toBe(200);
     expect(Object.keys(a.body ?? {}).sort()).toEqual(Object.keys(b.body ?? {}).sort());
     expect(sent).toHaveLength(2);
+    // Each mail has its own Message-ID; everything else is the same.
     const normalize = (mail: OutboundMail | undefined, email: string, token: string) =>
-      JSON.stringify(mail).replaceAll(email, '<email>').replaceAll(token, '<token>');
+      JSON.stringify({ ...mail, messageId: '<id>' }).replaceAll(email, '<email>').replaceAll(token, '<token>');
     expect(normalize(sent[0], existing.email, tokenOf(a.body?.acceptPath))).toBe(normalize(sent[1], unknown, tokenOf(b.body?.acceptPath)));
   });
 
@@ -294,6 +319,7 @@ suite('invite mail on PostgreSQL', () => {
     expect(attempts).toBe(3);
     const token = tokenOf(created.body?.acceptPath);
     expect(printed).toContain('[mail] invite mail not sent after 3 attempt(s): ECONNECTION');
+    expect(await mailRow(created.body?.inviteId)).toMatchObject({ status: 'failed', error_code: 'SEND_FAILED' });
 
     // A mailer that throws before returning a promise (a bug) does not fail the invite either.
     const syncThrow: Mailer = {
@@ -309,6 +335,7 @@ suite('invite mail on PostgreSQL', () => {
     const odd = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: `y-${randomUUID().slice(0, 6)}@mail.test`, role: 'member' }, org.slug, appWith(capturing, { PUBLIC_URL: undefined as unknown as string }));
     expect(odd).toMatchObject({ status: 200 });
     expect(printed).toContain('[mail] invite mail not sent: TypeError');
+    expect(await mailRow(odd.body?.inviteId)).toMatchObject({ status: 'failed', error_code: 'SEND_ERROR' });
 
     // The one-time link still works.
     expect(await rpc('invites/accept', await tokenFor(invitee), { token }, null)).toMatchObject({ status: 200 });
@@ -330,11 +357,47 @@ suite('invite mail on PostgreSQL', () => {
     const none = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: 'other@mail.test', role: 'viewer' }, org.slug, appWith());
     expect(none).toMatchObject({ status: 200 });
     expect(sent).toEqual([]);
+    expect(await mailRow(created.body?.inviteId)).toMatchObject({ status: 'failed', error_code: 'MAIL_OFF' });
+    expect(await mailRow(none.body?.inviteId)).toMatchObject({ status: 'failed', error_code: 'MAIL_OFF' });
 
     // The app tells the inviter whether the server mails invites.
     const mailEnabled = async (via: ReturnType<typeof createHttpApp>) => ((await (await via.request('/api/config')).json()) as { mailEnabled: boolean }).mailEnabled;
     expect(await mailEnabled(off)).toBe(false);
     expect(await mailEnabled(appWith(capturing))).toBe(true);
     expect(await mailEnabled(appWith())).toBe(false);
+  });
+
+  it('sends no mail to an address the org stopped, and still makes the invite (#538)', async () => {
+    const owner = await signIn('owner');
+    const org = await orgOf(owner);
+    const ownerMfa = await tokenFor(owner, { mfa: true });
+    const local = `ab${randomUUID().slice(0, 6)}`;
+    const before = await rpc('org/invite', ownerMfa, { email: `${local}@gmail.com`, role: 'member' }, org.slug);
+    expect(sent).toHaveLength(1);
+    sent.length = 0;
+    expect(await runtime.execute('kernel.mail.suppression.add', { email: `${local}@gmail.com`, scope: 'all' }, { actor: { type: 'user', userId: owner.userId, aal: 'aal1', sessionId: owner.session }, orgId: org.orgId })).toEqual({ added: true });
+
+    // A spelling of the same inbox (case, dots, +tag at Gmail) is stopped too.
+    const variant = `${local.slice(0, 1).toUpperCase()}.${local.slice(1)}+crove@GMAIL.com`;
+    const invited = await rpc('org/invite', ownerMfa, { email: variant, role: 'member' }, org.slug);
+    // The answer is the same as for any other address.
+    expect(invited.status).toBe(200);
+    expect(Object.keys(invited.body ?? {}).sort()).toEqual(Object.keys(before.body ?? {}).sort());
+    expect(sent).toEqual([]);
+    expect(printed.filter((line) => line.startsWith('[mail]'))).toEqual([]);
+    expect(await mailRow(invited.body?.inviteId)).toMatchObject({ status: 'suppressed', error_code: null, attempts: 0 });
+    // The invite itself is made, and its link works for the account with that email.
+    expect(tokenOf(invited.body?.acceptPath)).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+    // Lifted, the address gets mail again.
+    await runtime.execute(
+      'kernel.mail.suppression.lift',
+      { email: `${local}@gmail.com`, scope: 'all', reason: 'Đã sửa hộp thư' },
+      { actor: { type: 'user', userId: owner.userId, aal: 'aal1', sessionId: owner.session }, orgId: org.orgId },
+    );
+    const again = await rpc('org/invite', ownerMfa, { email: variant, role: 'member' }, org.slug);
+    expect(again.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(await mailRow(again.body?.inviteId)).toMatchObject({ status: 'sent' });
   });
 });

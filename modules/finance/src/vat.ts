@@ -14,6 +14,7 @@ import {
   form01Indicators,
   reducedRateApplies,
   sideTotals,
+  vatMismatch,
   vatPeriod,
   type FormIndicator,
   type RateAmounts,
@@ -72,6 +73,7 @@ function invoiceView(
   if (breakdown.rates.some((r) => r.rate === '8') && !reducedRateApplies(doc.issueDate)) warnings.push('reduced_rate_outside_period');
   const linesTaxable = breakdown.rates.reduce((acc, r) => acc.plus(money(r.taxable)), money(0));
   if (!linesTaxable.equals(money(doc.subtotal))) warnings.push('lines_mismatch');
+  if (vatMismatch({ vatAmount: doc.vatAmount, lines })) warnings.push('vat_mismatch');
   return {
     id: doc.id,
     issueDate: doc.issueDate,

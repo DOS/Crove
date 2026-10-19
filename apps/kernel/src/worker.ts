@@ -10,7 +10,7 @@ import type { InvoiceReader } from '@crove/agent';
 import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
-import { extractAndPropose, recordExtractionFailure } from '@crove/mod-finance';
+import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
 import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
@@ -84,6 +84,12 @@ interface ExtractJob {
 interface OrgExportJob {
   orgId: string;
 }
+
+interface PortalListJob {
+  orgId: string;
+  listId: string;
+}
+const PORTAL_LIST_RETRY_LIMIT = 3;
 
 interface OutboxRow {
   seq: string;
@@ -184,6 +190,28 @@ export async function runSignOut(revoker: SessionRevoker | null | undefined, tar
   }
 }
 
+// The extraction job's last attempt failed: records a failed run, so the file never stays "being read". `archive` is
+// what the attempt learned about the file (undefined when its lookup failed too). A file whose lookup keeps failing is
+// recorded as a document; should the file turn out to be a ZIP (#432), that refusal (ARCHIVE_NOT_READ) records the
+// failed opening of an archive instead.
+export async function recordLastAttemptFailure(runtime: Runtime, orgId: string, fileId: string, version: number | undefined, archive: ArchiveSource | null | undefined): Promise<void> {
+  const known = archive === undefined ? await archiveSource(runtime, orgId, fileId).catch(() => undefined) : archive;
+  const failArchive = () => recordArchiveFailure(runtime, orgId, fileId, 'Không mở được tệp ZIP sau nhiều lần thử; hãy tải lại tệp');
+  if (known) {
+    await failArchive();
+    return;
+  }
+  try {
+    await recordExtractionFailure(runtime, orgId, fileId, 'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML', version);
+  } catch (error) {
+    if (known === undefined && error instanceof DomainError && error.code === 'ARCHIVE_NOT_READ') {
+      await failArchive();
+      return;
+    }
+    throw error;
+  }
+}
+
 export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>> {
   const boss = new PgBoss({ connectionString: deps.connectionString, schema: JOB_SCHEMA, migrate: false, createSchema: false });
   boss.on('error', (error) => console.error('[pg-boss]', error));
@@ -220,18 +248,22 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       console.error(`[extract] file ${fileId}${version ? ` version ${version}` : ''} attempt ${job.retryCount + 1}`, error);
       if (job.retryCount < EXTRACT_RETRY_LIMIT) throw error;
       // The last attempt records a failed run either way, so the file never stays "being read".
-      if (archive === undefined) archive = await archiveSource(deps.runtime, orgId, fileId).catch(() => null);
-      if (archive) {
-        await recordArchiveFailure(deps.runtime, orgId, fileId, 'Không mở được tệp ZIP sau nhiều lần thử; hãy tải lại tệp');
-        return;
-      }
-      await recordExtractionFailure(
-        deps.runtime,
-        orgId,
-        fileId,
-        'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML',
-        version,
-      );
+      await recordLastAttemptFailure(deps.runtime, orgId, fileId, version, archive);
+    }
+  });
+
+  // The tax portal's purchase list (#465): read in crove-extract and recorded on its list. After the last failed
+  // attempt the list is recorded as failed, so it never stays "being read"; the accountant imports the file again.
+  if (finance) await boss.work<PortalListJob>(QUEUES.portalList, { batchSize: 1, pollingIntervalSeconds: EXTRACT_POLL_SECONDS }, async ([job]) => {
+    if (!job) return;
+    const { orgId, listId } = job.data;
+    try {
+      const done = await importPortalList({ runtime: deps.runtime, store: deps.store, extract: deps.extract }, orgId, listId, job.retryCount);
+      if (done) console.log(`[portal-list] list ${listId}: ${done.rows} row(s)`);
+    } catch (error) {
+      console.error(`[portal-list] list ${listId} attempt ${job.retryCount + 1}`, error);
+      if (job.retryCount < PORTAL_LIST_RETRY_LIMIT) throw error;
+      await recordPortalListFailure(deps.runtime, orgId, listId, 'Không đọc được danh sách sau nhiều lần thử; hãy nhập lại tệp');
     }
   });
 
@@ -421,7 +453,18 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           // A failed send rolls back the claim; singletonKey makes the retry idempotent.
           await Promise.all(
             rows.map((row) => {
-              if (!finance && (row.type === 'kernel.file.ingested' || row.type === 'kernel.file.reextract_requested')) return null;
+              if (!finance && (row.type === 'kernel.file.ingested' || row.type === 'kernel.file.reextract_requested' || row.type === 'finance.portal_list.import_requested')) {
+                return null;
+              }
+              if (row.type === 'finance.portal_list.import_requested') {
+                const listId = String(row.payload.listId);
+                return boss.send(QUEUES.portalList, { orgId: row.org_id, listId } satisfies PortalListJob, {
+                  singletonKey: `${row.org_id}:${listId}`,
+                  retryLimit: PORTAL_LIST_RETRY_LIMIT,
+                  retryDelay: 20,
+                  retryBackoff: true,
+                });
+              }
               if (row.type === 'kernel.file.ingested') {
                 const fileId = String(row.payload.fileId);
                 return boss.send(

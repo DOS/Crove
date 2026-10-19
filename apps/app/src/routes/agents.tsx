@@ -12,10 +12,11 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { agentPermissions, budgetUsage, chartTree, isBudgetAmount, type AgentPermissions, type ChartNode } from '../lib/agents.ts';
-import { errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 
 type Chart = Awaited<ReturnType<typeof orpc.chart.get.call>>;
@@ -29,6 +30,38 @@ const AGENT_STATUSES = ['active', 'paused', 'retired'] as const;
 const SCOPES = ['org', 'module', 'agent'] as const;
 
 const refresh = () => void queryClient.invalidateQueries();
+
+// The refusal of a request this screen sent. The chart, agent, template and budget commands and releasing a stop are
+// R3 (ADR-0029), so they need a second factor verified in the last 5 minutes (P11): on STEP_UP_REQUIRED the step-up
+// prompt asks for one, then `retry` sends the refused request again as it was (a refused request stores no
+// idempotency key, so the same key is fine), and cancel drops it (#345). Any other refusal shows as text. While the
+// prompt shows, the screen locks the fields of the refused request, so what is sent again is what is on screen, and
+// the prompt sits outside any <form>: its own forms and buttons must not submit the screen's form.
+function Refusal<V>({
+  error,
+  variables,
+  retry,
+  reset,
+  action,
+  className,
+}: {
+  error: unknown;
+  variables: V | undefined;
+  retry: (variables: V) => void;
+  reset: () => void;
+  action: string;
+  className: string;
+}) {
+  if (!error) return null;
+  if (isStepUpRequired(error)) {
+    return (
+      <div className="mt-2">
+        <StepUpPrompt action={action} onVerified={() => variables !== undefined && retry(variables)} onCancel={reset} />
+      </div>
+    );
+  }
+  return <p className={className}>{errorMessage(error)}</p>;
+}
 
 // "Stop AI": owners and admins, R1, so it never waits for a second factor. One idempotency key per confirmation.
 function StopAi() {
@@ -116,7 +149,14 @@ function KillSwitches({ switches, agents, perms }: { switches: KillSwitch[]; age
           ))}
         </ul>
         <p className="mt-2 text-xs">{t('releaseHint')}</p>
-        {release.error && <p className="mt-2 text-xs">{errorMessage(release.error)}</p>}
+        <Refusal
+          error={release.error}
+          variables={release.variables}
+          retry={(v) => release.mutate(v)}
+          reset={() => release.reset()}
+          action={t('stepUpRelease')}
+          className="mt-2 text-xs"
+        />
       </AlertDescription>
     </Alert>
   );
@@ -140,7 +180,13 @@ function AssignHolder({ position, members, agents }: { position: Position; membe
     <div className="mt-2">
       <label className="block text-xs">
         <span className="text-subtle-foreground">{t('holder')}</span>
-        <NativeSelect size="sm" className="mt-1 w-full" value={holderValue(position.holder)} disabled={assign.isPending} onChange={(e) => pick(e.target.value)}>
+        <NativeSelect
+          size="sm"
+          className="mt-1 w-full"
+          value={holderValue(position.holder)}
+          disabled={assign.isPending || isStepUpRequired(assign.error)}
+          onChange={(e) => pick(e.target.value)}
+        >
           <NativeSelectOption value="">{t('holderVacant')}</NativeSelectOption>
           {members.map((m) => (
             <NativeSelectOption key={m.userId} value={`user:${m.userId}`}>
@@ -156,7 +202,14 @@ function AssignHolder({ position, members, agents }: { position: Position; membe
             ))}
         </NativeSelect>
       </label>
-      {assign.error && <p className="mt-1 text-xs text-destructive">{errorMessage(assign.error)}</p>}
+      <Refusal
+        error={assign.error}
+        variables={assign.variables}
+        retry={(v) => assign.mutate(v)}
+        reset={() => assign.reset()}
+        action={t('stepUpAssign', { title: position.title })}
+        className="mt-1 text-xs text-destructive"
+      />
     </div>
   );
 }
@@ -209,58 +262,69 @@ function AddPosition({ positions }: { positions: Position[] }) {
   const [reportsTo, setReportsTo] = useState('');
   const [key, setKey] = useState(() => crypto.randomUUID());
   const create = useMutation(orpc.chart.createPosition.mutationOptions({ onSuccess: refresh }));
+  const cleared = {
+    onSuccess: () => {
+      setTitle('');
+      setRoleKey('');
+      setKey(crypto.randomUUID());
+    },
+  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    create.mutate(
-      { title: title.trim(), module, roleKey: roleKey.trim(), reportsTo: reportsTo || null, idempotencyKey: key },
-      {
-        onSuccess: () => {
-          setTitle('');
-          setRoleKey('');
-          setKey(crypto.randomUUID());
-        },
-      },
-    );
+    create.mutate({ title: title.trim(), module, roleKey: roleKey.trim(), reportsTo: reportsTo || null, idempotencyKey: key }, cleared);
   };
+  const locked = isStepUpRequired(create.error);
   return (
-    <form onSubmit={submit} className="mt-4 grid gap-3 rounded-lg border bg-muted/40 p-3 sm:grid-cols-2 lg:grid-cols-5">
-      <label className="block text-xs lg:col-span-2">
-        <span className="text-subtle-foreground">{t('positionTitle')}</span>
-        <Input required maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} className="mt-1" />
-      </label>
-      <label className="block text-xs">
-        <span className="text-subtle-foreground">{t('positionModule')}</span>
-        <NativeSelect className="mt-1 w-full" value={module} onChange={(e) => setModule(e.target.value)}>
-          {modules.map((m) => (
-            <NativeSelectOption key={m} value={m}>
-              {m}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </label>
-      <label className="block text-xs">
-        <span className="text-subtle-foreground">{t('positionRoleKey')}</span>
-        <Input required pattern="[a-z][a-z0-9_.]*" maxLength={100} value={roleKey} onChange={(e) => setRoleKey(e.target.value)} className="mt-1" />
-      </label>
-      <label className="block text-xs">
-        <span className="text-subtle-foreground">{t('reportsTo')}</span>
-        <NativeSelect className="mt-1 w-full" value={reportsTo} onChange={(e) => setReportsTo(e.target.value)}>
-          <NativeSelectOption value="">{t('reportsToOwners')}</NativeSelectOption>
-          {positions.map((p) => (
-            <NativeSelectOption key={p.id} value={p.id}>
-              {p.title}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </label>
-      <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-5">
-        <Button type="submit" disabled={create.isPending}>
-          {create.isPending ? <Spinner /> : null}
-          {t('addPosition')}
-        </Button>
-        {create.error && <span className="text-xs text-destructive">{errorMessage(create.error)}</span>}
-      </div>
-    </form>
+    <>
+      <form onSubmit={submit} className="mt-4 grid gap-3 rounded-lg border bg-muted/40 p-3 sm:grid-cols-2 lg:grid-cols-5">
+        <label className="block text-xs lg:col-span-2">
+          <span className="text-subtle-foreground">{t('positionTitle')}</span>
+          <Input required maxLength={200} value={title} disabled={locked} onChange={(e) => setTitle(e.target.value)} className="mt-1" />
+        </label>
+        <label className="block text-xs">
+          <span className="text-subtle-foreground">{t('positionModule')}</span>
+          <NativeSelect className="mt-1 w-full" value={module} disabled={locked} onChange={(e) => setModule(e.target.value)}>
+            {modules.map((m) => (
+              <NativeSelectOption key={m} value={m}>
+                {m}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </label>
+        <label className="block text-xs">
+          <span className="text-subtle-foreground">{t('positionRoleKey')}</span>
+          <Input required pattern="[a-z][a-z0-9_.]*" maxLength={100} value={roleKey} disabled={locked} onChange={(e) => setRoleKey(e.target.value)} className="mt-1" />
+        </label>
+        <label className="block text-xs">
+          <span className="text-subtle-foreground">{t('reportsTo')}</span>
+          <NativeSelect className="mt-1 w-full" value={reportsTo} disabled={locked} onChange={(e) => setReportsTo(e.target.value)}>
+            <NativeSelectOption value="">{t('reportsToOwners')}</NativeSelectOption>
+            {positions.map((p) => (
+              <NativeSelectOption key={p.id} value={p.id}>
+                {p.title}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </label>
+        <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-5">
+          <Button type="submit" disabled={create.isPending || locked}>
+            {create.isPending ? <Spinner /> : null}
+            {t('addPosition')}
+          </Button>
+          {create.error && !locked && <span className="text-xs text-destructive">{errorMessage(create.error)}</span>}
+        </div>
+      </form>
+      {locked && (
+        <Refusal
+          error={create.error}
+          variables={create.variables}
+          retry={(v) => create.mutate(v, cleared)}
+          reset={() => create.reset()}
+          action={t('stepUpAddPosition', { title: create.variables?.title ?? '' })}
+          className="text-xs text-destructive"
+        />
+      )}
+    </>
   );
 }
 
@@ -275,6 +339,7 @@ function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissions }) {
   const capValid = Number.isInteger(capValue) && capValue >= 1 && capValue <= 10000;
   const changed = status !== agent.status || maxRisk !== agent.maxRisk || capValue !== agent.dailyRunCap;
   const editable = perms.manage && agent.status !== 'retired';
+  const locked = isStepUpRequired(update.error);
   return (
     <TableRow data-testid="agent-row">
       <TableCell className="px-4">
@@ -284,7 +349,7 @@ function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissions }) {
       <TableCell className="px-4 text-xs text-muted-foreground">{agent.templateKey}</TableCell>
       <TableCell className="px-4">
         {editable ? (
-          <NativeSelect size="sm" aria-label={t('colStatus')} value={status} onChange={(e) => setStatus(e.target.value as typeof status)}>
+          <NativeSelect size="sm" aria-label={t('colStatus')} value={status} disabled={locked} onChange={(e) => setStatus(e.target.value as typeof status)}>
             {AGENT_STATUSES.map((s) => (
               <NativeSelectOption key={s} value={s}>
                 {t(`status.${s}`)}
@@ -298,7 +363,7 @@ function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissions }) {
       </TableCell>
       <TableCell className="px-4">
         {editable ? (
-          <NativeSelect size="sm" aria-label={t('colMaxRisk')} value={maxRisk} onChange={(e) => setMaxRisk(e.target.value as typeof maxRisk)}>
+          <NativeSelect size="sm" aria-label={t('colMaxRisk')} value={maxRisk} disabled={locked} onChange={(e) => setMaxRisk(e.target.value as typeof maxRisk)}>
             {RISKS.map((r) => (
               <NativeSelectOption key={r} value={r}>
                 {r}
@@ -311,7 +376,7 @@ function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissions }) {
       </TableCell>
       <TableCell className="px-4">
         {editable ? (
-          <Input aria-label={t('colDailyCap')} type="number" min={1} max={10000} value={cap} onChange={(e) => setCap(e.target.value)} className="w-24" />
+          <Input aria-label={t('colDailyCap')} type="number" min={1} max={10000} value={cap} disabled={locked} onChange={(e) => setCap(e.target.value)} className="w-24" />
         ) : (
           agent.dailyRunCap
         )}
@@ -320,7 +385,7 @@ function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissions }) {
         {editable && (
           <Button
             size="sm"
-            disabled={!changed || !capValid || update.isPending}
+            disabled={!changed || !capValid || update.isPending || locked}
             onClick={() =>
               update.mutate({
                 id: agent.id,
@@ -334,7 +399,14 @@ function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissions }) {
             {t('save')}
           </Button>
         )}
-        {update.error && <p className="mt-1 text-xs text-destructive">{errorMessage(update.error)}</p>}
+        <Refusal
+          error={update.error}
+          variables={update.variables}
+          retry={(v) => update.mutate(v)}
+          reset={() => update.reset()}
+          action={t('stepUpUpdateAgent', { name: agent.displayName })}
+          className="mt-1 text-xs text-destructive"
+        />
       </TableCell>
     </TableRow>
   );
@@ -385,10 +457,20 @@ function Templates({ perms }: { perms: AgentPermissions }) {
         </ul>
       )}
       {install.data && <p className="mt-2 text-sm text-success">{t('installed')}</p>}
-      {install.error && (
+      {install.error && !isStepUpRequired(install.error) && (
         <div className="mt-2">
           <ErrorText>{errorMessage(install.error)}</ErrorText>
         </div>
+      )}
+      {isStepUpRequired(install.error) && (
+        <Refusal
+          error={install.error}
+          variables={install.variables}
+          retry={(v) => install.mutate(v)}
+          reset={() => install.reset()}
+          action={t('stepUpInstall', { title: templates.data?.find((tpl) => tpl.key === install.variables?.templateKey)?.title ?? install.variables?.templateKey ?? '' })}
+          className="text-sm text-destructive"
+        />
       )}
     </section>
   );
@@ -413,59 +495,63 @@ function BudgetForm({ agents }: { agents: Agent[] }) {
     setScope(next);
     setTarget(next === 'org' ? '*' : next === 'module' ? (modules[0] ?? '') : (agents[0]?.id ?? ''));
   };
+  const locked = isStepUpRequired(set.error);
   return (
-    <form
-      className="mt-4 grid gap-3 rounded-lg border bg-muted/40 p-3 sm:grid-cols-2 lg:grid-cols-5"
-      onSubmit={(event) => {
-        event.preventDefault();
-        setTouched(true);
-        if (!amountOk || !warnOk || !target) return;
-        set.mutate({ scope, target, monthlyLimit: limit.trim(), warnPercent: warn, hardStop, idempotencyKey: crypto.randomUUID() });
-      }}
-    >
-      <label className="block text-xs">
-        <span className="text-subtle-foreground">{t('budgetScope')}</span>
-        <NativeSelect className="mt-1 w-full" value={scope} onChange={(e) => pickScope(e.target.value as (typeof SCOPES)[number])}>
-          {SCOPES.map((s) => (
-            <NativeSelectOption key={s} value={s}>
-              {t(`scope.${s}`)}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </label>
-      <label className="block text-xs">
-        <span className="text-subtle-foreground">{t('budgetTarget')}</span>
-        <NativeSelect className="mt-1 w-full" value={target} onChange={(e) => setTarget(e.target.value)} disabled={scope === 'org'}>
-          {targets.map((o) => (
-            <NativeSelectOption key={o.value} value={o.value}>
-              {o.label}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </label>
-      <label className="block text-xs">
-        <span className="text-subtle-foreground">{t('budgetLimit')}</span>
-        <Input inputMode="decimal" required value={limit} onChange={(e) => setLimit(e.target.value)} className="mt-1" aria-invalid={touched && !amountOk} />
-      </label>
-      <label className="block text-xs">
-        <span className="text-subtle-foreground">{t('warnPercent')}</span>
-        <Input type="number" min={1} max={100} value={warnPercent} onChange={(e) => setWarnPercent(e.target.value)} className="mt-1" />
-      </label>
-      <label className="flex items-center gap-2 self-end pb-2 text-xs text-muted-foreground">
-        <Checkbox checked={hardStop} onCheckedChange={(checked) => setHardStop(checked)} />
-        {t('hardStop')}
-      </label>
-      <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-5">
-        <Button type="submit" disabled={set.isPending}>
-          {set.isPending ? <Spinner /> : null}
-          {t('setBudget')}
-        </Button>
-        {touched && !amountOk && <span className="text-xs text-destructive">{t('budgetAmountInvalid')}</span>}
-        {touched && !warnOk && <span className="text-xs text-destructive">{t('warnPercentInvalid')}</span>}
-        {touched && !target && <span className="text-xs text-destructive">{t('budgetTargetMissing')}</span>}
-        {set.error && <span className="text-xs text-destructive">{errorMessage(set.error)}</span>}
-      </div>
-    </form>
+    <>
+      <form
+        className="mt-4 grid gap-3 rounded-lg border bg-muted/40 p-3 sm:grid-cols-2 lg:grid-cols-5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setTouched(true);
+          if (!amountOk || !warnOk || !target) return;
+          set.mutate({ scope, target, monthlyLimit: limit.trim(), warnPercent: warn, hardStop, idempotencyKey: crypto.randomUUID() });
+        }}
+      >
+        <label className="block text-xs">
+          <span className="text-subtle-foreground">{t('budgetScope')}</span>
+          <NativeSelect className="mt-1 w-full" value={scope} disabled={locked} onChange={(e) => pickScope(e.target.value as (typeof SCOPES)[number])}>
+            {SCOPES.map((s) => (
+              <NativeSelectOption key={s} value={s}>
+                {t(`scope.${s}`)}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </label>
+        <label className="block text-xs">
+          <span className="text-subtle-foreground">{t('budgetTarget')}</span>
+          <NativeSelect className="mt-1 w-full" value={target} onChange={(e) => setTarget(e.target.value)} disabled={scope === 'org' || locked}>
+            {targets.map((o) => (
+              <NativeSelectOption key={o.value} value={o.value}>
+                {o.label}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </label>
+        <label className="block text-xs">
+          <span className="text-subtle-foreground">{t('budgetLimit')}</span>
+          <Input inputMode="decimal" required value={limit} disabled={locked} onChange={(e) => setLimit(e.target.value)} className="mt-1" aria-invalid={touched && !amountOk} />
+        </label>
+        <label className="block text-xs">
+          <span className="text-subtle-foreground">{t('warnPercent')}</span>
+          <Input type="number" min={1} max={100} value={warnPercent} disabled={locked} onChange={(e) => setWarnPercent(e.target.value)} className="mt-1" />
+        </label>
+        <label className="flex items-center gap-2 self-end pb-2 text-xs text-muted-foreground">
+          <Checkbox checked={hardStop} disabled={locked} onCheckedChange={(checked) => setHardStop(checked)} />
+          {t('hardStop')}
+        </label>
+        <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-5">
+          <Button type="submit" disabled={set.isPending || locked}>
+            {set.isPending ? <Spinner /> : null}
+            {t('setBudget')}
+          </Button>
+          {touched && !amountOk && <span className="text-xs text-destructive">{t('budgetAmountInvalid')}</span>}
+          {touched && !warnOk && <span className="text-xs text-destructive">{t('warnPercentInvalid')}</span>}
+          {touched && !target && <span className="text-xs text-destructive">{t('budgetTargetMissing')}</span>}
+          {set.error && !locked && <span className="text-xs text-destructive">{errorMessage(set.error)}</span>}
+        </div>
+      </form>
+      {locked && <Refusal error={set.error} variables={set.variables} retry={(v) => set.mutate(v)} reset={() => set.reset()} action={t('stepUpBudget')} className="text-xs text-destructive" />}
+    </>
   );
 }
 

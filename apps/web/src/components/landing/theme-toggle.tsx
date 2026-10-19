@@ -5,22 +5,17 @@ import { useEffect, useState } from 'react';
 
 type Theme = 'light' | 'dark';
 
+// Light unless the visitor picked dark; the system setting is not followed (light is the default look).
 function currentTheme(): Theme {
-  const picked = document.documentElement.getAttribute('data-theme');
-  if (picked === 'light' || picked === 'dark') return picked;
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
 }
 
-// Flips between light and dark and remembers the choice; until the visitor picks, the system setting applies.
+// Flips between light and dark and remembers the choice; until the visitor picks, the page is light.
 export function ThemeToggle({ toLight, toDark }: { toLight: string; toDark: string }) {
   const [theme, setTheme] = useState<Theme | null>(null);
 
   useEffect(() => {
     setTheme(currentTheme());
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const follow = () => setTheme(currentTheme());
-    media.addEventListener('change', follow);
-    return () => media.removeEventListener('change', follow);
   }, []);
 
   const flip = () => {

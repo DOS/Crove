@@ -1,0 +1,555 @@
+// The tax portal's purchase-invoice list (issue #465). The accountant exports the month's purchase invoices from
+// hoadondientu.gdt.gov.vn ("Tra cứu hóa đơn", "Hóa đơn điện tử mua vào", "Xuất Excel") and uploads the .xlsx here,
+// for one client (the org) and one VAT period:
+// - finance.portal_list.import (owners, admins, members; R1) files an uploaded spreadsheet as a pending list of the
+//   period and asks the worker to read it.
+// - The worker reads the file in crove-extract (kind portal_invoice_list, External-tenant gate T12: nothing is parsed
+//   in the API or the worker), checks the sandbox's answer again (importPortalList below) and records the outcome
+//   with finance.portal_list.record (system only): the rows, or why the list could not be used.
+// - finance.portal_list.remove (owners, admins, members; R1) takes a list out of its period (a wrong file, an older
+//   export); it is kept, never deleted.
+// - finance.portal_list.reconcile (every role) compares the rows of the period's lists with the purchase documents
+//   Crove recorded and the purchase proposals waiting in the Inbox (domain/portal-reconcile.ts).
+// Only purchases: sales invoices (#313) are the org's own and are not on this list.
+import { sql } from 'kysely';
+import { z } from 'zod';
+import {
+  EXTRACT_LIMITS,
+  EXTRACT_LIMIT_RETRIES,
+  type ExtractClient,
+  type ExtractFailure,
+  type ExtractedPortalList,
+} from '@crove/extract-contract';
+import {
+  MAX_IMPORT_BYTES,
+  MAX_PORTAL_LISTS_PER_PERIOD,
+  PORTAL_LIST_SKIP_REASONS,
+  XLSX_CONTENT_TYPE,
+  zId,
+  zVatPeriod,
+  type PortalListView,
+  type PortalReconciliation,
+} from '@crove/kernel-contract';
+import type { MemberRole } from '@crove/db';
+import { DomainError, defineCommand, defineQuery, readVerified, type BlobStore, type QueryContext, type Runtime } from '@crove/kernel-runtime';
+import { parseTaxCode, toMoney, money } from '@crove/l10n-vn';
+import { portalStatus } from './domain/portal-status.ts';
+import { reconcilePortalList, type CroveInvoice, type PortalRow } from './domain/portal-reconcile.ts';
+import { vatPeriod } from './domain/vat-return.ts';
+
+const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
+const EDITORS: readonly MemberRole[] = ['owner', 'admin', 'member'];
+export const PORTAL_LIST_ACTOR = { type: 'system' as const, component: 'finance.portal_list' };
+// Purchase documents and proposals read for one reconciliation; more is refused rather than cut short.
+export const PORTAL_RECONCILE_LIMIT = 20_000;
+const ROW_INSERT_BATCH = 500;
+const IMPORT_TYPES = [XLSX_CONTENT_TYPE, 'application/zip'];
+
+export const portalListImport = defineCommand({
+  name: 'finance.portal_list.import',
+  input: z.object({ period: zVatPeriod, fileId: zId }),
+  risk: 'R1',
+  access: EDITORS,
+  handler: async (ctx, input) => {
+    vatPeriod(input.period);
+    const file = await ctx.trx
+      .selectFrom('crove_kernel.file')
+      .select(['id', 'filename', 'content_type', 'size_bytes'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.fileId)
+      .executeTakeFirst();
+    if (!file) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy tệp đã tải lên');
+    if (!IMPORT_TYPES.includes(file.content_type)) throw new DomainError('UNSUPPORTED_TYPE', 415, 'Danh sách hóa đơn phải là tệp Excel .xlsx');
+    if (Number(file.size_bytes) > MAX_IMPORT_BYTES) throw new DomainError('TOO_LARGE', 413, 'Tệp danh sách vượt quá 10 MB');
+    // A purchase list is told apart from another company's or the sales list by the org's tax code (checkPortalList).
+    const tenant = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
+    if (!tenant?.tax_code) {
+      throw new DomainError('TAX_CODE_REQUIRED', 409, 'Hãy nhập mã số thuế của công ty trong Cài đặt trước khi nhập danh sách hóa đơn từ cổng thuế');
+    }
+    // Serializes imports of one period, so the count below and the unique index agree.
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`finance.portal_list:${ctx.orgId}:${input.period}`}, 0))`.execute(ctx.trx);
+    const active = await ctx.trx
+      .selectFrom('crove_finance.portal_invoice_list')
+      .select(['id', 'file_id'])
+      .where('org_id', '=', ctx.orgId)
+      .where('period', '=', input.period)
+      .where('removed_at', 'is', null)
+      .execute();
+    if (active.some((l) => l.file_id === input.fileId)) {
+      throw new DomainError('PORTAL_LIST_EXISTS', 409, `Tệp này đã được nhập cho kỳ ${input.period}`);
+    }
+    if (active.length >= MAX_PORTAL_LISTS_PER_PERIOD) {
+      throw new DomainError('PORTAL_LIST_LIMIT', 409, `Mỗi kỳ nhập tối đa ${MAX_PORTAL_LISTS_PER_PERIOD} danh sách; hãy gỡ bớt danh sách cũ`);
+    }
+    const list = await ctx.trx
+      .insertInto('crove_finance.portal_invoice_list')
+      .values({
+        org_id: ctx.orgId,
+        period: input.period,
+        file_id: file.id,
+        filename: file.filename.slice(0, 255),
+        created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    ctx.audit({ period: input.period, file_id: file.id });
+    await ctx.activity('finance.portal_invoice_list', list.id, 'portal_list.imported', `Nhập danh sách hóa đơn mua vào từ cổng thuế, kỳ ${input.period}`);
+    await ctx.emit('finance.portal_list.import_requested', { listId: list.id });
+    return { listId: list.id };
+  },
+});
+
+export const portalListRemove = defineCommand({
+  name: 'finance.portal_list.remove',
+  input: z.object({ listId: zId }),
+  risk: 'R1',
+  access: EDITORS,
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới gỡ được danh sách');
+    const removed = await ctx.trx
+      .updateTable('crove_finance.portal_invoice_list')
+      .set({ removed_at: sql<Date>`pg_catalog.now()`, removed_by: ctx.actor.userId })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.listId)
+      .where('removed_at', 'is', null)
+      .returning(['id', 'period'])
+      .executeTakeFirst();
+    if (!removed) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy danh sách, hoặc danh sách đã được gỡ');
+    ctx.audit({ period: removed.period });
+    await ctx.activity('finance.portal_invoice_list', removed.id, 'portal_list.removed', `Gỡ danh sách hóa đơn từ cổng thuế khỏi kỳ ${removed.period}`);
+    return { listId: removed.id };
+  },
+});
+
+// The list a worker job reads, while it is still pending.
+export const portalListSource = defineQuery({
+  name: 'finance.portal_list.source',
+  input: z.object({ listId: zId }),
+  access: 'system',
+  handler: async (ctx, input) => {
+    const row = await ctx.trx
+      .selectFrom('crove_finance.portal_invoice_list as l')
+      .innerJoin('crove_kernel.file as f', (join) => join.onRef('f.org_id', '=', 'l.org_id').onRef('f.id', '=', 'l.file_id'))
+      .innerJoin('crove_kernel.tenant as t', 't.org_id', 'l.org_id')
+      .select(['l.id', 'l.status', 'l.period', 'f.storage_key', 'f.generation', 'f.sha256', 't.tax_code'])
+      .where('l.org_id', '=', ctx.orgId)
+      .where('l.id', '=', input.listId)
+      .executeTakeFirst();
+    if (!row) return null;
+    return {
+      id: row.id,
+      pending: row.status === 'pending',
+      period: row.period,
+      orgTaxCode: row.tax_code,
+      file: { key: row.storage_key, generation: row.generation, sha256: row.sha256 },
+    };
+  },
+});
+
+const zRecordRow = z.object({
+  rowNo: z.number().int().min(1).max(1_048_576),
+  sellerTaxCode: z.string().regex(/^[0-9]{10}(-[0-9]{3})?$|^[0-9]{12}$/),
+  sellerName: z.string().max(500),
+  template: z.string().regex(/^[0-9A-Z]{1,11}$/).nullable(),
+  series: z.string().min(1).max(20),
+  number: z.string().min(1).max(20),
+  issueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  subtotal: z.string().nullable(),
+  vatAmount: z.string().nullable(),
+  total: z.string().nullable(),
+  status: z.enum(['original', 'replacement', 'adjustment', 'replaced', 'adjusted', 'cancelled', 'unknown']),
+  statusLabel: z.string().max(200).nullable(),
+  checkResult: z.string().max(200).nullable(),
+});
+
+export const portalListRecord = defineCommand({
+  name: 'finance.portal_list.record',
+  input: z.discriminatedUnion('status', [
+    z.object({
+      listId: zId,
+      status: z.literal('done'),
+      listFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+      listTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+      buyerTaxCode: z.string().nullable(),
+      rows: z.array(zRecordRow).max(EXTRACT_LIMITS.maxPortalListRows),
+      skippedCount: z.number().int().min(0).max(1_048_576),
+      skipped: z.array(z.object({ rowNo: z.number().int().min(1).max(1_048_576), reason: z.enum(PORTAL_LIST_SKIP_REASONS) })).max(EXTRACT_LIMITS.maxPortalListSkipped),
+    }),
+    z.object({ listId: zId, status: z.literal('failed'), error: z.string().min(1).max(2000) }),
+  ]),
+  risk: 'R1',
+  access: 'system',
+  handler: async (ctx, input) => {
+    const list = await ctx.trx
+      .selectFrom('crove_finance.portal_invoice_list')
+      .select(['id', 'status', 'period'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.listId)
+      .forUpdate()
+      .executeTakeFirst();
+    // A list already recorded (a retried job) or gone is left as it is.
+    if (!list || list.status !== 'pending') return { listId: input.listId, recorded: false };
+    if (input.status === 'done' && input.skippedCount < input.skipped.length) {
+      throw new DomainError('INVALID', 400, 'Số dòng bỏ qua ít hơn số dòng được liệt kê');
+    }
+    if (input.status === 'failed') {
+      await ctx.trx
+        .updateTable('crove_finance.portal_invoice_list')
+        .set({ status: 'failed', error: input.error, recorded_at: sql<Date>`pg_catalog.now()` })
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', list.id)
+        .execute();
+      ctx.audit({ status: 'failed' });
+      await ctx.activity('finance.portal_invoice_list', list.id, 'portal_list.failed', `Không đọc được danh sách hóa đơn kỳ ${list.period}`);
+      return { listId: list.id, recorded: true };
+    }
+    for (let i = 0; i < input.rows.length; i += ROW_INSERT_BATCH) {
+      await ctx.trx
+        .insertInto('crove_finance.portal_invoice_row')
+        .values(
+          input.rows.slice(i, i + ROW_INSERT_BATCH).map((r) => ({
+            org_id: ctx.orgId,
+            list_id: list.id,
+            row_no: r.rowNo,
+            seller_tax_code: r.sellerTaxCode,
+            seller_name: r.sellerName,
+            template: r.template,
+            series: r.series,
+            number: r.number,
+            issue_date: r.issueDate,
+            currency: r.currency,
+            subtotal: r.subtotal,
+            vat_amount: r.vatAmount,
+            total: r.total,
+            status: r.status,
+            status_label: r.statusLabel,
+            check_result: r.checkResult,
+          })),
+        )
+        .execute();
+    }
+    await ctx.trx
+      .updateTable('crove_finance.portal_invoice_list')
+      .set({
+        status: 'done',
+        row_count: input.rows.length,
+        list_from: input.listFrom,
+        list_to: input.listTo,
+        buyer_tax_code: input.buyerTaxCode,
+        skipped_count: input.skippedCount,
+        skipped: input.skipped.length > 0 ? JSON.stringify(input.skipped) : null,
+        recorded_at: sql<Date>`pg_catalog.now()`,
+      })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', list.id)
+      .execute();
+    ctx.audit({ status: 'done', rows: input.rows.length, skipped: input.skippedCount });
+    await ctx.activity('finance.portal_invoice_list', list.id, 'portal_list.read', `Đọc ${input.rows.length} hóa đơn từ danh sách của cổng thuế, kỳ ${list.period}`);
+    return { listId: list.id, recorded: true };
+  },
+});
+
+async function periodLists(ctx: QueryContext, period: string): Promise<PortalListView[]> {
+  const lists = await ctx.trx
+    .selectFrom('crove_finance.portal_invoice_list')
+    .select(['id', 'period', 'file_id', 'filename', 'status', 'error', 'row_count', 'list_from', 'list_to', 'skipped_count', 'skipped', 'created_at'])
+    .where('org_id', '=', ctx.orgId)
+    .where('period', '=', period)
+    .where('removed_at', 'is', null)
+    .orderBy('created_at')
+    .orderBy('id')
+    .execute();
+  return lists.map((l) => ({
+    id: l.id,
+    period: l.period,
+    fileId: l.file_id,
+    filename: l.filename,
+    status: l.status,
+    error: l.error,
+    rowCount: l.row_count,
+    listFrom: l.list_from,
+    listTo: l.list_to,
+    skippedCount: l.skipped_count,
+    skipped: skippedRows(l.skipped),
+    createdAt: new Date(l.created_at).toISOString(),
+  }));
+}
+
+// The skipped rows as stored (jsonb written by finance.portal_list.record from a checked list), read defensively.
+function skippedRows(value: unknown): PortalListView['skipped'] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((v: unknown) => {
+    const r = v as { rowNo?: unknown; reason?: unknown } | null;
+    return r && typeof r.rowNo === 'number' && typeof r.reason === 'string' && (PORTAL_LIST_SKIP_REASONS as readonly string[]).includes(r.reason)
+      ? [{ rowNo: r.rowNo, reason: r.reason as PortalListView['skipped'][number]['reason'] }]
+      : [];
+  });
+}
+
+function addDays(date: string, days: number): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+// Crove's purchases dated in [from, to]: the recorded documents that are not voided, and the purchase proposals waiting
+// in the Inbox.
+async function croveInvoices(ctx: QueryContext, from: string, to: string): Promise<CroveInvoice[]> {
+  const documents = await ctx.trx
+    .selectFrom('crove_finance.purchase_document as d')
+    .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
+    .leftJoin('crove_kernel.proposal as q', (join) => join.onRef('q.org_id', '=', 'd.org_id').onRef('q.id', '=', 'd.proposal_id'))
+    .select([
+      'd.id',
+      'p.tax_code',
+      'p.name',
+      'd.invoice_series',
+      'd.invoice_number',
+      'd.invoice_date',
+      'd.currency',
+      'd.vat_amount',
+      'd.total',
+      'd.source_file_id',
+      sql<string | null>`q.payload #>> '{invoice,template}'`.as('template'),
+    ])
+    .where('d.org_id', '=', ctx.orgId)
+    .where('d.direction', '=', 'purchase')
+    .where('d.invoice_date', '>=', from)
+    .where('d.invoice_date', '<=', to)
+    .where(({ not, exists, selectFrom }) =>
+      not(exists(selectFrom('crove_finance.purchase_document_void as v').select('v.document_id').whereRef('v.org_id', '=', 'd.org_id').whereRef('v.document_id', '=', 'd.id'))),
+    )
+    .limit(PORTAL_RECONCILE_LIMIT + 1)
+    .execute();
+  const proposals = await ctx.trx
+    .selectFrom('crove_kernel.proposal')
+    .select(['id', 'payload', 'source_file_id'])
+    .where('org_id', '=', ctx.orgId)
+    .where('kind', '=', 'finance.purchase')
+    .where('status', '=', 'pending')
+    .where(sql`coalesce(payload ->> 'direction', 'purchase')`, '=', 'purchase')
+    .where(sql`payload #>> '{invoice,issueDate}'`, '>=', from)
+    .where(sql`payload #>> '{invoice,issueDate}'`, '<=', to)
+    .limit(PORTAL_RECONCILE_LIMIT + 1)
+    .execute();
+  if (documents.length + proposals.length > PORTAL_RECONCILE_LIMIT) {
+    throw new DomainError('PERIOD_TOO_LARGE', 422, `Kỳ này có hơn ${PORTAL_RECONCILE_LIMIT} hóa đơn mua vào; Crove chưa đối chiếu được khối lượng này`);
+  }
+  const out: CroveInvoice[] = documents.map((d) => ({
+    kind: 'document',
+    id: d.id,
+    sellerTaxCode: d.tax_code,
+    sellerName: d.name,
+    template: d.template,
+    series: d.invoice_series,
+    number: d.invoice_number,
+    issueDate: d.invoice_date,
+    currency: d.currency,
+    vatAmount: d.vat_amount,
+    total: d.total,
+    sourceFileId: d.source_file_id,
+  }));
+  for (const p of proposals) {
+    // A pending proposal's payload passed zPurchaseProposal when it was stored; it is read defensively all the same.
+    const payload = p.payload as { seller?: { taxCode?: unknown; name?: unknown }; invoice?: Record<string, unknown> } | null;
+    const invoice = payload?.invoice;
+    if (!invoice || typeof invoice.series !== 'string' || typeof invoice.number !== 'string' || typeof invoice.issueDate !== 'string') continue;
+    const taxCode = typeof payload?.seller?.taxCode === 'string' ? (parseTaxCode(payload.seller.taxCode)?.normalized ?? null) : null;
+    out.push({
+      kind: 'proposal',
+      id: p.id,
+      sellerTaxCode: taxCode,
+      sellerName: typeof payload?.seller?.name === 'string' ? payload.seller.name : '',
+      template: typeof invoice.template === 'string' ? invoice.template : null,
+      series: invoice.series,
+      number: invoice.number,
+      issueDate: invoice.issueDate,
+      currency: typeof invoice.currency === 'string' ? invoice.currency.toUpperCase() : 'VND',
+      vatAmount: typeof invoice.vatTotal === 'string' ? invoice.vatTotal : '0',
+      total: typeof invoice.total === 'string' ? invoice.total : '0',
+      sourceFileId: p.source_file_id,
+    });
+  }
+  return out;
+}
+
+export const portalListReconcile = defineQuery({
+  name: 'finance.portal_list.reconcile',
+  input: z.object({ period: zVatPeriod }),
+  access: ALL,
+  handler: async (ctx, input): Promise<PortalReconciliation> => {
+    const period = vatPeriod(input.period);
+    const lists = await periodLists(ctx, input.period);
+    const done = lists.filter((l) => l.status === 'done').map((l) => l.id);
+    const rows: PortalRow[] =
+      done.length === 0
+        ? []
+        : (
+            await ctx.trx
+              .selectFrom('crove_finance.portal_invoice_row')
+              .select(['list_id', 'row_no', 'seller_tax_code', 'seller_name', 'template', 'series', 'number', 'issue_date', 'currency', 'subtotal', 'vat_amount', 'total', 'status', 'status_label'])
+              .where('org_id', '=', ctx.orgId)
+              .where('list_id', 'in', done)
+              .orderBy('list_id')
+              .orderBy('row_no')
+              .execute()
+          ).map((r) => ({
+            listId: r.list_id,
+            rowNo: r.row_no,
+            sellerTaxCode: r.seller_tax_code,
+            sellerName: r.seller_name,
+            template: r.template,
+            series: r.series,
+            number: r.number,
+            issueDate: r.issue_date,
+            currency: r.currency,
+            subtotal: r.subtotal,
+            vatAmount: r.vat_amount,
+            total: r.total,
+            status: r.status,
+            statusLabel: r.status_label,
+          }));
+    // Rows dated outside the period are still matched, so Crove's side is read for every date the rows have, and a
+    // month around it (an invoice booked on a slightly different date than the portal shows still counts).
+    const dates = rows.map((r) => r.issueDate).sort();
+    const from = addDays([period.from, dates[0] ?? period.from].sort()[0] ?? period.from, -31);
+    const to = addDays([period.to, dates.at(-1) ?? period.to].sort().at(-1) ?? period.to, 31);
+    // Without a list there is nothing to compare: Crove's invoices are not all reported as "not on the portal".
+    const reconciliation =
+      done.length === 0 ? reconcilePortalList([], [], period) : reconcilePortalList(rows, await croveInvoices(ctx, from, to), period);
+    return { period, lists, ...reconciliation };
+  },
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Worker side
+
+export interface PortalListDeps {
+  runtime: Runtime;
+  store: BlobStore;
+  extract: ExtractClient;
+}
+
+interface ListSource {
+  id: string;
+  pending: boolean;
+  period: string;
+  orgTaxCode: string | null;
+  file: { key: string; generation: string | null; sha256: string };
+}
+
+function unreadable(result: ExtractFailure): string {
+  switch (result.code) {
+    case 'too_large':
+      return 'Tệp danh sách quá lớn (tối đa 10 MB)';
+    case 'timeout':
+      return 'Đọc tệp quá lâu nên đã dừng; hãy chia danh sách thành nhiều tệp nhỏ hơn';
+    case 'memory':
+      return 'Tệp quá phức tạp để đọc; hãy chia danh sách thành nhiều tệp nhỏ hơn';
+    default:
+      // The sandbox says what is wrong with the file; the text stays plain data wherever it is shown.
+      return result.message || 'Không đọc được danh sách hóa đơn';
+  }
+}
+
+export function recordPortalListFailure(runtime: Runtime, orgId: string, listId: string, error: string) {
+  return runtime.execute('finance.portal_list.record', { listId, status: 'failed', error: error.slice(0, 2000) }, { actor: PORTAL_LIST_ACTOR, orgId });
+}
+
+// Checks the sandbox's answer again (it is untrusted) and turns it into the rows recorded for the list, or a reason the
+// list cannot be used. Pure, so the rules are tested without a database. The portal's list names both parties on each
+// row and has the same columns for purchases and sales, so the parties decide: a purchase list is one where the org is
+// the buyer. Rows where the org is the seller (its own sales) or someone else is the buyer are not purchases of the
+// org and are dropped; a list with none left is refused with the reason.
+export function checkPortalList(
+  list: ExtractedPortalList,
+  orgTaxCode: string | null,
+): { ok: true; rows: z.infer<typeof zRecordRow>[] } | { ok: false; error: string } {
+  const own = parseTaxCode(orgTaxCode)?.normalized ?? null;
+  // Without the org's tax code any company's list, or the sales list, would pass as the org's purchases.
+  if (!own) return { ok: false, error: 'Hãy nhập mã số thuế của công ty trong Cài đặt rồi nhập lại danh sách' };
+  const preamble = parseTaxCode(list.buyerTaxCode)?.normalized ?? null;
+  const otherCompany = (code: string) =>
+    `Danh sách này của mã số thuế ${code}, không phải của công ty này (${own}); hãy kiểm tra đã chọn đúng khách hàng chưa`;
+  if (own && preamble && own !== preamble) return { ok: false, error: otherCompany(preamble) };
+  if (list.rows.length === 0 && list.skippedCount > 0) {
+    return { ok: false, error: `Không đọc được hóa đơn nào trong danh sách (${list.skippedCount} dòng lỗi, ví dụ dòng ${list.skipped[0]?.rowNo ?? '?'}); hãy kiểm tra tệp` };
+  }
+  if (list.rows.length === 0) {
+    return { ok: false, error: 'Danh sách không có hóa đơn nào; hãy kiểm tra đã tra cứu đúng kỳ ở mục "Hóa đơn điện tử mua vào"' };
+  }
+  const rows: z.infer<typeof zRecordRow>[] = [];
+  let ownSales = 0;
+  const foreignBuyers = new Map<string, number>();
+  for (const r of list.rows) {
+    const seller = parseTaxCode(r.sellerTaxCode)?.normalized;
+    if (!seller) return { ok: false, error: `Dòng ${r.rowNo}: mã số thuế người bán không hợp lệ` };
+    const buyer = parseTaxCode(r.buyerTaxCode)?.normalized ?? null;
+    if (own && seller === own) {
+      ownSales += 1;
+      continue;
+    }
+    if (own && buyer && buyer !== own) {
+      foreignBuyers.set(buyer, (foreignBuyers.get(buyer) ?? 0) + 1);
+      continue;
+    }
+    const amount = (value: string | null) => (value === null ? null : toMoney(money(value)));
+    rows.push({
+      rowNo: r.rowNo,
+      sellerName: r.sellerName,
+      template: r.template,
+      series: r.series,
+      number: r.number,
+      issueDate: r.issueDate,
+      currency: r.currency,
+      statusLabel: r.statusLabel,
+      checkResult: r.checkResult,
+      sellerTaxCode: seller, subtotal: amount(r.subtotal), vatAmount: amount(r.vatAmount), total: amount(r.total),
+      status: portalStatus(r.statusLabel),
+    });
+  }
+  if (rows.length === 0) {
+    const foreignRows = [...foreignBuyers.values()].reduce((sum, n) => sum + n, 0);
+    if (ownSales > 0 && ownSales >= foreignRows) {
+      return { ok: false, error: 'Đây là danh sách hóa đơn bán ra; hãy tra cứu ở mục "Hóa đơn điện tử mua vào" rồi xuất lại' };
+    }
+    const [mostCommon] = [...foreignBuyers].sort((a, b) => b[1] - a[1]);
+    if (mostCommon) return { ok: false, error: otherCompany(mostCommon[0]) };
+  }
+  return { ok: true, rows };
+}
+
+// Reads one imported list and records the outcome. `attempt` is the job's retry count. A sandbox that cannot answer
+// throws (ExtractServiceError) and the job is retried; a file the sandbox refuses is recorded as failed. A timeout or
+// memory answer may come from load, so it is retried EXTRACT_LIMIT_RETRIES times first.
+export async function importPortalList(deps: PortalListDeps, orgId: string, listId: string, attempt = 0): Promise<{ rows: number } | null> {
+  const source = await deps.runtime.query<ListSource | null>('finance.portal_list.source', { listId }, { actor: PORTAL_LIST_ACTOR, orgId });
+  if (!source || !source.pending) return null;
+  const bytes = await readVerified(deps.store, source.file);
+  const result = await deps.extract.extract('portal_invoice_list', bytes);
+  if (!result.ok) {
+    const limitHit = result.code === 'timeout' || result.code === 'memory';
+    if (limitHit && attempt < EXTRACT_LIMIT_RETRIES) throw new Error(`crove-extract stopped at a limit: ${result.code}`);
+    await recordPortalListFailure(deps.runtime, orgId, listId, unreadable(result));
+    return null;
+  }
+  const checked = checkPortalList(result.list, source.orgTaxCode);
+  if (!checked.ok) {
+    await recordPortalListFailure(deps.runtime, orgId, listId, checked.error);
+    return null;
+  }
+  await deps.runtime.execute(
+    'finance.portal_list.record',
+    {
+      listId,
+      status: 'done',
+      listFrom: result.list.listFrom,
+      listTo: result.list.listTo,
+      buyerTaxCode: parseTaxCode(result.list.buyerTaxCode)?.normalized ?? null,
+      rows: checked.rows,
+      skippedCount: result.list.skippedCount,
+      skipped: result.list.skipped,
+    },
+    { actor: PORTAL_LIST_ACTOR, orgId },
+  );
+  return { rows: checked.rows.length };
+}

@@ -23,6 +23,9 @@ export const zCashVoucherRequest = z.object({
   // Lý do thu / lý do chi.
   description: z.string().trim().min(1).max(300),
   lines: z.array(zVoucherLine).min(1).max(VOUCHER_MAX_LINES),
+  // The bank statement line a báo Có or báo Nợ settles (#326), when it is made from one: the voucher then has the
+  // line's bank account, date, direction and amount.
+  bankLineId: zId.optional(),
 });
 export type CashVoucherRequest = z.infer<typeof zCashVoucherRequest>;
 
