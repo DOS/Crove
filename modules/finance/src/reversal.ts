@@ -139,6 +139,7 @@ export const reverseEntry = defineCommand({
   input: z.object({ payload: zJournalReversal, acceptFailedChecks: z.boolean().default(false) }),
   risk: 'R3',
   access: 'proposal',
+  proposalKind: REVERSAL_KIND,
   target: (input) => ({ type: 'finance.journal_entry', id: input.payload.entryId }),
   handler: async (ctx, { payload }) => {
     if (!ctx.proposalId) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt');

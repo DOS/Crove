@@ -101,6 +101,7 @@ export const recordVoucher = defineCommand({
   input: z.object({ payload: zCashVoucherProposal, acceptFailedChecks: z.boolean().default(false) }),
   risk: 'R3',
   access: 'proposal',
+  proposalKind: VOUCHER_KIND,
   handler: async (ctx, { payload }) => {
     if (!ctx.proposalId) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt');
     const partyId = payload.party?.id ?? null;
