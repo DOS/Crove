@@ -1479,6 +1479,7 @@ export const vi = {
       VARIANT_INVALID: 'Có kênh chưa đúng yêu cầu của nền tảng',
       VARIANT_IN_FLIGHT: 'Có kênh đang đăng: chờ kết quả rồi mới sửa nội dung chung',
       APPROVAL_REQUIRED: 'Kênh này chưa được duyệt đúng nội dung hiện tại',
+      APPROVALS_MISSING: 'Kênh này cần thêm người duyệt trước khi lên lịch',
       CHANNEL_ALREADY_IN_POST: 'Bài đăng đã có kênh này',
       CHANNEL_PROVIDER_UNSUPPORTED: 'Kênh này chưa được hỗ trợ',
       TOO_MANY_CHANNELS: 'Một bài đăng có tối đa 20 kênh',
