@@ -105,6 +105,8 @@ Confirmed by A only (files 014 and 016); D says the two layouts differ and merge
 The reader is `apps/extract/src/portal-list.ts`, on top of a small `.xlsx` reader (`apps/extract/src/xlsx.ts`), and
 runs only in the parsing sandbox like every untrusted file:
 
+- **Time:** the sheet and the shared strings are read by a forward tokenizer: one pass over each part, and a missing
+  closing tag refuses the file at once, so a hostile part cannot hold the sandbox's single slot.
 - **Limits:** the file at most 10 MB (checked at upload, by the import command and by the sandbox), every inflated
   part at most 32 MB and 48 MB together, at most 20,000 invoice rows and 64 columns. DOCTYPE and ENTITY are refused in
   every part. An Excel 97-2003 file is refused with a hint to save it as `.xlsx`.
@@ -118,6 +120,8 @@ runs only in the parsing sandbox like every untrusted file:
   columns and no seller column is refused as a sales list.
 - **Rows:** a row without number, series and tax code (blank, totals) is ignored; one with some of them but not all,
   an impossible date, an invalid tax code or an unreadable amount is listed by row number and reason, never guessed.
+  The list keeps how many rows were skipped and the first 1000 of them, and the screen says the comparison is
+  incomplete until the accountant fixes those rows and imports the list again; a list with no readable invoice fails.
   Amounts read as Excel numbers or as text with dot or comma thousands separators.
 - **Tolerances for unconfirmed quirks:** a tax code stored as a number is padded back to 10 (or 12) digits. One
   source (C) reports that rows of the "không mã" export can carry one extra empty cell before the currency; such a
@@ -125,7 +129,7 @@ runs only in the parsing sandbox like every untrusted file:
   column to the right.
 
 The worker then checks the answer again (`checkPortalList` in `modules/finance/src/portal-list.ts`): a purchase list
-is one where the org is the buyer. Rows where the org is the seller (its sales) or another company is the buyer are
+is one where the org is the buyer, so the org's tax code must be set (the import refuses without it). Rows where the org is the seller (its sales) or another company is the buyer are
 dropped; a list with none left is recorded as failed, as the sales list or as another company's list (the accountant
 picked the wrong client).
 
@@ -143,7 +147,9 @@ purchase documents (not voided) and the purchase proposals waiting in the Inbox:
 - **Status:** "đã bị thay thế" and "đã bị hủy" no longer count. Absent from Crove is right; present in Crove (booked or
   waiting) is reported so the accountant reverses or rejects it. An adjusted invoice still counts; the replacement
   and the adjustment are invoices of their own. An unknown status counts like a valid invoice.
-- **Duplicates:** an invoice on several lists of the period counts once; a later cancellation wins.
+- **Duplicates:** an invoice on several lists of the period counts once, by the same rule as a match (a row without a
+  template joins the invoice its key names); a later cancellation wins. A second copy in Crove of a matched invoice is
+  reported as not on the portal and marked as a duplicate.
 - **Period:** Crove's invoices dated in the period that match nothing are reported as not on the portal. With no
   list for a period nothing is compared. A portal row dated outside the period is matched and marked.
 

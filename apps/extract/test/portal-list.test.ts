@@ -223,6 +223,37 @@ describe('xlsx reader', () => {
     expect(() => readFirstSheet(broken)).toThrow(XlsxError);
   });
 
+  it('refuses hostile parts with unclosed tags in one pass, well under a second each', () => {
+    const MB = 1024 * 1024;
+    const repeat = (unit: string) => unit.repeat(Math.ceil(MB / unit.length));
+    const hostile: Array<[string, string]> = [
+      ['xl/worksheets/sheet1.xml', `<worksheet><sheetData>${repeat('<row>')}</sheetData></worksheet>`],
+      ['xl/worksheets/sheet1.xml', `<worksheet><sheetData><row r="1">${repeat('<c r="A1">')}</row></sheetData></worksheet>`],
+      ['xl/worksheets/sheet1.xml', `<worksheet><sheetData><row r="1"><c t="inlineStr"><is>${repeat('<t>')}</is></c></row></sheetData></worksheet>`],
+      ['xl/worksheets/sheet1.xml', `<worksheet><sheetData>${repeat('<!--')}</sheetData></worksheet>`],
+      ['xl/worksheets/sheet1.xml', `<worksheet><sheetData><row r="1"><c r="A1" t="${repeat('x')}`],
+      ['xl/worksheets/sheet1.xml', `<worksheet>${repeat('<sheetData>')}`],
+      ['xl/sharedStrings.xml', `<sst>${repeat('<si>')}</sst>`],
+      ['xl/sharedStrings.xml', `<sst><si>${repeat('<t>')}</si></sst>`],
+      ['xl/sharedStrings.xml', `<sst><si>${repeat('<rPh>')}</si></sst>`],
+      ['xl/styles.xml', `<styleSheet>${repeat('<xf ')}`],
+    ];
+    for (const [part, xml] of hostile) {
+      const file = buildXlsx([['x']], { override: { [part]: xml } });
+      const started = performance.now();
+      expect(() => readFirstSheet(file), part).toThrow(XlsxError);
+      expect(performance.now() - started, `${part}: ${xml.slice(0, 40)}`).toBeLessThan(1000);
+    }
+  });
+
+  it('reads a full-size sheet quickly', () => {
+    const rows = Array.from({ length: 20_000 }, (_, i) => portalRow(i + 1, { series: 'C26TAA', number: i + 1, date: '01/09/2026', sellerTaxCode: SELLER, total: 1000 }));
+    const file = buildXlsx([PORTAL_HEADER, ...rows], { strings: 'inline' });
+    const started = performance.now();
+    expect(readPortalList(file).rows).toHaveLength(20_000);
+    expect(performance.now() - started).toBeLessThan(10_000);
+  });
+
   it('caps a decompression bomb by its declared size', () => {
     const bomb = '<worksheet><sheetData>' + '<row/>'.repeat(2_000_000) + '</sheetData></worksheet>';
     const zip = buildXlsx([['x']], { override: { 'xl/worksheets/sheet1.xml': bomb } });

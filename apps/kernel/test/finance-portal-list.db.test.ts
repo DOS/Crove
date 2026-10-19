@@ -367,6 +367,34 @@ suite('tax portal purchase list (#465)', () => {
     expect(theirs.body).toMatchObject({ lists: [], items: [] });
     expect((await rpc('portalList/reconcile', await tokenFor(outsider), { period: '2026-09' })).status).toBe(403);
     expect((await rpc('portalList/remove', await tokenFor(outsider), { listId: before.body.lists[0].id }, otherOrg.slug)).status).toBe(404);
+    // An org without a tax code cannot import: a list could not be told apart from another company's.
+    const own = await upload(await tokenFor(outsider), 'ds.xlsx', portalListXlsx([spec('1', '01/09/2026')]), 'import', otherOrg.slug);
+    expect(own.status).toBe(200);
+    const noTaxCode = await rpc('portalList/import', await tokenFor(outsider), { period: '2026-09', fileId: own.body.files[0].fileId }, otherOrg.slug);
+    expect(noTaxCode.status).toBe(409);
+    expect(noTaxCode.body.code).toBe('TAX_CODE_REQUIRED');
+  });
+
+  it('records the rows it could not read, so the period shows an incomplete comparison', async () => {
+    const bytes = buildXlsx([PORTAL_HEADER, portalRow(1, spec('7001', '01/07/2026')), portalRow(2, spec('7002', '31/02/2026')), portalRow(3, { ...spec('7003', '02/07/2026'), sellerTaxCode: '12345' })], {
+      strings: 'inline',
+    });
+    const uploaded = await upload(await tokenFor(owner), 'ds-07.xlsx', bytes);
+    const imported = await rpc('portalList/import', await tokenFor(owner), { period: '2026-07', fileId: uploaded.body.files[0].fileId });
+    await importPortalList({ runtime: workerRuntime, store, extract }, org.orgId, imported.body.listId);
+    const july = await rpc('portalList/reconcile', await tokenFor(viewer), { period: '2026-07' });
+    expect(july.body.lists).toEqual([
+      expect.objectContaining({
+        status: 'done',
+        rowCount: 1,
+        skippedCount: 2,
+        skipped: [
+          { rowNo: 3, reason: 'bad_date' },
+          { rowNo: 4, reason: 'bad_tax_code' },
+        ],
+      }),
+    ]);
+    expect(july.body.summary.missing).toBe(1);
   });
 
   it('records a list once, and the database keeps an outcome and its rows from changing', async () => {

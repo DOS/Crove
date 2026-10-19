@@ -126,6 +126,8 @@ export interface FinancePortalInvoiceListTable {
   list_from: string | null;
   list_to: string | null;
   buyer_tax_code: string | null;
+  skipped_count: Generated<number>;
+  skipped: ColumnType<unknown, string | null | undefined, string | null>;
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   recorded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;

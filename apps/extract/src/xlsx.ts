@@ -2,8 +2,10 @@
 // process (see sandbox.ts): the workbook is untrusted. The container is opened with readZipParts, which checks the
 // directory, refuses overlapping or escaping entries and caps every inflated part; only the parts a plain table needs
 // are inflated (workbook, its relationships, the first sheet, shared strings, styles). DOCTYPE and ENTITY are refused
-// in every part, so no entity is ever expanded, and the cell scanner is linear in the size of the sheet: it never
-// builds a tree of the whole sheet in memory.
+// in every part, so no entity is ever expanded. The sheet and the shared strings are read by a forward tokenizer
+// (nextTag below): each search starts where the last one ended and a missing closing tag refuses the file at once, so
+// the time is one pass over the part, whatever it holds, and no tree of the whole sheet is built. The small structural
+// parts (workbook, relationships, styles) go through fast-xml-parser and are capped at 4 MB each.
 //
 // What it returns is a grid of text: a number cell keeps the exact digits Excel stored ("1500000", "1.5E+16"), never
 // a JS number, and a number cell whose style is a date format is marked as a date so the caller can turn the serial
@@ -89,7 +91,10 @@ const isNode = (value: unknown): value is Node => typeof value === 'object' && v
 const nodes = (value: unknown): Node[] => (Array.isArray(value) ? value.filter(isNode) : []);
 const attr = (node: Node, key: string): string | null => (typeof node[key] === 'string' ? (node[key] as string) : null);
 
+const MAX_STRUCTURE_BYTES = 4 * MiB;
+
 function parseStructure(bytes: Uint8Array, name: string): Node {
+  if (bytes.byteLength > MAX_STRUCTURE_BYTES) throw new XlsxError(`Tệp Excel có phần ${name} quá lớn để đọc`);
   try {
     const tree: unknown = structure.parse(partText(bytes, name));
     if (isNode(tree)) return tree;
@@ -179,15 +184,116 @@ function dateStyles(styles: Uint8Array | undefined): Set<number> {
   return dated;
 }
 
-function textOfRuns(xml: string, limit: number): string {
-  // Phonetic runs (rPh) are reading aids, not part of the text.
-  const visible = xml.replace(/<(?:\w+:)?rPh\b[\s\S]*?<\/(?:\w+:)?rPh>/g, '');
-  let out = '';
-  for (const match of visible.matchAll(/<(?:\w+:)?t\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:\w+:)?t>)/g)) {
-    out += decodeXmlText(match[1] ?? '');
-    if (out.length > limit) return out.slice(0, limit);
+// ---------------------------------------------------------------------------------------------------------------
+// A forward tokenizer for the sheet and shared-string parts. Every search starts where the previous one ended and an
+// element's closing tag is looked for once, from its opening tag on; a missing one refuses the file at once. So a
+// hostile part (thousands of unclosed tags) costs one pass, never a rescan per tag.
+
+const CORRUPT = 'Tệp Excel bị hỏng (thẻ XML không đóng)';
+
+interface Tag {
+  // The name as written (with any namespace prefix) and without its prefix.
+  name: string;
+  local: string;
+  closing: boolean;
+  selfClosing: boolean;
+  // The attribute text between the name and the end of the tag.
+  attrs: string;
+  // Index just past the tag's '>'.
+  end: number;
+}
+
+// The next tag at or after `from` and before `limit`, skipping comments and processing instructions; null when none.
+// CDATA sections are refused (Excel and the portal's exporter never write them), and DOCTYPE never gets this far.
+export function nextTag(xml: string, from: number, limit: number): Tag | null {
+  let i = xml.indexOf('<', from);
+  while (i >= 0 && i < limit) {
+    if (xml.startsWith('<!--', i)) {
+      const close = xml.indexOf('-->', i + 4);
+      if (close < 0 || close + 3 > limit) throw new XlsxError(CORRUPT);
+      i = xml.indexOf('<', close + 3);
+      continue;
+    }
+    if (xml.startsWith('<?', i)) {
+      const close = xml.indexOf('?>', i + 2);
+      if (close < 0 || close + 2 > limit) throw new XlsxError(CORRUPT);
+      i = xml.indexOf('<', close + 2);
+      continue;
+    }
+    if (xml.startsWith('<!', i)) throw new XlsxError('Tệp Excel có phần XML không được hỗ trợ (CDATA)');
+    let j = i + 1;
+    const closing = xml[j] === '/';
+    if (closing) j += 1;
+    const nameStart = j;
+    while (j < limit && !' \t\r\n/>'.includes(xml[j] ?? '>')) j += 1;
+    const name = xml.slice(nameStart, j);
+    if (name === '') throw new XlsxError(CORRUPT);
+    // The end of the tag, past any quoted attribute value (which may hold '>').
+    const attrStart = j;
+    let quote: string | null = null;
+    while (j < limit) {
+      const ch = xml[j];
+      if (quote) {
+        if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === '>') {
+        break;
+      }
+      j += 1;
+    }
+    if (j >= limit) throw new XlsxError(CORRUPT);
+    const selfClosing = xml[j - 1] === '/';
+    const colon = name.indexOf(':');
+    return {
+      name,
+      local: colon >= 0 ? name.slice(colon + 1) : name,
+      closing,
+      selfClosing,
+      attrs: xml.slice(attrStart, selfClosing ? j - 1 : j),
+      end: j + 1,
+    };
   }
+  return null;
+}
+
+// Where the element opened by `tag` closes: the index of its closing tag and the index just past it. The elements read
+// here (row, c, v, is, t, si, rPh) never nest in themselves, so the first closing tag of the same name is the one.
+function closeOf(xml: string, tag: Tag, limit: number): { at: number; end: number } {
+  const needle = `</${tag.name}`;
+  let at = xml.indexOf(needle, tag.end);
+  // "</c" must not be taken from "</cols>": the name ends at '>' or white space.
+  while (at >= 0 && at < limit && !/[>\s]/.test(xml[at + needle.length] ?? '')) at = xml.indexOf(needle, at + 1);
+  if (at < 0 || at >= limit) throw new XlsxError(CORRUPT);
+  const gt = xml.indexOf('>', at);
+  if (gt < 0 || gt >= limit) throw new XlsxError(CORRUPT);
+  return { at, end: gt + 1 };
+}
+
+const ATTRIBUTE = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+
+// The tag's attributes by local name. The tokenizer guarantees balanced quotes, so this is one pass.
+function attributes(raw: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of raw.matchAll(ATTRIBUTE)) out.set((m[1] ?? '').replace(/^[\w.-]+:/, ''), decodeXmlText(m[2] ?? m[3] ?? ''));
   return out;
+}
+
+// The text of the <t> elements between `from` and `limit` (a shared string or an inline string), leaving out phonetic
+// runs (rPh), which are reading aids and not part of the text.
+function textOfRuns(xml: string, from: number, limit: number, max: number): string {
+  let out = '';
+  let p = from;
+  for (let tag = nextTag(xml, p, limit); tag; tag = nextTag(xml, p, limit)) {
+    p = tag.end;
+    if (tag.closing || tag.selfClosing) continue;
+    if (tag.local === 'rPh' || tag.local === 't') {
+      const close = closeOf(xml, tag, limit);
+      if (tag.local === 't' && out.length <= max) out += decodeXmlText(xml.slice(tag.end, close.at));
+      p = close.end;
+    }
+  }
+  return out.length > max ? out.slice(0, max) : out;
 }
 
 function sharedStrings(bytes: Uint8Array | undefined, limits: XlsxLimits): string[] {
@@ -195,36 +301,46 @@ function sharedStrings(bytes: Uint8Array | undefined, limits: XlsxLimits): strin
   const xml = partText(bytes, 'sharedStrings.xml');
   const strings: string[] = [];
   const max = limits.maxRows * limits.maxColumns;
-  for (const match of xml.matchAll(/<(?:\w+:)?si\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:\w+:)?si>)/g)) {
+  let p = 0;
+  for (let tag = nextTag(xml, p, xml.length); tag; tag = nextTag(xml, p, xml.length)) {
+    p = tag.end;
+    if (tag.local !== 'si' || tag.closing) continue;
     if (strings.length >= max) throw new XlsxError('Tệp Excel có quá nhiều ô chữ để đọc');
-    strings.push(textOfRuns(match[1] ?? '', limits.maxCellChars));
+    if (tag.selfClosing) {
+      strings.push('');
+      continue;
+    }
+    const close = closeOf(xml, tag, xml.length);
+    strings.push(textOfRuns(xml, tag.end, close.at, limits.maxCellChars));
+    p = close.end;
   }
   return strings;
 }
 
-const CELL = /<(?:\w+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?c>)/g;
-const ROW = /<(?:\w+:)?row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?row>)/g;
-const ATTRIBUTE = /([\w:]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-
-function attributes(raw: string): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const m of raw.matchAll(ATTRIBUTE)) out.set((m[1] ?? '').replace(/^\w+:/, ''), decodeXmlText(m[2] ?? m[3] ?? ''));
-  return out;
+// The content of the first child element `local` of [from, limit), or null when there is none.
+function childText(xml: string, from: number, limit: number, local: string): { from: number; to: number } | null {
+  let p = from;
+  for (let tag = nextTag(xml, p, limit); tag; tag = nextTag(xml, p, limit)) {
+    p = tag.end;
+    if (tag.closing) continue;
+    if (tag.local === local) {
+      if (tag.selfClosing) return { from: tag.end, to: tag.end };
+      return { from: tag.end, to: closeOf(xml, tag, limit).at };
+    }
+    if (!tag.selfClosing) p = closeOf(xml, tag, limit).end;
+  }
+  return null;
 }
 
-function innerValue(xml: string): string | null {
-  const m = /<(?:\w+:)?v\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:\w+:)?v>)/.exec(xml);
-  return m ? decodeXmlText(m[1] ?? '') : null;
-}
-
-function readCell(attrs: Map<string, string>, inner: string, strings: string[], dated: Set<number>, limits: XlsxLimits): SheetCell | null {
+function readCell(attrs: Map<string, string>, xml: string, from: number, limit: number, strings: string[], dated: Set<number>, limits: XlsxLimits): SheetCell | null {
   const type = attrs.get('t') ?? 'n';
   if (type === 'inlineStr') {
-    const is = /<(?:\w+:)?is\b[^>]*>([\s\S]*?)<\/(?:\w+:)?is>/.exec(inner);
-    const value = is ? textOfRuns(is[1] ?? '', limits.maxCellChars) : '';
+    const is = childText(xml, from, limit, 'is');
+    const value = is ? textOfRuns(xml, is.from, is.to, limits.maxCellChars) : '';
     return value === '' ? null : { kind: 'text', value };
   }
-  const raw = innerValue(inner);
+  const v = childText(xml, from, limit, 'v');
+  const raw = v ? decodeXmlText(xml.slice(v.from, Math.min(v.to, v.from + limits.maxCellChars * 8))) : null;
   if (raw === null || raw === '') return null;
   switch (type) {
     case 's': {
@@ -249,25 +365,37 @@ function readCell(attrs: Map<string, string>, inner: string, strings: string[], 
   }
 }
 
-function readRows(xml: string, strings: string[], dated: Set<number>, limits: XlsxLimits): SheetRow[] {
+function readRows(xml: string, from: number, limit: number, strings: string[], dated: Set<number>, limits: XlsxLimits): SheetRow[] {
   const rows: SheetRow[] = [];
   let nextRow = 1;
-  for (const rowMatch of xml.matchAll(ROW)) {
-    const rowAttrs = attributes(rowMatch[1] ?? '');
+  let p = from;
+  for (let tag = nextTag(xml, p, limit); tag; tag = nextTag(xml, p, limit)) {
+    p = tag.end;
+    if (tag.local !== 'row' || tag.closing) continue;
+    const rowAttrs = attributes(tag.attrs);
     const declared = Number(rowAttrs.get('r'));
     const rowNo = Number.isInteger(declared) && declared >= 1 ? declared : nextRow;
     if (rowNo < nextRow) throw new XlsxError('Tệp Excel bị hỏng (các dòng không theo thứ tự)');
     nextRow = rowNo + 1;
+    if (tag.selfClosing) continue;
+    const rowClose = closeOf(xml, tag, limit);
+    p = rowClose.end;
     const cells = new Map<number, SheetCell>();
     let nextColumn = 0;
-    for (const cellMatch of (rowMatch[2] ?? '').matchAll(CELL)) {
-      const attrs = attributes(cellMatch[1] ?? '');
+    let q = tag.end;
+    for (let cellTag = nextTag(xml, q, rowClose.at); cellTag; cellTag = nextTag(xml, q, rowClose.at)) {
+      q = cellTag.end;
+      if (cellTag.local !== 'c' || cellTag.closing) continue;
+      const attrs = attributes(cellTag.attrs);
       const ref = attrs.get('r');
       const column = ref === undefined ? nextColumn : columnOf(ref);
       if (column === null) throw new XlsxError('Tệp Excel bị hỏng (địa chỉ ô không hợp lệ)');
       nextColumn = column + 1;
+      if (cellTag.selfClosing) continue;
+      const cellClose = closeOf(xml, cellTag, rowClose.at);
+      q = cellClose.end;
       if (column >= limits.maxColumns) continue;
-      const cell = readCell(attrs, cellMatch[2] ?? '', strings, dated, limits);
+      const cell = readCell(attrs, xml, cellTag.end, cellClose.at, strings, dated, limits);
       if (cell) cells.set(column, cell);
     }
     if (cells.size === 0) continue;
@@ -322,9 +450,16 @@ export function readFirstSheet(bytes: Uint8Array, limits: XlsxLimits = XLSX_LIMI
   const strings = sharedStrings(parts.get('xl/sharedStrings.xml'), limits);
   const dated = dateStyles(parts.get('xl/styles.xml'));
   const xml = partText(sheetBytes, sheetPath);
-  const data = /<(?:\w+:)?sheetData\b[^>]*?(?:\/>|>([\s\S]*)<\/(?:\w+:)?sheetData>)/.exec(xml);
   const name = (attr(first, 'name') ?? '').slice(0, 200);
-  return { name, rows: data ? readRows(data[1] ?? '', strings, dated, limits) : [], date1904 };
+  // The rows are inside sheetData; anything before it (dimension, columns) and after it is not read.
+  let p = 0;
+  for (let tag = nextTag(xml, p, xml.length); tag; tag = nextTag(xml, p, xml.length)) {
+    p = tag.end;
+    if (tag.local !== 'sheetData' || tag.closing) continue;
+    if (tag.selfClosing) break;
+    return { name, rows: readRows(xml, tag.end, closeOf(xml, tag, xml.length).at, strings, dated, limits), date1904 };
+  }
+  return { name, rows: [], date1904 };
 }
 
 // The calendar day (YYYY-MM-DD) of an Excel serial day number, or null when it is not a plausible date. Excel's 1900

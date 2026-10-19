@@ -148,24 +148,30 @@ export function reconcilePortalList(rows: readonly PortalRow[], crove: readonly 
   // The portal's side, one invoice per key and template; later rows of the same invoice count as duplicates. When the
   // same invoice appears with different statuses (two lists exported at different times), the later list's row wins
   // only if it voids the invoice: once replaced or cancelled, an invoice stays so.
-  const invoices = new Map<string, { row: PortalRow; template: string | null; series: string; duplicates: number }>();
+  // Rows are the same invoice by the same rule as a match: key, and templates that do not contradict (a row without a
+  // template joins the invoice its key names; a template seen later fills one that was missing).
+  const groups = new Map<string, Array<{ row: PortalRow; template: string | null; series: string; duplicates: number }>>();
   for (const row of rows) {
     const symbol = invoiceSymbol(row.template, row.series);
-    const key = `${keyOf(row.sellerTaxCode, symbol.series, row.number)}|${symbol.template ?? ''}`;
-    const seen = invoices.get(key);
+    const key = keyOf(row.sellerTaxCode, symbol.series, row.number);
+    const group = groups.get(key) ?? [];
+    groups.set(key, group);
+    const seen = group.find((g) => templatesAgree(g.template, symbol.template));
     if (!seen) {
-      invoices.set(key, { row, ...symbol, duplicates: 0 });
+      group.push({ row, ...symbol, duplicates: 0 });
       continue;
     }
     seen.duplicates += 1;
+    seen.template ??= symbol.template;
     if (VOID_STATUSES.has(row.status) && !VOID_STATUSES.has(seen.row.status)) seen.row = row;
   }
+  const invoices = [...groups.values()].flat();
   // How many portal invoices share a series and number, for the match without a tax code.
   const looseCount = new Map<string, number>();
-  for (const p of invoices.values()) looseCount.set(looseKeyOf(p.series, p.row.number), (looseCount.get(looseKeyOf(p.series, p.row.number)) ?? 0) + 1);
+  for (const p of invoices) looseCount.set(looseKeyOf(p.series, p.row.number), (looseCount.get(looseKeyOf(p.series, p.row.number)) ?? 0) + 1);
 
   const items: ReconcileItem[] = [];
-  for (const p of invoices.values()) {
+  for (const p of invoices) {
     const { row } = p;
     const exact = (byKey.get(keyOf(row.sellerTaxCode, p.series, row.number)) ?? []).filter((c) => !used.has(c.invoice) && templatesAgree(c.template, p.template));
     const looseKey = looseKeyOf(p.series, row.number);
@@ -235,7 +241,7 @@ export function reconcilePortalList(rows: readonly PortalRow[], crove: readonly 
   return {
     items,
     summary: {
-      portalInvoices: invoices.size,
+      portalInvoices: invoices.length,
       matched: count('matched'),
       inInbox: count('in_inbox'),
       amountMismatch: count('amount_mismatch'),
@@ -243,7 +249,7 @@ export function reconcilePortalList(rows: readonly PortalRow[], crove: readonly 
       voidInCrove: count('void_in_crove'),
       void: count('void'),
       notOnPortal: count('not_on_portal'),
-      duplicateRows: [...invoices.values()].reduce((sum, p) => sum + p.duplicates, 0),
+      duplicateRows: invoices.reduce((sum, p) => sum + p.duplicates, 0),
     },
   };
 }

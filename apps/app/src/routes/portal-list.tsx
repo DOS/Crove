@@ -3,6 +3,7 @@ import { Link, useParams } from '@tanstack/react-router';
 import { useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import type { ReconcileOutcome } from '@crove/kernel-contract';
+import { Alert, AlertDescription, AlertTitle } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -13,6 +14,8 @@ import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { SECTIONS, canImportPortalList, invoiceLabel, itemsByOutcome, pickProblem, pollWhilePending, type ReconcileItem } from '../lib/portal-list.ts';
 import { defaultPeriod, periodKey, switchKind, yearOptions, type PeriodChoice, type PeriodKind } from '../lib/vat.ts';
+
+const SKIPPED_SHOWN = 20;
 
 function ItemRow({ item, slug }: { item: ReconcileItem; slug: string }) {
   const t = useTranslations('portalList');
@@ -131,6 +134,9 @@ export function PortalListPage() {
   const indexes = choice.kind === 'month' ? Array.from({ length: 12 }, (_, i) => i + 1) : [1, 2, 3, 4];
   const grouped = data ? itemsByOutcome(data.items) : new Map();
   const doneLists = data?.lists.filter((l) => l.status === 'done') ?? [];
+  // Rows of the period's lists that name an invoice but could not be read: the comparison misses them.
+  const skipped = doneLists.flatMap((l) => l.skipped.map((s) => ({ ...s, filename: l.filename })));
+  const skippedTotal = doneLists.reduce((sum, l) => sum + l.skippedCount, 0);
 
   return (
     <>
@@ -228,7 +234,10 @@ export function PortalListPage() {
                       {list.status === 'pending' ? (
                         <Badge variant="brand">{t('listStatus.pending')}</Badge>
                       ) : list.status === 'done' ? (
-                        <Badge variant="success">{t('listStatus.done', { count: list.rowCount ?? 0 })}</Badge>
+                        <div className="flex flex-wrap gap-1">
+                          <Badge variant="success">{t('listStatus.done', { count: list.rowCount ?? 0 })}</Badge>
+                          {list.skippedCount > 0 && <Badge variant="warning">{t('listStatus.skipped', { count: list.skippedCount })}</Badge>}
+                        </div>
                       ) : (
                         <div className="space-y-1">
                           <Badge variant="destructive">{t('listStatus.failed')}</Badge>
@@ -251,6 +260,20 @@ export function PortalListPage() {
 
           {doneLists.length > 0 && (
             <>
+              {skipped.length > 0 && (
+                <Alert role="alert" className="border-warning/30 bg-warning/10 text-warning">
+                  <AlertTitle>{t('incompleteTitle', { count: skippedTotal })}</AlertTitle>
+                  <AlertDescription>
+                    <p>{t('incompleteHint')}</p>
+                    <ul className="mt-1 list-disc pl-5">
+                      {skipped.slice(0, SKIPPED_SHOWN).map((s) => (
+                        <li key={`${s.filename}-${s.rowNo}`}>{t('skippedRow', { file: s.filename, row: String(s.rowNo), reason: t(`skipReasons.${s.reason}`) })}</li>
+                      ))}
+                    </ul>
+                    {skipped.length > SKIPPED_SHOWN && <p className="mt-1">{t('skippedMore', { count: skippedTotal - SKIPPED_SHOWN })}</p>}
+                  </AlertDescription>
+                </Alert>
+              )}
               <section aria-label={t('summaryTitle')} className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {(
                   [

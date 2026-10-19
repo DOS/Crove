@@ -23,6 +23,7 @@ import {
 import {
   MAX_IMPORT_BYTES,
   MAX_PORTAL_LISTS_PER_PERIOD,
+  PORTAL_LIST_SKIP_REASONS,
   XLSX_CONTENT_TYPE,
   zId,
   zVatPeriod,
@@ -60,6 +61,11 @@ export const portalListImport = defineCommand({
     if (!file) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy tệp đã tải lên');
     if (!IMPORT_TYPES.includes(file.content_type)) throw new DomainError('UNSUPPORTED_TYPE', 415, 'Danh sách hóa đơn phải là tệp Excel .xlsx');
     if (Number(file.size_bytes) > MAX_IMPORT_BYTES) throw new DomainError('TOO_LARGE', 413, 'Tệp danh sách vượt quá 10 MB');
+    // A purchase list is told apart from another company's or the sales list by the org's tax code (checkPortalList).
+    const tenant = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
+    if (!tenant?.tax_code) {
+      throw new DomainError('TAX_CODE_REQUIRED', 409, 'Hãy nhập mã số thuế của công ty trong Cài đặt trước khi nhập danh sách hóa đơn từ cổng thuế');
+    }
     // Serializes imports of one period, so the count below and the unique index agree.
     await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`finance.portal_list:${ctx.orgId}:${input.period}`}, 0))`.execute(ctx.trx);
     const active = await ctx.trx
@@ -167,6 +173,8 @@ export const portalListRecord = defineCommand({
       listTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
       buyerTaxCode: z.string().nullable(),
       rows: z.array(zRecordRow).max(EXTRACT_LIMITS.maxPortalListRows),
+      skippedCount: z.number().int().min(0).max(1_048_576),
+      skipped: z.array(z.object({ rowNo: z.number().int().min(1).max(1_048_576), reason: z.enum(PORTAL_LIST_SKIP_REASONS) })).max(EXTRACT_LIMITS.maxPortalListSkipped),
     }),
     z.object({ listId: zId, status: z.literal('failed'), error: z.string().min(1).max(2000) }),
   ]),
@@ -226,12 +234,14 @@ export const portalListRecord = defineCommand({
         list_from: input.listFrom,
         list_to: input.listTo,
         buyer_tax_code: input.buyerTaxCode,
+        skipped_count: input.skippedCount,
+        skipped: input.skipped.length > 0 ? JSON.stringify(input.skipped) : null,
         recorded_at: sql<Date>`pg_catalog.now()`,
       })
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', list.id)
       .execute();
-    ctx.audit({ status: 'done', rows: input.rows.length });
+    ctx.audit({ status: 'done', rows: input.rows.length, skipped: input.skippedCount });
     await ctx.activity('finance.portal_invoice_list', list.id, 'portal_list.read', `Đọc ${input.rows.length} hóa đơn từ danh sách của cổng thuế, kỳ ${list.period}`);
     return { listId: list.id, recorded: true };
   },
@@ -240,7 +250,7 @@ export const portalListRecord = defineCommand({
 async function periodLists(ctx: QueryContext, period: string): Promise<PortalListView[]> {
   const lists = await ctx.trx
     .selectFrom('crove_finance.portal_invoice_list')
-    .select(['id', 'period', 'file_id', 'filename', 'status', 'error', 'row_count', 'list_from', 'list_to', 'created_at'])
+    .select(['id', 'period', 'file_id', 'filename', 'status', 'error', 'row_count', 'list_from', 'list_to', 'skipped_count', 'skipped', 'created_at'])
     .where('org_id', '=', ctx.orgId)
     .where('period', '=', period)
     .where('removed_at', 'is', null)
@@ -257,8 +267,21 @@ async function periodLists(ctx: QueryContext, period: string): Promise<PortalLis
     rowCount: l.row_count,
     listFrom: l.list_from,
     listTo: l.list_to,
+    skippedCount: l.skipped_count,
+    skipped: skippedRows(l.skipped),
     createdAt: new Date(l.created_at).toISOString(),
   }));
+}
+
+// The skipped rows as stored (jsonb written by finance.portal_list.record from a checked list), read defensively.
+function skippedRows(value: unknown): PortalListView['skipped'] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((v: unknown) => {
+    const r = v as { rowNo?: unknown; reason?: unknown } | null;
+    return r && typeof r.rowNo === 'number' && typeof r.reason === 'string' && (PORTAL_LIST_SKIP_REASONS as readonly string[]).includes(r.reason)
+      ? [{ rowNo: r.rowNo, reason: r.reason as PortalListView['skipped'][number]['reason'] }]
+      : [];
+  });
 }
 
 function addDays(date: string, days: number): string {
@@ -439,10 +462,15 @@ export function checkPortalList(
   orgTaxCode: string | null,
 ): { ok: true; rows: z.infer<typeof zRecordRow>[] } | { ok: false; error: string } {
   const own = parseTaxCode(orgTaxCode)?.normalized ?? null;
+  // Without the org's tax code any company's list, or the sales list, would pass as the org's purchases.
+  if (!own) return { ok: false, error: 'Hãy nhập mã số thuế của công ty trong Cài đặt rồi nhập lại danh sách' };
   const preamble = parseTaxCode(list.buyerTaxCode)?.normalized ?? null;
   const otherCompany = (code: string) =>
     `Danh sách này của mã số thuế ${code}, không phải của công ty này (${own}); hãy kiểm tra đã chọn đúng khách hàng chưa`;
   if (own && preamble && own !== preamble) return { ok: false, error: otherCompany(preamble) };
+  if (list.rows.length === 0 && list.skippedCount > 0) {
+    return { ok: false, error: `Không đọc được hóa đơn nào trong danh sách (${list.skippedCount} dòng lỗi, ví dụ dòng ${list.skipped[0]?.rowNo ?? '?'}); hãy kiểm tra tệp` };
+  }
   if (list.rows.length === 0) {
     return { ok: false, error: 'Danh sách không có hóa đơn nào; hãy kiểm tra đã tra cứu đúng kỳ ở mục "Hóa đơn điện tử mua vào"' };
   }
@@ -515,6 +543,8 @@ export async function importPortalList(deps: PortalListDeps, orgId: string, list
       listTo: result.list.listTo,
       buyerTaxCode: parseTaxCode(result.list.buyerTaxCode)?.normalized ?? null,
       rows: checked.rows,
+      skippedCount: result.list.skippedCount,
+      skipped: result.list.skipped,
     },
     { actor: PORTAL_LIST_ACTOR, orgId },
   );

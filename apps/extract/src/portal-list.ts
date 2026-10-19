@@ -329,7 +329,9 @@ export function readPortalList(bytes: Uint8Array): ExtractedPortalList {
   };
   const rows: ExtractedPortalList['rows'] = [];
   const skipped: ExtractedPortalList['skipped'] = [];
+  let skippedCount = 0;
   const skip = (rowNo: number, reason: PortalListSkipReason) => {
+    skippedCount += 1;
     if (skipped.length < EXTRACT_LIMITS.maxPortalListSkipped) skipped.push({ rowNo, reason });
   };
   for (const row of sheet.rows.slice(header.start)) {
@@ -400,5 +402,6 @@ export function readPortalList(bytes: Uint8Array): ExtractedPortalList {
     ...readPreamble(sheet.rows.filter((r) => r.rowNo < header.headerRow), sheet.date1904),
     rows,
     skipped,
+    skippedCount,
   };
 }

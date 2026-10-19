@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS crove_finance.portal_invoice_list (
   list_from date,
   list_to date,
   buyer_tax_code text CHECK (buyer_tax_code IS NULL OR buyer_tax_code ~ '^[0-9]{10}(-[0-9]{3})?$|^[0-9]{12}$'),
+  -- Rows of the sheet that name an invoice but could not be read (a bad date, tax code or amount): how many, and the
+  -- first 1000 as [{ "rowNo", "reason" }]. A done list with skipped rows is an incomplete comparison, and says so.
+  skipped_count integer NOT NULL DEFAULT 0 CHECK (skipped_count BETWEEN 0 AND 1048576),
+  skipped jsonb CHECK (skipped IS NULL OR (pg_catalog.jsonb_typeof(skipped) = 'array' AND pg_catalog.jsonb_array_length(skipped) <= 1000)),
   created_by uuid,
   created_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
   recorded_at timestamptz,
@@ -38,7 +42,7 @@ CREATE TABLE IF NOT EXISTS crove_finance.portal_invoice_list (
   PRIMARY KEY (org_id, id),
   CONSTRAINT portal_invoice_list_file_fk FOREIGN KEY (org_id, file_id) REFERENCES crove_kernel.file (org_id, id),
   CONSTRAINT portal_invoice_list_result CHECK (
-    (status = 'pending' AND recorded_at IS NULL AND row_count IS NULL AND error IS NULL)
+    (status = 'pending' AND recorded_at IS NULL AND row_count IS NULL AND error IS NULL AND skipped_count = 0 AND skipped IS NULL)
     OR (status = 'done' AND recorded_at IS NOT NULL AND row_count IS NOT NULL AND error IS NULL)
     OR (status = 'failed' AND recorded_at IS NOT NULL AND row_count IS NULL AND error IS NOT NULL)
   ),
@@ -52,7 +56,7 @@ CREATE INDEX IF NOT EXISTS portal_invoice_list_file_idx ON crove_finance.portal_
 SELECT crove_kernel.apply_tenant_rls('crove_finance.portal_invoice_list');
 -- Tenant roles read and insert; they update only the outcome columns and the removal; nobody deletes.
 REVOKE UPDATE, DELETE ON crove_finance.portal_invoice_list FROM crove_tenant;
-GRANT UPDATE (status, error, row_count, list_from, list_to, buyer_tax_code, recorded_at, removed_at, removed_by)
+GRANT UPDATE (status, error, row_count, list_from, list_to, buyer_tax_code, skipped_count, skipped, recorded_at, removed_at, removed_by)
   ON crove_finance.portal_invoice_list TO crove_tenant;
 
 -- The outcome is written once (pending to done or failed, with the database clock), and a removal is never undone.
@@ -65,8 +69,9 @@ BEGIN
      OR NEW.created_by IS DISTINCT FROM OLD.created_by OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
     RAISE EXCEPTION 'portal invoice list %: only its outcome and its removal can change', OLD.id USING ERRCODE = '42501';
   END IF;
-  IF OLD.status <> 'pending' AND (NEW.status, NEW.error, NEW.row_count, NEW.list_from, NEW.list_to, NEW.buyer_tax_code, NEW.recorded_at)
-       IS DISTINCT FROM (OLD.status, OLD.error, OLD.row_count, OLD.list_from, OLD.list_to, OLD.buyer_tax_code, OLD.recorded_at) THEN
+  IF OLD.status <> 'pending'
+     AND (NEW.status, NEW.error, NEW.row_count, NEW.list_from, NEW.list_to, NEW.buyer_tax_code, NEW.skipped_count, NEW.skipped, NEW.recorded_at)
+       IS DISTINCT FROM (OLD.status, OLD.error, OLD.row_count, OLD.list_from, OLD.list_to, OLD.buyer_tax_code, OLD.skipped_count, OLD.skipped, OLD.recorded_at) THEN
     RAISE EXCEPTION 'portal invoice list % already has its outcome', OLD.id USING ERRCODE = '42501';
   END IF;
   IF OLD.status = 'pending' AND NEW.status <> 'pending' THEN
@@ -143,8 +148,8 @@ CREATE TABLE IF NOT EXISTS crove_finance.portal_invoice_row (
   status_label text CHECK (status_label IS NULL OR pg_catalog.length(status_label) <= 200),
   check_result text CHECK (check_result IS NULL OR pg_catalog.length(check_result) <= 200),
   PRIMARY KEY (org_id, list_id, row_no),
-  -- ON DELETE CASCADE as on purchase_line: no role deletes a list (the guard below), so the cascade never runs today; it
-  -- states that rows live and die with their list should staff ever delete one.
+  -- ON DELETE CASCADE as on purchase_line. It never takes effect: no role deletes a list (the guard above), and a
+  -- cascade would be refused by the rows' append-only trigger anyway, as for the ledger.
   CONSTRAINT portal_invoice_row_list_fk FOREIGN KEY (org_id, list_id) REFERENCES crove_finance.portal_invoice_list (org_id, id) ON DELETE CASCADE
 );
 SELECT crove_kernel.apply_tenant_rls('crove_finance.portal_invoice_row', true);

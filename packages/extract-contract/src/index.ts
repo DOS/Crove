@@ -198,6 +198,8 @@ export const zExtractedPortalList = z.strictObject({
   skipped: z
     .array(z.strictObject({ rowNo: z.number().int().positive().max(1_048_576), reason: z.enum(PORTAL_LIST_SKIP_REASONS) }))
     .max(EXTRACT_LIMITS.maxPortalListSkipped),
+  // Every row skipped, including those past maxPortalListSkipped that are not listed.
+  skippedCount: z.number().int().min(0).max(1_048_576),
 });
 export type ExtractedPortalList = z.infer<typeof zExtractedPortalList>;
 

@@ -2,7 +2,8 @@
 // variants, the fallback without a tax code, amounts as a check, cancelled and replaced invoices, duplicates, period
 // scoping; the portal status words; and the worker's second check of the sandbox's answer.
 import { describe, expect, it } from 'vitest';
-import type { ExtractedPortalList } from '@crove/extract-contract';
+import { PORTAL_LIST_SKIP_REASONS as EXTRACT_SKIP_REASONS, type ExtractedPortalList } from '@crove/extract-contract';
+import { PORTAL_LIST_SKIP_REASONS } from '@crove/kernel-contract';
 import { checkPortalList, invoiceSymbol, portalStatus, reconcilePortalList, type CroveInvoice, type PortalRow } from '../src/index.ts';
 
 const LIST = '00000000-0000-7000-8000-000000000001';
@@ -157,6 +158,21 @@ describe('reconcilePortalList', () => {
   });
 });
 
+describe('portal duplicates and templates', () => {
+  it('counts a row without a template as the same invoice as one with it, so neither looks missing', () => {
+    const second = '00000000-0000-7000-8000-000000000003';
+    const result = reconcilePortalList([portal('1', { template: '1' }), portal('1', { listId: second, template: null })], [crove('1')], PERIOD);
+    expect(result.items.map((i) => [i.portal?.number, i.outcome, i.duplicateRows])).toEqual([['1', 'matched', 1]]);
+    expect(result.summary).toMatchObject({ portalInvoices: 1, missing: 0, duplicateRows: 1 });
+    // The template-less row first: the later row's template fills it, and a third with another template stays apart.
+    const apart = reconcilePortalList([portal('2', { template: null }), portal('2', { template: '1' }), portal('2', { template: '2' })], [crove('2', { template: '1' })], PERIOD);
+    expect(apart.items.map((i) => [i.portal?.template, i.outcome])).toEqual([
+      ['2', 'missing'],
+      [null, 'matched'],
+    ]);
+  });
+});
+
 describe('invoiceSymbol', () => {
   it('splits a template written into the series, and leaves anything else as written', () => {
     expect(invoiceSymbol(null, '1C26TAA')).toEqual({ template: '1', series: 'C26TAA' });
@@ -193,6 +209,7 @@ describe('checkPortalList', () => {
     listTo: '2026-09-30',
     buyerTaxCode: null,
     skipped: [],
+    skippedCount: 0,
     rows: rows.map((r, i) => ({
       rowNo: i + 4,
       sellerTaxCode: SELLER,
@@ -211,6 +228,14 @@ describe('checkPortalList', () => {
       ...r,
     })),
     ...extra,
+  });
+
+  it('refuses a list whose every invoice row was skipped, and shares the skip reasons with the sandbox contract', () => {
+    expect(checkPortalList(list([], { skipped: [{ rowNo: 7, reason: 'bad_date' }], skippedCount: 3 }), OTHER)).toEqual({
+      ok: false,
+      error: expect.stringContaining('3 dòng lỗi, ví dụ dòng 7'),
+    });
+    expect([...PORTAL_LIST_SKIP_REASONS]).toEqual([...EXTRACT_SKIP_REASONS]);
   });
 
   it('normalizes amounts and reads the status into the stored rows', () => {
@@ -234,7 +259,7 @@ describe('checkPortalList', () => {
     expect(checkPortalList(list([{ sellerTaxCode: OTHER }]), OTHER)).toEqual({ ok: false, error: expect.stringContaining('bán ra') });
     const mixed = checkPortalList(list([{ sellerTaxCode: OTHER }, {}]), OTHER);
     expect(mixed.ok && mixed.rows.map((r) => r.sellerTaxCode)).toEqual([SELLER]);
-    // Without the org's tax code nothing is compared.
-    expect(checkPortalList(list([{}], { buyerTaxCode: SELLER }), null).ok).toBe(true);
+    // Without the org's tax code a list cannot be told apart from another company's: refused.
+    expect(checkPortalList(list([{}]), null)).toEqual({ ok: false, error: expect.stringContaining('mã số thuế của công ty trong Cài đặt') });
   });
 });

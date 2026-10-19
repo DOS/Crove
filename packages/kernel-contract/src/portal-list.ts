@@ -17,6 +17,11 @@ export type ReconcileOutcome = (typeof RECONCILE_OUTCOMES)[number];
 export const RECONCILE_DIFFERENCES = ['total', 'vat', 'currency'] as const;
 export type ReconcileDifference = (typeof RECONCILE_DIFFERENCES)[number];
 
+// Why a row of the sheet that names an invoice was not read (the same reasons as @crove/extract-contract's
+// PORTAL_LIST_SKIP_REASONS; modules/finance/test/portal-reconcile.test.ts checks they agree).
+export const PORTAL_LIST_SKIP_REASONS = ['no_tax_code', 'bad_tax_code', 'no_number', 'no_series', 'bad_date', 'bad_amount', 'too_long'] as const;
+export type PortalListSkipReason = (typeof PORTAL_LIST_SKIP_REASONS)[number];
+
 // Lists imported for one period while not removed; more is refused (the portal exports a month at a time, per tab).
 export const MAX_PORTAL_LISTS_PER_PERIOD = 12;
 
@@ -30,6 +35,9 @@ export const zPortalList = z.object({
   rowCount: z.number().int().nonnegative().nullable(),
   listFrom: zLocalDate.nullable(),
   listTo: zLocalDate.nullable(),
+  // Rows that name an invoice but could not be read: the comparison is incomplete while there are any.
+  skippedCount: z.number().int().nonnegative(),
+  skipped: z.array(z.object({ rowNo: z.number().int().positive(), reason: z.enum(PORTAL_LIST_SKIP_REASONS) })),
   createdAt: z.iso.datetime(),
 });
 export type PortalListView = z.infer<typeof zPortalList>;
