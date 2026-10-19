@@ -613,7 +613,7 @@ export type BulkApproveResult =
 // P12 eligibility and P10 four-eyes decision and writes its own audit row, exactly as approving it alone would. An
 // item refused with a listed per-proposal code (BULK_ITEM_REFUSALS) rolls back to its savepoint and the others go
 // on. Each item runs under ctx.tryRun (issue #429), so a refused item also gets its own denied/failed audit row for
-// kernel.proposal.approve with the proposal as its target, written by the runtime after the item's rollback, the
+// kernel.proposal.approve with the proposal as its target, written by the runtime once the items ran, the
 // row approving it alone would have left, linked to the batch (detail parentCommandId, the batch row's command_id).
 // The batch's audit row lists every item's outcome. When the whole batch aborts, the item rows roll back with it and
 // the batch's own refusal row records it. Items run in the order of
