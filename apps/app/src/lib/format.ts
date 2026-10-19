@@ -3,6 +3,7 @@ import { FORMAT_LOCALE, type Locale } from '../i18n/locale.ts';
 
 const DECIMAL = /^-?\d+(\.\d+)?$/;
 const numberFormats = new Map<string, Intl.NumberFormat>();
+const decimalFormats = new Map<string, Intl.NumberFormat>();
 const dateFormats = new Map<Locale, Intl.DateTimeFormat>();
 
 // The ledger keeps amounts with 4 decimals (NUMERIC(20,4)); money is shown with up to as many.
@@ -34,7 +35,13 @@ function numberFormat(locale: Locale, currency?: string): Intl.NumberFormat {
 // that is not a decimal string is shown as is.
 export function formatDecimal(value: string, locale: Locale, digits: number): string {
   if (!DECIMAL.test(value)) return value;
-  return new Intl.NumberFormat(FORMAT_LOCALE[locale], { maximumFractionDigits: digits }).format(value as `${number}`);
+  const key = `${locale}|${digits}`;
+  let format = decimalFormats.get(key);
+  if (!format) {
+    format = new Intl.NumberFormat(FORMAT_LOCALE[locale], { maximumFractionDigits: digits });
+    decimalFormats.set(key, format);
+  }
+  return format.format(value as `${number}`);
 }
 
 // Formats a decimal string (e.g. "1980000.0000") as money: the currency's usual decimals (none for VND), more only
