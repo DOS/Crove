@@ -79,8 +79,8 @@ export function OAuthCallbackPage() {
           </div>
         )}
         {finish.data && <p className="text-sm text-foreground">{t('oauthConnected', { list: finish.data.connections.map((c) => c.displayName).join(', ') })}</p>}
-        {finish.data && finish.data.failed.length > 0 && <ErrorText>{t('oauthFailed', { list: finish.data.failed.map((c) => c.displayName).join(', ') })}</ErrorText>}
-        {finish.data && finish.data.skipped > 0 && <p className="text-sm text-muted-foreground">{t('oauthSkipped', { count: finish.data.skipped, max: OAUTH_MAX_ACCOUNTS_PER_GRANT })}</p>}
+        {finish.data && (finish.data.failed?.length ?? 0) > 0 && <ErrorText>{t('oauthFailed', { list: (finish.data.failed ?? []).map((c) => c.displayName).join(', ') })}</ErrorText>}
+        {finish.data && (finish.data.skipped ?? 0) > 0 && <p className="text-sm text-muted-foreground">{t('oauthSkipped', { count: finish.data.skipped, max: OAUTH_MAX_ACCOUNTS_PER_GRANT })}</p>}
         {finish.error && <ErrorText>{errorMessage(finish.error)}</ErrorText>}
         {!busy && back}
       </Card>

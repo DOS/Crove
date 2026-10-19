@@ -420,7 +420,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           const taken = accounts.slice(0, OAUTH_MAX_ACCOUNTS_PER_GRANT);
           const connections: { connectionId: string; displayName: string; reconnected: boolean }[] = [];
           const failed: { displayName: string; code: string }[] = [];
-          let firstError: unknown = null;
+          let firstError: DomainError | null = null;
           for (const account of taken) {
             const sealed = broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });
             const command: ChannelConnectInput = {
@@ -435,11 +435,14 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
               const done = await runtime.execute<{ connectionId: string; reconnected: boolean }>('kernel.channel.connect', command, { actor, orgId });
               connections.push({ connectionId: done.connectionId, displayName: account.displayName, reconnected: done.reconnected });
             } catch (error) {
+              // Only a refusal of this one account lets the others go on; a failure of the server (an outage, a bug)
+              // ends the request at once, so it is logged and no more transactions pile onto a failing database.
+              if (!(error instanceof DomainError) || error.status >= 500) throw error;
               firstError ??= error;
-              failed.push({ displayName: account.displayName, code: error instanceof DomainError ? error.code : 'INTERNAL' });
+              failed.push({ displayName: account.displayName, code: error.code });
             }
           }
-          if (connections.length === 0) throw firstError;
+          if (connections.length === 0 && firstError) throw firstError;
           return { connections, failed, skipped: accounts.length - taken.length };
         }),
       ),

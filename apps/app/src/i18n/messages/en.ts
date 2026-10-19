@@ -1370,7 +1370,7 @@ export const en = {
     oauthFinishing: 'Finishing the connection...',
     oauthConnected: 'Connected: {list}',
     oauthFailed: 'Not connected: {list}. The other accounts are connected; try this one again later.',
-    oauthSkipped: '{count, number} more accounts were not connected: one grant connects at most {max, number}. Grant access again and pick only the Pages you need.',
+    oauthSkipped: '{count, number} more accounts were not connected: one grant connects at most {max, number}. Grant access again and pick only the accounts you need.',
     oauthCancelled: 'You cancelled the connection in the platform dialog.',
     oauthLost: 'This connect attempt was not found in this browser (it may have started in another tab). Start again from the Channels page.',
     backToChannels: 'Back to Channels',

@@ -328,7 +328,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     }
     // A provider sends the authorization code to PUBLIC_URL/channels/oauth/<provider>/callback (#375).
     const oauthApps = [config.CHANNEL_META_APP_ID, config.CHANNEL_ZALO_APP_ID, config.CHANNEL_THREADS_APP_ID, config.CHANNEL_LINKEDIN_CLIENT_ID, config.CHANNEL_GOOGLE_CLIENT_ID, config.CHANNEL_TIKTOK_CLIENT_KEY, config.CHANNEL_X_CLIENT_ID];
-    if (oauthApps.some(Boolean) && new URL(config.PUBLIC_URL).protocol !== 'https:') {
+    if (oauthApps.some(Boolean) && !config.PUBLIC_URL.startsWith('https://')) {
       throw new Error('channel OAuth sends authorization codes back to PUBLIC_URL; a public PUBLIC_URL must be https when a CHANNEL_* app is set');
     }
     // Browsers send files to, and fetch them from, this endpoint, and it is allowed in the app's CSP connect-src.

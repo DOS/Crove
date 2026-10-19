@@ -1371,7 +1371,7 @@ export const vi = {
     oauthFinishing: 'Đang hoàn tất kết nối...',
     oauthConnected: 'Đã kết nối: {list}',
     oauthFailed: 'Chưa kết nối được: {list}. Các tài khoản khác vẫn đã kết nối; hãy thử lại với tài khoản này sau.',
-    oauthSkipped: 'Còn {count, number} tài khoản chưa kết nối vì mỗi lần chỉ kết nối tối đa {max, number}. Hãy cấp quyền lại và chỉ chọn những trang cần dùng.',
+    oauthSkipped: 'Còn {count, number} tài khoản chưa kết nối vì mỗi lần chỉ kết nối tối đa {max, number}. Hãy cấp quyền lại và chỉ chọn những tài khoản cần dùng.',
     oauthCancelled: 'Bạn đã hủy kết nối trong hộp thoại của nền tảng.',
     oauthLost: 'Không tìm thấy lượt kết nối này trên trình duyệt (có thể đã mở ở tab khác). Hãy bắt đầu lại từ trang Kênh.',
     backToChannels: 'Về trang Kênh',
