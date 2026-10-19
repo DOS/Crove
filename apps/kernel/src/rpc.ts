@@ -2,7 +2,7 @@
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { contract } from '@crove/kernel-contract';
-import { BlueskyError, ConnectorError, connectBluesky, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
+import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
 import type { SocialWriter, WriterChannel } from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider } from '@crove/mod-social/contract';
 import {
@@ -366,21 +366,32 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới kết nối được kênh');
           if (!channels?.bluesky) throw new DomainError('CHANNEL_PROVIDER_DISABLED', 404, 'Kênh này chưa được bật trên máy chủ');
           if (channels.broker.id === 'none') throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
-          // Each try is a login on Bluesky, which limits them per account (#399).
-          const ticket = blueskyLogins.take(orgId, context.user.userId, input.handle.trim().replace(/^@/, '').toLowerCase());
+          const failure = (error: unknown): DomainError => {
+            if (error instanceof BlueskyError) {
+              if (error.code === 'NotAnAppPassword') return new DomainError('BLUESKY_APP_PASSWORD', 422, 'Hãy dùng mật khẩu ứng dụng (app password) của Bluesky, không dùng mật khẩu tài khoản');
+              if (error.code === 'PrivilegedAppPassword') {
+                return new DomainError('BLUESKY_APP_PASSWORD_PRIVILEGED', 422, 'Mật khẩu ứng dụng này được đọc cả tin nhắn riêng; hãy tạo mật khẩu ứng dụng mới không bật quyền tin nhắn');
+              }
+              if (error.code === 'UnsupportedPds') return new DomainError('BLUESKY_PDS_UNSUPPORTED', 422, 'Hiện Crove chỉ hỗ trợ tài khoản lưu trên máy chủ của Bluesky');
+              if (error.status === 401 || error.status === 400) return new DomainError('BLUESKY_LOGIN_FAILED', 422, 'Bluesky không chấp nhận tên tài khoản hoặc mật khẩu ứng dụng này');
+            }
+            return new DomainError('OAUTH_PROVIDER_FAILED', 503, 'Nền tảng không phản hồi đúng, hãy thử lại sau');
+          };
+          // The format is checked first, so a typo costs no try; each try is a login on Bluesky, which limits them
+          // per account (#399).
+          const login = (() => {
+            try {
+              return blueskyLogin(input);
+            } catch (error) {
+              throw failure(error);
+            }
+          })();
+          const ticket = blueskyLogins.take(orgId, context.user.userId, login.handle);
           if (!ticket.allowed) {
             throw new DomainError('RATE_LIMITED', 429, 'Đã thử kết nối Bluesky nhiều lần trong phút này, hãy đợi một lát rồi thử lại', { retryAfterSeconds: ticket.retryAfterSeconds });
           }
-          const account = await connectBluesky({ handle: input.handle, appPassword: input.appPassword }).catch((error: unknown) => {
-            if (error instanceof BlueskyError) {
-              if (error.code === 'NotAnAppPassword') throw new DomainError('BLUESKY_APP_PASSWORD', 422, 'Hãy dùng mật khẩu ứng dụng (app password) của Bluesky, không dùng mật khẩu tài khoản');
-              if (error.code === 'PrivilegedAppPassword') {
-                throw new DomainError('BLUESKY_APP_PASSWORD_PRIVILEGED', 422, 'Mật khẩu ứng dụng này được đọc cả tin nhắn riêng; hãy tạo mật khẩu ứng dụng mới không bật quyền tin nhắn');
-              }
-              if (error.code === 'UnsupportedPds') throw new DomainError('BLUESKY_PDS_UNSUPPORTED', 422, 'Hiện Crove chỉ hỗ trợ tài khoản lưu trên máy chủ của Bluesky');
-              if (error.status === 401 || error.status === 400) throw new DomainError('BLUESKY_LOGIN_FAILED', 422, 'Bluesky không chấp nhận tên tài khoản hoặc mật khẩu ứng dụng này');
-            }
-            throw new DomainError('OAUTH_PROVIDER_FAILED', 503, 'Nền tảng không phản hồi đúng, hãy thử lại sau');
+          const account = await connectBluesky(login).catch((error: unknown) => {
+            throw failure(error);
           });
           const sealed = channels.broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });
           const command: ChannelConnectInput = {

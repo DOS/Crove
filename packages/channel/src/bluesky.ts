@@ -129,12 +129,18 @@ class Xrpc {
 }
 
 // Connecting checks the app password once by opening a session; the answer names the account.
-export async function connectBluesky(input: { handle: string; appPassword: string }, fetchImpl?: Fetch): Promise<ConnectedAccount> {
+// The handle and app password as Bluesky takes them, checked here without a call (so a typo costs no login try).
+export function blueskyLogin(input: { handle: string; appPassword: string }): { handle: string; appPassword: string } {
   const handle = input.handle.trim().replace(/^@/, '').toLowerCase();
   if (!BLUESKY_HANDLE.test(handle)) throw new BlueskyError(400, 'InvalidHandle', 'not a Bluesky handle');
   // App passwords are lowercase; one typed in capitals is the same password.
   const appPassword = input.appPassword.trim().toLowerCase();
   if (!APP_PASSWORD.test(appPassword)) throw new BlueskyError(400, 'NotAnAppPassword', 'use an app password, not the account password');
+  return { handle, appPassword };
+}
+
+export async function connectBluesky(input: { handle: string; appPassword: string }, fetchImpl?: Fetch): Promise<ConnectedAccount> {
+  const { handle, appPassword } = blueskyLogin(input);
   const session = await new Xrpc(fetchImpl).session(handle, appPassword);
   // The format check above cannot tell an account password shaped like an app password; the session can (#399). A
   // privileged app password also reads direct messages, which Crove never needs. An unreadable scope is let through:
