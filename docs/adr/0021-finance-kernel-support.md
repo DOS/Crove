@@ -93,6 +93,14 @@ Reading the numbers:
 - **Corrections to a closed period are new entries in an open period**: a reversal of a January entry is dated in October and posts normally (measured).
 - `period_balance` stays as the plan has it (written only by the posting definer, reconciled nightly); the spike did not build it.
 - A terminal "locked" state (after year-end finalization or a tax audit) is deferred to the customer interviews; it would be a status that `reopen_period()` refuses.
+- **As built for #329** (`supabase/migrations/20261020070000_crove_finance_period_lock.sql`, months only):
+  - Because months close in order and reopen newest first, the closed months are always one range. They are stored as one `period_lock` row per org (`locked_from`, `locked_through`), not one `accounting_period` row per month.
+  - Dates before `locked_from` are refused too: an entry there would change the opening balances of the closed months.
+  - The guard, `FOR SHARE` and `FOR UPDATE` are as above. The first lock and the first posting create the org's row, whichever comes first, so they meet on the same row.
+  - The history is the audit rows of `finance.period.lock` and `finance.period.unlock` (actor, month, reason, and for unlock the R3 assurance), not a `period_event` table. The hash chain is not built yet.
+  - The commands are `finance.period.lock` (R2) and `finance.period.unlock` (R3, reason required), the close and reopen of section 7 under the words of the issue.
+  - The definers and the trigger are owned by the table owner, not `crove_definer_tenant`: the trigger must see the row of any org, including for the database owner's direct inserts, which carry no context. `lock_period()` and `unlock_period()` check the caller's role in `tenant_member` themselves.
+  - Unlock is for owners only until a chief accountant role exists. The errors are `PERIOD_LOCKED`, `EARLIER_PERIOD_OPEN`, `LATER_PERIOD_LOCKED`, `PERIOD_ALREADY_LOCKED`, `PERIOD_NOT_LOCKED` and `PERIOD_NOT_ENDED` (a month locks once it has ended, in Vietnam time).
 
 Measured races, each with one transaction held open for 2 s and the other starting 0.5 s later:
 

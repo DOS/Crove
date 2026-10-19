@@ -8,6 +8,7 @@ import { accountsList, documentsList, journalExport, journalGet, journalList, pu
 import { vatDeclarationQuery, vatExport, vatPeriodQuery } from './vat.ts';
 import { ledgerAccountQuery, ledgerBookQuery, ledgerExport, ledgerPeriodQuery } from './ledger-reports.ts';
 import { portalListImport, portalListReconcile, portalListRecord, portalListRemove, portalListSource } from './portal-list.ts';
+import { periodLock, periodLockStateQuery, periodUnlock } from './period-lock.ts';
 
 export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
 export { checkPortalList, importPortalList, recordPortalListFailure, PORTAL_RECONCILE_LIMIT, type PortalListDeps } from './portal-list.ts';
@@ -49,9 +50,10 @@ export {
   type VatTaxpayer,
   type VatWarning,
 } from './vat.ts';
+export { PERIOD_TIME_ZONE, vietnamMonth } from './period-lock.ts';
 export { LEDGER_LINE_LIMIT, type AccountLedgerView, type LedgerBook, type LedgerReport } from './ledger-reports.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, openingBalancePost, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, portalListImport, portalListRemove, portalListRecord];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, openingBalancePost, periodLock, periodUnlock, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, portalListImport, portalListRemove, portalListRecord];
 export const financeQueries = [
   fileForExtraction,
   purchaseLookup,
@@ -72,4 +74,5 @@ export const financeQueries = [
   vouchersList,
   portalListSource,
   portalListReconcile,
+  periodLockStateQuery,
 ];

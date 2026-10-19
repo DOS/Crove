@@ -65,6 +65,9 @@ import {
   zAccountLedger,
   zLedgerPeriod,
   zLedgerReport,
+  zPeriodLockInput,
+  zPeriodLockState,
+  zPeriodUnlockInput,
   zVoucherType,
 } from './schemas.ts';
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
@@ -374,6 +377,14 @@ export const contract = {
   ledger: {
     period: oc.input(z.object({ period: zLedgerPeriod })).output(zLedgerReport),
     account: oc.input(z.object({ period: zLedgerPeriod, accountCode: zAccountCode })).output(zAccountLedger),
+  },
+  // Period lock (#329): every member reads it; owners and admins lock the next month once it has ended; only owners
+  // unlock the last locked month (R3: fresh MFA), with a reason. A retry with the same idempotencyKey returns the first
+  // result.
+  periodLock: {
+    state: oc.output(zPeriodLockState),
+    lock: oc.input(zPeriodLockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
+    unlock: oc.input(zPeriodUnlockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
   },
   // The org chart (ADR-0029): positions shared by members and AI agents. Every member reads it; changing it is the
   // owner's (R3: role keys, holders and reporting lines decide what agents may do). A retry with the same

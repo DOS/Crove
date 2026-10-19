@@ -1,5 +1,6 @@
 // Ledger reports (issue #321): for a month, quarter or year, the trial balance, the general ledger of one account and
-// the receivables and payables per party, from posted entries, with one Excel workbook of all of them.
+// the receivables and payables per party, from posted entries, with one Excel workbook of all of them. The period
+// lock (#329) sits above the reports.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -8,6 +9,7 @@ import { Button } from '@crove/ui/components/button';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
+import { PeriodLockPanel } from '../components/period-lock.tsx';
 import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc } from '../lib/api.ts';
@@ -229,6 +231,7 @@ export function LedgerPage() {
         </label>
         {data && <p className="pb-1.5 text-sm text-muted-foreground">{t('range', { from: f.date(data.period.from), to: f.date(data.period.to) })}</p>}
       </div>
+      <PeriodLockPanel />
       {exportXlsx.error && (
         <div className="mb-4">
           <ErrorText>{errorMessage(exportXlsx.error)}</ErrorText>
