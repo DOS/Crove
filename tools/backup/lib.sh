@@ -181,7 +181,7 @@ backup_key_id() {
   if [[ "$key" =~ ^[0-9a-fA-F]{64}$ ]]; then
     { printf 'crove.backup.key-id|'; printf "$(printf '%s' "$key" | sed 's/../\\x&/g')"; } | sha256sum | cut -c1-16
   elif [[ "$key" =~ ^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$ ]]; then
-    { printf 'crove.backup.key-id|'; base64 -d <<<"$key"; } | sha256sum | cut -c1-16
+    { printf 'crove.backup.key-id|'; printf '%s' "$key" | base64 -d; } | sha256sum | cut -c1-16
   else
     return 1
   fi

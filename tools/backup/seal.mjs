@@ -79,12 +79,14 @@ function writeAtomically(to, body) {
   mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
   const temporary = `${to}.part`;
   const fd = openSync(temporary, 'w', 0o600);
+  let open = true;
   try {
     body((bytes) => writeSync(fd, bytes));
     closeSync(fd);
+    open = false;
     renameSync(temporary, to);
   } catch (error) {
-    closeSync(fd);
+    if (open) closeSync(fd);
     rmSync(temporary, { force: true });
     throw error;
   }

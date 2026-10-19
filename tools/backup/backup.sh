@@ -324,6 +324,10 @@ if [ -n "${BACKUP_S3_ENDPOINT:-}" ]; then
     cp "$TMP/seal.list" "$BACKUP_DIR/.seal-$RUN_ID.list"
     seal_run "$BACKUP_DIR" seal ".seal-$RUN_ID.list"
     rm -f "$BACKUP_DIR/.seal-$RUN_ID.list"
+    # The blob store is named by the key id this shell computed; the sealed files carry seal.mjs's. They must agree, or
+    # the prune would read this run's blobs as belonging to another store.
+    sealed_id="$(od -An -tx1 -j4 -N8 "$stage/run/$sums" | tr -d ' \n')"
+    [ "blobs/k$sealed_id" = "$BLOB_STORE" ] || { STEP="sealing: seal.mjs used key id $sealed_id, the shell computed ${BLOB_STORE#blobs/k}"; false; }
   fi
   run_objects="$(wc -l <"$TMP/run-files")"
 
@@ -358,9 +362,11 @@ if [ -n "${BACKUP_S3_ENDPOINT:-}" ]; then
   listed="$(wc -l <"$TMP/blob-sizes.tsv")"
   log "uploaded to $BACKUP_S3_ENDPOINT, bucket $BACKUP_S3_BUCKET, prefix $BACKUP_S3_PREFIX/$RUN_ID ($remote_count objects, encryption $ENCRYPTION); $new_blobs new blob(s) into $BLOB_STORE, $((listed - new_blobs)) already there"
 
-  # Runs older than BACKUP_KEEP_DAYS go, then every blob no kept run lists. Each kept run's files.sha256 is read (opened
+  # Runs older than BACKUP_KEEP_DAYS go, then the blobs no kept run lists. Each kept run's files.sha256 is read (opened
   # when sealed; this run's is here already); a complete run whose list is missing or does not open stops the prune,
-  # so no blob a run needs is ever deleted.
+  # so no blob a run needs is ever deleted. A blob goes only when the previous prune found it unlisted too
+  # (<prefix>/prune-candidates): a run another writer was uploading while this one listed the bucket has finished by
+  # then. Still, one writer per prefix: a second server gets a BACKUP_S3_PREFIX of its own.
   STEP="pruning the backup bucket"
   cutoff="$(days_ago "$BACKUP_KEEP_DAYS")"
   manifests="$BACKUP_DIR/.manifests-$RUN_ID"
@@ -368,6 +374,10 @@ if [ -n "${BACKUP_S3_ENDPOINT:-}" ]; then
   : >"$manifests/prune.sh"
   : >"$manifests/open.list"
   : >"$TMP/deleted-runs"
+  : >"$manifests/candidates.prev"
+  if grep -q '^prune-candidates'$'\t' "$TMP/bucket.tsv"; then
+    echo "mc cp --quiet \"$remote/prune-candidates\" /work/candidates.prev >/dev/null" >>"$manifests/prune.sh"
+  fi
   cut -f1 "$TMP/bucket.tsv" | grep -o '^[0-9]\{8\}T[0-9]\{6\}Z/' | tr -d / | LC_ALL=C sort -u >"$TMP/run-ids" || true
   while IFS= read -r id; do
     [ "$id" = "$RUN_ID" ] && continue
@@ -408,13 +418,17 @@ if [ -n "${BACKUP_S3_ENDPOINT:-}" ]; then
     awk -v store="$store" '$2 ~ /^\.\/org\// {print store "/" substr($2, 3)}' "$list" >>"$TMP/referenced"
   done
   LC_ALL=C sort -u "$TMP/referenced" -o "$TMP/referenced"
-  { cut -f1 "$TMP/bucket.tsv" | grep '^blobs/' || true; } | LC_ALL=C sort | LC_ALL=C comm -23 - "$TMP/referenced" >"$manifests/delete.txt"
-  if [ -s "$manifests/delete.txt" ]; then
-    mc_run "${BACKUP_S3_NETWORK:-}" "$manifests" "while IFS= read -r key; do mc rm --quiet \"$remote/\$key\" >/dev/null || exit 1; done </work/delete.txt" </dev/null
+  { cut -f1 "$TMP/bucket.tsv" | grep '^blobs/' || true; } | LC_ALL=C sort | LC_ALL=C comm -23 - "$TMP/referenced" >"$manifests/unlisted"
+  LC_ALL=C sort -u "$manifests/candidates.prev" -o "$manifests/candidates.prev"
+  LC_ALL=C comm -12 "$manifests/unlisted" "$manifests/candidates.prev" >"$manifests/delete.txt"
+  LC_ALL=C comm -23 "$manifests/unlisted" "$manifests/delete.txt" >"$manifests/candidates.next"
+  if [ -s "$manifests/delete.txt" ] || ! cmp -s "$manifests/candidates.next" "$manifests/candidates.prev"; then
+    mc_run "${BACKUP_S3_NETWORK:-}" "$manifests" "while IFS= read -r key; do mc rm --quiet \"$remote/\$key\" >/dev/null || exit 1; done </work/delete.txt && mc cp --quiet /work/candidates.next \"$remote/prune-candidates\" >/dev/null" </dev/null
   fi
   referenced="$(wc -l <"$TMP/referenced")"
   deleted="$(wc -l <"$manifests/delete.txt")"
-  log "blob stores: $referenced blob(s) listed by kept runs, $deleted deleted"
+  waiting="$(wc -l <"$manifests/candidates.next")"
+  log "blob stores: $referenced blob(s) listed by kept runs, $deleted deleted, $waiting unlisted (deleted by the next run if still unlisted)"
   rm -rf "$manifests"
   keep_local="$BACKUP_LOCAL_KEEP_DAYS"
 else

@@ -68,6 +68,8 @@ describe('pilot-check settings', () => {
     expect(failing(sameBucket)).toEqual([expect.stringContaining('BACKUP_S3_BUCKET is the files bucket itself')]);
     expect(failing({ ...READY, BACKUP_ENCRYPTION_KEY: 'change-me' })).toEqual([expect.stringContaining('BACKUP_ENCRYPTION_KEY is not 32 bytes')]);
     expect(failing({ ...READY, BACKUP_ENCRYPTION_KEY: READY.EXPORT_ENCRYPTION_KEY })).toEqual([expect.stringContaining('give each its own key')]);
+    // The same 32 bytes written as hex are the same key.
+    expect(failing({ ...READY, BACKUP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('hex') })).toEqual([expect.stringContaining('give each its own key')]);
     expect(failing({ ...READY, BACKUP_HEARTBEAT_URL: 'http://hc.example.com/ping/x' })).toEqual([expect.stringContaining('BACKUP_HEARTBEAT_URL is not https')]);
     // Without a key or a heartbeat it passes, and asks the owner to accept or fix each.
     const manual = checkEnv({ ...READY, BACKUP_ENCRYPTION_KEY: undefined, BACKUP_HEARTBEAT_URL: undefined }).filter((r) => r.item === 'Backups' && r.status !== 'pass');

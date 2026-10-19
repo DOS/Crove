@@ -9,12 +9,12 @@
 //      is offboarded, so the worker exports it;
 //   3. runs backup.sh with an impossible setting first and with a missing one (each must exit 1 and alert through the
 //      prober), then for real: a dump and a file copy, sealed with a throwaway BACKUP_ENCRYPTION_KEY (unless
-//      --seal off) and uploaded to the target bucket; then a fourth invoice and a stray blob in the bucket's blob
-//      store, and a second backup, which must upload only the new blob, link the old ones to the first run and delete
-//      the stray one;
+//      --seal off) and uploaded to the target bucket, where a stray blob in the blob store must wait for the next prune;
+//      then a fourth invoice and a second backup, which must upload only the new blob, link the old ones to the first
+//      run and delete the stray one;
 //   4. wipes the source stack and its volumes, and deletes the local copies of the runs;
-//   5. checks that restore.sh refuses a STORAGE that differs from the scratch stack's and a run with a file its
-//      checksums do not list, then runs restore.sh s3:latest onto a scratch stack (<prefix>-restore) with empty
+//   5. checks that restore.sh refuses a STORAGE that differs from the scratch stack's, a run with a file its
+//      checksums do not list and (sealing on) an unsealed run in the bucket, then runs restore.sh s3:latest onto a scratch stack (<prefix>-restore) with empty
 //      volumes and an empty bucket;
 //   6. signs in as the same user, finds the org, the four files with their bytes (read back through the API, so
 //      through the recorded object versions), the journal entry and the second org's export (downloaded, so its
@@ -38,6 +38,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { keyId, parseKey, sealFile } from './seal.mjs';
 
 // Forward slashes throughout: these paths reach bash, where a backslash is an escape.
 const ROOT = fileURLToPath(new URL('../../', import.meta.url)).replaceAll('\\', '/');
@@ -133,6 +134,12 @@ const docker = (argv, options = {}) => execFileSync('docker', argv, { encoding: 
 const compose = (stack, argv) => docker(['compose', ...argv], { env: stackEnv(stack), stdio: ['ignore', 'pipe', 'inherit'] });
 // The MinIO client inside the target container (its alias `local` is the target itself).
 const targetMc = (argv, options = {}) => docker(['exec', TARGET.name, 'mc', ...argv], options);
+// Puts an object into the target bucket under the default prefix (crove/).
+function putObject(key, bytes) {
+  writeFileSync(`${work}/object`, bytes);
+  docker(['cp', `${work}/object`, `${TARGET.name}:/tmp/object`]);
+  targetMc(['cp', '--quiet', '/tmp/object', `local/${TARGET.bucket}/crove/${key}`]);
+}
 const quietly = (fn) => {
   try {
     fn();
@@ -288,9 +295,9 @@ async function seed() {
 function backupFigures(output) {
   const uploaded = /(\d+) new blob\(s\) into (blobs\/\S+), (\d+) already there/.exec(output);
   const shared = /files: (\d+) blob\(s\), [^;]+; (\d+) shared with the previous run/.exec(output);
-  const pruned = /blob stores: (\d+) blob\(s\) listed by kept runs, (\d+) deleted/.exec(output);
+  const pruned = /blob stores: (\d+) blob\(s\) listed by kept runs, (\d+) deleted, (\d+) unlisted/.exec(output);
   assert(uploaded && shared && pruned, 'the backup log reports uploaded, shared and pruned blobs');
-  return { newBlobs: Number(uploaded[1]), store: uploaded[2], already: Number(uploaded[3]), blobs: Number(shared[1]), linked: Number(shared[2]), deleted: Number(pruned[2]) };
+  return { newBlobs: Number(uploaded[1]), store: uploaded[2], already: Number(uploaded[3]), blobs: Number(shared[1]), linked: Number(shared[2]), deleted: Number(pruned[2]), unlisted: Number(pruned[3]) };
 }
 
 async function verifyRestored(seeded) {
@@ -358,11 +365,18 @@ async function main() {
   assert(unset.output.includes('the backup failed.'), 'a missing setting alerts through the prober');
   log('failure path: a missing BACKUP_S3_BUCKET exited 1, logged [backup] FAILED and alerted');
 
+  // A stray object in the blob store that no run lists: the first prune notes it, the second deletes it.
+  const store = SEAL === 'on' ? `blobs/k${keyId(parseKey(targetEnv.BACKUP_ENCRYPTION_KEY)).toString('hex')}` : 'blobs/plain';
+  const stray = `${store}/org/00000000-0000-4000-8000-000000000000/${'0'.repeat(64)}`;
+  putObject(stray, Buffer.from('stray'));
+
   const first = await time('backup', async () => script('backup.sh', SRC, {}));
   assert(first.status === 0, `backup.sh exits 0 (got ${first.status})`);
   const one = backupFigures(first.output);
+  assert(one.store === store, `the run uses blob store ${store} (${one.store})`);
   // Org blobs (the invoices) go to the shared store; other files (the export's parts) travel with the run.
   assert(one.newBlobs >= seeded.files.length && one.already === 0, `the first run uploads every org blob (${one.newBlobs})`);
+  assert(one.deleted === 0 && one.unlisted === 1, `the stray blob waits a run (${one.deleted} deleted, ${one.unlisted} unlisted)`);
   assert(readFileSync(`${backupDir}/last-success`, 'utf8').includes(`ENCRYPTION=${SEAL === 'on' ? 'aes-256-gcm' : 'none'}`), 'last-success names the run');
   if (SEAL === 'on') {
     // Nothing readable in the bucket: run files are sealed (.enc), and neither the roles nor an invoice show.
@@ -377,29 +391,26 @@ async function main() {
     log('sealed: every run file and blob in the bucket is CRB1, with no plaintext roles or invoice');
   }
 
-  // A fourth invoice, and a stray object in the blob store that no run lists: the next run uploads only the new
-  // blob, links the others to the first run, and deletes the stray one.
+  // A fourth invoice: the next run uploads only its blob, links the others to the first run, and deletes the stray one.
   const fourth = invoice(4105);
   const fourthId = await upload(SRC, seeded.token, seeded.slug, 'hoadon-4105.xml', fourth);
   await proposalOf(SRC, seeded.token, seeded.slug, fourthId);
   seeded.files.push({ id: fourthId, bytes: fourth });
-  const stray = `local/${TARGET.bucket}/crove/${one.store}/org/00000000-0000-4000-8000-000000000000/${'0'.repeat(64)}`;
-  docker(['exec', TARGET.name, 'sh', '-c', `printf stray > /tmp/stray && mc cp --quiet /tmp/stray ${stray} >/dev/null`]);
   const second = await time('second backup (incremental)', async () => script('backup.sh', SRC, {}));
   assert(second.status === 0, `the second backup exits 0 (got ${second.status})`);
   const two = backupFigures(second.output);
   assert(two.store === one.store, 'both runs use the same blob store');
   assert(two.newBlobs >= 1 && two.already === one.newBlobs, `the second run uploads only new blobs (${two.newBlobs} new, ${two.already} already there)`);
   assert(two.linked >= one.newBlobs, `the second run links the first run's org blobs (${two.linked} of ${one.newBlobs})`);
-  assert(two.deleted === 1, `the stray blob is deleted (${two.deleted})`);
+  assert(two.deleted === 1 && two.unlisted === 0, `the stray blob is deleted (${two.deleted} deleted, ${two.unlisted} unlisted)`);
   let strayGone = false;
   try {
-    targetMc(['stat', stray]);
+    targetMc(['stat', `local/${TARGET.bucket}/crove/${stray}`]);
   } catch {
     strayGone = true;
   }
   assert(strayGone, 'the stray blob is gone from the bucket');
-  log(`incremental: ${two.newBlobs} new blob(s) uploaded, ${two.already} already there, ${two.linked} linked to the first run, the stray blob deleted`);
+  log(`incremental: ${two.newBlobs} new blob(s) uploaded, ${two.already} already there, ${two.linked} linked to the first run, the stray blob deleted on the second prune`);
 
   await time('wipe source', async () => {
     compose(SRC, ['down', '-v', '--remove-orphans']);
@@ -414,15 +425,33 @@ async function main() {
   assert(refused.status === 1, `restore.sh with STORAGE=${wrongStorage} exits 1 (got ${refused.status})`);
   assert(refused.output.includes(`the target compose project uses STORAGE=${DST.storage}`), 'restore.sh names the storage mismatch');
   log(`refused: restore.sh with STORAGE=${wrongStorage} onto a STORAGE=${DST.storage} stack`);
-  // A file the run's checksums do not list (here a stray blob in the run's directory) is refused too.
+  // A file the run's checksums do not list is refused too: a stray blob in the run's directory (sealed with the run's
+  // key when the run is sealed, so it opens and only the listing catches it).
   const latest = /run (\d{8}T\d{6}Z) into/.exec(second.output)[1];
-  const extra = `local/${TARGET.bucket}/crove/${latest}/files/org/${seeded.orgId}/stray`;
-  docker(['exec', TARGET.name, 'sh', '-c', `printf stray > /tmp/stray && mc cp --quiet /tmp/stray ${extra} >/dev/null`]);
+  const extraPath = `files/org/${seeded.orgId}/${'1'.repeat(64)}`;
+  const extra = `${latest}/${extraPath}${SEAL === 'on' ? '.enc' : ''}`;
+  if (SEAL === 'on') {
+    writeFileSync(`${work}/extra.plain`, 'stray');
+    sealFile(`${work}/extra.plain`, `${work}/extra.sealed`, `${latest}/${extraPath}`, parseKey(targetEnv.BACKUP_ENCRYPTION_KEY));
+    putObject(extra, readFileSync(`${work}/extra.sealed`));
+  } else {
+    putObject(extra, Buffer.from('stray'));
+  }
   const unlisted = script('restore.sh', DST, DST.storage === 's3' ? { RESTORE_PRESTART: 'db minio' } : {}, ['s3:latest']);
-  targetMc(['rm', '--quiet', extra]);
+  targetMc(['rm', '--quiet', `local/${TARGET.bucket}/crove/${extra}`]);
   assert(unlisted.status === 1, `restore.sh with an unlisted file exits 1 (got ${unlisted.status})`);
-  assert(/is not sealed|neither SHA256SUMS nor files\.sha256 lists/.test(unlisted.output), 'restore.sh names the unlisted file');
+  assert(unlisted.output.includes('neither SHA256SUMS nor files.sha256 lists'), 'restore.sh names the unlisted file');
   log('refused: a run with a file its checksums do not list');
+  if (SEAL === 'on') {
+    // An unsealed run in the bucket of a deployment that seals may come from whoever holds the bucket's keys alone.
+    const forged = '29991231T000000Z';
+    putObject(`${forged}/SHA256SUMS`, Buffer.from('forged\n'));
+    const downgrade = script('restore.sh', DST, DST.storage === 's3' ? { RESTORE_PRESTART: 'db minio' } : {}, ['s3:latest']);
+    targetMc(['rm', '--quiet', '--recursive', '--force', `local/${TARGET.bucket}/crove/${forged}/`]);
+    assert(downgrade.status === 1, `restore.sh of an unsealed run with a key set exits 1 (got ${downgrade.status})`);
+    assert(downgrade.output.includes('is not sealed although BACKUP_ENCRYPTION_KEY is set'), 'restore.sh names the unsealed run');
+    log('refused: an unsealed run in the bucket while BACKUP_ENCRYPTION_KEY is set');
+  }
 
   const restore = await time('restore (restore.sh s3:latest, until /readyz is green)', async () =>
     script('restore.sh', DST, DST.storage === 's3' ? { RESTORE_PRESTART: 'db minio', RESTORE_SAMPLE: '0' } : { RESTORE_SAMPLE: '0' }, ['s3:latest']),

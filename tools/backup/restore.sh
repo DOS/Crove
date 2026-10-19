@@ -32,7 +32,8 @@
 # sealed run), RESTORE_PRESTART, RESTORE_SAMPLE, RESTORE_FILES_SERVICE (default crove), BACKUP_NODE_SERVICE (default
 # crove), RESTORE_API_SERVICE (default crove when the stack defines it, else api), RESTORE_WORKER_SERVICE (default
 # crove when the stack defines it, else worker), RESTORE_GENERATIONS (versions, or content; default content on
-# storage.googleapis.com), RESTORE_READY_TIMEOUT (seconds, default 600).
+# storage.googleapis.com), RESTORE_READY_TIMEOUT (seconds, default 600), RESTORE_ALLOW_UNSEALED (yes restores an
+# unsealed run from the bucket although BACKUP_ENCRYPTION_KEY is set, for a run older than the key).
 set -Eeuo pipefail
 LOG_TAG=restore
 # shellcheck source=tools/backup/lib.sh
@@ -159,6 +160,13 @@ case "$SOURCE" in
       seal_run "$WORK" open open.list
       rm -rf "$WORK/fetched"
     else
+      # With a key set, runs in the bucket are sealed: an unsealed one there may have been written by whoever holds the
+      # bucket's keys alone, and its dump would be restored unchecked. Only an explicit choice restores it.
+      if [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] && [ "${RESTORE_ALLOW_UNSEALED:-}" != yes ]; then
+        STEP="checking the run: $RUN_ID in the bucket is not sealed although BACKUP_ENCRYPTION_KEY is set; restore it only if you know it predates the key (RESTORE_ALLOW_UNSEALED=yes)"
+        false
+      fi
+      [ -z "${BACKUP_ENCRYPTION_KEY:-}" ] || log "WARNING: restoring the unsealed run $RUN_ID although BACKUP_ENCRYPTION_KEY is set (RESTORE_ALLOW_UNSEALED=yes)"
       SEALED=0
       mv "$WORK/fetched" "$RUN"
     fi

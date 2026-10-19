@@ -247,8 +247,14 @@ export function checkEnv(env: Env): CheckResult[] {
   const backupKey = value(env, 'BACKUP_ENCRYPTION_KEY');
   if (backupKey) {
     try {
-      parseExportKey(backupKey);
-      if (backupKey === exportKey) backups.push('BACKUP_ENCRYPTION_KEY is EXPORT_ENCRYPTION_KEY: give each its own key (openssl rand -base64 32)');
+      const parsed = parseExportKey(backupKey);
+      let sameAsExport = false;
+      try {
+        sameAsExport = exportKey !== undefined && parseExportKey(exportKey).equals(parsed);
+      } catch {
+        // An invalid export key is reported under Secrets.
+      }
+      if (sameAsExport) backups.push('BACKUP_ENCRYPTION_KEY is EXPORT_ENCRYPTION_KEY: give each its own key (openssl rand -base64 32)');
     } catch {
       backups.push('BACKUP_ENCRYPTION_KEY is not 32 bytes as base64 or hex (openssl rand -base64 32)');
     }
