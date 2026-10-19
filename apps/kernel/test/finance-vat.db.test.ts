@@ -1,6 +1,7 @@
 // VAT working per month or quarter (issue #316), on a real PostgreSQL 17, through the HTTP API: the period's purchase
 // invoices by rate (voided documents left out), month and quarter ranges, the form 01/GTGT indicators, the empty sales
-// side, the Excel export with its audit row, the roles and the org boundary. The totals logic itself is unit-tested in
+// side, the Excel export with its audit row, the roles and the org boundary; then the HTKK XML of form 01/GTGT
+// (#332): refused without the org tax code, its audit row, the roles and the org boundary. The totals logic itself is unit-tested in
 // modules/finance/test/vat-return.test.ts.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
@@ -273,5 +274,69 @@ suite('VAT working per month or quarter (#316)', () => {
     // A malformed period downloads nothing and records nothing.
     expect((await exportFile(await tokenFor(owner), '2026-Q9')).status).toBe(422);
     expect(await exportAudits()).toHaveLength(1);
+  });
+
+  // The HTKK XML of form 01/GTGT (#332). These run last: they set the org's tax code, which the tests above expect
+  // to be missing. The org is the fixture's buyer, so the recorded invoices stay purchases.
+  const BUYER_TAX_CODE = '0309876546';
+  const exportXml = async (token: string, period: string, slug = org.slug) =>
+    app.request(`/api/export/vat-01gtgt.xml?${new URLSearchParams({ period })}`, { headers: { authorization: `Bearer ${token}`, 'x-crove-org': slug } });
+  const xmlAudits = async () => (await exportAudits()).filter((row: { detail: { format?: string } }) => row.detail.format === 'htkk_01gtgt_xml');
+  const valueOf = (xml: string, tag: string) => new RegExp(`<${tag}>([^<]*)</${tag}>`).exec(xml)?.[1];
+
+  it('refuses the HTKK XML while the org has no tax code, and records nothing', async () => {
+    const response = await exportXml(await tokenFor(owner), '2026-09');
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ code: 'TAX_CODE_REQUIRED' });
+    expect(response.headers.get('content-disposition')).toBeNull();
+    expect(await xmlAudits()).toEqual([]);
+  });
+
+  it('exports the period as the HTKK XML of form 01/GTGT with the org tax code, and records the export', async () => {
+    const set = await rpc('org/setTaxCode', await tokenFor(owner), { taxCode: BUYER_TAX_CODE });
+    expect(set.status).toBe(200);
+
+    const month = await exportXml(await tokenFor(viewer), '2026-09');
+    expect(month.status).toBe(200);
+    expect(month.headers.get('content-type')).toBe('application/xml; charset=utf-8');
+    expect(month.headers.get('content-disposition')).toBe(`attachment; filename="crove-01gtgt-2026-09-${org.slug}.xml"`);
+    expect(month.headers.get('cache-control')).toBe('private, no-store');
+    const xml = await month.text();
+    expect(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>')).toBe(true);
+    expect(valueOf(xml, 'mst')).toBe(BUYER_TAX_CODE);
+    expect(valueOf(xml, 'tenNNT')).toBe('Công ty Tờ khai GTGT');
+    expect(valueOf(xml, 'kieuKy')).toBe('M');
+    expect(valueOf(xml, 'kyKKhai')).toBe('09/2026');
+    expect(valueOf(xml, 'ct23')).toBe('1800000');
+    expect(valueOf(xml, 'ct24')).toBe('180000');
+    expect(valueOf(xml, 'ct32')).toBe('0');
+
+    const quarter = await exportXml(await tokenFor(owner), '2026-Q3');
+    expect(quarter.status).toBe(200);
+    const quarterly = await quarter.text();
+    expect(valueOf(quarterly, 'kieuKy')).toBe('Q');
+    expect(valueOf(quarterly, 'kyKKhai')).toBe('3/2026');
+    expect(valueOf(quarterly, 'ct23')).toBe('3600000');
+    expect(valueOf(quarterly, 'ct24')).toBe('360000');
+
+    expect((await xmlAudits()).map((row: { detail: unknown }) => row.detail)).toEqual([
+      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml' },
+      { period: '2026-Q3', documents: 2, format: 'htkk_01gtgt_xml' },
+    ]);
+    // A malformed period downloads nothing and records nothing.
+    expect((await exportXml(await tokenFor(owner), '2026-13')).status).toBe(422);
+    expect(await xmlAudits()).toHaveLength(2);
+  });
+
+  it('keeps the HTKK XML to members of the org', async () => {
+    const before = (await xmlAudits()).length;
+    const foreign = await exportXml(await tokenFor(outsider), '2026-09');
+    expect(foreign.status).toBeGreaterThanOrEqual(400);
+    expect(await foreign.text()).not.toContain(BUYER_TAX_CODE);
+    // The outsider's own org has no tax code: refused too, and neither attempt is recorded in this org.
+    expect((await exportXml(await tokenFor(outsider), '2026-09', otherOrg.slug)).status).toBe(422);
+    expect(await xmlAudits()).toHaveLength(before);
+    const unauthenticated = await app.request(`/api/export/vat-01gtgt.xml?period=2026-09`, { headers: { 'x-crove-org': org.slug } });
+    expect(unauthenticated.status).toBe(401);
   });
 });

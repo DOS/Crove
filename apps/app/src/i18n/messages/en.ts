@@ -212,6 +212,11 @@ export const en = {
       'Sales and purchase invoices of a month or a quarter, totals by VAT rate and the indicators of form 01/GTGT. Your accountant checks them before filing.',
     export: 'Export to Excel',
     exportFile: 'crove-vat-{period}-{org}.xlsx',
+    exportXml: 'Export XML for HTKK',
+    exportXmlFile: 'crove-01gtgt-{period}-{org}.xml',
+    xmlNote:
+      'The XML file for HTKK (form 01/GTGT of Circular 80/2021, XML version 2.8.3) carries the indicators above. Indicators [22], [25] and [37] to [39a], the tax office and the signer are left blank; until [25] is entered, the payable VAT in the file assumes no input VAT is deducted. Your accountant completes and checks it in HTKK or on eTax before filing.',
+    exportXmlNeedsTaxCode: 'To export the return as XML for HTKK, set the tax code of your organization in Settings.',
     kind: 'Period',
     month: 'Month',
     quarter: 'Quarter',
@@ -1446,6 +1451,7 @@ export const en = {
       EXPORT_PENDING: 'Data is being exported. Wait for the current export to finish, then try again.',
       EXPORT_TOO_LARGE: 'Too many journal entries to export at once. Choose a shorter date range.',
       PERIOD_TOO_LARGE: 'This period has too many invoices or entries to report at once; choose a shorter period.',
+      TAX_CODE_REQUIRED: 'Your organization has no tax code yet. Set it in Settings, then export again.',
       // Crove Social and connected channels.
       POST_NOT_FOUND: 'This post was not found',
       VARIANT_NOT_FOUND: 'This channel of the post was not found',
