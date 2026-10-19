@@ -13,10 +13,12 @@ export function chunks<T>(items: readonly T[], size: number = BULK_LIMIT): T[][]
   return out;
 }
 
-// Whether a list row can be selected for bulk approval: a pending purchase with no failed check and no duplicate
-// warning. A failed check needs the approver to confirm the original document one by one (acceptFailedChecks), which a
-// bulk approval never does; a possible duplicate and a reversal (it voids a posted document) are reviewed one by one
-// too. The server still decides each item (four-eyes, eligibility, revision) and refuses what it would refuse alone.
+// Whether a list row can be selected for bulk approval: a pending proposal that is not a reversal, with no failed check
+// and no duplicate warning. That takes purchases and sales read from invoices and cash and bank vouchers (#327; they
+// carry no checks and no duplicate, and are approved as shown, as one by one). A failed check needs the approver to
+// confirm the original document one by one (acceptFailedChecks), which a bulk approval never does; a possible duplicate
+// and a reversal (it voids a posted document) are reviewed one by one too. The server still decides each item
+// (four-eyes, eligibility, revision, the voucher's own rules) and refuses what it would refuse alone.
 export function bulkSelectable(item: { status: string; failedChecks: number; kind: string; duplicateOf: string | null }, reversalKind: string): boolean {
   return item.status === 'pending' && item.failedChecks === 0 && item.duplicateOf === null && item.kind !== reversalKind;
 }

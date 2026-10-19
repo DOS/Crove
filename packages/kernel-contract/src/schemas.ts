@@ -329,7 +329,7 @@ export const zInboxDetail = zInboxItem.extend({
   decidedAt: z.string().nullable(),
   decisionNote: z.string().nullable(),
   // A purchase returns its document; a reversal returns the entry it reversed and, for a purchase entry, the
-  // document it voided (#165); a voucher returns the voucher (#327).
+  // document it voided (#165); a voucher returns the voucher and the code it was given (PC00001 and the like; #327).
   result: z
     .object({
       documentId: zId.optional(),
@@ -337,6 +337,7 @@ export const zInboxDetail = zInboxItem.extend({
       reversedEntryId: zId.optional(),
       voidedDocumentId: zId.optional(),
       voucherId: zId.optional(),
+      voucherCode: z.string().optional(),
     })
     .nullable(),
   // An executed purchase whose document was voided by reversing its journal entry (#165): the file may be read again

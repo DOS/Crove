@@ -1,7 +1,7 @@
 // Which errors of a nested approval refuse only that item of a bulk approval (issue #315): an explicit list of
 // per-proposal codes, never a status. The database flows are in bulk-approve-api.db.test.ts and the invariant suite.
 import { describe, expect, it } from 'vitest';
-import { BULK_ITEM_REFUSALS, isBulkItemRefusal } from '@crove/kernel';
+import { BULK_ITEM_REFUSALS, bulkApproveOrder, isBulkItemRefusal } from '@crove/kernel';
 import { DomainError } from '@crove/kernel-runtime';
 
 describe('bulk approval item refusals', () => {
@@ -42,5 +42,34 @@ describe('bulk approval item refusals', () => {
     for (const code of ['FORBIDDEN', 'STEP_UP_REQUIRED', 'AUTH_UNAVAILABLE', 'NOT_A_MEMBER', 'INTERNAL', 'RETRY']) {
       expect(BULK_ITEM_REFUSALS.has(code)).toBe(false);
     }
+  });
+});
+
+describe('bulk approval order (#509)', () => {
+  const item = (id: string) => ({ id, revision: 1 });
+
+  it('keeps id order for every proposal that is not a voucher', () => {
+    expect(bulkApproveOrder([item('c'), item('a'), item('b')], new Map()).map((i) => i.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('runs vouchers after the rest, by voucher type then id, so concurrent batches take numbering locks in one order', () => {
+    const types = new Map([
+      ['a', 'cash_payment'],
+      ['b', 'cash_receipt'],
+      ['d', 'bank_debit'],
+      ['e', 'bank_credit'],
+      ['f', 'cash_receipt'],
+    ]);
+    const order = bulkApproveOrder([item('f'), item('e'), item('d'), item('c'), item('b'), item('a'), item('g')], types).map((i) => i.id);
+    expect(order).toEqual(['c', 'g', 'b', 'f', 'a', 'e', 'd']);
+    // Two batches that would cross in id order (PT then PC, and PC then PT) both take PT first.
+    expect(bulkApproveOrder([item('b'), item('a')], types).map((i) => types.get(i.id))).toEqual(['cash_receipt', 'cash_payment']);
+    expect(bulkApproveOrder([item('a'), item('f')], types).map((i) => types.get(i.id))).toEqual(['cash_receipt', 'cash_payment']);
+  });
+
+  it('does not change the items it is given', () => {
+    const items = [item('b'), item('a')];
+    bulkApproveOrder(items, new Map());
+    expect(items.map((i) => i.id)).toEqual(['b', 'a']);
   });
 });

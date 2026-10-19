@@ -32,7 +32,6 @@ export * from './domain/ledger-reports.ts';
 export * from './domain/opening-balance.ts';
 export * from './domain/cash-voucher.ts';
 export { type OrgChartAccount } from './accounts.ts';
-export { VOUCHER_LIST_LIMIT } from './cash-voucher.ts';
 export { REVERSAL_COMMAND, REVERSAL_KIND, zJournalReversal, type JournalReversal } from './reversal.ts';
 export { JOURNAL_EXPORT_LIMIT, VOIDED_PROPOSALS_QUERY, type JournalEntryView } from './queries.ts';
 export {

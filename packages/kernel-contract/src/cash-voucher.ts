@@ -33,6 +33,9 @@ export function voucherCode(type: VoucherType, number: number): string {
   return `${VOUCHER_PREFIXES[type]}${String(number).padStart(5, '0')}`;
 }
 
+// A code voucherCode writes: a prefix and at least five digits.
+export const zVoucherCode = z.string().regex(/^(PT|PC|BC|BN)\d{5,}$/);
+
 // Money in (receipts and bank credits: the cash or bank account is debited) or out (payments and bank debits).
 export function isInflow(type: VoucherType): boolean {
   return type === 'cash_receipt' || type === 'bank_credit';
@@ -81,3 +84,14 @@ export const zCashVoucherView = z.object({
   proposalId: zId.nullable(),
 });
 export type CashVoucherView = z.infer<typeof zCashVoucherView>;
+
+// The most vouchers one page of finance.vouchers.list holds; the next page starts after the last one shown.
+export const VOUCHER_PAGE_SIZE = 100;
+
+// Where a page starts: after this voucher, in the list's order (newest date first, then newest voucher first).
+export const zVoucherCursor = z.object({ date: zLocalDate, id: zId });
+export type VoucherCursor = z.infer<typeof zVoucherCursor>;
+
+// One page of the vouchers screen: more says whether older vouchers follow.
+export const zCashVoucherPage = z.object({ items: z.array(zCashVoucherView), more: z.boolean() });
+export type CashVoucherPage = z.infer<typeof zCashVoucherPage>;
