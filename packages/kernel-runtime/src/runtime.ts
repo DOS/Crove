@@ -968,20 +968,35 @@ export class Runtime {
         await sql`ROLLBACK TO SAVEPOINT ${savepoint}`.execute(trx);
         await sql`RELEASE SAVEPOINT ${savepoint}`.execute(trx);
       };
+      // Before an error propagates: a failed rollback (the connection may be gone) never replaces the original
+      // error, which is what the caller needs; it is logged with ids and codes only.
+      const discardQuietly = async (original: unknown) => {
+        try {
+          await discard();
+        } catch (rollbackError) {
+          const sqlState = (rollbackError as { code?: unknown } | null)?.code;
+          console.error(`[command ${def.name}] TRY_RUN_ROLLBACK_FAILED`, {
+            orgId: base.orgId,
+            commandId,
+            nested: nested.def.name,
+            error: original instanceof DomainError ? original.code : 'INTERNAL',
+            sqlState: typeof sqlState === 'string' ? sqlState : null,
+          });
+        }
+      };
       let value: R;
       try {
         value = await runNested<R>(nested);
       } catch (error) {
         if (!(error instanceof DomainError)) {
-          // Best effort (the connection may be gone); the original error is what the caller needs.
-          await discard().catch(() => undefined);
+          await discardQuietly(error);
           throw error;
         }
         // The snapshot the row is written from, taken before anyone else sees the refusal again.
         const code = error.code;
         const status = error.status;
         if (!AUDITED_REFUSAL_STATUSES.has(status) || isNeverRecovered(code)) {
-          await discard();
+          await discardQuietly(error);
           throw error;
         }
         const snapshot: CaughtRefusal = Object.freeze({
@@ -1003,11 +1018,15 @@ export class Runtime {
         try {
           recovered = options.recover(refusal) === true;
         } catch (recoverError) {
-          await discard();
+          await discardQuietly(recoverError);
           throw recoverError;
         }
+        if (!recovered) {
+          await discardQuietly(error);
+          throw error;
+        }
+        // Recovered: the caller goes on, so a failed rollback fails it here rather than keep the refused writes.
         await discard();
-        if (!recovered) throw error;
         caught.push(snapshot);
         return { status: 'refused', refusal };
       }
