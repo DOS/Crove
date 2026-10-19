@@ -485,6 +485,7 @@ export const vi = {
     reading: 'Đang đọc file…',
     checking: 'Đang kiểm tra…',
     chooseDate: 'Hãy chọn ngày của số dư đầu kỳ.',
+    extraColumns: 'File có dữ liệu sau cột D (Dư Có); Crove chỉ đọc 4 cột của mẫu nên phần đó bị bỏ qua. Hãy chuyển số liệu vào đúng cột Dư Nợ hoặc Dư Có nếu cần.',
     fileProblems: {
       template: 'File không đúng mẫu: dòng đầu tiên phải là các cột Mã tài khoản, Tên tài khoản, Dư Nợ, Dư Có. Hãy tải file mẫu và điền vào đó.',
       empty: 'File không có dòng số dư nào.',

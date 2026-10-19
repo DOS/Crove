@@ -43,7 +43,8 @@ export function buildTemplate(accounts: ReadonlyArray<{ code: string; name: stri
 }
 
 export type SheetProblem = 'template' | 'empty' | 'too_many';
-export type SheetImport = { ok: true; rows: OpeningBalanceRow[] } | { ok: false; problem: SheetProblem };
+// extraColumns: some row has a cell after column D, which the import does not read (the screen says so).
+export type SheetImport = { ok: true; rows: OpeningBalanceRow[]; extraColumns: boolean } | { ok: false; problem: SheetProblem };
 
 const header = (text: string) => text.normalize('NFC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('vi');
 const MAX_CELL = 50;
@@ -52,9 +53,13 @@ const MAX_CELL = 50;
 // would be another number.
 const bounded = (text: string) => (text.length > MAX_CELL ? '?' : text);
 const codeOf = (cell: SheetCell | undefined) => bounded(cell?.value.trim() ?? '');
+// A number cell's stored value may carry an exponent (Excel writes 1E+16); a typed text never does, so a text such as
+// "1e3" is sent as a value the kernel refuses instead of 1000 (#366).
 const amountOf = (cell: SheetCell | undefined) => {
   if (!cell) return '';
-  return bounded(cell.kind === 'number' ? cell.value : normalizeAmountText(cell.value));
+  if (cell.kind === 'number') return bounded(cell.value);
+  const text = normalizeAmountText(cell.value);
+  return /[eE]/.test(text) ? '?' : bounded(text);
 };
 
 // The rows of a filled template: row 1 must be the template's headers; every later row with any of the four cells
@@ -64,9 +69,13 @@ export function sheetToRows(sheet: SheetRows): SheetImport {
   const matches = TEMPLATE_HEADERS.every((h, col) => header(first?.get(col)?.value ?? '') === header(h));
   if (!matches) return { ok: false, problem: 'template' };
   const rows: OpeningBalanceRow[] = [];
+  let extraColumns = false;
   for (const rowNo of [...sheet.keys()].sort((a, b) => a - b)) {
-    if (rowNo === 1) continue;
     const cells = sheet.get(rowNo);
+    for (const [col, cell] of cells ?? []) {
+      if (col > 3 && cell.value.trim() !== '') extraColumns = true;
+    }
+    if (rowNo === 1) continue;
     const values = [0, 1, 2, 3].map((col) => cells?.get(col)?.value.trim() ?? '');
     if (values.every((v) => v === '')) continue;
     if (rows.length === OPENING_BALANCE_MAX_ROWS) return { ok: false, problem: 'too_many' };
@@ -78,5 +87,5 @@ export function sheetToRows(sheet: SheetRows): SheetImport {
       credit: amountOf(cells?.get(3)),
     });
   }
-  return rows.length === 0 ? { ok: false, problem: 'empty' } : { ok: true, rows };
+  return rows.length === 0 ? { ok: false, problem: 'empty' } : { ok: true, rows, extraColumns };
 }
