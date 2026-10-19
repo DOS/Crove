@@ -27,11 +27,15 @@ export const vi = {
     closeMenu: 'Đóng menu',
   },
   hero: {
-    line1: 'Hoá đơn về là có bút toán.',
-    line2: 'Bạn chỉ cần kiểm tra và duyệt.',
-    lead: 'Crove đọc hoá đơn điện tử, kiểm tra từng con số và soạn sẵn bút toán theo Thông tư 133. Bạn xem lại, sửa tài khoản nếu cần, rồi bấm duyệt.',
+    title: 'Agent AI làm việc dưới quyền của bạn.',
+    lead: 'Mỗi agent là một vị trí trong sơ đồ tổ chức: có người quản lý, ngân sách tháng, giới hạn rủi ro và nút dừng. Agent Kế toán đọc hoá đơn và soạn sẵn bút toán; chỉ người có thẩm quyền mới duyệt và ghi sổ.',
     primary: 'Tự cài đặt miễn phí',
     secondary: 'Xem mã nguồn trên GitHub',
+    note: 'Mã nguồn mở AGPL. Cài trên máy chủ của bạn bằng docker compose. Crove Cloud sắp ra mắt.',
+  },
+  tour: {
+    title: 'Duyệt cả tháng chứng từ bằng bàn phím',
+    lead: 'Crove đọc hoá đơn điện tử, kiểm tra từng con số và soạn sẵn bút toán theo Thông tư 133. Bạn xem lại, sửa tài khoản nếu cần, rồi bấm duyệt.',
     sample: 'Dữ liệu mẫu',
     replay: 'Xem lại',
   },
@@ -114,7 +118,6 @@ export const vi = {
     ],
   },
   keys: {
-    title: 'Xử lý chứng từ cả tháng chỉ bằng bàn phím',
     items: [
       { keys: ['J', 'K'], label: 'Di chuyển', body: 'Lên xuống giữa các dòng trong AI Inbox.' },
       { keys: ['A'], label: 'Duyệt', body: 'Hỏi mã hai lớp rồi ghi sổ.' },
@@ -190,8 +193,6 @@ export const vi = {
     },
   },
   agents: {
-    title: 'Agent AI làm việc dưới quyền của bạn',
-    lead: 'Mỗi agent là một vị trí trong sơ đồ tổ chức: có người quản lý, ngân sách tháng, giới hạn rủi ro và nút dừng. Agent chỉ đề xuất, quy tắc kiểm tra quyết định số liệu đúng hay sai, và chỉ khi có người duyệt thì mới ghi sổ.',
     chartTitle: 'Sơ đồ tổ chức',
     chartSub: 'Gạo Sạch Mekong, dữ liệu mẫu',
     legendPerson: 'Người',

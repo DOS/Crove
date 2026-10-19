@@ -66,8 +66,8 @@ export function OrgChart({ dict }: { dict: Dictionary }) {
   const node = (id: PanelId) => <NodeCard node={byId[id]} selected={selected === id} onSelect={() => setSelected(id)} a={a} />;
 
   return (
-    <div className="grid overflow-hidden rounded-lg border border-line bg-surface lg:grid-cols-[minmax(0,1fr)_340px]">
-      <div className="min-w-0 border-b border-line lg:border-r lg:border-b-0">
+    <div className="grid overflow-hidden rounded-lg border border-line bg-surface xl:grid-cols-[minmax(0,1fr)_300px]">
+      <div className="min-w-0 border-b border-line xl:border-r xl:border-b-0">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
           <div className="text-sm">
             <span className="font-semibold">{a.chartTitle}</span> <span className="text-subtle">{a.chartSub}</span>

@@ -9,7 +9,7 @@ const TONES = ['neutral', 'ok', 'accent', 'ok'] as const;
 export function HowItWorks({ dict }: { dict: Dictionary }) {
   const { flow } = dict;
   return (
-    <Section id="san-pham" labelledBy="flow-title">
+    <Section id="cach-lam" labelledBy="flow-title">
       <SectionHead id="flow-title" title={flow.title} lead={flow.lead} />
       <ol className="relative grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {flow.steps.map((step, i) => (

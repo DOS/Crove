@@ -27,11 +27,15 @@ export const en: Dictionary = {
     closeMenu: 'Close menu',
   },
   hero: {
-    line1: 'Invoices in, journal entries ready.',
-    line2: 'You just review and approve.',
-    lead: 'Crove reads Vietnamese e-invoices, checks every number and proposes a journal entry under Circular 133. You review it, change an account if needed, and approve.',
+    title: 'AI agents work under your authority.',
+    lead: 'Each agent is a position in your org chart, with a manager, a monthly budget, a risk limit and a kill switch. The accounting agent reads invoices and drafts the entries; only a person with the authority approves and posts them.',
     primary: 'Self-host for free',
     secondary: 'View the source on GitHub',
+    note: 'Open source under the AGPL. Runs on your own server with docker compose. Crove Cloud is coming soon.',
+  },
+  tour: {
+    title: 'A month of documents, approved from the keyboard',
+    lead: 'Crove reads Vietnamese e-invoices, checks every number and proposes a journal entry under Circular 133. You review it, change an account if needed, and approve.',
     sample: 'Example data',
     replay: 'Replay',
   },
@@ -114,7 +118,6 @@ export const en: Dictionary = {
     ],
   },
   keys: {
-    title: 'A month of documents, done from the keyboard',
     items: [
       { keys: ['J', 'K'], label: 'Move', body: 'Step through the rows of the AI Inbox.' },
       { keys: ['A'], label: 'Approve', body: 'Asks for a two-factor code, then posts.' },
@@ -190,8 +193,6 @@ export const en: Dictionary = {
     },
   },
   agents: {
-    title: 'AI agents work under your authority',
-    lead: 'Each agent is a position in your org chart, with a manager, a monthly budget, a risk limit and a kill switch. Agents propose, fixed checks decide whether the numbers are right, and a person approves before anything is posted.',
     chartTitle: 'Org chart',
     chartSub: 'Gạo Sạch Mekong, example data',
     legendPerson: 'Person',

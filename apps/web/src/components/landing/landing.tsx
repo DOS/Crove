@@ -7,6 +7,7 @@ import { Ledger } from './ledger';
 import { Modules } from './modules';
 import { OwnerPhone } from './owner-phone';
 import { Pricing } from './pricing';
+import { ProductTour } from './product-tour';
 import { SiteFooter } from './site-footer';
 import { SiteHeader } from './site-header';
 import { Trust } from './trust';
@@ -19,6 +20,7 @@ export function Landing({ dict }: { dict: Dictionary }) {
       <SiteHeader dict={dict} />
       <main id="main">
         <Hero dict={dict} />
+        <ProductTour dict={dict} />
         <HowItWorks dict={dict} />
         <Ledger dict={dict} />
         <Agents dict={dict} />
