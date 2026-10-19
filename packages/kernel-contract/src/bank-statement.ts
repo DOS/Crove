@@ -160,6 +160,13 @@ export const zBankLineVoucher = z.object({
 });
 export type BankLineVoucher = z.infer<typeof zBankLineVoucher>;
 
+// The open statement lines of each bank account (no voucher, none waiting for approval), which the Inbox lists as lines
+// to resolve (#326, stage 2b): how many, how many were flagged as ambiguous at import, and the oldest one's date.
+export const zBankOpenLines = z.object({
+  accounts: z.array(z.object({ bankAccount: z.string(), open: z.number().int().nonnegative(), ambiguous: z.number().int().nonnegative(), oldest: zLocalDate })),
+});
+export type BankOpenLines = z.infer<typeof zBankOpenLines>;
+
 // A text cell of an amount as banks print them, made plain for the module. Spaces, a "VND", "đ" or "₫" suffix and a
 // leading "+" are dropped; "" or "-" means none. With both "." and "," the one written last is the decimal point
 // ("1,500,000.50", "1.500.000,50"). With one kind only, groups of three are thousands ("1.500.000", "1,500"), and a

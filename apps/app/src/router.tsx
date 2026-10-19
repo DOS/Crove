@@ -175,8 +175,18 @@ const vatRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vat', befo
 const portalListRoute = createRoute({ getParentRoute: () => orgRoute, path: 'portal-invoices', beforeLoad: requireFinance, component: PortalListPage });
 // Ledger reports per month, quarter or year (issue #321).
 const ledgerRoute = createRoute({ getParentRoute: () => orgRoute, path: 'ledger', beforeLoad: requireFinance, component: LedgerPage });
-// Bank statements per bank account (issue #326).
-const bankRoute = createRoute({ getParentRoute: () => orgRoute, path: 'bank', beforeLoad: requireFinance, component: BankPage });
+// Bank statements per bank account (issue #326). ?account=1121&month=2026-09 opens that account and month (the Inbox
+// links its open lines here).
+const bankRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: 'bank',
+  beforeLoad: requireFinance,
+  validateSearch: (search: Record<string, unknown>): { account?: string; month?: string } => ({
+    ...(typeof search.account === 'string' && /^[0-9A-Za-z._-]{3,50}$/.test(search.account) ? { account: search.account } : {}),
+    ...(typeof search.month === 'string' && /^\d{4}-\d{2}$/.test(search.month) ? { month: search.month } : {}),
+  }),
+  component: BankPage,
+});
 // Opening balances from Excel (#320), reached from the journal.
 const openingBalanceRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal/opening-balances', beforeLoad: requireFinance, component: OpeningBalancePage });
 // The Vietnamese quick guide (issue #310), linked from the empty Inbox; it walks through finance screens.
