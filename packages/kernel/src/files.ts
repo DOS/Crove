@@ -68,6 +68,20 @@ export async function ingestFileRow(ctx: CommandContext, input: IngestFile, crea
     if (input.source === 'social' && existing.source !== 'social') {
       throw new DomainError('FILE_IS_DOCUMENT', 409, 'Ảnh này đã có trong chứng từ kế toán của tổ chức, hãy dùng ảnh khác cho bài đăng');
     }
+    // A spreadsheet stored for an import (#465) and a document are told apart by how they were first stored, and the
+    // file row keeps that (#506). Bytes first stored as an import are recorded as an .xlsx workbook, so reading them
+    // as a document would open the workbook's own parts as a ZIP of documents: a direct upload of those bytes as a
+    // document is refused with the reason instead of answering "duplicate" and reading nothing. An emailed copy stays
+    // a duplicate (refusing it would refuse the whole message). A ZIP's entries (source upload) never reach this: only
+    // entries the worker sniffed as a document type are filed, and the same bytes sniff as a ZIP for an import. The
+    // other way round, an import upload of a document's bytes is refused here too, and finance.portal_list.import
+    // takes only files stored as an import.
+    if (input.source === 'upload' && existing.source === 'import') {
+      throw new DomainError('FILE_IS_IMPORT', 409, 'Tệp này đã được tải lên làm danh sách hóa đơn từ cổng thuế nên không được đọc như chứng từ; nếu đây là tệp ZIP chứng từ, hãy nén lại thành tệp mới rồi tải lên');
+    }
+    if (input.source === 'import' && existing.source !== 'import') {
+      throw new DomainError('FILE_IS_NOT_IMPORT', 409, 'Tệp này đã có trong chứng từ của tổ chức nên không nhập làm danh sách được; hãy xuất lại danh sách từ cổng thuế rồi tải lên');
+    }
     // A document whose bytes were first uploaded as a post image is still read as a document, once.
     if (isDocumentSource(input.source) && existing.source === 'social') {
       const read = await ctx.trx.selectFrom('crove_kernel.extraction').select('id').where('org_id', '=', ctx.orgId).where('file_id', '=', existing.id).limit(1).executeTakeFirst();

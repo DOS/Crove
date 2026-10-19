@@ -31,6 +31,26 @@ export function itemsByOutcome(items: readonly ReconcileItem[]): Map<ReconcileOu
   return out;
 }
 
+// How many items an outcome has in all (the summary counts every item; the list may stop short, #506).
+export function outcomeTotal(summary: PortalReconciliation['summary'], outcome: ReconcileOutcome): number {
+  switch (outcome) {
+    case 'missing':
+      return summary.missing;
+    case 'void_in_crove':
+      return summary.voidInCrove;
+    case 'amount_mismatch':
+      return summary.amountMismatch;
+    case 'not_on_portal':
+      return summary.notOnPortal;
+    case 'in_inbox':
+      return summary.inInbox;
+    case 'matched':
+      return summary.matched;
+    case 'void':
+      return summary.void;
+  }
+}
+
 // While a list is being read the screen asks again every few seconds.
 export function pollWhilePending(data: PortalReconciliation | undefined, ms = 2000): number | false {
   return data?.lists.some((l) => l.status === 'pending') ? ms : false;

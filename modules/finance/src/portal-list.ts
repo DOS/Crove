@@ -26,13 +26,14 @@ import {
   PORTAL_LIST_SKIP_REASONS,
   XLSX_CONTENT_TYPE,
   zId,
+  zLocalDate,
   zVatPeriod,
   type PortalListView,
   type PortalReconciliation,
 } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, readVerified, type BlobStore, type QueryContext, type Runtime } from '@crove/kernel-runtime';
-import { parseTaxCode, toMoney, money } from '@crove/l10n-vn';
+import { isCalendarDate, parseTaxCode, toMoney, money } from '@crove/l10n-vn';
 import { portalStatus } from './domain/portal-status.ts';
 import { reconcilePortalList, type CroveInvoice, type PortalRow } from './domain/portal-reconcile.ts';
 import { vatPeriod } from './domain/vat-return.ts';
@@ -42,8 +43,17 @@ const EDITORS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const PORTAL_LIST_ACTOR = { type: 'system' as const, component: 'finance.portal_list' };
 // Purchase documents and proposals read for one reconciliation; more is refused rather than cut short.
 export const PORTAL_RECONCILE_LIMIT = 20_000;
+// Rows of the done lists of one period, all lists together. A list that would take the period past it is recorded as
+// failed, so a reconciliation (any role may run it, and the screen polls it while a list is read) reads a bounded
+// number of rows (#506).
+export const PORTAL_PERIOD_ROW_LIMIT = 50_000;
+// Reconciliation items returned per outcome. The summary counts every item; a section past the limit shows its first
+// items (in the order of reconcilePortalList) and says how many there are in all.
+export const PORTAL_RECONCILE_ITEMS_PER_OUTCOME = 500;
 const ROW_INSERT_BATCH = 500;
-const IMPORT_TYPES = [XLSX_CONTENT_TYPE, 'application/zip'];
+const vnNumber = (n: number) => n.toLocaleString('vi-VN');
+const periodLock = (orgId: string, period: string) =>
+  sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`finance.portal_list:${orgId}:${period}`}, 0))`;
 
 export const portalListImport = defineCommand({
   name: 'finance.portal_list.import',
@@ -54,12 +64,16 @@ export const portalListImport = defineCommand({
     vatPeriod(input.period);
     const file = await ctx.trx
       .selectFrom('crove_kernel.file')
-      .select(['id', 'filename', 'content_type', 'size_bytes'])
+      .select(['id', 'filename', 'content_type', 'size_bytes', 'source'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.fileId)
       .executeTakeFirst();
     if (!file) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy tệp đã tải lên');
-    if (!IMPORT_TYPES.includes(file.content_type)) throw new DomainError('UNSUPPORTED_TYPE', 415, 'Danh sách hóa đơn phải là tệp Excel .xlsx');
+    // Only a workbook uploaded for an import (purpose 'import': a ZIP container recorded as .xlsx, never sent to
+    // extraction). An uploaded or emailed document, even a ZIP, is not a portal list (#506).
+    if (file.source !== 'import' || file.content_type !== XLSX_CONTENT_TYPE) {
+      throw new DomainError('UNSUPPORTED_TYPE', 415, 'Danh sách hóa đơn phải là tệp Excel .xlsx tải lên ở màn hình đối chiếu với cổng thuế');
+    }
     if (Number(file.size_bytes) > MAX_IMPORT_BYTES) throw new DomainError('TOO_LARGE', 413, 'Tệp danh sách vượt quá 10 MB');
     // A purchase list is told apart from another company's or the sales list by the org's tax code (checkPortalList).
     const tenant = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
@@ -67,7 +81,7 @@ export const portalListImport = defineCommand({
       throw new DomainError('TAX_CODE_REQUIRED', 409, 'Hãy nhập mã số thuế của công ty trong Cài đặt trước khi nhập danh sách hóa đơn từ cổng thuế');
     }
     // Serializes imports of one period, so the count below and the unique index agree.
-    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`finance.portal_list:${ctx.orgId}:${input.period}`}, 0))`.execute(ctx.trx);
+    await periodLock(ctx.orgId, input.period).execute(ctx.trx);
     const active = await ctx.trx
       .selectFrom('crove_finance.portal_invoice_list')
       .select(['id', 'file_id'])
@@ -153,7 +167,7 @@ const zRecordRow = z.object({
   template: z.string().regex(/^[0-9A-Z]{1,11}$/).nullable(),
   series: z.string().min(1).max(20),
   number: z.string().min(1).max(20),
-  issueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  issueDate: zLocalDate,
   currency: z.string().regex(/^[A-Z]{3}$/),
   subtotal: z.string().nullable(),
   vatAmount: z.string().nullable(),
@@ -169,10 +183,15 @@ export const portalListRecord = defineCommand({
     z.object({
       listId: zId,
       status: z.literal('done'),
-      listFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
-      listTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+      listFrom: zLocalDate.nullable(),
+      listTo: zLocalDate.nullable(),
       buyerTaxCode: z.string().nullable(),
-      rows: z.array(zRecordRow).max(EXTRACT_LIMITS.maxPortalListRows),
+      rows: z
+        .array(zRecordRow)
+        .max(EXTRACT_LIMITS.maxPortalListRows)
+        .refine((rows) => new Set(rows.map((r) => r.rowNo)).size === rows.length, 'rowNo repeats'),
+      ownSalesCount: z.number().int().min(0).max(1_048_576),
+      otherBuyerCount: z.number().int().min(0).max(1_048_576),
       skippedCount: z.number().int().min(0).max(1_048_576),
       skipped: z.array(z.object({ rowNo: z.number().int().min(1).max(1_048_576), reason: z.enum(PORTAL_LIST_SKIP_REASONS) })).max(EXTRACT_LIMITS.maxPortalListSkipped),
     }),
@@ -193,16 +212,32 @@ export const portalListRecord = defineCommand({
     if (input.status === 'done' && input.skippedCount < input.skipped.length) {
       throw new DomainError('INVALID', 400, 'Số dòng bỏ qua ít hơn số dòng được liệt kê');
     }
-    if (input.status === 'failed') {
+    const fail = async (error: string) => {
       await ctx.trx
         .updateTable('crove_finance.portal_invoice_list')
-        .set({ status: 'failed', error: input.error, recorded_at: sql<Date>`pg_catalog.now()` })
+        .set({ status: 'failed', error, recorded_at: sql<Date>`pg_catalog.now()` })
         .where('org_id', '=', ctx.orgId)
         .where('id', '=', list.id)
         .execute();
       ctx.audit({ status: 'failed' });
       await ctx.activity('finance.portal_invoice_list', list.id, 'portal_list.failed', `Không đọc được danh sách hóa đơn kỳ ${list.period}`);
       return { listId: list.id, recorded: true };
+    };
+    if (input.status === 'failed') return fail(input.error);
+    // The period's rows stay within PORTAL_PERIOD_ROW_LIMIT; serialized with the period's imports and other records.
+    await periodLock(ctx.orgId, list.period).execute(ctx.trx);
+    const held = await ctx.trx
+      .selectFrom('crove_finance.portal_invoice_list')
+      .select(sql<string>`coalesce(sum(row_count), 0)::text`.as('rows'))
+      .where('org_id', '=', ctx.orgId)
+      .where('period', '=', list.period)
+      .where('status', '=', 'done')
+      .where('removed_at', 'is', null)
+      .executeTakeFirstOrThrow();
+    if (Number(held.rows) + input.rows.length > PORTAL_PERIOD_ROW_LIMIT) {
+      return fail(
+        `Kỳ ${list.period} đã có ${vnNumber(Number(held.rows))} hóa đơn từ các danh sách đã nhập, thêm ${vnNumber(input.rows.length)} hóa đơn của danh sách này sẽ vượt mức ${vnNumber(PORTAL_PERIOD_ROW_LIMIT)} hóa đơn mỗi kỳ; hãy gỡ các danh sách trùng hoặc cũ rồi nhập lại`,
+      );
     }
     for (let i = 0; i < input.rows.length; i += ROW_INSERT_BATCH) {
       await ctx.trx
@@ -239,12 +274,14 @@ export const portalListRecord = defineCommand({
         buyer_tax_code: input.buyerTaxCode,
         skipped_count: input.skippedCount,
         skipped: input.skipped.length > 0 ? JSON.stringify(input.skipped) : null,
+        own_sales_count: input.ownSalesCount,
+        other_buyer_count: input.otherBuyerCount,
         recorded_at: sql<Date>`pg_catalog.now()`,
       })
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', list.id)
       .execute();
-    ctx.audit({ status: 'done', rows: input.rows.length, skipped: input.skippedCount });
+    ctx.audit({ status: 'done', rows: input.rows.length, skipped: input.skippedCount, own_sales: input.ownSalesCount, other_buyers: input.otherBuyerCount });
     await ctx.activity('finance.portal_invoice_list', list.id, 'portal_list.read', `Đọc ${input.rows.length} hóa đơn từ danh sách của cổng thuế, kỳ ${list.period}`);
     return { listId: list.id, recorded: true };
   },
@@ -253,7 +290,7 @@ export const portalListRecord = defineCommand({
 async function periodLists(ctx: QueryContext, period: string): Promise<PortalListView[]> {
   const lists = await ctx.trx
     .selectFrom('crove_finance.portal_invoice_list')
-    .select(['id', 'period', 'file_id', 'filename', 'status', 'error', 'row_count', 'list_from', 'list_to', 'skipped_count', 'skipped', 'created_at'])
+    .select(['id', 'period', 'file_id', 'filename', 'status', 'error', 'row_count', 'list_from', 'list_to', 'skipped_count', 'skipped', 'own_sales_count', 'other_buyer_count', 'created_at'])
     .where('org_id', '=', ctx.orgId)
     .where('period', '=', period)
     .where('removed_at', 'is', null)
@@ -272,6 +309,8 @@ async function periodLists(ctx: QueryContext, period: string): Promise<PortalLis
     listTo: l.list_to,
     skippedCount: l.skipped_count,
     skipped: skippedRows(l.skipped),
+    ownSalesCount: l.own_sales_count,
+    otherBuyerCount: l.other_buyer_count,
     createdAt: new Date(l.created_at).toISOString(),
   }));
 }
@@ -372,6 +411,16 @@ async function croveInvoices(ctx: QueryContext, from: string, to: string): Promi
   return out;
 }
 
+// The first `limit` items of each outcome, in their order. The summary is computed before, over every item.
+export function firstPerOutcome<T extends { outcome: string }>(items: readonly T[], limit: number): T[] {
+  const seen = new Map<string, number>();
+  return items.filter((item) => {
+    const n = (seen.get(item.outcome) ?? 0) + 1;
+    seen.set(item.outcome, n);
+    return n <= limit;
+  });
+}
+
 export const portalListReconcile = defineQuery({
   name: 'finance.portal_list.reconcile',
   input: z.object({ period: zVatPeriod }),
@@ -416,7 +465,8 @@ export const portalListReconcile = defineQuery({
     // Without a list there is nothing to compare: Crove's invoices are not all reported as "not on the portal".
     const reconciliation =
       done.length === 0 ? reconcilePortalList([], [], period) : reconcilePortalList(rows, await croveInvoices(ctx, from, to), period);
-    return { period, lists, ...reconciliation };
+    const items = firstPerOutcome(reconciliation.items, PORTAL_RECONCILE_ITEMS_PER_OUTCOME);
+    return { period, lists, summary: reconciliation.summary, items, truncated: items.length < reconciliation.items.length };
   },
 });
 
@@ -460,10 +510,19 @@ export function recordPortalListFailure(runtime: Runtime, orgId: string, listId:
 // row and has the same columns for purchases and sales, so the parties decide: a purchase list is one where the org is
 // the buyer. Rows where the org is the seller (its own sales) or someone else is the buyer are not purchases of the
 // org and are dropped; a list with none left is refused with the reason.
-export function checkPortalList(
-  list: ExtractedPortalList,
-  orgTaxCode: string | null,
-): { ok: true; rows: z.infer<typeof zRecordRow>[] } | { ok: false; error: string } {
+// The sandbox reads dates as calendar dates and numbers rows by their place in the sheet; an answer that breaks either
+// (an impossible date, a row number twice) is refused here with the reason, not left to the database insert (#506).
+export interface CheckedPortalList {
+  ok: true;
+  rows: z.infer<typeof zRecordRow>[];
+  listFrom: string | null;
+  listTo: string | null;
+  // Rows dropped as not the org's purchases: the org is the seller, or another buyer is named.
+  ownSales: number;
+  otherBuyers: number;
+}
+
+export function checkPortalList(list: ExtractedPortalList, orgTaxCode: string | null): CheckedPortalList | { ok: false; error: string } {
   const own = parseTaxCode(orgTaxCode)?.normalized ?? null;
   // Without the org's tax code any company's list, or the sales list, would pass as the org's purchases.
   if (!own) return { ok: false, error: 'Hãy nhập mã số thuế của công ty trong Cài đặt rồi nhập lại danh sách' };
@@ -471,6 +530,18 @@ export function checkPortalList(
   const otherCompany = (code: string) =>
     `Danh sách này của mã số thuế ${code}, không phải của công ty này (${own}); hãy kiểm tra đã chọn đúng khách hàng chưa`;
   if (own && preamble && own !== preamble) return { ok: false, error: otherCompany(preamble) };
+  for (const date of [list.listFrom, list.listTo]) {
+    if (date !== null && !isCalendarDate(date)) return { ok: false, error: `Khoảng ngày tra cứu trong tệp có ngày không hợp lệ (${date}); hãy xuất lại danh sách từ cổng thuế` };
+  }
+  if (list.listFrom !== null && list.listTo !== null && list.listFrom > list.listTo) {
+    return { ok: false, error: `Khoảng ngày tra cứu trong tệp không hợp lệ (từ ${list.listFrom} đến ${list.listTo}); hãy xuất lại danh sách từ cổng thuế` };
+  }
+  const rowNos = new Set<number>();
+  for (const r of list.rows) {
+    if (rowNos.has(r.rowNo)) return { ok: false, error: `Kết quả đọc tệp có dòng ${r.rowNo} hai lần; hãy nhập lại danh sách` };
+    rowNos.add(r.rowNo);
+    if (!isCalendarDate(r.issueDate)) return { ok: false, error: `Dòng ${r.rowNo}: ngày lập hóa đơn không hợp lệ (${r.issueDate})` };
+  }
   if (list.rows.length === 0 && list.skippedCount > 0) {
     return { ok: false, error: `Không đọc được hóa đơn nào trong danh sách (${list.skippedCount} dòng lỗi, ví dụ dòng ${list.skipped[0]?.rowNo ?? '?'}); hãy kiểm tra tệp` };
   }
@@ -507,15 +578,15 @@ export function checkPortalList(
       status: portalStatus(r.statusLabel),
     });
   }
+  const otherBuyers = [...foreignBuyers.values()].reduce((sum, n) => sum + n, 0);
   if (rows.length === 0) {
-    const foreignRows = [...foreignBuyers.values()].reduce((sum, n) => sum + n, 0);
-    if (ownSales > 0 && ownSales >= foreignRows) {
+    if (ownSales > 0 && ownSales >= otherBuyers) {
       return { ok: false, error: 'Đây là danh sách hóa đơn bán ra; hãy tra cứu ở mục "Hóa đơn điện tử mua vào" rồi xuất lại' };
     }
     const [mostCommon] = [...foreignBuyers].sort((a, b) => b[1] - a[1]);
     if (mostCommon) return { ok: false, error: otherCompany(mostCommon[0]) };
   }
-  return { ok: true, rows };
+  return { ok: true, rows, listFrom: list.listFrom, listTo: list.listTo, ownSales, otherBuyers };
 }
 
 // Reads one imported list and records the outcome. `attempt` is the job's retry count. A sandbox that cannot answer
@@ -542,12 +613,14 @@ export async function importPortalList(deps: PortalListDeps, orgId: string, list
     {
       listId,
       status: 'done',
-      listFrom: result.list.listFrom,
-      listTo: result.list.listTo,
+      listFrom: checked.listFrom,
+      listTo: checked.listTo,
       buyerTaxCode: parseTaxCode(result.list.buyerTaxCode)?.normalized ?? null,
       rows: checked.rows,
       skippedCount: result.list.skippedCount,
       skipped: result.list.skipped,
+      ownSalesCount: checked.ownSales,
+      otherBuyerCount: checked.otherBuyers,
     },
     { actor: PORTAL_LIST_ACTOR, orgId },
   );

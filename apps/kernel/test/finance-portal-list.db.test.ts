@@ -422,4 +422,158 @@ suite('tax portal purchase list (#465)', () => {
     const audits = await admin(async (c) => (await c.query(`SELECT command, detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command LIKE 'finance.portal_list.%' AND outcome = 'ok' ORDER BY occurred_at`, [org.orgId])).rows);
     expect(audits.map((a) => a.command)).toEqual(expect.arrayContaining(['finance.portal_list.import', 'finance.portal_list.record', 'finance.portal_list.remove']));
   });
+
+  // Uploads a list and imports it for the period without running the worker: the list stays pending.
+  async function pendingList(invoices: PortalInvoiceSpec[], period: string) {
+    const uploaded = await upload(await tokenFor(owner), `ds-${period}.xlsx`, portalListXlsx(invoices));
+    expect(uploaded.status, JSON.stringify(uploaded.body)).toBe(200);
+    const imported = await rpc('portalList/import', await tokenFor(owner), { period, fileId: uploaded.body.files[0].fileId });
+    expect(imported.status, JSON.stringify(imported.body)).toBe(200);
+    return imported.body.listId as string;
+  }
+
+  it('lets only the worker record a list: in a member context the outcome and the rows are refused, removal is not (#506)', async () => {
+    const listId = await pendingList([spec('5001', '01/06/2026')], '2026-06');
+    const asMember = async (text: string, params: unknown[]) => {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner.userId, org.orgId]);
+        return await c.query(text, params);
+      } finally {
+        await c.query('ROLLBACK').catch(() => {});
+        c.release();
+      }
+    };
+    await expect(asMember(`UPDATE crove_finance.portal_invoice_list SET status = 'failed', error = 'x', recorded_at = now() WHERE id = $1`, [listId])).rejects.toThrow(
+      /only the worker that reads the list records its outcome/,
+    );
+    await expect(asMember('UPDATE crove_finance.portal_invoice_list SET own_sales_count = 3 WHERE id = $1', [listId])).rejects.toThrow(/only the worker/);
+    await expect(
+      asMember(
+        `INSERT INTO crove_finance.portal_invoice_row (org_id, list_id, row_no, seller_tax_code, series, number, issue_date, status)
+         VALUES ($1, $2, 1, $3, 'C26TAB', '1', '2026-06-01', 'original')`,
+        [org.orgId, listId, SELLER],
+      ),
+    ).rejects.toThrow(/written only by the worker/);
+    // A list never starts with an outcome, whoever inserts it.
+    await expect(
+      asMember(
+        `INSERT INTO crove_finance.portal_invoice_list (org_id, period, file_id, filename, list_from)
+         SELECT org_id, '2026-05', file_id, 'x.xlsx', '2026-05-01' FROM crove_finance.portal_invoice_list WHERE id = $1`,
+        [listId],
+      ),
+    ).rejects.toThrow(/starts pending, without an outcome/);
+    const removed = await asMember('UPDATE crove_finance.portal_invoice_list SET removed_at = now(), removed_by = $2 WHERE id = $1 RETURNING id', [listId, owner.userId]);
+    expect(removed.rowCount).toBe(1);
+    // The worker still records it.
+    await importPortalList({ runtime: workerRuntime, store, extract }, org.orgId, listId);
+    const june = await rpc('portalList/reconcile', await tokenFor(owner), { period: '2026-06' });
+    expect(june.body).toMatchObject({ lists: [expect.objectContaining({ id: listId, status: 'done', rowCount: 1 })], truncated: false });
+  });
+
+  it("counts the rows left out as the org's own sales or another buyer's, and shows them with the list (#506)", async () => {
+    const bytes = buildXlsx(
+      [
+        PORTAL_HEADER,
+        portalRow(1, spec('4001', '01/04/2026')),
+        portalRow(2, spec('4002', '02/04/2026', { sellerTaxCode: BUYER })),
+        portalRow(3, { ...spec('4003', '03/04/2026'), buyerTaxCode: '0100109107' }),
+        portalRow(4, { ...spec('4004', '04/04/2026'), buyerTaxCode: '0100109107' }),
+      ],
+      { strings: 'inline' },
+    );
+    const uploaded = await upload(await tokenFor(owner), 'ds-04.xlsx', bytes);
+    const imported = await rpc('portalList/import', await tokenFor(owner), { period: '2026-04', fileId: uploaded.body.files[0].fileId });
+    await importPortalList({ runtime: workerRuntime, store, extract }, org.orgId, imported.body.listId);
+    const april = await rpc('portalList/reconcile', await tokenFor(viewer), { period: '2026-04' });
+    expect(april.body.lists).toEqual([expect.objectContaining({ status: 'done', rowCount: 1, ownSalesCount: 1, otherBuyerCount: 2, skippedCount: 0 })]);
+  });
+
+  it('refuses an impossible date from the sandbox with the reason, not a database error (#506)', async () => {
+    const listId = await pendingList([spec('3001', '01/03/2026')], '2026-03');
+    const answer = await extract.extract('portal_invoice_list', portalListXlsx([spec('3001', '01/03/2026')]));
+    if (!answer.ok) throw new Error('fixture not read');
+    const lying = {
+      extract: async () => ({ ...answer, list: { ...answer.list, rows: answer.list.rows.map((r) => ({ ...r, issueDate: '2026-02-30' })) } }),
+    } as unknown as ExtractClient;
+    await importPortalList({ runtime: workerRuntime, store, extract: lying }, org.orgId, listId);
+    const march = await rpc('portalList/reconcile', await tokenFor(owner), { period: '2026-03' });
+    expect(march.body.lists).toEqual([expect.objectContaining({ id: listId, status: 'failed', error: expect.stringContaining('ngày lập hóa đơn không hợp lệ (2026-02-30)') })]);
+    // The command checks the same on its own: an impossible date, a row number twice.
+    const other = await pendingList([spec('3002', '02/03/2026')], '2026-03');
+    const row = { rowNo: 1, sellerTaxCode: SELLER, sellerName: 'A', template: '1', series: 'C26TAB', number: '1', issueDate: '2026-02-30', currency: 'VND', subtotal: null, vatAmount: null, total: null, status: 'original', statusLabel: null, checkResult: null };
+    const record = (rows: unknown[]) =>
+      workerRuntime.execute(
+        'finance.portal_list.record',
+        { listId: other, status: 'done', listFrom: null, listTo: null, buyerTaxCode: null, rows, skippedCount: 0, skipped: [], ownSalesCount: 0, otherBuyerCount: 0 },
+        { actor: { type: 'system', component: 'test' }, orgId: org.orgId },
+      );
+    await expect(record([row])).rejects.toMatchObject({ code: 'VALIDATION' });
+    const good = { ...row, issueDate: '2026-03-01' };
+    await expect(record([good, good])).rejects.toMatchObject({ code: 'VALIDATION' });
+  });
+
+  it('keeps an import upload and a document apart: neither is taken for the other (#506)', async () => {
+    const workbook = portalListXlsx([spec('2001', '01/02/2026')]);
+    const imported = await upload(await tokenFor(owner), 'ds-02.xlsx', workbook);
+    expect(imported.status).toBe(200);
+    // The same bytes as a document: refused with the reason, and nothing is sent to extraction.
+    const asDocument = await upload(await tokenFor(owner), 'ds-02.xlsx', workbook, 'document');
+    expect(asDocument.status).toBe(409);
+    expect(asDocument.body.code).toBe('FILE_IS_IMPORT');
+    const outbox = await admin(
+      async (c) => (await c.query(`SELECT count(*)::int AS n FROM crove_kernel.outbox_event WHERE type = 'kernel.file.ingested' AND payload ->> 'fileId' = $1`, [imported.body.files[0].fileId])).rows[0],
+    );
+    expect(outbox.n).toBe(0);
+    // A ZIP uploaded as a document is not imported as a list, by the upload or by the import command.
+    const zip = portalListXlsx([spec('2002', '02/02/2026')]);
+    const document = await upload(await tokenFor(owner), 'chung-tu.zip', zip, 'document');
+    expect(document.status, JSON.stringify(document.body)).toBe(200);
+    const asImport = await upload(await tokenFor(owner), 'ds.xlsx', zip);
+    expect(asImport.status).toBe(409);
+    expect(asImport.body.code).toBe('FILE_IS_NOT_IMPORT');
+    const command = await rpc('portalList/import', await tokenFor(owner), { period: '2026-02', fileId: document.body.files[0].fileId });
+    expect(command.status).toBe(415);
+    expect(command.body.code).toBe('UNSUPPORTED_TYPE');
+  });
+
+  it('records a list as failed when the period would hold more rows than the limit (#506)', async () => {
+    const period = '2026-05';
+    const lists = [
+      await pendingList([spec('6001', '01/05/2026')], period),
+      await pendingList([spec('6002', '02/05/2026')], period),
+      await pendingList([spec('6003', '03/05/2026')], period),
+    ];
+    const rows = Array.from({ length: 20_000 }, (_, i) => ({
+      rowNo: i + 1,
+      sellerTaxCode: SELLER,
+      sellerName: 'A',
+      template: '1',
+      series: 'C26TAB',
+      number: String(i + 1),
+      issueDate: '2026-05-01',
+      currency: 'VND',
+      subtotal: null,
+      vatAmount: null,
+      total: '1',
+      status: 'original',
+      statusLabel: null,
+      checkResult: null,
+    }));
+    const record = (listId: string, n: number) =>
+      workerRuntime.execute<{ recorded: boolean }>(
+        'finance.portal_list.record',
+        { listId, status: 'done', listFrom: null, listTo: null, buyerTaxCode: null, rows: rows.slice(0, n), skippedCount: 0, skipped: [], ownSalesCount: 0, otherBuyerCount: 0 },
+        { actor: { type: 'system', component: 'test' }, orgId: org.orgId },
+      );
+    const [first, second, third] = lists as [string, string, string];
+    await record(first, 20_000);
+    await record(second, 20_000);
+    await record(third, 10_001);
+    const states = await admin(async (c) => (await c.query('SELECT id, status, error FROM crove_finance.portal_invoice_list WHERE id = ANY($1::uuid[])', [lists])).rows);
+    const byId = new Map(states.map((r) => [r.id as string, r]));
+    expect([byId.get(first)?.status, byId.get(second)?.status]).toEqual(['done', 'done']);
+    expect(byId.get(third)).toMatchObject({ status: 'failed', error: expect.stringContaining('đã có 40.000 hóa đơn từ các danh sách đã nhập, thêm 10.001 hóa đơn của danh sách này sẽ vượt mức 50.000 hóa đơn mỗi kỳ') });
+  }, 60_000);
 });
