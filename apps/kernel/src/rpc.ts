@@ -1,7 +1,7 @@
 // oRPC implementation of @crove/kernel-contract. Handlers only call the runtime (execute/query).
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
-import { contract } from '@crove/kernel-contract';
+import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
 import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
 import type { SocialWriter, WriterChannel } from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider } from '@crove/mod-social/contract';
@@ -439,8 +439,14 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             throw connectorFailure(error);
           });
           if (accounts.length === 0) throw new DomainError('CHANNEL_NO_ACCOUNTS', 422, 'Không có tài khoản nào bạn được quyền đăng bài trong lần cấp quyền này');
+          // Each account connects in its own command, so one that fails leaves the others connected: the answer says
+          // which did and which did not (#375), and only a grant where none connected is an error. A grant covering
+          // more accounts than a request should connect one by one is cut, and the answer says how many were left.
+          const taken = accounts.slice(0, OAUTH_MAX_ACCOUNTS_PER_GRANT);
           const connections: { connectionId: string; displayName: string; reconnected: boolean }[] = [];
-          for (const account of accounts) {
+          const failed: { displayName: string; code: string }[] = [];
+          let firstError: DomainError | null = null;
+          for (const account of taken) {
             const sealed = broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });
             const command: ChannelConnectInput = {
               provider: account.provider,
@@ -450,10 +456,19 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
               expiresAt: account.expiresAt?.toISOString() ?? null,
               credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
             };
-            const done = await runtime.execute<{ connectionId: string; reconnected: boolean }>('kernel.channel.connect', command, { actor, orgId });
-            connections.push({ connectionId: done.connectionId, displayName: account.displayName, reconnected: done.reconnected });
+            try {
+              const done = await runtime.execute<{ connectionId: string; reconnected: boolean }>('kernel.channel.connect', command, { actor, orgId });
+              connections.push({ connectionId: done.connectionId, displayName: account.displayName, reconnected: done.reconnected });
+            } catch (error) {
+              // Only a refusal of this one account lets the others go on; a failure of the server (an outage, a bug)
+              // ends the request at once, so it is logged and no more transactions pile onto a failing database.
+              if (!(error instanceof DomainError) || error.status >= 500) throw error;
+              firstError ??= error;
+              failed.push({ displayName: account.displayName, code: error.code });
+            }
           }
-          return { connections };
+          if (connections.length === 0 && firstError) throw firstError;
+          return { connections, failed, skipped: accounts.length - taken.length };
         }),
       ),
     },
@@ -628,6 +643,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       ),
       account: os.ledger.account.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.ledger.account', input, { actor, orgId })),
+      ),
+      statements: os.ledger.statements.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.statements.period', input, { actor, orgId })),
       ),
     },
     periodLock: {

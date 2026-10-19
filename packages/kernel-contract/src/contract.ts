@@ -63,6 +63,7 @@ import {
   zVatFilingPeriod,
   zVatReport,
   zAccountLedger,
+  zFinancialStatements,
   zLedgerPeriod,
   zLedgerReport,
   zPeriodLockInput,
@@ -158,7 +159,15 @@ export const contract = {
       .output(z.object({ authorizeUrl: z.url({ protocol: /^https$/ }), state: zOAuthState, expiresAt: z.iso.datetime({ offset: true }) })),
     oauthFinish: oc
       .input(z.object({ provider: zOAuthProvider, state: zOAuthState, code: z.string().min(1).max(2048) }))
-      .output(z.object({ connections: z.array(z.object({ connectionId: zId, displayName: z.string(), reconnected: z.boolean() })) })),
+      .output(
+        z.object({
+          connections: z.array(z.object({ connectionId: zId, displayName: z.string(), reconnected: z.boolean() })),
+          // Accounts of the grant that did not connect, with the error code; the others stay connected.
+          failed: z.array(z.object({ displayName: z.string(), code: z.string() })),
+          // Accounts of the grant beyond what one request connects.
+          skipped: z.number().int().min(0),
+        }),
+      ),
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.
   social: {
@@ -388,6 +397,9 @@ export const contract = {
   ledger: {
     period: oc.input(z.object({ period: zLedgerPeriod })).output(zLedgerReport),
     account: oc.input(z.object({ period: zLedgerPeriod, accountCode: zAccountCode })).output(zAccountLedger),
+    // Issue #154: the DRAFT B01-DNN at the period's last day and B02-DNN for the period. The Excel workbook is
+    // GET /api/export/statements.xlsx?period=<period>.
+    statements: oc.input(z.object({ period: zLedgerPeriod })).output(zFinancialStatements),
   },
   // Period lock (#329): every member reads it; owners and admins lock the next month once it has ended; only owners
   // unlock the last locked month (R3: fresh MFA), with a reason. A retry with the same idempotencyKey returns the first

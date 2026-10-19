@@ -213,6 +213,8 @@ export const zChannelConnection = z.object({
 
 // Providers connected through an OAuth dialog (Social plan S6), and the attempt's state: 32 random bytes, base64url.
 export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x'] as const;
+// Accounts one OAuth grant connects in a request, one command each (#375): a Meta user may manage hundreds of Pages.
+export const OAUTH_MAX_ACCOUNTS_PER_GRANT = 100;
 export const zOAuthProvider = z.enum(OAUTH_CHANNEL_PROVIDERS);
 export const zOAuthState = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 
@@ -574,6 +576,17 @@ export const zPeriodLockState = z.object({
   updatedAt: z.string().nullable(),
 });
 export type PeriodLockState = z.infer<typeof zPeriodLockState>;
+
+// Financial statements for a period (issue #154): B01-DNN at its last day and B02-DNN for the period, with the DRAFT
+// TT133 line codes and mapping an accountant has not verified. `unmapped` lists balances no line reads (the statement
+// is then incomplete); `balanced` is whether B01's total assets equal its total sources.
+const zStatementLine = z.object({ code: z.string(), label: z.string(), amount: zMoney, total: z.boolean() });
+const zUnmappedRow = z.object({ accountCode: z.string(), accountName: z.string().nullable(), partyName: z.string().nullable(), amount: zMoney });
+export const zFinancialStatements = z.object({
+  period: zLedgerPeriodRange,
+  b01: z.object({ asOf: zLocalDate, lines: z.array(zStatementLine), unmapped: z.array(zUnmappedRow), balanced: z.boolean() }),
+  b02: z.object({ from: zLocalDate, to: zLocalDate, lines: z.array(zStatementLine), unmapped: z.array(zUnmappedRow) }),
+});
 
 export const zAccountLedger = z.object({
   period: zLedgerPeriodRange,
