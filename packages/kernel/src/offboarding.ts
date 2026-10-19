@@ -35,6 +35,9 @@ export const EXPORT_TABLES = {
   'kernel.task_comment': { from: 'crove_kernel.task_comment', omit: [] },
   // Connected channel accounts (ADR-0025). Their sealed tokens (crove_kernel.credential) are secrets and stay out.
   'kernel.channel_connection': { from: 'crove_kernel.channel_connection', omit: [] },
+  // Outbound mail (#538): the mail log and the org's suppression list. The address hashes are keyed by the deployment.
+  'kernel.mail_message': { from: 'crove_kernel.mail_message', omit: [] },
+  'kernel.mail_suppression': { from: 'crove_kernel.mail_suppression', omit: [] },
   'finance.purchase_document': { from: 'crove_finance.purchase_document', omit: [] },
   'finance.purchase_line': { from: 'crove_finance.purchase_line', omit: [] },
   'finance.journal_entry': { from: 'crove_finance.journal_entry', omit: [] },

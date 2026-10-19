@@ -44,6 +44,8 @@ export interface CroveKernelSchema {
   'crove_kernel.idempotency_key': KernelIdempotencyKeyTable;
   'crove_kernel.inbound_message': KernelInboundMessageTable;
   'crove_kernel.kill_switch': KernelKillSwitchTable;
+  'crove_kernel.mail_message': KernelMailMessageTable;
+  'crove_kernel.mail_suppression': KernelMailSuppressionTable;
   'crove_kernel.member_invite': KernelMemberInviteTable;
   'crove_kernel.outbox_event': KernelOutboxEventTable;
   'crove_kernel.party': KernelPartyTable;
@@ -476,6 +478,46 @@ export interface KernelKillSwitchTable {
   engaged_at: ColumnType<Date, Date | string | undefined, Date | string>;
   released_by: string | null;
   released_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
+/** crove_kernel.mail_message */
+export interface KernelMailMessageTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  stream: ColumnType<string, string, NotGranted>;
+  source: ColumnType<string, string, NotGranted>;
+  source_id: ColumnType<string | null, string | null, NotGranted>;
+  template_key: ColumnType<string, string, NotGranted>;
+  template_version: ColumnType<number, number | undefined, NotGranted>;
+  to_address: ColumnType<string | null, string | null, NotGranted>;
+  to_hash: ColumnType<string, string, NotGranted>;
+  subject: ColumnType<string | null, string | null, NotGranted>;
+  payload: ColumnType<unknown, string | null | undefined, NotGranted>;
+  message_id_header: ColumnType<string, string, NotGranted>;
+  status: Generated<string>;
+  attempts: Generated<number>;
+  provider: string | null;
+  provider_message_id: string | null;
+  error_code: string | null;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  sent_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
+/** crove_kernel.mail_suppression */
+export interface KernelMailSuppressionTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  to_hash: ColumnType<string, string, NotGranted>;
+  scope: ColumnType<string, string, NotGranted>;
+  reason: ColumnType<string, string, NotGranted>;
+  source_message_id: ColumnType<string | null, string | null, NotGranted>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  lifted_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  lifted_by: string | null;
+  lift_reason: string | null;
 }
 
 /** crove_kernel.member_invite */

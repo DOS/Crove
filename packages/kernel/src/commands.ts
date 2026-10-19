@@ -31,6 +31,7 @@ import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
+import { mailCommands } from './mail.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
 import { setAddress } from './org-address.ts';
@@ -807,23 +808,28 @@ const otherKernelCommands = [
   setTaxCode,
   setVatFilingPeriod,
   setAddress,
+  ...mailCommands,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),
 // options.inboundRotateLimits the inbound address rotation limits (default DEFAULT_INBOUND_ROTATE_LIMITS),
 // options.uploadBeginLimits the presigned upload grant rate (default DEFAULT_UPLOAD_BEGIN_LIMITS), options.inviteLimits
-// the invite mails one address may get from all orgs (default DEFAULT_INVITE_LIMITS).
+// the invite mails one address may get from all orgs (default DEFAULT_INVITE_LIMITS), options.messageIdDomain the
+// right-hand side of the Message-ID of the mail the kernel records (default DEFAULT_MESSAGE_ID_DOMAIN).
 export function buildKernelCommands(
   options: {
     orgCreateLimits?: OrgCreateLimits;
     inboundRotateLimits?: InboundRotateLimits;
     uploadBeginLimits?: UploadBeginLimits;
     inviteLimits?: InviteLimits;
+    messageIdDomain?: string;
   } = {},
 ) {
   return [
     options.orgCreateLimits ? orgCreateCommand(options.orgCreateLimits) : createOrgCommand,
-    options.inviteLimits ? inviteCreateCommand(options.inviteLimits) : createInvite,
+    options.inviteLimits || options.messageIdDomain
+      ? inviteCreateCommand(options.inviteLimits, { messageIdDomain: options.messageIdDomain })
+      : createInvite,
     ...otherKernelCommands,
     options.uploadBeginLimits ? beginUploadCommand(options.uploadBeginLimits) : beginUpload,
     options.inboundRotateLimits ? inboundRotateCommand(options.inboundRotateLimits) : rotateInbound,

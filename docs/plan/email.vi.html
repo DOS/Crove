@@ -283,7 +283,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 <thead><tr><th>#</th><th>Bước</th><th>Phụ thuộc</th><th>Đụng đường dẫn bảo vệ</th></tr></thead>
 <tbody>
 <tr><td class="tnum">E0</td><td>Plan này, D18, ADR-0034 (đề xuất)</td><td>-</td><td>Không</td></tr>
-<tr><td class="tnum">E1</td><td>Đường gửi trong kernel: <code>mail_message</code>, <code>mail_suppression</code>, 2 hàng đợi với <code>external_call</code>, kiểm chặn, lời mời chuyển sang hàng đợi</td><td>-</td><td>Có</td></tr>
+<tr><td class="tnum">E1</td><td>Đường gửi trong kernel: <code>mail_message</code>, <code>mail_suppression</code>, 2 hàng đợi với <code>external_call</code>, kiểm chặn, dòng log của thư mời. Chia 2 phần: E1a gồm các bảng, mã băm địa chỉ có khóa, lệnh chặn và bỏ chặn, dòng log của thư mời (thư mời vẫn gửi ngay trong request vì liên kết chứa mã bí mật, database không lưu mã này); E1b gồm hàng đợi và <code>external_call</code>, cùng nơi gửi đầu tiên qua hàng đợi (nhắc khách hàng gửi chứng từ của Finance)</td><td>-</td><td>Có</td></tr>
 <tr><td class="tnum">E2</td><td>Sự kiện giao thư: <code>mail_event</code>, <code>@crove/mail</code>, adapter HTTP đầu tiên, webhook có chữ ký, thư báo lỗi qua inbound; hiện trạng thái lời mời</td><td>E1</td><td>Có</td></tr>
 <tr><td class="tnum">E3</td><td>Module <code>email</code> và schema <code>crove_email</code>, bật tắt qua <code>CROVE_MODULES</code>; tên miền gửi và job kiểm DNS</td><td>E1</td><td>Có</td></tr>
 <tr><td class="tnum">E4</td><td>Mẫu thư dạng khối, render HTML và chữ, xem trước an toàn, mẫu mặc định, nhật ký thư</td><td>E3</td><td>Có</td></tr>

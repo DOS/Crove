@@ -1531,6 +1531,8 @@ export const vi = {
       INVITE_USED: 'Lời mời này đã được sử dụng',
       INVITE_RATE_LIMITED: 'Đã gửi quá nhiều lời mời; hãy thử lại sau',
       TOO_MANY_INVITES: 'Tổ chức đang có quá nhiều lời mời chờ; hãy thu hồi bớt',
+      NOT_SUPPRESSED: 'Địa chỉ này không bị chặn',
+      MAIL_COMPLAINT_LIFT: 'Người nhận đã báo thư là spam; chỉ chính họ đăng ký lại mới bỏ chặn được',
       PROPOSAL_DECIDED: 'Đề xuất này đã được xử lý',
       STALE_REVISION: 'Đề xuất đã thay đổi, hãy tải lại',
       NOT_EDITABLE: 'Đề xuất này không chỉnh sửa được',
