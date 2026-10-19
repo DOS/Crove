@@ -222,9 +222,9 @@ export interface CommandContext extends QueryContext {
   // (RuntimeOptions.refusalAudit). The row commits with this command, and a command that fails writes none. Any other
   // error, or a refusal `recover` declines, propagates, so the whole command fails as with run(); on every path but
   // success the nested command is rolled back to the savepoint first, so a caller that catches the error and goes on
-  // keeps none of its writes. A tryRun runs alone among this command's nested commands: it throws while a ctx.run or
-  // another tryRun runs, and ctx.run throws while it runs. A handler that settles while any nested command (run or
-  // tryRun) still runs waits for it, and if it had returned, the command fails with nothing written; once the handler
+  // keeps none of its writes. This command's nested commands run one at a time: run and tryRun both throw while
+  // another nested command (run or tryRun) of this command runs. A handler that settles while any nested command still
+  // runs waits for it, and if it had returned, the command fails with nothing written; once the handler
   // has settled, tryRun, run, emit, activity and audit all throw. What this does not cover: emit, activity or a direct
   // write on ctx.trx made while a tryRun runs is undone if that tryRun rolls back.
   // The row is built from a snapshot the runtime takes when it catches the refusal, before `recover` sees it, and from
@@ -929,9 +929,9 @@ export class Runtime {
     // Refusals ctx.tryRun caught and rolled back, written after the handler returns.
     const caught: CaughtRefusal[] = [];
     // The nested commands (ctx.run and ctx.tryRun) running now: each one's gate settles before its answer reaches the
-    // caller. A tryRun runs alone (its savepoint is this transaction's), and the handler may not return while any runs.
+    // caller. They run one at a time (a tryRun's savepoint is this transaction's), and the handler may not return
+    // while any runs.
     const running = new Set<Promise<void>>();
-    let tryRunning = false;
     const tracked = <T>(start: () => Promise<T>): Promise<T> => {
       let settle = () => {};
       const gate = new Promise<void>((resolve) => {
@@ -994,20 +994,15 @@ export class Runtime {
       },
       run: async <R>(name: string, nestedInput: unknown, options?: { proposalId?: string }): Promise<R> => {
         refuseClosed('ctx.run');
-        if (tryRunning) throw new Error(`command ${def.name}: ctx.run while a ctx.tryRun is running`);
+        // One nested command at a time: a sibling running beside a tryRun, also one nested inside this run, could have
+        // its writes and ok row undone by that tryRun's rollback while it answers success.
+        if (running.size > 0) throw new Error(`command ${def.name}: ctx.run runs only while no other nested command runs`);
         return tracked(() => runNested<R>(resolveNested(name, nestedInput, options?.proposalId)));
       },
       tryRun: <R>(name: string, nestedInput: unknown, options: TryRunOptions): Promise<TryRunResult<R>> => {
         if (closed) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun after the handler returned`));
         if (running.size > 0) return Promise.reject(new Error(`command ${def.name}: ctx.tryRun runs only while no other nested command runs`));
-        tryRunning = true;
-        return tracked(async () => {
-          try {
-            return await tryNested<R>(name, nestedInput, options);
-          } finally {
-            tryRunning = false;
-          }
-        });
+        return tracked(() => tryNested<R>(name, nestedInput, options));
       },
     };
     // ctx.run and ctx.tryRun call these only while the handler runs, after both are defined.

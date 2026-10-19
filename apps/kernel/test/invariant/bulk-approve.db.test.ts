@@ -911,6 +911,22 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     expect(await auditRows(orgId, 'test.late_refuses')).toEqual([]);
   });
 
+  it('runs the nested commands of one command one at a time: a concurrent ctx.run is refused (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit siblings', []);
+    const siblings = ownerCommand('test.siblings', async (ctx, input) => {
+      // Like Promise.all([ctx.run('kernel.proposal.approve_many', ...), ctx.run('x', ...)]): the second would run beside
+      // the first one's tryRun, whose rollback could undo it.
+      const settled = await Promise.allSettled([ctx.run('test.fine', input), ctx.run('test.fine', input)]);
+      return {
+        settled: settled.map((r) => (r.status === 'fulfilled' ? 'fulfilled' : /ctx\.run runs only while no other nested command runs/.test((r.reason as Error).message) ? 'refused' : 'other')),
+      };
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(fineCommand, siblings).execute('test.siblings', { id }, { actor: asUser(owner), orgId })).toEqual({ settled: ['fulfilled', 'refused'] });
+    expect((await auditRows(orgId, 'test.fine')).map((r) => [r.outcome, r.target_id])).toEqual([['ok', id]]);
+    expect((await auditRows(orgId, 'test.siblings')).map((r) => r.outcome)).toEqual(['ok']);
+  });
+
   it("keeps the runtime's keys on an ok row: ctx.audit sets no refusal link and does not replace the assurance (#429)", async () => {
     const { orgId, owner } = await orgWith('Bulk audit ok keys', []);
     const forged = ownerCommand(
