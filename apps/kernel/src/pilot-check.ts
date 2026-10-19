@@ -417,6 +417,11 @@ async function probeSignup(authUrl: string, reportedPolicy: string | null, fetch
     };
   }
   if (response.status === 429) return cannotTell(`the sign-up probe was rate limited (${got})`);
+  // A 400 or 422 without Supabase Auth's error code may come from a reverse proxy or firewall in front, so it proves
+  // nothing about the sign-up gates. Still a failure: an inconclusive probe never passes.
+  if (response.status === 400 || response.status === 422) {
+    return cannotTell(`the sign-up probe got ${got} without Supabase Auth's error code, so something in front of it (a reverse proxy or firewall) may have answered`);
+  }
   return cannotTell(`the sign-up probe got ${got}`);
 }
 

@@ -262,6 +262,9 @@ describe('pilot-check probe', () => {
       json({ code: 403, error_code: 'something_else' }, 403),
       () => new Response('<html>blocked</html>', { status: 403 }),
       () => new Response('not found', { status: 404 }),
+      // A 400 or 422 without Supabase Auth's error code may be a proxy or firewall in front, not Supabase Auth.
+      () => new Response('<html>Bad Request</html>', { status: 400 }),
+      json({ message: 'unprocessable' }, 422),
       () => {
         throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
       },
@@ -271,6 +274,9 @@ describe('pilot-check probe', () => {
       expect(result.status).toBe('fail');
       expect(result.message).toMatch(/^could not tell whether sign-up is limited/);
     }
+    expect((await signupResult(reported('invite_only', () => new Response('<html>Bad Request</html>', { status: 400 })))).message).toContain(
+      "got 400 without Supabase Auth's error code",
+    );
   });
 
   it('probes with a fresh random address at a reserved domain and no password', async () => {

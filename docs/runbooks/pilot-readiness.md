@@ -23,7 +23,7 @@ The sign-up probe does not trust what the instance says about itself (`/api/conf
 - `signup_disabled`: the running Supabase Auth refuses every sign-up (`AUTH_DISABLE_SIGNUP=true`). `PASS`.
 - Supabase Auth's own refusal of the body (400 or 422 with an error code, `validation_failed` on the pinned version): the request passed every sign-up gate, so anyone can create an account. `FAIL`. Supabase Auth refuses a sign-up without a password before it creates or mails anything (`e2e/tests/auth-signup-parity.spec.ts` checks this against the pinned image), so the probe leaves nothing behind here either.
 - An accepted sign-up (2xx, which the pinned version never answers to this body): `FAIL`, naming the address; delete that account (step 4 of "Closed sign-up" in section 5).
-- Anything else, such as 429 (the email budget or Supabase Auth's rate limit), 503, a timeout or an answer that is not Supabase Auth's: `FAIL` with "could not tell whether sign-up is limited". The probe could not decide; run `pilot-check` again later, or check by hand that a sign-up for an address outside the policy gets `403 signup_not_allowed`.
+- Anything else, such as 429 (the email budget or Supabase Auth's rate limit), 503, a timeout or an answer that is not Supabase Auth's (a 400 or 422 without its error code may come from a reverse proxy or firewall in front): `FAIL` with "could not tell whether sign-up is limited". The probe could not decide; run `pilot-check` again later, or check by hand that a sign-up for an address outside the policy gets `403 signup_not_allowed`.
 
 ## 1. TLS on every public endpoint; every secret changed from the defaults
 
