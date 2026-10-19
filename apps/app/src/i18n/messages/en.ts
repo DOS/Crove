@@ -130,6 +130,7 @@ export const en = {
       vatDeadline: 'Next VAT return due',
     },
     noActivity: 'No activity yet',
+    truncated: 'Showing {shown} of {total} companies; this screen shows up to 200 companies.',
     periodMonth: 'Month {month}/{year}',
     periodQuarter: 'Q{quarter} {year}',
     daysLeft: '{days, plural, =0 {due today} one {# day left} other {# days left}}',

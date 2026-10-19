@@ -128,6 +128,7 @@ export const vi = {
       vatDeadline: 'Hạn nộp tờ khai GTGT',
     },
     noActivity: 'Chưa có hoạt động',
+    truncated: 'Đang hiện {shown} trong {total} doanh nghiệp; màn hình này hiện tối đa 200 doanh nghiệp.',
     periodMonth: 'Tháng {month}/{year}',
     periodQuarter: 'Quý {quarter}/{year}',
     daysLeft: '{days, plural, =0 {hạn cuối là hôm nay} other {còn # ngày}}',

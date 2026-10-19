@@ -138,6 +138,8 @@ export const zClientOverview = zOrgSummary.extend({
       .nullable(),
   }),
 });
+// The home screen's answer (#495): at most 200 orgs, and how many the user has, so a cut list says so.
+export const zClientOverviews = z.object({ clients: z.array(zClientOverview), total: z.number().int().nonnegative() });
 // What the public tax registry says about a tax code (issue #324), to prefill a new org: the normalized tax code, the
 // registered name and the address (null when the registry has none).
 export const zTaxRegistryEntry = z.object({ taxCode: z.string(), name: z.string(), address: z.string().nullable() });

@@ -11,7 +11,7 @@ import {
   zAgentTemplate,
   zAiAmount,
   zChart,
-  zClientOverview,
+  zClientOverviews,
   zJobDescription,
   zModuleId,
   zPositionStatus,
@@ -82,8 +82,9 @@ export const contract = {
   me: {
     get: oc.output(zMe),
     // The multi-client home screen (issue #318): the orgs of me.get (at most 200) with their figures, each read in its
-    // own org.
-    clients: oc.output(z.array(zClientOverview)),
+    // own org, and how many orgs the user has (#495). One at a time per user: a second while the first runs is
+    // refused with OVERLOADED (503).
+    clients: oc.output(zClientOverviews),
   },
   org: {
     // A retry with the same idempotencyKey returns the org the first request created.
