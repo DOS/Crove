@@ -9,12 +9,13 @@ import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { EXPORT_TABLE_NAMES, createOrg, kernelCommands, kernelQueries, myOrgs, upsertIdentity, type OrgExportView } from '@crove/kernel';
-import { Runtime, defineQuery, exportKey, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
+import { EXPORT_TABLE_NAMES, createOrg, kernelCommands, kernelQueries, myOrgs, upsertIdentity, type ExportRecord, type OrgExportView } from '@crove/kernel';
+import { BlobNotFoundError, Runtime, defineQuery, exportKey, fileKey, readVerified, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 import type { AuthUser } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
+import { rebindExport, rebindExports } from '../src/export-rebind.ts';
 import { ExportSealer, exportAad } from '../src/export-seal.ts';
 import { runOrgExport, type OrgExportManifest } from '../src/org-export.ts';
 
@@ -355,6 +356,91 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     const live = new Set(await workerRuntime.query<string[]>('kernel.org.export.live_keys', {}, system));
     expect(live).toEqual(new Set([record.manifestKey, ...record.parts.map((p) => p.key)]));
     await expect(runtime.query('kernel.org.export.live_keys', {}, { actor: asUser(owner.id), orgId: org.orgId })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('re-records an export with the object versions of a restored bucket, and it downloads again (#351)', async () => {
+    // A bucket with object versions: every write is a new version, as on S3; a restore copies the bytes into a new
+    // bucket, where each object gets a new version id.
+    class VersionedStore implements BlobStore {
+      readonly versions = new Map<string, Array<{ id: string; bytes: Uint8Array }>>();
+      readonly name: string;
+      constructor(name: string) {
+        this.name = name;
+      }
+      async put(key: string, bytes: Uint8Array) {
+        const list = this.versions.get(key) ?? [];
+        const latest = list.at(-1);
+        if (latest && sha256Hex(latest.bytes) === sha256Hex(bytes)) return `s3:${latest.id}`;
+        const id = `${this.name}-${randomUUID()}`;
+        this.versions.set(key, [...list, { id, bytes }]);
+        return `s3:${id}`;
+      }
+      async get(key: string, generation?: string | null) {
+        const list = this.versions.get(key) ?? [];
+        const found = generation?.startsWith('s3:') ? list.find((v) => `s3:${v.id}` === generation) : list.at(-1);
+        if (!found) throw new BlobNotFoundError(key);
+        return found.bytes;
+      }
+      async delete(key: string) {
+        this.versions.delete(key);
+      }
+      restoredCopy(name: string) {
+        const copy = new VersionedStore(name);
+        for (const [key, list] of this.versions) copy.versions.set(key, [{ id: `${name}-${randomUUID()}`, bytes: list.at(-1)!.bytes }]);
+        return copy;
+      }
+    }
+    const { org, owner } = await orgWithMember('Công ty Khôi phục');
+    await runtime.execute('kernel.org.offboard', { confirmSlug: org.slug }, { actor: asMfa(owner.id), orgId: org.orgId });
+    const original = new VersionedStore('before');
+    const record = await runOrgExport({ runtime: workerRuntime, store: original, sealer }, org.orgId);
+    expect(record.manifestGeneration).toMatch(/^s3:before-/);
+    const system = { actor: { type: 'system' as const, component: 'test' }, orgId: org.orgId };
+    expect(await workerRuntime.query('kernel.org.export.current', {}, system)).toEqual(record);
+    await expect(runtime.query('kernel.org.export.current', {}, { actor: asUser(owner.id), orgId: org.orgId })).rejects.toMatchObject({ status: 403 });
+
+    // The same bucket still reads: nothing to do.
+    expect(await rebindExport({ runtime: workerRuntime, store: original }, org.orgId)).toBe('readable');
+
+    // A restored bucket: the recorded versions are gone, so the export is re-recorded with the new ones.
+    const restored = original.restoredCopy('after');
+    await expect(readVerified(restored, { key: record.manifestKey, sha256: record.manifestSha256, generation: record.manifestGeneration })).rejects.toThrow(BlobNotFoundError);
+    expect(await rebindExport({ runtime: workerRuntime, store: restored }, org.orgId)).toBe('rebound');
+    const rebound = await workerRuntime.query<ExportRecord>('kernel.org.export.current', {}, system);
+    expect(rebound).toEqual({
+      ...record,
+      manifestGeneration: expect.stringMatching(/^s3:after-/),
+      parts: record.parts.map((p) => ({ ...p, generation: expect.stringMatching(/^s3:after-/) })),
+    });
+    for (const ref of [{ key: rebound.manifestKey, sha256: rebound.manifestSha256, generation: rebound.manifestGeneration }, ...rebound.parts]) {
+      expect(sha256Hex(await readVerified(restored, ref))).toBe(ref.sha256);
+    }
+    // A new audit row by the restore, the old one untouched; a second run finds nothing to do.
+    const audits = await withAdmin(async (admin) =>
+      (await admin.query<{ actor_type: string; generation: string }>(
+        `SELECT actor_type, detail->>'manifest_generation' AS generation FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.org.export.record' ORDER BY occurred_at, id`,
+        [org.orgId],
+      )).rows,
+    );
+    expect(audits).toEqual([
+      { actor_type: 'system', generation: record.manifestGeneration },
+      { actor_type: 'system', generation: rebound.manifestGeneration },
+    ]);
+    expect(await rebindExport({ runtime: workerRuntime, store: restored }, org.orgId)).toBe('readable');
+
+    // Bytes that differ from the recorded sha256 are never vouched for.
+    const tampered = original.restoredCopy('tampered');
+    tampered.versions.set(record.parts[0]!.key, [{ id: 'tampered-x', bytes: new TextEncoder().encode('forged') }]);
+    const lines: string[] = [];
+    // The export now names the 'after' versions, which this bucket lacks too.
+    expect(await rebindExports({ runtime: workerRuntime, store: tampered, log: (l) => lines.push(l) }, [org.orgId, 'not-an-org'])).toBe(1);
+    expect(lines).toEqual([
+      expect.stringMatching(new RegExp(`org ${org.orgId}: FAILED, the owner must ask for a new export: stored blob does not match its recorded sha256`)),
+      '[exports-rebind] not-an-org: not an org id',
+    ]);
+    // An org without an export.
+    const quiet = await orgWithMember('Công ty Chưa xuất');
+    expect(await rebindExport({ runtime: workerRuntime, store: restored }, quiet.org.orgId)).toBe('none');
   });
 
   it('runs a streamed query in one REPEATABLE READ, READ ONLY transaction that may idle while the sink works', async () => {

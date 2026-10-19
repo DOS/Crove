@@ -2,7 +2,8 @@
 // it with thresholds and notifies on news only (alert-gate.ts): a new or changed problem, a resolved one, and the
 // same problem again every ALERT_REPEAT_MINUTES. Runs once and exits (cron, a scheduler), or repeats with
 // `--every <seconds>` (the Compose profile). `--test-alert` sends a test alert and needs no database, and so does
-// `--backup-failed <reason>`, which the backup script runs when a backup fails (docs/runbooks/backup-and-restore.md).
+// `--backup-failed <reason>`, which the backup script runs when a backup fails, and `--backup-ok`, which it runs after
+// a good one to ping BACKUP_HEARTBEAT_URL (docs/runbooks/backup-and-restore.md).
 //
 // Exit codes: 0 healthy (or the test alert was delivered), 1 thresholds exceeded, 2 the health check could not run
 // (configuration, connection, permissions), 3 the alert could not be delivered (it was printed to stdout instead).
@@ -45,6 +46,9 @@ const schema = z.object({
   // An outside heartbeat monitor's ping URL (Healthchecks.io, Uptime Kuma push, Better Stack heartbeat): a GET after
   // each probe that read the database and delivered what it owed. Like the webhook, it usually carries a secret.
   PROBER_HEARTBEAT_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
+  // The same kind of monitor for backups (issue #351): pinged by `--backup-ok` after each good backup run, so a backup
+  // that never runs (the timer disabled, the server off) pages when the pings stop.
+  BACKUP_HEARTBEAT_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
   PROBER_MAX_OUTBOX_AGE_SECONDS: seconds(300),
   PROBER_MAX_JOB_AGE_SECONDS: seconds(900),
   PROBER_MAX_HEARTBEAT_AGE_SECONDS: seconds(120),
@@ -71,6 +75,8 @@ export interface ProberConfig {
   deadLetterWindowSeconds: number;
   // The outside heartbeat monitor's ping URL; unset: no heartbeat.
   heartbeatUrl?: string | undefined;
+  // The backup heartbeat monitor's ping URL; unset: --backup-ok pings nothing.
+  backupHeartbeatUrl?: string | undefined;
 }
 
 export interface Thresholds {
@@ -106,6 +112,7 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
     },
     deadLetterWindowSeconds: raw.PROBER_DEAD_LETTER_WINDOW_SECONDS ?? (everySeconds === null ? 3600 : Math.min(everySeconds + 60, 604_800)),
     heartbeatUrl: raw.PROBER_HEARTBEAT_URL,
+    backupHeartbeatUrl: raw.BACKUP_HEARTBEAT_URL,
   };
 }
 
@@ -313,7 +320,8 @@ function describeHeartbeat(url: string): string {
   return `heartbeat monitor at ${new URL(url).host}`;
 }
 
-async function pingHeartbeat(url: string, deps: ProbeDeps): Promise<void> {
+// true when the monitor answered 2xx. A failure is logged, never thrown.
+async function pingHeartbeat(url: string, deps: ProbeDeps, label = 'heartbeat'): Promise<boolean> {
   const log = deps.log ?? ((line: string) => console.log(line));
   const error = deps.error ?? ((line: string) => console.error(line));
   try {
@@ -321,9 +329,11 @@ async function pingHeartbeat(url: string, deps: ProbeDeps): Promise<void> {
     // Drain the body so the connection is released; its content is not logged.
     await response.arrayBuffer().catch(() => undefined);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    log(`[prober] heartbeat sent to ${describeHeartbeat(url)}`);
+    log(`[prober] ${label} sent to ${describeHeartbeat(url)}`);
+    return true;
   } catch (e) {
-    error(`[prober] heartbeat: ${describeHeartbeat(url)} failed: ${e instanceof Error ? e.message : String(e)}`);
+    error(`[prober] ${label}: ${describeHeartbeat(url)} failed: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
   }
 }
 
@@ -446,15 +456,31 @@ export async function sendBackupAlert(config: ProberConfig, reason: string, deps
   return EXIT.ok;
 }
 
+/**
+ * Reports a good backup run (issue #351): `tools/backup/backup.sh` calls `prober --backup-ok` at the end of every run
+ * that completed, and this pings BACKUP_HEARTBEAT_URL. The outside monitor pages when the pings stop, which no alert
+ * from the backup itself can do (a timer that was disabled runs nothing). Needs no database. 0 when pinged or when no
+ * URL is set, 3 when the ping failed.
+ */
+export async function sendBackupHeartbeat(config: ProberConfig, deps: ProbeDeps = {}): Promise<number> {
+  if (!config.backupHeartbeatUrl) {
+    (deps.log ?? console.log)('[prober] backup ok; BACKUP_HEARTBEAT_URL is not set, so no monitor sees it');
+    return EXIT.ok;
+  }
+  return (await pingHeartbeat(config.backupHeartbeatUrl, deps, 'backup heartbeat')) ? EXIT.ok : EXIT.deliveryFailed;
+}
+
 export interface ProberArgs {
   testAlert: boolean;
   everySeconds: number | null;
   // --backup-failed <reason>: send one backup failure alert and exit.
   backupFailed: string | null;
+  // --backup-ok: ping the backup heartbeat monitor and exit.
+  backupOk: boolean;
 }
 
 export function parseProberArgs(argv: readonly string[]): ProberArgs {
-  const args: ProberArgs = { testAlert: false, everySeconds: null, backupFailed: null };
+  const args: ProberArgs = { testAlert: false, everySeconds: null, backupFailed: null, backupOk: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--test-alert') args.testAlert = true;
@@ -466,13 +492,14 @@ export function parseProberArgs(argv: readonly string[]): ProberArgs {
       const reason = argv[++i];
       if (reason === undefined) throw new Error('--backup-failed needs the reason');
       args.backupFailed = reason;
-    } else throw new Error(`unknown prober argument ${arg}; use --test-alert, --backup-failed <reason> or --every <seconds>`);
+    } else if (arg === '--backup-ok') args.backupOk = true;
+    else throw new Error(`unknown prober argument ${arg}; use --test-alert, --backup-failed <reason>, --backup-ok or --every <seconds>`);
   }
   return args;
 }
 
 /**
- * Entry point for `main.ts prober [--test-alert] [--backup-failed <reason>] [--every <seconds>]`. Resolves to the
+ * Entry point for `main.ts prober [--test-alert] [--backup-failed <reason>] [--backup-ok] [--every <seconds>]`. Resolves to the
  * exit code of the last probe.
  */
 export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv = process.env, deps: ProbeDeps = {}): Promise<number> {
@@ -488,6 +515,7 @@ export async function runProber(argv: readonly string[], env: NodeJS.ProcessEnv 
   }
   if (args.testAlert) return sendTestAlert(config, deps);
   if (args.backupFailed !== null) return sendBackupAlert(config, args.backupFailed, deps);
+  if (args.backupOk) return sendBackupHeartbeat(config, deps);
   if (args.everySeconds === null) return probeOnce(config, deps);
   const every = args.everySeconds;
   const looping = { ...deps, outageGate: deps.outageGate ?? memoryAlertGate(config.repeatSeconds) };

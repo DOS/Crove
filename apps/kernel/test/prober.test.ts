@@ -149,11 +149,12 @@ describe('prober configuration', () => {
     expect(() => loadProberConfig({ PROBER_DEAD_LETTER_WINDOW_SECONDS: '10' })).toThrow(/PROBER_DEAD_LETTER_WINDOW_SECONDS/);
   });
 
-  it('parses --test-alert, --backup-failed and --every', () => {
-    expect(parseProberArgs([])).toEqual({ testAlert: false, everySeconds: null, backupFailed: null });
-    expect(parseProberArgs(['--test-alert'])).toEqual({ testAlert: true, everySeconds: null, backupFailed: null });
-    expect(parseProberArgs(['--every', '300'])).toEqual({ testAlert: false, everySeconds: 300, backupFailed: null });
-    expect(parseProberArgs(['--backup-failed', 'disk full'])).toEqual({ testAlert: false, everySeconds: null, backupFailed: 'disk full' });
+  it('parses --test-alert, --backup-failed, --backup-ok and --every', () => {
+    expect(parseProberArgs(['--backup-ok'])).toEqual({ testAlert: false, everySeconds: null, backupFailed: null, backupOk: true });
+    expect(parseProberArgs([])).toEqual({ testAlert: false, everySeconds: null, backupFailed: null, backupOk: false });
+    expect(parseProberArgs(['--test-alert'])).toEqual({ testAlert: true, everySeconds: null, backupFailed: null, backupOk: false });
+    expect(parseProberArgs(['--every', '300'])).toEqual({ testAlert: false, everySeconds: 300, backupFailed: null, backupOk: false });
+    expect(parseProberArgs(['--backup-failed', 'disk full'])).toEqual({ testAlert: false, everySeconds: null, backupFailed: 'disk full', backupOk: false });
     expect(() => parseProberArgs(['--backup-failed'])).toThrow(/--backup-failed needs the reason/);
     expect(() => parseProberArgs(['--every', '1'])).toThrow(/--every/);
     expect(() => parseProberArgs(['--loud'])).toThrow(/unknown prober argument --loud/);
@@ -183,6 +184,45 @@ describe('backup failure alert', () => {
     const finding = (hook.body().crove as { findings: Array<{ message: string }> }).findings[0];
     expect(finding?.message).toHaveLength('backup failed: '.length + 500);
     expect(finding?.message.endsWith('...')).toBe(true);
+  });
+});
+
+describe('backup heartbeat (--backup-ok)', () => {
+  const SECRET_BACKUP_PING = 'https://hc.example.test/ping/secret-backup-789';
+
+  it('pings BACKUP_HEARTBEAT_URL once with a GET, needs no database and logs the host only', async () => {
+    const io = capture();
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response('ok');
+    }) as unknown as typeof globalThis.fetch;
+    const readHealth = vi.fn();
+    const env = { BACKUP_HEARTBEAT_URL: SECRET_BACKUP_PING, PROBER_HEARTBEAT_URL: SECRET_PING, ALERT_WEBHOOK_URL: SECRET_HOOK };
+    expect(await runProber(['--backup-ok'], env, { ...io, fetch, readHealth })).toBe(EXIT.ok);
+    expect(readHealth).not.toHaveBeenCalled();
+    expect(calls.map((c) => c.url)).toEqual([SECRET_BACKUP_PING]);
+    expect(calls[0]?.init).toMatchObject({ method: 'GET', redirect: 'error' });
+    expect(io.out).toEqual(['[prober] backup heartbeat sent to heartbeat monitor at hc.example.test']);
+    expect([...io.out, ...io.err].join('\n')).not.toContain('secret-backup-789');
+  });
+
+  it('exits 3 when the ping fails, and 0 with nothing to ping', async () => {
+    const io = capture();
+    const failing = vi.fn(async () => new Response('down', { status: 503 })) as unknown as typeof globalThis.fetch;
+    expect(await runProber(['--backup-ok'], { BACKUP_HEARTBEAT_URL: SECRET_BACKUP_PING }, { ...io, fetch: failing })).toBe(EXIT.deliveryFailed);
+    expect(io.err).toEqual(['[prober] backup heartbeat: heartbeat monitor at hc.example.test failed: HTTP 503']);
+    const none = capture();
+    const unused = vi.fn() as unknown as typeof globalThis.fetch;
+    expect(await runProber(['--backup-ok'], {}, { ...none, fetch: unused })).toBe(EXIT.ok);
+    expect(unused).not.toHaveBeenCalled();
+    expect(none.out).toEqual(['[prober] backup ok; BACKUP_HEARTBEAT_URL is not set, so no monitor sees it']);
+  });
+
+  it('refuses a BACKUP_HEARTBEAT_URL that is not http(s)', async () => {
+    const io = capture();
+    expect(await runProber(['--backup-ok'], { BACKUP_HEARTBEAT_URL: 'ftp://hc.example.test/x' }, io)).toBe(EXIT.probeFailed);
+    expect(io.err.join('\n')).toMatch(/BACKUP_HEARTBEAT_URL/);
   });
 });
 

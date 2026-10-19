@@ -234,6 +234,46 @@ export function checkEnv(env: Env): CheckResult[] {
   const webhookHost = webhook && URL.canParse(webhook) ? new URL(webhook).host : 'the webhook';
   add('Alerts', alerts, `alerts go to ${webhookHost}${proberProfile ? ', from the prober the compose profile starts' : ''}`);
 
+  // Backups (M1-7, issues #307 and #351): copied to a second location, over https, apart from the files bucket.
+  const backups: (string | null)[] = [];
+  const backupEndpoint = value(env, 'BACKUP_S3_ENDPOINT');
+  const backupBucket = value(env, 'BACKUP_S3_BUCKET');
+  if (!backupEndpoint) {
+    backups.push("BACKUP_S3_ENDPOINT is unset: the nightly backups stay on the server's own disk, which is not a backup; set a bucket at another provider or account (docs/runbooks/backup-and-restore.md)");
+  } else if (!URL.canParse(backupEndpoint)) {
+    backups.push('BACKUP_S3_ENDPOINT is not a URL');
+  } else {
+    const url = new URL(backupEndpoint);
+    if (url.protocol !== 'https:') backups.push(`BACKUP_S3_ENDPOINT is ${url.origin}: the backups and their keys would travel in the clear; use https`);
+    else if (isLocalHost(url.hostname)) backups.push(`BACKUP_S3_ENDPOINT is ${url.origin}: a bucket on this server is not a second location`);
+    for (const name of ['BACKUP_S3_BUCKET', 'BACKUP_S3_ACCESS_KEY_ID', 'BACKUP_S3_SECRET_ACCESS_KEY']) {
+      if (!value(env, name)) backups.push(`${name} is unset: backup.sh needs it with BACKUP_S3_ENDPOINT`);
+    }
+    const filesEndpoint = value(env, 'S3_ENDPOINT') ?? 'https://s3.amazonaws.com';
+    if (value(env, 'STORAGE') === 's3' && backupBucket === value(env, 'S3_BUCKET') && URL.canParse(filesEndpoint) && new URL(filesEndpoint).host === url.host) {
+      backups.push('BACKUP_S3_BUCKET is the files bucket itself: one incident would take both; use another provider or account');
+    }
+  }
+  const backupKey = value(env, 'BACKUP_ENCRYPTION_KEY');
+  if (backupKey) {
+    try {
+      const parsed = parseExportKey(backupKey);
+      let sameAsExport = false;
+      try {
+        sameAsExport = exportKey !== undefined && parseExportKey(exportKey).equals(parsed);
+      } catch {
+        // An invalid export key is reported under Secrets.
+      }
+      if (sameAsExport) backups.push('BACKUP_ENCRYPTION_KEY is EXPORT_ENCRYPTION_KEY: give each its own key (openssl rand -base64 32)');
+    } catch {
+      backups.push('BACKUP_ENCRYPTION_KEY is not 32 bytes as base64 or hex (openssl rand -base64 32)');
+    }
+  }
+  const backupHeartbeat = value(env, 'BACKUP_HEARTBEAT_URL');
+  if (backupHeartbeat) backups.push(secretUrlProblem('BACKUP_HEARTBEAT_URL', backupHeartbeat));
+  const backupHost = backupEndpoint && URL.canParse(backupEndpoint) ? new URL(backupEndpoint).host : 'the bucket';
+  add('Backups', backups, `backups go to ${backupHost}, bucket ${backupBucket ?? '?'}, ${backupKey ? 'sealed with BACKUP_ENCRYPTION_KEY' : 'not sealed'}`);
+
   results.push(
     {
       item: 'Alerts',
@@ -263,7 +303,29 @@ export function checkEnv(env: Env): CheckResult[] {
       status: 'manual',
       message: 'confirm the CI db job and the invariant suite (rls-matrix.db.test.ts, T8) are green on the commit you deploy',
     },
-    { item: 'Backups', status: 'manual', message: 'confirm a restore drill passed (M1-7, issue #307)' },
+    ...(backupKey
+      ? []
+      : [
+          {
+            item: 'Backups',
+            status: 'manual' as const,
+            message: 'BACKUP_ENCRYPTION_KEY is unset: whoever can read the backup bucket can read the books; set it (kept apart from the bucket, docs/runbooks/backup-and-restore.md) or accept that',
+          },
+        ]),
+    ...(backupHeartbeat
+      ? []
+      : [
+          {
+            item: 'Backups',
+            status: 'manual' as const,
+            message: 'BACKUP_HEARTBEAT_URL is unset: nothing pages the owner when the nightly backup stops running; set it (docs/runbooks/backup-and-restore.md) or accept that',
+          },
+        ]),
+    {
+      item: 'Backups',
+      status: 'manual',
+      message: 'confirm a restore onto a scratch stack passed this month (restore.sh ends with "restore of <run> passed") and note the RPO and RTO it shows (docs/runbooks/backup-and-restore.md)',
+    },
     { item: 'Owner sign-off', status: 'manual', message: 'the owner records the sign-off in issue #308' },
   );
   return results;

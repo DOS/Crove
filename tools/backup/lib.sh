@@ -18,21 +18,189 @@ BACKUP_MC_IMAGE_DEFAULT='pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe72
 log() { printf '[%s +%ss] %s\n' "$LOG_TAG" "$(($(date +%s) - STARTED_AT))" "$*"; }
 STARTED_AT="$(date +%s)"
 
-# Reads KEY=VALUE lines from a .env file without overriding variables already set, and without evaluating anything
-# (no command substitution, no expansion). Surrounding single or double quotes are removed.
+# Expands a .env value the way docker compose does, into REPLY: $NAME, ${NAME}, ${NAME:-word}, ${NAME-word},
+# ${NAME:+word}, ${NAME+word}, ${NAME:?message} and ${NAME?message} (word expanded in turn), $$ for a literal $. A $
+# before anything else stays. Never evaluates anything: no command substitution, no arithmetic, no globbing.
+env_interpolate() {
+  local s="$1" out='' i=0 rest name op word val depth j body
+  while [ "$i" -lt "${#s}" ]; do
+    if [ "${s:i:1}" != '$' ]; then
+      out+="${s:i:1}"
+      i=$((i + 1))
+      continue
+    fi
+    rest="${s:i+1}"
+    if [[ "$rest" == '$'* ]]; then
+      out+='$'
+      i=$((i + 2))
+    elif [[ "$rest" =~ ^([A-Za-z_][A-Za-z0-9_]*) ]]; then
+      name="${BASH_REMATCH[1]}"
+      out+="${!name-}"
+      i=$((i + 1 + ${#name}))
+    elif [[ "$rest" != '{'* ]]; then
+      out+='$'
+      i=$((i + 1))
+    else
+      depth=0
+      for ((j = 0; j < ${#rest}; j++)); do
+        case "${rest:j:1}" in
+          '{') depth=$((depth + 1)) ;;
+          '}') depth=$((depth - 1)); [ "$depth" -eq 0 ] && break ;;
+        esac
+      done
+      [ "$depth" -eq 0 ] || { ENV_ERROR='an unclosed ${'; return 1; }
+      body="${rest:1:j-1}"
+      [[ "$body" =~ ^([A-Za-z_][A-Za-z0-9_]*)((:?[-+?])(.*))?$ ]] || { ENV_ERROR="\${$body} is not a variable reference"; return 1; }
+      name="${BASH_REMATCH[1]}" op="${BASH_REMATCH[3]}" word="${BASH_REMATCH[4]}"
+      val="${!name-}"
+      case "$op" in
+        ':-') [ -n "$val" ] || { env_interpolate "$word" || return 1; val="$REPLY"; } ;;
+        '-') [ -n "${!name+x}" ] || { env_interpolate "$word" || return 1; val="$REPLY"; } ;;
+        ':+') if [ -n "$val" ]; then env_interpolate "$word" || return 1; val="$REPLY"; fi ;;
+        '+') if [ -n "${!name+x}" ]; then env_interpolate "$word" || return 1; val="$REPLY"; else val=''; fi ;;
+        ':?') [ -n "$val" ] || { ENV_ERROR="$name is required: $word"; return 1; } ;;
+        '?') [ -n "${!name+x}" ] || { ENV_ERROR="$name is required: $word"; return 1; } ;;
+      esac
+      out+="$val"
+      i=$((i + 2 + j))
+    fi
+  done
+  REPLY="$out"
+}
+
+# Reads KEY=VALUE lines from a .env file the way docker compose reads it, so the scripts see the values the stack
+# runs with, without overriding variables already set (as in Compose, the environment wins). An `export ` prefix is
+# allowed; a value is unquoted (trimmed, ` #` starts a comment, expanded), 'single-quoted' (literal) or
+# "double-quoted" (\n, \t, \r, \", \\ and \$ escapes, then expanded); expansion sees the environment and the lines
+# above (env_interpolate). Nothing is evaluated. A value Compose would read differently from this parser (an unclosed
+# quote, a multi-line value, text after the closing quote) fails, naming the line and the key but never the value.
 load_env_file() {
-  local file="$1" line key value
+  local file="$1" line key value n=0 rest out c i
   [ -f "$file" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
     line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
     case "$line" in '' | \#*) continue ;; esac
+    if [[ "$line" =~ ^export[[:space:]]+(.*)$ ]]; then line="${BASH_REMATCH[1]}"; fi
+    [[ "$line" == *=* ]] || continue
     key="${line%%=*}"
-    value="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
     [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    value="${line#*=}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    ENV_ERROR=''
+    case "$value" in
+      \'*)
+        rest="${value:1}"
+        [[ "$rest" == *\'* ]] || { echo "$file line $n ($key): unclosed single quote (multi-line values are not supported)" >&2; return 1; }
+        value="${rest%%\'*}"
+        rest="${rest#*\'}"
+        ;;
+      \"*)
+        out='' rest=''
+        for ((i = 1; i < ${#value}; i++)); do
+          c="${value:i:1}"
+          if [ "$c" = '\' ]; then
+            i=$((i + 1))
+            case "${value:i:1}" in
+              n) out+=$'\n' ;; t) out+=$'\t' ;; r) out+=$'\r' ;; '"') out+='"' ;; '\') out+='\' ;; '$') out+='$$' ;;
+              *) out+="\\${value:i:1}" ;;
+            esac
+          elif [ "$c" = '"' ]; then
+            rest="${value:i+1}"
+            break
+          else
+            out+="$c"
+          fi
+        done
+        [ "$i" -lt "${#value}" ] || { echo "$file line $n ($key): unclosed double quote (multi-line values are not supported)" >&2; return 1; }
+        env_interpolate "$out" || { echo "$file line $n ($key): $ENV_ERROR" >&2; return 1; }
+        value="$REPLY"
+        ;;
+      *)
+        value="${value%%[[:space:]]#*}"
+        value="${value%"${value##*[![:space:]]}"}"
+        env_interpolate "$value" || { echo "$file line $n ($key): $ENV_ERROR" >&2; return 1; }
+        value="$REPLY"
+        rest=''
+        ;;
+    esac
+    [[ "$rest" =~ ^([[:space:]]+#.*|[[:space:]]*)$ ]] || { echo "$file line $n ($key): text after the closing quote" >&2; return 1; }
     [ -n "${!key+x}" ] && continue
-    if [[ "$value" =~ ^\"(.*)\"$ ]] || [[ "$value" =~ ^\'(.*)\'$ ]]; then value="${BASH_REMATCH[1]}"; fi
     export "$key=$value"
   done <"$file"
+}
+
+# A KEY=value line of a run's meta.env; fails when the key is missing, so a damaged file is never read as empty.
+meta_value() {
+  local line
+  line="$(grep -m1 "^$1=" "$2")" || { echo "meta.env has no $1" >&2; return 1; }
+  printf '%s' "${line#*=}"
+}
+
+# node_run <host dir> <args...>: runs node from the stack's own image (service BACKUP_NODE_SERVICE, default crove) as
+# the host user, in the given directory (mounted at /work), with tools/backup at /crove-backup. The backup keys reach
+# it by name (-e), never on a command line. The host itself needs no Node.
+node_run() {
+  local dir="$1"
+  shift
+  dc run --rm --no-deps -T --user "$(id -u):$(id -g)" -e HOME=/tmp -e BACKUP_ENCRYPTION_KEY -e BACKUP_ENCRYPTION_KEY_PREVIOUS \
+    -v "$(host_path "$dir"):/work" -v "$(host_path "$SCRIPT_DIR"):/crove-backup:ro" -w /work --entrypoint node \
+    "${BACKUP_NODE_SERVICE:-crove}" "$@" </dev/null
+}
+
+# Turns `mc ls --recursive --json` output on stdin into "key<TAB>size" lines, one per object (keys relative to the
+# listed prefix); fails on an error line, so a listing that broke halfway is never read as a short one.
+mc_objects() {
+  local line key size
+  while IFS= read -r line; do
+    [[ "$line" == *'"status":"error"'* ]] && { printf 'mc: %s\n' "$line" >&2; return 1; }
+    [[ "$line" == *'"type":"file"'* ]] || continue
+    [[ "$line" =~ \"key\":\"([^\"]*)\" ]] || continue
+    key="${BASH_REMATCH[1]}"
+    [[ "$line" =~ \"size\":([0-9]+) ]] || continue
+    size="${BASH_REMATCH[1]}"
+    printf '%s\t%s\n' "$key" "$size"
+  done
+}
+
+# True for a URL a development stack uses (localhost, *.localhost, 127.x.x.x, [::1]), false for anything else,
+# including no URL at all: an unset PUBLIC_URL counts as a deployment, so its checks are not skipped by omission.
+is_local_url() {
+  local host="${1#*://}"
+  host="${host%%/*}"
+  if [[ "$host" == '['* ]]; then host="${host%%]*}]"; else host="${host%:*}"; fi
+  host="${host,,}"
+  [[ "$host" =~ ^(localhost|.+\.localhost|127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|\[::1\])$ ]]
+}
+
+# The id of a backup key, as seal.mjs keyId computes it: the first 8 bytes of sha256("crove.backup.key-id|" + key),
+# in hex. Fails on anything but 32 bytes as base64 (44 characters) or hex (64). The key moves through builtins and
+# pipes only, never a command line.
+backup_key_id() {
+  local key="$1"
+  if [[ "$key" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    { printf 'crove.backup.key-id|'; printf "$(printf '%s' "$key" | sed 's/../\\x&/g')"; } | sha256sum | cut -c1-16
+  elif [[ "$key" =~ ^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$ ]]; then
+    { printf 'crove.backup.key-id|'; printf '%s' "$key" | base64 -d; } | sha256sum | cut -c1-16
+  else
+    return 1
+  fi
+}
+
+# Runs seal.mjs (key-id, seal <list>, open <list>) in <dir>; see node_run.
+seal_run() {
+  local dir="$1"
+  shift
+  node_run "$dir" /crove-backup/seal.mjs "$@"
+}
+
+# The sealed size of a file of $1 bytes (seal.mjs sealedSize): a 28-byte header and a 16-byte tag per 64 KiB chunk.
+sealed_size() {
+  local chunks=$((($1 + 65535) / 65536))
+  [ "$chunks" -gt 0 ] || chunks=1
+  echo $((28 + $1 + chunks * 16))
 }
 
 # docker compose in CROVE_DIR, so it reads the same .env, COMPOSE_FILE and COMPOSE_PROJECT_NAME as the stack.
@@ -62,7 +230,7 @@ mc_run() {
   local args=(run --rm -i --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$(host_path "$dir"):/work")
   [ -n "$network" ] && args+=(--network "$network")
   local name
-  for name in MC_HOST_src MC_HOST_dst S3_BUCKET BACKUP_S3_BUCKET BACKUP_S3_PREFIX RUN_ID; do
+  for name in MC_HOST_src MC_HOST_dst S3_BUCKET BACKUP_S3_BUCKET BACKUP_S3_PREFIX RUN_ID BLOB_STORE; do
     args+=(-e "$name")
   done
   docker "${args[@]}" --entrypoint /bin/sh "${BACKUP_MC_IMAGE:-$BACKUP_MC_IMAGE_DEFAULT}" -c "umask 077; $script"
