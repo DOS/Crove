@@ -72,8 +72,10 @@ export async function ingestFileRow(ctx: CommandContext, input: IngestFile, crea
     // file row keeps that (#506). Bytes first stored as an import are recorded as an .xlsx workbook, so reading them
     // as a document would open the workbook's own parts as a ZIP of documents: a direct upload of those bytes as a
     // document is refused with the reason instead of answering "duplicate" and reading nothing. An emailed copy stays
-    // a duplicate (refusing it would refuse the whole message). The other way round, a document's bytes are not
-    // imported as a list: finance.portal_list.import takes only files stored as an import.
+    // a duplicate (refusing it would refuse the whole message). A ZIP's entries (source upload) never reach this: only
+    // entries the worker sniffed as a document type are filed, and the same bytes sniff as a ZIP for an import. The
+    // other way round, an import upload of a document's bytes is refused here too, and finance.portal_list.import
+    // takes only files stored as an import.
     if (input.source === 'upload' && existing.source === 'import') {
       throw new DomainError('FILE_IS_IMPORT', 409, 'Tệp này đã được tải lên làm danh sách hóa đơn từ cổng thuế nên không được đọc như chứng từ; nếu đây là tệp ZIP chứng từ, hãy nén lại thành tệp mới rồi tải lên');
     }
