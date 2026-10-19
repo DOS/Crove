@@ -516,6 +516,8 @@ export const variantRetry = defineCommand({
       if (decision?.decision !== 'approved' || !approvalCovers({ revision: decision.revision, contentHash: decision.content_hash }, { revision: v.revision, contentHash: v.content_hash })) {
         throw new DomainError('APPROVAL_REQUIRED', 409, 'Kênh này chưa được duyệt đúng nội dung hiện tại', { variantId: v.id });
       }
+      // Approved under a bar its channel has raised since (#408), as social.variant.schedule refuses.
+      if (await shortOfPolicy(ctx.trx, ctx.orgId, v)) throw new DomainError('APPROVALS_MISSING', 409, 'Kênh này cần thêm người duyệt trước khi đăng lại', { variantId: v.id });
       await move(ctx, v, { type: 'retry' }, { ...NO_ERROR, scheduled_at: ctx.now, queue_slot_at: null, next_check_at: null });
     }
     await refreshPostStatus(ctx, postId);

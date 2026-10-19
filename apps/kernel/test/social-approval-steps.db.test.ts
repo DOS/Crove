@@ -177,6 +177,27 @@ suite('social multi-step approval on PostgreSQL (S9)', () => {
     expect(events.map((e) => e.payload.post_id).sort()).toEqual([approvedPost, scheduledPost].sort());
   });
 
+  it('leaves a re-approved variant approved when its kept time has passed, and an edit ends the mark', async () => {
+    const o = await org();
+    const conn = await connection(o);
+    const late = await inReview(o, conn);
+    await decide(o, o.owner, late, 'approved');
+    await schedule(o, late);
+    const edited = await inReview(o, conn);
+    await decide(o, o.owner, edited, 'approved');
+    await schedule(o, edited);
+    await exec(o, o.owner, 'social.channel.set_policy', { connectionId: conn, approvalsRequired: 2 });
+
+    // The kept time went by while the variant waited for its second approval.
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 minute' WHERE post_id = $1", [late]));
+    await decide(o, o.admin, late, 'approved');
+    expect((await get(o, late)).variants[0]).toMatchObject({ status: 'approved', error: null });
+
+    const post = await get(o, edited);
+    await exec(o, o.member, 'social.post.update', { postId: edited, revision: post.revision, body: 'Khai trương, mở cửa 8 giờ' });
+    expect((await get(o, edited)).variants[0]).toMatchObject({ status: 'draft', error: null });
+  });
+
   it('refuses to schedule a variant approved under a bar its channel has raised since', async () => {
     const o = await org();
     const conn = await connection(o);
