@@ -199,6 +199,19 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(platform.posts).toHaveLength(1);
   });
 
+  it('never publishes a variant short of what its channel asks for now, and sends it back to review (#408)', async () => {
+    const o = await org();
+    const platform = new FakePlatform();
+    const { postId, variants, connections } = await duePost(o);
+    const id = variants[0] as string;
+    // The policy rose without set_policy re-checking (as after a retry or a resume brings a variant back).
+    await admin((c) => c.query('INSERT INTO crove_social.channel_policy (org_id, channel_connection_id, approvals_required, updated_by) VALUES ($1, $2, 2, $3)', [o.orgId, connections[0], o.owner]));
+    expect(await run(o, id, platform)).toEqual({ action: 'none', reason: 'approval' });
+    expect(platform.posts).toHaveLength(0);
+    expect((await variant(o, postId)).status).toBe('in_review');
+    const events = await admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.post.submitted' AND payload->>'by_policy' = 'true'", [o.orgId])).rows);
+    expect(events.map((e) => e.payload)).toEqual([{ post_id: postId, variant_ids: [id], by_policy: true }]);
+  });
   it('does nothing before the time, and never for a variant of another provider', async () => {
     const o = await org();
     const platform = new FakePlatform();

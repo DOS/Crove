@@ -16,6 +16,7 @@ import { zId } from '@crove/kernel-contract';
 import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
+import { shortOfPolicy } from './policy.ts';
 import { nextAction, publishCallKey, type RetrySafety } from './domain/publish.ts';
 import { startsNewAttempt, type VariantEvent } from './domain/state.ts';
 import {
@@ -28,6 +29,7 @@ import {
   overrides,
   pick,
   refreshPostStatus,
+  regateValues,
   setVariant,
   settingsOf,
   step,
@@ -270,6 +272,14 @@ export const publishBegin = defineCommand({
           result = none('approval');
           break;
         }
+        if (await shortOfPolicy(ctx.trx, ctx.orgId, v)) {
+          // Its channel now asks for more approvals than it has (set_policy re-checks too; a retry or a resume can
+          // bring one back to scheduled): back to review, never published short.
+          await move(ctx, v, { type: 'regate' }, regateValues(v));
+          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: [v.id], by_policy: true });
+          result = none('approval');
+          break;
+        }
         if (await queuePaused(ctx, v)) return none('queue_paused');
         const connection = await connectionOf(ctx, v.channel_connection_id);
         if (connection?.status !== 'active') {
@@ -506,6 +516,8 @@ export const variantRetry = defineCommand({
       if (decision?.decision !== 'approved' || !approvalCovers({ revision: decision.revision, contentHash: decision.content_hash }, { revision: v.revision, contentHash: v.content_hash })) {
         throw new DomainError('APPROVAL_REQUIRED', 409, 'Kênh này chưa được duyệt đúng nội dung hiện tại', { variantId: v.id });
       }
+      // Approved under a bar its channel has raised since (#408), as social.variant.schedule refuses.
+      if (await shortOfPolicy(ctx.trx, ctx.orgId, v)) throw new DomainError('APPROVALS_MISSING', 409, 'Kênh này cần thêm người duyệt trước khi đăng lại', { variantId: v.id });
       await move(ctx, v, { type: 'retry' }, { ...NO_ERROR, scheduled_at: ctx.now, queue_slot_at: null, next_check_at: null });
     }
     await refreshPostStatus(ctx, postId);

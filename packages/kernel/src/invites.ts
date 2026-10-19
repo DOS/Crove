@@ -8,6 +8,7 @@ import { z } from 'zod';
 import type { Db, MemberRole } from '@crove/db';
 import { zId, zInviteRole, zInviteToken } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type SessionStatusSource } from '@crove/kernel-runtime';
+import { createMailMessage } from './mail.ts';
 import { memberProfiles } from './profiles.ts';
 
 // How long an invite stays valid. The table allows at most 30 days.
@@ -209,8 +210,11 @@ async function pendingRefusals(ctx: CommandContext, email: string, locked: Locke
 // the pending one, which is also how an inviter gets a fresh link. limits.perRecipientPerDay caps the invites one
 // address gets from all orgs together (default DEFAULT_INVITE_LIMITS). The limits that key on an address count its
 // inbox (crove_kernel.invite_cap_key: no +tag, no dots at Gmail, #270); the invite itself stays bound to the email
-// as given.
-export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS) {
+// as given. The invite mail gets its crove_kernel.mail_message row here (#538): as suppressed when the org has
+// stopped mail to the address; otherwise as sending, and the API, which holds the token, reads it back
+// (kernel.mail.direct.get), sends the mail and records the outcome. The answer stays the one #35 defined, the same
+// for every address. mail.messageIdDomain is the right-hand side of its Message-ID.
+export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS, mail: { messageIdDomain?: string | undefined } = {}) {
   if (!Number.isInteger(limits.perRecipientPerDay) || limits.perRecipientPerDay < 1 || limits.perRecipientPerDay > 1000) {
     throw new Error('perRecipientPerDay must be an integer from 1 to 1000');
   }
@@ -289,7 +293,16 @@ export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS
         })
         .returning('id')
         .executeTakeFirstOrThrow();
-      ctx.audit({ invite_id: invite.id, role: input.role, replaced: replaced.map((r) => r.id) });
+      const message = await createMailMessage(ctx, {
+        stream: 'system',
+        source: 'kernel.member.invite.create',
+        sourceId: invite.id,
+        templateKey: 'kernel.member.invite',
+        to: email,
+        status: 'sending',
+        messageIdDomain: mail.messageIdDomain,
+      });
+      ctx.audit({ invite_id: invite.id, role: input.role, replaced: replaced.map((r) => r.id), mail: message.status });
       await ctx.activity('kernel.member_invite', invite.id, 'invite.created', `Mời ${email} tham gia với vai trò ${ROLE_LABEL[input.role]}`);
       return {
         inviteId: invite.id,

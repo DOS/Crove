@@ -1,38 +1,74 @@
-import { useMutation } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useRef, useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
+import { normalizeTaxCode } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { ErrorText, Logo, OrgLeftNotice } from '../components/ui.tsx';
-import { errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { client, clientForOrg, errorMessage, orglessClient, orpc, queryClient } from '../lib/api.ts';
+import { getConfig } from '../lib/auth.ts';
 import { signOut } from '../lib/session-actions.ts';
 
+// A new org (issue #324): a firm adding a client types the client's tax code, the public registry fills in the name and
+// address where the server has a lookup, and the contact person's email opens the new org's invite form. The org is
+// created first; its tax code and address are set right after, in the new org.
 export function OnboardingPage() {
   const navigate = useNavigate();
   const t = useTranslations('onboarding');
   const tc = useTranslations('common');
+  const me = useQuery(orpc.me.get.queryOptions());
+  const hasOrgs = (me.data?.orgs.length ?? 0) > 0;
+  const finance = getConfig().modules.includes('finance');
+  const [taxCode, setTaxCode] = useState('');
   const [name, setName] = useState('');
-  const create = useMutation(
-    orpc.org.create.mutationOptions({
-      onSuccess: async (org) => {
-        await queryClient.invalidateQueries();
-        await navigate({ to: '/o/$slug/inbox', params: { slug: org.slug } });
-      },
-    }),
-  );
+  const [address, setAddress] = useState('');
+  const [contact, setContact] = useState('');
+  const [invalidTaxCode, setInvalidTaxCode] = useState(false);
+
+  const lookup = useMutation({
+    mutationFn: (code: string) => orglessClient.taxRegistry.lookup({ taxCode: code }),
+    onSuccess: (entry) => {
+      setTaxCode(entry.taxCode);
+      setName(entry.name);
+      setAddress(entry.address ?? '');
+    },
+  });
 
   // One idempotency key per name: a retried submit returns the org the first one created instead of a second.
   const attempt = useRef<{ name: string; key: string } | null>(null);
+  const create = useMutation({
+    mutationFn: async (input: { name: string; taxCode: string | null; address: string | null; contact: string | null }) => {
+      if (attempt.current?.name !== input.name) attempt.current = { name: input.name, key: crypto.randomUUID() };
+      const org = await client.org.create({ name: input.name, idempotencyKey: attempt.current.key });
+      const inOrg = clientForOrg(org.slug);
+      if (input.taxCode) await inOrg.org.setTaxCode({ taxCode: input.taxCode });
+      if (input.address) await inOrg.org.setAddress({ address: input.address });
+      return org;
+    },
+    onSuccess: async (org, input) => {
+      await queryClient.invalidateQueries();
+      // Inviting is R3 (a fresh second factor): the org's own invite form asks for it and shows the link.
+      if (input.contact) await navigate({ to: '/o/$slug/settings', params: { slug: org.slug }, search: { invite: input.contact } });
+      else await navigate({ to: '/o/$slug/inbox', params: { slug: org.slug } });
+    },
+  });
+
+  function lookUp() {
+    const code = normalizeTaxCode(taxCode);
+    setInvalidTaxCode(!code);
+    if (code) lookup.mutate(code);
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault();
+    const code = taxCode.trim() ? normalizeTaxCode(taxCode) : null;
+    setInvalidTaxCode(taxCode.trim() !== '' && !code);
+    if (taxCode.trim() && !code) return;
     // The server trims the name, so the key follows the trimmed name.
-    const trimmed = name.trim();
-    if (attempt.current?.name !== trimmed) attempt.current = { name: trimmed, key: crypto.randomUUID() };
-    create.mutate({ name: trimmed, idempotencyKey: attempt.current.key });
+    create.mutate({ name: name.trim(), taxCode: code, address: address.trim() || null, contact: contact.trim() || null });
   }
 
   return (
@@ -40,21 +76,69 @@ export function OnboardingPage() {
       <Card className="block w-full max-w-md p-6">
         <OrgLeftNotice />
         <Logo />
-        <h1 className="mt-6 text-lg font-semibold text-foreground">{t('title')}</h1>
+        <h1 className="mt-6 text-lg font-semibold text-foreground">{hasOrgs ? t('titleAnother') : t('title')}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t('subtitle')}</p>
         <form className="mt-6 space-y-3" onSubmit={submit}>
+          {finance && (
+            <div className="space-y-1">
+              <Label htmlFor="onboarding-tax-code" className="font-normal text-muted-foreground">
+                {t('taxCodeLabel')}
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  id="onboarding-tax-code"
+                  className="font-mono"
+                  maxLength={20}
+                  inputMode="numeric"
+                  value={taxCode}
+                  onChange={(e) => {
+                    setTaxCode(e.target.value);
+                    setInvalidTaxCode(false);
+                    lookup.reset();
+                  }}
+                  placeholder="0101234567"
+                />
+                {getConfig().taxCodeLookup && (
+                  <Button type="button" variant="outline" className="shrink-0" disabled={lookup.isPending || !taxCode.trim()} onClick={lookUp}>
+                    {lookup.isPending ? t('lookingUp') : t('lookUp')}
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-subtle-foreground">{getConfig().taxCodeLookup ? t('taxCodeHintLookup') : t('taxCodeHint')}</p>
+              {invalidTaxCode && <ErrorText>{t('taxCodeInvalid')}</ErrorText>}
+              {lookup.error && <ErrorText>{errorMessage(lookup.error)}</ErrorText>}
+            </div>
+          )}
           <Label className="flex-col items-stretch gap-1 font-normal">
             <span className="text-muted-foreground">{t('nameLabel')}</span>
             <Input required maxLength={200} value={name} onChange={(e) => setName(e.target.value)} placeholder={t('namePlaceholder')} />
+          </Label>
+          <Label className="flex-col items-stretch gap-1 font-normal">
+            <span className="text-muted-foreground">{t('addressLabel')}</span>
+            <Input maxLength={500} value={address} onChange={(e) => setAddress(e.target.value)} placeholder={t('addressPlaceholder')} />
+          </Label>
+          <Label className="flex-col items-stretch gap-1 font-normal">
+            <span className="text-muted-foreground">{t('contactLabel')}</span>
+            <Input type="email" maxLength={320} value={contact} onChange={(e) => setContact(e.target.value)} placeholder={t('contactPlaceholder')} />
+            <span className="text-xs text-subtle-foreground">{t('contactHint')}</span>
           </Label>
           {create.error && <ErrorText>{errorMessage(create.error)}</ErrorText>}
           <Button type="submit" size="lg" className="w-full" disabled={create.isPending}>
             {create.isPending ? t('creating') : t('create')}
           </Button>
         </form>
-        <button className="mt-4 text-sm text-subtle-foreground hover:text-muted-foreground" onClick={() => void signOut()}>
-          {tc('signOut')}
-        </button>
+        <div className="mt-4 flex items-center justify-between text-sm">
+          {hasOrgs ? (
+            <Link to="/" className="text-subtle-foreground hover:text-muted-foreground">
+              {t('back')}
+            </Link>
+          ) : (
+            <span />
+          )}
+          <button className="text-subtle-foreground hover:text-muted-foreground" onClick={() => void signOut()}>
+            {tc('signOut')}
+          </button>
+        </div>
       </Card>
     </main>
   );

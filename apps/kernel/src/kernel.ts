@@ -51,10 +51,11 @@ import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
 import { exportSealer } from './export-seal.ts';
 import { ConcurrencyLimiter, Semaphore } from './concurrency.ts';
 import { createHttpApp, type StreamDeps } from './http.ts';
-import { createLogMailer, createMailer, type Mailer } from './mail.ts';
+import { createLogMailer, createMailer, messageIdDomain, type Mailer } from './mail.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
 import { createBlobStore } from './storage.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource } from './stream.ts';
+import { createTaxCodeLookup } from './tax-lookup.ts';
 import { startWorker } from './worker.ts';
 
 // Identity (ADR-0027, ADR-0028): who the caller is and whether their session still holds. When
@@ -131,6 +132,7 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
         inboundRotateLimits: { perDay: config.INBOUND_ROTATE_LIMIT_PER_DAY, total: config.INBOUND_ROTATE_LIMIT_TOTAL },
         uploadBeginLimits: { perMinute: config.UPLOAD_BEGIN_LIMIT_PER_MINUTE },
         inviteLimits: { perRecipientPerDay: config.INVITE_LIMIT_PER_RECIPIENT_PER_DAY },
+        messageIdDomain: messageIdDomain(config),
       }),
       queries: kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null }),
     }),
@@ -301,6 +303,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           pool,
           aiEnabled: resolved.ai !== null,
           ...(resolved.writer ? { socialWriter: resolved.writer } : {}),
+          ...(config.TAX_CODE_LOOKUP_URL ? { taxLookup: createTaxCodeLookup(config.TAX_CODE_LOOKUP_URL) } : {}),
           mailer: resolved.mail,
           channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL },
           ...(stream ? { stream } : {}),

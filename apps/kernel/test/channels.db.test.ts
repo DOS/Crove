@@ -302,6 +302,22 @@ suite('channel connections through the API (ADR-0025)', () => {
       expect(again).toMatchObject({ status: 409, body: { code: 'OAUTH_STATE_USED' } });
     });
 
+    it('keeps the accounts that connected when another fails, and says which did not (#375)', async () => {
+      const started = await start();
+      // A name over the connect command's 200 characters: that one account is refused, the others connect.
+      fake.answer([page('551', 'Trang D', 'page-token-551'), page('552', 'X'.repeat(201), 'page-token-552'), page('553', 'Trang E', 'page-token-553')]);
+      const finished = await rpc('channels/oauthFinish', await tokenFor(owner), { provider: 'facebook_page', state: started.body?.state, code: 'code-p' });
+      expect(finished.status).toBe(200);
+      expect(finished.body.connections.map((c: { displayName: string }) => c.displayName)).toEqual(['Trang D', 'Trang E']);
+      expect(finished.body.failed).toEqual([{ displayName: 'X'.repeat(201), code: 'VALIDATION' }]);
+      expect(finished.body.skipped).toBe(0);
+
+      // When none connects, the grant is an error as before.
+      const again = await start();
+      fake.answer([page('554', 'Y'.repeat(201), 'page-token-554')]);
+      expect(await rpc('channels/oauthFinish', await tokenFor(owner), { provider: 'facebook_page', state: again.body?.state, code: 'code-q' })).toMatchObject({ status: 422, body: { code: 'VALIDATION' } });
+    });
+
     it('refuses a state started by someone else, an unknown state and a viewer', async () => {
       expect((await start(viewer)).status).toBe(403);
       const started = await start();

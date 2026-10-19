@@ -39,7 +39,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>(['crove_finance.bank_line']);
+const PENDING_TABLES = new Set<string>([]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -358,6 +358,30 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => ({
       row: { org_id: o.id, key: `rls.matrix:${randomUUID()}`, module: 'social', target: 'sandbox', step: 'publish', retry_safety: 'reconcile_only' },
     }),
+  },
+  // Outbound mail (Email plan §3.2, ADR-0034, #538): one row per mail to one recipient. Tenant roles read and insert,
+  // update only the status columns, never delete; the guard keeps the identity columns fixed, so the update probes
+  // assign the status to itself.
+  'crove_kernel.mail_message': {
+    update: { set: 'status = status' },
+    make: (o) => ({
+      row: {
+        org_id: o.id,
+        stream: 'transactional',
+        source: 'rls.matrix',
+        template_key: 'rls.matrix',
+        to_address: `rls-${tag()}@example.com`,
+        to_hash: hex64(),
+        subject: 'RLS matrix',
+        message_id_header: `<${randomUUID()}@rls.matrix>`,
+      },
+    }),
+  },
+  // The suppression list (Email plan §3.3, #538): keyed on the address hash, never deleted; lifting writes the lift
+  // columns once, so the update probes assign lift_reason to itself on a live row.
+  'crove_kernel.mail_suppression': {
+    update: { set: 'lift_reason = lift_reason' },
+    make: (o) => ({ row: { org_id: o.id, to_hash: hex64(), scope: 'all', reason: 'manual' } }),
   },
   // Definer-only machinery (Social plan §3.5, S6): one single-use OAuth state per connect attempt, holding the hash of
   // the state parameter and the PKCE verifier; only the start and callback definers touch it.

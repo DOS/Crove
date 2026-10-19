@@ -399,6 +399,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           actions={
             pending ? (
               <>
+                {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
                 {reextractButton}
                 {item.canReject && (
                   <Button
@@ -453,6 +454,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
               </>
             ) : (
               <>
+                {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
                 {reextractButton}
                 <Badge variant={item.status === 'executed' ? 'success' : 'secondary'}>
                   {item.status === 'executed'
@@ -624,8 +626,8 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                           value={l.debitAccount}
                           onChange={(e) => setLineAccounts((prev) => ({ ...prev, [l.lineNo]: e.target.value }))}
                         >
-                          {/* Accounts in use, plus the line's own even if it was deactivated since (#319). */}
-                          {pickableAccounts(accounts.data ?? [], l.debitAccount).map((a) => (
+                          {/* Accounts in use that fit the direction (#430), plus the line's own even if it was deactivated since (#319). */}
+                          {pickableAccounts(accounts.data ?? [], l.debitAccount, sale ? 'sale' : 'purchase').map((a) => (
                             <NativeSelectOption key={a.code} value={a.code}>
                               {accountLabel(a)}
                             </NativeSelectOption>

@@ -190,6 +190,28 @@ export async function runSignOut(revoker: SessionRevoker | null | undefined, tar
   }
 }
 
+// The extraction job's last attempt failed: records a failed run, so the file never stays "being read". `archive` is
+// what the attempt learned about the file (undefined when its lookup failed too). A file whose lookup keeps failing is
+// recorded as a document; should the file turn out to be a ZIP (#432), that refusal (ARCHIVE_NOT_READ) records the
+// failed opening of an archive instead.
+export async function recordLastAttemptFailure(runtime: Runtime, orgId: string, fileId: string, version: number | undefined, archive: ArchiveSource | null | undefined): Promise<void> {
+  const known = archive === undefined ? await archiveSource(runtime, orgId, fileId).catch(() => undefined) : archive;
+  const failArchive = () => recordArchiveFailure(runtime, orgId, fileId, 'Không mở được tệp ZIP sau nhiều lần thử; hãy tải lại tệp');
+  if (known) {
+    await failArchive();
+    return;
+  }
+  try {
+    await recordExtractionFailure(runtime, orgId, fileId, 'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML', version);
+  } catch (error) {
+    if (known === undefined && error instanceof DomainError && error.code === 'ARCHIVE_NOT_READ') {
+      await failArchive();
+      return;
+    }
+    throw error;
+  }
+}
+
 export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>> {
   const boss = new PgBoss({ connectionString: deps.connectionString, schema: JOB_SCHEMA, migrate: false, createSchema: false });
   boss.on('error', (error) => console.error('[pg-boss]', error));
@@ -226,18 +248,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       console.error(`[extract] file ${fileId}${version ? ` version ${version}` : ''} attempt ${job.retryCount + 1}`, error);
       if (job.retryCount < EXTRACT_RETRY_LIMIT) throw error;
       // The last attempt records a failed run either way, so the file never stays "being read".
-      if (archive === undefined) archive = await archiveSource(deps.runtime, orgId, fileId).catch(() => null);
-      if (archive) {
-        await recordArchiveFailure(deps.runtime, orgId, fileId, 'Không mở được tệp ZIP sau nhiều lần thử; hãy tải lại tệp');
-        return;
-      }
-      await recordExtractionFailure(
-        deps.runtime,
-        orgId,
-        fileId,
-        'Không đọc được chứng từ sau nhiều lần thử; hãy kiểm tra cấu hình AI hoặc gửi tệp XML',
-        version,
-      );
+      await recordLastAttemptFailure(deps.runtime, orgId, fileId, version, archive);
     }
   });
 

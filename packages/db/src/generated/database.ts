@@ -14,6 +14,7 @@ export type NotGranted = undefined;
 
 export interface CroveFinanceSchema {
   'crove_finance.account': FinanceAccountTable;
+  'crove_finance.bank_line': FinanceBankLineTable;
   'crove_finance.cash_voucher': FinanceCashVoucherTable;
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
@@ -43,6 +44,8 @@ export interface CroveKernelSchema {
   'crove_kernel.idempotency_key': KernelIdempotencyKeyTable;
   'crove_kernel.inbound_message': KernelInboundMessageTable;
   'crove_kernel.kill_switch': KernelKillSwitchTable;
+  'crove_kernel.mail_message': KernelMailMessageTable;
+  'crove_kernel.mail_suppression': KernelMailSuppressionTable;
   'crove_kernel.member_invite': KernelMemberInviteTable;
   'crove_kernel.outbox_event': KernelOutboxEventTable;
   'crove_kernel.party': KernelPartyTable;
@@ -73,6 +76,24 @@ export interface FinanceAccountTable {
   standard: ColumnType<string, NotGranted, NotGranted>;
 }
 
+/** crove_finance.bank_line */
+export interface FinanceBankLineTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  bank_account: ColumnType<string, string, NotGranted>;
+  import_id: ColumnType<string, string, NotGranted>;
+  position: ColumnType<number, number, NotGranted>;
+  value_date: ColumnType<string, string, NotGranted>;
+  description: ColumnType<string, string, NotGranted>;
+  amount: ColumnType<string, string, NotGranted>;
+  running_balance: ColumnType<string | null, string | null, NotGranted>;
+  bank_ref: ColumnType<string | null, string | null, NotGranted>;
+  dedupe_key: ColumnType<string | null, string | null, NotGranted>;
+  ambiguous: ColumnType<boolean, boolean | undefined, NotGranted>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
 /** crove_finance.cash_voucher */
 export interface FinanceCashVoucherTable {
   org_id: ColumnType<string, string, NotGranted>;
@@ -88,6 +109,7 @@ export interface FinanceCashVoucherTable {
   proposal_id: ColumnType<string | null, string | null, NotGranted>;
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  bank_line_id: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_finance.journal_entry */
@@ -459,6 +481,46 @@ export interface KernelKillSwitchTable {
   released_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
+/** crove_kernel.mail_message */
+export interface KernelMailMessageTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  stream: ColumnType<string, string, NotGranted>;
+  source: ColumnType<string, string, NotGranted>;
+  source_id: ColumnType<string | null, string | null, NotGranted>;
+  template_key: ColumnType<string, string, NotGranted>;
+  template_version: ColumnType<number, number | undefined, NotGranted>;
+  to_address: ColumnType<string | null, string | null, NotGranted>;
+  to_hash: ColumnType<string, string, NotGranted>;
+  subject: ColumnType<string | null, string | null, NotGranted>;
+  payload: ColumnType<unknown, string | null | undefined, NotGranted>;
+  message_id_header: ColumnType<string, string, NotGranted>;
+  status: Generated<string>;
+  attempts: Generated<number>;
+  provider: string | null;
+  provider_message_id: string | null;
+  error_code: string | null;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  sent_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
+/** crove_kernel.mail_suppression */
+export interface KernelMailSuppressionTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  to_hash: ColumnType<string, string, NotGranted>;
+  scope: ColumnType<string, string, NotGranted>;
+  reason: ColumnType<string, string, NotGranted>;
+  source_message_id: ColumnType<string | null, string | null, NotGranted>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  lifted_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  lifted_by: string | null;
+  lift_reason: string | null;
+}
+
 /** crove_kernel.member_invite */
 export interface KernelMemberInviteTable {
   org_id: ColumnType<string, string, NotGranted>;
@@ -485,6 +547,9 @@ export interface KernelOutboxEventTable {
   actor_id: ColumnType<string | null, NotGranted, NotGranted>;
   command_id: ColumnType<string | null, NotGranted, NotGranted>;
   created_at: ColumnType<Date, NotGranted, NotGranted>;
+  actor_type: ColumnType<string | null, NotGranted, NotGranted>;
+  agent_id: ColumnType<string | null, NotGranted, NotGranted>;
+  agent_run: ColumnType<string | null, NotGranted, NotGranted>;
 }
 
 /** crove_kernel.party */
@@ -612,6 +677,7 @@ export interface KernelTenantTable {
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   tax_code: string | null;
   vat_filing_period: string | null;
+  address: string | null;
 }
 
 /** crove_social.channel_policy */

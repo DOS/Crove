@@ -51,6 +51,9 @@ export const KERNEL_ERROR_CODES = [
   'INVITE_USED',
   'INVITE_RATE_LIMITED',
   'TOO_MANY_INVITES',
+  // Outbound mail (#538).
+  'NOT_SUPPRESSED',
+  'MAIL_COMPLAINT_LIFT',
   // Proposals and extraction.
   'PROPOSAL_DECIDED',
   'STALE_REVISION',
@@ -73,7 +76,14 @@ export const KERNEL_ERROR_CODES = [
   // Sales invoices and the org's tax code (#313).
   'NOT_OWN_SALE',
   'OWN_INVOICE',
+  'NOT_REVENUE_ACCOUNT',
+  'REVENUE_ACCOUNT_ON_PURCHASE',
   'INVALID_TAX_CODE',
+  // Onboarding by tax code and the org's address (#324).
+  'TAX_CODE_NOT_FOUND',
+  'TAX_LOOKUP_UNAVAILABLE',
+  'TAX_LOOKUP_DISABLED',
+  'INVALID_ADDRESS',
   'ALREADY_REVERSED',
   'ENTRY_IS_REVERSAL',
   'ENTRY_NOT_FOUND',
@@ -94,6 +104,9 @@ export const KERNEL_ERROR_CODES = [
   'PERIOD_NOT_LOCKED',
   'LATER_PERIOD_LOCKED',
   'PERIOD_NOT_ENDED',
+  // Bank statements (#326).
+  'NOT_A_BANK_ACCOUNT',
+  'BANK_IMPORT_INVALID',
   // The chart of accounts and vendor defaults (#319).
   'ACCOUNT_CODE_TAKEN',
   'ACCOUNT_HAS_SUB_ACCOUNTS',
@@ -108,8 +121,12 @@ export const KERNEL_ERROR_CODES = [
   'PARENT_TAGGED',
   'PARENT_NOT_DEEPEST',
   'PARTY_NOT_FOUND',
-  // Cash and bank vouchers (#327).
+  // Cash and bank vouchers (#327), and bank vouchers made from a statement line (#326).
   'VOUCHER_INVALID',
+  'BANK_LINE_NOT_FOUND',
+  'BANK_LINE_MISMATCH',
+  'BANK_LINE_PROPOSED',
+  'BANK_LINE_MATCHED',
   // Files, uploads and exports.
   'TOO_LARGE',
   'TOO_MANY_FILES',
@@ -149,6 +166,7 @@ export const KERNEL_ERROR_CODES = [
   'VARIANT_INVALID',
   'VARIANT_IN_FLIGHT',
   'APPROVAL_REQUIRED',
+  'APPROVALS_MISSING',
   'VARIANT_MEDIA_INVALID',
   'CHANNEL_ALREADY_IN_POST',
   'CHANNEL_PROVIDER_UNSUPPORTED',

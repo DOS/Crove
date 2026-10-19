@@ -23,6 +23,19 @@ export function bulkSelectable(item: { status: string; failedChecks: number; kin
   return item.status === 'pending' && item.failedChecks === 0 && item.duplicateOf === null && item.kind !== reversalKind;
 }
 
+// Whether a list row shows the "matched" success badge: only when invoice checks ran and none failed or warned. A
+// reversal and a voucher carry no checks, and an agent's proposal that no extraction read (#435) ran none either, so
+// "matched" would claim a verification that never happened.
+export function showMatched(
+  item: { kind: string; failedChecks: number; warnChecks: number; duplicateOf: string | null; requestedByAgent: unknown; extracted: boolean },
+  reversalKind: string,
+  voucherKind: string,
+): boolean {
+  if (item.kind === reversalKind || item.kind === voucherKind) return false;
+  if (item.requestedByAgent && !item.extracted) return false;
+  return item.failedChecks === 0 && item.warnChecks === 0 && !item.duplicateOf;
+}
+
 // The roles that may approve proposals (kernel.proposal.approve and approve_many); the kernel checks again.
 export function canApproveProposals(role: string | null | undefined): boolean {
   return role === 'owner' || role === 'admin';

@@ -11,7 +11,7 @@ import {
   zAgentTemplate,
   zAiAmount,
   zChart,
-  zClientOverview,
+  zClientOverviews,
   zJobDescription,
   zModuleId,
   zPositionStatus,
@@ -63,24 +63,28 @@ import {
   zVatFilingPeriod,
   zVatReport,
   zAccountLedger,
+  zFinancialStatements,
   zLedgerPeriod,
   zLedgerReport,
   zPeriodLockInput,
   zPeriodLockState,
   zPeriodUnlockInput,
+  zTaxRegistryEntry,
   zVoucherType,
 } from './schemas.ts';
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { zPortalReconciliation } from './portal-list.ts';
+import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankStatementImport } from './bank-statement.ts';
 
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
 export const contract = {
   me: {
     get: oc.output(zMe),
     // The multi-client home screen (issue #318): the orgs of me.get (at most 200) with their figures, each read in its
-    // own org.
-    clients: oc.output(z.array(zClientOverview)),
+    // own org, and how many orgs the user has (#495). One at a time per user: a second while the first runs is
+    // refused with OVERLOADED (503).
+    clients: oc.output(zClientOverviews),
   },
   org: {
     // A retry with the same idempotencyKey returns the org the first request created.
@@ -93,6 +97,9 @@ export const contract = {
     setVatFilingPeriod: oc
       .input(z.object({ vatFilingPeriod: zVatFilingPeriod.nullable() }))
       .output(z.object({ vatFilingPeriod: zVatFilingPeriod.nullable() })),
+    // Owners and admins (issue #324): the org's address, or null to clear it. Stored on one line, at most 500
+    // characters; a value with control characters is refused.
+    setAddress: oc.input(z.object({ address: z.string().max(2000).nullable() })).output(z.object({ address: z.string().nullable() })),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
     invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),
@@ -114,6 +121,12 @@ export const contract = {
       .output(z.object({ status: z.literal('offboarding'), exportRequested: z.literal(true) })),
     // Owner only: the offboarding state and the newest finished export.
     export: oc.output(zOrgExport),
+  },
+  // Org-less (issue #324): the public tax registry's name and address for a tax code, to prefill a new org. Answers
+  // TAX_LOOKUP_DISABLED (404) when the server has no lookup configured (TAX_CODE_LOOKUP_URL), INVALID_TAX_CODE (422),
+  // TAX_CODE_NOT_FOUND (404) when the registry does not know the code, and TAX_LOOKUP_UNAVAILABLE (503).
+  taxRegistry: {
+    lookup: oc.input(z.object({ taxCode: z.string().trim().max(20) })).output(zTaxRegistryEntry),
   },
   // Org-less: the signed-in invitee previews and accepts an invite by its token. Only the invited email may.
   invites: {
@@ -147,7 +160,15 @@ export const contract = {
       .output(z.object({ authorizeUrl: z.url({ protocol: /^https$/ }), state: zOAuthState, expiresAt: z.iso.datetime({ offset: true }) })),
     oauthFinish: oc
       .input(z.object({ provider: zOAuthProvider, state: zOAuthState, code: z.string().min(1).max(2048) }))
-      .output(z.object({ connections: z.array(z.object({ connectionId: zId, displayName: z.string(), reconnected: z.boolean() })) })),
+      .output(
+        z.object({
+          connections: z.array(z.object({ connectionId: zId, displayName: z.string(), reconnected: z.boolean() })),
+          // Accounts of the grant that did not connect, with the error code; the others stay connected.
+          failed: z.array(z.object({ displayName: z.string(), code: z.string() })),
+          // Accounts of the grant beyond what one request connects.
+          skipped: z.number().int().min(0),
+        }),
+      ),
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.
   social: {
@@ -377,6 +398,9 @@ export const contract = {
   ledger: {
     period: oc.input(z.object({ period: zLedgerPeriod })).output(zLedgerReport),
     account: oc.input(z.object({ period: zLedgerPeriod, accountCode: zAccountCode })).output(zAccountLedger),
+    // Issue #154: the DRAFT B01-DNN at the period's last day and B02-DNN for the period. The Excel workbook is
+    // GET /api/export/statements.xlsx?period=<period>.
+    statements: oc.input(z.object({ period: zLedgerPeriod })).output(zFinancialStatements),
   },
   // Period lock (#329): every member reads it; owners and admins lock the next month once it has ended; only owners
   // unlock the last locked month (R3: fresh MFA), with a reason. A retry with the same idempotencyKey returns the first
@@ -385,6 +409,19 @@ export const contract = {
     state: oc.output(zPeriodLockState),
     lock: oc.input(zPeriodLockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
     unlock: oc.input(zPeriodUnlockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
+  },
+  // Bank statements (#326): owners, admins and members import a bank's export into an account's statement lines
+  // (preview writes nothing; import stores the new and ambiguous lines); every member reads them, each with its state
+  // (open, proposed as a voucher, settled by one). A retry with the same
+  // idempotencyKey returns the first result.
+  bank: {
+    preview: oc.input(zBankStatementImport).output(zBankImportPreview),
+    import: oc.input(zBankStatementImport.extend({ idempotencyKey: zId })).output(zBankImportResult),
+    lines: oc.input(z.object({ bankAccount: zAccountCode, period: zLedgerPeriod })).output(zBankLines),
+    // The báo Có or báo Nợ a line makes and the party it is probably about (#326, stage 2a), for the voucher form; the
+    // voucher itself is asked for with inbox.request (finance.voucher.record, bankLineId set). Owners, admins and
+    // members, who may ask for vouchers.
+    lineVoucher: oc.input(z.object({ bankLineId: zId })).output(zBankLineVoucher),
   },
   // The org chart (ADR-0029): positions shared by members and AI agents. Every member reads it; changing it is the
   // owner's (R3: role keys, holders and reporting lines decide what agents may do). A retry with the same

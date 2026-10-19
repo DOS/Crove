@@ -127,7 +127,10 @@ suite('multi-client home screen (#318)', () => {
   const clients = async (who: Account): Promise<ClientRow[]> => {
     const answer = await rpc('me/clients', await tokenFor(who), undefined, null);
     expect(answer.status).toBe(200);
-    return answer.body as ClientRow[];
+    const { clients: rows, total } = answer.body as { clients: ClientRow[]; total: number };
+    // Far below the 200 a screen lists, so every org of the user is there.
+    expect(total).toBe(rows.length);
+    return rows;
   };
   const row = (rows: ClientRow[], org: Org) => rows.find((r) => r.orgId === org.orgId);
   const setPeriod = async (who: Account, org: Org, vatFilingPeriod: unknown) =>
@@ -324,6 +327,42 @@ suite('multi-client home screen (#318)', () => {
     const rows = await clients(accountant);
     expect(row(rows, clientOrg)).toBeUndefined();
     expect(rows.map((r) => r.orgId).sort()).toEqual([firm.orgId, quiet.orgId].sort());
+  });
+
+  it("loads one home screen per user at a time, and another user's meanwhile (#495)", async () => {
+    // The accountant's first load is held inside an org's read: the activity table is locked until the end.
+    const lock = new pg.Client({ connectionString: adminUrl });
+    await lock.connect();
+    await lock.query('BEGIN');
+    await lock.query('LOCK TABLE crove_kernel.activity IN ACCESS EXCLUSIVE MODE');
+    let first: ReturnType<typeof rpc> | undefined;
+    let other: ReturnType<typeof rpc> | undefined;
+    try {
+      first = rpc('me/clients', await tokenFor(accountant), undefined, null);
+      const deadline = Date.now() + 20_000;
+      const waiting = async () =>
+        (
+          await admin((c) =>
+            c.query<{ n: number }>(
+              `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE '%crove_kernel%activity%'`,
+            ),
+          )
+        ).rows[0]?.n ?? 0;
+      while ((await waiting()) === 0) {
+        if (Date.now() > deadline) throw new Error('the first load never reached the lock');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      // A second load by the same user is refused at once; another user's is not.
+      expect(await rpc('me/clients', await tokenFor(accountant), undefined, null)).toMatchObject({ status: 503, body: { code: 'OVERLOADED' } });
+      other = rpc('me/clients', await tokenFor(stranger), undefined, null);
+    } finally {
+      await lock.query('ROLLBACK');
+      await lock.end();
+    }
+    expect((await first)?.status).toBe(200);
+    expect((await other)?.status).toBe(200);
+    // The slot is free again.
+    expect((await clients(accountant)).length).toBeGreaterThan(0);
   });
 
   it('needs a signed-in user', async () => {

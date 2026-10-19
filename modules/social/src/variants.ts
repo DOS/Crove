@@ -43,6 +43,8 @@ export interface VariantRow {
   queue_slot_at: Date | null;
   attempt: number;
   error_retry_at: Date | null;
+  error_code: string | null;
+  error_action: string | null;
   next_check_at: Date | null;
   external_post_id: string | null;
   updated_at: Date;
@@ -68,6 +70,8 @@ export const VARIANT_COLUMNS = [
   'queue_slot_at',
   'attempt',
   'error_retry_at',
+  'error_code',
+  'error_action',
   'next_check_at',
   'external_post_id',
   'updated_at',
@@ -231,7 +235,28 @@ export async function setVariant(ctx: CommandContext, id: string, values: Record
 // What a variant moving to draft by an edit keeps: a failed one gives up its old slot and time (another post may
 // hold that slot by now); the others keep their place in the queue while they are reviewed again.
 export function editValues(v: VariantRow): Record<string, unknown> {
-  return v.status === 'failed' ? { status: step(v, { type: 'edit' }), queue_slot_at: null, scheduled_at: null } : { status: step(v, { type: 'edit' }) };
+  // An edit is a new round of review: a variant a raised policy took out of the schedule no longer goes back on its own.
+  const reason = v.error_code === POLICY_RAISED ? CLEAR_ERROR : {};
+  return v.status === 'failed' ? { status: step(v, { type: 'edit' }), queue_slot_at: null, scheduled_at: null } : { status: step(v, { type: 'edit' }), ...reason };
+}
+
+export const CLEAR_ERROR = { error_kind: null, error_code: null, error_http_status: null, error_message: null, error_action: null, error_retry_at: null };
+// Back in review because its channel's policy now asks for more approvals (#408). The reason shows on the variant, and
+// one that was scheduled (or paused on its channel) is marked to go back to its kept time once the approvals are given.
+export const POLICY_RAISED = 'POLICY_RAISED';
+
+export function regateValues(v: VariantRow): Record<string, unknown> {
+  return { ...CLEAR_ERROR, status: step(v, { type: 'regate' }), error_code: POLICY_RAISED, error_action: v.status === 'approved' ? null : 'reschedule' };
+}
+
+// What the approval that completes the count sets: approved, or scheduled again for a variant a raised policy took out
+// of the schedule, when its kept time (or queue slot) is still ahead; past it, a person schedules it again.
+export function approvedValues(v: VariantRow, now: Date): Record<string, unknown> {
+  const status = step(v, { type: 'approve' });
+  if (v.error_code !== POLICY_RAISED) return { status };
+  const at = v.scheduled_at ?? v.queue_slot_at;
+  const back = v.error_action === 'reschedule' && at !== null && at.getTime() > now.getTime();
+  return { ...CLEAR_ERROR, status: back ? step({ id: v.id, status }, { type: 'schedule' }) : status };
 }
 
 // A variant becoming history keeps the content it had: copied into its own columns, which base edits no longer reach.

@@ -7,6 +7,7 @@
 > Update 2026-10-14: consolidated. The body now describes the decided design (Decisions 1-15): Supabase Auth identity (ADR-0027; sessions and revocation per ADR-0028), one image serving the SPA, the built-in migration runner, the MVP in place of Phase 0, and the External-tenant gate. Where `main` differs from the decided design, the text says so.
 > Update 2026-10-14 (later): ADR-0028 accepted with the hybrid revocation design C (Decision 16); §7.5, the External-tenant gate (T1) and §11 (DOS-28) describe it.
 > Update 2026-10-15: ADR-0028 amended by the owner: Crove Cloud uses Supabase Auth's default session behavior (`AUTH_SESSION_CHECK=jwt`), keeps Crove's own revocation, per-request membership and a live Auth check for R3; DOS-28 becomes an optional later refinement (§7.5, T1, §11).
+> Update 2026-10-19: the owner added an Email module for transactional email and email marketing (Decision 18); plan: [email.md](email.md), architecture: ADR-0034 (proposed).
 > Vietnamese decision page (concise, not a full translation): [crove-os-kernel.vi.html](crove-os-kernel.vi.html). This English file is the full source of record.
 
 ## Tracking
@@ -32,6 +33,7 @@
 | 5 Social | 6 weeks | Started 2026-10-16 by owner decision, in parallel (Decision 17); plan: [social.md](social.md) |
 | 6 Sign | 8 weeks | Waits for wedge-customer demand (Decision 2) |
 | 7 HRM | 10 weeks | Waits for wedge-customer demand (Decision 2) |
+| Email (transactional and marketing) | 8 weeks (estimate) | Added 2026-10-19 by owner decision (Decision 18); steps E1-E2 in M2, the rest after M3 (backlog review D11); plan: [email.md](email.md) |
 
 Setup checklist: §12. Exit criteria per phase: §13; the MVP below replaces Phase 0.
 
@@ -67,6 +69,7 @@ The body of this plan was rewritten on 2026-10-14 to describe these decisions; i
 15. **Agents hold positions in an org chart shared with humans** (owner direction, 2026-10-14; [ADR-0029](../adr/0029-agents-positions-and-org-chart.md)). Each module ships one or more agent templates, for example `finance.chief_accountant` ("Kế toán trưởng (AI)"). A position is held by a human or an agent, and has a job description and tasks. Agents work with humans, and with each other where a module or an org has no humans: delegation only down their subtree, escalation to the supervisor position, communication only through tasks, comments and proposals. Only humans manage the chart, templates, limits and budgets. R3, and any proposal flagged P03-P07, always ends at a human (the nearest one up the chart holding the permission, else the org owner); agents never approve work from their own causal chain (External-tenant gate T18). Budgets, wake-up limits and kill switches per agent, module and org. Legal sign-off (kế toán trưởng, signed statements) stays with a qualified human. Ideas borrowed from Paperclip (MIT); Paperclip is not embedded, and external runtimes act through MCP grants.
 16. **Identity and revocation per ADR-0028 (design C), 2026-10-14.** Chosen by the owner after two blind reviews (Codex, Claude) independently converged on it. Every request verifies the Supabase JWT locally and, in the same transaction, checks membership and a Crove-owned session status record (`auth_session`). Status source, one interface with two adapters: self-host reads `auth.sessions` and the user's ban or deletion in the shared database (next request); Crove Cloud (amended 2026-10-15) keeps Supabase Auth's default behavior: a sign-out elsewhere destroys the refresh tokens at once and access ends when the access token expires (SLA: the project's JWT expiry), with no per-request Auth call and no DOS-side change; DOS ID lifecycle events (DOS-28) are an optional later refinement. A revoke in Crove (self or owner) is immediate. R3 checks Supabase Auth live and needs `aal2` with MFA in the last 5 minutes. Rejected: a Supabase Auth call on every request with a 30 s cache (Auth load and outage coupling on Cloud), short-lived tokens only, pure push, Crove-issued sessions through token exchange. The ADR's acceptance tests are the evidence for gate T1.
 17. **Social starts now, in parallel with Accounting (owner decision, 2026-10-16).** An exception to Decision 2 for Social only: CRM, Service, Sign and HRM still wait for wedge-customer demand. Social runs as its own stream and does not take kernel work Finance waits on. It builds the kernel pieces it needs and nobody else is building: the `crove-local` credential broker, the `channel` layer (ADR-0025, moved ahead of Phase 4) and the `external_call` ledger. Detailed plan: [social.md](social.md).
+18. **Email module: transactional email and email marketing (owner decision, 2026-10-19).** Replaces the earlier "bulk email marketing only on real customer demand" (§13, §15). The sending pipeline and the rules no sender may skip (suppression, a log row per mail, one send per mail through `external_call`) are a kernel service every module uses; the optional `email` module adds sender domains, templates, contacts with consent, campaigns and analytics. Marketing goes only to contacts with recorded consent, from a verified org domain, with one-click unsubscribe and the Vietnamese `[QC]` label, after a human approval (R2). It keeps the milestone order of the backlog review: transactional steps E1-E2 in M2, marketing after M3 (backlog review D11). Detailed plan: [email.md](email.md); architecture: [ADR-0034](../adr/0034-outbound-email.md) (proposed).
 
 ### MVP
 
@@ -512,7 +515,7 @@ Crove runs on one PostgreSQL database. Decision 14 keeps it cheap to move tenant
 
 **Member names and emails (#169).** Tenant code reads `user_account` only through `crove_kernel.member_profiles(user_ids uuid[])`: id, email and display name of those users who are members of the org in the sealed context (`ctx_org_id()`), nobody else; no context returns nothing, a forged one is refused, and only `crove_app` may call it. `kernel.org.get`, the pending invite list, the already-a-member check of `kernel.member.invite.create` and the member commands use it (`packages/kernel/src/profiles.ts`). Since step 2 (#222) the database enforces the rule too: no Crove role holds any privilege on `user_account` and the table has RLS enabled with no policy, so a direct read is `permission denied` with or without a context (`kernel-invariants.db.test.ts`, `sealed-context.db.test.ts`). Every function that reads it is a definer owned by the migration runner, or runs only inside one. With a second cell, `member_profiles` becomes a call to the control plane; its callers do not change.
 
-**Identity foreign keys (decision, #169).** Tenant tables reference `user_account`: `tenant.created_by`, `tenant_member.user_id`, `member_invite.invited_by`, `accepted_by` and `revoked_by`, `auth_session_org.user_id` and `revoked_by`. On one database these keys are correct and stay. When the second cell is built, each cell gets an id-only anchor, `crove_kernel.user_ref (id uuid PRIMARY KEY)` with no email, name or subject, and the same migration moves these keys to it. The definers that bring a user into a cell (`create_or_replay_org`, `invite_accept`) insert the user's id there before the row that references it, and `member_profiles` keeps serving names and emails from the control plane. Rejected: dropping the keys (a membership or invite could name a user id that never existed, and nothing in the cell would notice); a full cell-local copy of `user_account` (personal data in every cell, a sync for every email or name change, and erasure under PDPL in more than one place).
+**Identity foreign keys (decision, #169).** Tenant tables reference `user_account`: `tenant.created_by`, `tenant_member.user_id`, `member_invite.invited_by`, `accepted_by` and `revoked_by`, `auth_session_org.user_id` and `revoked_by`, `mail_message.created_by`, `mail_suppression.created_by` and `lifted_by` (#538). On one database these keys are correct and stay. When the second cell is built, each cell gets an id-only anchor, `crove_kernel.user_ref (id uuid PRIMARY KEY)` with no email, name or subject, and the same migration moves these keys to it. The definers that bring a user into a cell (`create_or_replay_org`, `invite_accept`) insert the user's id there before the row that references it, and `member_profiles` keeps serving names and emails from the control plane. Rejected: dropping the keys (a membership or invite could name a user id that never existed, and nothing in the cell would notice); a full cell-local copy of `user_account` (personal data in every cell, a sync for every email or name change, and erasure under PDPL in more than one place).
 
 **Known exception on `main`** (fix before a second cell): inbound routing is coupled the other way: the active token lives on `tenant.inbound_token` in the cell, triggers on `tenant` (`tenant_pick_inbound_token`, `tenant_register_inbound_token`) write `inbound_address` directly, `inbound_address.org_id` references `tenant`, and `org_by_inbound_token` joins the two; a split moves the active token to the control plane or writes `inbound_address` through the control plane.
 
@@ -1005,7 +1008,7 @@ Every column of an entity table must have a `classify` entry; the default is `in
 
 | Artifact | Rule | Example |
 |---|---|---|
-| Token (module id) | `^[a-z][a-z0-9]{1,11}$`. Modules: `crm service social sign finance hr projects`. Reserved: `kernel`, `jobs` | `finance` |
+| Token (module id) | `^[a-z][a-z0-9]{1,11}$`. Modules: `crm service social email sign finance hr projects`. Reserved: `kernel`, `jobs` | `finance` |
 | Package / schema / role | `@crove/mod-<id>` / `crove_<id>` / `crove_m_<id>` | `crove_m_finance` |
 | Table / column / wire field | snake_case, singular table names; identical from SQL to JSON, OpenAPI, MCP, events | `journal_entry.posting_date` |
 | Entity / command / query / event | `<id>.<entity>` / `.<verb>` / `.<get\|list\|search>` / `.<past>` + `version` | `finance.journal_entry.posted` v1 |
@@ -1013,7 +1016,7 @@ Every column of an entity table must have a `classify` entry; the default is `in
 | Job / subscriber / DLQ | `<id>.<noun>.<verb>` / `<id>.sub.<handler>` / `<queue>.dlq` | `finance.bank_feed.sync` |
 | Inbox / error code | `<id>.<entity>.<condition>` / `<ID>.<UPPER_SNAKE>` | `FINANCE.PERIOD_LOCKED` |
 | Public CloudEvents | `com.crove.<event>.v<n>`, frozen in ADR-0014 | `com.crove.finance.journal_entry.posted.v1` |
-| Migration | `^[0-9]{14}_crove_(kernel\|jobs\|crm\|service\|social\|sign\|finance\|hr\|projects)_[a-z0-9]+(_[a-z0-9]+)*\.sql$` (UTC); every file in `supabase/migrations/` must match | `20261103090000_crove_finance_ledger_core.sql` |
+| Migration | `^[0-9]{14}_crove_(kernel\|jobs\|crm\|service\|social\|email\|sign\|finance\|hr\|projects)_[a-z0-9]+(_[a-z0-9]+)*\.sql$` (UTC); every file in `supabase/migrations/` must match | `20261103090000_crove_finance_ledger_core.sql` |
 | pgTAP | `supabase/tests/database/<token>/<desc>.test.sql` | - |
 | Generated files | First line `// @generated by crove gen: do not edit` | - |
 
@@ -1093,6 +1096,7 @@ DO $$ DECLARE n int := 0; BEGIN LOOP BEGIN
 | CRM (`crm`) | Twenty; Cal.com, Calendly | Contacts, companies, deals, pipelines, timeline; Calendar and booking pages |
 | Service (`service`) | Go Desk; Zendesk | Unified inbox: email, social messages and comments; tickets, SLA |
 | Social (`social`) | Postiz; Publer, Nuelink, Buffer | Compose, schedule, queues, reposting, analytics |
+| Email (`email`) | Mailchimp, Brevo, listmonk; Postmark, Amazon SES | Transactional templates and message log, sender domains, contacts with consent, campaigns, unsubscribe, analytics ([email.md](email.md)) |
 | Sign (`sign`) | Documenso; Docusign | Digital signatures via Vietnamese CAs, templates, signing order, audit certificate |
 | Accounting (`finance`) | MISA | TT133/TT99 books, vouchers, e-invoices, banking, reports |
 | HRM (`hr`) | | Employee records, labor contracts, timekeeping, leave, payroll |
@@ -1102,6 +1106,7 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 
 - **Calendar lives in CRM.** The core (events, availability, external calendar sync) is the kernel `calendar` service, so HRM (interviews, leave) and Service (customer appointments) share it. The Calendly-style booking page is a CRM feature.
 - **Service and Social share the `channel` layer but are two modules.** Each Facebook, Instagram, Zalo OA or TikTok page connects once. Messages and comments land in Service's inbox; Social only publishes. They are split because the users and permissions differ (customer support vs marketing) and so does the cadence (SLA-driven replies vs scheduled posting). In the UI, a post shows its comment count and opens straight into the conversation.
+- **Sending mail is a kernel service; Email is the module that manages it.** Every module sends mail through the kernel pipeline (queue, log, suppression, one send per mail), so it works with `email` off; the Email module adds domains, templates, consent and campaigns ([ADR-0034](../adr/0034-outbound-email.md)). Replies to campaigns go to the org's Reply-To address until Service's inbox can take them.
 
 ## 6. Core data model
 
@@ -1138,6 +1143,7 @@ Every module shares from the kernel: `party`, `activity`, `task`, `file`, `calen
 | `ai_run` / `ai_step` | Payloads in S3 `org/<org_id>/…`; `ai_step` kept 180 days | v0 |
 | `kill_switch`, `staff`, `support_grant` | §4.12 | v0 |
 | `inbound_address` | Ledger of every inbound email token ever issued (§7.6): `token` UNIQUE across active and retired rows, `retired_at` as the tombstone, at most one active row per org. Rows are never deleted or changed except to retire an active one, for every role. Only definers read or write it. On `main` (#112) the active token is also kept in `tenant.inbound_token`, which must match the org's active row at commit, so the resolver and the org query read one column | v0 |
+| `mail_message`, `mail_suppression`, `mail_event` | Outbound mail: one row per mail to one recipient, the suppression list keyed by an address hash (kept after erasure), append-only provider events ([email.md](email.md) §3.2, ADR-0034) | Email E1-E2 |
 | `number_series`, `number_allocation`, `external_call`, `process_instance`, `connection_binding`, `credential`, `document`, `document_version`, `field_history` (yearly partitions, PII crypto-shredded), `subject_key` | | 2a |
 | `ai_thread`, `ai_message` (per-user RLS) | | 2b |
 | `usage_counter`, `feature_flag*` | | Before charging |
@@ -1892,10 +1898,28 @@ Detailed plan, dependencies and steps: [social.md](social.md). The `channel` lay
 - The golden company's payroll matches an accountant's hand calculation.
 - Unauthorized users cannot read salaries, including through search, export or the agent.
 
+### Email (8 weeks estimated, added 2026-10-19 per Decision 18; reference: Mailchimp, Brevo, listmonk, Postmark, Amazon SES)
+
+Detailed plan, steps and open decisions: [email.md](email.md); architecture: [ADR-0034](../adr/0034-outbound-email.md) (proposed). Transactional steps E1-E2 are in M2, marketing after M3 (backlog review D11).
+
+**Kernel additions:** the mail pipeline (`mail_message`, `mail_suppression`, `mail_event`, a send queue and a throttled bulk queue, each send through `external_call`), provider webhooks and bounce reports, `contact_point` (§6), public unsubscribe and signup routes.
+
+**Scope:**
+- Transactional: built-in and org-editable templates in Vietnamese and English for the mail every module sends (invites, invoices, reminders), a message log with delivery status, bounces and complaints that suppress.
+- Sender domains verified with SPF, DKIM and DMARC.
+- Marketing: topics, subscriptions and an append-only consent record, double opt-in, CSV import with a declared basis, audiences, campaigns with review and approval (R2), throttled sending, one-click unsubscribe, analytics; click counts only when the org turns them on.
+- AI drafts and rewrites, tainted, always landing as drafts.
+
+**Exit criteria:**
+- No mail to a suppressed address; at most one copy per campaign recipient across a worker crash.
+- Every marketing mail has a working one-click unsubscribe, the `[QC]` label while the setting is on, and goes only to contacts with recorded consent, from a verified domain.
+- A complaint rate above 0.3% or a hard bounce rate above 5% pauses the org's marketing.
+- With `CROVE_MODULES` excluding `email`, invites still go out with the built-in templates.
+
 ### After the core modules
 
 - **Projects:** `task_ext` attached to `kernel.task`; boards on `list`; billable hours flow to Accounting exactly once.
-- Workflow builder, bulk email marketing, websites, ads: only on real customer demand.
+- Workflow builder, websites, ads: only on real customer demand. Email marketing is the Email module above (Decision 18).
 
 ### The forks
 
@@ -1956,7 +1980,7 @@ No fork has real users. The owner archived the five fork repositories on 2026-10
 - **Customization and integrations:**
   - No tenant-written code or policy language.
   - No visual workflow builder beyond narrow automation.
-  - No website or landing page builder, bulk email marketing or ads.
+  - No website or landing page builder or ads. Email marketing is the Email module since 2026-10-19 (Decision 18), without bought lists or cold outreach.
   - No connector marketplace, no public plugin SDK.
   - No in-process third-party plugins in v1 (use API/MCP).
 - **AI:**
@@ -1990,6 +2014,7 @@ ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this pla
 | [0029](../adr/0029-agents-positions-and-org-chart.md) | Agents as org members: positions held by humans or agents, module agent templates, tasks with delegation and escalation, wake-ups, budgets, R3 always ends at a human, runtimes as adapters | Accepted 2026-10-14 (direction); details proposed until the Phase 1 PR |
 | [0013](../adr/0013-evidence-storage-and-integrity.md) | Evidence storage and integrity: the triple (key, generation, sha256) on every file row, version-pinned reads checked by sha256 (S25), bucket versioning required by default, staged uploads through a single-use presigned POST with the server-side hash, presigned GETs of the recorded version | Accepted 2026-10-16 (issue #109) |
 | [0021](../adr/0021-finance-kernel-support.md) | Kernel support for Finance, from the Phase 0b spike (measured on PostgreSQL 17): <ul><li>money domains `amount numeric(20,4)`, `unit_amount numeric(24,8)`, `quantity numeric(20,6)`, `fx_rate numeric(24,10)` (direct quote), plus a per-currency scale check because `numeric(20,4)` rounds silently;</li><li>gapless numbering: a counter row per (org, legal entity, doc type, period key) allocated last in the posting transaction, voids as append-only facts; 1,000 parallel posts gave 1..1000;</li><li>period close: `FOR SHARE` guard in a `BEFORE INSERT` trigger, close in order, reopen newest first (R3, reason);</li><li>hash chain per legal entity, appended asynchronously from a pending queue, anchored by the WORM stream;</li><li>`source_revision` with a payload hash for replay and re-posting after reversal;</li><li>bank line keys: bank reference, else date + amount + running balance, else an Inbox exception.</li></ul> | Proposed 2026-10-15 (issue #58); the owner accepts it before the Phase 2a kernel additions |
+| [0034](../adr/0034-outbound-email.md) | Outbound email: one kernel pipeline (log per mail, suppression, one send per mail through `external_call`, transactional and marketing streams apart, providers behind `@crove/mail`) and an optional Email module (domains, templates, consent, campaigns); marketing needs consent, a verified domain, one-click unsubscribe and an R2 approval | Proposed 2026-10-19 (Decision 18); accepted before Email step E1 |
 
 **To write** (the ones the External-tenant gate depends on first):
 

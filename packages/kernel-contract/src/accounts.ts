@@ -27,6 +27,14 @@ export function isTaggedCode(code: string): boolean {
   return code.includes('.');
 }
 
+// The accounts a sale line may be credited to, and a purchase line never debited to (#430): every TT133 account of
+// class 5 (511 sales, 515 financial income), 711 other income and 3387 unearned revenue, with their sub-accounts (a
+// sub-account's code starts with its parent's). The database holds every writer to the same rule
+// (crove_finance.check_line_direction).
+export function isRevenueAccount(code: string): boolean {
+  return /^(5|711|3387)/.test(code);
+}
+
 // The code a user typed, as stored: trimmed, the tag in upper case (1121.vcb is 1121.VCB).
 export function normalizeAccountCode(input: string): string {
   return input.trim().toUpperCase();

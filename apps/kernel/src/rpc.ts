@@ -1,7 +1,7 @@
 // oRPC implementation of @crove/kernel-contract. Handlers only call the runtime (execute/query).
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
-import { contract } from '@crove/kernel-contract';
+import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
 import { BlueskyError, ConnectorError, connectBluesky, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
 import type { SocialWriter, WriterChannel } from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider } from '@crove/mod-social/contract';
@@ -16,6 +16,7 @@ import {
   type AcceptedInvite,
   type BulkApproveResult,
   type ChannelConnectInput,
+  type DirectMail,
   type OrgSummary,
 } from '@crove/kernel';
 import type { z } from 'zod';
@@ -23,7 +24,10 @@ import type { zAgentBudget, zAgentTemplate, zTask } from '@crove/kernel-contract
 import { DomainError, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { DraftBudget } from './ai-draft-limit.ts';
 import { actorOf, type AuthUser } from './auth.ts';
+import { ConcurrencyLimiter } from './concurrency.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
+import type { Delivery } from './mail.ts';
+import type { TaxCodeLookup } from './tax-lookup.ts';
 
 export interface RpcContext {
   user: AuthUser;
@@ -48,6 +52,10 @@ export async function resolveMembership(runtime: Runtime, user: AuthUser, slug: 
 export async function resolveOrg(runtime: Runtime, user: AuthUser, slug: string | null): Promise<string> {
   return (await resolveMembership(runtime, user, slug)).orgId;
 }
+
+// The error code a mail_message row gets when the invite mail did not go out: no mail server configured, the server
+// refused it or the deadline passed, or the template threw.
+const DELIVERY_ERROR: Record<Exclude<Delivery, 'sent'> | 'error', string> = { off: 'MAIL_OFF', failed: 'SEND_FAILED', error: 'SEND_ERROR' };
 
 interface CreatedInvite {
   inviteId: string;
@@ -103,7 +111,8 @@ function connectorFailure(error: unknown): DomainError {
 
 // sendInviteMail unset: invite mail is off (tests, or an embedder without mail). channels unset: no channel can be
 // connected through the API (the list and disconnect still work).
-export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, drafts: DraftBudget = new DraftBudget()) {
+// taxLookup unset: the public tax registry lookup is off (issue #324, TAX_CODE_LOOKUP_URL).
+export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, taxLookup?: TaxCodeLookup, drafts: DraftBudget = new DraftBudget()) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -128,6 +137,10 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     if (!finance) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun tài chính chưa được bật' });
     return inOrg(context, fn);
   };
+
+  // The multi-client home screen reads up to four orgs at once, a transaction each, on the API's pool of ten
+  // connections (#495): one screen per user at a time and two per process; another is refused at once (OVERLOADED).
+  const clientScreens = new ConcurrencyLimiter({ total: 2, perKey: 1 });
 
   const social = runtime.installed('social');
   const inSocial = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor) => Promise<T>) => {
@@ -169,7 +182,17 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         })),
       ),
       // The multi-client home screen (issue #318): each org's figures are read in that org's own context.
-      clients: os.me.clients.handler(({ context }) => guard(() => clientOverviews(runtime, actorOf(context.user)))),
+      clients: os.me.clients.handler(({ context, signal }) =>
+        guard(async () => {
+          const release = clientScreens.tryAcquire(context.user.userId);
+          if (!release) throw new DomainError('OVERLOADED', 503, 'Danh sách khách hàng đang được tải, hãy thử lại sau giây lát', { retryAfterSeconds: 2 });
+          try {
+            return await clientOverviews(runtime, actorOf(context.user), signal ? { signal } : {});
+          } finally {
+            release();
+          }
+        }),
+      ),
     },
     org: {
       create: os.org.create.handler(({ context, input }) =>
@@ -182,25 +205,48 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       setVatFilingPeriod: os.org.setVatFilingPeriod.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_vat_filing_period', input, { actor, orgId })),
       ),
+      setAddress: os.org.setAddress.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_address', input, { actor, orgId })),
+      ),
       // No idempotency key: the answer carries the invite token, which must never be stored with a key. The mail
-      // goes out after the command has committed (invite-mail.ts says why); its outcome is logged and never changes
-      // the answer, which stays the same whether or not the email has an account.
+      // goes out after the command has committed (invite-mail.ts says why), unless the org stopped mail to the
+      // address (#538); its outcome is recorded on the invite's mail_message row and never changes the answer, which
+      // stays the same whether or not the email has an account.
       invite: os.org.invite.handler(({ context, input }) =>
         guard(async () => {
           const org = await resolveMembership(runtime, context.user, context.orgSlug);
-          const created = await runtime.execute<CreatedInvite>('kernel.member.invite.create', input, { actor: actorOf(context.user), orgId: org.orgId });
-          try {
-            await sendInviteMail?.({
-              to: created.email,
-              orgName: org.name,
-              inviterName: context.user.name,
-              inviterEmail: context.user.email,
-              role: created.role,
-              expiresAt: created.expiresAt,
-              acceptPath: created.acceptPath,
+          const actor = actorOf(context.user);
+          const created = await runtime.execute<CreatedInvite>('kernel.member.invite.create', input, { actor, orgId: org.orgId });
+          // The invite's mail row, as the command wrote it: no row, or a read that fails, sends nothing, since an
+          // address the org stopped must never get mail; the inviter still has the link.
+          const mail = await runtime
+            .query<DirectMail | null>('kernel.mail.direct.get', { source: 'kernel.member.invite.create', sourceId: created.inviteId }, { actor, orgId: org.orgId })
+            .catch((error: unknown) => {
+              console.error(`[mail] invite mail not sent, its record was not read: ${error instanceof Error ? error.name : 'unknown error'}`);
+              return null;
             });
-          } catch (error) {
-            console.error(`[mail] invite mail not sent: ${error instanceof Error ? error.name : 'unknown error'}`);
+          if (mail?.status === 'sending') {
+            let delivery: Delivery | 'error' = 'off';
+            try {
+              delivery =
+                (await sendInviteMail?.({
+                  to: created.email,
+                  orgName: org.name,
+                  inviterName: context.user.name,
+                  inviterEmail: context.user.email,
+                  role: created.role,
+                  expiresAt: created.expiresAt,
+                  acceptPath: created.acceptPath,
+                  messageId: mail.messageIdHeader,
+                })) ?? 'off';
+            } catch (error) {
+              delivery = 'error';
+              console.error(`[mail] invite mail not sent: ${error instanceof Error ? error.name : 'unknown error'}`);
+            }
+            const outcome = delivery === 'sent' ? { outcome: 'sent' as const } : { outcome: 'failed' as const, errorCode: DELIVERY_ERROR[delivery] };
+            await runtime.execute('kernel.mail.record_direct', { messageId: mail.messageId, ...outcome }, { actor, orgId: org.orgId }).catch((error: unknown) => {
+              console.error(`[mail] invite mail outcome not recorded: ${error instanceof Error ? error.name : 'unknown error'}`);
+            });
           }
           return created;
         }),
@@ -414,8 +460,14 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             throw connectorFailure(error);
           });
           if (accounts.length === 0) throw new DomainError('CHANNEL_NO_ACCOUNTS', 422, 'Không có tài khoản nào bạn được quyền đăng bài trong lần cấp quyền này');
+          // Each account connects in its own command, so one that fails leaves the others connected: the answer says
+          // which did and which did not (#375), and only a grant where none connected is an error. A grant covering
+          // more accounts than a request should connect one by one is cut, and the answer says how many were left.
+          const taken = accounts.slice(0, OAUTH_MAX_ACCOUNTS_PER_GRANT);
           const connections: { connectionId: string; displayName: string; reconnected: boolean }[] = [];
-          for (const account of accounts) {
+          const failed: { displayName: string; code: string }[] = [];
+          let firstError: DomainError | null = null;
+          for (const account of taken) {
             const sealed = broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });
             const command: ChannelConnectInput = {
               provider: account.provider,
@@ -425,10 +477,28 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
               expiresAt: account.expiresAt?.toISOString() ?? null,
               credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
             };
-            const done = await runtime.execute<{ connectionId: string; reconnected: boolean }>('kernel.channel.connect', command, { actor, orgId });
-            connections.push({ connectionId: done.connectionId, displayName: account.displayName, reconnected: done.reconnected });
+            try {
+              const done = await runtime.execute<{ connectionId: string; reconnected: boolean }>('kernel.channel.connect', command, { actor, orgId });
+              connections.push({ connectionId: done.connectionId, displayName: account.displayName, reconnected: done.reconnected });
+            } catch (error) {
+              // Only a refusal of this one account lets the others go on; a failure of the server (an outage, a bug)
+              // ends the request at once, so it is logged and no more transactions pile onto a failing database.
+              if (!(error instanceof DomainError) || error.status >= 500) throw error;
+              firstError ??= error;
+              failed.push({ displayName: account.displayName, code: error.code });
+            }
           }
-          return { connections };
+          if (connections.length === 0 && firstError) throw firstError;
+          return { connections, failed, skipped: accounts.length - taken.length };
+        }),
+      ),
+    },
+    // Org-less: any signed-in user may look up a tax code before the org exists. Nothing is written, so no command.
+    taxRegistry: {
+      lookup: os.taxRegistry.lookup.handler(({ context, input }) =>
+        guard(async () => {
+          if (!taxLookup) throw new DomainError('TAX_LOOKUP_DISABLED', 404, 'Máy chủ chưa bật tra cứu mã số thuế; hãy nhập tên và địa chỉ');
+          return taxLookup.lookup(input.taxCode, context.user.userId);
         }),
       ),
     },
@@ -595,6 +665,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       account: os.ledger.account.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.ledger.account', input, { actor, orgId })),
       ),
+      statements: os.ledger.statements.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.statements.period', input, { actor, orgId })),
+      ),
     },
     periodLock: {
       state: os.periodLock.state.handler(({ context }) =>
@@ -611,6 +684,23 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           const { idempotencyKey, ...rest } = input;
           return runtime.execute('finance.period.unlock', rest, { actor, orgId, idempotencyKey });
         }),
+      ),
+    },
+    bank: {
+      preview: os.bank.preview.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.bank.preview', input, { actor, orgId })),
+      ),
+      import: os.bank.import.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('finance.bank.import', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+      lines: os.bank.lines.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.bank.lines', input, { actor, orgId })),
+      ),
+      lineVoucher: os.bank.lineVoucher.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.bank.line_voucher', input, { actor, orgId })),
       ),
     },
     // AI agents (ADR-0029). The kernel module owns them; a template of a module that is off answers MODULE_DISABLED.
