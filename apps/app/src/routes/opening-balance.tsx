@@ -175,7 +175,7 @@ export function OpeningBalancePage() {
                 {skipped > 0 && <p className="text-xs text-subtle-foreground">{t('skipped', { count: skipped })}</p>}
                 {rowsWithErrors > 0 && <p className="text-sm text-destructive">{t('rowsWithErrors', { count: rowsWithErrors })}</p>}
                 {shown.length > 0 && (
-                  <DataTable head={[t('columns.row'), t('columns.account'), t('columns.debit'), t('columns.credit'), t('columns.status')]}>
+                  <DataTable numeric={[2, 3]} head={[t('columns.row'), t('columns.account'), t('columns.debit'), t('columns.credit'), t('columns.status')]}>
                     {shown.map((r) => (
                       <TableRow key={r.rowNo} className="hover:bg-transparent">
                         <TableCell className="px-4 text-subtle-foreground tabular-nums">{r.rowNo}</TableCell>

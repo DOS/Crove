@@ -3,10 +3,12 @@ import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { errorMessage, getCurrentOrg, isUnauthenticated, orpc, queryClient, setCurrentOrg } from './lib/api.ts';
 import { accessToken, auth, getConfig, needsSecondFactor } from './lib/auth.ts';
+import { landingFor } from './lib/clients.ts';
 import { pendingInvite, rememberInvite, takeTokenFromHash } from './lib/invite.ts';
 import { signOut } from './lib/session-actions.ts';
 import { AgentsPage } from './routes/agents.tsx';
 import { AuthPage } from './routes/auth.tsx';
+import { ClientsPage } from './routes/clients.tsx';
 import { DocumentsPage } from './routes/documents.tsx';
 import { GuidePage } from './routes/guide.tsx';
 import { InboxDetailPage } from './routes/inbox-detail.tsx';
@@ -70,11 +72,17 @@ const indexRoute = createRoute({
       await auth().signOut({ scope: 'local' });
       throw redirect({ to: '/login' });
     });
-    const first = me.orgs[0];
-    if (first) throw redirect({ to: '/o/$slug/inbox', params: { slug: first.slug } });
+    // Several orgs (an accountant's clients): the home screen (issue #318); one: its Inbox; none: onboarding.
+    const landing = landingFor(me.orgs);
+    if (landing.to === 'clients') throw redirect({ to: '/clients' });
+    if (landing.to === 'inbox') throw redirect({ to: '/o/$slug/inbox', params: { slug: landing.slug } });
     throw redirect({ to: '/onboarding' });
   },
 });
+
+// Every org of the user with what waits in it and its next VAT deadline (issue #318); the landing page with several
+// orgs, and linked from the sidebar then.
+const clientsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/clients', beforeLoad: requireAuth, component: ClientsPage });
 
 const loginRoute = createRoute({ getParentRoute: () => rootRoute, path: '/login', component: AuthPage });
 
@@ -186,6 +194,7 @@ const routeTree = rootRoute.addChildren([
   mfaRoute,
   resetPasswordRoute,
   onboardingRoute,
+  clientsRoute,
   oauthCallbackRoute,
   orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vatRoute, ledgerRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
 ]);

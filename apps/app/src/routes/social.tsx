@@ -233,7 +233,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
               <Thumb fileId={open.fileId} alt={open.filename} mime={open.mime} durationMs={open.durationMs} className="aspect-[4/3]" />
               <p className="text-sm font-medium [overflow-wrap:anywhere] text-foreground">{open.filename}</p>
               <p className="text-xs text-subtle-foreground">{f.dateTime(open.createdAt)}</p>
-              <p className="text-xs font-medium tracking-wide text-subtle-foreground uppercase">{t('libraryUsageTitle')}</p>
+              <p className="text-sm font-medium text-muted-foreground">{t('libraryUsageTitle')}</p>
               <Usage fileId={open.fileId} slug={slug} />
 
             </Card>
@@ -266,7 +266,7 @@ function Agenda({ posts, slug, names }: { posts: Post[]; slug: string; names: Ma
     <div className="space-y-6">
       {[...days.entries()].map(([key, list]) => (
         <section key={key}>
-          <h3 className="mb-2 text-xs font-medium tracking-wide text-subtle-foreground uppercase">{f.date(key)}</h3>
+          <h3 className="mb-2 text-sm font-medium text-muted-foreground">{f.date(key)}</h3>
           <div className="space-y-2">
             {list.map(({ post, v }) => (
               <Link

@@ -80,15 +80,16 @@ export function Spinner({ className }: { className?: string }) {
   return <SpinnerIcon className={cn('text-ring', className)} aria-label={t('loading')} />;
 }
 
-// A table with one header row; the body rows are TableRow/TableCell from @crove/ui.
-export function DataTable({ head, children }: { head: string[]; children: ReactNode }) {
+// A table with one header row; the body rows are TableRow/TableCell from @crove/ui. `numeric` lists the columns that
+// hold amounts: their headers are right-aligned like the amounts (DESIGN.md 4.3).
+export function DataTable({ head, numeric = [], children }: { head: string[]; numeric?: number[]; children: ReactNode }) {
   return (
     <div className="overflow-hidden rounded-xl border bg-card">
       <Table className="min-w-[640px] [&_td]:whitespace-normal">
         <TableHeader className="bg-muted">
           <TableRow className="hover:bg-transparent">
-            {head.map((h) => (
-              <TableHead key={h} className="px-4 text-xs font-medium tracking-wide text-subtle-foreground uppercase">
+            {head.map((h, i) => (
+              <TableHead key={i} className={cn('px-4 text-xs font-medium text-subtle-foreground', numeric.includes(i) && 'text-right')}>
                 {h}
               </TableHead>
             ))}

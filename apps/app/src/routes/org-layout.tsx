@@ -1,15 +1,19 @@
-import { useId } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate, useParams } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { CommandPalette, type PaletteEntry } from '../components/command-palette.tsx';
 import { SupportLink } from '../components/support-link.tsx';
 import { Logo, OrgLeftNotice } from '../components/ui.tsx';
-import { LocaleSwitcher } from '../i18n/provider.tsx';
+import { LOCALE_NAMES, LOCALES } from '../i18n/locale.ts';
+import { LocaleSwitcher, useFormat, useLocaleSetting } from '../i18n/provider.tsx';
 import { orpc } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { installedItems } from '../lib/modules.ts';
+import { isPaletteShortcut } from '../lib/palette.ts';
+import { proposalName } from '../lib/review.ts';
 import { signOut } from '../lib/session-actions.ts';
 import { SAFETY_POLL_MS, pollEvery, useInvalidationStream, useStreamLive } from '../lib/stream-hook.ts';
 
@@ -28,7 +32,7 @@ const ALL_NAV = [
 ] as const;
 
 export function OrgLayout() {
-  const NAV = installedItems(getConfig().modules, ALL_NAV);
+  const NAV = useMemo(() => installedItems(getConfig().modules, ALL_NAV), []);
   const { slug } = useParams({ strict: false }) as { slug: string };
   const navigate = useNavigate();
   const t = useTranslations('nav');
@@ -43,6 +47,57 @@ export function OrgLayout() {
   });
   const org = me.data?.orgs.find((o) => o.slug === slug);
   const orgSelectId = useId();
+  const tp = useTranslations('palette');
+  const f = useFormat();
+  const { locale, setLocale } = useLocaleSetting();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const paletteKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘ K' : 'Ctrl K';
+
+  // Ctrl K (Cmd K on a Mac) opens or closes the command palette from any screen of the org.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!isPaletteShortcut(event)) return;
+      event.preventDefault();
+      setPaletteOpen((open) => !open);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const paletteEntries = useMemo<PaletteEntry[]>(
+    () => [
+      ...NAV.map((item) => ({
+        id: `go:${item.to}`,
+        group: 'go' as const,
+        label: t(item.label),
+        run: () => void navigate({ to: item.to, params: { slug } }),
+      })),
+      ...(pending.data ?? []).map((item) => ({
+        id: `proposal:${item.id}`,
+        group: 'proposals' as const,
+        label: proposalName(item),
+        detail: `${item.title}, ${f.money(item.total)}`,
+        run: () => void navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: item.id } }),
+      })),
+      ...(me.data?.orgs ?? [])
+        .filter((o) => o.slug !== slug)
+        .map((o) => ({
+          id: `org:${o.slug}`,
+          group: 'orgs' as const,
+          label: tp('switchOrg', { name: o.name }),
+          run: () => void navigate({ to: '/o/$slug/inbox', params: { slug: o.slug } }),
+        })),
+      ...LOCALES.filter((l) => l !== locale).map((l) => ({
+        id: `locale:${l}`,
+        group: 'actions' as const,
+        label: tp('switchLocale', { name: LOCALE_NAMES[l] }),
+        keywords: 'language ngon ngu',
+        run: () => setLocale(l),
+      })),
+      { id: 'sign-out', group: 'actions' as const, label: tc('signOut'), run: () => void signOut() },
+    ],
+    [NAV, pending.data, me.data, slug, locale, t, tp, tc, f, navigate, setLocale],
+  );
 
   return (
     <div className="flex min-h-full bg-background">
@@ -51,6 +106,11 @@ export function OrgLayout() {
           <Logo />
         </div>
         <div className="mt-6 px-2">
+          {(me.data?.orgs.length ?? 0) > 1 && (
+            <Link to="/clients" className="mb-3 block text-sm text-link hover:underline">
+              {t('allClients')}
+            </Link>
+          )}
           <Label htmlFor={orgSelectId} className="text-xs font-normal text-subtle-foreground">
             {t('org')}
           </Label>
@@ -67,7 +127,15 @@ export function OrgLayout() {
             ))}
           </NativeSelect>
         </div>
-        <nav className="mt-6 flex flex-col gap-0.5">
+        <button
+          type="button"
+          onClick={() => setPaletteOpen(true)}
+          className="mx-2 mt-4 flex items-center justify-between gap-2 rounded-lg border bg-background px-3 py-1.5 text-left text-sm text-subtle-foreground hover:text-foreground"
+        >
+          {tp('open')}
+          <kbd className="rounded-sm border px-1 font-mono text-[11px]">{paletteKeys}</kbd>
+        </button>
+        <nav className="mt-4 flex flex-col gap-0.5">
           {NAV.map((item) => (
             <Link
               key={item.to}
@@ -97,6 +165,14 @@ export function OrgLayout() {
       <div className="min-w-0 flex-1">
         <header className="flex flex-wrap items-center justify-between gap-2 border-b bg-sidebar px-4 py-3 md:hidden">
           <Logo />
+          {(me.data?.orgs.length ?? 0) > 1 && (
+            <Link to="/clients" className="text-xs text-link">
+              {t('allClients')}
+            </Link>
+          )}
+          <button type="button" onClick={() => setPaletteOpen(true)} className="rounded-lg border px-2 py-1 text-xs text-subtle-foreground">
+            {tp('open')}
+          </button>
           <SupportLink className="text-xs text-link" />
           <LocaleSwitcher />
           <NativeSelect
@@ -115,6 +191,7 @@ export function OrgLayout() {
           <OrgLeftNotice />
           {me.isSuccess && !org ? <p className="text-sm text-destructive">{t('notMember')}</p> : <Outlet />}
         </main>
+        <CommandPalette entries={paletteEntries} open={paletteOpen} onOpenChange={setPaletteOpen} />
       </div>
     </div>
   );
