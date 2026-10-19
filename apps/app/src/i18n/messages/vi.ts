@@ -577,6 +577,7 @@ export const vi = {
     failedChecks: '{count, number} lỗi',
     warnChecks: '{count, number} lưu ý',
     matched: 'Khớp',
+    agentProposed: 'AI agent đề xuất: {name}',
     reversalKind: 'Đảo bút toán',
     voucherKind: 'Chứng từ thu chi',
     saleKind: 'Bán ra',
@@ -664,6 +665,7 @@ export const vi = {
     confirmRereadVoided:
       'Đọc lại chứng từ? Chứng từ đã ghi sổ trước đây đã bị hủy do đảo bút toán; nếu đọc được, một đề xuất mới sẽ được tạo để ghi sổ lại hóa đơn.',
     voidedBadge: 'Chứng từ đã hủy do đảo bút toán',
+    agentProposed: 'AI agent đề xuất: {name}',
     voidedNotice: 'Bút toán của hóa đơn này đã được đảo nên Crove đã hủy chứng từ trong sổ của mình.',
     voidedReread: 'Bấm Đọc lại để tạo đề xuất mới và ghi sổ lại hóa đơn với tài khoản đúng.',
     voidedNoReread:

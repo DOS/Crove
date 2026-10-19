@@ -1,6 +1,6 @@
 // Bulk approval batches and review shortcuts (issue #315).
 import { describe, expect, it } from 'vitest';
-import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, type BulkBatch } from '../src/lib/review.ts';
+import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, showMatched, type BulkBatch } from '../src/lib/review.ts';
 
 const REVERSAL = 'finance.reversal';
 
@@ -117,5 +117,24 @@ describe('review shortcuts', () => {
     expect(proposalName({ ...base, direction: 'purchase' })).toBe('Bao Bì Phú Thịnh');
     expect(proposalName({ ...base, direction: 'sale' })).toBe('Gạo Sạch Mekong');
     expect(proposalName({ ...base, direction: null, sellerName: '' })).toBe('HĐ 00001284');
+  });
+});
+
+describe('matched badge (#435)', () => {
+  const VOUCHER = 'finance.cash_voucher';
+  const row = { kind: 'finance.purchase', failedChecks: 0, warnChecks: 0, duplicateOf: null, requestedByAgent: null as unknown, extracted: true };
+  it('shows matched for an extracted purchase with no failed or warning check', () => {
+    expect(showMatched(row, REVERSAL, VOUCHER)).toBe(true);
+    expect(showMatched({ ...row, warnChecks: 1 }, REVERSAL, VOUCHER)).toBe(false);
+    expect(showMatched({ ...row, failedChecks: 1 }, REVERSAL, VOUCHER)).toBe(false);
+    expect(showMatched({ ...row, duplicateOf: 'p0' }, REVERSAL, VOUCHER)).toBe(false);
+    expect(showMatched({ ...row, kind: REVERSAL }, REVERSAL, VOUCHER)).toBe(false);
+    expect(showMatched({ ...row, kind: VOUCHER }, REVERSAL, VOUCHER)).toBe(false);
+  });
+  it('never shows matched for an agent proposal that no extraction read', () => {
+    const agent = { id: 'a1', name: 'Kế toán AI' };
+    expect(showMatched({ ...row, requestedByAgent: agent, extracted: false }, REVERSAL, VOUCHER)).toBe(false);
+    // A human-checked extraction of an agent's request would still show it.
+    expect(showMatched({ ...row, requestedByAgent: agent, extracted: true }, REVERSAL, VOUCHER)).toBe(true);
   });
 });

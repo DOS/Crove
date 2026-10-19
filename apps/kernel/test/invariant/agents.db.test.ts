@@ -1131,6 +1131,22 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     expect(declared.sort()).toEqual([...AGENT_COMMANDS, ...Object.keys(AGENT_PROPOSAL_COMMANDS)].sort());
   });
 
+  it('marks an agent-requested proposal with the agent and its name in the Inbox list and detail, and no other (#435)', async () => {
+    const agent = await liveAgent(orgA, owner);
+    const asked = await agentProposes(agent, 't260.prop_r3');
+    const human = await humanProposal('t260.prop_r3', { flags: null });
+    const name = await withAdmin(async (c) => (await c.query<{ display_name: string }>('SELECT display_name FROM crove_kernel.agent WHERE id = $1', [agent.agentId])).rows[0]?.display_name as string);
+    expect(name).not.toBe('');
+    const as = { actor: asUser(owner), orgId: orgA };
+    const items = await app.query<Array<{ id: string; requestedByAgent: { id: string; name: string } | null; extracted: boolean }>>('kernel.inbox.list', {}, as);
+    const byId = new Map(items.map((i) => [i.id, i]));
+    expect(byId.get(asked.proposalId as string)).toMatchObject({ requestedByAgent: { id: agent.agentId, name }, extracted: false });
+    expect(byId.get(human)).toMatchObject({ requestedByAgent: null });
+    const detail = await app.query<{ requestedByAgent: { id: string; name: string } | null }>('kernel.inbox.get', { id: asked.proposalId as string }, as);
+    expect(detail.requestedByAgent).toEqual({ id: agent.agentId, name });
+    expect((await app.query<{ requestedByAgent: unknown }>('kernel.inbox.get', { id: human }, as)).requestedByAgent).toBeNull();
+  });
+
   it('turns R2 and R3 work into a proposal for review, created by the worker with its causal chain, taint and flags', async () => {
     const agent = await liveAgent(orgA, owner);
     // Direct R2 or R3 work stays refused (P05, P06); the agent asks instead.
