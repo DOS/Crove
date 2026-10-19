@@ -34,6 +34,16 @@ export const HTKK_01GTGT = {
 // Upper bound of an amount cell in HTKK (14 digits).
 export const HTKK_AMOUNT_LIMIT = '99999999999999';
 
+// An indicator beyond what HTKK holds: the caller turns it into a refusal the user can read.
+export class HtkkAmountError extends Error {
+  readonly code: string;
+  constructor(code: string, value: string) {
+    super(`indicator [${code}] exceeds what HTKK can hold: ${value}`);
+    this.name = 'HtkkAmountError';
+    this.code = code;
+  }
+}
+
 // Indicator codes of the form, in the form's order, with the value Crove writes for each.
 export const FORM_01_CODES = [
   '21', '22', '23', '24', '23a', '24a', '25', '26', '27', '28', '29', '30', '31', '32', '33', '32a', '34', '35', '36',
@@ -85,7 +95,7 @@ export function form01XmlValues(indicators: ReadonlyArray<FormIndicator>): Recor
   const out = {} as Record<Form01Code, string>;
   for (const code of FORM_01_CODES) {
     const value = get(code);
-    if (value.abs().greaterThan(HTKK_AMOUNT_LIMIT)) throw new Error(`indicator [${code}] exceeds what HTKK can hold: ${value.toFixed()}`);
+    if (value.abs().greaterThan(HTKK_AMOUNT_LIMIT)) throw new HtkkAmountError(code, value.toFixed());
     // toFixed(0) never writes an exponent; plus(0) turns a negative zero into 0.
     out[code] = value.plus(0).toFixed(0);
   }

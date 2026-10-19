@@ -233,6 +233,9 @@ describe('form01XmlValues', () => {
   it('ignores the indicators Crove does not compute and refuses amounts HTKK cannot hold', () => {
     expect(form01XmlValues([{ code: '25', label: '', amount: '999' }])['25']).toBe('0');
     expect(() => form01XmlValues([{ code: '23', label: '', amount: '100000000000000' }])).toThrow(/HTKK/);
+    // Through the export, a refusal the user can read (422), not a server error.
+    const d = declaration('2026-09', [invoice('big', [{ rate: '10', taxable: '100000000000000', vat: '0' }])], []);
+    expect(() => buildVat01Xml(d, '2026-10-19')).toThrow(expect.objectContaining({ code: 'INVALID', status: 422 }));
   });
 });
 
