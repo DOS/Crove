@@ -3,3 +3,4 @@ export * from './tax-code.ts';
 export * from './invoice.ts';
 export * from './einvoice-detect.ts';
 export * from './accounting.ts';
+export * from './vat-rate.ts';

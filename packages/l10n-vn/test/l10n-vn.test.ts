@@ -12,7 +12,9 @@ import {
   journalIsBalanced,
   looksLikeEInvoiceXml,
   parseTaxCode,
+  parseVatRate,
   suggestDebitAccount,
+  vatPercent,
   type ParsedInvoice,
 } from '../src/index.ts';
 
@@ -200,5 +202,47 @@ describe('TT133 sales entries (#313)', () => {
       ['131', '500000', '0'],
       ['511', '0', '500000'],
     ]);
+  });
+});
+
+describe('parseVatRate', () => {
+  const read = (rate: string | null) => {
+    const parsed = parseVatRate(rate);
+    return parsed.kind === 'unknown' ? { kind: parsed.kind } : { kind: parsed.kind, percent: parsed.percent?.toFixed() ?? null };
+  };
+
+  it('reads plain rates with or without the percent sign, spaces and case ignored', () => {
+    for (const text of ['10%', '10', ' 10 % ', '10.00%']) expect(read(text)).toEqual({ kind: 'percent', percent: '10' });
+    expect(read('0%')).toEqual({ kind: 'percent', percent: '0' });
+    expect(read('3.5%')).toEqual({ kind: 'percent', percent: '3.5' });
+    expect(read('100%')).toEqual({ kind: 'percent', percent: '100' });
+  });
+
+  it('reads exempt, untaxed and other rates', () => {
+    expect(parseVatRate('kct')).toMatchObject({ kind: 'exempt', code: 'KCT' });
+    expect(parseVatRate('KKKNT')).toMatchObject({ kind: 'exempt', code: 'KKKNT' });
+    expect(read('KHAC:5.26%')).toEqual({ kind: 'other', percent: '5.26' });
+    expect(read('KHAC:3')).toEqual({ kind: 'other', percent: '3' });
+    expect(read('KHAC')).toEqual({ kind: 'other', percent: null });
+    expect(read('KHAC:0%')).toEqual({ kind: 'other', percent: null });
+    expect(read('KHAC:150%')).toEqual({ kind: 'other', percent: null });
+  });
+
+  it('calls anything else unknown', () => {
+    for (const text of [null, '', 'abc', '150%', '-5%', '10%%', '1e1', '10,5%']) expect(parseVatRate(text).kind, String(text)).toBe('unknown');
+  });
+});
+
+describe('vatPercent', () => {
+  it('shares the parser: the same texts give the same percent, "10" included', () => {
+    expect(vatPercent('10%')).toBe(10);
+    expect(vatPercent('10')).toBe(10);
+    expect(vatPercent('8%')).toBe(8);
+    expect(vatPercent('0%')).toBe(0);
+    expect(vatPercent('KCT')).toBe(0);
+    expect(vatPercent('KKKNT')).toBe(0);
+    expect(vatPercent(null)).toBe(0);
+    expect(vatPercent('150%')).toBe(0);
+    expect(vatPercent('abc')).toBe(0);
   });
 });

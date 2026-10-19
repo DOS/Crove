@@ -1,6 +1,7 @@
 // TT133/2016 suggestions for purchase invoices: debit account per line, VAT input account, payable.
 import { money, sum, toMoney, type Money } from './money.ts';
 import { lineContribution, type InvoiceLine, type ParsedInvoice } from './invoice.ts';
+import { parseVatRate } from './vat-rate.ts';
 
 export const PAYABLE_ACCOUNT = '331';
 export const VAT_INPUT_GOODS = '1331';
@@ -113,10 +114,10 @@ export function buildPurchaseJournal(lines: ProposedLine[], vatTotal: Money, mem
   return drafts;
 }
 
-// Whole-number VAT rates such as "10%"; exempt or untaxed lines ("KCT", "KKKNT") count as 0.
+// The VAT percent of a rate text (see parseVatRate); exempt, untaxed and unreadable rates count as 0.
 export function vatPercent(rate: string | null): number {
-  const match = /^(\d{1,2})%$/.exec(rate?.trim() ?? '');
-  return match ? Number(match[1]) : 0;
+  const parsed = parseVatRate(rate);
+  return parsed.kind === 'unknown' ? 0 : Number(parsed.percent?.toFixed() ?? 0);
 }
 
 // Input VAT on fixed assets goes to 1332, the rest to 1331. For a mixed invoice the asset share is
