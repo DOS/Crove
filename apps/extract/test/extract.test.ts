@@ -297,7 +297,11 @@ function underSandbox(script: string): Promise<{ code: number | null; out: strin
   });
 }
 
-describe('crove-extract parser process isolation', () => {
+// These tests assert Node's permission model (--permission, ERR_ACCESS_DENIED). Bun ignores those flags, and the service
+// ships and runs on Node only (see the Dockerfile), so the nightly Bun canary skips them instead of failing on every run.
+const onBun = 'bun' in process.versions;
+
+describe.skipIf(onBun)('crove-extract parser process isolation', () => {
   it('cannot open a network connection', async () => {
     let connections = 0;
     const server = createServer((socket) => {
