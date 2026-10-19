@@ -77,7 +77,7 @@ Alerts go to `ALERT_WEBHOOK_URL`; without it they are printed to stdout. The req
 | `slack` | a Slack incoming webhook, `https://hooks.slack.com/services/...` | `{"text", "mrkdwn": false}`, with `&`, `<` and `>` escaped |
 | `discord` | a Discord channel webhook, `https://discord.com/api/webhooks/<id>/<token>` | `{"content", "allowed_mentions": {"parse": []}}`: Markdown escaped, no pings, at most 2000 characters |
 | `telegram` | `https://api.telegram.org/bot<token>/sendMessage`, plus `ALERT_TELEGRAM_CHAT_ID` (numeric id, negative for groups and channels, or `@channelname`) | `{"chat_id", "text", "link_preview_options": {"is_disabled": true}}`, plain text (no `parse_mode`) |
-| `generic` | anything else (Mattermost, Google Chat, your own receiver) | `{"text", "content", "crove"}`, where `crove` holds `kind` (`alert`, `resolved`, `test`), `state` (`new`, `changed`, `repeat`), `severity`, `since`, the findings and the `health()` row |
+| `generic` | anything else (Mattermost, Google Chat, your own receiver) | `{"text", "content", "crove"}`, where `crove` holds `kind` (`alert`, `resolved`, `test`; `usage` for the weekly usage summary below, with its counts in `week` and `previous`), `state` (`new`, `changed`, `repeat`), `severity`, `since`, the findings and the `health()` row |
 
 Name the deployment with `ALERT_INSTANCE` (default: the host of `PUBLIC_URL`). Exit codes report health whether or not a notification went out: 0 healthy, 1 a limit was exceeded, 2 the check could not run, 3 a due notification could not be delivered (it is printed instead, with the vendor's short reason such as `no_text` or `Bad Request: chat not found`). Use an `https` webhook: these URLs carry their secret (the Telegram bot token, the Slack and Discord path), and the prober logs only their host.
 
@@ -116,9 +116,12 @@ Set `CROVE_REPORTER_DB_PASSWORD` (applied by `migrate`) in `.env`, then:
 docker compose run --rm usage usage-report                      # the last 8 weeks, deployment totals
 docker compose run --rm usage usage-report --weeks 12 --by-org --csv > usage.csv
 pnpm usage:report --weeks 4                                     # from a checkout: set REPORTER_DATABASE_URL in .env
+docker compose run --rm usage usage-report --post               # also post last week's summary to ALERT_WEBHOOK_URL
 ```
 
-Options: `--weeks <1-104>` (default 8, the current week included), `--by-org`, `--csv` (RFC 4180; an org name a spreadsheet would read as a formula gets a leading `'`), `--time-zone <name>`. Exit codes: 0 printed, 2 the report could not run. Without Compose, run `node apps/kernel/src/main.ts usage-report` with `REPORTER_DATABASE_URL=postgres://crove_reporter:<password>@<host>:5432/<db>`; it refuses a superuser or BYPASSRLS login. For a Monday summary, schedule it with cron and mail or post the output yourself.
+Options: `--weeks <1-104>` (default 8, the current week included), `--by-org`, `--csv` (RFC 4180; an org name a spreadsheet would read as a formula gets a leading `'`), `--time-zone <name>`, `--post`. Exit codes: 0 printed (and posted), 2 the report could not run, 3 printed but the summary could not be posted. Without Compose, run `node apps/kernel/src/main.ts usage-report` with `REPORTER_DATABASE_URL=postgres://crove_reporter:<password>@<host>:5432/<db>`; it refuses a superuser or BYPASSRLS login.
+
+`--post` sends a summary of the last complete week, with the week before for comparison, to the prober's alert webhook (`ALERT_WEBHOOK_URL`, in the same format, see "Monitoring and alerts"): deployment totals only, never an org id or name, whatever `--by-org` says. The report still connects as `crove_reporter`; the prober's login reads no usage. Without `ALERT_WEBHOOK_URL`, or with invalid webhook settings, it fails with exit 2 before reading anything. It logs the webhook by host only, and prints the report to stdout as usual, so `--csv --post > usage.csv` still writes a clean file. It needs `--weeks 3` or more. A Monday cron job for it: [docs/runbooks/alerts.md](./docs/runbooks/alerts.md), "Weekly usage summary".
 
 ## Pilot readiness
 

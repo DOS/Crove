@@ -278,7 +278,8 @@ services:
         condition: service_completed_successfully
 
   # Weekly usage report for the operator (issue #311), never started by `up`:
-  # `docker compose run --rm usage usage-report [--weeks 8] [--by-org] [--csv]`.
+  # `docker compose run --rm usage usage-report [--weeks 8] [--by-org] [--csv] [--post]`; --post sends a summary of
+  # the last complete week to the alert webhook (issue #344).
   usage:
     build: .
     image: crove:local
@@ -289,6 +290,12 @@ services:
       disable: true
     environment:
       REPORTER_DATABASE_URL: postgres://crove_reporter:${CROVE_REPORTER_DB_PASSWORD:-local-reporter-password}@db:5432/postgres
+      # The prober's webhook settings, used only by --post.
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_INSTANCE: ${ALERT_INSTANCE:-}
+      ALERT_WEBHOOK_FORMAT: ${ALERT_WEBHOOK_FORMAT:-auto}
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

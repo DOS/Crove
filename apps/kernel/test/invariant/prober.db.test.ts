@@ -84,7 +84,7 @@ suite('prober privileges', () => {
   it('lets only crove_prober execute health() and prober_alert_gate(), and only crove_worker execute worker_beat() (EXECUTE matrix)', async () => {
     const admin = await connect(adminUrl);
     const functions = ['crove_kernel.health(integer)', 'crove_kernel.prober_alert_gate(text,integer)', 'crove_kernel.worker_beat(text)'];
-    const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober'];
+    const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober', 'crove_reporter'];
     const { rows } = await admin.query<{ fn: string; role: string }>(
       `SELECT f AS fn, r AS role FROM unnest($1::text[]) f CROSS JOIN unnest($2::text[]) r
        WHERE has_function_privilege(r, f, 'EXECUTE') ORDER BY 1, 2`,

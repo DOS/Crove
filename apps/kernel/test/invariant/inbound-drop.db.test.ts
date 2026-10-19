@@ -132,7 +132,7 @@ suite('inbound drop count invariants on PostgreSQL', () => {
   });
 
   it('lets only the worker login role record a drop and only the API login role read the count (EXECUTE matrix)', async () => {
-    const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober'];
+    const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober', 'crove_reporter'];
     const { matrix, shape } = await withAdmin(async (c) => {
       const { rows } = await c.query<{ fn: string; role: string }>(
         `SELECT f AS fn, r AS role FROM unnest($1::text[]) f CROSS JOIN unnest($2::text[]) r
