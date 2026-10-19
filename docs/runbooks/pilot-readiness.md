@@ -74,6 +74,13 @@ What exists today is a closed sign-up: `AUTH_DISABLE_SIGNUP=true` (`GOTRUE_DISAB
      An unexpected account means someone else used the window: note it in issue #308 and do not sign off until the owner decided what to do with it.
 - Keep the window short: while it is open, anyone who reaches `PUBLIC_URL` can create an account and an org (bounded by `ORG_CREATE_LIMIT_PER_DAY` and the email limits).
 
-## 6. Owner sign-off
+## 6. Alerts reach the owner's phone
+
+The owner learns about an outage before the partner calls (M1-9, issue #309): prober alerts in a Telegram chat or Slack channel the owner reads, an outside uptime check on `/healthz` every 5 minutes, and a heartbeat monitor for the prober itself. Setting them up and testing each one: [alerts.md](alerts.md).
+
+- Checked by `pilot:check`: `ALERT_WEBHOOK_URL` is set and https, `PROBER_HEARTBEAT_URL` is https when set, and the prober accepts its settings (a Telegram webhook needs `ALERT_TELEGRAM_CHAT_ID`). The pass line says whether `COMPOSE_PROFILES` starts the prober.
+- `MANUAL`: the outside uptime check exists and the test alert (`pnpm alert:test`) reached the phone; without `prober` in `COMPOSE_PROFILES`, that a cron job runs the prober; without `PROBER_HEARTBEAT_URL`, that the owner accepts that nothing pages when the prober itself stops.
+
+## 7. Owner sign-off
 
 The owner reviews the `pnpm pilot:check -- --url <public URL>` output with no `FAIL` line, confirms the `MANUAL` items above, and records the sign-off in issue #308 with the date, the deployed commit or tag and the output.

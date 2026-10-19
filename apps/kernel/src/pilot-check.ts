@@ -7,6 +7,7 @@
 //
 // Exit codes: 0 every automatic check passed, 1 a check failed, 2 the check could not run (bad arguments).
 import { parseExportKey } from './export-seal.ts';
+import { loadProberConfig } from './prober.ts';
 
 export const PILOT_EXIT = { ok: 0, failed: 1, error: 2 } as const;
 
@@ -108,6 +109,13 @@ function httpsProblem(name: string, raw: string): string | null {
   return null;
 }
 
+// A URL that carries its own secret (a webhook's token or path, a heartbeat check's id) goes over https only.
+function secretUrlProblem(name: string, raw: string): string | null {
+  if (!URL.canParse(raw)) return `${name} is not a URL`;
+  if (new URL(raw).protocol !== 'https:') return `${name} is not https: the URL carries its secret (a bot token, a webhook path, a check id)`;
+  return null;
+}
+
 function secretProblem(name: string, secret: string | undefined, minLength: number): string | null {
   if (secret === undefined) return `${name} is unset (docker compose then falls back to a value published in this repository)`;
   if (KNOWN_DEFAULTS.has(secret) || /change-?me/i.test(secret)) return `${name} still has a sample value from .env.example or docker-compose.yml`;
@@ -189,7 +197,48 @@ export function checkEnv(env: Env): CheckResult[] {
     'AUTH_DISABLE_SIGNUP=true: Supabase Auth creates no new accounts',
   );
 
+  // Alerts (M1-9, issue #309): the prober posts to a channel the owner reads, and it runs.
+  const alerts: (string | null)[] = [];
+  const webhook = value(env, 'ALERT_WEBHOOK_URL');
+  alerts.push(
+    webhook
+      ? secretUrlProblem('ALERT_WEBHOOK_URL', webhook)
+      : 'ALERT_WEBHOOK_URL is unset: the prober prints alerts to its own log, where nobody reads them; set a Telegram or Slack webhook the owner reads (docs/runbooks/alerts.md)',
+  );
+  const heartbeat = value(env, 'PROBER_HEARTBEAT_URL');
+  if (heartbeat) alerts.push(secretUrlProblem('PROBER_HEARTBEAT_URL', heartbeat));
+  // The prober's own rules (a Telegram webhook needs the chat id, limits are whole numbers), once the URLs are sound.
+  if (!alerts.some((p) => p !== null)) {
+    try {
+      loadProberConfig({ ...env });
+    } catch (error) {
+      alerts.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  const proberProfile = (value(env, 'COMPOSE_PROFILES') ?? '').split(',').some((p) => p.trim() === 'prober');
+  // The message is built before the problems are known: never parse a webhook that may not be a URL.
+  const webhookHost = webhook && URL.canParse(webhook) ? new URL(webhook).host : 'the webhook';
+  add('Alerts', alerts, `alerts go to ${webhookHost}${proberProfile ? ', from the prober the compose profile starts' : ''}`);
+
   results.push(
+    {
+      item: 'Alerts',
+      status: 'manual',
+      message:
+        'an outside monitor requests PUBLIC_URL/healthz every 5 minutes and pages the owner, and the test alert (pnpm alert:test) reached the phone (docs/runbooks/alerts.md)',
+    },
+    ...(proberProfile
+      ? []
+      : [{ item: 'Alerts', status: 'manual' as const, message: 'COMPOSE_PROFILES does not include prober: confirm a cron job runs the prober every 5 minutes (README, "Monitoring and alerts")' }]),
+    ...(heartbeat
+      ? []
+      : [
+          {
+            item: 'Alerts',
+            status: 'manual' as const,
+            message: 'PROBER_HEARTBEAT_URL is unset: nothing pages the owner when the prober itself stops or cannot deliver; set it (docs/runbooks/alerts.md) or accept that',
+          },
+        ]),
     {
       item: 'Extraction sandbox',
       status: 'manual',

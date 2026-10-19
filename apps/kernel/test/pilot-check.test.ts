@@ -23,6 +23,9 @@ const READY: Env = {
   AUTH_STEP_UP: 'required',
   AUTH_DISABLE_SIGNUP: 'true',
   SMTP_HOST: 'smtp.mailprovider.example',
+  ALERT_WEBHOOK_URL: `https://alerts.example.com/hook/${fake('hook')}`,
+  PROBER_HEARTBEAT_URL: `https://hc.example.com/ping/${fake('check')}`,
+  COMPOSE_PROFILES: 'prober',
 };
 
 const failures = (results: readonly CheckResult[]) => results.filter((r) => r.status === 'fail');
@@ -32,7 +35,27 @@ describe('pilot-check settings', () => {
   it('passes a ready deployment and leaves the human items as manual', () => {
     const results = checkEnv(READY);
     expect(failures(results)).toEqual([]);
-    expect(results.filter((r) => r.status === 'manual').map((r) => r.item)).toEqual(['Extraction sandbox', 'RLS matrix', 'Backups', 'Owner sign-off']);
+    expect(results.filter((r) => r.status === 'manual').map((r) => r.item)).toEqual(['Alerts', 'Extraction sandbox', 'RLS matrix', 'Backups', 'Owner sign-off']);
+    expect(results.find((r) => r.item === 'Alerts' && r.status === 'pass')?.message).toBe('alerts go to alerts.example.com, from the prober the compose profile starts');
+  });
+
+  it('requires alerts on an https webhook the prober accepts (M1-9, issue #309)', () => {
+    expect(failing({ ...READY, ALERT_WEBHOOK_URL: undefined })).toEqual([expect.stringContaining('ALERT_WEBHOOK_URL is unset')]);
+    expect(failing({ ...READY, ALERT_WEBHOOK_URL: 'http://alerts.example.com/hook' })).toEqual([expect.stringContaining('ALERT_WEBHOOK_URL is not https')]);
+    expect(failing({ ...READY, ALERT_WEBHOOK_URL: 'not a url' })).toEqual([expect.stringContaining('ALERT_WEBHOOK_URL is not a URL')]);
+    expect(failing({ ...READY, PROBER_HEARTBEAT_URL: 'http://hc.example.com/ping/x' })).toEqual([expect.stringContaining('PROBER_HEARTBEAT_URL is not https')]);
+    // The prober's own rules: a Telegram webhook needs the chat id.
+    const telegram = { ...READY, ALERT_WEBHOOK_URL: `https://api.telegram.org/bot${fake('token')}/sendMessage` };
+    expect(failing(telegram)).toEqual([expect.stringContaining('ALERT_TELEGRAM_CHAT_ID')]);
+    expect(failing({ ...telegram, ALERT_TELEGRAM_CHAT_ID: '-1001234567890' })).toEqual([]);
+  });
+
+  it('asks to confirm the prober cron and the heartbeat when the settings do not show them', () => {
+    const manual = (env: Env) => checkEnv(env).filter((r) => r.item === 'Alerts' && r.status === 'manual').map((r) => r.message);
+    expect(manual(READY)).toEqual([expect.stringContaining('PUBLIC_URL/healthz every 5 minutes')]);
+    const bare = manual({ ...READY, COMPOSE_PROFILES: undefined, PROBER_HEARTBEAT_URL: undefined });
+    expect(bare).toEqual([expect.stringContaining('healthz'), expect.stringContaining('COMPOSE_PROFILES does not include prober'), expect.stringContaining('PROBER_HEARTBEAT_URL is unset')]);
+    expect(manual({ ...READY, COMPOSE_PROFILES: 'tools, prober' })).toHaveLength(1);
   });
 
   it('fails an empty .env: docker compose would run every local default', () => {
@@ -206,7 +229,7 @@ describe('pilot-check command', () => {
     const lines: string[] = [];
     const print = (line: string) => lines.push(line);
     expect(await runPilotCheck([], READY, fakeFetch({}), print)).toBe(PILOT_EXIT.ok);
-    expect(lines.join('\n')).toContain('Automatic checks passed. Confirm the 4 manual item(s)');
+    expect(lines.join('\n')).toContain('Automatic checks passed. Confirm the 5 manual item(s)');
     expect(await runPilotCheck(['--url', 'https://crove.example.com'], READY, fakeFetch(healthy), print)).toBe(PILOT_EXIT.ok);
     lines.length = 0;
     expect(await runPilotCheck([], { ...READY, AUTH_DISABLE_SIGNUP: 'false' }, fakeFetch({}), print)).toBe(PILOT_EXIT.failed);
