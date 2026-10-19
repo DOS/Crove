@@ -220,8 +220,9 @@ export interface CommandContext extends QueryContext {
   // transaction: the row a refused top-level run of it would get, linked to this command (detail parentCommand and
   // parentCommandId, the command_id of this command's own audit row), and under the same bound
   // (RuntimeOptions.refusalAudit). The row commits with this command, and a command that fails writes none. Any other
-  // error, or a refusal `recover` declines, propagates untouched, so the whole command fails as with run(); a `recover`
-  // that throws rolls the nested command back first. One tryRun at a time per command (a second one while another is
+  // error, or a refusal `recover` declines, propagates, so the whole command fails as with run(); on every path but
+  // success the nested command is rolled back to the savepoint first, so a caller that catches the error and goes on
+  // keeps none of its writes. One tryRun at a time per command (a second one while another is
   // in flight throws, and so does a handler that returns while one is), since they share one connection's savepoints.
   // The row is built from a snapshot the runtime takes when it catches the refusal, before `recover` sees it, and from
   // the nested input as parsed before the nested command ran: neither the caller (with the refusal copy or the
@@ -961,15 +962,28 @@ export class Runtime {
       this.savepointSeq += 1;
       const savepoint = sql.raw(`crove_try_run_${this.savepointSeq}`);
       await sql`SAVEPOINT ${savepoint}`.execute(trx);
+      // Undoes the nested command. Every path that does not return its value takes it, so a handler that catches the
+      // error and goes on never keeps a refused or failed command's writes, and an aborted transaction is usable again.
+      const discard = async () => {
+        await sql`ROLLBACK TO SAVEPOINT ${savepoint}`.execute(trx);
+        await sql`RELEASE SAVEPOINT ${savepoint}`.execute(trx);
+      };
       let value: R;
       try {
         value = await runNested<R>(nested);
       } catch (error) {
-        if (!(error instanceof DomainError)) throw error;
+        if (!(error instanceof DomainError)) {
+          // Best effort (the connection may be gone); the original error is what the caller needs.
+          await discard().catch(() => undefined);
+          throw error;
+        }
         // The snapshot the row is written from, taken before anyone else sees the refusal again.
         const code = error.code;
         const status = error.status;
-        if (!AUDITED_REFUSAL_STATUSES.has(status) || isNeverRecovered(code)) throw error;
+        if (!AUDITED_REFUSAL_STATUSES.has(status) || isNeverRecovered(code)) {
+          await discard();
+          throw error;
+        }
         const snapshot: CaughtRefusal = Object.freeze({
           command: nested.def.name,
           code,
@@ -989,13 +1003,11 @@ export class Runtime {
         try {
           recovered = options.recover(refusal) === true;
         } catch (recoverError) {
-          await sql`ROLLBACK TO SAVEPOINT ${savepoint}`.execute(trx);
-          await sql`RELEASE SAVEPOINT ${savepoint}`.execute(trx);
+          await discard();
           throw recoverError;
         }
+        await discard();
         if (!recovered) throw error;
-        await sql`ROLLBACK TO SAVEPOINT ${savepoint}`.execute(trx);
-        await sql`RELEASE SAVEPOINT ${savepoint}`.execute(trx);
         caught.push(snapshot);
         return { status: 'refused', refusal };
       }

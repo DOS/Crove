@@ -23,6 +23,7 @@ import { createExtractClient } from '@crove/extract-contract';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { DomainError, Runtime, defineCommand, fileKey, sha256Hex, type BlobStore, type CommandDef } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
+import { sql } from 'kysely';
 import { z } from 'zod';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -684,6 +685,46 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     });
     expect(asked).toBe(0);
     expect((await auditRows(orgId, 'test.coded')).map((r) => [r.outcome, r.detail.code])).toEqual([['denied', 'NOT_ELIGIBLE']]);
+  });
+
+  it('rolls the nested command back on every path but success, also when the caller catches and goes on (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit discard', []);
+    const zWrite = z.object({ id: z.string().uuid(), fail: z.enum(['declined', 'never', 'sql']) });
+    const writesThenFails = defineCommand({
+      name: 'test.writes_then_fails',
+      input: zWrite,
+      risk: 'R1',
+      access: ['owner'],
+      target: thingTarget,
+      handler: async (ctx, input) => {
+        await ctx.activity('test.thing', input.id, 'test.written', 'written before the failure');
+        if (input.fail === 'sql') await sql`SELECT 1 / 0`.execute(ctx.trx);
+        throw new DomainError(input.fail === 'never' ? 'STEP_UP_REQUIRED' : 'NOT_ELIGIBLE', 403, 'x');
+      },
+    });
+    const caller = ownerCommand('test.catches', async (ctx, input) => {
+      const thrown: string[] = [];
+      for (const fail of ['declined', 'never', 'sql'] as const) {
+        try {
+          await ctx.tryRun('test.writes_then_fails', { id: input.id, fail }, { recover: () => fail !== 'declined' });
+        } catch (error) {
+          thrown.push(error instanceof DomainError ? error.code : String((error as { code?: unknown }).code));
+        }
+      }
+      // The transaction is still usable after the database error.
+      const { rows } = await sql<{ one: number }>`SELECT 1 AS one`.execute(ctx.trx);
+      return { thrown, usable: rows[0]?.one === 1 };
+    });
+    const id = randomUUID();
+    expect(await runtimeWith(writesThenFails, caller).execute('test.catches', { id }, { actor: asUser(owner), orgId })).toEqual({
+      thrown: ['NOT_ELIGIBLE', 'STEP_UP_REQUIRED', '22012'],
+      usable: true,
+    });
+    const activity = await withAdmin(
+      async (a) => (await a.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2', [orgId, id])).rows[0]?.n,
+    );
+    expect(activity).toBe(0);
+    expect(await auditRows(orgId, 'test.writes_then_fails')).toEqual([]);
   });
 
   it('rolls the nested command back when recover throws (#429)', async () => {
