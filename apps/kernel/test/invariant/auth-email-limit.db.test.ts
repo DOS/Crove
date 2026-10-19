@@ -80,7 +80,7 @@ suite('auth email budget (#190)', () => {
       `SELECT f.fn, r.rolname AS role
        FROM unnest(ARRAY[$1, $2]) AS f(fn)
        CROSS JOIN pg_roles r
-       WHERE r.rolname IN ('crove_app', 'crove_worker', 'crove_tenant', 'crove_prober', 'crove_definer_tenant', 'anon', 'authenticated')
+       WHERE r.rolname IN ('crove_app', 'crove_worker', 'crove_tenant', 'crove_prober', 'crove_reporter', 'crove_definer_tenant', 'anon', 'authenticated')
          AND has_function_privilege(r.oid, f.fn::regprocedure, 'EXECUTE')
        ORDER BY 1, 2`,
       [RESERVE, RELEASE],

@@ -297,7 +297,7 @@ suite('refusal audit bound on PostgreSQL (#162)', () => {
         { fn: NOTE, definer: true, config: ['search_path=pg_catalog, pg_temp'], public: false },
         { fn: PRUNE, definer: true, config: ['search_path=pg_catalog, pg_temp'], public: false },
       ]);
-      const roles = `ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober']`;
+      const roles = `ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober', 'crove_reporter']`;
       const { rows: execute } = await a.query<{ fn: string; role: string }>(
         `SELECT f AS fn, r AS role FROM unnest(${roles}) r, unnest(ARRAY['${NOTE}', '${PRUNE}']) f
           WHERE has_function_privilege(r, f, 'EXECUTE') ORDER BY 1, 2`,

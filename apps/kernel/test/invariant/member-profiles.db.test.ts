@@ -190,7 +190,7 @@ suite('member profiles definer invariants on PostgreSQL', () => {
   });
 
   it('lets only the API login role call it, as a pinned definer owned with the identity table (EXECUTE matrix)', async () => {
-    const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober'];
+    const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'crove_auth_reader', 'crove_prober', 'crove_reporter'];
     const { matrix, shape } = await withAdmin(async (c) => {
       const { rows } = await c.query<{ role: string }>(
         `SELECT r AS role FROM unnest($1::text[]) r WHERE has_function_privilege(r, $2::regprocedure, 'EXECUTE') ORDER BY 1`,

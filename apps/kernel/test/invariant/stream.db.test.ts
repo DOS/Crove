@@ -36,7 +36,7 @@ const SECRET = 'stream-invariant-secret-0123456789-abcdefghij';
 const ISSUER = 'http://localhost:9999';
 // The re-check interval of every stream in this file.
 const RECHECK_SECONDS = 1;
-const ROLES = ['crove_app', 'crove_tenant', 'crove_worker', 'crove_definer_tenant', 'crove_prober'];
+const ROLES = ['crove_app', 'crove_tenant', 'crove_worker', 'crove_definer_tenant', 'crove_prober', 'crove_reporter'];
 
 const suite = ADMIN ? describe : describe.skip;
 

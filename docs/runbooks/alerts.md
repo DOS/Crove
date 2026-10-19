@@ -80,3 +80,33 @@ The prober pings `PROBER_HEARTBEAT_URL` with a GET after every probe that read t
 ## 4. Record it
 
 When the three tests above reached the phone, note it in issue #309 with the date, then confirm the `MANUAL` alert lines of `pnpm pilot:check` for the pilot sign-off ([pilot-readiness.md](pilot-readiness.md)).
+
+## Weekly usage summary
+
+Optional, and not part of the pilot sign-off: the same chat can get a summary of last week's usage every Monday (issue #344), so the owner sees how the pilot goes without running the report. `usage-report --post` prints the weekly usage report (README, "Weekly usage report") and posts the last complete week's deployment totals, with the week before in brackets, to `ALERT_WEBHOOK_URL`:
+
+```text
+[Crove] Weekly usage on crove.example.com: 2026-W42, from 2026-10-12 (Asia/Ho_Chi_Minh). In brackets: 2026-W41.
+- active orgs: 2 [1]
+- active users: 3 [2]
+- documents uploaded: 10 [7]
+...
+```
+
+It reads usage as `crove_reporter` (set `CROVE_REPORTER_DB_PASSWORD`, applied by `migrate`), never through the prober, and posts no org name or id.
+
+1. Run it once by hand after step 1 above works:
+
+   ```bash
+   docker compose run --rm usage usage-report --post
+   ```
+
+   The table goes to the terminal, `[usage-report] summary posted to telegram webhook at api.telegram.org` follows, and the chat shows the summary. Exit code 2 means nothing was read or posted (most often `--post needs ALERT_WEBHOOK_URL`); 3 means the report was read but the post failed, with the vendor's short reason.
+2. Schedule it on the host with cron (`crontab -e` as the user that runs the stack). Cron uses the server's clock, usually UTC: `0 1 * * 1` is Monday 08:00 in Vietnam (UTC+7). The weeks themselves follow `--time-zone` (default `Asia/Ho_Chi_Minh`), so run it after Monday 00:00 there:
+
+   ```bash
+   0 1 * * 1 cd /opt/crove && docker compose run --rm usage usage-report --post > /dev/null 2>> /var/log/crove-usage.log
+   ```
+
+   Use the directory that holds the deployment's `docker-compose.yml` and `.env`. The table is dropped (`> /dev/null`); the log keeps the one-line result of each run. To also keep the numbers, send stdout to a file instead, for example `--csv --post > /var/log/crove-usage-$(date +\%F).csv` (cron needs the `%` escaped).
+3. A missed Monday is not caught up by itself: run step 1 by hand, or look at the log. A post that fails is not retried; the next Monday's run posts as usual.
