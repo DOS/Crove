@@ -585,8 +585,3 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});
   };
 }
-
-// Kept only until main's invariant suite stops referencing it: protected.yml runs main's copy of that suite against
-// a PR's code. No test or caller uses it any more, and the schema comes from the vendored migration (#25), so it does
-// nothing. Delete it in the follow-up PR once this change is on main (#130).
-export async function migrateJobs(_adminUrl: string): Promise<void> {}
