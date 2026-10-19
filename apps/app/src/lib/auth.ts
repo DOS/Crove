@@ -69,12 +69,15 @@ export async function needsSecondFactor(): Promise<boolean> {
 // The same question, asked of the server when the session's answer is no (#345). The session keeps the factors the
 // user had when it was issued, so a factor enabled since on another device is missing there until the token refreshes.
 // /mfa asks this one: on the cached answer it would send that user back to the app, whose next request the kernel
-// refuses with MFA_REQUIRED, which opens /mfa again, page load after page load.
+// refuses with MFA_REQUIRED, which opens /mfa again, page load after page load. For the same reason a failed answer
+// throws (the router shows its error page) instead of counting as "no factor".
 export async function needsSecondFactorNow(client: Pick<Client, 'mfa'> = auth()): Promise<boolean> {
-  const { data } = await client.mfa.getAuthenticatorAssuranceLevel();
+  const { data, error } = await client.mfa.getAuthenticatorAssuranceLevel();
+  if (error) throw error;
   if (data?.currentLevel !== 'aal1') return false;
   if (data.nextLevel === 'aal2') return true;
   const factors = await client.mfa.listFactors();
+  if (factors.error) throw factors.error;
   return (factors.data?.all ?? []).some((factor) => factor.status === 'verified');
 }
 
