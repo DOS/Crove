@@ -96,6 +96,23 @@ describe('xlsx reader', () => {
     await expect(readFirstSheet(new Uint8Array(MAX_XLSX_BYTES + 1))).rejects.toBeInstanceOf(XlsxError);
   });
 
+  it('reads a part with many unterminated tags in one pass (#366)', async () => {
+    // A lazy regex rescans to the end for each unterminated <row> (quadratic); the scanner stops at the first one.
+    const xml = `<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>ok</t></is></c></row>${'<row r="2"><c r="A2"><v>1</v>'.repeat(40_000)}</sheetData></worksheet>`;
+    const started = performance.now();
+    const sheet = await readFirstSheet(zipStored([{ name: 'xl/worksheets/sheet1.xml', data: new TextEncoder().encode(xml) }]));
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect([...sheet.keys()]).toEqual([1]);
+    expect(sheet.get(1)?.get(0)).toEqual({ kind: 'text', value: 'ok' });
+  });
+
+  it('drops only <rPh> elements, not another tag that starts with the same letters', async () => {
+    const sheet = await readFirstSheet(
+      excelWorkbook(`<x:row r="1"><x:c r="A1" t="s"><x:v>0</x:v></x:c></x:row>`, ['<x:t>Tiền </x:t><x:rPhX/><x:t>mặt</x:t><x:rPh sb="0" eb="1"><x:t>ignored</x:t></x:rPh>']),
+    );
+    expect(sheet.get(1)?.get(0)).toEqual({ kind: 'text', value: 'Tiền mặt' });
+  });
+
   it('stops inflating a part that grows past the limit', async () => {
     const bomb = zipDeflated({ 'xl/worksheets/sheet1.xml': `<worksheet><sheetData>${' '.repeat(21 * 1024 * 1024)}</sheetData></worksheet>` });
     expect(bomb.byteLength).toBeLessThan(MAX_XLSX_BYTES);
@@ -115,6 +132,7 @@ describe('opening balance template', () => {
     // Nothing filled yet: every account row is skipped, so the import is empty.
     expect(sheetToRows(sheet)).toEqual({
       ok: true,
+      extraColumns: false,
       rows: [
         { rowNo: 2, accountCode: '111', accountName: 'Tiền mặt', debit: '', credit: '' },
         { rowNo: 3, accountCode: '1331', accountName: 'Thuế GTGT được khấu trừ <hàng hóa> & "dịch vụ"', debit: '', credit: '' },
@@ -148,6 +166,7 @@ describe('sheetToRows', () => {
     );
     expect(result).toEqual({
       ok: true,
+      extraColumns: false,
       rows: [
         // 1.125 in a number cell stays a fraction for the kernel to refuse; it is not read as 1125.
         { rowNo: 2, accountCode: '111', accountName: 'Tiền mặt', debit: '1.125', credit: '' },
@@ -162,6 +181,20 @@ describe('sheetToRows', () => {
     const long = '9'.repeat(60);
     const result = sheetToRows(sheetOf({ 1: HEAD, 2: [text('111'), text('x'.repeat(300)), text(long), num(long)] }));
     expect(result).toMatchObject({ ok: true, rows: [{ debit: '?', credit: '?', accountName: 'x'.repeat(200) }] });
+  });
+
+  it('refuses an exponent typed as text, keeps one in a number cell, and flags cells after column D (#366)', () => {
+    const result = sheetToRows(sheetOf({ 1: HEAD, 2: [text('111'), undefined, text('1e3'), num('1E+16')], 3: [text('112'), undefined, num('5'), undefined, text('ghi chú')] }));
+    expect(result).toEqual({
+      ok: true,
+      extraColumns: true,
+      rows: [
+        { rowNo: 2, accountCode: '111', accountName: '', debit: '?', credit: '1E+16' },
+        { rowNo: 3, accountCode: '112', accountName: '', debit: '5', credit: '' },
+      ],
+    });
+    // A blank cell after D is no data.
+    expect(sheetToRows(sheetOf({ 1: HEAD, 2: [text('111'), undefined, num('5'), undefined, text('  ')] }))).toMatchObject({ extraColumns: false });
   });
 
   it('refuses a sheet that is not the template, an empty one and one with too many rows', () => {

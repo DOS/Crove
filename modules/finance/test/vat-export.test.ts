@@ -75,6 +75,24 @@ describe('buildVatWorkbook', () => {
     ]);
   });
 
+  it('says when sales at an unknown rate are in no indicator, and names a VAT mismatch (#358)', async () => {
+    const OTHER = 'Doanh thu bán ra chưa rõ thuế suất, không nằm trong chỉ tiêu nào: kiểm tra các hóa đơn đó trước khi nộp tờ khai';
+    const workbook = await readBack(
+      report(
+        [invoice('a', { vatAmount: '0', rates: [{ rate: '10', taxable: '1800000', vat: '0' }], warnings: ['vat_mismatch'] })],
+        [invoice('s', { rates: [{ rate: 'other', taxable: '500000', vat: '0' }], warnings: ['rate_unknown'] })],
+      ),
+    );
+    const summary = rowsOf(workbook.getWorksheet('Tong hop') as ExcelJS.Worksheet);
+    expect(summary.find((r) => r[1] === OTHER)?.[2]).toBe(500000);
+    const purchases = rowsOf(workbook.getWorksheet('Mua vao') as ExcelJS.Worksheet);
+    expect(purchases[1]?.[9]).toBe('Thuế GTGT lệch giá trị trước thuế nhân thuế suất');
+
+    // No such row when every sale has a known rate.
+    const clean = rowsOf((await readBack(report([], [invoice('s')]))).getWorksheet('Tong hop') as ExcelJS.Worksheet);
+    expect(clean.some((r) => r[1] === OTHER)).toBe(false);
+  });
+
   it('keeps amounts beyond 15 digits as exact text and text as text', async () => {
     const workbook = await readBack(
       report(

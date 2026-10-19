@@ -10,7 +10,7 @@ export interface InvoiceParty {
   phone: string | null;
 }
 
-// TChat in Decree 123 XML: 1 goods/services, 2 promotion, 3 trade discount, 4 note.
+// TChat in the e-invoice XML: 1 goods/services, 2 promotion, 3 trade discount, 4 note.
 export type LineNature = 'goods' | 'promotion' | 'discount' | 'note';
 
 export interface InvoiceLine {

@@ -51,7 +51,7 @@ Rules:
 - About 90 percent of any screen is neutral. The accent marks what to do next; semantic colors mark state.
 - Neutrals carry a slight hue bias toward the accent. No pure mid-grey.
 - No gradients on text, buttons or backgrounds. No radial glows, no glass blur as decoration, no colored shadows.
-- Both themes are designed, not inverted: check contrast and the accent separately in each. The app defaults to dark today (`class="dark"` on `<html>`); the marketing site follows `prefers-color-scheme` with a manual toggle.
+- Both themes are designed, not inverted: check contrast and the accent separately in each. The app opens dark and lets each user pick system, light or dark (next to the language switch and in the command palette; applied before first paint by `apps/app/public/assets/theme-boot.js`); the marketing site follows `prefers-color-scheme` with a manual toggle.
 - `proposal`: AI-proposed data nobody has approved yet. Use the `proposal` badge variant and a dashed `border-proposal` outline (the AI Inbox journal card does), never the accent, so principle 2 has one consistent look.
 
 ### 3.2 Typography

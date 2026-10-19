@@ -119,6 +119,8 @@ function IssueList({ issues }: { issues: Issue[] }) {
     switch (issue.code) {
       case 'TEXT_TOO_LONG':
         return t('TEXT_TOO_LONG', { limit, actual });
+      case 'TEXT_TOO_MANY_BYTES':
+        return t('TEXT_TOO_MANY_BYTES', { limit, actual });
       case 'TITLE_TOO_LONG':
         return t('TITLE_TOO_LONG', { limit, actual });
       case 'MEDIA_REQUIRED':

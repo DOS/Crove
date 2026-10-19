@@ -383,7 +383,8 @@ export type FileStatus = z.infer<typeof zFileStatus>;
 // Why an entry of a ZIP archive was not filed (#314): what the sandbox refused (encrypted, a compression other than
 // stored or deflate, an archive inside the archive, larger than a document may be, bytes that do not match the
 // archive's directory), or what the server refused (not XML, PDF, JPG, PNG or WEBP; empty).
-export const ARCHIVE_ENTRY_REASONS = ['encrypted', 'unsupported_method', 'nested_archive', 'too_large', 'corrupt', 'unsupported_type', 'empty'] as const;
+// email_limit: past the documents an emailed ZIP files (MAX_EMAIL_ARCHIVE_DOCUMENTS, #432).
+export const ARCHIVE_ENTRY_REASONS = ['encrypted', 'unsupported_method', 'nested_archive', 'too_large', 'corrupt', 'unsupported_type', 'empty', 'email_limit'] as const;
 export type ArchiveEntryReason = (typeof ARCHIVE_ENTRY_REASONS)[number];
 
 // One entry of an opened archive: filed as a new document (stored, with that file's status), the same bytes as a
@@ -482,7 +483,7 @@ export const VAT_PERIOD_PATTERN = /^(20\d{2}|2100)-(0[1-9]|1[0-2]|Q[1-4])$/;
 export const zVatPeriod = z.string().regex(VAT_PERIOD_PATTERN, 'YYYY-MM or YYYY-Qn');
 export const VAT_RATES = ['0', '5', '8', '10', 'KCT', 'KKKNT', 'other'] as const;
 export const zVatRate = z.enum(VAT_RATES);
-export const VAT_WARNINGS = ['rate_unknown', 'rate_split', 'reduced_rate_outside_period', 'lines_mismatch'] as const;
+export const VAT_WARNINGS = ['rate_unknown', 'rate_split', 'reduced_rate_outside_period', 'lines_mismatch', 'vat_mismatch'] as const;
 export const zVatWarning = z.enum(VAT_WARNINGS);
 const zRateAmounts = z.object({ rate: zVatRate, taxable: zMoney, vat: zMoney });
 export const zVatInvoice = z.object({
@@ -552,6 +553,23 @@ export const zLedgerReport = z.object({
   receivables: zPartyLedger,
   payables: zPartyLedger,
 });
+// Period lock (issue #329): the org's books are locked from lockedFrom to lockedThrough (YYYY-MM-DD, both null when
+// nothing is locked). Months are YYYY-MM; nextMonth is the only month a lock may name (null: any month that has
+// ended), lastMonth the only one an unlock may name. updatedBy and updatedAt describe the last lock or unlock
+// (updatedBy null once that person left the org).
+export const zPeriodMonth = z.string().regex(/^(20\d{2})-(0[1-9]|1[0-2])$/, 'YYYY-MM');
+export const zPeriodLockInput = z.object({ month: zPeriodMonth });
+export const zPeriodUnlockInput = z.object({ month: zPeriodMonth, reason: z.string().trim().min(1).max(500) });
+export const zPeriodLockState = z.object({
+  lockedFrom: zLocalDate.nullable(),
+  lockedThrough: zLocalDate.nullable(),
+  nextMonth: zPeriodMonth.nullable(),
+  lastMonth: zPeriodMonth.nullable(),
+  updatedBy: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+});
+export type PeriodLockState = z.infer<typeof zPeriodLockState>;
+
 export const zAccountLedger = z.object({
   period: zLedgerPeriodRange,
   account: z.object({ code: z.string(), name: z.string() }),

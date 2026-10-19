@@ -206,7 +206,7 @@ describe('auth proxy', () => {
   it('forwards public endpoints with the client address from the socket, not from headers', async () => {
     const request = new Request('http://localhost/auth/v1/token?grant_type=password', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-forwarded-for': '1.2.3.4', 'x-real-ip': '1.2.3.4' },
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': '1.2.3.4', 'x-real-ip': '1.2.3.4', 'sb-forwarded-for': '1.2.3.4' },
       body: '{}',
     });
     const response = await app.fetch(request, { incoming: { socket: { remoteAddress: '203.0.113.9' } } });
@@ -214,6 +214,7 @@ describe('auth proxy', () => {
     expect(seen?.path).toBe('/token?grant_type=password');
     expect(seen?.headers['x-real-ip']).toBe('203.0.113.9');
     expect(seen?.headers['x-forwarded-for']).toBeUndefined();
+    expect(seen?.headers['sb-forwarded-for']).toBeUndefined();
   });
 
   // Issue #277: Supabase Auth authenticates /user, /logout, /reauthenticate and /factors with the user's access token
