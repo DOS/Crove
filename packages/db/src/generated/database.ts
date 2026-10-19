@@ -504,6 +504,9 @@ export interface KernelOutboxEventTable {
   actor_id: ColumnType<string | null, NotGranted, NotGranted>;
   command_id: ColumnType<string | null, NotGranted, NotGranted>;
   created_at: ColumnType<Date, NotGranted, NotGranted>;
+  actor_type: ColumnType<string | null, NotGranted, NotGranted>;
+  agent_id: ColumnType<string | null, NotGranted, NotGranted>;
+  agent_run: ColumnType<string | null, NotGranted, NotGranted>;
 }
 
 /** crove_kernel.party */
