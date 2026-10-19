@@ -77,7 +77,10 @@ test('import a bank statement, then an overlapping one, and find each line once'
     await expect(page.getByText('Dòng sao kê ngân hàng chưa lập chứng từ')).toBeVisible();
     // FT002 waits for approval; the three others are open.
     await page.getByRole('link', { name: '1121: 3 dòng; cũ nhất ngày 01/09/2026' }).click();
-    await expect(page).toHaveURL(new RegExp(`/o/${slug}/bank\\?account=1121&month=2026-09$`));
+    // The link sets the account and the month (the router writes 1121 quoted in the URL, as JSON, so the page is checked
+    // rather than the URL).
+    await expect(page).toHaveURL(new RegExp(`/o/${slug}/bank\\?`));
+    await expect(page.getByLabel('Tài khoản ngân hàng')).toHaveValue('1121');
     await expect(page.getByLabel('Tháng')).toHaveValue('2026-09');
     await expect(page.getByRole('row').filter({ hasText: 'FT002' }).getByRole('link', { name: 'Chờ duyệt' })).toBeVisible();
   });
