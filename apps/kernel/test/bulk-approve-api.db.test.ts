@@ -1,6 +1,6 @@
 // Bulk approval through /api/rpc (issue #315) on a real PostgreSQL 17: the route's input limits, the step-up and role
-// answers, the per-item result and the idempotency replay. The policy itself is pinned in
-// test/invariant/bulk-approve.db.test.ts.
+// answers, the per-item result, the idempotency replay and each proposal's own audit history (#429). The policy
+// itself is pinned in test/invariant/bulk-approve.db.test.ts.
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -61,6 +61,7 @@ suite('bulk approval through the API (#315)', () => {
   let worker: Runtime;
   const store = new MemoryStore();
   let invoiceNo = 7000;
+  let adminUrl = '';
   const accounts = Object.fromEntries(
     (['owner', 'admin', 'member'] as const).map((who) => [who, { subject: randomUUID(), email: `${who}@bulk-api.test`, session: randomUUID(), userId: '' }]),
   ) as Record<Who, Account>;
@@ -122,7 +123,7 @@ suite('bulk approval through the API (#315)', () => {
     await root.end();
     const base = new URL(ADMIN as string);
     base.pathname = `/${dbName}`;
-    const adminUrl = base.toString();
+    adminUrl = base.toString();
     await migrate({ adminUrl, dir: MIGRATIONS });
     await setRolePasswords(adminUrl, { crove_app: 'test-app-pw', crove_worker: 'test-worker-pw' });
     const login = (username: string, password: string) => {
@@ -241,6 +242,49 @@ suite('bulk approval through the API (#315)', () => {
     // The other org's proposal is untouched, still pending there.
     const there = await rpc('inbox/list', 'owner', { status: 'pending' }, { org: String(other.body?.slug) });
     expect(there.body).toContainEqual(expect.objectContaining({ id: foreign }));
+  });
+
+  it("shows a refusal inside a batch in the proposal's own audit history, linked to its batch (#429)", async () => {
+    const id = await propose('owner');
+    // The owner uploaded it and the admin may approve it too, so four-eyes refuses the owner's batch; the admin's
+    // batch then approves it.
+    const refused = await rpc('inbox/approveMany', 'owner', { items: [{ id, revision: 1 }], idempotencyKey: randomUUID() }, { mfaAge: 0 });
+    expect(refused.body.results).toEqual([{ id, outcome: 'refused', code: 'FOUR_EYES_REQUIRED', rule: 'P10' }]);
+    const approved = await rpc('inbox/approveMany', 'admin', { items: [{ id, revision: 1 }], idempotencyKey: randomUUID() }, { mfaAge: 0 });
+    expect(approved.body.results).toEqual([expect.objectContaining({ id, outcome: 'approved' })]);
+
+    const admin = new pg.Client({ connectionString: adminUrl });
+    await admin.connect();
+    try {
+      // The batches that listed this proposal, oldest first.
+      const batches = (
+        await admin.query<{ command_id: string; actor_id: string }>(
+          `SELECT command_id, actor_id FROM crove_kernel.audit_event
+            WHERE org_id = $1 AND command = 'kernel.proposal.approve_many' AND outcome = 'ok'
+              AND detail -> 'items' @> pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('id', $2::text))
+            ORDER BY id`,
+          [orgId, id],
+        )
+      ).rows;
+      expect(batches.map((b) => b.actor_id)).toEqual([accounts.owner.userId, accounts.admin.userId]);
+      // "History of proposal X": its approval rows, the refusal inside the first batch included.
+      const history = (
+        await admin.query<{ actor_id: string; outcome: string; code: string | null; rule: string | null; parent: string | null }>(
+          `SELECT actor_id, outcome, detail ->> 'code' AS code, detail ->> 'rule' AS rule, detail ->> 'parentCommandId' AS parent
+             FROM crove_kernel.audit_event
+            WHERE org_id = $1 AND command = 'kernel.proposal.approve' AND target_type = 'kernel.proposal' AND target_id = $2
+            ORDER BY id`,
+          [orgId, id],
+        )
+      ).rows;
+      expect(history).toEqual([
+        { actor_id: accounts.owner.userId, outcome: 'denied', code: 'FOUR_EYES_REQUIRED', rule: 'P10', parent: batches[0]?.command_id },
+        // An approved item's row is the runtime's ok row, with no link of a refusal.
+        { actor_id: accounts.admin.userId, outcome: 'ok', code: null, rule: null, parent: null },
+      ]);
+    } finally {
+      await admin.end();
+    }
   });
 
   it('takes 1 to 50 distinct items', async () => {

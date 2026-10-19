@@ -47,6 +47,12 @@ describe('refusal audit facts (#119)', () => {
     expect(detail).toEqual({ note: SECRET, code: 'NOT_FOUND' });
   });
 
+  it('drops a forged link to a calling command, which only ctx.tryRun writes (#429)', () => {
+    const linked = new DomainError('NOT_FOUND', 404, 'x', undefined, { audit: { ...forged, parentCommand: 'forged', parentCommandId: 'forged' } });
+    expect(refusalAuditDetail(linked, system)).toEqual({ note: SECRET, code: 'NOT_FOUND' });
+    expect(refusalAuditDetail(linked, user)).toEqual({ note: SECRET, code: 'NOT_FOUND', aal: 'aal2', sessionId: user.sessionId, mfaAt: 1700000000 });
+  });
+
   it('writes only the code (and the session) when the command attaches nothing', () => {
     expect(refusalAuditDetail(new DomainError('MEMBER_NOT_FOUND', 404, 'x'), system)).toEqual({ code: 'MEMBER_NOT_FOUND' });
   });

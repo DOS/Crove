@@ -4,7 +4,9 @@
 //   the approved items are posted, each with its own approval audit row;
 // - a stale or missing step-up (P11) refuses the whole batch before any item, a step-up that goes stale between two
 //   items commits nothing, and a role that may not approve, or an AI agent, gets nothing approved either;
-// - only listed per-proposal codes refuse one item; any other refusal aborts the whole batch.
+// - only listed per-proposal codes refuse one item; any other refusal aborts the whole batch;
+// - a refused item gets its own denied/failed audit row (#429), the row a refused approval of it alone gets, linked
+//   to the batch, and an aborted batch leaves no item rows; ctx.tryRun records only a refusal of a command it ran.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { randomUUID } from 'node:crypto';
@@ -17,8 +19,9 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createExtractApp } from '@crove/extract';
 import { createExtractClient } from '@crove/extract-contract';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime, fileKey, sha256Hex, type BlobStore, type CommandDef } from '@crove/kernel-runtime';
+import { DomainError, Runtime, defineCommand, fileKey, sha256Hex, type BlobStore, type CommandDef } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
+import { z } from 'zod';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', import.meta.url));
@@ -360,5 +363,194 @@ suite('bulk approval on PostgreSQL (#315)', () => {
       status: 403,
     });
     expect(await proposalState(id)).toEqual({ status: 'pending', documents: 0, approvals: [] });
+  });
+
+  // Audit rows of `command` in the org, oldest first.
+  const auditRows = (orgId: string, command: string) =>
+    withAdmin(
+      async (a) =>
+        (
+          await a.query<{
+            actor_type: string;
+            actor_id: string | null;
+            command_id: string;
+            outcome: string;
+            target_type: string | null;
+            target_id: string | null;
+            input_sha256: string;
+            proposal_id: string | null;
+            detail: Record<string, unknown>;
+          }>(
+            'SELECT actor_type, actor_id, command_id, outcome, target_type, target_id, input_sha256, proposal_id, detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = $2 ORDER BY id',
+            [orgId, command],
+          )
+        ).rows,
+    );
+
+  it('gives each refused item its own audit row, the one a refused approval of it alone gets, linked to the batch (#429)', async () => {
+    const { orgId, owner, people } = await orgWith('Bulk audit', ['admin']);
+    const admin = people[0] as string;
+    const other = await orgWith('Bulk audit other', []);
+    const own = await proposeIn(orgId, admin);
+    const fine = await proposeIn(orgId, owner);
+    const edited = await proposeIn(orgId, owner);
+    expect(await editAs(orgId, owner, edited)).toBe(2);
+    const foreign = await proposeIn(other.orgId, other.owner);
+    const actor = asMfa(admin);
+    const { results } = await bulk(orgId, actor, [
+      { id: own, revision: 1 },
+      { id: fine, revision: 1 },
+      { id: edited, revision: 1 },
+      { id: foreign, revision: 1 },
+    ]);
+    expect(results.map((r) => r.outcome)).toEqual(['refused', 'approved', 'refused', 'refused']);
+    const [batch] = await auditRows(orgId, 'kernel.proposal.approve_many');
+    expect(batch?.outcome).toBe('ok');
+    const inBatch = await auditRows(orgId, 'kernel.proposal.approve');
+    const link = { parentCommand: 'kernel.proposal.approve_many', parentCommandId: batch?.command_id };
+    const session = { aal: 'aal2', sessionId: SESSION, mfaAt: actor.mfaAt };
+    const rowsOf = (id: string) => inBatch.filter((r) => r.target_id === id);
+    // 403 is denied; 409 and 404 are failed, as for a refused top-level command.
+    for (const [id, outcome, code, rule] of [
+      [own, 'denied', 'FOUR_EYES_REQUIRED', 'P10'],
+      [edited, 'failed', 'STALE_REVISION', null],
+      [foreign, 'failed', 'NOT_FOUND', null],
+    ] as const) {
+      const rows = rowsOf(id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ actor_type: 'user', actor_id: admin, outcome, target_type: 'kernel.proposal', target_id: id, proposal_id: null });
+      expect(rows[0]?.detail).toEqual({ code, ...(rule ? { rule } : {}), ...session, ...link });
+      expect(rows[0]?.command_id).not.toBe(batch?.command_id);
+    }
+    // The approved item has its own ok row only, and that row carries no link.
+    expect(rowsOf(fine).map((r) => r.outcome)).toEqual(['ok']);
+    expect(rowsOf(fine)[0]?.detail).not.toHaveProperty('parentCommandId');
+
+    // The same approval alone, refused, writes the same row but for the link.
+    for (const id of [own, edited, foreign]) {
+      await refusalOf(runtime.execute('kernel.proposal.approve', { id, revision: 1 }, { actor, orgId }));
+      const [nested, alone] = (await auditRows(orgId, 'kernel.proposal.approve')).filter((r) => r.target_id === id);
+      expect(alone).toBeDefined();
+      const { parentCommand, parentCommandId, ...nestedDetail } = nested?.detail ?? {};
+      expect([parentCommand, parentCommandId]).toEqual([link.parentCommand, link.parentCommandId]);
+      expect(alone?.detail).toEqual(nestedDetail);
+      for (const key of ['actor_type', 'actor_id', 'outcome', 'target_type', 'target_id', 'input_sha256', 'proposal_id'] as const) {
+        expect(alone?.[key]).toEqual(nested?.[key]);
+      }
+    }
+  });
+
+  it('leaves no item audit rows when the whole batch aborts; the batch refusal row records it (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit abort', []);
+    // The batch runs items in id order: the stale one first (refused, recorded), then one that aborts the batch.
+    const [first, second] = [await proposeIn(orgId, owner), await proposeIn(orgId, owner)].sort();
+    const stale = first as string;
+    const odd = second as string;
+    expect(await editAs(orgId, owner, stale)).toBe(2);
+    await withAdmin(async (a) => {
+      await a.query('SET session_replication_role = replica');
+      await a.query("UPDATE crove_kernel.proposal SET command = 'test.unsupported' WHERE id = $1", [odd]);
+    });
+    const items = [
+      { id: stale, revision: 1 },
+      { id: odd, revision: 1 },
+    ];
+    expect(await refusalOf(bulk(orgId, asMfa(owner), items))).toEqual({ code: 'FORBIDDEN', status: 403 });
+    expect((await auditRows(orgId, 'kernel.proposal.approve')).filter((r) => r.target_id === stale || r.target_id === odd)).toEqual([]);
+    const batch = await auditRows(orgId, 'kernel.proposal.approve_many');
+    expect(batch.map((r) => [r.outcome, r.detail.code])).toEqual([['denied', 'FORBIDDEN']]);
+    expect(batch[0]?.detail).not.toHaveProperty('parentCommandId');
+    // Alone, the stale item is still refused, so it would have been recorded had the batch committed.
+    expect((await bulk(orgId, asMfa(owner), [{ id: stale, revision: 1 }])).results).toEqual([{ id: stale, outcome: 'refused', code: 'STALE_REVISION', rule: null }]);
+    expect((await auditRows(orgId, 'kernel.proposal.approve')).filter((r) => r.target_id === stale).map((r) => r.outcome)).toEqual(['failed']);
+  });
+
+  it('records through ctx.tryRun only a refusal of a command it ran, with the runtime keys, never a forged row (#429)', async () => {
+    const { orgId, owner } = await orgWith('Bulk audit forge', []);
+    const FORGED = randomUUID();
+    const zThing = z.object({ id: z.string().uuid() });
+    const target = (input: { id: string }) => ({ type: 'test.thing', id: input.id });
+    const refuse = defineCommand({
+      name: 'test.refuse',
+      input: zThing,
+      risk: 'R1',
+      access: ['owner'],
+      target,
+      handler: async () => {
+        // Audit facts that try to set the keys only the runtime writes.
+        throw new DomainError('NOT_FOUND', 404, 'x', { rule: 'T1' }, { audit: { note: 'kept', code: 'FORGED', parentCommand: 'forged', parentCommandId: FORGED } });
+      },
+    });
+    const unauthenticated = defineCommand({
+      name: 'test.unauthenticated',
+      input: zThing,
+      risk: 'R1',
+      access: ['owner'],
+      target,
+      handler: async () => {
+        throw new DomainError('UNAUTHENTICATED', 401, 'x');
+      },
+    });
+    const fine = defineCommand({ name: 'test.fine', input: zThing, risk: 'R1', access: ['owner'], target, handler: async () => ({ done: true }) });
+    const codeOf = async (attempt: Promise<unknown>) => {
+      try {
+        await attempt;
+        return 'none';
+      } catch (error) {
+        return error instanceof DomainError ? error.code : 'other';
+      }
+    };
+    const forge = defineCommand({
+      name: 'test.forge',
+      input: zThing,
+      risk: 'R1',
+      access: ['owner'],
+      handler: async (ctx, input) => {
+        const always = { recover: () => true };
+        return {
+          // A command that does not exist, an input that does not parse (a 422) and a status a refusal is never
+          // audited for: thrown to the caller and nothing recorded, though `recover` accepts everything.
+          missing: await codeOf(ctx.tryRun('test.missing', input, always)),
+          invalid: await codeOf(ctx.tryRun('test.refuse', { id: 'not-a-uuid' }, always)),
+          unauthenticated: await codeOf(ctx.tryRun('test.unauthenticated', input, always)),
+          // A refusal `recover` does not accept propagates, unrecorded.
+          declined: await codeOf(ctx.tryRun('test.refuse', input, { recover: () => false })),
+          fine: (await ctx.tryRun('test.fine', input, always)).status,
+          refused: await ctx.tryRun('test.refuse', input, always).then((r) => (r.status === 'refused' ? r.refusal.code : r.status)),
+        };
+      },
+    });
+    const forging = new Runtime(db).register({
+      commands: [...kernelCommands, ...financeCommands, refuse, unauthenticated, fine, forge],
+      queries: [...kernelQueries({ inboundDomain: 'in.test' }), ...financeQueries],
+    });
+    const id = randomUUID();
+    expect(await forging.execute('test.forge', { id }, { actor: asUser(owner), orgId })).toEqual({
+      missing: 'COMMAND_NOT_FOUND',
+      invalid: 'VALIDATION',
+      unauthenticated: 'UNAUTHENTICATED',
+      declined: 'NOT_FOUND',
+      fine: 'ok',
+      refused: 'NOT_FOUND',
+    });
+    const [parent] = await auditRows(orgId, 'test.forge');
+    expect(parent?.outcome).toBe('ok');
+    expect(await auditRows(orgId, 'test.missing')).toEqual([]);
+    expect(await auditRows(orgId, 'test.unauthenticated')).toEqual([]);
+    expect((await auditRows(orgId, 'test.fine')).map((r) => [r.outcome, r.target_id])).toEqual([['ok', id]]);
+    // One row, for the one refusal tryRun caught and recovered: failed (404), never ok, with the runtime's keys.
+    const refused = await auditRows(orgId, 'test.refuse');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toMatchObject({ outcome: 'failed', actor_id: owner, target_type: 'test.thing', target_id: id, proposal_id: null });
+    expect(refused[0]?.detail).toEqual({
+      note: 'kept',
+      code: 'NOT_FOUND',
+      rule: 'T1',
+      aal: 'aal1',
+      sessionId: null,
+      mfaAt: null,
+      parentCommand: 'test.forge',
+      parentCommandId: parent?.command_id,
+    });
   });
 });
