@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { SIGNUP_POLICIES, parseAllowedDomains } from './auth-signup-policy.ts';
 import { exportSealer } from './export-seal.ts';
 
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
@@ -121,6 +122,19 @@ const schema = z.object({
   // hour, and one per recipient every AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS. AUTH_RATE_LIMIT_EMAIL_SENT is Supabase
   // Auth's deployment-wide budget (GOTRUE_RATE_LIMIT_EMAIL_SENT, per hour); when set, a public deployment refuses to
   // start unless it takes at least EMAIL_BUDGET_MIN_CLIENTS client addresses to use it up.
+  // Who may create an account (#350), enforced by the /auth/v1 proxy in front of the bundled Supabase Auth: open (the
+  // default; AUTH_DISABLE_SIGNUP still closes sign-up), invite_only (an email with a valid member invite) or allowlist
+  // (an email at one of AUTH_SIGNUP_ALLOWED_DOMAINS, comma separated, or with a valid invite). See auth-signup-policy.ts.
+  AUTH_SIGNUP_POLICY: optional.pipe(z.enum(SIGNUP_POLICIES).optional()).transform((v) => v ?? 'open'),
+  AUTH_SIGNUP_ALLOWED_DOMAINS: optional.transform((value, ctx): readonly string[] => {
+    if (value === undefined) return [];
+    const { domains, invalid } = parseAllowedDomains(value);
+    if (invalid.length > 0) {
+      ctx.addIssue({ code: 'custom', message: `not a domain: ${invalid.join(', ')}` });
+      return z.NEVER;
+    }
+    return domains;
+  }),
   AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR: z.coerce.number().int().min(1).max(100_000).default(5),
   AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
   AUTH_RATE_LIMIT_EMAIL_SENT: optional
@@ -288,6 +302,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (config.INBOUND_SECRET && config.INBOUND_SECRET.length < 32) {
     throw new Error('INBOUND_SECRET must be at least 32 characters');
+  }
+  // A sign-up policy the deployment cannot enforce, or one set only halfway, stops the boot instead of leaving
+  // sign-up more open than the operator meant (#350).
+  if (config.AUTH_SIGNUP_POLICY === 'allowlist' && config.AUTH_SIGNUP_ALLOWED_DOMAINS.length === 0) {
+    throw new Error('AUTH_SIGNUP_POLICY=allowlist needs AUTH_SIGNUP_ALLOWED_DOMAINS, the email domains that may sign up');
+  }
+  if (config.AUTH_SIGNUP_POLICY !== 'allowlist' && config.AUTH_SIGNUP_ALLOWED_DOMAINS.length > 0) {
+    throw new Error(`AUTH_SIGNUP_ALLOWED_DOMAINS applies to AUTH_SIGNUP_POLICY=allowlist only (it is ${config.AUTH_SIGNUP_POLICY}); set the policy or remove the domains`);
+  }
+  if (config.AUTH_SIGNUP_POLICY !== 'open' && !config.AUTH_UPSTREAM_URL) {
+    throw new Error(
+      `AUTH_SIGNUP_POLICY=${config.AUTH_SIGNUP_POLICY} is enforced by the /auth/v1 proxy in front of the bundled Supabase Auth (AUTH_UPSTREAM_URL); ` +
+        'with a remote Supabase Auth, restrict sign-up there and leave AUTH_SIGNUP_POLICY unset',
+    );
   }
   if (config.STORAGE === 's3' && !config.S3_BUCKET) throw new Error('STORAGE=s3 needs S3_BUCKET');
   // Fails the boot on a malformed key rather than at the first export or download.

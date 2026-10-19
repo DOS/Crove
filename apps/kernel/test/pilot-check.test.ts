@@ -107,6 +107,13 @@ describe('pilot-check settings', () => {
     expect(failing({ ...READY, AUTH_DISABLE_SIGNUP: undefined })).toEqual([expect.stringContaining('AUTH_DISABLE_SIGNUP is unset')]);
   });
 
+  it('accepts sign-up limited by the invite-only or allowlist policy instead (#350)', () => {
+    expect(failing({ ...READY, AUTH_DISABLE_SIGNUP: 'false', AUTH_SIGNUP_POLICY: 'invite_only' })).toEqual([]);
+    expect(failing({ ...READY, AUTH_DISABLE_SIGNUP: 'false', AUTH_SIGNUP_POLICY: 'allowlist', AUTH_SIGNUP_ALLOWED_DOMAINS: 'partner.vn' })).toEqual([]);
+    expect(failing({ ...READY, AUTH_DISABLE_SIGNUP: 'false', AUTH_SIGNUP_POLICY: 'allowlist' })).toEqual([expect.stringContaining('without AUTH_SIGNUP_ALLOWED_DOMAINS')]);
+    expect(failing({ ...READY, AUTH_DISABLE_SIGNUP: 'false', AUTH_SIGNUP_POLICY: 'open' })).toEqual([expect.stringContaining('AUTH_SIGNUP_POLICY is open')]);
+  });
+
   it('knows every secret value this repository ships in .env.example and the compose files', () => {
     const secrets = new Set<string>([...REQUIRED_SECRETS, 'INBOUND_SECRET', 'S3_SECRET_ACCESS_KEY']);
     const shipped: string[] = [];
@@ -194,6 +201,13 @@ describe('pilot-check probe', () => {
   it('reads what the running Supabase Auth does', async () => {
     const open = { ...healthy, 'https://crove.example.com/auth/v1/settings': json({ disable_signup: false, mailer_autoconfirm: true }) };
     expect(failures(await probeDeployment('https://crove.example.com', fakeFetch(open))).map((r) => r.item)).toEqual(['Sign-up limited', 'Email confirmation and MFA step-up']);
+    // Supabase Auth open behind a restricting kernel (#350) passes; the policy comes from /api/config.
+    const settingsOpen = { ...healthy, 'https://crove.example.com/auth/v1/settings': json({ disable_signup: false, mailer_autoconfirm: false }) };
+    expect(failures(await probeDeployment('https://crove.example.com', fakeFetch(settingsOpen))).map((r) => r.item)).toEqual(['Sign-up limited']);
+    for (const signupPolicy of ['invite_only', 'allowlist']) {
+      const restricted = { ...settingsOpen, 'https://crove.example.com/api/config': json({ authUrl: 'https://crove.example.com/auth/v1', authAnonKey: null, signupPolicy }) };
+      expect(failures(await probeDeployment('https://crove.example.com', fakeFetch(restricted)))).toEqual([]);
+    }
     // Every fetch refuses redirects, except the ones that inspect them.
     const modes: (RequestRedirect | undefined)[] = [];
     const record: Fetch = async (input, init) => {
