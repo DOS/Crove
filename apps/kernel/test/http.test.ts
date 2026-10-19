@@ -92,6 +92,16 @@ describe('configuration guards', () => {
     expect(loadConfig({ ...base, AUTH_STEP_UP: 'off' }).AUTH_STEP_UP).toBe('off');
   });
 
+  // #375: a provider sends the OAuth code to PUBLIC_URL/channels/oauth/<provider>/callback.
+  it('refuses a public plain-http PUBLIC_URL when a channel OAuth app is set', () => {
+    const meta = { CHANNEL_META_APP_ID: '1234567890', CHANNEL_META_APP_SECRET: 'meta-secret-0123456789abcdef' };
+    const auth = { PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' };
+    expect(() => loadConfig({ ...base, ...auth, ...meta, PUBLIC_URL: 'http://books.example.com' })).toThrow(/must be https/);
+    expect(loadConfig({ ...base, ...auth, PUBLIC_URL: 'http://books.example.com' }).PUBLIC_URL).toBe('http://books.example.com');
+    expect(loadConfig({ ...base, ...auth, ...meta, PUBLIC_URL: 'https://books.example.com' }).CHANNEL_META_APP_ID).toBe('1234567890');
+    expect(loadConfig({ ...base, ...meta }).CHANNEL_META_APP_ID).toBe('1234567890');
+  });
+
   // #212: org exports are sealed at rest on every public deployment; a key must be 32 bytes.
   it('requires a well-formed export key to serve a public URL', () => {
     const publicUrl = { ...base, PUBLIC_URL: 'https://books.example.com', PUBLIC_AUTH_URL: 'https://auth.example.com/auth/v1' };

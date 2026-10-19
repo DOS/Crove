@@ -326,6 +326,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (config.AUTH_STEP_UP === 'off') {
       throw new Error('AUTH_STEP_UP=off lets a stolen session approve and change roles without MFA; set it to required');
     }
+    // A provider sends the authorization code to PUBLIC_URL/channels/oauth/<provider>/callback (#375).
+    const oauthApps = [config.CHANNEL_META_APP_ID, config.CHANNEL_ZALO_APP_ID, config.CHANNEL_THREADS_APP_ID, config.CHANNEL_LINKEDIN_CLIENT_ID, config.CHANNEL_GOOGLE_CLIENT_ID, config.CHANNEL_TIKTOK_CLIENT_KEY, config.CHANNEL_X_CLIENT_ID];
+    if (oauthApps.some(Boolean) && new URL(config.PUBLIC_URL).protocol !== 'https:') {
+      throw new Error('channel OAuth sends authorization codes back to PUBLIC_URL; a public PUBLIC_URL must be https when a CHANNEL_* app is set');
+    }
     // Browsers send files to, and fetch them from, this endpoint, and it is allowed in the app's CSP connect-src.
     const browserEndpoint = config.S3_PUBLIC_ENDPOINT ?? config.S3_ENDPOINT;
     if (presigned && browserEndpoint && new URL(browserEndpoint).protocol !== 'https:') {
