@@ -1104,6 +1104,12 @@ export const en = {
     },
   },
   agents: {
+    stepUpRelease: 'release the AI stop',
+    stepUpAssign: 'assign the position {title}',
+    stepUpAddPosition: 'add the position {title}',
+    stepUpUpdateAgent: 'save the changes to {name}',
+    stepUpInstall: 'install the template {title}',
+    stepUpBudget: 'set the AI budget',
     title: 'Org chart and AI agents',
     subtitle: 'Positions held by members or AI agents. AI agents are always labelled AI.',
     manageHint: 'Changing the chart, AI agents and budgets: owners only, with two-factor authentication in the last 5 minutes.',

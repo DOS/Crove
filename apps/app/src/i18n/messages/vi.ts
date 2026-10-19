@@ -1105,6 +1105,12 @@ export const vi = {
     },
   },
   agents: {
+    stepUpRelease: 'gỡ lệnh dừng AI',
+    stepUpAssign: 'giao vị trí {title}',
+    stepUpAddPosition: 'thêm vị trí {title}',
+    stepUpUpdateAgent: 'lưu thay đổi của {name}',
+    stepUpInstall: 'cài mẫu {title}',
+    stepUpBudget: 'đặt ngân sách AI',
     title: 'Sơ đồ tổ chức và tác tử AI',
     subtitle: 'Vị trí do thành viên hoặc tác tử AI đảm nhận. Tác tử AI luôn được gắn nhãn AI.',
     manageHint: 'Thay đổi sơ đồ, tác tử AI và ngân sách: chỉ chủ sở hữu, cần xác thực hai lớp trong 5 phút gần nhất.',
