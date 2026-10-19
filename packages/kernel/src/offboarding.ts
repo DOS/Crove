@@ -44,6 +44,9 @@ export const EXPORT_TABLES = {
   'finance.org_account': { from: 'crove_finance.org_account', omit: [] },
   // Cash and bank vouchers (#327): their journal entries name them.
   'finance.cash_voucher': { from: 'crove_finance.cash_voucher', omit: [] },
+  // The tax portal's purchase lists and their rows (#465), kept like the ledger; the files are in kernel.file.
+  'finance.portal_invoice_list': { from: 'crove_finance.portal_invoice_list', omit: [] },
+  'finance.portal_invoice_row': { from: 'crove_finance.portal_invoice_row', omit: [] },
   'social.post': { from: 'crove_social.post', omit: [] },
   'social.post_variant': { from: 'crove_social.post_variant', omit: [] },
   'social.post_approval': { from: 'crove_social.post_approval', omit: [] },

@@ -23,7 +23,11 @@ export const SECTIONS: ReadonlyArray<{ outcome: ReconcileOutcome; folded: boolea
 
 export function itemsByOutcome(items: readonly ReconcileItem[]): Map<ReconcileOutcome, ReconcileItem[]> {
   const out = new Map<ReconcileOutcome, ReconcileItem[]>();
-  for (const item of items) out.set(item.outcome, [...(out.get(item.outcome) ?? []), item]);
+  for (const item of items) {
+    const bucket = out.get(item.outcome);
+    if (bucket) bucket.push(item);
+    else out.set(item.outcome, [item]);
+  }
   return out;
 }
 

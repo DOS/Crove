@@ -476,7 +476,8 @@ export const zAccount = z.object({
 
 // VAT working for a month ("2026-09") or a quarter ("2026-Q3") (issue #316): the period's input and output invoices
 // by VAT rate and the form 01/GTGT indicators they feed. The rules are in @crove/mod-finance (domain/vat-return.ts).
-export const VAT_PERIOD_PATTERN = /^(\d{4})-(0[1-9]|1[0-2]|Q[1-4])$/;
+// The year is bounded (2000 to 2100) here, at the edge, so an out-of-range period is a 4xx, never a server error.
+export const VAT_PERIOD_PATTERN = /^(20\d{2}|2100)-(0[1-9]|1[0-2]|Q[1-4])$/;
 export const zVatPeriod = z.string().regex(VAT_PERIOD_PATTERN, 'YYYY-MM or YYYY-Qn');
 export const VAT_RATES = ['0', '5', '8', '10', 'KCT', 'KKKNT', 'other'] as const;
 export const zVatRate = z.enum(VAT_RATES);

@@ -213,7 +213,13 @@ export const vi = {
     exportXml: 'Xuất XML cho HTKK',
     exportXmlFile: 'crove-01gtgt-{period}-{org}.xml',
     xmlNote:
-      'File XML cho HTKK (mẫu 01/GTGT theo Thông tư 80/2021, bản XML 2.8.3) có sẵn các chỉ tiêu trên. Chỉ tiêu [22], [25], [37] đến [39a], cơ quan thuế quản lý và người ký đang để trống; khi chưa nhập [25], số thuế phải nộp trong file đang tính như chưa được khấu trừ đồng nào. Kế toán bổ sung và kiểm tra trong HTKK hoặc trên eTax trước khi nộp.',
+      'File XML cho HTKK (mẫu 01/GTGT theo Thông tư 80/2021, bản XML 2.8.3) có sẵn các chỉ tiêu trên. Các chỉ tiêu [21], [22], [23a], [24a], [25], [37], [38], [39a], [40b] và [42] được ghi là 0, còn cơ quan thuế quản lý và người ký để trống; khi chưa nhập [25], số thuế phải nộp trong file đang tính như chưa được khấu trừ đồng nào. Kế toán bổ sung và kiểm tra trong HTKK hoặc trên eTax trước khi nộp.',
+    exportXmlWrongKind:
+      'Tổ chức khai thuế GTGT theo {kind} nên chỉ xuất được tờ khai XML cho HTKK theo {kindOne}. Xuất Excel vẫn dùng được cho mọi kỳ.',
+    filingMonthly: 'tháng',
+    filingQuarterly: 'quý',
+    kindMonth: 'tháng',
+    kindQuarter: 'quý',
     exportXmlNeedsTaxCode: 'Muốn xuất tờ khai XML cho HTKK, hãy nhập mã số thuế của tổ chức trong Cài đặt.',
     kind: 'Kỳ khai',
     month: 'Tháng',
@@ -1453,6 +1459,8 @@ export const vi = {
       EXPORT_TOO_LARGE: 'Quá nhiều bút toán để xuất một lần; hãy chọn khoảng ngày ngắn hơn',
       PERIOD_TOO_LARGE: 'Kỳ này có quá nhiều hóa đơn hoặc bút toán để lập báo cáo một lần; hãy chọn kỳ ngắn hơn',
       TAX_CODE_REQUIRED: 'Tổ chức chưa có mã số thuế. Nhập mã số thuế trong Cài đặt rồi thử lại.',
+      PERIOD_KIND_MISMATCH: 'Tổ chức khai thuế GTGT theo kỳ khác nên không xuất được tờ khai XML này. Chọn kỳ đúng loại đã đăng ký, hoặc đổi kỳ khai thuế GTGT trong Cài đặt.',
+      TAXPAYER_NAME_REQUIRED: 'Tổ chức chưa có tên. Nhập tên tổ chức trong Cài đặt rồi xuất lại.',
       // Crove Social and connected channels.
       POST_NOT_FOUND: 'Không tìm thấy bài đăng này',
       VARIANT_NOT_FOUND: 'Không tìm thấy kênh này của bài đăng',
