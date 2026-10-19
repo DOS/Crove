@@ -158,7 +158,15 @@ export const contract = {
       .output(z.object({ authorizeUrl: z.url({ protocol: /^https$/ }), state: zOAuthState, expiresAt: z.iso.datetime({ offset: true }) })),
     oauthFinish: oc
       .input(z.object({ provider: zOAuthProvider, state: zOAuthState, code: z.string().min(1).max(2048) }))
-      .output(z.object({ connections: z.array(z.object({ connectionId: zId, displayName: z.string(), reconnected: z.boolean() })) })),
+      .output(
+        z.object({
+          connections: z.array(z.object({ connectionId: zId, displayName: z.string(), reconnected: z.boolean() })),
+          // Accounts of the grant that did not connect, with the error code; the others stay connected.
+          failed: z.array(z.object({ displayName: z.string(), code: z.string() })),
+          // Accounts of the grant beyond what one request connects.
+          skipped: z.number().int().min(0),
+        }),
+      ),
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.
   social: {
