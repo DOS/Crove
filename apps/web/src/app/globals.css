@@ -5,7 +5,7 @@
 
 @theme inline {
   --font-sans: var(--font-body), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-display: var(--font-heading), var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-body), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --color-bg: var(--bg);
@@ -43,8 +43,8 @@
   --accent-fg: oklch(1 0 0);
   --accent-soft: oklch(0.95 0.03 293);
   --accent-ink: oklch(0.46 0.2 290);
-  --ok: oklch(0.48 0.11 160);
-  --ok-soft: oklch(0.95 0.035 160);
+  --ok: oklch(0.47 0.085 172);
+  --ok-soft: oklch(0.95 0.025 172);
   --warn: oklch(0.52 0.12 62);
   --warn-soft: oklch(0.96 0.045 80);
   --bad: oklch(0.53 0.2 25);
@@ -66,8 +66,8 @@
   --accent-fg: oklch(0.17 0.03 290);
   --accent-soft: oklch(0.3 0.06 293);
   --accent-ink: oklch(0.8 0.11 293);
-  --ok: oklch(0.79 0.13 160);
-  --ok-soft: oklch(0.29 0.05 160);
+  --ok: oklch(0.8 0.1 172);
+  --ok-soft: oklch(0.29 0.045 172);
   --warn: oklch(0.83 0.13 80);
   --warn-soft: oklch(0.31 0.05 75);
   --bad: oklch(0.73 0.16 20);
@@ -143,5 +143,55 @@
   .canvas-dots {
     background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
     background-size: 16px 16px;
+  }
+}
+
+/* Light motion (DESIGN.md 3.6): a proposal travelling up the dashed line from an agent to its manager in the hero
+   chart, and the fixed checks ticking as the pipeline scrolls into view (only the check marks move; the text is
+   always visible). Both stop for reduced motion. */
+@keyframes crove-travel-up {
+  0% {
+    transform: translate(-50%, 3rem);
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  62% {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+  78%,
+  100% {
+    transform: translate(-50%, 0);
+    opacity: 0;
+  }
+}
+@keyframes crove-check-in {
+  from {
+    transform: scale(0.4);
+  }
+  to {
+    transform: none;
+  }
+}
+@layer components {
+  .travel-up {
+    animation: crove-travel-up 3.6s ease-in-out infinite;
+  }
+  @supports (animation-timeline: view()) {
+    .flow-check > span {
+      animation: crove-check-in linear both;
+      animation-timeline: view();
+      animation-range: entry calc(30% + var(--i, 0) * 10%) entry calc(60% + var(--i, 0) * 10%);
+    }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .travel-up {
+    display: none;
+  }
+  .flow-check > span {
+    animation: none !important;
   }
 }

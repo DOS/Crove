@@ -3,7 +3,6 @@ import { Agents } from './agents';
 import { Faq } from './faq';
 import { Hero } from './hero';
 import { HowItWorks } from './how-it-works';
-import { Ledger } from './ledger';
 import { Modules } from './modules';
 import { OwnerPhone } from './owner-phone';
 import { Pricing } from './pricing';
@@ -22,7 +21,6 @@ export function Landing({ dict }: { dict: Dictionary }) {
         <Hero dict={dict} />
         <ProductTour dict={dict} />
         <HowItWorks dict={dict} />
-        <Ledger dict={dict} />
         <Agents dict={dict} />
         <OwnerPhone dict={dict} />
         <Modules dict={dict} />
