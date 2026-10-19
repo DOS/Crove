@@ -293,4 +293,35 @@ suite('agent positions, tasks and wake-ups on PostgreSQL (ADR-0029 Phase 1)', ()
     expect(status).toEqual({ status: 'cancelled' });
     await expect(worker.execute('kernel.agent.run.start', { agentId }, { actor: SYSTEM, orgId })).resolves.toEqual({ runId: null, reason: 'not_runnable' });
   });
+  it('marks a proposal an agent requested with the agent and its name in the Inbox list and detail, and no other (#435)', async () => {
+    const { agentId, positionId } = await app.execute<{ agentId: string; positionId: string }>(
+      'kernel.agent.template.install',
+      { templateKey: 'finance.chief_accountant' },
+      { actor: asMfa(owner), orgId },
+    );
+    const { taskId } = await app.execute<{ taskId: string }>('kernel.task.create', { title: 'Việc thử', assigneePositionId: positionId }, { actor: asUser(owner), orgId });
+    const { runId } = await worker.execute<{ runId: string | null }>('kernel.agent.run.start', { agentId }, { actor: SYSTEM, orgId });
+    expect(runId).not.toBeNull();
+    const name = await admin(async (c) => (await c.query<{ display_name: string }>('SELECT display_name FROM crove_kernel.agent WHERE id = $1', [agentId])).rows[0]?.display_name as string);
+    expect(name).not.toBe('');
+    const insert = (byAgent: boolean) =>
+      admin(async (c) =>
+        (
+          await c.query<{ id: string }>(
+            `INSERT INTO crove_kernel.proposal (org_id, kind, command, title, payload, eligible_approvers, authors, requested_by_agent, requested_by_run, source_task_id)
+             VALUES ($1, 'finance.purchase', 'finance.purchase.record', 'Đề xuất', '{}', ARRAY[$2::uuid], $3, $4, $5, $6) RETURNING id`,
+            [orgId, owner, JSON.stringify(byAgent ? [{ type: 'agent', id: agentId, run: runId }] : []), byAgent ? agentId : null, byAgent ? runId : null, byAgent ? taskId : null],
+          )
+        ).rows[0]?.id as string,
+      );
+    const asked = await insert(true);
+    const human = await insert(false);
+    const as = { actor: asUser(owner), orgId };
+    const items = await app.query<Array<{ id: string; requestedByAgent: { id: string; name: string } | null; extracted: boolean }>>('kernel.inbox.list', {}, as);
+    const byId = new Map(items.map((i) => [i.id, i]));
+    expect(byId.get(asked)).toMatchObject({ requestedByAgent: { id: agentId, name }, extracted: false });
+    expect(byId.get(human)).toMatchObject({ requestedByAgent: null });
+    expect((await app.query<{ requestedByAgent: unknown }>('kernel.inbox.get', { id: asked }, as)).requestedByAgent).toEqual({ id: agentId, name });
+    expect((await app.query<{ requestedByAgent: unknown }>('kernel.inbox.get', { id: human }, as)).requestedByAgent).toBeNull();
+  });
 });
