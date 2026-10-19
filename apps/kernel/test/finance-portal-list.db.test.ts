@@ -514,6 +514,18 @@ suite('tax portal purchase list (#465)', () => {
     await expect(record([good, good])).rejects.toMatchObject({ code: 'VALIDATION' });
   });
 
+  it('refuses a row dated year 0000, which PostgreSQL rejects, with the reason (#555)', async () => {
+    const listId = await pendingList([spec('3101', '01/03/2026')], '2026-03');
+    const answer = await extract.extract('portal_invoice_list', portalListXlsx([spec('3101', '01/03/2026')]));
+    if (!answer.ok) throw new Error('fixture not read');
+    const lying = {
+      extract: async () => ({ ...answer, list: { ...answer.list, rows: answer.list.rows.map((r) => ({ ...r, issueDate: '0000-01-01' })) } }),
+    } as unknown as ExtractClient;
+    await importPortalList({ runtime: workerRuntime, store, extract: lying }, org.orgId, listId);
+    const march = await rpc('portalList/reconcile', await tokenFor(owner), { period: '2026-03' });
+    expect(march.body.lists).toContainEqual(expect.objectContaining({ id: listId, status: 'failed', error: expect.stringContaining('ngày lập hóa đơn không hợp lệ (0000-01-01)') }));
+  });
+
   it('keeps an import upload and a document apart: neither is taken for the other (#506)', async () => {
     const workbook = portalListXlsx([spec('2001', '01/02/2026')]);
     const imported = await upload(await tokenFor(owner), 'ds-02.xlsx', workbook);

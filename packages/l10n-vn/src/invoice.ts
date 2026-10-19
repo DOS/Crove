@@ -78,9 +78,11 @@ export function lineContribution(line: InvoiceLine): Money {
   return toMoney(line.nature === 'discount' && amount.isPositive() ? amount.negated() : amount);
 }
 
-// YYYY-MM-DD that names a real day. Never throws (toISOString() does on an Invalid Date).
+// YYYY-MM-DD that names a real day, year 0001 or later (PostgreSQL rejects year 0000 in date input).
+// Never throws (toISOString() does on an Invalid Date).
 export function isCalendarDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  if (value < '0001-01-01') return false;
   const date = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value);
 }

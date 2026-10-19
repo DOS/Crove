@@ -23,9 +23,11 @@ describe('zBulkApproveItems (#315)', () => {
 describe('zLocalDate', () => {
   it('accepts real calendar dates', () => {
     expect(zLocalDate.safeParse('2028-02-29').success).toBe(true);
+    // 0001-01-01 is PostgreSQL's lower bound for date input and stays valid; the upper bound is 9999-12-31.
+    for (const value of ['0001-01-01', '0001-12-31', '1900-01-01', '9999-12-31']) expect(zLocalDate.safeParse(value).success).toBe(true);
   });
 
-  it.each(['2026-02-30', '2026-13-01', '0000-00-00', '13/10/2026', '', 'abc'])('rejects %j without throwing', (value) => {
+  it.each(['2026-02-30', '2026-13-01', '0000-00-00', '0000-01-01', '0000-12-31', '13/10/2026', '', 'abc'])('rejects %j without throwing', (value) => {
     expect(zLocalDate.safeParse(value).success).toBe(false);
   });
 });

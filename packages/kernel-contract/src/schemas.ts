@@ -7,9 +7,11 @@ import { VAT_FILING_PERIODS } from './vat-deadline.ts';
 export const zId = z.uuid();
 // At most 16 integer digits, the size of the numeric(20,4) money columns.
 export const zMoney = z.string().regex(/^-?\d{1,16}(\.\d{1,8})?$/, 'decimal string');
-// YYYY-MM-DD that names a real day. Never throws (toISOString() does on an Invalid Date).
+// YYYY-MM-DD that names a real day, year 0001 or later (PostgreSQL rejects year 0000 in date input).
+// Never throws (toISOString() does on an Invalid Date).
 export function isCalendarDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  if (value < '0001-01-01') return false;
   const date = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value);
 }

@@ -270,6 +270,8 @@ describe('checkPortalList', () => {
 
   it('refuses impossible dates and a row number given twice with the reason, before anything reaches the database', () => {
     expect(checkPortalList(list([{ issueDate: '2026-02-30' }]), OTHER)).toEqual({ ok: false, error: 'Dòng 4: ngày lập hóa đơn không hợp lệ (2026-02-30)' });
+    expect(checkPortalList(list([{ issueDate: '0000-01-01' }]), OTHER)).toEqual({ ok: false, error: 'Dòng 4: ngày lập hóa đơn không hợp lệ (0000-01-01)' });
+    expect(checkPortalList(list([{}], { listTo: '0000-12-31' }), OTHER)).toEqual({ ok: false, error: expect.stringContaining('ngày không hợp lệ (0000-12-31)') });
     expect(checkPortalList(list([{}], { listFrom: '2026-09-31' }), OTHER)).toEqual({ ok: false, error: expect.stringContaining('ngày không hợp lệ (2026-09-31)') });
     expect(checkPortalList(list([{}], { listFrom: '2026-10-01', listTo: '2026-09-30' }), OTHER)).toEqual({ ok: false, error: expect.stringContaining('từ 2026-10-01 đến 2026-09-30') });
     expect(checkPortalList(list([{ rowNo: 9 }, { rowNo: 9 }]), OTHER)).toEqual({ ok: false, error: expect.stringContaining('dòng 9 hai lần') });
