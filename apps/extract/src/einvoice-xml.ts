@@ -1,5 +1,9 @@
-// Parser for Vietnamese e-invoice XML (Decree 123/2020/ND-CP, Circular 78/2021/TT-BTC, format of
-// Decision 1450/QD-TCT). Deterministic, no LLM. Entity expansion is disabled and DOCTYPE is rejected.
+// Parser for Vietnamese e-invoice XML: Decree 254/2026/ND-CP and Circular 91/2026/TT-BTC from 2026-07-01 (before
+// that Decree 123/2020/ND-CP as amended by Decree 70/2025/ND-CP, with Circular 78/2021/TT-BTC, then Circular
+// 32/2025/TT-BTC), in the tax authority's data format (Decision 1450/QD-TCT of 2021; since 2026-08-27 Decision
+// 1233/QD-CT, which accepts message versions 2.1.0 and 2.1.1 side by side until 2026-12-31). It reads the same
+// elements in every version, and checks neither the version nor the signature format (XML-DSig or XAdES), only that
+// the seller's signature element is there. Deterministic, no LLM. Entity expansion is disabled and DOCTYPE is rejected.
 // It runs only inside a crove-extract parser process (plan §7.6, External-tenant gate T12). The invoice types,
 // money helpers and checks it shares with the worker stay in @crove/l10n-vn, which holds no parser.
 import { XMLParser } from 'fast-xml-parser';
@@ -51,7 +55,7 @@ function text(node: unknown, key: string): string | null {
 function amount(node: unknown, key: string): string | null {
   const raw = text(node, key);
   if (raw === null) return null;
-  // Decree 123 XML uses "." as the decimal separator; anything else is rejected, never guessed.
+  // The e-invoice XML format uses "." as the decimal separator; anything else is rejected, never guessed.
   if (!/^-?\d{1,16}(\.\d{1,8})?$/.test(raw)) throw new EInvoiceParseError(`Số không hợp lệ ở thẻ ${key}: ${raw.slice(0, 40)}`);
   return toMoney(money(raw));
 }
