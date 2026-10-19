@@ -16,6 +16,7 @@ import { InboxPage } from './routes/inbox.tsx';
 import { InvitePage } from './routes/invite.tsx';
 import { JournalPage } from './routes/journal.tsx';
 import { LedgerPage } from './routes/ledger.tsx';
+import { BankPage } from './routes/bank.tsx';
 import { MfaPage } from './routes/mfa.tsx';
 import { OnboardingPage } from './routes/onboarding.tsx';
 import { OpeningBalancePage } from './routes/opening-balance.tsx';
@@ -174,6 +175,8 @@ const vatRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vat', befo
 const portalListRoute = createRoute({ getParentRoute: () => orgRoute, path: 'portal-invoices', beforeLoad: requireFinance, component: PortalListPage });
 // Ledger reports per month, quarter or year (issue #321).
 const ledgerRoute = createRoute({ getParentRoute: () => orgRoute, path: 'ledger', beforeLoad: requireFinance, component: LedgerPage });
+// Bank statements per bank account (issue #326).
+const bankRoute = createRoute({ getParentRoute: () => orgRoute, path: 'bank', beforeLoad: requireFinance, component: BankPage });
 // Opening balances from Excel (#320), reached from the journal.
 const openingBalanceRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal/opening-balances', beforeLoad: requireFinance, component: OpeningBalancePage });
 // The Vietnamese quick guide (issue #310), linked from the empty Inbox; it walks through finance screens.
@@ -202,7 +205,7 @@ const routeTree = rootRoute.addChildren([
   onboardingRoute,
   clientsRoute,
   oauthCallbackRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vouchersRoute, vatRoute, portalListRoute, ledgerRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vouchersRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

@@ -14,6 +14,7 @@ export type NotGranted = undefined;
 
 export interface CroveFinanceSchema {
   'crove_finance.account': FinanceAccountTable;
+  'crove_finance.bank_line': FinanceBankLineTable;
   'crove_finance.cash_voucher': FinanceCashVoucherTable;
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
@@ -71,6 +72,24 @@ export interface FinanceAccountTable {
   name: ColumnType<string, NotGranted, NotGranted>;
   parent_code: ColumnType<string | null, NotGranted, NotGranted>;
   standard: ColumnType<string, NotGranted, NotGranted>;
+}
+
+/** crove_finance.bank_line */
+export interface FinanceBankLineTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  bank_account: ColumnType<string, string, NotGranted>;
+  import_id: ColumnType<string, string, NotGranted>;
+  position: ColumnType<number, number, NotGranted>;
+  value_date: ColumnType<string, string, NotGranted>;
+  description: ColumnType<string, string, NotGranted>;
+  amount: ColumnType<string, string, NotGranted>;
+  running_balance: ColumnType<string | null, string | null, NotGranted>;
+  bank_ref: ColumnType<string | null, string | null, NotGranted>;
+  dedupe_key: ColumnType<string | null, string | null, NotGranted>;
+  ambiguous: ColumnType<boolean, boolean | undefined, NotGranted>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_finance.cash_voucher */
