@@ -144,7 +144,7 @@ suite('finance exports: no audit row, no download (#365)', () => {
     expect(reached).toEqual([command]);
     expect(response.status).toBe(500);
     expect(response.headers.get('content-type')).not.toBe(XLSX);
-    expect(response.headers.get('content-type')).not.toMatch(/^application\/xml/);
+    expect(response.headers.get('content-type') ?? '').not.toMatch(/^application\/xml/);
     expect(response.headers.get('content-disposition')).toBeNull();
     expect(await response.json()).toMatchObject({ code: 'INTERNAL' });
   });
