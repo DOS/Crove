@@ -98,6 +98,8 @@ export const KERNEL_ERROR_CODES = [
   'PARENT_TAGGED',
   'PARENT_NOT_DEEPEST',
   'PARTY_NOT_FOUND',
+  // Cash and bank vouchers (#327).
+  'VOUCHER_INVALID',
   // Files, uploads and exports.
   'TOO_LARGE',
   'TOO_MANY_FILES',

@@ -295,6 +295,19 @@ export type OrgAccountTable = Refine<
   'root_code'
 >;
 
+// Cash and bank vouchers (#327): phiếu thu, phiếu chi, giấy báo Có, giấy báo Nợ. The insert trigger numbers each one
+// per org and type (any number given is replaced), and rows never change.
+export const VOUCHER_TYPES = ['cash_receipt', 'cash_payment', 'bank_credit', 'bank_debit'] as const;
+export type VoucherType = (typeof VOUCHER_TYPES)[number];
+export type CashVoucherTable = Refine<
+  G.FinanceCashVoucherTable,
+  {
+    voucher_type: ColumnType<VoucherType, VoucherType, never>;
+    number: ColumnType<number, never, never>;
+  },
+  'number'
+>;
+
 // Crove Social (Social plan §3.2, S3).
 export const SOCIAL_POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled'] as const;
 export const SOCIAL_VARIANT_STATUSES = [
@@ -368,6 +381,7 @@ type Refined = Tables<{
   'crove_finance.purchase_document': PurchaseDocumentTable;
   'crove_finance.journal_entry': JournalEntryTable;
   'crove_finance.org_account': OrgAccountTable;
+  'crove_finance.cash_voucher': CashVoucherTable;
   'crove_social.post': SocialPostTable;
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.post_approval': SocialPostApprovalTable;
