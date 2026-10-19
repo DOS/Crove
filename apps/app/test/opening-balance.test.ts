@@ -106,6 +106,53 @@ describe('xlsx reader', () => {
     expect(sheet.get(1)?.get(0)).toEqual({ kind: 'text', value: 'ok' });
   });
 
+  // Every other pattern the reader scans with, on a crafted part (#366). Each of these took seconds to tens of seconds
+  // with the lazy regexes it replaced (a <v>, <is>, <sheet> or <Relationship> without its end, an attribute name
+  // with no `=`), and the reader still answers, with the cells or the fallback sheet.
+  const ws = (inner: string) => `<worksheet><sheetData>${inner}</sheetData></worksheet>`;
+  const OK_ROW = '<row r="1"><c r="A1" t="inlineStr"><is><t>ok</t></is></c></row>';
+  it.each([
+    ['unterminated <c> tags', { 'xl/worksheets/sheet1.xml': ws(`${OK_ROW}<row r="2">${'<c r="A2"><v>1</v>'.repeat(100_000)}</row>`) }],
+    ['unterminated <v> tags in one cell', { 'xl/worksheets/sheet1.xml': ws(`${OK_ROW}<row r="2"><c r="A2">${'<v>'.repeat(200_000)}</c></row>`) }],
+    ['unterminated <is> tags in one cell', { 'xl/worksheets/sheet1.xml': ws(`${OK_ROW}<row r="2"><c r="A2" t="inlineStr">${'<is>'.repeat(200_000)}</c></row>`) }],
+    ['unterminated <si> items', { 'xl/worksheets/sheet1.xml': ws(OK_ROW), 'xl/sharedStrings.xml': `<sst>${'<si><t>x</t>'.repeat(100_000)}</sst>` }],
+    [
+      '<sheet> tags without their end',
+      { 'xl/worksheets/sheet1.xml': ws(OK_ROW), 'xl/workbook.xml': `<workbook><sheets>${'<sheet name="a" '.repeat(100_000)}`, 'xl/_rels/workbook.xml.rels': '<Relationships/>' },
+    ],
+    [
+      '<Relationship> tags without their end',
+      {
+        'xl/worksheets/sheet1.xml': ws(OK_ROW),
+        'xl/workbook.xml': '<workbook><sheets><sheet name="a" r:id="rId1"/></sheets></workbook>',
+        'xl/_rels/workbook.xml.rels': `<Relationships>${'<Relationship Id="x" '.repeat(100_000)}`,
+      },
+    ],
+    ['an attribute name with no value', { 'xl/worksheets/sheet1.xml': ws(`${OK_ROW}<row ${'a'.repeat(200_000)}></row>`) }],
+  ])('reads a part with %s in one pass', async (_name, files) => {
+    const zip = zipStored(Object.entries(files).map(([name, text]) => ({ name, data: new TextEncoder().encode(text) })));
+    expect(zip.byteLength).toBeLessThan(MAX_XLSX_BYTES);
+    const started = performance.now();
+    const sheet = await readFirstSheet(zip);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(sheet.get(1)?.get(0)).toEqual({ kind: 'text', value: 'ok' });
+  });
+
+  it('reads attributes with either quote, spaces around `=`, and past a value that never closes', async () => {
+    const sheet = await readFirstSheet(
+      zipStored([
+        {
+          name: 'xl/worksheets/sheet1.xml',
+          data: new TextEncoder().encode(ws(`<row r = '2'><c t="inlineStr" r ='B2' ><is><t>x</t></is></c><c bad=' r="D2"><v>7</v></c></row>`)),
+        },
+      ]),
+    );
+    expect(sheet.get(2)?.get(1)).toEqual({ kind: 'text', value: 'x' });
+    // A quote that never closes is skipped, and the attribute after it still counts.
+    expect(sheet.get(2)?.get(3)).toEqual({ kind: 'number', value: '7' });
+    expect(sheet.get(2)?.has(2)).toBe(false);
+  });
+
   it('drops only <rPh> elements, not another tag that starts with the same letters', async () => {
     const sheet = await readFirstSheet(
       excelWorkbook(`<x:row r="1"><x:c r="A1" t="s"><x:v>0</x:v></x:c></x:row>`, ['<x:t>Tiền </x:t><x:rPhX/><x:t>mặt</x:t><x:rPh sb="0" eb="1"><x:t>ignored</x:t></x:rPh>']),
