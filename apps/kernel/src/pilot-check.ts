@@ -6,6 +6,7 @@
 //   pilot-check [--url https://crove.example.com]
 //
 // Exit codes: 0 every automatic check passed, 1 a check failed, 2 the check could not run (bad arguments).
+import { randomBytes } from 'node:crypto';
 import { parseExportKey } from './export-seal.ts';
 import { loadProberConfig } from './prober.ts';
 
@@ -144,7 +145,16 @@ export function checkEnv(env: Env): CheckResult[] {
     const browserEndpoint = value(env, 'S3_PUBLIC_ENDPOINT') ?? value(env, 'S3_ENDPOINT');
     if (browserEndpoint) tls.push(httpsProblem(value(env, 'S3_PUBLIC_ENDPOINT') ? 'S3_PUBLIC_ENDPOINT' : 'S3_ENDPOINT', browserEndpoint));
   }
-  add('TLS', tls, 'PUBLIC_URL and the other browser-facing URLs are https');
+  // The kernel serves plain http, so a pilot always has a TLS reverse proxy in front. With TRUSTED_PROXY_HOPS=0 every
+  // client then shares the proxy's address and so one email budget (#190): a few refused sign-ups or mistyped
+  // addresses from anyone use up the confirmation and recovery emails of everyone for an hour (#564).
+  const hops = value(env, 'TRUSTED_PROXY_HOPS');
+  if (hops === undefined || !/^[1-5]$/.test(hops)) {
+    tls.push(
+      `TRUSTED_PROXY_HOPS is ${hops ?? 'unset (0)'}: behind the TLS reverse proxy every client would share its address, and so one email budget and one sign-in rate limit; set it to the number of proxies that append X-Forwarded-For (1 for the Caddy setup in docs/runbooks/provision-pilot.md)`,
+    );
+  }
+  add('TLS', tls, 'PUBLIC_URL and the other browser-facing URLs are https, and TRUSTED_PROXY_HOPS counts the reverse proxy in front');
 
   // Secrets: none left at a value this public repository ships.
   const secrets: (string | null)[] = REQUIRED_SECRETS.map((name) =>
@@ -283,7 +293,7 @@ function reason(error: unknown): string {
   return String(error);
 }
 
-/** Probes the running deployment at `origin`: TLS, no plain-http service, and the sign-up settings Supabase Auth reports. */
+/** Probes the running deployment at `origin`: TLS, no plain-http service, a sign-up nobody may make, and email confirmation. */
 export async function probeDeployment(origin: string, fetchFn: Fetch = fetch): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
   const url = new URL(origin);
@@ -346,11 +356,7 @@ export async function probeDeployment(origin: string, fetchFn: Fetch = fetch): P
     if (!response.ok) throw new Error(`${authUrl}/settings answered ${response.status}`);
     const settings = (await response.json()) as { disable_signup?: unknown; mailer_autoconfirm?: unknown };
     results.push(
-      settings.disable_signup === true
-        ? { item: 'Sign-up limited', status: 'pass', message: 'the running Supabase Auth refuses new sign-ups' }
-        : signupPolicy === 'invite_only' || signupPolicy === 'allowlist'
-          ? { item: 'Sign-up limited', status: 'pass', message: `the running Crove admits sign-ups by its ${signupPolicy} policy` }
-          : { item: 'Sign-up limited', status: 'fail', message: 'the running Supabase Auth accepts sign-ups from anyone (disable_signup is not true, and the sign-up policy is open)' },
+      await probeSignup(authUrl, typeof signupPolicy === 'string' ? signupPolicy : null, fetchFn, init),
       settings.mailer_autoconfirm === false
         ? { item: 'Email confirmation and MFA step-up', status: 'pass', message: 'the running Supabase Auth requires email confirmation' }
         : { item: 'Email confirmation and MFA step-up', status: 'fail', message: 'the running Supabase Auth skips email confirmation (mailer_autoconfirm is not false)' },
@@ -359,6 +365,64 @@ export async function probeDeployment(origin: string, fetchFn: Fetch = fetch): P
     authFailed(`could not read the Supabase Auth settings: ${reason(error)}`);
   }
   return results;
+}
+
+// The sign-up probe (#564): what the running instance does with a sign-up nobody may make, rather than what
+// /api/config and /settings say about it. It signs up a random address at a reserved domain that never resolves
+// (RFC 2606 .invalid), which no allowlist holds and no invite names, and sends no password:
+//   - Crove's proxy enforcing invite_only or allowlist refuses it before Supabase Auth (403 signup_not_allowed). It
+//     creates nothing and sends nothing; it uses one slot of this client's email budget for the hour.
+//   - Supabase Auth with sign-up closed refuses it (signup_disabled).
+//   - Otherwise it reaches Supabase Auth, which refuses a sign-up without a password before it creates or mails
+//     anything (validation_failed, checked against the pinned image by e2e/tests/auth-signup-parity.spec.ts): sign-up is
+//     open to anyone.
+// Any other answer (a rate limit, a server error, a timeout) proves nothing either way, and says so.
+async function probeSignup(authUrl: string, reportedPolicy: string | null, fetchFn: Fetch, init: (extra?: RequestInit) => RequestInit): Promise<CheckResult> {
+  const item = 'Sign-up limited';
+  const address = `pilot-check-${randomBytes(8).toString('hex')}@pilot-check.invalid`;
+  const cannotTell = (why: string): CheckResult => ({
+    item,
+    status: 'fail',
+    message: `could not tell whether sign-up is limited: ${why}; run pilot-check again later, or check by hand that a sign-up for an address outside the policy is refused with 403 signup_not_allowed`,
+  });
+  let response: Response;
+  try {
+    response = await fetchFn(
+      `${authUrl.replace(/\/$/, '')}/signup`,
+      init({ method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: address }) }),
+    );
+  } catch (error) {
+    return cannotTell(`the sign-up probe failed (${reason(error)})`);
+  }
+  const answer = (await response.json().catch(() => null)) as { error_code?: unknown } | null;
+  const code = typeof answer?.error_code === 'string' ? answer.error_code : null;
+  const got = `${response.status}${code ? ` ${code}` : ''}`;
+  if (response.status === 403 && code === 'signup_not_allowed') {
+    return { item, status: 'pass', message: `the running Crove refused a sign-up for a random address no policy admits (403 signup_not_allowed${reportedPolicy ? `, policy ${reportedPolicy}` : ''})` };
+  }
+  if (code === 'signup_disabled') return { item, status: 'pass', message: `the running Supabase Auth refuses new sign-ups (${got})` };
+  if (response.ok) {
+    return {
+      item,
+      status: 'fail',
+      message: `the running instance accepted a sign-up for ${address} (${got}): anyone who reaches it can create an account; delete that account and set AUTH_SIGNUP_POLICY (docs/runbooks/pilot-readiness.md)`,
+    };
+  }
+  // Supabase Auth's own refusal of the body (its error shape, 400 or 422): the request got past every sign-up gate.
+  if ((response.status === 400 || response.status === 422) && code !== null) {
+    return {
+      item,
+      status: 'fail',
+      message: `a sign-up for a random address reached Supabase Auth (${got}${reportedPolicy === 'invite_only' || reportedPolicy === 'allowlist' ? `, although /api/config reports the policy ${reportedPolicy}` : ''}): anyone who reaches the instance can create an account; set AUTH_SIGNUP_POLICY=invite_only or AUTH_DISABLE_SIGNUP=true and recreate the services (docs/runbooks/pilot-readiness.md)`,
+    };
+  }
+  if (response.status === 429) return cannotTell(`the sign-up probe was rate limited (${got})`);
+  // A 400 or 422 without Supabase Auth's error code may come from a reverse proxy or firewall in front, so it proves
+  // nothing about the sign-up gates. Still a failure: an inconclusive probe never passes.
+  if (response.status === 400 || response.status === 422) {
+    return cannotTell(`the sign-up probe got ${got} without Supabase Auth's error code, so something in front of it (a reverse proxy or firewall) may have answered`);
+  }
+  return cannotTell(`the sign-up probe got ${got}`);
 }
 
 const LABEL: Record<CheckStatus, string> = { pass: 'PASS  ', fail: 'FAIL  ', manual: 'MANUAL' };
