@@ -99,10 +99,12 @@ export function Modules({ dict }: { dict: Dictionary }) {
                   </div>
                   <div className="pt-1.5 pl-2">
                     <div className="text-center font-semibold text-subtle">{t.credit}</div>
-                    <div className="mt-1.5 flex flex-col">
-                      <span className="text-subtle">{t.creditRow[0]}</span>
-                      <span className="num">{t.creditRow[1]}</span>
-                    </div>
+                    {t.creditRows.map(([label, amount]) => (
+                      <div key={label} className="mt-1.5 flex flex-col">
+                        <span className="text-subtle">{label}</span>
+                        <span className="num">{amount}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
                 <div className="mt-3 flex items-baseline justify-between gap-2 border-t border-line pt-2 text-xs">

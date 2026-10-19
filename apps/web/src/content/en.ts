@@ -54,8 +54,8 @@ export const en: Dictionary = {
     tabs: ['To approve', 'Warnings', 'Approved'],
     rows: [
       { party: 'Công ty CP Bao Bì Phú Thịnh', sub: 'Invoice 00001284, 14/10/2026', amount: '₫32,832,000', account: 'Acc 152', flag: '' },
-      { party: 'EVN', sub: 'Electricity, September', amount: '₫1,946,780', account: 'Acc 6427', flag: '' },
-      { party: 'Viettel', sub: 'Telecom, September', amount: '₫880,000', account: 'Acc 6427', flag: '' },
+      { party: 'EVN', sub: 'Electricity, September', amount: '₫1,946,780', account: 'Acc 6422', flag: '' },
+      { party: 'Viettel', sub: 'Telecom, September', amount: '₫880,000', account: 'Acc 6422', flag: '' },
       { party: 'Hợp tác xã Tân Hồng', sub: 'Rice purchase slip', amount: '₫148,500,000', account: 'Acc 152', flag: 'No tax code' },
     ],
     waiting: 'To approve',
@@ -248,7 +248,7 @@ export const en: Dictionary = {
         items: [
           { title: 'Invoice 00001284', amount: '₫32,832,000', sub: 'Công ty CP Bao Bì Phú Thịnh', tone: 'ok', chip: '5/5 checks passed', note: 'Dr 152, 1331 / Cr 331' },
           { title: 'Rice purchase slip', amount: '₫148,500,000', sub: 'Hợp tác xã Tân Hồng', tone: 'warn', chip: 'No authority code', note: 'Escalated to Chị Lan' },
-          { title: 'EVN electricity, September', amount: '₫1,946,780', sub: 'Acc 6427', tone: 'ok', chip: 'Ready to approve', note: '' },
+          { title: 'EVN electricity, September', amount: '₫1,946,780', sub: 'Acc 6422', tone: 'ok', chip: 'Ready to approve', note: '' },
         ],
       },
       tasks: {
@@ -335,26 +335,29 @@ export const en: Dictionary = {
         { name: 'Accounting agent', initials: '', agent: true },
       ],
       inboxTitle: 'AI Inbox',
-      inboxSub: '4 documents to approve',
+      inboxSub: '1 posted, 3 waiting for approval',
       inbox: [
-        { title: 'Invoice 00001284, Bao Bì Phú Thịnh', amount: '₫32,832,000', account: 'Acc 152, 1331', tone: 'ok', label: 'Ready to approve' },
+        { title: 'Invoice 00001284, Bao Bì Phú Thịnh', amount: '₫32,832,000', account: 'Acc 152, 1331', tone: 'ok', label: 'Posted' },
         { title: 'Rice purchase, HTX Tân Hồng', amount: '₫148,500,000', account: 'Acc 152', tone: 'warn', label: 'Authority code missing' },
-        { title: 'EVN power bill, September', amount: '₫1,946,780', account: 'Acc 6427', tone: 'ok', label: 'Ready to approve' },
-        { title: 'Viettel bill, September', amount: '₫880,000', account: 'Acc 6427', tone: 'ok', label: 'Ready to approve' },
+        { title: 'EVN power bill, September', amount: '₫1,946,780', account: 'Acc 6422', tone: 'ok', label: 'Ready to approve' },
+        { title: 'Viettel bill, September', amount: '₫880,000', account: 'Acc 6422', tone: 'ok', label: 'Ready to approve' },
       ],
       tail: 'Accounts are learned per vendor. Next time Crove proposes the account Chị Lan picked.',
       taccount: {
-        title: 'Ledger, account 331',
+        title: 'Subsidiary ledger, account 331',
         sub: 'Bao Bì Phú Thịnh, after Chị Lan approved',
         debit: 'Dr',
         credit: 'Cr',
         debitRow: ['Payment 03/10', '18,360,000'],
-        creditRow: ['Invoice 00001284, 14/10', '32,832,000'],
+        creditRows: [
+          ['Opening balance 01/10', '18,360,000'],
+          ['Invoice 00001284, 14/10', '32,832,000'],
+        ],
         balanceLabel: 'Credit balance',
         balance: '32,832,000',
       },
       vat: {
-        title: 'Input VAT, Q4',
+        title: 'Expected input VAT, Q4',
         total: '2,688,980',
         rows: [
           { name: 'Bao Bì Phú Thịnh', amount: '2,432,000', pct: 90.4 },

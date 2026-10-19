@@ -54,8 +54,8 @@ export const vi = {
     tabs: ['Cần duyệt', 'Cảnh báo', 'Đã duyệt'],
     rows: [
       { party: 'Công ty CP Bao Bì Phú Thịnh', sub: 'HĐ 00001284, 14/10/2026', amount: '32.832.000 ₫', account: 'TK 152', flag: '' },
-      { party: 'EVN', sub: 'Hoá đơn điện tháng 9', amount: '1.946.780 ₫', account: 'TK 6427', flag: '' },
-      { party: 'Viettel', sub: 'Cước viễn thông tháng 9', amount: '880.000 ₫', account: 'TK 6427', flag: '' },
+      { party: 'EVN', sub: 'Hoá đơn điện tháng 9', amount: '1.946.780 ₫', account: 'TK 6422', flag: '' },
+      { party: 'Viettel', sub: 'Cước viễn thông tháng 9', amount: '880.000 ₫', account: 'TK 6422', flag: '' },
       { party: 'Hợp tác xã Tân Hồng', sub: 'Phiếu mua gạo nguyên liệu', amount: '148.500.000 ₫', account: 'TK 152', flag: 'Thiếu mã CQT' },
     ],
     waiting: 'Chờ duyệt',
@@ -248,7 +248,7 @@ export const vi = {
         items: [
           { title: 'HĐ 00001284', amount: '32.832.000 ₫', sub: 'Công ty CP Bao Bì Phú Thịnh', tone: 'ok', chip: '5/5 kiểm tra đạt', note: 'Nợ 152, 1331 / Có 331' },
           { title: 'Phiếu mua gạo', amount: '148.500.000 ₫', sub: 'Hợp tác xã Tân Hồng', tone: 'warn', chip: 'Thiếu mã CQT', note: 'Đã chuyển lên Chị Lan' },
-          { title: 'Điện EVN tháng 9', amount: '1.946.780 ₫', sub: 'TK 6427', tone: 'ok', chip: 'Sẵn sàng duyệt', note: '' },
+          { title: 'Điện EVN tháng 9', amount: '1.946.780 ₫', sub: 'TK 6422', tone: 'ok', chip: 'Sẵn sàng duyệt', note: '' },
         ],
       },
       tasks: {
@@ -335,26 +335,29 @@ export const vi = {
         { name: 'Agent Kế toán', initials: '', agent: true },
       ],
       inboxTitle: 'AI Inbox',
-      inboxSub: '4 chứng từ chờ duyệt',
+      inboxSub: '1 đã ghi sổ, 3 đang chờ duyệt',
       inbox: [
-        { title: 'HĐ 00001284, Bao Bì Phú Thịnh', amount: '32.832.000 ₫', account: 'TK 152, 1331', tone: 'ok', label: 'Sẵn sàng duyệt' },
+        { title: 'HĐ 00001284, Bao Bì Phú Thịnh', amount: '32.832.000 ₫', account: 'TK 152, 1331', tone: 'ok', label: 'Đã ghi sổ' },
         { title: 'Phiếu mua gạo, HTX Tân Hồng', amount: '148.500.000 ₫', account: 'TK 152', tone: 'warn', label: 'Thiếu mã CQT' },
-        { title: 'Hoá đơn điện EVN tháng 9', amount: '1.946.780 ₫', account: 'TK 6427', tone: 'ok', label: 'Sẵn sàng duyệt' },
-        { title: 'Cước Viettel tháng 9', amount: '880.000 ₫', account: 'TK 6427', tone: 'ok', label: 'Sẵn sàng duyệt' },
+        { title: 'Hoá đơn điện EVN tháng 9', amount: '1.946.780 ₫', account: 'TK 6422', tone: 'ok', label: 'Sẵn sàng duyệt' },
+        { title: 'Cước Viettel tháng 9', amount: '880.000 ₫', account: 'TK 6422', tone: 'ok', label: 'Sẵn sàng duyệt' },
       ],
       tail: 'Tài khoản được nhớ theo từng nhà cung cấp. Lần sau Crove đề xuất đúng tài khoản Chị Lan đã chọn.',
       taccount: {
-        title: 'Sổ cái TK 331',
+        title: 'Sổ chi tiết TK 331',
         sub: 'Bao Bì Phú Thịnh, sau khi Chị Lan duyệt',
         debit: 'Nợ',
         credit: 'Có',
         debitRow: ['Thanh toán 03/10', '18.360.000'],
-        creditRow: ['HĐ 00001284, 14/10', '32.832.000'],
+        creditRows: [
+          ['Số dư đầu kỳ 01/10', '18.360.000'],
+          ['HĐ 00001284, 14/10', '32.832.000'],
+        ],
         balanceLabel: 'Số dư Có',
         balance: '32.832.000',
       },
       vat: {
-        title: 'Thuế GTGT đầu vào quý IV',
+        title: 'Thuế GTGT đầu vào dự kiến quý IV',
         total: '2.688.980',
         rows: [
           { name: 'Bao Bì Phú Thịnh', amount: '2.432.000', pct: 90.4 },
