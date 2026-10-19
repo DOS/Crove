@@ -1420,7 +1420,6 @@ export const en = {
       OPENING_BALANCE_EXISTS: 'The organization already has an opening entry. Reverse it before importing again.',
       PORTAL_LIST_EXISTS: 'This file is already imported for this period.',
       PORTAL_LIST_LIMIT: 'This period already has 12 lists. Remove an old one, then import again.',
-      TAX_CODE_REQUIRED: "Enter the company's tax code in Settings before importing a list from the tax portal.",
       OPENING_BALANCE_AFTER_ENTRIES: 'There are journal entries on or before this date. The opening balances must come before every other entry.',
       OPENING_REVERSAL_DATE: 'An opening entry can only be reversed on its own date.',
       OPENING_BALANCE_INVALID: 'Some rows of the trial balance are invalid. Check them before posting.',
@@ -1451,7 +1450,7 @@ export const en = {
       EXPORT_PENDING: 'Data is being exported. Wait for the current export to finish, then try again.',
       EXPORT_TOO_LARGE: 'Too many journal entries to export at once. Choose a shorter date range.',
       PERIOD_TOO_LARGE: 'This period has too many invoices or entries to report at once; choose a shorter period.',
-      TAX_CODE_REQUIRED: 'Your organization has no tax code yet. Set it in Settings, then export again.',
+      TAX_CODE_REQUIRED: 'Your organization has no tax code yet. Set it in Settings, then try again.',
       // Crove Social and connected channels.
       POST_NOT_FOUND: 'This post was not found',
       VARIANT_NOT_FOUND: 'This channel of the post was not found',

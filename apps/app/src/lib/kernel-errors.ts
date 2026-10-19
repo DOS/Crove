@@ -87,7 +87,6 @@ export const KERNEL_ERROR_CODES = [
   // The tax portal's purchase list (#465).
   'PORTAL_LIST_EXISTS',
   'PORTAL_LIST_LIMIT',
-  'TAX_CODE_REQUIRED',
   // The chart of accounts and vendor defaults (#319).
   'ACCOUNT_CODE_TAKEN',
   'ACCOUNT_HAS_SUB_ACCOUNTS',

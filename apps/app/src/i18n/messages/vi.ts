@@ -1422,7 +1422,6 @@ export const vi = {
       OPENING_BALANCE_EXISTS: 'Tổ chức đã có bút toán số dư đầu kỳ; hãy đảo bút toán đó trước khi nhập lại',
       PORTAL_LIST_EXISTS: 'Tệp này đã được nhập cho kỳ này rồi',
       PORTAL_LIST_LIMIT: 'Kỳ này đã có 12 danh sách; hãy gỡ bớt danh sách cũ rồi nhập lại',
-      TAX_CODE_REQUIRED: 'Hãy nhập mã số thuế của công ty trong Cài đặt trước khi nhập danh sách hóa đơn từ cổng thuế',
       OPENING_BALANCE_AFTER_ENTRIES: 'Đã có bút toán vào hoặc trước ngày số dư đầu kỳ; ngày số dư đầu kỳ phải trước mọi bút toán khác',
       OPENING_REVERSAL_DATE: 'Bút toán số dư đầu kỳ chỉ được đảo vào đúng ngày của nó',
       OPENING_BALANCE_INVALID: 'Bảng số dư có dòng không hợp lệ; hãy xem lại trước khi ghi sổ',
@@ -1453,7 +1452,7 @@ export const vi = {
       EXPORT_PENDING: 'Dữ liệu đang được xuất; hãy đợi bản xuất hiện tại xong rồi thử lại',
       EXPORT_TOO_LARGE: 'Quá nhiều bút toán để xuất một lần; hãy chọn khoảng ngày ngắn hơn',
       PERIOD_TOO_LARGE: 'Kỳ này có quá nhiều hóa đơn hoặc bút toán để lập báo cáo một lần; hãy chọn kỳ ngắn hơn',
-      TAX_CODE_REQUIRED: 'Tổ chức chưa có mã số thuế. Nhập mã số thuế trong Cài đặt rồi xuất lại.',
+      TAX_CODE_REQUIRED: 'Tổ chức chưa có mã số thuế. Nhập mã số thuế trong Cài đặt rồi thử lại.',
       // Crove Social and connected channels.
       POST_NOT_FOUND: 'Không tìm thấy bài đăng này',
       VARIANT_NOT_FOUND: 'Không tìm thấy kênh này của bài đăng',
