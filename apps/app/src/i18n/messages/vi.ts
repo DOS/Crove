@@ -209,6 +209,11 @@ export const vi = {
       'Bảng kê hóa đơn bán ra, mua vào của một tháng hoặc một quý, tổng theo thuế suất và các chỉ tiêu của tờ khai 01/GTGT. Kế toán kiểm tra trước khi nộp.',
     export: 'Xuất Excel',
     exportFile: 'crove-gtgt-{period}-{org}.xlsx',
+    exportXml: 'Xuất XML cho HTKK',
+    exportXmlFile: 'crove-01gtgt-{period}-{org}.xml',
+    xmlNote:
+      'File XML cho HTKK (mẫu 01/GTGT theo Thông tư 80/2021, bản XML 2.8.3) có sẵn các chỉ tiêu trên. Chỉ tiêu [22], [25], [37] đến [39a], cơ quan thuế quản lý và người ký đang để trống; khi chưa nhập [25], số thuế phải nộp trong file đang tính như chưa được khấu trừ đồng nào. Kế toán bổ sung và kiểm tra trong HTKK hoặc trên eTax trước khi nộp.',
+    exportXmlNeedsTaxCode: 'Muốn xuất tờ khai XML cho HTKK, hãy nhập mã số thuế của tổ chức trong Cài đặt.',
     kind: 'Kỳ khai',
     month: 'Tháng',
     quarter: 'Quý',
@@ -1333,6 +1338,7 @@ export const vi = {
       EXPORT_PENDING: 'Dữ liệu đang được xuất; hãy đợi bản xuất hiện tại xong rồi thử lại',
       EXPORT_TOO_LARGE: 'Quá nhiều bút toán để xuất một lần; hãy chọn khoảng ngày ngắn hơn',
       PERIOD_TOO_LARGE: 'Kỳ này có quá nhiều hóa đơn hoặc bút toán để lập báo cáo một lần; hãy chọn kỳ ngắn hơn',
+      TAX_CODE_REQUIRED: 'Tổ chức chưa có mã số thuế. Nhập mã số thuế trong Cài đặt rồi xuất lại.',
       // Crove Social and connected channels.
       POST_NOT_FOUND: 'Không tìm thấy bài đăng này',
       VARIANT_NOT_FOUND: 'Không tìm thấy kênh này của bài đăng',

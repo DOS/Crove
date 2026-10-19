@@ -29,6 +29,7 @@ import {
   buildJournalWorkbook,
   buildLedgerWorkbook,
   buildMisaWorkbook,
+  buildVat01Xml,
   buildVatWorkbook,
   purchaseRows,
   salesRows,
@@ -36,6 +37,7 @@ import {
   type LedgerBook,
   type PurchaseVoucher,
   type SalesVoucher,
+  type VatDeclaration,
   type VatReport,
 } from '@crove/mod-finance';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
@@ -908,6 +910,36 @@ export function createHttpApp(deps: HttpDeps) {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': `attachment; filename="crove-gtgt-${report.period.period}-${orgSlug}.xlsx"`,
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // The VAT return of one month or quarter as the XML of form 01/GTGT that HTKK imports (issue #332), same period,
+    // roles and audit as the Excel working above. The declaration query refuses an org without a tax code (422
+    // TAX_CODE_REQUIRED) and checks the period, so the file name below only ever holds a valid period.
+    app.get('/api/export/vat-01gtgt.xml', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const period = c.req.query('period') ?? '';
+        const declaration = await runtime.query<VatDeclaration>('finance.vat.declaration', { period }, { actor: actorOf(user), orgId });
+        const xml = buildVat01Xml(declaration);
+        // The export's audit row (period, invoice count and format only). No row, no download.
+        const documents = declaration.report.input.documents.length + declaration.report.output.documents.length;
+        await runtime.execute(
+          'finance.vat.export',
+          { period: declaration.report.period.period, documents, format: 'htkk_01gtgt_xml' },
+          { actor: actorOf(user), orgId },
+        );
+        return new Response(body(new TextEncoder().encode(xml)), {
+          headers: {
+            'content-type': 'application/xml; charset=utf-8',
+            'content-disposition': `attachment; filename="crove-01gtgt-${declaration.report.period.period}-${orgSlug}.xml"`,
             'cache-control': 'private, no-store',
           },
         });
