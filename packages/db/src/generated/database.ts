@@ -18,6 +18,7 @@ export interface CroveFinanceSchema {
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
   'crove_finance.org_account': FinanceOrgAccountTable;
+  'crove_finance.period_lock': FinancePeriodLockTable;
   'crove_finance.portal_invoice_list': FinancePortalInvoiceListTable;
   'crove_finance.portal_invoice_row': FinancePortalInvoiceRowTable;
   'crove_finance.purchase_document': FinancePurchaseDocumentTable;
@@ -129,6 +130,16 @@ export interface FinanceOrgAccountTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   updated_by: string | null;
   updated_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_finance.period_lock */
+export interface FinancePeriodLockTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  locked_from: ColumnType<string | null, NotGranted, NotGranted>;
+  locked_through: ColumnType<string | null, NotGranted, NotGranted>;
+  updated_by: ColumnType<string | null, NotGranted, NotGranted>;
+  updated_at: ColumnType<Date, NotGranted, NotGranted>;
 }
 
 /** crove_finance.portal_invoice_list */
