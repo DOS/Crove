@@ -394,6 +394,7 @@ export const en = {
     },
     allClear: 'Nothing to do',
     allClearHint: 'Every invoice on the lists is in Crove with the same amount.',
+  },
   periodLock: {
     title: 'Period lock',
     none: 'No month is locked. Lock a month once its returns are filed, so that nobody posts, approves or reverses entries into it.',

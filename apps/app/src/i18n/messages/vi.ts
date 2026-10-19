@@ -392,6 +392,7 @@ export const vi = {
     },
     allClear: 'Không có gì cần xử lý',
     allClearHint: 'Mọi hóa đơn trên danh sách đều đã có trong Crove với cùng số tiền.',
+  },
   periodLock: {
     title: 'Khóa sổ',
     none: 'Chưa khóa sổ tháng nào. Khóa sổ một tháng khi đã nộp báo cáo của tháng đó, để không ai ghi, duyệt hay đảo bút toán vào tháng đó nữa.',
