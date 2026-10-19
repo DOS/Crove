@@ -173,6 +173,21 @@ async function waitFor(what, timeoutMs, probe) {
 }
 
 const base = (stack) => `http://127.0.0.1:${stack.port}`;
+
+// fetch, tried again on a network error (a pooled connection the server closed while idle answers `fetch failed`).
+// Every request the drill retries is safe to repeat: reads, sign-in, and uploads of content-addressed files.
+async function send(url, makeInit) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fetch(url, makeInit());
+    } catch (error) {
+      const cause = error?.cause?.code ?? error?.cause?.message;
+      if (!(error instanceof TypeError) || attempt === 3) throw new Error(`${url}: ${error.message}${cause ? ` (${cause})` : ''}`);
+      log(`${url}: ${error.message}${cause ? ` (${cause})` : ''}; trying again`);
+      await sleep(1_000);
+    }
+  }
+}
 async function ready(stack) {
   await waitFor(`${stack.project} to be ready`, 300_000, async () => {
     const response = await fetch(`${base(stack)}/readyz`, { signal: AbortSignal.timeout(5_000) });
@@ -186,37 +201,35 @@ async function ready(stack) {
 async function rpc(stack, token, path, input, org) {
   const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
   if (org) headers['x-crove-org'] = org;
-  const response = await fetch(`${base(stack)}/api/rpc/${path}`, {
+  // Commands carry an idempotency key, so a repeat after a network error is safe.
+  const response = await send(`${base(stack)}/api/rpc/${path}`, () => ({
     method: 'POST',
     headers,
     body: JSON.stringify(input === undefined ? {} : { json: input }),
     signal: AbortSignal.timeout(REQUEST_MS),
-  });
+  }));
   const body = await response.json().catch(() => null);
   if (!response.ok) throw new Error(`rpc ${path}: HTTP ${response.status} ${JSON.stringify(body?.json ?? body)}`);
   return body.json;
 }
 
 async function auth(stack, path, body) {
-  const response = await fetch(`${base(stack)}/auth/v1/${path}`, {
+  const response = await send(`${base(stack)}/auth/v1/${path}`, () => ({
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(REQUEST_MS),
-  });
+  }));
   const json = await response.json();
   assert(response.ok && typeof json.access_token === 'string', `${path} returns a session (HTTP ${response.status})`);
   return json.access_token;
 }
 
 async function upload(stack, token, slug, name, bytes) {
-  const form = new FormData();
-  form.append('file', new Blob([bytes], { type: 'application/xml' }), name);
-  const response = await fetch(`${base(stack)}/api/files`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'x-crove-org': slug },
-    body: form,
-    signal: AbortSignal.timeout(REQUEST_MS),
+  const response = await send(`${base(stack)}/api/files`, () => {
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type: 'application/xml' }), name);
+    return { method: 'POST', headers: { authorization: `Bearer ${token}`, 'x-crove-org': slug }, body: form, signal: AbortSignal.timeout(REQUEST_MS) };
   });
   const json = await response.json();
   assert(response.ok && json.files?.[0]?.fileId, `upload of ${name} accepted (HTTP ${response.status})`);
@@ -233,10 +246,10 @@ async function proposalOf(stack, token, slug, fileId) {
 }
 
 async function download(stack, token, slug, path) {
-  const response = await fetch(`${base(stack)}${path}`, {
+  const response = await send(`${base(stack)}${path}`, () => ({
     headers: { authorization: `Bearer ${token}`, 'x-crove-org': slug },
     signal: AbortSignal.timeout(REQUEST_MS),
-  });
+  }));
   assert(response.ok, `${path} downloads (HTTP ${response.status})`);
   return Buffer.from(await response.arrayBuffer());
 }
