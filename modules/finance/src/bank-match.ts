@@ -58,16 +58,16 @@ export interface StoredBankLine {
   importId: string;
 }
 
-// The line, as the org has it, or null.
-export async function findBankLine(ctx: QueryContext, id: string): Promise<StoredBankLine | null> {
-  const row = await ctx.trx
+// The lines, as the org has them, in no particular order; ids of other orgs or of no line are left out.
+async function findBankLines(ctx: QueryContext, ids: readonly string[]): Promise<StoredBankLine[]> {
+  if (ids.length === 0) return [];
+  const rows = await ctx.trx
     .selectFrom('crove_finance.bank_line')
     .select(['id', 'bank_account', 'value_date', 'description', 'amount', 'running_balance', 'bank_ref', 'ambiguous', 'import_id'])
     .where('org_id', '=', ctx.orgId)
-    .where('id', '=', id)
-    .executeTakeFirst();
-  if (!row) return null;
-  return {
+    .where('id', 'in', ids)
+    .execute();
+  return rows.map((row) => ({
     id: row.id,
     bankAccount: row.bank_account,
     date: row.value_date,
@@ -77,7 +77,12 @@ export async function findBankLine(ctx: QueryContext, id: string): Promise<Store
     reference: row.bank_ref,
     ambiguous: row.ambiguous,
     importId: row.import_id,
-  };
+  }));
+}
+
+// The line, as the org has it, or null.
+export async function findBankLine(ctx: QueryContext, id: string): Promise<StoredBankLine | null> {
+  return (await findBankLines(ctx, [id]))[0] ?? null;
 }
 
 // The same transaction lock the database's check takes when a voucher of the line is posted (20261020130000).
@@ -170,8 +175,15 @@ type PartyRow = { id: string; name: string; tax_code: string | null };
 const readParties = (ctx: QueryContext): Promise<PartyRow[]> =>
   ctx.trx.selectFrom('crove_kernel.party').select(['id', 'name', 'tax_code']).where('org_id', '=', ctx.orgId).execute();
 
-// The voucher a line makes and the party it is probably about, given the org's parties.
-async function lineVoucherFor(ctx: QueryContext, line: StoredBankLine, state: BankLineState, parties: readonly PartyRow[]): Promise<BankLineVoucher> {
+// The voucher a line makes and the party it is probably about, given the org's parties. withBalances: false leaves out
+// the open-balance reason (its query is the costliest, and only finance.bank.line_voucher shows it).
+async function lineVoucherFor(
+  ctx: QueryContext,
+  line: StoredBankLine,
+  state: BankLineState,
+  parties: readonly PartyRow[],
+  withBalances = true,
+): Promise<BankLineVoucher> {
   const amount = new Decimal(line.amount).abs();
   const type = bankVoucherType(line.amount);
   const inflow = type === 'bank_credit';
@@ -191,18 +203,20 @@ async function lineVoucherFor(ctx: QueryContext, line: StoredBankLine, state: Ba
   // Parties whose open balance on the line's side equals the amount on the line's date: owed to the org on 131 for
   // money in, owed by the org on 331 for money out.
   const side = inflow ? sql<string>`pg_catalog.sum(l.debit) - pg_catalog.sum(l.credit)` : sql<string>`pg_catalog.sum(l.credit) - pg_catalog.sum(l.debit)`;
-  const balances = await ctx.trx
-    .selectFrom('crove_finance.journal_line as l')
-    .innerJoin('crove_finance.journal_entry as e', (join) => join.onRef('e.org_id', '=', 'l.org_id').onRef('e.id', '=', 'l.entry_id'))
-    .select(['l.party_id', side.as('balance')])
-    .where('l.org_id', '=', ctx.orgId)
-    .where('l.party_id', 'is not', null)
-    .where('l.account_code', 'like', inflow ? '131%' : '331%')
-    .where('e.entry_date', '<=', line.date)
-    .groupBy('l.party_id')
-    .having(side, '=', amount.toFixed())
-    .limit(CANDIDATE_ROWS)
-    .execute();
+  const balances = !withBalances
+    ? []
+    : await ctx.trx
+        .selectFrom('crove_finance.journal_line as l')
+        .innerJoin('crove_finance.journal_entry as e', (join) => join.onRef('e.org_id', '=', 'l.org_id').onRef('e.id', '=', 'l.entry_id'))
+        .select(['l.party_id', side.as('balance')])
+        .where('l.org_id', '=', ctx.orgId)
+        .where('l.party_id', 'is not', null)
+        .where('l.account_code', 'like', inflow ? '131%' : '331%')
+        .where('e.entry_date', '<=', line.date)
+        .groupBy('l.party_id')
+        .having(side, '=', amount.toFixed())
+        .limit(CANDIDATE_ROWS)
+        .execute();
 
   const match = matchLine(
     { description: line.description, amount: line.amount },
@@ -273,13 +287,16 @@ export const bankSuggestions = defineQuery({
       .limit(BANK_SUGGESTIONS_MAX)
       .execute();
     const states = await bankLineStates(ctx, ids.map((r) => r.id));
+    const open = await findBankLines(ctx, ids.filter((r) => states.get(r.id)?.status === 'open').map((r) => r.id));
+    const byId = new Map(open.map((l) => [l.id, l]));
     const parties = await readParties(ctx);
     const out: BankLineVoucher[] = [];
+    // In statement order. The open-balance reason is never strong, so its query is skipped: a tie it would add sits
+    // below the strong reason that decides.
     for (const { id } of ids) {
-      if (states.get(id)?.status !== 'open') continue;
-      const line = await findBankLine(ctx, id);
+      const line = byId.get(id);
       if (!line) continue;
-      const made = await lineVoucherFor(ctx, line, { status: 'open' }, parties);
+      const made = await lineVoucherFor(ctx, line, { status: 'open' }, parties, false);
       if (made.voucher && made.suggested && STRONG_REASONS.includes(made.suggested.reason)) out.push(made);
     }
     return out;

@@ -4,7 +4,7 @@
 // one; "Enter voucher" opens the voucher form prefilled from the line, with the party Crove suggests.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams, useSearch } from '@tanstack/react-router';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import type { BankImportResult, BankLine, BankLineStatus, BankLineVoucher, BankRowError } from '@crove/kernel-contract';
 import { Alert, AlertDescription } from '@crove/ui/components/alert';
@@ -330,6 +330,13 @@ export function BankPage() {
   const account = picked ?? bankAccounts.find((a) => a.active)?.code ?? null;
   const current = bankAccounts.find((a) => a.code === account);
   const [month, setMonth] = useState(() => search.month ?? thisMonth());
+  // A link to another account or month while the page is open (back and forward between two of them) moves it there.
+  useEffect(() => {
+    if (search.account) setPicked(search.account);
+  }, [search.account]);
+  useEffect(() => {
+    if (search.month) setMonth(search.month);
+  }, [search.month]);
   const canImport = org.data?.role === 'owner' || org.data?.role === 'admin' || org.data?.role === 'member';
   const lines = useQuery({ ...orpc.bank.lines.queryOptions({ input: { bankAccount: account ?? '1121', period: month } }), enabled: account !== null && /^\d{4}-\d{2}$/.test(month) });
   // The line whose voucher is being entered.
