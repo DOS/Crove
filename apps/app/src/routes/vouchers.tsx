@@ -342,7 +342,7 @@ export function VouchersPage() {
       </div>
       {vouchers.isLoading ? (
         <Spinner />
-      ) : vouchers.error ? (
+      ) : vouchers.error && rows.length === 0 ? (
         <ErrorText>{errorMessage(vouchers.error)}</ErrorText>
       ) : rows.length === 0 ? (
         <Empty title={t('empty')} />
@@ -380,6 +380,12 @@ export function VouchersPage() {
               </TableRow>
             ))}
           </DataTable>
+          {/* A failed page or background refetch keeps the vouchers already shown; its error shows here, by Load more. */}
+          {vouchers.error && (
+            <div className="mt-3">
+              <ErrorText>{errorMessage(vouchers.error)}</ErrorText>
+            </div>
+          )}
           {vouchers.hasNextPage && (
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <p className="text-xs text-muted-foreground">{t('more', { count: rows.length })}</p>
