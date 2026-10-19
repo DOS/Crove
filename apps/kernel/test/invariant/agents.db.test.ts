@@ -1050,16 +1050,34 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     return { ...created, eventId };
   }
 
-  // A proposal written as a human or extraction would (admin, no context), and a review task for the approver.
+  // The agent named as the requester of assessed proposals written directly (humanProposal): one top-level agent, off
+  // the line of every approver the tests start, created once.
+  let assessedRequester: Promise<Awaited<ReturnType<typeof liveAgent>>> | null = null;
+
+  // A proposal written directly (admin, no context), and a review task for the approver.
   // flags: the writer's assessment; null means no writer assessed them (every proposal not created from an agent's
-  // request today).
+  // request). Only an agent's request carries assessed flags (#435), so a proposal written with flags names the chain
+  // of a requesting agent that is neither the approver nor on its reporting line.
   async function humanProposal(command: string, extra: { flags?: string[] | null; authors?: unknown[]; tainted?: boolean } = {}) {
+    const flags = extra.flags === undefined ? [] : extra.flags;
+    const requester = flags === null ? null : await (assessedRequester ??= liveAgent(orgA, owner));
     return withAdmin(async (c) =>
       (
         await c.query<{ id: string }>(
-          `INSERT INTO crove_kernel.proposal (org_id, kind, command, title, payload, eligible_approvers, authors, policy_flags, tainted)
-           VALUES ($1, 't260', $2, 'T260', '{}', ARRAY[$3::uuid], $4, $5, $6) RETURNING id`,
-          [orgA, command, owner, JSON.stringify(extra.authors ?? [{ type: 'user', id: owner }]), extra.flags === undefined ? [] : extra.flags, extra.tainted ?? false],
+          `INSERT INTO crove_kernel.proposal (org_id, kind, command, title, payload, eligible_approvers, authors, policy_flags, tainted,
+                                              requested_by_agent, requested_by_run, source_task_id)
+           VALUES ($1, 't260', $2, 'T260', '{}', ARRAY[$3::uuid], $4, $5, $6, $7, $8, $9) RETURNING id`,
+          [
+            orgA,
+            command,
+            owner,
+            JSON.stringify(extra.authors ?? [{ type: 'user', id: owner }]),
+            flags,
+            extra.tainted ?? false,
+            requester?.agentId ?? null,
+            requester?.runId ?? null,
+            requester?.taskId ?? null,
+          ],
         )
       ).rows[0]?.id as string,
     );
