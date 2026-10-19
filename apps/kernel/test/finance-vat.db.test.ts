@@ -264,7 +264,7 @@ suite('VAT working per month or quarter (#316)', () => {
   it('exports the period to Excel and records the export, for a viewer too', async () => {
     const response = await exportFile(await tokenFor(viewer), '2026-Q3');
     expect(response.status).toBe(200);
-    expect(response.headers.get('content-disposition')).toBe(`attachment; filename="crove-gtgt-2026-Q3-${org.slug}.xlsx"`);
+    expect(response.headers.get('content-disposition')).toBe(`attachment; filename="crove-gtgt-2026-Q3-${org.slug}.xlsx"; filename*=UTF-8''crove-gtgt-2026-Q3-${org.slug}.xlsx`);
     expect(response.headers.get('content-type')).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     // An xlsx file is a zip archive; its content is checked in modules/finance/test/vat-export.test.ts and the e2e.
     const bytes = new Uint8Array(await response.arrayBuffer());
@@ -299,7 +299,7 @@ suite('VAT working per month or quarter (#316)', () => {
     const month = await exportXml(await tokenFor(viewer), '2026-09');
     expect(month.status).toBe(200);
     expect(month.headers.get('content-type')).toBe('application/xml; charset=utf-8');
-    expect(month.headers.get('content-disposition')).toBe(`attachment; filename="crove-01gtgt-2026-09-${org.slug}.xml"`);
+    expect(month.headers.get('content-disposition')).toBe(`attachment; filename="crove-01gtgt-2026-09-${org.slug}.xml"; filename*=UTF-8''crove-01gtgt-2026-09-${org.slug}.xml`);
     expect(month.headers.get('cache-control')).toBe('private, no-store');
     const xml = await month.text();
     expect(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>')).toBe(true);

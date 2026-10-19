@@ -327,7 +327,7 @@ suite('ledger reports per month, quarter or year (#321)', () => {
     const before = (await exportAudits()).length;
     const response = await exportFile(await tokenFor(viewer), '2026-09');
     expect(response.status).toBe(200);
-    expect(response.headers.get('content-disposition')).toBe(`attachment; filename="crove-so-sach-2026-09-${org.slug}.xlsx"`);
+    expect(response.headers.get('content-disposition')).toBe(`attachment; filename="crove-so-sach-2026-09-${org.slug}.xlsx"; filename*=UTF-8''crove-so-sach-2026-09-${org.slug}.xlsx`);
     expect(response.headers.get('content-type')).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     // An xlsx file is a zip archive; its content is checked in modules/finance/test/ledger-export.test.ts and the e2e.
