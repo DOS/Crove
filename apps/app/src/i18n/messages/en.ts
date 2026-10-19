@@ -414,6 +414,8 @@ export const en = {
     posted: 'Posted',
     reversed: 'Reversed on {date}',
     viewEntry: 'View entry',
+    more: 'Showing the {count, number} newest vouchers; older ones follow.',
+    loadMore: 'Load more',
     form: {
       intro: 'The voucher goes to the inbox as a proposal. It gets its number and its entry is posted when an owner or admin approves it.',
       type: 'Voucher type',
@@ -464,6 +466,7 @@ export const en = {
       PARTY_REQUIRED: 'Lines on 131 or 331 need a party (a customer or a vendor).',
       TOTAL_TOO_LARGE: 'The total is above the allowed limit.',
       TOTAL_MISMATCH: "The total does not match the voucher's lines.",
+      PROPOSAL_INVALID: "This voucher cannot be entered as it is: check the party and the lines (the party's stored name or tax code may be too long).",
     },
   },
   reversal: {
@@ -662,6 +665,7 @@ export const en = {
     reversalFourEyes: 'Someone else must approve (you asked for this reversal).',
     reversalNotEligible: 'Only owners and admins can approve a reversal.',
     voucherSubtitle: '{type} dated {date}: when approved, Crove numbers the voucher and posts its entry.',
+    voucherSubtitlePosted: '{type} {code} dated {date}, posted.',
     approveVoucher: 'Approve and post the voucher',
     stepUpApproveVoucher: 'approve and post this cash or bank voucher',
     voucherFourEyes: 'Someone else must approve (you entered this voucher).',
@@ -672,6 +676,7 @@ export const en = {
     voucherReason: 'Reason',
     voucherTotal: 'Total',
     voucherNumberLater: 'The voucher number is given on approval.',
+    voucherNumberGiven: 'Voucher number:',
     viewVouchers: 'View cash and bank vouchers',
     reversalDate: 'Reversal date',
     reason: 'Reason',

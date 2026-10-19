@@ -141,8 +141,8 @@ function ReversalCard({ reversal, slug }: { reversal: { entryId: string; entryDa
 }
 
 // A cash or bank voucher entered by hand (#327): what it says and the entry its approval posts. The number is given
-// on approval.
-function VoucherCard({ voucher, slug, accountName }: { voucher: CashVoucherProposal; slug: string; accountName: (code: string) => string }) {
+// on approval; code is the one it was given, once approved.
+function VoucherCard({ voucher, code, slug, accountName }: { voucher: CashVoucherProposal; code: string | null; slug: string; accountName: (code: string) => string }) {
   const t = useTranslations('inboxDetail');
   const f = useFormat();
   const journal = previewVoucherJournal(voucher);
@@ -198,7 +198,13 @@ function VoucherCard({ voucher, slug, accountName }: { voucher: CashVoucherPropo
             ))}
           </tbody>
         </table>
-        <p className="mt-3 text-xs text-subtle-foreground">{t('voucherNumberLater')}</p>
+        {code ? (
+          <p className="mt-3 text-sm text-foreground">
+            {t('voucherNumberGiven')} <span className="font-mono font-medium">{code}</span>
+          </p>
+        ) : (
+          <p className="mt-3 text-xs text-subtle-foreground">{t('voucherNumberLater')}</p>
+        )}
         <Link to="/o/$slug/vouchers" params={{ slug }} className="mt-2 inline-block text-sm text-link hover:underline">
           {t('viewVouchers')}
         </Link>
@@ -282,6 +288,8 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const reversal = item?.reversal ?? null;
   // A voucher (#327) is approved as shown, like a reversal: no line accounts, no invoice checks.
   const voucher = item?.voucher ?? null;
+  // The code the voucher was given when it was approved (PC00001 and the like).
+  const voucherCode = (voucher && item?.status === 'executed' && item.result?.voucherCode) || null;
   const plain = reversal !== null || voucher !== null;
   const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
   const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
@@ -383,7 +391,9 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
               : reversal
                 ? t('reversalSubtitle')
                 : voucher
-                  ? t('voucherSubtitle', { type: root(`vouchers.types.${voucher.type}`), date: f.date(voucher.date) })
+                  ? voucherCode
+                    ? t('voucherSubtitlePosted', { type: root(`vouchers.types.${voucher.type}`), code: voucherCode, date: f.date(voucher.date) })
+                    : t('voucherSubtitle', { type: root(`vouchers.types.${voucher.type}`), date: f.date(voucher.date) })
                   : undefined
           }
           actions={
@@ -494,7 +504,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           {pending && !item.canApprove && item.approveReason === 'not_eligible' && (
             <p className="mb-4 text-sm text-subtle-foreground">{t('voucherNotEligible')}</p>
           )}
-          <VoucherCard voucher={voucher} slug={slug} accountName={accountName} />
+          <VoucherCard voucher={voucher} code={voucherCode} slug={slug} accountName={accountName} />
         </div>
       )}
       {reading && (

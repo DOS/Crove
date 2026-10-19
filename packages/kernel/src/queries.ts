@@ -9,6 +9,7 @@ import {
   zMoney,
   zProposalStatus,
   zPurchaseProposal,
+  zVoucherCode,
   type CashVoucherProposal,
   type JournalReversal,
   type PurchaseProposal,
@@ -198,7 +199,7 @@ export const inboxGet = defineQuery({
           .where('id', '=', row.source_file_id)
           .executeTakeFirst()
       : undefined;
-    const result = row.result as { documentId?: string; journalEntryId?: string; reversedEntryId?: string; voidedDocumentId?: string; voucherId?: string } | null;
+    const result = row.result as { documentId?: string; journalEntryId?: string; reversedEntryId?: string; voidedDocumentId?: string; voucherId?: string; code?: unknown } | null;
     // The same decision kernel.proposal.approve makes (without its locks), so the Inbox shows Approve only
     // to users the server will accept.
     const approval = await decideApproval(ctx.trx, ctx.orgId, ctx.actor, row, { lock: false });
@@ -248,6 +249,9 @@ export const inboxGet = defineQuery({
             ...(result.reversedEntryId ? { reversedEntryId: result.reversedEntryId } : {}),
             ...(result.voidedDocumentId ? { voidedDocumentId: result.voidedDocumentId } : {}),
             ...(result.voucherId ? { voucherId: result.voucherId } : {}),
+            // The code finance.voucher.record gave the voucher (it returns it with the voucher's id); a number never
+            // changes once given, so the stored result stays true.
+            ...(result.voucherId && zVoucherCode.safeParse(result.code).success ? { voucherCode: result.code as string } : {}),
           }
         : null,
       voided,

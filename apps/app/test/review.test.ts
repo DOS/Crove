@@ -29,6 +29,8 @@ describe('bulk approval', () => {
     expect(bulkSelectable({ ...row, status: 'executed' }, REVERSAL)).toBe(false);
     expect(bulkSelectable({ ...row, duplicateOf: 'p0' }, REVERSAL)).toBe(false);
     expect(bulkSelectable({ ...row, kind: REVERSAL }, REVERSAL)).toBe(false);
+    // A pending cash or bank voucher (#327) has no checks and no duplicate, and goes in a bulk approval too.
+    expect(bulkSelectable({ ...row, kind: 'finance.cash_voucher' }, REVERSAL)).toBe(true);
   });
 
   it('offers bulk approval to owners and admins only', () => {

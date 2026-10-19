@@ -30,8 +30,10 @@ test('enter a bank debit note, approve it and find it numbered in the books', as
     await page.getByRole('link', { name: 'Xem đề xuất' }).click();
   });
 
+  let proposalUrl = '';
   await test.step('approve it in the Inbox after a fresh second factor', async () => {
     await expect(page.getByText(/Giấy báo Nợ ngày .*Crove cấp số chứng từ và ghi bút toán/)).toBeVisible();
+    proposalUrl = page.url();
     await expect(page.getByText('Số chứng từ được cấp khi duyệt.')).toBeVisible();
     await page.getByRole('button', { name: 'Duyệt và ghi sổ chứng từ' }).click();
     await expect(page.getByText('Đang chờ: duyệt và ghi sổ chứng từ thu chi này.')).toBeVisible();
@@ -51,6 +53,13 @@ test('enter a bank debit note, approve it and find it numbered in the books', as
     await expect(row).toContainText('Đã ghi sổ');
     await row.getByRole('link', { name: 'Xem bút toán' }).click();
     await expect(page.getByText('BN00001 Phí chuyển khoản tháng 10')).toBeVisible();
+  });
+
+  await test.step('the approved proposal shows the number the voucher was given', async () => {
+    await page.goto(proposalUrl);
+    await expect(page.getByText(/Giấy báo Nợ số BN00001 ngày .*đã ghi sổ/)).toBeVisible();
+    await expect(page.getByText('Số chứng từ: BN00001')).toBeVisible();
+    await expect(page.getByText('Số chứng từ được cấp khi duyệt.')).toHaveCount(0);
   });
 
   await test.step('one voucher and its entry in the database, approved with the second factor', async () => {

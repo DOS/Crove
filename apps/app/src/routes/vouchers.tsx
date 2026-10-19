@@ -1,8 +1,8 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
-import { VOUCHER_MAX_LINES, VOUCHER_TYPES, cashRootOf, defaultCounterAccount, isInflow, type VoucherType } from '@crove/kernel-contract';
+import { VOUCHER_MAX_LINES, VOUCHER_TYPES, cashRootOf, defaultCounterAccount, isInflow, type VoucherCursor, type VoucherType } from '@crove/kernel-contract';
 import { Alert, AlertDescription } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -19,6 +19,7 @@ import { localToday } from '../lib/reversal.ts';
 import {
   canEnterVoucher,
   cashAccountChoices,
+  nextVoucherCursor,
   normalizeAmount,
   previewVoucherJournal,
   voucherFormError,
@@ -291,7 +292,17 @@ export function VouchersPage() {
   const [type, setType] = useState<VoucherType | ''>('');
   const [entering, setEntering] = useState(false);
   const org = useQuery(orpc.org.get.queryOptions());
-  const vouchers = useQuery(orpc.vouchers.list.queryOptions({ input: { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(type ? { type } : {}) } }));
+  const filters = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(type ? { type } : {}) };
+  // A page at a time (the server sends at most VOUCHER_PAGE_SIZE); Load more asks for the vouchers after the last one.
+  const vouchers = useInfiniteQuery(
+    orpc.vouchers.list.infiniteOptions({
+      input: (before: VoucherCursor | undefined) => ({ ...filters, ...(before ? { before } : {}) }),
+      initialPageParam: undefined as VoucherCursor | undefined,
+      getNextPageParam: nextVoucherCursor,
+      placeholderData: keepPreviousData,
+    }),
+  );
+  const rows = vouchers.data?.pages.flatMap((p) => p.items) ?? [];
   const allowed = canEnterVoucher(org.data?.role);
 
   return (
@@ -333,41 +344,51 @@ export function VouchersPage() {
         <Spinner />
       ) : vouchers.error ? (
         <ErrorText>{errorMessage(vouchers.error)}</ErrorText>
-      ) : (vouchers.data?.length ?? 0) === 0 ? (
+      ) : rows.length === 0 ? (
         <Empty title={t('empty')} />
       ) : (
-        <DataTable
-          head={[t('columns.number'), t('columns.date'), t('columns.party'), t('columns.description'), t('columns.account'), t('columns.amount'), t('columns.status')]}
-        >
-          {vouchers.data?.map((v) => (
-            <TableRow key={v.id}>
-              <TableCell className="px-4 py-3">
-                <span className="font-mono font-medium text-foreground">{v.code}</span>
-                <p className="text-xs text-subtle-foreground">{t(`types.${v.type}`)}</p>
-              </TableCell>
-              <TableCell className="px-4 py-3 text-muted-foreground">{f.date(v.date)}</TableCell>
-              <TableCell className="px-4 py-3 text-foreground">
-                {v.party?.name ?? ''}
-                {v.personName && <p className="text-xs text-subtle-foreground">{v.personName}</p>}
-              </TableCell>
-              <TableCell className="px-4 py-3 text-foreground">{v.description}</TableCell>
-              <TableCell className="px-4 py-3 font-mono text-muted-foreground">{v.cashAccount}</TableCell>
-              <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">{f.money(v.amount)}</TableCell>
-              <TableCell className="px-4 py-3">
-                {v.reversal ? (
-                  <Badge variant="warning">{t('reversed', { date: f.date(v.reversal.entryDate) })}</Badge>
-                ) : (
-                  <Badge variant="success">{t('posted')}</Badge>
-                )}
-                {v.journalEntryId && (
-                  <Link to="/o/$slug/journal" params={{ slug }} hash={`entry-${v.journalEntryId}`} className="mt-1 block text-xs text-link hover:underline">
-                    {t('viewEntry')}
-                  </Link>
-                )}
-              </TableCell>
-            </TableRow>
-          ))}
-        </DataTable>
+        <>
+          <DataTable
+            head={[t('columns.number'), t('columns.date'), t('columns.party'), t('columns.description'), t('columns.account'), t('columns.amount'), t('columns.status')]}
+          >
+            {rows.map((v) => (
+              <TableRow key={v.id}>
+                <TableCell className="px-4 py-3">
+                  <span className="font-mono font-medium text-foreground">{v.code}</span>
+                  <p className="text-xs text-subtle-foreground">{t(`types.${v.type}`)}</p>
+                </TableCell>
+                <TableCell className="px-4 py-3 text-muted-foreground">{f.date(v.date)}</TableCell>
+                <TableCell className="px-4 py-3 text-foreground">
+                  {v.party?.name ?? ''}
+                  {v.personName && <p className="text-xs text-subtle-foreground">{v.personName}</p>}
+                </TableCell>
+                <TableCell className="px-4 py-3 text-foreground">{v.description}</TableCell>
+                <TableCell className="px-4 py-3 font-mono text-muted-foreground">{v.cashAccount}</TableCell>
+                <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">{f.money(v.amount)}</TableCell>
+                <TableCell className="px-4 py-3">
+                  {v.reversal ? (
+                    <Badge variant="warning">{t('reversed', { date: f.date(v.reversal.entryDate) })}</Badge>
+                  ) : (
+                    <Badge variant="success">{t('posted')}</Badge>
+                  )}
+                  {v.journalEntryId && (
+                    <Link to="/o/$slug/journal" params={{ slug }} hash={`entry-${v.journalEntryId}`} className="mt-1 block text-xs text-link hover:underline">
+                      {t('viewEntry')}
+                    </Link>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </DataTable>
+          {vouchers.hasNextPage && (
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <p className="text-xs text-muted-foreground">{t('more', { count: rows.length })}</p>
+              <Button variant="outline" size="sm" disabled={vouchers.isFetchingNextPage} onClick={() => void vouchers.fetchNextPage()}>
+                {t('loadMore')}
+              </Button>
+            </div>
+          )}
+        </>
       )}
     </>
   );
