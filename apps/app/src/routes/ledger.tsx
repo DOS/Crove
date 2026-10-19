@@ -256,6 +256,9 @@ export function LedgerPage() {
   const period = ledgerPeriodKey(choice);
   const report = useQuery(orpc.ledger.period.queryOptions({ input: { period } }));
   const data = report.data;
+  // The trial balance, general ledger and party tabs wait for this report. The statements tab runs its own query, so a
+  // period too large for the ledger report (PERIOD_TOO_LARGE) still gets its statements.
+  const reportStatus = report.isLoading ? <Spinner /> : report.error ? <ErrorText>{errorMessage(report.error)}</ErrorText> : null;
   const rows = data?.trialBalance.rows ?? [];
   // The account the general ledger shows: the one picked if the period has it, else the first one.
   const account = rows.find((r) => r.accountCode === picked)?.accountCode ?? rows[0]?.accountCode ?? null;
@@ -333,104 +336,116 @@ export function LedgerPage() {
           <ErrorText>{errorMessage(exportXlsx.error)}</ErrorText>
         </div>
       )}
-      {report.isLoading ? (
-        <Spinner />
-      ) : report.error ? (
-        <ErrorText>{errorMessage(report.error)}</ErrorText>
-      ) : data ? (
-        <Tabs className="gap-4" value={tab} onValueChange={(value) => setTab(value as Tab)}>
-          <TabsList variant="line" className="w-full justify-start border-b">
-            {TABS.map((id) => (
-              <TabsTrigger key={id} value={id} className="flex-none px-3">
-                {t(`tabs.${id}`)}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-          <TabsContent value="trialBalance">
-            {!data.trialBalance.balanced && (
-              <div className="mb-4">
-                <Notice>{t('unbalanced')}</Notice>
-              </div>
-            )}
-            {rows.length === 0 ? (
-              <Empty title={t('trialBalanceEmpty')} />
-            ) : (
-              <DataTable
-                numeric={[2, 3, 4, 5, 6, 7]}
-                head={[
-                  t('columns.code'),
-                  t('columns.name'),
-                  t('columns.openingDebit'),
-                  t('columns.openingCredit'),
-                  t('columns.debit'),
-                  t('columns.credit'),
-                  t('columns.closingDebit'),
-                  t('columns.closingCredit'),
-                ]}>
-                {rows.map((row) => (
-                  <TableRow key={row.accountCode} className={row.level === 0 ? 'font-medium' : ''}>
-                    <TableCell className="px-4 py-3 font-mono text-xs text-foreground">{row.accountCode}</TableCell>
-                    <TableCell className="px-4 py-3 text-foreground" style={{ paddingLeft: `${1 + row.level * 1.25}rem` }}>
-                      {row.accountName}
-                    </TableCell>
-                    <TableCell className={NUM}>{f.money(row.openingDebit)}</TableCell>
-                    <TableCell className={NUM}>{f.money(row.openingCredit)}</TableCell>
-                    <TableCell className={NUM}>{f.money(row.debit)}</TableCell>
-                    <TableCell className={NUM}>{f.money(row.credit)}</TableCell>
-                    <TableCell className={NUM}>{f.money(row.closingDebit)}</TableCell>
-                    <TableCell className={NUM}>{f.money(row.closingCredit)}</TableCell>
+      <Tabs className="gap-4" value={tab} onValueChange={(value) => setTab(value as Tab)}>
+        <TabsList variant="line" className="w-full justify-start border-b">
+          {TABS.map((id) => (
+            <TabsTrigger key={id} value={id} className="flex-none px-3">
+              {t(`tabs.${id}`)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        <TabsContent value="trialBalance">
+          {data ? (
+            <>
+              {!data.trialBalance.balanced && (
+                <div className="mb-4">
+                  <Notice>{t('unbalanced')}</Notice>
+                </div>
+              )}
+              {rows.length === 0 ? (
+                <Empty title={t('trialBalanceEmpty')} />
+              ) : (
+                <DataTable
+                  numeric={[2, 3, 4, 5, 6, 7]}
+                  head={[
+                    t('columns.code'),
+                    t('columns.name'),
+                    t('columns.openingDebit'),
+                    t('columns.openingCredit'),
+                    t('columns.debit'),
+                    t('columns.credit'),
+                    t('columns.closingDebit'),
+                    t('columns.closingCredit'),
+                  ]}>
+                  {rows.map((row) => (
+                    <TableRow key={row.accountCode} className={row.level === 0 ? 'font-medium' : ''}>
+                      <TableCell className="px-4 py-3 font-mono text-xs text-foreground">{row.accountCode}</TableCell>
+                      <TableCell className="px-4 py-3 text-foreground" style={{ paddingLeft: `${1 + row.level * 1.25}rem` }}>
+                        {row.accountName}
+                      </TableCell>
+                      <TableCell className={NUM}>{f.money(row.openingDebit)}</TableCell>
+                      <TableCell className={NUM}>{f.money(row.openingCredit)}</TableCell>
+                      <TableCell className={NUM}>{f.money(row.debit)}</TableCell>
+                      <TableCell className={NUM}>{f.money(row.credit)}</TableCell>
+                      <TableCell className={NUM}>{f.money(row.closingDebit)}</TableCell>
+                      <TableCell className={NUM}>{f.money(row.closingCredit)}</TableCell>
+                    </TableRow>
+                  ))}
+                  <TableRow className="font-semibold">
+                    <TableCell className="px-4 py-3" />
+                    <TableCell className="px-4 py-3 text-foreground">{t('total')}</TableCell>
+                    <TableCell className={NUM}>{f.money(data.trialBalance.totals.openingDebit)}</TableCell>
+                    <TableCell className={NUM}>{f.money(data.trialBalance.totals.openingCredit)}</TableCell>
+                    <TableCell className={NUM}>{f.money(data.trialBalance.totals.debit)}</TableCell>
+                    <TableCell className={NUM}>{f.money(data.trialBalance.totals.credit)}</TableCell>
+                    <TableCell className={NUM}>{f.money(data.trialBalance.totals.closingDebit)}</TableCell>
+                    <TableCell className={NUM}>{f.money(data.trialBalance.totals.closingCredit)}</TableCell>
                   </TableRow>
-                ))}
-                <TableRow className="font-semibold">
-                  <TableCell className="px-4 py-3" />
-                  <TableCell className="px-4 py-3 text-foreground">{t('total')}</TableCell>
-                  <TableCell className={NUM}>{f.money(data.trialBalance.totals.openingDebit)}</TableCell>
-                  <TableCell className={NUM}>{f.money(data.trialBalance.totals.openingCredit)}</TableCell>
-                  <TableCell className={NUM}>{f.money(data.trialBalance.totals.debit)}</TableCell>
-                  <TableCell className={NUM}>{f.money(data.trialBalance.totals.credit)}</TableCell>
-                  <TableCell className={NUM}>{f.money(data.trialBalance.totals.closingDebit)}</TableCell>
-                  <TableCell className={NUM}>{f.money(data.trialBalance.totals.closingCredit)}</TableCell>
-                </TableRow>
-              </DataTable>
-            )}
-          </TabsContent>
-          <TabsContent value="generalLedger">
-            {account === null ? (
-              <Empty title={t('trialBalanceEmpty')} />
-            ) : (
-              <div className="space-y-4">
-                <label className="block text-xs">
-                  <span className="text-subtle-foreground">{t('account')}</span>
-                  <NativeSelect aria-label={t('account')} className="mt-1 w-96 max-w-full" value={account} onChange={(e) => setPicked(e.target.value)}>
-                    {rows.map((row) => (
-                      <NativeSelectOption key={row.accountCode} value={row.accountCode}>
-                        {`${' '.repeat(row.level * 4)}${row.accountCode} ${row.accountName}`}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                </label>
-                <AccountLedger period={period} accountCode={account} />
+                </DataTable>
+              )}
+            </>
+          ) : (
+            reportStatus
+          )}
+        </TabsContent>
+        <TabsContent value="generalLedger">
+          {data ? (
+            <>
+              {account === null ? (
+                <Empty title={t('trialBalanceEmpty')} />
+              ) : (
+                <div className="space-y-4">
+                  <label className="block text-xs">
+                    <span className="text-subtle-foreground">{t('account')}</span>
+                    <NativeSelect aria-label={t('account')} className="mt-1 w-96 max-w-full" value={account} onChange={(e) => setPicked(e.target.value)}>
+                      {rows.map((row) => (
+                        <NativeSelectOption key={row.accountCode} value={row.accountCode}>
+                          {`${' '.repeat(row.level * 4)}${row.accountCode} ${row.accountName}`}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </label>
+                  <AccountLedger period={period} accountCode={account} />
+                </div>
+              )}
+            </>
+          ) : (
+            reportStatus
+          )}
+        </TabsContent>
+        <TabsContent value="parties">
+          {data ? (
+            <>
+              <div className="space-y-8">
+                <section>
+                  <h2 className="mb-2 text-base font-semibold text-foreground">{t('receivablesTitle')}</h2>
+                  <PartyTable ledger={data.receivables} partyLabel={t('columns.customer')} />
+                </section>
+                <section>
+                  <h2 className="mb-2 text-base font-semibold text-foreground">{t('payablesTitle')}</h2>
+                  <PartyTable ledger={data.payables} partyLabel={t('columns.vendor')} />
+                </section>
+                <p className="text-xs text-subtle-foreground">{t('partiesNote')}</p>
               </div>
-            )}
-          </TabsContent>
-          <TabsContent value="parties">
-            <div className="space-y-8">
-              <section>
-                <h2 className="mb-2 text-base font-semibold text-foreground">{t('receivablesTitle')}</h2>
-                <PartyTable ledger={data.receivables} partyLabel={t('columns.customer')} />
-              </section>
-              <section>
-                <h2 className="mb-2 text-base font-semibold text-foreground">{t('payablesTitle')}</h2>
-                <PartyTable ledger={data.payables} partyLabel={t('columns.vendor')} />
-              </section>
-              <p className="text-xs text-subtle-foreground">{t('partiesNote')}</p>
-            </div>
-          </TabsContent>
-          <TabsContent value="statements">
-            <Statements period={period} />
-          </TabsContent>
-        </Tabs>
-      ) : null}
+            </>
+          ) : (
+            reportStatus
+          )}
+        </TabsContent>
+        <TabsContent value="statements">
+          <Statements period={period} />
+        </TabsContent>
+      </Tabs>
     </>
   );
 }
