@@ -129,21 +129,21 @@ export async function expandArchive(deps: ArchiveDeps, orgId: string, source: Ar
   }
 
   // An emailed archive (#432) files its first MAX_EMAIL_ARCHIVE_DOCUMENTS documents in archive order; the others are
-  // listed as rejected and never stored. kernel.file.archive.record holds the same limit.
+  // listed as rejected and never stored. kernel.file.archive.record holds the same limit. Its entries are decoded once,
+  // here, and the loop below reuses them; any other archive decodes each entry as it stores it.
+  const decoded = source.source === 'email' ? listed.map(entryDocument) : null;
   const overLimit = new Set<number>();
-  if (source.source === 'email') {
-    let documents = 0;
-    listed.forEach((entry, index) => {
-      if (!('reason' in entryDocument(entry)) && ++documents > MAX_EMAIL_ARCHIVE_DOCUMENTS) overLimit.add(index);
-    });
-  }
+  let documents = 0;
+  decoded?.forEach((document, index) => {
+    if (!('reason' in document) && ++documents > MAX_EMAIL_ARCHIVE_DOCUMENTS) overLimit.add(index);
+  });
 
   const indexed = listed.map((entry, index) => ({ entry, index }));
   const entries = await mapLimited(indexed, STORE_CONCURRENCY, async ({ entry, index }): Promise<ArchiveEntryInput> => {
     const name = entryName(entry.name);
     const reject = (reason: ArchiveEntryReason): ArchiveEntryInput => ({ outcome: 'rejected', name, reason });
     if (overLimit.has(index)) return reject('email_limit');
-    const document = entryDocument(entry);
+    const document = decoded?.[index] ?? entryDocument(entry);
     if ('reason' in document) return reject(document.reason);
     const { content, contentType } = document;
     const sha256 = sha256Hex(content);
