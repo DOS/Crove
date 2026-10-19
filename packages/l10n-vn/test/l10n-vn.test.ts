@@ -76,11 +76,15 @@ describe('invoice checks', () => {
     expect(checkInvoice(changed, '2026-10-13').find((c) => c.id === 'total')?.status).toBe('fail');
   });
 
-  it.each(['2026-02-30', '2026-13-01', '0000-00-00', '13/10/2026', ''])('fails the date %j without throwing', (issueDate) => {
+  it.each(['2026-02-30', '2026-13-01', '0000-00-00', '0000-01-01', '0000-12-31', '13/10/2026', ''])('fails the date %j without throwing', (issueDate) => {
     const changed = invoice();
     changed.issueDate = issueDate;
     expect(checkInvoice(changed, '2026-10-13').find((c) => c.id === 'issue_date')?.status).toBe('fail');
     expect(isCalendarDate(issueDate)).toBe(false);
+  });
+
+  it.each(['0001-01-01', '1900-01-01', '2028-02-29', '9999-12-31'])('accepts the date %j, the earliest PostgreSQL date and ordinary days', (issueDate) => {
+    expect(isCalendarDate(issueDate)).toBe(true);
   });
 
   it('fails the currency check for foreign-currency invoices', () => {

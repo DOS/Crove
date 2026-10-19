@@ -185,6 +185,8 @@ describe('value readers', () => {
     expect(readDate({ kind: 'number', value: '46270' }, false)).toBe('2026-09-05');
     expect(readDate({ kind: 'number', value: '123' }, false)).toBeNull();
     expect(readDate({ kind: 'text', value: '30/02/2026' }, false)).toBeNull();
+    expect(readDate({ kind: 'text', value: '01/01/0000' }, false)).toBeNull();
+    expect(readDate({ kind: 'text', value: '0000-01-01' }, false)).toBeNull();
     expect(readDate({ kind: 'text', value: '09/05/26' }, false)).toBeNull();
   });
 });
