@@ -67,7 +67,7 @@ import {
   zLedgerReport,
   zVoucherType,
 } from './schemas.ts';
-import { zCashVoucherRequest, zCashVoucherView } from './cash-voucher.ts';
+import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { zPortalReconciliation } from './portal-list.ts';
 
@@ -326,12 +326,13 @@ export const contract = {
     // One entry, for example the one a reversal proposal names.
     get: oc.input(z.object({ id: zId })).output(zJournalEntry),
   },
-  // Cash and bank vouchers (#327): the posted vouchers of a date range, newest first. A voucher is entered with
-  // inbox.request (command finance.voucher.record) and posted when its proposal is approved.
+  // Cash and bank vouchers (#327): the posted vouchers of a date range, newest first, VOUCHER_PAGE_SIZE at a time
+  // (before: the last voucher of the page shown; more: older ones follow). A voucher is entered with inbox.request
+  // (command finance.voucher.record) and posted when its proposal is approved.
   vouchers: {
     list: oc
-      .input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional(), type: zVoucherType.optional() }))
-      .output(z.array(zCashVoucherView)),
+      .input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional(), type: zVoucherType.optional(), before: zVoucherCursor.optional() }))
+      .output(zCashVoucherPage),
   },
   // Opening balances from Excel (#320), owners and admins. preview checks a trial balance read from the template and
   // writes nothing; post checks it again and posts it as the org's one opening entry (R3: fresh MFA). A retry with the

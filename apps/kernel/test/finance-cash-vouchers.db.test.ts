@@ -260,7 +260,11 @@ suite('cash and bank vouchers (#327)', () => {
     expect(approved).toMatchObject({ status: 200, body: { voucherId: expect.any(String), journalEntryId: expect.any(String) } });
     paymentEntry = String(approved.body.journalEntryId);
     paymentVoucher = String(approved.body.voucherId);
-    expect((await rpc('inbox/get', await tokenFor(owner), { id })).body).toMatchObject({ status: 'executed', result: { voucherId: paymentVoucher, journalEntryId: paymentEntry } });
+    // The Inbox shows the code the voucher was given (#509).
+    expect((await rpc('inbox/get', await tokenFor(owner), { id })).body).toMatchObject({
+      status: 'executed',
+      result: { voucherId: paymentVoucher, journalEntryId: paymentEntry, voucherCode: 'PC00001' },
+    });
   });
 
   async function vendorName() {
@@ -270,7 +274,8 @@ suite('cash and bank vouchers (#327)', () => {
 
   it('numbers the voucher, posts Dr 331 for the vendor and Cr 1111, and clears the vendor in the payables', async () => {
     const vouchers = await rpc('vouchers/list', await tokenFor(viewer), {});
-    expect(vouchers.body).toEqual([
+    expect(vouchers.body.more).toBe(false);
+    expect(vouchers.body.items).toEqual([
       {
         id: paymentVoucher,
         type: 'cash_payment',
@@ -318,7 +323,7 @@ suite('cash and bank vouchers (#327)', () => {
         (
           await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.proposal.approve' AND outcome = 'ok' AND target_id = $2`, [
             org.orgId,
-            vouchers.body[0].proposalId,
+            vouchers.body.items[0].proposalId,
           ])
         ).rows,
     );
@@ -339,7 +344,7 @@ suite('cash and bank vouchers (#327)', () => {
     expect((await approve(owner, id)).body).toMatchObject({ code: 'FOUR_EYES_REQUIRED' });
     const approved = await approve(adminUser, id);
     expect(approved.status).toBe(200);
-    const vouchers = (await rpc('vouchers/list', await tokenFor(viewer), { type: 'cash_receipt' })).body as any[];
+    const vouchers = (await rpc('vouchers/list', await tokenFor(viewer), { type: 'cash_receipt' })).body.items as any[];
     expect(vouchers.map((v) => v.code)).toEqual(['PT00001']);
     // An advance from the customer: a credit balance of 131 for that customer.
     const ledger = await rpc('ledger/period', await tokenFor(viewer), { period: '2026-09' });
@@ -362,7 +367,7 @@ suite('cash and bank vouchers (#327)', () => {
     expect((await rpc('inbox/reject', await tokenFor(owner), { id: rejected.body.proposalId })).status).toBe(200);
     const results = await Promise.all(asked.map((a, i) => approve(i % 2 ? adminUser : owner, String(a.body.proposalId))));
     expect(results.map((r) => r.status)).toEqual([200, 200, 200]);
-    const vouchers = (await rpc('vouchers/list', await tokenFor(viewer), {})).body as any[];
+    const vouchers = (await rpc('vouchers/list', await tokenFor(viewer), {})).body.items as any[];
     expect(vouchers.filter((v) => v.type === 'cash_payment').map((v) => v.number).sort()).toEqual([1, 2, 3, 4]);
     expect(vouchers.filter((v) => v.type === 'bank_credit').map((v) => v.code)).toEqual(['BC00001']);
   });
@@ -401,7 +406,7 @@ suite('cash and bank vouchers (#327)', () => {
     const id = String(asked.body.proposalId);
     const result = await rpc('inbox/approveMany', await tokenFor(owner, { mfa: true }), { items: [{ id, revision: 1 }], idempotencyKey: randomUUID() });
     expect(result.body).toEqual({ results: [{ id, outcome: 'approved', journalEntryId: expect.any(String), voucherId: expect.any(String) }] });
-    const vouchers = (await rpc('vouchers/list', await tokenFor(viewer), { type: 'bank_debit' })).body as any[];
+    const vouchers = (await rpc('vouchers/list', await tokenFor(viewer), { type: 'bank_debit' })).body.items as any[];
     expect(vouchers).toEqual([expect.objectContaining({ code: 'BN00001', party: null, amount: expect.stringMatching(/^22000(\.0+)?$/) })]);
   });
 
@@ -414,7 +419,7 @@ suite('cash and bank vouchers (#327)', () => {
     expect(asked.status).toBe(200);
     const approved = await approve(adminUser, String(asked.body.proposalId));
     expect(approved).toMatchObject({ status: 200, body: { reversedEntryId: paymentEntry } });
-    const vouchers = (await rpc('vouchers/list', await tokenFor(viewer), { type: 'cash_payment' })).body as any[];
+    const vouchers = (await rpc('vouchers/list', await tokenFor(viewer), { type: 'cash_payment' })).body.items as any[];
     expect(vouchers.find((v) => v.id === paymentVoucher)).toMatchObject({ code: 'PC00001', reversal: { id: approved.body.journalEntryId, entryDate: '2026-09-30' } });
     const ledger = await rpc('ledger/period', await tokenFor(viewer), { period: '2026-09' });
     // 1 980 000 owed, 600 000 of it paid by the three later vouchers: the reversed 1 980 000 is owed again. The reversal
@@ -423,7 +428,7 @@ suite('cash and bank vouchers (#327)', () => {
     // A new voucher takes the next number; the reversed one is never reused.
     const next = await ask(member, payment('1000'));
     expect((await approve(owner, String(next.body.proposalId))).status).toBe(200);
-    expect(((await rpc('vouchers/list', await tokenFor(viewer), { type: 'cash_payment' })).body as any[])[0]).toMatchObject({ code: 'PC00005' });
+    expect(((await rpc('vouchers/list', await tokenFor(viewer), { type: 'cash_payment' })).body.items as any[])[0]).toMatchObject({ code: 'PC00005' });
   });
 
   it('lists the parties of both sides for the voucher picker, vendors only by default', async () => {
@@ -435,13 +440,13 @@ suite('cash and bank vouchers (#327)', () => {
   });
 
   it('keeps vouchers to their org', async () => {
-    expect((await rpc('vouchers/list', await tokenFor(outsider), {}, other.slug)).body).toEqual([]);
+    expect((await rpc('vouchers/list', await tokenFor(outsider), {}, other.slug)).body).toEqual({ items: [], more: false });
     expect((await rpc('vouchers/list', await tokenFor(outsider), {}, org.slug)).status).toBe(403);
     // The other org numbers from 1.
     const asked = await ask(outsider, { ...payment('1000'), partyId: otherParty }, other.slug);
     expect(asked.status).toBe(200);
     expect((await approve(outsider, String(asked.body.proposalId), other.slug)).status).toBe(200);
-    expect(((await rpc('vouchers/list', await tokenFor(outsider), {}, other.slug)).body as any[]).map((v) => v.code)).toEqual(['PC00001']);
+    expect(((await rpc('vouchers/list', await tokenFor(outsider), {}, other.slug)).body.items as any[]).map((v) => v.code)).toEqual(['PC00001']);
   });
 
   it('holds every writer to the numbering, the cash account, the entry and append-only', async () => {
@@ -513,5 +518,80 @@ suite('cash and bank vouchers (#327)', () => {
         }
       }),
     ).rejects.toMatchObject({ code: '23514', message: expect.stringContaining('does not move 1111 by the voucher amount') });
+  });
+
+  it('refuses at request time a voucher whose proposal could never be approved (#509)', async () => {
+    // A party whose stored tax code is longer than a voucher holds (zCashVoucherProposal): the proposal would be refused
+    // at approval, and abort every bulk approval it is part of, so it is never stored.
+    const odd = randomUUID();
+    await admin((c) => c.query(`INSERT INTO crove_kernel.party (org_id, id, name, tax_code) VALUES ($1, $2, 'Đối tác mã dài', $3)`, [org.orgId, odd, '0'.repeat(25)]));
+    const count = async () =>
+      Number((await admin(async (c) => (await c.query(`SELECT count(*) AS n FROM crove_kernel.proposal WHERE org_id = $1 AND kind = 'finance.cash_voucher'`, [org.orgId])).rows))[0].n);
+    const before = await count();
+    const refused = await ask(member, payment('1000', { partyId: odd }));
+    expect(refused).toMatchObject({ status: 422, body: { code: 'VOUCHER_INVALID', data: { problems: ['PROPOSAL_INVALID'], fields: ['party.taxCode'] } } });
+    expect(await count()).toBe(before);
+  });
+
+  it('approves two mixed-type bulk batches at the same time without a deadlock (#509)', async () => {
+    const receipt = (amount: string) => ({
+      type: 'cash_receipt',
+      date: '2026-09-29',
+      cashAccount: '1111',
+      partyId: customer,
+      description: 'Khách hàng trả nợ',
+      lines: [{ account: '131', amount }],
+    });
+    // Entered one after another, so their ids (time-ordered) run r1 < p1 < p2 < r2. In id order the first batch would
+    // take the PT numbering lock then PC, and the second PC then PT: the order that deadlocked.
+    const ids: string[] = [];
+    for (const input of [receipt('11000'), payment('12000', { date: '2026-09-29' }), payment('13000', { date: '2026-09-29' }), receipt('14000')]) {
+      const asked = await ask(member, input);
+      expect(asked.status).toBe(200);
+      ids.push(String(asked.body.proposalId));
+    }
+    expect([...ids].sort()).toEqual(ids);
+    const [r1, p1, p2, r2] = ids as [string, string, string, string];
+    const batch = async (items: string[]) =>
+      rpc('inbox/approveMany', await tokenFor(owner, { mfa: true }), { items: items.map((id) => ({ id, revision: 1 })), idempotencyKey: randomUUID() });
+    const [first, second] = await Promise.all([batch([r1, p1]), batch([p2, r2])]);
+    for (const result of [first, second]) {
+      expect(result.status).toBe(200);
+      expect((result.body.results as any[]).map((r) => r.outcome)).toEqual(['approved', 'approved']);
+    }
+    // Each type numbered once each, with no gap.
+    const listed = (await rpc('vouchers/list', await tokenFor(viewer), { from: '2026-09-29', to: '2026-09-29' })).body.items as any[];
+    expect(listed.filter((v) => v.type === 'cash_receipt').map((v) => v.number).sort()).toEqual([2, 3]);
+    expect(listed.filter((v) => v.type === 'cash_payment')).toHaveLength(2);
+  });
+
+  it('lists vouchers a page at a time, newest first, and says when older ones follow (#509)', async () => {
+    // 120 more vouchers in the other org, written as the database owner with triggers off (each would otherwise need its
+    // own approved proposal and journal entry); the list reads only the voucher rows, entries are optional.
+    await admin(async (c) => {
+      await c.query('BEGIN');
+      await c.query(`SET LOCAL session_replication_role = replica`);
+      for (let i = 0; i < 120; i += 1) {
+        await c.query(
+          `INSERT INTO crove_finance.cash_voucher (org_id, voucher_type, number, voucher_date, cash_account, description, amount) VALUES ($1, 'cash_payment', $2, $3, '1111', 'Chi lẻ', 1)`,
+          [other.orgId, i + 2, `2026-08-${String((i % 28) + 1).padStart(2, '0')}`],
+        );
+      }
+      await c.query('COMMIT');
+    });
+    const token = await tokenFor(outsider);
+    const first = (await rpc('vouchers/list', token, {}, other.slug)).body;
+    expect(first.items).toHaveLength(100);
+    expect(first.more).toBe(true);
+    const last = first.items.at(-1);
+    const second = (await rpc('vouchers/list', token, { before: { date: last.date, id: last.id } }, other.slug)).body;
+    expect(second).toMatchObject({ more: false });
+    expect(second.items).toHaveLength(21);
+    const all = [...first.items, ...second.items] as any[];
+    expect(new Set(all.map((v) => v.id)).size).toBe(121);
+    // Newest date first, then newest voucher first: each row comes after the one before it.
+    const key = (v: any) => `${v.date}|${v.id}`;
+    expect(all.map(key)).toEqual(all.map(key).sort().reverse());
+    expect(all[0]).toMatchObject({ code: 'PC00001', date: '2026-09-20' });
   });
 });

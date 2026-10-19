@@ -7,6 +7,7 @@ import {
   canEnterVoucher,
   cashAccountChoices,
   isVoucherAmount,
+  nextVoucherCursor,
   normalizeAmount,
   previewVoucherJournal,
   VOUCHER_PROBLEMS,
@@ -120,5 +121,34 @@ describe('voucherProblem', () => {
       expect(vi(`vouchers.problems.${problem}`)).not.toContain('vouchers.');
       expect(en(`vouchers.problems.${problem}`)).not.toContain('vouchers.');
     }
+  });
+});
+
+describe('nextVoucherCursor (#509)', () => {
+  const voucher = (id: string, date: string) => ({
+    id,
+    type: 'cash_payment' as const,
+    number: 1,
+    code: 'PC00001',
+    date,
+    cashAccount: '1111',
+    party: null,
+    personName: null,
+    description: 'x',
+    amount: '1',
+    journalEntryId: null,
+    reversal: null,
+    proposalId: null,
+  });
+  const a = '018f0000-0000-7000-8000-000000000001';
+  const b = '018f0000-0000-7000-8000-000000000002';
+
+  it('starts the next page after the last voucher shown, while older ones follow', () => {
+    expect(nextVoucherCursor({ items: [voucher(b, '2026-09-20'), voucher(a, '2026-09-01')], more: true })).toEqual({ date: '2026-09-01', id: a });
+  });
+
+  it('asks for no next page on the last page or an empty one', () => {
+    expect(nextVoucherCursor({ items: [voucher(a, '2026-09-01')], more: false })).toBeUndefined();
+    expect(nextVoucherCursor({ items: [], more: true })).toBeUndefined();
   });
 });

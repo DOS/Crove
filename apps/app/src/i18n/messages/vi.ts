@@ -535,6 +535,8 @@ export const vi = {
     posted: 'Đã ghi sổ',
     reversed: 'Đã đảo ngày {date}',
     viewEntry: 'Xem bút toán',
+    more: 'Đang hiển thị {count, number} chứng từ mới nhất, còn chứng từ cũ hơn.',
+    loadMore: 'Xem thêm',
     form: {
       intro: 'Chứng từ được gửi vào Hộp thư thành đề xuất. Số chứng từ được cấp và bút toán được ghi khi chủ sở hữu hoặc quản trị duyệt.',
       type: 'Loại chứng từ',
@@ -585,6 +587,7 @@ export const vi = {
       PARTY_REQUIRED: 'Dòng hạch toán vào 131 hoặc 331 cần chọn đối tượng (khách hàng hoặc nhà cung cấp).',
       TOTAL_TOO_LARGE: 'Tổng số tiền vượt quá giới hạn cho phép.',
       TOTAL_MISMATCH: 'Tổng số tiền không khớp các dòng của chứng từ.',
+      PROPOSAL_INVALID: 'Không lập được chứng từ này: hãy kiểm tra lại đối tượng và các dòng hạch toán (tên hoặc mã số thuế của đối tượng có thể quá dài).',
     },
   },
   reversal: {
@@ -782,6 +785,7 @@ export const vi = {
     reversalFourEyes: 'Cần một người khác duyệt (bạn đã yêu cầu đảo bút toán này).',
     reversalNotEligible: 'Chỉ chủ sở hữu hoặc quản trị duyệt được đề xuất đảo bút toán.',
     voucherSubtitle: '{type} ngày {date}: khi được duyệt, Crove cấp số chứng từ và ghi bút toán.',
+    voucherSubtitlePosted: '{type} số {code} ngày {date}, đã ghi sổ.',
     approveVoucher: 'Duyệt và ghi sổ chứng từ',
     stepUpApproveVoucher: 'duyệt và ghi sổ chứng từ thu chi này',
     voucherFourEyes: 'Cần một người khác duyệt (bạn đã lập chứng từ này).',
@@ -792,6 +796,7 @@ export const vi = {
     voucherReason: 'Lý do',
     voucherTotal: 'Tổng tiền',
     voucherNumberLater: 'Số chứng từ được cấp khi duyệt.',
+    voucherNumberGiven: 'Số chứng từ:',
     viewVouchers: 'Xem danh sách thu chi',
     reversalDate: 'Ngày bút toán đảo',
     reason: 'Lý do',

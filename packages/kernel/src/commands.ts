@@ -5,6 +5,8 @@ import {
   MAX_SOCIAL_VIDEO_BYTES,
   MAX_UPLOAD_BYTES,
   UPLOAD_PURPOSES,
+  VOUCHER_COMMAND,
+  VOUCHER_TYPES,
   zAccountCode,
   zBulkApproveItems,
   zId,
@@ -589,6 +591,20 @@ export function isBulkItemRefusal(error: unknown): error is DomainError {
   return error instanceof DomainError && BULK_ITEM_REFUSALS.has(error.code);
 }
 
+// The order a bulk approval runs its items in, so that concurrent batches take their locks in one order. Every item
+// but a cash or bank voucher comes first, in id order, so two batches over the same proposals lock them in the same
+// order. Vouchers (#327) follow, by voucher type (VOUCHER_TYPES order) and then id: posting one holds its org's
+// numbering lock for its type until commit (20261019270000), so a batch taking PT then PC and another taking PC then
+// PT would deadlock (40P01, both users told to retry). In one type order the second batch waits for the first.
+// voucherTypes: the voucher type of each voucher item, by proposal id; items not in it are not vouchers.
+export function bulkApproveOrder<T extends { id: string }>(items: readonly T[], voucherTypes: ReadonlyMap<string, string>): T[] {
+  const rank = (id: string) => {
+    const type = voucherTypes.get(id);
+    return type === undefined ? 0 : 1 + Math.max(0, (VOUCHER_TYPES as readonly string[]).indexOf(type));
+  };
+  return [...items].sort((a, b) => rank(a.id) - rank(b.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 export type BulkApproveResult =
   | { id: string; outcome: 'approved'; result: Record<string, unknown> }
   | { id: string; outcome: 'refused'; code: string; rule: string | null };
@@ -599,7 +615,8 @@ export type BulkApproveResult =
 // P12 eligibility and P10 four-eyes decision and writes its own audit row, exactly as approving it alone would. An
 // item refused with a listed per-proposal code (BULK_ITEM_REFUSALS) rolls back to its savepoint and the others go
 // on; the batch's audit row lists every item's outcome. A refused item has no audit row of its own (a refusal row is
-// written only by the runtime, for a whole command); its code and rule are in the batch row. Items run in id order, so two batches over the same proposals lock them in the same order. No line
+// written only by the runtime, for a whole command); its code and rule are in the batch row. Items run in the order of
+// bulkApproveOrder, so concurrent batches take their locks in the same order. No line
 // accounts and no acceptFailedChecks: a bulk approval only approves what it would approve as shown, and an invoice
 // with failed checks is refused (CHECKS_FAILED) for a one-by-one review.
 export const approveProposals = defineCommand({
@@ -611,8 +628,18 @@ export const approveProposals = defineCommand({
   access: APPROVERS,
   handler: async (ctx, input): Promise<{ results: BulkApproveResult[] }> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới duyệt được');
+    // The voucher type of each voucher item, read without a lock: a pending voucher is never edited, so its type stays.
+    // Each item is still locked and checked by its own nested approval.
+    const vouchers = await ctx.trx
+      .selectFrom('crove_kernel.proposal')
+      .select(['id', sql<string | null>`payload ->> 'type'`.as('voucher_type')])
+      .where('org_id', '=', ctx.orgId)
+      .where('command', '=', VOUCHER_COMMAND)
+      .where('id', 'in', input.items.map((i) => i.id))
+      .execute();
+    const voucherTypes = new Map(vouchers.map((v) => [v.id, v.voucher_type ?? '']));
     const outcomes = new Map<string, BulkApproveResult>();
-    for (const item of [...input.items].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
+    for (const item of bulkApproveOrder(input.items, voucherTypes)) {
       await sql`SAVEPOINT bulk_approve_item`.execute(ctx.trx);
       try {
         const result = await ctx.run<Record<string, unknown>>('kernel.proposal.approve', { id: item.id, revision: item.revision });

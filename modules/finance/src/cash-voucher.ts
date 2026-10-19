@@ -3,24 +3,31 @@
 // - finance.voucher.prepare: a user enters a voucher through kernel.proposal.request, which runs this to check it and
 //   build the proposal (the party as found, the total). It writes nothing. Owners, admins and members may ask.
 // - finance.voucher.record: runs only through kernel.proposal.approve, on the stored payload. It checks everything
-//   again, inserts the voucher (the database numbers it per org and type, PT00001, PC00001 ...) and posts its journal
-//   entry through the posting path, linked by source_type 'finance.cash_voucher'. The database refuses a voucher
-//   whose entry does not move its cash account by its amount on its date (20261019270000).
-// - finance.vouchers.list: the posted vouchers, with their reversal when their entry was reversed.
+//   again, inserts the voucher (the database numbers it per org and type, PT00001, PC00001 ...) and, in the same
+//   transaction, posts its journal entry through the posting path, linked by source_type 'finance.cash_voucher'.
+//   The database checks at commit (a deferred constraint trigger, 20261019270000) that the voucher has such an entry,
+//   dated the voucher's date, that moves its cash account by its amount; it refuses the voucher otherwise. That check
+//   only asks for the entry to exist by commit, not to be written in the same transaction (its error message says
+//   more than it checks; applied migrations are never edited). The entry is this transaction's because this command
+//   writes it right after the insert, for a voucher id the database has just generated.
+// - finance.vouchers.list: the posted vouchers, page by page, with their reversal when their entry was reversed.
 // A voucher is corrected by reversing its entry (finance.journal.reverse); it keeps its number and shows as reversed.
 // A bank statement line matched to a payable or receivable (#326) is meant to propose a voucher through the same
 // preparer, so the approval path stays one.
 import { z } from 'zod';
+import { sql } from 'kysely';
 import {
   VOUCHER_COMMAND,
   VOUCHER_KIND,
+  VOUCHER_PAGE_SIZE,
   voucherCode,
   zCashVoucherProposal,
   zCashVoucherRequest,
   zLocalDate,
+  zVoucherCursor,
   zVoucherType,
+  type CashVoucherPage,
   type CashVoucherProposal,
-  type CashVoucherView,
   type VoucherType,
 } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
@@ -82,7 +89,7 @@ export const prepareVoucher = defineCommand({
     const partyId = input.partyId ?? null;
     await checkVoucher(ctx, { type: input.type, cashAccount: input.cashAccount, partyId, lines: input.lines });
     const party = partyId ? await findParty(ctx, partyId, false) : null;
-    const payload: CashVoucherProposal = {
+    const built: CashVoucherProposal = {
       type: input.type,
       date: input.date,
       cashAccount: input.cashAccount,
@@ -92,6 +99,18 @@ export const prepareVoucher = defineCommand({
       lines: input.lines.map((l) => ({ account: l.account, amount: l.amount, ...(l.memo?.trim() ? { memo: l.memo.trim() } : {}) })),
       total: voucherTotal(input.lines),
     };
+    // The payload is stored as the proposal and parsed again with this schema when it is approved
+    // (finance.voucher.record). A payload the schema refuses (a party whose stored name or tax code is longer than a
+    // voucher holds, say) could never be approved, and would abort every bulk approval it is part of, so it is refused
+    // now, while the user is still on the form.
+    const parsed = zCashVoucherProposal.safeParse(built);
+    if (!parsed.success) {
+      throw new DomainError('VOUCHER_INVALID', 422, 'Không lập được chứng từ từ dữ liệu này; hãy kiểm tra lại đối tượng và các dòng hạch toán', {
+        problems: ['PROPOSAL_INVALID'],
+        fields: [...new Set(parsed.error.issues.map((i) => i.path.join('.')))],
+      });
+    }
+    const payload = parsed.data;
     return { kind: VOUCHER_KIND, command: VOUCHER_COMMAND, title: voucherTitle(payload), payload };
   },
 });
@@ -155,14 +174,15 @@ export const recordVoucher = defineCommand({
   },
 });
 
-export const VOUCHER_LIST_LIMIT = 1000;
-
-// The posted vouchers of a date range, newest first, with the entry that posted each and its reversal, if any.
+// The posted vouchers of a date range, newest first (by date, then by id: ids are time-ordered, so the newest voucher of
+// a day comes first), with the entry that posted each and its reversal, if any. One page holds at most
+// VOUCHER_PAGE_SIZE vouchers; before names the last voucher of the previous page, and more says whether older ones
+// follow. A voucher has at most one entry and that entry at most one reversal, so each voucher is one row.
 export const vouchersList = defineQuery({
   name: 'finance.vouchers.list',
-  input: z.object({ from: zLocalDate.optional(), to: zLocalDate.optional(), type: zVoucherType.optional() }),
+  input: z.object({ from: zLocalDate.optional(), to: zLocalDate.optional(), type: zVoucherType.optional(), before: zVoucherCursor.optional() }),
   access: ALL,
-  handler: async (ctx, input): Promise<CashVoucherView[]> => {
+  handler: async (ctx, input): Promise<CashVoucherPage> => {
     let query = ctx.trx
       .selectFrom('crove_finance.cash_voucher as v')
       .leftJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'v.org_id').onRef('p.id', '=', 'v.party_id'))
@@ -189,12 +209,15 @@ export const vouchersList = defineQuery({
       ])
       .where('v.org_id', '=', ctx.orgId)
       .orderBy('v.voucher_date', 'desc')
-      .orderBy('v.created_at', 'desc')
-      .limit(VOUCHER_LIST_LIMIT);
+      .orderBy('v.id', 'desc')
+      // One more than a page, to tell whether another page follows.
+      .limit(VOUCHER_PAGE_SIZE + 1);
     if (input.from) query = query.where('v.voucher_date', '>=', input.from);
     if (input.to) query = query.where('v.voucher_date', '<=', input.to);
     if (input.type) query = query.where('v.voucher_type', '=', input.type);
-    return (await query.execute()).map((r) => ({
+    if (input.before) query = query.where(sql<boolean>`(v.voucher_date, v.id) < (${input.before.date}::date, ${input.before.id}::uuid)`);
+    const rows = await query.execute();
+    const items = rows.slice(0, VOUCHER_PAGE_SIZE).map((r) => ({
       id: r.id,
       type: r.voucher_type,
       number: r.number,
@@ -209,6 +232,7 @@ export const vouchersList = defineQuery({
       reversal: r.reversal_id && r.reversal_date ? { id: r.reversal_id, entryDate: r.reversal_date } : null,
       proposalId: r.proposal_id,
     }));
+    return { items, more: rows.length > VOUCHER_PAGE_SIZE };
   },
 });
 

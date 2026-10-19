@@ -1,7 +1,16 @@
 // Cash and bank vouchers on screen (issue #327): entering a phiếu thu, phiếu chi, báo Có or báo Nợ, and showing one in
 // the Inbox. The kernel checks every rule again (finance.voucher.prepare, then finance.voucher.record when approved);
 // these helpers only keep the form from sending what it will refuse and preview the entry the approval posts.
-import { cashRootOf, isCalendarDate, isInflow, needsParty, VOUCHER_MAX_LINES, type VoucherType } from '@crove/kernel-contract';
+import {
+  cashRootOf,
+  isCalendarDate,
+  isInflow,
+  needsParty,
+  VOUCHER_MAX_LINES,
+  type CashVoucherPage,
+  type VoucherCursor,
+  type VoucherType,
+} from '@crove/kernel-contract';
 import type { ChartAccount } from './accounts.ts';
 import type { Translate } from '../i18n/runtime.ts';
 
@@ -93,7 +102,7 @@ export function previewVoucherJournal(voucher: {
 
 // The problems finance.voucher.prepare and finance.voucher.record name in a VOUCHER_INVALID refusal; each has words in
 // vouchers.problems of both catalogs.
-export const VOUCHER_PROBLEMS = ['CASH_ACCOUNT_TYPE', 'LINE_IS_CASH_ACCOUNT', 'PARTY_REQUIRED', 'TOTAL_TOO_LARGE', 'TOTAL_MISMATCH'] as const;
+export const VOUCHER_PROBLEMS = ['CASH_ACCOUNT_TYPE', 'LINE_IS_CASH_ACCOUNT', 'PARTY_REQUIRED', 'TOTAL_TOO_LARGE', 'TOTAL_MISMATCH', 'PROPOSAL_INVALID'] as const;
 export type VoucherProblemCode = (typeof VOUCHER_PROBLEMS)[number];
 
 // Which of the voucher's own rules a refusal names (VOUCHER_INVALID carries it in its details), or null for any other
@@ -103,4 +112,10 @@ export function voucherProblem(error: unknown): VoucherProblemCode | null {
   if (e?.code !== 'VOUCHER_INVALID' || !Array.isArray(e.data?.problems)) return null;
   const first: unknown = e.data.problems[0];
   return VOUCHER_PROBLEMS.find((p) => p === first) ?? null;
+}
+
+// Where the next page of finance.vouchers.list starts: after the last voucher of this page, when older ones follow.
+export function nextVoucherCursor(page: CashVoucherPage): VoucherCursor | undefined {
+  const last = page.items.at(-1);
+  return page.more && last ? { date: last.date, id: last.id } : undefined;
 }
