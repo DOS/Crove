@@ -78,14 +78,24 @@ export type PostContent = BaseContent & { media: readonly PostMedia[] };
 export const base = (post: Pick<PostRow, 'body' | 'title' | 'link_url' | 'media'>): PostContent => ({ body: post.body, title: post.title, linkUrl: post.link_url, media: post.media });
 export const overrides = (v: Pick<VariantRow, 'body' | 'title' | 'link_url'>) => ({ body: v.body, title: v.title, linkUrl: v.link_url });
 
-// A variant's own media column, as the commands wrote it; anything else reads as no list (inherit).
+// A variant's own media column, as the commands wrote it; a value that is not a list reads as no list (inherit). A
+// list with an entry the commands never write is refused rather than read shorter (#379): the hash and the publish
+// read the same list, and a post must never go out with fewer images than its reviewers saw.
 export function mediaOf(value: unknown): PostMedia[] | null {
   if (!Array.isArray(value)) return null;
-  return value.flatMap((m: unknown) => {
-    if (m === null || typeof m !== 'object') return [];
-    const r = m as Record<string, unknown>;
-    if (typeof r.fileId !== 'string' || typeof r.mime !== 'string' || typeof r.sizeBytes !== 'number') return [];
-    return [{ fileId: r.fileId, generation: typeof r.generation === 'string' ? r.generation : null, altText: typeof r.altText === 'string' ? r.altText : null, mime: r.mime, sizeBytes: r.sizeBytes, durationMs: typeof r.durationMs === 'number' ? r.durationMs : null }];
+  return value.map((m: unknown) => {
+    const { fileId, mime, sizeBytes, generation, altText, durationMs } = m !== null && typeof m === 'object' ? (m as Record<string, unknown>) : {};
+    if (typeof fileId !== 'string' || typeof mime !== 'string' || typeof sizeBytes !== 'number') {
+      throw new DomainError('VARIANT_MEDIA_INVALID', 500, 'Danh sách ảnh của kênh bị hỏng, cần kiểm tra dữ liệu');
+    }
+    return {
+      fileId,
+      generation: typeof generation === 'string' ? generation : null,
+      altText: typeof altText === 'string' ? altText : null,
+      mime,
+      sizeBytes,
+      durationMs: typeof durationMs === 'number' ? durationMs : null,
+    };
   });
 }
 

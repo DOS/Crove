@@ -1485,6 +1485,7 @@ export const en = {
       VARIANT_INVALID: "A channel does not meet its platform's rules yet",
       VARIANT_IN_FLIGHT: 'A channel is publishing: wait for the outcome before editing the shared text',
       APPROVAL_REQUIRED: 'This channel is not approved for its current content',
+      VARIANT_MEDIA_INVALID: 'The image list of this channel is damaged; pick its images again',
       CHANNEL_ALREADY_IN_POST: 'The post already has this channel',
       CHANNEL_PROVIDER_UNSUPPORTED: 'This channel is not supported yet',
       TOO_MANY_CHANNELS: 'A post has at most 20 channels',
