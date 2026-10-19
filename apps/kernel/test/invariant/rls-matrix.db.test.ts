@@ -39,7 +39,7 @@ const MACHINERY = new Set([
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main.
-const PENDING_TABLES = new Set<string>([]);
+const PENDING_TABLES = new Set<string>(['crove_finance.period_lock']);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
@@ -456,6 +456,15 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         row: { org_id: o.id, list_id: list.id, row_no: 1, seller_tax_code: '0100109107', series: 'C26TAA', number: tag(), issue_date: '2026-09-01', status: 'original' },
       };
     },
+  },
+  // The period lock of an org (#329): one row per org, the months locked so far. Tenant roles only read it; the lock
+  // and unlock definers write it. The rows exist for both orgs: the posting guard creates an org's row (nothing locked)
+  // at its first journal entry, and the fixtures above post one per org. Locked in 2020, so a probe row would not
+  // cover any factory's journal entry.
+  'crove_finance.period_lock': {
+    seed: false,
+    noInsertControl: 'one row per org, which the posting guard already created',
+    make: (o) => ({ row: { org_id: o.id, locked_from: '2020-01-01', locked_through: '2020-01-31', updated_by: o.owner } }),
   },
   'crove_finance.vendor_account_rule': {
     make: (o) => {
