@@ -2,7 +2,8 @@
 // browser and sent as plain strings, then checked and deduplicated by the finance module. The module decides every
 // rule; the SPA only finds the columns and shows the answer.
 import { z } from 'zod';
-import { zAccountCode, zId, zLocalDate, zMoney } from './schemas.ts';
+import { zVoucherCode } from './cash-voucher.ts';
+import { zAccountCode, zId, zLocalDate, zMoney, zVoucherAmount, zVoucherType } from './schemas.ts';
 
 // A month of a busy account has a few thousand lines; the cap keeps a request well under the API's body limit.
 export const BANK_IMPORT_MAX_ROWS = 5000;
@@ -91,28 +92,73 @@ export const zBankImportResult = z.object({
 });
 export type BankImportResult = z.infer<typeof zBankImportResult>;
 
+// What became of a statement line (#326, stage 2a): nothing yet, a báo Có or báo Nợ proposal waiting for approval, or
+// the posted voucher that settles it. A voucher whose entry was reversed settles nothing, so its line is open again.
+export const zBankLineState = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('open') }),
+  z.object({ status: z.literal('proposed'), proposalId: zId }),
+  z.object({ status: z.literal('matched'), voucherId: zId, code: zVoucherCode }),
+]);
+export type BankLineState = z.infer<typeof zBankLineState>;
+
+export const zBankLine = z.object({
+  id: zId,
+  date: zLocalDate,
+  description: z.string(),
+  amount: zMoney,
+  balance: zMoney.nullable(),
+  reference: z.string().nullable(),
+  ambiguous: z.boolean(),
+  importId: zId,
+  state: zBankLineState,
+});
+export type BankLine = z.infer<typeof zBankLine>;
+
 // The stored lines of one bank account for a period, oldest first.
 export const zBankLines = z.object({
   bankAccount: z.string(),
   from: zLocalDate,
   to: zLocalDate,
-  lines: z.array(
-    z.object({
-      id: zId,
-      date: zLocalDate,
-      description: z.string(),
-      amount: zMoney,
-      balance: zMoney.nullable(),
-      reference: z.string().nullable(),
-      ambiguous: z.boolean(),
-      importId: zId,
-    }),
-  ),
+  lines: z.array(zBankLine),
   // Money in and out over the period.
   moneyIn: zMoney,
   moneyOut: zMoney,
 });
 export type BankLines = z.infer<typeof zBankLines>;
+
+// Why a party is suggested for a statement line, strongest first (finance domain/bank-match.ts): its tax code is in the
+// description; an invoice of the line's amount is named there; its name is there; its open balance equals the amount.
+export const BANK_MATCH_REASONS = ['tax_code', 'invoice', 'name', 'balance'] as const;
+export type BankMatchReason = (typeof BANK_MATCH_REASONS)[number];
+
+export const zBankLineCandidate = z.object({
+  party: z.object({ id: zId, name: z.string(), taxCode: z.string().nullable() }),
+  reason: z.enum(BANK_MATCH_REASONS),
+  invoice: z.object({ series: z.string(), number: z.string() }).optional(),
+});
+export type BankLineCandidate = z.infer<typeof zBankLineCandidate>;
+
+// The báo Có or báo Nợ a statement line makes (finance.bank.line_voucher), for the voucher form: the line, the voucher's
+// fixed fields (type, date, bank account and amount follow the line) and the party suggested, if one stands out.
+// voucher is null when the line cannot make one: an amount with fractions of a dong.
+export const zBankLineVoucher = z.object({
+  bankAccount: zAccountCode,
+  line: zBankLine,
+  voucher: z
+    .object({
+      type: zVoucherType,
+      date: zLocalDate,
+      amount: zVoucherAmount,
+      // Lý do: the statement's description, cut to what a voucher holds.
+      description: z.string().min(1).max(300),
+      // 131 for money in, 331 for money out.
+      counterAccount: zAccountCode,
+    })
+    .nullable(),
+  suggested: zBankLineCandidate.nullable(),
+  candidates: z.array(zBankLineCandidate),
+});
+export type BankLineVoucher = z.infer<typeof zBankLineVoucher>;
 
 // A text cell of an amount as banks print them, made plain for the module. Spaces, a "VND", "đ" or "₫" suffix and a
 // leading "+" are dropped; "" or "-" means none. With both "." and "," the one written last is the decimal point

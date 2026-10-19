@@ -313,6 +313,8 @@ export const zCashVoucherProposal = z.object({
   description: z.string().min(1).max(300),
   lines: z.array(zVoucherLine).min(1).max(VOUCHER_MAX_LINES),
   total: zVoucherAmount,
+  // The bank statement line the voucher settles (#326); absent on vouchers entered by hand.
+  bankLineId: zId.optional(),
 });
 export type CashVoucherProposal = z.infer<typeof zCashVoucherProposal>;
 

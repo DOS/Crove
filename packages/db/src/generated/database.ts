@@ -109,6 +109,7 @@ export interface FinanceCashVoucherTable {
   proposal_id: ColumnType<string | null, string | null, NotGranted>;
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  bank_line_id: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_finance.journal_entry */

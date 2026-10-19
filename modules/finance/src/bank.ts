@@ -1,13 +1,14 @@
 // Bank statements (issue #326, stage 1): a bank's Excel or CSV export, read in the browser, becomes the statement lines
-// of one bank account, deduplicated as ADR-0021 section 6 says (domain/bank-statement.ts). Matching the lines to
-// payables and receivables follows once the bank vouchers of #327 exist.
+// of one bank account, deduplicated as ADR-0021 section 6 says (domain/bank-statement.ts). A line becomes a bank voucher
+// in stage 2a (bank-match.ts).
 // - finance.bank.preview: checks a file against what the account has and answers line by line. It writes nothing.
 // - finance.bank.import: checks it again and stores its new and ambiguous lines, refusing a file with an invalid row.
 //   R1: it records the bank's own figures and posts nothing. Imports of one account are serialized by a
 //   transaction-level advisory lock, so two at once cannot both store the same line: the second waits, then sees the
 //   first's lines (READ COMMITTED, the runtime's isolation for commands). The unique key on (account, dedupe_key)
 //   refuses a double from any writer anyway, and the insert skips a key already there rather than failing.
-// - finance.bank.lines: the stored lines of one account for a month, quarter or year.
+// - finance.bank.lines: the stored lines of one account for a month, quarter or year, each with what became of it
+//   (stage 2a, bank-match.ts: open, proposed as a voucher, or settled by one).
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
@@ -15,6 +16,7 @@ import { zBankStatementImport, zLedgerPeriod, type BankImportPreview, type BankI
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { Decimal } from '@crove/l10n-vn';
 import { chartAccounts } from './accounts.ts';
+import { bankLineStates } from './bank-match.ts';
 import { checkStatement, readStatement, type StatementCheck, type StoredChainLine } from './domain/bank-statement.ts';
 import { ledgerPeriod } from './domain/ledger-reports.ts';
 
@@ -181,6 +183,7 @@ export const bankLines = defineQuery({
       .orderBy('import_id')
       .orderBy('position')
       .execute();
+    const states = await bankLineStates(ctx, rows.map((r) => r.id));
     let moneyIn = new Decimal(0);
     let moneyOut = new Decimal(0);
     const lines = rows.map((r) => {
@@ -196,6 +199,7 @@ export const bankLines = defineQuery({
         reference: r.bank_ref,
         ambiguous: r.ambiguous,
         importId: r.import_id,
+        state: states.get(r.id) ?? { status: 'open' as const },
       };
     });
     return { bankAccount: input.bankAccount, from: period.from, to: period.to, lines, moneyIn: moneyIn.toFixed(), moneyOut: moneyOut.toFixed() };

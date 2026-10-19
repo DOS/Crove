@@ -1,6 +1,7 @@
-// Bank statements (issue #326, stage 1), end to end: import a bank's CSV export into the 1121 account (the columns are
-// found by their headers), see the check before anything is stored, then import an overlapping export and see only
-// its new line stored; the lines and their totals show per month, and the database has each line once.
+// Bank statements (issue #326), end to end: import a bank's CSV export into the 1121 account (the columns are found by
+// their headers), see the check before anything is stored, then import an overlapping export and see only its new line
+// stored; the lines and their totals show per month, and the database has each line once. Then enter the báo Nợ of a
+// bank fee from its line (stage 2a): the form follows the line, and the line waits for approval.
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -40,7 +41,7 @@ test('import a bank statement, then an overlapping one, and find each line once'
     await expect(page.getByRole('row').filter({ hasText: 'FT003' }).getByRole('cell')).toHaveText(['7', '05/09/2026', 'FT003', 'Trả tiền hàng; HĐ 1234', '', /^19\.800\.000/, /^30\.189\.000/, 'Mới']);
     await page.getByRole('button', { name: 'Nhập 3 dòng' }).click();
     await expect(page.getByText('Đã nhập 3 dòng (0 dòng đã có được bỏ qua).')).toBeVisible();
-    await expect(page.getByRole('row').filter({ hasText: 'Tổng phát sinh trong kỳ' }).getByRole('cell')).toHaveText(['Tổng phát sinh trong kỳ', /^50\.000\.000/, /^19\.811\.000/, '']);
+    await expect(page.getByRole('row').filter({ hasText: 'Tổng phát sinh trong kỳ' }).getByRole('cell')).toHaveText(['Tổng phát sinh trong kỳ', /^50\.000\.000/, /^19\.811\.000/, '', '']);
   });
 
   await test.step('an overlapping export stores only its new line', async () => {
@@ -50,6 +51,24 @@ test('import a bank statement, then an overlapping one, and find each line once'
     await page.getByRole('button', { name: 'Nhập 1 dòng' }).click();
     await expect(page.getByText('Đã nhập 1 dòng (2 dòng đã có được bỏ qua).')).toBeVisible();
     await expect(page.getByRole('row').filter({ hasText: 'Khách trả tiền' })).toHaveCount(1);
+  });
+
+  await test.step('enter the báo Nợ of the SMS fee from its line; the line then waits for approval', async () => {
+    await page.getByRole('button', { name: /^Lập chứng từ cho dòng ngày 03\/09\/2026/ }).click();
+    await expect(page.getByText(/Lập từ dòng sao kê ngày 03\/09\/2026: 11\.000/)).toBeVisible();
+    // The type, date, bank account and amount follow the line.
+    await expect(page.getByLabel('Loại chứng từ').first()).toHaveValue('bank_debit');
+    await expect(page.getByLabel('Loại chứng từ').first()).toBeDisabled();
+    await expect(page.getByLabel('Ngày chứng từ')).toHaveValue('2026-09-03');
+    await expect(page.getByLabel('Số tiền dòng 1')).toHaveValue('11000');
+    await expect(page.getByLabel('Lý do chi')).toHaveValue('Phí SMS');
+    // A bank fee settles no vendor: as an expense line it needs no party.
+    await page.getByLabel('Tài khoản đối ứng dòng 1').selectOption('6422');
+    await page.getByRole('button', { name: 'Gửi đề xuất' }).click();
+    await expect(page.getByText('Đã tạo đề xuất Giấy báo Nợ.')).toBeVisible();
+    await expect(page.getByRole('row').filter({ hasText: 'FT002' }).getByRole('link', { name: 'Chờ duyệt' })).toBeVisible();
+    // Other lines can still get theirs.
+    await expect(page.getByRole('button', { name: /^Lập chứng từ cho dòng ngày 05\/09\/2026/ })).toBeVisible();
   });
 
   await test.step('each line once in the database', async () => {

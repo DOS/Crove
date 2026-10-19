@@ -2,7 +2,16 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tans
 import { Link, useParams } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
-import { VOUCHER_MAX_LINES, VOUCHER_TYPES, cashRootOf, defaultCounterAccount, isInflow, type VoucherCursor, type VoucherType } from '@crove/kernel-contract';
+import {
+  VOUCHER_MAX_LINES,
+  VOUCHER_TYPES,
+  cashRootOf,
+  defaultCounterAccount,
+  isInflow,
+  type BankLineVoucher,
+  type VoucherCursor,
+  type VoucherType,
+} from '@crove/kernel-contract';
 import { Alert, AlertDescription } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -38,32 +47,38 @@ interface Line {
 const newLine = (account: string): Line => ({ key: crypto.randomUUID(), account, amount: '', memo: '' });
 
 // Enters a phiếu thu, phiếu chi, báo Có or báo Nợ (#327) as a proposal; an owner or admin approves it in the Inbox (R3,
-// four-eyes, fresh MFA), which numbers it and posts its entry.
-function VoucherFormCard({ slug, onClose }: { slug: string; onClose: () => void }) {
+// four-eyes, fresh MFA), which numbers it and posts its entry. From a bank statement line (#326, fromLine: what
+// finance.bank.line_voucher answered), the form is a báo Có or báo Nợ whose type, date, bank account and total follow the
+// line, with the suggested party chosen; the proposal names the line.
+export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onClose: () => void; fromLine?: BankLineVoucher }) {
   const root = useTranslations();
   const t = useTranslations('vouchers');
   const f = useFormat();
   const accounts = useQuery(orpc.accounts.list.queryOptions());
   const parties = useQuery(orpc.parties.list.queryOptions({ input: { all: true } }));
-  const [type, setType] = useState<VoucherType>('cash_payment');
-  const [date, setDate] = useState(localToday);
-  const [cashAccount, setCashAccount] = useState('');
-  const [partyId, setPartyId] = useState('');
+  const prefill = fromLine?.voucher ?? null;
+  const [type, setType] = useState<VoucherType>(prefill?.type ?? 'cash_payment');
+  const [date, setDate] = useState(() => prefill?.date ?? localToday());
+  const [cashAccount, setCashAccount] = useState(prefill ? (fromLine?.bankAccount ?? '') : '');
+  const [partyId, setPartyId] = useState(fromLine?.suggested?.party.id ?? '');
   const [personName, setPersonName] = useState('');
-  const [description, setDescription] = useState('');
-  const [lines, setLines] = useState<Line[]>(() => [newLine(defaultCounterAccount('cash_payment'))]);
+  const [description, setDescription] = useState(prefill?.description ?? '');
+  const [lines, setLines] = useState<Line[]>(() =>
+    prefill ? [{ ...newLine(prefill.counterAccount), amount: prefill.amount }] : [newLine(defaultCounterAccount('cash_payment'))],
+  );
   const [touched, setTouched] = useState(false);
   // One key per form: a retry of the same request returns the same proposal.
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const request = useMutation(orpc.inbox.request.mutationOptions({ onSettled: () => void queryClient.invalidateQueries() }));
 
   const chart = accounts.data ?? [];
-  const cashChoices = cashAccountChoices(chart, type);
+  // A voucher from a statement line keeps the line's bank account, even one no longer in use.
+  const cashChoices = prefill ? chart.filter((a) => a.code === cashAccount) : cashAccountChoices(chart, type);
   // The first cash or bank account in use until the user picks one.
-  const cash = cashChoices.some((a) => a.code === cashAccount) ? cashAccount : (cashChoices[0]?.code ?? '');
+  const cash = prefill ? cashAccount : cashChoices.some((a) => a.code === cashAccount) ? cashAccount : (cashChoices[0]?.code ?? '');
   const form: VoucherForm = { type, date, cashAccount: cash, partyId, description, lines: lines.map((l) => ({ account: l.account, amount: l.amount })) };
-  const problem = voucherFormError(form, root);
   const total = voucherTotal(form.lines);
+  const problem = voucherFormError(form, root) ?? (prefill && total !== prefill.amount ? t('form.lineTotal', { amount: f.money(prefill.amount) }) : null);
   const journal = previewVoucherJournal(form);
   const accountName = (code: string) => chart.find((a) => a.code === code)?.name ?? '';
   const inflow = isInflow(type);
@@ -84,20 +99,27 @@ function VoucherFormCard({ slug, onClose }: { slug: string; onClose: () => void 
           <Link to="/o/$slug/inbox/$id" params={{ slug, id: request.data.proposalId }} className="text-link underline">
             {t('form.viewProposal')}
           </Link>{' '}
-          <button
-            type="button"
-            className="text-link underline"
-            onClick={() => {
-              request.reset();
-              setIdempotencyKey(crypto.randomUUID());
-              setDescription('');
-              setPersonName('');
-              setLines([newLine(defaultCounterAccount(type))]);
-              setTouched(false);
-            }}
-          >
-            {t('form.another')}
-          </button>
+          {fromLine ? (
+            // One voucher per statement line: the bank screen now shows it as waiting for approval.
+            <button type="button" className="text-link underline" onClick={onClose}>
+              {t('form.close')}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="text-link underline"
+              onClick={() => {
+                request.reset();
+                setIdempotencyKey(crypto.randomUUID());
+                setDescription('');
+                setPersonName('');
+                setLines([newLine(defaultCounterAccount(type))]);
+                setTouched(false);
+              }}
+            >
+              {t('form.another')}
+            </button>
+          )}
         </AlertDescription>
       </Alert>
     );
@@ -122,16 +144,20 @@ function VoucherFormCard({ slug, onClose }: { slug: string; onClose: () => void 
               ...(personName.trim() ? { personName: personName.trim() } : {}),
               description: description.trim(),
               lines: lines.map((l) => ({ account: l.account, amount: normalizeAmount(l.amount), ...(l.memo.trim() ? { memo: l.memo.trim() } : {}) })),
+              ...(fromLine ? { bankLineId: fromLine.line.id } : {}),
             },
           });
         }}
       >
         <p className="text-sm text-muted-foreground">{t('form.intro')}</p>
+        {fromLine && prefill && (
+          <p className="text-sm text-foreground">{t('form.fromLine', { date: f.date(prefill.date), amount: f.money(fromLine.line.amount.replace(/^-/, '')) })}</p>
+        )}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div className="text-xs">
             <label className="block">
               <span className="text-subtle-foreground">{t('form.type')}</span>
-              <NativeSelect className="mt-1 w-full" value={type} onChange={(e) => changeType(e.target.value as VoucherType)}>
+              <NativeSelect className="mt-1 w-full" value={type} disabled={prefill !== null} onChange={(e) => changeType(e.target.value as VoucherType)}>
                 {VOUCHER_TYPES.map((v) => (
                   <NativeSelectOption key={v} value={v}>
                     {t(`types.${v}`)}
@@ -143,12 +169,12 @@ function VoucherFormCard({ slug, onClose }: { slug: string; onClose: () => void 
           </div>
           <label className="block text-xs">
             <span className="text-subtle-foreground">{t('form.date')}</span>
-            <Input type="date" required value={date} onChange={(e) => setDate(e.target.value)} className="mt-1 w-full" />
+            <Input type="date" required value={date} disabled={prefill !== null} onChange={(e) => setDate(e.target.value)} className="mt-1 w-full" />
           </label>
           <div className="text-xs">
             <label className="block">
               <span className="text-subtle-foreground">{cashRootOf(type) === '111' ? t('form.cashAccountCash') : t('form.cashAccountBank')}</span>
-              <NativeSelect className="mt-1 w-full" value={cash} onChange={(e) => setCashAccount(e.target.value)}>
+              <NativeSelect className="mt-1 w-full" value={cash} disabled={prefill !== null} onChange={(e) => setCashAccount(e.target.value)}>
                 {cashChoices.map((a) => (
                   <NativeSelectOption key={a.code} value={a.code}>
                     {accountLabel(a)}
@@ -171,6 +197,16 @@ function VoucherFormCard({ slug, onClose }: { slug: string; onClose: () => void 
               </NativeSelect>
             </label>
             <p className="mt-1 text-subtle-foreground">{t('form.partyHint')}</p>
+            {fromLine?.suggested ? (
+              <p className="mt-1 text-foreground">
+                {t('form.suggested', {
+                  name: fromLine.suggested.party.name,
+                  reason: t(`reasons.${fromLine.suggested.reason}`, { number: fromLine.suggested.invoice?.number ?? '' }),
+                })}
+              </p>
+            ) : fromLine && fromLine.candidates.length > 1 ? (
+              <p className="mt-1 text-foreground">{t('form.candidates', { names: fromLine.candidates.map((c) => c.party.name).join(', ') })}</p>
+            ) : null}
           </div>
           <label className="block text-xs">
             <span className="text-subtle-foreground">{inflow ? t('form.personPayer') : t('form.personPayee')}</span>
