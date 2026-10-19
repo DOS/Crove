@@ -1,7 +1,8 @@
 // AUTH_SIGNUP_POLICY end to end through the kernel's /auth/v1 proxy (#350), on a real PostgreSQL 17 with real member
 // invites, in front of a fake Supabase Auth that records what reaches it. Each mode admits exactly the sign-ups it
 // should, every refusal is the same response and never reaches Supabase Auth, and sign-in and password recovery keep
-// working. Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
+// working. A sign-up for an invited address needs the invite's token from the accept link (#563), which never
+// reaches Supabase Auth. Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -13,6 +14,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime, type BlobStore } from '@crove/kernel-runtime';
 import { loadConfig } from '../src/config.ts';
+import type { InviteChecks } from '../src/auth-signup-policy.ts';
 import { createHttpApp } from '../src/http.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -30,8 +32,9 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
   let runtime: Runtime;
   let upstream: Server;
   let upstreamUrl = '';
-  // What reached the fake Supabase Auth: method, path with query, body.
+  // What reached the fake Supabase Auth: method, path with query, body; and every invite token header it saw.
   const reached: string[] = [];
+  const leakedTokens: string[] = [];
   let seq = 0;
   // A fresh client address per call, so the email budget never mixes tests (the budget test picks its own).
   const nextClient = () => `198.51.100.${(++seq % 250) + 1}`;
@@ -55,7 +58,7 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
     }
   }
 
-  function appWith(env: Record<string, string>, signupInviteCheck?: (email: string) => Promise<boolean>): App {
+  function appWith(env: Record<string, string>, signupInviteChecks?: InviteChecks): App {
     const config = loadConfig({
       DATABASE_URL: 'postgres://unused@localhost/unused',
       AUTH_JWT_SECRET: 'x'.repeat(32),
@@ -76,21 +79,22 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
       },
       pool,
       aiEnabled: false,
-      ...(signupInviteCheck ? { signupInviteCheck } : {}),
+      ...(signupInviteChecks ? { signupInviteChecks } : {}),
     });
   }
 
-  const call = (app: App, method: string, path: string, body?: unknown, client = nextClient(), contentType = 'application/json') =>
+  const call = (app: App, method: string, path: string, body?: unknown, client = nextClient(), contentType = 'application/json', invite?: string) =>
     app.fetch(
       new Request(`http://localhost/auth/v1${path}`, {
         method,
-        headers: { 'content-type': contentType },
+        headers: { 'content-type': contentType, ...(invite === undefined ? {} : { 'x-crove-invite': invite }) },
         ...(body === undefined ? {} : { body: typeof body === 'string' ? body : JSON.stringify(body) }),
       }),
       { incoming: { socket: { remoteAddress: client } } },
     );
-  const post = (app: App, path: string, body: unknown, client?: string) => call(app, 'POST', path, body, client);
-  const signup = (app: App, email: unknown, client?: string) => post(app, '/signup', { email, password: 'pw-12345678' }, client);
+  const post = (app: App, path: string, body: unknown, client?: string, invite?: string) => call(app, 'POST', path, body, client, 'application/json', invite);
+  // A sign-up, with the invite token from an accept link when `invite` is given (the web app's header).
+  const signup = (app: App, email: unknown, client?: string, invite?: string) => post(app, '/signup', { email, password: 'pw-12345678' }, client, invite);
 
   async function expectMethodRefused(response: Response) {
     expect(response.status).toBe(403);
@@ -102,17 +106,23 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
     expect(await response.json()).toEqual(REFUSED);
   }
 
-  // An org whose owner invites `emails`; returns the invite ids by email.
+  // An org whose owner invites `emails`; returns the invite ids and the tokens of their accept links by email.
   async function orgInviting(emails: string[]) {
     const db = createDb(pool);
     const ownerId = await upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: `owner-${randomUUID().slice(0, 8)}@owners.test`, name: null });
     const { orgId } = await createOrg(runtime, asUser(ownerId), `Org ${randomUUID().slice(0, 6)}`);
     const ids = new Map<string, string>();
+    const tokens = new Map<string, string>();
     for (const email of emails) {
-      const created = await runtime.execute<{ inviteId: string }>('kernel.member.invite.create', { email, role: 'member' }, { actor: asMfa(ownerId), orgId });
+      const created = await runtime.execute<{ inviteId: string; acceptPath: string }>(
+        'kernel.member.invite.create',
+        { email, role: 'member' },
+        { actor: asMfa(ownerId), orgId },
+      );
       ids.set(email, created.inviteId);
+      tokens.set(email, created.acceptPath.split('#')[1] as string);
     }
-    return { orgId, ownerId, ids };
+    return { orgId, ownerId, ids, tokens };
   }
 
   beforeAll(async () => {
@@ -136,6 +146,8 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
       req.on('data', (chunk: Buffer) => (raw += chunk.toString()));
       req.on('end', () => {
         reached.push(`${req.method} ${req.url} ${raw}`);
+        const leaked = req.headers['x-crove-invite'];
+        if (leaked !== undefined) leakedTokens.push(String(leaked));
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
         res.end('{}');
@@ -162,26 +174,35 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
     const kelvin = `kim-${tag}@partner.test`;
     const revoked = `revoked-${tag}@partner.test`;
     const expired = `expired-${tag}@partner.test`;
+    // The token of each address's invite, from its accept link.
+    let token: Map<string, string>;
+    const EXPIRED_TOKEN = 'E'.repeat(43);
 
     beforeAll(async () => {
       app = appWith({ AUTH_SIGNUP_POLICY: 'invite_only' });
-      const { orgId, ownerId, ids } = await orgInviting([invited, kelvin, revoked]);
+      const { orgId, ownerId, ids, tokens } = await orgInviting([invited, kelvin, revoked]);
+      token = tokens;
       await runtime.execute('kernel.member.invite.revoke', { inviteId: ids.get(revoked) }, { actor: asUser(ownerId), orgId });
       await admin((c) =>
         c.query(
-          `INSERT INTO crove_kernel.member_invite (org_id, email, role, invited_by, created_at, expires_at)
-           VALUES ($1, $2, 'member', $3, now() - interval '8 days', now() - interval '1 minute')`,
-          [orgId, expired, ownerId],
+          `INSERT INTO crove_kernel.member_invite (org_id, email, role, invited_by, created_at, expires_at, token_sha256)
+           VALUES ($1, $2, 'member', $3, now() - interval '8 days', now() - interval '1 minute', encode(sha256(convert_to($4, 'UTF8')), 'hex'))`,
+          [orgId, expired, ownerId, EXPIRED_TOKEN],
         ),
       );
     });
 
-    it('forwards the sign-up of an invited email, in any letter case, and refuses everyone else alike', async () => {
+    it('forwards the sign-up of an invited email with its invite token, in any letter case, and refuses everyone else alike', async () => {
       const before = reached.length;
-      expect((await signup(app, invited)).status).toBe(200);
-      expect((await signup(app, invited.toUpperCase())).status).toBe(200);
-      expect((await signup(app, `  ${invited} `)).status).toBe(200);
+      const tok = token.get(invited) as string;
+      expect((await signup(app, invited, undefined, tok)).status).toBe(200);
+      expect((await signup(app, invited.toUpperCase(), undefined, tok)).status).toBe(200);
+      expect((await signup(app, `  ${invited} `, undefined, tok)).status).toBe(200);
       expect(reached.length).toBe(before + 3);
+      // The token is the proxy's: it never reaches Supabase Auth.
+      expect(leakedTokens).toEqual([]);
+      await expectRefused(await signup(app, revoked, undefined, token.get(revoked)));
+      await expectRefused(await signup(app, expired, undefined, EXPIRED_TOKEN));
 
       for (const email of [
         `nobody-${tag}@partner.test`,
@@ -199,20 +220,37 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
         42,
         null,
       ]) {
-        await expectRefused(await signup(app, email));
+        await expectRefused(await signup(app, email, undefined, tok));
       }
       expect(reached.length).toBe(before + 3);
+    });
+
+    // #563: Supabase Auth keeps the first unconfirmed sign-up's password, so a sign-up that only names an invited
+    // address would let whoever knows it create the invitee's account with their own password.
+    it('refuses a sign-up for an invited email without its token, or with the token of another invite or a malformed one', async () => {
+      const before = reached.length;
+      const tok = token.get(invited) as string;
+      await expectRefused(await signup(app, invited));
+      await expectRefused(await signup(app, invited, undefined, token.get(kelvin)));
+      await expectRefused(await signup(app, kelvin, undefined, tok));
+      for (const bad of ['', 'x', `${tok}x`, `${tok}, ${tok}`, tok.toUpperCase() === tok ? tok.toLowerCase() : tok.toUpperCase()]) {
+        await expectRefused(await signup(app, invited, undefined, bad));
+      }
+      // The token counts in the header only: one in the body is not read.
+      await expectRefused(await post(app, '/signup', { email: invited, password: 'pw-12345678', invite: tok }));
+      expect(reached.length).toBe(before);
     });
 
     it('reads the email the way Supabase Auth decodes it and refuses an ambiguous body', async () => {
       const before = reached.length;
       const other = `other-${tag}@partner.test`;
+      const tok = token.get(invited);
       // Go matches keys ignoring case and the last one wins: two different addresses are refused.
-      await expectRefused(await post(app, '/signup', { email: invited, EMAIL: other, password: 'pw-12345678' }));
-      await expectRefused(await post(app, '/signup', { Email: other, email: invited, password: 'pw-12345678' }));
+      await expectRefused(await post(app, '/signup', { email: invited, EMAIL: other, password: 'pw-12345678' }, undefined, tok));
+      await expectRefused(await post(app, '/signup', { Email: other, email: invited, password: 'pw-12345678' }, undefined, tok));
       // The same address twice is fine; a key Go does not fold into "email" (dotless i) is not the email.
-      expect((await post(app, '/signup', { email: invited, EMAIL: invited.toUpperCase(), password: 'pw-12345678' })).status).toBe(200);
-      expect((await post(app, '/signup', { email: invited, 'emaıl': other, password: 'pw-12345678' })).status).toBe(200);
+      expect((await post(app, '/signup', { email: invited, EMAIL: invited.toUpperCase(), password: 'pw-12345678' }, undefined, tok)).status).toBe(200);
+      expect((await post(app, '/signup', { email: invited, 'emaıl': other, password: 'pw-12345678' }, undefined, tok)).status).toBe(200);
       // Phone and anonymous sign-ups carry no email to check; a body that is not a JSON object neither.
       await expectRefused(await post(app, '/signup', { phone: '+84901234567', password: 'pw-12345678' }));
       await expectRefused(await post(app, '/signup', { email: invited, phone: '+84901234567', password: 'pw-12345678' }));
@@ -222,7 +260,7 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
       expect(reached.length).toBe(before + 2);
     });
 
-    it('lets an email code through for existing accounts only, unless the email is invited', async () => {
+    it('lets an email code through for existing accounts only, unless it carries the invite token of its email', async () => {
       const before = reached.length;
       const stranger = `stranger-${tag}@partner.test`;
       await expectRefused(await post(app, '/otp', { email: stranger }));
@@ -232,7 +270,8 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
       await expectRefused(await post(app, '/otp', { email: stranger, create_user: false, 'create_uſer': true }));
       expect((await post(app, '/otp', { email: stranger, create_user: false })).status).toBe(200);
       expect((await post(app, '/otp', { email: stranger, 'create_uſer': false })).status).toBe(200);
-      expect((await post(app, '/otp', { email: invited })).status).toBe(200);
+      expect((await post(app, '/otp', { email: invited }, undefined, token.get(invited))).status).toBe(200);
+      await expectRefused(await post(app, '/otp', { email: invited }));
       await expectRefused(await post(app, '/otp', { phone: '+84901234567' }));
       expect(reached.length).toBe(before + 3);
     });
@@ -265,17 +304,18 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
       const capped = appWith({ AUTH_SIGNUP_POLICY: 'invite_only', AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR: '3' });
       const client = '203.0.113.77';
       for (let n = 0; n < 3; n++) await expectRefused(await signup(capped, `probe-${n}-${tag}@partner.test`, client));
-      const next = await signup(capped, invited, client);
+      const next = await signup(capped, invited, client, token.get(invited));
       expect(next.status).toBe(429);
       expect(await next.json()).toMatchObject({ error_code: 'over_email_send_rate_limit' });
     });
 
     it('answers 503 and forwards nothing when the invite check cannot answer', async () => {
-      const broken = appWith({ AUTH_SIGNUP_POLICY: 'invite_only' }, async () => {
+      const down = async (): Promise<boolean> => {
         throw new Error('database down');
-      });
+      };
+      const broken = appWith({ AUTH_SIGNUP_POLICY: 'invite_only' }, { held: down, matches: down });
       const before = reached.length;
-      const response = await signup(broken, invited);
+      const response = await signup(broken, invited, undefined, token.get(invited));
       expect(response.status).toBe(503);
       expect(await response.json()).toMatchObject({ code: 'AUTH_UNAVAILABLE' });
       expect(reached.length).toBe(before);
@@ -286,18 +326,33 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
     let app: App;
     const tag = randomUUID().slice(0, 8);
     const outsider = `accountant-${tag}@outside.test`;
+    const insider = `staff-${tag}@corp.test`;
+    let token: Map<string, string>;
 
     beforeAll(async () => {
       app = appWith({ AUTH_SIGNUP_POLICY: 'allowlist', AUTH_SIGNUP_ALLOWED_DOMAINS: 'Corp.test, partner.vn' });
-      await orgInviting([outsider]);
+      token = (await orgInviting([outsider, insider])).tokens;
     });
 
-    it('forwards an email at an allowed domain, including plus-addressing, or with a valid invite', async () => {
+    it('forwards an email at an allowed domain, including plus-addressing, or with the token of a valid invite', async () => {
       const before = reached.length;
-      for (const email of [`a-${tag}@corp.test`, `a-${tag}+billing@corp.test`, `A-${tag}@CORP.TEST`, `b-${tag}@partner.vn`, outsider]) {
+      for (const email of [`a-${tag}@corp.test`, `a-${tag}+billing@corp.test`, `A-${tag}@CORP.TEST`, `b-${tag}@partner.vn`]) {
         expect((await signup(app, email)).status).toBe(200);
       }
-      expect(reached.length).toBe(before + 5);
+      expect((await signup(app, outsider, undefined, token.get(outsider))).status).toBe(200);
+      expect((await signup(app, insider, undefined, token.get(insider))).status).toBe(200);
+      expect(reached.length).toBe(before + 6);
+      expect(leakedTokens).toEqual([]);
+    });
+
+    // #563: an invited address needs its link whatever its domain, or someone at the partner could sign up first as
+    // the invitee.
+    it('refuses an invited address without its token, at an allowed domain too', async () => {
+      const before = reached.length;
+      await expectRefused(await signup(app, outsider));
+      await expectRefused(await signup(app, insider));
+      await expectRefused(await signup(app, insider, undefined, token.get(outsider)));
+      expect(reached.length).toBe(before);
     });
 
     it('refuses other domains, subdomains, look-alikes and uninvited outsiders alike', async () => {
@@ -320,14 +375,18 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
   });
 
   it('open forwards every sign-up untouched and asks the database nothing', async () => {
-    const app = appWith({}, async () => {
+    const never = async (): Promise<boolean> => {
       throw new Error('must not be asked');
-    });
+    };
+    const app = appWith({}, { held: never, matches: never });
     const before = reached.length;
     expect((await signup(app, `anyone-${randomUUID().slice(0, 8)}@anywhere.test`)).status).toBe(200);
+    // Except the invite token header, which the proxy never forwards.
+    expect((await signup(app, `anyone-${randomUUID().slice(0, 8)}@anywhere.test`, undefined, 'A'.repeat(43))).status).toBe(200);
+    expect(leakedTokens).toEqual([]);
     expect((await post(app, '/signup', { phone: '+84901234567', password: 'pw-12345678' })).status).toBe(200);
     expect((await call(app, 'GET', '/authorize?provider=google')).status).toBe(200);
-    expect(reached.length).toBe(before + 3);
+    expect(reached.length).toBe(before + 4);
   });
 
   it('reports the policy, never the domains, in /api/config', async () => {

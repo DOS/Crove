@@ -4,10 +4,20 @@
 // AUTH_SIGNUP_POLICY:
 //   open         the proxy checks nothing; Supabase Auth's own switch decides (AUTH_DISABLE_SIGNUP, i.e.
 //                GOTRUE_DISABLE_SIGNUP, still closes sign-up for everyone). The default, as before this setting.
-//   invite_only  a sign-up goes through only for an email that holds a valid member invite: pending, unexpired, in
-//                an active org, from an inviter who may still grant the role (crove_kernel.signup_invite_valid).
+//   invite_only  a sign-up goes through only when it carries the token of a valid member invite for exactly its
+//                email (INVITE_TOKEN_HEADER): pending, unexpired, in an active org, from an inviter who may still
+//                grant the role (crove_kernel.signup_invite_token_valid).
 //   allowlist    a sign-up goes through for an email whose domain is in AUTH_SIGNUP_ALLOWED_DOMAINS (exact domain,
-//                no subdomains), or that holds a valid invite (an outside accountant can still be invited).
+//                no subdomains) and that holds no valid invite, or with the token of a valid invite for it (an
+//                outside accountant can still be invited).
+//
+// Why the token and not just the invited address (issue #563): Supabase Auth keeps the password of the first
+// unconfirmed sign-up for an address and only mails the confirmation again on a later one (v2.197 signup.go, "do not
+// update the user"). Admitting any sign-up for an invited address let whoever knew it sign up first with their own
+// password; the invitee then confirmed that account from the email and joined the org on it, and the attacker signed
+// in. The token is in the accept link mailed to the invited address (and shown once to the inviter), so a sign-up
+// for an invited address now needs someone who opened that link. The web app sends the token it holds from the link;
+// the proxy never forwards the header to Supabase Auth.
 //
 // Under invite_only and allowlist the proxy lets an account be created only where it can read the email:
 //   - POST /signup with an email and no phone. A phone or anonymous sign-up has no email to check: refused.
@@ -15,8 +25,8 @@
 //     client that signs existing users in by email code sends create_user: false (supabase-js shouldCreateUser).
 //   - /authorize and /callback (OAuth providers) and /token grants other than password, refresh_token and pkce
 //     (id_token, web3) can create an account from an identity the proxy never sees: refused while the policy is set.
-// Every refused sign-up is the same 403 (`signupRefused`), whatever the reason (no invite, a revoked or expired one, a
-// domain not allowed, a malformed or ambiguous body), and none calls Supabase Auth, so all refusals are one timing
+// Every refused sign-up is the same 403 (`signupRefused`), whatever the reason (no invite, no token or a token for another
+// address, a revoked or expired invite, a domain not allowed, a malformed or ambiguous body), and none calls Supabase Auth, so all refusals are one timing
 // class. A refused sign-in method (the OAuth paths and grants above) gets its own code (`methodRefused`): it depends on
 // the path alone, never on the email, so it tells nothing about invites.
 //
@@ -78,10 +88,31 @@ export function signupGate(rules: SignupRules, request: SignupRequest): SignupGa
   return normalized.size === 1 && typeof only === 'string' ? { kind: 'check', email: only } : { kind: 'refuse' };
 }
 
-export async function signupAllowed(rules: SignupRules, email: string, inviteValid: (email: string) => Promise<boolean>): Promise<boolean> {
+// The request header the web app puts the invite token in when it signs up from an accept link. Read by the proxy
+// and never forwarded.
+export const INVITE_TOKEN_HEADER = 'x-crove-invite';
+
+// The token of a sign-up request, or null when the header is missing or is not one well-formed token.
+const INVITE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+export function signupInviteToken(value: string | null | undefined): string | null {
+  return typeof value === 'string' && INVITE_TOKEN.test(value) ? value : null;
+}
+
+// What the proxy asks the database (createDbInviteChecks): whether an email holds a valid invite at all, and whether
+// a token names a valid invite for exactly that email.
+export interface InviteChecks {
+  held: (email: string) => Promise<boolean>;
+  matches: (email: string, token: string) => Promise<boolean>;
+}
+
+// open: everything. Otherwise the token of a valid invite for the email admits it under either policy; without one,
+// allowlist admits an allowed domain only while the address holds no valid invite (an invited address needs its
+// link, wherever its domain is), and invite_only admits nothing.
+export async function signupAllowed(rules: SignupRules, email: string, token: string | null, checks: InviteChecks): Promise<boolean> {
   if (rules.policy === 'open') return true;
-  if (rules.policy === 'allowlist' && rules.domains.has(email.slice(email.lastIndexOf('@') + 1))) return true;
-  return inviteValid(email);
+  if (token !== null && (await checks.matches(email, token))) return true;
+  if (rules.policy === 'allowlist' && rules.domains.has(email.slice(email.lastIndexOf('@') + 1))) return !(await checks.held(email));
+  return false;
 }
 
 // The address a restricted sign-up is checked under, lower case, or null when it is not one plain ASCII address
@@ -125,11 +156,17 @@ export function methodRefused(): Response {
   return new Response(JSON.stringify(error), { status: 403, headers: { 'content-type': 'application/json' } });
 }
 
-// Throws when the database cannot answer; the proxy then answers 503 and forwards nothing.
-export function createDbInviteCheck(pool: pg.Pool): (email: string) => Promise<boolean> {
-  return async (email) => {
-    const { rows } = await pool.query<{ ok: boolean }>('SELECT crove_kernel.signup_invite_valid($1) AS ok', [email]);
-    return rows[0]?.ok === true;
+// Throw when the database cannot answer; the proxy then answers 503 and forwards nothing.
+export function createDbInviteChecks(pool: pg.Pool): InviteChecks {
+  return {
+    held: async (email) => {
+      const { rows } = await pool.query<{ ok: boolean }>('SELECT crove_kernel.signup_invite_valid($1) AS ok', [email]);
+      return rows[0]?.ok === true;
+    },
+    matches: async (email, token) => {
+      const { rows } = await pool.query<{ ok: boolean }>('SELECT crove_kernel.signup_invite_token_valid($1, $2) AS ok', [email, token]);
+      return rows[0]?.ok === true;
+    },
   };
 }
 

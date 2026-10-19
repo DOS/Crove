@@ -65,3 +65,30 @@ export function takeTokenFromHash(): string | null {
   window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search);
   return token;
 }
+
+// The header the kernel's /auth/v1 proxy reads the invite token from on a sign-up (issue #563). While sign-up is
+// restricted (invite_only, or an invited address under allowlist), Supabase Auth only gets a sign-up for an invited
+// address that carries its token: whoever merely knows the address cannot create the account first with their own
+// password. The proxy never forwards the header.
+export const INVITE_TOKEN_HEADER = 'x-crove-invite';
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+// A fetch for the auth client that adds the pending invite token to a sign-up sent to this origin (the bundled
+// Supabase Auth behind the kernel's proxy), and changes nothing else. A Supabase Auth on another origin never gets
+// the token (and would refuse the unknown header in its CORS preflight).
+export function withInviteToken(base: typeof fetch, origin: string): typeof fetch {
+  return (input, init) => {
+    const url = new URL(requestUrl(input), origin);
+    const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    const token = method === 'POST' && url.origin === origin && url.pathname.endsWith('/signup') ? pendingInvite() : null;
+    if (!token) return base(input, init);
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    headers.set(INVITE_TOKEN_HEADER, token);
+    return base(input, { ...init, headers });
+  };
+}
