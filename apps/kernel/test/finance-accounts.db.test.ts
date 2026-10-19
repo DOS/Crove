@@ -371,6 +371,69 @@ suite('chart of accounts: TT133 plus the org sub-accounts (#319)', () => {
     ]);
   });
 
+  it('records the default each change replaced when two changes for one vendor race (#368)', async () => {
+    const [vendor] = (await rpc('parties/list', owner, {})).body as Array<{ id: string }>;
+    const partyId = String(vendor?.id);
+    const audits = async () =>
+      admin(async (c) =>
+        (await c.query<{ detail: { previous: string | null; accountCode: string | null } }>(
+          `SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.vendor.set_default_account' AND outcome = 'ok' ORDER BY occurred_at, id`,
+          [org.orgId],
+        )).rows.map((r) => r.detail),
+      );
+    // Holds `hold` open in a transaction until both changes wait on a lock, then commits it and returns the audit
+    // rows the two changes wrote.
+    const race = async (hold: string, params: unknown[]) => {
+      const seen = (await audits()).length;
+      const locker = new pg.Client({ connectionString: adminUrl });
+      await locker.connect();
+      try {
+        await locker.query('BEGIN');
+        await locker.query(hold, params);
+        const changes = Promise.all([
+          rpc('parties/setDefaultAccount', owner, { partyId, accountCode: '11211.VCB' }),
+          rpc('parties/setDefaultAccount', owner, { partyId, accountCode: '6421' }),
+        ]);
+        for (let waiting = 0; waiting < 2; ) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          const { rows } = await locker.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM pg_catalog.pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+          );
+          waiting = rows[0]?.n ?? 0;
+        }
+        await locker.query('COMMIT');
+        expect((await changes).map((r) => r.status)).toEqual([200, 200]);
+      } finally {
+        await locker.end();
+      }
+      return (await audits()).slice(seen);
+    };
+    // The second change to run must name the first one's account as the one it replaced, never the default both saw
+    // before either ran. (Audit rows carry their transaction's start time, which does not tell which ran first.)
+    const chained = (rows: Array<{ previous: string | null; accountCode: string | null }>, start: string) => {
+      expect(rows).toHaveLength(2);
+      const first = rows.find((r) => r.previous === start);
+      const second = rows.find((r) => r !== first);
+      expect(first).toBeDefined();
+      expect(second?.previous).toBe(first?.accountCode);
+    };
+
+    try {
+      // A default exists (6422.MKT): both changes wait for its row.
+      chained(await race(`SELECT 1 FROM crove_finance.vendor_account_rule WHERE org_id = $1 AND party_id = $2 FOR UPDATE`, [org.orgId, partyId]), '6422.MKT');
+
+      // No default yet: both changes find no row, and their inserts wait for one being written (here 6422.MKT).
+      await admin((c) => c.query(`DELETE FROM crove_finance.vendor_account_rule WHERE org_id = $1 AND party_id = $2`, [org.orgId, partyId]));
+      chained(
+        await race(`INSERT INTO crove_finance.vendor_account_rule (org_id, party_id, debit_account) VALUES ($1, $2, '6422.MKT')`, [org.orgId, partyId]),
+        '6422.MKT',
+      );
+    } finally {
+      // Back to the default the next tests expect.
+      expect(await rpc('parties/setDefaultAccount', owner, { partyId, accountCode: '6422.MKT' })).toMatchObject({ status: 200 });
+    }
+  });
+
   it('keeps a vendor default and a parent with active sub-accounts in use, and says why', async () => {
     const refused = await rpc('accounts/update', owner, { code: '6422.MKT', active: false });
     expect(refused).toMatchObject({ status: 409, body: { code: 'ACCOUNT_IS_VENDOR_DEFAULT', data: { count: 1 } } });
