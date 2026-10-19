@@ -13,7 +13,6 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { BlobNotFoundError, LocalDiskStore, inboundKey, newInboundBlobId, sha256Hex } from '@crove/kernel-runtime';
 import { INBOUND_BLOB_MAX_AGE_DAYS, sweepInboundBlobs } from '../src/retention.ts';
 import { QUEUES } from '../src/jobs-schema.ts';
-import { migrateJobs } from '../src/worker.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -79,7 +78,6 @@ suite('inbound blob sweep on PostgreSQL (#212)', () => {
     adminUrl = base.toString();
     await migrate({ adminUrl, dir: MIGRATIONS });
     await setRolePasswords(adminUrl, { crove_app: 'test-app-pw', crove_worker: 'test-worker-pw' });
-    await migrateJobs(adminUrl);
     const loginUrl = (username: string, password: string) => {
       const url = new URL(adminUrl);
       url.username = username;

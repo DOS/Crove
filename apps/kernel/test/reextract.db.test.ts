@@ -14,7 +14,7 @@ import { MAX_EXTRACTION_VERSIONS, createOrg, kernelCommands, kernelQueries, upse
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import type { ParsedInvoice } from '@crove/l10n-vn';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
-import { migrateJobs, startWorker } from '../src/worker.ts';
+import { startWorker } from '../src/worker.ts';
 import { inProcessExtract } from './extract-service.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -220,7 +220,6 @@ suite('re-extraction on PostgreSQL (issue #40)', () => {
   });
 
   it('runs a requested re-read through the outbox and the worker into a new revision', { timeout: 90_000 }, async () => {
-    await migrateJobs(adminUrl);
     const fileId = await upload();
     reads.push(invoice('7003', 'Bản đọc đầu'));
     const stop = await startWorker({ connectionString: workerUrl, workerDb, runtime: workerRuntime, store, extractor: ai, extract, inboundDomain: null });

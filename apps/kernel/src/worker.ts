@@ -586,7 +586,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   };
 }
 
-// Kept only because the invariant suite on main still calls it, and protected.yml runs main's copy of that suite
-// against this code. The schema now comes from the vendored migration (#25), so this does nothing; delete it
-// together with those calls once they are gone from main.
+// Kept only until main's invariant suite stops referencing it: protected.yml runs main's copy of that suite against
+// a PR's code. No test or caller uses it any more, and the schema comes from the vendored migration (#25), so it does
+// nothing. Delete it in the follow-up PR once this change is on main (#130).
 export async function migrateJobs(_adminUrl: string): Promise<void> {}

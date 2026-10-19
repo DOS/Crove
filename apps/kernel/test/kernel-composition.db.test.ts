@@ -18,7 +18,6 @@ import { financeQueries } from '@crove/mod-finance';
 import type { AuthUser } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createKernel, defaultAdapters, type IdentityPort } from '../src/kernel.ts';
-import { migrateJobs } from '../src/worker.ts';
 import { startExtractService } from './extract-service.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -77,7 +76,6 @@ suite('composition root on PostgreSQL (ADR-0030)', () => {
     adminUrl = url.toString();
     await migrate({ adminUrl, dir: MIGRATIONS });
     await setRolePasswords(adminUrl, { crove_app: 'test-app-pw', crove_worker: 'test-worker-pw' });
-    await migrateJobs(adminUrl);
     const loginUrl = (username: string, password: string) => {
       const u = new URL(adminUrl);
       u.username = username;

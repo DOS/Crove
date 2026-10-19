@@ -16,7 +16,7 @@ import { financeCommands, financeQueries } from '@crove/mod-finance';
 import { buildZip, type ZipEntrySpec } from '../../extract/test/zip-fixture.ts';
 import { archiveSource, expandArchive } from '../src/archive.ts';
 import { processInboundEmail } from '../src/inbound.ts';
-import { migrateJobs, recordLastAttemptFailure, startWorker } from '../src/worker.ts';
+import { recordLastAttemptFailure, startWorker } from '../src/worker.ts';
 import { inProcessExtract } from './extract-service.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -354,7 +354,6 @@ suite('bulk intake of a ZIP archive on PostgreSQL (issue #314)', () => {
   });
 
   it(`opens a ZIP of ${INVOICES} e-invoices through the worker into ${INVOICES} proposals, each entry its own document`, { timeout: 400_000 }, async () => {
-    await migrateJobs(adminUrl);
     const inner = buildZip([{ name: 'a.xml', data: invoiceXml(-4) }]);
     const entries: ZipEntrySpec[] = [
       { name: 'thang-10/', data: '', method: 'store' },
