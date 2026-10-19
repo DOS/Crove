@@ -23,6 +23,7 @@ import type { zAgentBudget, zAgentTemplate, zTask } from '@crove/kernel-contract
 import { DomainError, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { DraftBudget } from './ai-draft-limit.ts';
 import { actorOf, type AuthUser } from './auth.ts';
+import { ConcurrencyLimiter } from './concurrency.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
 
@@ -131,6 +132,10 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     return inOrg(context, fn);
   };
 
+  // The multi-client home screen reads up to four orgs at once, a transaction each, on the API's pool of ten
+  // connections (#495): one screen per user at a time and two per process; another is refused at once (OVERLOADED).
+  const clientScreens = new ConcurrencyLimiter({ total: 2, perKey: 1 });
+
   const social = runtime.installed('social');
   const inSocial = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor) => Promise<T>) => {
     if (!social) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun mạng xã hội chưa được bật' });
@@ -171,7 +176,17 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         })),
       ),
       // The multi-client home screen (issue #318): each org's figures are read in that org's own context.
-      clients: os.me.clients.handler(({ context }) => guard(() => clientOverviews(runtime, actorOf(context.user)))),
+      clients: os.me.clients.handler(({ context, signal }) =>
+        guard(async () => {
+          const release = clientScreens.tryAcquire(context.user.userId);
+          if (!release) throw new DomainError('OVERLOADED', 503, 'Danh sách khách hàng đang được tải, hãy thử lại sau giây lát', { retryAfterSeconds: 2 });
+          try {
+            return await clientOverviews(runtime, actorOf(context.user), signal ? { signal } : {});
+          } finally {
+            release();
+          }
+        }),
+      ),
     },
     org: {
       create: os.org.create.handler(({ context, input }) =>
