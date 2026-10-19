@@ -133,8 +133,11 @@ if [ -n "${BACKUP_ENCRYPTION_KEY:-}" ]; then
   STEP="settings: BACKUP_ENCRYPTION_KEY must be 32 random bytes as base64 or hex (openssl rand -base64 32)"
   key_id="$(backup_key_id "$BACKUP_ENCRYPTION_KEY")"
   [[ "$key_id" =~ ^[0-9a-f]{16}$ ]] || false
-  ENCRYPTION=aes-256-gcm
-  BLOB_STORE="blobs/k$key_id"
+  # Only what goes to the bucket is sealed; without a bucket nothing is, and meta.env and last-success say so.
+  if [ -n "${BACKUP_S3_ENDPOINT:-}" ]; then
+    ENCRYPTION=aes-256-gcm
+    BLOB_STORE="blobs/k$key_id"
+  fi
 fi
 export BLOB_STORE
 

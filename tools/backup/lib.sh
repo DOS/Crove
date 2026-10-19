@@ -165,12 +165,14 @@ mc_objects() {
   done
 }
 
-# True for a URL a development stack uses (loopback, *.localhost, or none), false for a deployment's public URL.
+# True for a URL a development stack uses (localhost, *.localhost, 127.x.x.x, [::1]), false for anything else,
+# including no URL at all: an unset PUBLIC_URL counts as a deployment, so its checks are not skipped by omission.
 is_local_url() {
   local host="${1#*://}"
   host="${host%%/*}"
   if [[ "$host" == '['* ]]; then host="${host%%]*}]"; else host="${host%:*}"; fi
-  case "$host" in '' | localhost | *.localhost | 127.* | '[::1]') return 0 ;; *) return 1 ;; esac
+  host="${host,,}"
+  [[ "$host" =~ ^(localhost|.+\.localhost|127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|\[::1\])$ ]]
 }
 
 # The id of a backup key, as seal.mjs keyId computes it: the first 8 bytes of sha256("crove.backup.key-id|" + key),

@@ -103,6 +103,13 @@ describe.skipIf(!hasBash)('backup lib.sh', { timeout: 120_000 }, () => {
     }
   });
 
+  it('tells a development URL from a deployment, and counts no URL as a deployment', () => {
+    const local = ['http://localhost:8080', 'http://LOCALHOST', 'http://crove.localhost/x', 'http://127.0.0.1:18181', 'http://127.12.0.3', 'http://[::1]:8080'];
+    const deployed = ['', 'https://crove.example.com', 'https://127.example.com', 'http://127.0.0.1.nip.io', 'https://localhost.example.com', 'http://10.0.0.5:8080'];
+    const res = bash(`for u in ${[...local, ...deployed].map((u) => `'${u}'`).join(' ')}; do if is_local_url "$u"; then echo local; else echo deployed; fi; done`);
+    expect(res.out.trim().split('\n')).toEqual([...local.map(() => 'local'), ...deployed.map(() => 'deployed')]);
+  });
+
   it('agrees with seal.mjs on the sealed size', () => {
     const sizes = [0, 1, 65535, 65536, 65537, 1_000_000];
     const res = bash(`for n in ${sizes.join(' ')}; do sealed_size "$n"; done`);

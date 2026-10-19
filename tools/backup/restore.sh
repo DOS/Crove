@@ -21,9 +21,10 @@
 #      transaction rolls back and no row changes. RESTORE_FILES=skip leaves the files alone, for a bucket that survived
 #      the incident;
 #   5. read back RESTORE_SAMPLE blobs (default 50, 0 for all) named by restored file rows and check their sha256;
-#   6. start the whole stack: migrate must succeed (it applies migrations newer than the backup, sets the role
-#      passwords and runs the hardening guard), then /readyz must answer ready; after a restore into a new bucket,
-#      each org's export is re-recorded with the restored object versions (main.ts exports-rebind).
+#   6. run migrate, which must succeed (it applies migrations newer than the backup, sets the role passwords and runs
+#      the hardening guard); after a restore into a new bucket, re-record each org's export with the restored object
+#      versions before the worker starts (main.ts exports-rebind; an org that fails is reported, the restore goes
+#      on); then start the whole stack, and /readyz must answer ready.
 # Exit 0 when everything passed; otherwise `[restore] FAILED: <reason>` and exit 1. The log goes to stdout and to
 # <BACKUP_DIR>/logs/restore-<time>.log.
 #
@@ -32,8 +33,9 @@
 # sealed run), RESTORE_PRESTART, RESTORE_SAMPLE, RESTORE_FILES_SERVICE (default crove), BACKUP_NODE_SERVICE (default
 # crove), RESTORE_API_SERVICE (default crove when the stack defines it, else api), RESTORE_WORKER_SERVICE (default
 # crove when the stack defines it, else worker), RESTORE_GENERATIONS (versions, or content; default content on
-# storage.googleapis.com), RESTORE_READY_TIMEOUT (seconds, default 600), RESTORE_ALLOW_UNSEALED (yes restores an
-# unsealed run from the bucket although BACKUP_ENCRYPTION_KEY is set, for a run older than the key).
+# storage.googleapis.com), RESTORE_READY_TIMEOUT (seconds, default 600). RESTORE_ALLOW_UNSEALED=yes, set on the
+# command (never read from .env) with an explicit s3:<run id>, restores an unsealed run from the bucket although
+# BACKUP_ENCRYPTION_KEY is set, for a run older than the key.
 set -Eeuo pipefail
 LOG_TAG=restore
 # shellcheck source=tools/backup/lib.sh
@@ -66,6 +68,9 @@ if [ $# -ne 1 ]; then
   exit 2
 fi
 SOURCE="$1"
+# Taken from the command's own environment only, never from .env, where a forgotten line would switch the downgrade
+# check off for good.
+ALLOW_UNSEALED="${RESTORE_ALLOW_UNSEALED:-}"
 STEP="reading $CROVE_DIR/.env"
 load_env_file "$CROVE_DIR/.env"
 
@@ -172,9 +177,11 @@ case "$SOURCE" in
       rm -rf "$WORK/fetched"
     else
       # With a key set, runs in the bucket are sealed: an unsealed one there may have been written by whoever holds the
-      # bucket's keys alone, and its dump would be restored unchecked. Only an explicit choice restores it.
-      if [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] && [ "${RESTORE_ALLOW_UNSEALED:-}" != yes ]; then
-        STEP="checking the run: $RUN_ID in the bucket is not sealed although BACKUP_ENCRYPTION_KEY is set; restore it only if you know it predates the key (RESTORE_ALLOW_UNSEALED=yes)"
+      # bucket's keys alone, and its dump would be restored unchecked. Only an explicit choice restores it: the
+      # variable set on the command (not in .env) and the run named by its id (not s3:latest, which anyone who can
+      # write to the bucket can point at a run of theirs).
+      if [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] && { [ "$ALLOW_UNSEALED" != yes ] || [ "$SOURCE" = s3:latest ]; }; then
+        STEP="checking the run: $RUN_ID in the bucket is not sealed although BACKUP_ENCRYPTION_KEY is set; restore it only if you know it predates the key (RESTORE_ALLOW_UNSEALED=yes on the command, with s3:$RUN_ID)"
         false
       fi
       [ -z "${BACKUP_ENCRYPTION_KEY:-}" ] || log "WARNING: restoring the unsealed run $RUN_ID although BACKUP_ENCRYPTION_KEY is set (RESTORE_ALLOW_UNSEALED=yes)"
@@ -396,11 +403,15 @@ phase_done "blob check"
 
 # --- 6. The stack ----------------------------------------------------------------------------------------------------
 STEP="starting the stack"
-dc up -d
 services="$(dc config --services)"
 api="${RESTORE_API_SERVICE:-}"
 [ -n "$api" ] || { if grep -qx crove <<<"$services"; then api=crove; else api=api; fi; }
+worker="${RESTORE_WORKER_SERVICE:-}"
+[ -n "$worker" ] || { if grep -qx crove <<<"$services"; then worker=crove; else worker=worker; fi; }
 deadline=$(($(date +%s) + RESTORE_READY_TIMEOUT))
+# migrate first, alone: the exports below are re-recorded before the worker starts, so no export job the restored
+# queue still holds can record a newer export that the re-record would then shadow.
+dc up -d migrate
 STEP="migrate (applies newer migrations, sets role passwords, runs the hardening guard)"
 while :; do
   id="$(dc ps -a -q migrate)"
@@ -415,26 +426,32 @@ while :; do
 done
 migrated="$(dc logs --no-color migrate | grep -o '\[migrate\] done, [0-9]* new migration(s)' | tail -1 || true)"
 log "migrate: ${migrated:-done}"
+# Org exports are recorded in audit rows, which keep the old object versions: after a restore into a new bucket they
+# are re-recorded with the restored ones (kernel.org.export.record, as the worker), so they download again. The data
+# is in place by now, so an org whose export cannot be re-recorded is reported and the restore goes on: its owner
+# asks for a new export.
+rebind_failed=0
+if [ "$STORAGE" = s3 ] && [ "$RESTORE_FILES" = copy ]; then
+  STEP="re-recording org exports with the restored object versions (main.ts exports-rebind)"
+  orgs="$(db_psql -d postgres -tA -c "SELECT DISTINCT org_id FROM crove_kernel.audit_event WHERE command = 'kernel.org.export.record' AND outcome = 'ok' ORDER BY 1")"
+  if [ -n "$orgs" ]; then
+    # shellcheck disable=SC2086
+    if ! dc run --rm --no-deps -T "$worker" exports-rebind $orgs </dev/null; then
+      rebind_failed=1
+      log "WARNING: some org exports could not be re-recorded (above); their owners ask for a new export (org.offboard again)"
+    fi
+  else
+    log "exports: no org has an export to re-record"
+  fi
+fi
+STEP="starting the stack"
+dc up -d
 STEP="waiting for /readyz on $api"
 until ready="$(dc exec -T "$api" node -e "fetch('http://127.0.0.1:8080/readyz').then(async (r) => { console.log(await r.text()); process.exit(r.ok ? 0 : 1); }).catch(() => process.exit(1))" 2>/dev/null)"; do
   [ "$(date +%s)" -lt "$deadline" ] || { STEP="/readyz did not answer ready within $RESTORE_READY_TIMEOUT s (last: ${ready:-no answer})"; false; }
   sleep 2
 done
 log "readyz: $ready"
-# Org exports are recorded in audit rows, which keep the old object versions: after a restore into a new bucket they
-# are re-recorded with the restored ones, through the worker (kernel.org.export.record), so they download again.
-if [ "$STORAGE" = s3 ] && [ "$RESTORE_FILES" = copy ]; then
-  STEP="re-recording org exports with the restored object versions (main.ts exports-rebind)"
-  orgs="$(db_psql -d postgres -tA -c "SELECT DISTINCT org_id FROM crove_kernel.audit_event WHERE command = 'kernel.org.export.record' AND outcome = 'ok' ORDER BY 1")"
-  if [ -n "$orgs" ]; then
-    worker="${RESTORE_WORKER_SERVICE:-}"
-    [ -n "$worker" ] || { if grep -qx crove <<<"$services"; then worker=crove; else worker=worker; fi; }
-    # shellcheck disable=SC2086
-    dc exec -T "$worker" node apps/kernel/src/main.ts exports-rebind $orgs
-  else
-    log "exports: no org has an export to re-record"
-  fi
-fi
 phase_done "stack start"
 
 STEP="cleaning up"
@@ -456,4 +473,5 @@ for file in "$BACKUP_DIR"/logs/restore-*.log; do
 done
 
 log "restore of $RUN_ID passed in $(($(date +%s) - STARTED_AT)) s: ${PHASES[*]/%/;}"
+[ "$rebind_failed" -eq 0 ] || log "WARNING: some org exports were not re-recorded (see exports-rebind above): their owners ask for a new export"
 log "before reopening writes: reconcile with the e-invoice providers (docs/runbooks/ledger-after-restore.md, step 4)"

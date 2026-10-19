@@ -4,8 +4,8 @@
 // re-records the newest export of each org through the one write path (kernel.org.export.record, a new audit row),
 // with the versions now under the same keys: the bytes are read back and must match the recorded sha256 first, so
 // the export is exactly the one the owner was given. Run by restore.sh as `main.ts exports-rebind <org id>...` in the
-// worker's container once the restored stack is up.
-import { BlobIntegrityError, BlobNotFoundError, readVerified, sha256Hex, type Actor, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+// worker's image once migrate has run and before the worker starts.
+import { BlobIntegrityError, BlobStoreAccessError, readVerified, sha256Hex, type Actor, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import type { ExportRecord } from '@crove/kernel';
 
 const RESTORE: Actor = { type: 'system', component: 'restore' };
@@ -31,7 +31,10 @@ export async function rebindExport(deps: ExportRebindDeps, orgId: string): Promi
     try {
       await readVerified(deps.store, ref);
     } catch (error) {
-      if (!(error instanceof BlobNotFoundError)) throw error;
+      // Bytes that differ from the record, or a store that refuses this role, are never papered over. Anything else
+      // means the recorded version is not there: a missing version, or one the new store cannot even parse (a version
+      // id from another provider, which S3 answers with 400 InvalidArgument). The current object is checked below.
+      if (error instanceof BlobIntegrityError || error instanceof BlobStoreAccessError) throw error;
       stale = true;
       break;
     }
