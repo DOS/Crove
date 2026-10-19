@@ -184,18 +184,20 @@ Vietnam first; the exact articles and any newer sanctions decree are to be confi
 
 ## 4. Steps (one PR each, end to end)
 
+Epic: #537. E1 and E2 are in M2 at P2; E3 to E9 are in Icebox at P3 until M3 is done (backlog review D11).
+
 | # | Step | Depends on | Touches protected paths |
 |---|---|---|---|
-| E0 | This plan, Decision 18, ADR-0034 (proposed) | - | No |
-| E1 | Kernel mail pipeline: `mail_message`, `mail_suppression`, the send and bulk queues with `external_call`, the suppression check, the invite moved onto the queue; RLS matrix factories first | - | Yes (migrations, kernel) |
-| E2 | Delivery events: `mail_event`, `@crove/mail` with the provider interface, the first HTTP adapter, the signed webhook route, DSNs through the inbound route (VERP); hard bounces and complaints suppress; invite delivery status on the members screen | E1 | Yes (migrations, `http.ts`) |
-| E3 | `modules/email` and the `crove_email` schema, registered under `CROVE_MODULES` with its menu; sender domains with the DNS check job and the From rules | E1 | Yes (migrations) |
-| E4 | Templates: block model, renderer (HTML and text), sandboxed preview, built-in defaults for every slot, org overrides; the message log screen | E3 | Yes (migrations) |
-| E5 | Contacts and consent: kernel `contact_point` with the backfill, topics, subscriptions, consent events, CSV import with attestation, double opt-in, the hosted signup form | E3 | Yes (migrations, `http.ts`) |
-| E6 | Unsubscribe and preferences: the signed token key ring, `/-/u/` pages, one-click POST, `mailto:` unsubscribe | E2, E5 | Yes (`http.ts`) |
-| E7 | Audiences and campaigns: lists and segments, composer, test send, review and approval, scheduled and throttled sending, pause and cancel, the 3-in-24-hours rule, the `[QC]` label, the guard | E4, E5, E6 | Yes (migrations) |
-| E8 | Analytics: per-campaign delivered, bounced, complaints, unsubscribes; optional click counts with the safe redirect | E7 | Yes (`http.ts`) |
-| E9 | AI drafting and rewrites (`EmailWriter`) and the deterministic content lint | E4 | No |
+| E0 (#535) | This plan, Decision 18, ADR-0034 (proposed) | - | No |
+| E1 (#538) | Kernel mail pipeline: `mail_message`, `mail_suppression`, the send and bulk queues with `external_call`, the suppression check, the invite moved onto the queue; RLS matrix factories first | - | Yes (migrations, kernel) |
+| E2 (#539) | Delivery events: `mail_event`, `@crove/mail` with the provider interface, the first HTTP adapter, the signed webhook route, DSNs through the inbound route (VERP); hard bounces and complaints suppress; invite delivery status on the members screen | E1 | Yes (migrations, `http.ts`) |
+| E3 (#540) | `modules/email` and the `crove_email` schema, registered under `CROVE_MODULES` with its menu; sender domains with the DNS check job and the From rules | E1 | Yes (migrations) |
+| E4 (#541) | Templates: block model, renderer (HTML and text), sandboxed preview, built-in defaults for every slot, org overrides; the message log screen | E3 | Yes (migrations) |
+| E5 (#542) | Contacts and consent: kernel `contact_point` with the backfill, topics, subscriptions, consent events, CSV import with attestation, double opt-in, the hosted signup form | E3 | Yes (migrations, `http.ts`) |
+| E6 (#543) | Unsubscribe and preferences: the signed token key ring, `/-/u/` pages, one-click POST, `mailto:` unsubscribe | E2, E5 | Yes (`http.ts`) |
+| E7 (#544) | Audiences and campaigns: lists and segments, composer, test send, review and approval, scheduled and throttled sending, pause and cancel, the 3-in-24-hours rule, the `[QC]` label, the guard | E4, E5, E6 | Yes (migrations) |
+| E8 (#545) | Analytics: per-campaign delivered, bounced, complaints, unsubscribes; optional click counts with the safe redirect | E7 | Yes (`http.ts`) |
+| E9 (#546) | AI drafting and rewrites (`EmailWriter`) and the deterministic content lint | E4 | No |
 | E10 | Later items of §1, each its own issue | E7 | Some |
 
 The first business senders beyond invites (Finance's invoice delivery and document requests to client companies, Social's channel alerts) are issues of those modules: each adds a template slot with a built-in default and sends through the kernel pipeline.
