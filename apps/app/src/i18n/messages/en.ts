@@ -252,7 +252,7 @@ export const en = {
     year: 'Year',
     monthOption: 'Month {n}',
     quarterOption: 'Q{n}',
-    range: 'From {from} to {to}, by invoice date',
+    range: 'From {from} to {to}: sales by invoice date, purchases by posting date',
     indicatorsTitle: 'Form 01/GTGT indicators',
     indicatorsNote:
       'Indicator [25] (deductible input VAT) and those from [36] on are for your accountant to decide. Sales at the reduced 8% rate go in [32] and [33] with the VAT reduction appendix. Voided documents are left out.',
@@ -298,6 +298,7 @@ export const en = {
       reduced_rate_outside_period: '8% rate outside the reduction period',
       lines_mismatch: 'Lines do not add up to the amount before VAT; the totals use the lines',
       vat_mismatch: 'VAT is not the value before VAT times the rate',
+      declared_late: 'Invoice of an earlier period, posted and declared in this one because its own month was locked',
     },
   },
   portalList: {
@@ -844,6 +845,7 @@ export const en = {
       refused: '{count, plural, one {# proposal was not approved:} other {# proposals were not approved:}}',
       notSent: '{count, plural, one {# proposal was not sent; select it again to approve it.} other {# proposals were not sent; select them again to approve them.}}',
       dismiss: 'Close',
+      periodLockedHint: 'Open it to post it on a date in an open month.',
     },
   },
   inboxDetail: {
@@ -883,6 +885,13 @@ export const en = {
     failedChecks:
       '{count, plural, one {# check failed. Compare with the original document before approving.} other {# checks failed. Compare with the original document before approving.}}',
     acceptFailed: 'I compared it with the original document and still want to post it',
+    lateTitle: 'The books are locked through {through}',
+    lateNotice: 'This invoice is dated {date}, in a locked month, so it cannot be posted on that date. You can post it in an open month instead; an owner can also unlock the month.',
+    latePost: 'Post it in an open month and keep the invoice date on the document',
+    lateDate: 'Posting date',
+    lateHint: 'The journal entry is dated on this day, and the VAT working declares the invoice in the period of this day. The document keeps its invoice date, {date}.',
+    lateDateInvalid: 'Choose a date from {from} to today.',
+    latePosted: 'Posted on {date}: the invoice month was locked, so the approver posted it in an open month. The document keeps its invoice date, {invoiceDate}.',
     seller: 'Seller',
     buyer: 'Buyer',
     taxCode: 'Tax code {code}',
@@ -1605,6 +1614,8 @@ export const en = {
       OPENING_REVERSAL_DATE: 'An opening entry can only be reversed on its own date.',
       OPENING_BALANCE_INVALID: 'Some rows of the trial balance are invalid. Check them before posting.',
       PERIOD_LOCKED: "The books are locked through this entry's month, so it cannot be posted. An owner can unlock that month to make a correction.",
+      POSTING_DATE_NOT_ALLOWED: 'This posting date cannot be used: only a purchase invoice whose own month is locked is posted later, on a date from its invoice date on.',
+      POSTING_DATE_IN_FUTURE: 'The posting date has not come yet. Choose today or an earlier day.',
       PERIOD_ALREADY_LOCKED: 'This month is already locked.',
       EARLIER_PERIOD_OPEN: 'Lock one month at a time, starting with the month right after the last locked one.',
       PERIOD_NOT_LOCKED: 'This month is not locked.',

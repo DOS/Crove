@@ -270,6 +270,8 @@ export function InboxPage() {
                       </Link>
                       {': '}
                       {errorMessage({ code: r.code, data: r.rule ? { rule: r.rule } : undefined })}
+                      {/* A purchase dated in a locked month (#478) is posted in an open month one by one, never in bulk. */}
+                      {r.code === 'PERIOD_LOCKED' && ` ${t('bulk.periodLockedHint')}`}
                     </li>
                   ))}
                 </ul>

@@ -104,6 +104,9 @@ export const KERNEL_ERROR_CODES = [
   'PERIOD_NOT_LOCKED',
   'LATER_PERIOD_LOCKED',
   'PERIOD_NOT_ENDED',
+  // A late purchase invoice posted in an open month (#478).
+  'POSTING_DATE_NOT_ALLOWED',
+  'POSTING_DATE_IN_FUTURE',
   // Bank statements (#326).
   'NOT_A_BANK_ACCOUNT',
   'BANK_IMPORT_INVALID',

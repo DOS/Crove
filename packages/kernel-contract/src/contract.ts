@@ -252,14 +252,19 @@ export const contract = {
           lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).optional(),
           note: z.string().max(500).optional(),
           acceptFailedChecks: z.boolean().optional(),
+          // A purchase invoice dated in a locked month (#478): the date its journal entry is posted on, in an open month,
+          // chosen by the approver. Omitted, the entry is dated on the invoice date.
+          postingDate: zLocalDate.optional(),
           idempotencyKey: zId,
         }),
       )
-      // A purchase returns its document; a reversal (#138) returns the entry it reversed and, when that entry recorded a
-      // purchase, the document it voided (#165); a cash or bank voucher (#327) returns the voucher.
+      // A purchase returns its document, and the posting date when it was posted later than its invoice date (#478); a
+      // reversal (#138) returns the entry it reversed and, when that entry recorded a purchase, the document it voided
+      // (#165); a cash or bank voucher (#327) returns the voucher.
       .output(
         z.object({
           documentId: zId.optional(),
+          postingDate: zLocalDate.optional(),
           journalEntryId: zId,
           reversedEntryId: zId.optional(),
           voidedDocumentId: zId.optional(),

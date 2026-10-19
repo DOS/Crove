@@ -216,7 +216,15 @@ export const inboxGet = defineQuery({
           .where('id', '=', row.source_file_id)
           .executeTakeFirst()
       : undefined;
-    const result = row.result as { documentId?: string; journalEntryId?: string; reversedEntryId?: string; voidedDocumentId?: string; voucherId?: string; code?: unknown } | null;
+    const result = row.result as {
+      documentId?: string;
+      journalEntryId?: string;
+      postingDate?: unknown;
+      reversedEntryId?: string;
+      voidedDocumentId?: string;
+      voucherId?: string;
+      code?: unknown;
+    } | null;
     // The same decision kernel.proposal.approve makes (without its locks), so the Inbox shows Approve only
     // to users the server will accept.
     const approval = await decideApproval(ctx.trx, ctx.orgId, ctx.actor, row, { lock: false });
@@ -266,6 +274,10 @@ export const inboxGet = defineQuery({
         ? {
             journalEntryId: result.journalEntryId,
             ...(result.documentId ? { documentId: result.documentId } : {}),
+            // A purchase posted later than its invoice date, in an open month (#478): the date its entry is on.
+            ...(result.documentId && typeof result.postingDate === 'string' && zLocalDate.safeParse(result.postingDate).success
+              ? { postingDate: result.postingDate }
+              : {}),
             ...(result.reversedEntryId ? { reversedEntryId: result.reversedEntryId } : {}),
             ...(result.voidedDocumentId ? { voidedDocumentId: result.voidedDocumentId } : {}),
             ...(result.voucherId ? { voucherId: result.voucherId } : {}),

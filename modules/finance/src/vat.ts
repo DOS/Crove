@@ -4,6 +4,16 @@
 //
 // Input invoices are the recorded purchase documents, output invoices the recorded sales documents (sales e-invoices,
 // issue #313); both live in crove_finance.purchase_document, told apart by direction.
+//
+// The period of an input invoice is its posting date, the date of its journal entry (#478). That is its invoice date,
+// except for an invoice recorded after its own month was locked, which the approver posts in an open month: it is
+// then declared in that later period, flagged declared_late. Source (checked 2026-10-19 against the General Department
+// of Taxation's published answers, not the texts themselves): input VAT is declared in the period it arises (Law on
+// VAT No. 48/2024/QH15, Article 14(1)(đ)), and an omission found later that lowers the tax payable, as a missed input
+// invoice does, is declared in the period it is found (Decree 181/2025/ND-CP, Article 23(5) and (6)); one that raises
+// it needs a supplementary return for its own period. Treating a late-received invoice as such an omission is an
+// inference for the partner's accountant to confirm (#61). An output invoice always stays in its invoice period: a
+// sale is never posted late (record.ts).
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
 import { VAT_WARNINGS, zVatPeriod, type DocumentDirection } from '@crove/kernel-contract';
@@ -36,6 +46,8 @@ export type VatWarning = (typeof VAT_WARNINGS)[number];
 export interface VatInvoiceView {
   id: string;
   issueDate: string;
+  // The date of its journal entry, which chooses the period (#478).
+  postingDate: string;
   series: string;
   number: string;
   partyName: string;
@@ -63,7 +75,19 @@ export interface VatReport {
 }
 
 function invoiceView(
-  doc: { id: string; issueDate: string; series: string; number: string; partyName: string; partyTaxCode: string | null; subtotal: string; vatAmount: string; total: string },
+  period: VatPeriod,
+  doc: {
+    id: string;
+    issueDate: string;
+    postingDate: string;
+    series: string;
+    number: string;
+    partyName: string;
+    partyTaxCode: string | null;
+    subtotal: string;
+    vatAmount: string;
+    total: string;
+  },
   lines: Array<{ amount: string; vatRate: string | null }>,
 ): VatInvoiceView {
   const breakdown = documentVatByRate({ vatAmount: doc.vatAmount, lines });
@@ -74,9 +98,12 @@ function invoiceView(
   const linesTaxable = breakdown.rates.reduce((acc, r) => acc.plus(money(r.taxable)), money(0));
   if (!linesTaxable.equals(money(doc.subtotal))) warnings.push('lines_mismatch');
   if (vatMismatch({ vatAmount: doc.vatAmount, lines })) warnings.push('vat_mismatch');
+  // An invoice of an earlier period, posted in this one after its own month was locked (#478).
+  if (doc.issueDate < period.from) warnings.push('declared_late');
   return {
     id: doc.id,
     issueDate: doc.issueDate,
+    postingDate: doc.postingDate,
     series: doc.series,
     number: doc.number,
     partyName: doc.partyName,
@@ -89,17 +116,23 @@ function invoiceView(
   };
 }
 
-// The recorded documents of one direction dated in the period, except those voided by a reversal (#165), oldest first:
-// purchases for the input side, sales (#313) for the output side. The party is the supplier or the customer.
+// The recorded documents of one direction in the period, except those voided by a reversal (#165), oldest first:
+// purchases for the input side, by posting date (#478), and sales (#313) for the output side, by invoice date. The
+// party is the supplier or the customer. Each document has exactly one entry of its own (journal_entry is unique by
+// source); a reversal is an entry of another source.
 async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: DocumentDirection): Promise<VatInvoiceView[]> {
+  const periodDate = direction === 'purchase' ? 'j.entry_date' : 'd.invoice_date';
   const docs = await ctx.trx
     .selectFrom('crove_finance.purchase_document as d')
     .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
-    .select(['d.id', 'd.invoice_date', 'd.invoice_series', 'd.invoice_number', 'd.subtotal', 'd.vat_amount', 'd.total', 'p.name', 'p.tax_code'])
+    .innerJoin('crove_finance.journal_entry as j', (join) =>
+      join.onRef('j.org_id', '=', 'd.org_id').onRef('j.source_id', '=', 'd.id').on('j.source_type', '=', 'finance.purchase_document'),
+    )
+    .select(['d.id', 'd.invoice_date', 'j.entry_date', 'd.invoice_series', 'd.invoice_number', 'd.subtotal', 'd.vat_amount', 'd.total', 'p.name', 'p.tax_code'])
     .where('d.org_id', '=', ctx.orgId)
     .where('d.direction', '=', direction)
-    .where('d.invoice_date', '>=', period.from)
-    .where('d.invoice_date', '<=', period.to)
+    .where(periodDate, '>=', period.from)
+    .where(periodDate, '<=', period.to)
     .where(({ not, exists, selectFrom }) =>
       not(
         exists(
@@ -107,6 +140,7 @@ async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: D
         ),
       ),
     )
+    .orderBy(periodDate)
     .orderBy('d.invoice_date')
     .orderBy('d.invoice_series')
     .orderBy('d.invoice_number')
@@ -137,9 +171,11 @@ async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: D
   }
   return docs.map((d) =>
     invoiceView(
+      period,
       {
         id: d.id,
         issueDate: d.invoice_date,
+        postingDate: d.entry_date,
         series: d.invoice_series,
         number: d.invoice_number,
         partyName: d.name,

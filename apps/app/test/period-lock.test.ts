@@ -1,7 +1,7 @@
 // Period lock on the ledger screen (issue #329): who may lock and unlock, and months counted in Vietnam time, as the
 // kernel counts them.
 import { describe, expect, it } from 'vitest';
-import { canLockPeriods, canUnlockPeriods, currentMonth, monthLabel, previousMonth } from '../src/lib/period-lock.ts';
+import { canLockPeriods, canUnlockPeriods, currentDate, currentMonth, monthLabel, nextDay, postingDateAllowed, previousMonth } from '../src/lib/period-lock.ts';
 
 describe('period lock helpers', () => {
   it('lets owners and admins lock, and only owners unlock', () => {
@@ -20,5 +20,17 @@ describe('period lock helpers', () => {
     expect(previousMonth('2026-10')).toBe('2026-09');
     expect(previousMonth('2026-01')).toBe('2025-12');
     expect(monthLabel('2026-09')).toBe('09/2026');
+  });
+
+  it('offers the first open day for a late invoice and takes only open days up to today (#478)', () => {
+    expect(nextDay('2026-09-30')).toBe('2026-10-01');
+    expect(nextDay('2026-12-31')).toBe('2027-01-01');
+    expect(nextDay('2028-02-28')).toBe('2028-02-29');
+    expect(currentDate(new Date('2026-09-30T17:00:00Z'))).toBe('2026-10-01');
+    expect(postingDateAllowed('2026-10-01', '2026-09-30', '2026-10-19')).toBe(true);
+    expect(postingDateAllowed('2026-10-19', '2026-09-30', '2026-10-19')).toBe(true);
+    expect(postingDateAllowed('2026-09-30', '2026-09-30', '2026-10-19')).toBe(false);
+    expect(postingDateAllowed('2026-10-20', '2026-09-30', '2026-10-19')).toBe(false);
+    expect(postingDateAllowed('', '2026-09-30', '2026-10-19')).toBe(false);
   });
 });
