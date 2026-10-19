@@ -134,6 +134,7 @@ The existing "External-tenant gate" milestone, renamed. It keeps #31 (external s
 
 - **Social** (Phase 5 milestone): paused if the owner accepts D5; issues keep their content at P3.
 - **Icebox** (the "Later (Phase 3+)" milestone, renamed "Icebox"): review follow-ups, tooling polish, client apps, the public API, agents beyond the Inbox.
+- **Email** (added 2026-10-19 by owner decision, kernel plan Decision 18; plan [email.md](email.md)): steps E1 and E2 (the kernel mail pipeline, bounces and complaints) in M2 at P2, because the pilot already sends invites by mail and M2's client reminders will too; steps E3 to E9 (domains, templates, consent, campaigns) in Icebox at P3 until M3 is done, like Social under D5 (D11).
 
 ## 5. Every open issue and the recommended action
 
@@ -219,6 +220,7 @@ Each question has the recommended answer; per the plan's working rule, a recomme
 | D8 | Keep the Crove brand (issue #80)? | Keep Crove; close #80 | A rename touches packages, schemas, docs and domains; the alternative was already checked and rejected (premium domain, an existing accounting brand with a similar name) |
 | D9 | Which AI endpoint processes PDFs and photos in the pilot, and may invoice data leave Vietnam for it? | The DOS.AI endpoint with a monthly cap; XML e-invoices (most of the volume) never call AI; say so in the pilot agreement | XML is parsed deterministically, so AI only sees scans and photos; the agreement makes the processing explicit |
 | D10 | Work alongside the firm's current software instead of replacing it? | Yes for the MVP: Crove is the AI intake and review layer, and exports vouchers to the firm's system of record (M2-5) | Switching a firm's ledger is a year-end decision with retraining; feeding their software removes the switching cost and still saves the data-entry time |
+| D11 | When does the Email module (Decision 18) start? | Transactional first: E1 and E2 in M2 at P2; marketing (E3 to E9) after M3 unless a pilot customer asks for it | Invites already depend on mail, and the kernel pipeline adds the log, bounces and suppression a pilot needs; marketing has no pilot user yet and agent capacity is scarce (the same reason as D5). Details: [email.md §6](email.md#6-open-decisions-for-the-owner), decision E-1 |
 
 ## 7. Rules that keep the backlog healthy
 
