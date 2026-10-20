@@ -13,6 +13,8 @@ import { Textarea } from '@crove/ui/components/textarea';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
+import { errorMessage } from '../lib/api.ts';
+import { apiErrorFromResponse } from '../lib/errors.ts';
 
 interface ReviewPage {
   org: string;
@@ -39,9 +41,9 @@ const readName = () => {
 async function post<T>(path: string, body: unknown): Promise<T | null> {
   const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), credentials: 'omit', referrerPolicy: 'no-referrer' });
   if (res.status === 404) return null;
-  const json = (await res.json().catch(() => null)) as (T & { message?: string }) | null;
-  if (!res.ok) throw new Error(json?.message ?? `HTTP ${res.status}`);
-  return json;
+  // A refusal keeps the kernel's code, so the page says it in the reader's language.
+  if (!res.ok) throw await apiErrorFromResponse(res);
+  return (await res.json()) as T;
 }
 
 export function SocialReviewPage() {
@@ -82,7 +84,7 @@ export function SocialReviewPage() {
         ) : page.isLoading ? (
           <Spinner />
         ) : page.error ? (
-          <ErrorText>{(page.error as Error).message}</ErrorText>
+          <ErrorText>{errorMessage(page.error)}</ErrorText>
         ) : data ? (
           <>
             <div>
@@ -109,7 +111,7 @@ export function SocialReviewPage() {
                 <Label htmlFor="review-body">{t('comment')}</Label>
                 <Textarea id="review-body" value={body} maxLength={2000} rows={3} placeholder={t('commentPlaceholder')} onChange={(e) => setBody(e.target.value)} />
               </div>
-              {answer.error && <ErrorText>{(answer.error as Error).message}</ErrorText>}
+              {answer.error && <ErrorText>{errorMessage(answer.error)}</ErrorText>}
               <div className="flex flex-wrap gap-2">
                 <Button disabled={answer.isPending || !name.trim()} onClick={() => answer.mutate('approved')}>
                   {t('approve')}

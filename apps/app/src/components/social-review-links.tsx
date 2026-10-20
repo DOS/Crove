@@ -45,7 +45,7 @@ export function ReviewLinks({ postId, canDecide }: { postId: string; canDecide: 
   const feedback = list.data?.feedback ?? [];
   const now = Date.now();
   const live = links.filter((l) => !l.revokedAt && Date.parse(l.expiresAt) > now);
-  if (!canDecide && links.length === 0 && feedback.length === 0) return null;
+  if (!canDecide && !list.error && links.length === 0 && feedback.length === 0) return null;
   return (
     <Card className="block space-y-3 p-4">
       <div>
@@ -66,6 +66,7 @@ export function ReviewLinks({ postId, canDecide }: { postId: string; canDecide: 
           </Button>
         </div>
       )}
+      {list.error && <ErrorText>{errorMessage(list.error)}</ErrorText>}
       {create.error && <ErrorText>{errorMessage(create.error)}</ErrorText>}
       {made && (
         <div className="space-y-1.5 rounded-lg border border-primary/40 p-3">
