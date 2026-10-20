@@ -117,6 +117,20 @@ describe('SMTP adapter', () => {
     expect(mail?.data).not.toMatch(/^Bcc:/im);
     expect(logs).toEqual([]);
   });
+
+  it('sends bounce reports to the mail\'s own address on the inbound domain and keeps the From header (#539)', async () => {
+    const mailer = createSmtpProvider({ host: '127.0.0.1', port, from: 'noreply@crove.local' });
+    const token = 'a'.repeat(48);
+    await createInviteMailSender(mailer, 'https://books.example.com/', {}, 'In.Example.com')({ ...INVITE, bounceToken: token });
+    const bounced = smtp.received.at(-1);
+    expect(bounced?.from).toBe(`MAIL FROM:<bounce+${token}@in.example.com>`);
+    expect(bounced?.to).toEqual([expect.stringContaining('<khach@example.test>')]);
+    expect(bounced?.data).toMatch(/^From: Crove <noreply@crove\.local>$/m);
+    // Without an inbound domain to receive them, or without a token, the envelope sender is the From address.
+    await createInviteMailSender(mailer, 'https://books.example.com/', {}, null)({ ...INVITE, bounceToken: token });
+    await createInviteMailSender(mailer, 'https://books.example.com/', {}, 'in.example.com')({ ...INVITE, bounceToken: null });
+    expect(smtp.received.slice(-2).map((m) => m.from)).toEqual(['MAIL FROM:<noreply@crove.local>', 'MAIL FROM:<noreply@crove.local>']);
+  });
 });
 
 describe('SMTP adapter, refusals', () => {

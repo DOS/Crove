@@ -72,6 +72,8 @@ export function createSmtpProvider(options: SmtpOptions): MailProvider {
           text: mail.text,
           html: mail.html,
           ...(mail.messageId ? { messageId: mail.messageId } : {}),
+          // The From header stays; only the envelope sender, where bounce reports go, changes.
+          ...(mail.returnPath ? { envelope: { from: mail.returnPath, to: mail.to } } : {}),
         });
         return { status: 'accepted' };
       } catch (error) {
