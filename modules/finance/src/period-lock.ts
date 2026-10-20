@@ -62,6 +62,8 @@ export async function periodLockState(ctx: QueryContext): Promise<PeriodLockStat
     // The last lock or unlock; a row the posting guard created has neither.
     updatedBy,
     updatedAt: row?.updated_by ? row.updated_at.toISOString() : null,
+    // The opening entry in force (#366): nothing else posts on or before it.
+    openingDate: await liveOpeningDate(ctx),
   };
 }
 
@@ -190,12 +192,34 @@ function detailField(error: PgError, key: string): string | null {
   }
 }
 
+// How a posting can answer an entry dated on or before the opening entry, so the refusal tells the user what to do:
+// - posting_date: a purchase invoice, whose approver may choose a later posting date (record.ts, #478);
+// - fixed: a document posted on its own date, which nobody chooses (a sales invoice, a voucher made from a bank
+//   statement line): it must be dated after the opening balances, or the opening balances reversed and imported again
+//   at an earlier date;
+// - later_date: anything whose date the user enters (a cash voucher, a reversal).
+// The SPA words each case through the rule in the details (apps/app/src/lib/kernel-errors.ts).
+export const BEFORE_OPENING_CHOICES = ['posting_date', 'fixed', 'later_date'] as const;
+export type BeforeOpeningChoice = (typeof BEFORE_OPENING_CHOICES)[number];
+
+function beforeOpeningMessage(choice: BeforeOpeningChoice, openingDate: string, entryDate: string): string {
+  const opening = `Số dư đầu kỳ đã ghi tại ngày ${openingDate}`;
+  switch (choice) {
+    case 'posting_date':
+      return `${opening} nên hóa đơn không ghi sổ vào ngày ${entryDate} được. Hãy chọn ngày ghi sổ sau ngày ${openingDate}; chứng từ vẫn giữ ngày hóa đơn.`;
+    case 'fixed':
+      return `${opening} nên chứng từ ngày ${entryDate} không ghi sổ được. Chứng từ này ghi sổ theo đúng ngày của nó, không chọn được ngày khác, nên phải có ngày sau ngày số dư đầu kỳ. Nếu ngày số dư đầu kỳ chưa đúng, hãy đảo bút toán số dư đầu kỳ rồi nhập lại với ngày sớm hơn.`;
+    case 'later_date':
+      return `${opening} nên không ghi được bút toán ngày ${entryDate}. Hãy chọn một ngày sau ngày ${openingDate}.`;
+  }
+}
+
 // The answer to a posting the opening entry rule refused (#366, 20261020210000): an entry dated on or before the org's
-// opening entry (55000 BEFORE_OPENING_BALANCE), or an opening entry while another is in force (55000
-// OPENING_BALANCE_EXISTS) or dated on or after another entry (55000 OPENING_BALANCE_AFTER_ENTRIES);
+// opening entry (55000 BEFORE_OPENING_BALANCE, worded for `choice`), or an opening entry while another is in force
+// (55000 OPENING_BALANCE_EXISTS) or dated on or after another entry (55000 OPENING_BALANCE_AFTER_ENTRIES);
 // finance.opening_balance.post says the last two first, unless an entry committed meanwhile.
 // Null for any other error.
-export function openingEntryError(error: unknown): DomainError | null {
+export function openingEntryError(error: unknown, choice: BeforeOpeningChoice = 'later_date'): DomainError | null {
   const pg = error as PgError;
   if (pg?.code !== '55000') return null;
   const entryDate = detailField(pg, 'entryDate');
@@ -204,8 +228,8 @@ export function openingEntryError(error: unknown): DomainError | null {
     return new DomainError(
       'BEFORE_OPENING_BALANCE',
       409,
-      `Số dư đầu kỳ đã ghi tại ngày ${openingDate ? dateLabel(openingDate) : ''}, nên không ghi được bút toán ngày ${entryDate ? dateLabel(entryDate) : ''}; mọi bút toán khác phải sau ngày số dư đầu kỳ. Hãy chọn ngày sau đó, hoặc đảo bút toán số dư đầu kỳ rồi nhập lại với ngày sớm hơn.`,
-      { openingDate, entryDate },
+      beforeOpeningMessage(choice, openingDate ? dateLabel(openingDate) : '', entryDate ? dateLabel(entryDate) : ''),
+      { openingDate, entryDate, rule: `before_opening_${choice}` },
     );
   }
   if (pg.message === 'OPENING_BALANCE_EXISTS') {
@@ -226,6 +250,18 @@ export function openingEntryError(error: unknown): DomainError | null {
 }
 
 // The answer to any refusal of the posting guard on journal_entry: the period lock or the opening entry rule.
-export function postingGuardError(error: unknown): DomainError | null {
-  return periodLockedError(error) ?? openingEntryError(error);
+export function postingGuardError(error: unknown, choice: BeforeOpeningChoice = 'later_date'): DomainError | null {
+  return periodLockedError(error) ?? openingEntryError(error, choice);
+}
+
+// The date of the org's opening entry in force (not reversed), or null: the same rule as the posting guard. Read after
+// a posting, it cannot move before commit: the guard holds the org's period_lock row FOR SHARE, and an opening entry
+// needs it FOR UPDATE.
+export async function liveOpeningDate(ctx: QueryContext): Promise<string | null> {
+  const { rows } = await sql<{ opening: string | null }>`
+    SELECT pg_catalog.max(o.entry_date)::text AS opening
+    FROM crove_finance.journal_entry o
+    WHERE o.org_id = ${ctx.orgId}::uuid AND o.source_type = 'finance.opening_balance'
+      AND NOT EXISTS (SELECT 1 FROM crove_finance.journal_entry r WHERE r.org_id = o.org_id AND r.reverses_entry_id = o.id)`.execute(ctx.trx);
+  return rows[0]?.opening ?? null;
 }

@@ -591,6 +591,8 @@ export const zPeriodLockState = z.object({
   lastMonth: zPeriodMonth.nullable(),
   updatedBy: z.string().nullable(),
   updatedAt: z.string().nullable(),
+  // The date of the org's opening entry in force (#366): no other entry posts on or before it.
+  openingDate: zLocalDate.nullable(),
 });
 export type PeriodLockState = z.infer<typeof zPeriodLockState>;
 

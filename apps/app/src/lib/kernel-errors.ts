@@ -229,6 +229,10 @@ export const KERNEL_ERROR_RULES = {
   invite_org_per_day: 'INVITE_RATE_LIMITED',
   invite_email_per_day: 'INVITE_RATE_LIMITED',
   invite_recipient_per_day: 'INVITE_RATE_LIMITED',
+  // An entry dated on or before the opening balances (#366), worded by what the user can do about it.
+  before_opening_posting_date: 'BEFORE_OPENING_BALANCE',
+  before_opening_fixed: 'BEFORE_OPENING_BALANCE',
+  before_opening_later_date: 'BEFORE_OPENING_BALANCE',
 } as const satisfies Record<string, KernelErrorCode>;
 
 type KernelErrorRule = keyof typeof KERNEL_ERROR_RULES;

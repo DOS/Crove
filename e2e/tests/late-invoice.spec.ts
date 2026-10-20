@@ -74,7 +74,7 @@ test('post an invoice of a locked month in the first open month, keeping its inv
     await page.getByRole('tab', { name: 'Đã ghi sổ' }).click();
     await page.getByRole('link', { name: SELLER }).click();
     await expect(page.getByTestId('late-posted')).toHaveText(
-      `Đã ghi sổ ngày ${dmy(FIRST_OPEN_DAY)}: tháng của hóa đơn đã khóa sổ nên người duyệt ghi vào tháng đang mở. Chứng từ vẫn giữ ngày hóa đơn ${dmy(INVOICE_DATE)}.`,
+      `Đã ghi sổ ngày ${dmy(FIRST_OPEN_DAY)}, sau ngày hóa đơn: ngày hóa đơn thuộc tháng đã khóa sổ hoặc không sau ngày số dư đầu kỳ. Chứng từ vẫn giữ ngày hóa đơn ${dmy(INVOICE_DATE)}.`,
     );
   });
 

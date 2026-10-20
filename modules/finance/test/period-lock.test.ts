@@ -35,6 +35,17 @@ describe('period lock', () => {
       details: { firstEntryDate: '2026-01-05' },
     });
     expect(openingEntryError({ code: '55000', message: 'BEFORE_OPENING_BALANCE', detail: 'not json' })).toMatchObject({ details: { openingDate: null, entryDate: null } });
+    // Worded by what the user can do: choose a posting date (a purchase invoice), nothing (a document on its own date),
+    // or a later date (the default); the rule tells the SPA which.
+    const detail = '{"openingDate" : "2025-12-31", "entryDate" : "2025-12-20"}';
+    const worded = (choice?: 'posting_date' | 'fixed' | 'later_date') => openingEntryError({ code: '55000', message: 'BEFORE_OPENING_BALANCE', detail }, choice);
+    expect(worded()).toMatchObject({ details: { rule: 'before_opening_later_date' } });
+    expect(worded()?.message).toContain('Hãy chọn một ngày sau ngày 31/12/2025');
+    expect(worded('posting_date')).toMatchObject({ details: { rule: 'before_opening_posting_date' } });
+    expect(worded('posting_date')?.message).toContain('Hãy chọn ngày ghi sổ sau ngày 31/12/2025');
+    expect(worded('fixed')).toMatchObject({ details: { rule: 'before_opening_fixed' } });
+    expect(worded('fixed')?.message).toContain('đảo bút toán số dư đầu kỳ');
+    expect(postingGuardError({ code: '55000', message: 'BEFORE_OPENING_BALANCE', detail }, 'fixed')).toMatchObject({ details: { rule: 'before_opening_fixed' } });
     expect(openingEntryError({ code: '55000', message: 'PERIOD_LOCKED' })).toBeNull();
     expect(openingEntryError({ code: '23514', message: 'BEFORE_OPENING_BALANCE' })).toBeNull();
     // The guard's refusals, whichever rule: the period lock first, then the opening entry.

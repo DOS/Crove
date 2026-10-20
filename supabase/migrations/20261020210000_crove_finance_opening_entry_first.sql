@@ -6,7 +6,8 @@
 -- every writer that runs with triggers enabled, whatever the path:
 -- - An entry dated on or before the org's opening entry in force (source 'finance.opening_balance', not reversed) is
 --   refused: BEFORE_OPENING_BALANCE (55000) with the opening and entry dates as JSON detail. The opening entry's own
---   reversal is exempt: it is dated on the opening date (reversal.ts), so the two cancel out at every date.
+--   reversal dated on the opening date is exempt (reversal.ts dates it there), so the two cancel out at every date; a
+--   reversal of it on any other date is held to the rule like any entry.
 -- - An opening entry is refused while another opening entry is in force (OPENING_BALANCE_EXISTS, 55000, its id as JSON
 --   detail: reverse it first), and while another entry (not an opening entry, nor the reversal of one) is dated on or
 --   before it: OPENING_BALANCE_AFTER_ENTRIES (55000) with the first such date as JSON detail.
@@ -14,8 +15,11 @@
 -- FOR UPDATE instead, so an opening import waits for postings in flight and a posting waits for an opening import in
 -- flight; whichever comes second reads the other's committed entry (each statement of the guard takes a new snapshot
 -- under READ COMMITTED, the runtime's isolation for commands) and is refused if it breaks the rule. The lock and unlock
--- functions take the same row FOR UPDATE, as before.
--- Entries posted before this migration are not checked again. Idempotent.
+-- functions take the same row FOR UPDATE, as before. A transaction that posted an ordinary entry (FOR SHARE) and then
+-- posts an opening entry upgrades to FOR UPDATE, and two such transactions in one org can deadlock (40P01, one of them
+-- is rolled back); no command does that today: finance.opening_balance.post posts the opening entry alone.
+-- Entries posted before this migration are not checked again (ADR-0021 has a read-only query that lists them).
+-- Idempotent.
 SET LOCAL lock_timeout = '2s';
 
 -- The guard, replaced: the period lock as in 20261020070000, then the opening entry rule. Owned by the table owner
@@ -70,6 +74,7 @@ BEGIN
   ELSIF NEW.reverses_entry_id IS NULL OR NOT EXISTS (
     SELECT 1 FROM crove_finance.journal_entry o
     WHERE o.org_id = NEW.org_id AND o.id = NEW.reverses_entry_id AND o.source_type = 'finance.opening_balance'
+      AND o.entry_date = NEW.entry_date
   ) THEN
     -- The opening entry in force: not reversed (there is at most one; the latest date if a writer made more).
     SELECT pg_catalog.max(o.entry_date) INTO v_opening

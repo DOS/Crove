@@ -322,8 +322,21 @@ suite('opening balances from Excel (#320)', () => {
 
   // The opening entry stays first for every writer (#366): the posting guard refuses an entry dated on or before the
   // opening entry in force, and an opening entry dated on or after another entry, whatever the path.
-  const settledWithin = <T>(promise: Promise<T>, ms: number) =>
-    Promise.race([promise.then(() => 'settled' as const), new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), ms))]);
+  // Waits until a backend of this database posting through post_journal_entry() waits on a lock (a row lock of the
+  // guard), so a test knows the posting is held by the lock under test rather than by a timer.
+  async function waitForPostingLock() {
+    await admin(async (c) => {
+      for (let i = 0; i < 400; i++) {
+        const { rows } = await c.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_catalog.pg_stat_activity
+           WHERE datname = pg_catalog.current_database() AND wait_event_type = 'Lock' AND query LIKE '%post_journal_entry%'`,
+        );
+        if ((rows[0]?.n ?? 0) > 0) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error('no posting waited on a lock');
+    });
+  }
 
   // A balanced entry written as the superuser in its own transaction (any writer: the guard runs for every role); the
   // database error, or null once committed.
@@ -372,9 +385,36 @@ suite('opening balances from Excel (#320)', () => {
     // A second opening entry dated earlier is no way around it: refused while the first stands.
     expect(await rawEntry(org.orgId, '2025-12-30', OPENING_BALANCE_SOURCE)).toMatchObject({ code: '55000', message: 'OPENING_BALANCE_EXISTS' });
 
+    // The opening entry's reversal is exempt only on the opening date: dated earlier, it is held to the rule. (The
+    // guard runs first; nothing is written.)
+    const opening = await admin(async (c) =>
+      (
+        await c.query<{ id: string }>(
+          `SELECT id FROM crove_finance.journal_entry o WHERE org_id = $1 AND source_type = $2
+           AND NOT EXISTS (SELECT 1 FROM crove_finance.journal_entry r WHERE r.org_id = o.org_id AND r.reverses_entry_id = o.id)`,
+          [org.orgId, OPENING_BALANCE_SOURCE],
+        )
+      ).rows[0]?.id,
+    );
+    const earlyReversal = await admin(async (c) =>
+      c
+        .query(
+          `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id, reverses_entry_id) VALUES ($1, '2025-12-30', 'Đảo', 'kernel.proposal', $2, $3)`,
+          [org.orgId, randomUUID(), opening],
+        )
+        .then(
+          () => null,
+          (error: { code?: string; message: string }) => ({ code: error.code, message: error.message }),
+        ),
+    );
+    expect(earlyReversal).toEqual({ code: '55000', message: 'BEFORE_OPENING_BALANCE' });
+
     // Through a command: refused with the dates, and posted the day after.
     const refused = await voucher('2025-12-31');
-    expect(refused).toMatchObject({ status: 409, body: { code: 'BEFORE_OPENING_BALANCE', data: { openingDate: '2025-12-31', entryDate: '2025-12-31' } } });
+    expect(refused).toMatchObject({
+      status: 409,
+      body: { code: 'BEFORE_OPENING_BALANCE', data: { openingDate: '2025-12-31', entryDate: '2025-12-31', rule: 'before_opening_later_date' } },
+    });
     expect(refused.body.message).toContain('31/12/2025');
     expect((await voucher('2026-01-01')).status).toBe(200);
     expect(await rawEntry(org.orgId, '2026-01-01')).toBeNull();
@@ -405,6 +445,9 @@ suite('opening balances from Excel (#320)', () => {
     const fresh = await rpc('org/create', await tokenFor(owner), { name: 'Công ty Cùng lúc', idempotencyKey: randomUUID() }, null);
     const slug = String(fresh.body?.slug);
     const orgId = String(fresh.body?.orgId);
+    // A first entry, after every date below, creates the org's period_lock row, so the postings below meet on its row
+    // lock (on a fresh org they would meet on the row's unique index instead, whatever lock the guard takes).
+    expect(await rawEntry(orgId, '2026-03-01')).toBeNull();
     // Holds a balanced entry dated `entryDate` open as the superuser, until the returned client commits or rolls back.
     const hold = async (entryDate: string, sourceType: string) => {
       const client = new pg.Client({ connectionString: adminUrl });
@@ -426,7 +469,7 @@ suite('opening balances from Excel (#320)', () => {
     let client = await hold('2026-01-10', 'test.sale');
     try {
       const importing = post(owner, balanced('2026-01-31'), slug);
-      expect(await settledWithin(importing, 500)).toBe('pending');
+      await waitForPostingLock();
       await client.query('COMMIT');
       expect(await importing).toMatchObject({ status: 422, body: { code: 'OPENING_BALANCE_AFTER_ENTRIES', data: { firstEntryDate: '2026-01-10' } } });
     } finally {
@@ -437,7 +480,7 @@ suite('opening balances from Excel (#320)', () => {
     client = await hold('2026-01-05', OPENING_BALANCE_SOURCE);
     try {
       const posting = voucher('2026-01-05', slug);
-      expect(await settledWithin(posting, 1000)).toBe('pending');
+      await waitForPostingLock();
       await client.query('COMMIT');
       expect(await posting).toMatchObject({ status: 409, body: { code: 'BEFORE_OPENING_BALANCE', data: { openingDate: '2026-01-05' } } });
     } finally {
@@ -452,6 +495,7 @@ suite('opening balances from Excel (#320)', () => {
     expect(rows).toEqual([
       { entry_date: '2026-01-05', source_type: OPENING_BALANCE_SOURCE },
       { entry_date: '2026-01-10', source_type: 'test.sale' },
+      { entry_date: '2026-03-01', source_type: 'test.sale' },
     ]);
   });
 });
