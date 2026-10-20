@@ -33,6 +33,7 @@ import {
   zSocialSnippet,
   zSocialSnippetCreate,
   zSocialSnippetUpdate,
+  zSocialReviewLinks,
   zSocialActivityItem,
   zSocialQueueSet,
   zSocialSchedule,
@@ -276,6 +277,12 @@ export const contract = {
       create: oc.input(zSocialSnippetCreate).output(z.object({ snippetId: zId })),
       update: oc.input(zSocialSnippetUpdate).output(z.object({ snippetId: zId })),
       remove: oc.input(z.strictObject({ snippetId: zId })).output(z.object({ snippetId: zId })),
+    },
+    // Client review links (#589): owners and admins make and revoke them; the token is in the create answer only.
+    reviewLinks: {
+      list: oc.input(z.object({ postId: zId })).output(zSocialReviewLinks),
+      create: oc.input(z.strictObject({ postId: zId, days: z.number().int().min(1).max(30).optional() })).output(z.object({ linkId: zId, token: z.string(), expiresAt: z.string() })),
+      revoke: oc.input(z.strictObject({ linkId: zId })).output(z.object({ linkId: zId, postId: zId })),
     },
     // The media library (S9): the org's post images, newest first, and the posts that show one.
     media: {

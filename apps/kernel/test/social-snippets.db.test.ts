@@ -92,6 +92,8 @@ suite('social snippets on PostgreSQL (#584)', () => {
     const { snippetId: forX } = await exec<{ snippetId: string }>(o, o.member, 'social.snippet.create', { name: 'Cho X', body: '#x', provider: 'x' });
     await expect(exec(o, o.member, 'social.snippet.create', { name: 'Cho X'.normalize('NFD'), body: '#x' })).rejects.toMatchObject({ code: 'SNIPPET_NAME_TAKEN' });
     await exec(o, o.member, 'social.snippet.delete', { snippetId: forX });
+    // A name that NFC lengthens past 100 characters is refused as input, not by the table.
+    await expect(exec(o, o.member, 'social.snippet.create', { name: 'क़'.repeat(60), body: '#x' })).rejects.toMatchObject({ code: 'VALIDATION', status: 422 });
 
     const all = await list(o, o.member);
     expect(all.map((s) => [s.name, s.mine])).toEqual([

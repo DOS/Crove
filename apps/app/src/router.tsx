@@ -26,6 +26,7 @@ import { SettingsPage } from './routes/settings.tsx';
 import { SocialPage } from './routes/social.tsx';
 import { SocialImportPage } from './routes/social-import.tsx';
 import { SocialSnippetsPage } from './routes/social-snippets.tsx';
+import { SocialReviewPage } from './routes/social-review.tsx';
 import { parseSocialSearch } from './lib/social.ts';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
 import { OAuthCallbackPage } from './routes/social-oauth.tsx';
@@ -91,6 +92,9 @@ const indexRoute = createRoute({
 const clientsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/clients', beforeLoad: requireAuth, component: ClientsPage });
 
 const loginRoute = createRoute({ getParentRoute: () => rootRoute, path: '/login', component: AuthPage });
+
+// A client's review link (#589): /-/review#<token>, no account and no sign-in; the token is the only credential.
+const reviewRoute = createRoute({ getParentRoute: () => rootRoute, path: '/-/review', component: SocialReviewPage });
 
 // Accept links are /-/invite#<token>. The token is moved from the address bar to storage before the sign-in
 // check, so it survives the detour through /login (and email confirmation after signing up).
@@ -230,6 +234,7 @@ const taskDetailRoute = createRoute({ getParentRoute: () => orgRoute, path: 'tas
 const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
+  reviewRoute,
   inviteRoute,
   mfaRoute,
   resetPasswordRoute,

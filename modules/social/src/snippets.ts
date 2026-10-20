@@ -25,7 +25,12 @@ export interface Snippet {
 }
 
 // NFC, so a name typed with combining marks matches the same name typed precomposed.
-const zName = z.string().trim().min(1).max(100).transform((s) => s.normalize('NFC'));
+const zName = z
+  .string()
+  .trim()
+  .transform((s) => s.normalize('NFC'))
+  // The length the table checks is the normalized one: NFC can lengthen a few characters.
+  .pipe(z.string().min(1).max(100));
 const zBody = z.string().trim().min(1).max(10_000);
 const zProvider = z
   .string()

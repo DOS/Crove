@@ -22,6 +22,7 @@ import type { Issue } from './domain/validate.ts';
 import { activityCommands, activityQueries } from './activity.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
+import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
@@ -1165,6 +1166,7 @@ export const socialCommands = [
   ...commentCommands,
   ...policyCommands,
   ...snippetCommands,
+  ...reviewLinkCommands,
   ...activityCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
@@ -1197,4 +1199,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...activityQueries];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...activityQueries, ...reviewLinkQueries];

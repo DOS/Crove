@@ -11,7 +11,8 @@ import { insertAt } from '../lib/social-snippets.ts';
 export function SnippetPicker({ slug, targetId, value, onChange, provider, disabled }: { slug: string; targetId: string; value: string; onChange: (text: string) => void; provider?: string; disabled?: boolean }) {
   const t = useTranslations('social.snippets');
   const list = useQuery(orpc.social.snippets.list.queryOptions({ input: provider ? { provider } : {} }));
-  const snippets = list.data ?? [];
+  // The shared text goes to every channel: only snippets for any platform are offered there.
+  const snippets = (list.data ?? []).filter((s) => (provider ? true : s.provider === null));
   if (disabled) return null;
   const pick = (id: string) => {
     const s = snippets.find((x) => x.id === id);
