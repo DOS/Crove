@@ -1821,7 +1821,7 @@ export const en = {
     metricsNotYet: 'No counts yet; Crove asks the platform every few hours after the post goes out.',
     metricsNone: 'The platform reported no counts (last asked {when}).',
     metricsAt: 'Counts as of {when}',
-    metric: { impressions: 'Impressions', reach: 'Reach', reactions: 'Reactions', comments: 'Comments', shares: 'Shares', saves: 'Saves', clicks: 'Clicks', views: 'Views' },
+    metric: { impressions: 'Impressions', reach: 'Reach', reactions: 'Reactions', comments: 'Comments', shares: 'Shares', saves: 'Saves', clicks: 'Clicks', views: 'Views', linkClicks: 'Link clicks' },
     emptyText: '(No text yet)',
     fromQueue: 'from the queue',
     agendaEmpty: 'Nothing scheduled in the next 4 weeks',

@@ -1821,7 +1821,7 @@ export const vi = {
     metricsNotYet: 'Chưa có số liệu; Crove lấy số liệu vài giờ một lần sau khi bài lên kênh.',
     metricsNone: 'Nền tảng chưa báo số liệu nào (lần lấy gần nhất {when}).',
     metricsAt: 'Số liệu lúc {when}',
-    metric: { impressions: 'Lượt hiển thị', reach: 'Người tiếp cận', reactions: 'Cảm xúc', comments: 'Bình luận', shares: 'Chia sẻ', saves: 'Lượt lưu', clicks: 'Lượt nhấp', views: 'Lượt xem' },
+    metric: { impressions: 'Lượt hiển thị', reach: 'Người tiếp cận', reactions: 'Cảm xúc', comments: 'Bình luận', shares: 'Chia sẻ', saves: 'Lượt lưu', clicks: 'Lượt nhấp', views: 'Lượt xem', linkClicks: 'Lượt bấm liên kết' },
     emptyText: '(Chưa có nội dung)',
     fromQueue: 'theo hàng đợi',
     agendaEmpty: 'Chưa có bài nào lên lịch trong 4 tuần tới',
