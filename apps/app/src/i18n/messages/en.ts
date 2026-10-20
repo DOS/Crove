@@ -1349,6 +1349,7 @@ export const en = {
     bestTimesSlot: '{day} {hour}:00 (avg {engagement} engagements, {posts} posts)',
     metricsCapped: 'Showing the latest 500 published channels; totals cover these only.',
     metricsExport: 'Download CSV',
+    metricsExportCut: 'The file holds the latest 10,000 published channels only; choose a shorter window to get them all.',
     metricsNotYet: 'No counts yet; Crove asks the platform every few hours after the post goes out.',
     metricsNone: 'The platform reported no counts (last asked {when}).',
     metricsAt: 'Counts as of {when}',

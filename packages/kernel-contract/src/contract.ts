@@ -209,7 +209,7 @@ export const contract = {
       // postId: that post's published channels, whenever they went out.
       summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional() })).output(z.array(zSocialMetricsRow)),
       // The window as a CSV file (UTF-8 with a byte order mark); every export is audited.
-      export: oc.input(z.strictObject({ days: z.number().int().min(1).max(365) })).output(z.object({ filename: z.string(), csv: z.string() })),
+      export: oc.input(z.strictObject({ days: z.number().int().min(1).max(365) })).output(z.object({ filename: z.string(), csv: z.string(), truncated: z.boolean() })),
     },
     // The media library (S9): the org's post images, newest first, and the posts that show one.
     media: {

@@ -81,10 +81,14 @@ export const metricsSummary = defineQuery({
   name: 'social.metrics.summary',
   input: z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional() }),
   access: ALL,
-  handler: async (ctx, input): Promise<MetricsRow[]> => latestMetrics(ctx.trx, ctx.orgId, input),
+  handler: async (ctx, input): Promise<MetricsRow[]> => (await latestMetrics(ctx.trx, ctx.orgId, input, SUMMARY_LIMIT)).map(({ text: _text, ...row }) => row),
 });
 
-async function latestMetrics(trx: Trx, orgId: string, input: { days?: number | undefined; postId?: string | undefined }): Promise<MetricsRow[]> {
+// What the screens show at most, and what one export holds at most (it says when it was cut).
+const SUMMARY_LIMIT = 500;
+export const EXPORT_LIMIT = 10_000;
+
+async function latestMetrics(trx: Trx, orgId: string, input: { days?: number | undefined; postId?: string | undefined }, limit: number): Promise<(MetricsRow & { text: string })[]> {
   const days = input.days ?? 30;
   const window = input.postId ? sql`v.post_id = ${input.postId}::uuid` : sql`v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days}::int)`;
   const { rows } = await sql<{
@@ -110,13 +114,14 @@ async function latestMetrics(trx: Trx, orgId: string, input: { days?: number | u
     ) s ON true
     WHERE v.org_id = ${orgId} AND v.status = 'published' AND ${window}
     ORDER BY v.published_at DESC
-    LIMIT 500`.execute(trx);
+    LIMIT ${limit}`.execute(trx);
   return rows.map((r) => ({
     variantId: r.variant_id,
     postId: r.post_id,
     provider: r.provider,
     connectionId: r.channel_connection_id,
     excerpt: r.body.replace(/\s+/g, ' ').trim().slice(0, 160),
+    text: r.body,
     publishedAt: r.published_at ? r.published_at.toISOString() : null,
     externalUrl: r.external_url,
     metrics: r.metrics ?? {},
@@ -133,10 +138,10 @@ export function csvCell(value: string | number | null): string {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export function metricsCsv(rows: readonly MetricsRow[], channelNames: ReadonlyMap<string, string>): string {
+export function metricsCsv(rows: readonly (MetricsRow & { text?: string })[], channelNames: ReadonlyMap<string, string>): string {
   const head = ['post_id', 'channel', 'provider', 'published_at', 'url', 'text', ...METRIC_NAMES, 'captured_at'];
   const lines = rows.map((r) =>
-    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.excerpt, ...METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt].map(csvCell).join(','),
+    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.text ?? r.excerpt, ...METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt].map(csvCell).join(','),
   );
   // A byte order mark, so a spreadsheet opens Vietnamese text as UTF-8.
   return `﻿${[head.join(','), ...lines].join('\r\n')}\r\n`;
@@ -151,15 +156,17 @@ export const metricsExport = defineCommand({
   access: ALL,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
-    const rows = await latestMetrics(ctx.trx, ctx.orgId, { days: input.days });
+    const rows = await latestMetrics(ctx.trx, ctx.orgId, { days: input.days }, EXPORT_LIMIT + 1);
+    const truncated = rows.length > EXPORT_LIMIT;
+    if (truncated) rows.length = EXPORT_LIMIT;
     const ids = [...new Set(rows.map((r) => r.connectionId))];
     const names = new Map(
       ids.length === 0
         ? []
         : (await ctx.trx.selectFrom('crove_kernel.channel_connection').select(['id', 'display_name']).where('org_id', '=', ctx.orgId).where('id', 'in', ids).execute()).map((c) => [c.id, c.display_name] as const),
     );
-    ctx.audit({ days: input.days, rows: rows.length });
-    return { filename: `social-metrics-${input.days}d-${ctx.now.toISOString().slice(0, 10)}.csv`, csv: metricsCsv(rows, names) };
+    ctx.audit({ days: input.days, rows: rows.length, truncated });
+    return { filename: `social-metrics-${input.days}d-${ctx.now.toISOString().slice(0, 10)}.csv`, csv: metricsCsv(rows, names), truncated };
   },
 });
 

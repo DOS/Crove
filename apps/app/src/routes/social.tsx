@@ -81,7 +81,8 @@ function Metrics({ slug, names }: { slug: string; names: Map<string, string> }) 
       a.href = url;
       a.download = file.filename;
       a.click();
-      URL.revokeObjectURL(url);
+      // Some browsers still read the link a moment after the click.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
     },
   });
   if (rows.isLoading) return <Spinner />;
@@ -103,6 +104,7 @@ function Metrics({ slug, names }: { slug: string; names: Map<string, string> }) 
         )}
       </div>
       {exportCsv.error && <ErrorText>{errorMessage(exportCsv.error)}</ErrorText>}
+      {exportCsv.data?.truncated && <p className="text-xs text-warning">{t('metricsExportCut')}</p>}
       {data.length === 0 ? (
         <Empty title={t('empty.metrics')} hint={t('metricsHint')} />
       ) : (
