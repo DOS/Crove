@@ -463,3 +463,35 @@ test('crops a post image to a frame, and the server reads the new size (#636)', 
   );
   expect(media).toEqual([{ image_width: 1080, image_height: 1080, content_type: 'image/png' }]);
 });
+test('turns an idea on the board into a draft, which moves it to Drafted (#701)', async ({ page }) => {
+  await signUp(page, newEmail('social-idea'));
+  await createOrg(page, 'Công ty Ý Tưởng');
+  await connectSandbox(page, 'Trang Ý Tưởng');
+  await page.getByRole('link', { name: 'Quay lại' }).click();
+  await page.getByRole('link', { name: 'Ý tưởng', exact: true }).click();
+  await page.getByRole('button', { name: 'Thêm ý tưởng' }).click();
+  await page.getByLabel('Ý tưởng', { exact: true }).fill('Món mới mùa thu');
+  await page.getByLabel('Ghi chú (không bắt buộc)').fill('Chụp ở quầy, ánh sáng buổi sáng');
+  await page.getByLabel('Liên kết (không bắt buộc)').fill('https://cuahang.vn/thu');
+  await page.getByRole('button', { name: 'Lưu', exact: true }).click();
+  const fresh = page.getByRole('region', { name: 'Mới' });
+  await expect(fresh.getByText('Món mới mùa thu')).toBeVisible();
+  await fresh.getByRole('button', { name: 'Lên kế hoạch' }).click();
+  const planned = page.getByRole('region', { name: 'Đã lên kế hoạch' });
+  await expect(planned.getByText('Món mới mùa thu')).toBeVisible();
+
+  await planned.getByRole('button', { name: 'Viết thành bài nháp' }).click();
+  await expect(page.getByText('Đang soạn từ ý tưởng "Món mới mùa thu"')).toBeVisible();
+  await expect(page.getByLabel('Nội dung chung')).toHaveValue('Món mới mùa thu\n\nChụp ở quầy, ánh sáng buổi sáng');
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  await expect(page.getByText('Bài này được viết từ ý tưởng')).toBeVisible();
+  const saved = sql<{ stage: string; linked: boolean; link_url: string | null }>(
+    `SELECT i.stage, i.post_id = p.id AS linked, p.link_url FROM crove_social.idea i JOIN crove_social.post p ON p.org_id = i.org_id AND p.id = :'post'`,
+    { post: postIdOf(page) },
+  );
+  expect(saved).toEqual([{ stage: 'drafted', linked: true, link_url: 'https://cuahang.vn/thu' }]);
+
+  await page.getByRole('link', { name: 'Món mới mùa thu' }).click();
+  await expect(page.getByRole('region', { name: 'Đã có bài nháp' }).getByRole('link', { name: 'Mở bài nháp' })).toBeVisible();
+});

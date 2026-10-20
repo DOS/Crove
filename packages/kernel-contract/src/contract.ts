@@ -28,6 +28,9 @@ import {
   zSocialPostUpdate,
   zSocialQueue,
   zSocialMetricsRow,
+  zSocialIdea,
+  zSocialIdeaCreate,
+  zSocialIdeaUpdate,
   zSocialLibraryItem,
   zSocialLibraryUse,
   zSocialReportLink,
@@ -300,6 +303,14 @@ export const contract = {
       create: oc.input(zSocialLabelCreate).output(z.object({ labelId: zId })),
       update: oc.input(zSocialLabelUpdate).output(z.object({ labelId: zId })),
       remove: oc.input(z.strictObject({ labelId: zId })).output(z.object({ labelId: zId })),
+    },
+    // The ideas board (#701): members add, change and move ideas; a draft made from one names it (posts.create ideaId).
+    ideas: {
+      list: oc.input(z.object({ archived: z.boolean().optional(), labelId: zId.optional() })).output(z.object({ ideas: z.array(zSocialIdea), truncated: z.boolean() })),
+      get: oc.input(z.object({ ideaId: zId })).output(zSocialIdea),
+      create: oc.input(zSocialIdeaCreate).output(z.object({ ideaId: zId })),
+      update: oc.input(zSocialIdeaUpdate).output(z.object({ ideaId: zId })),
+      move: oc.input(z.strictObject({ ideaId: zId, stage: z.enum(['new', 'planned', 'archived']) })).output(z.object({ ideaId: zId, stage: z.string() })),
     },
     // Saved snippets (#584): members create them and change their own; owners and admins any.
     snippets: {

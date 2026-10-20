@@ -42,8 +42,6 @@ const MACHINERY = new Set([
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_social.account_snapshot',
-  'crove_social.idea',
-  'crove_social.idea_label',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
