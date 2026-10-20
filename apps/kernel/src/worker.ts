@@ -471,6 +471,11 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await boss.work<AgentDispatchJob & { type?: string }>(QUEUES.socialNotify, { batchSize: 1 }, async ([job]) => {
       if (!job) return;
       // A client's answer on a review link may settle variants waiting for it (#770), before the team is told.
+      // A member who lost the right to make links (#625): their review and report links stop working.
+      if (job.data.type === 'kernel.member.removed' || job.data.type === 'kernel.member.role_changed') {
+        await deps.runtime.execute('social.links.revoke_for_member', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.links' }, orgId: job.data.orgId });
+        return;
+      }
       if (job.data.type === 'social.review.answered') {
         await deps.runtime.execute('social.review.client_settle', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.review' }, orgId: job.data.orgId });
       }
