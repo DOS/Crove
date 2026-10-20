@@ -65,6 +65,7 @@ export interface CroveSocialSchema {
   'crove_social.bio_page': SocialBioPageTable;
   'crove_social.brand_voice': SocialBrandVoiceTable;
   'crove_social.channel_policy': SocialChannelPolicyTable;
+  'crove_social.channel_set': SocialChannelSetTable;
   'crove_social.feed': SocialFeedTable;
   'crove_social.feed_item': SocialFeedItemTable;
   'crove_social.idea': SocialIdeaTable;
@@ -796,6 +797,17 @@ export interface SocialChannelPolicyTable {
   review_reminders: Generated<boolean>;
   short_links: Generated<boolean>;
   four_eyes: Generated<boolean>;
+}
+
+/** crove_social.channel_set */
+export interface SocialChannelSetTable {
+  org_id: string;
+  id: Generated<string>;
+  name: string;
+  connection_ids: Generated<string[]>;
+  updated_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_social.feed_item */

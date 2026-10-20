@@ -19,6 +19,7 @@ export * from './bio-page.ts';
 export * from './feeds.ts';
 export * from './report-schedules.ts';
 export * from './brand-voice.ts';
+export * from './channel-sets.ts';
 export * from './domain/report-schedule.ts';
 export * from './review-links.ts';
 export * from './report-links.ts';
