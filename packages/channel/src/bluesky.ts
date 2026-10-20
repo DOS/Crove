@@ -31,8 +31,9 @@ const RESOLVED_MS = 10 * 60_000;
 const RESOLVED_MAX = 1000;
 const DID_PLC = /^did:plc:[a-z0-9]{8,64}$/;
 const DID_WEB = /^did:web:([a-z0-9.-]{4,253})$/;
-// A host name with a dot, never an address: a PDS is reached by its domain, as a Mastodon instance is.
-const HOST_NAME = /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+// A host name with a dot, never an address: a PDS is reached by its domain, as a Mastodon instance is. A top-level
+// domain is letters, or an IDN one in its xn-- form (#804).
+const HOST_NAME = /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/;
 const POST_COLLECTION = 'app.bsky.feed.post';
 // Bluesky's own image limit per blob.
 const MAX_IMAGE_BYTES = 1_000_000;
@@ -208,11 +209,47 @@ class Xrpc {
     return kept && Date.now() - kept.at < RESOLVED_MS ? kept : null;
   }
 
+  // Keeps a resolution under each name given. Expired lookups go first, then the oldest, so the map stays under its cap.
+  private remember(own: Own, ...keys: string[]): void {
+    const found = { ...own, at: Date.now() };
+    for (const [key, value] of this.resolved) if (found.at - value.at >= RESOLVED_MS) this.resolved.delete(key);
+    while (this.resolved.size > RESOLVED_MAX - keys.length) this.resolved.delete(this.resolved.keys().next().value as string);
+    for (const key of keys) this.resolved.set(key, found);
+  }
+
+  // The identity read afresh and kept, wherever it is hosted; null when it cannot be read.
+  private async lookup(identifier: string): Promise<Own | null> {
+    const own = await this.resolve(identifier).catch(() => null);
+    if (own) this.remember(own, identifier);
+    return own;
+  }
+
+  // createSession where the identity says the account lives: its own PDS outside Bluesky, else bsky.social.
+  private openAt(own: Own | null, identifier: string, appPassword: string): Promise<Session> {
+    return own && !isBlueskyHost(new URL(own.pds).hostname) ? this.open(own.pds, identifier, appPassword, own) : this.open(ENTRYWAY, identifier, appPassword, null);
+  }
+
   // A session for an app password, on the account's own PDS. Bluesky-hosted accounts sign in through bsky.social, as
   // before. When it refuses the login, the account may live on another PDS: the identity is resolved and, if it names
   // a PDS outside Bluesky, the login is tried there. Later calls go straight to that PDS while the resolution is kept.
   async session(identifier: string, appPassword: string): Promise<Session> {
     const refused = (error: unknown) => error instanceof BlueskyError && (error.status === 400 || error.status === 401) && error.code !== 'UnsupportedPds';
+    // A DID's document names its PDS and is read without the app password, so the login goes straight there: bsky.social
+    // never sees the password of an account hosted elsewhere (#804). The lookup is kept for Bluesky-hosted accounts too,
+    // so a refused password costs no directory read while it is fresh.
+    if (identifier.startsWith('did:')) {
+      const kept = this.kept(identifier);
+      const own = kept ?? (await this.lookup(identifier));
+      try {
+        return await this.openAt(own, identifier, appPassword);
+      } catch (error) {
+        // Refused on its own PDS where a kept lookup pointed: the account may have moved, so it is looked up afresh once.
+        if (!kept || !refused(error) || isBlueskyHost(new URL(kept.pds).hostname)) throw error;
+        const fresh = await this.lookup(identifier);
+        if (!fresh || fresh.pds === kept.pds) throw error;
+        return this.openAt(fresh, identifier, appPassword);
+      }
+    }
     const kept = this.kept(identifier);
     if (kept && !isBlueskyHost(new URL(kept.pds).hostname)) {
       try {
@@ -234,14 +271,7 @@ class Xrpc {
 
   // createSession on base. own: the identity resolved for this login (a PDS outside Bluesky), or null.
   private async open(base: string, identifier: string, appPassword: string, own: Own | null): Promise<Session> {
-    let answer: { did?: unknown; handle?: unknown; accessJwt?: unknown; didDoc?: DidDocument };
-    try {
-      answer = await this.call(base, 'POST', 'com.atproto.server.createSession', { json: { identifier, password: appPassword } });
-    } catch (error) {
-      // The account may have moved since it was resolved: resolve it afresh next time.
-      this.resolved.delete(identifier);
-      throw error;
-    }
+    const answer = await this.call<{ did?: unknown; handle?: unknown; accessJwt?: unknown; didDoc?: DidDocument }>(base, 'POST', 'com.atproto.server.createSession', { json: { identifier, password: appPassword } });
     if (typeof answer.did !== 'string' || !answer.did.startsWith('did:') || typeof answer.accessJwt !== 'string') throw new BlueskyError(502, 'BadSession', 'Bluesky answered without a session');
     // The server signed in someone other than the account resolved: never use that session.
     if (own && answer.did !== own.did) throw new BlueskyError(502, 'BadSession', 'Bluesky signed in another account');
@@ -254,14 +284,7 @@ class Xrpc {
     const host = new URL(pds).hostname;
     // A PDS outside Bluesky is called only when the resolved identity named it, never on a session's word alone.
     if (!isBlueskyHost(host) && pds !== own?.pds) throw new BlueskyError(400, 'UnsupportedPds', `accounts hosted on ${host} are not supported`);
-    if (own) {
-      const found = { ...own, at: Date.now() };
-      // Expired lookups go first, then the oldest, so the map stays under its cap.
-      for (const [key, value] of this.resolved) if (found.at - value.at >= RESOLVED_MS) this.resolved.delete(key);
-      while (this.resolved.size >= RESOLVED_MAX - 1) this.resolved.delete(this.resolved.keys().next().value as string);
-      this.resolved.set(identifier, found);
-      this.resolved.set(answer.did, found);
-    }
+    if (own) this.remember(own, identifier, answer.did);
     // A PDS outside Bluesky says what the account's handle is; it is shown only when the DID document claims it too,
     // else the account is named by its DID.
     const said = typeof answer.handle === 'string' ? answer.handle.toLowerCase() : null;
