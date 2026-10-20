@@ -1,6 +1,7 @@
 // Channel sets for the composer (#774, research §2: Postiz's "sets and signatures"; signatures are snippets, #584): a
 // saved group of channels, picked in one click and still editable after. Owners and admins save and remove them;
 // everyone reads. A channel disconnected later drops out of its sets when they are read.
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
@@ -39,6 +40,8 @@ export const channelSetSave = defineCommand({
       .execute();
     if (live.length !== ids.length) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
     const name = input.name.replace(/\s+/g, ' ');
+    // One save at a time per org, so the name check and the count below hold against saves at the same moment.
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(${`crove_social.channel_set:${ctx.orgId}`}))`.execute(ctx.trx);
     const clash = await ctx.trx
       .selectFrom('crove_social.channel_set')
       .select('id')

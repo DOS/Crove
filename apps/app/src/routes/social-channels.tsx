@@ -357,7 +357,8 @@ export function SocialChannelsPage() {
             </div>
             {!voices.isLoading && <VoiceEditor key={orgVoice?.updatedAt ?? 'none'} connectionId={null} voice={orgVoice} canEdit={isAdmin} />}
           </Card>
-          <ChannelSetsCard channels={(channels.data ?? []).filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />
+          {/* Once the channels are loaded: before, every set would read as having none left. */}
+          {channels.data && <ChannelSetsCard channels={channels.data.filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />}
           {channels.isLoading ? (
             <Spinner />
           ) : channels.error ? (
