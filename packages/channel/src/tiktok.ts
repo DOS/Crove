@@ -350,12 +350,10 @@ export class TikTokPublisher implements Publisher {
     const images = input.content.media;
     if (images.length > PHOTO_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_MEDIA' };
     if (images.some((m) => !PHOTO_TYPES.includes(m.mime.toLowerCase()))) return { kind: 'rejected', error: 'bad_request', code: 'IMAGE_TYPE_NOT_ALLOWED', message: 'TikTok takes JPEG or WebP photos' };
-    const urls: string[] = [];
-    for (const m of images) {
-      const url = await input.mediaUrl(m.fileId).catch(() => null);
-      if (!url) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
-      urls.push(url);
-    }
+    // The URLs together: presigning is local, and none is sent unless all of them are there.
+    const found = await Promise.all(images.map((m) => input.mediaUrl(m.fileId).catch(() => null)));
+    if (found.some((url) => !url)) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+    const urls = found as string[];
     let creator: CreatorInfo;
     try {
       creator = await this.client.call<CreatorInfo>('POST', '/post/publish/creator_info/query/', token, {});

@@ -257,6 +257,11 @@ describe('validateVariant', () => {
     expect(tiktok([jpeg(), jpeg()])).toEqual([]);
     expect(tiktok([{ ...jpeg(), mime: 'image/png' }])).toEqual(['IMAGE_TYPE_NOT_ALLOWED']);
     expect(tiktok(Array.from({ length: 36 }, () => jpeg()))).toEqual(['TOO_MANY_MEDIA']);
+    // A photo post's description takes 4,000 characters; a video's caption keeps 2,200.
+    const long = (media: MediaItem[], n: number) => validateVariant({ provider: 'tiktok', body: 'x'.repeat(n), title: null, media, settings: { privacyLevel: 'SELF_ONLY' } }).map((i) => i.code);
+    expect(long([jpeg()], 4000)).toEqual([]);
+    expect(long([jpeg()], 4001)).toEqual(['TEXT_TOO_LONG']);
+    expect(long([{ kind: 'video', mime: 'video/mp4', sizeBytes: 1000, durationSeconds: 10 }], 2201)).toEqual(['TEXT_TOO_LONG']);
   });
 
   it('says when a channel takes video but its Crove adapter does not post it yet', () => {

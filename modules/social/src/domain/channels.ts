@@ -80,6 +80,10 @@ const ANY_IMAGE: readonly string[] = [];
 // (#710).
 export const VIDEO_ONLY_ADAPTERS: ReadonlySet<Provider> = new Set<Provider>([]);
 
+// A longer text where a channel's photo posts take one (#710): TikTok sends a photo post's text as its description,
+// up to 4,000 characters, where a video's caption takes 2,200.
+export const PHOTO_BODY_MAX: Readonly<Partial<Record<Provider, number>>> = { tiktok: 4000 };
+
 // Where each adapter puts the post's link, so the checks count the text the platform receives:
 // - text: after a blank line at the end of the text, unless the text already holds it;
 // - text_with_media: the same, but only when the post has media (a Facebook Page text post sends it as its own field);
