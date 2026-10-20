@@ -251,7 +251,7 @@ test('turns on evergreen reposting for a published post', async ({ page }) => {
     .toEqual([{ evergreen_days: null }]);
 });
 
-test('shows the latest metrics of a published channel on the post and in the Metrics tab', async ({ page }) => {
+test('shows the latest metrics of a published channel on the post and in the Metrics tab, and in a client report', async ({ page, browser }) => {
   await signUp(page, newEmail('social-metrics'));
   await createOrg(page, 'Công ty Số Liệu');
   const channel = 'Trang Số Liệu';
@@ -286,6 +286,40 @@ test('shows the latest metrics of a published channel on the post and in the Met
   await expect(row.getByRole('cell')).toHaveText([new RegExp(`^${body}`), '1.234', '56', '7', '3']);
   await expect(row).toContainText(channel);
   await expect(panel.locator('[data-slot="card"]').filter({ hasText: 'Người tiếp cận' })).toContainText('1.234');
+
+  // A client report link of today (#643), opened without an account: the totals, the channel and the post.
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date());
+  await panel.getByLabel('Từ ngày').fill(today);
+  await panel.getByLabel('Đến ngày').fill(today);
+  await panel.getByLabel('Tên báo cáo').fill('Báo cáo hôm nay');
+  await panel.getByRole('button', { name: 'Tạo liên kết báo cáo' }).click();
+  const link = await panel.getByLabel('Liên kết báo cáo').inputValue();
+  expect(link).toMatch(/\/-\/report#[A-Za-z0-9_-]{43}$/);
+  await expect(panel.getByText('Báo cáo hôm nay')).toBeVisible();
+  const guest = await browser.newContext({ timezoneId: TIME_ZONE });
+  try {
+    const client = await guest.newPage();
+    await client.goto(link);
+    await expect(client.getByRole('heading', { name: 'Báo cáo hôm nay' })).toBeVisible();
+    await expect(client.getByText('Công ty Số Liệu')).toBeVisible();
+    await expect(client.locator('[data-slot="card"]').filter({ hasText: 'Người tiếp cận' })).toContainText('1.234');
+    await expect(client.getByRole('row').filter({ hasText: channel })).toContainText('1.234');
+    await expect(client.getByRole('listitem').filter({ hasText: body })).toContainText('Cảm xúc: 56');
+    await expect(client.getByRole('button', { name: 'In hoặc lưu PDF' })).toBeVisible();
+  } finally {
+    await guest.close();
+  }
+  // Revoked, the same link opens nothing.
+  await panel.getByRole('button', { name: 'Thu hồi' }).click();
+  await expect(panel.getByText('Đã thu hồi')).toBeVisible();
+  const after = await browser.newContext();
+  try {
+    const client = await after.newPage();
+    await client.goto(link);
+    await expect(client.getByRole('heading', { name: 'Không mở được báo cáo' })).toBeVisible();
+  } finally {
+    await after.close();
+  }
 });
 
 test('says AI drafting is off on a server without a model', async ({ page, request }) => {
