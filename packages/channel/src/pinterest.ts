@@ -3,7 +3,9 @@
 //
 // Connect: Pinterest's consent screen for boards, pins and the user account; the app's id and secret go in Basic auth.
 // A pin is always saved to a board, so each of the account's boards becomes a channel of its own ("Shop / Spring
-// menu"), all sharing the account's tokens; the access token lives 30 days and the refresh schedule renews it.
+// menu"), all sharing the account's tokens; the access token lives 30 days and the refresh schedule renews it. Each
+// board's connection renews its own copy: this assumes a continuous refresh token stays valid after use (Pinterest's
+// 2025 notes); if it turns out to rotate, sibling boards ask to reconnect (follow-up in the PR).
 // Publish: one call, POST /v5/pins, with the image's bytes in the request (base64, no public URL needed), or 2 to 5
 // images as a carousel pin. The post's title is the pin's title, its text the description, its link where the pin
 // leads. Video pins are not posted yet (VIDEO_NOT_SUPPORTED_YET). An unclear answer is checked by listing the board's
@@ -19,7 +21,8 @@ const ID = /^\d{1,32}$/;
 const TITLE_MAX = 100;
 const DESCRIPTION_MAX = 800;
 const ALT_TEXT_MAX = 500;
-const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+// The types an image_base64 source takes.
+const IMAGE_TYPES = ['image/jpeg', 'image/png'];
 // A carousel pin holds 2 to 5 images.
 const CAROUSEL_MAX = 5;
 // Boards one connect lists at most (a page of 250, as Pinterest pages them).
@@ -142,7 +145,7 @@ export class PinterestConnector implements OAuthConnector {
 
   // One channel per board the account can pin to; secret boards are left out (a pin there is seen by nobody).
   async exchange(input: ExchangeInput, now = Date.now()): Promise<ConnectedAccount[]> {
-    const answer = await this.client.token({ grant_type: 'authorization_code', code: input.code, redirect_uri: input.redirectUri }).catch((error: unknown) => {
+    const answer = await this.client.token({ grant_type: 'authorization_code', code: input.code, redirect_uri: input.redirectUri, continuous_refresh: 'true' }).catch((error: unknown) => {
       throw connectorError(error, true);
     });
     if (typeof answer.access_token !== 'string' || !answer.access_token) throw new ConnectorError('provider', 'Pinterest answered without an access token');
@@ -279,6 +282,8 @@ export class PinterestPublisher implements Publisher {
     if (!s || !ID.test(input.externalAccountId)) return { found: 'unknown' };
     const title = titleOf(input.content);
     const description = descriptionOf(input.content);
+    // An image-only pin has nothing to tell it from any other pin of the window: never guessed.
+    if (!title && !description) return { found: 'unknown' };
     try {
       const answer = await this.client.call<PinList>('GET', `/boards/${input.externalAccountId}/pins?page_size=25`, s.accessToken);
       const from = input.after.getTime() - 60_000;
@@ -287,25 +292,26 @@ export class PinterestPublisher implements Publisher {
         const at = typeof p.created_at === 'string' ? Date.parse(p.created_at.endsWith('Z') ? p.created_at : `${p.created_at}Z`) : Number.NaN;
         return typeof p.id === 'string' && ID.test(p.id) && at >= from && at <= to && same(p.title ?? '', title) && same(p.description ?? '', description);
       });
-      return pin && typeof pin.id === 'string' ? { found: true, externalId: pin.id, url: pinUrl(pin.id) } : { found: false };
+      if (pin && typeof pin.id === 'string') return { found: true, externalId: pin.id, url: pinUrl(pin.id) };
+      // Not among the latest: missing only when the page held every pin of the board; else it may be further down.
+      return (answer?.items?.length ?? 0) < 25 ? { found: false } : { found: 'unknown' };
     } catch {
       return { found: 'unknown' };
     }
   }
 
-  // Impressions, saves and clicks of a pin (lifetime counts, else the last 90 days). A pin Pinterest no longer has is
-  // gone.
+  // Impressions, saves and outbound clicks of a pin, lifetime counts only. A pin Pinterest no longer has is gone.
   async metrics(input: MetricsInput): Promise<MetricsResult> {
     const s = pinterestSecretOf(input.secret);
     if (!s) return { refused: 'token_expired' };
     if (!ID.test(input.externalId)) return { refused: 'gone' };
     try {
       const answer = await this.client.call<{ pin_metrics?: Record<string, Record<string, unknown> | undefined> }>('GET', `/pins/${input.externalId}?pin_metrics=true`, s.accessToken);
-      const m = answer?.pin_metrics?.lifetime_metrics ?? answer?.pin_metrics?.['90d'];
+      const m = answer?.pin_metrics?.lifetime_metrics;
       if (!m) return null;
       const n = (v: unknown) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : undefined);
       const metrics = Object.fromEntries(
-        Object.entries({ impressions: n(m.impression), saves: n(m.save), clicks: n(m.outbound_click) ?? n(m.pin_click), comments: n(m.comment), reactions: n(m.reaction) }).filter(([, v]) => v !== undefined),
+        Object.entries({ impressions: n(m.impression), saves: n(m.save), clicks: n(m.outbound_click), comments: n(m.comment), reactions: n(m.reaction) }).filter(([, v]) => v !== undefined),
       );
       return { metrics };
     } catch (error) {

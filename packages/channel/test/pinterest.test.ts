@@ -54,7 +54,7 @@ describe('PinterestConnector', () => {
     ]);
     expect(accounts[0]).toMatchObject({ provider: 'pinterest', secret: SECRET, expiresAt: new Date(1_000_000 + 2_592_000_000) });
     expect(calls[0]?.headers.get('authorization')).toBe(`Basic ${Buffer.from(`${APP.appId}:${APP.appSecret}`).toString('base64')}`);
-    expect(calls[0]?.body).toEqual({ grant_type: 'authorization_code', code: 'c', redirect_uri: REDIRECT });
+    expect(calls[0]?.body).toEqual({ grant_type: 'authorization_code', code: 'c', redirect_uri: REDIRECT, continuous_refresh: 'true' });
   });
 
   it('refuses a narrow grant, an account with no board, and a used code', async () => {
@@ -128,6 +128,15 @@ describe('PinterestPublisher', () => {
     const found = await new PinterestPublisher(APP, fetchImpl).reconcile({ externalAccountId: BOARD, secret: SECRET, callKey: 'call-1', contentHash: input().contentHash, content: input().content, after: at, before: new Date(at.getTime() + 60_000) });
     expect(found).toEqual({ found: true, externalId: '813744226420795884', url: 'https://www.pinterest.com/pin/813744226420795884/' });
     expect(calls[0]?.url.searchParams.get('page_size')).toBe('25');
+    const window = { externalAccountId: BOARD, secret: SECRET, callKey: 'call-1', contentHash: input().contentHash, after: at, before: new Date(at.getTime() + 60_000) };
+    // An image-only pin is never guessed, and a full page without it is not proof it is missing.
+    const untouched = pinterest({});
+    expect(await new PinterestPublisher(APP, untouched.fetchImpl).reconcile({ ...window, content: { ...input().content, title: null, body: '' } })).toEqual({ found: 'unknown' });
+    expect(untouched.calls).toHaveLength(0);
+    const full = pinterest({ [`GET /v5/boards/${BOARD}/pins`]: [{ body: { items: Array.from({ length: 25 }, (_, i) => ({ id: String(i + 1), title: 'x', description: 'y', created_at: '2026-10-22T03:00:10' })) } }] });
+    expect(await new PinterestPublisher(APP, full.fetchImpl).reconcile({ ...window, content: input().content })).toEqual({ found: 'unknown' });
+    const short = pinterest({ [`GET /v5/boards/${BOARD}/pins`]: [{ body: { items: [] } }] });
+    expect(await new PinterestPublisher(APP, short.fetchImpl).reconcile({ ...window, content: input().content })).toEqual({ found: false });
   });
 
   it('maps rate limits, a dead token and a refused pin', async () => {

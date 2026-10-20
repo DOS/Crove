@@ -495,12 +495,12 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     unverified: ['body.max'],
   },
   // Pinterest (#798): a pin's title of 100 characters and description of 800, saved to a board; one image or a
-  // carousel of 2 to 5 (20 MB each). The adapter does not post video pins yet, so Pinterest stays out of VIDEO_READY.
+  // carousel of 2 to 5, JPEG or PNG (kept to 10 MB each, sent in the request). The adapter does not post video pins yet, so Pinterest stays out of VIDEO_READY.
   pinterest: {
     provider: 'pinterest',
     body: { max: 800, count: 'codepoints', required: false },
     title: { max: 100, count: 'codepoints', required: false },
-    media: { min: 1, max: 5, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'], maxImageBytes: 20 * MB, maxVideoBytes: 2048 * MB, maxVideoSeconds: 900 },
+    media: { min: 1, max: 5, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png'], maxImageBytes: 10 * MB, maxVideoBytes: 2048 * MB, maxVideoSeconds: 900 },
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: ['media.max'],
