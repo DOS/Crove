@@ -188,6 +188,8 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
     const stored = await admin(async (c) => (await c.query<{ row: string }>("SELECT row_to_json(m)::text AS row FROM crove_kernel.mail_message m WHERE source = 'social.report_schedule.run'")).rows.map((r) => r.row).join(' '));
     expect(stored).not.toContain(tokens[0]);
     // The links a schedule makes are not the org's manual links.
+    const linkOf = (token: string | undefined) => admin(async (c) => (await c.query<{ revoked_at: Date | null }>('SELECT revoked_at FROM crove_social.report_link WHERE token_sha256 = encode(sha256(convert_to($1, \'UTF8\')), \'hex\')', [token])).rows[0]);
+    expect(await linkOf(tokens[0])).toMatchObject({ revoked_at: null });
     expect(await rt.query<ReportLinkView[]>('social.report_link.list', {}, { actor: asUser(o.owner), orgId: o.orgId })).toEqual([]);
     const after = await list(o);
     expect(after[0]?.runs[0]?.mails.map((m) => m.status)).toEqual(['sent', 'sent', 'suppressed']);
@@ -195,6 +197,10 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
     await exec(o, o.owner, 'social.report_schedule.save', { ...weekly, scheduleId, recipients: ['a@example.vn'], paused: true });
     await admin((c) => c.query("UPDATE crove_social.report_schedule SET next_run_at = now() - interval '1 hour' WHERE id = $1", [scheduleId]));
     expect(await sweepReportSchedules({ runtime: worker, workerDb })).toBe(0);
+    // Removing the schedule revokes the links it mailed: the report no longer opens.
+    await exec(o, o.owner, 'social.report_schedule.remove', { scheduleId });
+    expect(await linkOf(tokens[0])).toMatchObject({ revoked_at: expect.any(Date) });
+    expect(await reportView(rt, { token: tokens[0] })).toBeNull();
   });
 
   it('sends a test to the person who asks, records mail off, and limits tests', async () => {

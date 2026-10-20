@@ -1672,7 +1672,7 @@ export const vi = {
       pause: 'Tạm dừng',
       resume: 'Tiếp tục',
       remove: 'Xóa',
-      removeConfirm: 'Xóa lịch gửi này? Các liên kết đã gửi vẫn dùng được đến khi hết hạn.',
+      removeConfirm: 'Xóa lịch gửi này? Các liên kết báo cáo đã gửi đi cũng sẽ bị thu hồi.',
       runPeriod: 'kỳ {from} - {to}',
       erased: '(đã xóa địa chỉ)',
       mailOff: 'máy chủ chưa bật gửi thư',

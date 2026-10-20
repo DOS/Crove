@@ -1672,7 +1672,7 @@ export const en = {
       pause: 'Pause',
       resume: 'Resume',
       remove: 'Remove',
-      removeConfirm: 'Remove this schedule? Links already sent keep working until they expire.',
+      removeConfirm: 'Remove this schedule? The report links already sent are revoked too.',
       runPeriod: 'period {from} - {to}',
       erased: '(address erased)',
       mailOff: 'mail is not set up on the server',

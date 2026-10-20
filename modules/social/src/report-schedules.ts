@@ -4,7 +4,7 @@
 // and up to 10 recipients. When it is due the worker runs it: one transactional mail per recipient is queued through
 // the kernel's mail pipeline (Email E1b), with the period's headline numbers as merge data. The link to the full
 // report carries a secret token, so it is not in the queue: social.report_schedule.mint_link makes one per recipient
-// when the mail goes out (the mail template calls it), revocable like any report link. "Send a test" mails the person
+// when the mail goes out (the mail template calls it). Removing a schedule revokes the links it sent. "Send a test" mails the person
 // who asks, for the latest period.
 import { sql } from 'kysely';
 import { z } from 'zod';
@@ -120,10 +120,18 @@ export const reportScheduleRemove = defineCommand({
   risk: 'R1',
   access: ADMINS,
   handler: async (ctx, input) => {
-    requireUser(ctx);
+    const userId = requireUser(ctx);
     const gone = await ctx.trx.deleteFrom('crove_social.report_schedule').where('org_id', '=', ctx.orgId).where('id', '=', input.scheduleId).returning('id').executeTakeFirst();
     if (!gone) throw new DomainError('REPORT_SCHEDULE_NOT_FOUND', 404, 'Không tìm thấy lịch gửi báo cáo này');
-    ctx.audit({ schedule_id: gone.id });
+    // The links already mailed stop working with the schedule.
+    const revoked = await ctx.trx
+      .updateTable('crove_social.report_link')
+      .set({ revoked_at: ctx.now, revoked_by: userId })
+      .where('org_id', '=', ctx.orgId)
+      .where('schedule_id', '=', gone.id)
+      .where('revoked_at', 'is', null)
+      .executeTakeFirst();
+    ctx.audit({ schedule_id: gone.id, links_revoked: Number(revoked.numUpdatedRows) });
     return { scheduleId: gone.id };
   },
 });
@@ -296,6 +304,15 @@ export const reportScheduleMintLink = defineCommand({
       .executeTakeFirst();
     if (!run) throw new DomainError('REPORT_SCHEDULE_NOT_FOUND', 404, 'Lịch gửi báo cáo này đã bị xóa');
     const days = run.kind === 'test' ? 7 : run.cadence === 'weekly' ? 14 : 42;
+    const by = run.created_by ?? run.schedule_by;
+    // One live link per mail: a send tried again (a retry, an unknown outcome sent again) revokes the try before's.
+    await ctx.trx
+      .updateTable('crove_social.report_link')
+      .set({ revoked_at: ctx.now, revoked_by: by })
+      .where('org_id', '=', ctx.orgId)
+      .where('mail_message_id', '=', input.messageId)
+      .where('revoked_at', 'is', null)
+      .execute();
     const token = newReportToken();
     const expiresAt = new Date(ctx.now.getTime() + days * DAY_MS);
     await ctx.trx
@@ -307,10 +324,11 @@ export const reportScheduleMintLink = defineCommand({
         period_start: run.period_start,
         period_end: run.period_end,
         connection_ids: run.connection_ids,
-        created_by: run.created_by ?? run.schedule_by,
+        created_by: by,
         created_at: ctx.now,
         expires_at: expiresAt,
         schedule_id: run.schedule_id,
+        mail_message_id: input.messageId,
       })
       .execute();
     return { token, expiresAt: expiresAt.toISOString() };

@@ -7,9 +7,11 @@
 -- crove_social.report_schedule_run  one time a schedule sent, or a test an owner or admin sent to themselves: the
 --                                   period and how many mails were queued and suppressed. Each mail is a
 --                                   crove_kernel.mail_message of source social.report_schedule.run naming the run.
--- crove_social.report_link.schedule_id  the schedule a link was made for: one per recipient and send, minted when the
---                                   mail goes out so its token is only in the mail. They do not count toward the
---                                   org's live manual links and are not listed with them.
+-- crove_social.report_link.schedule_id  the schedule a link was made for, and mail_message_id the mail it went out in:
+--                                   one live link per mail, minted when the mail goes out so its token is only in
+--                                   the mail (a send tried again revokes the link of the try before). They do not
+--                                   count toward the org's live manual links and are not listed with them; removing
+--                                   the schedule revokes them.
 -- crove_social.report_schedules_due the worker's scan, across active orgs, of the schedules due. Ids only.
 SET LOCAL lock_timeout = '2s';
 
@@ -64,6 +66,7 @@ REVOKE UPDATE ON crove_social.report_schedule_run FROM crove_tenant;
 GRANT UPDATE (mails, suppressed) ON crove_social.report_schedule_run TO crove_tenant;
 
 ALTER TABLE crove_social.report_link ADD COLUMN IF NOT EXISTS schedule_id uuid;
+ALTER TABLE crove_social.report_link ADD COLUMN IF NOT EXISTS mail_message_id uuid;
 CREATE INDEX IF NOT EXISTS report_link_schedule_idx ON crove_social.report_link (org_id, schedule_id) WHERE schedule_id IS NOT NULL;
 
 CREATE OR REPLACE FUNCTION crove_social.report_schedules_due(p_limit int)

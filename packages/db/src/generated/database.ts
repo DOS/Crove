@@ -1011,6 +1011,7 @@ export interface SocialReportLinkTable {
   revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   revoked_by: string | null;
   schedule_id: ColumnType<string | null, string | null, NotGranted>;
+  mail_message_id: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_social.report_schedule_run */
