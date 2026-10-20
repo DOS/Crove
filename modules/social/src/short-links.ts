@@ -20,7 +20,12 @@ export function shortCode(random: (size: number) => Uint8Array = (size) => crypt
   return out;
 }
 
-export const shortUrl = (publicUrl: string, code: string) => `${publicUrl.replace(/\/+$/, '')}/l/${code}`;
+// The deployment's URL without its trailing slashes (a loop: a regex on PUBLIC_URL would be quadratic on many of them).
+export function shortUrl(publicUrl: string, code: string): string {
+  let base = publicUrl;
+  while (base.endsWith('/')) base = base.slice(0, -1);
+  return `${base}/l/${code}`;
+}
 
 // The content as it goes out with its short link: the link replaced, and so is the same link where the text holds it.
 export function shortened<T extends { body: string; linkUrl: string | null }>(content: T, link: { target: string; url: string }): T {
