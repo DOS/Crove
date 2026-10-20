@@ -237,6 +237,8 @@ suite('social posts through the API', () => {
     expect(writerAsked.at(-1)).toMatchObject({ brief: '', source: { url, title: 'Áo thun cotton 199.000đ', siteName: 'Shop A' } });
     const post = await rpc('social/posts/get', owner_, { postId: drafted.body?.postId });
     expect(post.body).toMatchObject({ origin: 'ai', tainted: true, linkUrl: url });
+    // A link with credentials in it is refused before any fetch.
+    expect((await rpc('social/posts/draftWithAi', owner_, { brief: 'x', connectionIds: [connectionId], sourceUrl: 'https://user:pw@shop.example/a' })).status).toBe(400);
     // Neither a brief nor a page: refused before the model.
     const empty = await rpc('social/posts/draftWithAi', owner_, { brief: '', connectionIds: [connectionId] });
     expect(empty.status).toBe(400);

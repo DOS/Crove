@@ -384,6 +384,10 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             const chosen = input.connectionIds.map((id) => connections.find((c) => c.id === id && c.status === 'active'));
             if (chosen.some((c) => !c)) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
             const channels = (chosen as { id: string; provider: string; displayName: string }[]).map((c) => writerChannel(c));
+            // The source page (#769) as its link preview read it (fetched by the worker through the egress guard, parsed in
+            // the extract container): asked for if new, and waited for a few seconds. Before the budget: waiting for a page
+            // costs no model call, and a page that cannot be read takes no slot.
+            const source = input.sourceUrl ? await sourcePage(runtime, actor, orgId, input.sourceUrl) : undefined;
             // The model call is paid: a member gets a few a minute and one at a time, an org a few more (#386).
             const ticket = drafts.take(orgId, actor.userId);
             if (!ticket.allowed) {
@@ -391,9 +395,6 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
                 retryAfterSeconds: ticket.retryAfterSeconds,
               });
             }
-            // The source page (#769) as its link preview read it (fetched by the worker through the egress guard, parsed in
-            // the extract container): asked for if new, and waited for a few seconds.
-            const source = input.sourceUrl ? await sourcePage(runtime, actor, orgId, input.sourceUrl) : undefined;
             let draft: Awaited<ReturnType<SocialDrafter['draft']>>;
             try {
               const voices = input.tone ? null : await savedVoices(runtime, actor, orgId);

@@ -289,7 +289,11 @@ export const contract = {
             tone: z.string().trim().max(300).optional(),
             language: z.enum(['vi', 'en']).optional(),
             // A page to write about (#769): read through its link preview, and the post links to it.
-            sourceUrl: z.url({ protocol: /^https?$/ }).max(2000).optional(),
+            sourceUrl: z
+              .url({ protocol: /^https?$/ })
+              .max(2000)
+              .refine((u) => !/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(u), 'a link without a user name or password')
+              .optional(),
           })
           .refine((v) => v.brief.length > 0 || v.sourceUrl !== undefined, { message: 'a brief or a source page', path: ['brief'] }),
         )

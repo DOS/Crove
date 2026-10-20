@@ -981,7 +981,8 @@ export function SocialComposePage() {
   const [brief, setBrief] = useState(() => (occasion ? tOcc('brief', occasion) : ''));
   // A page to write about (#769): the post links to it.
   const [sourceUrl, setSourceUrl] = useState('');
-  const source = /^https?:\/\/\S+$/.test(sourceUrl.trim()) ? sourceUrl.trim() : null;
+  // http(s), with no user name or password in it, as the server takes it.
+  const source = /^https?:\/\/[^\s@/?#]+(?:[/?#]\S*)?$/.test(sourceUrl.trim()) ? sourceUrl.trim() : null;
   const locale = useLocale();
   const aiEnabled = getConfig().aiEnabled === true;
   const aiDraft = useMutation({
