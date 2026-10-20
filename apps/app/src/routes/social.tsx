@@ -22,6 +22,7 @@ import type { BulkAction } from '../lib/social-bulk.ts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { AccountGrowth, TopPosts } from '../components/social-growth.tsx';
+import { WhatWorks } from '../components/social-insights.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { dayKey, dayRange, providerName, SOCIAL_TABS, VARIANT_TONE, type SocialSearch, type SocialTab } from '../lib/social.ts';
@@ -139,6 +140,7 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
           </div>
           {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t('metricsCapped')}</p>}
           <BestTimes rows={data} names={names} />
+      <WhatWorks slug={slug} days={days} labelId={labelId} names={names} />
           <TopPosts rows={data} names={names} slug={slug} />
           <div className="overflow-x-auto rounded-xl border">
             <table className="w-full text-sm">
