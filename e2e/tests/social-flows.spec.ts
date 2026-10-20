@@ -305,3 +305,25 @@ test('says AI drafting is off on a server without a model', async ({ page, reque
   await expect(page.getByRole('button', { name: 'Soạn nháp bằng AI' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Nhờ AI viết lại' })).toHaveCount(0);
 });
+
+test('keeps a post being written through a reload, and offers it back (#634)', async ({ page }) => {
+  await signUp(page, newEmail('social-autosave'));
+  await createOrg(page, 'Công ty Lưu Nháp');
+  await connectSandbox(page, 'Trang Lưu Nháp');
+  await compose(page, 'Bài đang viết dở 🎉');
+  // The shared text gets an emoji at the cursor from the picker.
+  await page.getByRole('button', { name: 'Chèn biểu tượng cảm xúc' }).first().click();
+  await page.getByRole('option', { name: '🔥' }).click();
+  await expect(page.getByLabel('Nội dung chung')).toHaveValue('Bài đang viết dở 🎉🔥');
+  // Saved as typed: a reload offers it back.
+  await page.waitForTimeout(600);
+  page.once('dialog', (d) => void d.accept());
+  await page.reload();
+  await page.getByRole('button', { name: 'Khôi phục' }).click();
+  await expect(page.getByLabel('Nội dung chung')).toHaveValue('Bài đang viết dở 🎉🔥');
+  // Saving the post clears what the browser kept.
+  await page.getByRole('button', { name: 'Lưu và gửi duyệt' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  await page.goto(page.url().replace(/\/social\/[0-9a-f-]{36}$/, '/social/new'));
+  await expect(page.getByRole('button', { name: 'Khôi phục' })).toHaveCount(0);
+});
