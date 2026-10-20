@@ -96,6 +96,17 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const captionOf = (content: { body: string }) => content.body.trim();
 const isVideo = (m: { mime: string }) => m.mime.startsWith('video/');
 // An image's description for screen readers (#790): feed images and carousel images only, up to 1000 characters.
+// Collaborators (feed posts and Reels) and people tagged on the first image (#796), as the composer stores them.
+const USERNAME = /^[a-z0-9._]{1,30}$/;
+function peopleOf(settings: Readonly<Record<string, unknown>>, key: 'collaborators' | 'userTags', max: number): string[] {
+  const value = settings[key];
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((v): v is string => typeof v === 'string' && USERNAME.test(v)))].slice(0, max);
+}
+// Tags spread along the bottom of the image; Instagram shows them when the image is tapped.
+const userTagsForm = (names: readonly string[]) =>
+  names.length === 0 ? {} : { user_tags: JSON.stringify(names.map((username, i) => ({ username, x: Number(((i + 1) / (names.length + 1)).toFixed(3)), y: 0.9 }))) };
+const collaboratorsForm = (names: readonly string[]) => (names.length === 0 ? {} : { collaborators: JSON.stringify(names) });
 const altOf = (m: { mime: string; altText?: string | null }) => (m.altText && !isVideo(m) ? { alt_text: m.altText.slice(0, 1000) } : {});
 // A pending post's reference: the container and a short hash of its caption, so a later status check can recognise the
 // post the container became without the content.
@@ -177,6 +188,8 @@ export class InstagramPublisher implements Publisher {
     if (uploaded && !bytes) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
     const source = (video: boolean) => (uploaded ? { upload_type: 'resumable' } : video ? { video_url: first as string } : { image_url: first as string });
     const caption = story ? '' : captionOf(input.content);
+    const collaborators = story ? [] : peopleOf(input.settings, 'collaborators', 3);
+    const tagged = story ? [] : peopleOf(input.settings, 'userTags', 20);
     // Containers are invisible until published, so any failure while making them posted nothing.
     let container: string;
     try {
@@ -186,16 +199,16 @@ export class InstagramPublisher implements Publisher {
       } else if (media.length === 1) {
         // One video is a Reel, shown in the feed too; Meta fetches it from the URL and processes it before publishing.
         const coverForm = !cover ? {} : 'atMs' in cover ? { thumb_offset: String(cover.atMs) } : { cover_url: await urlOf(cover.fileId) };
-        const single = reel ? { media_type: 'REELS', ...source(true), share_to_feed: 'true', ...coverForm } : { ...source(false), ...altOf(media[0] as { mime: string; altText?: string | null }) };
-        container = await this.create(input.externalAccountId, s.accessToken, { ...single, caption });
+        const single = reel ? { media_type: 'REELS', ...source(true), share_to_feed: 'true', ...coverForm } : { ...source(false), ...altOf(media[0] as { mime: string; altText?: string | null }), ...userTagsForm(tagged) };
+        container = await this.create(input.externalAccountId, s.accessToken, { ...single, caption, ...collaboratorsForm(collaborators) });
       } else {
         // A carousel may mix images and videos.
         const children: string[] = [];
         for (const [i, m] of media.entries()) {
           const url = i === 0 ? (first as string) : await urlOf(m.fileId);
-          children.push(await this.create(input.externalAccountId, s.accessToken, { ...(isVideo(m) ? { media_type: 'VIDEO', video_url: url } : { image_url: url, ...altOf(m) }), is_carousel_item: 'true' }));
+          children.push(await this.create(input.externalAccountId, s.accessToken, { ...(isVideo(m) ? { media_type: 'VIDEO', video_url: url } : { image_url: url, ...altOf(m), ...(i === 0 ? userTagsForm(tagged) : {}) }), is_carousel_item: 'true' }));
         }
-        container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'CAROUSEL', children: children.join(','), caption });
+        container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'CAROUSEL', children: children.join(','), caption, ...collaboratorsForm(collaborators) });
       }
       // The bytes, to the container just made; still invisible, so a failed upload posted nothing.
       if (uploaded && bytes) await this.graph.uploadInstagram(container, s.accessToken, bytes, UPLOAD_MS);

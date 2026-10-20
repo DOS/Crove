@@ -127,6 +127,23 @@ describe('InstagramPublisher', () => {
     ]);
   });
 
+  it('sends collaborators on the post and people tags on the first image, never on a Story (#796)', async () => {
+    const { fetchImpl, calls } = graph({
+      [`POST /${IG}/media`]: [{ body: { id: '9001' } }, { body: { id: '9002' } }, { body: { id: '9003' } }],
+      'GET /9003': [{ body: { status_code: 'FINISHED' } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000002' } }],
+      'GET /18000000000000002': [{ body: {} }],
+    });
+    const settings = { collaborators: ['doi.tac', 'Bad Name'], userTags: ['lan_anh', 'minh'] };
+    await new InstagramPublisher(APP, fetchImpl, fast).publish(input({ settings, content: { body: 'Bộ ảnh', title: null, linkUrl: null, media: [image('f-1'), image('f-2')] } }));
+    expect(calls[0]?.form).toEqual({ image_url: 'https://bucket.example/f-1?sig=1', user_tags: JSON.stringify([{ username: 'lan_anh', x: 0.333, y: 0.9 }, { username: 'minh', x: 0.667, y: 0.9 }]), is_carousel_item: 'true' });
+    expect(calls[1]?.form).toEqual({ image_url: 'https://bucket.example/f-2?sig=1', is_carousel_item: 'true' });
+    expect(calls[2]?.form).toEqual({ media_type: 'CAROUSEL', children: '9001,9002', caption: 'Bộ ảnh', collaborators: JSON.stringify(['doi.tac']) });
+    const story = graph({ [`POST /${IG}/media`]: [{ body: { id: '9101' } }], 'GET /9101': [{ body: { status_code: 'FINISHED' } }], [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000101' } }] });
+    await new InstagramPublisher(APP, story.fetchImpl, fast).publish(input({ settings: { ...settings, postType: 'story' } }));
+    expect(story.calls[0]?.form).toEqual({ media_type: 'STORIES', image_url: 'https://bucket.example/f-1?sig=1' });
+  });
+
   it('sends alt text on described images, alone or in a carousel, and never on a video (#790)', async () => {
     const { fetchImpl, calls } = graph({
       [`POST /${IG}/media`]: [{ body: { id: '9001' } }, { body: { id: '9002' } }, { body: { id: '9003' } }],
