@@ -136,7 +136,7 @@ export const reviewLinkList = defineQuery({
         id: f.id,
         linkId: f.link_id,
         name: f.reviewer_name,
-        verdict: f.verdict as ReviewFeedbackView['verdict'],
+        verdict: f.verdict,
         body: f.body,
         changed: f.changed,
         createdAt: f.created_at.toISOString(),
