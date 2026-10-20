@@ -98,7 +98,7 @@ The staging object never becomes a file: no file row points at a `staging/` key 
 
 Clock note: the database decides the grant's expiry; the API's clock signs the POST policy's expiration. Both are 5 minutes; a skew between them shifts which of the two refuses first, never lets a late upload become a file.
 
-The direct `POST /api/files` stays available with S3 (scripts, API clients, `S3_PRESIGNED_URLS=false`); it takes the same server-side hash and create-only write.
+The direct `POST /api/files` stays available with S3 (scripts, API clients, `S3_PRESIGNED_URLS=false`); it takes the same server-side hash and create-only write. With presigned uploads on, it takes documents of at most 4 MB (`DIRECT_UPLOAD_MAX_BYTES`, #432): bulk intake sends small files that way rather than opening a grant for each, and a larger document goes through the staged upload. Every body it reads holds one of a bounded number of upload slots per process.
 
 ### 5. Presigned downloads of the exact version
 

@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { EXTRACT_LIMITS, zExtractResponse } from '@crove/extract-contract';
 import { parse } from '../src/parse.ts';
-import { runSandboxed } from '../src/sandbox.ts';
+import { DEFAULT_SANDBOX, runSandboxed } from '../src/sandbox.ts';
 import { ArchiveError, looksLikeArchive, readZip, safeEntryName } from '../src/zip.ts';
-import { buildZip } from './zip-fixture.ts';
+import { buildLimitArchive, buildZip } from './zip-fixture.ts';
 
 const FIXTURE = readFileSync(new URL('./fixtures/einvoice-basic.xml', import.meta.url));
 const decoded = (content: string | null) => (content === null ? null : Buffer.from(content, 'base64'));
@@ -136,5 +136,22 @@ describe('the zip kind', () => {
     if (!result.ok || result.kind !== 'zip') throw new Error(`unexpected answer ${JSON.stringify(result).slice(0, 300)}`);
     expect(result.archive.entries).toHaveLength(200);
     expect(result.archive.entries.every((e) => e.rejected === null && e.content !== null)).toBe(true);
+  });
+
+  // #432: an archive at every limit at once (the most entries, the most decompressed bytes, an upload just under the
+  // file limit) opens with half the parser's heap and half its resident memory limit. On Linux the RSS watchdog is
+  // live here (as in CI), so the parse needs less than half of the 768 MB the default sandbox allows, which itself
+  // leaves the server its share of the container's 1 GiB. Measured in the crove-extract image: about 335 MB at peak.
+  // The container smoke test (test/container/smoke.mjs) opens the same archive in the real 1 GiB container.
+  it('opens an archive at the entry and size limits within half the sandbox limits', { timeout: 120_000 }, async () => {
+    const zip = buildLimitArchive({ entries: EXTRACT_LIMITS.maxArchiveEntries, totalBytes: EXTRACT_LIMITS.maxArchiveTotalBytes, randomBytesPerEntry: 50_000 });
+    expect(zip.byteLength).toBeLessThanOrEqual(EXTRACT_LIMITS.maxFileBytes);
+    expect(zip.byteLength).toBeGreaterThan(EXTRACT_LIMITS.maxFileBytes * 0.9);
+    const half = { ...DEFAULT_SANDBOX, maxHeapMb: DEFAULT_SANDBOX.maxHeapMb / 2, maxRssMb: DEFAULT_SANDBOX.maxRssMb / 2 };
+    const result = await runSandboxed('zip', zip, half);
+    if (!result.ok || result.kind !== 'zip') throw new Error(`unexpected answer ${JSON.stringify(result).slice(0, 300)}`);
+    expect(result.archive.entries).toHaveLength(EXTRACT_LIMITS.maxArchiveEntries);
+    expect(result.archive.entries.every((e) => e.rejected === null && e.content !== null)).toBe(true);
+    expect(result.archive.entries.reduce((sum, e) => sum + e.sizeBytes, 0)).toBe(EXTRACT_LIMITS.maxArchiveTotalBytes);
   });
 });
