@@ -38,7 +38,7 @@ const dayKeyOf = (weekday: number) => DAY_KEYS[(weekday - 1) % 7] ?? 'mon';
 
 // How many different people approve a post for this channel before it may be scheduled (S9 review policy).
 // loading: the policies are still being read, so the select waits instead of showing the default.
-function ReviewPolicy({ channel, required, reminders, canEdit, loading }: { channel: Channel; required: number; reminders: boolean; canEdit: boolean; loading: boolean }) {
+function ReviewPolicy({ channel, required, reminders, shortLinks, canEdit, loading }: { channel: Channel; required: number; reminders: boolean; shortLinks: boolean; canEdit: boolean; loading: boolean }) {
   const t = useTranslations('social');
   const set = useMutation({
     mutationFn: (approvalsRequired: number) => client.social.policies.set({ connectionId: channel.id, approvalsRequired }),
@@ -50,6 +50,12 @@ function ReviewPolicy({ channel, required, reminders, canEdit, loading }: { chan
     onSettled: () => void queryClient.invalidateQueries({ queryKey: orpc.social.policies.list.key() }),
   });
   const remindOn = remind.isPending && remind.variables !== undefined ? remind.variables : reminders;
+  // Crove's short links with click counts (#706), off unless turned on.
+  const shorten = useMutation({
+    mutationFn: (on: boolean) => client.social.policies.setShortLinks({ connectionId: channel.id, shortLinks: on }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: orpc.social.policies.list.key() }),
+  });
+  const shortOn = shorten.isPending && shorten.variables !== undefined ? shorten.variables : shortLinks;
   return (
     <div className="space-y-1.5">
       <Label htmlFor={`policy-${channel.id}`} className="text-sm font-medium text-muted-foreground">
@@ -84,6 +90,14 @@ function ReviewPolicy({ channel, required, reminders, canEdit, loading }: { chan
         </span>
       </label>
       {remind.error && <ErrorText>{errorMessage(remind.error)}</ErrorText>}
+      <label className="flex items-start gap-2 pt-1 text-sm text-muted-foreground">
+        <Checkbox className="mt-0.5" checked={shortOn} disabled={loading || !canEdit || shorten.isPending || channel.status === 'revoked'} onCheckedChange={(checked) => shorten.mutate(checked === true)} />
+        <span>
+          {t('shortLinksLabel')}
+          <span className="block text-xs text-subtle-foreground">{t('shortLinksHint')}</span>
+        </span>
+      </label>
+      {shorten.error && <ErrorText>{errorMessage(shorten.error)}</ErrorText>}
     </div>
   );
 }
@@ -205,6 +219,7 @@ export function SocialChannelsPage() {
   const policyRows = useQuery(orpc.social.policies.list.queryOptions({ input: {} }));
   const policies = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.approvalsRequired]));
   const reminders = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.reviewReminders]));
+  const shortLinks = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.shortLinks]));
   const [name, setName] = useState('');
   const [confirming, setConfirming] = useState<string | null>(null);
   const sandbox = getConfig().channels?.sandbox ?? false;
@@ -323,7 +338,7 @@ export function SocialChannelsPage() {
                 </div>
                 {confirming === c.id && <p className="text-xs text-muted-foreground">{t('disconnectHint')}</p>}
                 <div className="border-t pt-3">
-                  <ReviewPolicy channel={c} required={policies.get(c.id) ?? 1} reminders={reminders.get(c.id) ?? true} canEdit={isAdmin} loading={policyRows.isLoading} />
+                  <ReviewPolicy channel={c} required={policies.get(c.id) ?? 1} reminders={reminders.get(c.id) ?? true} shortLinks={shortLinks.get(c.id) ?? false} canEdit={isAdmin} loading={policyRows.isLoading} />
                 </div>
                 <div className="border-t pt-3">
                   <p className="mb-2 text-sm font-medium text-muted-foreground">{t('queueTitle')}</p>

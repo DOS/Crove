@@ -80,6 +80,8 @@ export interface CroveSocialSchema {
   'crove_social.report_link': SocialReportLinkTable;
   'crove_social.review_feedback': SocialReviewFeedbackTable;
   'crove_social.review_link': SocialReviewLinkTable;
+  'crove_social.short_link': SocialShortLinkTable;
+  'crove_social.short_link_click': SocialShortLinkClickTable;
   'crove_social.snippet': SocialSnippetTable;
 }
 
@@ -744,6 +746,7 @@ export interface SocialChannelPolicyTable {
   updated_by: string;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
   review_reminders: Generated<boolean>;
+  short_links: Generated<boolean>;
 }
 
 /** crove_social.idea_label */
@@ -1003,6 +1006,27 @@ export interface SocialReviewLinkTable {
   expires_at: ColumnType<Date, Date | string, NotGranted>;
   revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   revoked_by: string | null;
+}
+
+/** crove_social.short_link_click */
+export interface SocialShortLinkClickTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  short_link_id: ColumnType<string, NotGranted, NotGranted>;
+  day: ColumnType<string, NotGranted, NotGranted>;
+  clicks: ColumnType<string, NotGranted, NotGranted>;
+}
+
+/** crove_social.short_link */
+export interface SocialShortLinkTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  code: ColumnType<string, string, NotGranted>;
+  variant_id: ColumnType<string, string, NotGranted>;
+  revision: ColumnType<number, number | undefined, NotGranted>;
+  post_id: ColumnType<string, string, NotGranted>;
+  target_url: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_social.snippet */
