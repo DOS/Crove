@@ -156,11 +156,13 @@ suite('social report links on PostgreSQL (#643)', () => {
     const fb = await connection(o.orgId, o.owner, 'Trang Facebook');
     const zalo = await connection(o.orgId, o.owner, 'Zalo OA');
     const sale = await published(o, fb, 'Giảm giá', '2026-10-05T03:00:00Z', { reach: 100, reactions: 1 });
-    await published(o, zalo, 'Tin Zalo', '2026-10-06T03:00:00Z', { reach: 50, reactions: 9 });
+    const zaloPost = await published(o, zalo, 'Tin Zalo', '2026-10-06T03:00:00Z', { reach: 50, reactions: 9 });
     // Two revisions went out with a link. The period is 2026-09-30T17:00Z to 2026-10-31T17:00Z: a UTC day counts when its
     // midday is in it, so 31 October does and 30 September and 1 November do not.
     await shortLink(o, sale, 1, { '2026-09-30': 100, '2026-10-03': 7, '2026-10-31': 3, '2026-11-01': 50 });
     await shortLink(o, sale, 2, { '2026-10-10': 2 });
+    // A link whose only clicks fall after the period counts 0, not nothing.
+    await shortLink(o, zaloPost, 1, { '2026-11-05': 40 });
     // Another org's clicks stay its own.
     const theirConn = await connection(stranger.orgId, stranger.owner, 'Của họ');
     await shortLink(stranger, await published(stranger, theirConn, 'Của họ', '2026-10-05T03:00:00Z', { reach: 1 }), 1, { '2026-10-05': 900 });
@@ -170,11 +172,11 @@ suite('social report links on PostgreSQL (#643)', () => {
     expect(page.totals).toEqual({ reach: 150, reactions: 10, linkClicks: 12 });
     expect(page.channels).toEqual([
       { channel: 'Trang Facebook', provider: 'sandbox', posts: 1, totals: { reach: 100, reactions: 1, linkClicks: 12 } },
-      { channel: 'Zalo OA', provider: 'sandbox', posts: 1, totals: { reach: 50, reactions: 9 } },
+      { channel: 'Zalo OA', provider: 'sandbox', posts: 1, totals: { reach: 50, reactions: 9, linkClicks: 0 } },
     ]);
     // Link clicks do not make a post do better: the Zalo post still leads on its reactions.
     expect(page.top.map((p) => [p.excerpt, p.metrics])).toEqual([
-      ['Tin Zalo', { reach: 50, reactions: 9 }],
+      ['Tin Zalo', { reach: 50, reactions: 9, linkClicks: 0 }],
       ['Giảm giá', { reach: 100, reactions: 1, linkClicks: 12 }],
     ]);
   });

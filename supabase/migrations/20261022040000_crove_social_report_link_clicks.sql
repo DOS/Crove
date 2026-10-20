@@ -2,7 +2,7 @@
 --
 -- crove_social.report_link_view  as before (20261021160000), and each channel's totals, the report's totals and the
 --                                best posts' counts also carry linkClicks: the clicks on Crove's short links (#706) of
---                                what went out in the period, on the days (UTC) whose midday is in the period. Only for
+--                                what went out in the period, on the days (UTC) whose midday is in the period (0 when a link had none). Only for
 --                                posts that went out with a short link; it does not change which posts do best.
 SET LOCAL lock_timeout = '2s';
 
@@ -50,12 +50,12 @@ BEGIN
       UNION ALL
       -- The clicks on Crove's short links (#706) of what went out, every revision of it, on the days (UTC) whose midday is
       -- in the period (clicks are kept by UTC day; a period is in the org's own zone). Not part of a post's score: a
-      -- channel's own clicks may count the same people.
-      SELECT v.id, v.conn, 'linkClicks', pg_catalog.sum(k.clicks)::numeric
+      -- channel's own clicks may count the same people. A post that went out with a link nobody clicked shows 0.
+      SELECT v.id, v.conn, 'linkClicks', coalesce(pg_catalog.sum(k.clicks), 0)::numeric
       FROM v
       JOIN crove_social.short_link l ON l.org_id = v_link.org_id AND l.variant_id = v.id
-      JOIN crove_social.short_link_click k ON k.org_id = l.org_id AND k.short_link_id = l.id
-      WHERE (k.day + time '12:00') AT TIME ZONE 'UTC' >= v_link.period_start
+      LEFT JOIN crove_social.short_link_click k ON k.org_id = l.org_id AND k.short_link_id = l.id
+        AND (k.day + time '12:00') AT TIME ZONE 'UTC' >= v_link.period_start
         AND (k.day + time '12:00') AT TIME ZONE 'UTC' < v_link.period_end
       GROUP BY v.id, v.conn
     ),
