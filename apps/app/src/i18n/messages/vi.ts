@@ -1975,6 +1975,7 @@ export const vi = {
     bestTimesHint: 'Khung giờ (theo múi giờ của bạn) mà bài của mỗi kênh có nhiều tương tác nhất trong khoảng đã chọn: lượt thích, bình luận, chia sẻ và lưu, trung bình mỗi bài. Cần vài bài mỗi khung giờ.',
     bestTimesSlot: '{day} {hour}:00 (TB {engagement} tương tác, {posts} bài)',
     metricsCapped: 'Chỉ hiện 500 kênh đăng gần nhất; số tổng phía trên tính trên tất cả các kênh.',
+    metricsCappedPartial: 'Chỉ hiện 500 kênh đăng gần nhất; chưa đọc được số tổng đầy đủ nên số tổng phía trên chỉ tính trên các kênh này.',
     metricsClicks: 'Lượt bấm liên kết',
     metricsExport: 'Tải CSV',
     metricsExportCut: 'Tệp chỉ có 10.000 kênh đăng gần nhất; hãy chọn khoảng thời gian ngắn hơn để có đủ.',

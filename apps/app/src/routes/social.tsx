@@ -153,7 +153,7 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
               </Card>
             )}
           </div>
-          {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t('metricsCapped')}</p>}
+          {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t(totals.data ? 'metricsCapped' : 'metricsCappedPartial')}</p>}
           <BestTimes rows={data} names={names} />
       <WhatWorks slug={slug} days={days} labelId={labelId} names={names} />
           <TopPosts rows={data} names={names} slug={slug} />
