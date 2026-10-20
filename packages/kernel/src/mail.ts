@@ -129,6 +129,9 @@ export interface DirectMail {
   messageId: string;
   status: 'queued' | 'sending' | 'sent' | 'delivered' | 'bounced' | 'complained' | 'suppressed' | 'failed' | 'ambiguous';
   messageIdHeader: string;
+  // The mail's VERP token (#539): sent over SMTP with the Return-Path bounce+<token>@INBOUND_DOMAIN, so a bounce
+  // report names this mail.
+  bounceToken: string | null;
 }
 
 // The mail a command just wrote for the request to send itself (the invite mail): the newest row of this source and
@@ -151,7 +154,9 @@ export const directMailGet = defineQuery({
       .orderBy('created_at', 'desc')
       .limit(1)
       .executeTakeFirst();
-    return row ? { messageId: row.id, status: row.status, messageIdHeader: row.message_id_header } : null;
+    if (!row) return null;
+    const { rows } = await sql<{ token: string | null }>`SELECT crove_kernel.mail_bounce_token(${row.id}) AS token`.execute(ctx.trx);
+    return { messageId: row.id, status: row.status, messageIdHeader: row.message_id_header, bounceToken: rows[0]?.token ?? null };
   },
 });
 

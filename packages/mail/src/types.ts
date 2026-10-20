@@ -10,6 +10,9 @@ export interface OutboundMail {
   // The Message-ID header, "<id@domain>"; unset, the transport makes one. HTTP providers also derive their
   // idempotency key from it, so a retry of the same mail is not sent twice.
   messageId?: string;
+  // The envelope sender that bounce reports go to (#539: bounce+<token>@INBOUND_DOMAIN). SMTP uses it; HTTP providers
+  // report bounces through their webhooks instead.
+  returnPath?: string;
 }
 
 // How safe it is to repeat a send whose outcome is unknown (ADR-0025): 'idempotent' when the provider drops a repeat

@@ -23,6 +23,8 @@ export interface InviteMailInput {
   acceptPath: string;
   // The Message-ID of the invite's mail_message row (#538), so the mail and its row name the same message.
   messageId?: string;
+  // The row's bounce token (#539): with INBOUND_DOMAIN set, the Return-Path is bounce+<token>@INBOUND_DOMAIN.
+  bounceToken?: string | null;
 }
 
 export type SendInviteMail = (invite: InviteMailInput) => Promise<DeliveryResult>;
@@ -95,7 +97,15 @@ export function inviteMail(input: InviteMailInput, publicUrl: string): OutboundM
   return { to: input.to, subject, text, html, ...(input.messageId ? { messageId: input.messageId } : {}) };
 }
 
-export function createInviteMailSender(mailer: MailProvider, publicUrl: string, options: DeliverOptions = {}): SendInviteMail {
+// The Return-Path of a mail with this bounce token (#539), or nothing without an inbound domain to receive reports.
+export function bounceAddress(token: string | null | undefined, inboundDomain: string | null | undefined): string | undefined {
+  return token && inboundDomain ? `bounce+${token}@${inboundDomain.toLowerCase()}` : undefined;
+}
+
+export function createInviteMailSender(mailer: MailProvider, publicUrl: string, options: DeliverOptions = {}, inboundDomain?: string | null): SendInviteMail {
   // async: a template error becomes a rejected promise, never a synchronous throw past the caller's handler.
-  return async (invite) => deliver(mailer, inviteMail(invite, publicUrl), { label: 'invite mail', ...options });
+  return async (invite) => {
+    const returnPath = bounceAddress(invite.bounceToken, inboundDomain);
+    return deliver(mailer, { ...inviteMail(invite, publicUrl), ...(returnPath ? { returnPath } : {}) }, { label: 'invite mail', ...options });
+  };
 }

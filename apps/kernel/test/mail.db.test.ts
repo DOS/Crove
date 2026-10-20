@@ -241,7 +241,13 @@ suite('outbound mail in the kernel (#538)', () => {
     // The request reads back the row its command wrote; another member, another org or another record reads nothing.
     const lookup = (who: UserActor, id = sourceId, org = orgId) =>
       runtime.query<unknown>('kernel.mail.direct.get', { source: 'kernel.mail_test.send', sourceId: id }, { actor: who, orgId: org });
-    expect(await lookup(users.member)).toEqual({ messageId: sent.id, status: 'sending', messageIdHeader: sent.messageIdHeader });
+    expect(await lookup(users.member)).toEqual({
+      messageId: sent.id,
+      status: 'sending',
+      messageIdHeader: sent.messageIdHeader,
+      // Its Return-Path token (#539): the id without dashes and a MAC of it.
+      bounceToken: expect.stringMatching(new RegExp(`^${sent.id.replaceAll('-', '')}[0-9a-f]{16}$`)),
+    });
     expect(await lookup(users.admin)).toBeNull();
     expect(await lookup(users.other, sourceId, otherOrgId)).toBeNull();
     expect(await lookup(users.member, randomUUID())).toBeNull();
