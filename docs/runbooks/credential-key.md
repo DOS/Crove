@@ -26,14 +26,18 @@ Rotate when someone who could read the key loses that access, when the key may h
 
 1. Generate a new key: `openssl rand -base64 32`.
 2. Set `CREDENTIAL_KEY` to the new key and `CREDENTIAL_KEY_PREVIOUS` to the old one, on the API and the worker, and restart both. New tokens are sealed with the new key; tokens sealed before still open with the previous key.
-3. Reseal the old envelopes. Today a token is resealed when its channel is reconnected; the provider adapters reseal on every token refresh once they land (Social plan S4, S6). A reseal command for all envelopes is a follow-up; until it exists, keep `CREDENTIAL_KEY_PREVIOUS` set until every connection has been refreshed or reconnected:
+3. Wait for the worker to reseal the old envelopes. Every 10 minutes it opens each credential of an active connection still sealed with the previous key and seals it again with the new one (a batch of up to 200 per pass, #776), and logs:
+
+   ```text
+   [credential-reseal] resealed 12, failed 0; left under an older key: 0 active, 3 to reconnect
+   ```
+
+   "Active" counts what the next passes will reseal. "To reconnect" counts credentials of connections that are expired, in error or revoked, or whose connecting member left: their tokens no longer work anyway, and they are sealed with the new key when an owner or admin reconnects them. A token refresh and a reconnect also seal with the new key. To check by hand (as the database owner; no Crove role can read the table):
 
    ```sql
    SELECT key_id, count(*) FROM crove_kernel.credential GROUP BY key_id;
    ```
-
-   (run as the database owner; no Crove role can read the table).
-4. When no envelope uses the old key id any more, remove `CREDENTIAL_KEY_PREVIOUS` and restart.
+4. When the log shows 0 active left (and the channels left to reconnect are ones you are ready to reconnect), remove `CREDENTIAL_KEY_PREVIOUS` and restart. A credential still under the old key after that no longer opens: its channel shows as needing a reconnect.
 
 Only one previous key is kept: finish one rotation (step 4) before starting the next, or envelopes sealed with the oldest key stop opening.
 

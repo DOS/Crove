@@ -9,6 +9,7 @@ import { runAgentWake } from '@crove/kernel';
 import type { InvoiceReader } from '@crove/agent';
 import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
+import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
 import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules } from '@crove/mod-social';
@@ -603,6 +604,29 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const feedTimer = deps.runtime.installed('social') ? setInterval(() => void feedSweep(), FEED_SWEEP_MS) : null;
   if (feedTimer) void feedSweep();
 
+  // After a credential key rotation (#776), envelopes still sealed with the previous key are sealed again with the
+  // current one, a batch at a time, until none is left; the log says how many remain.
+  let resealing = false;
+  const resealSweep = async () => {
+    if (resealing || !channels) return;
+    resealing = true;
+    try {
+      const done = await resealCredentials({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb });
+      if (done.resealed + done.failed + done.leftActive + done.leftInactive > 0) {
+        console.log(`[credential-reseal] resealed ${done.resealed}, failed ${done.failed}; left under an older key: ${done.leftActive} active, ${done.leftInactive} to reconnect`);
+      }
+    } catch (error) {
+      console.error('[credential-reseal] sweep', error instanceof Error ? error.name : typeof error);
+    } finally {
+      resealing = false;
+    }
+  };
+  const resealTimer = channels ? setInterval(() => void resealSweep(), RESEAL_SWEEP_MS) : null;
+  if (resealTimer) {
+    resealTimer.unref();
+    void resealSweep();
+  }
+
   // Channel tokens are renewed before they expire (S6.4), whatever module uses the channel.
   const refreshers = channels?.refreshers ?? {};
   let refreshing = false;
@@ -846,6 +870,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (reportTimer) clearInterval(reportTimer);
     if (feedTimer) clearInterval(feedTimer);
     if (refreshTimer) clearInterval(refreshTimer);
+    if (resealTimer) clearInterval(resealTimer);
     if (metricsTimer) clearInterval(metricsTimer);
     if (accountTimer) clearInterval(accountTimer);
     await listener.end().catch(() => {});
