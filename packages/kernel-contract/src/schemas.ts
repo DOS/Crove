@@ -83,6 +83,12 @@ export const zPurchaseProposal = z.object({
     subtotal: zMoney,
     vatTotal: zMoney,
     total: zMoney,
+    // The invoice's own VAT table (THTTLTSuat, #685): for each rate as the invoice writes it, the taxable value and the
+    // VAT. Only from e-invoice XML; absent on proposals read from a PDF or an image, and on those raised before #685.
+    taxBreakdown: z
+      .array(z.object({ rate: z.string().max(20), taxableAmount: zMoney, vatAmount: zMoney }))
+      .max(100)
+      .optional(),
   }),
   lines: z.array(zProposedLine).min(1).max(1000),
   journal: z.array(zJournalLineDraft).min(2).max(1010),
