@@ -257,8 +257,9 @@ export const feedRecord = defineCommand({
       return { drafted: 0, paused };
     }
     const seen = await ctx.trx.selectFrom('crove_social.feed_item').select('item_key').where('org_id', '=', ctx.orgId).where('feed_id', '=', feed.id).limit(1).execute();
-    // The first read notes what the feed already holds; only items published since the feed was added are drafted.
-    const first = feed.last_checked_at === null && seen.length === 0;
+    // The first good read (none noted yet, whatever failed before it) notes what the feed already holds; only items
+    // published since the feed was added are drafted.
+    const first = seen.length === 0;
     const keyed = new Map<string, Item>();
     for (const item of result.items) {
       const key = itemKey(item.key);

@@ -73,6 +73,11 @@ describe('feeds (#708)', () => {
     expect(sneaky.items).toEqual([{ key: 'g', title: 'x', link: null, publishedAt: null, summary: null, image: null }]);
   });
 
+  it("keeps a text's own < and > while dropping the tags", () => {
+    const feed = readFeed(bytes('<rss><channel><item><title>So sánh</title><guid>s</guid><description>&lt;p&gt;Giá A &amp;lt; B &amp;amp; C &amp;gt; D&lt;/p&gt;</description></item><item><title>CDATA</title><guid>c</guid><description><![CDATA[<b>Lãi</b> 5 &lt; 7]]></description></item></channel></rss>'));
+    expect(feed.items.map((i) => i.summary)).toEqual(['Giá A < B & C > D', 'Lãi 5 < 7']);
+  });
+
   it('caps the items and the texts', () => {
     const many = `<rss><channel><title>${'t'.repeat(400)}</title>${Array.from({ length: 80 }, (_, i) => `<item><title>Bài ${i}</title><link>https://b.example/${i}</link><description>${'x'.repeat(1500)}</description></item>`).join('')}</channel></rss>`;
     const feed = readFeed(bytes(many));

@@ -41,11 +41,13 @@ function textOf(value: unknown): string {
   return '';
 }
 
-// HTML of a description as plain text: tags dropped, entities decoded (twice: feeds often escape their HTML), spaces
-// folded.
+// Only what is a tag (a letter, / or ! after the <), so a text's own "a < b" stays.
+const stripTags = (html: string) => html.replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, ' ').replace(/<[/!]?[a-z][^>]*>/gi, ' ');
+
+// HTML of a description as plain text: tags dropped before and after decoding (a feed may hold its HTML as it is, in
+// CDATA, or escaped once), entities decoded, spaces folded.
 function plain(html: string): string {
-  const once = decode(html);
-  return decode(once.replace(/<(script|style)[\s\S]*?<\/\1\s*>/gi, ' ').replace(/<[^>]*>/g, ' '))
+  return decode(stripTags(decode(stripTags(html))))
     .replace(/\s+/g, ' ')
     .trim();
 }

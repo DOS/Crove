@@ -145,6 +145,16 @@ suite('social blog feeds on PostgreSQL (#708)', () => {
     expect((await drafts(o)).length).toBe(9);
   });
 
+  it('keeps the first-read rule when the first reads failed (#708)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const { feedId } = await exec<{ feedId: string }>(o, o.owner, 'social.feed.add', { url: 'https://slow.example/feed', connectionIds: [conn] });
+    expect(await record(o, feedId, { ok: false, error: 'timeout' })).toEqual({ drafted: 0, paused: false });
+    // The first good read still notes the old article instead of drafting it.
+    expect(await record(o, feedId, ok([item(1, '2020-01-01T00:00:00.000Z'), item(2)]))).toEqual({ drafted: 1, paused: false });
+    expect((await drafts(o)).map((d) => d.body)).toEqual(['Bài 2\n\nTóm tắt 2']);
+  });
+
   it('pauses after five failed reads, tells the owners and admins, and the scan skips it until resumed', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);
