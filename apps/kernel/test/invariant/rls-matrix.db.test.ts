@@ -42,6 +42,7 @@ const MACHINERY = new Set([
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_social.account_snapshot',
+  'crove_social.idea',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -516,6 +517,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   // A metrics snapshot of a published variant (S8, issue #238): append-only, one per capture key.
   // An org's label for posts (#639): a name and a colour from the app's palette.
+  // An idea on the Social ideas board (#701), before it becomes a draft.
+  'crove_social.idea': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), title: 'RLS matrix idea', stage: 'new', created_by: o.owner } }) },
   'crove_social.label': { make: (o) => ({ row: socialLabelRow(o) }) },
   // A link's preview card (#641), cached per org and URL: asked for by a member, filled in by the worker.
   'crove_social.link_preview': {
