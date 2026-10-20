@@ -42,7 +42,8 @@ function Chip({ item, slug, name, draggable }: { item: CalendarItem; slug: strin
   );
 }
 
-export function SocialCalendar({ slug, names, canDecide }: { slug: string; names: Map<string, string>; canDecide: boolean }) {
+// labelId: only posts with that label (#639).
+export function SocialCalendar({ slug, names, canDecide, labelId }: { slug: string; names: Map<string, string>; canDecide: boolean; labelId?: string | undefined }) {
   const t = useTranslations('social');
   const f = useFormat();
   const navigate = useNavigate();
@@ -50,7 +51,7 @@ export function SocialCalendar({ slug, names, canDecide }: { slug: string; names
   const [anchor, setAnchor] = useState(() => startOfDay(new Date()));
   const days = useMemo(() => viewDays(view, anchor), [view, anchor]);
   const range = useMemo(() => ({ from: (days[0] as Date).toISOString(), to: addDays(days.at(-1) as Date, 1).toISOString() }), [days]);
-  const posts = useQuery(orpc.social.posts.list.queryOptions({ input: { ...range, limit: 200 } }));
+  const posts = useQuery(orpc.social.posts.list.queryOptions({ input: { ...range, ...(labelId ? { labelId } : {}), limit: 200 } }));
   const items = useMemo(() => calendarItems(posts.data ?? []), [posts.data]);
   const byDay = useMemo(() => {
     const map = new Map<string, CalendarItem[]>();

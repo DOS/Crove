@@ -724,7 +724,7 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(await api.query<MetricsRow[]>('social.metrics.summary', { postId: randomUUID() }, { actor: asUser(o.owner), orgId: o.orgId })).toEqual([]);
     const file = await api.execute<{ filename: string; csv: string; truncated: boolean }>('social.metrics.export', { days: 30 }, { actor: asUser(o.owner), orgId: o.orgId });
     const lines = file.csv.replace(/^﻿/, '').trim().split('\r\n');
-    expect(lines[0]).toBe('post_id,channel,provider,published_at,url,text,impressions,reach,reactions,comments,shares,saves,clicks,views,captured_at');
+    expect(lines[0]).toBe('post_id,channel,provider,published_at,url,text,labels,impressions,reach,reactions,comments,shares,saves,clicks,views,captured_at');
     expect(lines[1]).toContain(`${postId},Trang thử,sandbox,`);
     const audits = await admin(async (c) => (await c.query<{ detail: Record<string, unknown> }>("SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'social.metrics.export' AND outcome = 'ok'", [o.orgId])).rows);
     expect(audits).toHaveLength(1);

@@ -311,6 +311,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           }),
         ),
         duplicate: os.social.posts.duplicate.handler(socialCommand('social.post.duplicate')),
+        setLabels: os.social.posts.setLabels.handler(socialCommand('social.post.set_labels')),
         comment: os.social.posts.comment.handler(socialCommand('social.post_comment.add')),
         editComment: os.social.posts.editComment.handler(socialCommand('social.post_comment.edit')),
         activity: os.social.posts.activity.handler(socialQuery('social.post.activity')),
@@ -408,6 +409,12 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       metrics: {
         summary: os.social.metrics.summary.handler(socialQuery('social.metrics.summary')),
         export: os.social.metrics.export.handler(socialCommand('social.metrics.export')),
+      },
+      labels: {
+        list: os.social.labels.list.handler(socialQuery('social.label.list')),
+        create: os.social.labels.create.handler(socialCommand('social.label.create')),
+        update: os.social.labels.update.handler(socialCommand('social.label.update')),
+        remove: os.social.labels.remove.handler(socialCommand('social.label.delete')),
       },
       snippets: {
         list: os.social.snippets.list.handler(socialQuery('social.snippet.list')),

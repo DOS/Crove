@@ -19,6 +19,7 @@ import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
 import { ReviewLinks } from '../components/social-review-links.tsx';
 import { PostActivity } from '../components/social-activity.tsx';
+import { LabelPicker } from '../components/social-labels.tsx';
 import { EmojiPicker } from '../components/social-emoji.tsx';
 import { ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -1229,6 +1230,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           )}
           {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} />}
           {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
+          <LabelPicker slug={slug} postId={p.id} labelIds={p.labelIds} canWrite={canWrite} />
           {canWrite && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
             <ReviewLinks postId={p.id} canDecide={canDecide} />
           {dirty && <p className="text-xs text-subtle-foreground">{t('unsaved')}</p>}

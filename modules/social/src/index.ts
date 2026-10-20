@@ -12,6 +12,7 @@ export * from './evergreen.ts';
 export * from './library.ts';
 export * from './policy.ts';
 export * from './snippets.ts';
+export * from './labels.ts';
 export * from './review-links.ts';
 export * from './activity.ts';
 export * from './comments.ts';
