@@ -27,11 +27,15 @@ export const en: Dictionary = {
     closeMenu: 'Close menu',
   },
   hero: {
-    line1: 'Invoices in, journal entries ready.',
-    line2: 'You just review and approve.',
-    lead: 'Crove reads Vietnamese e-invoices, checks every number and proposes a journal entry under Circular 133. You review it, change an account if needed, and approve.',
+    title: 'AI agents work under your authority.',
+    lead: 'Each agent is a position in your org chart, with a manager, a monthly budget, a risk limit and a kill switch. The accounting agent reads invoices and drafts the entries; only a person with the authority approves and posts them.',
     primary: 'Self-host for free',
     secondary: 'View the source on GitHub',
+    note: 'Open source under the AGPL. Runs on your own server with docker compose. Crove Cloud is coming soon.',
+  },
+  tour: {
+    title: 'A month of documents, approved from the keyboard',
+    lead: 'Crove reads Vietnamese e-invoices, checks every number and proposes a journal entry under Circular 133. You review it, change an account if needed, and approve.',
     sample: 'Example data',
     replay: 'Replay',
   },
@@ -50,8 +54,8 @@ export const en: Dictionary = {
     tabs: ['To approve', 'Warnings', 'Approved'],
     rows: [
       { party: 'Công ty CP Bao Bì Phú Thịnh', sub: 'Invoice 00001284, 14/10/2026', amount: '₫32,832,000', account: 'Acc 152', flag: '' },
-      { party: 'EVN', sub: 'Electricity, September', amount: '₫1,946,780', account: 'Acc 6427', flag: '' },
-      { party: 'Viettel', sub: 'Telecom, September', amount: '₫880,000', account: 'Acc 6427', flag: '' },
+      { party: 'EVN', sub: 'Electricity, September', amount: '₫1,946,780', account: 'Acc 6422', flag: '' },
+      { party: 'Viettel', sub: 'Telecom, September', amount: '₫880,000', account: 'Acc 6422', flag: '' },
       { party: 'Hợp tác xã Tân Hồng', sub: 'Rice purchase slip', amount: '₫148,500,000', account: 'Acc 152', flag: 'No tax code' },
     ],
     waiting: 'To approve',
@@ -114,7 +118,6 @@ export const en: Dictionary = {
     ],
   },
   keys: {
-    title: 'A month of documents, done from the keyboard',
     items: [
       { keys: ['J', 'K'], label: 'Move', body: 'Step through the rows of the AI Inbox.' },
       { keys: ['A'], label: 'Approve', body: 'Asks for a two-factor code, then posts.' },
@@ -127,6 +130,37 @@ export const en: Dictionary = {
     lead: 'Crove does the first three steps and records each one. The last one is always a person with the authority to approve, with a two-factor code.',
     actorLabel: 'Handled by',
     timeLabel: 'At',
+    invoice: {
+      kind: 'VAT invoice',
+      series: '1C26TPT',
+      meta: 'No. 00001284, 14/10/2026',
+      sellerLabel: 'Seller',
+      seller: 'CP Bao Bì Phú Thịnh',
+      taxIdLabel: 'Tax ID',
+      taxId: '0312 345 678',
+      lines: [
+        { name: '5-ply cartons, 2,000 pcs', amount: '25,000,000' },
+        { name: '48mm tape, 300 rolls', amount: '5,400,000' },
+        { name: 'VAT 8%', amount: '2,432,000' },
+      ],
+      totalLabel: 'Total due',
+      total: '32,832,000 ₫',
+    },
+    checks: {
+      items: ['Line totals add up', 'VAT rate 8% is right', 'Tax ID is valid', 'Has the tax authority code', 'Not a duplicate of an earlier invoice'],
+      foot: 'If one check fails, the invoice is held and goes to a person.',
+    },
+    proposal: {
+      balanced: 'Balanced',
+      balancedNote: 'Debit equals credit',
+      foot: 'Account 152 has been used 6 times for this vendor.',
+    },
+    approve: {
+      title: 'Approve invoice 00001284',
+      sub: 'Enter the two-factor code to post',
+      code: '481027',
+      button: 'Approve and post',
+    },
     steps: [
       {
         name: 'Receive',
@@ -162,36 +196,7 @@ export const en: Dictionary = {
       },
     ],
   },
-  ledger: {
-    title: 'A ledger you can read, with a running balance',
-    lead: 'Approved entries go into the general journal and the ledger. Payables are tracked per vendor. Export to Excel whenever your accountant asks.',
-    tableTitle: 'Subsidiary ledger, account 331, payables to suppliers',
-    tableSub: 'Party: Công ty CP Bao Bì Phú Thịnh. Period: October 2026. Unit: VND.',
-    cols: ['Posted', 'Document', 'Description', 'Contra', 'Debit', 'Credit', 'Credit balance'],
-    opening: { date: '01/10/2026', label: 'Opening balance', balance: '18,360,000' },
-    rows: [
-      { date: '03/10/2026', doc: 'UNC0412', desc: 'Payment of invoice 00001197', contra: '1121', debit: '18,360,000', credit: '', balance: '0', mark: false },
-      { date: '14/10/2026', doc: '00001284', desc: 'Carton boxes, packing tape', contra: '152', debit: '', credit: '30,400,000', balance: '30,400,000', mark: true },
-      { date: '14/10/2026', doc: '00001284', desc: 'Input VAT 8%', contra: '1331', debit: '', credit: '2,432,000', balance: '32,832,000', mark: true },
-    ],
-    totals: { label: 'Movement in the period', debit: '18,360,000', credit: '32,832,000' },
-    closing: { date: '31/10/2026', label: 'Closing balance', balance: '32,832,000' },
-    note: 'The two shaded rows are the entry for invoice 00001284 after it was approved.',
-    vat: {
-      title: 'Input VAT, Q4 2026',
-      sub: 'Deductible, as of 18/10/2026',
-      rows: [
-        { name: 'Công ty CP Bao Bì Phú Thịnh', sub: 'Invoice 00001284, 8% rate', amount: '2,432,000', width: '100%' },
-        { name: 'EVN', sub: 'Electricity, September, 10% rate', amount: '176,980', width: '7.3%' },
-        { name: 'Viettel', sub: 'Telecom, September, 10% rate', amount: '80,000', width: '3.3%' },
-      ],
-      total: ['Total deductible input VAT', '2,688,980'],
-      pending: 'Not yet counted: the Hợp tác xã Tân Hồng slip has no authority code and is waiting for review.',
-    },
-  },
   agents: {
-    title: 'AI agents work under your authority',
-    lead: 'Each agent is a position in your org chart, with a manager, a monthly budget, a risk limit and a kill switch. Agents propose, fixed checks decide whether the numbers are right, and a person approves before anything is posted.',
     chartTitle: 'Org chart',
     chartSub: 'Gạo Sạch Mekong, example data',
     legendPerson: 'Person',
@@ -243,7 +248,7 @@ export const en: Dictionary = {
         items: [
           { title: 'Invoice 00001284', amount: '₫32,832,000', sub: 'Công ty CP Bao Bì Phú Thịnh', tone: 'ok', chip: '5/5 checks passed', note: 'Dr 152, 1331 / Cr 331' },
           { title: 'Rice purchase slip', amount: '₫148,500,000', sub: 'Hợp tác xã Tân Hồng', tone: 'warn', chip: 'No authority code', note: 'Escalated to Chị Lan' },
-          { title: 'EVN electricity, September', amount: '₫1,946,780', sub: 'Acc 6427', tone: 'ok', chip: 'Ready to approve', note: '' },
+          { title: 'EVN electricity, September', amount: '₫1,946,780', sub: 'Acc 6422', tone: 'ok', chip: 'Ready to approve', note: '' },
         ],
       },
       tasks: {
@@ -319,35 +324,88 @@ export const en: Dictionary = {
     },
   },
   modules: {
-    title: 'Modules that share one set of books',
-    lead: 'Turn on the modules you need. They all share members, the approval flow and the audit log.',
-    items: [
-      {
-        name: 'Finance',
-        body: 'AI Inbox, documents, general journal, ledger, TT133 chart of accounts, vendors, VAT return, opening balances.',
-        sample: { primary: 'Ledger 331, Bao Bì Phú Thịnh', secondary: 'Credit balance 32,832,000', chips: [{ tone: 'ok', label: 'Balanced' }] },
+    title: 'One module per department, one org chart',
+    lead: 'The people and agents of each department work on the same data, with the same approvals and the same change log. Turn on the modules you need.',
+    deptLabel: 'Department of',
+    finance: {
+      name: 'Finance',
+      body: 'AI Inbox, vouchers, general journal, ledger, the TT133 chart of accounts, vendors, VAT returns and opening balances.',
+      people: [
+        { name: 'Chị Lan', initials: 'L', agent: false },
+        { name: 'Accounting agent', initials: '', agent: true },
+      ],
+      inboxTitle: 'AI Inbox',
+      inboxSub: '1 posted, 3 waiting for approval',
+      inbox: [
+        { title: 'Invoice 00001284, Bao Bì Phú Thịnh', amount: '₫32,832,000', account: 'Acc 152, 1331', tone: 'ok', label: 'Posted' },
+        { title: 'Rice purchase, HTX Tân Hồng', amount: '₫148,500,000', account: 'Acc 152', tone: 'warn', label: 'Authority code missing' },
+        { title: 'EVN power bill, September', amount: '₫1,946,780', account: 'Acc 6422', tone: 'ok', label: 'Ready to approve' },
+        { title: 'Viettel bill, September', amount: '₫880,000', account: 'Acc 6422', tone: 'ok', label: 'Ready to approve' },
+      ],
+      tail: 'Accounts are learned per vendor. Next time Crove proposes the account Chị Lan picked.',
+      taccount: {
+        title: 'Subsidiary ledger, account 331',
+        sub: 'Bao Bì Phú Thịnh, after Chị Lan approved',
+        debit: 'Dr',
+        credit: 'Cr',
+        debitRow: ['Payment 03/10', '18,360,000'],
+        creditRows: [
+          ['Opening balance 01/10', '18,360,000'],
+          ['Invoice 00001284, 14/10', '32,832,000'],
+        ],
+        balanceLabel: 'Credit balance',
+        balance: '32,832,000',
       },
-      {
-        name: 'Tasks',
-        body: 'Work for people and agents, with a due date, an owner and the documents it belongs to.',
-        sample: { primary: 'Get the authority code, HTX Tân Hồng', secondary: 'Due 20/10/2026', chips: [{ tone: 'accent', label: 'Accounting agent' }] },
+      vat: {
+        title: 'Expected input VAT, Q4',
+        total: '2,688,980',
+        rows: [
+          { name: 'Bao Bì Phú Thịnh', amount: '2,432,000', pct: 90.4 },
+          { name: 'EVN', amount: '176,980', pct: 6.6 },
+          { name: 'Viettel', amount: '80,000', pct: 3 },
+        ],
       },
-      {
-        name: 'AI Agents',
-        body: 'Agents in the org chart, each with a manager, a budget, a risk limit and a kill switch.',
-        sample: { primary: 'Accounting agent', secondary: '1,240,000 / ₫2,000,000', chips: [{ tone: 'neutral', label: 'R1' }] },
-      },
-      {
-        name: 'Social',
-        body: 'Schedule posts to Facebook, LinkedIn, X, YouTube and TikTok, with multi-step approval per channel and a media library.',
-        sample: { primary: 'Gạo ST25 vụ mới đã về', secondary: '19:30 18/10/2026', chips: [{ tone: 'warn', label: 'To approve' }] },
-      },
-      {
-        name: 'Members and security',
-        body: 'Roles, invites, two-factor authentication, sessions and an append-only audit log.',
-        sample: { primary: 'Chị Lan, chief accountant', secondary: 'Two-factor on', chips: [{ tone: 'ok', label: 'Approver' }] },
-      },
-    ],
+    },
+    agents: {
+      name: 'Agents',
+      body: 'Add an agent the way you add a position: pick its manager, its budget and its risk limit.',
+      budgetLabel: 'October budget',
+      running: 'Running',
+      roster: [
+        { name: 'Accounting agent', risk: 'R1', manager: 'Manager: Chị Lan', spent: '₫1,240,000 / ₫2,000,000', pct: 62 },
+        { name: 'Social agent', risk: 'R1', manager: 'Manager: Anh Minh', spent: '₫310,000 / ₫1,000,000', pct: 31 },
+      ],
+    },
+    tasks: {
+      name: 'Tasks',
+      body: 'One task list for people and agents, with due dates and an assignee.',
+      doneLabel: 'Done',
+      items: [
+        { title: 'Reconcile payables with Bao Bì Phú Thịnh', who: 'Accounting agent', initials: '', agent: true, due: '20/10/2026', done: false },
+        { title: 'Add the authority code to the HTX Tân Hồng voucher', who: 'Chị Lan', initials: 'L', agent: false, due: '21/10/2026', done: false },
+        { title: 'Photograph the ST25 rice for the post', who: 'Anh Minh', initials: 'M', agent: false, due: '18/10/2026', done: false },
+        { title: 'Export the September general journal', who: 'Accounting agent', initials: '', agent: true, due: '15/10/2026', done: true },
+      ],
+    },
+    social: {
+      name: 'Social',
+      body: 'Schedule posts for Facebook, LinkedIn, X, YouTube and TikTok. Each channel has its own approval steps, and photos and videos live in one shared library.',
+      people: [
+        { name: 'Anh Minh', initials: 'M', agent: false },
+        { name: 'Social agent', initials: '', agent: true },
+      ],
+      weekLabel: 'Posting calendar, 16/10 to 22/10/2026',
+      todayLabel: 'Today',
+      days: [
+        { label: 'Fri 16/10', today: false, post: { title: 'How our rice is milled', time: '09:00', channels: ['Facebook'], state: 'Posted', tone: 'ok', art: 'mill' } },
+        { label: 'Sat 17/10', today: false, post: null },
+        { label: 'Sun 18/10', today: true, post: { title: 'New-season ST25 rice is in', time: '19:30', channels: ['Facebook', 'TikTok'], state: 'Waiting for Anh Minh', tone: 'warn', art: 'rice' } },
+        { label: 'Mon 19/10', today: false, post: null },
+        { label: 'Tue 20/10', today: false, post: { title: 'We are hiring warehouse staff', time: '08:30', channels: ['LinkedIn'], state: 'Approved', tone: 'ok', art: 'warehouse' } },
+        { label: 'Wed 21/10', today: false, post: null },
+        { label: 'Thu 22/10', today: false, post: null },
+      ],
+    },
   },
   trust: {
     title: 'AI proposes, people approve, every change is recorded',

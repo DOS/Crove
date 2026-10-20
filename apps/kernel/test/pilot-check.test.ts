@@ -27,6 +27,12 @@ const READY: Env = {
   ALERT_WEBHOOK_URL: `https://alerts.example.com/hook/${fake('hook')}`,
   PROBER_HEARTBEAT_URL: `https://hc.example.com/ping/${fake('check')}`,
   COMPOSE_PROFILES: 'prober',
+  BACKUP_S3_ENDPOINT: 'https://backups.storage.example',
+  BACKUP_S3_BUCKET: 'crove-backups',
+  BACKUP_S3_ACCESS_KEY_ID: fake('backup-key'),
+  BACKUP_S3_SECRET_ACCESS_KEY: fake('backup-secret'),
+  BACKUP_ENCRYPTION_KEY: Buffer.alloc(32, 9).toString('base64'),
+  BACKUP_HEARTBEAT_URL: `https://hc.example.com/ping/${fake('backup-check')}`,
 };
 
 const failures = (results: readonly CheckResult[]) => results.filter((r) => r.status === 'fail');
@@ -56,6 +62,31 @@ describe('pilot-check settings', () => {
     const telegram = { ...READY, ALERT_WEBHOOK_URL: `https://api.telegram.org/bot${fake('token')}/sendMessage` };
     expect(failing(telegram)).toEqual([expect.stringContaining('ALERT_TELEGRAM_CHAT_ID')]);
     expect(failing({ ...telegram, ALERT_TELEGRAM_CHAT_ID: '-1001234567890' })).toEqual([]);
+  });
+
+  it('requires backups in a second location over https, apart from the files bucket (issues #307, #351)', () => {
+    expect(checkEnv(READY).find((r) => r.item === 'Backups' && r.status === 'pass')?.message).toBe(
+      'backups go to backups.storage.example, bucket crove-backups, sealed with BACKUP_ENCRYPTION_KEY',
+    );
+    expect(failing({ ...READY, BACKUP_S3_ENDPOINT: undefined })).toEqual([expect.stringContaining("BACKUP_S3_ENDPOINT is unset: the nightly backups stay on the server's own disk")]);
+    expect(failing({ ...READY, BACKUP_S3_ENDPOINT: 'http://backups.storage.example' })).toEqual([expect.stringContaining('travel in the clear')]);
+    expect(failing({ ...READY, BACKUP_S3_ENDPOINT: 'https://127.0.0.1:9000' })).toEqual([expect.stringContaining('not a second location')]);
+    expect(failing({ ...READY, BACKUP_S3_SECRET_ACCESS_KEY: undefined })).toEqual([expect.stringContaining('BACKUP_S3_SECRET_ACCESS_KEY is unset')]);
+    const sameBucket = { ...READY, STORAGE: 's3', S3_ENDPOINT: 'https://backups.storage.example', S3_BUCKET: 'crove-backups' };
+    expect(failing(sameBucket)).toEqual([expect.stringContaining('BACKUP_S3_BUCKET is the files bucket itself')]);
+    expect(failing({ ...READY, BACKUP_ENCRYPTION_KEY: 'change-me' })).toEqual([expect.stringContaining('BACKUP_ENCRYPTION_KEY is not 32 bytes')]);
+    expect(failing({ ...READY, BACKUP_ENCRYPTION_KEY: READY.EXPORT_ENCRYPTION_KEY })).toEqual([expect.stringContaining('give each its own key')]);
+    // The same 32 bytes written as hex are the same key.
+    expect(failing({ ...READY, BACKUP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('hex') })).toEqual([expect.stringContaining('give each its own key')]);
+    expect(failing({ ...READY, BACKUP_HEARTBEAT_URL: 'http://hc.example.com/ping/x' })).toEqual([expect.stringContaining('BACKUP_HEARTBEAT_URL is not https')]);
+    // Without a key or a heartbeat it passes, and asks the owner to accept or fix each.
+    const manual = checkEnv({ ...READY, BACKUP_ENCRYPTION_KEY: undefined, BACKUP_HEARTBEAT_URL: undefined }).filter((r) => r.item === 'Backups' && r.status !== 'pass');
+    expect(manual.map((r) => r.status)).toEqual(['manual', 'manual', 'manual']);
+    expect(manual.map((r) => r.message)).toEqual([
+      expect.stringContaining('BACKUP_ENCRYPTION_KEY is unset'),
+      expect.stringContaining('BACKUP_HEARTBEAT_URL is unset'),
+      expect.stringContaining('restore onto a scratch stack passed'),
+    ]);
   });
 
   it('asks to confirm the prober cron and the heartbeat when the settings do not show them', () => {
