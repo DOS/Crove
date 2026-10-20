@@ -6,8 +6,9 @@
 // a carousel container for several (images and videos mixed), a wait until
 // Meta has fetched and processed them (status_code FINISHED), then media_publish, the one visible step. A container
 // whose status_code is PUBLISHED went out already, so a check after a lost answer finds the post instead of posting
-// again. Meta fetches each image and video from a public URL: deployments whose storage hands out presigned URLs (S3) can post;
-// others get MEDIA_URL_UNAVAILABLE with nothing posted.
+// again. Meta fetches each image from a public URL: deployments whose storage hands out presigned URLs (S3) can post
+// images; others get MEDIA_URL_UNAVAILABLE with nothing posted. A Reel or a video Story goes up without one: its bytes
+// are uploaded to the container (upload_type=resumable, #772).
 import { createHash } from 'node:crypto';
 import type { CommentInput, CommentResult, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
 import { commentResult } from './comment.ts';
@@ -27,6 +28,8 @@ const WAIT_MS = 15_000;
 const POLL_MS = 2_000;
 // When the pipeline checks a pending post again.
 const CHECK_AFTER_SECONDS = 30;
+// How long the upload of one video's bytes may take (#772): a 100 MB file on a slow link.
+const UPLOAD_MS = 300_000;
 const NUMERIC_ID = /^\d{1,32}$/;
 
 interface InstagramSecret {
@@ -121,6 +124,8 @@ export function quotaExhausted(answer: { data?: { quota_usage?: unknown; config?
 export class InstagramPublisher implements Publisher {
   readonly provider = 'instagram' as const;
   readonly publishSafety: RetrySafety = 'reconcile_only';
+  // A video uploaded by Crove (#772) takes minutes; the job waits as long as for the other video adapters.
+  readonly callTimeoutMs = 420_000;
   private readonly graph: Graph;
   private readonly waitMs: number;
   private readonly pollMs: number;
@@ -161,28 +166,37 @@ export class InstagramPublisher implements Publisher {
       .catch(() => null);
     if (quotaExhausted(quota)) return { kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED', retryAt: new Date(Date.now() + QUOTA_RETRY_MS) };
     const first = await input.mediaUrl((media[0] as { fileId: string }).fileId).catch(() => null);
-    if (!first) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+    // Without a URL, a Reel or a video Story still goes: its bytes are uploaded to the container (#772). A cover image
+    // is fetched by URL, so it still needs one.
+    const uploaded = !first && reel && !(cover && !('atMs' in cover));
+    if (!first && !uploaded) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+    // Read before anything is created: a file that cannot be read posts nothing.
+    const bytes = uploaded ? await input.readMedia((media[0] as { fileId: string }).fileId).catch(() => null) : null;
+    if (uploaded && !bytes) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
+    const source = (video: boolean) => (uploaded ? { upload_type: 'resumable' } : video ? { video_url: first as string } : { image_url: first as string });
     const caption = story ? '' : captionOf(input.content);
     // Containers are invisible until published, so any failure while making them posted nothing.
     let container: string;
     try {
       if (story) {
         // A Story: Meta fetches the image or video from the URL; it takes no caption.
-        container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'STORIES', ...(reel ? { video_url: first } : { image_url: first }) });
+        container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'STORIES', ...source(reel) });
       } else if (media.length === 1) {
         // One video is a Reel, shown in the feed too; Meta fetches it from the URL and processes it before publishing.
         const coverForm = !cover ? {} : 'atMs' in cover ? { thumb_offset: String(cover.atMs) } : { cover_url: await urlOf(cover.fileId) };
-        const single = reel ? { media_type: 'REELS', video_url: first, share_to_feed: 'true', ...coverForm } : { image_url: first };
+        const single = reel ? { media_type: 'REELS', ...source(true), share_to_feed: 'true', ...coverForm } : source(false);
         container = await this.create(input.externalAccountId, s.accessToken, { ...single, caption });
       } else {
         // A carousel may mix images and videos.
         const children: string[] = [];
         for (const [i, m] of media.entries()) {
-          const url = i === 0 ? first : await urlOf(m.fileId);
+          const url = i === 0 ? (first as string) : await urlOf(m.fileId);
           children.push(await this.create(input.externalAccountId, s.accessToken, { ...(isVideo(m) ? { media_type: 'VIDEO', video_url: url } : { image_url: url }), is_carousel_item: 'true' }));
         }
         container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'CAROUSEL', children: children.join(','), caption });
       }
+      // The bytes, to the container just made; still invisible, so a failed upload posted nothing.
+      if (uploaded && bytes) await this.graph.uploadInstagram(container, s.accessToken, bytes, UPLOAD_MS);
     } catch (error) {
       if (error instanceof NoUrl) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
       const result = graphPublishResult(error);

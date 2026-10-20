@@ -59,6 +59,8 @@ export type IssueCode =
   // The first comment (#587): too long for the channel, or a channel that takes none yet.
   | 'COMMENT_TOO_LONG'
   | 'COMMENT_NOT_SUPPORTED'
+  // Files the channel fetches by URL, on a deployment that hands out none (#772); raised by the composer, which knows.
+  | 'MEDIA_NEEDS_PUBLIC_STORAGE'
   // Mastodon (#748): a visibility other than public or unlisted; a content warning over CONTENT_WARNING_MAX characters.
   | 'VISIBILITY_INVALID'
   | 'CONTENT_WARNING_TOO_LONG'

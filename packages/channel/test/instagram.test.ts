@@ -142,6 +142,38 @@ describe('InstagramPublisher', () => {
     expect(await publisher.status({ externalAccountId: IG, secret: SECRET, externalRef: ref('9101') })).toEqual({ kind: 'accepted', externalId: '18000000000000101', url: 'https://www.instagram.com/reel/xyz/' });
   });
 
+  it('uploads a Reel to its container when the deployment has no public file URLs, and still refuses images then (#772)', async () => {
+    const { fetchImpl: base, calls } = graph({
+      [`POST /${IG}/media`]: [{ body: { id: '9201' } }],
+      'POST /ig-api-upload/9201': [{ body: { success: true, message: 'Upload successful.' } }],
+      'GET /9201': [{ body: { status_code: 'FINISHED' } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000301' } }],
+      'GET /18000000000000301': [{ body: { permalink: 'https://www.instagram.com/reel/up/' } }],
+    });
+    const uploads: { host: string; headers: Headers; size: number }[] = [];
+    const fetchImpl: Fetch = async (url, init) => {
+      if (new URL(url).host === 'rupload.facebook.com') uploads.push({ host: new URL(url).host, headers: new Headers(init?.headers), size: init?.body instanceof Uint8Array ? init.body.byteLength : -1 });
+      return base(url, init);
+    };
+    const publisher = new InstagramPublisher(APP, fetchImpl, fast);
+    const noUrls = { mediaUrl: async () => null, readMedia: async () => new Uint8Array(2048) };
+    const content = { body: 'Khai trương!', title: null, linkUrl: null, media: [{ fileId: 'v-1', mime: 'video/mp4', sizeBytes: 2048, altText: null }] };
+    expect(await publisher.publish(input({ content, ...noUrls }))).toEqual({ kind: 'accepted', externalId: '18000000000000301', url: 'https://www.instagram.com/reel/up/' });
+    expect(calls[0]?.form).toEqual({ media_type: 'REELS', upload_type: 'resumable', share_to_feed: 'true', caption: 'Khai trương!' });
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]?.headers.get('authorization')).toBe('OAuth page-token-1');
+    expect(uploads[0]?.headers.get('file_size')).toBe('2048');
+    expect(uploads[0]?.size).toBe(2048);
+    expect(publisher.callTimeoutMs).toBeGreaterThanOrEqual(300_000);
+    // An image, or a Reel with a cover image, is still fetched by URL: refused before anything is created.
+    const none = graph({});
+    const strict = new InstagramPublisher(APP, none.fetchImpl, fast);
+    expect(await strict.publish(input({ ...noUrls }))).toMatchObject({ kind: 'rejected', code: 'MEDIA_URL_UNAVAILABLE' });
+    expect(await strict.publish(input({ content, ...noUrls, settings: { cover: { fileId: 'c-1' } } }))).toMatchObject({ kind: 'rejected', code: 'MEDIA_URL_UNAVAILABLE' });
+    // A file that cannot be read posts nothing either.
+    expect(await strict.publish(input({ content, mediaUrl: async () => null, readMedia: async () => Promise.reject(new Error('gone')) }))).toMatchObject({ kind: 'rejected', code: 'MEDIA_UNREADABLE' });
+    expect(none.calls).toEqual([]);
+  });
   it('posts a Story of one image or video with no caption, and never guesses which Story a container became (#644)', async () => {
     const { fetchImpl, calls } = graph({
       [`POST /${IG}/media`]: [{ body: { id: '9201' } }, { body: { id: '9202' } }],

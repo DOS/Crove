@@ -104,6 +104,21 @@ export class Graph {
     return json as T;
   }
 
+  // The bytes of an Instagram video container made with upload_type=resumable (#772), to Meta's upload host, in one
+  // request: how a deployment without public file URLs posts a Reel or a video Story. The address is built from the
+  // container id Meta answered, never taken from the answer.
+  async uploadInstagram(containerId: string, token: string, bytes: Uint8Array, timeoutMs: number): Promise<void> {
+    if (!/^\d{1,32}$/.test(containerId)) throw new GraphError(400, { message: 'bad container id' });
+    const response = await this.fetch(`https://${META_RUPLOAD_HOST}/ig-api-upload/${this.version}/${containerId}`, {
+      method: 'POST',
+      headers: { authorization: `OAuth ${token}`, offset: '0', file_size: String(bytes.byteLength), 'content-type': 'application/octet-stream' },
+      body: new Uint8Array(bytes),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const json = (await response.json().catch(() => null)) as { success?: unknown; error?: GraphErrorBody } | null;
+    if (!response.ok || !json || json.error || json.success !== true) throw new GraphError(response.status, json?.error);
+  }
+
   // The bytes of a video started with upload_phase=start (#644), to Meta's upload host, in one request. The address is
   // built from the video id Meta answered, never taken from the answer.
   async upload(videoId: string, token: string, bytes: Uint8Array, timeoutMs: number): Promise<void> {

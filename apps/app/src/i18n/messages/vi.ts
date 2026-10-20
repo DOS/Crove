@@ -2001,6 +2001,7 @@ export const vi = {
       AUTO_REPLY_NOT_SUPPORTED: 'Kênh này chưa tự trả lời theo lượt thích được',
       AUTO_REPLY_TOO_LONG: 'Câu tự trả lời dài {actual, number}, kênh này cho tối đa {limit, number}',
       COMMENT_NOT_SUPPORTED: 'Crove chưa đăng được bình luận đầu tiên lên kênh này',
+      MEDIA_NEEDS_PUBLIC_STORAGE: 'Kênh này tải ảnh hoặc video qua đường link công khai, mà máy chủ này lưu tệp trên đĩa nên không có; hãy dùng S3 (S3_PRESIGNED_URLS) hoặc đăng một video duy nhất',
       COVER_INVALID: 'Ảnh bìa không hợp lệ; hãy chọn lại một khoảnh khắc trong video hoặc một ảnh',
       COVER_NEEDS_VIDEO: 'Chỉ đặt được ảnh bìa khi kênh này đăng đúng một video',
       COVER_NOT_SUPPORTED: 'Kênh này không nhận loại ảnh bìa này; TikTok chỉ lấy một khoảnh khắc trong video, YouTube chỉ nhận ảnh tải lên',
