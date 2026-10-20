@@ -29,6 +29,7 @@ import {
   zSocialQueue,
   zSocialMetricsRow,
   zSocialChannelInsights,
+  zSocialFeed,
   zSocialIdea,
   zSocialIdeaCreate,
   zSocialIdeaUpdate,
@@ -317,6 +318,13 @@ export const contract = {
       create: oc.input(zSocialIdeaCreate).output(z.object({ ideaId: zId })),
       update: oc.input(zSocialIdeaUpdate).output(z.object({ ideaId: zId })),
       move: oc.input(z.strictObject({ ideaId: zId, stage: z.enum(['new', 'planned', 'archived']) })).output(z.object({ ideaId: zId, stage: z.string() })),
+    },
+    // Blog feeds that become drafts (#708): owners and admins add, change, pause and remove them; everyone reads them.
+    feeds: {
+      list: oc.input(z.object({})).output(z.array(zSocialFeed)),
+      add: oc.input(z.strictObject({ url: z.url({ protocol: /^https?$/ }).max(2000), connectionIds: z.array(zId).min(1).max(20) })).output(z.object({ feedId: zId })),
+      update: oc.input(z.strictObject({ feedId: zId, connectionIds: z.array(zId).min(1).max(20).optional(), paused: z.boolean().optional() })).output(z.object({ feedId: zId })),
+      remove: oc.input(z.strictObject({ feedId: zId })).output(z.object({ feedId: zId })),
     },
     // Saved snippets (#584): members create them and change their own; owners and admins any.
     snippets: {

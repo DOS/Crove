@@ -43,6 +43,8 @@ function useLine() {
         return t(`text.${n.kind}`, { provider });
       case 'channel_expired':
         return t('text.channel_expired', { channel: n.channel ?? provider });
+      case 'feed_paused':
+        return t('text.feed_paused', { feed: n.detail.feed ?? '' });
       case 'review_reminder':
         return t(n.detail.stage === 'due' ? 'text.reminder_due' : 'text.reminder_waiting');
       default:
@@ -95,6 +97,7 @@ export function SocialNotificationsPage() {
     const target = notificationTarget(n);
     if (target?.to === 'post') void navigate({ to: '/o/$slug/social/$id', params: { slug, id: target.postId } });
     else if (target?.to === 'channels') void navigate({ to: '/o/$slug/social/channels', params: { slug } });
+    else if (target?.to === 'feeds') void navigate({ to: '/o/$slug/social/feeds', params: { slug } });
   };
   const items = list.data?.items ?? [];
   return (

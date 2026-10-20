@@ -6,9 +6,11 @@ export type NotificationKind = (typeof SOCIAL_NOTIFICATION_KINDS)[number];
 export const NOTIFICATION_KINDS: readonly NotificationKind[] = SOCIAL_NOTIFICATION_KINDS;
 
 // What an item opens: its post, or the channels page for a channel that needs connecting again.
-export function notificationTarget(item: { kind: NotificationKind; postId: string | null }): { to: 'post'; postId: string } | { to: 'channels' } | null {
+export function notificationTarget(item: { kind: NotificationKind; postId: string | null }): { to: 'post'; postId: string } | { to: 'channels' } | { to: 'feeds' } | null {
   if (item.postId) return { to: 'post', postId: item.postId };
   if (item.kind === 'channel_expired') return { to: 'channels' };
+  // A feed that stopped being read (#708).
+  if (item.kind === 'feed_paused') return { to: 'feeds' };
   return null;
 }
 

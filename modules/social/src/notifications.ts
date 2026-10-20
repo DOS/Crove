@@ -33,6 +33,7 @@ export const NOTIFYING_EVENTS = [
   'social.review.answered',
   'social.post.assigned',
   'social.review.reminder',
+  'social.feed.paused',
 ] as const;
 
 function requireUser(ctx: Pick<CommandContext, 'actor'>): string {
@@ -144,6 +145,13 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
       // Gone since (deleted): nothing to open.
       if (!(await authorOf(ctx, e.data.post_id))) return null;
       return { ...base, kind: 'assigned', users: [e.data.assignee_user_id], postId: e.data.post_id };
+    }
+    case 'social.feed.paused': {
+      const e = z.object({ feed_id: zId }).safeParse(payload);
+      if (!e.success) return null;
+      const feed = await ctx.trx.selectFrom('crove_social.feed').select(['url', 'title']).where('org_id', '=', ctx.orgId).where('id', '=', e.data.feed_id).executeTakeFirst();
+      if (!feed) return null;
+      return { ...base, kind: 'feed_paused', users: await deciders(ctx), postId: null, detail: { feed: (feed.title ?? feed.url).slice(0, 300) } };
     }
     case 'social.review.reminder': {
       const e = z.object({ post_id: zId, stage: z.enum(['waiting', 'due']), variant_ids: z.array(zId).min(1).max(100) }).safeParse(payload);

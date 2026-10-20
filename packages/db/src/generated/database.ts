@@ -62,6 +62,8 @@ export interface CroveKernelSchema {
 export interface CroveSocialSchema {
   'crove_social.account_snapshot': SocialAccountSnapshotTable;
   'crove_social.channel_policy': SocialChannelPolicyTable;
+  'crove_social.feed': SocialFeedTable;
+  'crove_social.feed_item': SocialFeedItemTable;
   'crove_social.idea': SocialIdeaTable;
   'crove_social.idea_label': SocialIdeaLabelTable;
   'crove_social.label': SocialLabelTable;
@@ -747,6 +749,33 @@ export interface SocialChannelPolicyTable {
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
   review_reminders: Generated<boolean>;
   short_links: Generated<boolean>;
+}
+
+/** crove_social.feed_item */
+export interface SocialFeedItemTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  feed_id: ColumnType<string, string, NotGranted>;
+  item_key: ColumnType<string, string, NotGranted>;
+  title: ColumnType<string | null, string | null, NotGranted>;
+  post_id: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.feed */
+export interface SocialFeedTable {
+  org_id: string;
+  id: Generated<string>;
+  url: string;
+  title: string | null;
+  connection_ids: Generated<string[]>;
+  paused: Generated<boolean>;
+  failures: Generated<number>;
+  last_checked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  last_error: string | null;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_social.idea_label */
