@@ -1079,6 +1079,46 @@ export const zSocialReportLinkCreate = z.strictObject({
   days: z.number().int().min(1).max(90).optional(),
 });
 
+// A schedule that mails the client report (#704), with its latest sends and each mail's delivery status.
+export const zSocialReportSchedule = z.object({
+  id: zId,
+  name: z.string(),
+  cadence: z.enum(['weekly', 'monthly']),
+  weekday: z.number().int().nullable(),
+  monthDay: z.number().int().nullable(),
+  sendHour: z.number().int(),
+  timeZone: z.string(),
+  period: z.enum(['previous_week', 'previous_month', 'last_7_days', 'last_30_days']),
+  connectionIds: z.array(zId),
+  recipients: z.array(z.string()),
+  paused: z.boolean(),
+  nextRunAt: z.string(),
+  lastRunAt: z.string().nullable(),
+  runs: z.array(
+    z.object({
+      id: zId,
+      kind: z.enum(['scheduled', 'test']),
+      periodStart: z.string(),
+      periodEnd: z.string(),
+      createdAt: z.string(),
+      mails: z.array(z.object({ to: z.string().nullable(), status: z.string(), errorCode: z.string().nullable() })),
+    }),
+  ),
+});
+export const zSocialReportScheduleSave = z.strictObject({
+  scheduleId: zId.optional(),
+  name: z.string().trim().min(1).max(120),
+  cadence: z.enum(['weekly', 'monthly']),
+  weekday: z.number().int().min(1).max(7).nullable().optional(),
+  monthDay: z.number().int().min(1).max(28).nullable().optional(),
+  sendHour: z.number().int().min(0).max(23),
+  timeZone: z.string().min(1).max(64),
+  period: z.enum(['previous_week', 'previous_month', 'last_7_days', 'last_30_days']),
+  connectionIds: z.array(zId).max(50),
+  recipients: z.array(z.email().max(320)).min(1).max(10),
+  paused: z.boolean().optional(),
+});
+
 // A link's preview card (#641): pending until the worker read the page; failed with why.
 export const zSocialLinkPreview = z.object({
   url: z.string(),

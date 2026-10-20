@@ -36,7 +36,7 @@ import {
 } from '@crove/channel';
 import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
-import { buildKernelCommands, kernelQueries } from '@crove/kernel';
+import { buildKernelCommands, kernelQueries, setMessageIdDomain } from '@crove/kernel';
 import {
   LocalDiskStore,
   Runtime,
@@ -133,6 +133,8 @@ export interface ModuleDefinitions {
 // absentModules buildRuntime passes), and the
 // routes and jobs that ask Runtime.installed() are not registered either.
 export function moduleDefinitions(config: Config): ModuleDefinitions {
+  // Mail a module queues (the scheduled report, #704) gets the deployment's Message-ID domain too.
+  setMessageIdDomain(messageIdDomain(config));
   const all: Record<ModuleId, () => ModuleDefinitions> = {
     kernel: () => ({
       commands: buildKernelCommands({

@@ -29,6 +29,12 @@ export type MailScope = 'all' | 'marketing';
 // The right-hand side of the Message-ID when the deployment names none: a reserved name (RFC 2606) no mail system
 // resolves, for tests and mail that is only logged.
 export const DEFAULT_MESSAGE_ID_DOMAIN = 'crove.invalid';
+// The deployment's own domain for the Message-ID (the SMTP_FROM domain, else the PUBLIC_URL host), set once at boot so
+// mail a module queues without naming one (the scheduled report, #704) is not sent with the reserved name.
+let deploymentMessageIdDomain: string | undefined;
+export function setMessageIdDomain(domain: string | undefined): void {
+  deploymentMessageIdDomain = domain;
+}
 // How long the request that sent a mail may record its outcome.
 export const DIRECT_RECORD_WINDOW_MS = 10 * 60 * 1000;
 
@@ -106,7 +112,7 @@ export async function createMailMessage(ctx: CommandContext, mail: MailToSend): 
   const to = mail.to.trim().toLowerCase();
   const hash = await mailAddressHash(ctx, to);
   const status = (await isSuppressed(ctx, hash, mail.stream, ctx.now)) ? 'suppressed' : mail.status;
-  const messageIdHeader = `<${randomUUID()}@${mail.messageIdDomain ?? DEFAULT_MESSAGE_ID_DOMAIN}>`;
+  const messageIdHeader = `<${randomUUID()}@${mail.messageIdDomain ?? deploymentMessageIdDomain ?? DEFAULT_MESSAGE_ID_DOMAIN}>`;
   const row = await ctx.trx
     .insertInto('crove_kernel.mail_message')
     .values({

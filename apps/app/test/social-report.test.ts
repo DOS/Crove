@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lastMonth, reportPeriod, reportUrl } from '../src/lib/social-report.ts';
+import { lastMonth, parseRecipients, reportPeriod, reportUrl } from '../src/lib/social-report.ts';
 
 describe('client report links (#643)', () => {
   it('suggests the previous calendar month, across a year end', () => {
@@ -26,5 +26,12 @@ describe('client report links (#643)', () => {
 
   it('keeps the token after the #', () => {
     expect(reportUrl('https://app.crove.test', 'a'.repeat(43))).toBe(`https://app.crove.test/-/report#${'a'.repeat(43)}`);
+  });
+});
+
+describe('report schedule recipients (#704)', () => {
+  it('splits on commas, semicolons and new lines, lower-cases, drops duplicates and names the invalid ones', () => {
+    expect(parseRecipients(' Khach@Example.vn, sep@example.vn;\nkhach@example.vn  sai-dia-chi ')).toEqual({ valid: ['khach@example.vn', 'sep@example.vn'], invalid: ['sai-dia-chi'] });
+    expect(parseRecipients('')).toEqual({ valid: [], invalid: [] });
   });
 });

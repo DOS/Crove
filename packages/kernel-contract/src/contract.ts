@@ -38,6 +38,8 @@ import {
   zSocialLibraryItem,
   zSocialLibraryUse,
   zSocialReportLink,
+  zSocialReportSchedule,
+  zSocialReportScheduleSave,
   zSocialReportLinkCreate,
   zSocialLinkPreview,
   zSocialNotificationKind,
@@ -345,6 +347,13 @@ export const contract = {
       list: oc.input(z.object({})).output(z.array(zSocialReportLink)),
       create: oc.input(zSocialReportLinkCreate).output(z.object({ linkId: zId, token: z.string(), expiresAt: z.string() })),
       revoke: oc.input(z.strictObject({ linkId: zId })).output(z.object({ linkId: zId })),
+    },
+    // Scheduled client report mail (#704): owners and admins set, pause, test and remove schedules.
+    reportSchedules: {
+      list: oc.input(z.object({})).output(z.array(zSocialReportSchedule)),
+      save: oc.input(zSocialReportScheduleSave).output(z.object({ scheduleId: zId, nextRunAt: z.string() })),
+      remove: oc.input(z.strictObject({ scheduleId: zId })).output(z.object({ scheduleId: zId })),
+      test: oc.input(z.strictObject({ scheduleId: zId })).output(z.object({ runId: zId, mails: z.number().int(), suppressed: z.number().int() })),
     },
     // Link preview cards (#641): what a link's page says, read by the worker; shown in Crove only.
     linkPreviews: {
