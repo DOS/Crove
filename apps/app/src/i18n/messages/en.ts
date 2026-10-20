@@ -1455,6 +1455,8 @@ export const en = {
     channelStatus: { active: 'Active', expired: 'Expired', error: 'Error', revoked: 'Disconnected' },
     connectedAt: 'Connected {when}',
     reconnectHint: 'This channel needs reconnecting; posts scheduled for it are paused, not lost.',
+    pausedPosts: '{count, plural, one {# post waits for this channel to be reconnected.} other {# posts wait for this channel to be reconnected.}}',
+    seePosts: 'See posts',
     disconnect: 'Disconnect',
     confirmDisconnect: 'Disconnect',
     keep: 'Keep',

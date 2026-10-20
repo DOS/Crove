@@ -236,6 +236,10 @@ export const contract = {
         .input(z.strictObject({ connectionId: zId, approvalsRequired: z.number().int().min(1).max(3) }))
         .output(z.object({ connectionId: zId, approvalsRequired: z.number().int(), approved: z.array(zId) })),
     },
+    // Variants waiting paused on each channel (expired or disconnected), for the channels screen.
+    channels: {
+      waiting: oc.input(z.object({})).output(z.array(z.object({ connectionId: zId, paused: z.number().int() }))),
+    },
     queues: {
       get: oc.input(z.object({ connectionId: zId })).output(zSocialQueue),
       set: oc.input(zSocialQueueSet).output(z.object({ queueId: zId, moved: z.array(z.object({ variantId: zId, at: z.string().nullable() })) })),
