@@ -944,7 +944,8 @@ export const postList = defineQuery({
     status: z.enum(['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled']).optional(),
     // The Social home's lists (#574): posts with a channel in review; drafts with none in review; posts that went out
     // or stopped.
-    stage: z.enum(['review', 'drafts', 'done']).optional(),
+    // attention: a channel failed, needs a person, or waits paused on its channel (#579).
+    stage: z.enum(['review', 'drafts', 'done', 'attention']).optional(),
     // Posts with a live channel on this connection.
     connectionId: zId.optional(),
     // In the post's or a channel's own text or title; wildcards are matched as themselves.
@@ -965,6 +966,9 @@ export const postList = defineQuery({
     if (input.stage === 'review') q = q.where(input.connectionId ? sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status = 'in_review' AND v.channel_connection_id = ${input.connectionId}::uuid)` : variantWhere('in_review'));
     if (input.stage === 'drafts') q = q.where('p.status', '=', 'draft').where(sql<boolean>`NOT ${variantWhere('in_review')}`);
     if (input.stage === 'done') q = q.where('p.status', 'in', ['published', 'partially_published', 'failed', 'publishing', 'cancelled']);
+    if (input.stage === 'attention') {
+      q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status IN ('failed', 'needs_attention', 'paused'))`);
+    }
     if (input.connectionId) q = q.where(variantWhere(null));
     if (input.search) {
       const term = likeTerm(input.search);

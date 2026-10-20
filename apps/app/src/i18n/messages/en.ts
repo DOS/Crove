@@ -1343,7 +1343,7 @@ export const en = {
     noChannelsTitle: 'No channel connected yet',
     noChannelsHint: 'Connect a page or account to start posting.',
     connectFirst: 'Connect a channel',
-    tabs: { upcoming: 'Schedule', review: 'To review', drafts: 'Drafts', done: 'Published', metrics: 'Metrics', library: 'Image library' },
+    tabs: { upcoming: 'Schedule', review: 'To review', attention: 'Needs attention', drafts: 'Drafts', done: 'Published', metrics: 'Metrics', library: 'Image library' },
     filters: {
       channel: 'Channel',
       allChannels: 'All channels',
@@ -1355,7 +1355,7 @@ export const en = {
       loadMore: 'Load more',
       noMatch: 'No posts match these filters',
     },
-    empty: { review: 'Nothing waits for review', drafts: 'No drafts yet', done: 'Nothing published yet', metrics: 'Nothing published in this period' },
+    empty: { review: 'Nothing waits for review', attention: 'Nothing failed or needs you', drafts: 'No drafts yet', done: 'Nothing published yet', metrics: 'Nothing published in this period' },
     metricsDays: '{days} days',
     metricsHint: 'Crove asks the platforms for the metrics of published posts every 6 hours, for 30 days after they go out.',
     metricsPost: 'Post',

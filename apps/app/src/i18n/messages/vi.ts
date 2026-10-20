@@ -1344,7 +1344,7 @@ export const vi = {
     noChannelsTitle: 'Chưa kết nối kênh nào',
     noChannelsHint: 'Kết nối một trang hoặc tài khoản để bắt đầu đăng bài.',
     connectFirst: 'Kết nối kênh',
-    tabs: { upcoming: 'Lịch đăng', review: 'Cần duyệt', drafts: 'Nháp', done: 'Đã đăng', metrics: 'Số liệu', library: 'Thư viện ảnh' },
+    tabs: { upcoming: 'Lịch đăng', review: 'Cần duyệt', attention: 'Cần xử lý', drafts: 'Nháp', done: 'Đã đăng', metrics: 'Số liệu', library: 'Thư viện ảnh' },
     filters: {
       channel: 'Kênh',
       allChannels: 'Tất cả kênh',
@@ -1356,7 +1356,7 @@ export const vi = {
       loadMore: 'Xem thêm',
       noMatch: 'Không có bài nào khớp với bộ lọc',
     },
-    empty: { review: 'Không có bài nào chờ duyệt', drafts: 'Chưa có bản nháp', done: 'Chưa có bài nào được đăng', metrics: 'Chưa có bài nào đăng trong khoảng này' },
+    empty: { review: 'Không có bài nào chờ duyệt', attention: 'Không có bài nào lỗi hay cần bạn xem', drafts: 'Chưa có bản nháp', done: 'Chưa có bài nào được đăng', metrics: 'Chưa có bài nào đăng trong khoảng này' },
     metricsDays: '{days} ngày',
     metricsHint: 'Crove hỏi nền tảng số liệu của bài đã đăng mỗi 6 giờ, trong 30 ngày sau khi đăng.',
     metricsPost: 'Bài',
