@@ -17,6 +17,7 @@ import {
   POST_STATUSES,
   postStatus,
   PROVIDERS,
+  VIDEO_READY,
   publishCallKey,
   publishJobKey,
   startsNewAttempt,
@@ -307,10 +308,12 @@ describe('validateVariant', () => {
     expect(tg(Array.from({ length: 11 }, () => jpeg()), 10)).toEqual(['TOO_MANY_MEDIA']);
   });
 
-  it('says when a channel takes video but its Crove adapter does not post it yet', () => {
+  it('posts video on every channel that takes it', () => {
     expect(validateVariant({ provider: 'facebook_page', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);
     expect(validateVariant({ provider: 'linkedin', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);
-    expect(validateVariant({ provider: 'pinterest', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual(['VIDEO_NOT_SUPPORTED_YET']);
+    expect(validateVariant({ provider: 'pinterest', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);
+    // VIDEO_NOT_SUPPORTED_YET stays for a platform added before its adapter learns video; none is left today.
+    for (const p of PROVIDERS) if (CAPABILITIES[p].media.kinds.includes('video')) expect(VIDEO_READY.has(p), p).toBe(true);
     expect(validateVariant({ provider: 'sandbox', body: '', title: null, media: [mp4()] })).toEqual([]);
   });
 
