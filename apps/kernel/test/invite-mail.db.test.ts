@@ -45,6 +45,8 @@ suite('invite mail on PostgreSQL', () => {
   let printed: string[] = [];
 
   const sent: OutboundMail[] = [];
+  // Ids the capturing provider gave, across tests: a provider id belongs to one mail (#539).
+  let captured = 0;
   // A provider that takes every mail and names it as an HTTP provider would (#539).
   const capturing: MailProvider = {
     name: 'capture',
@@ -52,7 +54,8 @@ suite('invite mail on PostgreSQL', () => {
     sendRetrySafety: 'never',
     async send(mail) {
       sent.push(mail);
-      return { status: 'accepted', providerMessageId: `capture-${sent.length}` };
+      captured += 1;
+      return { status: 'accepted', providerMessageId: `capture-${captured}` };
     },
   };
   function appWith(mailer?: MailProvider, overrides: Partial<Config> = {}) {
@@ -239,7 +242,7 @@ suite('invite mail on PostgreSQL', () => {
       created_by: owner.userId,
       attempts: 1,
       provider: 'capture',
-      provider_message_id: 'capture-1',
+      provider_message_id: `capture-${captured}`,
     });
     expect(mail?.messageId).toMatch(/^<[0-9a-f-]{36}@crove\.invalid>$/);
 

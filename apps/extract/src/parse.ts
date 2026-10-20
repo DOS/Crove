@@ -4,6 +4,7 @@
 import PostalMime from 'postal-mime';
 import type { Address } from 'postal-mime';
 import { EXTRACT_LIMITS, zExtractSuccess, type ExtractFailure, type ExtractKind, type ExtractResponse, type ExtractSuccess } from '@crove/extract-contract';
+import { DsnError, readDsn } from './dsn.ts';
 import { EInvoiceParseError, parseEInvoiceXml } from './einvoice-xml.ts';
 import { PortalListError, readPortalList } from './portal-list.ts';
 import { ArchiveError, readZip } from './zip.ts';
@@ -66,6 +67,12 @@ async function mime(bytes: Uint8Array): Promise<ExtractSuccess> {
   };
 }
 
+// A bounce report (#539): the same MIME reader, then the delivery-status part.
+async function dsn(bytes: Uint8Array): Promise<ExtractSuccess> {
+  const email = await PostalMime.parse(bytes, { attachmentEncoding: 'base64', maxNestingDepth: 32, maxHeadersSize: 1 * MiB, maxPartCount: 1000 });
+  return { ok: true, kind: 'dsn', report: readDsn(email) };
+}
+
 async function parseKind(kind: ExtractKind, bytes: Uint8Array): Promise<ExtractSuccess> {
   switch (kind) {
     case 'einvoice_xml':
@@ -81,6 +88,8 @@ async function parseKind(kind: ExtractKind, bytes: Uint8Array): Promise<ExtractS
     case 'portal_invoice_list':
       // The tax portal's purchase list (#465): the first sheet of an .xlsx, read into checked rows.
       return { ok: true, kind, list: readPortalList(bytes) };
+    case 'dsn':
+      return dsn(bytes);
   }
 }
 
@@ -90,6 +99,7 @@ const UNREADABLE: Record<ExtractKind, string> = {
   mime: 'Không đọc được thư điện tử',
   zip: 'Không mở được tệp ZIP',
   portal_invoice_list: 'Không đọc được danh sách hóa đơn từ cổng thuế',
+  dsn: 'Không đọc được báo cáo trạng thái gửi thư',
 };
 
 export async function parse(kind: ExtractKind, bytes: Uint8Array): Promise<ExtractResponse> {
@@ -98,7 +108,7 @@ export async function parse(kind: ExtractKind, bytes: Uint8Array): Promise<Extra
     result = await parseKind(kind, bytes);
   } catch (error) {
     // The e-invoice parser and the ZIP reader explain what is wrong; other parser errors are not passed on.
-    if (error instanceof EInvoiceParseError || error instanceof ArchiveError || error instanceof PortalListError) return failure('invalid', error.message);
+    if (error instanceof EInvoiceParseError || error instanceof ArchiveError || error instanceof PortalListError || error instanceof DsnError) return failure('invalid', error.message);
     // A stack overflow (deeply nested input) or an impossible allocation: the input is beyond what we read.
     if (error instanceof RangeError) return failure('invalid', `${UNREADABLE[kind]}: tệp vượt giới hạn xử lý`);
     return failure('invalid', UNREADABLE[kind]);

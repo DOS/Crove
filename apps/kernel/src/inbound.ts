@@ -32,6 +32,15 @@ function tokenOf(address: string, domain: string): string | null {
   return TOKEN.test(token) ? token : null;
 }
 
+// The bounce token of bounce+<token>@domain (#539: the Return-Path of a mail Crove sent over SMTP), or null.
+const BOUNCE = /^bounce\+([0-9a-f]{48})$/;
+export function bounceTokenOf(address: string, domain: string): string | null {
+  const suffix = `@${domain.toLowerCase()}`;
+  const normalized = address.toLowerCase().trim();
+  if (!normalized.endsWith(suffix)) return null;
+  return BOUNCE.exec(normalized.slice(0, -suffix.length))?.[1] ?? null;
+}
+
 const unknownRecipient = () => new DomainError('UNKNOWN_RECIPIENT', 404, 'Địa chỉ nhận không hợp lệ');
 
 export interface InboundAcceptDeps {
@@ -55,7 +64,7 @@ export async function acceptInboundEmail(
   const recipient = envelopeRecipient?.trim().toLowerCase() || null;
   if (recipient !== null) {
     const onDomain = recipient.endsWith(`@${deps.domain.toLowerCase()}`);
-    if (recipient.length > MAX_ADDRESS_LENGTH || (onDomain && !tokenOf(recipient, deps.domain))) throw unknownRecipient();
+    if (recipient.length > MAX_ADDRESS_LENGTH || (onDomain && !tokenOf(recipient, deps.domain) && !bounceTokenOf(recipient, deps.domain))) throw unknownRecipient();
   }
   const sha256 = sha256Hex(raw);
   const blobId = newInboundBlobId();
@@ -112,6 +121,9 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
   if (raw.byteLength !== job.sizeBytes || sha256Hex(raw) !== rawSha256) {
     throw new DomainError('INBOUND_BLOB_MISMATCH', 422, 'Thư lưu không khớp với hàng đợi');
   }
+  // A bounce report to a mail's Return-Path (#539): read as a DSN, never filed as an inbound message.
+  const bounceToken = job.recipient ? bounceTokenOf(job.recipient, domain) : null;
+  if (bounceToken) return processBounceReport(deps, raw, rawSha256, bounceToken, attempt);
   // A message the sandbox finds invalid or too large is dropped like any message no org can receive. A timeout or
   // memory limit can also come from load on the sandbox, so it is retried, but only EXTRACT_LIMIT_RETRIES times:
   // a hostile message must not hold the single parser slot, which every tenant shares, again and again. After
@@ -174,4 +186,61 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
     },
     { actor: { type: 'system', component: 'inbound.email' }, orgId },
   );
+}
+
+// What a recipient's report does (#539): a permanent failure (status 5.x.x) is a hard bounce; a temporary one, or a
+// failure without a status, a soft bounce; a delay is deferred; a delivery report says delivered. "relayed" and
+// "expanded" say nothing about the mailbox (RFC 3464 §2.3.3), so they record nothing.
+const OUTCOMES: ReadonlySet<string> = new Set(['failed', 'delayed', 'delivered']);
+function bounceKind(recipient: { action: string; status: string | null }): 'bounce_hard' | 'bounce_soft' | 'deferred' | 'delivered' {
+  if (recipient.action === 'failed') return recipient.status?.startsWith('5.') ? 'bounce_hard' : 'bounce_soft';
+  if (recipient.action === 'delayed') return 'deferred';
+  return 'delivered';
+}
+
+export interface BounceResult {
+  duplicate: boolean;
+  fileIds: string[];
+  bounce: 'bounce_hard' | 'bounce_soft' | 'deferred' | 'delivered';
+}
+
+// A DSN for one of Crove's SMTP mails (#539): parsed in the sandbox, matched to its mail by the token of the address
+// it came to (a made-up or altered token finds nothing), and recorded as that mail's delivery event in the mail's org.
+// A report that is not a DSN, names no mail of Crove, or quotes another Message-ID is dropped.
+async function processBounceReport(deps: InboundProcessDeps, raw: Uint8Array, rawSha256: string, token: string, attempt: number): Promise<BounceResult> {
+  const parsed = await deps.extract.extract('dsn', raw);
+  if (!parsed.ok) {
+    const limitHit = parsed.code === 'timeout' || parsed.code === 'memory';
+    if (limitHit && attempt < EXTRACT_LIMIT_RETRIES) throw new Error(`crove-extract stopped at a limit: ${parsed.code}`);
+    throw new DomainError('UNREADABLE_BOUNCE', 422, 'Không đọc được báo cáo trạng thái gửi thư');
+  }
+  const mail = await deps.runtime.orgless(async (db) => {
+    const { rows } = await sql<{ org_id: string; message_id: string; message_id_header: string }>`
+      SELECT org_id, message_id, message_id_header FROM crove_kernel.mail_message_by_bounce_token(${token})`.execute(db);
+    return rows[0] ?? null;
+  });
+  if (!mail) throw new DomainError('UNKNOWN_BOUNCE', 404, 'Báo cáo trạng thái gửi không ứng với thư nào');
+  const report = parsed.report;
+  // Compared without case: a relay may change the case of the domain, and the token already names exactly one mail.
+  if (report.originalMessageId !== null && report.originalMessageId.toLowerCase() !== mail.message_id_header.toLowerCase()) {
+    throw new DomainError('BOUNCE_MISMATCH', 422, 'Báo cáo trạng thái gửi nói về một thư khác');
+  }
+  // The mail had one recipient, so the report's first outcome is about it.
+  const recipient = report.recipients.find((r) => OUTCOMES.has(r.action));
+  if (!recipient) throw new DomainError('UNREADABLE_BOUNCE', 422, 'Không đọc được báo cáo trạng thái gửi thư');
+  const kind = bounceKind(recipient);
+  await deps.runtime.execute(
+    'kernel.mail.event.record',
+    {
+      messageId: mail.message_id,
+      provider: 'smtp',
+      // The report itself: a redelivered report is the same event.
+      providerEventId: `dsn:${rawSha256}`,
+      kind,
+      occurredAt: new Date().toISOString(),
+      detail: recipient.status ? { status: recipient.status } : {},
+    },
+    { actor: { type: 'system', component: 'inbound.bounce' }, orgId: mail.org_id },
+  );
+  return { duplicate: false, fileIds: [], bounce: kind };
 }

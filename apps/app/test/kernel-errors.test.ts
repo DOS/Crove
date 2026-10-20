@@ -38,6 +38,10 @@ const NOT_SHOWN: Record<string, string> = {
   UNKNOWN_RECIPIENT: 'inbound mail',
   UNREADABLE_MESSAGE: 'inbound mail',
   INBOUND_BLOB_MISMATCH: 'inbound mail',
+  // Bounce reports to a mail's Return-Path (#539), dropped by the worker.
+  UNREADABLE_BOUNCE: 'inbound mail',
+  UNKNOWN_BOUNCE: 'inbound mail',
+  BOUNCE_MISMATCH: 'inbound mail',
   // The invalidation stream (issue #69): the stream client (lib/stream.ts) handles these silently, backs off and
   // keeps polling; nothing is shown to the user. METHOD_NOT_ALLOWED answers a HEAD on /api/stream, never sent by the SPA.
   STREAM_BUSY: 'stream',

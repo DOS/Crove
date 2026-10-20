@@ -44,6 +44,7 @@ export interface CroveKernelSchema {
   'crove_kernel.idempotency_key': KernelIdempotencyKeyTable;
   'crove_kernel.inbound_message': KernelInboundMessageTable;
   'crove_kernel.kill_switch': KernelKillSwitchTable;
+  'crove_kernel.mail_event': KernelMailEventTable;
   'crove_kernel.mail_message': KernelMailMessageTable;
   'crove_kernel.mail_suppression': KernelMailSuppressionTable;
   'crove_kernel.member_invite': KernelMemberInviteTable;
@@ -486,6 +487,19 @@ export interface KernelKillSwitchTable {
   engaged_at: ColumnType<Date, Date | string | undefined, Date | string>;
   released_by: string | null;
   released_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
+/** crove_kernel.mail_event */
+export interface KernelMailEventTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  message_id: ColumnType<string, string, NotGranted>;
+  provider: ColumnType<string, string, NotGranted>;
+  provider_event_id: ColumnType<string, string, NotGranted>;
+  kind: ColumnType<string, string, NotGranted>;
+  occurred_at: ColumnType<Date, Date | string, NotGranted>;
+  detail: ColumnType<unknown, string | undefined, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_kernel.mail_message */

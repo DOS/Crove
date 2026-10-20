@@ -14,6 +14,7 @@ import { extractAndPropose, importPortalList, recordExtractionFailure, recordPor
 import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runCommentJob, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
+import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from './jobs-schema.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
@@ -49,6 +50,7 @@ function sendAgentWake(boss: PgBoss, orgId: string, agentId: string) {
 const EXTRACT_RETRY_LIMIT = 3;
 export const EXTRACT_POLL_SECONDS = 0.5;
 const INBOUND_RETRY_LIMIT = 3;
+const MAIL_EVENT_RETRY_LIMIT = 5;
 const SIGN_OUT_RETRY_LIMIT = 5;
 const ORG_EXPORT_RETRY_LIMIT = 3;
 // The prober alerts when the freshest heartbeat is older than PROBER_MAX_HEARTBEAT_AGE_SECONDS (default 120).
@@ -323,7 +325,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         job.data,
         job.retryCount,
       );
-      console.log(`[inbound] message ${label}: ${result.duplicate ? 'duplicate' : `${result.fileIds.length} file(s)`}`);
+      console.log(`[inbound] message ${label}: ${'bounce' in result ? `bounce report, ${result.bounce}` : result.duplicate ? 'duplicate' : `${result.fileIds.length} file(s)`}`);
     } catch (error) {
       // A message no org can receive (unknown or closed recipient, invalid content) is dropped, not retried.
       if (!(error instanceof DomainError && error.status !== 409 && error.status < 500)) {
@@ -333,6 +335,19 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       console.warn(`[inbound] message ${label} dropped: ${error.code}`);
     }
     await deps.store.delete(inboundKey(job.data.blobId));
+  });
+
+  // A delivery event (#539): recorded in its mail's org, or dropped when no mail of Crove has the provider's id.
+  await boss.work<MailEventJob>(QUEUES.mailEvent, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const label = `${job.data.provider}:${job.data.providerEventId.slice(0, 16)}`;
+    try {
+      const result = await processMailEvent({ runtime: deps.runtime, workerDb: deps.workerDb }, job.data);
+      if ('dropped' in result) console.warn(`[mail-event] ${label} dropped: ${result.dropped}`);
+    } catch (error) {
+      console.error(`[mail-event] ${label} attempt ${job.retryCount + 1}`, error);
+      throw error;
+    }
   });
 
   await boss.work<SignOutTarget>(QUEUES.signOut, { batchSize: 1 }, async ([job]) => {
@@ -596,6 +611,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 } satisfies InboundJob,
                 { singletonKey: row.blob_id, retryLimit: INBOUND_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
               ),
+            ),
+          );
+          return rows.length;
+        });
+        if (sent < 100) break;
+      }
+      for (;;) {
+        const sent = await deps.workerDb.transaction().execute(async (trx) => {
+          const { rows } = await sql<MailEventRow>`SELECT * FROM crove_kernel.mail_event_claim(100)`.execute(trx);
+          await Promise.all(
+            rows.map((row) =>
+              boss.send(QUEUES.mailEvent, mailEventJob(row) satisfies MailEventJob, {
+                singletonKey: `${row.provider}:${row.provider_event_id}`,
+                retryLimit: MAIL_EVENT_RETRY_LIMIT,
+                retryDelay: 20,
+                retryBackoff: true,
+              }),
             ),
           );
           return rows.length;
