@@ -2046,7 +2046,7 @@ export const en = {
     utmNeedsCampaign: 'Enter a campaign name; without one, links go out untagged.',
     firstComment: 'First comment (optional)',
     firstCommentPlaceholder: 'Posted right under the post once it is out, such as hashtags or a link',
-    commentStatus: { pending: 'First comment: waiting', posted: 'First comment: posted', failed: 'First comment: not posted', unknown: 'First comment: unclear whether it went out, check the channel' },
+    commentStatus: { pending: 'First comment: waiting', posted: 'First comment: posted', failed: 'First comment: not posted', reconnect: 'First comment: not posted, the channel was connected without permission to comment. Reconnect it in Channels, then post the comment again', unknown: 'First comment: unclear whether it went out, check the channel' },
     commentRetry: 'Post the comment again',
     threadParts: 'Post as a thread (optional)',
     threadPart: 'Part {n, number}',

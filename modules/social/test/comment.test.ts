@@ -95,6 +95,11 @@ describe('first comments (#587)', () => {
     expect(commentIssues('threads', '😀'.repeat(501))).toEqual([{ code: 'COMMENT_TOO_LONG', field: 'settings.firstComment', limit: 500, actual: 501 }]);
   });
 
+  it('takes a first comment on YouTube up to 10000 characters (#791)', () => {
+    expect(commentIssues('youtube', 'Chương 1 00:00')).toEqual([]);
+    expect(commentIssues('youtube', 'a'.repeat(10_001))).toEqual([{ code: 'COMMENT_TOO_LONG', field: 'settings.firstComment', limit: 10_000, actual: 10_001 }]);
+  });
+
   it('turns a call or a job that went quiet into something a person can retry', () => {
     const now = new Date('2026-10-20T10:00:00Z');
     const ago = (ms: number) => new Date(now.getTime() - ms);
@@ -107,6 +112,9 @@ describe('first comments (#587)', () => {
     expect(commentStatus([call('started', old)], now, ago(old))).toBe('unknown');
     expect(commentStatus([call('failed', fresh)], now, ago(fresh))).toBe('failed');
     expect(commentStatus([call('ambiguous', fresh)], now, ago(fresh))).toBe('unknown');
+    // A channel connected without the comment permission (#791) says to reconnect; only the last call counts.
+    expect(commentStatus([{ ...call('failed', fresh), error_code: 'RECONNECT_FOR_COMMENTS' }], now, ago(fresh))).toBe('reconnect');
+    expect(commentStatus([{ ...call('failed', old, 'a'), error_code: 'RECONNECT_FOR_COMMENTS' }, call('failed', fresh, 'b')], now, ago(old))).toBe('failed');
     // An older call answered after a newer one began still counts as posted.
     expect(commentStatus([call('succeeded', old, 'a'), call('started', fresh, 'b')], now, ago(old))).toBe('posted');
   });

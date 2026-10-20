@@ -2046,7 +2046,7 @@ export const vi = {
     utmNeedsCampaign: 'Hãy nhập tên chiến dịch; nếu để trống, liên kết sẽ được gửi đi không gắn thẻ.',
     firstComment: 'Bình luận đầu tiên (không bắt buộc)',
     firstCommentPlaceholder: 'Đăng ngay dưới bài sau khi bài lên kênh, ví dụ hashtag hoặc liên kết',
-    commentStatus: { pending: 'Bình luận đầu tiên: đang chờ đăng', posted: 'Bình luận đầu tiên: đã đăng', failed: 'Bình luận đầu tiên: chưa đăng được', unknown: 'Bình luận đầu tiên: không rõ đã đăng chưa, hãy xem trên kênh' },
+    commentStatus: { pending: 'Bình luận đầu tiên: đang chờ đăng', posted: 'Bình luận đầu tiên: đã đăng', failed: 'Bình luận đầu tiên: chưa đăng được', reconnect: 'Bình luận đầu tiên: chưa đăng được vì kênh được kết nối khi chưa có quyền bình luận. Hãy kết nối lại kênh trong mục Kênh rồi đăng lại bình luận', unknown: 'Bình luận đầu tiên: không rõ đã đăng chưa, hãy xem trên kênh' },
     commentRetry: 'Đăng lại bình luận',
     threadParts: 'Đăng thành chuỗi (không bắt buộc)',
     threadPart: 'Phần {n, number}',

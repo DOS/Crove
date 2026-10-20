@@ -1853,8 +1853,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                     )}
                     {v.commentStatus && (
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className={v.commentStatus === 'failed' || v.commentStatus === 'unknown' ? 'text-warning' : ''}>{t(`commentStatus.${v.commentStatus}`)}</span>
-                        {canDecide && (v.commentStatus === 'failed' || v.commentStatus === 'unknown') && (
+                        <span className={v.commentStatus === 'failed' || v.commentStatus === 'reconnect' || v.commentStatus === 'unknown' ? 'text-warning' : ''}>{t(`commentStatus.${v.commentStatus}`)}</span>
+                        {canDecide && (v.commentStatus === 'failed' || v.commentStatus === 'reconnect' || v.commentStatus === 'unknown') && (
                           <Button variant="outline" size="sm" disabled={retryComment.isPending} onClick={() => retryComment.mutate(v.id)}>
                             {t('commentRetry')}
                           </Button>
