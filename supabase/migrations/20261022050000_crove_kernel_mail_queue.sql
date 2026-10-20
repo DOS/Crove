@@ -10,10 +10,11 @@
 --                       stale time; the worker records it 'ambiguous'), and, only when the deployment's mailer
 --                       dedupes, transactional mail whose last send is unknown ('ambiguous', a few attempts at most).
 --                       Marketing is never sent again after an unknown outcome. Mail the request sent itself (the
---                       invite) has no external_call and is never in it.
+--                       invite) has no external_call and is never in it. Queued marketing comes last, so a campaign
+--                       of any size never keeps an invoice or a lost send out of a pass.
 --   mail_retention_purge  the 13-month and 30-day purges of mail_message: the address and subject go 13 months after
 --                       the mail was written (the hash stays, so a suppression still matches), the merge data 30 days
---                       after a final status. The row guard already allows only dropping these columns.
+--                       after a final status (or after an unknown outcome nobody sent again). The row guard already allows only dropping these columns.
 SET LOCAL lock_timeout = '2s';
 
 SELECT crove_jobs.create_queue(q, '{"policy":"stately","expireInSeconds":300}'::jsonb)
@@ -46,7 +47,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
       AND EXISTS (SELECT 1 FROM crove_kernel.external_call e WHERE e.org_id = m.org_id AND e.key = 'mail:' || m.id::text || ':' || m.attempts::text)
   ) d
   JOIN crove_kernel.tenant t ON t.org_id = d.org_id AND t.status = 'active'
-  ORDER BY d.created_at
+  ORDER BY (d.state = 'queued' AND d.stream = 'marketing'), d.created_at
   LIMIT LEAST(GREATEST(COALESCE(p_limit, 100), 1), 1000)
 $$;
 
@@ -75,20 +76,20 @@ BEGIN
   );
   RETURN NEXT;
 
-  -- A final status: nothing will render the mail again ('ambiguous' keeps it for a person's "send again").
+  -- A final status, or an unknown outcome left for 30 days: nothing will render the mail again.
   store := 'kernel.mail_message.payload';
   UPDATE crove_kernel.mail_message m SET payload = NULL
   WHERE (m.org_id, m.id) IN (
     SELECT e.org_id, e.id FROM crove_kernel.mail_message e
     WHERE e.payload IS NOT NULL AND e.updated_at < v_now - interval '30 days'
-      AND e.status IN ('sent', 'delivered', 'bounced', 'complained', 'suppressed', 'failed')
+      AND e.status IN ('sent', 'delivered', 'bounced', 'complained', 'suppressed', 'failed', 'ambiguous')
     LIMIT v_batch FOR UPDATE SKIP LOCKED
   );
   GET DIAGNOSTICS deleted = ROW_COUNT;
   more := EXISTS (
     SELECT 1 FROM crove_kernel.mail_message e
     WHERE e.payload IS NOT NULL AND e.updated_at < v_now - interval '30 days'
-      AND e.status IN ('sent', 'delivered', 'bounced', 'complained', 'suppressed', 'failed')
+      AND e.status IN ('sent', 'delivered', 'bounced', 'complained', 'suppressed', 'failed', 'ambiguous')
   );
   RETURN NEXT;
 END $$;

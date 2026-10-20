@@ -174,6 +174,23 @@ suite('queued mail (#548)', () => {
     expect(await runMailJob(deps(mailer), { orgId: otherOrgId, messageId: campaign })).toEqual({ action: 'none', reason: 'NOT_FOUND' });
   });
 
+  it('puts a campaign behind every other mail in a pass, and takes an unsendable mail out of the queue', async () => {
+    const campaign = [await queue('a@example.vn', 'marketing'), await queue('b@example.vn', 'marketing'), await queue('c@example.vn', 'marketing')];
+    const invoice = await queue('hoa-don@example.vn', 'transactional');
+    const { rows } = await workerPool.query<{ message_id: string }>('SELECT message_id FROM crove_kernel.mail_queued_due(2, 600, false)');
+    const due = rows.map((r) => r.message_id);
+    expect(due).toContain(invoice);
+    expect(due.filter((id) => campaign.includes(id)).length).toBeLessThan(2);
+
+    // A queued mail that lost its address (an erasure) fails once instead of coming back every pass.
+    await backdate('UPDATE crove_kernel.mail_message SET to_address = NULL WHERE id = $1', [invoice]);
+    const { mailer, sent } = scripted([]);
+    expect(await runMailJob(deps(mailer), { orgId, messageId: invoice })).toEqual({ action: 'none', reason: 'NO_ADDRESS' });
+    expect(sent).toHaveLength(0);
+    expect(await row(invoice)).toMatchObject({ status: 'failed', error_code: 'NO_ADDRESS' });
+    for (const id of campaign) await runMailJob(deps(mailer), { orgId, messageId: id });
+  });
+
   it('reads the suppression list again before a send', async () => {
     const id = await queue('da-chan@example.vn');
     await runtime.execute('kernel.mail.suppression.add', { email: 'da-chan@example.vn', scope: 'all' }, { actor: owner, orgId });

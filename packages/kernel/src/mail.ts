@@ -385,6 +385,19 @@ export type QueuedMailBegin =
       bounceToken: string | null;
     };
 
+// A mail that cannot be sent leaves the queue as 'failed' with the reason, so no later pass picks it up again.
+async function stop(ctx: CommandContext, messageId: string, again: boolean, reason: string): Promise<QueuedMailBegin> {
+  if (!again) {
+    await ctx.trx
+      .updateTable('crove_kernel.mail_message')
+      .set({ status: 'failed', error_code: reason, updated_at: ctx.now })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', messageId)
+      .execute();
+  }
+  return { action: 'none', reason };
+}
+
 // The worker starts one send of a queued mail (or of a transactional one whose last send is unknown, when the mailer
 // dedupes): the suppression list is read again, since an address may have bounced or been stopped since the mail was
 // queued, then the mail becomes 'sending' and the call 'started', in this transaction, before the worker calls the
@@ -411,7 +424,7 @@ export const beginQueuedMail = defineCommand({
       if (input.safety !== 'idempotent' && input.safety !== 'safe') return { action: 'none', reason: 'NOT_REPEATABLE' };
       if (mail.attempts >= MAIL_MAX_ATTEMPTS) return { action: 'none', reason: 'ATTEMPTS' };
     }
-    if (!mail.to_address) return { action: 'none', reason: 'NO_ADDRESS' };
+    if (!mail.to_address) return stop(ctx, mail.id, again, 'NO_ADDRESS');
     if (await isSuppressed(ctx, mail.to_hash, mail.stream, ctx.now)) {
       // A queued mail is stopped before any call; one whose last send is unknown is not tried again.
       await ctx.trx
@@ -430,7 +443,7 @@ export const beginQueuedMail = defineCommand({
       .onConflict((oc) => oc.columns(['org_id', 'key']).doNothing())
       .returning('id')
       .executeTakeFirst();
-    if (!inserted) return { action: 'none', reason: 'CALL_EXISTS' };
+    if (!inserted) return stop(ctx, mail.id, again, 'CALL_EXISTS');
     await ctx.trx
       .updateTable('crove_kernel.mail_message')
       .set({ status: 'sending', attempts: attempt, provider: input.provider, error_code: null, updated_at: ctx.now })

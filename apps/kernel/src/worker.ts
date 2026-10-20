@@ -16,7 +16,7 @@ import { sweepFeeds } from './feeds.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
-import { MAIL_BULK_GAP_MS, MAIL_BULK_QUEUE, MAIL_SEND_QUEUE, MAIL_SWEEP_MS, purgeMail, runMailJob, sweepMail, type MailJob, type MailQueueDeps } from './mail-queue.ts';
+import { MAIL_BULK_GAP_MS, MAIL_BULK_QUEUE, MAIL_SEND_QUEUE, MAIL_SWEEP_MS, mailErrorCode, purgeMail, runMailJob, sweepMail, type MailJob, type MailQueueDeps } from './mail-queue.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from './jobs-schema.ts';
 import { runLinkPreviewJob } from './link-preview.ts';
@@ -380,7 +380,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         if (done.action === 'recorded') console.log(`[mail] ${label}: ${done.outcome}${done.code ? ` ${done.code}` : ''}`);
         else if (done.action === 'suppressed') console.log(`[mail] ${label}: suppressed`);
       } catch (error) {
-        console.error(`[mail] ${label} attempt ${job.retryCount + 1}`, error);
+        console.error(`[mail] ${label} attempt ${job.retryCount + 1}: ${mailErrorCode(error)}`);
         throw error;
       } finally {
         if (gap > 0) await new Promise<void>((resolve) => setTimeout(resolve, gap));
@@ -396,7 +396,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     try {
       await sweepMail(boss, deps.workerDb, deps.runtime, mail.mailer);
     } catch (error) {
-      console.error('[mail] sweep', error);
+      console.error(`[mail] sweep: ${mailErrorCode(error)}`);
     } finally {
       mailSweeping = false;
     }

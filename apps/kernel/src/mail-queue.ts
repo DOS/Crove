@@ -61,7 +61,7 @@ export async function sweepMail(boss: Sender, workerDb: Db, runtime: Runtime, ma
     if (row.state === 'stale') {
       await runtime
         .execute('kernel.mail.queue.record', { messageId: row.message_id, attempt: row.attempts, outcome: 'ambiguous', errorCode: 'WORKER_LOST' }, { actor: ACTOR, orgId: row.org_id })
-        .catch((error: unknown) => console.error(`[mail] lost send of ${row.message_id.slice(0, 8)} not recorded`, error));
+        .catch((error: unknown) => console.error(`[mail] lost send of ${row.message_id.slice(0, 8)} not recorded: ${mailErrorCode(error)}`));
       continue;
     }
     const queue = row.stream === 'marketing' ? MAIL_BULK_QUEUE : MAIL_SEND_QUEUE;
@@ -132,6 +132,18 @@ async function sendOne(deps: MailQueueDeps, mail: Extract<QueuedMailBegin, { act
     }
     return { outcome: 'failed', code: codeOf(result.code), kind: result.error };
   }
+}
+
+// What an error is, for the logs: its code or name, never its message or detail (a database error's detail can quote
+// the row, address and all).
+export function mailErrorCode(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(code)) return code;
+    const name = (error as { name?: unknown }).name;
+    if (typeof name === 'string' && /^[A-Za-z]{1,64}$/.test(name)) return name;
+  }
+  return 'ERROR';
 }
 
 // A provider's code as the row keeps it (A-Z, digits, underscore).
