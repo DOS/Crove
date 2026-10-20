@@ -190,6 +190,9 @@ const ASK: Record<RewriteAction, string> = {
 
 export type RewriteGenerator = (args: { system: string; prompt: string }) => Promise<z.infer<typeof zRewrite> | null>;
 
+// The text cannot close its own fence: a run of > or < is broken up.
+const fenced = (value: string) => value.replace(/<{3,}|>{3,}/g, (run) => run.split('').join(' '));
+
 function rewriteAsk(request: RewriteRequest, text: string): { system: string; prompt: string } {
   const system = [
     'You rewrite one social media post for a small or medium business.',
@@ -200,8 +203,8 @@ function rewriteAsk(request: RewriteRequest, text: string): { system: string; pr
   ].join(' ');
   const prompt = [
     request.channel ? `Channel:\n${channelLines([request.channel])}` : 'Channel: every channel of the post (keep it short enough for most).',
-    request.title?.trim() ? `Title:\n<<<\n${request.title.trim().slice(0, 500)}\n>>>` : null,
-    `Text:\n<<<\n${text}\n>>>`,
+    request.title?.trim() ? `Title:\n<<<\n${fenced(request.title.trim().slice(0, 500))}\n>>>` : null,
+    `Text:\n<<<\n${fenced(text)}\n>>>`,
   ]
     .filter(Boolean)
     .join('\n\n');

@@ -186,7 +186,15 @@ const REWRITES = ['shorten', 'formal', 'casual', 'translate_en', 'translate_vi']
 function AiRewrite({ text, title, connectionId, onAccept }: { text: string; title: string | null; connectionId?: string; onAccept: (next: { text: string; title: string | null }) => void }) {
   const t = useTranslations('social');
   const [action, setAction] = useState<(typeof REWRITES)[number]>('shorten');
-  const rewrite = useMutation({ mutationFn: () => client.social.posts.rewriteWithAi({ text, title, action, ...(connectionId ? { connectionId } : {}) }) });
+  // The text the proposal was made from: typed on since, it no longer fits and is not offered.
+  const [asked, setAsked] = useState<string | null>(null);
+  const rewrite = useMutation({
+    mutationFn: () => {
+      setAsked(text);
+      return client.social.posts.rewriteWithAi({ text, title, action, ...(connectionId ? { connectionId } : {}) });
+    },
+  });
+  const outdated = rewrite.data !== undefined && asked !== text;
   if (getConfig().aiEnabled !== true || !text.trim()) return null;
   return (
     <div className="space-y-2 rounded-lg border border-dashed p-2">
@@ -208,10 +216,11 @@ function AiRewrite({ text, title, connectionId, onAccept }: { text: string; titl
         <div className="space-y-2">
           {rewrite.data.title && <p className="text-sm font-medium text-foreground">{rewrite.data.title}</p>}
           <p className="text-sm whitespace-pre-wrap [overflow-wrap:anywhere] text-foreground">{rewrite.data.text}</p>
-          <p className="text-xs text-subtle-foreground">{t('aiRewriteHint')}</p>
+          <p className="text-xs text-subtle-foreground">{t(outdated ? 'aiRewriteOutdated' : 'aiRewriteHint')}</p>
           <div className="flex gap-2">
             <Button
               size="sm"
+              disabled={outdated}
               onClick={() => {
                 onAccept(rewrite.data);
                 rewrite.reset();
@@ -931,10 +940,10 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           <ErrorText>{error ? errorMessage(error) : flash}</ErrorText>
         </div>
       )}
-      {p.origin === 'ai' && (
+      {(p.origin === 'ai' || p.tainted) && (
         <div className="mb-4 flex items-center gap-2 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
-          <Badge variant="secondary">{t('aiBadge')}</Badge>
-          <span>{t('aiBadgeHint')}</span>
+          <Badge variant="secondary">{t(p.origin === 'ai' ? 'aiBadge' : 'aiAssistedBadge')}</Badge>
+          <span>{t(p.origin === 'ai' ? 'aiBadgeHint' : 'aiAssistedHint')}</span>
         </div>
       )}
       {p.repostOf && (
