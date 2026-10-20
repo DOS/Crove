@@ -120,6 +120,32 @@ describe('InstagramPublisher', () => {
     expect(await publisher.status({ externalAccountId: IG, secret: SECRET, externalRef: ref('9101') })).toEqual({ kind: 'accepted', externalId: '18000000000000101', url: 'https://www.instagram.com/reel/xyz/' });
   });
 
+  it('gives a Reel its cover: a frame as thumb_offset in milliseconds, or an image Meta fetches as cover_url (#642)', async () => {
+    const reel = { body: 'Khai trương!', title: null, linkUrl: null, media: [{ fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: null }] };
+    const answers = () => ({
+      [`POST /${IG}/media`]: [{ body: { id: '9102' } }],
+      'GET /9102': [{ body: { status_code: 'FINISHED' } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000102' } }],
+      'GET /18000000000000102': [{ body: {} }],
+    });
+    const frame = graph(answers());
+    expect(await new InstagramPublisher(APP, frame.fetchImpl, fast).publish(input({ content: reel, settings: { cover: { atMs: 2500 } } }))).toMatchObject({ kind: 'accepted' });
+    expect(frame.calls[0]?.form).toEqual({ media_type: 'REELS', video_url: 'https://bucket.example/v-1?sig=1', share_to_feed: 'true', thumb_offset: '2500', caption: 'Khai trương!' });
+    const image = graph(answers());
+    expect(await new InstagramPublisher(APP, image.fetchImpl, fast).publish(input({ content: reel, settings: { cover: { fileId: 'c-1' } } }))).toMatchObject({ kind: 'accepted' });
+    expect(image.calls[0]?.form).toEqual({ media_type: 'REELS', video_url: 'https://bucket.example/v-1?sig=1', share_to_feed: 'true', cover_url: 'https://bucket.example/c-1?sig=1', caption: 'Khai trương!' });
+  });
+
+  it('posts nothing with a cover on a post that is not a Reel, or a cover image without a public URL', async () => {
+    const { fetchImpl, calls } = graph({});
+    const publisher = new InstagramPublisher(APP, fetchImpl, fast);
+    expect(await publisher.publish(input({ settings: { cover: { atMs: 0 } } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' });
+    const reel = { body: 'x', title: null, linkUrl: null, media: [{ fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: null }] };
+    const noCoverUrl = input({ content: reel, settings: { cover: { fileId: 'c-1' } }, mediaUrl: async (fileId) => (fileId === 'c-1' ? null : `https://bucket.example/${fileId}?sig=1`) });
+    expect(await publisher.publish(noCoverUrl)).toMatchObject({ kind: 'rejected', code: 'MEDIA_URL_UNAVAILABLE' });
+    expect(calls).toHaveLength(0);
+  });
+
   it('mixes images and videos in a carousel', async () => {
     const { fetchImpl, calls } = graph({
       [`POST /${IG}/media`]: [{ body: { id: '9201' } }, { body: { id: '9202' } }, { body: { id: '9203' } }],

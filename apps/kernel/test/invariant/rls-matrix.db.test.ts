@@ -43,6 +43,8 @@ const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_social.label',
   'crove_social.link_preview',
+  'crove_social.notification',
+  'crove_social.notification_mute',
   'crove_social.post_label',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
@@ -121,6 +123,8 @@ const mailMessageRow = (o: { id: string }) => ({
 });
 // Crove Social (S3): a post, and a variant of it for a fresh channel connection (one variant per connection).
 const ZERO_HASH = `sha256:${'0'.repeat(64)}`;
+const MUTE_KINDS = ['review_requested', 'decided', 'failed', 'comment'] as const;
+const muteRows = new Map<string, number>();
 const socialPostRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), body: 'RLS matrix post' });
 const socialLabelRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), name: `rls-${tag()}`, color: 'blue', created_by: o.owner });
 const socialReviewLinkRow = (o: { id: string; owner: string }) => {
@@ -496,6 +500,18 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         setup: [...setup, { table: 'crove_social.post_variant', values: variant }],
         row: { org_id: o.id, variant_id: variant.id, capture_key: `rls-${tag()}`, metrics: '{}' },
       };
+    },
+  },
+  // A notification for one member (#637), written once per event and person. A restrictive policy shows each member
+  // only their own; the factory's rows belong to the owner, the user every member-context actor enters as.
+  'crove_social.notification': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner, kind: 'comment', event_id: randomUUID() } }) },
+  // A kind of notification a member turned off (#637), under the same restrictive policy. One row per member and kind:
+  // an org's first row (the seeded one) takes the first kind, every later row (a probe, rolled back) another one.
+  'crove_social.notification_mute': {
+    make: (o) => {
+      const n = muteRows.get(o.id) ?? 0;
+      muteRows.set(o.id, n + 1);
+      return { row: { org_id: o.id, user_id: o.owner, kind: MUTE_KINDS[n === 0 ? 0 : 1 + ((n - 1) % (MUTE_KINDS.length - 1))] ?? 'comment' } };
     },
   },
   'crove_social.post': { make: (o) => ({ row: socialPostRow(o) }) },

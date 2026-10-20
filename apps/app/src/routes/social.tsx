@@ -14,6 +14,7 @@ import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
+import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
 import type { BulkAction } from '../lib/social-bulk.ts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
@@ -70,7 +71,10 @@ function PostRow({ post, slug, names, right }: { post: Post; slug: string; names
         <p className="line-clamp-2 text-sm [overflow-wrap:anywhere] text-foreground">{excerpt(post.body) || <span className="text-subtle-foreground">{t('emptyText')}</span>}</p>
         <ChannelChips post={post} names={names} />
       </div>
-      {right && <span className="shrink-0 text-xs text-subtle-foreground tabular-nums">{right}</span>}
+      <div className="flex shrink-0 items-center gap-2">
+        {isOverdue(post, Date.now()) && <Badge variant="destructive">{t('assign.overdue')}</Badge>}
+        {right && <span className="text-xs text-subtle-foreground tabular-nums">{right}</span>}
+      </div>
     </Link>
   );
 }
@@ -385,7 +389,7 @@ export function SocialPage() {
     const timer = setTimeout(() => setSearch({ q }), 300);
     return () => clearTimeout(timer);
   }, [text, search.q, setSearch]);
-  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.q ? { search: search.q } : {}) };
+  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.q ? { search: search.q } : {}), ...(search.mine ? { assignee: 'me' as const } : {}) };
   // The agenda window starts now; a new day does not need a reload to move it, a refetch does.
   const range = useMemo(() => {
     const from = new Date(Date.now() - DAY);
@@ -420,10 +424,10 @@ export function SocialPage() {
   const rows = list.data?.pages.flat() ?? [];
   const reviewCount = review.data?.length ?? 0;
   const attentionCount = attention.data?.length ?? 0;
-  const filtered = Boolean(search.channel || search.q || search.from || search.to);
+  const filtered = Boolean(search.channel || search.q || search.from || search.to || search.mine);
   // Posts picked for a bulk action (#635), in the list on screen; a new tab or filter starts afresh.
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  useEffect(() => setPicked(new Set()), [tab, search.channel, search.q, search.from, search.to]);
+  useEffect(() => setPicked(new Set()), [tab, search.channel, search.q, search.from, search.to, search.mine]);
   const canDecide = role === 'owner' || role === 'admin';
   const bulkActions: readonly BulkAction[] = !canWrite ? [] : listTab === 'review' ? (canDecide ? ['approve', 'cancel'] : ['cancel']) : listTab === 'drafts' ? (canDecide ? ['queue', 'cancel'] : ['cancel']) : listTab === 'attention' ? ['cancel'] : [];
   const toggle = (id: string) => setPicked((now) => { const next = new Set(now); if (next.has(id)) next.delete(id); else next.add(id); return next; });
@@ -508,8 +512,12 @@ export function SocialPage() {
                 </label>
               </>
             )}
+            <label className="flex items-center gap-2 pb-2 text-xs text-muted-foreground">
+              <Checkbox checked={search.mine === true} onCheckedChange={(on) => setSearch({ mine: on === true ? true : undefined })} />
+              {t('assign.mine')}
+            </label>
             {filtered && (
-              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, q: undefined, from: undefined, to: undefined })}>
+              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, q: undefined, from: undefined, to: undefined, mine: undefined })}>
                 {t('filters.clear')}
               </Button>
             )}

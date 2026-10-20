@@ -108,6 +108,46 @@ describe('YouTubePublisher', () => {
     expect(calls[1]?.headers.get('content-type')).toBe('video/mp4');
   });
 
+  it('sets an image cover as the thumbnail after the upload, read before anything is sent (#642)', async () => {
+    const { fetchImpl, calls } = google({
+      'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, headers: { location: SESSION } }],
+      'PUT www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, body: { id: 'dQw4w9WgXcQ' } }],
+      'POST www.googleapis.com/upload/youtube/v3/thumbnails/set': [{ status: 200, body: { items: [{ default: { url: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/default.jpg' } }] } }],
+    });
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+    const read: string[] = [];
+    const readMedia = async (fileId: string) => {
+      read.push(fileId);
+      return fileId === 'c-1' ? png : new Uint8Array([0, 0, 1]);
+    };
+    expect(await new YouTubePublisher(APP, fetchImpl).publish(input({ readMedia, settings: { cover: { fileId: 'c-1' } } }))).toMatchObject({ kind: 'accepted', externalId: 'dQw4w9WgXcQ' });
+    expect(read).toEqual(['f-1', 'c-1']);
+    expect(calls.map((c) => c.route)).toEqual(['POST www.googleapis.com/upload/youtube/v3/videos', 'PUT www.googleapis.com/upload/youtube/v3/videos', 'POST www.googleapis.com/upload/youtube/v3/thumbnails/set']);
+    expect(calls[2]?.url.searchParams.get('videoId')).toBe('dQw4w9WgXcQ');
+    expect(calls[2]?.headers.get('content-type')).toBe('image/png');
+  });
+
+  it('keeps an uploaded video accepted when YouTube refuses its thumbnail', async () => {
+    const { fetchImpl, calls } = google({
+      'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, headers: { location: SESSION } }],
+      'PUT www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, body: { id: 'dQw4w9WgXcQ' } }],
+      'POST www.googleapis.com/upload/youtube/v3/thumbnails/set': [{ status: 403, body: { error: { message: 'The authenticated user does not have permissions to upload and set custom video thumbnails.', errors: [{ reason: 'forbidden' }] } } }],
+    });
+    expect(await new YouTubePublisher(APP, fetchImpl).publish(input({ settings: { cover: { fileId: 'c-1' } } }))).toEqual({ kind: 'accepted', externalId: 'dQw4w9WgXcQ', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
+    expect(calls[2]?.headers.get('content-type')).toBe('image/jpeg');
+  });
+
+  it('posts nothing with a frame cover, which the Data API cannot set, or a cover image it cannot read', async () => {
+    const none = google({});
+    expect(await new YouTubePublisher(APP, none.fetchImpl).publish(input({ settings: { cover: { atMs: 1000 } } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' });
+    const unreadable = async (fileId: string) => {
+      if (fileId === 'c-1') throw new Error('gone');
+      return new Uint8Array([0, 0, 1]);
+    };
+    expect(await new YouTubePublisher(APP, none.fetchImpl).publish(input({ readMedia: unreadable, settings: { cover: { fileId: 'c-1' } } }))).toMatchObject({ kind: 'rejected', code: 'MEDIA_UNREADABLE' });
+    expect(none.calls).toHaveLength(0);
+  });
+
   it('posts nothing without one video or a title, and waits out the daily quota', async () => {
     const none = google({});
     expect(await new YouTubePublisher(APP, none.fetchImpl).publish(input({ content: { body: 'x', title: 'T', linkUrl: null, media: [] } }))).toMatchObject({ code: 'ONE_VIDEO_REQUIRED' });

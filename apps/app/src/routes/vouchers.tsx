@@ -21,7 +21,7 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { isZeroAmount } from '../lib/decimal.ts';
 import { localToday } from '../lib/reversal.ts';
@@ -340,6 +340,19 @@ export function VouchersPage() {
   );
   const rows = vouchers.data?.pages.flatMap((p) => p.items) ?? [];
   const allowed = canEnterVoucher(org.data?.role);
+  // Cash receipts and payments of the chosen dates in MISA SME's import templates, one file per type (#657).
+  const exportMisa = useMutation({
+    mutationFn: async (kind: 'receipts' | 'payments') => {
+      const params = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) });
+      const response = await apiFetch(`/api/export/misa/${kind}.xlsx?${params}`);
+      const url = URL.createObjectURL(await response.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = t(kind === 'receipts' ? 'exportReceiptsFile' : 'exportPaymentsFile', { org: getCurrentOrg() ?? 'org' });
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+  });
 
   return (
     <>
@@ -347,13 +360,28 @@ export function VouchersPage() {
         title={t('title')}
         subtitle={t('subtitle')}
         actions={
-          allowed && !entering ? (
-            <Button size="lg" onClick={() => setEntering(true)}>
-              {t('new')}
+          <div className="flex flex-wrap gap-2">
+            <Button size="lg" variant="outline" onClick={() => exportMisa.mutate('receipts')} disabled={exportMisa.isPending}>
+              {exportMisa.isPending && exportMisa.variables === 'receipts' ? <Spinner className="text-current" /> : null}
+              {t('exportReceipts')}
             </Button>
-          ) : undefined
+            <Button size="lg" variant="outline" onClick={() => exportMisa.mutate('payments')} disabled={exportMisa.isPending}>
+              {exportMisa.isPending && exportMisa.variables === 'payments' ? <Spinner className="text-current" /> : null}
+              {t('exportPayments')}
+            </Button>
+            {allowed && !entering && (
+              <Button size="lg" onClick={() => setEntering(true)}>
+                {t('new')}
+              </Button>
+            )}
+          </div>
         }
       />
+      {exportMisa.error && (
+        <div className="mb-4">
+          <ErrorText>{errorMessage(exportMisa.error)}</ErrorText>
+        </div>
+      )}
       {entering && <VoucherFormCard slug={slug} onClose={() => setEntering(false)} />}
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <label className="text-xs">

@@ -9,6 +9,7 @@
 // has not audited can only post SELF_ONLY. A post is visible only after the bytes are in, so a failure before then
 // posted nothing; after init, the publish_id says where it stands.
 import type { ConnectedAccount, Publisher, PublishInput, PublishResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import { videoCoverOf } from './cover.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -263,6 +264,9 @@ export class TikTokPublisher implements Publisher {
     if (!video || !video.mime.startsWith('video/') || input.content.media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
     const privacy = TIKTOK_PRIVACY_LEVELS.find((p) => p === input.settings.privacyLevel);
     if (!privacy) return { kind: 'rejected', error: 'bad_request', code: 'PRIVACY_REQUIRED' };
+    // A cover (#642): direct post takes a frame of the video (video_cover_timestamp_ms), never an uploaded image.
+    const cover = videoCoverOf(input.settings);
+    if (cover && !('atMs' in cover)) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
     let bytes: Uint8Array;
     try {
       bytes = await input.readMedia(video.fileId);
@@ -297,6 +301,7 @@ export class TikTokPublisher implements Publisher {
           disable_comment: creator.comment_disabled === true || input.settings.allowComments !== true,
           disable_duet: creator.duet_disabled === true || input.settings.allowDuet !== true,
           disable_stitch: creator.stitch_disabled === true || input.settings.allowStitch !== true,
+          ...(cover ? { video_cover_timestamp_ms: cover.atMs } : {}),
         },
         source_info: { source: 'FILE_UPLOAD', video_size: size, chunk_size: chunk, total_chunk_count: count },
       });
