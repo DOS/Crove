@@ -1459,6 +1459,8 @@ export const vi = {
       topics: { STANDARD: 'Bài cập nhật', EVENT: 'Sự kiện', OFFER: 'Ưu đãi' },
       cta: 'Nút',
       noCta: 'Không có nút',
+      language: 'Ngôn ngữ',
+      languages: { vi: 'Tiếng Việt', en: 'Tiếng Anh', zh: 'Tiếng Trung', ja: 'Tiếng Nhật', ko: 'Tiếng Hàn' },
       ctas: { BOOK: 'Đặt lịch', ORDER: 'Đặt hàng', SHOP: 'Mua ngay', LEARN_MORE: 'Tìm hiểu thêm', SIGN_UP: 'Đăng ký', CALL: 'Gọi điện' },
       eventTitle: 'Tên sự kiện',
       offerTitle: 'Tên ưu đãi (không bắt buộc)',

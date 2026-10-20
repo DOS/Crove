@@ -253,6 +253,9 @@ describe('validateVariant', () => {
     expect(codes('google_business', { topic: 'OFFER', event: { startDate: '2026-09-26', endDate: '2026-09-25' } })).toEqual(['GBP_INVALID']);
     expect(codes('google_business', { topic: 'EVENT', event: { title: 'x', ...day, startTime: '25:00' } })).toEqual(['GBP_INVALID']);
     expect(codes('google_business', { topic: 'PRODUCT' })).toEqual(['GBP_INVALID']);
+    // The post's language (#730): one Google takes, Vietnamese when unsaid.
+    expect(codes('google_business', { language: 'en' })).toEqual([]);
+    expect(codes('google_business', { language: 'english' })).toEqual(['GBP_INVALID']);
     expect(codes('google_business', { cta: 'SHOP' }, null)).toEqual(['GBP_CTA_NEEDS_LINK']);
     expect(codes('google_business', { cta: 'CALL' }, null)).toEqual([]);
     expect(codes('facebook_page', { topic: 'STANDARD' })).toEqual(['GBP_NOT_SUPPORTED']);

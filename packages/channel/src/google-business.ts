@@ -20,6 +20,9 @@ export const GBP_CTA_TYPES = ['BOOK', 'ORDER', 'SHOP', 'LEARN_MORE', 'SIGN_UP', 
 export type GbpCtaType = (typeof GBP_CTA_TYPES)[number];
 export const GBP_TOPICS = ['STANDARD', 'EVENT', 'OFFER'] as const;
 export type GbpTopic = (typeof GBP_TOPICS)[number];
+// The languages a post may be written in (#730); Vietnamese when the post does not say.
+export const GBP_LANGUAGES = ['vi', 'en', 'zh', 'ja', 'ko'] as const;
+export type GbpLanguage = (typeof GBP_LANGUAGES)[number];
 export const GBP_SUMMARY_MAX = 1500;
 export const GBP_EVENT_TITLE_MAX = 58;
 const LOCATION = /^accounts\/\d{1,32}\/locations\/\d{1,32}$/;
@@ -236,6 +239,7 @@ function publishResult(error: unknown): PublishResult {
 // A post's Business Profile settings (`settings.gbp`): its topic, call to action, event and offer.
 export interface GbpSettings {
   topic: GbpTopic;
+  language: GbpLanguage;
   cta: GbpCtaType | null;
   event: { title: string; startDate: string; startTime: string | null; endDate: string; endTime: string | null } | null;
   offer: { couponCode: string | null; terms: string | null } | null;
@@ -245,12 +249,13 @@ export interface GbpSettings {
 // without an event's dates).
 export function gbpSettingsOf(settings: Readonly<Record<string, unknown>>): GbpSettings | null {
   const raw = settings.gbp;
-  if (raw === undefined || raw === null) return { topic: 'STANDARD', cta: null, event: null, offer: null };
+  if (raw === undefined || raw === null) return { topic: 'STANDARD', language: 'vi', cta: null, event: null, offer: null };
   if (typeof raw !== 'object' || Array.isArray(raw)) return null;
   const g = raw as Record<string, unknown>;
   const topic = g.topic === undefined ? 'STANDARD' : GBP_TOPICS.find((t) => t === g.topic);
   const cta = g.cta === undefined || g.cta === null ? null : (GBP_CTA_TYPES.find((c) => c === g.cta) ?? undefined);
-  if (!topic || cta === undefined) return null;
+  const language = g.language === undefined || g.language === null ? 'vi' : GBP_LANGUAGES.find((l) => l === g.language);
+  if (!topic || cta === undefined || !language) return null;
   let event: GbpSettings['event'] = null;
   if (topic !== 'STANDARD') {
     const e = (g.event ?? {}) as Record<string, unknown>;
@@ -273,7 +278,7 @@ export function gbpSettingsOf(settings: Readonly<Record<string, unknown>>): GbpS
     const text = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
     offer = { couponCode: text(o.couponCode, 58), terms: text(o.terms, 5000) };
   }
-  return { topic, cta, event, offer };
+  return { topic, language, cta, event, offer };
 }
 
 const dateOf = (day: string) => {
@@ -314,7 +319,7 @@ export class GoogleBusinessPublisher implements Publisher {
       if (!photo) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
     }
     const body = {
-      languageCode: 'vi',
+      languageCode: g.language,
       summary,
       topicType: g.topic,
       ...(g.cta ? { callToAction: { actionType: g.cta, ...(g.cta === 'CALL' ? {} : { url: link }) } } : {}),

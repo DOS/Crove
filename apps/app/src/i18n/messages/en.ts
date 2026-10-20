@@ -1459,6 +1459,8 @@ export const en = {
       topics: { STANDARD: 'Update', EVENT: 'Event', OFFER: 'Offer' },
       cta: 'Button',
       noCta: 'No button',
+      language: 'Language',
+      languages: { vi: 'Vietnamese', en: 'English', zh: 'Chinese', ja: 'Japanese', ko: 'Korean' },
       ctas: { BOOK: 'Book', ORDER: 'Order', SHOP: 'Shop', LEARN_MORE: 'Learn more', SIGN_UP: 'Sign up', CALL: 'Call' },
       eventTitle: 'Event name',
       offerTitle: 'Offer name (optional)',
