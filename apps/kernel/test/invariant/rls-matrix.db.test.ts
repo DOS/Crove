@@ -42,6 +42,8 @@ const MACHINERY = new Set([
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_social.account_snapshot',
+  'crove_social.idea',
+  'crove_social.idea_label',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -123,6 +125,7 @@ const MUTE_KINDS = ['review_requested', 'decided', 'failed', 'comment'] as const
 const muteRows = new Map<string, number>();
 const socialPostRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), body: 'RLS matrix post' });
 const socialLabelRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), name: `rls-${tag()}`, color: 'blue', created_by: o.owner });
+const socialIdeaRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), title: 'RLS matrix idea', stage: 'new', created_by: o.owner });
 const socialReviewLinkRow = (o: { id: string; owner: string }) => {
   const post = socialPostRow(o);
   return { post, row: { org_id: o.id, id: randomUUID(), post_id: post.id, token_sha256: hex64(), created_by: o.owner, expires_at: new Date(Date.now() + 86_400_000).toISOString() } };
@@ -517,6 +520,22 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   // A metrics snapshot of a published variant (S8, issue #238): append-only, one per capture key.
   // An org's label for posts (#639): a name and a colour from the app's palette.
+  // An idea on the Social ideas board (#701), before it becomes a draft.
+  'crove_social.idea': { make: (o) => ({ row: socialIdeaRow(o) }) },
+  // A label on an idea (#701).
+  'crove_social.idea_label': {
+    make: (o) => {
+      const idea = socialIdeaRow(o);
+      const label = socialLabelRow(o);
+      return {
+        setup: [
+          { table: 'crove_social.idea', values: idea },
+          { table: 'crove_social.label', values: label },
+        ],
+        row: { org_id: o.id, idea_id: idea.id, label_id: label.id },
+      };
+    },
+  },
   'crove_social.label': { make: (o) => ({ row: socialLabelRow(o) }) },
   // A link's preview card (#641), cached per org and URL: asked for by a member, filled in by the worker.
   'crove_social.link_preview': {

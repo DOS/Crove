@@ -25,6 +25,7 @@ import {
 import { assertUsableAccounts, isInactiveDefaultRefusal } from './accounts.ts';
 import { postJournalEntry } from './ledger.ts';
 import { journalMemo } from './memo.ts';
+import { isOwnTaxCode } from './own-tax-code.ts';
 import { databaseToday, dateLabel, liveOpeningDate } from './period-lock.ts';
 
 function directionOf(payload: PurchaseProposal): DocumentDirection {
@@ -108,8 +109,8 @@ async function replaceableDocument(ctx: CommandContext, direction: DocumentDirec
 async function assertDirection(ctx: CommandContext, payload: PurchaseProposal): Promise<void> {
   const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).forShare().executeTakeFirst();
   const orgTaxCode = org?.tax_code ?? null;
-  const sellerTaxCode = parseTaxCode(payload.seller.taxCode)?.normalized ?? null;
-  const ownInvoice = orgTaxCode !== null && sellerTaxCode === orgTaxCode;
+  // The org's branches (#686) issue its own invoices too.
+  const ownInvoice = isOwnTaxCode(payload.seller.taxCode, orgTaxCode);
   if (directionOf(payload) === 'sale' && !ownInvoice) {
     throw new DomainError('NOT_OWN_SALE', 422, 'Mã số thuế người bán không phải mã số thuế của tổ chức nên không ghi sổ như hóa đơn bán ra được; hãy kiểm tra mã số thuế trong Cài đặt rồi đọc lại tệp');
   }

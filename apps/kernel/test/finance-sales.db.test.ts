@@ -493,4 +493,25 @@ suite('sales e-invoices (#313)', () => {
       }
     });
   });
+  it('reads an invoice from a branch of the org as a sale and keeps the branch code, and a branch of a supplier as a purchase (#686)', async () => {
+    const branch = `${SELLER_TAX_CODE}-001`;
+    const fromBranch = new TextEncoder().encode(FIXTURE.replace('<SHDon>1234</SHDon>', '<SHDon>6001</SHDon>').replace(`<MST>${SELLER_TAX_CODE}</MST>`, `<MST>${branch}</MST>`));
+    const sale = await read(fromBranch);
+    const saleDetail = await rpc('inbox/get', await tokenFor(owner), { id: sale });
+    expect(saleDetail.body).toMatchObject({ direction: 'sale' });
+    expect(saleDetail.body.payload).toMatchObject({ direction: 'sale', seller: { taxCode: branch }, buyer: { taxCode: BUYER_TAX_CODE } });
+    expect(saleDetail.body.payload.journal.map((j: { accountCode: string }) => j.accountCode)).toEqual(['131', '511', '3331']);
+    const recorded = await approve(sale);
+    const [doc] = await admin(async (c) => (await c.query(`SELECT direction FROM crove_finance.purchase_document WHERE id = $1`, [recorded.documentId])).rows);
+    expect(doc).toEqual({ direction: 'sale' });
+
+    // A supplier's branch selling to the org: still a purchase, and approved as one.
+    const supplierBranch = `${BUYER_TAX_CODE}-002`;
+    const purchaseXml = new TextDecoder().decode(invoice('6002', { purchase: true })).replace(`<MST>${BUYER_TAX_CODE}</MST>`, `<MST>${supplierBranch}</MST>`);
+    const purchase = await read(new TextEncoder().encode(purchaseXml));
+    const purchaseDetail = await rpc('inbox/get', await tokenFor(owner), { id: purchase });
+    expect(purchaseDetail.body).toMatchObject({ direction: 'purchase' });
+    expect(purchaseDetail.body.payload).toMatchObject({ seller: { taxCode: supplierBranch } });
+    await expect(approve(purchase)).resolves.toMatchObject({ documentId: expect.any(String) });
+  });
 });

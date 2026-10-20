@@ -8,6 +8,7 @@ import { zId, zPurchaseProposal, type DocumentDirection, type PurchaseProposal }
 import { defineQuery, readVerified, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { AiNotConfiguredError, AmountFormatError, type InvoiceReader } from '@crove/agent';
 import { journalMemo } from './memo.ts';
+import { isOwnTaxCode } from './own-tax-code.ts';
 import {
   bookableLines,
   bookableSaleLines,
@@ -46,7 +47,7 @@ export const fileForExtraction = defineQuery({
 });
 
 export interface InvoiceLookup {
-  // 'sale' when the seller's tax code is the org's own (crove_kernel.tenant.tax_code, issue #313).
+  // 'sale' when the seller's tax code is the org's own or one of its branches (crove_kernel.tenant.tax_code, #313, #686).
   direction: DocumentDirection;
   vendorDefault: string | null;
   duplicateDocumentId: string | null;
@@ -62,7 +63,7 @@ export const purchaseLookup = defineQuery({
     const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
     // A sale (issue #313): the org issued the invoice and numbers its own invoices, so a duplicate is the same series
     // and number whoever the customer is, and no account is remembered per customer.
-    const sale = Boolean(input.sellerTaxCode && org?.tax_code && input.sellerTaxCode === org.tax_code);
+    const sale = isOwnTaxCode(input.sellerTaxCode, org?.tax_code);
     const party =
       !sale && input.sellerTaxCode
         ? await ctx.trx
