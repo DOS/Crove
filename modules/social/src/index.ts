@@ -14,6 +14,7 @@ export * from './policy.ts';
 export * from './assign.ts';
 export * from './snippets.ts';
 export * from './labels.ts';
+export * from './calendar-notes.ts';
 export * from './ideas.ts';
 export * from './bio-page.ts';
 export * from './feeds.ts';
