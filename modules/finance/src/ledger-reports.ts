@@ -4,11 +4,12 @@
 // finance.ledger.export records, like finance.vat.export. The rules are pure functions in domain/ledger-reports.ts.
 //
 // Every posted entry counts, reversals included; the opening balance is every entry dated before the period.
+import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
 import { zAccountCode, zLedgerPeriod } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
-import { chartAccounts } from './accounts.ts';
+import { mergeChart, type OrgAccountRow, type Tt133AccountRow } from './accounts.ts';
 import {
   PAYABLE_ACCOUNT,
   RECEIVABLE_ACCOUNT,
@@ -61,28 +62,42 @@ interface LedgerData {
   parties: Map<string, PartyInfo>;
 }
 
+// What the one statement of loadLedgerData answers: each part a JSON array, money and dates as text (a JSON number
+// would lose a NUMERIC's digits in JavaScript; the text is what the driver returns for a NUMERIC or a date column).
+interface LedgerDataRow {
+  tt133: Tt133AccountRow[];
+  own: OrgAccountRow[];
+  opening: Array<{ account_code: string; party_id: string | null; debit: string | null; credit: string | null }>;
+  // Each line as [id, entry_date, description, reverses_entry_id, invoice_series, invoice_number, line_no, account_code,
+  // party_id, debit, credit]: an array, not an object, since a period may have tens of thousands of lines.
+  lines: Array<[string, string, string, string | null, string | null, string | null, number, string, string | null, string, string]>;
+  parties: Array<{ id: string; name: string; tax_code: string | null }>;
+}
+
+// The chart, the opening balance, the period's lines and their parties in ONE statement (#365): a statement sees one
+// snapshot even in the query's READ COMMITTED transaction, so an entry posted while the report reads is in all of it or
+// in none (four statements could show a reversal in the period without the entry it undoes in the opening balance).
+// The parts are typed Kysely queries; the statement around them only aggregates each into a JSON array.
 async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<LedgerData> {
   const period = ledgerPeriod(periodText);
   // The org's whole chart (#319): the TT133 accounts and the org's sub-accounts, inactive ones included (posted lines
   // may name them). A sub-account's parent is its parent_code, so it rolls up into its parent like a TT133 account.
-  const chart = [...(await chartAccounts(ctx)).values()]
-    .map((a) => ({ code: a.code, name: a.name, parentCode: a.parentCode }))
-    .sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+  const tt133 = ctx.trx.selectFrom('crove_finance.account').select(['code', 'name', 'parent_code']);
+  const own = ctx.trx.selectFrom('crove_finance.org_account').select(['code', 'name', 'parent_code', 'root_code', 'active']).where('org_id', '=', ctx.orgId);
 
   // The opening balance: the debits and credits of every entry dated before the period, per account and party.
-  const opening = await ctx.trx
+  const opening = ctx.trx
     .selectFrom('crove_finance.journal_line as l')
     .innerJoin('crove_finance.journal_entry as j', (join) => join.onRef('j.org_id', '=', 'l.org_id').onRef('j.id', '=', 'l.entry_id'))
     .select(['l.account_code', 'l.party_id'])
     .select((eb) => [eb.fn.sum<string>('l.debit').as('debit'), eb.fn.sum<string>('l.credit').as('credit')])
     .where('l.org_id', '=', ctx.orgId)
     .where('j.entry_date', '<', period.from)
-    .groupBy(['l.account_code', 'l.party_id'])
-    .orderBy('l.account_code')
-    .execute();
+    .groupBy(['l.account_code', 'l.party_id']);
 
-  // The period's lines in posting order; the purchase invoice an entry records gives its reference.
-  const rows = await ctx.trx
+  // The period's lines in posting order; the purchase invoice an entry records gives its reference. The aggregate
+  // below orders them again, which is what guarantees the order; sorting here first keeps that second sort cheap.
+  const lines = ctx.trx
     .selectFrom('crove_finance.journal_entry as j')
     .innerJoin('crove_finance.journal_line as l', (join) => join.onRef('l.org_id', '=', 'j.org_id').onRef('l.entry_id', '=', 'j.id'))
     .leftJoin('crove_finance.purchase_document as d', (join) =>
@@ -91,6 +106,7 @@ async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<Le
     .select([
       'j.id',
       'j.entry_date',
+      'j.created_at',
       'j.description',
       'j.reverses_entry_id',
       'd.invoice_series',
@@ -108,41 +124,59 @@ async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<Le
     .orderBy('j.created_at')
     .orderBy('j.id')
     .orderBy('l.line_no')
-    .limit(LEDGER_LINE_LIMIT + 1)
-    .execute();
-  if (rows.length > LEDGER_LINE_LIMIT) {
+    .limit(LEDGER_LINE_LIMIT + 1);
+
+  // The parties the opening balance and the lines name.
+  const parties = ctx.trx
+    .selectFrom('crove_kernel.party')
+    .select(['id', 'name', 'tax_code'])
+    .where('org_id', '=', ctx.orgId)
+    .where('id', 'in', sql<string>`(SELECT party_id FROM opening WHERE party_id IS NOT NULL UNION SELECT party_id FROM lines WHERE party_id IS NOT NULL)`);
+
+  const { rows } = await sql<LedgerDataRow>`
+    WITH opening AS ${opening}, lines AS ${lines}
+    SELECT
+      (SELECT coalesce(json_agg(json_build_object('code', a.code, 'name', a.name, 'parent_code', a.parent_code)), '[]') FROM ${tt133} AS a) AS tt133,
+      (SELECT coalesce(json_agg(json_build_object('code', a.code, 'name', a.name, 'parent_code', a.parent_code, 'root_code', a.root_code, 'active', a.active)), '[]')
+         FROM ${own} AS a) AS own,
+      (SELECT coalesce(json_agg(json_build_object('account_code', o.account_code, 'party_id', o.party_id, 'debit', o.debit::text, 'credit', o.credit::text)
+                                ORDER BY o.account_code), '[]')
+         FROM opening AS o) AS opening,
+      (SELECT coalesce(json_agg(json_build_array(r.id, r.entry_date::text, r.description, r.reverses_entry_id, r.invoice_series, r.invoice_number,
+                                                 r.line_no, r.account_code, r.party_id, r.debit::text, r.credit::text)
+                                ORDER BY r.entry_date, r.created_at, r.id, r.line_no), '[]')
+         FROM lines AS r) AS lines,
+      (SELECT coalesce(json_agg(json_build_object('id', p.id, 'name', p.name, 'tax_code', p.tax_code)), '[]') FROM ${parties} AS p) AS parties
+  `.execute(ctx.trx);
+  const data = rows[0];
+  if (!data) throw new Error('the ledger statement returned no row');
+  if (data.lines.length > LEDGER_LINE_LIMIT) {
     throw new DomainError('PERIOD_TOO_LARGE', 422, `Kỳ này có hơn ${LEDGER_LINE_LIMIT} dòng bút toán; hãy chọn kỳ ngắn hơn`);
   }
 
-  const partyIds = [...new Set([...opening, ...rows].flatMap((r) => (r.party_id ? [r.party_id] : [])))];
-  const parties = new Map<string, PartyInfo>();
-  if (partyIds.length > 0) {
-    const found = await ctx.trx
-      .selectFrom('crove_kernel.party')
-      .select(['id', 'name', 'tax_code'])
-      .where('org_id', '=', ctx.orgId)
-      .where('id', 'in', partyIds)
-      .execute();
-    for (const p of found) parties.set(p.id, { name: p.name, taxCode: p.tax_code });
-  }
+  const chart = [...mergeChart(data.tt133, data.own).values()]
+    .map((a) => ({ code: a.code, name: a.name, parentCode: a.parentCode }))
+    .sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+  const partyInfo = new Map<string, PartyInfo>();
+  for (const p of data.parties) partyInfo.set(p.id, { name: p.name, taxCode: p.tax_code });
 
   return {
     period,
     chart,
-    opening: opening.map((o) => ({ accountCode: o.account_code, partyId: o.party_id, debit: o.debit ?? '0', credit: o.credit ?? '0' })),
-    lines: rows.map((r) => ({
-      entryId: r.id,
-      entryDate: r.entry_date,
-      reference: r.invoice_number ? `${r.invoice_series ? `${r.invoice_series}-` : ''}${r.invoice_number}` : null,
-      description: r.description,
-      reversal: r.reverses_entry_id !== null,
-      lineNo: r.line_no,
-      accountCode: r.account_code,
-      partyId: r.party_id,
-      debit: r.debit,
-      credit: r.credit,
+    opening: data.opening.map((o) => ({ accountCode: o.account_code, partyId: o.party_id, debit: o.debit ?? '0', credit: o.credit ?? '0' })),
+    lines: data.lines.map(([id, entryDate, description, reversesEntryId, invoiceSeries, invoiceNumber, lineNo, accountCode, partyId, debit, credit]) => ({
+      entryId: id,
+      entryDate,
+      reference: invoiceNumber ? `${invoiceSeries ? `${invoiceSeries}-` : ''}${invoiceNumber}` : null,
+      description,
+      reversal: reversesEntryId !== null,
+      lineNo,
+      accountCode,
+      partyId,
+      debit,
+      credit,
     })),
-    parties,
+    parties: partyInfo,
   };
 }
 
