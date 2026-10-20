@@ -42,6 +42,8 @@ export const EXPORT_TABLES = {
   'kernel.mail_event': { from: 'crove_kernel.mail_event', omit: [] },
   'finance.purchase_document': { from: 'crove_finance.purchase_document', omit: [] },
   'finance.purchase_line': { from: 'crove_finance.purchase_line', omit: [] },
+  // The invoice's own VAT table by rate (#685).
+  'finance.purchase_tax_rate': { from: 'crove_finance.purchase_tax_rate', omit: [] },
   'finance.journal_entry': { from: 'crove_finance.journal_entry', omit: [] },
   'finance.journal_line': { from: 'crove_finance.journal_line', omit: [] },
   'finance.vendor_account_rule': { from: 'crove_finance.vendor_account_rule', omit: [] },
