@@ -325,7 +325,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         job.data,
         job.retryCount,
       );
-      console.log(`[inbound] message ${label}: ${result.duplicate ? 'duplicate' : `${result.fileIds.length} file(s)`}`);
+      console.log(`[inbound] message ${label}: ${'bounce' in result ? `bounce report, ${result.bounce}` : result.duplicate ? 'duplicate' : `${result.fileIds.length} file(s)`}`);
     } catch (error) {
       // A message no org can receive (unknown or closed recipient, invalid content) is dropped, not retried.
       if (!(error instanceof DomainError && error.status !== 409 && error.status < 500)) {
