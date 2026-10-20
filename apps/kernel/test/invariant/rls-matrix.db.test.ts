@@ -41,6 +41,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.notification_mail_off',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -589,6 +590,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   // A notification for one member (#637), written once per event and person. A restrictive policy shows each member
   // only their own; the factory's rows belong to the owner, the user every member-context actor enters as.
   'crove_social.notification': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner, kind: 'comment', event_id: randomUUID() } }) },
+  // A member who turned Social emails off (#579), under the same restrictive policy as the mutes.
+  'crove_social.notification_mail_off': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner } }) },
   // A kind of notification a member turned off (#637), under the same restrictive policy. One row per member and kind:
   // an org's first row (the seeded one) takes the first kind, every later row (a probe, rolled back) another one.
   'crove_social.notification_mute': {
