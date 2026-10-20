@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { COMMENT_RULES, COVER_RULES, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { COMMENT_RULES, COVER_RULES, GBP_CTAS, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
@@ -240,6 +240,8 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('POLL_OPTIONS', { limit });
       case 'POLL_OPTION_LENGTH':
         return t('POLL_OPTION_LENGTH', { limit });
+      case 'GBP_INVALID':
+        return t('GBP_INVALID', { limit: limit || 58 });
       case 'TOPIC_TAG_INVALID':
         return t('TOPIC_TAG_INVALID', { limit });
       // Which image: media.<index> on the issue, counted from 1 for the person.
@@ -476,6 +478,98 @@ function PollAndTagField({ provider, settings, onChange, disabled }: { provider:
   );
 }
 
+// Google Business Profile posts (#709): a standard post, an event or an offer, with an optional call to action whose
+// URL is the post's link (CALL dials the profile's number). Events and offers have dates; an offer has a coupon code
+// and terms. Kept as typed; the checks say what Google would refuse.
+function GbpField({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social.gbp');
+  const g = provider === 'google_business' ? gbpOf(settings) : null;
+  if (!g) return null;
+  const set = (next: typeof g) =>
+    onChange({
+      ...settings,
+      gbp: {
+        topic: next.topic,
+        ...(next.cta ? { cta: next.cta } : {}),
+        ...(next.topic !== 'STANDARD' ? { event: next.event } : {}),
+        ...(next.topic === 'OFFER' ? { offer: next.offer } : {}),
+      },
+    });
+  const id = (name: string) => `gbp-${name}`;
+  return (
+    <div className="space-y-2 rounded-lg border p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={id('topic')} className="text-xs">
+          {t('topic')}
+        </Label>
+        <NativeSelect id={id('topic')} size="sm" className="w-auto" value={g.topic} disabled={disabled} onChange={(e) => set({ ...g, topic: e.target.value as typeof g.topic })}>
+          {GBP_TOPICS.map((x) => (
+            <NativeSelectOption key={x} value={x}>
+              {t(`topics.${x}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <Label htmlFor={id('cta')} className="text-xs">
+          {t('cta')}
+        </Label>
+        <NativeSelect id={id('cta')} size="sm" className="w-auto" value={g.cta ?? ''} disabled={disabled} onChange={(e) => set({ ...g, cta: (e.target.value || null) as typeof g.cta })}>
+          <NativeSelectOption value="">{t('noCta')}</NativeSelectOption>
+          {GBP_CTAS.map((x) => (
+            <NativeSelectOption key={x} value={x}>
+              {t(`ctas.${x}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      {g.topic !== 'STANDARD' && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="space-y-1 sm:col-span-2">
+            <Label htmlFor={id('title')} className="text-xs">
+              {t(g.topic === 'EVENT' ? 'eventTitle' : 'offerTitle')}
+            </Label>
+            <Input id={id('title')} value={g.event.title} maxLength={58} disabled={disabled} className="h-8" onChange={(e) => set({ ...g, event: { ...g.event, title: e.target.value } })} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor={id('start')} className="text-xs">
+              {t('starts')}
+            </Label>
+            <div className="flex gap-1.5">
+              <Input id={id('start')} type="date" value={g.event.startDate} disabled={disabled} className="h-8" onChange={(e) => set({ ...g, event: { ...g.event, startDate: e.target.value } })} />
+              <Input type="time" aria-label={t('startTime')} value={g.event.startTime} disabled={disabled} className="h-8 w-28" onChange={(e) => set({ ...g, event: { ...g.event, startTime: e.target.value } })} />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor={id('end')} className="text-xs">
+              {t('ends')}
+            </Label>
+            <div className="flex gap-1.5">
+              <Input id={id('end')} type="date" value={g.event.endDate} disabled={disabled} className="h-8" onChange={(e) => set({ ...g, event: { ...g.event, endDate: e.target.value } })} />
+              <Input type="time" aria-label={t('endTime')} value={g.event.endTime} disabled={disabled} className="h-8 w-28" onChange={(e) => set({ ...g, event: { ...g.event, endTime: e.target.value } })} />
+            </div>
+          </div>
+        </div>
+      )}
+      {g.topic === 'OFFER' && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="space-y-1">
+            <Label htmlFor={id('coupon')} className="text-xs">
+              {t('coupon')}
+            </Label>
+            <Input id={id('coupon')} value={g.offer.couponCode} maxLength={58} disabled={disabled} className="h-8" onChange={(e) => set({ ...g, offer: { ...g.offer, couponCode: e.target.value } })} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor={id('terms')} className="text-xs">
+              {t('terms')}
+            </Label>
+            <Input id={id('terms')} value={g.offer.terms} maxLength={5000} disabled={disabled} className="h-8" onChange={(e) => set({ ...g, offer: { ...g.offer, terms: e.target.value } })} />
+          </div>
+        </div>
+      )}
+      <p className="text-xs text-subtle-foreground">{t('hint')}</p>
+    </div>
+  );
+}
+
 function ChannelEditor({
   provider,
   channel,
@@ -530,6 +624,7 @@ function ChannelEditor({
       </div>
       <PostTypeField provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <PollAndTagField provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
+      <GbpField provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <label className="flex items-center gap-2 text-sm text-muted-foreground">
         <Checkbox checked={own.custom} disabled={disabled} onCheckedChange={(checked) => onChange({ ...own, custom: checked === true, body: own.body || base.body })} />
         {t('ownText')}
