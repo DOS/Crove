@@ -41,6 +41,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.brand_voice',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -534,6 +535,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     noInsertControl: 'only the bio page definer counts clicks, for a visitor following a link; tenant roles may only read them',
   },
   'crove_social.bio_page': { make: (o) => ({ row: socialBioPageRow(o) }) },
+  // The org's brand voice for AI drafts, or one channel's (#741).
+  'crove_social.brand_voice': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), description: 'RLS matrix voice', updated_by: o.owner } }) },
   // The review policy of a channel (S9, issue #394): how many people approve a variant, and whether its reviewers
   // are reminded (#703), one row per connection.
   'crove_social.channel_policy': {
