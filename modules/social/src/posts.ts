@@ -182,38 +182,95 @@ export const zPostCreate = z.strictObject({
   aiAssisted: z.literal(true).optional(),
 });
 
+async function createPost(ctx: CommandContext, input: z.infer<typeof zPostCreate>) {
+  const userId = requireUser(ctx);
+  distinctConnections(input.channels);
+  const media = await resolveMedia(ctx, input.media ?? []);
+  const inserted = await ctx.trx
+    .insertInto('crove_social.post')
+    .values({
+      org_id: ctx.orgId,
+      body: input.body,
+      title: input.title ?? null,
+      link_url: input.linkUrl ?? null,
+      // The surface sets actor_origin once API and MCP clients exist; today every write comes from the app.
+      origin: input.origin ?? 'human',
+      tainted: input.origin === 'ai' || input.aiAssisted === true,
+      actor_origin: 'ui',
+      author_user_id: userId,
+      ...(input.timeZone ? { time_zone: input.timeZone } : {}),
+      scheduled_at: input.scheduledAt ?? null,
+    })
+    .returning(POST_COLUMNS)
+    .executeTakeFirstOrThrow();
+  await writePostMedia(ctx, inserted.id, media);
+  const post: PostRow = { ...inserted, media };
+  const variants = await insertVariants(ctx, post, input.channels, 0);
+  await ctx.emit('social.post.created', { post_id: post.id });
+  return { post, variants, media };
+}
+
 export const postCreate = defineCommand({
   name: 'social.post.create',
   input: zPostCreate,
   risk: 'R1',
   access: MEMBERS,
   handler: async (ctx, input) => {
-    const userId = requireUser(ctx);
-    distinctConnections(input.channels);
-    const media = await resolveMedia(ctx, input.media ?? []);
-    const inserted = await ctx.trx
-      .insertInto('crove_social.post')
-      .values({
-        org_id: ctx.orgId,
-        body: input.body,
-        title: input.title ?? null,
-        link_url: input.linkUrl ?? null,
-        // The surface sets actor_origin once API and MCP clients exist; today every write comes from the app.
-        origin: input.origin ?? 'human',
-        tainted: input.origin === 'ai' || input.aiAssisted === true,
-        actor_origin: 'ui',
-        author_user_id: userId,
-        ...(input.timeZone ? { time_zone: input.timeZone } : {}),
-        scheduled_at: input.scheduledAt ?? null,
-      })
-      .returning(POST_COLUMNS)
-      .executeTakeFirstOrThrow();
-    await writePostMedia(ctx, inserted.id, media);
-    const post: PostRow = { ...inserted, media };
-    const variants = await insertVariants(ctx, post, input.channels, 0);
+    const { post, variants, media } = await createPost(ctx, input);
     ctx.audit({ post_id: post.id, variants: variants.length, media: media.length, origin: input.origin ?? 'human' });
-    await ctx.emit('social.post.created', { post_id: post.id });
     return { postId: post.id, revision: post.revision, variants };
+  },
+});
+
+// Many drafts at once from a sheet (#586): each row a post for its channels, text only (images are added on the post
+// afterwards). With submit, the channels that fit their rules go to review; nothing is published without one.
+export const MAX_IMPORT_ROWS = 200;
+export const postImport = defineCommand({
+  name: 'social.post.import',
+  input: z.strictObject({
+    posts: z
+      .array(
+        z.strictObject({
+          body: zBody,
+          title: zTitle.nullable().optional(),
+          linkUrl: zLink.nullable().optional(),
+          scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
+          timeZone: zTimeZone.optional(),
+          connectionIds: z.array(zId).min(1).max(MAX_CHANNELS_PER_POST),
+        }),
+      )
+      .min(1)
+      .max(MAX_IMPORT_ROWS),
+    submit: z.boolean().optional(),
+  }),
+  risk: 'R1',
+  access: MEMBERS,
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const created: { postId: string; submitted: number }[] = [];
+    for (const row of input.posts) {
+      const { post, variants } = await createPost(ctx, {
+        body: row.body,
+        title: row.title ?? null,
+        linkUrl: row.linkUrl ?? null,
+        ...(row.scheduledAt ? { scheduledAt: row.scheduledAt } : {}),
+        ...(row.timeZone ? { timeZone: row.timeZone } : {}),
+        channels: row.connectionIds.map((connectionId) => ({ connectionId })),
+      });
+      let submitted = 0;
+      if (input.submit) {
+        const ready = (await lockVariants(ctx.trx, ctx.orgId, post.id)).filter((v) => variants.some((c) => c.variantId === v.id) && issuesOf(base(post), v).length === 0);
+        for (const v of ready) await setVariant(ctx, v.id, { status: step(v, { type: 'submit' }) });
+        if (ready.length > 0) {
+          await refreshPostStatus(ctx, post.id);
+          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: ready.map((v) => v.id) });
+        }
+        submitted = ready.length;
+      }
+      created.push({ postId: post.id, submitted });
+    }
+    ctx.audit({ posts: created.length, submitted: created.reduce((n, c) => n + c.submitted, 0) });
+    return { posts: created };
   },
 });
 
@@ -605,6 +662,35 @@ export const variantUnschedule = defineCommand({
     for (const v of chosen) await setVariant(ctx, v.id, { status: step(v, { type: 'unschedule' }), queue_slot_at: null, scheduled_at: null, error_retry_at: null });
     await refreshPostStatus(ctx, postId);
     return { postId, variants: chosen.map((v) => v.id) };
+  },
+});
+
+// Moves a scheduled variant to another time (#580, the calendar's drag): its approvals stay, since its content does
+// not change. A variant waiting on a queue slot leaves the slot for the exact time.
+export const variantReschedule = defineCommand({
+  name: 'social.variant.reschedule',
+  input: z.strictObject({ variantId: zId, at: z.iso.datetime({ offset: true }) }),
+  risk: 'R2',
+  access: ADMINS,
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const postId = await variantPost(ctx.trx, ctx.orgId, [input.variantId]);
+    await lockPost(ctx.trx, ctx.orgId, postId);
+    const [v] = pick(await lockVariants(ctx.trx, ctx.orgId, postId), [input.variantId]);
+    if (!v) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy kênh này của bài đăng');
+    if (v.status !== 'scheduled') throw new DomainError('VARIANT_STATE', 409, 'Chỉ đổi giờ được kênh đã lên lịch', { variantId: v.id, status: v.status });
+    const at = new Date(Date.parse(input.at));
+    if (at.getTime() <= ctx.now.getTime()) throw new DomainError('SCHEDULE_IN_PAST', 422, 'Giờ đăng phải ở tương lai', { variantId: v.id });
+    // A variant waiting on a slot of a paused queue stays held by the pause: moving it to an exact time would let it go out.
+    if (v.queue_slot_at && !v.scheduled_at && !v.error_retry_at) {
+      const queue = await ctx.trx.selectFrom('crove_social.queue').select('paused').where('org_id', '=', ctx.orgId).where('channel_connection_id', '=', v.channel_connection_id).executeTakeFirst();
+      if (queue?.paused) throw new DomainError('QUEUE_PAUSED', 409, 'Hàng đợi của kênh này đang tạm dừng; hãy chạy lại hàng đợi hoặc bỏ lịch trước', { variantId: v.id });
+    }
+    // The earlier refusal and its retry time belong to the old time.
+    await setVariant(ctx, v.id, { ...CLEAR_ERROR, scheduled_at: at, queue_slot_at: null });
+    await refreshPostStatus(ctx, postId);
+    await ctx.emit('social.variant.scheduled', { post_id: postId, variant_ids: [v.id], rescheduled: true });
+    return { postId, variantId: v.id, at: at.toISOString() };
   },
 });
 
@@ -1052,6 +1138,7 @@ export const queueGet = defineQuery({
 
 export const socialCommands = [
   postCreate,
+  postImport,
   postAddChannels,
   postUpdate,
   variantUpdate,
@@ -1059,6 +1146,7 @@ export const socialCommands = [
   variantDecide,
   variantSchedule,
   variantUnschedule,
+  variantReschedule,
   variantCancel,
   queueSet,
   ...publishingCommands,

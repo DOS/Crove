@@ -243,9 +243,9 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const [lineAccounts, setLineAccounts] = useState<Record<number, string>>({});
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [acceptFailed, setAcceptFailed] = useState(false);
-  // A purchase invoice dated in a locked month (#478): the approver may post it on a date in an open month, by choice
-  // only (unticked, the approval posts on the invoice date and the kernel refuses it, as before). The date starts at
-  // the first open day.
+  // A purchase invoice dated in a locked month (#478), or on or before the opening balances (#366): the approver may
+  // post it on a later date, by choice only (unticked, the approval posts on the invoice date and the kernel refuses
+  // it, as before). The date starts at the first day after both.
   const [postLate, setPostLate] = useState(false);
   const [postingDate, setPostingDate] = useState<string | null>(null);
 
@@ -258,11 +258,15 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const sale = payload?.direction === 'sale';
   const lockState = useQuery({ ...orpc.periodLock.state.queryOptions(), enabled: finance && !!payload && !sale });
   const lockedThrough = lockState.data?.lockedThrough ?? null;
+  const openingDate = lockState.data?.openingDate ?? null;
   const invoiceLocked = !!payload && !sale && lockedThrough !== null && payload.invoice.issueDate <= lockedThrough;
-  const firstOpenDay = lockedThrough ? nextDay(lockedThrough) : null;
+  const invoiceBeforeOpening = !!payload && !sale && openingDate !== null && payload.invoice.issueDate <= openingDate;
+  // The last day nothing posts on: the later of the lock and the opening entry.
+  const closedThrough = [lockedThrough, openingDate].filter((d): d is string => d !== null).sort().at(-1) ?? null;
+  const firstOpenDay = closedThrough ? nextDay(closedThrough) : null;
   const chosenPostingDate = postingDate ?? firstOpenDay;
-  const latePosting = invoiceLocked && postLate ? chosenPostingDate : null;
-  const latePostingValid = latePosting === null || (lockedThrough !== null && postingDateAllowed(latePosting, lockedThrough, vietnamToday()));
+  const latePosting = (invoiceLocked || invoiceBeforeOpening) && postLate ? chosenPostingDate : null;
+  const latePostingValid = latePosting === null || (closedThrough !== null && postingDateAllowed(latePosting, closedThrough, vietnamToday()));
   const journal = useMemo(
     () => (payload ? (payload.direction === 'sale' ? previewSalesJournal : previewPurchaseJournal)(lines, payload.invoice.vatTotal) : []),
     [payload, lines],
@@ -570,14 +574,23 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
         </div>
       )}
 
-      {pending && invoiceLocked && payload && lockedThrough && firstOpenDay && (
+      {pending && (invoiceLocked || invoiceBeforeOpening) && payload && firstOpenDay && (
         <Card className="mb-4 block space-y-3 border border-warning/60 p-4 ring-0" data-testid="late-posting">
-          <p className="text-sm font-medium text-foreground">{t('lateTitle', { through: f.date(lockedThrough) })}</p>
-          <p className="text-sm text-muted-foreground">{t('lateNotice', { date: f.date(payload.invoice.issueDate) })}</p>
+          {invoiceLocked && lockedThrough ? (
+            <>
+              <p className="text-sm font-medium text-foreground">{t('lateTitle', { through: f.date(lockedThrough) })}</p>
+              <p className="text-sm text-muted-foreground">{t('lateNotice', { date: f.date(payload.invoice.issueDate) })}</p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-foreground">{t('lateTitleOpening', { date: f.date(openingDate ?? '') })}</p>
+              <p className="text-sm text-muted-foreground">{t('lateNoticeOpening', { date: f.date(payload.invoice.issueDate) })}</p>
+            </>
+          )}
           {item.canApprove && (
             <Label className="font-normal text-muted-foreground">
               <Checkbox checked={postLate} disabled={busy} onCheckedChange={(checked) => setPostLate(checked)} />
-              {t('latePost')}
+              {invoiceLocked ? t('latePost') : t('latePostOpening')}
             </Label>
           )}
           {item.canApprove && postLate && (

@@ -12,6 +12,7 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
+import { SocialCalendar } from '../components/social-calendar.tsx';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -428,6 +429,11 @@ export function SocialPage() {
             <Link to="/o/$slug/social/channels" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
               {t('channels')}
             </Link>
+            {canWrite && !noChannels && (
+              <Link to="/o/$slug/social/import" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+                {t('import.open')}
+              </Link>
+            )}
             {!canWrite ? null : noChannels ? (
               <Button size="lg" disabled>
                 {t('compose')}
@@ -500,6 +506,7 @@ export function SocialPage() {
         <TabsContent value="upcoming">
           {upcoming.isLoading ? <Spinner /> : upcoming.error ? <ErrorText>{errorMessage(upcoming.error)}</ErrorText> : <Agenda posts={upcoming.data ?? []} slug={slug} names={names} />}
         </TabsContent>
+        <TabsContent value="calendar">{tab === 'calendar' && <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} />}</TabsContent>
         <TabsContent value="metrics">
           <Metrics slug={slug} names={names} />
         </TabsContent>

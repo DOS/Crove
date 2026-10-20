@@ -301,6 +301,13 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         addChannels: os.social.posts.addChannels.handler(socialCommand('social.post.add_channels')),
         submit: os.social.posts.submit.handler(socialCommand('social.post.submit')),
         repost: os.social.posts.repost.handler(socialCommand('social.post.repost')),
+        // A retry with the same idempotencyKey returns the first import instead of a second set of posts.
+        import: os.social.posts.import.handler(({ context, input }) =>
+          inSocial(context, (orgId, actor) => {
+            const { idempotencyKey, ...rest } = input;
+            return runtime.execute('social.post.import', rest, { actor, orgId, idempotencyKey });
+          }),
+        ),
         duplicate: os.social.posts.duplicate.handler(socialCommand('social.post.duplicate')),
         setEvergreen: os.social.posts.setEvergreen.handler(socialCommand('social.post.set_evergreen')),
         draftWithAi: os.social.posts.draftWithAi.handler(({ context, input }) =>
@@ -387,6 +394,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         decide: os.social.variants.decide.handler(socialCommand('social.variant.decide')),
         schedule: os.social.variants.schedule.handler(socialCommand('social.variant.schedule')),
         unschedule: os.social.variants.unschedule.handler(socialCommand('social.variant.unschedule')),
+        reschedule: os.social.variants.reschedule.handler(socialCommand('social.variant.reschedule')),
         cancel: os.social.variants.cancel.handler(socialCommand('social.variant.cancel')),
         retry: os.social.variants.retry.handler(socialCommand('social.variant.retry')),
         resolve: os.social.variants.resolve.handler(socialCommand('social.variant.resolve')),

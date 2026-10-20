@@ -42,11 +42,31 @@ export async function chartAccounts(ctx: QueryContext, codes?: readonly string[]
     tt133 = tt133.where('code', 'in', [...codes]);
     own = own.where('code', 'in', [...codes]);
   }
+  return mergeChart(await tt133.execute(), await own.execute());
+}
+
+// A row of crove_finance.account (the TT133 accounts) and of crove_finance.org_account (the org's sub-accounts).
+export interface Tt133AccountRow {
+  code: string;
+  name: string;
+  parent_code: string | null;
+}
+export interface OrgAccountRow {
+  code: string;
+  name: string;
+  parent_code: string;
+  root_code: string;
+  active: boolean;
+}
+
+// One chart from both tables, for readers that select the rows themselves (the ledger reports read them in the same
+// statement as the journal lines). A TT133 account wins over a sub-account of the same code.
+export function mergeChart(tt133: readonly Tt133AccountRow[], own: readonly OrgAccountRow[]): Map<string, OrgChartAccount> {
   const chart = new Map<string, OrgChartAccount>();
-  for (const a of await tt133.execute()) {
+  for (const a of tt133) {
     chart.set(a.code, { code: a.code, name: a.name, parentCode: a.parent_code, rootCode: a.code, active: true, custom: false });
   }
-  for (const a of await own.execute()) {
+  for (const a of own) {
     if (chart.has(a.code)) continue;
     chart.set(a.code, { code: a.code, name: a.name, parentCode: a.parent_code, rootCode: a.root_code, active: a.active, custom: true });
   }

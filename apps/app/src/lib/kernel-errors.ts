@@ -94,6 +94,8 @@ export const KERNEL_ERROR_CODES = [
   'OPENING_BALANCE_AFTER_ENTRIES',
   'OPENING_BALANCE_INVALID',
   'OPENING_REVERSAL_DATE',
+  // An entry dated on or before the opening entry (#366).
+  'BEFORE_OPENING_BALANCE',
   // The tax portal's purchase list (#465).
   'PORTAL_LIST_EXISTS',
   'PORTAL_LIST_LIMIT',
@@ -169,6 +171,7 @@ export const KERNEL_ERROR_CODES = [
   'VARIANT_INVALID',
   'VARIANT_IN_FLIGHT',
   'APPROVAL_REQUIRED',
+  'QUEUE_PAUSED',
   'APPROVALS_MISSING',
   'VARIANT_MEDIA_INVALID',
   'CHANNEL_ALREADY_IN_POST',
@@ -228,6 +231,10 @@ export const KERNEL_ERROR_RULES = {
   invite_org_per_day: 'INVITE_RATE_LIMITED',
   invite_email_per_day: 'INVITE_RATE_LIMITED',
   invite_recipient_per_day: 'INVITE_RATE_LIMITED',
+  // An entry dated on or before the opening balances (#366), worded by what the user can do about it.
+  before_opening_posting_date: 'BEFORE_OPENING_BALANCE',
+  before_opening_fixed: 'BEFORE_OPENING_BALANCE',
+  before_opening_later_date: 'BEFORE_OPENING_BALANCE',
 } as const satisfies Record<string, KernelErrorCode>;
 
 type KernelErrorRule = keyof typeof KERNEL_ERROR_RULES;

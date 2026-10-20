@@ -1,7 +1,7 @@
 // Compose a post and work on it: shared text, a variant per channel that inherits it or has its own text, live
 // channel rules and a preview, then review (owners and admins decide on what they see), schedule and cancel.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useNavigate, useParams } from '@tanstack/react-router';
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
@@ -14,7 +14,8 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
 import { isProvider, sentLink, utmOf, type Issue } from '@crove/mod-social/contract';
-import { MediaField, MediaPreview, type MediaItem } from '../components/social-media.tsx';
+import { MediaField, type MediaItem } from '../components/social-media.tsx';
+import { PlatformPreview } from '../components/social-preview.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -155,36 +156,6 @@ function Counter({ provider, body, linkUrl, mediaCount }: { provider: string; bo
   if (max === null) return null;
   const over = used > max;
   return <span className={cn('font-mono text-xs tabular-nums', over ? 'text-destructive' : used > max * 0.9 ? 'text-warning' : 'text-subtle-foreground')}>{used}/{max}</span>;
-}
-
-// How the post reads on the channel: name, text, title and link, without the platform's chrome.
-function Preview({ channel, provider, content }: { channel: string; provider: string; content: { body: string; title: string; linkUrl: string; media: readonly MediaItem[] } }) {
-  const t = useTranslations('social');
-  let host = '';
-  try {
-    host = content.linkUrl ? new URL(content.linkUrl).host : '';
-  } catch {
-    host = '';
-  }
-  return (
-    <div className="rounded-xl border bg-background p-3">
-      <div className="flex items-center gap-2">
-        <span className="flex size-8 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-link">{channel.slice(0, 1).toUpperCase()}</span>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-foreground">{channel}</p>
-          <p className="text-xs text-subtle-foreground">{providerName(provider)}</p>
-        </div>
-      </div>
-      {hasTitle(provider) && content.title && <p className="mt-3 text-sm font-semibold text-foreground">{content.title}</p>}
-      <p className="mt-2 text-sm [overflow-wrap:anywhere] whitespace-pre-wrap text-foreground">{content.body || <span className="text-subtle-foreground">{t('emptyText')}</span>}</p>
-      <MediaPreview media={content.media} />
-      {host && (
-        <div className="mt-3 rounded-lg border bg-muted px-3 py-2 text-xs text-muted-foreground">
-          <span className="font-mono">{host}</span>
-        </div>
-      )}
-    </div>
-  );
 }
 
 type UtmTags = { campaign: string; medium: string };
@@ -342,7 +313,7 @@ function ChannelEditor({
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
       <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
-      <Preview channel={channel} provider={provider} content={content} />
+      <PlatformPreview channel={channel} provider={provider} content={content} />
       {footer}
     </Card>
   );
@@ -393,6 +364,7 @@ const mediaItems = (media: readonly { fileId: string; altText: string | null; mi
 export function SocialComposePage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('social');
+  const f = useFormat();
   const navigate = useNavigate();
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
   const [base, setBase] = useState<Base>({ body: '', title: '', linkUrl: '', media: [] });
@@ -403,6 +375,9 @@ export function SocialComposePage() {
   // An AI rewrite was taken into the text (#583): the post is saved as AI-assisted.
   const [aiUsed, setAiUsed] = useState(false);
   const live = (channels.data ?? []).filter((c) => c.status === 'active');
+  // A planned time from the calendar (#580), kept on the draft; scheduling starts from it.
+  const search: { at?: string } = useSearch({ strict: false });
+  const [plannedAt, setPlannedAt] = useState<string | null>(() => (search.at && Date.parse(search.at) > Date.now() ? search.at : null));
   useEffect(() => {
     // The only channel is chosen for you.
     if (chosen.length === 0 && live.length === 1 && live[0]) setChosen([live[0].id]);
@@ -418,6 +393,8 @@ export function SocialComposePage() {
         title: orNull(base.title),
         linkUrl: orNull(base.linkUrl),
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        // A planned time that went by while the page was open is dropped.
+        ...(plannedAt && Date.parse(plannedAt) > Date.now() ? { scheduledAt: plannedAt } : {}),
         ...(aiUsed ? { aiAssisted: true as const } : {}),
         media: mediaInput(base.media),
         channels: chosen.map((connectionId) => {
@@ -488,6 +465,14 @@ export function SocialComposePage() {
         <div className="mb-4">
           <ErrorText>{errorMessage(create.error)}</ErrorText>
         </div>
+      )}
+      {plannedAt && (
+        <p className="mb-4 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          {t('plannedFor', { when: f.dateTime(plannedAt) })}
+          <Button variant="ghost" size="sm" onClick={() => setPlannedAt(null)}>
+            {t('plannedClear')}
+          </Button>
+        </p>
       )}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
@@ -821,6 +806,47 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
   }
 }
 
+// Another time for a scheduled channel, its approvals kept (#580): the calendar's drag, from the keyboard.
+function MoveTime({ variantId, at, onDone }: { variantId: string; at: string | null; onDone: () => void }) {
+  const t = useTranslations('social');
+  const [open, setOpen] = useState(false);
+  const [when, setWhen] = useState(() => toLocalInput(at ?? new Date(Date.now() + 3_600_000).toISOString()));
+  const move = useMutation({
+    mutationFn: () => client.social.variants.reschedule({ variantId, at: fromLocalInput(when) as string }),
+    onSuccess: () => {
+      setOpen(false);
+      onDone();
+    },
+  });
+  if (!open) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          // From the time it has now (a drag in the calendar or another tab may have moved it).
+          setWhen(toLocalInput(at ?? new Date(Date.now() + 3_600_000).toISOString()));
+          setOpen(true);
+        }}
+      >
+        {t('moveTime')}
+      </Button>
+    );
+  }
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <Input type="datetime-local" aria-label={t('moveTime')} value={when} min={toLocalInput(new Date().toISOString())} onChange={(e) => setWhen(e.target.value)} className="h-8 max-w-56" />
+      <Button size="sm" disabled={move.isPending || !fromLocalInput(when)} onClick={() => move.mutate()}>
+        {t('moveTimeSave')}
+      </Button>
+      <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+        {t('keep')}
+      </Button>
+      {move.error && <ErrorText>{errorMessage(move.error)}</ErrorText>}
+    </span>
+  );
+}
+
 const POST_METRICS = ['reach', 'impressions', 'views', 'reactions', 'comments', 'shares', 'saves', 'clicks'] as const;
 
 // A published channel's latest counts, as the platform reported them; a count it does not report is left out.
@@ -1123,6 +1149,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                           </Button>
                         </>
                       )}
+                      {canDecide && v.status === 'scheduled' && !v.queuePaused && <MoveTime variantId={v.id} at={v.effectiveAt} onDone={refresh} />}
                       {canDecide && ['scheduled', 'paused'].includes(v.status) && (
                         <Button variant="outline" size="sm" disabled={unschedule.isPending} onClick={() => unschedule.mutate(v.id)}>
                           {t('unschedule')}
