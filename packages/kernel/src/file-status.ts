@@ -41,8 +41,9 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
             'x.error',
             'x.version',
             'x.method',
-            // Only the size of an opened archive's entry list; neither it nor an invoice's result is loaded here.
-            sql<number | null>`CASE WHEN x.method = 'archive' AND x.status = 'done' THEN pg_catalog.jsonb_array_length(x.result -> 'entries') END`.as('entry_count'),
+            // Only the size of an opened archive's entry list, from its own column (#432): neither the list nor an
+            // invoice's result is loaded here.
+            sql<number | null>`CASE WHEN x.method = 'archive' AND x.status = 'done' THEN x.entry_count END`.as('entry_count'),
             sql<boolean>`x.status = 'pending' AND x.created_at > pg_catalog.now() - pg_catalog.make_interval(mins => ${REEXTRACT_STALE_MINUTES}::int)`.as(
               'in_flight',
             ),

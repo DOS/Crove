@@ -151,6 +151,9 @@ export type ExtractionTable = Refine<
     status: ExtractionStatus;
     // 1, 2, 3, ... per file; assigned by the database on insert (trigger extraction_assign_version).
     version: Generated<number>;
+    // How many entries an archive run's result lists (#432); NULL for every other run. Set by the database from the
+    // result on every insert and update (trigger extraction_entry_count), never by the code.
+    entry_count: ColumnType<number | null, never, never>;
   },
   'version'
 >;

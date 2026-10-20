@@ -11,6 +11,10 @@ export * from './bank-statement.ts';
 
 export const ORG_HEADER = 'x-crove-org';
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+// When the store takes presigned uploads, files of at most this size still go through the kernel (POST /api/files):
+// bulk intake (#314) sends a batch of 200 e-invoice XML files that way instead of opening 200 upload grants. The
+// kernel refuses larger files on that path (#432); they go through a staged upload (POST /api/files/uploads).
+export const DIRECT_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 export const ACCEPTED_UPLOAD_TYPES = ['application/xml', 'text/xml', 'application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
 // Bulk intake (#314): a ZIP of documents, up to MAX_UPLOAD_BYTES like any document. It is stored as a file, opened in
 // the parsing sandbox by the worker, and every entry the sandbox returns becomes a document of its own.

@@ -41,6 +41,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_kernel.mail_event',
   'crove_social.review_feedback',
   'crove_social.review_link',
   'crove_social.snippet',
@@ -106,6 +107,18 @@ const channelConnectionRow = (o: { id: string; owner: string }) => ({
   external_account_id: `rls-${tag()}`,
   display_name: 'RLS matrix channel',
   connected_by: o.owner,
+});
+// An outbound mail (Email plan §3.2, #538), with its id so a delivery event can name it.
+const mailMessageRow = (o: { id: string }) => ({
+  org_id: o.id,
+  id: randomUUID(),
+  stream: 'transactional',
+  source: 'rls.matrix',
+  template_key: 'rls.matrix',
+  to_address: `rls-${tag()}@example.com`,
+  to_hash: hex64(),
+  subject: 'RLS matrix',
+  message_id_header: `<${randomUUID()}@rls.matrix>`,
 });
 // Crove Social (S3): a post, and a variant of it for a fresh channel connection (one variant per connection).
 const ZERO_HASH = `sha256:${'0'.repeat(64)}`;
@@ -390,23 +403,25 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.inbound_message': { make: (o) => ({ row: { org_id: o.id, message_id: `<${randomUUID()}@rls.test>` } }) },
   // One active switch per (org, scope, target), so every row stops its own agent id.
   'crove_kernel.kill_switch': { make: (o) => ({ row: { org_id: o.id, scope: 'agent', target: randomUUID(), engaged_by: o.owner } }) },
+  // Delivery events from the mail provider (Email plan §3.3, #539), append-only: one row per provider event, joined to
+  // its mail in the same org. Only the system context adds rows (the worker recording a verified webhook or bounce
+  // report; a trigger refuses member contexts), so the own-org control, which also runs in member contexts, is skipped.
+  'crove_kernel.mail_event': {
+    noInsertControl: 'only the system context adds rows (the worker recording a provider event); a member context is refused',
+    make: (o) => {
+      const message = mailMessageRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.mail_message', values: message }],
+        row: { org_id: o.id, message_id: message.id, provider: 'sandbox', provider_event_id: `rls-${randomUUID()}`, kind: 'delivered', occurred_at: '2026-10-20T00:00:00Z' },
+      };
+    },
+  },
   // Outbound mail (Email plan §3.2, ADR-0034, #538): one row per mail to one recipient. Tenant roles read and insert,
   // update only the status columns, never delete; the guard keeps the identity columns fixed, so the update probes
   // assign the status to itself.
   'crove_kernel.mail_message': {
     update: { set: 'status = status' },
-    make: (o) => ({
-      row: {
-        org_id: o.id,
-        stream: 'transactional',
-        source: 'rls.matrix',
-        template_key: 'rls.matrix',
-        to_address: `rls-${tag()}@example.com`,
-        to_hash: hex64(),
-        subject: 'RLS matrix',
-        message_id_header: `<${randomUUID()}@rls.matrix>`,
-      },
-    }),
+    make: (o) => ({ row: mailMessageRow(o) }),
   },
   // The suppression list (Email plan §3.3, #538): keyed on the address hash, never deleted; lifting writes the lift
   // columns once, so the update probes assign lift_reason to itself on a live row.
