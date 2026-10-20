@@ -500,6 +500,11 @@ export const vi = {
       proposed: 'Chờ duyệt',
     },
     makeVoucher: 'Lập chứng từ',
+    proposeAll: 'Lập đề xuất cho {count, number} dòng khớp chắc chắn',
+    proposeAllHint: 'Các dòng có nội dung chuyển khoản ghi rõ đối tượng (mã số thuế, hoặc số hóa đơn đúng số tiền). Mỗi chứng từ vẫn chờ chủ sở hữu hoặc quản trị duyệt.',
+    proposedAll: 'Đã lập {done, number} đề xuất chứng từ.',
+    proposeFailed: 'Dòng ngày {date}: {message}',
+    proposeClose: 'Đóng',
     makeVoucherFor: 'Lập chứng từ cho dòng ngày {date}, {amount}',
   },
   ledger: {
@@ -757,6 +762,10 @@ export const vi = {
     },
   },
   inbox: {
+    bankLines: {
+      title: 'Dòng sao kê ngân hàng chưa lập chứng từ',
+      account: '{account}: {count, number} dòng{ambiguous, plural, =0 {} other {, # dòng cần xem}}; cũ nhất ngày {date}',
+    },
     fileTooLarge: '{name} vượt quá 25 MB',
     socialFileTooLarge: '{name} vượt quá 100 MB',
     storageUploadFailed: 'Không gửi được {name} lên kho lưu trữ; hãy tải lại tệp',

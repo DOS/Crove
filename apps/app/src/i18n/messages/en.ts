@@ -502,6 +502,11 @@ export const en = {
       proposed: 'Waiting for approval',
     },
     makeVoucher: 'Enter voucher',
+    proposeAll: 'Ask for {count, plural, one {# voucher} other {# vouchers}}',
+    proposeAllHint: 'Lines whose transfer description names the party (its tax code, or an invoice of exactly this amount). Each voucher still waits for an owner or admin to approve it.',
+    proposedAll: '{done, plural, one {# voucher proposal created.} other {# voucher proposals created.}}',
+    proposeFailed: 'Line of {date}: {message}',
+    proposeClose: 'Close',
     makeVoucherFor: 'Enter the voucher of the line of {date}, {amount}',
   },
   ledger: {
@@ -759,6 +764,10 @@ export const en = {
     },
   },
   inbox: {
+    bankLines: {
+      title: 'Bank statement lines without a voucher',
+      account: '{account}: {count, plural, one {# line} other {# lines}}{ambiguous, plural, =0 {} one {, # to look at} other {, # to look at}}; oldest on {date}',
+    },
     fileTooLarge: '{name} is larger than 25 MB',
     socialFileTooLarge: '{name} is larger than 100 MB',
     storageUploadFailed: 'Could not send {name} to storage; upload the file again',

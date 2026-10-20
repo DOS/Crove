@@ -277,6 +277,20 @@ suite('bank statement lines to bank vouchers (#326)', () => {
     expect(await suggestion(lineId.FT101 as string, outsider, other.slug)).toMatchObject({ status: 404, body: { code: 'BANK_LINE_NOT_FOUND' } });
   });
 
+  it('lists the open lines per account for the Inbox, and the lines whose description names their party (#326, stage 2b)', async () => {
+    expect((await rpc('bank/openLines', await tokenFor(viewer), undefined)).body).toEqual({
+      accounts: [{ bankAccount: '1121', open: 4, ambiguous: 0, oldest: '2026-10-01' }],
+    });
+    expect((await rpc('bank/openLines', await tokenFor(outsider), undefined, other.slug)).body).toEqual({ accounts: [] });
+    // Only the tax code names a party in this month: the open balance of FT102 is not strong enough to ask in bulk.
+    const strong = await rpc('bank/suggestions', await tokenFor(member), { bankAccount: '1121', period: '2026-10' });
+    expect(strong.status).toBe(200);
+    expect((strong.body as any[]).map((s) => [s.line.reference, s.suggested.reason, s.suggested.party.id, s.voucher.amount])).toEqual([
+      ['FT101', 'tax_code', customer, '1500000'],
+    ]);
+    expect(await rpc('bank/suggestions', await tokenFor(viewer), { bankAccount: '1121', period: '2026-10' })).toMatchObject({ status: 403 });
+  });
+
   let receiptProposal = '';
   let receiptEntry = '';
 
@@ -297,6 +311,9 @@ suite('bank statement lines to bank vouchers (#326)', () => {
     expect(asked).toMatchObject({ status: 200, body: { proposalId: expect.any(String) } });
     receiptProposal = String(asked.body.proposalId);
     expect((await states()).FT101).toEqual({ status: 'proposed', proposalId: receiptProposal });
+    // A proposed line is no longer open, nor suggested again.
+    expect((await rpc('bank/openLines', await tokenFor(viewer), undefined)).body.accounts).toEqual([{ bankAccount: '1121', open: 3, ambiguous: 0, oldest: '2026-10-02' }]);
+    expect((await rpc('bank/suggestions', await tokenFor(member), { bankAccount: '1121', period: '2026-10' })).body).toEqual([]);
     // The proposal carries the line, and the line takes no second proposal.
     const detail = await rpc('inbox/get', await tokenFor(owner), { id: receiptProposal });
     expect(detail.body.voucher).toMatchObject({ bankLineId: lineId.FT101, total: '1500000' });

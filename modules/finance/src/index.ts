@@ -9,7 +9,7 @@ import { vatDeclarationQuery, vatExport, vatPeriodQuery } from './vat.ts';
 import { ledgerAccountQuery, ledgerBookQuery, ledgerExport, ledgerPeriodQuery } from './ledger-reports.ts';
 import { portalListImport, portalListReconcile, portalListRecord, portalListRemove, portalListSource } from './portal-list.ts';
 import { bankImport, bankLines, bankPreview } from './bank.ts';
-import { bankLineVoucher } from './bank-match.ts';
+import { bankLineVoucher, bankOpenLines, bankSuggestions } from './bank-match.ts';
 import { periodLock, periodLockStateQuery, periodUnlock } from './period-lock.ts';
 import { statementsExport, statementsPeriodQuery } from './statements.ts';
 
@@ -94,4 +94,6 @@ export const financeQueries = [
   bankPreview,
   bankLines,
   bankLineVoucher,
+  bankSuggestions,
+  bankOpenLines,
 ];

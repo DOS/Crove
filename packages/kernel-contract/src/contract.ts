@@ -75,7 +75,7 @@ import {
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { zPortalReconciliation } from './portal-list.ts';
-import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankStatementImport } from './bank-statement.ts';
+import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
 export const contract = {
@@ -427,6 +427,11 @@ export const contract = {
     // voucher itself is asked for with inbox.request (finance.voucher.record, bankLineId set). Owners, admins and
     // members, who may ask for vouchers.
     lineVoucher: oc.input(z.object({ bankLineId: zId })).output(zBankLineVoucher),
+    // The open lines of an account and period whose party is named by its tax code or an invoice of the amount, with
+    // the voucher each makes (stage 2b); the SPA asks for them one by one with inbox.request. Owners, admins and members.
+    suggestions: oc.input(z.object({ bankAccount: zAccountCode, period: zLedgerPeriod })).output(z.array(zBankLineVoucher)),
+    // The open lines per bank account, for the Inbox (stage 2b). Every member.
+    openLines: oc.output(zBankOpenLines),
   },
   // The org chart (ADR-0029): positions shared by members and AI agents. Every member reads it; changing it is the
   // owner's (R3: role keys, holders and reporting lines decide what agents may do). A retry with the same
