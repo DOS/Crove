@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
-import { autoReplyCallsOf } from './auto-reply.ts';
+import { AUTO_REPLY_STALE_MS, autoReplyCallsOf } from './auto-reply.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -207,9 +207,10 @@ export const postActivity = defineQuery({
         return [];
       }),
       ...[...replies].flatMap(([variantId, call]): ActivityItem[] =>
-        call.state === 'started'
+        // A call still on its way shows nothing yet; one that went quiet is unclear.
+        call.state === 'started' && now - call.started_at.getTime() <= AUTO_REPLY_STALE_MS
           ? []
-          : [{ ...none, id: `auto_reply:${variantId}`, kind: call.state === 'succeeded' ? 'auto_replied' : 'auto_reply_failed', at: (call.finished_at ?? call.started_at).toISOString(), variantId, code: call.state === 'succeeded' ? null : (call.error_code ?? 'OUTCOME_UNKNOWN') }],
+          : [{ ...none, id: `auto_reply:${variantId}`, kind: call.state === 'succeeded' ? 'auto_replied' : 'auto_reply_failed', at: (call.finished_at ?? call.started_at).toISOString(), variantId, code: call.state === 'succeeded' ? null : call.state === 'started' ? 'OUTCOME_UNKNOWN' : (call.error_code ?? 'OUTCOME_UNKNOWN') }],
       ),
     ];
     items.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));

@@ -924,6 +924,13 @@ suite('social publishing on PostgreSQL (S4)', () => {
     await ageCaptures(v.id);
     await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: refusing } });
     expect(tries).toBe(1);
+
+    // A reply whose worker died mid-call shows as unclear on the activity once it went quiet.
+    const quiet = await dueReply(o, { text: 'Cảm ơn!', likes: 1 });
+    expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox }, callTimeoutMs: 2_000 }, o.orgId, quiet.id, 'sandbox')).toMatchObject({ status: 'published' });
+    const key = `social.publish:${quiet.id}:1:1:autoreply`;
+    await admin((c) => c.query("INSERT INTO crove_kernel.external_call (org_id, key, module, target, step, retry_safety, request_hash, started_at) VALUES ($1, $2, 'social', 'sandbox', 'autoreply', 'never', NULL, now() - interval '11 minutes')", [o.orgId, key]));
+    expect(await activityOf(o, quiet.postId)).toContainEqual(expect.objectContaining({ kind: 'auto_reply_failed', variantId: quiet.id, code: 'OUTCOME_UNKNOWN' }));
   });
 
   it('keeps a failed metrics try as an empty capture, never asks a gone post again, and shows the last real answer', async () => {

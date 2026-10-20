@@ -11,7 +11,7 @@ import type { Publisher } from '@crove/channel';
 import { DomainError, defineCommand, type CommandContext, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { AUTO_REPLY_RULES, autoReplyOf, isProvider } from './domain/channels.ts';
 import { publishCallKey } from './domain/publish.ts';
-import type { CommentCall } from './comments.ts';
+import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
 
 export const AUTO_REPLY_STEP = 'autoreply';
@@ -85,6 +85,10 @@ const zReplyResult = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('unknown'), code: zText(200).optional(), message: zText(2000).optional() }),
 ]);
 
+// A call still started after this long never got its answer recorded (the worker died mid-call): the post's activity
+// shows it as unclear.
+export const AUTO_REPLY_STALE_MS = COMMENT_STALE_MS;
+
 // Stores what the platform answered; an answer for a key that is not a started call changes nothing.
 export const autoReplyRecord = defineCommand({
   name: 'social.auto_reply.record',
@@ -123,7 +127,7 @@ export const autoReplyCommands = [autoReplyBegin, autoReplyRecord];
  * passes the credential it opened for the metrics.
  */
 export async function runAutoReply(
-  deps: { runtime: Runtime; callTimeoutMs?: number },
+  deps: { runtime: Runtime },
   orgId: string,
   variantId: string,
   publisher: Publisher,
@@ -140,6 +144,9 @@ export async function runAutoReply(
   } catch {
     result = { kind: 'unknown', code: 'ADAPTER_ERROR' };
   }
-  const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.auto_reply.record', { variantId, callKey: begun.callKey, result }, options);
+  // What the record takes: an adapter's long code or message is cut, so the answer is always recorded.
+  const cut = (s: string | undefined, max: number) => (s === undefined ? {} : { [max === 200 ? 'code' : 'message']: s.slice(0, max) });
+  const safe = result.kind === 'accepted' ? result : { ...result, ...cut(result.code, 200), ...cut(result.message, 2000) };
+  const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.auto_reply.record', { variantId, callKey: begun.callKey, result: safe }, options);
   return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}) };
 }

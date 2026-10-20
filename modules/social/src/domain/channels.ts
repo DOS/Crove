@@ -151,16 +151,14 @@ export function firstCommentOf(settings: Readonly<Record<string, unknown>> | und
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-// Auto-replies on likes (#746): on the channels whose adapter both replies under its own post and reports likes, a
-// variant may carry one reply posted once the post has that many likes (`settings.autoReply`: { text, likes }). The
+// Auto-replies on likes (#746): on the channels whose adapter both replies under its own post and reports likes
+// (Facebook Pages, Threads, Bluesky; X and LinkedIn report no counts yet), a variant may carry one reply posted once the post has that many likes (`settings.autoReply`: { text, likes }). The
 // reply is counted like a first comment there.
 export const AUTO_REPLY_LIKES_MAX = 1_000_000;
 export const AUTO_REPLY_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
   sandbox: COMMENT_RULES.sandbox as TextRule,
   facebook_page: COMMENT_RULES.facebook_page as TextRule,
   threads: COMMENT_RULES.threads as TextRule,
-  linkedin: COMMENT_RULES.linkedin as TextRule,
-  x: COMMENT_RULES.x as TextRule,
   bluesky: COMMENT_RULES.bluesky as TextRule,
 };
 

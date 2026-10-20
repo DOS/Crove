@@ -218,7 +218,8 @@ function AutoReplyField({ settings, disabled, onChange }: { settings: Record<str
   const likes = typeof current?.likes === 'number' ? current.likes : null;
   const set = (next: { text: string; likes: number | null }) => {
     const { autoReply: _old, ...rest } = settings;
-    onChange(next.text || next.likes !== null ? { ...rest, autoReply: { text: next.text, likes: next.likes ?? 0 } } : rest);
+    // An empty count is kept as null, which validation names, rather than shown as 0.
+    onChange(next.text || next.likes !== null ? { ...rest, autoReply: { text: next.text, likes: next.likes } } : rest);
   };
   return (
     <div className="space-y-1">
@@ -238,6 +239,7 @@ function AutoReplyField({ settings, disabled, onChange }: { settings: Record<str
           className="w-28"
           disabled={disabled}
           value={likes ?? ''}
+          placeholder="100"
           onChange={(e) => set({ text, likes: e.target.value === '' ? null : Math.floor(Number(e.target.value)) })}
         />
       </div>
