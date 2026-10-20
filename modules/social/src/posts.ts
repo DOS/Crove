@@ -15,7 +15,7 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contr
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
-import { isProvider } from './domain/channels.ts';
+import { firstCommentOf, isProvider } from './domain/channels.ts';
 import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
@@ -24,6 +24,7 @@ import { snippetCommands, snippetQueries } from './snippets.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
+import { commentCallsOf, commentCommands, commentStatus, type CommentStatus } from './comments.ts';
 import { approvalsRequired, decisionsOf, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
@@ -857,6 +858,7 @@ export interface VariantView {
   // When it goes out: a retry time after a rate limit, else its queue slot, else its own time, else the post's.
   effectiveAt: string | null;
   queueSlotAt: string | null;
+  commentStatus: CommentStatus | null;
   queuePaused: boolean;
   attempt: number;
   externalUrl: string | null;
@@ -938,6 +940,11 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
           (q) => q.channel_connection_id,
         ),
   );
+  // The first comment of each published channel that has one (#587).
+  const commented = variants.filter((v) => v.status === 'published' && v.external_post_id && firstCommentOf(settingsOf(v)));
+  const calls = await commentCallsOf(ctx.trx, ctx.orgId, commented);
+  const now = new Date();
+  const comments = new Map<string, CommentStatus>(commented.map((v) => [v.id, commentStatus(calls.get(v.id) ?? [], now, v.published_at)]));
   const mediaRows = await ctx.trx
     .selectFrom('crove_social.post_media as m')
     .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
@@ -995,6 +1002,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               status: v.status,
               effectiveAt: iso(v.status === 'published' ? v.published_at : (v.error_retry_at ?? v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at)),
               queueSlotAt: iso(v.queue_slot_at),
+              commentStatus: comments.get(v.id) ?? null,
               // As the publisher decides it (queuePaused in publishing.ts): a retry time goes out whatever the queue does.
               queuePaused: v.queue_slot_at !== null && v.scheduled_at === null && v.error_retry_at === null && pausedQueues.has(v.channel_connection_id),
               attempt: v.attempt,
@@ -1153,6 +1161,7 @@ export const socialCommands = [
   ...publishingCommands,
   ...metricsCommands,
   ...evergreenCommands,
+  ...commentCommands,
   ...policyCommands,
   ...snippetCommands,
 ];

@@ -58,7 +58,7 @@ Rules:
 
 - **Every font must ship the Vietnamese subset** and render stacked diacritics (`Ở`, `ữ`, `ặ`) cleanly at all weights. Test with "Hoá đơn giá trị gia tăng, Thuế GTGT được khấu trừ, Người mua hàng" before adopting a face.
 - At most two families: one for display and UI, an optional second for display or for numbers. Monospace only for amounts in dense tables, account numbers, codes (MST, mã CQT, invoice numbers) and keyboard keys, never for decorative labels.
-- Use variable fonts, subset to latin, latin-ext and vietnamese, `font-display: swap`, self-hosted in production (no third-party font requests from the app).
+- Subset to latin, latin-ext and vietnamese, `font-display: swap`, self-hosted in production (no third-party font requests from the app). Use the variable font where the family has one (JetBrains Mono); Be Vietnam Pro has none, so it ships the four static weights the UI uses, 400 to 700. The app's files and their OFL licenses live in `packages/ui/src/fonts/`; the marketing site loads the same faces through `next/font`.
 - Line height: body at least 1.55, headings at least 1.12. Letter spacing on headings no tighter than -0.025em, or diacritics collide. No all-caps on Vietnamese phrases longer than two words; uppercase labels get +0.04em tracking.
 - Line length 60 to 75 characters for running text.
 - Numbers: `font-variant-numeric: tabular-nums` wherever digits line up.
