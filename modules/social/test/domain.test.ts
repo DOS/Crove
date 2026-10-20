@@ -311,6 +311,16 @@ describe('validateVariant', () => {
     expect(tg(Array.from({ length: 11 }, () => jpeg()), 10)).toEqual(['TOO_MANY_MEDIA']);
   });
 
+  it('checks a Discord post: 2,000 characters, up to 10 images and videos of 10 MB each (#832)', () => {
+    const dc = (media: MediaItem[], n: number) => validateVariant({ provider: 'discord', body: 'x'.repeat(n), title: null, media, settings: {} }).map((i) => i.code);
+    expect(dc([], 2000)).toEqual([]);
+    expect(dc([], 2001)).toEqual(['TEXT_TOO_LONG']);
+    expect(dc([jpeg(), mp4(30, 5_000_000)], 2000)).toEqual([]);
+    expect(dc(Array.from({ length: 11 }, () => jpeg()), 10)).toEqual(['TOO_MANY_MEDIA']);
+    expect(dc([jpeg(10 * 1024 * 1024 + 1)], 10)).toEqual(['IMAGE_TOO_LARGE']);
+    expect(dc([mp4(30, 10 * 1024 * 1024 + 1)], 10)).toEqual(['VIDEO_TOO_LARGE']);
+  });
+
   it('posts video on every channel that takes it', () => {
     expect(validateVariant({ provider: 'facebook_page', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);
     expect(validateVariant({ provider: 'linkedin', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);

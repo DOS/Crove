@@ -2,7 +2,7 @@
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
-import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectMastodon, connectTelegram, mastodonLogin, telegramLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
+import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectDiscord, connectMastodon, connectTelegram, discordLogin, mastodonLogin, telegramLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
 import type { SocialWriter, WriterChannel } from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider } from '@crove/mod-social/contract';
 import { voiceNotes, type BrandVoice } from '@crove/mod-social';
@@ -136,7 +136,13 @@ function telegramFailure(code: string | undefined): DomainError | null {
   if (code === 'TELEGRAM_BOT_CANNOT_POST') return new DomainError('TELEGRAM_BOT_CANNOT_POST', 422, 'Bot chưa được đăng bài trong kênh; hãy đặt bot làm quản trị viên có quyền đăng bài');
   return null;
 }
-const PROVIDER_LABELS: Record<string, string> = { sandbox: 'test channel', facebook_page: 'Facebook Page', instagram: 'Instagram', zalo_oa: 'Zalo Official Account (article)', tiktok: 'TikTok', youtube: 'YouTube', threads: 'Threads', linkedin: 'LinkedIn', x: 'X', bluesky: 'Bluesky', google_business: 'Google Business Profile', telegram: 'Telegram', mastodon: 'Mastodon', pinterest: 'Pinterest' };
+// Why a Discord channel did not connect, in words for the connect form.
+function discordFailure(code: string | undefined): DomainError | null {
+  if (code === 'DISCORD_WEBHOOK_INVALID') return new DomainError('DISCORD_WEBHOOK_INVALID', 422, 'Hãy dán địa chỉ webhook của kênh Discord, dạng https://discord.com/api/webhooks/...');
+  if (code === 'DISCORD_WEBHOOK_REFUSED') return new DomainError('DISCORD_WEBHOOK_REFUSED', 422, 'Discord không nhận webhook này, có thể nó đã bị xóa; hãy tạo webhook mới');
+  return null;
+}
+const PROVIDER_LABELS: Record<string, string> = { sandbox: 'test channel', facebook_page: 'Facebook Page', instagram: 'Instagram', zalo_oa: 'Zalo Official Account (article)', tiktok: 'TikTok', youtube: 'YouTube', threads: 'Threads', linkedin: 'LinkedIn', x: 'X', bluesky: 'Bluesky', google_business: 'Google Business Profile', telegram: 'Telegram', mastodon: 'Mastodon', pinterest: 'Pinterest', discord: 'Discord' };
 
 export interface RpcChannels {
   // Seals tokens before kernel.channel.connect stores them; never opens one in the API.
@@ -149,6 +155,8 @@ export interface RpcChannels {
   telegram?: boolean;
   // Mastodon accounts may connect with an access token (CHANNEL_MASTODON).
   mastodon?: boolean;
+  // Discord channels may connect with a webhook URL (CHANNEL_DISCORD).
+  discord?: boolean;
   // Providers connected through an OAuth dialog that this deployment configured (Social plan S6), by provider id.
   connectors?: Readonly<Partial<Record<string, OAuthConnector>>>;
   // PUBLIC_URL: the provider sends the browser back to PUBLIC_URL/channels/oauth/:provider/callback.
@@ -768,6 +776,40 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             }
           })();
           const account = await connectTelegram(login).catch((error: unknown) => {
+            throw failure(error);
+          });
+          const sealed = channels.broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });
+          const command: ChannelConnectInput = {
+            provider: account.provider,
+            externalAccountId: account.externalAccountId,
+            displayName: account.displayName,
+            scopes: account.scopes,
+            expiresAt: null,
+            credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+          };
+          return runtime.execute<{ connectionId: string; reconnected: boolean }>('kernel.channel.connect', command, { actor: actorOf(context.user), orgId });
+        }),
+      ),
+      // A webhook is checked once with Discord (an incoming webhook of a server's channel), then its token is sealed with
+      // the webhook's id and dropped; it never reaches a log, an audit row or an answer.
+      connectDiscord: os.channels.connectDiscord.handler(({ context, input }) =>
+        guard(async () => {
+          const { orgId, role } = await resolveMembership(runtime, context.user, context.orgSlug);
+          if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới kết nối được kênh');
+          if (!channels?.discord) throw new DomainError('CHANNEL_PROVIDER_DISABLED', 404, 'Kênh này chưa được bật trên máy chủ');
+          if (channels.broker.id === 'none') throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
+          const failure = (error: unknown): DomainError => {
+            const known = error instanceof ConnectorError ? discordFailure(error.code) : null;
+            return known ?? new DomainError('OAUTH_PROVIDER_FAILED', 503, 'Nền tảng không phản hồi đúng, hãy thử lại sau');
+          };
+          const login = (() => {
+            try {
+              return discordLogin(input);
+            } catch (error) {
+              throw failure(error);
+            }
+          })();
+          const account = await connectDiscord(login).catch((error: unknown) => {
             throw failure(error);
           });
           const sealed = channels.broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });
