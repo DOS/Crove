@@ -891,7 +891,8 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               status: v.status,
               effectiveAt: iso(v.status === 'published' ? v.published_at : (v.error_retry_at ?? v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at)),
               queueSlotAt: iso(v.queue_slot_at),
-              queuePaused: v.queue_slot_at !== null && v.scheduled_at === null && pausedQueues.has(v.channel_connection_id),
+              // As the publisher decides it (queuePaused in publishing.ts): a retry time goes out whatever the queue does.
+              queuePaused: v.queue_slot_at !== null && v.scheduled_at === null && v.error_retry_at === null && pausedQueues.has(v.channel_connection_id),
               attempt: v.attempt,
               externalUrl: v.external_url,
               publishedAt: iso(v.published_at),
