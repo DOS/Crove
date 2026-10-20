@@ -205,9 +205,46 @@ function decodeXml(text: string): string {
   });
 }
 
+const NAME_START = /[A-Za-z_]/;
+const NAME_CHAR = /[\w.:-]/;
+const SPACE = /\s/;
+
+// The name="value" pairs of a start tag, by one forward scan. A regex such as /([A-Za-z_][\w.:-]*)\s*=\s*"…"/g retries
+// from every character of a long name that has no `=` after it, which is quadratic on a crafted tag (#366); here a
+// name that is not followed by `=` and a quoted value is skipped as a whole.
 function attributes(tag: string): Map<string, string> {
   const out = new Map<string, string>();
-  for (const m of tag.matchAll(/([A-Za-z_][\w.:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) out.set(m[1] as string, decodeXml(m[2] ?? m[3] ?? ''));
+  const length = tag.length;
+  let at = 0;
+  while (at < length) {
+    if (!NAME_START.test(tag.charAt(at))) {
+      at++;
+      continue;
+    }
+    let end = at + 1;
+    while (end < length && NAME_CHAR.test(tag.charAt(end))) end++;
+    let i = end;
+    while (i < length && SPACE.test(tag.charAt(i))) i++;
+    if (tag.charAt(i) !== '=') {
+      at = end;
+      continue;
+    }
+    i++;
+    while (i < length && SPACE.test(tag.charAt(i))) i++;
+    const quote = tag.charAt(i);
+    if (quote !== '"' && quote !== "'") {
+      at = i;
+      continue;
+    }
+    const close = tag.indexOf(quote, i + 1);
+    if (close < 0) {
+      // No closing quote: no later value in this quote closes either, so the scan goes on past it.
+      at = i + 1;
+      continue;
+    }
+    out.set(tag.slice(at, end), decodeXml(tag.slice(i + 1, close)));
+    at = close + 1;
+  }
   return out;
 }
 
@@ -239,6 +276,33 @@ function* elements(xml: string, name: string): Generator<{ attrs: string; body: 
     if (closeAt < 0) return;
     yield { attrs: xml.slice(next, end), body: xml.slice(end + 1, closeAt) };
     at = closeAt + close.length;
+  }
+}
+
+// The inner text of the first element named `name`, or null when there is none or it is self-closing.
+function firstBody(xml: string, name: string): string | null {
+  for (const element of elements(xml, name)) return element.body;
+  return null;
+}
+
+// The attribute text of every start tag named `name` (self-closing or not), in order, by the same indexOf scan as
+// elements(): for elements read by their attributes alone (<sheet>, <Relationship>), whose closing tag never matters.
+function* startTags(xml: string, name: string): Generator<string> {
+  const open = `<${name}`;
+  let at = 0;
+  for (;;) {
+    const start = xml.indexOf(open, at);
+    if (start < 0) return;
+    const next = start + open.length;
+    // `<sheet` must not be the start of `<sheets`.
+    if (!/[\s/>]/.test(xml.charAt(next))) {
+      at = next;
+      continue;
+    }
+    const end = xml.indexOf('>', next);
+    if (end < 0) return;
+    yield xml.slice(next, xml.charAt(end - 1) === '/' ? end - 1 : end);
+    at = end + 1;
   }
 }
 
@@ -298,11 +362,11 @@ function sheetRows(xml: string, strings: readonly string[]): SheetRows {
       nextCol = col + 1;
       const body = c.body ?? '';
       const type = attrs.get('t') ?? 'n';
-      const v = /<v\b[^>]*>([\s\S]*?)<\/v>/.exec(body);
-      const value = v ? decodeXml(v[1] as string) : null;
+      const v = firstBody(body, 'v');
+      const value = v === null ? null : decodeXml(v);
       let cell: SheetCell | null = null;
       if (type === 's') cell = value === null ? null : { kind: 'text', value: strings[Number(value)] ?? '' };
-      else if (type === 'inlineStr') cell = { kind: 'text', value: runText(/<is\b[^>]*>([\s\S]*?)<\/is>/.exec(body)?.[1] ?? '') };
+      else if (type === 'inlineStr') cell = { kind: 'text', value: runText(firstBody(body, 'is') ?? '') };
       else if (type === 'n') cell = value === null ? null : { kind: 'number', value: value.trim() };
       // A boolean as the word Excel shows, so it never reads as the amount 1 or 0; error and date cells as stored.
       else if (type === 'b') cell = value === null ? null : { kind: 'text', value: value.trim() === '1' ? 'TRUE' : 'FALSE' };
@@ -318,13 +382,13 @@ function sheetRows(xml: string, strings: readonly string[]): SheetRows {
 function firstSheetPath(workbook: string | null, rels: string | null): string {
   const fallback = 'xl/worksheets/sheet1.xml';
   if (!workbook || !rels) return fallback;
-  const sheet = /<sheet\b([^>]*?)\/?>/.exec(unprefix(workbook));
-  if (!sheet) return fallback;
-  const attrs = attributes(sheet[1] ?? '');
+  const sheet = startTags(unprefix(workbook), 'sheet').next();
+  if (sheet.done) return fallback;
+  const attrs = attributes(sheet.value);
   const id = [...attrs].find(([key]) => key === 'id' || key.endsWith(':id'))?.[1];
   if (!id) return fallback;
-  for (const m of unprefix(rels).matchAll(/<Relationship\b([^>]*?)\/?>/g)) {
-    const rel = attributes(m[1] ?? '');
+  for (const tag of startTags(unprefix(rels), 'Relationship')) {
+    const rel = attributes(tag);
     if (rel.get('Id') !== id) continue;
     const target = rel.get('Target') ?? '';
     return target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\//, '')}`;

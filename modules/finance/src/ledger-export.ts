@@ -25,7 +25,7 @@ function heading(sheet: ExcelJS.Worksheet, key: string, text: string): void {
 }
 
 function trialBalanceSheet(workbook: ExcelJS.Workbook, book: LedgerBook, range: string): void {
-  const sheet = workbook.addWorksheet('Can doi phat sinh');
+  const sheet = workbook.addWorksheet('Cân đối phát sinh');
   sheet.columns = [
     { key: 'code', width: 12 },
     { key: 'name', width: 48 },
@@ -72,7 +72,7 @@ function trialBalanceSheet(workbook: ExcelJS.Workbook, book: LedgerBook, range: 
 }
 
 function generalLedgerSheet(workbook: ExcelJS.Workbook, book: LedgerBook, range: string): void {
-  const sheet = workbook.addWorksheet('So cai');
+  const sheet = workbook.addWorksheet('Sổ cái');
   sheet.columns = [
     { key: 'date', width: 12 },
     { key: 'reference', width: 16 },
@@ -178,11 +178,11 @@ function partySheet(workbook: ExcelJS.Workbook, name: string, title: string, led
 export async function buildLedgerWorkbook(book: LedgerBook, orgName: string): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Crove';
-  workbook.title = `So sach ${book.period.period} ${orgName}`;
+  workbook.title = `Sổ sách ${book.period.period} ${orgName}`;
   const range = `kỳ ${book.period.period} (${book.period.from} đến ${book.period.to})`;
   trialBalanceSheet(workbook, book, range);
   generalLedgerSheet(workbook, book, range);
-  partySheet(workbook, 'Phai thu', `Công nợ phải thu khách hàng (TK 131), ${range}`, book.receivables, 'Khách hàng');
-  partySheet(workbook, 'Phai tra', `Công nợ phải trả người bán (TK 331), ${range}`, book.payables, 'Nhà cung cấp');
+  partySheet(workbook, 'Phải thu', `Công nợ phải thu khách hàng (TK 131), ${range}`, book.receivables, 'Khách hàng');
+  partySheet(workbook, 'Phải trả', `Công nợ phải trả người bán (TK 331), ${range}`, book.payables, 'Nhà cung cấp');
   return new Uint8Array(await workbook.xlsx.writeBuffer());
 }

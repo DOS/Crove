@@ -142,7 +142,7 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     expect(file.suggestedFilename()).toBe(`crove-gtgt-2026-09-${slug}.xlsx`);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(await file.path());
-    const sheet = workbook.getWorksheet('Mua vao');
+    const sheet = workbook.getWorksheet('Mua vào');
     if (!sheet) throw new Error('the VAT export has no purchase sheet');
     const values = (row: number) => (sheet.getRow(row).values as unknown[]).slice(1);
     expect(values(2)).toEqual([1, '2026-09-15', 'C26TAB', '1234', SELLER_TAX_CODE, SELLER, '10%', 1800000, 180000, '']);
@@ -182,10 +182,10 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     expect(file.suggestedFilename()).toBe(`crove-so-sach-2026-09-${slug}.xlsx`);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(await file.path());
-    expect(workbook.worksheets.map((s) => s.name)).toEqual(['Can doi phat sinh', 'So cai', 'Phai thu', 'Phai tra']);
+    expect(workbook.worksheets.map((s) => s.name)).toEqual(['Cân đối phát sinh', 'Sổ cái', 'Phải thu', 'Phải trả']);
     const rows = (name: string) => (workbook.getWorksheet(name)?.getRows(1, workbook.getWorksheet(name)?.rowCount ?? 0) ?? []).map((r) => (r.values as unknown[]).slice(1));
-    expect(rows('Can doi phat sinh').find((r) => r[0] === '331')).toEqual(['331', 'Phải trả cho người bán', 0, 0, 0, 1980000, 0, 1980000]);
-    expect(rows('Phai tra')[2]).toEqual([SELLER_TAX_CODE, SELLER, 0, 1980000, 0, 1980000]);
+    expect(rows('Cân đối phát sinh').find((r) => r[0] === '331')).toEqual(['331', 'Phải trả cho người bán', 0, 0, 0, 1980000, 0, 1980000]);
+    expect(rows('Phải trả')[2]).toEqual([SELLER_TAX_CODE, SELLER, 0, 1980000, 0, 1980000]);
   });
 
   await test.step('add a sub-account in Settings and make it the vendor default (#319)', async () => {

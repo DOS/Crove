@@ -60,7 +60,7 @@ function statementSheet(
 export async function buildStatementsWorkbook(statements: FinancialStatements, orgName: string): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Crove';
-  workbook.title = `Bao cao tai chinh ${statements.period.period} ${orgName}`;
+  workbook.title = `Báo cáo tài chính ${statements.period.period} ${orgName}`;
   const b01 = statementSheet(
     workbook,
     'B01-DNN',
