@@ -306,6 +306,25 @@ test('says AI drafting is off on a server without a model', async ({ page, reque
   await expect(page.getByRole('button', { name: 'Nhờ AI viết lại' })).toHaveCount(0);
 });
 
+test('approves several posts at once from the review list (#635)', async ({ page }) => {
+  await signUp(page, newEmail('social-bulk'));
+  await createOrg(page, 'Công ty Duyệt Nhiều');
+  await connectSandbox(page, 'Trang Duyệt Nhiều');
+  await page.getByRole('link', { name: 'Quay lại' }).click();
+  for (const body of ['Bài thứ nhất', 'Bài thứ hai']) {
+    await page.getByRole('link', { name: 'Soạn bài' }).click();
+    await page.getByLabel('Nội dung chung').fill(body);
+    await page.getByRole('button', { name: 'Lưu và gửi duyệt' }).click();
+    await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+    await page.getByRole('link', { name: 'Quay lại' }).click();
+  }
+  await page.getByRole('tab', { name: /Cần duyệt/ }).click();
+  await page.getByText('Chọn mọi bài đang hiện').click();
+  await expect(page.getByText('Đã chọn 2 bài')).toBeVisible();
+  await page.getByRole('button', { name: 'Duyệt', exact: true }).click();
+  await expect(page.getByText('Duyệt: xong 2, 0 bài không có gì để làm, 0 bài bị từ chối.')).toBeVisible();
+});
+
 test('keeps a post being written through a reload, and offers it back (#634)', async ({ page }) => {
   await signUp(page, newEmail('social-autosave'));
   await createOrg(page, 'Công ty Lưu Nháp');
