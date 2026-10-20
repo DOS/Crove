@@ -217,6 +217,8 @@ const schema = z.object({
   // PUBLIC_URL/channels/oauth/tiktok/callback.
   CHANNEL_TIKTOK_CLIENT_KEY: optional,
   CHANNEL_TIKTOK_CLIENT_SECRET: optional,
+  // The TikTok app also has the Display API: connections ask for video.list, and posts' counts are read (#744).
+  CHANNEL_TIKTOK_VIDEO_LIST: z.enum(['true', 'false']).default('false'),
   // The deployment's X app (OAuth 2.0, a confidential client with PKCE), S9; X bills each post to its account.
   // Callback URL: PUBLIC_URL/channels/oauth/x/callback.
   CHANNEL_X_CLIENT_ID: optional,
