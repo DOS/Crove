@@ -216,6 +216,25 @@ describe('validateVariant', () => {
     expect(codes('instagram', [img(null, null), { kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null }])).toEqual([]);
   });
 
+  it('checks Threads polls and topic tags, and refuses them elsewhere (#711)', () => {
+    const codes = (provider: 'threads' | 'facebook_page', settings: Record<string, unknown>, media: MediaItem[] = []) =>
+      validateVariant({ provider, body: 'Bạn thích món nào?', title: null, media, settings }).map((i) => i.code);
+    const img: MediaItem = { kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null };
+    expect(codes('threads', { poll: { options: ['Cà phê', 'Trà sữa'] }, topicTag: '#Ăn uống' })).toEqual([]);
+    expect(codes('threads', { poll: { options: ['Một'] } })).toEqual(['POLL_OPTIONS']);
+    expect(codes('threads', { poll: { options: ['a', 'b', 'c', 'd', 'e'] } })).toEqual(['POLL_OPTIONS']);
+    expect(codes('threads', { poll: 'có' })).toEqual(['POLL_OPTIONS']);
+    expect(validateVariant({ provider: 'threads', body: 'x', title: null, media: [], settings: { poll: { options: ['a', ' ', 'x'.repeat(26)] } } })).toEqual([
+      { code: 'POLL_OPTION_LENGTH', field: 'settings.poll.1', limit: 25, actual: 0 },
+      { code: 'POLL_OPTION_LENGTH', field: 'settings.poll.2', limit: 25, actual: 26 },
+    ]);
+    expect(codes('threads', { poll: { options: ['a', 'b'] } }, [img])).toEqual(['POLL_WITH_MEDIA']);
+    expect(codes('threads', { topicTag: 'a.b' })).toEqual(['TOPIC_TAG_INVALID']);
+    expect(codes('threads', { topicTag: 'x'.repeat(51) })).toEqual(['TOPIC_TAG_INVALID']);
+    expect(codes('threads', { topicTag: '#' })).toEqual(['TOPIC_TAG_INVALID']);
+    expect(codes('facebook_page', { poll: { options: ['a', 'b'] }, topicTag: 'Ăn uống' })).toEqual(['POLL_NOT_SUPPORTED', 'TOPIC_TAG_NOT_SUPPORTED']);
+  });
+
   it('refuses images mixed with video where the channel does not mix them', () => {
     const codes = validateVariant({ provider: 'facebook_page', body: '', title: null, media: [jpeg(), mp4()] }).map((i) => i.code);
     expect(codes).toEqual(['MEDIA_MIX_NOT_ALLOWED']);

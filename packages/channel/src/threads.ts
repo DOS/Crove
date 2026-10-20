@@ -6,6 +6,8 @@
 // Publish: a container (text, an image, a video, or a carousel of 2 to 20 mixing them), a wait until Meta has processed it, then
 // threads_publish, the one visible step. As for Instagram, a PUBLISHED container went out already, and a pending
 // reference carries the text's hash so a status check recognises the post it became.
+// Polls and topic tags (#711): a text post may carry a poll of 2 to 4 options (poll_attachment), and any post one topic
+// tag (topic_tag); both come from the variant's settings and are checked before anything is created.
 // First comment (#609): a reply to the account's own post, made the same way (a TEXT container with reply_to_id, then
 // threads_publish); replying needs threads_manage_replies.
 import { createHash } from 'node:crypto';
@@ -209,6 +211,33 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 class NoUrl extends Error {}
 
+// A Threads poll (#711), as the variant's settings carry it (`settings.poll`: { options: 2 to 4 strings of 1 to 25
+// characters }); the form Threads takes (option_a to option_d), null for none, 'invalid' for any other shape.
+const POLL_KEYS = ['option_a', 'option_b', 'option_c', 'option_d'] as const;
+export function threadsPollOf(settings: Readonly<Record<string, unknown>>): Record<string, string> | null | 'invalid' {
+  const poll = settings.poll;
+  if (poll === undefined || poll === null) return null;
+  const options = typeof poll === 'object' ? (poll as { options?: unknown }).options : undefined;
+  if (!Array.isArray(options) || options.length < 2 || options.length > POLL_KEYS.length) return 'invalid';
+  const out: Record<string, string> = {};
+  for (const [i, option] of options.entries()) {
+    const text = typeof option === 'string' ? option.trim() : '';
+    if ([...text].length < 1 || [...text].length > 25) return 'invalid';
+    out[POLL_KEYS[i] as string] = text;
+  }
+  return out;
+}
+
+// A post's topic tag (#711, `settings.topicTag`): 1 to 50 characters, without a period or an ampersand; a leading # is
+// dropped. null for none, 'invalid' for one Threads would refuse.
+export function threadsTopicTagOf(settings: Readonly<Record<string, unknown>>): string | null | 'invalid' {
+  const tag = settings.topicTag;
+  if (tag === undefined || tag === null) return null;
+  if (typeof tag !== 'string') return 'invalid';
+  const text = tag.trim().replace(/^#/, '');
+  return [...text].length >= 1 && [...text].length <= 50 && !/[.&]/.test(text) ? text : 'invalid';
+}
+
 export class ThreadsPublisher implements Publisher {
   readonly provider = 'threads' as const;
   readonly publishSafety: RetrySafety = 'reconcile_only';
@@ -234,6 +263,12 @@ export class ThreadsPublisher implements Publisher {
     const text = textOf(input.content);
     const media = input.content.media.slice(0, CAROUSEL_MAX);
     if (!text && media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    const poll = threadsPollOf(input.settings);
+    const topicTag = threadsTopicTagOf(input.settings);
+    if (poll === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' };
+    if (poll && media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
+    if (topicTag === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'TOPIC_TAG_INVALID' };
+    const extras = { ...(poll ? { poll_attachment: JSON.stringify(poll) } : {}), ...(topicTag ? { topic_tag: topicTag } : {}) };
     const urlOf = async (fileId: string) => {
       const url = await input.mediaUrl(fileId).catch(() => null);
       if (!url) throw new NoUrl();
@@ -245,15 +280,15 @@ export class ThreadsPublisher implements Publisher {
     let container: string;
     try {
       if (media.length === 0) {
-        container = await this.create(user, token, { media_type: 'TEXT', text });
+        container = await this.create(user, token, { media_type: 'TEXT', text, ...extras });
       } else if (media.length === 1) {
         const only = media[0] as { fileId: string; mime: string };
-        container = await this.create(user, token, { ...(await mediaForm(only)), ...(text ? { text } : {}) });
+        container = await this.create(user, token, { ...(await mediaForm(only)), ...(text ? { text } : {}), ...extras });
       } else {
         // A carousel may mix images and videos.
         const children: string[] = [];
         for (const m of media) children.push(await this.create(user, token, { ...(await mediaForm(m)), is_carousel_item: 'true' }));
-        container = await this.create(user, token, { media_type: 'CAROUSEL', children: children.join(','), ...(text ? { text } : {}) });
+        container = await this.create(user, token, { media_type: 'CAROUSEL', children: children.join(','), ...(text ? { text } : {}), ...extras });
       }
     } catch (error) {
       if (error instanceof NoUrl) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };

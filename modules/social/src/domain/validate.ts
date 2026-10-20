@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, COMMENT_RULES, COVER_RULES, IMAGE_RULES, POST_TYPE_RULES, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { CAPABILITIES, COMMENT_RULES, COVER_RULES, IMAGE_RULES, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -69,7 +69,15 @@ export type IssueCode =
   // video.
   | 'POST_TYPE_NOT_SUPPORTED'
   | 'STORY_ONE_MEDIA'
-  | 'REEL_ONE_VIDEO';
+  | 'REEL_ONE_VIDEO'
+  // A poll or a topic tag (#711): on a channel that takes none; not 2 to 4 options (limit: the most, actual: how many);
+  // an option empty or too long (field settings.poll.<index>); a poll with media; a tag Threads would refuse.
+  | 'POLL_NOT_SUPPORTED'
+  | 'POLL_OPTIONS'
+  | 'POLL_OPTION_LENGTH'
+  | 'POLL_WITH_MEDIA'
+  | 'TOPIC_TAG_NOT_SUPPORTED'
+  | 'TOPIC_TAG_INVALID';
 
 export interface Issue {
   code: IssueCode;
@@ -182,6 +190,7 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
     }
   }
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
+  checkPollAndTag(issues, variant, caps);
   if (variant.provider === 'tiktok' && !TIKTOK_PRIVACY.includes(String(variant.settings?.privacyLevel ?? ''))) {
     issues.push({ code: 'PRIVACY_REQUIRED', field: 'settings.privacyLevel', limit: null, actual: null });
   }
@@ -190,6 +199,32 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
     if (links > caps.maxLinks) issues.push({ code: 'TOO_MANY_LINKS', field: 'body', limit: caps.maxLinks, actual: links });
   }
   return issues;
+}
+
+function checkPollAndTag(issues: Issue[], variant: VariantDraft, caps: ChannelCapabilities): void {
+  const options = pollOptionsOf(variant.settings);
+  if (options !== null) {
+    const rule = POLL_RULES[variant.provider];
+    if (!rule) issues.push({ code: 'POLL_NOT_SUPPORTED', field: 'settings.poll', limit: null, actual: null });
+    else if (options === 'invalid' || options.length < rule.minOptions || options.length > rule.maxOptions) {
+      issues.push({ code: 'POLL_OPTIONS', field: 'settings.poll', limit: rule.maxOptions, actual: options === 'invalid' ? null : options.length });
+    } else {
+      options.forEach((option, i) => {
+        const n = countText(option, caps.body.count);
+        if (n < 1 || n > rule.maxChars) issues.push({ code: 'POLL_OPTION_LENGTH', field: `settings.poll.${i}`, limit: rule.maxChars, actual: n });
+      });
+    }
+    if (rule && variant.media.length > 0) issues.push({ code: 'POLL_WITH_MEDIA', field: 'settings.poll', limit: null, actual: null });
+  }
+  const tag = topicTagOf(variant.settings);
+  if (tag !== null) {
+    const rule = TOPIC_TAG_RULES[variant.provider];
+    if (!rule) issues.push({ code: 'TOPIC_TAG_NOT_SUPPORTED', field: 'settings.topicTag', limit: null, actual: null });
+    else {
+      const n = tag === 'invalid' ? 0 : countText(tag, caps.body.count);
+      if (tag === 'invalid' || n < 1 || n > rule.maxChars || /[.&]/.test(tag)) issues.push({ code: 'TOPIC_TAG_INVALID', field: 'settings.topicTag', limit: rule.maxChars, actual: n });
+    }
+  }
 }
 
 // A cover belongs to one video, alone in the post (a Reel on Instagram); the channel decides which kinds it takes.

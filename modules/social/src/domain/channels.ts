@@ -138,6 +138,33 @@ export function firstCommentOf(settings: Readonly<Record<string, unknown>> | und
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+// Polls and topic tags (#711), in the variant's settings, on the channels that take them (Threads): `settings.poll`
+// is { options: 2 to 4 strings of 1 to 25 characters } on a post without media; `settings.topicTag` is one tag of 1 to 50
+// characters with no period or ampersand (a leading # is dropped). The Threads adapter reads the same shapes.
+export interface PollRule {
+  minOptions: number;
+  maxOptions: number;
+  maxChars: number;
+}
+export const POLL_RULES: Readonly<Partial<Record<Provider, PollRule>>> = { threads: { minOptions: 2, maxOptions: 4, maxChars: 25 } };
+export const TOPIC_TAG_RULES: Readonly<Partial<Record<Provider, { maxChars: number }>>> = { threads: { maxChars: 50 } };
+
+// The poll's options, trimmed; null when there is none, 'invalid' when it is not { options: string[] }.
+export function pollOptionsOf(settings: Readonly<Record<string, unknown>> | undefined): string[] | null | 'invalid' {
+  const poll = settings?.poll;
+  if (poll === undefined || poll === null) return null;
+  const options = typeof poll === 'object' ? (poll as { options?: unknown }).options : undefined;
+  if (!Array.isArray(options) || !options.every((o) => typeof o === 'string')) return 'invalid';
+  return options.map((o: string) => o.trim());
+}
+
+// The topic tag as it is sent, without a leading #; null when there is none, 'invalid' when it is not text.
+export function topicTagOf(settings: Readonly<Record<string, unknown>> | undefined): string | null | 'invalid' {
+  const tag = settings?.topicTag;
+  if (tag === undefined || tag === null) return null;
+  return typeof tag === 'string' ? tag.trim().replace(/^#/, '') : 'invalid';
+}
+
 // A video's cover (#642), in the variant's settings (`settings.cover`): a frame of the video, at a time in
 // milliseconds from its start, or an image of the org (a file uploaded for Social, JPEG or PNG), by file id. The
 // adapters' videoCoverOf in @crove/channel reads the same shape.

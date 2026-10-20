@@ -86,6 +86,32 @@ describe('ThreadsPublisher', () => {
     expect(calls[2]?.form).toEqual({ creation_id: '9001' });
   });
 
+  it('sends a poll on a text post and a topic tag on any post, and refuses bad ones before creating anything (#711)', async () => {
+    const { fetchImpl, calls } = threads({
+      [`POST /v1.0/${USER}/threads`]: [{ body: { id: '9001' } }, { body: { id: '9002' } }],
+      'GET /v1.0/9001': [{ body: { status: 'FINISHED' } }],
+      'GET /v1.0/9002': [{ body: { status: 'FINISHED' } }],
+      [`POST /v1.0/${USER}/threads_publish`]: [{ body: { id: '18100000000000011' } }, { body: { id: '18100000000000012' } }],
+      'GET /v1.0/18100000000000011': [{ body: {} }],
+      'GET /v1.0/18100000000000012': [{ body: {} }],
+    });
+    const publisher = new ThreadsPublisher(fetchImpl, fast);
+    const settings = { poll: { options: [' Cà phê ', 'Trà sữa', 'Nước ép'] }, topicTag: '#Ăn uống' };
+    expect((await publisher.publish(input({ settings }))).kind).toBe('accepted');
+    expect(calls[0]?.form).toEqual({ media_type: 'TEXT', text: 'Khai trương!', poll_attachment: JSON.stringify({ option_a: 'Cà phê', option_b: 'Trà sữa', option_c: 'Nước ép' }), topic_tag: 'Ăn uống' });
+    const image = { body: 'Ảnh', title: null, linkUrl: null, media: [{ fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 10, altText: null }] };
+    expect((await publisher.publish(input({ content: image, settings: { topicTag: 'Khai trương' } }))).kind).toBe('accepted');
+    expect(calls[4]?.form).toEqual({ media_type: 'IMAGE', image_url: 'https://bucket.example/f-1', text: 'Ảnh', topic_tag: 'Khai trương' });
+
+    const none = threads({});
+    const refused = new ThreadsPublisher(none.fetchImpl, fast);
+    expect(await refused.publish(input({ settings: { poll: { options: ['Chỉ một'] } } }))).toMatchObject({ kind: 'rejected', code: 'POLL_INVALID' });
+    expect(await refused.publish(input({ settings: { poll: { options: ['a', 'x'.repeat(26)] } } }))).toMatchObject({ kind: 'rejected', code: 'POLL_INVALID' });
+    expect(await refused.publish(input({ content: image, settings: { poll: { options: ['a', 'b'] } } }))).toMatchObject({ kind: 'rejected', code: 'POLL_WITH_MEDIA' });
+    expect(await refused.publish(input({ settings: { topicTag: 'a.b' } }))).toMatchObject({ kind: 'rejected', code: 'TOPIC_TAG_INVALID' });
+    expect(none.calls).toHaveLength(0);
+  });
+
   it('makes a carousel of images, and refuses without image URLs before creating anything', async () => {
     const { fetchImpl, calls } = threads({
       [`POST /v1.0/${USER}/threads`]: [{ body: { id: '9001' } }, { body: { id: '9002' } }, { body: { id: '9003' } }],
