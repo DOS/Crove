@@ -100,6 +100,28 @@ function mastodonFailure(code: string | undefined): DomainError {
   return new DomainError('MASTODON_INSTANCE_UNREACHABLE', 422, 'Không kết nối được tới máy chủ Mastodon này; hãy kiểm tra địa chỉ rồi thử lại');
 }
 
+type LinkPreviewView = { status: 'pending' | 'ready' | 'failed'; title: string | null; description: string | null; siteName: string | null } | null;
+const SOURCE_WAIT_MS = 10_000;
+// The link preview of a page an AI draft is written from (#769): requested when there is none, then waited for. A page
+// that cannot be read, or one still pending, is said in words; nothing is drafted from it.
+async function sourcePage(runtime: Runtime, actor: UserActor, orgId: string, url: string) {
+  const options = { actor, orgId };
+  const read = () => runtime.query<LinkPreviewView>('social.link_preview.get', { url }, options);
+  let view = await read();
+  if (!view || view.status !== 'ready') {
+    if (!view || view.status === 'failed') await runtime.execute('social.link_preview.request', { url }, options);
+    const until = Date.now() + SOURCE_WAIT_MS;
+    while (Date.now() < until) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      view = await read();
+      if (view && view.status !== 'pending') break;
+    }
+  }
+  if (!view || view.status === 'pending') throw new DomainError('SOURCE_NOT_READY', 409, 'Đang đọc trang này, hãy thử lại sau vài giây');
+  if (view.status === 'failed' || (!view.title && !view.description)) throw new DomainError('SOURCE_UNREADABLE', 422, 'Không đọc được nội dung trang này; hãy mô tả bài bằng lời');
+  return { url, title: view.title, description: view.description, siteName: view.siteName };
+}
+
 // Why a Telegram channel did not connect, in words for the connect form.
 function telegramFailure(code: string | undefined): DomainError | null {
   if (code === 'TELEGRAM_TOKEN_INVALID') return new DomainError('TELEGRAM_TOKEN_INVALID', 422, 'Đây không phải mã bot Telegram; hãy chép mã @BotFather gửi khi tạo bot');
@@ -362,6 +384,10 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             const chosen = input.connectionIds.map((id) => connections.find((c) => c.id === id && c.status === 'active'));
             if (chosen.some((c) => !c)) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
             const channels = (chosen as { id: string; provider: string; displayName: string }[]).map((c) => writerChannel(c));
+            // The source page (#769) as its link preview read it (fetched by the worker through the egress guard, parsed in
+            // the extract container): asked for if new, and waited for a few seconds. Before the budget: waiting for a page
+            // costs no model call, and a page that cannot be read takes no slot.
+            const source = input.sourceUrl ? await sourcePage(runtime, actor, orgId, input.sourceUrl) : undefined;
             // The model call is paid: a member gets a few a minute and one at a time, an org a few more (#386).
             const ticket = drafts.take(orgId, actor.userId);
             if (!ticket.allowed) {
@@ -378,6 +404,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
                 language: input.language ?? 'vi',
                 ...(input.tone ? { tone: input.tone } : {}),
                 ...(voices?.org ? { voice: voices.org } : {}),
+                ...(source ? { source } : {}),
                 ...(voices ? { channelVoices: Object.fromEntries(input.connectionIds.flatMap((id) => (voices.byChannel.has(id) ? [[id, voices.byChannel.get(id) as string]] : []))) } : {}),
               });
             } catch (error: unknown) {
@@ -394,6 +421,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
                 body: draft.body,
                 title: draft.title,
                 origin: 'ai',
+                ...(input.sourceUrl ? { linkUrl: input.sourceUrl } : {}),
                 channels: input.connectionIds.map((connectionId) => {
                   const v = own.get(connectionId);
                   return { connectionId, ...(v?.body ? { body: v.body } : {}), ...(v?.title ? { title: v.title } : {}) };

@@ -284,11 +284,18 @@ export const contract = {
       draftWithAi: oc
         .input(
           z.strictObject({
-            brief: z.string().trim().min(1).max(4000),
+            brief: z.string().trim().max(4000),
             connectionIds: z.array(zId).min(1).max(20),
             tone: z.string().trim().max(300).optional(),
             language: z.enum(['vi', 'en']).optional(),
-          }),
+            // A page to write about (#769): read through its link preview, and the post links to it.
+            sourceUrl: z
+              .url({ protocol: /^https?$/ })
+              .max(2000)
+              .refine((u) => !/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(u), 'a link without a user name or password')
+              .optional(),
+          })
+          .refine((v) => v.brief.length > 0 || v.sourceUrl !== undefined, { message: 'a brief or a source page', path: ['brief'] }),
         )
         .output(z.object({ postId: zId })),
       // A rewrite of one text, as a proposal the member accepts or discards (#583); nothing is saved. With a channel,
