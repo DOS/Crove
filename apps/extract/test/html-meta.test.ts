@@ -17,6 +17,7 @@ describe('readHtmlMeta', () => {
     ).toEqual({ title: 'Khai trương cửa hàng', description: 'Giảm 20% tuần đầu', siteName: 'Crove Shop' });
     expect(readHtmlMeta(page('<title>Chỉ có tiêu đề</title><meta name=description content=Ngắn>'))).toEqual({ title: 'Chỉ có tiêu đề', description: 'Ngắn', siteName: null });
     expect(readHtmlMeta(page("<meta name='twitter:title' content='Từ Twitter'>"))).toMatchObject({ title: 'Từ Twitter' });
+    expect(readHtmlMeta(page('<title>A < B và <b>đậm</b></title>'))).toMatchObject({ title: 'A < B và <b>đậm</b>' });
   });
 
   it('decodes entities and the declared charset, and collapses whitespace', () => {

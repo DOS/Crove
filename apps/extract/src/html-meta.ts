@@ -108,8 +108,11 @@ function titleOf(head: string): string | undefined {
   if (!open) return undefined;
   const start = head.indexOf('>', open.index);
   if (start < 0) return undefined;
-  const end = head.indexOf('<', start + 1);
-  return end < 0 ? undefined : head.slice(start + 1, end);
+  // The title is plain text (RCDATA): a < inside it is part of it; only </title> ends it.
+  const close = /<\/title\s*>/gi;
+  close.lastIndex = start + 1;
+  const end = close.exec(head);
+  return end ? head.slice(start + 1, end.index) : undefined;
 }
 
 export function readHtmlMeta(bytes: Uint8Array): ExtractedPage {
