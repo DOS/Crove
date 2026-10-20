@@ -28,5 +28,10 @@ async function main(): Promise<ExtractResponse> {
 const answer = await main().catch(() => failure('internal', 'parser process failed'));
 // In pieces (json-chunks.ts), waiting for the pipe to drain between them, so the answer is never held again as one
 // string, as one Buffer and in the pipe's write queue (#653: an archive at the limits peaked near 384 MB that way).
-for (const piece of jsonChunks(answer)) if (!process.stdout.write(piece)) await once(process.stdout, 'drain');
-process.stdout.write('', () => process.exit(0));
+// The last piece carries the exit, so the process ends only once all of it is written.
+let held = '';
+for (const piece of jsonChunks(answer)) {
+  if (held && !process.stdout.write(held)) await once(process.stdout, 'drain');
+  held = piece;
+}
+process.stdout.write(held, () => process.exit(0));
