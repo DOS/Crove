@@ -11,13 +11,16 @@
 // Photo posts (#710): 1 to 35 JPEG or WebP images through content/init with media_type PHOTO, which TikTok pulls from
 // Crove's presigned URLs (PULL_FROM_URL; the URL's domain must be verified for the TikTok app, or TikTok answers
 // url_ownership_unverified). The text goes as the description; the status check is the same as for a video.
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, Refresher, RetrySafety, StatusInput } from './index.ts';
 import { videoCoverOf } from './cover.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const TIKTOK_HOSTS = ['open.tiktokapis.com', 'open-upload.tiktokapis.com'] as const;
 export const TIKTOK_SCOPES = ['user.info.basic', 'video.publish'] as const;
+// Asked for only when the deployment's app has the Display API (CHANNEL_TIKTOK_VIDEO_LIST): it reads a video's counts
+// (#744). An app without it would refuse the whole sign-in, so it is never asked for by default.
+export const TIKTOK_METRICS_SCOPE = 'video.list';
 export const TIKTOK_PRIVACY_LEVELS = ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'] as const;
 export type TikTokPrivacy = (typeof TIKTOK_PRIVACY_LEVELS)[number];
 const API = 'https://open.tiktokapis.com/v2';
@@ -35,6 +38,8 @@ const CHUNK = 64 * 1024 * 1024;
 export interface TikTokAppConfig {
   clientKey: string;
   clientSecret: string;
+  // The app has the Display API: connections ask for video.list and posts' counts are read (#744).
+  videoList?: boolean;
 }
 
 export class TikTokError extends Error {
@@ -87,6 +92,10 @@ class TikTokClient {
 
   get clientKey(): string {
     return this.app.clientKey;
+  }
+
+  get videoList(): boolean {
+    return this.app.videoList === true;
   }
 
   async token(form: Record<string, string>): Promise<TokenAnswer> {
@@ -162,7 +171,7 @@ export class TikTokConnector implements OAuthConnector {
   authorizeUrl(input: AuthorizeInput): string {
     const url = new URL('https://www.tiktok.com/v2/auth/authorize/');
     url.searchParams.set('client_key', this.client.clientKey);
-    url.searchParams.set('scope', TIKTOK_SCOPES.join(','));
+    url.searchParams.set('scope', [...TIKTOK_SCOPES, ...(this.client.videoList ? [TIKTOK_METRICS_SCOPE] : [])].join(','));
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('redirect_uri', input.redirectUri);
     url.searchParams.set('state', input.state);
@@ -268,6 +277,34 @@ export class TikTokPublisher implements Publisher {
 
   constructor(app: TikTokAppConfig, fetchImpl?: Fetch) {
     this.client = new TikTokClient(app, fetchImpl);
+  }
+
+  // A video's counts (#744): views, likes, comments and shares from the video query endpoint (video.list). Without
+  // the scope, or for a post id TikTok has not given (a private post), no counts.
+  async metrics(input: MetricsInput): Promise<MetricsResult> {
+    const s = tiktokSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (!/^\d{1,32}$/.test(input.externalId)) return null;
+    let answer: { videos?: { id?: unknown; view_count?: unknown; like_count?: unknown; comment_count?: unknown; share_count?: unknown }[] };
+    try {
+      answer = await this.client.call('POST', '/video/query/?fields=id,view_count,like_count,comment_count,share_count', s.accessToken, { filters: { video_ids: [input.externalId] } });
+    } catch (error) {
+      if (error instanceof TikTokError && (error.status === 401 || error.code === 'access_token_invalid')) return { refused: 'token_expired' };
+      return null;
+    }
+    const video = answer.videos?.[0];
+    if (!video) return null;
+    const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
+    const metrics: Partial<Record<MetricName, number>> = {};
+    const views = n(video.view_count);
+    const likes = n(video.like_count);
+    const comments = n(video.comment_count);
+    const shares = n(video.share_count);
+    if (views !== undefined) metrics.views = views;
+    if (likes !== undefined) metrics.reactions = likes;
+    if (comments !== undefined) metrics.comments = comments;
+    if (shares !== undefined) metrics.shares = shares;
+    return { metrics };
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {

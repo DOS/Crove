@@ -284,6 +284,16 @@ describe('validateVariant', () => {
     expect(long([{ kind: 'video', mime: 'video/mp4', sizeBytes: 1000, durationSeconds: 10 }], 2201)).toEqual(['TEXT_TOO_LONG']);
   });
 
+  it('gives a Telegram post with media the caption limit of 1,024, and text alone 4,096 (#747)', () => {
+    const tg = (media: MediaItem[], n: number) => validateVariant({ provider: 'telegram', body: 'x'.repeat(n), title: null, media, settings: {} }).map((i) => i.code);
+    expect(tg([], 4096)).toEqual([]);
+    expect(tg([], 4097)).toEqual(['TEXT_TOO_LONG']);
+    expect(tg([jpeg()], 1024)).toEqual([]);
+    expect(tg([jpeg()], 1025)).toEqual(['TEXT_TOO_LONG']);
+    expect(tg([jpeg(), { kind: 'video', mime: 'video/mp4', sizeBytes: 1000, durationSeconds: 10 }], 10)).toEqual([]);
+    expect(tg(Array.from({ length: 11 }, () => jpeg()), 10)).toEqual(['TOO_MANY_MEDIA']);
+  });
+
   it('says when a channel takes video but its Crove adapter does not post it yet', () => {
     expect(validateVariant({ provider: 'facebook_page', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);
     expect(validateVariant({ provider: 'linkedin', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);

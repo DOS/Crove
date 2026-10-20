@@ -78,6 +78,26 @@ describe('TikTokRefresher', () => {
 });
 
 describe('TikTokPublisher', () => {
+  it("reads a video's counts with video.list, asked for only when the app has the Display API (#744)", async () => {
+    expect(new URL(new TikTokConnector(APP).authorizeUrl({ state: 's', redirectUri: REDIRECT, codeChallenge: null })).searchParams.get('scope')).toBe('user.info.basic,video.publish');
+    expect(new URL(new TikTokConnector({ ...APP, videoList: true }).authorizeUrl({ state: 's', redirectUri: REDIRECT, codeChallenge: null })).searchParams.get('scope')).toBe('user.info.basic,video.publish,video.list');
+    const { fetchImpl, calls } = tiktok({
+      'POST open.tiktokapis.com/v2/video/query/': [
+        { body: { data: { videos: [{ id: '7300000000000000001', view_count: 1200, like_count: 80, comment_count: 6, share_count: 3 }] }, error: ok } },
+        { status: 401, body: { error: { code: 'access_token_invalid', message: 'expired' } } },
+        { status: 403, body: { error: { code: 'scope_not_authorized', message: 'no video.list' } } },
+      ],
+    });
+    const publisher = new TikTokPublisher({ ...APP, videoList: true }, fetchImpl);
+    const ask = { externalAccountId: OPEN_ID, secret: SECRET, externalId: '7300000000000000001' };
+    expect(await publisher.metrics(ask)).toEqual({ metrics: { views: 1200, reactions: 80, comments: 6, shares: 3 } });
+    expect(calls[0]?.body).toEqual({ filters: { video_ids: ['7300000000000000001'] } });
+    expect(await publisher.metrics(ask)).toEqual({ refused: 'token_expired' });
+    // Without the scope (or for a private post with no id), no counts and no error.
+    expect(await publisher.metrics(ask)).toBeNull();
+    expect(await publisher.metrics({ ...ask, externalId: 'v_pub_abc' })).toBeNull();
+  });
+
   it('checks the creator options, opens the upload with the chosen settings, sends the bytes and reports pending', async () => {
     const { fetchImpl, calls } = tiktok({
       'POST open.tiktokapis.com/v2/post/publish/creator_info/query/': [creator()],

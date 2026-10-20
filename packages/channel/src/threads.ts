@@ -11,7 +11,7 @@
 // First comment (#609): a reply to the account's own post, made the same way (a TEXT container with reply_to_id, then
 // threads_publish); replying needs threads_manage_replies.
 import { createHash } from 'node:crypto';
-import type { CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
@@ -254,6 +254,35 @@ export class ThreadsPublisher implements Publisher {
     this.pollMs = timing.pollMs ?? POLL_MS;
     this.commentWaitMs = timing.commentWaitMs ?? COMMENT_WAIT_MS;
     this.commentBudgetMs = timing.commentBudgetMs ?? COMMENT_BUDGET_MS;
+  }
+
+  // A post's counts (plan §3.6, #744): views, likes, replies, and reposts, quotes and shares together, from the media
+  // insights endpoint (threads_manage_insights). A post that is gone, or insights not granted, give no counts.
+  async metrics(input: MetricsInput): Promise<MetricsResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { refused: 'token_expired' };
+    if (!NUMERIC_ID.test(input.externalId)) return { refused: 'gone' };
+    let answer: { data?: { name?: unknown; values?: { value?: unknown }[]; total_value?: { value?: unknown } }[] };
+    try {
+      answer = await this.client.call('GET', `${VERSION}/${input.externalId}/insights`, { token, params: { metric: 'views,likes,replies,reposts,quotes,shares' } });
+    } catch (error) {
+      const result = threadsResult(error);
+      if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
+      return null;
+    }
+    const metrics: Partial<Record<MetricName, number>> = {};
+    let shared: number | undefined;
+    for (const row of answer.data ?? []) {
+      const raw = row.values?.[0]?.value ?? row.total_value?.value;
+      const value = typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : undefined;
+      if (value === undefined || typeof row.name !== 'string') continue;
+      if (row.name === 'views') metrics.views = value;
+      else if (row.name === 'likes') metrics.reactions = value;
+      else if (row.name === 'replies') metrics.comments = value;
+      else if (row.name === 'reposts' || row.name === 'quotes' || row.name === 'shares') shared = (shared ?? 0) + value;
+    }
+    if (shared !== undefined) metrics.shares = shared;
+    return { metrics };
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
