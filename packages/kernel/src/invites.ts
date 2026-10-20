@@ -8,7 +8,7 @@ import { z } from 'zod';
 import type { Db, MemberRole } from '@crove/db';
 import { zId, zInviteRole, zInviteToken } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type SessionStatusSource } from '@crove/kernel-runtime';
-import { createMailMessage } from './mail.ts';
+import { createMailMessage, type DirectMail } from './mail.ts';
 import { memberProfiles } from './profiles.ts';
 
 // How long an invite stays valid. The table allows at most 30 days.
@@ -474,6 +474,21 @@ export const invitesList = defineQuery({
       .execute();
     // Inviters through the definer (plan §3.6, #169). An inviter who left the org has no profile here: null, as before.
     const inviters = await memberProfiles(ctx.trx, rows.map((r) => r.invited_by));
+    // Each invite's newest mail row (#539): sent, delivered, bounced, or not sent because the address is stopped.
+    const mails = new Map<string, DirectMail['status']>();
+    if (rows.length > 0) {
+      const sent = await ctx.trx
+        .selectFrom('crove_kernel.mail_message')
+        .select(['source_id', 'status'])
+        .distinctOn('source_id')
+        .where('org_id', '=', ctx.orgId)
+        .where('source', '=', 'kernel.member.invite.create')
+        .where('source_id', 'in', rows.map((r) => r.id))
+        .orderBy('source_id')
+        .orderBy('created_at', 'desc')
+        .execute();
+      for (const m of sent) if (m.source_id) mails.set(m.source_id, m.status);
+    }
     const now = Date.now();
     return rows.map((r) => ({
       id: r.id,
@@ -483,6 +498,7 @@ export const invitesList = defineQuery({
       invitedBy: inviters.get(r.invited_by)?.displayName ?? inviters.get(r.invited_by)?.email ?? null,
       createdAt: r.created_at.toISOString(),
       expiresAt: r.expires_at.toISOString(),
+      mail: mails.get(r.id) ?? null,
     }));
   },
 });

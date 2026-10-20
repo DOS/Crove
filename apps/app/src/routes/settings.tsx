@@ -462,6 +462,9 @@ function InviteMember({ isOwner, initialEmail }: { isOwner: boolean; initialEmai
   );
 }
 
+// Mail outcomes the inviter should act on (#539): the address bounced or is stopped, or the mail did not go out.
+const INVITE_MAIL_PROBLEMS: ReadonlySet<string> = new Set(['bounced', 'complained', 'suppressed', 'failed', 'ambiguous']);
+
 function PendingInvites() {
   const root = useTranslations();
   const t = useTranslations('settings');
@@ -487,6 +490,11 @@ function PendingInvites() {
                 {i.status === 'expired' ? t('expired') : t('expiresAt', { at: f.dateTime(i.expiresAt) })}
                 {i.invitedBy ? ` · ${t('invitedBy', { name: i.invitedBy })}` : ''}
               </p>
+              {i.mail && (
+                <p className={`text-xs ${INVITE_MAIL_PROBLEMS.has(i.mail) ? 'text-destructive' : 'text-subtle-foreground'}`}>
+                  {t(`inviteMail.${i.mail}`)}
+                </p>
+              )}
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <Badge variant={i.status === 'expired' ? 'warning' : 'secondary'}>{root(`roles.${i.role}`)}</Badge>

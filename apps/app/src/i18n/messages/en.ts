@@ -1077,6 +1077,17 @@ export const en = {
     expiresAt: 'Expires {at}',
     invitedBy: 'invited by {name}',
     revoke: 'Revoke',
+    inviteMail: {
+      queued: 'Mail queued',
+      sending: 'Sending mail',
+      sent: 'Mail sent',
+      delivered: 'Mail delivered',
+      bounced: 'Mail bounced: check the address',
+      complained: 'The recipient marked the mail as spam',
+      suppressed: 'No mail sent: the address is stopped',
+      failed: 'Mail not sent: pass the link on yourself',
+      ambiguous: 'Not known whether the mail went out',
+    },
   },
   offboarding: {
     title: 'Close the organization and export its data',
