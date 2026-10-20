@@ -38,8 +38,8 @@ export function invoiceJournal(direction: DocumentDirection, lines: ProposedLine
 }
 
 // The party of the invoice in Crove's books: the supplier of a purchase, the customer of a sale. Matched by tax code,
-// or by name when the invoice gives none.
-async function upsertParty(ctx: CommandContext, ref: PurchaseProposal['seller'], direction: DocumentDirection): Promise<string> {
+// or by name when the invoice gives none. Opening balances per party (#689) find or create theirs the same way.
+export async function upsertParty(ctx: CommandContext, ref: PurchaseProposal['seller'], direction: DocumentDirection): Promise<string> {
   const taxCode = parseTaxCode(ref.taxCode)?.normalized ?? null;
   const name = ref.name.trim() || (direction === 'sale' ? 'Khách hàng chưa rõ tên' : 'Nhà cung cấp chưa rõ tên');
   const existing = taxCode

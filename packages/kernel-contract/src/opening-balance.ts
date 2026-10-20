@@ -10,12 +10,16 @@ export const OPENING_BALANCE_MAX_ROWS = 1000;
 
 // One row of the sheet as read, cells as text. An amount is a number cell's stored value as is, or a text cell after
 // normalizeAmountText; the module parses and checks it. rowNo is the sheet's row number, for messages.
+// The party (#689) is optional and only for receivables (131) and payables (331) rows: a customer or vendor by tax
+// code, or by name when it has none. A template without the party columns sends neither.
 export const zOpeningBalanceRow = z.object({
   rowNo: z.number().int().positive(),
   accountCode: z.string().max(50),
   accountName: z.string().max(200),
   debit: z.string().max(50),
   credit: z.string().max(50),
+  partyTaxCode: z.string().max(50).optional(),
+  partyName: z.string().max(200).optional(),
 });
 export type OpeningBalanceRow = z.infer<typeof zOpeningBalanceRow>;
 
@@ -34,8 +38,12 @@ export const OPENING_ROW_ERRORS = [
   'ACCOUNT_UNKNOWN',
   // An account the org no longer uses.
   'ACCOUNT_INACTIVE',
-  // The same account on more than one row.
+  // The same account on more than one row (for 131 and 331, the same account and party).
   'ACCOUNT_DUPLICATE',
+  // A party on an account that is not a receivable or a payable (131, 331 and their sub-accounts).
+  'PARTY_NOT_ALLOWED',
+  // A party tax code that is not one (10 digits, 10 digits and a 3-digit branch, or 12 digits).
+  'PARTY_TAX_CODE_INVALID',
   // Not a number.
   'AMOUNT_INVALID',
   'AMOUNT_NEGATIVE',
@@ -71,6 +79,9 @@ export const zOpeningBalancePreview = z.object({
       // Parsed amounts, or null when the cell is not a valid amount.
       debit: zMoney.nullable(),
       credit: zMoney.nullable(),
+      // The row's party as read (#689): the tax code normalized when it is valid, as written otherwise.
+      partyTaxCode: z.string().nullable(),
+      partyName: z.string().nullable(),
       // No amount on either side: the row is left out of the entry.
       skipped: z.boolean(),
       errors: z.array(z.enum(OPENING_ROW_ERRORS)),

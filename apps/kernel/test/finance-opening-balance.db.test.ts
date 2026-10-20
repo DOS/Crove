@@ -10,6 +10,7 @@ import { SignJWT } from 'jose';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
+import { normalizeStatementAmount } from '@crove/kernel-contract';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
 import { Runtime, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
@@ -497,5 +498,110 @@ suite('opening balances from Excel (#320)', () => {
       { entry_date: '2026-01-10', source_type: 'test.sale' },
       { entry_date: '2026-03-01', source_type: 'test.sale' },
     ]);
+  });
+  it('splits 131 and 331 per customer and vendor: the per-party report and a bank line find the opening balances (#689)', async () => {
+    const fresh = await rpc('org/create', await tokenFor(owner), { name: 'Công ty Công nợ đầu kỳ', idempotencyKey: randomUUID() }, null);
+    const slug = String(fresh.body?.slug);
+    const orgId = String(fresh.body?.orgId);
+    // A vendor already in the books is reused by its tax code; the others are created. Fake tax codes only.
+    const known = randomUUID();
+    await admin((c) => c.query(`INSERT INTO crove_kernel.party (org_id, id, name, tax_code) VALUES ($1, $2, 'Nhà cung cấp Cũ', '0312345670')`, [orgId, known]));
+    const party = (accountCode: string, debit: string, credit: string, partyTaxCode: string, partyName: string) => ({
+      ...row(accountCode, debit, credit),
+      ...(partyTaxCode ? { partyTaxCode } : {}),
+      ...(partyName ? { partyName } : {}),
+    });
+    const input = {
+      asOf: '2025-12-31',
+      rows: [
+        row('112', '100000000', ''),
+        party('131', '30000000', '', '0101234564', 'Công ty Khách A'),
+        party('131', '5000000', '', '', 'Khách lẻ'),
+        // The rest of 131 that the firm cannot split yet.
+        row('131', '2000000', ''),
+        party('331', '', '25000000', '0312345670', 'Tên khác trong bảng'),
+        row('411', '', '112000000'),
+      ],
+    };
+    // A party on another account is refused, and nothing is created while the sheet is refused.
+    const refused = await post(owner, { ...input, rows: [...input.rows.slice(0, -1), party('411', '', '112000000', '0309876546', '')] }, slug);
+    expect(refused).toMatchObject({ status: 422, body: { code: 'OPENING_BALANCE_INVALID' } });
+    expect((await admin((c) => c.query('SELECT count(*)::int AS n FROM crove_kernel.party WHERE org_id = $1', [orgId]))).rows[0].n).toBe(1);
+
+    const preview = await rpc('openingBalance/preview', await tokenFor(owner), input, slug);
+    expect(preview.body).toMatchObject({ ok: true, lines: 6 });
+    expect(preview.body.rows.map((r: any) => [r.accountCode, r.partyTaxCode, r.partyName])).toEqual([
+      ['112', null, null],
+      ['131', '0101234564', 'Công ty Khách A'],
+      ['131', null, 'Khách lẻ'],
+      ['131', null, null],
+      ['331', '0312345670', 'Tên khác trong bảng'],
+      ['411', null, null],
+    ]);
+    const posted = await post(owner, input, slug);
+    expect(posted).toMatchObject({ status: 200, body: { lines: 6 } });
+
+    const parties = await admin(
+      async (c) => (await c.query<{ id: string; name: string; tax_code: string | null }>('SELECT id, name, tax_code FROM crove_kernel.party WHERE org_id = $1 ORDER BY name', [orgId])).rows,
+    );
+    expect(parties.map((p) => [p.name, p.tax_code])).toEqual([
+      ['Công ty Khách A', '0101234564'],
+      ['Khách lẻ', null],
+      ['Nhà cung cấp Cũ', '0312345670'],
+    ]);
+    const idOf = (name: string) => parties.find((p) => p.name === name)?.id;
+    const lines = await admin(
+      async (c) =>
+        (await c.query('SELECT account_code, party_id, debit::text, credit::text FROM crove_finance.journal_line WHERE org_id = $1 AND entry_id = $2 ORDER BY line_no', [orgId, posted.body.journalEntryId]))
+          .rows,
+    );
+    expect(lines.map((l) => [l.account_code, l.party_id])).toEqual([
+      ['112', null],
+      ['131', idOf('Công ty Khách A')],
+      ['131', idOf('Khách lẻ')],
+      ['131', null],
+      ['331', known],
+      ['411', null],
+    ]);
+    const audit = await admin((c) => c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.opening_balance.post' AND outcome = 'ok'`, [orgId]));
+    expect(audit.rows[0].detail).toMatchObject({ lines: 6, parties: 3 });
+
+    // The receivables and payables report of the next month opens with each party's balance and the unallocated rest.
+    const ledger = await rpc('ledger/period', await tokenFor(owner), { period: '2026-01' }, slug);
+    expect(ledger.status).toBe(200);
+    expect(ledger.body.receivables.rows.map((r: any) => [r.partyId, r.opening, r.closing])).toEqual([
+      [idOf('Công ty Khách A'), '30000000', '30000000'],
+      [idOf('Khách lẻ'), '5000000', '5000000'],
+      [null, '2000000', '2000000'],
+    ]);
+    expect(ledger.body.payables.rows.map((r: any) => [r.partyId, r.opening])).toEqual([[known, '25000000']]);
+
+    // A payment in January of the vendor's opening balance, with nothing in the description to name it, is matched
+    // by that balance.
+    const imported = await rpc(
+      'bank/import',
+      await tokenFor(owner),
+      {
+        bankAccount: '1121',
+        filename: 'sao-ke-01.xlsx',
+        rows: [
+          {
+            rowNo: 2,
+            date: '05/01/2026',
+            description: 'CHUYEN KHOAN THANH TOAN',
+            moneyIn: '',
+            moneyOut: normalizeStatementAmount('25.000.000'),
+            balance: '',
+            reference: 'FT689',
+          },
+        ],
+        idempotencyKey: randomUUID(),
+      },
+      slug,
+    );
+    expect(imported.status).toBe(200);
+    const [line] = (await admin((c) => c.query<{ id: string }>('SELECT id FROM crove_finance.bank_line WHERE org_id = $1', [orgId]))).rows;
+    const suggested = await rpc('bank/lineVoucher', await tokenFor(owner), { bankLineId: line?.id }, slug);
+    expect(suggested.body).toMatchObject({ voucher: { counterAccount: '331', amount: '25000000' }, suggested: { party: { id: known }, reason: 'balance' } });
   });
 });
