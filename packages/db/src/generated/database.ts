@@ -61,6 +61,8 @@ export interface CroveKernelSchema {
 
 export interface CroveSocialSchema {
   'crove_social.account_snapshot': SocialAccountSnapshotTable;
+  'crove_social.bio_click': SocialBioClickTable;
+  'crove_social.bio_page': SocialBioPageTable;
   'crove_social.channel_policy': SocialChannelPolicyTable;
   'crove_social.feed': SocialFeedTable;
   'crove_social.feed_item': SocialFeedItemTable;
@@ -737,6 +739,32 @@ export interface SocialAccountSnapshotTable {
   reach: ColumnType<string | null, string | null, NotGranted>;
   error: ColumnType<string | null, string | null, NotGranted>;
   captured_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.bio_click */
+export interface SocialBioClickTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  page_id: ColumnType<string, NotGranted, NotGranted>;
+  target: ColumnType<string, NotGranted, NotGranted>;
+  day: ColumnType<string, NotGranted, NotGranted>;
+  clicks: ColumnType<string, NotGranted, NotGranted>;
+}
+
+/** crove_social.bio_page */
+export interface SocialBioPageTable {
+  org_id: string;
+  id: Generated<string>;
+  slug: string;
+  title: string;
+  about: string | null;
+  avatar_file_id: string | null;
+  buttons: ColumnType<unknown, string | undefined, string>;
+  show_posts: Generated<boolean>;
+  published: Generated<boolean>;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_social.channel_policy */

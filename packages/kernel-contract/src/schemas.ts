@@ -970,6 +970,28 @@ const zIdeaFields = {
 };
 export const zSocialIdeaCreate = z.strictObject({ ...zIdeaFields, stage: z.enum(['new', 'planned']).optional() });
 export const zSocialIdeaUpdate = z.strictObject({ ideaId: zId, ...zIdeaFields });
+// An org's link-in-bio page (#707) and its clicks of the last 30 days, by button:<index> or post:<id>.
+export const zSocialBioPage = z.object({
+  id: zId,
+  slug: z.string(),
+  title: z.string(),
+  about: z.string().nullable(),
+  avatarFileId: zId.nullable(),
+  buttons: z.array(z.object({ label: z.string(), url: z.string() })),
+  showPosts: z.boolean(),
+  published: z.boolean(),
+  updatedAt: z.string(),
+  clicks: z.record(z.string(), z.number()),
+});
+export const zSocialBioSave = z.strictObject({
+  slug: z.string().trim().min(3).max(40),
+  title: z.string().trim().min(1).max(100),
+  about: z.string().max(300).nullable().optional(),
+  avatarFileId: zId.nullable().optional(),
+  buttons: z.array(z.strictObject({ label: z.string().trim().min(1).max(60), url: z.url({ protocol: /^https?$/ }).max(2000) })).max(12),
+  showPosts: z.boolean(),
+  published: z.boolean(),
+});
 // A blog feed an org drafts posts from (#708), and how its reads went.
 export const zSocialFeed = z.object({
   id: zId,

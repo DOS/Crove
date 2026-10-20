@@ -477,6 +477,9 @@ export function SocialPage() {
             <Link to="/o/$slug/social/ideas" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
               {t('ideas.title')}
             </Link>
+            <Link to="/o/$slug/social/bio" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+              {t('bio.pageTitle')}
+            </Link>
             <Link to="/o/$slug/social/feeds" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
               {t('feeds.title')}
             </Link>

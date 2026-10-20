@@ -89,6 +89,7 @@ import type { MailProvider } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { reviewAnswer, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
 import { reportView, REPORT_VIEWS_PER_MINUTE } from './report-link.ts';
+import { BIO_HITS_PER_MINUTE, BIO_PAGE_CSP, bioGo, bioImage, bioView, renderBioPage } from './bio-page.ts';
 import { shortLinkTarget, SHORT_LINK_HITS_PER_MINUTE } from './short-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
@@ -132,6 +133,8 @@ export interface HttpDeps {
   reviewLimits?: { views: RateLimiter; answers: RateLimiter };
   // The public report page's budget per client (#643). Unset: REPORT_VIEWS_PER_MINUTE.
   reportLimit?: RateLimiter;
+  // The per-client budget of link-in-bio pages, their links and images (#707), replaceable in tests.
+  bioLimit?: RateLimiter;
   // The per-client budget of short link redirects (#706), replaceable in tests.
   shortLinkLimit?: RateLimiter;
   // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
@@ -569,6 +572,47 @@ export function createHttpApp(deps: HttpDeps) {
       try {
         const target = await shortLinkTarget(runtime, c.req.param('code'), c.req.header('user-agent'));
         return target ? c.redirect(target, 302) : c.text('Liên kết không tồn tại hoặc đã bị gỡ', 404);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    // An org's link-in-bio page (#707): the page, its counted links and its images, under one per-client budget. An
+    // unpublished or unknown page is a plain 404 for all three.
+    const bioLimit = deps.bioLimit ?? new RateLimiter({ perMinute: BIO_HITS_PER_MINUTE });
+    const notFound = (c: Context) => c.text('Không tìm thấy trang này', 404);
+    app.get('/b/:slug', async (c) => {
+      const limited = reviewBudget(c, bioLimit);
+      if (limited) return limited;
+      try {
+        const slug = c.req.param('slug');
+        const view = await bioView(runtime, slug);
+        if (!view) return notFound(c);
+        return c.html(renderBioPage(slug, view), 200, { 'content-security-policy': BIO_PAGE_CSP, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    app.get('/b/:slug/go/:target', async (c) => {
+      const limited = reviewBudget(c, bioLimit);
+      if (limited) return limited;
+      c.header('cache-control', 'no-store');
+      c.header('referrer-policy', 'no-referrer');
+      try {
+        const url = await bioGo(runtime, c.req.param('slug'), c.req.param('target'), c.req.header('user-agent'));
+        return url ? c.redirect(url, 302) : notFound(c);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    app.get('/b/:slug/img/:file', async (c) => {
+      const limited = reviewBudget(c, bioLimit);
+      if (limited) return limited;
+      try {
+        const image = await bioImage(runtime, store, c.req.param('slug'), c.req.param('file'));
+        if (!image) return notFound(c);
+        return new Response(body(image.bytes), {
+          headers: { 'content-type': image.contentType, 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" },
+        });
       } catch (error) {
         return problem(c, error);
       }
