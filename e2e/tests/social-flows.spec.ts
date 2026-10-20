@@ -393,7 +393,7 @@ test('crops a post image to a frame, and the server reads the new size (#636)', 
   await page.locator('input[type="file"]').first().setInputFiles([{ name: 'doc.png', mimeType: 'image/png', buffer: solidPng(1080, 1920) }]);
   await expect(page.getByText('1/20').first()).toBeVisible();
   await page.getByRole('button', { name: 'Cắt', exact: true }).first().click();
-  await page.getByRole('radio', { name: /1:1/ }).click();
+  await page.getByRole('radio', { name: '1:1 · vuông' }).click();
   await expect(page.getByText('Ảnh gốc 1080 × 1920, sau khi cắt 1080 × 1080')).toBeVisible();
   await page.getByRole('button', { name: 'Lưu ảnh đã cắt' }).click();
   await expect(page.getByRole('button', { name: 'Lưu ảnh đã cắt' })).toHaveCount(0);
