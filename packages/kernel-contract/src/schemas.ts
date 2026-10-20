@@ -1033,6 +1033,8 @@ export const zSocialMetricsRow = z.object({
   externalUrl: z.string().nullable(),
   metrics: z.record(z.string(), z.number()),
   capturedAt: z.string().nullable(),
+  // Clicks on its short link (#706); null when it went out without one.
+  clicks: z.number().int().nullable(),
 });
 
 export const zSocialQueue = z.object({

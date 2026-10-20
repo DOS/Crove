@@ -109,6 +109,9 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
   if (rows.error) return <ErrorText>{errorMessage(rows.error)}</ErrorText>;
   const data = rows.data ?? [];
   const total = (name: string) => data.reduce((sum, r) => sum + (r.metrics[name] ?? 0), 0);
+  // Clicks on Crove's short links (#706), where a channel sends its links through them.
+  const hasClicks = data.some((r) => r.clicks !== null);
+  const clicks = data.reduce((sum, r) => sum + (r.clicks ?? 0), 0);
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -137,6 +140,12 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
                 <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{f.number(total(m))}</p>
               </Card>
             ))}
+            {hasClicks && (
+              <Card className="block p-4">
+                <p className="text-xs text-subtle-foreground">{t('metricsClicks')}</p>
+                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{f.number(clicks)}</p>
+              </Card>
+            )}
           </div>
           {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t('metricsCapped')}</p>}
           <BestTimes rows={data} names={names} />
@@ -152,6 +161,7 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
                       {t(`metric.${m}`)}
                     </th>
                   ))}
+                  {hasClicks && <th className="px-3 py-2 text-right font-medium">{t('metricsClicks')}</th>}
                 </tr>
               </thead>
               <tbody>
@@ -172,6 +182,7 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
                         {r.metrics[m] === undefined ? '-' : f.number(r.metrics[m])}
                       </td>
                     ))}
+                    {hasClicks && <td className="px-3 py-2 text-right text-foreground tabular-nums">{r.clicks === null ? '-' : f.number(r.clicks)}</td>}
                   </tr>
                 ))}
               </tbody>

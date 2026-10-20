@@ -386,12 +386,14 @@ export const contract = {
     },
     // Review policy per channel (S9): how many different people approve a variant before it may be scheduled.
     policies: {
-      list: oc.input(z.object({})).output(z.array(z.object({ connectionId: zId, approvalsRequired: z.number().int(), reviewReminders: z.boolean(), updatedBy: zId, updatedAt: z.string() }))),
+      list: oc.input(z.object({})).output(z.array(z.object({ connectionId: zId, approvalsRequired: z.number().int(), reviewReminders: z.boolean(), shortLinks: z.boolean(), updatedBy: zId, updatedAt: z.string() }))),
       set: oc
         .input(z.strictObject({ connectionId: zId, approvalsRequired: z.number().int().min(1).max(3) }))
         .output(z.object({ connectionId: zId, approvalsRequired: z.number().int(), approved: z.array(zId) })),
       // Whether the channel's reviewers are reminded of posts waiting for review (#703).
       setReminders: oc.input(z.strictObject({ connectionId: zId, reviewReminders: z.boolean() })).output(z.object({ connectionId: zId, reviewReminders: z.boolean() })),
+      // Whether the channel's links go through Crove's short links, to count clicks (#706).
+      setShortLinks: oc.input(z.strictObject({ connectionId: zId, shortLinks: z.boolean() })).output(z.object({ connectionId: zId, shortLinks: z.boolean() })),
     },
     // Variants waiting paused on each channel (expired or disconnected), for the channels screen.
     channels: {

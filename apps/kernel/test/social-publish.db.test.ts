@@ -12,6 +12,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey, type BlobStore } from '@crove/kernel-runtime';
 import { captureKey, runCommentJob, runPublishJob, socialCommands, socialQueries, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
+import { shortLinkTarget } from '../src/short-link.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -199,6 +200,54 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(platform.posts).toHaveLength(1);
   });
 
+  it('sends a post link as a Crove short link where the channel asks, and counts clicks without the visitor (#706)', async () => {
+    const o = await org();
+    const platform = new FakePlatform();
+    const conn = (await connect(o, `acct-${randomUUID().slice(0, 8)}`)).connectionId;
+    const plain = (await connect(o, `acct-${randomUUID().slice(0, 8)}`)).connectionId;
+    await exec(o, 'social.channel.set_short_links', { connectionId: conn, shortLinks: true });
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', {
+      body: 'Ưu đãi tuần này: https://tiembanh.example/uu-dai',
+      linkUrl: 'https://tiembanh.example/uu-dai',
+      channels: [{ connectionId: conn }, { connectionId: plain }],
+    });
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    const [short, other] = post.variants;
+    const deps = { runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000, publicUrl: 'https://crove.example/' };
+    expect(await runPublishJob(deps, o.orgId, short?.id as string, 'sandbox')).toEqual({ action: 'call', status: 'published' });
+    expect(await runPublishJob(deps, o.orgId, other?.id as string, 'sandbox')).toEqual({ action: 'call', status: 'published' });
+
+    const rows = await admin(async (c) => (await c.query<{ code: string; target_url: string }>('SELECT code, target_url FROM crove_social.short_link WHERE post_id = $1', [postId])).rows);
+    expect(rows).toHaveLength(1);
+    const code = rows[0]?.code as string;
+    expect(code).toMatch(/^[A-Za-z0-9]{12}$/);
+    // The target is the link as the channel sends it (with its UTM tags when the post has some).
+    expect(rows[0]?.target_url).toBe('https://tiembanh.example/uu-dai');
+    // The shortened channel's text and link name the short link; the other channel's are its own.
+    expect(platform.posts[0]?.content).toMatchObject({ linkUrl: `https://crove.example/l/${code}` });
+    expect(platform.posts[0]?.content.body).not.toContain('tiembanh.example');
+    expect(platform.posts[1]?.content.linkUrl).toMatch(/^https:\/\/tiembanh\.example\/uu-dai/);
+
+    // The redirect: a person counts, a link preview does not, an unknown or malformed code is nothing.
+    expect(await shortLinkTarget(api, code, 'Mozilla/5.0 (iPhone)')).toBe(rows[0]?.target_url);
+    expect(await shortLinkTarget(api, code, 'Mozilla/5.0 (iPhone)')).toBe(rows[0]?.target_url);
+    expect(await shortLinkTarget(api, code, 'facebookexternalhit/1.1')).toBe(rows[0]?.target_url);
+    expect(await shortLinkTarget(api, 'AAAAAAAAAAAA', 'Mozilla/5.0')).toBeNull();
+    expect(await shortLinkTarget(api, "x' OR 1=1", 'Mozilla/5.0')).toBeNull();
+    const summary = await api.query<{ variantId: string; clicks: number | null }[]>('social.metrics.summary', { postId }, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(Object.fromEntries(summary.map((r) => [r.variantId, r.clicks]))).toEqual({ [short?.id as string]: 2, [other?.id as string]: null });
+    // Only the redirect's definer counts: members read the counts, and the API role cannot write them.
+    await expect(appPool.query("INSERT INTO crove_social.short_link_click (org_id, short_link_id, day, clicks) SELECT org_id, id, current_date, 99 FROM crove_social.short_link")).rejects.toMatchObject({ code: '42501' });
+    await expect(workerPool.query('SELECT crove_social.short_link_hit($1, true)', [code])).rejects.toMatchObject({ code: '42501' });
+    // A member cannot switch a channel's links.
+    const member = await person('member');
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, member]));
+    await expect(api.execute('social.channel.set_short_links', { connectionId: plain, shortLinks: true }, { actor: asUser(member), orgId: o.orgId })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
   it('never publishes a variant short of what its channel asks for now, and sends it back to review (#408)', async () => {
     const o = await org();
     const platform = new FakePlatform();

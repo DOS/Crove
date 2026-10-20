@@ -23,11 +23,7 @@ suite('social link-in-bio page on PostgreSQL (#707)', () => {
   let pool: pg.Pool;
   let db: Db;
   let rt: Runtime;
-  let workerPool: pg.Pool;
-  // The worker's runtime (the crove_worker login): only it enters an org's system context.
-  let worker: Runtime;
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
-  const system = { type: 'system' as const, component: 'test' };
 
   async function admin<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
     const client = new pg.Client({ connectionString: adminUrl });
@@ -43,7 +39,7 @@ suite('social link-in-bio page on PostgreSQL (#707)', () => {
     return upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: `${name}-${randomUUID().slice(0, 8)}@social.test`, name: null });
   }
 
-  type Org = { orgId: string; owner: string; admin: string; member: string; other: string; viewer: string; dispatched: Set<string> };
+  type Org = { orgId: string; owner: string; admin: string; member: string; other: string; viewer: string; };
   async function org(): Promise<Org> {
     const owner = await person('owner');
     const { orgId } = await createOrg(rt, asUser(owner), `Org ${randomUUID().slice(0, 6)}`);
@@ -52,7 +48,7 @@ suite('social link-in-bio page on PostgreSQL (#707)', () => {
     for (const [key, id] of Object.entries(roles)) {
       await admin((c) => c.query('INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, $3)', [orgId, id, role[key as keyof typeof role]]));
     }
-    return { orgId, owner, ...roles, dispatched: new Set() };
+    return { orgId, owner, ...roles };
   }
 
   async function connection(orgId: string, owner: string) {
@@ -85,16 +81,10 @@ suite('social link-in-bio page on PostgreSQL (#707)', () => {
     db = createDb(pool);
     const registry = { commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] };
     rt = new Runtime(db).register(registry);
-    const asWorker = new URL(adminUrl);
-    asWorker.username = 'crove_worker';
-    asWorker.password = 'test-worker-pw';
-    workerPool = createPool({ connectionString: asWorker.toString(), max: 2 });
-    worker = new Runtime(createDb(workerPool)).register(registry);
   });
 
   afterAll(async () => {
     await pool?.end();
-    await workerPool?.end();
     if (!ADMIN) return;
     const root = new pg.Client({ connectionString: ADMIN });
     await root.connect();

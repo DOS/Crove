@@ -90,6 +90,7 @@ import { RateLimiter } from './rate-limit.ts';
 import { reviewAnswer, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
 import { reportView, REPORT_VIEWS_PER_MINUTE } from './report-link.ts';
 import { BIO_HITS_PER_MINUTE, BIO_PAGE_CSP, bioGo, bioImage, bioView, renderBioPage } from './bio-page.ts';
+import { shortLinkTarget, SHORT_LINK_HITS_PER_MINUTE } from './short-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
@@ -134,6 +135,8 @@ export interface HttpDeps {
   reportLimit?: RateLimiter;
   // The per-client budget of link-in-bio pages, their links and images (#707), replaceable in tests.
   bioLimit?: RateLimiter;
+  // The per-client budget of short link redirects (#706), replaceable in tests.
+  shortLinkLimit?: RateLimiter;
   // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
   uploadCompletes?: ConcurrencyLimiter;
   // Uploads that may be larger than MAX_UPLOAD_BYTES (Social videos, #409) running at once. Default: 2 per process.
@@ -554,6 +557,21 @@ export function createHttpApp(deps: HttpDeps) {
       try {
         const view = await reportView(runtime, await c.req.json().catch(() => null));
         return view ? c.json(view) : c.json({ code: 'REPORT_LINK_INVALID', message: 'Liên kết báo cáo không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    // A Social short link (#706): a redirect to the link the post went out with, counted. The same per-client budget as
+    // the public pages; an unknown code is a plain 404.
+    const shortLinkLimit = deps.shortLinkLimit ?? new RateLimiter({ perMinute: SHORT_LINK_HITS_PER_MINUTE });
+    app.get('/l/:code', async (c) => {
+      const limited = reviewBudget(c, shortLinkLimit);
+      if (limited) return limited;
+      c.header('cache-control', 'no-store');
+      c.header('referrer-policy', 'no-referrer');
+      try {
+        const target = await shortLinkTarget(runtime, c.req.param('code'), c.req.header('user-agent'));
+        return target ? c.redirect(target, 302) : c.text('Liên kết không tồn tại hoặc đã bị gỡ', 404);
       } catch (error) {
         return problem(c, error);
       }

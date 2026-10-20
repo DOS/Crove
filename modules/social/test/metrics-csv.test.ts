@@ -22,7 +22,7 @@ describe('metrics CSV (#578)', () => {
       publishedAt: '2026-10-20T01:00:00.000Z',
       externalUrl: 'https://example.test/p/1',
       metrics: { reach: 30, reactions: 3 },
-      capturedAt: '2026-10-20T07:00:00.000Z',
+      capturedAt: '2026-10-20T07:00:00.000Z', clicks: null,
     };
     const csv = metricsCsv([row], new Map([['c1', 'Quán A']]));
     expect(csv.startsWith('﻿')).toBe(true);
@@ -43,7 +43,7 @@ describe('metrics CSV (#578)', () => {
       publishedAt: null,
       externalUrl: null,
       metrics: {},
-      capturedAt: null,
+      capturedAt: null, clicks: null,
     };
     const line = (labels?: Map<string, string[]>) => metricsCsv([row], new Map(), labels).slice(1).split('\r\n')[1];
     expect(line(new Map([['p1', ['Khai trương', 'Tết']]]))).toBe('p1,,facebook_page,,,Hi,Khai trương; Tết,,,,,,,,,');

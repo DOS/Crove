@@ -1,6 +1,6 @@
 -- An org's link-in-bio page (issue #707). Idempotent; applied files stay untouched.
 --
--- crove_social.bio_page        one page per org, at PUBLIC_URL/b/<slug> once published: a title, a short about, an
+-- crove_social.bio_page        an org's page (one, kept by social.bio.save), at PUBLIC_URL/b/<slug> once published: a title, a short about, an
 --                              avatar from the media library, up to 12 buttons (label and link) and, if chosen, a grid
 --                              of the org's recent published image posts. Owners and admins edit it; a new slug frees
 --                              the old one at once.
@@ -27,8 +27,7 @@ CREATE TABLE IF NOT EXISTS crove_social.bio_page (
   created_by uuid NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (org_id, id),
-  CONSTRAINT bio_page_one UNIQUE (org_id)
+  PRIMARY KEY (org_id, id)
 );
 -- Slugs are looked up without an org (the public page), so they are unique across orgs.
 CREATE UNIQUE INDEX IF NOT EXISTS bio_page_slug_uq ON crove_social.bio_page (slug);

@@ -69,11 +69,13 @@ export const bioSave = defineCommand({
       published: input.published,
       updated_at: ctx.now,
     };
-    const row = await ctx.trx
-      .insertInto('crove_social.bio_page')
-      .values({ org_id: ctx.orgId, ...values, created_by: userId, created_at: ctx.now })
-      .onConflict((oc) => oc.columns(['org_id']).doUpdateSet(values))
-      .returning('id')
+    // One page per org: saves are taken one at a time, and a second save changes the page the first made.
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(${`crove_social.bio_page:${ctx.orgId}`}))`.execute(ctx.trx);
+    const existing = await ctx.trx.selectFrom('crove_social.bio_page').select('id').where('org_id', '=', ctx.orgId).orderBy('created_at').orderBy('id').executeTakeFirst();
+    const write = existing
+      ? ctx.trx.updateTable('crove_social.bio_page').set(values).where('org_id', '=', ctx.orgId).where('id', '=', existing.id).returning('id')
+      : ctx.trx.insertInto('crove_social.bio_page').values({ org_id: ctx.orgId, ...values, created_by: userId, created_at: ctx.now }).returning('id');
+    const row = await write
       .executeTakeFirstOrThrow()
       .catch((error: unknown) => {
         if ((error as { constraint?: string }).constraint === 'bio_page_slug_uq') throw new DomainError('BIO_SLUG_TAKEN', 409, 'Địa chỉ này đã có trang khác dùng', { slug: input.slug });
@@ -107,6 +109,8 @@ export const bioGet = defineQuery({
       .selectFrom('crove_social.bio_page')
       .select(['id', 'slug', 'title', 'about', 'avatar_file_id', 'buttons', 'show_posts', 'published', 'updated_at'])
       .where('org_id', '=', ctx.orgId)
+      .orderBy('created_at')
+      .orderBy('id')
       .executeTakeFirst();
     if (!page) return null;
     const { rows } = await sql<{ target: string; clicks: string }>`
