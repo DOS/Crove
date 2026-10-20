@@ -162,8 +162,9 @@ export interface MetricsInput {
 }
 export type MetricsResult = { metrics: Partial<Record<MetricName, number>>; extra?: Record<string, unknown> } | { refused: 'token_expired' | 'gone' } | null;
 
-// A first comment under a published post (#587): a comment where the platform has comments (LinkedIn), a reply in
-// the post's thread where it has none (X, Bluesky). The comment never touches the post; a failure leaves it as it is.
+// A first comment under a published post (#587, #609): a comment where the platform has comments (LinkedIn, Facebook
+// Pages, Instagram), a reply in the post's thread where it has none (X, Bluesky, Threads). The comment never touches
+// the post; a failure leaves it as it is.
 export interface CommentInput {
   externalAccountId: string;
   secret: string;

@@ -1,17 +1,40 @@
-// First comments (#587) against recorded answers (X API v2 replies, LinkedIn Social Actions comments, Bluesky reply
-// records); no live call.
+// First comments (#587, #609) against recorded answers (X API v2 replies, LinkedIn Social Actions comments, Bluesky
+// reply records, Graph API comments on Facebook Page and Instagram posts, Threads reply containers); no live call.
 import { describe, expect, it } from 'vitest';
-import { BlueskyPublisher, LinkedInPublisher, SandboxPublisher, XPublisher, type CommentInput, type Fetch } from '../src/index.ts';
+import {
+  BlueskyPublisher,
+  FACEBOOK_PAGE_COMMENT_SCOPES,
+  FacebookPagePublisher,
+  INSTAGRAM_COMMENT_SCOPES,
+  InstagramPublisher,
+  LinkedInPublisher,
+  SandboxPublisher,
+  THREADS_SCOPES,
+  ThreadsPublisher,
+  XPublisher,
+  type CommentInput,
+  type Fetch,
+} from '../src/index.ts';
 
-type Answer = { status?: number; body?: unknown; headers?: Record<string, string> };
+// network: the call never reaches the platform (fetch throws, as on a DNS failure or a reset connection).
+type Answer = { status?: number; body?: unknown; headers?: Record<string, string>; network?: true };
+// A JSON body, or a form body (Graph and Threads) as its fields.
+const bodyOf = (raw: string): unknown => {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return Object.fromEntries(new URLSearchParams(raw));
+  }
+};
 function fake(routes: Record<string, Answer[]>) {
-  const calls: { route: string; body: unknown; url: URL }[] = [];
+  const calls: { route: string; body: unknown; url: URL; auth: string | null }[] = [];
   const fetchImpl: Fetch = async (input, init) => {
     const url = new URL(input);
     const route = `${init?.method ?? 'GET'} ${url.host}${url.pathname}`;
     const raw = init?.body;
-    calls.push({ route, url, body: typeof raw === 'string' ? JSON.parse(raw) : raw });
+    calls.push({ route, url, body: typeof raw === 'string' ? bodyOf(raw) : raw, auth: new Headers(init?.headers).get('authorization') });
     const answer = routes[route]?.shift() ?? { status: 500, body: { message: `no answer for ${route}` } };
+    if (answer.network) throw new TypeError('fetch failed');
     return new Response(answer.body === undefined ? null : JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json', ...answer.headers } });
   };
   return { calls, fetchImpl };
@@ -55,6 +78,94 @@ describe('first comments', () => {
     const record = (last ? (last.body as { record: { reply: unknown; text: string } }) : { record: { reply: null, text: '' } }).record;
     expect(record.reply).toEqual({ root: { uri, cid: 'bafyreicid1' }, parent: { uri, cid: 'bafyreicid1' } });
     expect(record.text).toBe('#khaitruong #quan3');
+  });
+
+  // Graph API errors (developers.facebook.com/docs/graph-api/guides/error-handling): 190 an expired or revoked token,
+  // 200 and 10 a permission the token lacks, 2 a Meta outage.
+  const graphError = (status: number, code: number, message: string): Answer => ({ status, body: { error: { message, type: 'OAuthException', code, fbtrace_id: 'AbCdEf' } } });
+  const graphCases: [Answer, Record<string, unknown>][] = [
+    [graphError(400, 190, 'Error validating access token: Session has expired'), { kind: 'rejected', error: 'token_expired', code: '190' }],
+    [graphError(403, 200, '(#200) Permissions error'), { kind: 'rejected', error: 'permission', code: '200' }],
+    [graphError(400, 4, 'Application request limit reached'), { kind: 'rejected', error: 'rate_limited', code: '4' }],
+    [graphError(500, 2, 'Service temporarily unavailable'), { kind: 'unknown', code: '2' }],
+    [{ network: true }, { kind: 'unknown', code: 'NETWORK' }],
+  ];
+  const META = { appSecret: 'meta-app-secret' };
+
+  it('comments on a Facebook Page post as the Page, and asks for pages_manage_engagement when connecting', async () => {
+    expect(FACEBOOK_PAGE_COMMENT_SCOPES).toContain('pages_manage_engagement');
+    const route = 'POST graph.facebook.com/v24.0/111222333_444555666/comments';
+    const { fetchImpl, calls } = fake({ [route]: [{ body: { id: '444555666_777888999' } }] });
+    const post = input({ externalAccountId: '111222333', secret: JSON.stringify({ accessToken: 'page-token-111' }), externalId: '111222333_444555666' });
+    expect(await new FacebookPagePublisher(META, fetchImpl).comment(post)).toEqual({ kind: 'accepted', externalId: '444555666_777888999' });
+    expect(calls[0]?.body).toEqual({ message: '#khaitruong #quan3' });
+    // The Page token travels in the header with its proof, never in the URL.
+    expect(calls[0]?.auth).toBe('Bearer page-token-111');
+    expect(calls[0]?.url.searchParams.get('appsecret_proof')).toMatch(/^[0-9a-f]{64}$/);
+    expect(calls[0]?.url.toString()).not.toContain('page-token-111');
+    for (const [answer, expected] of graphCases) expect(await new FacebookPagePublisher(META, fake({ [route]: [answer] }).fetchImpl).comment(post)).toMatchObject(expected);
+    // A Page connected before Crove asked for pages_manage_engagement: the post shows the comment failed, for a retry
+    // once the Page reconnects.
+    const old = fake({ [route]: [graphError(400, 10, '(#10) This endpoint requires the pages_manage_engagement permission')] });
+    expect(await new FacebookPagePublisher(META, old.fetchImpl).comment(post)).toMatchObject({ kind: 'rejected', error: 'permission', code: '10' });
+    expect(await new FacebookPagePublisher(META, fetchImpl).comment({ ...post, externalId: '../me/feed' })).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await new FacebookPagePublisher(META, fetchImpl).comment({ ...post, secret: '{}' })).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+  });
+
+  it('comments on an Instagram post as the account, and asks for instagram_manage_comments when connecting', async () => {
+    expect(INSTAGRAM_COMMENT_SCOPES).toContain('instagram_manage_comments');
+    const route = 'POST graph.facebook.com/v24.0/17900000000000001/comments';
+    const { fetchImpl, calls } = fake({ [route]: [{ body: { id: '17850000000000001' } }] });
+    const media = input({ externalAccountId: '17841400000000001', secret: JSON.stringify({ accessToken: 'page-token-111', pageId: '111' }), externalId: '17900000000000001' });
+    expect(await new InstagramPublisher(META, fetchImpl).comment(media)).toEqual({ kind: 'accepted', externalId: '17850000000000001' });
+    expect(calls[0]?.body).toEqual({ message: '#khaitruong #quan3' });
+    expect(calls[0]?.auth).toBe('Bearer page-token-111');
+    for (const [answer, expected] of graphCases) expect(await new InstagramPublisher(META, fake({ [route]: [answer] }).fetchImpl).comment(media)).toMatchObject(expected);
+    // An account connected before Crove asked for instagram_manage_comments.
+    const old = fake({ [route]: [graphError(403, 10, 'Application does not have permission for this action')] });
+    expect(await new InstagramPublisher(META, old.fetchImpl).comment(media)).toMatchObject({ kind: 'rejected', error: 'permission', code: '10' });
+    expect(await new InstagramPublisher(META, fetchImpl).comment({ ...media, externalId: 'abc' })).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await new InstagramPublisher(META, fetchImpl).comment({ ...media, secret: '{}' })).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+  });
+
+  it('replies on Threads under its own post through a reply container, and asks for threads_manage_replies when connecting', async () => {
+    expect(THREADS_SCOPES).toContain('threads_manage_replies');
+    const USER = '17841400000000009';
+    const CONTAINER = '18000000000000077';
+    const create = `POST graph.threads.net/v1.0/${USER}/threads`;
+    const status = `GET graph.threads.net/v1.0/${CONTAINER}`;
+    const publish = `POST graph.threads.net/v1.0/${USER}/threads_publish`;
+    const reply = input({ externalAccountId: USER, secret: JSON.stringify({ accessToken: 'th-1' }), externalId: '18100000000000001' });
+    const fast = { pollMs: 0 };
+    const { fetchImpl, calls } = fake({
+      [create]: [{ body: { id: CONTAINER } }],
+      [status]: [{ body: { status: 'IN_PROGRESS', id: CONTAINER } }, { body: { status: 'FINISHED', id: CONTAINER } }],
+      [publish]: [{ body: { id: '18100000000000002' } }],
+    });
+    expect(await new ThreadsPublisher(fetchImpl, fast).comment(reply)).toEqual({ kind: 'accepted', externalId: '18100000000000002' });
+    expect(calls[0]?.body).toEqual({ media_type: 'TEXT', text: '#khaitruong #quan3', reply_to_id: '18100000000000001' });
+    expect(calls[0]?.auth).toBe('Bearer th-1');
+    expect(calls.at(-1)?.body).toEqual({ creation_id: CONTAINER });
+    const threadsError = (code: number, httpStatus: number, message: string): Answer => ({ status: httpStatus, body: { error: { message, type: 'OAuthException', code } } });
+    // The reply container is invisible, so a failure while making it posted nothing: an outage there is transient.
+    const createCases: [Answer, Record<string, unknown>][] = [
+      [threadsError(190, 401, 'Error validating access token'), { kind: 'rejected', error: 'token_expired', code: '190' }],
+      // A connection made before Crove asked for threads_manage_replies.
+      [threadsError(10, 403, 'Application does not have permission for this action'), { kind: 'rejected', error: 'permission', code: '10' }],
+      [threadsError(2, 500, 'Service temporarily unavailable'), { kind: 'rejected', error: 'transient', code: '2' }],
+      [{ network: true }, { kind: 'rejected', error: 'transient', code: 'NETWORK' }],
+    ];
+    for (const [answer, expected] of createCases) expect(await new ThreadsPublisher(fake({ [create]: [answer] }).fetchImpl, fast).comment(reply)).toMatchObject(expected);
+    // threads_publish is the visible step: an outage or a lost answer there may have posted the reply.
+    const atPublish = (answer: Answer) => fake({ [create]: [{ body: { id: CONTAINER } }], [status]: [{ body: { status: 'FINISHED' } }], [publish]: [answer] }).fetchImpl;
+    expect(await new ThreadsPublisher(atPublish(threadsError(2, 500, 'Service temporarily unavailable')), fast).comment(reply)).toMatchObject({ kind: 'unknown', code: '2' });
+    expect(await new ThreadsPublisher(atPublish({ network: true }), fast).comment(reply)).toEqual({ kind: 'unknown', code: 'NETWORK' });
+    expect(await new ThreadsPublisher(atPublish(threadsError(10, 403, 'Application does not have permission for this action')), fast).comment(reply)).toMatchObject({ kind: 'rejected', error: 'permission' });
+    // A container still processing when the short wait ends posted nothing.
+    const slow = fake({ [create]: [{ body: { id: CONTAINER } }], [status]: [{ body: { status: 'IN_PROGRESS' } }] });
+    expect(await new ThreadsPublisher(slow.fetchImpl, { pollMs: 0, commentWaitMs: 0 }).comment(reply)).toEqual({ kind: 'rejected', error: 'transient', code: 'CONTAINER_NOT_READY' });
+    expect(slow.calls.some((c) => c.route === publish)).toBe(false);
+    expect(await new ThreadsPublisher(fetchImpl, fast).comment({ ...reply, externalId: 'at://not-threads' })).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
   });
 
   it('comments on a sandbox post it holds', async () => {

@@ -7,7 +7,8 @@
 // `/me/accounts` lists the Pages the user granted in Meta's dialog, each with its own Page token. A Page token from a
 // long-lived user token has no expiry timer, so it is sealed as is; the user token is dropped.
 import { createHmac } from 'node:crypto';
-import type { ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
+import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -15,8 +16,12 @@ export const META_GRAPH_HOST = 'graph.facebook.com';
 // Video uploads go to Graph's video host.
 export const META_VIDEO_HOST = 'graph-video.facebook.com';
 export const META_DEFAULT_GRAPH_VERSION = 'v24.0';
-// What a Page connection needs: list the Pages, post to them, read posts back to reconcile and for metrics.
+// What a Page connection needs: list the Pages, post to them, read posts back to reconcile and for metrics, and
+// comment under its own posts (pages_manage_engagement, the first comment of #609).
 export const FACEBOOK_PAGE_SCOPES = ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement'] as const;
+// Asked for, not required: first comments (#609) need it, and a Page connects without it (its comments then fail with
+// permission, shown on the post). Meta may hold it back until App Review approves it.
+export const FACEBOOK_PAGE_COMMENT_SCOPES = ['pages_manage_engagement'] as const;
 
 export interface MetaAppConfig {
   appId: string;
@@ -122,12 +127,15 @@ export class MetaLogin {
   readonly graph: Graph;
   private readonly app: MetaAppConfig;
   private readonly scopes: readonly string[];
+  // Asked for in the dialog but not required: a connection goes on without them.
+  private readonly optional: readonly string[];
 
-  constructor(app: MetaAppConfig, scopes: readonly string[], fetchImpl?: Fetch) {
+  constructor(app: MetaAppConfig, scopes: readonly string[], fetchImpl?: Fetch, optional: readonly string[] = []) {
     if (!/^\d{1,32}$/.test(app.appId)) throw new Error('invalid Meta app id');
     if (!app.appSecret) throw new Error('missing Meta app secret');
     this.app = app;
     this.scopes = scopes;
+    this.optional = optional;
     this.graph = new Graph(app.appSecret, app.graphVersion, fetchImpl);
   }
 
@@ -137,13 +145,14 @@ export class MetaLogin {
     url.searchParams.set('redirect_uri', input.redirectUri);
     url.searchParams.set('state', input.state);
     url.searchParams.set('response_type', 'code');
-    url.searchParams.set('scope', this.scopes.join(','));
+    url.searchParams.set('scope', [...this.scopes, ...this.optional].join(','));
     // Asks again for a permission the user declined last time; without it Meta skips declined permissions for good.
     url.searchParams.set('auth_type', 'rerequest');
     return url.toString();
   }
 
-  // The long-lived user token for a code, and the permissions it holds (all of the connector's, or a denied error).
+  // The long-lived user token for a code, and the permissions it holds (all the required ones, or a denied error, and
+  // whichever optional ones Meta granted).
   async userToken(input: ExchangeInput): Promise<{ token: string; scopes: string[] }> {
     const short = await this.graph
       .call<TokenAnswer>('POST', 'oauth/access_token', {
@@ -166,7 +175,7 @@ export class MetaLogin {
     const granted = new Set((permissions.data ?? []).filter((p) => p.status === 'granted' && typeof p.permission === 'string').map((p) => p.permission as string));
     const missing = this.scopes.filter((s) => !granted.has(s));
     if (missing.length > 0) throw new ConnectorError('denied', `Meta did not grant ${missing.join(', ')}`, 'MISSING_PERMISSION');
-    return { token, scopes: this.scopes.filter((s) => granted.has(s)) };
+    return { token, scopes: [...this.scopes, ...this.optional].filter((s) => granted.has(s)) };
   }
 
   // Every Page the user token manages, by cursor (never Meta's `next` URL, which carries the token).
@@ -195,7 +204,7 @@ export class FacebookPageConnector implements OAuthConnector {
   private readonly login: MetaLogin;
 
   constructor(app: MetaAppConfig, fetchImpl?: Fetch) {
-    this.login = new MetaLogin(app, FACEBOOK_PAGE_SCOPES, fetchImpl);
+    this.login = new MetaLogin(app, FACEBOOK_PAGE_SCOPES, fetchImpl, FACEBOOK_PAGE_COMMENT_SCOPES);
   }
 
   authorizeUrl(input: AuthorizeInput): string {
@@ -375,6 +384,23 @@ export class FacebookPagePublisher implements Publisher {
       }
     }
     return { ids };
+  }
+
+  // A comment by the Page under its own post (#609): `POST /{post-id}/comments` with the Page token. It needs
+  // pages_manage_engagement; a Page connected before Crove asked for it is refused with a permission error (code 10 or
+  // 200) and comments again once it reconnects.
+  async comment(input: CommentInput): Promise<CommentResult> {
+    const token = pageToken(input.secret);
+    if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_PAGE_TOKEN' };
+    if (!/^\d{1,32}_\d{1,32}$/.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      const answer = await this.graph.call<FeedAnswer>('POST', `${input.externalId}/comments`, { token, form: { message: input.text } });
+      // Meta answered 200 without an id: the comment may be there.
+      if (typeof answer.id !== 'string' || !answer.id) return { kind: 'unknown', code: 'NO_COMMENT_ID' };
+      return { kind: 'accepted', externalId: answer.id.slice(0, 500) };
+    } catch (error) {
+      return commentResult(graphPublishResult(error));
+    }
   }
 
   // Reactions, comments and shares of a Page post: plain fields of the post, which Meta's 2026 Page Insights changes do

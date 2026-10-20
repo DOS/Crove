@@ -43,7 +43,7 @@ describe('InstagramConnector', () => {
     const { fetchImpl, calls } = graph({
       'POST /oauth/access_token': [{ body: { access_token: 'short' } }, { body: { access_token: 'long-user-token' } }],
       'GET /me/permissions': [
-        { body: { data: ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights'].map((permission) => ({ permission, status: 'granted' })) } },
+        { body: { data: ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights', 'instagram_manage_comments'].map((permission) => ({ permission, status: 'granted' })) } },
       ],
       'GET /me/accounts': [
         {
@@ -58,14 +58,14 @@ describe('InstagramConnector', () => {
     });
     const connector = new InstagramConnector(APP, fetchImpl);
     const url = new URL(connector.authorizeUrl({ state: 'st', redirectUri: REDIRECT, codeChallenge: null }));
-    expect(url.searchParams.get('scope')).toBe('pages_show_list,pages_read_engagement,instagram_basic,instagram_content_publish,instagram_manage_insights');
+    expect(url.searchParams.get('scope')).toBe('pages_show_list,pages_read_engagement,instagram_basic,instagram_content_publish,instagram_manage_insights,instagram_manage_comments');
     const accounts = await connector.exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: null });
     expect(accounts).toEqual([
       {
         provider: 'instagram',
         externalAccountId: IG,
         displayName: '@quan.a',
-        scopes: ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights'],
+        scopes: ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights', 'instagram_manage_comments'],
         expiresAt: null,
         secret: JSON.stringify({ accessToken: 'page-token-111', pageId: '111' }),
       },

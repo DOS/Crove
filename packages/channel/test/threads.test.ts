@@ -44,7 +44,7 @@ describe('ThreadsConnector', () => {
     const connector = new ThreadsConnector(APP, fetchImpl);
     const url = new URL(connector.authorizeUrl({ state: 'st', redirectUri: REDIRECT, codeChallenge: null }));
     expect(`${url.origin}${url.pathname}`).toBe('https://threads.net/oauth/authorize');
-    expect(url.searchParams.get('scope')).toBe('threads_basic,threads_content_publish');
+    expect(url.searchParams.get('scope')).toBe('threads_basic,threads_content_publish,threads_manage_replies');
     const before = Date.now();
     const [account] = await connector.exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: null });
     expect(account).toMatchObject({ provider: 'threads', externalAccountId: USER, displayName: '@quan.a', secret: JSON.stringify({ accessToken: 'long-token' }) });

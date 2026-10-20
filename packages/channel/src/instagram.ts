@@ -9,12 +9,16 @@
 // again. Meta fetches each image and video from a public URL: deployments whose storage hands out presigned URLs (S3) can post;
 // others get MEDIA_URL_UNAVAILABLE with nothing posted.
 import { createHash } from 'node:crypto';
-import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
+import { commentResult } from './comment.ts';
 import { Graph, GraphError, graphPublishResult, MetaLogin, type MetaAppConfig } from './meta.ts';
 import type { AuthorizeInput, ExchangeInput, Fetch, OAuthConnector } from './oauth.ts';
 
-// instagram_manage_insights: reach, saves, shares and views of the account's posts (S8 metrics).
+// instagram_manage_insights: reach, saves, shares and views of the account's posts (S8 metrics);
+// instagram_manage_comments: the first comment under the account's own post (#609).
 export const INSTAGRAM_SCOPES = ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights'] as const;
+// Asked for, not required: first comments (#609); an account connects without it and its comments fail with permission.
+export const INSTAGRAM_COMMENT_SCOPES = ['instagram_manage_comments'] as const;
 // How long a publish waits for Meta to process the containers before it reports the post as pending; with the creates it
 // stays well inside the job's 60 second call timeout.
 const WAIT_MS = 15_000;
@@ -43,7 +47,7 @@ export class InstagramConnector implements OAuthConnector {
   private readonly login: MetaLogin;
 
   constructor(app: MetaAppConfig, fetchImpl?: Fetch) {
-    this.login = new MetaLogin(app, INSTAGRAM_SCOPES, fetchImpl);
+    this.login = new MetaLogin(app, INSTAGRAM_SCOPES, fetchImpl, INSTAGRAM_COMMENT_SCOPES);
   }
 
   authorizeUrl(input: AuthorizeInput): string {
@@ -198,6 +202,22 @@ export class InstagramPublisher implements Publisher {
       return post ? { found: true, externalId: post.id, url: post.permalink } : { found: false };
     } catch {
       return { found: 'unknown' };
+    }
+  }
+
+  // A comment by the account under its own post (#609): `POST /{ig-media-id}/comments` with the Page token. It needs
+  // instagram_manage_comments; an account connected before Crove asked for it is refused with a permission error and
+  // comments again once it reconnects.
+  async comment(input: CommentInput): Promise<CommentResult> {
+    const s = secretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_PAGE_TOKEN' };
+    if (!NUMERIC_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      const answer = await this.graph.call<IdAnswer>('POST', `${input.externalId}/comments`, { token: s.accessToken, form: { message: input.text } });
+      if (typeof answer.id !== 'string' || !NUMERIC_ID.test(answer.id)) return { kind: 'unknown', code: 'NO_COMMENT_ID' };
+      return { kind: 'accepted', externalId: answer.id };
+    } catch (error) {
+      return commentResult(graphPublishResult(error));
     }
   }
 

@@ -6,17 +6,23 @@
 // Publish: a container (text, an image, a video, or a carousel of 2 to 20 mixing them), a wait until Meta has processed it, then
 // threads_publish, the one visible step. As for Instagram, a PUBLISHED container went out already, and a pending
 // reference carries the text's hash so a status check recognises the post it became.
+// First comment (#609): a reply to the account's own post, made the same way (a TEXT container with reply_to_id, then
+// threads_publish); replying needs threads_manage_replies.
 import { createHash } from 'node:crypto';
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const THREADS_HOSTS = ['graph.threads.net'] as const;
-export const THREADS_SCOPES = ['threads_basic', 'threads_content_publish'] as const;
+export const THREADS_SCOPES = ['threads_basic', 'threads_content_publish', 'threads_manage_replies'] as const;
 const API = 'https://graph.threads.net';
 const VERSION = 'v1.0';
 const WAIT_MS = 15_000;
 const POLL_MS = 2_000;
+// How long a reply waits for its text container; a text container is usually ready at once, and the comment job's
+// call timeout (60 s) leaves room for the two calls around the wait.
+const COMMENT_WAIT_MS = 10_000;
 const CHECK_AFTER_SECONDS = 30;
 const NUMERIC_ID = /^\d{1,32}$/;
 // Threads takes 2 to 20 items in a carousel.
@@ -205,11 +211,13 @@ export class ThreadsPublisher implements Publisher {
   private readonly client: ThreadsClient;
   private readonly waitMs: number;
   private readonly pollMs: number;
+  private readonly commentWaitMs: number;
 
-  constructor(fetchImpl?: Fetch, timing: { waitMs?: number; pollMs?: number } = {}) {
+  constructor(fetchImpl?: Fetch, timing: { waitMs?: number; pollMs?: number; commentWaitMs?: number } = {}) {
     this.client = new ThreadsClient(fetchImpl);
     this.waitMs = timing.waitMs ?? WAIT_MS;
     this.pollMs = timing.pollMs ?? POLL_MS;
+    this.commentWaitMs = timing.commentWaitMs ?? COMMENT_WAIT_MS;
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -281,6 +289,44 @@ export class ThreadsPublisher implements Publisher {
         return { kind: 'rejected', error: 'token_expired', code: '190' };
       default:
         return { kind: 'unknown', code: 'CONTAINER_STATUS_UNKNOWN' };
+    }
+  }
+
+  // A reply to the account's own post (#609), as the first comment. The reply container is invisible until published,
+  // so any failure before threads_publish posted nothing; a container still processing when the short wait ends is
+  // transient, and the person retries. A connection made before Crove asked for threads_manage_replies is refused with
+  // a permission error and replies again once it reconnects.
+  async comment(input: CommentInput): Promise<CommentResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_TOKEN' };
+    if (!NUMERIC_ID.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
+    if (!NUMERIC_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    const user = input.externalAccountId;
+    let container: string;
+    try {
+      container = await this.create(user, token, { media_type: 'TEXT', text: input.text, reply_to_id: input.externalId });
+    } catch (error) {
+      const result = threadsResult(error);
+      return commentResult(result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) });
+    }
+    const deadline = Date.now() + this.commentWaitMs;
+    for (;;) {
+      const state = await this.status_(container, token);
+      if (state === 'FINISHED') break;
+      if (state === 'ERROR' || state === 'EXPIRED') return { kind: 'rejected', error: 'bad_request', code: `CONTAINER_${state}` };
+      // This call has not published the container yet; if Meta says it is published, whether a reply went out is unclear.
+      if (state === 'PUBLISHED') return { kind: 'unknown', code: 'CONTAINER_PUBLISHED' };
+      if (state === 'TOKEN_EXPIRED') return { kind: 'rejected', error: 'token_expired', code: '190' };
+      if (Date.now() >= deadline) return { kind: 'rejected', error: 'transient', code: 'CONTAINER_NOT_READY' };
+      await sleep(Math.min(this.pollMs, Math.max(0, deadline - Date.now())));
+    }
+    try {
+      const answer = await this.client.call<{ id?: unknown }>('POST', `${VERSION}/${user}/threads_publish`, { token, form: { creation_id: container } });
+      const id = typeof answer.id === 'string' || typeof answer.id === 'number' ? String(answer.id) : '';
+      if (!NUMERIC_ID.test(id)) return { kind: 'unknown', code: 'NO_POST_ID' };
+      return { kind: 'accepted', externalId: id };
+    } catch (error) {
+      return commentResult(threadsResult(error));
     }
   }
 
