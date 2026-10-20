@@ -243,13 +243,16 @@ export class BlueskyPublisher implements Publisher {
     }
   }
 
-  // A reply to the account's own post (#587), as the first comment: Bluesky threads name the post they answer by its
-  // URI and content id, so the post is read first for its cid. Reading posts nothing.
+  // A reply to the account's own post (#587), as the first comment or a thread's part (#742): Bluesky replies name the
+  // post they answer and the thread's first post by URI and content id, so both are read first for their cid. Reading
+  // posts nothing.
   async comment(input: CommentInput): Promise<CommentResult> {
     const s = secretOf(input.secret);
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_APP_PASSWORD' };
-    const parts = /^at:\/\/([^/]+)\/app\.bsky\.feed\.post\/([A-Za-z0-9._:~-]{1,512})$/.exec(input.externalId);
-    if (!parts) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    const POST_URI = /^at:\/\/([^/]+)\/app\.bsky\.feed\.post\/([A-Za-z0-9._:~-]{1,512})$/;
+    const parts = POST_URI.exec(input.externalId);
+    const rootParts = input.rootExternalId && input.rootExternalId !== input.externalId ? POST_URI.exec(input.rootExternalId) : null;
+    if (!parts || (input.rootExternalId && input.rootExternalId !== input.externalId && !rootParts)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
     let session: Session;
     try {
       session = await this.xrpc.session(s.identifier, s.appPassword);
@@ -257,17 +260,24 @@ export class BlueskyPublisher implements Publisher {
       const result = blueskyResult(error);
       return commentResult(result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) });
     }
-    if (parts[1] !== session.did) return { kind: 'rejected', error: 'bad_request', code: 'NOT_OWN_POST' };
+    if (parts[1] !== session.did || (rootParts && rootParts[1] !== session.did)) return { kind: 'rejected', error: 'bad_request', code: 'NOT_OWN_POST' };
+    const strongRef = async (rkey: string) => {
+      const got = await this.xrpc.call<{ uri?: unknown; cid?: unknown }>(session.pds, 'GET', 'com.atproto.repo.getRecord', { token: session.accessJwt, params: { repo: session.did, collection: POST_COLLECTION, rkey } });
+      return typeof got.uri === 'string' && typeof got.cid === 'string' ? { uri: got.uri, cid: got.cid } : null;
+    };
     let parent: { uri: string; cid: string };
+    let root: { uri: string; cid: string };
     try {
-      const got = await this.xrpc.call<{ uri?: unknown; cid?: unknown }>(session.pds, 'GET', 'com.atproto.repo.getRecord', { token: session.accessJwt, params: { repo: session.did, collection: POST_COLLECTION, rkey: parts[2] as string } });
-      if (typeof got.uri !== 'string' || typeof got.cid !== 'string') return { kind: 'rejected', error: 'transient', code: 'NO_CID' };
-      parent = { uri: got.uri, cid: got.cid };
+      const got = await strongRef(parts[2] as string);
+      const gotRoot = rootParts ? await strongRef(rootParts[2] as string) : got;
+      if (!got || !gotRoot) return { kind: 'rejected', error: 'transient', code: 'NO_CID' };
+      parent = got;
+      root = gotRoot;
     } catch (error) {
       const result = blueskyResult(error);
       return commentResult(result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) });
     }
-    const record: Record<string, unknown> = { $type: POST_COLLECTION, text: input.text, createdAt: new Date().toISOString(), reply: { root: parent, parent } };
+    const record: Record<string, unknown> = { $type: POST_COLLECTION, text: input.text, createdAt: new Date().toISOString(), reply: { root, parent } };
     const facets = linkFacets(input.text);
     if (facets.length > 0) record.facets = facets;
     try {

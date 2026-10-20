@@ -401,6 +401,8 @@ export const contract = {
       unschedule: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
       // Post a published channel's first comment again (#587), after a failure or an unclear answer.
       retryComment: oc.input(z.strictObject({ variantId: zId })).output(z.object({ variantId: zId })),
+      // Post the rest of a published channel's thread (#742), from the first part not out.
+      retryThread: oc.input(z.strictObject({ variantId: zId })).output(z.object({ variantId: zId })),
       // A scheduled variant at another time, its approvals kept (#580).
       reschedule: oc.input(z.strictObject({ variantId: zId, at: z.iso.datetime({ offset: true }) })).output(z.object({ postId: zId, variantId: zId, at: z.string() })),
       cancel: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
