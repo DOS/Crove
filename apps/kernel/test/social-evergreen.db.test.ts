@@ -203,6 +203,28 @@ suite('social reposts and evergreen posts on PostgreSQL (S9)', () => {
     expect(view.variants[1]?.media).toEqual([]);
   });
 
+  it('duplicates a draft or a published post as a new draft, without its schedule, approvals or a revoked channel (#575)', async () => {
+    const o = await org();
+    const source = await published(o);
+    const copy = await exec<{ postId: string }>(o, 'social.post.duplicate', { postId: source.postId });
+    const dup = await get(o, copy.postId);
+    expect(dup).toMatchObject({ status: 'draft', repostOf: null, body: source.body });
+    expect(dup.variants.map((v) => ({ connectionId: v.connectionId, status: v.status, own: v.overrides.body, approvedBy: v.review.approvedBy }))).toEqual([
+      { connectionId: source.connections[0], status: 'draft', own: null, approvedBy: [] },
+      { connectionId: source.connections[1], status: 'draft', own: 'Riêng kênh B', approvedBy: [] },
+    ]);
+
+    // A draft with a planned time and a channel disconnected since: the copy has no time and only the other channel.
+    const [a, b] = [await connect(o), await connect(o)];
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Nháp', scheduledAt: new Date(Date.now() + 86_400_000).toISOString(), channels: [{ connectionId: a }, { connectionId: b }] });
+    await admin((c) => c.query("UPDATE crove_kernel.channel_connection SET status = 'revoked' WHERE id = $1", [b]));
+    const second = await get(o, (await exec<{ postId: string }>(o, 'social.post.duplicate', { postId })).postId);
+    expect([second.scheduledAt, second.variants.map((v) => v.connectionId)]).toEqual([null, [a]]);
+
+    await admin((c) => c.query("UPDATE crove_kernel.channel_connection SET status = 'revoked' WHERE id = $1", [a]));
+    await expect(exec(o, 'social.post.duplicate', { postId })).rejects.toMatchObject({ code: 'NOTHING_TO_DUPLICATE' });
+  });
+
   it('marks a post evergreen within 7 to 365 days, and only the worker may scan for due ones', async () => {
     const o = await org();
     const { postId } = await published(o);

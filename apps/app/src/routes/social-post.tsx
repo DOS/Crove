@@ -774,6 +774,14 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
       void navigate({ to: '/o/$slug/social/$id', params: { slug, id: made.postId } });
     },
   });
+  // A copy of the post as a new draft, opened at once.
+  const duplicate = useMutation({
+    mutationFn: () => client.social.posts.duplicate({ postId }),
+    onSuccess: (made) => {
+      refresh();
+      void navigate({ to: '/o/$slug/social/$id', params: { slug, id: made.postId } });
+    },
+  });
   const unschedule = useMutation({ mutationFn: (variantId: string) => client.social.variants.unschedule({ variantIds: [variantId] }), onSuccess: refresh });
   const cancel = useMutation({ mutationFn: (variantId: string) => client.social.variants.cancel({ variantIds: [variantId] }), onSuccess: refresh });
   const retry = useMutation({ mutationFn: (variantId: string) => client.social.variants.retry({ variantIds: [variantId] }), onSuccess: refresh });
@@ -796,7 +804,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   };
   const published = p.variants.some((v) => v.status === 'published');
   const metricsOf = new Map((metrics.data ?? []).map((r) => [r.variantId, r]));
-  const error = save.error ?? submit.error ?? repost.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
+  const error = save.error ?? submit.error ?? repost.error ?? duplicate.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
   const reviewable = !dirty && !stale;
 
   return (
@@ -824,6 +832,12 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
               <Button variant="outline" size="lg" disabled={dirty || repost.isPending} title={t('repostHint')} onClick={() => repost.mutate()}>
                 {repost.isPending ? <Spinner className="text-current" /> : null}
                 {t('repost')}
+              </Button>
+            )}
+            {canWrite && (
+              <Button variant="outline" size="lg" disabled={dirty || duplicate.isPending} title={dirty ? t('saveFirst') : t('duplicateHint')} onClick={() => duplicate.mutate()}>
+                {duplicate.isPending ? <Spinner className="text-current" /> : null}
+                {t('duplicate')}
               </Button>
             )}
           </>
