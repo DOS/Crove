@@ -90,7 +90,7 @@ export const overrides = (v: Pick<VariantRow, 'body' | 'title' | 'link_url'>) =>
 export function mediaOf(value: unknown): PostMedia[] | null {
   if (!Array.isArray(value)) return null;
   return value.map((m: unknown) => {
-    const { fileId, mime, sizeBytes, generation, altText, durationMs } = m !== null && typeof m === 'object' ? (m as Record<string, unknown>) : {};
+    const { fileId, mime, sizeBytes, generation, altText, durationMs, width, height } = m !== null && typeof m === 'object' ? (m as Record<string, unknown>) : {};
     if (typeof fileId !== 'string' || typeof mime !== 'string' || typeof sizeBytes !== 'number') {
       throw new DomainError('VARIANT_MEDIA_INVALID', 500, 'Danh sách ảnh của kênh bị hỏng, cần kiểm tra dữ liệu');
     }
@@ -101,6 +101,8 @@ export function mediaOf(value: unknown): PostMedia[] | null {
       mime,
       sizeBytes,
       durationMs: typeof durationMs === 'number' ? durationMs : null,
+      width: typeof width === 'number' ? width : null,
+      height: typeof height === 'number' ? height : null,
     };
   });
 }
@@ -116,12 +118,12 @@ export async function loadPostMedia(trx: Trx, orgId: string, postId: string): Pr
   const rows = await trx
     .selectFrom('crove_social.post_media as m')
     .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
-    .select(['m.file_id', 'm.alt_text', 'f.generation', 'f.content_type', 'f.size_bytes', 'f.duration_ms'])
+    .select(['m.file_id', 'm.alt_text', 'f.generation', 'f.content_type', 'f.size_bytes', 'f.duration_ms', 'f.image_width', 'f.image_height'])
     .where('m.org_id', '=', orgId)
     .where('m.post_id', '=', postId)
     .orderBy('m.position')
     .execute();
-  return rows.map((r) => ({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes), durationMs: r.duration_ms === null ? null : Number(r.duration_ms) }));
+  return rows.map((r) => ({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes), durationMs: r.duration_ms === null ? null : Number(r.duration_ms), width: r.image_width ?? null, height: r.image_height ?? null }));
 }
 export const settingsOf = (v: { settings: unknown }): Record<string, unknown> =>
   v.settings !== null && typeof v.settings === 'object' && !Array.isArray(v.settings) ? (v.settings as Record<string, unknown>) : {};
@@ -145,7 +147,7 @@ export function hashOf(
 
 export function issuesOf(post: PostContent, v: VariantRow): Issue[] {
   const content = effectiveContent(post, overrides(v), v.content_frozen);
-  const media = mediaFor(post, v).map((m) => ({ kind: mediaKind(m.mime), mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000 }));
+  const media = mediaFor(post, v).map((m) => ({ kind: mediaKind(m.mime), mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000, width: m.width ?? null, height: m.height ?? null }));
   return validateVariant({ provider: providerOf(v), body: content.body, title: content.title, linkUrl: content.linkUrl, media, settings: settingsOf(v) });
 }
 

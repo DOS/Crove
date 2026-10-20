@@ -155,7 +155,7 @@ function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, s
     contentHash: v.content_hash,
     content: {
       ...withSentLink(v, effectiveContent(base(post), overrides(v), v.content_frozen)),
-      media: mediaFor(base(post), v).map((m) => ({ fileId: m.fileId, mime: m.mime, sizeBytes: m.sizeBytes, altText: m.altText, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000 })),
+      media: mediaFor(base(post), v).map((m) => ({ fileId: m.fileId, mime: m.mime, sizeBytes: m.sizeBytes, altText: m.altText, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000, width: m.width ?? null, height: m.height ?? null })),
     },
     settings: settingsOf(v),
     externalRef: v.external_post_id,

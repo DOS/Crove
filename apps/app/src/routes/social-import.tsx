@@ -139,7 +139,7 @@ export function SocialImportPage() {
                     ))}
                     {issues.map(({ channel, issue }, i) => (
                       <p key={`i${i}`} className="text-warning">
-                        {channel.displayName}: {t(`issues.${issue.code}`, { limit: issue.limit ?? 0, actual: issue.actual ?? 0 })}
+                        {channel.displayName}: {t(`issues.${issue.code}`, { limit: issue.limit ?? 0, actual: issue.actual ?? 0, n: Number(issue.field.split('.')[1] ?? 0) + 1 })}
                       </p>
                     ))}
                   </TableCell>

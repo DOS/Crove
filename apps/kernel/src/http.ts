@@ -84,7 +84,7 @@ import { reviewAnswer, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_VIEWS_PER_M
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
-import { hasVideoTrack, sniffVideo, videoDurationMs } from './media-probe.ts';
+import { hasVideoTrack, imageSize, sniffVideo, videoDurationMs, type ImageSize } from './media-probe.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 import { directTransferOrigin } from './storage.ts';
 import {
@@ -732,6 +732,7 @@ export function createHttpApp(deps: HttpDeps) {
     const video = purpose === 'social' ? sniffVideo(bytes) : null;
     let type = video ?? sniffType(bytes);
     let durationMs: number | undefined;
+    let size: ImageSize | null = null;
     if (purpose === 'import') {
       if (type !== 'application/zip') throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận tệp Excel dạng .xlsx`);
       if (bytes.byteLength > MAX_IMPORT_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 10 MB`);
@@ -752,6 +753,8 @@ export function createHttpApp(deps: HttpDeps) {
         throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận XML, PDF, JPG, PNG, WEBP hoặc ZIP`);
       }
       if (bytes.byteLength > MAX_UPLOAD_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 25 MB`);
+      // An image for a post: its size as shown, from its header (#636); unreadable, it is stored without one.
+      if (purpose === 'social' && type) size = imageSize(bytes, type);
     }
     if (!type) throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: không nhận dạng được tệp`);
     const storageKey = fileKey(orgId, sha256);
@@ -767,6 +770,7 @@ export function createHttpApp(deps: HttpDeps) {
         generation,
         source: purpose === 'social' ? 'social' : purpose === 'import' ? 'import' : 'upload',
         ...(durationMs === undefined ? {} : { durationMs }),
+        ...(size ? { imageWidth: size.width, imageHeight: size.height } : {}),
       },
       { actor: actorOf(user), orgId },
     );
