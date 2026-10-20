@@ -259,7 +259,8 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(platform.posts).toHaveLength(0);
     expect((await variant(o, postId)).status).toBe('in_review');
     const events = await admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.post.submitted' AND payload->>'by_policy' = 'true'", [o.orgId])).rows);
-    expect(events.map((e) => e.payload)).toEqual([{ post_id: postId, variant_ids: [id], by_policy: true }]);
+    // It carries the content manager agent's task too (#816), like a person's submit.
+    expect(events.map((e) => e.payload)).toEqual([{ post_id: postId, variant_ids: [id], by_policy: true, agent_task: expect.objectContaining({ ref: { type: 'social.post', id: postId }, tainted: false }) }]);
   });
   it('posts the first comment once after the post, and shows it on the post (#587)', async () => {
     const o = await org();

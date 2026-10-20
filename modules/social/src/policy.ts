@@ -8,6 +8,7 @@ import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery } from '@crove/kernel-runtime';
 import { approvalsInRound } from './domain/approval.ts';
 import { approvedValues, lockPost, lockVariants, refreshPostStatus, regateValues, setVariant, type Trx, type VariantRow } from './variants.ts';
+import { agentTaskOf } from './agent.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
@@ -166,7 +167,7 @@ export const policySet = defineCommand({
     for (const d of decided) {
       await ctx.emit('social.variant.decided', { post_id: d.postId, decision: 'approved', variant_ids: d.variantIds, waiting_variant_ids: [], by_policy: true });
     }
-    for (const r of resubmitted) await ctx.emit('social.post.submitted', { post_id: r.postId, variant_ids: r.variantIds, by_policy: true });
+    for (const r of resubmitted) await ctx.emit('social.post.submitted', { post_id: r.postId, variant_ids: r.variantIds, by_policy: true, agent_task: await agentTaskOf(ctx, r.postId) });
     for (const s of backOnSchedule) await ctx.emit('social.variant.scheduled', { post_id: s.postId, variant_ids: s.variantIds, by_policy: true });
     ctx.audit({ connection_id: input.connectionId, approvals_required: input.approvalsRequired, approved_variants: approved, regated_variants: regated });
     return { connectionId: input.connectionId, approvalsRequired: input.approvalsRequired, approved, regated };

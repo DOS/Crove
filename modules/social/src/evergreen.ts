@@ -10,6 +10,7 @@ import { DomainError, defineCommand, type CommandContext, type Runtime, type Sys
 import { effectiveContent } from './domain/approval.ts';
 import { insertVariants, writePostMedia } from './posts.ts';
 import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, setVariant, settingsOf, step, type PostRow, type VariantRow } from './variants.ts';
+import { agentTaskOf } from './agent.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const EVERGREEN_SWEEP_MS = 60 * 60_000;
@@ -134,7 +135,7 @@ async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRo
   await refreshPostStatus(ctx, post.id);
   ctx.audit({ post_id: post.id, ...(options.repostOf ? { repost_of: source.id } : { copy_of: source.id }), variants: created.length });
   await ctx.emit('social.post.created', { post_id: post.id, ...(options.repostOf ? { repost_of: source.id } : { copy_of: source.id }) });
-  if (submitted.length > 0) await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: submitted });
+  if (submitted.length > 0) await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: submitted, agent_task: await agentTaskOf(ctx, post.id) });
   return { postId: post.id, submitted: submitted.length };
 }
 
