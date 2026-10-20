@@ -76,8 +76,13 @@ export interface ChannelCapabilities {
 const MB = 1024 * 1024;
 const ANY_IMAGE: readonly string[] = [];
 
-// The channels whose platform takes photos but whose Crove adapter posts only video (TikTok's photo mode is not built).
-export const VIDEO_ONLY_ADAPTERS: ReadonlySet<Provider> = new Set<Provider>(['tiktok']);
+// The channels whose platform takes photos but whose Crove adapter posts only video. None since TikTok's photo posts
+// (#710).
+export const VIDEO_ONLY_ADAPTERS: ReadonlySet<Provider> = new Set<Provider>([]);
+
+// A longer text where a channel's photo posts take one (#710): TikTok sends a photo post's text as its description,
+// up to 4,000 characters, where a video's caption takes 2,200.
+export const PHOTO_BODY_MAX: Readonly<Partial<Record<Provider, number>>> = { tiktok: 4000 };
 
 // Where each adapter puts the post's link, so the checks count the text the platform receives:
 // - text: after a blank line at the end of the text, unless the text already holds it;
@@ -284,7 +289,8 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'tiktok',
     body: { max: 2200, count: 'utf16', required: false },
     title: null,
-    media: { min: 1, max: 35, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: 4096 * MB, maxVideoSeconds: 600 },
+    // A video alone, or 1 to 35 photos (JPEG or WebP, 20 MB each, #710).
+    media: { min: 1, max: 35, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/webp'], maxImageBytes: 20 * MB, maxVideoBytes: 4096 * MB, maxVideoSeconds: 600 },
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: [],
