@@ -181,10 +181,14 @@ const bankRoute = createRoute({
   getParentRoute: () => orgRoute,
   path: 'bank',
   beforeLoad: requireFinance,
-  validateSearch: (search: Record<string, unknown>): { account?: string; month?: string } => ({
-    ...(typeof search.account === 'string' && /^[0-9A-Za-z._-]{3,50}$/.test(search.account) ? { account: search.account } : {}),
-    ...(typeof search.month === 'string' && /^\d{4}-\d{2}$/.test(search.month) ? { month: search.month } : {}),
-  }),
+  // The router reads a digits-only value (a hand-typed ?account=1121) as a number, so a whole number counts as its code.
+  validateSearch: (search: Record<string, unknown>): { account?: string; month?: string } => {
+    const account = typeof search.account === 'number' && Number.isSafeInteger(search.account) ? String(search.account) : search.account;
+    return {
+      ...(typeof account === 'string' && /^[0-9A-Za-z._-]{3,50}$/.test(account) ? { account } : {}),
+      ...(typeof search.month === 'string' && /^\d{4}-\d{2}$/.test(search.month) ? { month: search.month } : {}),
+    };
+  },
   component: BankPage,
 });
 // Opening balances from Excel (#320), reached from the journal.
