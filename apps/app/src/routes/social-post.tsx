@@ -231,7 +231,7 @@ function ChannelEditor({
 }) {
   const t = useTranslations('social');
   // The link as the channel sends it, with its UTM tags (#585).
-  const linkUrl = (isProvider(provider) ? sentLink(provider, base.linkUrl || null, own.settings) : base.linkUrl) ?? '';
+  const linkUrl = (isProvider(provider) ? sentLink(provider, base.linkUrl || null, own.settings, own.custom ? own.body : base.body) : base.linkUrl) ?? '';
   const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl, media: base.media };
   const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   return (
@@ -765,7 +765,11 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const adopt = (p: Post, keepOwn = false) => {
     setOrigin(p);
     setBase(baseOf(p));
-    if (!keepOwn) setOwn(Object.fromEntries(p.variants.map((v) => [v.id, ownOf(v)])));
+    if (!keepOwn) {
+      setOwn(Object.fromEntries(p.variants.map((v) => [v.id, ownOf(v)])));
+      // The tags shown follow the channels again.
+      setUtmState(undefined);
+    }
     setStale(false);
   };
   const editsOf = (o: Post) =>

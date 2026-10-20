@@ -82,7 +82,7 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
   if (variant.body.trim() === '' && variant.media.length === 0) issues.push({ code: 'CONTENT_REQUIRED', field: 'body', limit: null, actual: null });
   // The text as the adapter sends it, with the link it appends.
   // The link as the channel sends it, with its UTM tags (#585), counted where the channel counts it.
-  const sent = sentText(variant.provider, variant.body, sentLink(variant.provider, variant.linkUrl ?? null, variant.settings), variant.media.length);
+  const sent = sentText(variant.provider, variant.body, sentLink(variant.provider, variant.linkUrl ?? null, variant.settings, variant.body), variant.media.length);
   checkText(issues, 'body', sent, caps.body);
   if (caps.title) checkText(issues, 'title', variant.title ?? '', caps.title);
   else if (variant.title !== null && variant.title.trim() !== '') issues.push({ code: 'TITLE_NOT_SUPPORTED', field: 'title', limit: null, actual: null });

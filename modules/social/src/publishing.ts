@@ -167,7 +167,7 @@ function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, s
 const none = (reason: string): BeginResult => ({ action: 'none', reason });
 
 // The link as the channel sends it, with its UTM tags (#585).
-const withSentLink = (v: VariantRow, content: BaseContent): BaseContent => ({ ...content, linkUrl: isProvider(v.provider) ? sentLink(v.provider, content.linkUrl, settingsOf(v)) : content.linkUrl });
+const withSentLink = (v: VariantRow, content: BaseContent): BaseContent => ({ ...content, linkUrl: isProvider(v.provider) ? sentLink(v.provider, content.linkUrl, settingsOf(v), content.body) : content.linkUrl });
 
 async function lockVariant(ctx: CommandContext, variantId: string): Promise<{ post: PostRow; v: VariantRow } | null> {
   const found = await ctx.trx.selectFrom('crove_social.post_variant').select('post_id').where('org_id', '=', ctx.orgId).where('id', '=', variantId).executeTakeFirst();
