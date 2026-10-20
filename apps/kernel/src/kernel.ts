@@ -52,7 +52,7 @@ import { rebindExports as rebindOrgExports } from './export-rebind.ts';
 import { exportSealer } from './export-seal.ts';
 import { ConcurrencyLimiter, Semaphore } from './concurrency.ts';
 import { createHttpApp, type StreamDeps } from './http.ts';
-import { createLogMailer, createMailer, messageIdDomain, type Mailer } from './mail.ts';
+import { createLogProvider, createMailer, messageIdDomain, type MailProvider } from './mail.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
 import { createBlobStore } from './storage.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource } from './stream.ts';
@@ -92,7 +92,7 @@ export interface KernelAdapters {
   writer?: Pick<SocialWriter, 'draft' | 'rewrite'> | null;
   storage: BlobStore;
   // Outbound mail (member invites, issue #129); the default logs that nothing was sent.
-  mail?: Mailer;
+  mail?: MailProvider;
   broker?: CredentialBroker;
   connectors?: readonly Connector[];
   billing?: Billing;
@@ -223,7 +223,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     ai: adapters.ai,
     writer: adapters.writer ?? null,
     storage: adapters.storage,
-    mail: adapters.mail ?? createLogMailer(),
+    mail: adapters.mail ?? createLogProvider(),
     broker: adapters.broker ?? noCredentialBroker,
     connectors: adapters.connectors ?? [],
     billing: adapters.billing ?? selfHostBilling,

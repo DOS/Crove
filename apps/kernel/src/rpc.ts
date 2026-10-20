@@ -27,7 +27,7 @@ import { BlueskyLoginBudget } from './bluesky-login-limit.ts';
 import { actorOf, type AuthUser } from './auth.ts';
 import { ConcurrencyLimiter } from './concurrency.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
-import type { Delivery } from './mail.ts';
+import type { Delivery, DeliveryResult } from './mail.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
 
 export interface RpcContext {
@@ -228,9 +228,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             });
           if (mail?.status === 'sending') {
             let delivery: Delivery | 'error' = 'off';
+            let sent: DeliveryResult | undefined;
             try {
-              delivery =
-                (await sendInviteMail?.({
+              sent = await sendInviteMail?.({
                   to: created.email,
                   orgName: org.name,
                   inviterName: context.user.name,
@@ -239,13 +239,15 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
                   expiresAt: created.expiresAt,
                   acceptPath: created.acceptPath,
                   messageId: mail.messageIdHeader,
-                })) ?? 'off';
+                });
+              delivery = sent?.status ?? 'off';
             } catch (error) {
               delivery = 'error';
               console.error(`[mail] invite mail not sent: ${error instanceof Error ? error.name : 'unknown error'}`);
             }
             const outcome = delivery === 'sent' ? { outcome: 'sent' as const } : { outcome: 'failed' as const, errorCode: DELIVERY_ERROR[delivery] };
-            await runtime.execute('kernel.mail.record_direct', { messageId: mail.messageId, ...outcome }, { actor, orgId: org.orgId }).catch((error: unknown) => {
+            const provider = sent && delivery !== 'off' ? { provider: sent.provider, ...(sent.providerMessageId ? { providerMessageId: sent.providerMessageId } : {}) } : {};
+            await runtime.execute('kernel.mail.record_direct', { messageId: mail.messageId, ...outcome, ...provider }, { actor, orgId: org.orgId }).catch((error: unknown) => {
               console.error(`[mail] invite mail outcome not recorded: ${error instanceof Error ? error.name : 'unknown error'}`);
             });
           }

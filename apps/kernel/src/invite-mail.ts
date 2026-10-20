@@ -6,7 +6,7 @@
 // one and sends a new mail.
 //
 // The mail is the same whether or not the email has an account, and says nothing about one.
-import { deliver, type Delivery, type DeliverOptions, type Mailer, type OutboundMail } from './mail.ts';
+import { deliver, type DeliverOptions, type DeliveryResult, type MailProvider, type OutboundMail } from './mail.ts';
 
 export type InviteRole = 'admin' | 'member' | 'viewer';
 
@@ -25,7 +25,7 @@ export interface InviteMailInput {
   messageId?: string;
 }
 
-export type SendInviteMail = (invite: InviteMailInput) => Promise<Delivery>;
+export type SendInviteMail = (invite: InviteMailInput) => Promise<DeliveryResult>;
 
 // Operator configuration only (plan §7.7): the link never takes its host from the request.
 export function acceptUrl(publicUrl: string, acceptPath: string): string {
@@ -95,7 +95,7 @@ export function inviteMail(input: InviteMailInput, publicUrl: string): OutboundM
   return { to: input.to, subject, text, html, ...(input.messageId ? { messageId: input.messageId } : {}) };
 }
 
-export function createInviteMailSender(mailer: Mailer, publicUrl: string, options: DeliverOptions = {}): SendInviteMail {
+export function createInviteMailSender(mailer: MailProvider, publicUrl: string, options: DeliverOptions = {}): SendInviteMail {
   // async: a template error becomes a rejected promise, never a synchronous throw past the caller's handler.
   return async (invite) => deliver(mailer, inviteMail(invite, publicUrl), { label: 'invite mail', ...options });
 }

@@ -1,0 +1,17 @@
+{
+  "name": "@crove/mail",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Mail providers behind one interface (Email plan §3.9, ADR-0034): SMTP, the log fallback and HTTP providers, with their webhook parsers",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "nodemailer": "catalog:"
+  }
+}
