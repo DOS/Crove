@@ -1,6 +1,8 @@
 // Entry point of one parser process (see sandbox.ts for the flags it runs under). The kind comes in argv, the
 // bytes on stdin; one JSON answer goes to stdout and the process exits.
+import { once } from 'node:events';
 import { maxRequestBytes, zExtractKind, type ExtractResponse } from '@crove/extract-contract';
+import { jsonChunks } from './json-chunks.ts';
 import { failure, parse } from './parse.ts';
 
 async function readStdin(max: number): Promise<Uint8Array | null> {
@@ -24,4 +26,12 @@ async function main(): Promise<ExtractResponse> {
 }
 
 const answer = await main().catch(() => failure('internal', 'parser process failed'));
-process.stdout.write(JSON.stringify(answer), () => process.exit(0));
+// In pieces (json-chunks.ts), waiting for the pipe to drain between them, so the answer is never held again as one
+// string, as one Buffer and in the pipe's write queue (#653: an archive at the limits peaked near 384 MB that way).
+// The last piece carries the exit, so the process ends only once all of it is written.
+let held = '';
+for (const piece of jsonChunks(answer)) {
+  if (held && !process.stdout.write(held)) await once(process.stdout, 'drain');
+  held = piece;
+}
+process.stdout.write(held, () => process.exit(0));
