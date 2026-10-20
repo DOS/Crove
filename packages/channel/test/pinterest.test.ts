@@ -186,7 +186,8 @@ describe('Pinterest video pins (#813)', () => {
     const form = t.uploads[0]?.body as FormData;
     expect([form.get('key'), form.get('policy'), (form.get('file') as Blob).type]).toEqual(['uploads/12345', 'p', 'video/mp4']);
     const pinned = t.calls.at(-1)?.body as { media_source: unknown } | undefined;
-    expect(pinned?.media_source).toEqual({ source_type: 'video_id', media_id: '12345', cover_image_key_frame_time: 2.5 });
+    // Whole seconds.
+    expect(pinned?.media_source).toEqual({ source_type: 'video_id', media_id: '12345', cover_image_key_frame_time: 3 });
   });
 
   it('posts nothing when the storage URL is elsewhere, processing fails or runs late', async () => {
@@ -196,6 +197,9 @@ describe('Pinterest video pins (#813)', () => {
     expect(await new PinterestPublisher(APP, failed.fetchImpl, fast).publish(videoInput())).toMatchObject({ kind: 'rejected', code: 'VIDEO_PROCESSING_FAILED' });
     const slow = withUpload({ 'POST /v5/media': [{ body: { media_id: '3', upload_url: UPLOAD, upload_parameters: {} } }], 'GET /v5/media/3': Array.from({ length: 50 }, () => ({ body: { status: 'processing' } })) });
     expect(await new PinterestPublisher(APP, slow.fetchImpl, { pollMs: 5, videoWaitMs: 20 }).publish(videoInput())).toMatchObject({ kind: 'rejected', error: 'transient', code: 'VIDEO_PROCESSING_SLOW' });
-    for (const t of [elsewhere, failed, slow]) expect(t.calls.some((c) => c.route === 'POST /v5/pins')).toBe(false);
+    // Done, but after the budget: retried rather than pinned late.
+    const late = withUpload({ 'POST /v5/media': [{ body: { media_id: '4', upload_url: UPLOAD, upload_parameters: {} } }], 'GET /v5/media/4': [{ body: { status: 'succeeded' } }] });
+    expect(await new PinterestPublisher(APP, late.fetchImpl, { ...fast, budgetMs: -1 }).publish(videoInput())).toMatchObject({ kind: 'rejected', error: 'transient' });
+    for (const t of [elsewhere, failed, slow, late]) expect(t.calls.some((c) => c.route === 'POST /v5/pins')).toBe(false);
   });
 });

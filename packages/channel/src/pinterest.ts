@@ -23,7 +23,8 @@ export const PINTEREST_UPLOAD_HOSTS = ['pinterest-media-upload.s3-accelerate.ama
 const VIDEO_TYPES = ['video/mp4', 'video/quicktime'];
 // How long a publish waits for Pinterest to process a video; with the upload it stays inside callTimeoutMs.
 const VIDEO_WAIT_MS = 300_000;
-const VIDEO_CALL_MARGIN_MS = 90_000;
+// The last status read and the pin call (60 s each at most) plus slack fit between the budget and callTimeoutMs.
+const VIDEO_CALL_MARGIN_MS = 150_000;
 export const PINTEREST_SCOPES = ['boards:read', 'pins:read', 'pins:write', 'user_accounts:read'] as const;
 const API = 'https://api.pinterest.com/v5';
 const ID = /^\d{1,32}$/;
@@ -355,6 +356,8 @@ export class PinterestPublisher implements Publisher {
     }
     const uploaded = await this.uploadVideo(token, bytes, video.mime, started);
     if ('rejected' in uploaded) return uploaded.rejected;
+    // Past the budget, a pin could land after the job gave up on it: retry instead, nothing is visible yet.
+    if (Date.now() - started > this.budgetMs) return { kind: 'rejected', error: 'transient', code: 'VIDEO_BUDGET_SPENT' };
     const cover = videoCoverOf(input.settings);
     const link = linkOf(input.content);
     const title = titleOf(input.content);
@@ -365,7 +368,7 @@ export class PinterestPublisher implements Publisher {
       ...(description ? { description } : {}),
       ...(link ? { link } : {}),
       ...(video.altText ? { alt_text: clip(video.altText, ALT_TEXT_MAX) } : {}),
-      media_source: { source_type: 'video_id', media_id: uploaded.mediaId, cover_image_key_frame_time: cover && 'atMs' in cover ? Math.round(cover.atMs / 100) / 10 : 0 },
+      media_source: { source_type: 'video_id', media_id: uploaded.mediaId, cover_image_key_frame_time: cover && 'atMs' in cover ? Math.round(cover.atMs / 1000) : 0 },
     };
     try {
       const answer = await this.client.call<{ id?: unknown }>('POST', '/pins', token, pin);

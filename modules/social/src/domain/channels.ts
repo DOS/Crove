@@ -349,6 +349,8 @@ export const COVER_RULES: Readonly<Partial<Record<Provider, readonly CoverKind[]
   instagram: ['frame', 'image'],
   tiktok: ['frame'],
   youtube: ['image'],
+  // A video pin's cover is a frame of the video (#813).
+  pinterest: ['frame'],
 };
 // YouTube refuses a thumbnail over 2 MB (thumbnails.set).
 export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> = { youtube: 2 * 1024 * 1024 };
@@ -500,7 +502,7 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'pinterest',
     body: { max: 800, count: 'codepoints', required: false },
     title: { max: 100, count: 'codepoints', required: false },
-    media: { min: 1, max: 5, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png'], maxImageBytes: 10 * MB, maxVideoBytes: 2048 * MB, maxVideoSeconds: 900 },
+    media: { min: 1, max: 5, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png'], maxImageBytes: 10 * MB, maxVideoBytes: 100 * MB, maxVideoSeconds: 900 },
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: ['media.max'],
