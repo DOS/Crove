@@ -479,16 +479,18 @@ suite('kernel invariants on PostgreSQL', () => {
       db,
     );
     const session = '6b1f2a9e-3c4d-4e5f-8a9b-0c1d2e3f4a5b';
+    // One fixed expiry for every token: tokenExp must not depend on when each token is signed.
+    const nowSec = Math.floor(Date.now() / 1000);
     const bearer = async (claims: Record<string, unknown>) =>
       `Bearer ${await new SignJWT({ email: 'mfa@example.com', role: 'authenticated', session_id: session, ...claims })
         .setProtectedHeader({ alg: 'HS256' })
         .setSubject('mfa-user')
         .setIssuer('test-auth')
         .setAudience('authenticated')
-        .setExpirationTime('5m')
+        .setExpirationTime(nowSec + 300)
         .sign(new TextEncoder().encode(secret))}`;
 
-    const mfaAt = Math.floor(Date.now() / 1000) - 10;
+    const mfaAt = nowSec - 10;
     const stepUp = await authenticate(await bearer({ aal: 'aal2', amr: [{ method: 'totp', timestamp: mfaAt }, { method: 'password', timestamp: mfaAt - 60 }] }));
     expect(stepUp).toMatchObject({ aal: 'aal2', sessionId: session, mfaAt });
     await expect(authenticate(await bearer({ aal: 'aal1' }))).resolves.toEqual({ ...stepUp, aal: 'aal1', mfaAt: null });

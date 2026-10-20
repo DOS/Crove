@@ -591,6 +591,8 @@ export const zPeriodLockState = z.object({
   lastMonth: zPeriodMonth.nullable(),
   updatedBy: z.string().nullable(),
   updatedAt: z.string().nullable(),
+  // The date of the org's opening entry in force (#366): no other entry posts on or before it.
+  openingDate: zLocalDate.nullable(),
 });
 export type PeriodLockState = z.infer<typeof zPeriodLockState>;
 
@@ -771,6 +773,8 @@ export const zSocialPostCreate = z.strictObject({
   scheduledAt: zInstant.nullable().optional(),
   media: zSocialMediaInput.optional(),
   channels: z.array(zSocialChannelInput).min(1).max(20),
+  // The member accepted an AI rewrite into the text (#583): the post is tainted. Never cleared.
+  aiAssisted: z.literal(true).optional(),
 });
 
 export const zSocialPostUpdate = z.strictObject({
@@ -782,11 +786,13 @@ export const zSocialPostUpdate = z.strictObject({
   timeZone: z.string().min(1).max(64).optional(),
   scheduledAt: zInstant.nullable().optional(),
   media: zSocialMediaInput.optional(),
+  aiAssisted: z.literal(true).optional(),
 });
 
 export const zSocialVariantUpdate = z.strictObject({
   variantId: zId,
   revision: z.number().int().positive(),
+  aiAssisted: z.literal(true).optional(),
   body: zSocialText.nullable().optional(),
   title: zSocialTitle.nullable().optional(),
   linkUrl: zSocialLink.nullable().optional(),

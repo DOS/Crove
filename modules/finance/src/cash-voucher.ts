@@ -180,6 +180,8 @@ export const recordVoucher = defineCommand({
       description: voucherEntryDescription(code, described),
       sourceType: VOUCHER_SOURCE,
       sourceId: voucher.id,
+      // A voucher made from a bank statement line has the line's date; any other voucher's date is the user's.
+      beforeOpening: payload.bankLineId ? 'fixed' : 'later_date',
       lines: journal.map((j) => ({
         lineNo: j.lineNo,
         accountCode: j.accountCode,

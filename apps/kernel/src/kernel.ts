@@ -89,7 +89,7 @@ export interface KernelAdapters {
   // The AI invoice reader; null runs without AI (e-invoice XML still works, PDF and images do not).
   ai: InvoiceReader | null;
   // Drafts Social posts (Social plan S7) through the same endpoint; null runs without AI drafting.
-  writer?: Pick<SocialWriter, 'draft'> | null;
+  writer?: Pick<SocialWriter, 'draft' | 'rewrite'> | null;
   storage: BlobStore;
   // Outbound mail (member invites, issue #129); the default logs that nothing was sent.
   mail?: Mailer;

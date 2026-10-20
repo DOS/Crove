@@ -10,7 +10,10 @@
 // again: the old entry and its reversal cancel out at every date, so the new one stands alone. Posts for one org are serialized by a
 // transaction-level advisory lock, so two at once cannot both pass the check; this relies on READ COMMITTED (the
 // runtime's isolation for commands), so the second sees the first's entry once it gets the lock.
-// The opening balances are as at the end of the date, so every other entry must be dated later.
+// The opening balances are as at the end of the date, so every other entry must be dated later. The posting guard on
+// journal_entry holds every writer to that (#366, 20261020210000): an entry dated on or before the opening entry in
+// force is refused (BEFORE_OPENING_BALANCE), and the opening entry takes the org's period_lock row FOR UPDATE, so an
+// import and a posting in flight wait for each other and the second is refused if it breaks the rule.
 import { sql } from 'kysely';
 import { zOpeningBalanceImport, type OpeningBalanceImport } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
