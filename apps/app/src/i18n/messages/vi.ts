@@ -66,6 +66,7 @@ export const vi = {
     settings: 'Cài đặt',
     notMember: 'Bạn không thuộc tổ chức này.',
     support: 'Góp ý / Hỗ trợ',
+    status: 'Trạng thái hệ thống',
   },
   auth: {
     login: 'Đăng nhập',
@@ -1006,6 +1007,7 @@ export const vi = {
     firmTitle: 'Hướng dẫn cho công ty dịch vụ kế toán',
     firmSubtitle: 'Một tháng của một doanh nghiệp khách hàng trong Crove: thêm khách hàng, nhận và duyệt hóa đơn, ngân hàng, khóa sổ, tờ khai GTGT và chuyển số liệu sang phần mềm kế toán.',
     supportHint: 'Gặp lỗi hoặc cần hỗ trợ? Gửi cho chúng tôi qua',
+    statusHint: 'Ứng dụng chạy chậm hoặc báo lỗi? Xem tình trạng các chức năng ở trang',
   },
   invite: {
     noInviteTitle: 'Không có lời mời',

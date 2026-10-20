@@ -68,6 +68,7 @@ export const en = {
     settings: 'Settings',
     notMember: 'You are not a member of this organization.',
     support: 'Feedback / Support',
+    status: 'System status',
   },
   auth: {
     login: 'Sign in',
@@ -1010,6 +1011,7 @@ export const en = {
     firmSubtitle:
       "One client company's month in Crove: add the client, take in and approve invoices, bank and cash, period close, the VAT return and handing the figures to the firm's accounting software. The steps are in Vietnamese.",
     supportHint: 'Found a problem or need help? Tell us through',
+    statusHint: 'Is the app slow or showing errors? See how each part is doing on the',
   },
   invite: {
     noInviteTitle: 'No invitation',
