@@ -80,6 +80,8 @@ export interface CroveSocialSchema {
   'crove_social.queue': SocialQueueTable;
   'crove_social.queue_slot': SocialQueueSlotTable;
   'crove_social.report_link': SocialReportLinkTable;
+  'crove_social.report_schedule': SocialReportScheduleTable;
+  'crove_social.report_schedule_run': SocialReportScheduleRunTable;
   'crove_social.review_feedback': SocialReviewFeedbackTable;
   'crove_social.review_link': SocialReviewLinkTable;
   'crove_social.short_link': SocialShortLinkTable;
@@ -1008,6 +1010,42 @@ export interface SocialReportLinkTable {
   expires_at: ColumnType<Date, Date | string, NotGranted>;
   revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   revoked_by: string | null;
+  schedule_id: ColumnType<string | null, string | null, NotGranted>;
+}
+
+/** crove_social.report_schedule_run */
+export interface SocialReportScheduleRunTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  schedule_id: ColumnType<string, string, NotGranted>;
+  kind: ColumnType<string, string, NotGranted>;
+  period_start: ColumnType<Date, Date | string, NotGranted>;
+  period_end: ColumnType<Date, Date | string, NotGranted>;
+  mails: Generated<number>;
+  suppressed: Generated<number>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.report_schedule */
+export interface SocialReportScheduleTable {
+  org_id: string;
+  id: Generated<string>;
+  name: string;
+  cadence: string;
+  weekday: number | null;
+  month_day: number | null;
+  send_hour: Generated<number>;
+  time_zone: Generated<string>;
+  period: string;
+  connection_ids: Generated<string[]>;
+  recipients: string[];
+  paused: Generated<boolean>;
+  next_run_at: ColumnType<Date, Date | string, Date | string>;
+  last_run_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_social.review_feedback */

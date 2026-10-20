@@ -11,7 +11,7 @@ import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, runCommentJob, runPublishJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
@@ -562,6 +562,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const reminderTimer = deps.runtime.installed('social') ? setInterval(() => void reminderSweep(), REMINDER_SWEEP_MS) : null;
   if (reminderTimer) void reminderSweep();
 
+  // Scheduled client report mail (#704): every 5 minutes, the schedules due queue their mails (sent by the mail queue).
+  let reporting = false;
+  const reportSweep = async () => {
+    if (reporting) return;
+    reporting = true;
+    try {
+      const ran = await sweepReportSchedules({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (ran > 0) console.log(`[social-report-schedule] ran ${ran}`);
+    } catch (error) {
+      console.error(`[social-report-schedule] sweep: ${mailErrorCode(error)}`);
+    } finally {
+      reporting = false;
+    }
+  };
+  const reportTimer = deps.runtime.installed('social') ? setInterval(() => void reportSweep(), REPORT_SCHEDULE_SWEEP_MS) : null;
+  if (reportTimer) void reportSweep();
+
   // Blog feeds (#708): every quarter hour, the feeds due for their hourly read; new items become drafts.
   let readingFeeds = false;
   const feedSweep = async () => {
@@ -805,6 +822,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (mailTimer) clearInterval(mailTimer);
     if (evergreenTimer) clearInterval(evergreenTimer);
     if (reminderTimer) clearInterval(reminderTimer);
+    if (reportTimer) clearInterval(reportTimer);
     if (feedTimer) clearInterval(feedTimer);
     if (refreshTimer) clearInterval(refreshTimer);
     if (metricsTimer) clearInterval(metricsTimer);

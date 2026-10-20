@@ -381,6 +381,10 @@ export type SocialLinkPreviewError = (typeof SOCIAL_LINK_PREVIEW_ERRORS)[number]
 export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
 // The stages of an idea on the ideas board (#701).
 export const SOCIAL_IDEA_STAGES = ['new', 'planned', 'drafted', 'archived'] as const;
+// Scheduled client report mail (#704): how often, the period each mail covers, and a run's kind.
+export const SOCIAL_REPORT_CADENCES = ['weekly', 'monthly'] as const;
+export const SOCIAL_REPORT_PERIODS = ['previous_week', 'previous_month', 'last_7_days', 'last_30_days'] as const;
+export const SOCIAL_REPORT_RUN_KINDS = ['scheduled', 'test'] as const;
 export type SocialVariantStatus = (typeof SOCIAL_VARIANT_STATUSES)[number];
 export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 export type SocialActorOrigin = (typeof SOCIAL_ACTOR_ORIGINS)[number];
@@ -390,6 +394,9 @@ export type SocialAccountSnapshotError = (typeof SOCIAL_ACCOUNT_SNAPSHOT_ERRORS)
 export type SocialNotificationKind = (typeof SOCIAL_NOTIFICATION_KINDS)[number];
 export type SocialLabelColor = (typeof SOCIAL_LABEL_COLORS)[number];
 export type SocialIdeaStage = (typeof SOCIAL_IDEA_STAGES)[number];
+export type SocialReportCadence = (typeof SOCIAL_REPORT_CADENCES)[number];
+export type SocialReportPeriod = (typeof SOCIAL_REPORT_PERIODS)[number];
+export type SocialReportRunKind = (typeof SOCIAL_REPORT_RUN_KINDS)[number];
 
 export type SocialPostTable = Refine<
   G.SocialPostTable,
@@ -419,6 +426,8 @@ export type SocialNotificationTable = Refine<G.SocialNotificationTable, { kind: 
 export type SocialNotificationMuteTable = Refine<G.SocialNotificationMuteTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
 export type SocialLabelTable = Refine<G.SocialLabelTable, { color: Generated<SocialLabelColor> }>;
 export type SocialIdeaTable = Refine<G.SocialIdeaTable, { stage: Generated<SocialIdeaStage> }>;
+export type SocialReportScheduleTable = Refine<G.SocialReportScheduleTable, { cadence: SocialReportCadence; period: SocialReportPeriod }>;
+export type SocialReportScheduleRunTable = Refine<G.SocialReportScheduleRunTable, { kind: SocialReportRunKind }>;
 
 export type SocialPostApprovalTable = Refine<
   G.SocialPostApprovalTable,
@@ -467,6 +476,8 @@ type Refined = Tables<{
   'crove_social.notification_mute': SocialNotificationMuteTable;
   'crove_social.label': SocialLabelTable;
   'crove_social.idea': SocialIdeaTable;
+  'crove_social.report_schedule': SocialReportScheduleTable;
+  'crove_social.report_schedule_run': SocialReportScheduleRunTable;
 }>;
 
 // Every table crove_tenant may read: the generated table type, or its refinement above.

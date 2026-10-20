@@ -443,6 +443,12 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         create: os.social.reportLinks.create.handler(socialCommand('social.report_link.create')),
         revoke: os.social.reportLinks.revoke.handler(socialCommand('social.report_link.revoke')),
       },
+      reportSchedules: {
+        list: os.social.reportSchedules.list.handler(socialQuery('social.report_schedule.list')),
+        save: os.social.reportSchedules.save.handler(socialCommand('social.report_schedule.save')),
+        remove: os.social.reportSchedules.remove.handler(socialCommand('social.report_schedule.remove')),
+        test: os.social.reportSchedules.test.handler(socialCommand('social.report_schedule.test')),
+      },
       linkPreviews: {
         request: os.social.linkPreviews.request.handler(socialCommand('social.link_preview.request')),
         get: os.social.linkPreviews.get.handler(socialQuery('social.link_preview.get')),

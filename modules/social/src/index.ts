@@ -16,6 +16,8 @@ export * from './snippets.ts';
 export * from './labels.ts';
 export * from './ideas.ts';
 export * from './feeds.ts';
+export * from './report-schedules.ts';
+export * from './domain/report-schedule.ts';
 export * from './review-links.ts';
 export * from './report-links.ts';
 export * from './activity.ts';

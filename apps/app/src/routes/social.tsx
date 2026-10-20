@@ -18,6 +18,7 @@ import { PostLabels, useLabels, type SocialLabel } from '../components/social-la
 import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
 import { ReportLinks } from '../components/social-report-links.tsx';
+import { ReportSchedules } from '../components/social-report-schedules.tsx';
 import type { BulkAction } from '../lib/social-bulk.ts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
@@ -586,6 +587,7 @@ export function SocialPage() {
           <div className="space-y-4">
             <Metrics slug={slug} names={names} labelId={search.label} />
             <ReportLinks channels={channels.data ?? []} />
+            <ReportSchedules channels={channels.data ?? []} />
           </div>
         </TabsContent>
         <TabsContent value="library">{tab === 'library' && <Library slug={slug} canWrite={canWrite} />}</TabsContent>

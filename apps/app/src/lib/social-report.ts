@@ -25,5 +25,20 @@ export function reportPeriod(from: string, to: string): { periodStart: string; p
   return { periodStart: start.toISOString(), periodEnd: end.toISOString() };
 }
 
+// Recipients typed one per line or separated by commas, semicolons or spaces: the addresses that look valid
+// (lower-cased, without duplicates) and the ones that do not.
+export function parseRecipients(text: string): { valid: string[]; invalid: string[] } {
+  const valid: string[] = [];
+  const invalid: string[] = [];
+  for (const part of text.split(/[\s,;]+/)) {
+    const address = part.trim().toLowerCase();
+    if (!address) continue;
+    if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address) && address.length <= 320) {
+      if (!valid.includes(address)) valid.push(address);
+    } else if (!invalid.includes(part.trim())) invalid.push(part.trim());
+  }
+  return { valid, invalid };
+}
+
 // The page a client opens; the token stays after the #, so browsers never send it to a server in the address.
 export const reportUrl = (origin: string, token: string) => `${origin}/-/report#${token}`;
