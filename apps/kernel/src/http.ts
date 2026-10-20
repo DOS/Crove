@@ -88,10 +88,11 @@ import { pgBossSchemaVersion } from './jobs-schema.ts';
 import type { MailProvider } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { reviewAnswer, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
+import { reportView, REPORT_VIEWS_PER_MINUTE } from './report-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
-import { hasVideoTrack, sniffVideo, videoDurationMs } from './media-probe.ts';
+import { hasVideoTrack, imageSize, sniffVideo, videoDurationMs, type ImageSize } from './media-probe.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 import { directTransferOrigin } from './storage.ts';
 import {
@@ -128,6 +129,8 @@ export interface HttpDeps {
   rateLimiter?: RateLimiter | null;
   // Per-client budgets of the public review page (#589). Unset: REVIEW_VIEWS_PER_MINUTE and REVIEW_ANSWERS_PER_MINUTE.
   reviewLimits?: { views: RateLimiter; answers: RateLimiter };
+  // The public report page's budget per client (#643). Unset: REPORT_VIEWS_PER_MINUTE.
+  reportLimit?: RateLimiter;
   // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
   uploadCompletes?: ConcurrencyLimiter;
   // Uploads that may be larger than MAX_UPLOAD_BYTES (Social videos, #409) running at once. Default: 2 per process.
@@ -539,6 +542,19 @@ export function createHttpApp(deps: HttpDeps) {
         return problem(c, error);
       }
     });
+    // A client report link (#643): the same edge as the review page, with its own budget.
+    const reportLimit = deps.reportLimit ?? new RateLimiter({ perMinute: REPORT_VIEWS_PER_MINUTE });
+    app.post('/api/report/view', bodyLimit({ maxSize: 1024 }), async (c) => {
+      const limited = reviewBudget(c, reportLimit);
+      if (limited) return limited;
+      c.header('cache-control', 'no-store');
+      try {
+        const view = await reportView(runtime, await c.req.json().catch(() => null));
+        return view ? c.json(view) : c.json({ code: 'REPORT_LINK_INVALID', message: 'Liên kết báo cáo không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
     app.post('/api/review/answer', bodyLimit({ maxSize: 8 * 1024 }), async (c) => {
       const limited = reviewBudget(c, reviewLimits.answers);
       if (limited) return limited;
@@ -757,6 +773,7 @@ export function createHttpApp(deps: HttpDeps) {
     const video = purpose === 'social' ? sniffVideo(bytes) : null;
     let type = video ?? sniffType(bytes);
     let durationMs: number | undefined;
+    let size: ImageSize | null = null;
     if (purpose === 'import') {
       if (type !== 'application/zip') throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận tệp Excel dạng .xlsx`);
       if (bytes.byteLength > MAX_IMPORT_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 10 MB`);
@@ -777,6 +794,8 @@ export function createHttpApp(deps: HttpDeps) {
         throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận XML, PDF, JPG, PNG, WEBP hoặc ZIP`);
       }
       if (bytes.byteLength > MAX_UPLOAD_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 25 MB`);
+      // An image for a post: its size as shown, from its header (#636); unreadable, it is stored without one.
+      if (purpose === 'social' && type) size = imageSize(bytes, type);
     }
     if (!type) throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: không nhận dạng được tệp`);
     const storageKey = fileKey(orgId, sha256);
@@ -792,6 +811,7 @@ export function createHttpApp(deps: HttpDeps) {
         generation,
         source: purpose === 'social' ? 'social' : purpose === 'import' ? 'import' : 'upload',
         ...(durationMs === undefined ? {} : { durationMs }),
+        ...(size ? { imageWidth: size.width, imageHeight: size.height } : {}),
       },
       { actor: actorOf(user), orgId },
     );

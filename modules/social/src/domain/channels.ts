@@ -183,6 +183,20 @@ export function postTypeOf(settings: Readonly<Record<string, unknown>> | undefin
   if (value === undefined || value === null) return 'feed';
   return (POST_TYPES as readonly unknown[]).includes(value) ? (value as PostType) : null;
 }
+// What an image must be for a channel to take it (#636): its shape (width / height) and its width in pixels, as the
+// platforms' APIs refuse otherwise. Instagram's feed takes 4:5 to 1.91:1; Threads 1:10 to 10:1; both at least 320 wide.
+// A channel without a rule takes any shape. Checked only when the image's size is known (read at upload).
+export interface ImageRule {
+  minRatio: number;
+  maxRatio: number;
+  minWidth: number;
+}
+export const IMAGE_RULES: Readonly<Partial<Record<Provider, ImageRule>>> = {
+  instagram: { minRatio: 4 / 5, maxRatio: 1.91, minWidth: 320 },
+  threads: { minRatio: 1 / 10, maxRatio: 10, minWidth: 320 },
+};
+// A shape within 1% of a bound counts as on it (1080 x 1350 is 4:5, a resize may land a pixel off).
+export const RATIO_SLACK = 0.01;
 
 export const COVER_RULES: Readonly<Partial<Record<Provider, readonly CoverKind[]>>> = {
   sandbox: ['frame', 'image'],

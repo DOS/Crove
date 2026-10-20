@@ -3,6 +3,7 @@
 // reposting, the metrics of a published post, and the AI drafting card on a server without a model. Each test signs
 // up its own user and org. States the worker reaches only on a real platform (a refusal, an unknown outcome, a metrics
 // capture) are written with SQL, as social.spec.ts moves a slot forward.
+import { crc32, deflateSync } from 'node:zlib';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { exec, sql } from '../lib/db.ts';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
@@ -11,6 +12,26 @@ import { createOrg, newEmail, signUp } from '../lib/session.ts';
 const TIME_ZONE = 'Asia/Ho_Chi_Minh';
 test.use({ timezoneId: TIME_ZONE });
 
+// A width x height PNG of one colour (an RGB image, rows unfiltered, deflated).
+function solidPng(width: number, height: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  const row = Buffer.alloc(1 + width * 3);
+  for (let x = 0; x < width; x++) row.set([200, 60, 60], 1 + x * 3);
+  const raw = Buffer.concat(Array.from({ length: height }, () => row));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
 // A 1x1 PNG.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==', 'base64');
 
@@ -251,7 +272,7 @@ test('turns on evergreen reposting for a published post', async ({ page }) => {
     .toEqual([{ evergreen_days: null }]);
 });
 
-test('shows the latest metrics of a published channel on the post and in the Metrics tab', async ({ page }) => {
+test('shows the latest metrics of a published channel on the post and in the Metrics tab, and in a client report', async ({ page, browser }) => {
   await signUp(page, newEmail('social-metrics'));
   await createOrg(page, 'Công ty Số Liệu');
   const channel = 'Trang Số Liệu';
@@ -286,6 +307,40 @@ test('shows the latest metrics of a published channel on the post and in the Met
   await expect(row.getByRole('cell')).toHaveText([new RegExp(`^${body}`), '1.234', '56', '7', '3']);
   await expect(row).toContainText(channel);
   await expect(panel.locator('[data-slot="card"]').filter({ hasText: 'Người tiếp cận' })).toContainText('1.234');
+
+  // A client report link of today (#643), opened without an account: the totals, the channel and the post.
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date());
+  await panel.getByLabel('Từ ngày').fill(today);
+  await panel.getByLabel('Đến ngày').fill(today);
+  await panel.getByLabel('Tên báo cáo').fill('Báo cáo hôm nay');
+  await panel.getByRole('button', { name: 'Tạo liên kết báo cáo' }).click();
+  const link = await panel.getByLabel('Liên kết báo cáo').inputValue();
+  expect(link).toMatch(/\/-\/report#[A-Za-z0-9_-]{43}$/);
+  await expect(panel.getByText('Báo cáo hôm nay')).toBeVisible();
+  const guest = await browser.newContext({ timezoneId: TIME_ZONE });
+  try {
+    const client = await guest.newPage();
+    await client.goto(link);
+    await expect(client.getByRole('heading', { name: 'Báo cáo hôm nay' })).toBeVisible();
+    await expect(client.getByText('Công ty Số Liệu')).toBeVisible();
+    await expect(client.locator('[data-slot="card"]').filter({ hasText: 'Người tiếp cận' })).toContainText('1.234');
+    await expect(client.getByRole('row').filter({ hasText: channel })).toContainText('1.234');
+    await expect(client.getByRole('listitem').filter({ hasText: body })).toContainText('Cảm xúc: 56');
+    await expect(client.getByRole('button', { name: 'In hoặc lưu PDF' })).toBeVisible();
+  } finally {
+    await guest.close();
+  }
+  // Revoked, the same link opens nothing.
+  await panel.getByRole('button', { name: 'Thu hồi' }).click();
+  await expect(panel.getByText('Đã thu hồi')).toBeVisible();
+  const after = await browser.newContext();
+  try {
+    const client = await after.newPage();
+    await client.goto(link);
+    await expect(client.getByRole('heading', { name: 'Không mở được báo cáo' })).toBeVisible();
+  } finally {
+    await after.close();
+  }
 });
 
 test('says AI drafting is off on a server without a model', async ({ page, request }) => {
@@ -369,13 +424,13 @@ test('posts a Story of one image, with no text, in a phone frame (#644)', async 
   await createOrg(page, 'Công ty Tin');
   await connectSandbox(page, 'Trang Tin');
   await compose(page, 'Chữ này không lên Tin');
-  await page.locator('input[type="file"]').first().setInputFiles([{ name: 'tin.png', mimeType: 'image/png', buffer: PNG }]);
+  await page.locator('input[type="file"]').first().setInputFiles([{ name: 'tin.png', mimeType: 'image/png', buffer: solidPng(1080, 1920) }]);
   await expect(page.getByText('1/20').first()).toBeVisible();
   await page.getByLabel('Kiểu bài').selectOption('story');
   await expect(page.getByText('Tin (Story) - chỉ hiện ảnh hoặc video')).toBeVisible();
   await expect(page.getByText('Bình luận đầu tiên (không bắt buộc)')).toHaveCount(0);
   // A second image is one too many for a Story.
-  await page.locator('input[type="file"]').first().setInputFiles([{ name: 'tin-2.png', mimeType: 'image/png', buffer: Buffer.concat([PNG, Buffer.from([0])]) }]);
+  await page.locator('input[type="file"]').first().setInputFiles([{ name: 'tin-2.png', mimeType: 'image/png', buffer: solidPng(1080, 1910) }]);
   await expect(page.getByText('2/20').first()).toBeVisible();
   await expect(page.getByText('Tin (Story) cần đúng một ảnh hoặc một video')).toBeVisible();
   await page.getByRole('button', { name: 'Bỏ', exact: true }).last().click();
@@ -386,4 +441,25 @@ test('posts a Story of one image, with no text, in a phone frame (#644)', async 
   expect(saved).toEqual([{ post_type: 'story' }]);
   // The saved post keeps the type in its channel's editor.
   await expect(page.getByLabel('Kiểu bài')).toHaveValue('story');
+});
+
+test('crops a post image to a frame, and the server reads the new size (#636)', async ({ page }) => {
+  await signUp(page, newEmail('social-crop'));
+  await createOrg(page, 'Công ty Cắt Ảnh');
+  await connectSandbox(page, 'Trang Cắt Ảnh');
+  await compose(page, 'Bài có ảnh dọc');
+  await page.locator('input[type="file"]').first().setInputFiles([{ name: 'doc.png', mimeType: 'image/png', buffer: solidPng(1080, 1920) }]);
+  await expect(page.getByText('1/20').first()).toBeVisible();
+  await page.getByRole('button', { name: 'Cắt', exact: true }).first().click();
+  await page.getByRole('radio', { name: '1:1 · vuông' }).click();
+  await expect(page.getByText('Ảnh gốc 1080 × 1920, sau khi cắt 1080 × 1080')).toBeVisible();
+  await page.getByRole('button', { name: 'Lưu ảnh đã cắt' }).click();
+  await expect(page.getByRole('button', { name: 'Lưu ảnh đã cắt' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  const media = sql<{ image_width: number; image_height: number; content_type: string }>(
+    `SELECT f.image_width, f.image_height, f.content_type FROM crove_social.post_media m JOIN crove_kernel.file f ON f.org_id = m.org_id AND f.id = m.file_id WHERE m.post_id = :'post'`,
+    { post: postIdOf(page) },
+  );
+  expect(media).toEqual([{ image_width: 1080, image_height: 1080, content_type: 'image/png' }]);
 });

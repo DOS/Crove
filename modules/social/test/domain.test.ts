@@ -192,6 +192,28 @@ describe('validateVariant', () => {
     expect(codes('x', 'story', [img()])).toEqual(['POST_TYPE_NOT_SUPPORTED']);
     expect(codes('instagram', 'carousel', [img()])).toEqual(['POST_TYPE_NOT_SUPPORTED']);
     expect(codes('instagram', 'feed', [img()])).toEqual([]);
+    // A Story image is upright (9:16 passes, the feed's 4:5 and wider do not), whatever the feed takes; an unknown size is not checked.
+    const sized = (width: number, height: number): MediaItem => ({ ...img(), width, height });
+    expect(codes('instagram', 'story', [sized(1080, 1920)])).toEqual([]);
+    expect(codes('facebook_page', 'story', [sized(1080, 2340)])).toEqual([]);
+    expect(codes('instagram', 'story', [sized(1080, 1350)])).toEqual(['IMAGE_RATIO_NOT_ALLOWED']);
+    expect(codes('facebook_page', 'story', [sized(1920, 1080)])).toEqual(['IMAGE_RATIO_NOT_ALLOWED']);
+    expect(codes('instagram', 'story', [sized(180, 320)])).toEqual(['IMAGE_TOO_SMALL']);
+  });
+
+  it("holds Instagram and Threads images to their shapes and widths, when the size is known (#636)", () => {
+    const img = (width: number | null, height: number | null): MediaItem => ({ kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null, width, height });
+    const codes = (provider: 'instagram' | 'threads' | 'facebook_page', media: MediaItem[]) => validateVariant({ provider, body: 'x', title: null, media }).map((i) => i.code);
+    // 4:5, square and 1.91:1 are Instagram's feed; a pixel off 4:5 still counts.
+    expect(codes('instagram', [img(1080, 1350), img(1080, 1080), img(1080, 566), img(1080, 1351)])).toEqual([]);
+    const tall = validateVariant({ provider: 'instagram', body: 'x', title: null, media: [img(1080, 1920)] });
+    expect(tall).toEqual([{ code: 'IMAGE_RATIO_NOT_ALLOWED', field: 'media.0', limit: null, actual: 563 }]);
+    expect(codes('instagram', [img(2000, 800)])).toEqual(['IMAGE_RATIO_NOT_ALLOWED']);
+    expect(validateVariant({ provider: 'instagram', body: 'x', title: null, media: [img(200, 200)] })).toEqual([{ code: 'IMAGE_TOO_SMALL', field: 'media.0', limit: 320, actual: 200 }]);
+    // Threads takes a 9:16 photo; Facebook any shape; an unknown size is not checked.
+    expect(codes('threads', [img(1080, 1920)])).toEqual([]);
+    expect(codes('facebook_page', [img(1080, 5000)])).toEqual([]);
+    expect(codes('instagram', [img(null, null), { kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null }])).toEqual([]);
   });
 
   it('refuses images mixed with video where the channel does not mix them', () => {

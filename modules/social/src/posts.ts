@@ -20,6 +20,7 @@ import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } fr
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { activityCommands, activityQueries } from './activity.ts';
+import { reportLinkCommands, reportLinkQueries } from './report-links.ts';
 import { linkPreviewCommands, linkPreviewQueries } from './link-preview.ts';
 import { notificationCommands, notificationQueries } from './notifications.ts';
 import { assignCommands } from './assign.ts';
@@ -71,7 +72,7 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
   if (list.length === 0) return [];
   const files = await ctx.trx
     .selectFrom('crove_kernel.file')
-    .select(['id', 'generation', 'content_type', 'size_bytes', 'source', 'duration_ms'])
+    .select(['id', 'generation', 'content_type', 'size_bytes', 'source', 'duration_ms', 'image_width', 'image_height'])
     .where('org_id', '=', ctx.orgId)
     .where(
       'id',
@@ -85,7 +86,7 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
     // Only images uploaded for posts: an accounting document of the org is never published, whatever its type.
     if (!f || f.source !== 'social') throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này');
     if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG, WEBP và video MP4, MOV');
-    return { fileId: f.id, generation: f.generation, altText: m.altText || null, mime: f.content_type, sizeBytes: Number(f.size_bytes), durationMs: f.duration_ms === null ? null : Number(f.duration_ms) };
+    return { fileId: f.id, generation: f.generation, altText: m.altText || null, mime: f.content_type, sizeBytes: Number(f.size_bytes), durationMs: f.duration_ms === null ? null : Number(f.duration_ms), width: f.image_width ?? null, height: f.image_height ?? null };
   });
 }
 
@@ -906,9 +907,11 @@ export interface MediaView {
   mime: string;
   sizeBytes: number;
   durationMs: number | null;
+  width: number | null;
+  height: number | null;
 }
 
-const mediaView = (list: readonly PostMedia[]): MediaView[] => list.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs ?? null }));
+const mediaView = (list: readonly PostMedia[]): MediaView[] => list.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs ?? null, width: m.width ?? null, height: m.height ?? null }));
 
 export interface PostView {
   id: string;
@@ -983,7 +986,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
   const mediaRows = await ctx.trx
     .selectFrom('crove_social.post_media as m')
     .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
-    .select(['m.post_id', 'm.file_id', 'm.alt_text', 'f.generation', 'f.content_type', 'f.size_bytes', 'f.duration_ms'])
+    .select(['m.post_id', 'm.file_id', 'm.alt_text', 'f.generation', 'f.content_type', 'f.size_bytes', 'f.duration_ms', 'f.image_width', 'f.image_height'])
     .where('m.org_id', '=', ctx.orgId)
     .where('m.post_id', 'in', postIds)
     .orderBy('m.position')
@@ -991,7 +994,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
   const mediaByPost = new Map<string, PostMedia[]>();
   for (const r of mediaRows) {
     const list = mediaByPost.get(r.post_id) ?? [];
-    list.push({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes), durationMs: r.duration_ms === null ? null : Number(r.duration_ms) });
+    list.push({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes), durationMs: r.duration_ms === null ? null : Number(r.duration_ms), width: r.image_width ?? null, height: r.image_height ?? null });
     mediaByPost.set(r.post_id, list);
   }
   const labels = await labelsOfPosts(ctx.trx, ctx.orgId, postIds);
@@ -1213,6 +1216,7 @@ export const socialCommands = [
   ...labelCommands,
   ...reviewLinkCommands,
   ...activityCommands,
+  ...reportLinkCommands,
   ...linkPreviewCommands,
   ...notificationCommands,
 ];
@@ -1257,4 +1261,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...activityQueries, ...reviewLinkQueries, ...linkPreviewQueries, ...notificationQueries];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...activityQueries, ...reviewLinkQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries];

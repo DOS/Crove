@@ -41,9 +41,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
-  'crove_social.notification',
-  'crove_social.notification_mute',
-  'crove_social.report_link',
+  'crove_social.account_snapshot',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -475,6 +473,16 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   'crove_kernel.tenant_member': { make: (o) => ({ row: { org_id: o.id, user_id: o.freshUser(), role: 'member' } }) },
   // The review policy of a channel (S9, issue #394): how many people approve a variant, one row per connection.
+  // A channel's daily count of followers (#645), recorded by the worker: one per channel and day.
+  'crove_social.account_snapshot': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id, captured_on: '2026-10-20', followers: 120 },
+      };
+    },
+  },
   'crove_social.channel_policy': {
     make: (o) => {
       const connection = channelConnectionRow(o);

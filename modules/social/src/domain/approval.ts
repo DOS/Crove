@@ -19,6 +19,9 @@ export interface PostMedia extends HashedMedia {
   sizeBytes: number;
   // A video's duration as the server read it from the file (#409); null for images.
   durationMs?: number | null;
+  // An image's size as shown, read from its header (#636); null when unknown (a video, an older upload).
+  width?: number | null;
+  height?: number | null;
 }
 
 export interface HashedVariant {

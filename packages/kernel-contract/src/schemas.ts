@@ -770,7 +770,7 @@ export const zSocialChannelInput = z.strictObject({
   media: zSocialMediaInput.nullable().optional(),
 });
 
-export const zSocialMedia = z.object({ fileId: zId, altText: z.string().nullable(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable() });
+export const zSocialMedia = z.object({ fileId: zId, altText: z.string().nullable(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable() });
 
 export const zSocialPostCreate = z.strictObject({
   body: zSocialText,
@@ -904,7 +904,7 @@ export const zSocialPost = z.object({
 
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
 // A media library item (S9): an image of the org uploaded for posts, and how many posts show it.
-export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int() });
+export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int() });
 // A saved snippet (#584): hashtags, a signature, or a whole post to start from (isTemplate).
 export const zSocialSnippet = z.object({
   id: zId,
@@ -969,6 +969,26 @@ export const zSocialQueue = z.object({
   paused: z.boolean(),
   slots: z.array(z.object({ weekday: z.number().int(), minute: z.number().int(), label: z.string().nullable(), active: z.boolean() })),
   nextFree: z.array(z.string()),
+});
+
+// A client report link of a period (#643); its token is in the create answer only.
+export const zSocialReportLink = z.object({
+  id: zId,
+  title: z.string().nullable(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  connectionIds: z.array(zId),
+  createdBy: zId,
+  createdAt: z.string(),
+  expiresAt: z.string(),
+  revokedAt: z.string().nullable(),
+});
+export const zSocialReportLinkCreate = z.strictObject({
+  periodStart: z.iso.datetime({ offset: true }),
+  periodEnd: z.iso.datetime({ offset: true }),
+  connectionIds: z.array(zId).max(50).optional(),
+  title: z.string().trim().min(1).max(120).optional(),
+  days: z.number().int().min(1).max(90).optional(),
 });
 
 // A link's preview card (#641): pending until the worker read the page; failed with why.

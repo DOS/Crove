@@ -141,7 +141,9 @@ describe('the zip kind', () => {
   // #432: an archive at every limit at once (the most entries, the most decompressed bytes, an upload just under the
   // file limit) opens with half the parser's heap and half its resident memory limit. On Linux the RSS watchdog is
   // live here (as in CI), so the parse needs less than half of the 768 MB the default sandbox allows, which itself
-  // leaves the server its share of the container's 1 GiB. Measured in the crove-extract image: about 335 MB at peak.
+  // leaves the server its share of the container's 1 GiB. Measured with Node 26 on Linux: about 270 to 300 MB at peak,
+  // since the parser process writes its answer in pieces (#653); before that it peaked at 375 to 390 MB and failed
+  // here at random on CI runners.
   // The container smoke test (test/container/smoke.mjs) opens the same archive in the real 1 GiB container.
   it('opens an archive at the entry and size limits within half the sandbox limits', { timeout: 120_000 }, async () => {
     const zip = buildLimitArchive({ entries: EXTRACT_LIMITS.maxArchiveEntries, totalBytes: EXTRACT_LIMITS.maxArchiveTotalBytes, randomBytesPerEntry: 50_000 });

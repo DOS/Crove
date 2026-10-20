@@ -18,6 +18,9 @@ export const zIngestFile = z.object({
   source: z.enum(['upload', 'email', 'social', 'import']),
   // A video's duration, read by the server from the file (#409).
   durationMs: z.number().int().min(0).max(86_400_000).optional(),
+  // An image's size as shown, read by the server from its header (#636); both or neither.
+  imageWidth: z.number().int().min(1).max(100_000).optional(),
+  imageHeight: z.number().int().min(1).max(100_000).optional(),
 });
 export type IngestFile = z.infer<typeof zIngestFile>;
 
@@ -50,6 +53,7 @@ export async function ingestFileRow(ctx: CommandContext, input: IngestFile, crea
       size_bytes: String(input.sizeBytes),
       source: input.source,
       duration_ms: input.durationMs === undefined ? null : String(input.durationMs),
+      ...(input.imageWidth !== undefined && input.imageHeight !== undefined ? { image_width: input.imageWidth, image_height: input.imageHeight } : {}),
       created_by: createdBy,
     })
     .onConflict((oc) => oc.columns(['org_id', 'sha256']).doNothing())
