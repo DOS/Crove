@@ -78,6 +78,32 @@ const sameSettings = (a: Record<string, unknown> | null | undefined, b: Record<s
 // The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
 function ProviderSettings({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
   const t = useTranslations('social');
+  // Mastodon (#748): who sees the post, and an optional content warning shown before it.
+  if (provider === 'mastodon') {
+    const without = (key: string) => {
+      const { [key]: _gone, ...rest } = settings;
+      return rest;
+    };
+    return (
+      <div className="space-y-1.5">
+        <Label htmlFor="mastodon-visibility" className="text-xs">
+          {t('mastodonVisibility')}
+        </Label>
+        <NativeSelect id="mastodon-visibility" size="sm" className="w-full max-w-xs" value={settings.visibility === 'unlisted' ? 'unlisted' : 'public'} disabled={disabled} onChange={(e) => onChange(e.target.value === 'public' ? without('visibility') : { ...settings, visibility: e.target.value })}>
+          {(['public', 'unlisted'] as const).map((v) => (
+            <NativeSelectOption key={v} value={v}>
+              {t(`mastodonVisibilityOption.${v}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <Label htmlFor="mastodon-cw" className="text-xs">
+          {t('mastodonContentWarning')}
+        </Label>
+        <Input id="mastodon-cw" value={typeof settings.contentWarning === 'string' ? settings.contentWarning : ''} disabled={disabled} onChange={(e) => onChange(e.target.value ? { ...settings, contentWarning: e.target.value } : without('contentWarning'))} />
+        <p className="text-xs text-subtle-foreground">{t('mastodonContentWarningHint')}</p>
+      </div>
+    );
+  }
   if (provider === 'youtube') {
     return (
       <div className="space-y-1.5">
@@ -317,6 +343,8 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TOO_MANY_MEDIA', { limit });
       case 'TOO_MANY_LINKS':
         return t('TOO_MANY_LINKS', { limit, actual });
+      case 'CONTENT_WARNING_TOO_LONG':
+        return t('CONTENT_WARNING_TOO_LONG', { limit, actual });
       case 'COMMENT_TOO_LONG':
         return t('COMMENT_TOO_LONG', { limit, actual });
       case 'THREAD_TOO_MANY_PARTS':

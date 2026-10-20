@@ -191,6 +191,9 @@ const schema = z.object({
   // Telegram channels (#747): a bot the shop makes with @BotFather posts to its channel; no app of the deployment's own is
   // needed. On unless false.
   CHANNEL_TELEGRAM: z.enum(['true', 'false']).default('true'),
+  // Mastodon (#748): an account on any instance connects with an access token made in its settings; every call to an
+  // instance goes through the egress guard. On unless false.
+  CHANNEL_MASTODON: z.enum(['true', 'false']).default('true'),
   // The deployment's Meta app (Facebook Pages, Social plan S6). Set both to offer Facebook Pages; neither hides them.
   // The app's valid OAuth redirect URI is PUBLIC_URL/channels/oauth/facebook_page/callback.
   CHANNEL_META_APP_ID: optional,
@@ -279,6 +282,9 @@ const schema = z.object({
   // pages the deployment publishes. Unset hides the line. Browsers read them from /api/config.
   TERMS_URL: optional.pipe(z.url({ protocol: /^https$/ }).optional()),
   PRIVACY_URL: optional.pipe(z.url({ protocol: /^https$/ }).optional()),
+  // The prober's last result for the public status page PUBLIC_URL/status (#678, status-page.ts): the file the
+  // prober writes as PROBER_STATUS_FILE, on a volume both share. Unset: no /status page and no link to it in the app.
+  STATUS_FILE: optional.pipe(z.string().startsWith('/', 'STATUS_FILE is an absolute path').optional()),
   // The public tax registry lookup that prefills a new org from its tax code (issue #324): an https URL template with
   // {taxCode}, answering in the VietQR business shape (https://api.vietqr.io/v2/business/{taxCode}). Unset turns the
   // lookup off: it sends the tax codes your users type to that provider.

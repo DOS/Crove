@@ -2,7 +2,7 @@
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
-import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectTelegram, telegramLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
+import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectMastodon, connectTelegram, mastodonLogin, telegramLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
 import type { SocialWriter, WriterChannel } from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider } from '@crove/mod-social/contract';
 import { voiceNotes, type BrandVoice } from '@crove/mod-social';
@@ -22,7 +22,7 @@ import {
 } from '@crove/kernel';
 import type { z } from 'zod';
 import type { zAgentBudget, zAgentTemplate, zTask } from '@crove/kernel-contract';
-import { DomainError, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
+import { DomainError, egressFetch, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { DraftBudget } from './ai-draft-limit.ts';
 import { BlueskyLoginBudget } from './bluesky-login-limit.ts';
 import { actorOf, type AuthUser } from './auth.ts';
@@ -90,6 +90,14 @@ function writerChannel(c: { id: string; provider: string; displayName: string })
   };
 }
 
+// Why a Mastodon account did not connect, in words for the connect form; any other failure (the instance did not
+// answer, or the egress guard refused its address) is an instance Crove cannot reach.
+function mastodonFailure(code: string | undefined): DomainError {
+  if (code === 'MASTODON_INSTANCE_INVALID') return new DomainError('MASTODON_INSTANCE_INVALID', 422, 'Hãy nhập địa chỉ máy chủ Mastodon, ví dụ mastodon.social');
+  if (code === 'MASTODON_TOKEN_INVALID') return new DomainError('MASTODON_TOKEN_INVALID', 422, 'Đây không phải mã truy cập Mastodon; hãy chép mã trong Cài đặt > Phát triển của máy chủ');
+  if (code === 'MASTODON_TOKEN_REFUSED') return new DomainError('MASTODON_TOKEN_REFUSED', 422, 'Máy chủ Mastodon không chấp nhận mã truy cập này');
+  if (code === 'MASTODON_NOT_AN_INSTANCE') return new DomainError('MASTODON_NOT_AN_INSTANCE', 422, 'Địa chỉ này không phải một máy chủ Mastodon');
+  return new DomainError('MASTODON_INSTANCE_UNREACHABLE', 422, 'Không kết nối được tới máy chủ Mastodon này; hãy kiểm tra địa chỉ rồi thử lại');
 type LinkPreviewView = { status: 'pending' | 'ready' | 'failed'; title: string | null; description: string | null; siteName: string | null } | null;
 const SOURCE_WAIT_MS = 10_000;
 // The link preview of a page an AI draft is written from (#769): requested when there is none, then waited for. A page
@@ -122,7 +130,7 @@ function telegramFailure(code: string | undefined): DomainError | null {
   if (code === 'TELEGRAM_BOT_CANNOT_POST') return new DomainError('TELEGRAM_BOT_CANNOT_POST', 422, 'Bot chưa được đăng bài trong kênh; hãy đặt bot làm quản trị viên có quyền đăng bài');
   return null;
 }
-const PROVIDER_LABELS: Record<string, string> = { sandbox: 'test channel', facebook_page: 'Facebook Page', instagram: 'Instagram', zalo_oa: 'Zalo Official Account (article)', tiktok: 'TikTok', youtube: 'YouTube', threads: 'Threads', linkedin: 'LinkedIn', x: 'X', bluesky: 'Bluesky', google_business: 'Google Business Profile', telegram: 'Telegram' };
+const PROVIDER_LABELS: Record<string, string> = { sandbox: 'test channel', facebook_page: 'Facebook Page', instagram: 'Instagram', zalo_oa: 'Zalo Official Account (article)', tiktok: 'TikTok', youtube: 'YouTube', threads: 'Threads', linkedin: 'LinkedIn', x: 'X', bluesky: 'Bluesky', google_business: 'Google Business Profile', telegram: 'Telegram', mastodon: 'Mastodon' };
 
 export interface RpcChannels {
   // Seals tokens before kernel.channel.connect stores them; never opens one in the API.
@@ -133,6 +141,8 @@ export interface RpcChannels {
   bluesky?: boolean;
   // Telegram channels may connect with a bot token (CHANNEL_TELEGRAM).
   telegram?: boolean;
+  // Mastodon accounts may connect with an access token (CHANNEL_MASTODON).
+  mastodon?: boolean;
   // Providers connected through an OAuth dialog that this deployment configured (Social plan S6), by provider id.
   connectors?: Readonly<Partial<Record<string, OAuthConnector>>>;
   // PUBLIC_URL: the provider sends the browser back to PUBLIC_URL/channels/oauth/:provider/callback.
@@ -633,6 +643,37 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       ),
       // A bot token is checked once (the bot, the channel, the bot's right to post), then sealed with the channel's id
       // and dropped; it never reaches a log, an audit row or an answer.
+      // An access token is checked once with the instance, through the egress guard (public addresses only, no
+      // redirects), then sealed with the account id and dropped; it never reaches a log, an audit row or an answer.
+      connectMastodon: os.channels.connectMastodon.handler(({ context, input }) =>
+        guard(async () => {
+          const { orgId, role } = await resolveMembership(runtime, context.user, context.orgSlug);
+          if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới kết nối được kênh');
+          if (!channels?.mastodon) throw new DomainError('CHANNEL_PROVIDER_DISABLED', 404, 'Kênh này chưa được bật trên máy chủ');
+          if (channels.broker.id === 'none') throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
+          const failure = (error: unknown) => mastodonFailure(error instanceof ConnectorError ? error.code : undefined);
+          const login = (() => {
+            try {
+              return mastodonLogin(input);
+            } catch (error) {
+              throw failure(error);
+            }
+          })();
+          const account = await connectMastodon(login, egressFetch({ timeoutMs: 15_000, maxBytes: 200_000, overLimit: 'fail' })).catch((error: unknown) => {
+            throw failure(error);
+          });
+          const sealed = channels.broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });
+          const command: ChannelConnectInput = {
+            provider: account.provider,
+            externalAccountId: account.externalAccountId,
+            displayName: account.displayName,
+            scopes: account.scopes,
+            expiresAt: null,
+            credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+          };
+          return runtime.execute<{ connectionId: string; reconnected: boolean }>('kernel.channel.connect', command, { actor: actorOf(context.user), orgId });
+        }),
+      ),
       connectTelegram: os.channels.connectTelegram.handler(({ context, input }) =>
         guard(async () => {
           const { orgId, role } = await resolveMembership(runtime, context.user, context.orgSlug);
