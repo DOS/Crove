@@ -53,6 +53,7 @@ export const PROVIDER_NAMES: Record<Provider, string> = {
   google_business: 'Google Business',
   telegram: 'Telegram',
   mastodon: 'Mastodon',
+  pinterest: 'Pinterest',
 };
 
 export function providerName(provider: string): string {

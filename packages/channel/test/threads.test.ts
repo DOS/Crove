@@ -50,7 +50,7 @@ describe('ThreadsConnector', () => {
     const connector = new ThreadsConnector(APP, fetchImpl);
     const url = new URL(connector.authorizeUrl({ state: 'st', redirectUri: REDIRECT, codeChallenge: null }));
     expect(`${url.origin}${url.pathname}`).toBe('https://threads.net/oauth/authorize');
-    expect(url.searchParams.get('scope')).toBe('threads_basic,threads_content_publish,threads_manage_replies');
+    expect(url.searchParams.get('scope')).toBe('threads_basic,threads_content_publish,threads_manage_replies,threads_manage_insights');
     const before = Date.now();
     const [account] = await connector.exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: null });
     expect(account).toMatchObject({ provider: 'threads', externalAccountId: USER, displayName: '@quan.a', secret: JSON.stringify({ accessToken: 'long-token' }) });
@@ -232,5 +232,15 @@ describe('ThreadsPublisher', () => {
       [`POST /v1.0/${USER}/threads_publish`]: [{ status: 500, body: { error: { message: 'Service temporarily unavailable', code: 2 } } }],
     });
     expect((await new ThreadsPublisher(down.fetchImpl, fast).publish(input())).kind).toBe('unknown');
+  });
+});
+
+describe('Threads followers (#819)', () => {
+  it('reads followers_count from threads_insights, and tells a missing permission apart', async () => {
+    const { fetchImpl, calls } = threads({ [`GET /v1.0/${USER}/threads_insights`]: [{ body: { data: [{ name: 'followers_count', period: 'day', total_value: { value: 1234 } }] } }] });
+    expect(await new ThreadsPublisher(fetchImpl, fast).accountMetrics({ externalAccountId: USER, secret: SECRET })).toEqual({ followers: 1234 });
+    expect(calls[0]?.query.get('metric')).toBe('followers_count');
+    const denied = threads({ [`GET /v1.0/${USER}/threads_insights`]: [{ status: 403, body: { error: { message: 'Application does not have permission for this action', type: 'OAuthException', code: 10 } } }] });
+    expect(await new ThreadsPublisher(denied.fetchImpl, fast).accountMetrics({ externalAccountId: USER, secret: SECRET })).toEqual({ refused: 'permission' });
   });
 });

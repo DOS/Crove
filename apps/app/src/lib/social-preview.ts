@@ -25,6 +25,7 @@ const RULES: Readonly<Record<string, PreviewRule>> = {
   zalo_oa: { layout: 'article', cut: 160, linkCard: false, gridMax: 1 },
   telegram: { layout: 'feed', cut: null, linkCard: true, gridMax: 4 },
   mastodon: { layout: 'short', cut: null, linkCard: true, gridMax: 4 },
+  pinterest: { layout: 'short', cut: null, linkCard: false, gridMax: 1 },
 };
 
 export const previewRule = (provider: string): PreviewRule => RULES[provider] ?? { layout: 'feed', cut: null, linkCard: true, gridMax: 4 };
