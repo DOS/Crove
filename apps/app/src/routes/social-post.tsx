@@ -412,7 +412,10 @@ function PollAndTagField({ provider, settings, onChange, disabled }: { provider:
   if (!pollRule && !tagRule) return null;
   const rawOptions = (settings.poll as { options?: unknown } | undefined)?.options;
   const options = Array.isArray(rawOptions) ? rawOptions.map((o) => (typeof o === 'string' ? o : '')) : null;
-  const without = (key: string) => Object.fromEntries(Object.entries(settings).filter(([k]) => k !== key));
+  const without = (key: string) => {
+    const { [key]: _gone, ...rest } = settings;
+    return rest;
+  };
   const setOptions = (next: string[] | null) => onChange(next ? { ...settings, poll: { options: next } } : without('poll'));
   const tag = typeof settings.topicTag === 'string' ? settings.topicTag : '';
   return (
@@ -512,7 +515,7 @@ function ChannelEditor({
     cover: coverOf(own.settings),
     postType,
     ...(Array.isArray(poll) ? { poll } : {}),
-    ...(typeof tag === 'string' && tag !== 'invalid' && tag ? { topicTag: tag } : {}),
+    ...(typeof tag === 'string' && tag ? { topicTag: tag } : {}),
   };
   const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   return (

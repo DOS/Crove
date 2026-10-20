@@ -109,6 +109,7 @@ describe('ThreadsPublisher', () => {
     expect(await refused.publish(input({ settings: { poll: { options: ['a', 'x'.repeat(26)] } } }))).toMatchObject({ kind: 'rejected', code: 'POLL_INVALID' });
     expect(await refused.publish(input({ content: image, settings: { poll: { options: ['a', 'b'] } } }))).toMatchObject({ kind: 'rejected', code: 'POLL_WITH_MEDIA' });
     expect(await refused.publish(input({ settings: { topicTag: 'a.b' } }))).toMatchObject({ kind: 'rejected', code: 'TOPIC_TAG_INVALID' });
+    expect(await refused.publish(input({ settings: { topicTag: 7 } }))).toMatchObject({ kind: 'rejected', code: 'TOPIC_TAG_INVALID' });
     expect(none.calls).toHaveLength(0);
   });
 

@@ -221,8 +221,8 @@ function checkPollAndTag(issues: Issue[], variant: VariantDraft, caps: ChannelCa
     const rule = TOPIC_TAG_RULES[variant.provider];
     if (!rule) issues.push({ code: 'TOPIC_TAG_NOT_SUPPORTED', field: 'settings.topicTag', limit: null, actual: null });
     else {
-      const n = tag === 'invalid' ? 0 : countText(tag, caps.body.count);
-      if (tag === 'invalid' || n < 1 || n > rule.maxChars || /[.&]/.test(tag)) issues.push({ code: 'TOPIC_TAG_INVALID', field: 'settings.topicTag', limit: rule.maxChars, actual: n });
+      const n = tag === false ? 0 : countText(tag, caps.body.count);
+      if (tag === false || n < 1 || n > rule.maxChars || /[.&]/.test(tag)) issues.push({ code: 'TOPIC_TAG_INVALID', field: 'settings.topicTag', limit: rule.maxChars, actual: n });
     }
   }
 }

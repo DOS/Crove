@@ -229,13 +229,13 @@ export function threadsPollOf(settings: Readonly<Record<string, unknown>>): Reco
 }
 
 // A post's topic tag (#711, `settings.topicTag`): 1 to 50 characters, without a period or an ampersand; a leading # is
-// dropped. null for none, 'invalid' for one Threads would refuse.
-export function threadsTopicTagOf(settings: Readonly<Record<string, unknown>>): string | null | 'invalid' {
+// dropped. null for none, false for one Threads would refuse (a tag may be any word, so no string marks a bad one).
+export function threadsTopicTagOf(settings: Readonly<Record<string, unknown>>): string | null | false {
   const tag = settings.topicTag;
   if (tag === undefined || tag === null) return null;
-  if (typeof tag !== 'string') return 'invalid';
+  if (typeof tag !== 'string') return false;
   const text = tag.trim().replace(/^#/, '');
-  return [...text].length >= 1 && [...text].length <= 50 && !/[.&]/.test(text) ? text : 'invalid';
+  return [...text].length >= 1 && [...text].length <= 50 && !/[.&]/.test(text) ? text : false;
 }
 
 export class ThreadsPublisher implements Publisher {
@@ -267,7 +267,7 @@ export class ThreadsPublisher implements Publisher {
     const topicTag = threadsTopicTagOf(input.settings);
     if (poll === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' };
     if (poll && media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
-    if (topicTag === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'TOPIC_TAG_INVALID' };
+    if (topicTag === false) return { kind: 'rejected', error: 'bad_request', code: 'TOPIC_TAG_INVALID' };
     const extras = { ...(poll ? { poll_attachment: JSON.stringify(poll) } : {}), ...(topicTag ? { topic_tag: topicTag } : {}) };
     const urlOf = async (fileId: string) => {
       const url = await input.mediaUrl(fileId).catch(() => null);

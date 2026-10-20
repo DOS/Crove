@@ -158,11 +158,12 @@ export function pollOptionsOf(settings: Readonly<Record<string, unknown>> | unde
   return options.map((o: string) => o.trim());
 }
 
-// The topic tag as it is sent, without a leading #; null when there is none, 'invalid' when it is not text.
-export function topicTagOf(settings: Readonly<Record<string, unknown>> | undefined): string | null | 'invalid' {
+// The topic tag as it is sent, without a leading #; null when there is none, false when it is not text (a tag may be
+// any word, so no string marks a bad one).
+export function topicTagOf(settings: Readonly<Record<string, unknown>> | undefined): string | null | false {
   const tag = settings?.topicTag;
   if (tag === undefined || tag === null) return null;
-  return typeof tag === 'string' ? tag.trim().replace(/^#/, '') : 'invalid';
+  return typeof tag === 'string' ? tag.trim().replace(/^#/, '') : false;
 }
 
 // A video's cover (#642), in the variant's settings (`settings.cover`): a frame of the video, at a time in

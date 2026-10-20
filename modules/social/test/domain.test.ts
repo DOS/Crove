@@ -232,6 +232,9 @@ describe('validateVariant', () => {
     expect(codes('threads', { topicTag: 'a.b' })).toEqual(['TOPIC_TAG_INVALID']);
     expect(codes('threads', { topicTag: 'x'.repeat(51) })).toEqual(['TOPIC_TAG_INVALID']);
     expect(codes('threads', { topicTag: '#' })).toEqual(['TOPIC_TAG_INVALID']);
+    expect(codes('threads', { topicTag: 7 })).toEqual(['TOPIC_TAG_INVALID']);
+    // Any word is a tag, this one too.
+    expect(codes('threads', { topicTag: 'invalid' })).toEqual([]);
     expect(codes('facebook_page', { poll: { options: ['a', 'b'] }, topicTag: 'Ăn uống' })).toEqual(['POLL_NOT_SUPPORTED', 'TOPIC_TAG_NOT_SUPPORTED']);
   });
 

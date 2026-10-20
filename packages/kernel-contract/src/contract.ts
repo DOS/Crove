@@ -35,6 +35,7 @@ import {
   zSocialLinkPreview,
   zSocialNotificationKind,
   zSocialNotifications,
+  zSocialAccountTrend,
   zSocialSnippet,
   zSocialSnippetCreate,
   zSocialSnippetUpdate,
@@ -324,6 +325,10 @@ export const contract = {
       list: oc.input(z.object({})).output(zSocialNotifications),
       read: oc.input(z.union([z.strictObject({ ids: z.array(zId).min(1).max(100) }), z.strictObject({ all: z.literal(true) })])).output(z.object({ read: z.number().int() })),
       mute: oc.input(z.strictObject({ kind: zSocialNotificationKind, muted: z.boolean() })).output(z.object({ kind: zSocialNotificationKind, muted: z.boolean() })),
+    },
+    // Account growth (#645): each channel's daily followers and reach over the last days.
+    accounts: {
+      trends: oc.input(z.object({ days: z.number().int().min(1).max(366) })).output(z.array(zSocialAccountTrend)),
     },
     // Client review links (#589): owners and admins make and revoke them; the token is in the create answer only.
     reviewLinks: {
