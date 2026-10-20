@@ -148,10 +148,10 @@ export function OrgLayout() {
         <button
           type="button"
           onClick={() => setPaletteOpen(true)}
-          className="mx-2 mt-4 flex items-center justify-between gap-2 rounded-lg border bg-background px-3 py-1.5 text-left text-sm text-subtle-foreground hover:text-foreground"
+          className="mt-4 flex items-center justify-between gap-1.5 rounded-lg border bg-background px-2.5 py-1.5 text-left text-sm text-subtle-foreground hover:text-foreground"
         >
-          {tp('open')}
-          <kbd className="rounded-sm border px-1 font-mono text-[11px]">{paletteKeys}</kbd>
+          <span className="min-w-0 truncate">{tp('open')}</span>
+          <kbd className="shrink-0 rounded-sm border px-1 font-mono text-[11px] whitespace-nowrap">{paletteKeys}</kbd>
         </button>
         {/* The menu scrolls on a short window, so the account footer below it always stays on screen. */}
         <nav className="mt-4 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
