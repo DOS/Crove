@@ -145,7 +145,7 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
                 </span>
                 {live ? <Badge variant="secondary">{t('liveUntil', { until: f.date(l.expiresAt) })}</Badge> : <Badge variant="outline">{l.revokedAt ? t('revoked') : t('expired')}</Badge>}
                 {live && (
-                  <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={revoke.isPending} onClick={() => revoke.mutate(l.id)}>
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={revoke.isPending && revoke.variables === l.id} onClick={() => revoke.mutate(l.id)}>
                     {t('revoke')}
                   </Button>
                 )}

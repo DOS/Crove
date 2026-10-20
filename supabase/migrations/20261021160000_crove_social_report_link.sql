@@ -5,7 +5,7 @@
 -- prints cleanly to PDF from the browser.
 --
 -- report_link  one link: the SHA-256 of its token (the secret is only in the URL the creator copies, after the #), an
---              optional title, the period [period_start, period_end) (at most 366 days), the channels, its expiry (at
+--              optional title, the period [period_start, period_end) (at most 366 days; the CHECK allows a day more for daylight saving), the channels, its expiry (at
 --              most 90 days) and its revocation. Owners and admins make and revoke links through commands; nothing else
 --              about a link changes.
 --
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS crove_social.report_link (
   revoked_by uuid,
   PRIMARY KEY (org_id, id),
   CONSTRAINT report_link_token_uq UNIQUE (token_sha256),
-  CONSTRAINT report_link_period CHECK (period_end > period_start AND period_end <= period_start + interval '366 days'),
+  CONSTRAINT report_link_period CHECK (period_end > period_start AND period_end <= period_start + interval '367 days'),
   CONSTRAINT report_link_expiry CHECK (expires_at > created_at AND expires_at <= created_at + interval '91 days'),
   CONSTRAINT report_link_revoked CHECK ((revoked_at IS NULL) = (revoked_by IS NULL))
 );

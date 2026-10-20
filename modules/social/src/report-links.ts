@@ -16,6 +16,8 @@ export const REPORT_PERIOD_MAX_DAYS = 366;
 // Live links an org keeps at most.
 export const REPORT_LINK_LIMIT = 50;
 const DAY_MS = 86_400_000;
+// Days picked in a zone with daylight saving can be an hour longer than 24 h; the table's CHECK allows a day more.
+const DST_SLACK_MS = 2 * 3_600_000;
 
 // 32 random bytes, base64url: the format report_link_view() accepts.
 export const newReportToken = () => randomBytes(32).toString('base64url');
@@ -43,7 +45,7 @@ export const reportLinkCreate = defineCommand({
     const userId = requireUser(ctx);
     const start = new Date(input.periodStart);
     const end = new Date(input.periodEnd);
-    if (end.getTime() <= start.getTime() || end.getTime() - start.getTime() > REPORT_PERIOD_MAX_DAYS * DAY_MS) {
+    if (end.getTime() <= start.getTime() || end.getTime() - start.getTime() > REPORT_PERIOD_MAX_DAYS * DAY_MS + DST_SLACK_MS) {
       throw new DomainError('REPORT_PERIOD_INVALID', 422, `Kỳ báo cáo phải kết thúc sau ngày bắt đầu và dài tối đa ${REPORT_PERIOD_MAX_DAYS} ngày`);
     }
     const ids = [...new Set(input.connectionIds ?? [])];
