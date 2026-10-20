@@ -174,7 +174,20 @@ export const contract = {
   social: {
     posts: {
       list: oc
-        .input(z.object({ from: z.iso.datetime({ offset: true }).optional(), to: z.iso.datetime({ offset: true }).optional(), status: z.enum(SOCIAL_POST_STATUSES).optional(), limit: z.number().int().min(1).max(200).optional() }))
+        .input(
+          z.object({
+            from: z.iso.datetime({ offset: true }).optional(),
+            to: z.iso.datetime({ offset: true }).optional(),
+            status: z.enum(SOCIAL_POST_STATUSES).optional(),
+            // The Social home's lists: a channel in review; drafts with none in review; went out or stopped.
+            stage: z.enum(['review', 'drafts', 'done']).optional(),
+            connectionId: zId.optional(),
+            search: z.string().trim().min(1).max(200).optional(),
+            // The last post of the previous page (newest change first).
+            before: z.strictObject({ updatedAt: z.iso.datetime({ offset: true }), postId: zId }).optional(),
+            limit: z.number().int().min(1).max(200).optional(),
+          }),
+        )
         .output(z.array(zSocialPost)),
       get: oc.input(z.object({ postId: zId })).output(zSocialPost),
       // A retry with the same idempotencyKey returns the first result instead of a second post.
@@ -220,7 +233,10 @@ export const contract = {
     },
     // How published posts did (S8): the latest capture of each variant published in the last days days (30 by default).
     metrics: {
-      summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional() })).output(z.array(zSocialMetricsRow)),
+      // postId: that post's published channels, whenever they went out.
+      summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional() })).output(z.array(zSocialMetricsRow)),
+      // The window as a CSV file (UTF-8 with a byte order mark); every export is audited.
+      export: oc.input(z.strictObject({ days: z.number().int().min(1).max(365) })).output(z.object({ filename: z.string(), csv: z.string(), truncated: z.boolean() })),
     },
     // The media library (S9): the org's post images, newest first, and the posts that show one.
     media: {

@@ -124,3 +124,41 @@ export function takeFlash(): string | null {
   flash = null;
   return message;
 }
+
+// The Social home's tab and filters, kept in the address (#574) so a reload or a shared link shows the same list.
+export const SOCIAL_TABS = ['upcoming', 'review', 'drafts', 'done', 'metrics', 'library'] as const;
+export type SocialTab = (typeof SOCIAL_TABS)[number];
+export interface SocialSearch {
+  tab?: SocialTab;
+  channel?: string;
+  q?: string;
+  // Local calendar days, YYYY-MM-DD, both included.
+  from?: string;
+  to?: string;
+}
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function parseSocialSearch(search: Record<string, unknown>): SocialSearch {
+  const out: SocialSearch = {};
+  if (typeof search.tab === 'string' && (SOCIAL_TABS as readonly string[]).includes(search.tab)) out.tab = search.tab as SocialTab;
+  if (typeof search.channel === 'string' && UUID_RE.test(search.channel)) out.channel = search.channel;
+  if (typeof search.q === 'string' && search.q.trim()) out.q = search.q.trim().slice(0, 200);
+  if (typeof search.from === 'string' && DAY_RE.test(search.from)) out.from = search.from;
+  if (typeof search.to === 'string' && DAY_RE.test(search.to)) out.to = search.to;
+  return out;
+}
+
+// The list query's range for local days: from the start of `from` to the end of `to`.
+export function dayRange(from: string | undefined, to: string | undefined): { from?: string; to?: string } {
+  const start = (day: string) => new Date(`${day}T00:00:00`);
+  const out: { from?: string; to?: string } = {};
+  if (from && !Number.isNaN(start(from).getTime())) out.from = start(from).toISOString();
+  if (to && !Number.isNaN(start(to).getTime())) {
+    const end = start(to);
+    end.setDate(end.getDate() + 1);
+    out.to = end.toISOString();
+  }
+  return out;
+}

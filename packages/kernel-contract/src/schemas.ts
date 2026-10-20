@@ -749,16 +749,18 @@ const zSocialLink = z.url({ protocol: /^https?$/ }).max(2000);
 const zSocialSettings = z.record(z.string().max(100), z.json());
 const zInstant = z.iso.datetime({ offset: true });
 
+// A post's images in order (#372): files uploaded with purpose=social.
+export const zSocialMediaInput = z.array(z.strictObject({ fileId: zId, altText: z.string().trim().max(1000).nullable().optional() })).max(20);
 export const zSocialChannelInput = z.strictObject({
   connectionId: zId,
   body: zSocialText.nullable().optional(),
   title: zSocialTitle.nullable().optional(),
   linkUrl: zSocialLink.nullable().optional(),
   settings: zSocialSettings.optional(),
+  // The channel's own images or video instead of the post's (#581).
+  media: zSocialMediaInput.nullable().optional(),
 });
 
-// A post's images in order (#372): files uploaded with purpose=social.
-export const zSocialMediaInput = z.array(z.strictObject({ fileId: zId, altText: z.string().trim().max(1000).nullable().optional() })).max(20);
 export const zSocialMedia = z.object({ fileId: zId, altText: z.string().nullable(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable() });
 
 export const zSocialPostCreate = z.strictObject({
@@ -793,6 +795,8 @@ export const zSocialVariantUpdate = z.strictObject({
   title: zSocialTitle.nullable().optional(),
   linkUrl: zSocialLink.nullable().optional(),
   settings: zSocialSettings.optional(),
+  // The channel's own images or video (#581); null goes back to the post's.
+  media: zSocialMediaInput.nullable().optional(),
 });
 
 export const zSocialDecide = z.strictObject({
@@ -837,6 +841,8 @@ export const zSocialVariant = z.object({
   provider: z.string(),
   position: z.number().int(),
   overrides: z.object({ body: z.string().nullable(), title: z.string().nullable(), linkUrl: z.string().nullable() }),
+  // The channel keeps its own images or video (#581), not the post's.
+  ownMedia: z.boolean(),
   effective: zContent,
   media: z.array(zSocialMedia),
   settings: z.record(z.string(), z.unknown()),
