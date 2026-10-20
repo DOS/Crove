@@ -191,6 +191,8 @@ jobs:
     permissions:
       contents: read
       packages: read
+    outputs:
+      deployed: ${{ steps.host.outcome == 'success' && steps.public-smoke.outcome != 'failure' }}
     env:
       ACTION: ${{ needs.target.outputs.action }}
       RELEASE: ${{ needs.target.outputs.release }}
@@ -349,3 +351,45 @@ jobs:
         run: |
           ssh -F "$SSH_CONFIG" crove-target "rm -rf '$REMOTE'" < /dev/null || true
           rm -rf "$(dirname "$SSH_CONFIG")"
+
+  # The partner's release notes (#691; plan §7 rule 6): one line per PR, from the "Release note (vi):" line of its body
+  # (tools/release-notes.mjs). Written to the summary on every v* tag; published as the tag's GitHub Release only once
+  # the release actually runs on the pilot (done means deployed).
+  release-notes:
+    name: Release notes
+    needs: [target, deploy]
+    if: ${{ !cancelled() && github.ref_type == 'tag' && needs.target.outputs.action == 'deploy' && needs.target.outputs.environment == 'pilot' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ needs.target.outputs.sha }}
+
+      - name: Collect the notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.target.outputs.release }}
+        run: |
+          set -euo pipefail
+          previous="$(git describe --tags --abbrev=0 --match 'v*' "$TAG^" 2>/dev/null || true)"
+          node tools/release-notes.mjs "$previous" "$TAG" > "$RUNNER_TEMP/release-notes.md"
+          cat "$RUNNER_TEMP/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the GitHub Release
+        if: needs.deploy.outputs.deployed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.target.outputs.release }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
