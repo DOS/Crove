@@ -134,7 +134,7 @@ export function CropPanel({ item, onDone, onCancel, initial = 'portrait' }: { it
                 {save.isPending ? <Spinner className="text-current" /> : null}
                 {t('save')}
               </Button>
-              <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+              <Button type="button" size="sm" variant="ghost" disabled={save.isPending} onClick={onCancel}>
                 {t('cancel')}
               </Button>
             </div>

@@ -12,12 +12,14 @@ ALTER TABLE crove_kernel.file ADD COLUMN IF NOT EXISTS image_height integer;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid = 'crove_kernel.file'::regclass AND conname = 'file_image_size') THEN
+    -- NOT VALID: added without scanning the file table under its exclusive lock; validated below with a lighter one.
     ALTER TABLE crove_kernel.file ADD CONSTRAINT file_image_size CHECK (
       (image_width IS NULL AND image_height IS NULL)
       OR (image_width BETWEEN 1 AND 100000 AND image_height BETWEEN 1 AND 100000)
-    );
+    ) NOT VALID;
   END IF;
 END $$;
+ALTER TABLE crove_kernel.file VALIDATE CONSTRAINT file_image_size;
 
 -- The guard of 20261019130000, with the new columns among those that never change.
 CREATE OR REPLACE FUNCTION crove_kernel.file_guard() RETURNS trigger

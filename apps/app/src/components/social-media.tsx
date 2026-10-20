@@ -174,8 +174,9 @@ export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; 
   const t = useTranslations('social');
   const picker = useRef<HTMLInputElement>(null);
   const [browsing, setBrowsing] = useState(false);
-  // The image being cropped (#636), by its place in the list.
-  const [cropping, setCropping] = useState<number | null>(null);
+  // The image being cropped (#636), by its file: moving or removing images while the panel is open never retargets it.
+  const [cropping, setCropping] = useState<string | null>(null);
+  const croppingItem = cropping === null ? undefined : media.find((m) => m.fileId === cropping);
   const upload = useMutation({
     mutationFn: async (files: File[]) => {
       const room = MAX_POST_MEDIA - media.length;
@@ -225,7 +226,7 @@ export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; 
                   →
                 </Button>
                 {!m.mime.startsWith('video/') && (
-                  <Button variant="ghost" size="sm" disabled={disabled} aria-expanded={cropping === i} onClick={() => setCropping(cropping === i ? null : i)}>
+                  <Button variant="ghost" size="sm" disabled={disabled} aria-expanded={cropping === m.fileId} onClick={() => setCropping(cropping === m.fileId ? null : m.fileId)}>
                     {t('crop.open')}
                   </Button>
                 )}
@@ -237,13 +238,14 @@ export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; 
           ))}
         </ul>
       )}
-      {cropping !== null && media[cropping] && !disabled && (
+      {croppingItem && !disabled && (
         <CropPanel
-          key={media[cropping].fileId}
-          item={media[cropping]}
+          key={croppingItem.fileId}
+          item={croppingItem}
           onCancel={() => setCropping(null)}
           onDone={(next) => {
-            onChange(media.map((x, j) => (j === cropping ? next : x)));
+            // The cropped file takes the place of the one it was cut from, wherever that is now; gone, nothing changes.
+            onChange(media.map((x) => (x.fileId === croppingItem.fileId ? next : x)));
             setCropping(null);
           }}
         />
