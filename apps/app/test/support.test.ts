@@ -91,6 +91,19 @@ describe('firm guide (#661)', () => {
     expect(text).not.toMatch(/[{}]/);
   });
 
+  it('quotes only labels the catalog has, so no quote can drift from its screen', () => {
+    // Every string of the vi catalog, with its placeholders filled as the guide fills them.
+    const catalog = new Set<string>();
+    const walk = (node: unknown) => {
+      if (typeof node === 'string') catalog.add(fill(node, { count: 'N', month: 'MM/YYYY' }));
+      else if (node && typeof node === 'object') Object.values(node).forEach(walk);
+    };
+    walk(vi);
+    const quoted = [...text.matchAll(/"([^"]+)"/g)].map((match) => match[1] ?? '');
+    expect(quoted.length).toBeGreaterThan(40);
+    expect(quoted.filter((label) => !catalog.has(label))).toEqual([]);
+  });
+
   it('fills ICU placeholders and leaves unknown ones', () => {
     expect(fill('Duyệt {count, number} đề xuất', { count: 'N' })).toBe('Duyệt N đề xuất');
     expect(fill('Khóa sổ tháng {month}', { month: '09/2026' })).toBe('Khóa sổ tháng 09/2026');
