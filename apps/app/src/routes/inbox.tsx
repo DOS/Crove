@@ -17,6 +17,7 @@ import { client, errorMessage, isStepUpRequired, orpc, queryClient } from '../li
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
+import { providerName } from '../lib/social.ts';
 import { VOUCHER_KIND } from '../lib/vouchers.ts';
 import { bulkSelectable, canApproveProposals, planBatches, proposalName, sendBatches, showMatched, type BulkBatch, type BulkProgress } from '../lib/review.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
@@ -69,6 +70,41 @@ function OpenBankLines({ slug }: { slug: string }) {
 
 // The name a proposal goes by in the list, its checkbox and the bulk report: the customer of a sale (#313; its seller is
 // the org itself), the seller of a purchase, else its title.
+// Social posts waiting for the viewer's review (#749), where Social runs: each opens its post, where it is decided.
+function SocialReviews({ slug }: { slug: string }) {
+  const t = useTranslations('inbox.socialReviews');
+  const f = useFormat();
+  const live = useStreamLive();
+  const reviews = useQuery({ ...orpc.social.reviewInbox.queryOptions({ input: {} }), refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
+  const items = reviews.data?.items ?? [];
+  if (items.length === 0) return null;
+  const more = (reviews.data?.total ?? 0) - items.length;
+  return (
+    <Card className="mt-6 block p-4">
+      <p className="text-sm font-medium text-foreground">{t('title', { count: reviews.data?.total ?? items.length })}</p>
+      <ul className="mt-2 divide-y text-sm">
+        {items.map((item) => (
+          <li key={item.postId} className="py-2">
+            <Link to="/o/$slug/social/$id" params={{ slug, id: item.postId }} className="block text-foreground hover:underline">
+              {item.title || item.excerpt || t('noText')}
+            </Link>
+            {item.title && item.excerpt && <p className="truncate text-xs text-muted-foreground">{item.excerpt}</p>}
+            <p className="text-xs text-subtle-foreground">
+              {item.channels.map((c) => `${providerName(c.provider)} · ${c.displayName}`).join(', ')}
+              {item.at ? ` · ${t('goesOut', { when: f.dateTime(item.at) })}` : ` · ${t('noTime')}`}
+            </p>
+          </li>
+        ))}
+      </ul>
+      {more > 0 && (
+        <Link to="/o/$slug/social" params={{ slug }} className="mt-2 inline-block text-sm text-link underline">
+          {t('more', { count: more })}
+        </Link>
+      )}
+    </Card>
+  );
+}
+
 export function InboxPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('inbox');
@@ -208,6 +244,7 @@ export function InboxPage() {
 
       <IntakePanel intake={intake} />
       {config.modules.includes('finance') && <OpenBankLines slug={slug} />}
+      {config.modules.includes('social') && <SocialReviews slug={slug} />}
 
       {(files.data?.length ?? 0) > 0 && (
         <div className="mt-6">
