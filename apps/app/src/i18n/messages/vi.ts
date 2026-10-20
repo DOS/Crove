@@ -1076,6 +1076,17 @@ export const vi = {
     expiresAt: 'Hết hạn {at}',
     invitedBy: 'mời bởi {name}',
     revoke: 'Thu hồi',
+    inviteMail: {
+      queued: 'Thư đang chờ gửi',
+      sending: 'Đang gửi thư',
+      sent: 'Đã gửi thư',
+      delivered: 'Thư đã tới hộp thư',
+      bounced: 'Thư bị trả về: kiểm tra lại địa chỉ',
+      complained: 'Người nhận đã báo thư là spam',
+      suppressed: 'Không gửi thư: địa chỉ đang bị chặn',
+      failed: 'Gửi thư không được: hãy gửi liên kết cho người được mời',
+      ambiguous: 'Chưa rõ thư đã đi chưa',
+    },
   },
   offboarding: {
     title: 'Đóng tổ chức và xuất dữ liệu',
