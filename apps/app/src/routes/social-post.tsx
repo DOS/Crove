@@ -232,6 +232,7 @@ function ChannelEditor({
         {t('ownMedia')}
       </label>
       {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
+      {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
       <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
       <Preview channel={channel} provider={provider} content={content} />
@@ -300,7 +301,7 @@ export function SocialComposePage() {
         channels: chosen.map((connectionId) => {
           const mine = own[connectionId] ?? EMPTY_OWN;
           const settings = Object.keys(mine.settings).length > 0 ? { settings: mine.settings as Record<string, string | boolean> } : {};
-          const media = mine.customMedia ? { media: mediaInput(mine.media) } : {};
+        const media = mine.customMedia ? { media: mediaInput(mine.media) } : {};
         return mine.custom ? { connectionId, body: mine.body, title: orNull(mine.title), ...settings, ...media } : { connectionId, ...settings, ...media };
         }),
       };
