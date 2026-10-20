@@ -86,6 +86,7 @@ export const vi = {
       email_not_confirmed: 'Email chưa được xác nhận, hãy mở thư xác nhận',
       weak_password: 'Mật khẩu quá yếu (tối thiểu 8 ký tự)',
       over_email_send_rate_limit: 'Gửi email quá nhanh, hãy thử lại sau',
+      over_request_rate_limit: 'Bạn thử quá nhiều lần, hãy đợi một lúc rồi thử lại',
       same_password: 'Mật khẩu mới phải khác mật khẩu cũ',
       otp_expired: 'Liên kết đã hết hạn hoặc đã được dùng. Hãy yêu cầu liên kết mới.',
       flow_state_expired: 'Liên kết đã hết hạn. Hãy yêu cầu liên kết mới.',

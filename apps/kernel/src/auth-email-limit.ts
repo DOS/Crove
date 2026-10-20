@@ -88,8 +88,9 @@ function jsonFields(body: Uint8Array | null): Record<string, unknown> | null {
 }
 
 // The bucket a client address falls in: an IPv4 address as is, an IPv6 address by its /64 (IPv4-mapped IPv6 as the
-// IPv4 address). Anything else (no socket address) shares one bucket, so it fails closed rather than open.
-export function clientBucket(ip: string | null): string {
+// IPv4 address), or by its /48 for a budget one site must not multiply across the /64s it holds (the sign-up refusal
+// cap, #564). Anything else (no socket address) shares one bucket, so it fails closed rather than open.
+export function clientBucket(ip: string | null, v6Prefix: 64 | 48 = 64): string {
   if (!ip) return 'unknown';
   const address = ip.trim().replace(/^\[|\]$/g, '').replace(/%.*$/, '');
   if (isIPv4(address)) return `v4:${address}`;
@@ -99,9 +100,9 @@ export function clientBucket(ip: string | null): string {
     return `v4:${groups[6]! >> 8}.${groups[6]! & 0xff}.${groups[7]! >> 8}.${groups[7]! & 0xff}`;
   }
   return `v6:${groups
-    .slice(0, 4)
+    .slice(0, v6Prefix / 16)
     .map((g) => g.toString(16))
-    .join(':')}::/64`;
+    .join(':')}::/${v6Prefix}`;
 }
 
 // Eight 16-bit groups of a valid IPv6 address (validated by isIPv6), including a dotted IPv4 tail.

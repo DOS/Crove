@@ -136,6 +136,12 @@ const schema = z.object({
     }
     return domains;
   }),
+  // Under allowlist, a sign-up at an allowed domain is refused when the address holds an invite and the request lacks
+  // its token, so a refusal tells that the address is invited (#564). At most AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR such
+  // refusals per client (an IPv4 address or an IPv6 /48) and AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR for the whole
+  // deployment (0: no deployment limit) in any rolling hour; past either, those sign-ups get 429.
+  AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR: z.coerce.number().int().min(1).max(100_000).default(5),
+  AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR: z.coerce.number().int().min(0).max(100_000).default(50),
   AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR: z.coerce.number().int().min(1).max(100_000).default(5),
   AUTH_EMAIL_ADDRESS_INTERVAL_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
   AUTH_RATE_LIMIT_EMAIL_SENT: optional
