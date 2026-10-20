@@ -1381,6 +1381,11 @@ export const vi = {
       },
       decision: { approved: 'đã duyệt', changes_requested: 'đã yêu cầu sửa', rejected: 'đã từ chối' },
     },
+    emoji: 'Chèn biểu tượng cảm xúc',
+    leaveConfirm: 'Thay đổi chưa được lưu; trình duyệt này vẫn giữ lại. Rời trang?',
+    draftFound: 'Trình duyệt này còn giữ thay đổi chưa lưu lúc {when}.',
+    draftRestore: 'Khôi phục',
+    draftDiscard: 'Bỏ đi',
     tabs: { upcoming: 'Lịch đăng', calendar: 'Xem lịch', review: 'Cần duyệt', attention: 'Cần xử lý', drafts: 'Nháp', done: 'Đã đăng', metrics: 'Số liệu', library: 'Thư viện ảnh' },
     filters: {
       channel: 'Kênh',

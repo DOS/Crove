@@ -1380,6 +1380,11 @@ export const en = {
       },
       decision: { approved: 'approved', changes_requested: 'asked for changes', rejected: 'rejected' },
     },
+    emoji: 'Insert an emoji',
+    leaveConfirm: 'Your changes are not saved yet; they are kept in this browser. Leave the page?',
+    draftFound: 'Unsaved changes from {when} are kept in this browser.',
+    draftRestore: 'Restore them',
+    draftDiscard: 'Discard',
     tabs: { upcoming: 'Schedule', calendar: 'Calendar', review: 'To review', attention: 'Needs attention', drafts: 'Drafts', done: 'Published', metrics: 'Metrics', library: 'Image library' },
     filters: {
       channel: 'Channel',
