@@ -301,6 +301,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         addChannels: os.social.posts.addChannels.handler(socialCommand('social.post.add_channels')),
         submit: os.social.posts.submit.handler(socialCommand('social.post.submit')),
         repost: os.social.posts.repost.handler(socialCommand('social.post.repost')),
+        duplicate: os.social.posts.duplicate.handler(socialCommand('social.post.duplicate')),
         setEvergreen: os.social.posts.setEvergreen.handler(socialCommand('social.post.set_evergreen')),
         draftWithAi: os.social.posts.draftWithAi.handler(({ context, input }) =>
           inSocial(context, async (orgId, actor) => {
@@ -369,6 +370,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       policies: {
         list: os.social.policies.list.handler(socialQuery('social.channel.policies')),
         set: os.social.policies.set.handler(socialCommand('social.channel.set_policy')),
+      },
+      channels: {
+        waiting: os.social.channels.waiting.handler(socialQuery('social.channel.waiting')),
       },
       queues: {
         get: os.social.queues.get.handler(socialQuery('social.queue.get')),

@@ -1,7 +1,8 @@
 // The HTKK XML of form 01/GTGT for a period's VAT working (issue #332, GET /api/export/vat-01gtgt.xml). The layout,
 // the values and their sources are in domain/vat-01gtgt-xml.ts and docs/integrations/htkk-01gtgt-xml.md.
+import { vietnamToday } from '@crove/kernel-contract';
 import { DomainError } from '@crove/kernel-runtime';
-import { HtkkAmountError, buildForm01Xml, vietnamToday } from './domain/vat-01gtgt-xml.ts';
+import { HtkkAmountError, buildForm01Xml } from './domain/vat-01gtgt-xml.ts';
 import type { VatDeclaration } from './vat.ts';
 
 export function buildVat01Xml(declaration: VatDeclaration, today: string = vietnamToday()): string {

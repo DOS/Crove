@@ -208,6 +208,15 @@ suite('social multi-step approval on PostgreSQL (S9)', () => {
     await expect(schedule(o, postId)).rejects.toMatchObject({ code: 'APPROVALS_MISSING' });
   });
 
+  it('counts the variants waiting paused on each channel (#577)', async () => {
+    const o = await org();
+    const [a, b] = [await connection(o), await connection(o)];
+    const [p1, p2] = [await inReview(o, a), await inReview(o, a)];
+    await inReview(o, b);
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET status = 'paused' WHERE post_id = ANY($1)", [[p1, p2]]));
+    expect(await rt.query('social.channel.waiting', {}, { actor: asUser(o.member), orgId: o.orgId })).toEqual([{ connectionId: a, paused: 2 }]);
+  });
+
   it('hides the policy of a revoked channel', async () => {
     const o = await org();
     const conn = await connection(o);

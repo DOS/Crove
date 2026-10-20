@@ -331,12 +331,17 @@ function addDays(date: string, days: number): string {
 }
 
 // Crove's purchases dated in [from, to]: the recorded documents that are not voided, and the purchase proposals waiting
-// in the Inbox.
-async function croveInvoices(ctx: QueryContext, from: string, to: string): Promise<CroveInvoice[]> {
+// in the Inbox. Also the documents dated before the period but posted in it (#478): the VAT working declares them in
+// the period of their posting date, so the reconciliation reports them there (declared_late, #560). Each document
+// carries its posting date, the date of its own journal entry (every document has one: purchase_document_entry).
+async function croveInvoices(ctx: QueryContext, from: string, to: string, period: { from: string; to: string }): Promise<CroveInvoice[]> {
   const documents = await ctx.trx
     .selectFrom('crove_finance.purchase_document as d')
     .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
     .leftJoin('crove_kernel.proposal as q', (join) => join.onRef('q.org_id', '=', 'd.org_id').onRef('q.id', '=', 'd.proposal_id'))
+    .leftJoin('crove_finance.journal_entry as j', (join) =>
+      join.onRef('j.org_id', '=', 'd.org_id').onRef('j.source_id', '=', 'd.id').on('j.source_type', '=', 'finance.purchase_document'),
+    )
     .select([
       'd.id',
       'p.tax_code',
@@ -348,12 +353,17 @@ async function croveInvoices(ctx: QueryContext, from: string, to: string): Promi
       'd.vat_amount',
       'd.total',
       'd.source_file_id',
+      'j.entry_date',
       sql<string | null>`q.payload #>> '{invoice,template}'`.as('template'),
     ])
     .where('d.org_id', '=', ctx.orgId)
     .where('d.direction', '=', 'purchase')
-    .where('d.invoice_date', '>=', from)
-    .where('d.invoice_date', '<=', to)
+    .where((eb) =>
+      eb.or([
+        eb.and([eb('d.invoice_date', '>=', from), eb('d.invoice_date', '<=', to)]),
+        eb.and([eb('d.invoice_date', '<', period.from), eb('j.entry_date', '>=', period.from), eb('j.entry_date', '<=', period.to)]),
+      ]),
+    )
     .where(({ not, exists, selectFrom }) =>
       not(exists(selectFrom('crove_finance.purchase_document_void as v').select('v.document_id').whereRef('v.org_id', '=', 'd.org_id').whereRef('v.document_id', '=', 'd.id'))),
     )
@@ -386,6 +396,7 @@ async function croveInvoices(ctx: QueryContext, from: string, to: string): Promi
     vatAmount: d.vat_amount,
     total: d.total,
     sourceFileId: d.source_file_id,
+    postingDate: d.entry_date,
   }));
   for (const p of proposals) {
     // A pending proposal's payload passed zPurchaseProposal when it was stored; it is read defensively all the same.
@@ -406,6 +417,7 @@ async function croveInvoices(ctx: QueryContext, from: string, to: string): Promi
       vatAmount: typeof invoice.vatTotal === 'string' ? invoice.vatTotal : '0',
       total: typeof invoice.total === 'string' ? invoice.total : '0',
       sourceFileId: p.source_file_id,
+      postingDate: null,
     });
   }
   return out;
@@ -464,7 +476,7 @@ export const portalListReconcile = defineQuery({
     const to = addDays([period.to, dates.at(-1) ?? period.to].sort().at(-1) ?? period.to, 31);
     // Without a list there is nothing to compare: Crove's invoices are not all reported as "not on the portal".
     const reconciliation =
-      done.length === 0 ? reconcilePortalList([], [], period) : reconcilePortalList(rows, await croveInvoices(ctx, from, to), period);
+      done.length === 0 ? reconcilePortalList([], [], period) : reconcilePortalList(rows, await croveInvoices(ctx, from, to, period), period);
     const items = firstPerOutcome(reconciliation.items, PORTAL_RECONCILE_ITEMS_PER_OUTCOME);
     return { period, lists, summary: reconciliation.summary, items, truncated: items.length < reconciliation.items.length };
   },

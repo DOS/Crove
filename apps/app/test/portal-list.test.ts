@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { RECONCILE_OUTCOMES, type PortalReconciliation } from '@crove/kernel-contract';
 import { SECTIONS, canImportPortalList, invoiceLabel, itemsByOutcome, outcomeTotal, pickProblem, pollWhilePending, type ReconcileItem } from '../src/lib/portal-list.ts';
 
-const item = (outcome: ReconcileItem['outcome']): ReconcileItem => ({ outcome, portal: null, crove: null, differences: [], withoutTaxCode: false, outsidePeriod: false, duplicateRows: 0, duplicateInCrove: false });
+const item = (outcome: ReconcileItem['outcome']): ReconcileItem => ({ outcome, portal: null, crove: null, differences: [], withoutTaxCode: false, outsidePeriod: false, duplicateRows: 0, duplicateInCrove: false, declaredInLaterPeriod: false });
 
 describe('portal reconciliation screen', () => {
   it('lets owners, admins and members import, never viewers', () => {
@@ -15,14 +15,14 @@ describe('portal reconciliation screen', () => {
   it('shows every outcome in exactly one section, work first and the quiet ones folded', () => {
     expect(SECTIONS.map((s) => s.outcome).sort()).toEqual([...RECONCILE_OUTCOMES].sort());
     expect(SECTIONS[0]?.outcome).toBe('missing');
-    expect(SECTIONS.filter((s) => s.folded).map((s) => s.outcome)).toEqual(['matched', 'void']);
+    expect(SECTIONS.filter((s) => s.folded).map((s) => s.outcome)).toEqual(['matched', 'declared_late', 'void']);
     const grouped = itemsByOutcome([item('missing'), item('matched'), item('missing')]);
     expect(grouped.get('missing')).toHaveLength(2);
     expect(grouped.get('void')).toBeUndefined();
   });
 
   it('titles a section with its total from the summary, however many items are listed', () => {
-    const summary: PortalReconciliation['summary'] = { portalInvoices: 0, matched: 1, inInbox: 2, amountMismatch: 3, missing: 4, voidInCrove: 5, void: 6, notOnPortal: 7, duplicateRows: 0 };
+    const summary: PortalReconciliation['summary'] = { portalInvoices: 0, matched: 1, inInbox: 2, amountMismatch: 3, missing: 4, voidInCrove: 5, void: 6, notOnPortal: 7, declaredLate: 8, duplicateRows: 0 };
     expect(Object.fromEntries(RECONCILE_OUTCOMES.map((o) => [o, outcomeTotal(summary, o)]))).toEqual({
       matched: 1,
       in_inbox: 2,
@@ -31,6 +31,7 @@ describe('portal reconciliation screen', () => {
       void_in_crove: 5,
       void: 6,
       not_on_portal: 7,
+      declared_late: 8,
     });
   });
 

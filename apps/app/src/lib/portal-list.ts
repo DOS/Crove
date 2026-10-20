@@ -10,7 +10,8 @@ export function canImportPortalList(role: string | null | undefined): boolean {
   return role === 'owner' || role === 'admin' || role === 'member';
 }
 
-// Sections of the screen, what needs work first. The last two are folded away by default: nothing to do there.
+// Sections of the screen, what needs work first. The last three are folded away by default: nothing to do there.
+// declared_late (#560) lists the invoices of earlier periods the VAT working declares in this one.
 export const SECTIONS: ReadonlyArray<{ outcome: ReconcileOutcome; folded: boolean }> = [
   { outcome: 'missing', folded: false },
   { outcome: 'void_in_crove', folded: false },
@@ -18,6 +19,7 @@ export const SECTIONS: ReadonlyArray<{ outcome: ReconcileOutcome; folded: boolea
   { outcome: 'not_on_portal', folded: false },
   { outcome: 'in_inbox', folded: false },
   { outcome: 'matched', folded: true },
+  { outcome: 'declared_late', folded: true },
   { outcome: 'void', folded: true },
 ];
 
@@ -46,6 +48,8 @@ export function outcomeTotal(summary: PortalReconciliation['summary'], outcome: 
       return summary.inInbox;
     case 'matched':
       return summary.matched;
+    case 'declared_late':
+      return summary.declaredLate;
     case 'void':
       return summary.void;
   }

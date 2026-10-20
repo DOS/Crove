@@ -12,6 +12,13 @@
 //   An adjusted invoice still counts (the adjustment is a separate invoice).
 // - replaced, cancelled: the invoice no longer counts. Missing from Crove is right; present in Crove means the books
 //   hold an invoice the tax authority no longer accepts (reverse it, or reject the proposal).
+//
+// Late invoices (#478, #560): the portal lists an invoice by its invoice date, the VAT working counts a purchase in the
+// period of its posting date. They differ for an invoice approved after its own month was locked and posted in a later
+// open month. The match stays by invoice date (that is what the portal's list holds), and the reconciliation says where
+// the VAT working declares it: in its own period the item is flagged declaredInLaterPeriod (with the posting date on
+// the Crove side), and in the period it was posted in it is reported as declared_late, so both periods agree with the
+// VAT working instead of one of them silently disagreeing.
 import { PORTAL_INVOICE_STATUSES, RECONCILE_DIFFERENCES, RECONCILE_OUTCOMES, type PortalInvoiceStatus, type ReconcileDifference, type ReconcileOutcome } from '@crove/kernel-contract';
 import { approxEqual, normalizeNumber, normalizeSeries, type Money } from '@crove/l10n-vn';
 
@@ -51,6 +58,8 @@ export interface CroveInvoice {
   vatAmount: Money;
   total: Money;
   sourceFileId: string | null;
+  // A recorded document's posting date (its journal entry's date), which picks its VAT period; null for a proposal.
+  postingDate: string | null;
 }
 
 // The outcomes (RECONCILE_OUTCOMES, shared with the API contract):
@@ -60,6 +69,8 @@ export interface CroveInvoice {
 // - void_in_crove: replaced or cancelled on the portal but held by Crove (booked or waiting): reverse it or reject it.
 // - void: replaced or cancelled on the portal and absent from Crove, as it should be.
 // - not_on_portal: in Crove for the period but on none of the period's lists.
+// - declared_late: a Crove document dated before the period and posted in it (its month was locked), on none of the
+//   period's lists: the VAT working declares it in this period, while the portal lists it in its own. Nothing to do.
 
 export interface ReconcileItem {
   outcome: ReconcileOutcome;
@@ -74,6 +85,9 @@ export interface ReconcileItem {
   duplicateRows: number;
   // A second copy in Crove of an invoice already matched to a portal row (not_on_portal only): reject or reverse it.
   duplicateInCrove: boolean;
+  // The Crove document is dated in (or before) the period but posted after it: the VAT working declares it in the
+  // period of its posting date, not in this one.
+  declaredInLaterPeriod: boolean;
 }
 
 export interface ReconcileSummary {
@@ -85,6 +99,7 @@ export interface ReconcileSummary {
   voidInCrove: number;
   void: number;
   notOnPortal: number;
+  declaredLate: number;
   duplicateRows: number;
 }
 
@@ -124,11 +139,23 @@ const RANK: Record<ReconcileOutcome, number> = {
   not_on_portal: 3,
   in_inbox: 4,
   matched: 5,
-  void: 6,
+  declared_late: 6,
+  void: 7,
 };
 
+// Posted after the period: a document dated up to the end of the period whose entry is dated after it.
+function declaredLater(crove: CroveInvoice | null, period: { from: string; to: string }): boolean {
+  return crove !== null && crove.postingDate !== null && crove.issueDate <= period.to && crove.postingDate > period.to;
+}
+
+// Dated before the period and posted in it: the VAT working declares it in this period (declared_late there).
+function declaredHere(crove: CroveInvoice, period: { from: string; to: string }): boolean {
+  return crove.postingDate !== null && crove.issueDate < period.from && crove.postingDate >= period.from && crove.postingDate <= period.to;
+}
+
 // rows: every row of the period's done, not removed lists. crove: the org's purchase documents (not voided) and
-// pending purchase proposals; those dated in [from, to] that match nothing are reported as not on the portal.
+// pending purchase proposals; those dated in [from, to] that match nothing are reported as not on the portal, and
+// documents dated before it but posted in it that match nothing as declared late.
 export function reconcilePortalList(rows: readonly PortalRow[], crove: readonly CroveInvoice[], period: { from: string; to: string }): Reconciliation {
   // Crove's side by key. A document is preferred over a proposal for the same invoice (a pending duplicate of a booked
   // invoice is not a second invoice).
@@ -232,23 +259,28 @@ export function reconcilePortalList(rows: readonly PortalRow[], crove: readonly 
       outsidePeriod: row.issueDate < period.from || row.issueDate > period.to,
       duplicateRows: p.duplicates,
       duplicateInCrove: false,
+      declaredInLaterPeriod: declaredLater(crove, period),
     });
   }
 
   for (const { invoice } of normalizedCrove) {
     const duplicate = duplicates.has(invoice);
+    const outside = invoice.issueDate < period.from || invoice.issueDate > period.to;
+    // Declared in this period though dated before it (posted late): reported, so the period agrees with the VAT working.
+    const late = !duplicate && declaredHere(invoice, period);
     // A duplicate is reported whatever its date: the portal row it repeats may be outside the period.
-    if (used.has(invoice) || (!duplicate && (invoice.issueDate < period.from || invoice.issueDate > period.to))) continue;
+    if (used.has(invoice) || (!duplicate && !late && outside)) continue;
     used.add(invoice);
     items.push({
-      outcome: 'not_on_portal',
+      outcome: late ? 'declared_late' : 'not_on_portal',
       portal: null,
       crove: invoice,
       differences: [],
       withoutTaxCode: false,
-      outsidePeriod: invoice.issueDate < period.from || invoice.issueDate > period.to,
+      outsidePeriod: outside,
       duplicateRows: 0,
       duplicateInCrove: duplicate,
+      declaredInLaterPeriod: declaredLater(invoice, period),
     });
   }
 
@@ -272,6 +304,7 @@ export function reconcilePortalList(rows: readonly PortalRow[], crove: readonly 
       voidInCrove: count('void_in_crove'),
       void: count('void'),
       notOnPortal: count('not_on_portal'),
+      declaredLate: count('declared_late'),
       duplicateRows: invoices.reduce((sum, p) => sum + p.duplicates, 0),
     },
   };
