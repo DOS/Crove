@@ -249,8 +249,10 @@ suite('social publishing on PostgreSQL (S4)', () => {
     const id = post.variants[0]?.id as string;
     const key = `social.publish:${id}:1:1:comment`;
     const deps = { runtime: worker, broker: vault, publishers: { sandbox }, callTimeoutMs: 2_000 };
-    // Published by a run whose comment job never came: waiting at first, then the person's to retry.
-    expect(await run(o, id, new FakePlatform())).toMatchObject({ status: 'published' });
+    // Waiting at first, then the person's to retry.
+    // Published on the same sandbox by a publisher without comments, as if the comment job never came.
+    const quiet: Publisher = { provider: 'sandbox', publishSafety: sandbox.publishSafety, publish: (i) => sandbox.publish(i), reconcile: (i) => sandbox.reconcile(i) };
+    expect(await run(o, id, quiet)).toMatchObject({ status: 'published' });
     expect((await variant(o, postId)).commentStatus).toBe('pending');
     await expect(exec(o, 'social.comment.retry', { variantId: id })).rejects.toMatchObject({ code: 'COMMENT_NOT_RETRYABLE' });
     await admin((c) => c.query("UPDATE crove_social.post_variant SET published_at = now() - interval '11 minutes' WHERE id = $1", [id]));
