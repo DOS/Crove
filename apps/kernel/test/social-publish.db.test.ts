@@ -227,13 +227,50 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(platform.comments.map((c) => c.text)).toEqual(['#khaitruong']);
     expect((await variant(o, postId)).commentStatus).toBe('posted');
     // A later run, or the retry command, posts no second comment.
-    await runCommentJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000 }, o.orgId, id, 'sandbox', true);
+    await runCommentJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000 }, o.orgId, id, 'sandbox', { after: `social.publish:${id}:1:1:comment` });
     expect(platform.comments).toHaveLength(1);
     await expect(exec(o, 'social.comment.retry', { variantId: id })).rejects.toMatchObject({ code: 'COMMENT_NOT_RETRYABLE' });
     // A post without a first comment shows none.
     const plain = await duePost(o);
     expect(await run(o, plain.variants[0] as string, platform)).toMatchObject({ status: 'published' });
     expect((await variant(o, plain.postId)).commentStatus).toBeNull();
+  });
+
+  it('lets a person retry a first comment whose job never ran or whose call went quiet, once per ask (#587)', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const conn = (await connect(o, `acct-${randomUUID().slice(0, 8)}`)).connectionId;
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Khai trương', channels: [{ connectionId: conn, settings: { firstComment: '#khaitruong' } }] });
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    const id = post.variants[0]?.id as string;
+    const key = `social.publish:${id}:1:1:comment`;
+    const deps = { runtime: worker, broker: vault, publishers: { sandbox }, callTimeoutMs: 2_000 };
+    // Published by a run whose comment job never came: waiting at first, then the person's to retry.
+    expect(await run(o, id, new FakePlatform())).toMatchObject({ status: 'published' });
+    expect((await variant(o, postId)).commentStatus).toBe('pending');
+    await expect(exec(o, 'social.comment.retry', { variantId: id })).rejects.toMatchObject({ code: 'COMMENT_NOT_RETRYABLE' });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET published_at = now() - interval '11 minutes' WHERE id = $1", [id]));
+    expect((await variant(o, postId)).commentStatus).toBe('failed');
+
+    // A call started and never answered (the worker died): unclear once it is old, and retried only after it.
+    await admin((c) =>
+      c.query("INSERT INTO crove_kernel.external_call (org_id, key, module, target, step, retry_safety, request_hash, started_at) VALUES ($1, $2, 'social', 'sandbox', 'comment', 'never', NULL, now() - interval '11 minutes')", [o.orgId, key]),
+    );
+    expect((await variant(o, postId)).commentStatus).toBe('unknown');
+    await exec(o, 'social.comment.retry', { variantId: id });
+    const asks = await admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.comment.retry_requested'", [o.orgId])).rows);
+    expect(asks.map((a) => a.payload)).toEqual([{ post_id: postId, variant_id: id, provider: 'sandbox', after: key }]);
+    // An ask that saw no call is stale now; the ask that saw the quiet call posts once, and a second job of it stops.
+    expect(await runCommentJob(deps, o.orgId, id, 'sandbox', { after: null })).toEqual({ action: 'none', reason: 'unknown' });
+    expect(await runCommentJob(deps, o.orgId, id, 'sandbox', { after: key })).toEqual({ action: 'call', state: 'succeeded' });
+    expect(await runCommentJob(deps, o.orgId, id, 'sandbox', { after: key })).toEqual({ action: 'none', reason: 'posted' });
+    expect(sandbox.comments.map((c) => c.text)).toEqual(['#khaitruong']);
+    expect(await calls(id)).toContainEqual(expect.objectContaining({ key: `${key}_2`, state: 'succeeded' }));
+    expect((await variant(o, postId)).commentStatus).toBe('posted');
   });
 
   it('does nothing before the time, and never for a variant of another provider', async () => {

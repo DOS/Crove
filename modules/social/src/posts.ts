@@ -23,7 +23,7 @@ import { publishingCommands } from './publishing.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
-import { commentCalls, commentCommands, commentStatus, type CommentStatus } from './comments.ts';
+import { commentCallsOf, commentCommands, commentStatus, type CommentStatus } from './comments.ts';
 import { approvalsRequired, decisionsOf, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
@@ -847,11 +847,10 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
         ),
   );
   // The first comment of each published channel that has one (#587).
-  const comments = new Map<string, CommentStatus>();
-  for (const v of variants) {
-    if (v.status !== 'published' || !firstCommentOf(settingsOf(v))) continue;
-    comments.set(v.id, commentStatus(await commentCalls(ctx.trx, ctx.orgId, v)));
-  }
+  const commented = variants.filter((v) => v.status === 'published' && v.external_post_id && firstCommentOf(settingsOf(v)));
+  const calls = await commentCallsOf(ctx.trx, ctx.orgId, commented);
+  const now = new Date();
+  const comments = new Map<string, CommentStatus>(commented.map((v) => [v.id, commentStatus(calls.get(v.id) ?? [], now, v.published_at)]));
   const mediaRows = await ctx.trx
     .selectFrom('crove_social.post_media as m')
     .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))

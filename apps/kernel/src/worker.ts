@@ -131,6 +131,8 @@ interface SocialPublishJob {
   provider: string;
   // A person asked for the variant's first comment again (#587): the job posts the comment, not the post.
   comment?: true;
+  // The last comment call the person saw when they asked (null: none was made).
+  after?: string | null;
 }
 
 /** Sends a publish job for each variant with publishing work, for the providers this worker can publish to. */
@@ -374,7 +376,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       if (!job || !channels) return;
       const { orgId, variantId } = job.data;
       if (job.data.comment) {
-        const done = await runCommentJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, true);
+        const done = await runCommentJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, { after: job.data.after ?? null });
         console.log(`[social-comment] ${provider} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
         return;
       }
@@ -503,10 +505,14 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
               // publish job.
               if (row.type === 'social.comment.retry_requested') {
                 const provider = String(row.payload.provider);
-                if (!SOCIAL_PUBLISH_QUEUES.includes(socialPublishQueue(provider))) return null;
                 const variantId = String(row.payload.variant_id);
-                return boss.send(socialPublishQueue(provider), { orgId: row.org_id, variantId, provider, comment: true } satisfies SocialPublishJob, {
-                  singletonKey: `${row.org_id}:${variantId}:comment`,
+                if (!SOCIAL_PUBLISH_QUEUES.includes(socialPublishQueue(provider))) {
+                  console.warn(`[social-comment] no publish queue for provider ${provider.slice(0, 32)}, variant ${variantId.slice(0, 8)}: retry dropped`);
+                  return null;
+                }
+                const after = typeof row.payload.after === 'string' ? row.payload.after : null;
+                return boss.send(socialPublishQueue(provider), { orgId: row.org_id, variantId, provider, comment: true, after } satisfies SocialPublishJob, {
+                  singletonKey: `${row.org_id}:${variantId}:comment:${after ?? '-'}`,
                   retryLimit: 0,
                 });
               }

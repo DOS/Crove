@@ -209,11 +209,11 @@ export async function runPublishJob(deps: PublishDeps, orgId: string, variantId:
   return { action: begun.action, status: recorded.status ?? recorded.reason ?? 'not_recorded' };
 }
 
-/** The first comment of a published variant (#587): begin, one call, record. retry: a person asked again. */
-export async function runCommentJob(deps: PublishDeps, orgId: string, variantId: string, provider: string, retry = false): Promise<{ action: string; reason?: string; state?: string }> {
+/** The first comment of a published variant (#587): begin, one call, record. retry: a person asked again, after the call they saw last. */
+export async function runCommentJob(deps: PublishDeps, orgId: string, variantId: string, provider: string, retry?: { after: string | null }): Promise<{ action: string; reason?: string; state?: string }> {
   const publisher = deps.publishers[provider];
   if (!publisher?.comment) return { action: 'none', reason: 'provider_not_configured' };
-  const begun = await deps.runtime.execute<CommentWork>('social.comment.begin', { variantId, provider, ...(retry ? { retry: true } : {}) }, { actor: ACTOR, orgId });
+  const begun = await deps.runtime.execute<CommentWork>('social.comment.begin', { variantId, provider, ...(retry ? { retry } : {}) }, { actor: ACTOR, orgId });
   if (begun.action === 'none') return { action: 'none', reason: begun.reason };
   const credential = await openCredential(deps, orgId, begun.connectionId);
   let result: Awaited<ReturnType<NonNullable<Publisher['comment']>>> | { kind: 'blocked'; code: string };
