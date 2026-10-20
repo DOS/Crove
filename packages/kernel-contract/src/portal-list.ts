@@ -92,8 +92,9 @@ export const zReconcileItem = z.object({
   outsidePeriod: z.boolean(),
   duplicateRows: z.number().int().nonnegative(),
   duplicateInCrove: z.boolean(),
-  // The Crove document is dated in this period but posted after it (#478): the VAT working declares it in the period
-  // of its posting date (crove.postingDate), flagged declared_late there, not in this one (#560).
+  // The Crove document is dated in (or, matched to a row of this period's lists, before) this period but posted after
+  // it (#478): the VAT working declares it in the period of its posting date (crove.postingDate), flagged declared_late
+  // there, not in this one (#560).
   declaredInLaterPeriod: z.boolean(),
 });
 

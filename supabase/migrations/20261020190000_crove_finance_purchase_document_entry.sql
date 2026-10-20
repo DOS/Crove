@@ -2,7 +2,8 @@
 -- (modules/finance/src/vat.ts) picks the input side by the entry's date (#478) and so inner-joins journal_entry for both
 -- directions; a document without its entry would drop out of the VAT working without a word. finance.purchase.record
 -- writes the document and its entry in one transaction, but nothing held another writer (another command, a raw
--- statement, a superuser) to it. Now, for every writer:
+-- statement, the database owner) to it. Now, for every writer that runs with triggers enabled (a superuser can still
+-- step around it with session_replication_role = replica or DISABLE TRIGGER, as around every trigger):
 -- - purchase_document_entry (deferred to commit): a purchase or sales document commits only together with its own
 --   journal entry, source_type 'finance.purchase_document' and source_id the document, not a reversal. Deferred, since
 --   the entry names the document's id and is posted after it (it must be). A writer that fires it early (SET
