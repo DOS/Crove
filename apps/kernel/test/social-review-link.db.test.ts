@@ -150,7 +150,7 @@ suite('social client review links on PostgreSQL (#589)', () => {
     expect((await view(token))?.changed).toBe(true);
     expect(await answer(token, 'Anh Minh', 'changes_requested', 'Thêm giờ mở cửa')).toEqual({ recorded: true });
     const seen = await links(o, o.viewer, postId);
-    expect(seen.links).toEqual([expect.objectContaining({ id: linkId, changed: true, revokedAt: null })]);
+    expect(seen.links).toEqual([expect.objectContaining({ id: linkId, changed: true, revokedAt: null, answers: 2 })]);
     expect(seen.feedback.map((f) => [f.name, f.verdict, f.body, f.changed])).toEqual([
       ['Anh Minh', 'changes_requested', 'Thêm giờ mở cửa', true],
       ['Chị Lan', 'approved', null, false],
@@ -161,6 +161,8 @@ suite('social client review links on PostgreSQL (#589)', () => {
     // At most 100 answers per link.
     await pool.query("SELECT crove_social.review_feedback_add($1, 'Khách', 'approved', NULL) FROM generate_series(1, 98)", [token]);
     await expect(answer(token, 'Khách', 'approved', null)).rejects.toMatchObject({ code: '54000' });
+    // The card counts every answer, past the 200 it lists (#626).
+    expect((await links(o, o.viewer, postId)).links[0]?.answers).toBe(100);
 
     // Revoked: nothing more, by either function.
     await expect(exec(o, o.member, 'social.review_link.revoke', { linkId })).rejects.toMatchObject({ status: 403 });

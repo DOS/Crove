@@ -36,6 +36,7 @@ import { reportScheduleCommands, reportScheduleQueries } from './report-schedule
 import { brandVoiceCommands, brandVoiceQueries } from './brand-voice.ts';
 import { channelSetCommands, channelSetQueries } from './channel-sets.ts';
 import { calendarNoteCommands, calendarNoteQueries } from './calendar-notes.ts';
+import { CONTENT_MANAGER_TEMPLATE, preReviewTask, type PreReview } from './agent.ts';
 import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { reviewInboxQueries } from './review-inbox.ts';
 import { attentionInboxQueries } from './attention-inbox.ts';
@@ -313,7 +314,7 @@ export const postImport = defineCommand({
         for (const v of ready) await setVariant(ctx, v.id, { status: step(v, { type: 'submit' }) });
         if (ready.length > 0) {
           await refreshPostStatus(ctx, post.id);
-          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: ready.map((v) => v.id) });
+          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: ready.map((v) => v.id), agent_task: preReviewTask({ ...post, tainted: await postTainted(ctx, post.id) }) });
         }
         submitted = ready.length;
       }
@@ -478,7 +479,7 @@ export const postSubmit = defineCommand({
     if (invalid.length > 0) throw new DomainError('VARIANT_INVALID', 422, 'Có kênh chưa đúng yêu cầu của nền tảng', { variants: invalid });
     for (const v of chosen) await setVariant(ctx, v.id, { status: step(v, { type: 'submit' }) });
     await refreshPostStatus(ctx, post.id);
-    await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: chosen.map((v) => v.id) });
+    await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: chosen.map((v) => v.id), agent_task: preReviewTask({ ...post, tainted: await postTainted(ctx, post.id) }) });
     return { postId: post.id, submitted: chosen.map((v) => v.id) };
   },
 });
@@ -1143,6 +1144,57 @@ export const postGet = defineQuery({
   },
 });
 
+// A post's taint (AI-drafted or AI-assisted), for the agent task its submission makes (#799); unknown counts as tainted.
+async function postTainted(ctx: CommandContext, postId: string): Promise<boolean> {
+  const row = await ctx.trx.selectFrom('crove_social.post').select('tainted').where('org_id', '=', ctx.orgId).where('id', '=', postId).executeTakeFirst();
+  return row?.tainted ?? true;
+}
+
+// What a reviewer should look at before deciding (#799), from deterministic checks only: each waiting channel's rule
+// issues, the brand voice's words to avoid in its text, and images without a description. Members and the
+// social.content_manager agent read it; it changes nothing.
+const PRE_REVIEW_FINDINGS_MAX = 30;
+export const postPreReview = defineQuery({
+  name: 'social.post.pre_review',
+  input: z.strictObject({ postId: zId }),
+  access: ALL,
+  agent: { roles: [CONTENT_MANAGER_TEMPLATE] },
+  handler: async (ctx, input): Promise<PreReview> => {
+    const [view] = await viewPosts(ctx, [input.postId]);
+    if (!view) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
+    const waiting = view.variants.filter((v) => v.status === 'in_review');
+    const voices = await ctx.trx.selectFrom('crove_social.brand_voice').select(['channel_connection_id', 'avoid_words']).where('org_id', '=', ctx.orgId).execute();
+    const names = new Map(
+      (
+        await ctx.trx
+          .selectFrom('crove_kernel.channel_connection')
+          .select(['id', 'display_name'])
+          .where('org_id', '=', ctx.orgId)
+          .where(
+            'id',
+            'in',
+            waiting.length > 0 ? waiting.map((v) => v.connectionId) : [input.postId],
+          )
+          .execute()
+      ).map((c) => [c.id, c.display_name]),
+    );
+    const findings: string[] = [];
+    for (const v of waiting) {
+      const name = names.get(v.connectionId) ?? v.provider;
+      const codes = [...new Set(v.issues.map((i) => i.code))];
+      if (codes.length > 0) findings.push(`${name}: chưa đúng yêu cầu của nền tảng (${codes.slice(0, 5).join(', ')}).`);
+      const text = v.effective.body.toLowerCase();
+      const avoid = voices.filter((x) => x.channel_connection_id === null || x.channel_connection_id === v.connectionId).flatMap((x) => x.avoid_words);
+      const used = [...new Set(avoid.map((w) => w.trim()).filter((w) => w && text.includes(w.toLowerCase())))];
+      if (used.length > 0) findings.push(`${name}: có từ nên tránh theo giọng thương hiệu (${used.slice(0, 5).join(', ')}).`);
+      const undescribed = v.media.filter((m) => !m.altText).length;
+      if (undescribed > 0) findings.push(`${name}: ${undescribed} ảnh hoặc video chưa có mô tả cho người đọc màn hình (alt text).`);
+    }
+    const title = view.title?.trim() || view.body.replace(/\s+/g, ' ').trim().slice(0, 120);
+    return { postId: view.id, title, waiting: waiting.length, findings: findings.slice(0, PRE_REVIEW_FINDINGS_MAX) };
+  },
+});
+
 // Posts, newest first; with from/to, those with a variant going out in [from, to) (the calendar).
 export const postList = defineQuery({
   name: 'social.post.list',
@@ -1346,4 +1398,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...channelSetQueries, ...calendarNoteQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];
+export const socialQueries = [postGet, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...channelSetQueries, ...calendarNoteQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];

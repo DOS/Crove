@@ -1016,7 +1016,7 @@ export const zSocialLabelCreate = z.strictObject({ name: zLabelName, color: z.en
 export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS) });
 // Client review links (#589): the team's view of a post's links and what clients said through them.
 export const zSocialReviewLinks = z.object({
-  links: z.array(z.object({ id: zId, createdBy: zId, createdAt: z.string(), expiresAt: z.string(), revokedAt: z.string().nullable(), changed: z.boolean() })),
+  links: z.array(z.object({ id: zId, answers: z.number().int().min(0), createdBy: zId, createdAt: z.string(), expiresAt: z.string(), revokedAt: z.string().nullable(), changed: z.boolean() })),
   feedback: z.array(
     z.object({ id: zId, linkId: zId, name: z.string(), verdict: z.enum(['approved', 'changes_requested', 'comment']), body: z.string().nullable(), changed: z.boolean(), createdAt: z.string() }),
   ),

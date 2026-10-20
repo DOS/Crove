@@ -122,8 +122,13 @@ export const linksRevokeForMember = defineCommand({
   },
 });
 
+// The answers one link takes (review_feedback_add refuses more, #589); the team sees how many are used (#626).
+export const REVIEW_LINK_ANSWERS_MAX = 100;
+
 export interface ReviewLinkView {
   id: string;
+  // Client answers given through it, of REVIEW_LINK_ANSWERS_MAX.
+  answers: number;
   createdBy: string;
   createdAt: string;
   expiresAt: string;
@@ -146,7 +151,7 @@ export const reviewLinkList = defineQuery({
   input: z.object({ postId: zId }),
   access: ALL,
   handler: async (ctx, input): Promise<{ links: ReviewLinkView[]; feedback: ReviewFeedbackView[] }> => {
-    const [links, feedback, key] = await Promise.all([
+    const [links, feedback, key, counts] = await Promise.all([
       ctx.trx
         .selectFrom('crove_social.review_link')
         .select(['id', 'created_by', 'created_at', 'expires_at', 'revoked_at', 'content_key'])
@@ -164,11 +169,21 @@ export const reviewLinkList = defineQuery({
         .limit(200)
         .execute(),
       sql<{ key: string }>`SELECT crove_social.review_content_key(${ctx.orgId}::uuid, ${input.postId}::uuid) AS key`.execute(ctx.trx),
+      // Every answer counts, not only the 200 listed below.
+      ctx.trx
+        .selectFrom('crove_social.review_feedback')
+        .select(['link_id', (eb) => eb.fn.countAll<string>().as('n')])
+        .where('org_id', '=', ctx.orgId)
+        .where('post_id', '=', input.postId)
+        .groupBy('link_id')
+        .execute(),
     ]);
+    const answers = new Map(counts.map((c) => [c.link_id, Number(c.n)]));
     const current = key.rows[0]?.key ?? '';
     return {
       links: links.map((l) => ({
         id: l.id,
+        answers: answers.get(l.id) ?? 0,
         createdBy: l.created_by,
         createdAt: l.created_at.toISOString(),
         expiresAt: l.expires_at.toISOString(),

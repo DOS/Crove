@@ -6,7 +6,7 @@
 // token lives two hours and the refresh schedule renews it, keeping whichever refresh token X hands back.
 // Publish: each image is uploaded first (nothing is visible until a post names it), then one POST /2/tweets; a video
 // goes through the chunked upload and X's processing first (#449). An unclear answer is checked against the account's recent posts by text and time.
-import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+import type { AccountMetricsInput, AccountMetricsResult, CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
@@ -284,10 +284,15 @@ export class XPublisher implements Publisher {
   // Post counts (#797), when the deployment turns them on (CHANNEL_X_METRICS): X bills every post read, so they are
   // off by default and the metrics sweep then skips X.
   readonly metrics?: (input: MetricsInput) => Promise<MetricsResult>;
+  // The account's followers (#819), on the same switch: one more billed read a day.
+  readonly accountMetrics?: (input: AccountMetricsInput) => Promise<AccountMetricsResult>;
 
   constructor(app: XAppConfig, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMinMs?: number; budgetMs?: number } = {}, options: { metrics?: boolean } = {}) {
     this.client = new XClient(app, fetchImpl);
-    if (options.metrics) this.metrics = (input) => this.readMetrics(input);
+    if (options.metrics) {
+      this.metrics = (input) => this.readMetrics(input);
+      this.accountMetrics = (input) => this.readFollowers(input);
+    }
     this.processingWaitMs = timing.processingWaitMs ?? PROCESSING_WAIT_MS;
     this.pollMinMs = timing.pollMinMs ?? 1000;
     // The last status check and the post (30 s each at most) plus slack fit between the budget and callTimeoutMs.
@@ -358,6 +363,21 @@ export class XPublisher implements Publisher {
       return { kind: 'accepted', externalId: id };
     } catch (error) {
       return commentResult(publishResult(error));
+    }
+  }
+
+  private async readFollowers(input: AccountMetricsInput): Promise<AccountMetricsResult> {
+    const s = xSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    try {
+      const answer = await this.client.call<{ data?: { id?: unknown; public_metrics?: { followers_count?: unknown } } }>('GET', '/users/me?user.fields=public_metrics', s.accessToken);
+      if (answer?.data?.id !== input.externalAccountId) return null;
+      const n = answer.data.public_metrics?.followers_count;
+      return { followers: typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : null };
+    } catch (error) {
+      if (error instanceof XError && error.status === 401) return { refused: 'token_expired' };
+      if (error instanceof XError && error.status === 403) return { refused: 'permission' };
+      return null;
     }
   }
 
