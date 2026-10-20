@@ -589,3 +589,25 @@ export function limitWait(starts: readonly Date[], limit: PublishLimit, now: Dat
   const leaving = inWindow[inWindow.length - limit.count] as number;
   return new Date(leaving + limit.windowMs + 1000);
 }
+
+// Media a channel fetches by URL (#772): on a deployment whose storage hands out no public file URLs (local disk), these
+// cannot go out, so the composer says so before the post is submitted. Instagram takes a Reel or a video Story without
+// one (Crove uploads the bytes), but not images, carousels or a cover image; Threads, Google Business, Zalo OA (its
+// cover) and TikTok photos are fetched by URL always.
+export function needsPublicUrls(provider: Provider, media: readonly { kind: 'image' | 'video' }[], settings?: Readonly<Record<string, unknown>>): boolean {
+  if (media.length === 0) return false;
+  switch (provider) {
+    case 'instagram': {
+      const cover = coverOf(settings);
+      return media.length > 1 || media[0]?.kind === 'image' || (cover !== null && 'fileId' in cover);
+    }
+    case 'threads':
+    case 'google_business':
+    case 'zalo_oa':
+      return true;
+    case 'tiktok':
+      return media.some((m) => m.kind === 'image');
+    default:
+      return false;
+  }
+}

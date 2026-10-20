@@ -1,6 +1,7 @@
 // Shared pieces of the Social screens: status tones, provider names, the effective text of a variant as the composer
 // shows it, and grouping by day for the agenda.
-import { CAPABILITIES, countText, isProvider, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
+import { CAPABILITIES, countText, isProvider, needsPublicUrls, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
+import { getConfig } from './auth.ts';
 
 export type VariantStatus =
   | 'draft'
@@ -70,10 +71,22 @@ export function hasTitle(provider: string): boolean {
 }
 
 // The issues a draft would have at submit, checked as it is typed (the server checks again).
+// Whether this deployment keeps files where no public link reaches them (local disk); unknown before the config loads.
+function uploadsDirect(): boolean {
+  try {
+    return getConfig().uploads === 'direct';
+  } catch {
+    return false;
+  }
+}
+
 export function draftIssues(provider: string, content: { body: string; title: string | null; linkUrl?: string | null; media?: readonly { mime: string; sizeBytes: number; durationMs?: number | null | undefined; width?: number | null | undefined; height?: number | null | undefined }[]; settings?: Record<string, unknown> }): Issue[] {
   if (!isProvider(provider)) return [];
   const media = (content.media ?? []).map((m) => ({ kind: m.mime.startsWith('video/') ? ('video' as const) : ('image' as const), mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000, width: m.width ?? null, height: m.height ?? null }));
-  return validateVariant({ provider, body: content.body, title: content.title, linkUrl: content.linkUrl ?? null, media, ...(content.settings ? { settings: content.settings } : {}) });
+  const issues = validateVariant({ provider, body: content.body, title: content.title, linkUrl: content.linkUrl ?? null, media, ...(content.settings ? { settings: content.settings } : {}) });
+  // Files that channel fetches by URL, on a deployment that hands out none (#772): said before the post is submitted.
+  if (uploadsDirect() && needsPublicUrls(provider, media, content.settings)) issues.push({ code: 'MEDIA_NEEDS_PUBLIC_STORAGE', field: 'media', limit: null, actual: null });
+  return issues;
 }
 
 // Local calendar day (yyyy-mm-dd) of an instant, in the viewer's time zone.

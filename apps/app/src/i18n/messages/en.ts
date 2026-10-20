@@ -2001,6 +2001,7 @@ export const en = {
       AUTO_REPLY_NOT_SUPPORTED: 'This channel cannot reply on likes yet',
       AUTO_REPLY_TOO_LONG: 'The auto-reply is {actual, number} long; this channel allows {limit, number}',
       COMMENT_NOT_SUPPORTED: 'Crove cannot post a first comment on this channel yet',
+      MEDIA_NEEDS_PUBLIC_STORAGE: 'This channel fetches images and videos from a public link, which this server cannot give while it keeps files on disk; use S3 (S3_PRESIGNED_URLS), or post a single video',
       COVER_INVALID: 'The cover is not valid; pick a moment in the video or an image again',
       COVER_NEEDS_VIDEO: 'A cover can only be set when this channel posts exactly one video',
       COVER_NOT_SUPPORTED: 'This channel does not take this kind of cover; TikTok only takes a moment in the video, YouTube only an uploaded image',

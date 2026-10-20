@@ -10,6 +10,7 @@ import {
   countText,
   sentText,
   effectiveContent,
+  needsPublicUrls,
   limitWait,
   PUBLISH_LIMITS,
   nextAction,
@@ -624,5 +625,22 @@ describe('counted publishing limits (#775)', () => {
   it('counts the platforms without a quota endpoint', () => {
     expect(Object.keys(PUBLISH_LIMITS).sort()).toEqual(['linkedin', 'tiktok', 'x', 'youtube']);
     expect(PUBLISH_LIMITS.youtube).toEqual({ count: 100, windowMs: 24 * 3_600_000 });
+  });
+});
+
+describe('media fetched by URL (#772)', () => {
+  const image = { kind: 'image' as const };
+  const video = { kind: 'video' as const };
+  it('names what a deployment without public file URLs cannot post', () => {
+    expect(needsPublicUrls('instagram', [video])).toBe(false);
+    expect(needsPublicUrls('instagram', [image])).toBe(true);
+    expect(needsPublicUrls('instagram', [video, video])).toBe(true);
+    expect(needsPublicUrls('instagram', [video], { cover: { fileId: 'c' } })).toBe(true);
+    expect(needsPublicUrls('instagram', [video], { cover: { atMs: 1000 } })).toBe(false);
+    for (const p of ['threads', 'google_business', 'zalo_oa'] as const) expect(needsPublicUrls(p, [image])).toBe(true);
+    expect(needsPublicUrls('tiktok', [video])).toBe(false);
+    expect(needsPublicUrls('tiktok', [image])).toBe(true);
+    for (const p of ['facebook_page', 'x', 'linkedin', 'bluesky', 'telegram', 'mastodon', 'youtube'] as const) expect(needsPublicUrls(p, [image, video])).toBe(false);
+    expect(needsPublicUrls('threads', [])).toBe(false);
   });
 });
