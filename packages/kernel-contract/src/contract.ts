@@ -30,6 +30,8 @@ import {
   zSocialMetricsRow,
   zSocialLibraryItem,
   zSocialLibraryUse,
+  zSocialReportLink,
+  zSocialReportLinkCreate,
   zSocialSnippet,
   zSocialSnippetCreate,
   zSocialSnippetUpdate,
@@ -302,6 +304,12 @@ export const contract = {
       create: oc.input(zSocialSnippetCreate).output(z.object({ snippetId: zId })),
       update: oc.input(zSocialSnippetUpdate).output(z.object({ snippetId: zId })),
       remove: oc.input(z.strictObject({ snippetId: zId })).output(z.object({ snippetId: zId })),
+    },
+    // Client report links (#643): owners and admins make and revoke them; the token is in the create answer only.
+    reportLinks: {
+      list: oc.input(z.object({})).output(z.array(zSocialReportLink)),
+      create: oc.input(zSocialReportLinkCreate).output(z.object({ linkId: zId, token: z.string(), expiresAt: z.string() })),
+      revoke: oc.input(z.strictObject({ linkId: zId })).output(z.object({ linkId: zId })),
     },
     // Client review links (#589): owners and admins make and revoke them; the token is in the create answer only.
     reviewLinks: {

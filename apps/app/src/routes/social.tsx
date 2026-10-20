@@ -17,6 +17,7 @@ import { SocialCalendar } from '../components/social-calendar.tsx';
 import { PostLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
 import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
+import { ReportLinks } from '../components/social-report-links.tsx';
 import type { BulkAction } from '../lib/social-bulk.ts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
@@ -560,7 +561,10 @@ export function SocialPage() {
         </TabsContent>
         <TabsContent value="calendar">{tab === 'calendar' && <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} labelId={search.label} />}</TabsContent>
         <TabsContent value="metrics">
-          <Metrics slug={slug} names={names} labelId={search.label} />
+          <div className="space-y-4">
+            <Metrics slug={slug} names={names} labelId={search.label} />
+            <ReportLinks channels={channels.data ?? []} />
+          </div>
         </TabsContent>
         <TabsContent value="library">{tab === 'library' && <Library slug={slug} canWrite={canWrite} />}</TabsContent>
         {(['review', 'attention', 'drafts', 'done'] as const).map((id) => (

@@ -970,3 +970,23 @@ export const zSocialQueue = z.object({
   slots: z.array(z.object({ weekday: z.number().int(), minute: z.number().int(), label: z.string().nullable(), active: z.boolean() })),
   nextFree: z.array(z.string()),
 });
+
+// A client report link of a period (#643); its token is in the create answer only.
+export const zSocialReportLink = z.object({
+  id: zId,
+  title: z.string().nullable(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  connectionIds: z.array(zId),
+  createdBy: zId,
+  createdAt: z.string(),
+  expiresAt: z.string(),
+  revokedAt: z.string().nullable(),
+});
+export const zSocialReportLinkCreate = z.strictObject({
+  periodStart: z.iso.datetime({ offset: true }),
+  periodEnd: z.iso.datetime({ offset: true }),
+  connectionIds: z.array(zId).max(50).optional(),
+  title: z.string().trim().min(1).max(120).optional(),
+  days: z.number().int().min(1).max(90).optional(),
+});

@@ -81,6 +81,7 @@ import { pgBossSchemaVersion } from './jobs-schema.ts';
 import type { MailProvider } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { reviewAnswer, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
+import { reportView, REPORT_VIEWS_PER_MINUTE } from './report-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
@@ -119,6 +120,8 @@ export interface HttpDeps {
   rateLimiter?: RateLimiter | null;
   // Per-client budgets of the public review page (#589). Unset: REVIEW_VIEWS_PER_MINUTE and REVIEW_ANSWERS_PER_MINUTE.
   reviewLimits?: { views: RateLimiter; answers: RateLimiter };
+  // The public report page's budget per client (#643). Unset: REPORT_VIEWS_PER_MINUTE.
+  reportLimit?: RateLimiter;
   // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
   uploadCompletes?: ConcurrencyLimiter;
   // Uploads that may be larger than MAX_UPLOAD_BYTES (Social videos, #409) running at once. Default: 2 per process.
@@ -510,6 +513,19 @@ export function createHttpApp(deps: HttpDeps) {
       try {
         const view = await reviewView(runtime, await c.req.json().catch(() => null));
         return view ? c.json(view) : c.json({ code: 'REVIEW_LINK_INVALID', message: 'Liên kết duyệt không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    // A client report link (#643): the same edge as the review page, with its own budget.
+    const reportLimit = deps.reportLimit ?? new RateLimiter({ perMinute: REPORT_VIEWS_PER_MINUTE });
+    app.post('/api/report/view', bodyLimit({ maxSize: 1024 }), async (c) => {
+      const limited = reviewBudget(c, reportLimit);
+      if (limited) return limited;
+      c.header('cache-control', 'no-store');
+      try {
+        const view = await reportView(runtime, await c.req.json().catch(() => null));
+        return view ? c.json(view) : c.json({ code: 'REPORT_LINK_INVALID', message: 'Liên kết báo cáo không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
       } catch (error) {
         return problem(c, error);
       }
