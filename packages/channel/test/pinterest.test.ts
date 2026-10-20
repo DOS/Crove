@@ -105,7 +105,9 @@ describe('PinterestPublisher', () => {
   it('pins 2 to 5 images as a carousel, and posts nothing for a video, too many images or an unreadable one', async () => {
     const { fetchImpl, calls } = pinterest({ 'POST /v5/pins': [{ body: { id: '813744226420795885' } }] });
     await new PinterestPublisher(APP, fetchImpl).publish(input({ content: { ...input().content, media: [image('a'), image('b')] } }));
-    const source = (calls[0]?.body as { media_source: { source_type: string; items: unknown[] } }).media_source;
+    const sent = calls[0]?.body as { media_source: { source_type: string; items: unknown[] } } | undefined;
+    if (!sent) throw new Error('no pin call');
+    const source = sent.media_source;
     expect(source.source_type).toBe('multiple_image_base64');
     expect(source.items).toHaveLength(2);
     const none = pinterest({});
