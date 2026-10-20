@@ -174,6 +174,8 @@ export const zPostCreate = z.strictObject({
   // Set by the server only (the AI drafting route); the app's create never sends it. An AI draft is tainted: every
   // variant needs a person's approval of what the model wrote (plan §3.7).
   origin: z.enum(['human', 'ai']).optional(),
+  // The member accepted an AI rewrite into the text (#583).
+  aiAssisted: z.literal(true).optional(),
 });
 
 export const postCreate = defineCommand({
@@ -194,7 +196,7 @@ export const postCreate = defineCommand({
         link_url: input.linkUrl ?? null,
         // The surface sets actor_origin once API and MCP clients exist; today every write comes from the app.
         origin: input.origin ?? 'human',
-        tainted: input.origin === 'ai',
+        tainted: input.origin === 'ai' || input.aiAssisted === true,
         actor_origin: 'ui',
         author_user_id: userId,
         ...(input.timeZone ? { time_zone: input.timeZone } : {}),
@@ -247,6 +249,8 @@ export const postUpdate = defineCommand({
     scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
     // The whole list of images, replacing the post's; omitted leaves them as they are.
     media: zMedia.optional(),
+    // The member accepted an AI rewrite into the text (#583).
+    aiAssisted: z.literal(true).optional(),
   }),
   risk: 'R1',
   access: MEMBERS,
@@ -286,7 +290,7 @@ export const postUpdate = defineCommand({
     const revision = post.revision + 1;
     await ctx.trx
       .updateTable('crove_social.post')
-      .set({ body: next.body, title: next.title, link_url: next.link_url, time_zone: next.time_zone, scheduled_at: next.scheduled_at, revision, updated_at: ctx.now })
+      .set({ body: next.body, title: next.title, link_url: next.link_url, time_zone: next.time_zone, scheduled_at: next.scheduled_at, revision, updated_at: ctx.now, ...(input.aiAssisted ? { tainted: true } : {}) })
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', post.id)
       .execute();
@@ -305,6 +309,8 @@ export const variantUpdate = defineCommand({
     title: zTitle.nullable().optional(),
     linkUrl: zLink.nullable().optional(),
     settings: zSettings.optional(),
+    // The member accepted an AI rewrite into the text (#583): the post is tainted.
+    aiAssisted: z.literal(true).optional(),
   }),
   risk: 'R1',
   access: MEMBERS,
@@ -333,6 +339,7 @@ export const variantUpdate = defineCommand({
       return { variantId: v.id, revision: v.revision, changed: false };
     }
     await setVariant(ctx, v.id, { ...columns, content_hash: hash, revision: v.revision + 1, ...editValues(v) });
+    if (input.aiAssisted) await ctx.trx.updateTable('crove_social.post').set({ tainted: true, updated_at: ctx.now }).where('org_id', '=', ctx.orgId).where('id', '=', postId).execute();
     await refreshPostStatus(ctx, postId);
     return { variantId: v.id, revision: v.revision + 1, changed: true };
   },

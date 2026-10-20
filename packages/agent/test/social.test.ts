@@ -1,6 +1,6 @@
 // SocialWriter with a stand-in for the model: what it is told, and what it keeps of the answer.
 import { describe, expect, it } from 'vitest';
-import { SocialWriter, type DraftGenerator, type WriterChannel } from '../src/index.ts';
+import { SocialWriter, type DraftGenerator, type RewriteGenerator, type WriterChannel } from '../src/index.ts';
 
 const CONFIG = { baseURL: 'http://localhost:1/v1', apiKey: null, model: 'test' };
 const channels: WriterChannel[] = [
@@ -55,5 +55,34 @@ describe('SocialWriter', () => {
     expect(asked).toHaveLength(0);
     expect(await writer.draft({ brief: 'x', channels, language: 'en' })).toBeNull();
     expect(asked[0]?.system).toContain('Write in English.');
+  });
+});
+
+describe('SocialWriter.rewrite (#583)', () => {
+  function rewriter(answer: Awaited<ReturnType<RewriteGenerator>>) {
+    const asked: { system: string; prompt: string }[] = [];
+    const draft: DraftGenerator = async () => null;
+    const writer = new SocialWriter(CONFIG, draft, async (args) => {
+      asked.push(args);
+      return answer;
+    });
+    return { asked, writer };
+  }
+
+  it('asks for the action, tells the channel limit, fences the text as data and forbids new facts', async () => {
+    const { asked, writer } = rewriter({ text: 'Khai trương Quận 3!', title: null });
+    const out = await writer.rewrite({ text: 'Khai trương chi nhánh Quận 3, giảm 20% tuần đầu', title: null, action: 'shorten', channel: channels[0] as WriterChannel });
+    expect(out).toEqual({ text: 'Khai trương Quận 3!', title: null });
+    expect(asked[0]?.system).toContain('Make the text shorter so it fits the channel limit');
+    expect(asked[0]?.system).toContain('Never add facts');
+    expect(asked[0]?.prompt).toContain('- key c-fb: Facebook Page (Quán A), text at most 63206 characters; no title');
+    expect(asked[0]?.prompt).toContain('<<<\nKhai trương chi nhánh Quận 3, giảm 20% tuần đầu\n>>>');
+  });
+
+  it('keeps the title when the model drops it, and gives nothing for an empty or unchanged answer', async () => {
+    expect(await rewriter({ text: 'Opening in District 3', title: null }).writer.rewrite({ text: 'Khai trương Quận 3', title: 'Khai trương', action: 'translate_en' })).toEqual({ text: 'Opening in District 3', title: 'Khai trương' });
+    expect(await rewriter({ text: '  ', title: null }).writer.rewrite({ text: 'x', title: null, action: 'formal' })).toBeNull();
+    expect(await rewriter({ text: 'x', title: null }).writer.rewrite({ text: 'x', title: null, action: 'casual' })).toBeNull();
+    expect(await rewriter(null).writer.rewrite({ text: 'x', title: null, action: 'casual' })).toBeNull();
   });
 });
