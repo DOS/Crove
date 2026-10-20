@@ -11,7 +11,7 @@
 // First comment (#609): a reply to the account's own post, made the same way (a TEXT container with reply_to_id, then
 // threads_publish); replying needs threads_manage_replies.
 import { createHash } from 'node:crypto';
-import type { CommentInput, CommentResult, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
@@ -371,6 +371,20 @@ export class ThreadsPublisher implements Publisher {
   // so any failure before threads_publish posted nothing; a container still processing when the short wait ends is
   // transient, and the person retries. A connection made before Crove asked for threads_manage_replies is refused with
   // a permission error and replies again once it reconnects.
+  // A repost of the account's own post (#773): POST /{media_id}/repost, which answers with the repost's id.
+  async repost(input: RepostInput): Promise<CommentResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_TOKEN' };
+    if (!NUMERIC_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      const answer = await this.client.call<{ id?: unknown }>('POST', `${VERSION}/${input.externalId}/repost`, { token, timeoutMs: COMMENT_CALL_MS });
+      if (typeof answer.id !== 'string' || !NUMERIC_ID.test(answer.id)) return { kind: 'unknown', code: 'NO_REPOST_ID' };
+      return { kind: 'accepted', externalId: answer.id };
+    } catch (error) {
+      return commentResult(threadsResult(error));
+    }
+  }
+
   async comment(input: CommentInput): Promise<CommentResult> {
     const token = tokenIn(input.secret);
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_TOKEN' };

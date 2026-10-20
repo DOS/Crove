@@ -6,7 +6,7 @@
 // token lives two hours and the refresh schedule renews it, keeping whichever refresh token X hands back.
 // Publish: each image is uploaded first (nothing is visible until a post names it), then one POST /2/tweets; a video
 // goes through the chunked upload and X's processing first (#449). An unclear answer is checked against the account's recent posts by text and time.
-import type { CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
@@ -323,6 +323,21 @@ export class XPublisher implements Publisher {
   }
 
   // A reply in the post's thread (#587), as the first comment X has none of its own.
+  // A repost of the account's own post (#773): POST /2/users/:id/retweets. X answers with the post retweeted, not a new
+  // id, so the repost is named by the account and the post.
+  async repost(input: RepostInput): Promise<CommentResult> {
+    const s = xSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!USER_ID.test(input.externalAccountId) || !POST_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      const answer = await this.client.call<{ data?: { retweeted?: unknown } }>('POST', `/users/${input.externalAccountId}/retweets`, s.accessToken, { json: { tweet_id: input.externalId } });
+      if (answer?.data?.retweeted !== true) return { kind: 'unknown', code: 'NOT_RETWEETED' };
+      return { kind: 'accepted', externalId: `retweet:${input.externalAccountId}:${input.externalId}` };
+    } catch (error) {
+      return commentResult(publishResult(error));
+    }
+  }
+
   async comment(input: CommentInput): Promise<CommentResult> {
     const s = xSecretOf(input.secret);
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };

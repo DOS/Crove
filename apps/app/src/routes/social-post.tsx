@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
@@ -279,6 +279,36 @@ function ThreadField({ settings, disabled, onChange }: { settings: Record<string
   );
 }
 
+// The repost when a post takes off (#773): at a like count, after some hours, or whichever comes first.
+function RepostField({ settings, disabled, onChange }: { settings: Record<string, unknown>; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const current = settings.repost && typeof settings.repost === 'object' ? (settings.repost as { likes?: unknown; afterHours?: unknown }) : null;
+  const likes = typeof current?.likes === 'number' ? current.likes : null;
+  const hours = typeof current?.afterHours === 'number' ? current.afterHours : null;
+  const set = (next: { likes: number | null; afterHours: number | null }) => {
+    const { repost: _old, ...rest } = settings;
+    onChange(next.likes !== null || next.afterHours !== null ? { ...rest, repost: { ...(next.likes !== null ? { likes: next.likes } : {}), ...(next.afterHours !== null ? { afterHours: next.afterHours } : {}) } } : rest);
+  };
+  const num = (v: string) => (v === '' ? null : Math.floor(Number(v)));
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-medium">{t('repostRule')}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={`${id}-likes`} className="text-xs text-muted-foreground">
+          {t('repostRuleLikes')}
+        </Label>
+        <Input id={`${id}-likes`} type="number" min={1} max={AUTO_REPLY_LIKES_MAX} className="w-28" disabled={disabled} value={likes ?? ''} placeholder="100" onChange={(e) => set({ likes: num(e.target.value), afterHours: hours })} />
+        <Label htmlFor={`${id}-hours`} className="text-xs text-muted-foreground">
+          {t('repostRuleHours')}
+        </Label>
+        <Input id={`${id}-hours`} type="number" min={1} max={REPOST_HOURS_MAX} className="w-24" disabled={disabled} value={hours ?? ''} placeholder="24" onChange={(e) => set({ likes, afterHours: num(e.target.value) })} />
+      </div>
+      <p className="text-xs text-subtle-foreground">{t('repostRuleHint')}</p>
+    </div>
+  );
+}
+
 // The auto-reply on likes (#746): a text and the like count that sets it off; both or neither.
 function AutoReplyField({ settings, disabled, onChange }: { settings: Record<string, unknown>; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
   const t = useTranslations('social');
@@ -354,6 +384,8 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('THREAD_PART_EMPTY', { n: Number(issue.field.split('.')[2] ?? 0) + 2 });
       case 'THREAD_PART_TOO_LONG':
         return t('THREAD_PART_TOO_LONG', { n: Number(issue.field.split('.')[2] ?? 0) + 2, limit, actual });
+      case 'REPOST_INVALID':
+        return t('REPOST_INVALID', { limit });
       case 'AUTO_REPLY_INVALID':
         return t('AUTO_REPLY_INVALID', { limit });
       case 'AUTO_REPLY_TOO_LONG':
@@ -511,6 +543,7 @@ function PostTypeField({ provider, settings, onChange, disabled }: { provider: s
               delete rest.firstComment;
               delete rest.threadParts;
               delete rest.autoReply;
+              delete rest.repost;
               delete rest.cover;
             }
             onChange(e.target.value === 'feed' ? rest : { ...rest, postType: e.target.value });
@@ -781,6 +814,7 @@ function ChannelEditor({
       </label>
       {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
+      {isProvider(provider) && REPOST_PROVIDERS.has(provider) && postType !== 'story' && <RepostField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {isProvider(provider) && AUTO_REPLY_RULES[provider] && postType !== 'story' && <AutoReplyField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {isProvider(provider) && THREAD_RULES[provider] && postType !== 'story' && <ThreadField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {isProvider(provider) && COMMENT_RULES[provider] && postType !== 'story' && (!threadPartsOf(own.settings) || typeof own.settings.firstComment === 'string') && (

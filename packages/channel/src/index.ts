@@ -197,6 +197,17 @@ export interface CommentInput {
   // The external_call key of this comment.
   callKey: string;
 }
+// A repost of the account's own published post (#773): a retweet on X, a repost on Threads and Bluesky, a boost on
+// Mastodon. It answers like a comment: the repost's own id when accepted.
+export interface RepostInput {
+  externalAccountId: string;
+  secret: string;
+  // The published post's id, as publish returned it.
+  externalId: string;
+  // The external_call key of this repost.
+  callKey: string;
+}
+
 export type CommentResult =
   | { kind: 'accepted'; externalId: string }
   | { kind: 'rejected'; error: Exclude<PublishErrorKind, 'unknown'>; code?: string; message?: string }
@@ -221,6 +232,8 @@ export interface Publisher {
   accountMetrics?(input: AccountMetricsInput): Promise<AccountMetricsResult>;
   // Providers that post a first comment (#587). Never retried by itself: an unclear answer goes to a person.
   comment?(input: CommentInput): Promise<CommentResult>;
+  // Providers that repost the account's own post (#773). Never retried by itself, like a comment.
+  repost?(input: RepostInput): Promise<CommentResult>;
 }
 
 interface SandboxPost {
@@ -240,6 +253,18 @@ export class SandboxPublisher implements Publisher {
 
   // A comment on a post the sandbox holds, or a reply to one of its comments (a thread's part, #742), kept beside it.
   readonly comments: { postId: string; text: string; callKey: string; id: string; rootId?: string }[] = [];
+
+  // A repost of a post the sandbox holds, kept beside it (#773).
+  readonly reposts: { postId: string; callKey: string; id: string }[] = [];
+
+  async repost(input: RepostInput): Promise<CommentResult> {
+    const accessToken = (JSON.parse(input.secret) as { accessToken?: unknown }).accessToken;
+    if (typeof accessToken !== 'string' || !accessToken.startsWith('sbx_')) return { kind: 'rejected', error: 'token_expired', code: 'SANDBOX_TOKEN' };
+    if (!(this.accounts.get(input.externalAccountId) ?? []).some((p) => p.id === input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'NO_SUCH_POST' };
+    const id = `sbx_repost_${randomBytes(9).toString('base64url')}`;
+    this.reposts.push({ postId: input.externalId, callKey: input.callKey, id });
+    return { kind: 'accepted', externalId: id };
+  }
 
   async comment(input: CommentInput): Promise<CommentResult> {
     const accessToken = (JSON.parse(input.secret) as { accessToken?: unknown }).accessToken;

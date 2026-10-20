@@ -11,7 +11,7 @@
 // is posted (POST /api/v1/statuses) with the call's key as its Idempotency-Key, so a repeat of the same call within the
 // instance's window posts nothing new. A content warning (spoiler text) and the visibility (public or unlisted) come
 // from the variant's settings. The limits are the instance's own (GET /api/v2/instance), read before the post.
-import type { CommentInput, CommentResult, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
+import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { ConnectorError, type Fetch } from './oauth.ts';
@@ -240,6 +240,20 @@ export class MastodonPublisher implements Publisher {
       }
     }
     return false;
+  }
+
+  // A boost of the account's own status (#773): POST /api/v1/statuses/:id/reblog, which answers with the boost.
+  async repost(input: RepostInput): Promise<CommentResult> {
+    const s = mastodonSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!STATUS_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      const { data } = await this.client.call<{ id?: unknown }>(s, 'POST', `/api/v1/statuses/${input.externalId}/reblog`, { json: { visibility: 'public' } }, { 'idempotency-key': input.callKey });
+      if (typeof data.id !== 'string' || !STATUS_ID.test(data.id)) return { kind: 'unknown', code: 'NO_STATUS_ID' };
+      return { kind: 'accepted', externalId: data.id };
+    } catch (error) {
+      return commentResult(mastodonResult(error));
+    }
   }
 
   // A reply to the account's own status (#587, #742), as the first comment or a thread's part.
