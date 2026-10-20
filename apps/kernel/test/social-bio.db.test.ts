@@ -143,11 +143,14 @@ suite('social link-in-bio page on PostgreSQL (#707)', () => {
 
     expect(await bioGo(rt, 'bio-tiem', 'button:0', 'Mozilla/5.0')).toBe('https://tiembanh.example/');
     expect(await bioGo(rt, 'bio-tiem', 'button:0', 'facebookexternalhit/1.1')).toBe('https://tiembanh.example/');
+    // Zalo's in-app browser is a person; WhatsApp's link preview fetcher is not.
+    expect(await bioGo(rt, 'bio-tiem', 'button:0', 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36 Zalo android/12345 ZaloTheme/light')).toBe('https://tiembanh.example/');
+    expect(await bioGo(rt, 'bio-tiem', 'button:0', 'WhatsApp/2.23.20.0 A')).toBe('https://tiembanh.example/');
     expect(await bioGo(rt, 'bio-tiem', `post:${postId}`, 'Mozilla/5.0')).toBe('https://tiembanh.example/moi');
     expect(await bioGo(rt, 'bio-tiem', 'button:5', 'Mozilla/5.0')).toBeNull();
     expect(await bioGo(rt, 'bio-tiem', `post:${randomUUID()}`, 'Mozilla/5.0')).toBeNull();
     expect(await bioGo(rt, 'khong-co', 'button:0', 'Mozilla/5.0')).toBeNull();
-    expect((await page(o, o.viewer))?.clicks).toEqual({ 'button:0': 1, [`post:${postId}`]: 1 });
+    expect((await page(o, o.viewer))?.clicks).toEqual({ 'button:0': 2, [`post:${postId}`]: 1 });
 
     // Files: the avatar and the shown post's image, nothing else of the org; none once the page is hidden.
     expect((await fileOf('bio-tiem', avatar)).length).toBe(1);

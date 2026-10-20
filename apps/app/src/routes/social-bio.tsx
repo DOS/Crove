@@ -29,7 +29,7 @@ const draftOf = (p: Page | null, orgName: string): Draft =>
 function Preview({ d }: { d: Draft }) {
   const t = useTranslations('social.bio');
   return (
-    <div className="mx-auto w-full max-w-xs space-y-2 rounded-2xl border bg-background p-4 text-center" aria-label={t('preview')}>
+    <div className="mx-auto w-full max-w-xs space-y-2 rounded-xl border bg-background p-4 text-center" aria-label={t('preview')}>
       {d.avatar[0] && <Thumb fileId={d.avatar[0].fileId} alt="" className="mx-auto size-16 rounded-full" />}
       <p className="text-base font-semibold text-foreground">{d.title || t('titlePlaceholder')}</p>
       {d.about && <p className="text-xs whitespace-pre-line text-muted-foreground">{d.about}</p>}

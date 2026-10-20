@@ -11,8 +11,10 @@ const TARGET = /^(button:[0-9]{1,2}|post:[0-9a-f-]{36})$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // The largest image the page sends (a post image is at most 10 MB in the library).
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-// Link previews and crawlers fetch a link without a person behind them: they follow it, uncounted.
-const AUTOMATED = /bot|crawl|spider|slurp|preview|facebookexternalhit|embedly|headless|zalo|whatsapp|telegram|discord|curl|wget|python|okhttp/i;
+// Link previews and crawlers fetch a link without a person behind them: they follow it, uncounted. Only their own
+// signatures: an app's in-app browser (Zalo, Telegram) is a person and counts. TelegramBot and Discordbot match 'bot';
+// WhatsApp's preview fetcher names itself WhatsApp/<version>.
+const AUTOMATED = /bot|crawl|spider|slurp|preview|facebookexternalhit|embedly|headless|whatsapp\/|curl|wget|python|okhttp/i;
 
 export const BIO_PAGE_CSP = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
