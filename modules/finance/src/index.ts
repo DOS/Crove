@@ -65,7 +65,6 @@ export {
   type VatTaxpayer,
   type VatWarning,
 } from './vat.ts';
-export { PERIOD_TIME_ZONE, vietnamMonth } from './period-lock.ts';
 export { LEDGER_LINE_LIMIT, type AccountLedgerView, type LedgerBook, type LedgerReport } from './ledger-reports.ts';
 export { type FinancialStatements, type StatementLine, type UnmappedRow } from './statements.ts';
 

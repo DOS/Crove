@@ -4,12 +4,13 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
+import { vietnamMonth } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
-import { canLockPeriods, canUnlockPeriods, currentMonth, monthLabel, previousMonth } from '../lib/period-lock.ts';
+import { canLockPeriods, canUnlockPeriods, monthLabel, previousMonth } from '../lib/period-lock.ts';
 import { StepUpPrompt } from './two-factor.tsx';
 import { ErrorText } from './ui.tsx';
 
@@ -18,7 +19,7 @@ export function PeriodLockPanel() {
   const f = useFormat();
   const org = useQuery(orpc.org.get.queryOptions());
   const state = useQuery(orpc.periodLock.state.queryOptions());
-  const [picked, setPicked] = useState(() => previousMonth(currentMonth()));
+  const [picked, setPicked] = useState(() => previousMonth(vietnamMonth()));
   const [unlocking, setUnlocking] = useState(false);
   const [reason, setReason] = useState('');
   // One key per action: a retry after the step-up is the same request; a new one follows each success.
@@ -51,7 +52,7 @@ export function PeriodLockPanel() {
   const canUnlock = canUnlockPeriods(org.data?.role);
   // The month a lock names: the one after the last locked month, or the one picked while nothing is locked.
   const next = data.nextMonth ?? picked;
-  const ended = /^\d{4}-\d{2}$/.test(next) && next < currentMonth();
+  const ended = /^\d{4}-\d{2}$/.test(next) && next < vietnamMonth();
   const last = data.lastMonth;
   const stepUp = isStepUpRequired(unlock.error);
 
@@ -76,7 +77,7 @@ export function PeriodLockPanel() {
                 aria-label={t('month')}
                 className="mt-1 w-44"
                 value={picked}
-                max={previousMonth(currentMonth())}
+                max={previousMonth(vietnamMonth())}
                 onChange={(e) => {
                   setPicked(e.target.value);
                   lock.reset();

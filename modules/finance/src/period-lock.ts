@@ -2,8 +2,8 @@
 // month at a time, in order, and unlocks the last locked month first; nothing posts with an entry date up to the end
 // of the last locked month (20261020070000_crove_finance_period_lock.sql holds every writer to it).
 // - finance.period.lock_state: every member reads what is locked (the ledger screen shows it).
-// - finance.period.lock: owners and admins lock the next month, once it has ended (in Vietnam time). R2, as ADR-0021
-//   section 7 has the close: no step-up, and an agent may only propose it.
+// - finance.period.lock: owners and admins lock the next month, once it has ended (in Vietnam time, by the database
+//   clock). R2, as ADR-0021 section 7 has the close: no step-up, and an agent may only propose it.
 // - finance.period.unlock: owners only, R3 (fresh MFA, P11) with a reason, which the audit row records together with
 //   the month. The audit rows of both commands are the history of the lock.
 // A refused posting answers PERIOD_LOCKED (ledger.ts), so recording, approving, reversing and importing opening
@@ -11,25 +11,23 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { zPeriodLockInput, zPeriodUnlockInput, type PeriodLockState } from '@crove/kernel-contract';
+import { VIETNAM_TIME_ZONE, zPeriodLockInput, zPeriodUnlockInput, type PeriodLockState } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const LOCKERS: readonly MemberRole[] = ['owner', 'admin'];
-export const PERIOD_TIME_ZONE = 'Asia/Ho_Chi_Minh';
 
-// 'YYYY-MM' of `date` in Vietnam.
-export function vietnamMonth(date: Date): string {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: PERIOD_TIME_ZONE, year: 'numeric', month: '2-digit' }).formatToParts(date);
-  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
-  return `${part('year')}-${part('month')}`;
-}
-
-// 'YYYY-MM-DD' of `date` in Vietnam.
-export function vietnamDate(date: Date): string {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: PERIOD_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
-  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
-  return `${part('year')}-${part('month')}-${part('day')}`;
+// Today in Vietnam by the database clock, as 'YYYY-MM-DD' (#560). The rules about "today" that go with the lock read
+// this clock, never the kernel process's: lock_period() refuses a month that has not ended by pg_catalog.now(), and a
+// late posting date may not be after this day (record.ts). now() is the transaction's start, one clock for every
+// kernel process (theirs may drift apart), and the same one the lock and the posting guard run under, so the two
+// rules cannot disagree around midnight. The SPA's hints use @crove/kernel-contract vietnamToday; the kernel decides.
+export async function databaseToday(trx: QueryContext['trx']): Promise<string> {
+  const { rows } = await sql<{ today: string }>`
+    SELECT pg_catalog.to_char(pg_catalog.now() AT TIME ZONE ${VIETNAM_TIME_ZONE}::text, 'YYYY-MM-DD') AS today`.execute(trx);
+  const today = rows[0]?.today;
+  if (!today) throw new Error('the database did not answer the date');
+  return today;
 }
 
 // 'YYYY-MM' of a YYYY-MM-DD date, and the month after or before one.
@@ -130,15 +128,14 @@ export const periodLock = defineCommand({
   access: LOCKERS,
   handler: async (ctx, input): Promise<PeriodLockState> => {
     ctx.audit({ month: input.month });
+    // A month is locked once it is over, so the entries of its last days can still be posted. lock_period() decides by
+    // the database clock (databaseToday above says why that clock), after the order, so a month out of order says which
+    // month comes first.
     try {
       await sql`SELECT crove_finance.lock_period(${`${input.month}-01`}::date)`.execute(ctx.trx);
     } catch (error) {
       lockRefusal(error, input.month);
     }
-    // A month is locked once it is over, so the entries of its last days can still be posted. lock_period() refuses it
-    // by the database clock; this says the same by the runtime's (the refusal rolls the lock back). Both come after the
-    // order, so a month out of order says which month comes first.
-    if (input.month >= vietnamMonth(ctx.now)) throw notEnded(input.month);
     await ctx.activity('finance.period', ctx.orgId, 'period.locked', `Khóa sổ tháng ${monthLabel(input.month)}`);
     return periodLockState(ctx);
   },
