@@ -11,11 +11,11 @@ import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
+import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runCommentJob, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { ExportSealer } from './export-seal.ts';
-import { JOB_SCHEMA, QUEUES, socialPublishQueue } from './jobs-schema.ts';
+import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from './jobs-schema.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
 import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
@@ -129,6 +129,8 @@ interface SocialPublishJob {
   orgId: string;
   variantId: string;
   provider: string;
+  // A person asked for the variant's first comment again (#587): the job posts the comment, not the post.
+  comment?: true;
 }
 
 /** Sends a publish job for each variant with publishing work, for the providers this worker can publish to. */
@@ -371,6 +373,11 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await boss.work<SocialPublishJob>(socialPublishQueue(provider), { batchSize: 1 }, async ([job]) => {
       if (!job || !channels) return;
       const { orgId, variantId } = job.data;
+      if (job.data.comment) {
+        const done = await runCommentJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, true);
+        console.log(`[social-comment] ${provider} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
+        return;
+      }
       const outcome = await runPublishJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider);
       if (outcome.action !== 'none') console.log(`[social-publish] ${provider} variant ${variantId.slice(0, 8)}: ${outcome.action} -> ${outcome.status}`);
     });
@@ -490,6 +497,17 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   retryLimit: ORG_EXPORT_RETRY_LIMIT,
                   retryDelay: 60,
                   retryBackoff: true,
+                });
+              }
+              // A person asked for a first comment again (#587): on the channel's publish queue, keyed apart from its
+              // publish job.
+              if (row.type === 'social.comment.retry_requested') {
+                const provider = String(row.payload.provider);
+                if (!SOCIAL_PUBLISH_QUEUES.includes(socialPublishQueue(provider))) return null;
+                const variantId = String(row.payload.variant_id);
+                return boss.send(socialPublishQueue(provider), { orgId: row.org_id, variantId, provider, comment: true } satisfies SocialPublishJob, {
+                  singletonKey: `${row.org_id}:${variantId}:comment`,
+                  retryLimit: 0,
                 });
               }
               if (row.type === 'kernel.agent.wakeup_requested') {

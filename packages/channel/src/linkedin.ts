@@ -7,7 +7,8 @@
 // Publish: images are uploaded first (initializeUpload, then a PUT of the bytes; nothing is visible until the post
 // names them), then one POST /rest/posts. A member app cannot list the member's posts, so an unclear answer cannot be
 // checked: publishSafety 'never', and such a post waits for a person.
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
+import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -298,6 +299,23 @@ export class LinkedInPublisher implements Publisher {
     }
     if (Date.now() >= budgetEnd) return late();
     return this.post(token, author, textOf(input.content), { media: { id: urn } });
+  }
+
+  // A comment under the member's post (#587), through the Social Actions API with the same w_member_social grant.
+  async comment(input: CommentInput): Promise<CommentResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!MEMBER_ID.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
+    if (!/^urn:li:(share|ugcPost):\d{1,32}$/.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    const actor = `urn:li:person:${input.externalAccountId}`;
+    try {
+      const answer = await this.client.call('POST', `/rest/socialActions/${encodeURIComponent(input.externalId)}/comments`, token, { actor, object: input.externalId, message: { text: input.text } });
+      const id = answer.id ?? '';
+      if (!id) return { kind: 'unknown', code: 'NO_COMMENT_ID' };
+      return { kind: 'accepted', externalId: id.slice(0, 500) };
+    } catch (error) {
+      return commentResult(publishResult(error));
+    }
   }
 
   // The one visible step.

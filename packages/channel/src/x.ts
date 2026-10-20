@@ -6,7 +6,8 @@
 // token lives two hours and the refresh schedule renews it, keeping whichever refresh token X hands back.
 // Publish: each image is uploaded first (nothing is visible until a post names it), then one POST /2/tweets; a video
 // goes through the chunked upload and X's processing first (#449). An unclear answer is checked against the account's recent posts by text and time.
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -319,6 +320,21 @@ export class XPublisher implements Publisher {
       }
     }
     return this.post(s.accessToken, text, mediaIds);
+  }
+
+  // A reply in the post's thread (#587), as the first comment X has none of its own.
+  async comment(input: CommentInput): Promise<CommentResult> {
+    const s = xSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!POST_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      const answer = await this.client.call<{ data?: { id?: unknown } }>('POST', '/tweets', s.accessToken, { json: { text: input.text, reply: { in_reply_to_tweet_id: input.externalId } } });
+      const id = answer?.data?.id;
+      if (typeof id !== 'string' || !POST_ID.test(id)) return { kind: 'unknown', code: 'NO_POST_ID' };
+      return { kind: 'accepted', externalId: id };
+    } catch (error) {
+      return commentResult(publishResult(error));
+    }
   }
 
   // The one visible step.

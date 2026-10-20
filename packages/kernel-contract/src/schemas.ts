@@ -847,6 +847,8 @@ export const zSocialVariant = z.object({
   status: z.enum(SOCIAL_VARIANT_STATUSES),
   effectiveAt: z.string().nullable(),
   queueSlotAt: z.string().nullable(),
+  // The first comment of a published channel (#587): pending, posted, failed, unknown; null without one.
+  commentStatus: z.enum(['pending', 'posted', 'failed', 'unknown']).nullable(),
   // Waiting on a slot of a queue a person paused.
   queuePaused: z.boolean(),
   attempt: z.number().int(),

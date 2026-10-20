@@ -239,6 +239,8 @@ export const contract = {
       decide: oc.input(zSocialDecide).output(z.object({ postId: zId, decision: z.string(), variants: z.array(zId), waiting: z.array(zId) })),
       schedule: oc.input(zSocialSchedule).output(z.object({ postId: zId, scheduled: z.array(z.object({ variantId: zId, at: z.string() })) })),
       unschedule: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
+      // Post a published channel's first comment again (#587), after a failure or an unclear answer.
+      retryComment: oc.input(z.strictObject({ variantId: zId })).output(z.object({ variantId: zId })),
       cancel: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
       // Publish failed or needs_attention variants again now (a new attempt).
       retry: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),

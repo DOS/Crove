@@ -355,6 +355,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         decide: os.social.variants.decide.handler(socialCommand('social.variant.decide')),
         schedule: os.social.variants.schedule.handler(socialCommand('social.variant.schedule')),
         unschedule: os.social.variants.unschedule.handler(socialCommand('social.variant.unschedule')),
+        retryComment: os.social.variants.retryComment.handler(socialCommand('social.comment.retry')),
         cancel: os.social.variants.cancel.handler(socialCommand('social.variant.cancel')),
         retry: os.social.variants.retry.handler(socialCommand('social.variant.retry')),
         resolve: os.social.variants.resolve.handler(socialCommand('social.variant.resolve')),
