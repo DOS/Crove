@@ -1,6 +1,7 @@
 // The composer's preview of a channel (#588): the post laid out the way its platform shows it in the feed, with the
 // text cut where the platform cuts it, images in its frame and a link card where it makes one.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { isProvider, LINK_PLACEMENT, sentText } from '@crove/mod-social/contract';
 import { useTranslations } from 'use-intl';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, type MediaItem } from './social-media.tsx';
@@ -32,7 +33,11 @@ function Media({ media, layout, max }: { media: readonly MediaItem[]; layout: st
     return (
       <div className="relative mt-3">
         <Thumb fileId={first.fileId} alt={alt(first, 0)} mime={first.mime} durationMs={first.durationMs} className={cn(frame, 'mx-auto w-full')} />
-        {media.length > 1 && <span className="absolute top-2 right-2 rounded-full bg-background/80 px-2 text-xs text-foreground tabular-nums">1/{media.length}</span>}
+        {media.length > 1 && (
+          <span className="absolute top-2 right-2 rounded-full bg-background/80 px-2 text-xs text-foreground tabular-nums" aria-label={t('previewCount', { count: media.length })}>
+            1/{media.length}
+          </span>
+        )}
       </div>
     );
   }
@@ -55,16 +60,23 @@ export function PlatformPreview({ channel, provider, content }: { channel: strin
   const t = useTranslations('social');
   const rule = previewRule(provider);
   const [open, setOpen] = useState(false);
+  // An edit shows the cut again, as the feed would.
+  useEffect(() => setOpen(false), [content.body]);
   const host = hostOf(content.linkUrl);
-  const text = previewText(content.body, open ? null : rule.cut);
+  // The text as the channel sends it: some append the link to it (TikTok, YouTube, Facebook with images).
+  const sent = isProvider(provider) ? sentText(provider, content.body, content.linkUrl || null, content.media.length) : content.body;
+  const linkInText = sent !== content.body;
+  // Instagram and the others whose adapter never sends the link.
+  const linkDropped = Boolean(host) && isProvider(provider) && LINK_PLACEMENT[provider] === 'apart' && !rule.linkCard;
+  const text = previewText(sent, open ? null : rule.cut);
   const title = hasTitle(provider) && content.title ? content.title : '';
-  const body = content.body ? (
+  const body = sent ? (
     <p className="text-sm [overflow-wrap:anywhere] whitespace-pre-wrap text-foreground">
       {text.shown}
       {text.more && (
         <>
           {'… '}
-          <button type="button" className="font-medium text-muted-foreground hover:underline" onClick={() => setOpen(true)}>
+          <button type="button" aria-expanded={open} className="font-medium text-muted-foreground hover:underline" onClick={() => setOpen(true)}>
             {t('previewMore')}
           </button>
         </>
@@ -75,20 +87,22 @@ export function PlatformPreview({ channel, provider, content }: { channel: strin
   );
   const header = (
     <div className="flex items-center gap-2">
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-link">{channel.slice(0, 1).toUpperCase()}</span>
+      <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-link">
+        {channel.slice(0, 1).toUpperCase()}
+      </span>
       <div className="min-w-0">
         <p className="truncate text-sm font-medium text-foreground">{channel}</p>
         <p className="text-xs text-subtle-foreground">{providerName(provider)}</p>
       </div>
     </div>
   );
-  const card = rule.linkCard && host && content.media.length === 0 && (
+  const card = rule.linkCard && host && !linkInText && content.media.length === 0 && (
     <div className="mt-3 overflow-hidden rounded-lg border bg-muted">
       <div className="aspect-[1.91/1] bg-background/40" />
       <p className="truncate px-3 py-2 font-mono text-xs text-muted-foreground uppercase">{host}</p>
     </div>
   );
-  const plainLink = !rule.linkCard && host && <p className="mt-2 text-xs text-subtle-foreground">{t('previewLinkNotClickable', { host })}</p>;
+  const plainLink = linkDropped ? <p className="mt-2 text-xs text-subtle-foreground">{t('previewLinkNotSent', { host })}</p> : null;
 
   if (rule.layout === 'vertical') {
     // TikTok: the video fills the frame, the caption sits over its lower part.
