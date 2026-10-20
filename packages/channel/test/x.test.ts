@@ -277,3 +277,15 @@ describe('X post counts (#797)', () => {
     expect(await ask({ status: 503, body: {} })).toBeNull();
   });
 });
+
+describe('X followers (#819)', () => {
+  it('reads followers only on the metrics switch, for the connected account', async () => {
+    expect(new XPublisher(APP).accountMetrics).toBeUndefined();
+    const { fetchImpl, calls } = x({ 'GET api.x.com/2/users/me': [{ body: { data: { id: USER, public_metrics: { followers_count: 321, following_count: 5 } } } }, { body: { data: { id: '999', public_metrics: { followers_count: 1 } } } }] });
+    const publisher = new XPublisher(APP, fetchImpl, {}, { metrics: true });
+    expect(await publisher.accountMetrics?.({ externalAccountId: USER, secret: SECRET })).toEqual({ followers: 321 });
+    expect(calls[0]?.url.searchParams.get('user.fields')).toBe('public_metrics');
+    // Another account answered (a token for someone else): nothing kept.
+    expect(await publisher.accountMetrics?.({ externalAccountId: USER, secret: SECRET })).toBeNull();
+  });
+});
