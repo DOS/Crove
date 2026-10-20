@@ -27,6 +27,12 @@ const row = (accountCode: string, debit: string, credit: string, accountName = '
   debit,
   credit,
 });
+// A 131 or 331 row of one customer or vendor (#689). Tax codes are the repo's checksum-invalid fixtures.
+const partyRow = (accountCode: string, debit: string, credit: string, partyTaxCode?: string, partyName?: string): OpeningBalanceRow => ({
+  ...row(accountCode, debit, credit),
+  ...(partyTaxCode !== undefined ? { partyTaxCode } : {}),
+  ...(partyName !== undefined ? { partyName } : {}),
+});
 const input = (rows: OpeningBalanceRow[], asOf = '2025-12-31'): OpeningBalanceImport => ({ asOf, rows });
 
 describe('parseOpeningAmount', () => {
@@ -95,12 +101,12 @@ describe('checkOpeningBalance', () => {
     expect(preview.rows.map((r) => r.skipped)).toEqual([false, false, true, true, false, false, false]);
     expect(preview.rows[0]?.accountName).toBe('Tiền mặt');
     expect(lines).toEqual([
-      { lineNo: 1, accountCode: '111', debit: '50000000', credit: '0' },
-      { lineNo: 2, accountCode: '112', debit: '150000000', credit: '0' },
-      { lineNo: 3, accountCode: '131', debit: '30000000', credit: '0' },
-      { lineNo: 4, accountCode: '131', debit: '0', credit: '5000000' },
-      { lineNo: 5, accountCode: '331', debit: '0', credit: '25000000' },
-      { lineNo: 6, accountCode: '411', debit: '0', credit: '200000000' },
+      { lineNo: 1, accountCode: '111', debit: '50000000', credit: '0', party: null },
+      { lineNo: 2, accountCode: '112', debit: '150000000', credit: '0', party: null },
+      { lineNo: 3, accountCode: '131', debit: '30000000', credit: '0', party: null },
+      { lineNo: 4, accountCode: '131', debit: '0', credit: '5000000', party: null },
+      { lineNo: 5, accountCode: '331', debit: '0', credit: '25000000', party: null },
+      { lineNo: 6, accountCode: '411', debit: '0', credit: '200000000', party: null },
     ]);
     expect(preview.lines).toBe(6);
   });
@@ -187,6 +193,87 @@ describe('checkOpeningBalance', () => {
     expect(checkOpeningBalance(input(rows, '2026-01-05'), CHART, { openingEntry: null, firstEntryDate: '2026-01-05' }).preview.errors).toEqual(['AFTER_ENTRIES']);
     expect(checkOpeningBalance(input(rows, '2026-02-01'), CHART, { openingEntry: null, firstEntryDate: '2026-01-05' }).preview.errors).toEqual(['AFTER_ENTRIES']);
     expect(checkOpeningBalance(input(rows, '2026-01-04'), CHART, { openingEntry: null, firstEntryDate: '2026-01-05' }).preview.ok).toBe(true);
+  });
+
+  it('splits receivables and payables per party, with an unallocated rest, and carries the party to the lines (#689)', () => {
+    const { preview, lines } = checkOpeningBalance(
+      input([
+        partyRow('131', '30000000', '', ' 0101.234.564 ', 'Công ty Khách A'),
+        partyRow('131', '10000000', '', '0309876546-001'),
+        // A customer without a tax code, by name; spaces are tidied.
+        partyRow('131', '2000000', '', '', '  Khách  lẻ '),
+        // The rest of 131 that the firm cannot split.
+        row('131', '8000000', ''),
+        partyRow('331', '', '25000000', '0312345670', 'NCC B'),
+        row('411', '', '25000000'),
+      ]),
+      CHART,
+      EMPTY_LEDGER,
+    );
+    expect(preview.ok).toBe(true);
+    expect(preview.rows.map((r) => [r.partyTaxCode, r.partyName])).toEqual([
+      ['0101234564', 'Công ty Khách A'],
+      ['0309876546-001', null],
+      [null, 'Khách lẻ'],
+      [null, null],
+      ['0312345670', 'NCC B'],
+      [null, null],
+    ]);
+    expect(lines.map((l) => [l.accountCode, l.debit, l.credit, l.party])).toEqual([
+      ['131', '30000000', '0', { taxCode: '0101234564', name: 'Công ty Khách A' }],
+      ['131', '10000000', '0', { taxCode: '0309876546-001', name: '' }],
+      ['131', '2000000', '0', { taxCode: null, name: 'Khách lẻ' }],
+      ['131', '8000000', '0', null],
+      ['331', '0', '25000000', { taxCode: '0312345670', name: 'NCC B' }],
+      ['411', '0', '25000000', null],
+    ]);
+  });
+
+  it('flags the same account and party twice, a party off 131 and 331, and a tax code that is not one (#689)', () => {
+    const { preview, lines } = checkOpeningBalance(
+      input([
+        // The same customer written two ways is one party: both rows are flagged.
+        partyRow('131', '1000000', '', '0101234564'),
+        partyRow('131', '2000000', '', '0101 234 564', 'Công ty Khách A'),
+        // The same name without a tax code, case aside.
+        partyRow('331', '', '1000000', '', 'NCC Lẻ'),
+        partyRow('331', '', '1000000', '', 'ncc lẻ'),
+        // Two unallocated rows of one account are a duplicate as before.
+        row('331', '', '500000'),
+        row('331', '', '500000'),
+        partyRow('111', '1000000', '', '0101234564'),
+        partyRow('131', '1000000', '', 'MST-123'),
+        row('411', '', '2000000'),
+      ]),
+      CHART,
+      EMPTY_LEDGER,
+    );
+    expect(preview.ok).toBe(false);
+    expect(lines).toEqual([]);
+    expect(preview.rows.map((r) => r.errors)).toEqual([
+      ['ACCOUNT_DUPLICATE'],
+      ['ACCOUNT_DUPLICATE'],
+      ['ACCOUNT_DUPLICATE'],
+      ['ACCOUNT_DUPLICATE'],
+      ['ACCOUNT_DUPLICATE'],
+      ['ACCOUNT_DUPLICATE'],
+      ['PARTY_NOT_ALLOWED'],
+      ['PARTY_TAX_CODE_INVALID'],
+      [],
+    ]);
+    // An invalid code is shown as written, so the row can be found and fixed.
+    expect(preview.rows[7]?.partyTaxCode).toBe('MST-123');
+  });
+
+  it('allows a party on a sub-account of 131 or 331 and ignores the party of a row with no balance (#689)', () => {
+    const chart = new Map(CHART).set('1311.VCB', { code: '1311.VCB', name: 'Phải thu chi tiết', active: true });
+    const { preview } = checkOpeningBalance(
+      input([partyRow('1311.VCB', '1000000', '', '0101234564'), partyRow('112', '', '', '0101234564'), row('411', '', '1000000')]),
+      chart,
+      EMPTY_LEDGER,
+    );
+    expect(preview.ok).toBe(true);
+    expect(preview.rows.map((r) => r.skipped)).toEqual([false, true, false]);
   });
 
   it('posts exactly when every row is clean and the totals match, and the lines always balance', () => {

@@ -34,7 +34,7 @@ test('import opening balances from the Excel template', async ({ page }) => {
     await workbook.xlsx.readFile(template);
     const sheet = workbook.worksheets[0];
     if (!sheet) throw new Error('the template has no worksheet');
-    expect((sheet.getRow(1).values as unknown[]).slice(1)).toEqual(['Mã tài khoản', 'Tên tài khoản', 'Dư Nợ', 'Dư Có']);
+    expect((sheet.getRow(1).values as unknown[]).slice(1)).toEqual(['Mã tài khoản', 'Tên tài khoản', 'Dư Nợ', 'Dư Có', 'MST đối tượng', 'Tên đối tượng']);
     sheet.eachRow((row) => {
       const amount = amounts[String(row.getCell(1).value)];
       if (!amount) return;
