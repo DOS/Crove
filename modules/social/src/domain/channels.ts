@@ -116,11 +116,17 @@ export function sentText(provider: Provider, body: string, linkUrl: string | nul
   return [text, link].filter(Boolean).join('\n\n');
 }
 
-// The first comment each channel's Crove adapter posts after the post (#587), and how its text is counted: a comment
-// on LinkedIn, a reply in the thread on X and Bluesky. Facebook, Instagram and Threads need a further permission at
-// connect time and come later; a channel missing here takes no first comment.
+// The first comment each channel's Crove adapter posts after the post (#587, #609), and how its text is counted: a
+// comment on LinkedIn, Facebook Pages and Instagram, a reply in the thread on X, Bluesky and Threads. Facebook,
+// Instagram and Threads need a permission Crove asks for at connect time since #609; a connection made earlier is
+// refused by the platform and comments once it reconnects. A channel missing here takes no first comment.
+// Limits (#609): a Facebook comment message 8000 characters, an Instagram comment 2200 characters (its hashtag cap is
+// not enforced reliably by the API, so it is not checked), a Threads reply 500 characters, counted as Threads post text.
 export const COMMENT_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
   sandbox: { max: 1000, count: 'graphemes', required: false },
+  facebook_page: { max: 8000, count: 'utf16', required: false },
+  instagram: { max: 2200, count: 'utf16', required: false },
+  threads: { max: 500, count: 'codepoints', required: false },
   linkedin: { max: 1250, count: 'utf16', required: false },
   x: { max: 280, count: 'weighted', required: false },
   bluesky: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },

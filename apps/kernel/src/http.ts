@@ -73,7 +73,7 @@ import { exportAad, exportSealer } from './export-seal.ts';
 import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts';
 import { createInviteMailSender } from './invite-mail.ts';
 import { pgBossSchemaVersion } from './jobs-schema.ts';
-import type { Mailer } from './mail.ts';
+import type { MailProvider } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { reviewAnswer, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
@@ -105,7 +105,7 @@ export interface HttpDeps {
   pool: pg.Pool;
   aiEnabled: boolean;
   // Outbound mail for invites (issue #129). Unset: off, and the inviter passes the one-time link on.
-  mailer?: Mailer;
+  mailer?: MailProvider;
   // Per-client budget for Supabase Auth's emails (#190). Unset: the database limiter on `pool`.
   emailLimiter?: EmailLimiter;
   // The member invite checks for AUTH_SIGNUP_POLICY (#350, #563). Unset: the database checks on `pool`.

@@ -15,7 +15,7 @@ import { Runtime, type BlobStore } from '@crove/kernel-runtime';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig, type Config } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
-import { createLogMailer, type Mailer, type OutboundMail } from '../src/mail.ts';
+import { classifySmtpError, createLogProvider, type MailProvider, type OutboundMail } from '@crove/mail';
 import { createSessionStatusSource } from '../src/sessions.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -45,13 +45,17 @@ suite('invite mail on PostgreSQL', () => {
   let printed: string[] = [];
 
   const sent: OutboundMail[] = [];
-  const capturing: Mailer = {
+  // A provider that takes every mail and names it as an HTTP provider would (#539).
+  const capturing: MailProvider = {
+    name: 'capture',
     enabled: true,
+    sendRetrySafety: 'never',
     async send(mail) {
       sent.push(mail);
+      return { status: 'accepted', providerMessageId: `capture-${sent.length}` };
     },
   };
-  function appWith(mailer?: Mailer, overrides: Partial<Config> = {}) {
+  function appWith(mailer?: MailProvider, overrides: Partial<Config> = {}) {
     const deps = { config: { ...config, PUBLIC_URL, ...overrides }, runtime, store: {} as BlobStore, authenticate: createAuthenticator(config, db), pool, aiEnabled: false };
     return createHttpApp(mailer ? { ...deps, mailer } : deps);
   }
@@ -117,8 +121,17 @@ suite('invite mail on PostgreSQL', () => {
   // The mail_message row of an invite's mail (#538).
   async function mailRow(inviteId: unknown) {
     return admin(async (c) => {
-      const { rows } = await c.query<{ status: string; error_code: string | null; to_address: string; message_id_header: string; created_by: string; attempts: number }>(
-        `SELECT status, error_code, to_address, message_id_header, created_by::text, attempts FROM crove_kernel.mail_message
+      const { rows } = await c.query<{
+        status: string;
+        error_code: string | null;
+        to_address: string;
+        message_id_header: string;
+        created_by: string;
+        attempts: number;
+        provider: string | null;
+        provider_message_id: string | null;
+      }>(
+        `SELECT status, error_code, to_address, message_id_header, created_by::text, attempts, provider, provider_message_id FROM crove_kernel.mail_message
           WHERE source = 'kernel.member.invite.create' AND source_id = $1`,
         [inviteId],
       );
@@ -216,7 +229,8 @@ suite('invite mail on PostgreSQL', () => {
     expect(mail?.text).toContain(`${PUBLIC_URL}/-/invite#${token}`);
     expect(mail?.text).toContain(`Chủ Lan (${owner.email}) mời bạn tham gia tổ chức "${org.name}" trên Crove với vai trò thành viên.`);
     expect(mail?.html).toContain(`href="${PUBLIC_URL}/-/invite#${token}"`);
-    // Its row: sent, by the owner, under the Message-ID the mail carried; never the body.
+    // Its row: sent, by the owner, under the Message-ID the mail carried, with the provider that took it and the id
+    // it gave it (#539: delivery events find the row by them); never the body.
     expect(await mailRow(created.body?.inviteId)).toEqual({
       status: 'sent',
       error_code: null,
@@ -224,6 +238,8 @@ suite('invite mail on PostgreSQL', () => {
       message_id_header: mail?.messageId,
       created_by: owner.userId,
       attempts: 1,
+      provider: 'capture',
+      provider_message_id: 'capture-1',
     });
     expect(mail?.messageId).toMatch(/^<[0-9a-f-]{36}@crove\.invalid>$/);
 
@@ -305,11 +321,13 @@ suite('invite mail on PostgreSQL', () => {
     const invitee = await signIn('invitee');
     const org = await orgOf(owner);
     let attempts = 0;
-    const down: Mailer = {
+    const down: MailProvider = {
+      name: 'smtp',
       enabled: true,
+      sendRetrySafety: 'never',
       async send(mail) {
         attempts++;
-        throw Object.assign(new Error(`connect ECONNREFUSED while sending ${mail.text}`), { code: 'ECONNECTION' });
+        return classifySmtpError(Object.assign(new Error(`connect ECONNREFUSED while sending ${mail.text}`), { code: 'ECONNECTION' }));
       },
     };
     // Real backoff (0.5 s, then 2 s) within the 10 s deadline.
@@ -319,11 +337,13 @@ suite('invite mail on PostgreSQL', () => {
     expect(attempts).toBe(3);
     const token = tokenOf(created.body?.acceptPath);
     expect(printed).toContain('[mail] invite mail not sent after 3 attempt(s): ECONNECTION');
-    expect(await mailRow(created.body?.inviteId)).toMatchObject({ status: 'failed', error_code: 'SEND_FAILED' });
+    expect(await mailRow(created.body?.inviteId)).toMatchObject({ status: 'failed', error_code: 'SEND_FAILED', provider: 'smtp', provider_message_id: null });
 
     // A mailer that throws before returning a promise (a bug) does not fail the invite either.
-    const syncThrow: Mailer = {
+    const syncThrow: MailProvider = {
+      name: 'smtp',
       enabled: true,
+      sendRetrySafety: 'never',
       send: () => {
         throw Object.assign(new TypeError(`sync ${token}`), { code: 'EMESSAGE' });
       },
@@ -348,7 +368,7 @@ suite('invite mail on PostgreSQL', () => {
     const owner = await signIn('owner');
     const org = await orgOf(owner);
     const lines: string[] = [];
-    const off = appWith(createLogMailer((l) => lines.push(l)));
+    const off = appWith(createLogProvider((l) => lines.push(l)));
     const created = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: 'someone@mail.test', role: 'viewer' }, org.slug, off);
     expect(created).toMatchObject({ status: 200 });
     expect(lines).toEqual([`[mail] not sent, SMTP_HOST is not set: "Lời mời tham gia ${org.name} trên Crove"`]);

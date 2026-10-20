@@ -142,6 +142,12 @@ export const recordDirectMail = defineCommand({
       .string()
       .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
       .optional(),
+    // The provider that took the mail, and the id it gave it (#539): its delivery events find the row by them.
+    provider: z
+      .string()
+      .regex(/^[a-z][a-z0-9_]{0,31}$/)
+      .optional(),
+    providerMessageId: z.string().min(1).max(255).optional(),
   }),
   risk: 'R1',
   access: ALL,
@@ -165,6 +171,8 @@ export const recordDirectMail = defineCommand({
         attempts: row.attempts + 1,
         error_code: input.outcome === 'failed' ? (input.errorCode ?? 'SEND_FAILED') : null,
         sent_at: input.outcome === 'sent' ? ctx.now : null,
+        ...(input.provider ? { provider: input.provider } : {}),
+        ...(input.outcome === 'sent' && input.providerMessageId ? { provider_message_id: input.providerMessageId } : {}),
         updated_at: ctx.now,
       })
       .where('org_id', '=', ctx.orgId)

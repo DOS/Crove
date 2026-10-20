@@ -239,6 +239,12 @@ const schema = z.object({
   SMTP_USER: optional,
   SMTP_PASS: optional,
   SMTP_FROM: optional,
+  // The provider of Crove's own mails (#539, Email plan §3.9): smtp (the settings above; off without SMTP_HOST) or
+  // resend (RESEND_API_KEY; SMTP_FROM, on a domain verified at Resend, stays the sender). RESEND_WEBHOOK_SECRET
+  // (whsec_...) checks the signature of Resend's delivery webhooks.
+  MAIL_PROVIDER: z.preprocess((v) => (v === '' ? undefined : v), z.enum(['smtp', 'resend']).default('smtp')),
+  RESEND_API_KEY: optional,
+  RESEND_WEBHOOK_SECRET: optional.pipe(z.string().regex(/^whsec_[A-Za-z0-9+/=]{24,}$/, 'RESEND_WEBHOOK_SECRET is the whsec_... signing secret of the webhook').optional()),
   // Where the app's "Góp ý / Hỗ trợ" (feedback and support) link goes: an https: page (a chat group, a help desk) or
   // a mailto: address. Unset hides the link. Browsers see it through /api/config, so it must hold nothing secret.
   SUPPORT_URL: optional.pipe(
@@ -328,6 +334,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error('set both S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or neither to use the default credential chain');
   }
   if (config.SMTP_HOST && !config.SMTP_FROM) throw new Error('SMTP_HOST needs SMTP_FROM, the sender address of Crove mails');
+  if (config.MAIL_PROVIDER === 'resend' && (!config.RESEND_API_KEY || !config.SMTP_FROM)) {
+    throw new Error('MAIL_PROVIDER=resend needs RESEND_API_KEY and SMTP_FROM, the sender address on a domain verified at Resend');
+  }
   const presigned = config.STORAGE === 's3' && config.S3_PRESIGNED_URLS === 'true';
   // Cloudflare R2 has no POST policy uploads: with presigned URLs on, every browser upload would fail at the bucket.
   if (presigned && [config.S3_ENDPOINT, config.S3_PUBLIC_ENDPOINT].some(isR2Endpoint)) {
