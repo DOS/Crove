@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { ORG_HEADER } from '@crove/kernel-contract';
+import { DIRECT_UPLOAD_MAX_BYTES, MAX_UPLOAD_BYTES, ORG_HEADER } from '@crove/kernel-contract';
 import {
   BlobConflictError,
   BlobNotFoundError,
@@ -20,6 +20,7 @@ import {
   type Runtime,
 } from '@crove/kernel-runtime';
 import type { AuthUser } from '../src/auth.ts';
+import { ConcurrencyLimiter } from '../src/concurrency.ts';
 import { assertExportKey, loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
 import { buildZip } from '../../extract/test/zip-fixture.ts';
@@ -542,5 +543,135 @@ describe('ZIP uploads (bulk intake, #314)', () => {
     expect(rar.status).toBe(415);
     expect(await rar.json()).toMatchObject({ code: 'UNSUPPORTED_TYPE' });
     expect(executed.length).toBe(count);
+  });
+});
+
+describe('uploads through the kernel (#432)', () => {
+  const MiB = 1024 * 1024;
+  const user: AuthUser = { userId: randomUUID(), email: 'member@example.com', name: null, aal: 'aal1', sessionId: randomUUID(), mfaAt: null };
+  const orgId = randomUUID();
+  const headers = { authorization: 'Bearer t', [ORG_HEADER]: 'acme' };
+  const config = loadConfig({ DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: 'crove-auth', WEB_DIST: '/nonexistent' });
+  const executed: string[] = [];
+  const runtime = {
+    installed: () => true,
+    modules: () => ['kernel', 'finance'],
+    forUser: async () => [{ orgId, slug: 'acme', name: 'Acme', role: 'member' }],
+    execute: async (name: string) => {
+      executed.push(name);
+      return { fileId: randomUUID(), duplicate: false };
+    },
+  } as unknown as Runtime;
+  // Each put waits for the test to let it through while `hold` is set, so a request can be kept in flight.
+  let hold: Promise<void> | null = null;
+  const stored: string[] = [];
+  const store = (presigned: boolean): BlobStore => ({
+    put: async (key) => {
+      await hold;
+      stored.push(key);
+      return undefined as unknown as string;
+    },
+    get: async () => {
+      throw new BlobNotFoundError('x');
+    },
+    delete: async () => undefined,
+    // Only its presence matters here: the store takes presigned uploads.
+    ...(presigned ? { direct: {} as NonNullable<BlobStore['direct']> } : {}),
+  });
+  const appWith = (presigned: boolean, slots?: { directUploads?: ConcurrencyLimiter; largeUploads?: ConcurrencyLimiter }) =>
+    createHttpApp({ config, runtime, store: store(presigned), authenticate: async () => user, pool: {} as pg.Pool, aiEnabled: false, ...slots });
+  const pdf = (size: number) => {
+    const bytes = new Uint8Array(size);
+    bytes.set(new TextEncoder().encode('%PDF-1.4\n'));
+    return bytes;
+  };
+  const png = (size: number) => {
+    const bytes = new Uint8Array(size);
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    return bytes;
+  };
+  // The multipart body with its length, as browsers send it (a FormData body alone has no Content-Length here).
+  async function post(app: ReturnType<typeof createHttpApp>, bytes: Uint8Array<ArrayBuffer>, name: string, purpose = 'document', withLength = true) {
+    const form = new FormData();
+    form.append('purpose', purpose);
+    form.append('file', new File([bytes], name, { type: 'application/octet-stream' }));
+    if (!withLength) return app.request('/api/files', { method: 'POST', body: form, headers });
+    const encoded = new Response(form);
+    const body = new Uint8Array(await encoded.arrayBuffer());
+    return app.request('/api/files', {
+      method: 'POST',
+      body,
+      headers: { ...headers, 'content-type': encoded.headers.get('content-type') ?? '', 'content-length': String(body.byteLength) },
+    });
+  }
+
+  it('takes a document of at most 4 MB when the store takes presigned uploads, and refuses a larger one before storing it', async () => {
+    const app = appWith(true);
+    expect((await post(app, pdf(DIRECT_UPLOAD_MAX_BYTES), 'hd.pdf')).status).toBe(200);
+    const count = executed.length;
+    const blobs = stored.length;
+    const refused = await post(app, pdf(DIRECT_UPLOAD_MAX_BYTES + 1), 'lon.pdf');
+    expect(refused.status).toBe(413);
+    expect(await refused.json()).toEqual({ code: 'TOO_LARGE', message: 'lon.pdf lớn hơn 4 MB; máy chủ này nhận tệp lớn qua kho lưu trữ (POST /api/files/uploads)' });
+    expect(executed.length).toBe(count);
+    expect(stored.length).toBe(blobs);
+  });
+
+  it('checks membership before a slot is taken, so a stranger to the org holds none', async () => {
+    const directUploads = new ConcurrencyLimiter({ total: 1 });
+    const app = appWith(true, { directUploads });
+    const form = new FormData();
+    form.append('file', new File([pdf(1024)], 'a.pdf'));
+    const refused = await app.request('/api/files', { method: 'POST', body: form, headers: { ...headers, [ORG_HEADER]: 'other-org', 'content-length': '2048' } });
+    expect([403, 404]).toContain(refused.status);
+    expect(directUploads.inUse).toBe(0);
+  });
+
+  it('keeps the other limits: documents up to 25 MB on a store without presigned uploads, Social images with them', async () => {
+    expect((await post(appWith(false), pdf(5 * MiB), 'hd.pdf')).status).toBe(200);
+    expect((await post(appWith(true), png(5 * MiB), 'anh.png', 'social')).status).toBe(200);
+    const tooLarge = await post(appWith(false), pdf(MAX_UPLOAD_BYTES + 1), 'lon.pdf');
+    expect(tooLarge.status).toBe(413);
+  });
+
+  it('holds a direct-upload slot per body and answers 503 UPLOAD_BUSY with Retry-After when they are all taken', async () => {
+    const directUploads = new ConcurrencyLimiter({ total: 1 });
+    const app = appWith(true, { directUploads });
+    let open = () => {};
+    hold = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const first = post(app, pdf(1024), 'a.pdf');
+    await vi.waitFor(() => expect(directUploads.inUse).toBe(1));
+    const busy = await post(app, pdf(1024), 'b.pdf');
+    expect(busy.status).toBe(503);
+    expect(busy.headers.get('retry-after')).toBe('3');
+    expect(await busy.json()).toMatchObject({ code: 'UPLOAD_BUSY' });
+    open();
+    hold = null;
+    expect((await first).status).toBe(200);
+    expect(directUploads.inUse).toBe(0);
+    expect((await post(app, pdf(1024), 'b.pdf')).status).toBe(200);
+    expect(directUploads.inUse).toBe(0);
+  });
+
+  it('gives a body without a length a large slot, taken before the body is read', async () => {
+    const directUploads = new ConcurrencyLimiter({ total: 4 });
+    const largeUploads = new ConcurrencyLimiter({ total: 1, perKey: 1 });
+    const app = appWith(false, { directUploads, largeUploads });
+    let open = () => {};
+    hold = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const first = post(app, pdf(1024), 'a.pdf', 'document', false);
+    await vi.waitFor(() => expect(largeUploads.inUse).toBe(1));
+    expect(directUploads.inUse).toBe(0);
+    expect((await post(app, pdf(1024), 'b.pdf', 'document', false)).status).toBe(503);
+    open();
+    hold = null;
+    expect((await first).status).toBe(200);
+    // A body with its length takes a direct-upload slot.
+    expect((await post(app, pdf(1024), 'c.pdf')).status).toBe(200);
+    expect(largeUploads.inUse + directUploads.inUse).toBe(0);
   });
 });

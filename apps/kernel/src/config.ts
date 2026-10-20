@@ -84,7 +84,8 @@ const schema = z.object({
   S3_PUBLIC_ENDPOINT: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
   // Staged upload completions one API process runs at once (issue #223): each buffers the staged file (up to 25 MB)
   // while it hashes and writes it. Past it, and past half of it for one user, completions answer 503 UPLOAD_BUSY with
-  // Retry-After and their grant stays unused.
+  // Retry-After and their grant stays unused. Uploads through POST /api/files (#432) get twice as many slots, on the
+  // same terms (bulk intake sends its documents three at a time).
   UPLOAD_COMPLETE_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(4),
   // Presigned upload grants (kernel.file.upload.begin) one user may open per org in any rolling minute, counted in the
   // database across API instances (issue #223). Bounds the staging objects an abandoned upload loop leaves behind.

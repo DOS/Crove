@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { Hono, type Context } from 'hono';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
@@ -10,6 +10,7 @@ import { schemaMissing } from '@crove/db/migrate';
 import {
   ACCEPTED_ARCHIVE_TYPES,
   ACCEPTED_UPLOAD_TYPES,
+  DIRECT_UPLOAD_MAX_BYTES,
   MAX_IMPORT_BYTES,
   MAX_SOCIAL_VIDEO_BYTES,
   MAX_SOCIAL_VIDEO_MS,
@@ -114,6 +115,9 @@ export interface HttpDeps {
   uploadCompletes?: ConcurrencyLimiter;
   // Uploads that may be larger than MAX_UPLOAD_BYTES (Social videos, #409) running at once. Default: 2 per process.
   largeUploads?: ConcurrencyLimiter;
+  // Every other POST /api/files running at once (#432): each holds its body (up to MAX_FILES_PER_UPLOAD files, about
+  // 26 MB) in memory. Default: twice UPLOAD_COMPLETE_CONCURRENCY, and half of that for one user.
+  directUploads?: ConcurrencyLimiter;
   // Channel connections (ADR-0025): the broker that seals tokens, and whether the sandbox channel is on. Unset: no
   // channel can be connected through the API.
   channels?: RpcChannels;
@@ -726,17 +730,37 @@ export function createHttpApp(deps: HttpDeps) {
     return { user, orgId: membership.orgId };
   }
 
-  // Bytes through the kernel: always on local disk, and still accepted with S3 (the server hashes them either way).
-  app.post('/api/files', bodyLimit({ maxSize: UPLOAD_BODY_LIMIT }), async (c) => {
-    let release: (() => void) | null = null;
+  // Every body this route reads holds a slot from before its first byte until the answer (#432): a large slot when it
+  // may be larger than a batch of documents (no length, or more than 25 MB), otherwise a direct-upload slot. The slot
+  // is taken in front of bodyLimit, which reads a body without a length whole before the handler runs, and after the
+  // membership check, so only a member who may upload can hold one.
+  const directUploads = deps.directUploads ?? new ConcurrencyLimiter({ total: 2 * config.UPLOAD_COMPLETE_CONCURRENCY });
+  const uploaders = new WeakMap<Context, { user: AuthUser; orgId: string }>();
+  const uploadSlot: MiddlewareHandler<{ Variables: { user: AuthUser } }> = async (c, next) => {
+    let who: { user: AuthUser; orgId: string };
     try {
-      const { user, orgId } = await uploader(c);
-      // A body that may be larger than a batch of documents (no length, or more than 25 MB) waits for a large slot.
-      const length = Number(c.req.header('content-length'));
-      if (!Number.isFinite(length) || length > MAX_UPLOAD_BYTES + 1024 * 1024) {
-        release = large.tryAcquire(user.userId);
-        if (!release) throw busy(c);
-      }
+      who = await uploader(c);
+    } catch (error) {
+      return problem(c, error);
+    }
+    // Like bodyLimit, a length counts only without Transfer-Encoding.
+    const length = c.req.header('transfer-encoding') === undefined ? Number(c.req.header('content-length')) : Number.NaN;
+    const slots = !Number.isFinite(length) || length > MAX_UPLOAD_BYTES + 1024 * 1024 ? large : directUploads;
+    const release = slots.tryAcquire(who.user.userId);
+    if (!release) return problem(c, busy(c));
+    uploaders.set(c, who);
+    try {
+      await next();
+    } finally {
+      release();
+    }
+  };
+  // Bytes through the kernel: always on local disk, and still accepted with S3 (the server hashes them either way).
+  app.post('/api/files', uploadSlot, bodyLimit({ maxSize: UPLOAD_BODY_LIMIT }), async (c) => {
+    try {
+      const who = uploaders.get(c);
+      if (!who) throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
+      const { user, orgId } = who;
       const body = await c.req.parseBody({ all: true });
       const files = ([] as unknown[]).concat(body.file ?? []).filter((f): f is File => f instanceof File);
       const purpose = uploadPurpose(body.purpose);
@@ -744,6 +768,11 @@ export function createHttpApp(deps: HttpDeps) {
       if (files.length > MAX_FILES_PER_UPLOAD) throw new DomainError('TOO_MANY_FILES', 413, `Tối đa ${MAX_FILES_PER_UPLOAD} tệp mỗi lần`);
       const results = [];
       for (const file of files) {
+        // With presigned uploads a document comes this way only up to DIRECT_UPLOAD_MAX_BYTES (#432); the SPA sends a
+        // larger one as a staged upload. Social images and videos and import spreadsheets keep their own limits.
+        if (purpose === 'document' && store.direct && file.size > DIRECT_UPLOAD_MAX_BYTES) {
+          throw new DomainError('TOO_LARGE', 413, `${file.name} lớn hơn ${DIRECT_UPLOAD_MAX_BYTES / (1024 * 1024)} MB; máy chủ này nhận tệp lớn qua kho lưu trữ (POST /api/files/uploads)`);
+        }
         // A Social video may be up to 100 MB; ingest checks the size against the type it reads from the bytes.
         if (file.size > (purpose === 'social' ? MAX_SOCIAL_VIDEO_BYTES : MAX_UPLOAD_BYTES)) throw new DomainError('TOO_LARGE', 413, `${file.name} vượt quá ${purpose === 'social' ? 100 : 25} MB`);
         const bytes = new Uint8Array(await file.arrayBuffer());
@@ -752,8 +781,6 @@ export function createHttpApp(deps: HttpDeps) {
       return c.json({ files: results });
     } catch (error) {
       return problem(c, error);
-    } finally {
-      release?.();
     }
   });
 
