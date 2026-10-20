@@ -387,6 +387,23 @@ suite('invite mail on PostgreSQL', () => {
     expect(await mailEnabled(appWith())).toBe(false);
   });
 
+  it('shows each pending invite with what became of its mail (#539)', async () => {
+    const owner = await signIn('owner');
+    const org = await orgOf(owner);
+    const ownerMfa = await tokenFor(owner, { mfa: true });
+    const tag = randomUUID().slice(0, 6);
+    const delivered = await rpc('org/invite', ownerMfa, { email: `sent-${tag}@mail.test`, role: 'member' }, org.slug);
+    await runtime.execute('kernel.mail.suppression.add', { email: `stopped-${tag}@mail.test`, scope: 'all' }, { actor: { type: 'user', userId: owner.userId, aal: 'aal1', sessionId: owner.session }, orgId: org.orgId });
+    const stopped = await rpc('org/invite', ownerMfa, { email: `stopped-${tag}@mail.test`, role: 'member' }, org.slug);
+    const refusing: MailProvider = { name: 'smtp', enabled: true, sendRetrySafety: 'never', send: async () => ({ status: 'rejected', error: 'bad_request', code: 'EMESSAGE' }) };
+    const failed = await rpc('org/invite', ownerMfa, { email: `failed-${tag}@mail.test`, role: 'viewer' }, org.slug, appWith(refusing));
+    const listed = (await rpc('org/listInvites', await tokenFor(owner), undefined, org.slug)).body as unknown as Array<{ id: string; mail: string | null }>;
+    const mailOf = (invite: { body: Record<string, unknown> | null }) => listed.find((i) => i.id === invite.body?.inviteId)?.mail;
+    expect(mailOf(delivered)).toBe('sent');
+    expect(mailOf(stopped)).toBe('suppressed');
+    expect(mailOf(failed)).toBe('failed');
+  });
+
   it('sends no mail to an address the org stopped, and still makes the invite (#538)', async () => {
     const owner = await signIn('owner');
     const org = await orgOf(owner);
