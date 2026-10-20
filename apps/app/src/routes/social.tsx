@@ -23,7 +23,7 @@ type Tab = SocialTab;
 const TABS = SOCIAL_TABS;
 // Posts a list page shows; Load more asks for the next ones.
 const PAGE = 50;
-type ListTab = 'review' | 'drafts' | 'done';
+type ListTab = 'review' | 'attention' | 'drafts' | 'done';
 type PostCursor = { updatedAt: string; postId: string };
 // The counts the analytics table shows, in order; a platform that does not report one shows a dash.
 const METRIC_COLUMNS = ['reach', 'reactions', 'comments', 'shares'] as const;
@@ -392,7 +392,7 @@ export function SocialPage() {
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
   const canWrite = role === 'owner' || role === 'admin' || role === 'member';
   const upcoming = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { ...range, ...filters, limit: 200 } }), enabled: tab === 'upcoming', refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
-  const listTab: ListTab | null = tab === 'review' || tab === 'drafts' || tab === 'done' ? tab : null;
+  const listTab: ListTab | null = tab === 'review' || tab === 'attention' || tab === 'drafts' || tab === 'done' ? tab : null;
   // The server filters and pages (#574); a page at a time, newest change first.
   const list = useInfiniteQuery({
     ...orpc.social.posts.list.infiniteOptions({
@@ -408,11 +408,14 @@ export function SocialPage() {
   });
   // The Review tab's count, whatever list is open.
   const review = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { stage: 'review', limit: 200 } }), refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
+  // Posts with a channel that failed, needs a person or waits on its channel (#579): their count on the tab.
+  const attention = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { stage: 'attention', limit: 200 } }), refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
   const names = new Map((channels.data ?? []).map((c) => [c.id, c.displayName]));
   const noChannels = channels.isSuccess && channels.data.length === 0;
 
   const rows = list.data?.pages.flat() ?? [];
   const reviewCount = review.data?.length ?? 0;
+  const attentionCount = attention.data?.length ?? 0;
   const filtered = Boolean(search.channel || search.q || search.from || search.to);
 
   return (
@@ -459,6 +462,7 @@ export function SocialPage() {
             <TabsTrigger key={id} value={id} className="flex-none px-3">
               {t(`tabs.${id}`)}
               {id === 'review' && reviewCount > 0 && <span className="ml-1.5 rounded-full bg-primary px-1.5 text-xs text-primary-foreground">{reviewCount}</span>}
+              {id === 'attention' && attentionCount > 0 && <span className="ml-1.5 rounded-full bg-destructive px-1.5 text-xs text-primary-foreground">{attentionCount}</span>}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -505,7 +509,7 @@ export function SocialPage() {
           <Metrics slug={slug} names={names} />
         </TabsContent>
         <TabsContent value="library">{tab === 'library' && <Library slug={slug} canWrite={canWrite} />}</TabsContent>
-        {(['review', 'drafts', 'done'] as const).map((id) => (
+        {(['review', 'attention', 'drafts', 'done'] as const).map((id) => (
           <TabsContent key={id} value={id}>
             {tab === id && (
               <>
