@@ -3,7 +3,7 @@
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { OPENING_BALANCE_MAX_ROWS } from '@crove/kernel-contract';
-import { buildTemplate, sheetToRows, TEMPLATE_HEADERS } from '../src/lib/opening-balance.ts';
+import { buildTemplate, PARTY_HEADERS, sheetToRows, TEMPLATE_HEADERS } from '../src/lib/opening-balance.ts';
 import { crc32, MAX_XLSX_BYTES, readFirstSheet, XlsxError, zipStored, type SheetRows } from '../src/lib/xlsx.ts';
 
 // A zip with deflated entries, as Excel writes it.
@@ -174,7 +174,7 @@ describe('opening balance template', () => {
       { code: '1331', name: 'Thuế GTGT được khấu trừ <hàng hóa> & "dịch vụ"' },
     ]);
     const sheet = await readFirstSheet(bytes);
-    expect([0, 1, 2, 3].map((c) => sheet.get(1)?.get(c)?.value)).toEqual([...TEMPLATE_HEADERS]);
+    expect([0, 1, 2, 3, 4, 5].map((c) => sheet.get(1)?.get(c)?.value)).toEqual([...TEMPLATE_HEADERS, ...PARTY_HEADERS]);
     expect(sheet.get(3)?.get(1)).toEqual({ kind: 'text', value: 'Thuế GTGT được khấu trừ <hàng hóa> & "dịch vụ"' });
     // Nothing filled yet: every account row is skipped, so the import is empty.
     expect(sheetToRows(sheet)).toEqual({
@@ -242,6 +242,35 @@ describe('sheetToRows', () => {
     });
     // A blank cell after D is no data.
     expect(sheetToRows(sheetOf({ 1: HEAD, 2: [text('111'), undefined, num('5'), undefined, text('  ')] }))).toMatchObject({ extraColumns: false });
+  });
+
+  it('reads the party columns when row 1 names them, and flags cells only after column F (#689)', () => {
+    const head = [...HEAD, ...PARTY_HEADERS.map(text)];
+    const result = sheetToRows(
+      sheetOf({
+        1: head,
+        2: [text('131'), undefined, num('30000000'), undefined, text('0101234564'), text(' Công ty Khách A ')],
+        3: [text('131'), undefined, num('8000000')],
+        4: [text('331'), undefined, undefined, num('5000000'), undefined, text('NCC lẻ'), text('ghi chú')],
+        // A row with only a party is still sent, for the kernel to judge.
+        5: [undefined, undefined, undefined, undefined, text('0309876546')],
+      }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      extraColumns: true,
+      rows: [
+        { rowNo: 2, accountCode: '131', accountName: '', debit: '30000000', credit: '', partyTaxCode: '0101234564', partyName: 'Công ty Khách A' },
+        { rowNo: 3, accountCode: '131', accountName: '', debit: '8000000', credit: '' },
+        { rowNo: 4, accountCode: '331', accountName: '', debit: '', credit: '5000000', partyName: 'NCC lẻ' },
+        { rowNo: 5, accountCode: '', accountName: '', debit: '', credit: '', partyTaxCode: '0309876546' },
+      ],
+    });
+  });
+
+  it('reads a template without the party columns as before, ignoring what is written in E and F (#689)', () => {
+    const result = sheetToRows(sheetOf({ 1: HEAD, 2: [text('131'), undefined, num('5'), undefined, text('0101234564'), text('Khách A')] }));
+    expect(result).toEqual({ ok: true, extraColumns: true, rows: [{ rowNo: 2, accountCode: '131', accountName: '', debit: '5', credit: '' }] });
   });
 
   it('refuses a sheet that is not the template, an empty one and one with too many rows', () => {

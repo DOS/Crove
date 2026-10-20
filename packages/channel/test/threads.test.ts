@@ -13,6 +13,12 @@ function threads(routes: Record<string, { status?: number; body: unknown }[]>) {
   const fetchImpl: Fetch = async (input, init) => {
     const url = new URL(input);
     const route = `${init?.method ?? 'GET'} ${url.pathname}`;
+    // The quota read (#743) is kept apart, so the other calls keep their order.
+    if (route.endsWith('/threads_publishing_limit')) {
+      const answer = routes[route]?.shift();
+      if (answer) return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
+      return new Response('{}', { status: 500 });
+    }
     calls.push({ route, form: Object.fromEntries(new URLSearchParams(typeof init?.body === 'string' ? init.body : '')), query: url.searchParams, auth: new Headers(init?.headers).get('authorization') });
     const answer = routes[route]?.shift() ?? { status: 500, body: { error: { message: `no answer for ${route}`, code: 1 } } };
     return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
@@ -74,6 +80,38 @@ describe('ThreadsRefresher', () => {
 });
 
 describe('ThreadsPublisher', () => {
+  it("reads a post's views, likes, replies and shares from its insights (#744)", async () => {
+    const { fetchImpl, calls } = threads({
+      'GET /v1.0/18100000000000001/insights': [
+        {
+          body: {
+            data: [
+              { name: 'views', values: [{ value: 900 }] },
+              { name: 'likes', values: [{ value: 40 }] },
+              { name: 'replies', values: [{ value: 5 }] },
+              { name: 'reposts', values: [{ value: 2 }] },
+              { name: 'quotes', values: [{ value: 1 }] },
+              { name: 'shares', total_value: { value: 3 } },
+            ],
+          },
+        },
+        { status: 400, body: { error: { message: 'Unsupported request', code: 100 } } },
+      ],
+    });
+    const publisher = new ThreadsPublisher(fetchImpl, fast);
+    const ask = { externalAccountId: USER, secret: SECRET, externalId: '18100000000000001' };
+    expect(await publisher.metrics(ask)).toEqual({ metrics: { views: 900, reactions: 40, comments: 5, shares: 6 } });
+    expect(calls[0]?.query.get('metric')).toBe('views,likes,replies,reposts,quotes,shares');
+    expect(await publisher.metrics(ask)).toBeNull();
+    expect(await publisher.metrics({ ...ask, externalId: 'not-a-post' })).toEqual({ refused: 'gone' });
+  });
+
+  it('waits hours with nothing created when the publishing quota is used up (#743)', async () => {
+    const { fetchImpl, calls } = threads({ [`GET /v1.0/${USER}/threads_publishing_limit`]: [{ body: { data: [{ quota_usage: 250, config: { quota_total: 250, quota_duration: 86400 } }] } }] });
+    expect(await new ThreadsPublisher(fetchImpl, fast).publish(input())).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED' });
+    expect(calls).toEqual([]);
+  });
+
   it('publishes a text post through a container, once', async () => {
     const { fetchImpl, calls } = threads({
       [`POST /v1.0/${USER}/threads`]: [{ body: { id: '9001' } }],

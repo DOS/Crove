@@ -103,6 +103,11 @@ export const en = {
       signup_disabled: "Sign-up is closed on this server. Ask your organization's admin.",
     },
   },
+  legal: {
+    consentBoth: 'By continuing, you agree to the Crove <terms>Terms of Service</terms> and <privacy>Privacy Notice</privacy>.',
+    consentTerms: 'By continuing, you agree to the Crove <terms>Terms of Service</terms>.',
+    consentPrivacy: 'By continuing, you confirm you have read the Crove <privacy>Privacy Notice</privacy>.',
+  },
   onboarding: {
     title: 'Create your first organization',
     subtitle: 'Each organization has its own books, document inbox and members.',
@@ -589,7 +594,7 @@ export const en = {
     badge: 'Opening balances',
     notAllowed: 'Only owners and admins can import opening balances.',
     stepTemplate: '1. Download the template',
-    templateHint: "The template lists your organization's chart of accounts. Enter each balance at the end of the day in the Debit or Credit column, in whole dong.",
+    templateHint: "The template lists your organization's chart of accounts. Enter each balance at the end of the day in the Debit or Credit column, in whole dong. Receivables (131) and payables (331) can optionally be split per customer or vendor by tax code.",
     downloadTemplate: 'Download template',
     templateFile: 'crove-opening-balances-{org}.xlsx',
     stepFile: '2. Choose the date and the filled file',
@@ -624,6 +629,8 @@ export const en = {
       ACCOUNT_UNKNOWN: 'Not in the chart of accounts',
       ACCOUNT_INACTIVE: 'Account no longer in use',
       ACCOUNT_DUPLICATE: 'Account on more than one row',
+      PARTY_NOT_ALLOWED: 'A party is only for 131 and 331',
+      PARTY_TAX_CODE_INVALID: 'Party tax code is not valid',
       AMOUNT_INVALID: 'Not a valid amount',
       AMOUNT_NEGATIVE: 'Negative balance: enter it in the other column',
       AMOUNT_FRACTION: 'Fractional amount: VND has no decimals',
@@ -2047,6 +2054,7 @@ export const en = {
     openPost: 'Open the post on the platform',
     outcome: {
       retrying: 'The platform did not take the post for now; Crove tries again {when}.',
+      quotaExhausted: 'The account has used up the posts it may publish in 24 hours; Crove tries again {when}.',
       queuePaused: 'The queue of this channel is paused; the post waits until the queue runs again.',
       publishing: 'Publishing to the channel.',
       processing: 'The platform took the post and is processing it; Crove checks until it is live.',

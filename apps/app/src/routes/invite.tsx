@@ -9,6 +9,7 @@ import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { signOut } from '../lib/session-actions.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { forgetInvite, pendingInvite } from '../lib/invite.ts';
+import { LegalConsent } from '../components/legal-consent.tsx';
 
 function errorCode(error: unknown): string | null {
   const code = (error as { code?: unknown } | null)?.code;
@@ -111,6 +112,9 @@ export function InvitePage() {
         {me.data?.email ? t('visibility', { email: me.data.email }) : t('visibilityNoEmail')}
       </p>
       {accept.error && <ErrorText>{errorMessage(accept.error)}</ErrorText>}
+      <div className="mt-4">
+        <LegalConsent />
+      </div>
       <div className="mt-6 flex flex-wrap gap-2">
         <Button size="lg" disabled={accept.isPending} onClick={() => accept.mutate({ token })}>
           {accept.isPending ? tc('processing') : t('accept')}

@@ -11,10 +11,11 @@
 // First comment (#609): a reply to the account's own post, made the same way (a TEXT container with reply_to_id, then
 // threads_publish); replying needs threads_manage_replies.
 import { createHash } from 'node:crypto';
-import type { CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
+import { QUOTA_RETRY_MS, quotaExhausted } from './instagram.ts';
 
 export const THREADS_HOSTS = ['graph.threads.net'] as const;
 export const THREADS_SCOPES = ['threads_basic', 'threads_content_publish', 'threads_manage_replies'] as const;
@@ -255,6 +256,35 @@ export class ThreadsPublisher implements Publisher {
     this.commentBudgetMs = timing.commentBudgetMs ?? COMMENT_BUDGET_MS;
   }
 
+  // A post's counts (plan §3.6, #744): views, likes, replies, and reposts, quotes and shares together, from the media
+  // insights endpoint (threads_manage_insights). A post that is gone, or insights not granted, give no counts.
+  async metrics(input: MetricsInput): Promise<MetricsResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { refused: 'token_expired' };
+    if (!NUMERIC_ID.test(input.externalId)) return { refused: 'gone' };
+    let answer: { data?: { name?: unknown; values?: { value?: unknown }[]; total_value?: { value?: unknown } }[] };
+    try {
+      answer = await this.client.call('GET', `${VERSION}/${input.externalId}/insights`, { token, params: { metric: 'views,likes,replies,reposts,quotes,shares' } });
+    } catch (error) {
+      const result = threadsResult(error);
+      if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
+      return null;
+    }
+    const metrics: Partial<Record<MetricName, number>> = {};
+    let shared: number | undefined;
+    for (const row of answer.data ?? []) {
+      const raw = row.values?.[0]?.value ?? row.total_value?.value;
+      const value = typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : undefined;
+      if (value === undefined || typeof row.name !== 'string') continue;
+      if (row.name === 'views') metrics.views = value;
+      else if (row.name === 'likes') metrics.reactions = value;
+      else if (row.name === 'replies') metrics.comments = value;
+      else if (row.name === 'reposts' || row.name === 'quotes' || row.name === 'shares') shared = (shared ?? 0) + value;
+    }
+    if (shared !== undefined) metrics.shares = shared;
+    return { metrics };
+  }
+
   async publish(input: PublishInput): Promise<PublishResult> {
     const token = tokenIn(input.secret);
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_TOKEN' };
@@ -269,6 +299,10 @@ export class ThreadsPublisher implements Publisher {
     if (poll && media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
     if (topicTag === false) return { kind: 'rejected', error: 'bad_request', code: 'TOPIC_TAG_INVALID' };
     const extras = { ...(poll ? { poll_attachment: JSON.stringify(poll) } : {}), ...(topicTag ? { topic_tag: topicTag } : {}) };
+    // The profile's publishing quota (plan §3.6; 250 posts in a rolling 24 hours today), read before any container; a
+    // read that fails does not hold the post.
+    const quota = await this.client.call<Parameters<typeof quotaExhausted>[0]>('GET', `${VERSION}/${user}/threads_publishing_limit`, { token, params: { fields: 'quota_usage,config' } }).catch(() => null);
+    if (quotaExhausted(quota)) return { kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED', retryAt: new Date(Date.now() + QUOTA_RETRY_MS) };
     const urlOf = async (fileId: string) => {
       const url = await input.mediaUrl(fileId).catch(() => null);
       if (!url) throw new NoUrl();
