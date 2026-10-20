@@ -18,6 +18,9 @@ export interface LibraryItem {
   sizeBytes: number;
   // A video's duration; null for images.
   durationMs: number | null;
+  // An image's size as shown (#636); null when unknown.
+  width: number | null;
+  height: number | null;
   createdAt: string;
   // Posts that show the image: in their own images or in a channel's own list.
   usedIn: number;
@@ -53,7 +56,7 @@ export const mediaList = defineQuery({
     const limit = input.limit ?? LIBRARY_PAGE;
     let q = ctx.trx
       .selectFrom('crove_kernel.file as f')
-      .select(['f.id', 'f.filename', 'f.content_type', 'f.size_bytes', 'f.duration_ms', 'f.created_at', sql<string>`(SELECT count(*) FROM ${postsUsing} u)`.as('used_in')])
+      .select(['f.id', 'f.filename', 'f.content_type', 'f.size_bytes', 'f.duration_ms', 'f.image_width', 'f.image_height', 'f.created_at', sql<string>`(SELECT count(*) FROM ${postsUsing} u)`.as('used_in')])
       .where('f.org_id', '=', ctx.orgId)
       .where('f.source', '=', 'social')
       .where('f.content_type', 'in', [...MEDIA_TYPES]);
@@ -74,6 +77,8 @@ export const mediaList = defineQuery({
         mime: r.content_type,
         sizeBytes: Number(r.size_bytes),
         durationMs: r.duration_ms === null ? null : Number(r.duration_ms),
+        width: r.image_width,
+        height: r.image_height,
         createdAt: r.created_at.toISOString(),
         usedIn: Number(r.used_in),
       })),

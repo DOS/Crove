@@ -236,6 +236,11 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TOO_MANY_LINKS', { limit, actual });
       case 'COMMENT_TOO_LONG':
         return t('COMMENT_TOO_LONG', { limit, actual });
+      // Which image: media.<index> on the issue, counted from 1 for the person.
+      case 'IMAGE_RATIO_NOT_ALLOWED':
+        return t('IMAGE_RATIO_NOT_ALLOWED', { n: Number(issue.field.split('.')[1] ?? 0) + 1 });
+      case 'IMAGE_TOO_SMALL':
+        return t('IMAGE_TOO_SMALL', { n: Number(issue.field.split('.')[1] ?? 0) + 1, limit, actual });
       // In milliseconds on the issue, in seconds for the person.
       case 'COVER_OUT_OF_RANGE':
         return t('COVER_OUT_OF_RANGE', { limit: limit / 1000, actual: actual / 1000 });
@@ -484,8 +489,8 @@ function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false,
 
 const orNull = (value: string) => (value.trim() === '' ? null : value);
 const mediaInput = (media: readonly MediaItem[]) => media.map((m) => ({ fileId: m.fileId, altText: orNull(m.altText) }));
-const mediaItems = (media: readonly { fileId: string; altText: string | null; mime: string; sizeBytes: number; durationMs: number | null }[]): MediaItem[] =>
-  media.map((m) => ({ fileId: m.fileId, altText: m.altText ?? '', mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs }));
+const mediaItems = (media: readonly { fileId: string; altText: string | null; mime: string; sizeBytes: number; durationMs: number | null; width: number | null; height: number | null }[]): MediaItem[] =>
+  media.map((m) => ({ fileId: m.fileId, altText: m.altText ?? '', mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs, width: m.width, height: m.height }));
 
 // ---------------------------------------------------------------------------------------------------------------------
 // New post

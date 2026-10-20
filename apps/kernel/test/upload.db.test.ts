@@ -383,6 +383,25 @@ suite.each(backends)('staged uploads on PostgreSQL and $name (issue #109)', (bac
     const { fileId } = (await done.json()) as { fileId: string };
     const row = await admin(async (c) => (await c.query<{ source: string; content_type: string }>('SELECT source, content_type FROM crove_kernel.file WHERE id = $1', [fileId])).rows[0]);
     expect(row).toEqual({ source: 'social', content_type: 'image/png' });
+    // Its size is read from its header (#636); these bytes have none, so it is stored without one.
+    const size = (id: string) => admin(async (c) => (await c.query<{ image_width: number | null; image_height: number | null }>('SELECT image_width, image_height FROM crove_kernel.file WHERE id = $1', [id])).rows[0]);
+    expect(await size(fileId)).toEqual({ image_width: null, image_height: null });
+    const header = Buffer.alloc(33);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(header, 0);
+    header.writeUInt32BE(13, 8);
+    header.write('IHDR', 12, 'latin1');
+    header.writeUInt32BE(1080, 16);
+    header.writeUInt32BE(1350, 20);
+    // Another member, so the upload budget of the owner's later tests is left as it was.
+    await join('sizer', 'member');
+    const sized = await begin('sizer');
+    expect(await backend.post(sized, Uint8Array.from([...header, ...Buffer.from(randomUUID())]))).toBe(204);
+    const sizedDone = await call(`/api/files/uploads/${sized.uploadId}/complete`, 'sizer', { json: { filename: 'doc.png', purpose: 'social' } });
+    expect(sizedDone.status).toBe(200);
+    const sizedId = ((await sizedDone.json()) as { fileId: string }).fileId;
+    expect(await size(sizedId)).toEqual({ image_width: 1080, image_height: 1350 });
+    // Like every column of a file row, it never changes afterwards.
+    await expect(admin((c) => c.query('UPDATE crove_kernel.file SET image_width = 1 WHERE id = $1', [sizedId]))).rejects.toMatchObject({ code: '42501' });
     // No extraction is queued for it.
     const events = await admin(async (c) => (await c.query("SELECT 1 FROM crove_kernel.outbox_event WHERE type = 'kernel.file.ingested' AND payload->>'fileId' = $1", [fileId])).rowCount);
     expect(events).toBe(0);
