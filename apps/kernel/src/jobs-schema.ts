@@ -25,6 +25,8 @@ export const QUEUES = {
   agentProposal: 'kernel-agent-proposal',
   // Created by the portal invoice list migration (20261020060000).
   portalList: 'finance-portal-list',
+  // Created by the mail events migration (20261021030000).
+  mailEvent: 'kernel-mail-event',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 

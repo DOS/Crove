@@ -265,6 +265,9 @@ export type MailSuppressionTable = Refine<
   G.KernelMailSuppressionTable,
   { scope: (typeof MAIL_SUPPRESSION_SCOPES)[number]; reason: (typeof MAIL_SUPPRESSION_REASONS)[number] }
 >;
+// Delivery events from the mail provider (Email plan §3.3, #539), one row per provider event.
+export const MAIL_EVENT_KINDS = ['delivered', 'deferred', 'bounce_hard', 'bounce_soft', 'complaint'] as const;
+export type MailEventTable = Refine<G.KernelMailEventTable, { kind: (typeof MAIL_EVENT_KINDS)[number] }>;
 
 export const AGENT_WAKEUP_STATUSES = ['pending', 'claimed', 'done'] as const;
 export type AgentWakeupTable = Refine<G.KernelAgentWakeupTable, { status: Generated<(typeof AGENT_WAKEUP_STATUSES)[number]> }>;
@@ -418,6 +421,7 @@ type Refined = Tables<{
   'crove_kernel.external_call': ExternalCallTable;
   'crove_kernel.mail_message': MailMessageTable;
   'crove_kernel.mail_suppression': MailSuppressionTable;
+  'crove_kernel.mail_event': MailEventTable;
   'crove_finance.purchase_document': PurchaseDocumentTable;
   'crove_finance.journal_entry': JournalEntryTable;
   'crove_finance.org_account': OrgAccountTable;
