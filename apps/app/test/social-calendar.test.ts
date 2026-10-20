@@ -24,7 +24,7 @@ describe('Social calendar (#580)', () => {
     const items = calendarItems([
       post('2026-10-25T02:00:00.000Z', [
         variant('a', 'scheduled', '2026-10-22T02:00:00.000Z'),
-        variant('b', 'draft', null),
+        variant('b', 'draft', '2026-10-25T02:00:00.000Z'),
         variant('c', 'cancelled', '2026-10-23T02:00:00.000Z'),
       ]),
       post(null, [variant('d', 'in_review', null)]),

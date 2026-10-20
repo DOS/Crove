@@ -290,6 +290,14 @@ suite('social posts on PostgreSQL (S3)', () => {
     const moved = (await get(o, o.owner, post.id)).variants[0];
     expect(moved).toMatchObject({ status: 'scheduled', effectiveAt: later, revision: v.revision, contentHash: v.contentHash });
     expect(moved?.review.approvedBy).toEqual(v.review.approvedBy);
+
+    // A channel waiting in a paused queue stays held: moving it to an exact time is refused.
+    const queued = await approved(o, [conn], 'Hàng đợi tạm dừng');
+    const slots = [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, minute: 9 * 60 }));
+    await exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots });
+    await exec(o, o.owner, 'social.variant.schedule', { postId: queued.id, queue: true });
+    await exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots, paused: true });
+    await expect(exec(o, o.owner, 'social.variant.reschedule', { variantId: queued.variants[0]?.id, at: later })).rejects.toMatchObject({ code: 'QUEUE_PAUSED' });
   });
 
   it('schedules each channel at its own time, and shows a post waiting in a paused queue (#576)', async () => {

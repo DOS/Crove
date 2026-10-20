@@ -58,6 +58,7 @@ export function SocialCalendar({ slug, names, canDecide }: { slug: string; names
     return map;
   }, [items]);
   const [over, setOver] = useState<string | null>(null);
+  const [dropError, setDropError] = useState(false);
   const move = useMutation({
     mutationFn: (args: { variantId: string; at: Date }) => client.social.variants.reschedule({ variantId: args.variantId, at: args.at.toISOString() }),
     onSettled: () => void queryClient.invalidateQueries(),
@@ -68,14 +69,25 @@ export function SocialCalendar({ slug, names, canDecide }: { slug: string; names
     e.preventDefault();
     setOver(null);
     const item = items.find((i) => i.v.id === e.dataTransfer.getData('text/plain'));
-    if (!item || item.planned || item.v.status !== 'scheduled') return;
+    if (!item || item.planned || item.v.status !== 'scheduled' || item.v.queuePaused) return;
     const at = onDay(item.at, day);
     if (dayId(at) === dayId(item.at)) return;
+    // Today, at a time already gone: say so here rather than ask the server.
+    if (at.getTime() <= Date.now()) {
+      setDropError(true);
+      return;
+    }
+    setDropError(false);
     move.mutate({ variantId: item.v.id, at });
   };
+  // A new post planned at 09:00 that day; today after 09:00, at the next full hour.
   const start = (day: Date) => {
-    const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0);
-    if (at.getTime() <= Date.now()) return;
+    let at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0);
+    if (at.getTime() <= Date.now()) {
+      const now = new Date();
+      at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1, 0);
+      if (dayId(at) !== dayId(day)) return;
+    }
     void navigate({ to: '/o/$slug/social/new', params: { slug }, search: { at: at.toISOString() } });
   };
   // Calendar days go to f.date as local YYYY-MM-DD: it reads the date part as written.
@@ -105,6 +117,7 @@ export function SocialCalendar({ slug, names, canDecide }: { slug: string; names
       </div>
       {canDecide && <p className="text-xs text-subtle-foreground">{t('calendar.dragHint')}</p>}
       {move.error && <ErrorText>{errorMessage(move.error)}</ErrorText>}
+      {dropError && <ErrorText>{t('calendar.dropPast')}</ErrorText>}
       {posts.isLoading ? (
         <Spinner />
       ) : posts.error ? (
@@ -148,7 +161,7 @@ export function SocialCalendar({ slug, names, canDecide }: { slug: string; names
                     )}
                   </div>
                   {list.slice(0, shown).map((item) => (
-                    <Chip key={item.v.id} item={item} slug={slug} name={names.get(item.v.connectionId)} draggable={canDecide && !item.planned && item.v.status === 'scheduled'} />
+                    <Chip key={item.v.id} item={item} slug={slug} name={names.get(item.v.connectionId)} draggable={canDecide && !item.planned && item.v.status === 'scheduled' && !item.v.queuePaused} />
                   ))}
                   {list.length > shown && <span className="text-xs text-subtle-foreground">{t('calendar.more', { count: list.length - shown })}</span>}
                 </div>

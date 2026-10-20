@@ -289,7 +289,8 @@ export function SocialComposePage() {
         title: orNull(base.title),
         linkUrl: orNull(base.linkUrl),
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        ...(plannedAt ? { scheduledAt: plannedAt } : {}),
+        // A planned time that went by while the page was open is dropped.
+        ...(plannedAt && Date.parse(plannedAt) > Date.now() ? { scheduledAt: plannedAt } : {}),
         media: mediaInput(base.media),
         channels: chosen.map((connectionId) => {
           const mine = own[connectionId] ?? EMPTY_OWN;
@@ -700,7 +701,15 @@ function MoveTime({ variantId, at, onDone }: { variantId: string; at: string | n
   });
   if (!open) {
     return (
-      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          // From the time it has now (a drag in the calendar or another tab may have moved it).
+          setWhen(toLocalInput(at ?? new Date(Date.now() + 3_600_000).toISOString()));
+          setOpen(true);
+        }}
+      >
         {t('moveTime')}
       </Button>
     );
@@ -967,7 +976,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                           </Button>
                         </>
                       )}
-                      {canDecide && v.status === 'scheduled' && <MoveTime variantId={v.id} at={v.effectiveAt} onDone={refresh} />}
+                      {canDecide && v.status === 'scheduled' && !v.queuePaused && <MoveTime variantId={v.id} at={v.effectiveAt} onDone={refresh} />}
                       {canDecide && ['scheduled', 'paused'].includes(v.status) && (
                         <Button variant="outline" size="sm" disabled={unschedule.isPending} onClick={() => unschedule.mutate(v.id)}>
                           {t('unschedule')}

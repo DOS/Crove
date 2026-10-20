@@ -54,8 +54,10 @@ export function calendarItems(posts: readonly Post[]): CalendarItem[] {
       post.variants
         .filter((v) => SHOWN.includes(v.status))
         .flatMap((v) => {
+          // effectiveAt falls back to the post's planned time for a channel with none of its own (a draft); a channel
+          // sent back to review keeps its own time.
           const planned = PLANNED.includes(v.status);
-          const when = planned ? post.scheduledAt : v.effectiveAt;
+          const when = v.effectiveAt ?? (planned ? post.scheduledAt : null);
           return when ? [{ post, v, at: new Date(when), planned }] : [];
         }),
     )

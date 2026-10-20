@@ -609,7 +609,13 @@ export const variantReschedule = defineCommand({
     if (v.status !== 'scheduled') throw new DomainError('VARIANT_STATE', 409, 'Chỉ đổi giờ được kênh đã lên lịch', { variantId: v.id, status: v.status });
     const at = new Date(Date.parse(input.at));
     if (at.getTime() <= ctx.now.getTime()) throw new DomainError('SCHEDULE_IN_PAST', 422, 'Giờ đăng phải ở tương lai', { variantId: v.id });
-    await setVariant(ctx, v.id, { scheduled_at: at, queue_slot_at: null, error_retry_at: null });
+    // A variant waiting on a slot of a paused queue stays held by the pause: moving it to an exact time would let it go out.
+    if (v.queue_slot_at && !v.scheduled_at && !v.error_retry_at) {
+      const queue = await ctx.trx.selectFrom('crove_social.queue').select('paused').where('org_id', '=', ctx.orgId).where('channel_connection_id', '=', v.channel_connection_id).executeTakeFirst();
+      if (queue?.paused) throw new DomainError('QUEUE_PAUSED', 409, 'Hàng đợi của kênh này đang tạm dừng; hãy chạy lại hàng đợi hoặc bỏ lịch trước', { variantId: v.id });
+    }
+    // The earlier refusal and its retry time belong to the old time.
+    await setVariant(ctx, v.id, { ...CLEAR_ERROR, scheduled_at: at, queue_slot_at: null });
     await refreshPostStatus(ctx, postId);
     await ctx.emit('social.variant.scheduled', { post_id: postId, variant_ids: [v.id], rescheduled: true });
     return { postId, variantId: v.id, at: at.toISOString() };
