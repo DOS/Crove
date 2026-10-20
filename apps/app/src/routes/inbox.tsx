@@ -100,6 +100,12 @@ function SocialAttention({ slug }: { slug: string }) {
           </li>
         ))}
       </ul>
+      {/* The total counts every post that needs a person; past the first 50, the Social home lists them all. */}
+      {data.total > data.channels.length + data.posts.length && (
+        <Link to="/o/$slug/social" params={{ slug }} className="mt-2 inline-block text-sm text-link underline">
+          {t('more', { count: data.total - data.channels.length - data.posts.length })}
+        </Link>
+      )}
     </Card>
   );
 }

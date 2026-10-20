@@ -781,6 +781,7 @@ export const en = {
       title: 'Social needs you ({count, number})',
       noText: 'Post without text',
       channel: { expired: '{channel}: sign-in expired, reconnect it', error: '{channel}: connection error, reconnect it' },
+      more: 'See {count, number} more in Social',
       post: { failed: 'did not go out', needs_attention: 'unclear whether it went out, check it', paused: 'paused while its channel is disconnected' },
     },
     socialReviews: {
