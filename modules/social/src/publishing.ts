@@ -40,6 +40,7 @@ import {
   type PostRow,
   type VariantRow,
 } from './variants.ts';
+import { agentTaskOf } from './agent.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const PUBLISH_STEP = 'publish';
@@ -303,7 +304,7 @@ export const publishBegin = defineCommand({
           // Its channel now asks for more approvals than it has (set_policy re-checks too; a retry or a resume can
           // bring one back to scheduled): back to review, never published short.
           await move(ctx, v, { type: 'regate' }, regateValues(v));
-          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: [v.id], by_policy: true });
+          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: [v.id], by_policy: true, agent_task: await agentTaskOf(ctx, post.id) });
           result = none('approval');
           break;
         }

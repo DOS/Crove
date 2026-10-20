@@ -6,7 +6,7 @@
 // approves, publishes or edits a post: publishing stays R2 with a person. Phase 1 uses no language model.
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
-import { DomainError, type AgentProgram } from '@crove/kernel-runtime';
+import { DomainError, type AgentProgram, type CommandContext } from '@crove/kernel-runtime';
 
 export const CONTENT_MANAGER_TEMPLATE = 'social.content_manager';
 // Tasks one run reviews at most; the rest wait for the next run.
@@ -24,6 +24,13 @@ export interface PreReview {
 export function preReviewTask(post: { id: string; title: string | null; body: string; tainted: boolean }) {
   const name = (post.title?.trim() || post.body.replace(/\s+/g, ' ').trim() || 'bài không có chữ').slice(0, 120);
   return { title: `Rà soát bài: ${name}`.slice(0, 300), ref: { type: 'social.post', id: post.id }, tainted: post.tainted };
+}
+
+// The agent task of a post sent for review by any path (#816: evergreen repeats, publishing and policy re-submits as
+// well as a person's submit), read from the post; a post that cannot be read gives none, and its taint defaults to true.
+export async function agentTaskOf(ctx: Pick<CommandContext, 'trx' | 'orgId'>, postId: string): Promise<ReturnType<typeof preReviewTask> | undefined> {
+  const post = await ctx.trx.selectFrom('crove_social.post').select(['id', 'title', 'body', 'tainted']).where('org_id', '=', ctx.orgId).where('id', '=', postId).executeTakeFirst();
+  return post ? preReviewTask({ id: post.id, title: post.title, body: post.body, tainted: post.tainted ?? true }) : undefined;
 }
 
 // The review comment: what the checks found, or that they found nothing blocking. Deterministic.
