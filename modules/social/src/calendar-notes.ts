@@ -29,7 +29,8 @@ export interface CalendarNote {
 const zDay = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
-  .refine((d) => !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && new Date(`${d}T00:00:00Z`).toISOString().startsWith(d), 'not a date');
+  // PostgreSQL has no year 0, so it is refused here rather than by the database.
+  .refine((d) => d >= '0001-01-01' && !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && new Date(`${d}T00:00:00Z`).toISOString().startsWith(d), 'not a date');
 const daysBetween = (from: string, to: string) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY_MS);
 
 function requireUser(ctx: CommandContext): string {

@@ -89,6 +89,8 @@ suite('social calendar notes on PostgreSQL (#794)', () => {
     await expect(exec(o.member, 'social.calendar_note.save', { startsOn: '2026-11-05', endsOn: '2026-11-04', title: 'x' })).rejects.toMatchObject({ code: 'CALENDAR_NOTE_RANGE' });
     await expect(exec(o.member, 'social.calendar_note.save', { startsOn: '2026-11-01', endsOn: '2026-12-02', title: 'x' })).rejects.toMatchObject({ code: 'CALENDAR_NOTE_RANGE' });
     await expect(exec(o.member, 'social.calendar_note.save', { startsOn: '2026-02-30', endsOn: '2026-02-30', title: 'x' })).rejects.toMatchObject({ status: 422 });
+    await expect(exec(o.member, 'social.calendar_note.save', { startsOn: '0000-01-01', endsOn: '0000-01-01', title: 'x' })).rejects.toMatchObject({ status: 422 });
+    await expect(exec(o.member, 'social.calendar_note.save', { noteId: '018f0000-0000-7000-8000-000000000009', startsOn: '2026-11-01', endsOn: '2026-11-01', title: 'x' })).rejects.toMatchObject({ code: 'CALENDAR_NOTE_NOT_FOUND' });
 
     expect(await exec(o.member, 'social.calendar_note.remove', { noteId })).toEqual({ noteId, removed: true });
     expect(await list(o.member, '2026-11-01', '2026-11-30')).toEqual([]);
