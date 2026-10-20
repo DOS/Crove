@@ -48,7 +48,6 @@ function endpoint(env) {
  */
 export async function relay(message, env, fetchImpl = fetch) {
   const url = endpoint(env);
-  const body = new Uint8Array(await new Response(message.raw).arrayBuffer());
   const response = await fetchImpl(url, {
     method: 'POST',
     headers: {
@@ -57,7 +56,9 @@ export async function relay(message, env, fetchImpl = fetch) {
       // The envelope recipient, <token>@ or bounce+<token>@INBOUND_DOMAIN: the kernel's worker routes by it.
       'x-crove-recipient': message.to,
     },
-    body,
+    // Streamed, not buffered: a large message never has to fit in the worker's memory.
+    body: message.raw,
+    duplex: 'half',
     // A redirect (http to https, a moved host) is a wrong KERNEL_URL: never follow it with the secret.
     redirect: 'manual',
   });
