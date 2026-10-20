@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import type { Issue } from '@crove/mod-social/contract';
+import { COMMENT_RULES, isProvider, type Issue } from '@crove/mod-social/contract';
 import { MediaField, type MediaItem } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
@@ -136,6 +136,8 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TOO_MANY_MEDIA', { limit });
       case 'TOO_MANY_LINKS':
         return t('TOO_MANY_LINKS', { limit, actual });
+      case 'COMMENT_TOO_LONG':
+        return t('COMMENT_TOO_LONG', { limit, actual });
       default:
         return t(issue.code);
     }
@@ -278,6 +280,21 @@ function ChannelEditor({
       </label>
       {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
+      {isProvider(provider) && COMMENT_RULES[provider] && (
+        <div className="space-y-1">
+          <Label className="text-xs">{t('firstComment')}</Label>
+          <Textarea
+            rows={2}
+            disabled={disabled}
+            value={typeof own.settings.firstComment === 'string' ? own.settings.firstComment : ''}
+            placeholder={t('firstCommentPlaceholder')}
+            onChange={(e) => {
+              const { firstComment: _old, ...rest } = own.settings;
+              onChange({ ...own, settings: e.target.value ? { ...rest, firstComment: e.target.value } : rest });
+            }}
+          />
+        </div>
+      )}
       <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
       <PlatformPreview channel={channel} provider={provider} content={content} />
@@ -948,6 +965,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
     },
   });
   const unschedule = useMutation({ mutationFn: (variantId: string) => client.social.variants.unschedule({ variantIds: [variantId] }), onSuccess: refresh });
+  // The first comment again (#587); the worker posts it in a moment.
+  const retryComment = useMutation({ mutationFn: (variantId: string) => client.social.variants.retryComment({ variantId }), onSuccess: refresh });
   const cancel = useMutation({ mutationFn: (variantId: string) => client.social.variants.cancel({ variantIds: [variantId] }), onSuccess: refresh });
   const retry = useMutation({ mutationFn: (variantId: string) => client.social.variants.retry({ variantIds: [variantId] }), onSuccess: refresh });
   const resolve = useMutation({
@@ -969,7 +988,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   };
   const published = p.variants.some((v) => v.status === 'published');
   const metricsOf = new Map((metrics.data ?? []).map((r) => [r.variantId, r]));
-  const error = save.error ?? submit.error ?? repost.error ?? duplicate.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
+  const error = save.error ?? submit.error ?? retryComment.error ?? repost.error ?? duplicate.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
   const reviewable = !dirty && !stale;
 
   return (
@@ -1072,6 +1091,16 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                       <a href={v.externalUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">
                         {t('openPost')}
                       </a>
+                    )}
+                    {v.commentStatus && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={v.commentStatus === 'failed' || v.commentStatus === 'unknown' ? 'text-warning' : ''}>{t(`commentStatus.${v.commentStatus}`)}</span>
+                        {canDecide && (v.commentStatus === 'failed' || v.commentStatus === 'unknown') && (
+                          <Button variant="outline" size="sm" disabled={retryComment.isPending} onClick={() => retryComment.mutate(v.id)}>
+                            {t('commentRetry')}
+                          </Button>
+                        )}
+                      </div>
                     )}
                     {v.status === 'published' && <VariantMetrics row={metricsOf.get(v.id)} />}
                     <div className="flex flex-wrap gap-2">

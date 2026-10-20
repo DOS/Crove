@@ -14,6 +14,7 @@ export * from './linkedin.ts';
 export * from './youtube.ts';
 export * from './tiktok.ts';
 export * from './x.ts';
+export * from './comment.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
@@ -161,6 +162,23 @@ export interface MetricsInput {
 }
 export type MetricsResult = { metrics: Partial<Record<MetricName, number>>; extra?: Record<string, unknown> } | { refused: 'token_expired' | 'gone' } | null;
 
+// A first comment under a published post (#587): a comment where the platform has comments (LinkedIn), a reply in
+// the post's thread where it has none (X, Bluesky). The comment never touches the post; a failure leaves it as it is.
+export interface CommentInput {
+  externalAccountId: string;
+  secret: string;
+  // The published post's id, as publish returned it.
+  externalId: string;
+  text: string;
+  // The external_call key of this comment.
+  callKey: string;
+}
+export type CommentResult =
+  | { kind: 'accepted'; externalId: string }
+  | { kind: 'rejected'; error: Exclude<PublishErrorKind, 'unknown'>; code?: string; message?: string }
+  | { kind: 'unknown'; code?: string; message?: string };
+
+
 export interface Publisher {
   readonly provider: ChannelProviderId;
   readonly publishSafety: RetrySafety;
@@ -175,6 +193,8 @@ export interface Publisher {
   // Providers that report how a post did: null when the platform did not answer (try again later), refused when the
   // token no longer works or the post is gone.
   metrics?(input: MetricsInput): Promise<MetricsResult>;
+  // Providers that post a first comment (#587). Never retried by itself: an unclear answer goes to a person.
+  comment?(input: CommentInput): Promise<CommentResult>;
 }
 
 interface SandboxPost {
@@ -192,6 +212,16 @@ export class SandboxPublisher implements Publisher {
   readonly publishSafety: RetrySafety = 'reconcile_only';
   private readonly accounts = new Map<string, SandboxPost[]>();
 
+  // A comment on a post the sandbox holds, kept beside it.
+  readonly comments: { postId: string; text: string; callKey: string }[] = [];
+
+  async comment(input: CommentInput): Promise<CommentResult> {
+    const accessToken = (JSON.parse(input.secret) as { accessToken?: unknown }).accessToken;
+    if (typeof accessToken !== 'string' || !accessToken.startsWith('sbx_')) return { kind: 'rejected', error: 'token_expired', code: 'SANDBOX_TOKEN' };
+    if (!(this.accounts.get(input.externalAccountId) ?? []).some((p) => p.id === input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'NO_SUCH_POST' };
+    this.comments.push({ postId: input.externalId, text: input.text, callKey: input.callKey });
+    return { kind: 'accepted', externalId: `sbx_comment_${randomBytes(9).toString('base64url')}` };
+  }
   async publish(input: PublishInput): Promise<PublishResult> {
     const accessToken = (JSON.parse(input.secret) as { accessToken?: unknown }).accessToken;
     if (typeof accessToken !== 'string' || !accessToken.startsWith('sbx_')) return { kind: 'rejected', error: 'token_expired', code: 'SANDBOX_TOKEN' };

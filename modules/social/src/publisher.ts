@@ -12,6 +12,7 @@ import { withCallSignal, type Publisher, type PublishResult, type ReconcileResul
 import { DomainError, readVerified, type BlobStore, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { VIDEO_READY, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
+import type { CommentWork } from './comments.ts';
 
 export interface PublishDeps {
   runtime: Runtime;
@@ -201,5 +202,30 @@ export async function runPublishJob(deps: PublishDeps, orgId: string, variantId:
     { variantId, callKey: begun.callKey, phase: begun.action, result, connectionVersion: begun.connectionVersion },
     { actor: ACTOR, orgId },
   );
+  // Published now: its first comment, if it has one (#587). A failure there never touches the post.
+  if (result.kind === 'accepted' || result.kind === 'found') {
+    await runCommentJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-comment] variant ${variantId.slice(0, 8)}`, (error as Error).message));
+  }
   return { action: begun.action, status: recorded.status ?? recorded.reason ?? 'not_recorded' };
+}
+
+/** The first comment of a published variant (#587): begin, one call, record. retry: a person asked again, after the call they saw last. */
+export async function runCommentJob(deps: PublishDeps, orgId: string, variantId: string, provider: string, retry?: { after: string | null }): Promise<{ action: string; reason?: string; state?: string }> {
+  const publisher = deps.publishers[provider];
+  if (!publisher?.comment) return { action: 'none', reason: 'provider_not_configured' };
+  const begun = await deps.runtime.execute<CommentWork>('social.comment.begin', { variantId, provider, ...(retry ? { retry } : {}) }, { actor: ACTOR, orgId });
+  if (begun.action === 'none') return { action: 'none', reason: begun.reason };
+  const credential = await openCredential(deps, orgId, begun.connectionId);
+  let result: Awaited<ReturnType<NonNullable<Publisher['comment']>>> | { kind: 'blocked'; code: string };
+  if ('blocked' in credential) result = { kind: 'blocked', code: credential.blocked };
+  else {
+    const timeout = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+    try {
+      result = await withTimeout(timeout, () => publisher.comment!({ ...credential, externalId: begun.externalId, text: begun.text, callKey: begun.callKey }));
+    } catch (error) {
+      result = { kind: 'unknown', code: error instanceof Timeout ? 'TIMEOUT' : 'ADAPTER_ERROR' };
+    }
+  }
+  const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.comment.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
+  return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}) };
 }

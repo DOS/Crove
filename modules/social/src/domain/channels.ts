@@ -116,6 +116,22 @@ export function sentText(provider: Provider, body: string, linkUrl: string | nul
   return [text, link].filter(Boolean).join('\n\n');
 }
 
+// The first comment each channel's Crove adapter posts after the post (#587), and how its text is counted: a comment
+// on LinkedIn, a reply in the thread on X and Bluesky. Facebook, Instagram and Threads need a further permission at
+// connect time and come later; a channel missing here takes no first comment.
+export const COMMENT_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
+  sandbox: { max: 1000, count: 'graphemes', required: false },
+  linkedin: { max: 1250, count: 'utf16', required: false },
+  x: { max: 280, count: 'weighted', required: false },
+  bluesky: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
+};
+
+// The first comment in a variant's settings, or null.
+export function firstCommentOf(settings: Readonly<Record<string, unknown>> | undefined): string | null {
+  const value = settings?.firstComment;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
 export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin']);
