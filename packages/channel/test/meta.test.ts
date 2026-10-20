@@ -40,6 +40,7 @@ const happy = {
         { permission: 'pages_show_list', status: 'granted' },
         { permission: 'pages_manage_posts', status: 'granted' },
         { permission: 'pages_read_engagement', status: 'granted' },
+        { permission: 'pages_manage_engagement', status: 'granted' },
         { permission: 'public_profile', status: 'granted' },
       ],
     },
@@ -69,7 +70,7 @@ describe('FacebookPageConnector', () => {
       redirect_uri: REDIRECT,
       state: 'st',
       response_type: 'code',
-      scope: 'pages_show_list,pages_manage_posts,pages_read_engagement',
+      scope: 'pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement',
       auth_type: 'rerequest',
     });
   });
@@ -78,8 +79,8 @@ describe('FacebookPageConnector', () => {
     const { seen, fetchImpl } = graphFake(happy);
     const accounts = await new FacebookPageConnector(APP, fetchImpl).exchange({ code: 'the-code', redirectUri: REDIRECT, codeVerifier: null });
     expect(accounts).toEqual([
-      { provider: 'facebook_page', externalAccountId: '111', displayName: 'Quán Cà Phê A', scopes: ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement'], expiresAt: null, secret: JSON.stringify({ accessToken: 'page-token-111' }) },
-      { provider: 'facebook_page', externalAccountId: '333', displayName: 'Tiệm Bánh B', scopes: ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement'], expiresAt: null, secret: JSON.stringify({ accessToken: 'page-token-333' }) },
+      { provider: 'facebook_page', externalAccountId: '111', displayName: 'Quán Cà Phê A', scopes: ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement', 'pages_manage_engagement'], expiresAt: null, secret: JSON.stringify({ accessToken: 'page-token-111' }) },
+      { provider: 'facebook_page', externalAccountId: '333', displayName: 'Tiệm Bánh B', scopes: ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement', 'pages_manage_engagement'], expiresAt: null, secret: JSON.stringify({ accessToken: 'page-token-333' }) },
     ]);
     // The code goes to the token endpoint with the same redirect; user tokens travel in the header, never the URL,
     // with appsecret_proof.
@@ -108,6 +109,27 @@ describe('FacebookPageConnector', () => {
     expect(error).toBeInstanceOf(ConnectorError);
     expect(error).toMatchObject({ kind: 'denied', code: 'MISSING_PERMISSION' });
     expect((error as Error).message).not.toContain('token');
+  });
+
+  it('connects a Page without the first-comment permission when Meta holds it back (#609)', async () => {
+    const declined = graphFake({
+      ...happy,
+      '/v24.0/me/permissions': {
+        body: {
+          data: [
+            { permission: 'pages_show_list', status: 'granted' },
+            { permission: 'pages_manage_posts', status: 'granted' },
+            { permission: 'pages_read_engagement', status: 'granted' },
+            { permission: 'pages_manage_engagement', status: 'declined' },
+          ],
+        },
+      },
+    });
+    const accounts = await new FacebookPageConnector(APP, declined.fetchImpl).exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: null });
+    expect(accounts.map((a) => a.scopes)).toEqual([
+      ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement'],
+      ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement'],
+    ]);
   });
 
   it('turns a Graph outage into a provider error', async () => {
