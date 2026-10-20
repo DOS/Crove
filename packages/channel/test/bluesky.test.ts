@@ -7,7 +7,8 @@ const PDS = 'https://morel.us-east.host.bsky.network';
 const APP_PASSWORD = 'abcd-efgh-ijkl-mnop';
 const SECRET = JSON.stringify({ identifier: DID, appPassword: APP_PASSWORD, pds: PDS });
 
-const session = (pds = PDS) => ({ body: { did: DID, handle: 'quan-a.bsky.social', accessJwt: 'access-jwt-1', refreshJwt: 'refresh-jwt-1', didDoc: { service: [{ id: '#atproto_pds', serviceEndpoint: pds }] } } });
+const jwt = (scope: string) => `eyJhbGciOiJFUzI1NksifQ.${Buffer.from(JSON.stringify({ scope, sub: DID })).toString('base64url')}.c2ln`;
+const session = (pds = PDS, accessJwt = 'access-jwt-1') => ({ body: { did: DID, handle: 'quan-a.bsky.social', accessJwt, refreshJwt: 'refresh-jwt-1', didDoc: { service: [{ id: '#atproto_pds', serviceEndpoint: pds }] } } });
 
 function xrpc(routes: Record<string, { status?: number; body: unknown }[]>) {
   const calls: { route: string; auth: string | null; json: unknown; type: string | null }[] = [];
@@ -38,7 +39,8 @@ describe('Bluesky connect', () => {
   it('opens a session with the app password and connects the account by its DID', async () => {
     const { fetchImpl, calls } = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
     const account = await connectBluesky({ handle: '@Quan-A.bsky.social', appPassword: APP_PASSWORD }, fetchImpl);
-    expect(account).toEqual({ provider: 'bluesky', externalAccountId: DID, displayName: '@quan-a.bsky.social', scopes: ['app_password'], expiresAt: null, secret: SECRET });
+    // The PDS is not kept: each call's session names it (#399).
+    expect(account).toEqual({ provider: 'bluesky', externalAccountId: DID, displayName: '@quan-a.bsky.social', scopes: ['app_password'], expiresAt: null, secret: JSON.stringify({ identifier: DID, appPassword: APP_PASSWORD }) });
     expect(calls[0]?.json).toEqual({ identifier: 'quan-a.bsky.social', password: APP_PASSWORD });
   });
 
@@ -48,6 +50,16 @@ describe('Bluesky connect', () => {
     await expect(connectBluesky({ handle: 'not a handle', appPassword: APP_PASSWORD }, fetchImpl)).rejects.toMatchObject({ code: 'InvalidHandle' });
     expect(calls).toHaveLength(0);
     await expect(connectBluesky({ handle: 'quan-a.bsky.social', appPassword: APP_PASSWORD }, fetchImpl)).rejects.toMatchObject({ code: 'UnsupportedPds' });
+  });
+
+  it('refuses an account password shaped like an app password, and a privileged app password, by the session scope (#399)', async () => {
+    const { fetchImpl } = xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [session(PDS, jwt('com.atproto.access')), session(PDS, jwt('com.atproto.appPassPrivileged')), session(PDS, jwt('com.atproto.appPass'))],
+    });
+    const connect = () => connectBluesky({ handle: 'quan-a.bsky.social', appPassword: APP_PASSWORD }, fetchImpl);
+    await expect(connect()).rejects.toMatchObject({ code: 'NotAnAppPassword' });
+    await expect(connect()).rejects.toMatchObject({ code: 'PrivilegedAppPassword' });
+    await expect(connect()).resolves.toMatchObject({ externalAccountId: DID });
   });
 
   it('only talks to Bluesky-hosted servers', () => {

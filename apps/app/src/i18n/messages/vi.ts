@@ -1694,6 +1694,7 @@ export const vi = {
       AI_DRAFT_FAILED: 'AI không soạn được bài lúc này, hãy thử lại sau',
       AI_DRAFT_EMPTY: 'AI không soạn được bài từ mô tả này, hãy viết rõ hơn',
       BLUESKY_APP_PASSWORD: 'Hãy dùng mật khẩu ứng dụng (app password) của Bluesky, không dùng mật khẩu tài khoản',
+      BLUESKY_APP_PASSWORD_PRIVILEGED: 'Mật khẩu ứng dụng này được đọc cả tin nhắn riêng; hãy tạo mật khẩu ứng dụng mới không bật quyền tin nhắn',
       BLUESKY_PDS_UNSUPPORTED: 'Hiện Crove chỉ hỗ trợ tài khoản lưu trên máy chủ của Bluesky',
       BLUESKY_LOGIN_FAILED: 'Bluesky không chấp nhận tên tài khoản hoặc mật khẩu ứng dụng này',
       MEDIA_NOT_FOUND: 'Không tìm thấy ảnh này',
