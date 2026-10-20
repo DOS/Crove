@@ -418,6 +418,13 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         update: os.social.labels.update.handler(socialCommand('social.label.update')),
         remove: os.social.labels.remove.handler(socialCommand('social.label.delete')),
       },
+      ideas: {
+        list: os.social.ideas.list.handler(socialQuery('social.idea.list')),
+        get: os.social.ideas.get.handler(socialQuery('social.idea.get')),
+        create: os.social.ideas.create.handler(socialCommand('social.idea.create')),
+        update: os.social.ideas.update.handler(socialCommand('social.idea.update')),
+        move: os.social.ideas.move.handler(socialCommand('social.idea.move')),
+      },
       snippets: {
         list: os.social.snippets.list.handler(socialQuery('social.snippet.list')),
         create: os.social.snippets.create.handler(socialCommand('social.snippet.create')),

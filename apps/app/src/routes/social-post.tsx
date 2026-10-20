@@ -662,8 +662,24 @@ export function SocialComposePage() {
   const [aiUsed, setAiUsed] = useState(false);
   const live = (channels.data ?? []).filter((c) => c.status === 'active');
   // A planned time from the calendar (#580), kept on the draft; scheduling starts from it.
-  const search: { at?: string } = useSearch({ strict: false });
+  const search: { at?: string; idea?: string } = useSearch({ strict: false });
   const [plannedAt, setPlannedAt] = useState<string | null>(() => (search.at && Date.parse(search.at) > Date.now() ? search.at : null));
+  // A draft made from an idea (#701): its title and note become the text, its link and media the post's; the saved
+  // post names the idea, which then shows as drafted.
+  const idea = useQuery({ ...orpc.social.ideas.get.queryOptions({ input: { ideaId: search.idea ?? '' } }), enabled: Boolean(search.idea), staleTime: Infinity });
+  const ideaTaken = useRef(false);
+  useEffect(() => {
+    const i = idea.data;
+    if (!i || ideaTaken.current) return;
+    ideaTaken.current = true;
+    setBase({
+      body: i.note ? `${i.title}\n\n${i.note}` : i.title,
+      title: '',
+      linkUrl: i.linkUrl ?? '',
+      media: i.media.map((m) => ({ fileId: m.fileId, altText: '', mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs, width: m.width, height: m.height })),
+    });
+  }, [idea.data]);
+  const ideaId = idea.data && !idea.data.postId && idea.data.stage !== 'archived' ? idea.data.id : null;
   useEffect(() => {
     // The only channel is chosen for you.
     if (chosen.length === 0 && live.length === 1 && live[0]) setChosen([live[0].id]);
@@ -703,6 +719,7 @@ export function SocialComposePage() {
         // A planned time that went by while the page was open is dropped.
         ...(plannedAt && Date.parse(plannedAt) > Date.now() ? { scheduledAt: plannedAt } : {}),
         ...(aiUsed ? { aiAssisted: true as const } : {}),
+        ...(ideaId ? { ideaId } : {}),
         media: mediaInput(base.media),
         channels: chosen.map((connectionId) => {
           const mine = withUtm(own[connectionId] ?? EMPTY_OWN, utm);
@@ -807,6 +824,11 @@ export function SocialComposePage() {
               {t('draftDiscard')}
             </Button>
           </div>
+        </Notice>
+      )}
+      {idea.data && (
+        <Notice>
+          <span>{t(ideaId ? 'ideas.fromIdea' : 'ideas.fromIdeaTaken', { title: idea.data.title })}</span>
         </Notice>
       )}
       {create.error && (
@@ -1468,6 +1490,14 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
         <div className="mb-4 flex items-center gap-2 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
           <Badge variant="secondary">{t(p.origin === 'ai' ? 'aiBadge' : 'aiAssistedBadge')}</Badge>
           <span>{t(p.origin === 'ai' ? 'aiBadgeHint' : 'aiAssistedHint')}</span>
+        </div>
+      )}
+      {p.idea && (
+        <div className="mb-4 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
+          {t('ideas.madeFrom')}{' '}
+          <Link to="/o/$slug/social/ideas" params={{ slug }} className="text-link hover:underline">
+            {p.idea.title}
+          </Link>
         </div>
       )}
       {p.repostOf && (
