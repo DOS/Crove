@@ -11,6 +11,7 @@
 import { createHash } from 'node:crypto';
 import type { CommentInput, CommentResult, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
 import { commentResult } from './comment.ts';
+import { videoCoverOf } from './cover.ts';
 import { Graph, GraphError, graphPublishResult, MetaLogin, type MetaAppConfig } from './meta.ts';
 import type { AuthorizeInput, ExchangeInput, Fetch, OAuthConnector } from './oauth.ts';
 
@@ -126,6 +127,10 @@ export class InstagramPublisher implements Publisher {
       if (!url) throw new NoUrl();
       return url;
     };
+    // A cover (#642) belongs to a Reel: a frame (thumb_offset, in milliseconds) or an image Meta fetches (cover_url).
+    const cover = videoCoverOf(input.settings);
+    const reel = media.length === 1 && isVideo(media[0] as { mime: string });
+    if (cover && !reel) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
     const first = await input.mediaUrl((media[0] as { fileId: string }).fileId).catch(() => null);
     if (!first) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
     const caption = captionOf(input.content);
@@ -134,7 +139,8 @@ export class InstagramPublisher implements Publisher {
     try {
       if (media.length === 1) {
         // One video is a Reel, shown in the feed too; Meta fetches it from the URL and processes it before publishing.
-        const single = isVideo(media[0] as { mime: string }) ? { media_type: 'REELS', video_url: first, share_to_feed: 'true' } : { image_url: first };
+        const coverForm = !cover ? {} : 'atMs' in cover ? { thumb_offset: String(cover.atMs) } : { cover_url: await urlOf(cover.fileId) };
+        const single = reel ? { media_type: 'REELS', video_url: first, share_to_feed: 'true', ...coverForm } : { image_url: first };
         container = await this.create(input.externalAccountId, s.accessToken, { ...single, caption });
       } else {
         // A carousel may mix images and videos.

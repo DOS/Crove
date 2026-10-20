@@ -9,6 +9,7 @@
 import { createHmac } from 'node:crypto';
 import type { CommentInput, CommentResult, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
 import { commentResult } from './comment.ts';
+import { videoCoverOf } from './cover.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -313,6 +314,8 @@ export class FacebookPagePublisher implements Publisher {
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_PAGE_TOKEN' };
     if (!/^\d{1,32}$/.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_PAGE_ID' };
     const media = input.content.media;
+    // A Page post or video takes no cover from Crove (#642): refused before anything is posted.
+    if (videoCoverOf(input.settings)) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
     if (media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, token);
     const form: Record<string, string> = { message: feedMessage(input.content) };
     if (input.content.linkUrl && media.length === 0) form.link = input.content.linkUrl;

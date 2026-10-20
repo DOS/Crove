@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, COMMENT_RULES, VIDEO_ONLY_ADAPTERS, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { CAPABILITIES, COMMENT_RULES, COVER_RULES, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -52,7 +52,13 @@ export type IssueCode =
   | 'TOO_MANY_LINKS'
   // The first comment (#587): too long for the channel, or a channel that takes none yet.
   | 'COMMENT_TOO_LONG'
-  | 'COMMENT_NOT_SUPPORTED';
+  | 'COMMENT_NOT_SUPPORTED'
+  // A video's cover (#642): not a frame or an image; set on a post that is not one video; a kind the channel's
+  // adapter cannot send; a frame past the end of the video.
+  | 'COVER_INVALID'
+  | 'COVER_NEEDS_VIDEO'
+  | 'COVER_NOT_SUPPORTED'
+  | 'COVER_OUT_OF_RANGE';
 
 export interface Issue {
   code: IssueCode;
@@ -137,6 +143,7 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
       else if (rule.maxBytes !== undefined && bytes > rule.maxBytes) issues.push({ code: 'COMMENT_TOO_LONG', field: 'settings.firstComment', limit: rule.maxBytes, actual: bytes });
     }
   }
+  if (variant.settings?.cover !== undefined) checkCover(issues, variant);
   if (variant.provider === 'tiktok' && !TIKTOK_PRIVACY.includes(String(variant.settings?.privacyLevel ?? ''))) {
     issues.push({ code: 'PRIVACY_REQUIRED', field: 'settings.privacyLevel', limit: null, actual: null });
   }
@@ -145,4 +152,28 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
     if (links > caps.maxLinks) issues.push({ code: 'TOO_MANY_LINKS', field: 'body', limit: caps.maxLinks, actual: links });
   }
   return issues;
+}
+
+// A cover belongs to one video, alone in the post (a Reel on Instagram); the channel decides which kinds it takes.
+function checkCover(issues: Issue[], variant: VariantDraft): void {
+  const field = 'settings.cover';
+  const cover = coverOf(variant.settings);
+  if (!cover) {
+    issues.push({ code: 'COVER_INVALID', field, limit: null, actual: null });
+    return;
+  }
+  const video = variant.media.length === 1 && variant.media[0]?.kind === 'video' ? variant.media[0] : null;
+  if (!video) {
+    issues.push({ code: 'COVER_NEEDS_VIDEO', field, limit: null, actual: null });
+    return;
+  }
+  if (!COVER_RULES[variant.provider]?.includes(coverKind(cover))) {
+    issues.push({ code: 'COVER_NOT_SUPPORTED', field, limit: null, actual: null });
+    return;
+  }
+  // A frame within the video, when its length is known (read at upload).
+  if ('atMs' in cover && video.durationSeconds !== null) {
+    const lastMs = Math.floor(video.durationSeconds * 1000);
+    if (cover.atMs > lastMs) issues.push({ code: 'COVER_OUT_OF_RANGE', field, limit: lastMs, actual: cover.atMs });
+  }
 }

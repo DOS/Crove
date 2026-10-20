@@ -98,6 +98,16 @@ describe('FacebookPagePublisher.publish', () => {
     expect(none.calls).toHaveLength(0);
   });
 
+  it('refuses a video cover, which Crove does not send to a Page, with nothing posted (#642)', async () => {
+    const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 4, altText: null };
+    const none = fake({ body: { id: '555666777' } });
+    for (const cover of [{ atMs: 1000 }, { fileId: 'c-1' }]) {
+      const withCover = input({ content: { ...input().content, media: [clip] }, readMedia: async () => new Uint8Array([1]), settings: { cover } });
+      expect(await none.publisher.publish(withCover)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' });
+    }
+    expect(none.calls).toHaveLength(0);
+  });
+
   it('maps Graph refusals to what the pipeline needs', async () => {
     const cases: [ReturnType<typeof graphError>, string][] = [
       [graphError(400, 190, 'Error validating access token'), 'token_expired'],
