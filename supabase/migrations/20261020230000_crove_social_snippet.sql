@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS crove_social.snippet (
   id uuid NOT NULL DEFAULT crove_kernel.uuid_v7(),
   name text NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
   body text NOT NULL CHECK (length(body) BETWEEN 1 AND 10000),
-  provider text CHECK (provider IS NULL OR provider ~ '^[a-z][a-z0-9_]{1,31}$'),
+  provider text CHECK (provider IS NULL OR provider ~ '^[a-z][a-z0-9_]{0,31}$'),
   is_template boolean NOT NULL DEFAULT false,
   created_by uuid NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),

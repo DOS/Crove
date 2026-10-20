@@ -88,6 +88,10 @@ suite('social snippets on PostgreSQL (#584)', () => {
     // Names are unique per org, whatever the case.
     await expect(exec(o, o.owner, 'social.snippet.create', { name: 'hashtag CỬA HÀNG', body: '#x' })).rejects.toMatchObject({ code: 'SNIPPET_NAME_TAKEN' });
     await expect(exec(o, o.member, 'social.snippet.create', { name: 'Lạ', body: '#x', provider: 'myspace' })).rejects.toThrow();
+    // A one-letter provider id (X) is a provider like any other; a name typed with combining marks is the same name.
+    const { snippetId: forX } = await exec<{ snippetId: string }>(o, o.member, 'social.snippet.create', { name: 'Cho X', body: '#x', provider: 'x' });
+    await expect(exec(o, o.member, 'social.snippet.create', { name: 'Cho X'.normalize('NFD'), body: '#x' })).rejects.toMatchObject({ code: 'SNIPPET_NAME_TAKEN' });
+    await exec(o, o.member, 'social.snippet.delete', { snippetId: forX });
 
     const all = await list(o, o.member);
     expect(all.map((s) => [s.name, s.mine])).toEqual([

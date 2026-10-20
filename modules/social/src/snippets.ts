@@ -1,6 +1,7 @@
 // Saved snippets (issue #584): named text an org reuses in posts, such as hashtags, a signature, or a whole post to
 // start from (a template). Members create them and change or delete their own; owners and admins any. The composer
 // inserts one at the cursor; nothing about a snippet reaches a post until a person puts it in the text.
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
@@ -23,7 +24,8 @@ export interface Snippet {
   mine: boolean;
 }
 
-const zName = z.string().trim().min(1).max(100);
+// NFC, so a name typed with combining marks matches the same name typed precomposed.
+const zName = z.string().trim().min(1).max(100).transform((s) => s.normalize('NFC'));
 const zBody = z.string().trim().min(1).max(10_000);
 const zProvider = z
   .string()
@@ -35,8 +37,12 @@ function requireUser(ctx: CommandContext): string {
   return ctx.actor.userId;
 }
 
+// One snippet write at a time per org, so the name and count checks below hold until the commit.
+const lockOrg = (ctx: CommandContext) => sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(${`crove_social.snippet:${ctx.orgId}`}))`.execute(ctx.trx);
+
+// Compared as the unique index does (lower() in the database), whatever the client's casing rules.
 async function nameFree(ctx: CommandContext, name: string, except?: string) {
-  let q = ctx.trx.selectFrom('crove_social.snippet').select('id').where('org_id', '=', ctx.orgId).where((eb) => eb(eb.fn('lower', ['name']), '=', name.toLowerCase()));
+  let q = ctx.trx.selectFrom('crove_social.snippet').select('id').where('org_id', '=', ctx.orgId).where(sql<boolean>`lower(name) = lower(${name})`);
   if (except) q = q.where('id', '<>', except);
   if (await q.executeTakeFirst()) throw new DomainError('SNIPPET_NAME_TAKEN', 409, 'Đã có đoạn mẫu cùng tên', { name });
 }
@@ -57,6 +63,7 @@ export const snippetCreate = defineCommand({
   access: MEMBERS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
+    await lockOrg(ctx);
     const count = await ctx.trx.selectFrom('crove_social.snippet').select((eb) => eb.fn.countAll<string>().as('n')).where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
     if (Number(count.n) >= SNIPPET_LIMIT) throw new DomainError('SNIPPET_LIMIT', 409, `Mỗi tổ chức lưu tối đa ${SNIPPET_LIMIT} đoạn mẫu`);
     await nameFree(ctx, input.name);
@@ -76,6 +83,7 @@ export const snippetUpdate = defineCommand({
   access: MEMBERS,
   handler: async (ctx, input) => {
     const s = await own(ctx, input.snippetId);
+    await lockOrg(ctx);
     await nameFree(ctx, input.name, s.id);
     await ctx.trx
       .updateTable('crove_social.snippet')
