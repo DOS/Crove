@@ -473,18 +473,6 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     },
   },
   'crove_social.post': { make: (o) => ({ row: socialPostRow(o) }) },
-  // An internal comment on a post (#582), by a member, never published.
-  'crove_social.post_comment': {
-    make: (o) => {
-      const post = socialPostRow(o);
-      return {
-        setup: [{ table: 'crove_social.post', values: post }],
-        row: { org_id: o.id, post_id: post.id, author_user_id: o.owner, body: 'RLS matrix comment' },
-      };
-    },
-  },
-  // A saved snippet of text (#584): hashtags, a signature or a whole post to start from.
-  'crove_social.snippet': { make: (o) => ({ row: { org_id: o.id, name: `rls-${tag()}`, body: '#rls', created_by: o.owner } }) },
   // Append-only review decisions: tenant roles may only read and insert.
   'crove_social.post_approval': {
     make: (o) => {
@@ -501,6 +489,16 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
           decided_by: o.owner,
           snapshot: '{}',
         },
+      };
+    },
+  },
+  // An internal comment on a post (#582), by a member, never published.
+  'crove_social.post_comment': {
+    make: (o) => {
+      const post = socialPostRow(o);
+      return {
+        setup: [{ table: 'crove_social.post', values: post }],
+        row: { org_id: o.id, post_id: post.id, author_user_id: o.owner, body: 'RLS matrix comment' },
       };
     },
   },
@@ -537,6 +535,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // A saved snippet of text (#584): hashtags, a signature or a whole post to start from.
+  'crove_social.snippet': { make: (o) => ({ row: { org_id: o.id, name: `rls-${tag()}`, body: '#rls', created_by: o.owner } }) },
 };
 
 function insertSql(row: Row): { text: string; values: Array<string | number> } {
