@@ -1639,6 +1639,7 @@ export const en = {
       PORTAL_LIST_LIMIT: 'This period already has 12 lists. Remove an old one, then import again.',
       OPENING_BALANCE_AFTER_ENTRIES: 'There are journal entries on or before this date. The opening balances must come before every other entry.',
       OPENING_REVERSAL_DATE: 'An opening entry can only be reversed on its own date.',
+      BEFORE_OPENING_BALANCE: 'This entry is dated on or before the opening balances, so it cannot be posted. Choose a date after the opening balance date.',
       OPENING_BALANCE_INVALID: 'Some rows of the trial balance are invalid. Check them before posting.',
       PERIOD_LOCKED: "The books are locked through this entry's month, so it cannot be posted. An owner can unlock that month to make a correction.",
       POSTING_DATE_NOT_ALLOWED: 'This posting date cannot be used: only a purchase invoice whose own month is locked is posted later, on a date from its invoice date on.',

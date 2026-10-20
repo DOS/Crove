@@ -1641,6 +1641,7 @@ export const vi = {
       PORTAL_LIST_LIMIT: 'Kỳ này đã có 12 danh sách; hãy gỡ bớt danh sách cũ rồi nhập lại',
       OPENING_BALANCE_AFTER_ENTRIES: 'Đã có bút toán vào hoặc trước ngày số dư đầu kỳ; ngày số dư đầu kỳ phải trước mọi bút toán khác',
       OPENING_REVERSAL_DATE: 'Bút toán số dư đầu kỳ chỉ được đảo vào đúng ngày của nó',
+      BEFORE_OPENING_BALANCE: 'Bút toán này có ngày trùng hoặc trước ngày số dư đầu kỳ nên không ghi được; hãy chọn một ngày sau ngày số dư đầu kỳ',
       OPENING_BALANCE_INVALID: 'Bảng số dư có dòng không hợp lệ; hãy xem lại trước khi ghi sổ',
       PERIOD_LOCKED: 'Sổ đã khóa đến tháng của bút toán này nên không ghi được; chủ sở hữu có thể mở khóa tháng đó nếu cần sửa',
       POSTING_DATE_NOT_ALLOWED: 'Không dùng được ngày ghi sổ này: chỉ hóa đơn mua vào thuộc tháng đã khóa sổ mới được ghi sổ muộn, vào một ngày từ ngày hóa đơn trở đi',

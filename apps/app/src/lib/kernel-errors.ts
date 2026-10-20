@@ -94,6 +94,8 @@ export const KERNEL_ERROR_CODES = [
   'OPENING_BALANCE_AFTER_ENTRIES',
   'OPENING_BALANCE_INVALID',
   'OPENING_REVERSAL_DATE',
+  // An entry dated on or before the opening entry (#366).
+  'BEFORE_OPENING_BALANCE',
   // The tax portal's purchase list (#465).
   'PORTAL_LIST_EXISTS',
   'PORTAL_LIST_LIMIT',

@@ -7,7 +7,8 @@
 // - finance.period.unlock: owners only, R3 (fresh MFA, P11) with a reason, which the audit row records together with
 //   the month. The audit rows of both commands are the history of the lock.
 // A refused posting answers PERIOD_LOCKED (ledger.ts), so recording, approving, reversing and importing opening
-// balances into a locked month all say why.
+// balances into a locked month all say why. The same guard keeps the opening entry first (#366): an entry dated on or
+// before it answers BEFORE_OPENING_BALANCE (openingEntryError below).
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
@@ -177,4 +178,54 @@ export function periodLockedError(error: unknown): DomainError | null {
     `Sổ đã khóa đến hết ngày ${through ? dateLabel(through) : ''}, nên không ghi được bút toán ngày ${entryDate ? dateLabel(entryDate) : ''}. Chủ sở hữu có thể mở khóa tháng đó nếu cần sửa.`,
     { lockedThrough: through, entryDate },
   );
+}
+
+// A string field of the guard's JSON detail, or null.
+function detailField(error: PgError, key: string): string | null {
+  try {
+    const value = (JSON.parse(error.detail ?? '{}') as Record<string, unknown>)[key];
+    return typeof value === 'string' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+// The answer to a posting the opening entry rule refused (#366, 20261020210000): an entry dated on or before the org's
+// opening entry (55000 BEFORE_OPENING_BALANCE), or an opening entry while another is in force (55000
+// OPENING_BALANCE_EXISTS) or dated on or after another entry (55000 OPENING_BALANCE_AFTER_ENTRIES);
+// finance.opening_balance.post says the last two first, unless an entry committed meanwhile.
+// Null for any other error.
+export function openingEntryError(error: unknown): DomainError | null {
+  const pg = error as PgError;
+  if (pg?.code !== '55000') return null;
+  const entryDate = detailField(pg, 'entryDate');
+  if (pg.message === 'BEFORE_OPENING_BALANCE') {
+    const openingDate = detailField(pg, 'openingDate');
+    return new DomainError(
+      'BEFORE_OPENING_BALANCE',
+      409,
+      `Số dư đầu kỳ đã ghi tại ngày ${openingDate ? dateLabel(openingDate) : ''}, nên không ghi được bút toán ngày ${entryDate ? dateLabel(entryDate) : ''}; mọi bút toán khác phải sau ngày số dư đầu kỳ. Hãy chọn ngày sau đó, hoặc đảo bút toán số dư đầu kỳ rồi nhập lại với ngày sớm hơn.`,
+      { openingDate, entryDate },
+    );
+  }
+  if (pg.message === 'OPENING_BALANCE_EXISTS') {
+    return new DomainError('OPENING_BALANCE_EXISTS', 409, 'Đã có bút toán số dư đầu kỳ; hãy đảo bút toán đó trước khi nhập lại', {
+      entryId: detailField(pg, 'entryId'),
+    });
+  }
+  if (pg.message === 'OPENING_BALANCE_AFTER_ENTRIES') {
+    const firstEntryDate = detailField(pg, 'firstEntryDate');
+    return new DomainError(
+      'OPENING_BALANCE_AFTER_ENTRIES',
+      422,
+      `Đã có bút toán từ ngày ${firstEntryDate ? dateLabel(firstEntryDate) : ''}; ngày số dư đầu kỳ phải trước ngày đó`,
+      { firstEntryDate },
+    );
+  }
+  return null;
+}
+
+// The answer to any refusal of the posting guard on journal_entry: the period lock or the opening entry rule.
+export function postingGuardError(error: unknown): DomainError | null {
+  return periodLockedError(error) ?? openingEntryError(error);
 }
