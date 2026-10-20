@@ -7,7 +7,7 @@
 // answer names the video. The project's quota allows about 100 uploads a day; a quota refusal waits, never fails.
 // An unclear answer is checked by listing the channel's latest uploads (one quota unit), matched by title and time.
 // Metrics: views, likes and comments from videos.list (one quota unit each).
-import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+import type { ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
 import { coverImageType, videoCoverOf } from './cover.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
@@ -326,6 +326,28 @@ export class YouTubePublisher implements Publisher {
 
   // Views, likes and comments of a published video (videos.list part=statistics, one quota unit). YouTube hides the
   // like count when the owner turned it off, and leaves it out then; a video that is gone answers no item.
+  // The channel's subscribers (#645); a channel that hides the count reports none.
+  async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
+    const s = youtubeSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    try {
+      const answer = await this.client.call<{ items?: { id?: unknown; statistics?: { subscriberCount?: unknown; hiddenSubscriberCount?: unknown } }[] }>(
+        'GET',
+        `${API}/channels?part=statistics&mine=true`,
+        s.accessToken,
+      );
+      const item = (answer.body?.items ?? []).find((i) => i.id === input.externalAccountId);
+      if (!item) return null;
+      const n = item.statistics?.subscriberCount;
+      if (item.statistics?.hiddenSubscriberCount === true || typeof n !== 'string' || !/^\d{1,15}$/.test(n)) return { followers: null };
+      return { followers: Number(n) };
+    } catch (error) {
+      if (error instanceof YouTubeError && error.status === 401) return { refused: 'token_expired' };
+      if (error instanceof YouTubeError && error.status === 403) return { refused: 'permission' };
+      return null;
+    }
+  }
+
   async metrics(input: MetricsInput): Promise<MetricsResult> {
     const s = youtubeSecretOf(input.secret);
     if (!s) return { refused: 'token_expired' };

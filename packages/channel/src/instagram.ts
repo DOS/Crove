@@ -9,7 +9,7 @@
 // again. Meta fetches each image and video from a public URL: deployments whose storage hands out presigned URLs (S3) can post;
 // others get MEDIA_URL_UNAVAILABLE with nothing posted.
 import { createHash } from 'node:crypto';
-import type { CommentInput, CommentResult, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
 import { commentResult } from './comment.ts';
 import { videoCoverOf } from './cover.ts';
 import { postTypeOf } from './post-type.ts';
@@ -248,6 +248,32 @@ export class InstagramPublisher implements Publisher {
   // Likes and comments are fields of the post; reach, saves, shares and views come from its insights, which need
   // instagram_manage_insights (an account connected before Crove asked for it has none) and exist only for posts made
   // after the account became professional. Without insights the plain counts are still reported.
+  // The account's followers and yesterday's reach (#645). The reach needs instagram_manage_insights; an account
+  // connected before Crove asked for it reports followers only.
+  async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
+    const s = secretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (!NUMERIC_ID.test(input.externalAccountId)) return null;
+    let followers: number | null;
+    try {
+      const answer = await this.graph.call<{ followers_count?: unknown }>('GET', input.externalAccountId, { token: s.accessToken, params: { fields: 'followers_count' } });
+      followers = count(answer.followers_count) ?? null;
+    } catch (error) {
+      const result = graphPublishResult(error);
+      if (result.kind === 'rejected' && (result.error === 'token_expired' || result.error === 'permission')) return { refused: result.error };
+      return null;
+    }
+    let reach: number | null = null;
+    try {
+      const insights = await this.graph.call<InsightsAnswer>('GET', `${input.externalAccountId}/insights`, { token: s.accessToken, params: { metric: 'reach', period: 'day' } });
+      const values = insights.data?.find((row) => row.name === 'reach')?.values ?? [];
+      reach = count(values.at(-1)?.value) ?? null;
+    } catch {
+      // No insights permission, or none yet: followers only.
+    }
+    return { followers, reach };
+  }
+
   async metrics(input: MetricsInput): Promise<MetricsResult> {
     const s = secretOf(input.secret);
     if (!s) return { refused: 'token_expired' };

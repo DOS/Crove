@@ -60,6 +60,7 @@ export interface CroveKernelSchema {
 }
 
 export interface CroveSocialSchema {
+  'crove_social.account_snapshot': SocialAccountSnapshotTable;
   'crove_social.channel_policy': SocialChannelPolicyTable;
   'crove_social.label': SocialLabelTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
@@ -718,6 +719,18 @@ export interface KernelTenantTable {
   tax_code: string | null;
   vat_filing_period: string | null;
   address: string | null;
+}
+
+/** crove_social.account_snapshot */
+export interface SocialAccountSnapshotTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  channel_connection_id: ColumnType<string, string, NotGranted>;
+  captured_on: ColumnType<string, string, NotGranted>;
+  followers: ColumnType<string | null, string | null, NotGranted>;
+  reach: ColumnType<string | null, string | null, NotGranted>;
+  error: ColumnType<string | null, string | null, NotGranted>;
+  captured_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_social.channel_policy */
