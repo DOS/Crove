@@ -19,6 +19,7 @@ import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
 import { ReviewLinks } from '../components/social-review-links.tsx';
 import { PostActivity } from '../components/social-activity.tsx';
+import { AssignCard } from '../components/social-assign.tsx';
 import { EmojiPicker } from '../components/social-emoji.tsx';
 import { ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -121,7 +122,7 @@ function ProviderSettings({ provider, settings, onChange, disabled }: { provider
 function useRole(slug: string) {
   const me = useQuery(orpc.me.get.queryOptions());
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
-  return { role, canDecide: role === 'owner' || role === 'admin', canWrite: role === 'owner' || role === 'admin' || role === 'member' };
+  return { userId: me.data?.userId ?? null, role, canDecide: role === 'owner' || role === 'admin', canWrite: role === 'owner' || role === 'admin' || role === 'member' };
 }
 
 function IssueList({ issues }: { issues: Issue[] }) {
@@ -997,7 +998,7 @@ type PostDraft = { base: Base; own: Record<string, Own> };
 function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const t = useTranslations('social');
   const f = useFormat();
-  const { canDecide, canWrite } = useRole(slug);
+  const { canDecide, canWrite, userId } = useRole(slug);
   const navigate = useNavigate();
   const post = useQuery(orpc.social.posts.get.queryOptions({ input: { postId } }));
   // The latest counts of each published channel (#578).
@@ -1263,6 +1264,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
           {canWrite && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
             <ReviewLinks postId={p.id} canDecide={canDecide} />
+            <AssignCard post={p} canEdit={canDecide || (canWrite && p.authorUserId !== null && p.authorUserId === userId)} />
           {dirty && <p className="text-xs text-subtle-foreground">{t('unsaved')}</p>}
         </div>
         <div className="space-y-4">

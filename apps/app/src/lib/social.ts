@@ -135,6 +135,8 @@ export interface SocialSearch {
   // Local calendar days, YYYY-MM-DD, both included.
   from?: string;
   to?: string;
+  // Only posts assigned to the viewer (#640).
+  mine?: true;
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -147,6 +149,7 @@ export function parseSocialSearch(search: Record<string, unknown>): SocialSearch
   if (typeof search.q === 'string' && search.q.trim()) out.q = search.q.trim().slice(0, 200);
   if (typeof search.from === 'string' && DAY_RE.test(search.from)) out.from = search.from;
   if (typeof search.to === 'string' && DAY_RE.test(search.to)) out.to = search.to;
+  if (search.mine === true || search.mine === '1' || search.mine === 'true') out.mine = true;
   return out;
 }
 
