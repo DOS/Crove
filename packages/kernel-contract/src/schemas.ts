@@ -894,6 +894,22 @@ export const zSocialPost = z.object({
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
 // A media library item (S9): an image of the org uploaded for posts, and how many posts show it.
 export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int() });
+// One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
+export const zSocialActivityItem = z.object({
+  id: z.string(),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'published', 'failed', 'cancelled']),
+  at: z.string(),
+  userId: zId.nullable(),
+  name: z.string().nullable(),
+  variantId: zId.nullable(),
+  body: z.string().nullable(),
+  decision: z.string().nullable(),
+  editedAt: z.string().nullable(),
+  editable: z.boolean(),
+  url: z.string().nullable(),
+  code: z.string().nullable(),
+});
+
 export const zSocialLibraryUse = z.object({ postId: zId, status: z.string(), excerpt: z.string(), updatedAt: z.string() });
 
 export const zSocialMetricsRow = z.object({

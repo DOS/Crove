@@ -17,6 +17,8 @@ import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
 import { shortOfPolicy } from './policy.ts';
+import { isProvider } from './domain/channels.ts';
+import { sentLink } from './domain/utm.ts';
 import { nextAction, publishCallKey, type RetrySafety } from './domain/publish.ts';
 import { startsNewAttempt, type VariantEvent } from './domain/state.ts';
 import {
@@ -152,7 +154,7 @@ function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, s
     callKey: key,
     contentHash: v.content_hash,
     content: {
-      ...effectiveContent(base(post), overrides(v), v.content_frozen),
+      ...withSentLink(v, effectiveContent(base(post), overrides(v), v.content_frozen)),
       media: mediaFor(base(post), v).map((m) => ({ fileId: m.fileId, mime: m.mime, sizeBytes: m.sizeBytes, altText: m.altText, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000 })),
     },
     settings: settingsOf(v),
@@ -163,6 +165,9 @@ function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, s
 }
 
 const none = (reason: string): BeginResult => ({ action: 'none', reason });
+
+// The link as the channel sends it, with its UTM tags (#585).
+const withSentLink = (v: VariantRow, content: BaseContent): BaseContent => ({ ...content, linkUrl: isProvider(v.provider) ? sentLink(v.provider, content.linkUrl, settingsOf(v), content.body) : content.linkUrl });
 
 async function lockVariant(ctx: CommandContext, variantId: string): Promise<{ post: PostRow; v: VariantRow } | null> {
   const found = await ctx.trx.selectFrom('crove_social.post_variant').select('post_id').where('org_id', '=', ctx.orgId).where('id', '=', variantId).executeTakeFirst();
