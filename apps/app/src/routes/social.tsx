@@ -131,6 +131,8 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
         )}
       </div>
       {exportCsv.error && <ErrorText>{errorMessage(exportCsv.error)}</ErrorText>}
+      {/* Without the server's totals the cards sum the listed rows only. */}
+      {totals.error && <ErrorText>{errorMessage(totals.error)}</ErrorText>}
       {exportCsv.data?.truncated && <p className="text-xs text-warning">{t('metricsExportCut')}</p>}
       <AccountGrowth days={days} names={names} />
       {data.length === 0 ? (
@@ -141,13 +143,13 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
             {METRIC_COLUMNS.map((m) => (
               <Card key={m} className="block p-4">
                 <p className="text-xs text-subtle-foreground">{t(`metric.${m}`)}</p>
-                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{f.number(total(m))}</p>
+                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{totals.isLoading ? '…' : f.number(total(m))}</p>
               </Card>
             ))}
             {hasClicks && (
               <Card className="block p-4">
                 <p className="text-xs text-subtle-foreground">{t('metricsClicks')}</p>
-                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{f.number(clicks ?? 0)}</p>
+                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{totals.isLoading ? '…' : f.number(clicks ?? 0)}</p>
               </Card>
             )}
           </div>

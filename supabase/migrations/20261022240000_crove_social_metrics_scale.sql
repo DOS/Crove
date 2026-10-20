@@ -1,5 +1,6 @@
 -- The metrics sweep at scale (#397). crove_social.metrics_due reads, across orgs, the variants published in the last
--- 30 days and skips the ones marked gone; both reads get a partial index so the scan stays small as the tables grow.
+-- 30 days and skips the ones marked gone; both reads get a partial index, which narrows the scan as the tables grow (the
+-- order by last capture still sorts the candidates).
 --
 -- post_variant_metrics_due_idx   published variants with a platform id, by publish time.
 -- metric_snapshot_gone_idx       the snapshots that mark a post gone (asked never again).
