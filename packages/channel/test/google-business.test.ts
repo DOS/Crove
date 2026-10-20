@@ -8,13 +8,13 @@ const REDIRECT = 'https://crove.example/channels/oauth/google_business/callback'
 const LOCATION = 'accounts/1001/locations/2002';
 
 function google(routes: Record<string, { status?: number; body: unknown }[]>) {
-  const calls: { route: string; body: unknown; auth: string | null }[] = [];
+  const calls: { route: string; query: URLSearchParams; body: unknown; auth: string | null }[] = [];
   const fetchImpl: Fetch = async (input, init) => {
     const url = new URL(input);
     const route = `${init?.method ?? 'GET'} ${url.host}${url.pathname}`;
     const raw = init?.body;
     const headers = new Headers(init?.headers);
-    calls.push({ route, auth: headers.get('authorization'), body: typeof raw === 'string' ? (headers.get('content-type')?.includes('json') ? JSON.parse(raw) : Object.fromEntries(new URLSearchParams(raw))) : raw });
+    calls.push({ route, query: url.searchParams, auth: headers.get('authorization'), body: typeof raw === 'string' ? (headers.get('content-type')?.includes('json') ? JSON.parse(raw) : Object.fromEntries(new URLSearchParams(raw))) : raw });
     const answer = routes[route]?.shift() ?? { status: 500, body: { error: { code: 500, message: `no answer for ${route}`, status: 'INTERNAL' } } };
     return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
   };
@@ -35,11 +35,14 @@ const input = (over: Partial<PublishInput> = {}): PublishInput => ({
 const POSTED = { name: `${LOCATION}/localPosts/abc123`, searchUrl: 'https://local.google.com/place?id=1&use=posts&lpsid=abc123' };
 
 describe('GoogleBusinessConnector', () => {
-  it('asks for business.manage offline and connects each location the account manages', async () => {
+  it('asks for business.manage offline and connects each location the account manages, page after page', async () => {
     const { fetchImpl, calls } = google({
       'POST oauth2.googleapis.com/token': [{ body: { access_token: 'ya29.token-1', refresh_token: '1//refresh-1', expires_in: 3599, scope: 'https://www.googleapis.com/auth/business.manage' } }],
       'GET mybusinessaccountmanagement.googleapis.com/v1/accounts': [{ body: { accounts: [{ name: 'accounts/1001' }, { name: 'not-an-account' }] } }],
-      'GET mybusinessbusinessinformation.googleapis.com/v1/accounts/1001/locations': [{ body: { locations: [{ name: 'locations/2002', title: 'Tiệm Bánh Quận 1' }, { name: 'locations/2003', title: 'Tiệm Bánh Thủ Đức' }] } }],
+      'GET mybusinessbusinessinformation.googleapis.com/v1/accounts/1001/locations': [
+        { body: { locations: [{ name: 'locations/2002', title: 'Tiệm Bánh Quận 1' }], nextPageToken: 'page-2' } },
+        { body: { locations: [{ name: 'locations/2003', title: 'Tiệm Bánh Thủ Đức' }] } },
+      ],
     });
     const connector = new GoogleBusinessConnector(APP, fetchImpl);
     const url = new URL(connector.authorizeUrl({ state: 'st', redirectUri: REDIRECT, codeChallenge: 'cc' }));
@@ -53,6 +56,9 @@ describe('GoogleBusinessConnector', () => {
     expect(accounts[0]).toMatchObject({ provider: 'google_business', secret: SECRET, expiresAt: new Date(1_000_000 + 3_599_000) });
     expect(calls[0]?.body).toMatchObject({ grant_type: 'authorization_code', code: 'c', code_verifier: 'v' });
     expect(calls[2]?.auth).toBe('Bearer ya29.token-1');
+    expect(calls[2]?.query.get('pageToken')).toBeNull();
+    expect(calls[3]?.query.get('pageToken')).toBe('page-2');
+    expect(calls).toHaveLength(4);
   });
 
   it('refuses a grant without the permission, an account with no location, and a project Google has not approved', async () => {

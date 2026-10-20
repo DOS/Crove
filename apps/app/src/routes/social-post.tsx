@@ -483,6 +483,7 @@ function PollAndTagField({ provider, settings, onChange, disabled }: { provider:
 // and terms. Kept as typed; the checks say what Google would refuse.
 function GbpField({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
   const t = useTranslations('social.gbp');
+  const uid = useId();
   const g = provider === 'google_business' ? gbpOf(settings) : null;
   if (!g) return null;
   const set = (next: typeof g) =>
@@ -495,7 +496,7 @@ function GbpField({ provider, settings, onChange, disabled }: { provider: string
         ...(next.topic === 'OFFER' ? { offer: next.offer } : {}),
       },
     });
-  const id = (name: string) => `gbp-${name}`;
+  const id = (name: string) => `${uid}-gbp-${name}`;
   return (
     <div className="space-y-2 rounded-lg border p-3">
       <div className="flex flex-wrap items-center gap-2">

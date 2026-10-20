@@ -23,6 +23,8 @@ export type GbpTopic = (typeof GBP_TOPICS)[number];
 export const GBP_SUMMARY_MAX = 1500;
 export const GBP_EVENT_TITLE_MAX = 58;
 const LOCATION = /^accounts\/\d{1,32}\/locations\/\d{1,32}$/;
+// Pages of 100 locations read per account when connecting (a chain of up to 1,000 places).
+const MAX_LOCATION_PAGES = 10;
 const POST_NAME = /^accounts\/\d{1,32}\/locations\/\d{1,32}\/localPosts\/[A-Za-z0-9_-]{1,128}$/;
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 const TIME = /^(\d{2}):(\d{2})$/;
@@ -166,12 +168,25 @@ export class GoogleBusinessConnector implements OAuthConnector {
     for (const account of accounts.accounts ?? []) {
       const name = typeof account.name === 'string' && /^accounts\/\d{1,32}$/.test(account.name) ? account.name : null;
       if (!name) continue;
-      const locations = await this.client
-        .call<{ locations?: { name?: unknown; title?: unknown }[] }>('GET', `https://mybusinessbusinessinformation.googleapis.com/v1/${name}/locations?readMask=name,title&pageSize=100`, token)
-        .catch((error: unknown) => {
-          throw connectorError(error);
-        });
-      for (const location of locations.locations ?? []) {
+      // Every location the account manages, 100 a page, up to MAX_LOCATION_PAGES pages.
+      const locations: { name?: unknown; title?: unknown }[] = [];
+      let pageToken: string | null = null;
+      for (let page = 0; page < MAX_LOCATION_PAGES; page++) {
+        type LocationPage = { locations?: { name?: unknown; title?: unknown }[]; nextPageToken?: unknown };
+        const answer: LocationPage = await this.client
+          .call<LocationPage>(
+            'GET',
+            `https://mybusinessbusinessinformation.googleapis.com/v1/${name}/locations?readMask=name,title&pageSize=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`,
+            token,
+          )
+          .catch((error: unknown) => {
+            throw connectorError(error);
+          });
+        locations.push(...(answer.locations ?? []));
+        pageToken = typeof answer.nextPageToken === 'string' && answer.nextPageToken ? answer.nextPageToken : null;
+        if (!pageToken) break;
+      }
+      for (const location of locations) {
         const id = typeof location.name === 'string' && /^locations\/\d{1,32}$/.test(location.name) ? `${name}/${location.name}` : null;
         if (!id) continue;
         const title = typeof location.title === 'string' && location.title.trim() ? location.title.trim() : id;
@@ -231,7 +246,7 @@ export interface GbpSettings {
 export function gbpSettingsOf(settings: Readonly<Record<string, unknown>>): GbpSettings | null {
   const raw = settings.gbp;
   if (raw === undefined || raw === null) return { topic: 'STANDARD', cta: null, event: null, offer: null };
-  if (typeof raw !== 'object') return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return null;
   const g = raw as Record<string, unknown>;
   const topic = g.topic === undefined ? 'STANDARD' : GBP_TOPICS.find((t) => t === g.topic);
   const cta = g.cta === undefined || g.cta === null ? null : (GBP_CTA_TYPES.find((c) => c === g.cta) ?? undefined);

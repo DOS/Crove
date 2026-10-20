@@ -192,7 +192,7 @@ const asText = (v: unknown) => (typeof v === 'string' ? v : '');
 // The settings as the composer edits them; null when they are not an object (an issue of their own).
 export function gbpOf(settings: Readonly<Record<string, unknown>> | undefined): Gbp | null {
   const raw = settings?.gbp;
-  const g = raw === undefined || raw === null ? {} : typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+  const g = raw === undefined || raw === null ? {} : typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
   if (!g) return null;
   const e = (g.event && typeof g.event === 'object' ? g.event : {}) as Record<string, unknown>;
   const o = (g.offer && typeof g.offer === 'object' ? g.offer : {}) as Record<string, unknown>;
