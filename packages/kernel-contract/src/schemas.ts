@@ -183,6 +183,10 @@ export const zInviteCreated = z.object({
   acceptPath: z.string(),
 });
 
+// What became of an invite's mail (#538, #539), from its mail_message row: null when no row exists (an invite made
+// before mail was logged).
+export const zInviteMailStatus = z.enum(['queued', 'sending', 'sent', 'delivered', 'bounced', 'complained', 'suppressed', 'failed', 'ambiguous']);
+
 export const zInvite = z.object({
   id: zId,
   email: z.string(),
@@ -191,6 +195,7 @@ export const zInvite = z.object({
   invitedBy: z.string().nullable(),
   createdAt: z.string(),
   expiresAt: z.string(),
+  mail: zInviteMailStatus.nullable(),
 });
 
 // What the invitee consents to before accepting.

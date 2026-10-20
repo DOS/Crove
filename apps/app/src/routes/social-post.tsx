@@ -1,7 +1,7 @@
 // Compose a post and work on it: shared text, a variant per channel that inherits it or has its own text, live
 // channel rules and a preview, then review (owners and admins decide on what they see), schedule and cancel.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
+import { Link, useBlocker, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
@@ -19,10 +19,12 @@ import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
 import { ReviewLinks } from '../components/social-review-links.tsx';
 import { PostActivity } from '../components/social-activity.tsx';
-import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { EmojiPicker } from '../components/social-emoji.tsx';
+import { ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
+import { clearDraft, loadDraft, saveDraft, type StoredDraft } from '../lib/social-draft.ts';
 import {
   CANCELLABLE,
   EDITABLE,
@@ -302,7 +304,10 @@ function ChannelEditor({
         <div className="space-y-2">
           {hasTitle(provider) && <Input value={own.title} disabled={disabled} aria-label={t('titleField')} placeholder={base.title || t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
           <Textarea id={`social-own-${connectionId ?? provider}`} value={own.body} disabled={disabled} rows={5} aria-label={t('ownTextPlaceholder')} placeholder={t('ownTextPlaceholder')} onChange={(e) => onChange({ ...own, body: e.target.value })} />
-          {slug && <SnippetPicker slug={slug} targetId={`social-own-${connectionId ?? provider}`} value={own.body} provider={provider} disabled={disabled} onChange={(body) => onChange({ ...own, body })} />}
+          <div className="flex flex-wrap items-center gap-2">
+            <EmojiPicker targetId={`social-own-${connectionId ?? provider}`} value={own.body} disabled={disabled} onChange={(body) => onChange({ ...own, body })} />
+            {slug && <SnippetPicker slug={slug} targetId={`social-own-${connectionId ?? provider}`} value={own.body} provider={provider} disabled={disabled} onChange={(body) => onChange({ ...own, body })} />}
+          </div>
           {!disabled && onAiUsed && (
             <AiRewrite
               text={own.body}
@@ -352,7 +357,10 @@ function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false,
       <div className="space-y-1.5">
         <Label htmlFor="social-body">{t('sharedText')}</Label>
         <Textarea id="social-body" autoFocus={autoFocus} value={base.body} disabled={disabled} rows={7} placeholder={t('sharedTextPlaceholder')} onChange={(e) => onChange({ ...base, body: e.target.value })} />
-        {slug && <SnippetPicker slug={slug} targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />}
+        <div className="flex flex-wrap items-center gap-2">
+          <EmojiPicker targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />
+          {slug && <SnippetPicker slug={slug} targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />}
+        </div>
         {!disabled && onAiUsed && (
           <AiRewrite
             text={base.body}
@@ -388,6 +396,9 @@ const mediaItems = (media: readonly { fileId: string; altText: string | null; mi
 // New post
 // ---------------------------------------------------------------------------------------------------------------------
 
+// What the composer keeps of a post not yet created (#634).
+type ComposeDraft = { base: Base; chosen: string[]; own: Record<string, Own>; utm: UtmTags | null; plannedAt: string | null; aiUsed: boolean };
+
 export function SocialComposePage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('social');
@@ -409,6 +420,26 @@ export function SocialComposePage() {
     // The only channel is chosen for you.
     if (chosen.length === 0 && live.length === 1 && live[0]) setChosen([live[0].id]);
   }, [live.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Unsaved work is kept in this browser as it is typed (#634) and offered back after a reload; leaving asks first.
+  const [restore, setRestore] = useState(() => loadDraft<ComposeDraft>(slug, 'new'));
+  const leaving = useRef(false);
+  const touched = base.body.trim() !== '' || base.title.trim() !== '' || base.linkUrl.trim() !== '' || base.media.length > 0 || Object.values(own).some((o) => o.custom || o.customMedia);
+  useEffect(() => {
+    if (restore) return;
+    const timer = setTimeout(() => (touched ? saveDraft<ComposeDraft>(slug, 'new', null, { base, chosen, own, utm, plannedAt, aiUsed }) : clearDraft(slug, 'new')), 400);
+    return () => clearTimeout(timer);
+  }, [base, chosen, own, utm, plannedAt, aiUsed, restore, touched, slug]);
+  const takeDraft = (d: StoredDraft<ComposeDraft>) => {
+    setBase(d.data.base);
+    setChosen(d.data.chosen);
+    setOwn(d.data.own);
+    setUtm(d.data.utm);
+    setPlannedAt(d.data.plannedAt);
+    setAiUsed(d.data.aiUsed);
+    setRestore(null);
+  };
+  useBlocker({ shouldBlockFn: () => touched && !leaving.current && !window.confirm(t('leaveConfirm')), enableBeforeUnload: () => touched && !leaving.current });
 
   // One key per content: a retry of the same content after a lost answer returns the post the first request created;
   // content edited after a failed attempt is a new request (the server would refuse the old key with other content).
@@ -439,6 +470,8 @@ export function SocialComposePage() {
       return created.postId;
     },
     onSuccess: (postId) => {
+      leaving.current = true;
+      clearDraft(slug, 'new');
       void queryClient.invalidateQueries();
       void navigate({ to: '/o/$slug/social/$id', params: { slug, id: postId } });
     },
@@ -452,6 +485,7 @@ export function SocialComposePage() {
   const aiDraft = useMutation({
     mutationFn: () => client.social.posts.draftWithAi({ brief: brief.trim(), connectionIds: chosen, language: locale === 'en' ? 'en' : 'vi' }),
     onSuccess: ({ postId }) => {
+      leaving.current = true;
       void queryClient.invalidateQueries();
       void navigate({ to: '/o/$slug/social/$id', params: { slug, id: postId } });
     },
@@ -488,6 +522,26 @@ export function SocialComposePage() {
           </>
         }
       />
+      {restore && (
+        <Notice>
+          <div className="flex flex-wrap items-center gap-2">
+            <span>{t('draftFound', { when: f.dateTime(restore.savedAt) })}</span>
+            <Button size="sm" onClick={() => takeDraft(restore)}>
+              {t('draftRestore')}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                clearDraft(slug, 'new');
+                setRestore(null);
+              }}
+            >
+              {t('draftDiscard')}
+            </Button>
+          </div>
+        </Notice>
+      )}
       {create.error && (
         <div className="mb-4">
           <ErrorText>{errorMessage(create.error)}</ErrorText>
@@ -905,6 +959,9 @@ export function SocialPostPage() {
   return <PostScreen key={postId} slug={slug} postId={postId} />;
 }
 
+// What the post screen keeps of unsaved edits (#634).
+type PostDraft = { base: Base; own: Record<string, Own> };
+
 function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const t = useTranslations('social');
   const f = useFormat();
@@ -943,11 +1000,26 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   useEffect(() => {
     const p = post.data;
     if (!p) return;
-    if (!origin) adopt(p);
-    else if (contentKey(p) === contentKey(origin)) setOrigin(p);
+    if (!origin) {
+      adopt(p);
+      // Edits left unsaved on this revision are offered back; edits of an older revision are dropped.
+      const kept = loadDraft<PostDraft>(slug, postId);
+      if (kept && kept.revision === p.revision) setRestorePost(kept);
+      else if (kept) clearDraft(slug, postId);
+    } else if (contentKey(p) === contentKey(origin)) setOrigin(p);
     else if (!editsOf(origin)) adopt(p);
     else setStale(true);
   }, [post.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Unsaved edits are kept in this browser for this revision as they are made (#634); leaving asks first.
+  const [restorePost, setRestorePost] = useState<StoredDraft<PostDraft> | null>(null);
+  const editing = origin !== null && editsOf(origin);
+  useEffect(() => {
+    if (!origin || restorePost) return;
+    const timer = setTimeout(() => (editing && base ? saveDraft<PostDraft>(slug, postId, origin.revision, { base, own }) : clearDraft(slug, postId)), 400);
+    return () => clearTimeout(timer);
+  }, [base, own, origin, editing, restorePost, slug, postId]);
+  useBlocker({ shouldBlockFn: () => editing && !window.confirm(t('leaveConfirm')), enableBeforeUnload: () => editing });
 
   const refresh = () => void queryClient.invalidateQueries();
   // After this page's own save: read the post once and take it as the new starting point here, rather than waiting
@@ -1093,6 +1165,33 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           </>
         }
       />
+      {restorePost && (
+        <Notice>
+          <div className="flex flex-wrap items-center gap-2">
+            <span>{t('draftFound', { when: f.dateTime(restorePost.savedAt) })}</span>
+            <Button
+              size="sm"
+              onClick={() => {
+                setBase(restorePost.data.base);
+                setOwn(restorePost.data.own);
+                setRestorePost(null);
+              }}
+            >
+              {t('draftRestore')}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                clearDraft(slug, postId);
+                setRestorePost(null);
+              }}
+            >
+              {t('draftDiscard')}
+            </Button>
+          </div>
+        </Notice>
+      )}
       {(error || flash) && (
         <div className="mb-4">
           <ErrorText>{error ? errorMessage(error) : flash}</ErrorText>
