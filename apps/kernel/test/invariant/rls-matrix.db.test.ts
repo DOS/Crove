@@ -41,6 +41,8 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.feed',
+  'crove_social.feed_item',
   'crove_social.short_link',
   'crove_social.short_link_click',
 ]);
@@ -124,6 +126,7 @@ const MUTE_KINDS = ['review_requested', 'decided', 'failed', 'comment'] as const
 const muteRows = new Map<string, number>();
 const socialPostRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), body: 'RLS matrix post' });
 const socialLabelRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), name: `rls-${tag()}`, color: 'blue', created_by: o.owner });
+const socialFeedRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), url: `https://rls-${tag()}.example/feed.xml`, created_by: o.owner });
 const socialIdeaRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), title: 'RLS matrix idea', stage: 'new', created_by: o.owner });
 const socialReviewLinkRow = (o: { id: string; owner: string }) => {
   const post = socialPostRow(o);
@@ -527,6 +530,15 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   // A metrics snapshot of a published variant (S8, issue #238): append-only, one per capture key.
   // An org's label for posts (#639): a name and a colour from the app's palette.
+  // A blog feed an org drafts posts from (#708).
+  'crove_social.feed': { make: (o) => ({ row: socialFeedRow(o) }) },
+  // An item of a feed, once it became a draft (#708).
+  'crove_social.feed_item': {
+    make: (o) => {
+      const feed = socialFeedRow(o);
+      return { setup: [{ table: 'crove_social.feed', values: feed }], row: { org_id: o.id, feed_id: feed.id, item_key: hex64(), title: 'RLS matrix item' } };
+    },
+  },
   // An idea on the Social ideas board (#701), before it becomes a draft.
   'crove_social.idea': { make: (o) => ({ row: socialIdeaRow(o) }) },
   // A label on an idea (#701).
