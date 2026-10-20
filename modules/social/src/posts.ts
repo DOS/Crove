@@ -29,6 +29,7 @@ import { assignCommands } from './assign.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
 import { labelCommands, labelQueries, labelsOfPosts } from './labels.ts';
+import { ideaCommands, ideaOfPost, ideaQueries, linkIdeaToPost } from './ideas.ts';
 import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
@@ -214,6 +215,8 @@ export const zPostCreate = z.strictObject({
   origin: z.enum(['human', 'ai']).optional(),
   // The member accepted an AI rewrite into the text (#583).
   aiAssisted: z.literal(true).optional(),
+  // The idea it is made from (#701).
+  ideaId: zId.optional(),
 });
 
 async function createPost(ctx: CommandContext, input: z.infer<typeof zPostCreate>) {
@@ -251,7 +254,8 @@ export const postCreate = defineCommand({
   access: MEMBERS,
   handler: async (ctx, input) => {
     const { post, variants, media } = await createPost(ctx, input);
-    ctx.audit({ post_id: post.id, variants: variants.length, media: media.length, origin: input.origin ?? 'human' });
+    if (input.ideaId) await linkIdeaToPost(ctx, input.ideaId, post.id);
+    ctx.audit({ post_id: post.id, variants: variants.length, media: media.length, origin: input.origin ?? 'human', ...(input.ideaId ? { idea_id: input.ideaId } : {}) });
     return { postId: post.id, revision: post.revision, variants };
   },
 });
@@ -939,6 +943,8 @@ export interface PostView {
   variants: VariantView[];
   // Its labels (#639), by label name.
   labelIds: string[];
+  // The idea it was made from (#701); on a single post's read only.
+  idea?: { id: string; title: string } | null;
 }
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
@@ -1077,7 +1083,7 @@ export const postGet = defineQuery({
   handler: async (ctx, input): Promise<PostView> => {
     const [view] = await viewPosts(ctx, [input.postId]);
     if (!view) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
-    return view;
+    return { ...view, idea: await ideaOfPost(ctx.trx, ctx.orgId, view.id) };
   },
 });
 
@@ -1216,6 +1222,7 @@ export const socialCommands = [
   ...assignCommands,
   ...snippetCommands,
   ...labelCommands,
+  ...ideaCommands,
   ...reviewLinkCommands,
   ...activityCommands,
   ...accountCommands,
@@ -1265,4 +1272,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...activityQueries, ...reviewLinkQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...activityQueries, ...reviewLinkQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];
