@@ -70,7 +70,7 @@ function asEntries(rows: BalanceRow[], date: string): ReportEntry[] {
 
 // The debits and credits of the org's entries in [from, to] (from null: since the first entry), per account, party and
 // reversal. `withoutClosing` leaves out every entry that has a line on the year-end closing account.
-async function balances(ctx: QueryContext, from: string | null, to: string, withoutClosing: boolean): Promise<BalanceRow[]> {
+function balances(ctx: QueryContext, from: string | null, to: string, withoutClosing: boolean) {
   let query = ctx.trx
     .selectFrom('crove_finance.journal_line as l')
     .innerJoin('crove_finance.journal_entry as j', (join) => join.onRef('j.org_id', '=', 'l.org_id').onRef('j.id', '=', 'l.entry_id'))
@@ -96,7 +96,23 @@ async function balances(ctx: QueryContext, from: string | null, to: string, with
       ),
     );
   }
-  return (await query.groupBy(['l.account_code', 'l.party_id', sql`j.reverses_entry_id IS NOT NULL`]).orderBy('l.account_code').execute()) as BalanceRow[];
+  return query.groupBy(['l.account_code', 'l.party_id', sql`j.reverses_entry_id IS NOT NULL`]);
+}
+
+// B01's balances (every entry up to the period end) and B02's (the period's entries without a closing line) in ONE
+// statement (#365), so both statements see the same entries even in the query's READ COMMITTED transaction: an entry
+// posted while they read is in both or in neither. The names of unmapped accounts and parties are read afterwards; they
+// only label rows whose amounts come from this statement.
+async function statementBalances(ctx: QueryContext, period: LedgerPeriod): Promise<{ b01: BalanceRow[]; b02: BalanceRow[] }> {
+  const rows = await balances(ctx, null, period.to, false)
+    .select(sql.lit('b01').as('part'))
+    .unionAll(balances(ctx, period.from, period.to, true).select(sql.lit('b02').as('part')))
+    .orderBy('part')
+    .orderBy('account_code')
+    .execute();
+  const split = { b01: [] as BalanceRow[], b02: [] as BalanceRow[] };
+  for (const { part, ...row } of rows) split[part === 'b01' ? 'b01' : 'b02'].push(row as BalanceRow);
+  return split;
 }
 
 async function unmappedRows(ctx: QueryContext, unmapped: UnmappedBalance[]): Promise<UnmappedRow[]> {
@@ -119,8 +135,9 @@ async function unmappedRows(ctx: QueryContext, unmapped: UnmappedBalance[]): Pro
 
 export async function financialStatements(ctx: QueryContext, periodText: string): Promise<FinancialStatements> {
   const period = ledgerPeriod(periodText);
-  const b01 = buildB01(asEntries(await balances(ctx, null, period.to, false), period.to), LEGAL_ENTITY, period.to);
-  const b02 = buildB02(asEntries(await balances(ctx, period.from, period.to, true), period.from), LEGAL_ENTITY, period.from, period.to);
+  const sums = await statementBalances(ctx, period);
+  const b01 = buildB01(asEntries(sums.b01, period.to), LEGAL_ENTITY, period.to);
+  const b02 = buildB02(asEntries(sums.b02, period.from), LEGAL_ENTITY, period.from, period.to);
   return {
     period,
     b01: { asOf: period.to, lines: withTotals(b01.lines, B01_LINES), unmapped: await unmappedRows(ctx, b01.unmapped), balanced: b01.balanced },
