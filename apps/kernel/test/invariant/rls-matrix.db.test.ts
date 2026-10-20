@@ -43,6 +43,8 @@ const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_kernel.mail_event',
   'crove_social.label',
+  'crove_social.notification',
+  'crove_social.notification_mute',
   'crove_social.post_label',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
@@ -494,6 +496,11 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // A notification for one member (#637), written once per event and person. A restrictive policy shows each member
+  // only their own; the factory's rows belong to the owner, the user every member-context actor enters as.
+  'crove_social.notification': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner, kind: 'comment', event_id: randomUUID() } }) },
+  // A kind of notification a member turned off (#637), under the same restrictive policy.
+  'crove_social.notification_mute': { make: (o) => ({ row: { org_id: o.id, user_id: o.owner, kind: 'comment' } }) },
   'crove_social.post': { make: (o) => ({ row: socialPostRow(o) }) },
   // Append-only review decisions: tenant roles may only read and insert.
   'crove_social.post_approval': {
