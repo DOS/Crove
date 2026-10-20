@@ -41,7 +41,6 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
-  'crove_finance.purchase_tax_rate',
   'crove_social.account_snapshot',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
