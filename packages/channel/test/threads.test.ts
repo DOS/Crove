@@ -174,6 +174,22 @@ describe('ThreadsPublisher', () => {
     expect(empty.calls).toHaveLength(0);
   });
 
+  it('sends alt text on described images and videos (#790)', async () => {
+    const { fetchImpl, calls } = threads({
+      [`POST /v1.0/${USER}/threads`]: [{ body: { id: '9001' } }, { body: { id: '9002' } }, { body: { id: '9003' } }],
+      'GET /v1.0/9003': [{ body: { status: 'FINISHED' } }],
+      [`POST /v1.0/${USER}/threads_publish`]: [{ body: { id: '18100000000000002' } }],
+      'GET /v1.0/18100000000000002': [{ body: {} }],
+    });
+    const media = [
+      { fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 10, altText: `Mặt tiền ${'c'.repeat(1200)}` },
+      { fileId: 'f-2', mime: 'image/png', sizeBytes: 10, altText: null },
+    ];
+    await new ThreadsPublisher(fetchImpl, fast).publish(input({ content: { body: 'Bộ ảnh', title: null, linkUrl: null, media } }));
+    expect(String(calls[0]?.form?.alt_text)).toHaveLength(1000);
+    expect(calls[1]?.form).toEqual({ media_type: 'IMAGE', image_url: 'https://bucket.example/f-2', is_carousel_item: 'true' });
+  });
+
   it('posts a video alone or in a carousel with images', async () => {
     const { fetchImpl, calls } = threads({
       [`POST /v1.0/${USER}/threads`]: [{ body: { id: '9101' } }, { body: { id: '9201' } }, { body: { id: '9202' } }, { body: { id: '9203' } }],

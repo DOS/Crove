@@ -102,6 +102,24 @@ describe('XPublisher', () => {
     expect(calls[2]?.body).toEqual({ text: 'Khai trương chi nhánh mới & ưu đãi\n\nhttps://example.com/a', media: { media_ids: ['1146654567674912769', '1146654567674912770'] } });
   });
 
+  it('sets the alt text of each described image before the post, and posts nothing when that fails', async () => {
+    const described = { ...image, altText: `Mặt tiền tiệm bánh ${'a'.repeat(1200)}` };
+    const { fetchImpl, calls } = x({
+      'POST api.x.com/2/media/upload': [{ body: { data: { id: '1146654567674912769' } } }, { body: { data: { id: '1146654567674912770' } } }],
+      'POST api.x.com/2/media/metadata': [{ body: {} }],
+      'POST api.x.com/2/tweets': [{ status: 201, body: { data: { id: '1445880548472328192' } } }],
+    });
+    const result = await new XPublisher(APP, fetchImpl).publish(input({ content: { ...input().content, media: [described, { ...image, fileId: 'f-2' }] } }));
+    expect(result).toMatchObject({ kind: 'accepted', externalId: '1445880548472328192' });
+    expect(calls.map((c) => c.route)).toEqual(['POST api.x.com/2/media/upload', 'POST api.x.com/2/media/metadata', 'POST api.x.com/2/media/upload', 'POST api.x.com/2/tweets']);
+    const meta = calls[1]?.body as { id: string; metadata: { alt_text: { text: string } } };
+    expect(meta.id).toBe('1146654567674912769');
+    expect(meta.metadata.alt_text.text).toHaveLength(1000);
+    const failed = x({ 'POST api.x.com/2/media/upload': [{ body: { data: { id: '1146654567674912769' } } }], 'POST api.x.com/2/media/metadata': [{ status: 503, body: {} }] });
+    expect(await new XPublisher(APP, failed.fetchImpl).publish(input({ content: { ...input().content, media: [described] } }))).toMatchObject({ kind: 'rejected' });
+    expect(failed.calls.some((c) => c.route === 'POST api.x.com/2/tweets')).toBe(false);
+  });
+
   it('posts nothing for a video with images, an empty post or an unreadable image', async () => {
     const none = x({});
     const publisher = new XPublisher(APP, none.fetchImpl);

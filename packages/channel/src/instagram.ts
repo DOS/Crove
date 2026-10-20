@@ -95,6 +95,8 @@ interface MediaListAnswer {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const captionOf = (content: { body: string }) => content.body.trim();
 const isVideo = (m: { mime: string }) => m.mime.startsWith('video/');
+// An image's description for screen readers (#790): feed images and carousel images only, up to 1000 characters.
+const altOf = (m: { mime: string; altText?: string | null }) => (m.altText && !isVideo(m) ? { alt_text: m.altText.slice(0, 1000) } : {});
 // A pending post's reference: the container and a short hash of its caption, so a later status check can recognise the
 // post the container became without the content.
 const captionKey = (caption: string) => createHash('sha256').update(caption).digest('hex').slice(0, 16);
@@ -184,14 +186,14 @@ export class InstagramPublisher implements Publisher {
       } else if (media.length === 1) {
         // One video is a Reel, shown in the feed too; Meta fetches it from the URL and processes it before publishing.
         const coverForm = !cover ? {} : 'atMs' in cover ? { thumb_offset: String(cover.atMs) } : { cover_url: await urlOf(cover.fileId) };
-        const single = reel ? { media_type: 'REELS', ...source(true), share_to_feed: 'true', ...coverForm } : source(false);
+        const single = reel ? { media_type: 'REELS', ...source(true), share_to_feed: 'true', ...coverForm } : { ...source(false), ...altOf(media[0] as { mime: string; altText?: string | null }) };
         container = await this.create(input.externalAccountId, s.accessToken, { ...single, caption });
       } else {
         // A carousel may mix images and videos.
         const children: string[] = [];
         for (const [i, m] of media.entries()) {
           const url = i === 0 ? (first as string) : await urlOf(m.fileId);
-          children.push(await this.create(input.externalAccountId, s.accessToken, { ...(isVideo(m) ? { media_type: 'VIDEO', video_url: url } : { image_url: url }), is_carousel_item: 'true' }));
+          children.push(await this.create(input.externalAccountId, s.accessToken, { ...(isVideo(m) ? { media_type: 'VIDEO', video_url: url } : { image_url: url, ...altOf(m) }), is_carousel_item: 'true' }));
         }
         container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'CAROUSEL', children: children.join(','), caption });
       }

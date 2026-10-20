@@ -230,6 +230,8 @@ export class MetaLogin {
 }
 
 const NUMERIC_ID = /^\d{1,32}$/;
+// Alt text per image, as Instagram and Threads cap it.
+const ALT_TEXT_MAX = 1000;
 
 export class FacebookPageConnector implements OAuthConnector {
   readonly provider = 'facebook_page' as const;
@@ -496,6 +498,8 @@ export class FacebookPagePublisher implements Publisher {
       const body = new FormData();
       body.set('published', 'false');
       body.set('source', new Blob([new Uint8Array(bytes)], { type: m.mime }), `image-${i + 1}`);
+      // The image's description for screen readers (#790); Facebook writes its own when none is given.
+      if (m.altText) body.set('alt_text_custom', m.altText.slice(0, ALT_TEXT_MAX));
       try {
         const answer = await this.graph.call<FeedAnswer>('POST', `${input.externalAccountId}/photos`, { token, multipart: body });
         if (typeof answer.id !== 'string' || !answer.id) return { rejected: { kind: 'rejected', error: 'transient', code: 'NO_PHOTO_ID' } };

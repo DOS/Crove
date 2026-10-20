@@ -127,6 +127,22 @@ describe('InstagramPublisher', () => {
     ]);
   });
 
+  it('sends alt text on described images, alone or in a carousel, and never on a video (#790)', async () => {
+    const { fetchImpl, calls } = graph({
+      [`POST /${IG}/media`]: [{ body: { id: '9001' } }, { body: { id: '9002' } }, { body: { id: '9003' } }],
+      'GET /9003': [{ body: { status_code: 'FINISHED' } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000002' } }],
+      'GET /18000000000000002': [{ body: {} }],
+    });
+    const media = [{ ...image('f-1'), altText: 'Mặt tiền' }, { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 10, altText: 'Video' }];
+    await new InstagramPublisher(APP, fetchImpl, fast).publish(input({ content: { body: 'Bộ ảnh', title: null, linkUrl: null, media } }));
+    expect(calls[0]?.form).toEqual({ image_url: 'https://bucket.example/f-1?sig=1', alt_text: 'Mặt tiền', is_carousel_item: 'true' });
+    expect(calls[1]?.form).toEqual({ media_type: 'VIDEO', video_url: 'https://bucket.example/v-1?sig=1', is_carousel_item: 'true' });
+    const single = graph({ [`POST /${IG}/media`]: [{ body: { id: '9004' } }], 'GET /9004': [{ body: { status_code: 'FINISHED' } }], [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000003' } }], 'GET /18000000000000003': [{ body: {} }] });
+    await new InstagramPublisher(APP, single.fetchImpl, fast).publish(input({ content: { body: 'Ảnh', title: null, linkUrl: null, media: [{ ...image('f-1'), altText: 'Mặt tiền' }] } }));
+    expect(single.calls[0]?.form).toEqual({ image_url: 'https://bucket.example/f-1?sig=1', alt_text: 'Mặt tiền', caption: 'Ảnh' });
+  });
+
   it('posts one video as a Reel shown in the feed, and finishes it on the status check while Meta processes it', async () => {
     const { fetchImpl, calls } = graph({
       [`POST /${IG}/media`]: [{ body: { id: '9101' } }],
