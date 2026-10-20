@@ -92,9 +92,22 @@ export interface VatLineInput {
   vatRate: string | null;
 }
 
+// One row of the invoice's own VAT table (THTTLTSuat in the e-invoice XML, #685): a rate as the invoice writes it, the
+// taxable value and the VAT the seller declared at that rate.
+export interface InvoiceRateInput {
+  rate: string | null;
+  taxable: Money;
+  vat: Money;
+}
+
 export interface VatDocumentInput {
   vatAmount: Money;
   lines: ReadonlyArray<VatLineInput>;
+  // The invoice's pre-tax total, checked against the invoice's VAT table when there is one.
+  subtotal?: Money;
+  // The invoice's VAT table, stored with documents recorded from e-invoice XML since #685; empty or absent for older
+  // documents and for documents read from a PDF or an image.
+  invoiceRates?: ReadonlyArray<InvoiceRateInput>;
 }
 
 export interface RateAmounts {
@@ -104,7 +117,7 @@ export interface RateAmounts {
 }
 
 export interface DocumentBreakdown {
-  // One row per rate the document's lines carry, in VAT_RATES order.
+  // One row per rate the document's lines (or its own VAT table) carry, in VAT_RATES order.
   rates: RateAmounts[];
   // The document's VAT was split across several rates (or put on 'other') by estimate, not read from the invoice.
   allocated: boolean;
@@ -114,9 +127,35 @@ function byRateOrder(a: { rate: VatRate }, b: { rate: VatRate }): number {
   return VAT_RATES.indexOf(a.rate) - VAT_RATES.indexOf(b.rate);
 }
 
+// The invoice's own VAT table, by rate, when it adds up to the invoice: its VAT to the invoice's VAT and its taxable
+// values to the invoice's pre-tax total. A table that does not (a row the reader could not fill, a seller's error) is
+// not used, and the estimate below stands in for it.
+function invoiceTableByRate(doc: VatDocumentInput): DocumentBreakdown | null {
+  const rows = doc.invoiceRates ?? [];
+  if (rows.length === 0) return null;
+  const taxable = new Map<VatRate, DecimalValue>();
+  const vat = new Map<VatRate, DecimalValue>();
+  let taxableSum = money(0);
+  let vatSum = money(0);
+  for (const row of rows) {
+    const rate = normalizeVatRate(row.rate);
+    taxable.set(rate, (taxable.get(rate) ?? money(0)).plus(money(row.taxable)));
+    vat.set(rate, (vat.get(rate) ?? money(0)).plus(money(row.vat)));
+    taxableSum = taxableSum.plus(money(row.taxable));
+    vatSum = vatSum.plus(money(row.vat));
+  }
+  if (!vatSum.equals(money(doc.vatAmount))) return null;
+  if (doc.subtotal !== undefined && !taxableSum.equals(money(doc.subtotal))) return null;
+  const rates = [...taxable.keys()]
+    .map((rate) => ({ rate, taxable: canonical(taxable.get(rate) ?? money(0)), vat: canonical(vat.get(rate) ?? money(0)) }))
+    .sort(byRateOrder);
+  return { rates, allocated: false };
+}
+
 /**
- * Splits one invoice into taxable value and VAT by rate. Crove stores each line's amount and rate and the invoice's
- * total VAT, not the VAT per rate, so:
+ * Splits one invoice into taxable value and VAT by rate. An invoice whose own VAT table is stored (#685) and adds up
+ * to the invoice is split exactly as that table says. Otherwise Crove has each line's amount and rate and the
+ * invoice's total VAT, not the VAT per rate, so:
  * - the taxable value of a rate is the sum of its lines (a discount line is already negative);
  * - an invoice with one taxed rate (5, 8 or 10) puts all its VAT on that rate, exactly as invoiced;
  * - an invoice with several taxed rates estimates each rate's VAT as taxable x rate, rounded half up to whole dong,
@@ -125,6 +164,8 @@ function byRateOrder(a: { rate: VatRate }, b: { rate: VatRate }): number {
  * - VAT on an invoice whose lines name no taxed rate goes to 'other' (flagged `allocated`), for the accountant.
  */
 export function documentVatByRate(doc: VatDocumentInput): DocumentBreakdown {
+  const table = invoiceTableByRate(doc);
+  if (table) return table;
   const taxable = new Map<VatRate, DecimalValue>();
   for (const line of doc.lines) {
     const rate = normalizeVatRate(line.vatRate);

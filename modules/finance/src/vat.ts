@@ -3,7 +3,9 @@
 // Excel export of it (GET /api/export/vat.xlsx), like finance.journal.export.
 //
 // Input invoices are the recorded purchase documents, output invoices the recorded sales documents (sales e-invoices,
-// issue #313); both live in crove_finance.purchase_document, told apart by direction.
+// issue #313); both live in crove_finance.purchase_document, told apart by direction. A document recorded from e-invoice
+// XML since #685 carries the invoice's own VAT table (crove_finance.purchase_tax_rate), which splits it by rate exactly;
+// the others are split by estimate from their lines and flagged rate_split when that spreads VAT over several rates.
 //
 // The period of an input invoice is its posting date, the date of its journal entry (#478). That is its invoice date,
 // except for an invoice recorded after its own month was locked, or dated on or before the org's opening entry (#366),
@@ -24,6 +26,7 @@ import {
   documentVatByRate,
   form01Indicators,
   reducedRateApplies,
+  type InvoiceRateInput,
   sideTotals,
   vatMismatch,
   vatPeriod,
@@ -90,13 +93,14 @@ function invoiceView(
     total: string;
   },
   lines: Array<{ amount: string; vatRate: string | null }>,
+  invoiceRates: InvoiceRateInput[],
 ): VatInvoiceView {
-  const breakdown = documentVatByRate({ vatAmount: doc.vatAmount, lines });
+  const breakdown = documentVatByRate({ vatAmount: doc.vatAmount, subtotal: doc.subtotal, lines, invoiceRates });
   const warnings: VatWarning[] = [];
   if (breakdown.rates.some((r) => r.rate === 'other')) warnings.push('rate_unknown');
   if (breakdown.allocated) warnings.push('rate_split');
   if (breakdown.rates.some((r) => r.rate === '8') && !reducedRateApplies(doc.issueDate)) warnings.push('reduced_rate_outside_period');
-  const linesTaxable = breakdown.rates.reduce((acc, r) => acc.plus(money(r.taxable)), money(0));
+  const linesTaxable = lines.reduce((acc, l) => acc.plus(money(l.amount)), money(0));
   if (!linesTaxable.equals(money(doc.subtotal))) warnings.push('lines_mismatch');
   if (vatMismatch({ vatAmount: doc.vatAmount, lines })) warnings.push('vat_mismatch');
   // An invoice of an earlier period, posted in this one after its own month was locked (#478).
@@ -171,6 +175,25 @@ async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: D
     list.push({ amount: line.amount, vatRate: line.vat_rate });
     byDocument.set(line.document_id, list);
   }
+  // The invoice's own VAT table, for the documents recorded from e-invoice XML since #685.
+  const rateRows = await ctx.trx
+    .selectFrom('crove_finance.purchase_tax_rate')
+    .select(['document_id', 'vat_rate', 'taxable_amount', 'vat_amount'])
+    .where('org_id', '=', ctx.orgId)
+    .where(
+      'document_id',
+      'in',
+      docs.map((d) => d.id),
+    )
+    .orderBy('document_id')
+    .orderBy('row_no')
+    .execute();
+  const ratesByDocument = new Map<string, InvoiceRateInput[]>();
+  for (const row of rateRows) {
+    const list = ratesByDocument.get(row.document_id) ?? [];
+    list.push({ rate: row.vat_rate, taxable: row.taxable_amount, vat: row.vat_amount });
+    ratesByDocument.set(row.document_id, list);
+  }
   return docs.map((d) =>
     invoiceView(
       period,
@@ -187,6 +210,7 @@ async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: D
         total: d.total,
       },
       byDocument.get(d.id) ?? [],
+      ratesByDocument.get(d.id) ?? [],
     ),
   );
 }
