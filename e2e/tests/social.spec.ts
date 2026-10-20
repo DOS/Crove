@@ -35,13 +35,13 @@ test('composes, reviews and schedules a post on the sandbox channel', async ({ p
   await page.getByRole('button', { name: 'Lưu và gửi duyệt' }).click();
 
   await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
-  await expect(page.getByText('Chờ duyệt')).toBeVisible();
+  await expect(page.getByText('Chờ duyệt', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Duyệt', exact: true }).click();
   await expect(page.getByText('Lên lịch 1 kênh đã duyệt')).toBeVisible();
   await page.getByRole('button', { name: 'Khung giờ trống kế tiếp' }).click();
   await page.getByRole('button', { name: 'Lên lịch', exact: true }).click();
   await expect(page.getByText(/Đăng lúc .* · theo hàng đợi/)).toBeVisible();
-  await expect(page.getByText('Đã lên lịch')).toBeVisible();
+  await expect(page.getByText('Đã lên lịch', { exact: true })).toBeVisible();
 
   const postUrl = page.url();
   await page.getByRole('link', { name: 'Quay lại' }).click();
@@ -100,7 +100,7 @@ test('keeps unsaved edits when another tab approves the post', async ({ page, co
   await page.getByRole('link', { name: 'Soạn bài' }).click();
   await page.getByLabel('Nội dung chung').fill('Bản gốc');
   await page.getByRole('button', { name: 'Lưu và gửi duyệt' }).click();
-  await expect(page.getByText('Chờ duyệt')).toBeVisible();
+  await expect(page.getByText('Chờ duyệt', { exact: true })).toBeVisible();
   const url = page.url();
 
   // This tab starts editing; the other tab approves the same post.

@@ -19,6 +19,7 @@ import { firstCommentOf, isProvider } from './domain/channels.ts';
 import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
+import { activityCommands, activityQueries } from './activity.ts';
 import { publishingCommands } from './publishing.ts';
 import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { libraryQueries, likeTerm } from './library.ts';
@@ -1164,6 +1165,7 @@ export const socialCommands = [
   ...commentCommands,
   ...policyCommands,
   ...reviewLinkCommands,
+  ...activityCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
 // org shows, so the job never reads another kind of file through it.
@@ -1195,4 +1197,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...reviewLinkQueries];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...reviewLinkQueries, ...activityQueries];

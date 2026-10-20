@@ -13,10 +13,11 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { COMMENT_RULES, isProvider, type Issue } from '@crove/mod-social/contract';
+import { COMMENT_RULES, isProvider, sentLink, utmOf, type Issue } from '@crove/mod-social/contract';
 import { MediaField, type MediaItem } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { ReviewLinks } from '../components/social-review-links.tsx';
+import { PostActivity } from '../components/social-activity.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -64,8 +65,10 @@ const EMPTY_OWN: Own = { custom: false, body: '', title: '', settings: {}, custo
 const sameMediaList = (a: readonly MediaItem[], b: readonly MediaItem[]) => JSON.stringify(mediaInput(a)) === JSON.stringify(mediaInput(b));
 // The images a channel shows: its own when it has them, else the post's.
 const mediaOfOwn = (own: Own, base: Base) => (own.customMedia ? own.media : base.media);
-const sameSettings = (a: Record<string, unknown> | null | undefined, b: Record<string, unknown> | null | undefined) =>
-  JSON.stringify(Object.entries(a ?? {}).sort()) === JSON.stringify(Object.entries(b ?? {}).sort());
+// Keys sorted at every level: the server's jsonb gives nested objects (the UTM tags) back in its own key order.
+const canonical = (value: unknown): string =>
+  JSON.stringify(value, (_key, v: unknown) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))) : v));
+const sameSettings = (a: Record<string, unknown> | null | undefined, b: Record<string, unknown> | null | undefined) => canonical(a ?? {}) === canonical(b ?? {});
 
 // The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
 function ProviderSettings({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
@@ -159,6 +162,38 @@ function Counter({ provider, body, linkUrl, mediaCount }: { provider: string; bo
   return <span className={cn('font-mono text-xs tabular-nums', over ? 'text-destructive' : used > max * 0.9 ? 'text-warning' : 'text-subtle-foreground')}>{used}/{max}</span>;
 }
 
+type UtmTags = { campaign: string; medium: string };
+type ApiSettings = NonNullable<Parameters<typeof client.social.variants.update>[0]['settings']>;
+
+// The channel's settings with the post's UTM tags, or without any (#585). A utm_content the channel already has (set
+// through the API) is kept.
+function withUtm(own: Own, utm: UtmTags | null): Own {
+  const { utm: old, ...rest } = own.settings;
+  const content = old && typeof old === 'object' && typeof (old as { content?: unknown }).content === 'string' ? { content: (old as { content: string }).content } : {};
+  return { ...own, settings: utm && utm.campaign.trim() ? { ...rest, utm: { campaign: utm.campaign.trim(), medium: utm.medium.trim() || 'social', ...content } } : rest };
+}
+
+// UTM tags for the post's link (#585): one campaign for every channel, each channel its own utm_source.
+function UtmFields({ utm, onChange, disabled }: { utm: UtmTags | null; onChange: (utm: UtmTags | null) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  return (
+    <div className="space-y-2">
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Checkbox checked={utm !== null} disabled={disabled} onCheckedChange={(checked) => onChange(checked === true ? { campaign: '', medium: 'social' } : null)} />
+        {t('utmOn')}
+      </label>
+      {utm && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Input value={utm.campaign} disabled={disabled} maxLength={100} aria-label={t('utmCampaign')} placeholder={t('utmCampaign')} onChange={(e) => onChange({ ...utm, campaign: e.target.value })} />
+          <Input value={utm.medium} disabled={disabled} maxLength={100} aria-label={t('utmMedium')} placeholder="social" onChange={(e) => onChange({ ...utm, medium: e.target.value })} />
+          {!utm.campaign.trim() && <p className="text-xs text-warning sm:col-span-2">{t('utmNeedsCampaign')}</p>}
+          <p className="text-xs text-subtle-foreground sm:col-span-2">{t('utmHint')}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const REWRITES = ['shorten', 'formal', 'casual', 'translate_en', 'translate_vi'] as const;
 
 // An AI rewrite of a text (#583): a proposal shown next to the text, which the member takes or leaves. Taking it marks
@@ -242,7 +277,9 @@ function ChannelEditor({
   onAiUsed?: () => void;
 }) {
   const t = useTranslations('social');
-  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl: base.linkUrl, media: mediaOfOwn(own, base) };
+  // The link as the channel sends it, with its UTM tags (#585).
+  const linkUrl = (isProvider(provider) ? sentLink(provider, base.linkUrl || null, own.settings, own.custom ? own.body : base.body) : base.linkUrl) ?? '';
+  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl, media: mediaOfOwn(own, base) };
   const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   return (
     <Card className="block space-y-3 p-4">
@@ -355,6 +392,8 @@ export function SocialComposePage() {
   const [base, setBase] = useState<Base>({ body: '', title: '', linkUrl: '', media: [] });
   const [chosen, setChosen] = useState<string[]>([]);
   const [own, setOwn] = useState<Record<string, Own>>({});
+  // UTM tags for the post's link, put on every channel's settings when it is created (#585).
+  const [utm, setUtm] = useState<UtmTags | null>(null);
   // An AI rewrite was taken into the text (#583): the post is saved as AI-assisted.
   const [aiUsed, setAiUsed] = useState(false);
   const live = (channels.data ?? []).filter((c) => c.status === 'active');
@@ -381,8 +420,8 @@ export function SocialComposePage() {
         ...(aiUsed ? { aiAssisted: true as const } : {}),
         media: mediaInput(base.media),
         channels: chosen.map((connectionId) => {
-          const mine = own[connectionId] ?? EMPTY_OWN;
-          const settings = Object.keys(mine.settings).length > 0 ? { settings: mine.settings as Record<string, string | boolean> } : {};
+          const mine = withUtm(own[connectionId] ?? EMPTY_OWN, utm);
+          const settings = Object.keys(mine.settings).length > 0 ? { settings: mine.settings as ApiSettings } : {};
           const media = mine.customMedia ? { media: mediaInput(mine.media) } : {};
           return mine.custom ? { connectionId, body: mine.body, title: orNull(mine.title), ...settings, ...media } : { connectionId, ...settings, ...media };
         }),
@@ -417,7 +456,7 @@ export function SocialComposePage() {
   const blocking = selected.some((c) => {
     const mine = own[c.id] ?? EMPTY_OWN;
     const content = { body: mine.custom ? mine.body : base.body, title: mine.custom ? mine.title : base.title };
-    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: mine.settings }).length > 0;
+    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: withUtm(mine, utm).settings }).length > 0;
   });
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !blocking && !create.isPending) {
@@ -460,6 +499,11 @@ export function SocialComposePage() {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
           <SharedFields base={base} onChange={setBase} disabled={create.isPending} autoFocus needsTitle={selected.some((c) => hasTitle(c.provider))} onAiUsed={() => setAiUsed(true)} />
+          {base.linkUrl.trim() && (
+            <Card className="block p-4">
+              <UtmFields utm={utm} onChange={setUtm} disabled={create.isPending} />
+            </Card>
+          )}
           <Card className="block p-4">
             <p className="mb-3 text-sm font-medium text-foreground">{t('pickChannels')}</p>
             {live.length === 0 ? (
@@ -523,7 +567,7 @@ export function SocialComposePage() {
                 provider={c.provider}
                 channel={c.displayName}
                 base={base}
-                own={own[c.id] ?? EMPTY_OWN}
+                own={withUtm(own[c.id] ?? EMPTY_OWN, utm)}
                 disabled={create.isPending}
                 onChange={(next) => setOwn({ ...own, [c.id]: next })}
                 connectionId={c.id}
@@ -867,6 +911,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const names = useMemo(() => new Map((channels.data ?? []).map((c: Channel) => [c.id, c.displayName])), [channels.data]);
   const [base, setBase] = useState<Base | null>(null);
   const [own, setOwn] = useState<Record<string, Own>>({});
+  // The post's UTM tags as the screen shows them; changing them changes every editable channel's settings (#585).
+  const [utm, setUtmState] = useState<UtmTags | null | undefined>(undefined);
   // An AI rewrite was taken into the text (#583): the next save marks the post AI-assisted.
   const [aiUsed, setAiUsed] = useState(false);
   // The server content the edits started from. A status change elsewhere (a teammate approving another channel, the
@@ -877,7 +923,11 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const adopt = (p: Post, keepOwn = false) => {
     setOrigin(p);
     setBase(baseOf(p));
-    if (!keepOwn) setOwn(Object.fromEntries(p.variants.map((v) => [v.id, ownOf(v)])));
+    if (!keepOwn) {
+      setOwn(Object.fromEntries(p.variants.map((v) => [v.id, ownOf(v)])));
+      // The tags shown follow the channels again.
+      setUtmState(undefined);
+    }
     setStale(false);
   };
   const editsOf = (o: Post) =>
@@ -978,6 +1028,15 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   if (post.isLoading || !base || !origin) return post.error ? <ErrorText>{errorMessage(post.error)}</ErrorText> : <Spinner />;
   if (!post.data) return null;
   const p = post.data;
+  // The tags the channels still to go out carry; a published channel keeps the tags it went out with.
+  const firstUtm = p.variants.filter((v) => EDITABLE.includes(v.status)).map((v) => utmOf(v.settings)).find((u) => u !== null) ?? null;
+  const shownUtm = utm === undefined ? (firstUtm ? { campaign: firstUtm.campaign, medium: firstUtm.medium ?? 'social' } : null) : utm;
+  const setUtm = (next: UtmTags | null) => {
+    setUtmState(next);
+    const changed = { ...own };
+    for (const v of p.variants) if (EDITABLE.includes(v.status)) changed[v.id] = withUtm(own[v.id] ?? ownOf(v), next);
+    setOwn(changed);
+  };
   const dirty = editsOf(origin);
   const editable = canWrite && p.variants.some((v) => EDITABLE.includes(v.status));
   const submittable = p.variants.filter((v) => SUBMITTABLE.includes(v.status));
@@ -1058,6 +1117,11 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
           <SharedFields base={base} onChange={setBase} disabled={!editable || save.isPending} needsTitle={p.variants.some((v) => hasTitle(v.provider))} onAiUsed={() => setAiUsed(true)} />
+          {base.linkUrl.trim() && editable && (
+            <Card className="block p-4">
+              <UtmFields utm={shownUtm} onChange={setUtm} disabled={save.isPending} />
+            </Card>
+          )}
           {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} />}
           {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
           {canWrite && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
@@ -1139,6 +1203,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             );
           })}
         </div>
+        <PostActivity postId={p.id} channels={p.variants.map((v) => ({ variantId: v.id, name: names.get(v.connectionId) ?? providerName(v.provider) }))} canWrite={canWrite} className="lg:col-span-2" />
       </div>
     </div>
   );

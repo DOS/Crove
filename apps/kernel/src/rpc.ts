@@ -309,6 +309,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           }),
         ),
         duplicate: os.social.posts.duplicate.handler(socialCommand('social.post.duplicate')),
+        comment: os.social.posts.comment.handler(socialCommand('social.post_comment.add')),
+        editComment: os.social.posts.editComment.handler(socialCommand('social.post_comment.edit')),
+        activity: os.social.posts.activity.handler(socialQuery('social.post.activity')),
         setEvergreen: os.social.posts.setEvergreen.handler(socialCommand('social.post.set_evergreen')),
         draftWithAi: os.social.posts.draftWithAi.handler(({ context, input }) =>
           inSocial(context, async (orgId, actor) => {

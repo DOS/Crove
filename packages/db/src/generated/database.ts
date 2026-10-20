@@ -62,6 +62,7 @@ export interface CroveSocialSchema {
   'crove_social.metric_snapshot': SocialMetricSnapshotTable;
   'crove_social.post': SocialPostTable;
   'crove_social.post_approval': SocialPostApprovalTable;
+  'crove_social.post_comment': SocialPostCommentTable;
   'crove_social.post_media': SocialPostMediaTable;
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.queue': SocialQueueTable;
@@ -420,6 +421,7 @@ export interface KernelExtractionTable {
   version: ColumnType<number, number, NotGranted>;
   requested_by: ColumnType<string | null, string | null, NotGranted>;
   completed_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  entry_count: ColumnType<number | null, number | null, NotGranted>;
 }
 
 /** crove_kernel.file */
@@ -719,6 +721,18 @@ export interface SocialPostApprovalTable {
   actor_origin: ColumnType<string, string | undefined, NotGranted>;
   snapshot: ColumnType<unknown, string, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.post_comment */
+export interface SocialPostCommentTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  post_id: ColumnType<string, string, NotGranted>;
+  variant_id: ColumnType<string | null, string | null, NotGranted>;
+  author_user_id: ColumnType<string, string, NotGranted>;
+  body: string;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  edited_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.post_media */

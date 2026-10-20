@@ -31,6 +31,7 @@ import {
   zSocialLibraryItem,
   zSocialLibraryUse,
   zSocialReviewLinks,
+  zSocialActivityItem,
   zSocialQueueSet,
   zSocialSchedule,
   zSocialVariantUpdate,
@@ -225,6 +226,11 @@ export const contract = {
           }),
         )
         .output(z.object({ posts: z.array(z.object({ postId: zId, submitted: z.number().int() })) })),
+      // Internal comments (#582): never published; the author may fix one for 15 minutes.
+      comment: oc.input(z.strictObject({ postId: zId, variantId: zId.optional(), body: z.string().trim().min(1).max(4000) })).output(z.object({ commentId: zId })),
+      editComment: oc.input(z.strictObject({ commentId: zId, body: z.string().trim().min(1).max(4000) })).output(z.object({ commentId: zId, postId: zId })),
+      // The post's timeline, newest first: comments, decisions and what happened to it and its channels.
+      activity: oc.input(z.object({ postId: zId })).output(z.object({ items: z.array(zSocialActivityItem), more: z.boolean() })),
       // A copy of any post as a new draft, for the channels still connected (#575).
       duplicate: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
       // Repost a published post every N days (7 to 365), each repost sent to review; null stops it.
