@@ -5,13 +5,28 @@ Crove is the open-source Business OS (AGPL). It must run with `docker compose up
 ## Picking up work (GitHub Project "Crove")
 
 - Work comes from the board https://github.com/orgs/DOS/projects/8 (issues in DOS/Crove). One task = one issue = one worktree = one PR. Split work by feature, not by layer: a task goes end to end (migration, server, contract, UI, tests).
-- The backlog follows the 2026-10-17 review ([docs/plan/backlog-review-2026-10-17.md](docs/plan/backlog-review-2026-10-17.md)). Milestones run in order: M0, M1, M2, M3, then the GA gate. Pick only from the earliest milestone that has an open, unclaimed `priority:P0` or `priority:P1` issue (P0 first), skipping issues already `In progress` and issues labelled `owner-action` (the owner's job). Never pick from Icebox, Social (paused) or the GA gate without an owner decision; if nothing is pickable, stop and report instead of creating work.
+- Work without stopping (owner decision 2026-10-20). The plans and designs are the backlog, so the owner should never have to type "continue", "status?" or "allowed". When a task is merged, start the next one in the same session. Never end a turn to ask whether to go on.
+- Pick the next task in this order, skipping issues already `In progress` and issues labelled `owner-action` (the owner's job):
+  1. In the earliest milestone with work left (M0, M1, M2, M3, then the GA gate, per [docs/plan/backlog-review-2026-10-17.md](docs/plan/backlog-review-2026-10-17.md)), take an open, unclaimed issue: `priority:P0` first, then P1, then P2.
+  2. When none is left there, create the next issues yourself from the plans and designs: that milestone's acceptance criteria, the step lists in `docs/plan/*.md`, the ADRs and `DESIGN.md`. Each issue gets its scope, acceptance criteria, the files it touches, a link to the plan line it comes from, and the milestone and priority the plan gives. Then claim one and build it.
+  3. When that milestone is done, go on to the next.
+
+  The Icebox and paused milestones (Social, decision D5) stay closed until the owner reopens them.
+- Stop and ask the owner only when nothing is left to pick or derive, or when a step would be hard to undo or would cross a line the plans did not draw. Judge each case yourself. The usual cases:
+  - losing or rewriting existing data;
+  - weakening tenancy, authentication, approval or the ledger's rules, or changing an invariant on purpose;
+  - going against a written decision or an accepted ADR;
+  - new spending, production or credentials;
+  - anything a person must sign off (lawyer, accountant).
+
+  Ask once, with the issue linked, and keep working on other tasks while you wait.
+- Keep the memory outside the session: at each milestone of a task (PR opened, merged, blocked), comment on its issue what is done and what comes next. A resumed or compacted session reads the open issues it claimed before doing anything else.
 - Review follow-ups go to the Icebox: a non-blocking finding from any review (security, code, bot) becomes a `priority:P3` issue labelled `review-followup` in the Icebox milestone. It moves into a milestone only when it blocks that milestone's acceptance criteria or a real user hits it. Blocking findings are still fixed in the same PR.
 - No hardening for features nobody uses: security work is picked only when the current milestone's checklist needs it (the pilot readiness checklist, then the GA gate), or when a real high or critical vulnerability is found, which is P0 at once.
 - WIP limit: at most 3 issues `In progress` across all agents, at least 2 of them in the current milestone; one issue per agent.
-- Agents never create `priority:P0` or `priority:P1` issues. New issues default to `priority:P3` in the Icebox; the coordinator triages them weekly.
+- An issue created from a plan takes the milestone and priority the plan gives it. Any other new issue (an idea, a nice-to-have, a finding outside the plans) goes to the Icebox as `priority:P3`, for the coordinator's weekly triage. Never build what no plan or design calls for.
 - Any number of agents may run; nobody owns a fixed area. When priorities tie, prefer an issue with the same area label (`kernel`, `security`, `auth`, `finance`, `web`, `infra`, `tooling`, `cloud`) as your previous task, so each agent naturally stays in one area and the owner can see who works where.
-- To claim it: set Status to `In progress` and comment `Claimed by <session or agent name>, branch <branch>`. All agents share one GitHub account, so the comment is the lock. Never take over a claimed issue.
+- To claim it: set Status to `In progress` and comment `Claimed by <session or agent name>, branch <branch>`. All agents share one GitHub account, so the comment is the lock: read the comments again after posting, and if another session claimed first, pick another task. Never take over a live claim. A claim with no push, PR update or comment for 48 hours is stale: comment `Taking over the stale claim of <session>` with that evidence, then claim it.
 - The PR body says `Closes #<n>`; merging moves the issue to Done. If a task needs work in another area (for example UI for a new kernel API), open a follow-up issue (P3, Icebox, unless it blocks the current milestone) instead of growing the PR.
 - New migrations: rebase on `origin/main` right before merging and keep your migration timestamp greater than every file on `main`. The "Migration order" step of the Docs check job fails a PR that adds an older or equal version (`tools/ci/migration-order.mjs`). GitHub does not re-run PR checks when `main` moves, so after every push to `main` the migration-recheck workflow re-runs the Docs check of open PRs whose migrations fell behind (`tools/ci/migration-recheck.mjs`). When it fails, rename your migration to a version above the newest on `main` (the error suggests one), push, and never merge with the old version.
 
@@ -27,18 +42,13 @@ Crove is the open-source Business OS (AGPL). It must run with `docker compose up
   Squash merge with the expected head SHA, then remove the worktree.
 - A review bot that is out of quota or rate limited has not reviewed the PR. Do not wait for it, retry it in a loop or work around its quota. Say so in the PR; on a protected-path PR the session's own security review stands in for it.
 - Never merge, push to or take over another session's PR unless the owner names it (for example "merge #481"). Even then, first check that it is still open and that its head matches what you checked: another agent may have merged or replaced it.
-- Ask the owner only for:
-  - a product or business decision;
-  - something only a person can do: accounts, secrets, payments, real sample files, legal or accounting sign-off;
-  - authority not yet granted.
-
-  Decide everything else yourself and say what you decided.
+- Ask the owner only for the stop cases under "Picking up work", and for something only a person can do: accounts, secrets, payments, real sample files. Decide everything else yourself, and write the decision and its reason in the PR.
 - Writing to the owner:
   - Vietnamese with full diacritics, in plain words. Explain any technical term on first use, and give every issue or PR number with its short name.
   - Each question says what is being decided, why it matters, the options, your recommendation, and what happens if there is no answer.
   - Name who must act on each open item: the owner, the accountant (#61, the pilot partner's accountant), a lawyer, or another agent.
   - Links must open in a browser: GitHub URLs (`https://github.com/DOS/Crove/blob/main/<path>`, `https://github.com/DOS/Crove/issues/<n>`), never a local path or a bare file name. GitHub shows an `.html` file as source code, so publish an owner page (`*.vi.html`) as a private claude.ai artifact when the session can, or summarize it in the message.
-- Report what actually happened, and keep these words distinct: opened, merged, deployed. Say what was verified and what was not.
+- Report without being asked: after each merge, one or two lines (what merged, what is next). Report what actually happened, and keep these words distinct: opened, merged, deployed. Say what was verified and what was not.
 
 ## Worktrees (several agents work on this repo at once)
 
