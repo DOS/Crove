@@ -50,6 +50,7 @@ export const PROVIDER_NAMES: Record<Provider, string> = {
   x: 'X',
   bluesky: 'Bluesky',
   google_business: 'Google Business',
+  telegram: 'Telegram',
 };
 
 export function providerName(provider: string): string {
