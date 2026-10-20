@@ -2,6 +2,7 @@
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
 import { CAPABILITIES, COMMENT_RULES, VIDEO_ONLY_ADAPTERS, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
 export const TIKTOK_PRIVACY: readonly string[] = ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'];
@@ -83,7 +84,8 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
   // No channel takes an empty post: it needs text or media.
   if (variant.body.trim() === '' && variant.media.length === 0) issues.push({ code: 'CONTENT_REQUIRED', field: 'body', limit: null, actual: null });
   // The text as the adapter sends it, with the link it appends.
-  const sent = sentText(variant.provider, variant.body, variant.linkUrl, variant.media.length);
+  // The link as the channel sends it, with its UTM tags (#585), counted where the channel counts it.
+  const sent = sentText(variant.provider, variant.body, sentLink(variant.provider, variant.linkUrl ?? null, variant.settings, variant.body), variant.media.length);
   checkText(issues, 'body', sent, caps.body);
   if (caps.title) checkText(issues, 'title', variant.title ?? '', caps.title);
   else if (variant.title !== null && variant.title.trim() !== '') issues.push({ code: 'TITLE_NOT_SUPPORTED', field: 'title', limit: null, actual: null });
