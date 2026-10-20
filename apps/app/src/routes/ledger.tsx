@@ -337,13 +337,17 @@ export function LedgerPage() {
         </div>
       )}
       <Tabs className="gap-4" value={tab} onValueChange={(value) => setTab(value as Tab)}>
-        <TabsList variant="line" className="w-full justify-start border-b">
-          {TABS.map((id) => (
-            <TabsTrigger key={id} value={id} className="flex-none px-3">
-              {t(`tabs.${id}`)}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        {/* Four tabs are wider than a phone: the row scrolls inside its own box instead of the page (issue #615), with
+            room below for the active tab's underline. */}
+        <div className="-mb-1 overflow-x-auto pb-1">
+          <TabsList variant="line" className="w-max min-w-full justify-start border-b">
+            {TABS.map((id) => (
+              <TabsTrigger key={id} value={id} className="flex-none px-3">
+                {t(`tabs.${id}`)}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
         <TabsContent value="trialBalance">
           {data ? (
             <>
