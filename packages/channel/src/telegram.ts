@@ -89,7 +89,8 @@ export function telegramLogin(input: { botToken: string; channel: string }): { b
 export async function connectTelegram(login: { botToken: string; channel: string }, fetchImpl?: Fetch): Promise<ConnectedAccount> {
   const client = new TelegramClient(fetchImpl, 15_000);
   const failed = (error: unknown): never => {
-    if (error instanceof TelegramError && (error.status === 401 || error.code === 401)) throw new ConnectorError('denied', 'Telegram refused the bot token', 'TELEGRAM_TOKEN_REFUSED');
+    // An unknown or malformed token answers 404 on getMe, a revoked one 401.
+    if (error instanceof TelegramError && (error.status === 401 || error.status === 404)) throw new ConnectorError('denied', 'Telegram refused the bot token', 'TELEGRAM_TOKEN_REFUSED');
     if (error instanceof TelegramError && (error.status === 400 || error.status === 403)) throw new ConnectorError('denied', 'Telegram does not know this channel for the bot', 'TELEGRAM_CHANNEL_NOT_FOUND');
     throw new ConnectorError('provider', 'Telegram did not answer');
   };
@@ -128,10 +129,10 @@ function telegramResult(error: unknown): PublishResult {
 export class TelegramPublisher implements Publisher {
   readonly provider = 'telegram' as const;
   readonly publishSafety: RetrySafety = 'never';
-  private readonly client: TelegramClient;
+  private readonly fetchImpl: Fetch | undefined;
 
   constructor(fetchImpl?: Fetch) {
-    this.client = new TelegramClient(fetchImpl);
+    this.fetchImpl = fetchImpl;
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -151,17 +152,21 @@ export class TelegramPublisher implements Publisher {
       if (!bytes) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
       files.set(`file${i}`, { bytes, mime: m.mime });
     }
+    // An upload of up to 10 files (videos up to 50 MB each) takes longer than a text: 30 s, plus 10 s a megabyte, so a
+    // slow upload is not cut off after Telegram took the post (which would leave it unclear).
+    const megabytes = media.reduce((sum, m) => sum + m.sizeBytes, 0) / 1_000_000;
+    const client = new TelegramClient(this.fetchImpl, Math.min(30_000 + Math.ceil(megabytes) * 10_000, 600_000));
     let messageId: unknown;
     try {
       if (media.length === 0) {
-        messageId = (await this.client.call<{ message_id?: unknown }>(s.botToken, 'sendMessage', { chat_id: chat, text })).message_id;
+        messageId = (await client.call<{ message_id?: unknown }>(s.botToken, 'sendMessage', { chat_id: chat, text })).message_id;
       } else if (media.length === 1) {
         const one = media[0] as { mime: string };
         const method = isVideo(one) ? 'sendVideo' : 'sendPhoto';
-        messageId = (await this.client.call<{ message_id?: unknown }>(s.botToken, method, { chat_id: String(chat), [isVideo(one) ? 'video' : 'photo']: 'attach://file0', ...(text ? { caption: text } : {}) }, files)).message_id;
+        messageId = (await client.call<{ message_id?: unknown }>(s.botToken, method, { chat_id: String(chat), [isVideo(one) ? 'video' : 'photo']: 'attach://file0', ...(text ? { caption: text } : {}) }, files)).message_id;
       } else {
         const group = media.map((m, i) => ({ type: isVideo(m) ? 'video' : 'photo', media: `attach://file${i}`, ...(i === 0 && text ? { caption: text } : {}) }));
-        const sent = await this.client.call<{ message_id?: unknown }[]>(s.botToken, 'sendMediaGroup', { chat_id: String(chat), media: group }, files);
+        const sent = await client.call<{ message_id?: unknown }[]>(s.botToken, 'sendMediaGroup', { chat_id: String(chat), media: group }, files);
         messageId = sent[0]?.message_id;
       }
     } catch (error) {

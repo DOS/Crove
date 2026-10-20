@@ -62,6 +62,7 @@ describe('Telegram connect', () => {
     const connect = (answers: Parameters<typeof bot>[0]) => connectTelegram({ botToken: TOKEN, channel: '@quanpho' }, bot(answers).fetchImpl);
     const me = () => [ok({ id: 1, is_bot: true })];
     await expect(connect({ getMe: [fail(401, 'Unauthorized')] })).rejects.toMatchObject({ code: 'TELEGRAM_TOKEN_REFUSED' });
+    await expect(connect({ getMe: [fail(404, 'Not Found')] })).rejects.toMatchObject({ code: 'TELEGRAM_TOKEN_REFUSED' });
     await expect(connect({ getMe: me(), getChat: [fail(400, 'Bad Request: chat not found')] })).rejects.toMatchObject({ code: 'TELEGRAM_CHANNEL_NOT_FOUND' });
     await expect(connect({ getMe: me(), getChat: [ok({ id: -1001, type: 'supergroup', title: 'Nhóm' })] })).rejects.toMatchObject({ code: 'TELEGRAM_NOT_A_CHANNEL' });
     await expect(
