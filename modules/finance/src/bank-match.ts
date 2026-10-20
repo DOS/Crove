@@ -15,11 +15,15 @@ import {
   VOUCHER_COMMAND,
   defaultCounterAccount,
   voucherCode,
+  zAccountCode,
   zId,
+  zLedgerPeriod,
   type BankLine,
   type BankLineCandidate,
   type BankLineState,
   type BankLineVoucher,
+  type BankMatchReason,
+  type BankOpenLines,
   type VoucherType,
 } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
@@ -27,8 +31,14 @@ import { DomainError, defineQuery, type QueryContext } from '@crove/kernel-runti
 import { Decimal } from '@crove/l10n-vn';
 import { matchLine, type MatchCandidate } from './domain/bank-match.ts';
 import { VOUCHER_SOURCE } from './domain/cash-voucher.ts';
+import { ledgerPeriod } from './domain/ledger-reports.ts';
 
 const REQUESTERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
+const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
+// The reasons strong enough to ask for vouchers in bulk: what the description itself names.
+const STRONG_REASONS: readonly BankMatchReason[] = ['tax_code', 'invoice'];
+// The most lines finance.bank.suggestions reads at once (a busy month of one account).
+export const BANK_SUGGESTIONS_MAX = 500;
 
 // The candidates a suggestion reads: invoices of the line's amount and party balances equal to it, at most this many
 // each. A line rarely has more than a handful; past this, the suggestion lists none of the extra ones.
@@ -48,16 +58,16 @@ export interface StoredBankLine {
   importId: string;
 }
 
-// The line, as the org has it, or null.
-export async function findBankLine(ctx: QueryContext, id: string): Promise<StoredBankLine | null> {
-  const row = await ctx.trx
+// The lines, as the org has them, in no particular order; ids of other orgs or of no line are left out.
+async function findBankLines(ctx: QueryContext, ids: readonly string[]): Promise<StoredBankLine[]> {
+  if (ids.length === 0) return [];
+  const rows = await ctx.trx
     .selectFrom('crove_finance.bank_line')
     .select(['id', 'bank_account', 'value_date', 'description', 'amount', 'running_balance', 'bank_ref', 'ambiguous', 'import_id'])
     .where('org_id', '=', ctx.orgId)
-    .where('id', '=', id)
-    .executeTakeFirst();
-  if (!row) return null;
-  return {
+    .where('id', 'in', ids)
+    .execute();
+  return rows.map((row) => ({
     id: row.id,
     bankAccount: row.bank_account,
     date: row.value_date,
@@ -67,7 +77,12 @@ export async function findBankLine(ctx: QueryContext, id: string): Promise<Store
     reference: row.bank_ref,
     ambiguous: row.ambiguous,
     importId: row.import_id,
-  };
+  }));
+}
+
+// The line, as the org has it, or null.
+export async function findBankLine(ctx: QueryContext, id: string): Promise<StoredBankLine | null> {
+  return (await findBankLines(ctx, [id]))[0] ?? null;
 }
 
 // The same transaction lock the database's check takes when a voucher of the line is posted (20261020130000).
@@ -155,6 +170,87 @@ export async function checkBankLineVoucher(
   return line;
 }
 
+type PartyRow = { id: string; name: string; tax_code: string | null };
+
+const readParties = (ctx: QueryContext): Promise<PartyRow[]> =>
+  ctx.trx.selectFrom('crove_kernel.party').select(['id', 'name', 'tax_code']).where('org_id', '=', ctx.orgId).execute();
+
+// The voucher a line makes and the party it is probably about, given the org's parties. withBalances: false leaves out
+// the open-balance reason (its query is the costliest, and only finance.bank.line_voucher shows it).
+async function lineVoucherFor(
+  ctx: QueryContext,
+  line: StoredBankLine,
+  state: BankLineState,
+  parties: readonly PartyRow[],
+  withBalances = true,
+): Promise<BankLineVoucher> {
+  const amount = new Decimal(line.amount).abs();
+  const type = bankVoucherType(line.amount);
+  const inflow = type === 'bank_credit';
+  // Sales for money in, purchases for money out, of exactly the line's amount, not voided, issued by the line's date.
+  const invoices = await ctx.trx
+    .selectFrom('crove_finance.purchase_document as d')
+    .leftJoin('crove_finance.purchase_document_void as x', (join) => join.onRef('x.org_id', '=', 'd.org_id').onRef('x.document_id', '=', 'd.id'))
+    .select(['d.party_id', 'd.invoice_series', 'd.invoice_number', 'd.total'])
+    .where('d.org_id', '=', ctx.orgId)
+    .where('d.direction', '=', inflow ? 'sale' : 'purchase')
+    .where('d.total', '=', amount.toFixed())
+    .where('d.invoice_date', '<=', line.date)
+    .where('x.document_id', 'is', null)
+    .orderBy('d.invoice_date', 'desc')
+    .limit(CANDIDATE_ROWS)
+    .execute();
+  // Parties whose open balance on the line's side equals the amount on the line's date: owed to the org on 131 for
+  // money in, owed by the org on 331 for money out.
+  const side = inflow ? sql<string>`pg_catalog.sum(l.debit) - pg_catalog.sum(l.credit)` : sql<string>`pg_catalog.sum(l.credit) - pg_catalog.sum(l.debit)`;
+  const balances = !withBalances
+    ? []
+    : await ctx.trx
+        .selectFrom('crove_finance.journal_line as l')
+        .innerJoin('crove_finance.journal_entry as e', (join) => join.onRef('e.org_id', '=', 'l.org_id').onRef('e.id', '=', 'l.entry_id'))
+        .select(['l.party_id', side.as('balance')])
+        .where('l.org_id', '=', ctx.orgId)
+        .where('l.party_id', 'is not', null)
+        .where('l.account_code', 'like', inflow ? '131%' : '331%')
+        .where('e.entry_date', '<=', line.date)
+        .groupBy('l.party_id')
+        .having(side, '=', amount.toFixed())
+        .limit(CANDIDATE_ROWS)
+        .execute();
+
+  const match = matchLine(
+    { description: line.description, amount: line.amount },
+    parties.map((p) => ({ id: p.id, name: p.name, taxCode: p.tax_code })),
+    invoices.map((i) => ({ partyId: i.party_id, series: i.invoice_series, number: i.invoice_number, total: i.total })),
+    balances.flatMap((b) => (b.party_id ? [{ partyId: b.party_id, balance: b.balance }] : [])),
+  );
+  const byId = new Map(parties.map((p) => [p.id, p]));
+  const view = (c: MatchCandidate): BankLineCandidate[] => {
+    const party = byId.get(c.partyId);
+    if (!party) return [];
+    return [{ party: { id: party.id, name: party.name, taxCode: party.tax_code }, reason: c.reason, ...(c.invoice ? { invoice: c.invoice } : {}) }];
+  };
+  const description = line.description.replace(/\s+/g, ' ').trim().slice(0, DESCRIPTION_MAX).trim();
+  return {
+    bankAccount: line.bankAccount,
+    line: bankLineView(line, state),
+    // A voucher holds whole dong, at most 15 digits; a line with fractions of a dong (a foreign currency account) makes
+    // none.
+    voucher:
+      amount.isInteger() && amount.lessThan('1e15')
+        ? {
+            type,
+            date: line.date,
+            amount: amount.toFixed(0),
+            description: description || (inflow ? 'Thu tiền qua ngân hàng' : 'Chi tiền qua ngân hàng'),
+            counterAccount: defaultCounterAccount(type),
+          }
+        : null,
+    suggested: match.suggested ? (view(match.suggested)[0] ?? null) : null,
+    candidates: match.candidates.flatMap(view),
+  };
+}
+
 // The voucher a line makes and the party it is probably about, for the voucher form. Reads only; the user confirms the
 // party when entering the voucher, and an approver checks it again.
 export const bankLineVoucher = defineQuery({
@@ -165,69 +261,97 @@ export const bankLineVoucher = defineQuery({
     const line = await findBankLine(ctx, input.bankLineId);
     if (!line) throw new DomainError('BANK_LINE_NOT_FOUND', 404, 'Không tìm thấy dòng sao kê; hãy tải lại trang ngân hàng');
     const state = (await bankLineStates(ctx, [line.id])).get(line.id) ?? { status: 'open' };
-    const amount = new Decimal(line.amount).abs();
-    const type = bankVoucherType(line.amount);
-    const inflow = type === 'bank_credit';
+    return lineVoucherFor(ctx, line, state, await readParties(ctx));
+  },
+});
 
-    const parties = await ctx.trx.selectFrom('crove_kernel.party').select(['id', 'name', 'tax_code']).where('org_id', '=', ctx.orgId).execute();
-    // Sales for money in, purchases for money out, of exactly the line's amount, not voided, issued by the line's date.
-    const invoices = await ctx.trx
-      .selectFrom('crove_finance.purchase_document as d')
-      .leftJoin('crove_finance.purchase_document_void as x', (join) => join.onRef('x.org_id', '=', 'd.org_id').onRef('x.document_id', '=', 'd.id'))
-      .select(['d.party_id', 'd.invoice_series', 'd.invoice_number', 'd.total'])
-      .where('d.org_id', '=', ctx.orgId)
-      .where('d.direction', '=', inflow ? 'sale' : 'purchase')
-      .where('d.total', '=', amount.toFixed())
-      .where('d.invoice_date', '<=', line.date)
-      .where('x.document_id', 'is', null)
-      .orderBy('d.invoice_date', 'desc')
-      .limit(CANDIDATE_ROWS)
+// The open lines of an account and period whose party stands out by a strong reason (its tax code, or an invoice of the
+// amount, named in the description), with the voucher each makes (stage 2b): the bank screen offers to ask for all of
+// them at once, each through kernel.proposal.request as a user would. At most BANK_SUGGESTIONS_MAX lines are read.
+export const bankSuggestions = defineQuery({
+  name: 'finance.bank.suggestions',
+  input: z.object({ bankAccount: zAccountCode, period: zLedgerPeriod }),
+  access: REQUESTERS,
+  handler: async (ctx, input): Promise<BankLineVoucher[]> => {
+    const period = ledgerPeriod(input.period);
+    const ids = await ctx.trx
+      .selectFrom('crove_finance.bank_line')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('bank_account', '=', input.bankAccount)
+      .where('value_date', '>=', period.from)
+      .where('value_date', '<=', period.to)
+      .orderBy('value_date')
+      .orderBy('import_id')
+      .orderBy('position')
+      .limit(BANK_SUGGESTIONS_MAX)
       .execute();
-    // Parties whose open balance on the line's side equals the amount on the line's date: owed to the org on 131 for
-    // money in, owed by the org on 331 for money out.
-    const side = inflow ? sql<string>`pg_catalog.sum(l.debit) - pg_catalog.sum(l.credit)` : sql<string>`pg_catalog.sum(l.credit) - pg_catalog.sum(l.debit)`;
-    const balances = await ctx.trx
-      .selectFrom('crove_finance.journal_line as l')
-      .innerJoin('crove_finance.journal_entry as e', (join) => join.onRef('e.org_id', '=', 'l.org_id').onRef('e.id', '=', 'l.entry_id'))
-      .select(['l.party_id', side.as('balance')])
+    const states = await bankLineStates(ctx, ids.map((r) => r.id));
+    const open = await findBankLines(ctx, ids.filter((r) => states.get(r.id)?.status === 'open').map((r) => r.id));
+    const byId = new Map(open.map((l) => [l.id, l]));
+    const parties = await readParties(ctx);
+    const out: BankLineVoucher[] = [];
+    // In statement order. The open-balance reason is never strong, so its query is skipped: a tie it would add sits
+    // below the strong reason that decides.
+    for (const { id } of ids) {
+      const line = byId.get(id);
+      if (!line) continue;
+      const made = await lineVoucherFor(ctx, line, { status: 'open' }, parties, false);
+      if (made.voucher && made.suggested && STRONG_REASONS.includes(made.suggested.reason)) out.push(made);
+    }
+    return out;
+  },
+});
+
+// The open lines of each bank account (no voucher, no pending voucher proposal): how many, how many flagged as
+// ambiguous at import, and the oldest one's date. The Inbox lists them as statement lines to resolve (stage 2b).
+export const bankOpenLines = defineQuery({
+  name: 'finance.bank.open_lines',
+  input: z.object({}),
+  access: ALL,
+  handler: async (ctx): Promise<BankOpenLines> => {
+    const rows = await ctx.trx
+      .selectFrom('crove_finance.bank_line as l')
+      .select([
+        'l.bank_account',
+        sql<string>`pg_catalog.count(*)`.as('open'),
+        sql<string>`pg_catalog.count(*) FILTER (WHERE l.ambiguous)`.as('ambiguous'),
+        sql<string>`pg_catalog.to_char(pg_catalog.min(l.value_date), 'YYYY-MM-DD')`.as('oldest'),
+      ])
       .where('l.org_id', '=', ctx.orgId)
-      .where('l.party_id', 'is not', null)
-      .where('l.account_code', 'like', inflow ? '131%' : '331%')
-      .where('e.entry_date', '<=', line.date)
-      .groupBy('l.party_id')
-      .having(side, '=', amount.toFixed())
-      .limit(CANDIDATE_ROWS)
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom('crove_finance.cash_voucher as v')
+              .innerJoin('crove_finance.journal_entry as e', (join) =>
+                join.onRef('e.org_id', '=', 'v.org_id').onRef('e.source_id', '=', 'v.id').on('e.source_type', '=', VOUCHER_SOURCE).on('e.reverses_entry_id', 'is', null),
+              )
+              .select('v.id')
+              .whereRef('v.org_id', '=', 'l.org_id')
+              .whereRef('v.bank_line_id', '=', 'l.id')
+              .where(({ not, exists, selectFrom }) =>
+                not(exists(selectFrom('crove_finance.journal_entry as r').select('r.id').whereRef('r.org_id', '=', 'e.org_id').whereRef('r.reverses_entry_id', '=', 'e.id'))),
+              ),
+          ),
+        ),
+      )
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom('crove_kernel.proposal as p')
+              .select('p.id')
+              .whereRef('p.org_id', '=', 'l.org_id')
+              .where('p.command', '=', VOUCHER_COMMAND)
+              .where('p.status', '=', 'pending')
+              .where(sql`p.payload->>'bankLineId'`, '=', sql`l.id::text`),
+          ),
+        ),
+      )
+      .groupBy('l.bank_account')
+      .orderBy('l.bank_account')
       .execute();
-
-    const match = matchLine(
-      { description: line.description, amount: line.amount },
-      parties.map((p) => ({ id: p.id, name: p.name, taxCode: p.tax_code })),
-      invoices.map((i) => ({ partyId: i.party_id, series: i.invoice_series, number: i.invoice_number, total: i.total })),
-      balances.flatMap((b) => (b.party_id ? [{ partyId: b.party_id, balance: b.balance }] : [])),
-    );
-    const byId = new Map(parties.map((p) => [p.id, p]));
-    const view = (c: MatchCandidate): BankLineCandidate[] => {
-      const party = byId.get(c.partyId);
-      if (!party) return [];
-      return [{ party: { id: party.id, name: party.name, taxCode: party.tax_code }, reason: c.reason, ...(c.invoice ? { invoice: c.invoice } : {}) }];
-    };
-    const description = line.description.replace(/\s+/g, ' ').trim().slice(0, DESCRIPTION_MAX).trim();
     return {
-      bankAccount: line.bankAccount,
-      line: bankLineView(line, state),
-      // A voucher holds whole dong, at most 15 digits; a line with fractions of a dong (a foreign currency account) makes
-      // none.
-      voucher: amount.isInteger() && amount.lessThan('1e15')
-        ? {
-            type,
-            date: line.date,
-            amount: amount.toFixed(0),
-            description: description || (inflow ? 'Thu tiền qua ngân hàng' : 'Chi tiền qua ngân hàng'),
-            counterAccount: defaultCounterAccount(type),
-          }
-        : null,
-      suggested: match.suggested ? (view(match.suggested)[0] ?? null) : null,
-      candidates: match.candidates.flatMap(view),
+      accounts: rows.map((r) => ({ bankAccount: r.bank_account, open: Number(r.open), ambiguous: Number(r.ambiguous), oldest: r.oldest })),
     };
   },
 });

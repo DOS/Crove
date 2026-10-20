@@ -1,7 +1,8 @@
 // Bank statements (issue #326), end to end: import a bank's CSV export into the 1121 account (the columns are found by
 // their headers), see the check before anything is stored, then import an overlapping export and see only its new line
 // stored; the lines and their totals show per month, and the database has each line once. Then enter the báo Nợ of a
-// bank fee from its line (stage 2a): the form follows the line, and the line waits for approval.
+// bank fee from its line (stage 2a): the form follows the line, and the line waits for approval; the Inbox lists the
+// lines still open and links to their account and month (stage 2b).
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -69,6 +70,19 @@ test('import a bank statement, then an overlapping one, and find each line once'
     await expect(page.getByRole('row').filter({ hasText: 'FT002' }).getByRole('link', { name: 'Chờ duyệt' })).toBeVisible();
     // Other lines can still get theirs.
     await expect(page.getByRole('button', { name: /^Lập chứng từ cho dòng ngày 05\/09\/2026/ })).toBeVisible();
+  });
+
+  await test.step('the Inbox lists the lines still without a voucher and opens their account and month', async () => {
+    await page.getByRole('navigation').getByRole('link', { name: 'Hộp thư' }).click();
+    await expect(page.getByText('Dòng sao kê ngân hàng chưa lập chứng từ')).toBeVisible();
+    // FT002 waits for approval; the three others are open.
+    await page.getByRole('link', { name: '1121: 3 dòng; cũ nhất ngày 01/09/2026' }).click();
+    // The link sets the account and the month (the router writes 1121 quoted in the URL, as JSON, so the page is checked
+    // rather than the URL).
+    await expect(page).toHaveURL(new RegExp(`/o/${slug}/bank\\?`));
+    await expect(page.getByLabel('Tài khoản ngân hàng')).toHaveValue('1121');
+    await expect(page.getByLabel('Tháng')).toHaveValue('2026-09');
+    await expect(page.getByRole('row').filter({ hasText: 'FT002' }).getByRole('link', { name: 'Chờ duyệt' })).toBeVisible();
   });
 
   await test.step('each line once in the database', async () => {
