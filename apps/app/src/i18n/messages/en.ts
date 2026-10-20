@@ -2047,6 +2047,7 @@ export const en = {
     openPost: 'Open the post on the platform',
     outcome: {
       retrying: 'The platform did not take the post for now; Crove tries again {when}.',
+      quotaExhausted: 'The account has used up the posts it may publish in 24 hours; Crove tries again {when}.',
       queuePaused: 'The queue of this channel is paused; the post waits until the queue runs again.',
       publishing: 'Publishing to the channel.',
       processing: 'The platform took the post and is processing it; Crove checks until it is live.',

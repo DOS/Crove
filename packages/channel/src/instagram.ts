@@ -104,6 +104,20 @@ function parseRef(ref: string): { container: string; key: string } | null {
   return m ? { container: m[1] as string, key: m[2] as string } : null;
 }
 
+// The account's publishing quota (plan §3.6): Instagram takes a limited number of posts in a rolling 24 hours (100
+// today, Stories included). With none left the post waits and is tried again later, instead of failing in the middle
+// of a publish. The API does not say when the quota frees, so the post is tried again every 2 hours; the publisher
+// bounds these waits on their own (MAX_QUOTA_WAITS in modules/social), past the quota's rolling day.
+export const QUOTA_RETRY_MS = 2 * 60 * 60 * 1000;
+
+// Whether the quota answer says the account has nothing left; a quota that cannot be read says nothing.
+export function quotaExhausted(answer: { data?: { quota_usage?: unknown; config?: { quota_total?: unknown } }[] } | null): boolean {
+  const d = answer?.data?.[0];
+  const usage = d?.quota_usage;
+  const total = d?.config?.quota_total;
+  return typeof usage === 'number' && typeof total === 'number' && total > 0 && usage >= total;
+}
+
 export class InstagramPublisher implements Publisher {
   readonly provider = 'instagram' as const;
   readonly publishSafety: RetrySafety = 'reconcile_only';
@@ -141,6 +155,11 @@ export class InstagramPublisher implements Publisher {
     if (story && media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'STORY_ONE_MEDIA' };
     if (type === 'reel' && !reel) return { kind: 'rejected', error: 'bad_request', code: 'REEL_ONE_VIDEO' };
     if (cover && (!reel || story)) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
+    // Read before anything is created; a read that fails does not hold the post.
+    const quota = await this.graph
+      .call<Parameters<typeof quotaExhausted>[0]>('GET', `${input.externalAccountId}/content_publishing_limit`, { token: s.accessToken, params: { fields: 'quota_usage,config' } })
+      .catch(() => null);
+    if (quotaExhausted(quota)) return { kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED', retryAt: new Date(Date.now() + QUOTA_RETRY_MS) };
     const first = await input.mediaUrl((media[0] as { fileId: string }).fileId).catch(() => null);
     if (!first) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
     const caption = story ? '' : captionOf(input.content);

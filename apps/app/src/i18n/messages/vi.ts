@@ -2047,6 +2047,7 @@ export const vi = {
     openPost: 'Mở bài trên nền tảng',
     outcome: {
       retrying: 'Nền tảng tạm thời chưa nhận bài; Crove sẽ thử lại lúc {when}.',
+      quotaExhausted: 'Tài khoản đã dùng hết số bài được đăng trong 24 giờ; Crove sẽ thử lại lúc {when}.',
       queuePaused: 'Hàng đợi của kênh này đang tạm dừng; bài sẽ chưa đăng cho đến khi hàng đợi chạy lại.',
       publishing: 'Đang đăng lên kênh.',
       processing: 'Nền tảng đã nhận bài và đang xử lý; Crove sẽ kiểm tra lại cho đến khi bài lên.',

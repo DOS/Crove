@@ -13,6 +13,12 @@ function threads(routes: Record<string, { status?: number; body: unknown }[]>) {
   const fetchImpl: Fetch = async (input, init) => {
     const url = new URL(input);
     const route = `${init?.method ?? 'GET'} ${url.pathname}`;
+    // The quota read (#743) is kept apart, so the other calls keep their order.
+    if (route.endsWith('/threads_publishing_limit')) {
+      const answer = routes[route]?.shift();
+      if (answer) return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
+      return new Response('{}', { status: 500 });
+    }
     calls.push({ route, form: Object.fromEntries(new URLSearchParams(typeof init?.body === 'string' ? init.body : '')), query: url.searchParams, auth: new Headers(init?.headers).get('authorization') });
     const answer = routes[route]?.shift() ?? { status: 500, body: { error: { message: `no answer for ${route}`, code: 1 } } };
     return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
@@ -74,6 +80,12 @@ describe('ThreadsRefresher', () => {
 });
 
 describe('ThreadsPublisher', () => {
+  it('waits hours with nothing created when the publishing quota is used up (#743)', async () => {
+    const { fetchImpl, calls } = threads({ [`GET /v1.0/${USER}/threads_publishing_limit`]: [{ body: { data: [{ quota_usage: 250, config: { quota_total: 250, quota_duration: 86400 } }] } }] });
+    expect(await new ThreadsPublisher(fetchImpl, fast).publish(input())).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED' });
+    expect(calls).toEqual([]);
+  });
+
   it('publishes a text post through a container, once', async () => {
     const { fetchImpl, calls } = threads({
       [`POST /v1.0/${USER}/threads`]: [{ body: { id: '9001' } }],
