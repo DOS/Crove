@@ -11,14 +11,17 @@ const REDIRECT = 'https://crove.example/channels/oauth/instagram/callback';
 // Answers per "METHOD /path" in order; records every call with its form.
 function graph(routes: Record<string, { status?: number; body: unknown }[]>) {
   const calls: { route: string; form: Record<string, string>; query: URLSearchParams }[] = [];
+  const quota: string[] = [];
   const fetchImpl: Fetch = async (input, init) => {
     const url = new URL(input);
     const route = `${init?.method ?? 'GET'} ${url.pathname.replace('/v24.0', '')}`;
-    calls.push({ route, form: Object.fromEntries(new URLSearchParams(typeof init?.body === 'string' ? init.body : '')), query: url.searchParams });
+    // The quota read (#743) is kept apart, so the other calls keep their order.
+    if (route.endsWith('/content_publishing_limit')) quota.push(route);
+    else calls.push({ route, form: Object.fromEntries(new URLSearchParams(typeof init?.body === 'string' ? init.body : '')), query: url.searchParams });
     const answer = routes[route]?.shift() ?? { status: 500, body: { error: { message: `no answer for ${route}`, code: 1 } } };
     return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
   };
-  return { calls, fetchImpl };
+  return { calls, quota, fetchImpl };
 }
 
 const image = (fileId: string) => ({ fileId, mime: 'image/jpeg', sizeBytes: 1000, altText: null });
@@ -75,6 +78,25 @@ describe('InstagramConnector', () => {
 });
 
 describe('InstagramPublisher', () => {
+  it('waits an hour with nothing created when the publishing quota is used up, and posts while some is left (#743)', async () => {
+    const full = graph({ [`GET /${IG}/content_publishing_limit`]: [{ body: { data: [{ quota_usage: 100, config: { quota_total: 100, quota_duration: 86400 } }] } }] });
+    const before = Date.now();
+    const result = await new InstagramPublisher(APP, full.fetchImpl, fast).publish(input());
+    expect(result).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED' });
+    const at = (result as { retryAt?: Date }).retryAt?.getTime() ?? 0;
+    expect(at - before).toBeGreaterThanOrEqual(59 * 60 * 1000);
+    expect(full.quota).toEqual([`GET /${IG}/content_publishing_limit`]);
+    expect(full.calls).toEqual([]);
+    const left = graph({
+      [`GET /${IG}/content_publishing_limit`]: [{ body: { data: [{ quota_usage: 99, config: { quota_total: 100 } }] } }],
+      [`POST /${IG}/media`]: [{ body: { id: '9001' } }],
+      'GET /9001': [{ body: { status_code: 'FINISHED' } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000001' } }],
+      'GET /18000000000000001': [{ body: { permalink: 'https://www.instagram.com/p/abc/' } }],
+    });
+    expect(await new InstagramPublisher(APP, left.fetchImpl, fast).publish(input())).toMatchObject({ kind: 'accepted' });
+  });
+
   it('creates a container, waits for it and publishes it once', async () => {
     const { fetchImpl, calls } = graph({
       [`POST /${IG}/media`]: [{ body: { id: '9001' } }],

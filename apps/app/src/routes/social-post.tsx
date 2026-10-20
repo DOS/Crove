@@ -1256,7 +1256,7 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
       ) : null;
     case 'scheduled':
       if (v.queuePaused) return <p className="text-warning">{t('outcome.queuePaused')}</p>;
-      return v.error?.retryAt ? <p className="text-warning">{t('outcome.retrying', { when: f.dateTime(v.error.retryAt) })}</p> : null;
+      return v.error?.retryAt ? <p className="text-warning">{t(v.error.code === 'QUOTA_EXHAUSTED' ? 'outcome.quotaExhausted' : 'outcome.retrying', { when: f.dateTime(v.error.retryAt) })}</p> : null;
     case 'publishing':
     case 'processing':
       return <p>{t(`outcome.${v.status}`)}</p>;

@@ -15,6 +15,7 @@ import type { CommentInput, CommentResult, ConnectedAccount, Publisher, PublishI
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
+import { QUOTA_RETRY_MS, quotaExhausted } from './instagram.ts';
 
 export const THREADS_HOSTS = ['graph.threads.net'] as const;
 export const THREADS_SCOPES = ['threads_basic', 'threads_content_publish', 'threads_manage_replies'] as const;
@@ -269,6 +270,10 @@ export class ThreadsPublisher implements Publisher {
     if (poll && media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
     if (topicTag === false) return { kind: 'rejected', error: 'bad_request', code: 'TOPIC_TAG_INVALID' };
     const extras = { ...(poll ? { poll_attachment: JSON.stringify(poll) } : {}), ...(topicTag ? { topic_tag: topicTag } : {}) };
+    // The profile's publishing quota (plan §3.6; 250 posts in a rolling 24 hours today), read before any container; a
+    // read that fails does not hold the post.
+    const quota = await this.client.call<Parameters<typeof quotaExhausted>[0]>('GET', `${VERSION}/${user}/threads_publishing_limit`, { token, params: { fields: 'quota_usage,config' } }).catch(() => null);
+    if (quotaExhausted(quota)) return { kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED', retryAt: new Date(Date.now() + QUOTA_RETRY_MS) };
     const urlOf = async (fileId: string) => {
       const url = await input.mediaUrl(fileId).catch(() => null);
       if (!url) throw new NoUrl();
