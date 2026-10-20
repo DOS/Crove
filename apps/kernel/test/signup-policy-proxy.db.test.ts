@@ -259,16 +259,19 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
       // Go matches keys ignoring case and the last one wins: two different addresses are refused.
       await expectRefused(await post(app, '/signup', { email: invited, EMAIL: other, password: 'pw-12345678' }, undefined, tok));
       await expectRefused(await post(app, '/signup', { Email: other, email: invited, password: 'pw-12345678' }, undefined, tok));
-      // The same address twice is fine; a key Go does not fold into "email" (dotless i) is not the email.
-      expect((await post(app, '/signup', { email: invited, EMAIL: invited.toUpperCase(), password: 'pw-12345678' }, undefined, tok)).status).toBe(200);
+      // A key repeated after Go's folding is refused even with one address; a key Go does not fold into "email"
+      // (dotless i) is not the email.
+      await expectRefused(await post(app, '/signup', { email: invited, EMAIL: invited.toUpperCase(), password: 'pw-12345678' }, undefined, tok));
       expect((await post(app, '/signup', { email: invited, 'emaıl': other, password: 'pw-12345678' }, undefined, tok)).status).toBe(200);
+      // JSON.parse keeps the last copy of a repeated key, Go keeps a phone a later null does not clear.
+      await expectRefused(await post(app, '/signup', `{"email":${JSON.stringify(invited)},"phone":"+84901234567","phone":null,"password":"pw-12345678"}`, undefined, tok));
       // Phone and anonymous sign-ups carry no email to check; a body that is not a JSON object neither.
       await expectRefused(await post(app, '/signup', { phone: '+84901234567', password: 'pw-12345678' }));
       await expectRefused(await post(app, '/signup', { email: invited, phone: '+84901234567', password: 'pw-12345678' }));
       await expectRefused(await post(app, '/signup', {}));
       await expectRefused(await post(app, '/signup', 'not json'));
       await expectRefused(await post(app, '/signup', [invited]));
-      expect(reached.length).toBe(before + 2);
+      expect(reached.length).toBe(before + 1);
     });
 
     it('lets an email code through for existing accounts only, unless it carries the invite token of its email', async () => {
@@ -394,6 +397,12 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
         { email: 42 },
         [{ email: `moved-${tag}@outside.test` }],
         'not json',
+        { email: null },
+        // JSON.parse keeps the last copy (null), Go keeps the address: the change would start.
+        `{"email":"moved-${tag}@gmail.com","email":null}`,
+        `{"EMAIL":"moved-${tag}@outside.test","EMAIL":null}`,
+        `{"email":"moved-${tag}@outside.test","Email":null}`,
+        `{"email":"moved-${tag}@corp.test","email":"moved-${tag}@corp.test"}`,
       ]) {
         await expectEmailChangeRefused(await put(body));
       }
@@ -437,7 +446,10 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
       await expectRefused(await signup(capped, g1));
       await expectRefused(await signup(capped, g1));
       await expectRefused(await signup(capped, g2));
-      await expectRefusalsLimited(await signup(capped, g3));
+      const full = await signup(capped, g3);
+      // An hour, not the wait until the deployment's oldest refusal expires.
+      expect(full.headers.get('retry-after')).toBe('3600');
+      await expectRefusalsLimited(full);
       await expectRefusalsLimited(await signup(capped, `g-free-${tag}@corp.test`));
       expect((await signup(capped, g3, undefined, tokens.get(g3))).status).toBe(200);
       await expectRefused(await signup(capped, `g-${tag}@evil.test`));

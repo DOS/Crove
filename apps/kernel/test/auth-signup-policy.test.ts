@@ -15,6 +15,7 @@ import {
   SignupRefusalsLimited,
   signupRefusalsLimited,
   signupRefused,
+  topLevelKeys,
   type InviteChecks,
   type RefusalLimiter,
   type SignupRules,
@@ -61,8 +62,21 @@ describe('signupGate', () => {
   it('checks the one email of a sign-up and refuses what it cannot read', () => {
     const r = rules('invite_only');
     expect(gate(r, '/signup', { email: 'An@Corp.test', password: 'x' })).toEqual({ kind: 'check', email: 'an@corp.test' });
-    expect(gate(r, '/signup', { email: 'an@corp.test', EMAIL: 'AN@corp.test' })).toEqual({ kind: 'check', email: 'an@corp.test' });
-    for (const body of [{ email: 'an@corp.test', Email: 'x@corp.test' }, { email: 'an@corp.test', EMAIL: null }, { phone: '+84901234567' }, { email: 'an@corp.test', phone: '1' }, {}, [], 'x']) {
+    // A key repeated after Go's folding is refused, even with one address: JavaScript and Go may keep different copies.
+    expect(gate(r, '/signup', { email: 'an@corp.test', EMAIL: 'AN@corp.test' })).toEqual({ kind: 'refuse' });
+    for (const body of [
+      { email: 'an@corp.test', Email: 'x@corp.test' },
+      { email: 'an@corp.test', EMAIL: null },
+      { phone: '+84901234567' },
+      { email: 'an@corp.test', phone: '1' },
+      {},
+      [],
+      'x',
+      // JSON.parse keeps the last copy of a repeated key (null: no phone); Go keeps the phone, as a null leaves it.
+      '{"email":"an@corp.test","phone":"+84901234567","phone":null}',
+      '{"email":"an@corp.test","email":"an@corp.test"}',
+      '{"email":"an@corp.test","PHONE":"+84901234567","Phone":null}',
+    ]) {
       expect(gate(r, '/signup', body)).toEqual({ kind: 'refuse' });
     }
     expect(gate(r, '/signup')).toEqual({ kind: 'refuse' });
@@ -73,7 +87,8 @@ describe('signupGate', () => {
     const r = rules('allowlist', ['corp.test']);
     expect(gate(r, '/otp', { email: 'x@else.test', create_user: false })).toEqual({ kind: 'pass' });
     expect(gate(r, '/otp', { phone: '+84901234567', CREATE_USER: false })).toEqual({ kind: 'pass' });
-    expect(gate(r, '/otp', { email: 'x@else.test', create_user: false, 'create_uſer': true })).toEqual({ kind: 'check', email: 'x@else.test' });
+    expect(gate(r, '/otp', { email: 'x@else.test', create_user: false, 'create_uſer': true })).toEqual({ kind: 'refuse' });
+    expect(gate(r, '/otp', '{"email":"x@else.test","create_user":false,"create_user":false}')).toEqual({ kind: 'refuse' });
     expect(gate(r, '/otp', { email: 'x@else.test', create_user: 'false' })).toEqual({ kind: 'check', email: 'x@else.test' });
     expect(gate(r, '/otp', { email: 'x@else.test', create_user: null })).toEqual({ kind: 'check', email: 'x@else.test' });
   });
@@ -193,13 +208,30 @@ describe('emailChangeGate (#564 item 4)', () => {
     expect(change({ email: ['a@corp.test'] })).toBe('refuse');
   });
 
-  it('passes updates that change no email: no key, an empty or null value, password and metadata', () => {
+  it('passes updates that change no email: no key, an empty value, password and metadata', () => {
     expect(change({ password: 'new-password-1' })).toBe('pass');
     expect(change({ data: { name: 'An' } })).toBe('pass');
     expect(change({ email: '' })).toBe('pass');
-    expect(change({ email: null, password: 'new-password-1' })).toBe('pass');
+    // A null is refused: the proxy does not rely on how Go treats it.
+    expect(change({ email: null, password: 'new-password-1' })).toBe('refuse');
     expect(change(undefined)).toBe('pass');
     expect(change('')).toBe('pass');
+  });
+
+  // JSON.parse keeps the last copy of a repeated key, here null, while Go assigns each copy in turn and a null leaves
+  // the string as it was: Supabase Auth would start the change to the first address.
+  it('refuses a body that repeats the email key, exactly or after Go folding', () => {
+    for (const body of [
+      '{"email":"me@gmail.com","email":null}',
+      '{"EMAIL":"x@evil.test","EMAIL":null}',
+      '{"email":"x@evil.test","Email":null}',
+      '{"email":"x@evil.test","email":""}',
+      '{"email":"a@corp.test","email":"a@corp.test"}',
+      '{"email":"x@evil.test","em\\u0061il":null}',
+      '{"password":"a","PASSWORD":"b"}',
+    ]) {
+      expect(change(body), body).toBe('refuse');
+    }
   });
 
   it('refuses a body it cannot read as one JSON object, whatever the method on /user', () => {
@@ -223,6 +255,14 @@ describe('emailChangeGate (#564 item 4)', () => {
     const response = emailChangeRefused();
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ code: 403, error_code: 'email_change_not_allowed', msg: expect.any(String) });
+  });
+});
+
+describe('topLevelKeys', () => {
+  it('lists the top-level keys with repeats, decoding escapes, and skips nested objects and strings', () => {
+    expect(topLevelKeys('{"a":1,"b":{"a":2,"c":[{"a":3}]},"a":"x,\\"a\\":{"}')).toEqual(['a', 'b', 'a']);
+    expect(topLevelKeys(' { "em\\u0061il" : null , "x\\\\" : [1, {"y": 2}] } ')).toEqual(['email', 'x\\']);
+    expect(topLevelKeys('{}')).toEqual([]);
   });
 });
 
@@ -337,7 +377,13 @@ describe('configuration', () => {
   it('caps sign-up refusals by default and takes 0 to turn the deployment cap off', () => {
     const config = loadConfig(BUNDLED);
     expect(config.AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR).toBe(5);
-    expect(config.AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR).toBe(50);
+    // Off by default: a member who may invite could fill a deployment cap and stop plain sign-ups for the domain.
+    expect(config.AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR).toBe(0);
+    expect(loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR: '50' }).AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR).toBe(50);
+    // Blank is unset, as for the other optional settings, not 0.
+    expect(loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR: ' ' }).AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR).toBe(5);
+    expect(loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR: '' }).AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR).toBe(0);
+    expect(() => loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR: 'five' })).toThrow(/AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR/);
     expect(loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR: '0' }).AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR).toBe(0);
     expect(() => loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR: '0' })).toThrow(/AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR/);
     expect(() => loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR: '-1' })).toThrow(/AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR/);

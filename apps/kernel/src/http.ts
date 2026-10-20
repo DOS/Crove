@@ -229,14 +229,14 @@ function oauthClientTokenRefused(): Response {
   return new Response(JSON.stringify(error), { status: refused.status, headers: { 'content-type': 'application/json' } });
 }
 
-// With TRUSTED_PROXY_HOPS=0 behind a reverse proxy, every client shares the proxy's address and so one email budget
-// and one budget of failed stream ticket redeems.
+// With TRUSTED_PROXY_HOPS=0 behind a reverse proxy, every client shares the proxy's address and so one email budget,
+// one budget of sign-up refusals and one budget of failed stream ticket redeems.
 let proxyWarned = false;
 function warnIfUntrustedProxy(c: Context, trustedHops: number): void {
   if (proxyWarned || trustedHops > 0 || !c.req.header('x-forwarded-for')) return;
   proxyWarned = true;
   console.warn(
-    '[http] requests carry X-Forwarded-For but TRUSTED_PROXY_HOPS=0: behind a reverse proxy every client shares its address, and so one email budget and one budget of failed stream ticket redeems; set TRUSTED_PROXY_HOPS',
+    '[http] requests carry X-Forwarded-For but TRUSTED_PROXY_HOPS=0: behind a reverse proxy every client shares its address, and so one email budget, one budget of sign-up refusals and one budget of failed stream ticket redeems; set TRUSTED_PROXY_HOPS',
   );
 }
 
@@ -436,6 +436,9 @@ export function createHttpApp(deps: HttpDeps) {
         const token = signupInviteToken(c.req.header(INVITE_TOKEN_HEADER));
         // Each lookup of whether the address holds an invite takes a refusal slot of the client's IPv4 address or IPv6
         // /48 and of the deployment, given back when the sign-up is admitted (#564 item 1).
+        // The refusal cap counts per client address too, so warn about a reverse proxy without TRUSTED_PROXY_HOPS
+        // here as well (with AUTH_AUTOCONFIRM a sign-up takes no email slot, so the warning above never ran).
+        warnIfUntrustedProxy(c, config.TRUSTED_PROXY_HOPS);
         const checks = limitInviteChecks(inviteChecks, refusalLimiter, clientBucket(ip, 48));
         const allowed = await signupAllowed(signupRules, gate.email, token, checks).catch((error: unknown) => {
           if (error instanceof SignupRefusalsLimited) return error;

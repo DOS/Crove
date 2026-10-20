@@ -114,14 +114,15 @@ const CASES: BodyCase[] = [
   { name: 'upper-case email key', path: '/signup', body: (a) => `{"EMAIL":${q(a)},"password":${q(PASSWORD)}}`, gate: 'a', creates: 'a' },
   { name: 'mixed-case key and address, lower-cased', path: '/signup', body: (a) => `{"eMail":${q(a.toUpperCase())},"PassWord":${q(PASSWORD)}}`, gate: 'a', creates: 'a' },
   { name: 'two email keys, last one wins', path: '/signup', body: (a, b) => `{"email":${q(a)},"Email":${q(b)},"password":${q(PASSWORD)}}`, gate: 'refuse', creates: 'b' },
-  { name: 'two email keys, one address', path: '/signup', body: (a) => `{"email":${q(a)},"EMAIL":${q(a.toUpperCase())},"password":${q(PASSWORD)}}`, gate: 'a', creates: 'a' },
+  { name: 'two email keys, one address', path: '/signup', body: (a) => `{"email":${q(a)},"EMAIL":${q(a.toUpperCase())},"password":${q(PASSWORD)}}`, gate: 'refuse', creates: 'a' },
+  { name: 'phone then null phone, kept by Go', path: '/signup', body: (a) => `{"email":${q(a)},"phone":"+15005550006","phone":null,"password":${q(PASSWORD)}}`, gate: 'refuse', creates: 'none' },
   { name: 'email and phone', path: '/signup', body: (a) => `{"email":${q(a)},"Phone":"+15005550006","password":${q(PASSWORD)}}`, gate: 'refuse', creates: 'none' },
   { name: 'email code, create_user unset', path: '/otp', body: (a) => `{"email":${q(a)}}`, gate: 'a', creates: 'a' },
   { name: 'email code, create_user false', path: '/otp', body: (a) => `{"email":${q(a)},"create_user":false}`, gate: 'pass', creates: 'none' },
   { name: 'email code, create_uſer (U+017F) false', path: '/otp', body: (a) => `{"email":${q(a)},"create_uſer":false}`, gate: 'pass', creates: 'none' },
   { name: 'email code, CREATE_USER false', path: '/otp', body: (a) => `{"email":${q(a)},"CREATE_USER":false}`, gate: 'pass', creates: 'none' },
-  { name: 'email code, false then create_uſer true', path: '/otp', body: (a) => `{"email":${q(a)},"create_user":false,"create_uſer":true}`, gate: 'a', creates: 'a' },
-  { name: 'email code, true then Create_User false', path: '/otp', body: (a) => `{"email":${q(a)},"create_user":true,"Create_User":false}`, gate: 'a', creates: 'none' },
+  { name: 'email code, false then create_uſer true', path: '/otp', body: (a) => `{"email":${q(a)},"create_user":false,"create_uſer":true}`, gate: 'refuse', creates: 'a' },
+  { name: 'email code, true then Create_User false', path: '/otp', body: (a) => `{"email":${q(a)},"create_user":true,"Create_User":false}`, gate: 'refuse', creates: 'none' },
   { name: 'email code, create_user as a string', path: '/otp', body: (a) => `{"email":${q(a)},"create_user":"false"}`, gate: 'a', creates: 'none' },
 ];
 
@@ -198,6 +199,9 @@ const CHANGES: ChangeCase[] = [
   { name: 'upper-case email key', body: (_, o) => `{"EMAIL":${q(o)}}`, gate: 'refuse', moves: 'outside' },
   { name: 'two email keys, last one wins', body: (i, o) => `{"email":${q(i)},"Email":${q(o)}}`, gate: 'refuse', moves: 'outside' },
   { name: 'two email keys, the allowed one last', body: (i, o) => `{"Email":${q(o)},"email":${q(i)}}`, gate: 'refuse', moves: 'inside' },
+  // JSON.parse keeps the last copy (null); Go assigns each in turn, and a null leaves the address it already set.
+  { name: 'an address, then the same key null', body: (_, o) => `{"email":${q(o)},"email":null}`, gate: 'refuse', moves: 'outside' },
+  { name: 'an address, then a folded key null', body: (_, o) => `{"EMAIL":${q(o)},"Email":null}`, gate: 'refuse', moves: 'outside' },
   { name: 'a text/plain body is still JSON', body: (_, o) => `{"email":${q(o)}}`, contentType: 'text/plain', gate: 'refuse', moves: 'outside' },
   { name: 'mixed-case key and address, lower-cased', body: (i) => `{"eMail":${q(i.toUpperCase())}}`, gate: 'pass', moves: 'inside' },
   // Supabase Auth does not trim an email change (v2.197 refuses it); the gate's trimming lets nothing else through.

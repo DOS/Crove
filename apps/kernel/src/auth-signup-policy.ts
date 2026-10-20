@@ -32,19 +32,22 @@
 //
 // Supabase Auth decodes the body with Go's encoding/json: keys match field names case-insensitively under Unicode
 // simple folding (so "create_uſer", with U+017F, sets create_user), the last match wins, and it lower-cases the email.
-// The proxy matches keys the same way and fails closed on anything it cannot read with certainty: several email keys
-// must all carry the same address, and the address must be plain ASCII (no Unicode look-alikes, which Go and
-// JavaScript lower-case differently).
+// The proxy matches keys the same way and fails closed on anything it cannot read with certainty: a body that repeats a
+// key (after that folding) is refused, since JavaScript keeps the last copy while Go may keep an earlier one, and the
+// address must be plain ASCII (no Unicode look-alikes, which Go and JavaScript lower-case differently).
 //
 // Refusals that tell who holds an invite (#564 item 1). Under allowlist, a sign-up at an allowed domain without the
 // invite's token is refused exactly when the address holds a valid invite, so each such refusal answers "is this
 // address invited?". A refused sign-up keeps its email slot (per IPv4 address or IPv6 /64, and only for a request that
 // sends an email), but one IPv6 /48 holds 65,536 /64s, and with AUTH_AUTOCONFIRM a sign-up takes no email slot at all.
 // So each of these checks first takes a slot of its own (`limitInviteChecks`): at most
-// AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR per IPv4 address or IPv6 /48, and at most AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR
-// for the whole deployment, where an address refused again within the hour counts once. An admitted sign-up gives its
-// slots back, so only refusals count. At a limit the proxy answers 429 before it asks whether the address is invited,
-// so that answer depends on the client alone. Refusals that do not depend on an invite (another domain, invite_only,
+// AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR per IPv4 address or IPv6 /48, and, when set, at most
+// AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR for the whole deployment, where an address refused again within the hour
+// counts once. The deployment cap is off by default: a member who may invite can create invited addresses at the
+// allowed domain and, from a few clients, fill it every hour, which would stop plain sign-ups for the whole domain.
+// An admitted sign-up gives its slots back, so only refusals count. At a limit the proxy answers 429 before it asks
+// whether the address is invited, so that answer depends on the client alone; at the deployment's limit Retry-After is
+// always an hour, so it does not tell when the oldest refusal in the deployment happened. Refusals that do not depend on an invite (another domain, invite_only,
 // a body it cannot read) tell nothing and take no slot, so the pilot-check probe (an `.invalid` address) keeps its 403.
 // GoTrue's obfuscated 200 was not used instead: GoTrue answers a closed sign-up with 422 signup_disabled, not a fake
 // success; a fake user cannot stand in for an autoconfirmed sign-up, whose real answer carries a session; and a person
@@ -52,8 +55,8 @@
 //
 // Email changes (#564 item 4). The allowlist would gate only creation if a signed-in user could then move the account
 // to any address. Under allowlist, a request to /user other than GET or HEAD that names an email is refused unless
-// every email it names is one plain address at an allowed domain, read the way the sign-up gate reads it
-// (`emailChangeGate`). invite_only and open leave email changes to Supabase Auth, which mails the new address a
+// its email is one plain address at an allowed domain, read the way the sign-up gate reads it (`emailChangeGate`). A
+// change asked for before the policy was set can still be confirmed from its link (/verify). invite_only and open leave email changes to Supabase Auth, which mails the new address a
 // confirmation link before it changes anything.
 import type pg from 'pg';
 import { hashKey } from './auth-email-limit.ts';
@@ -181,8 +184,8 @@ export function methodRefused(): Response {
 // the request does not change the email (another path, GET or HEAD, an empty body, no email key or only empty ones,
 // which Supabase Auth reads as "no change"). refuse: answer emailChangeRefused(). Supabase Auth decodes the body as
 // JSON whatever its Content-Type and matches the email key as in signupGate. A body the proxy cannot read as one JSON
-// object might still name an email, so it is refused (Supabase Auth would refuse it too). Every non-empty email value
-// must be one plain address at an allowed domain, so the proxy never has to know which one Go's decoder keeps.
+// object, or one that repeats a key (jsonObject), might still name an email, so it is refused (Supabase Auth refuses
+// the former too). The one email value must be "" or one plain address at an allowed domain; null is refused.
 export function emailChangeGate(rules: SignupRules, request: { method: string; path: string; body: Uint8Array | null }): 'pass' | 'refuse' {
   if (rules.policy !== 'allowlist' || request.path !== '/user') return 'pass';
   const method = request.method.toUpperCase();
@@ -190,7 +193,9 @@ export function emailChangeGate(rules: SignupRules, request: { method: string; p
   const fields = jsonObject(request.body);
   if (!fields) return 'refuse';
   for (const value of goFieldValues(fields, 'email')) {
-    if (value === null || value === '') continue;
+    // "" is "no change" to Supabase Auth. A null is too, alone, but it is refused like any value that is not one
+    // address: the proxy does not rely on Go's handling of it.
+    if (value === '') continue;
     const email = signupEmail(value);
     if (email === null || !rules.domains.has(email.slice(email.lastIndexOf('@') + 1))) return 'refuse';
   }
@@ -212,7 +217,7 @@ export interface RefusalLimiter {
 export interface RefusalLimits {
   // Per IPv4 address or IPv6 /48 (clientBucket(ip, 48)), in any rolling hour.
   perClientPerHour: number;
-  // For the whole deployment, in any rolling hour; 0 turns it off.
+  // For the whole deployment, in any rolling hour; 0 (the default) turns it off.
   globalPerHour: number;
 }
 
@@ -300,7 +305,9 @@ export function createDbRefusalLimiter(pool: pg.Pool, limits: RefusalLimits): Re
         if (global.reserved_id) allId = global.reserved_id;
         else if (global.rule !== 'auth_email_per_address') {
           await release(ownId, own);
-          return { allowed: false, retryAfterSeconds: Math.max(1, global.retry_after_seconds ?? 1) };
+          // A full hour rather than the counter's exact wait, which would date the deployment's oldest refusal. A
+          // lock wait (rule auth_email_busy) is retried after a second.
+          return { allowed: false, retryAfterSeconds: global.rule === 'auth_email_busy' ? 1 : 3600 };
         }
       }
       return {
@@ -351,12 +358,55 @@ function jsonOrNone(contentType: string | null): boolean {
   return asciiLower(contentType.split(';')[0]!.trim()) === 'application/json';
 }
 
+// The body as one JSON object, or null when it is not one or when two of its top-level keys are the same field to Go
+// (equal after goFoldKey, or simply repeated). JavaScript and Go disagree on such a body: JSON.parse keeps the last
+// repeated key, while Go assigns each match in turn and a null leaves a string field as it was, so
+// {"email":"a@evil.test","email":null} reads as null here and as a@evil.test to Supabase Auth (#564). No client the
+// proxy serves sends repeated keys, so a gate refuses the body instead of guessing which value Go keeps.
 function jsonObject(body: Uint8Array | null): Record<string, unknown> | null {
   if (!body || body.byteLength === 0) return null;
+  const text = new TextDecoder().decode(body);
+  let value: unknown;
   try {
-    const value: unknown = JSON.parse(new TextDecoder().decode(body));
-    return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+    value = JSON.parse(text);
   } catch {
     return null;
   }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const seen = new Set<string>();
+  for (const key of topLevelKeys(text)) {
+    const folded = goFoldKey(key);
+    if (seen.has(folded)) return null;
+    seen.add(folded);
+  }
+  return value as Record<string, unknown>;
+}
+
+// The keys of a JSON object's top level, repeats included, in document order. Only for text JSON.parse accepted as an
+// object: strings are skipped whole (escapes included), so a brace, bracket or comma inside one never counts, and a
+// key is the first string after the opening brace or a comma at depth 1.
+export function topLevelKeys(text: string): string[] {
+  const keys: string[] = [];
+  let depth = 0;
+  let expectKey = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      let end = i + 1;
+      while (end < text.length && text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+      if (depth === 1 && expectKey) {
+        keys.push(JSON.parse(text.slice(i, end + 1)) as string);
+        expectKey = false;
+      }
+      i = end;
+    } else if (ch === '{' || ch === '[') {
+      depth++;
+      if (depth === 1) expectKey = ch === '{';
+    } else if (ch === '}' || ch === ']') {
+      depth--;
+    } else if (ch === ',' && depth === 1) {
+      expectKey = true;
+    }
+  }
+  return keys;
 }
