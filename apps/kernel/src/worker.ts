@@ -468,8 +468,12 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // In-app notifications (#637): the command reads the event from the outbox and writes one row per person; the job
   // carries only its id.
   if (social) {
-    await boss.work<AgentDispatchJob>(QUEUES.socialNotify, { batchSize: 1 }, async ([job]) => {
+    await boss.work<AgentDispatchJob & { type?: string }>(QUEUES.socialNotify, { batchSize: 1 }, async ([job]) => {
       if (!job) return;
+      // A client's answer on a review link may settle variants waiting for it (#770), before the team is told.
+      if (job.data.type === 'social.review.answered') {
+        await deps.runtime.execute('social.review.client_settle', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.review' }, orgId: job.data.orgId });
+      }
       await deps.runtime.execute('social.notification.dispatch', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.notify' }, orgId: job.data.orgId });
     });
   }
@@ -754,7 +758,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 });
               }
               if (social && NOTIFYING.has(row.type)) {
-                return boss.send(QUEUES.socialNotify, { orgId: row.org_id, eventId: row.event_id } satisfies AgentDispatchJob, {
+                return boss.send(QUEUES.socialNotify, { orgId: row.org_id, eventId: row.event_id, type: row.type } satisfies AgentDispatchJob & { type: string }, {
                   singletonKey: `${row.org_id}:${row.event_id}`,
                   retryLimit: SOCIAL_NOTIFY_RETRY_LIMIT,
                   retryDelay: 20,

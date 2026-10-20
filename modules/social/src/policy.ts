@@ -1,6 +1,7 @@
 // Review policy per channel (Social plan S9, issue #394): how many different people approve a variant for a channel
 // before it may be scheduled. A channel without a policy needs one approval. Each approval binds the revision and
 // content hash its reviewer saw (post_approval), and a person approves a variant's content once.
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole, SocialVariantStatus } from '@crove/db';
@@ -33,6 +34,31 @@ export async function approvalsRequired(trx: Trx, orgId: string, connectionIds: 
 // when the row is written, under the post lock, while created_at is the start of its transaction, which a decision
 // that waited for the lock may share with an older one.
 // The channels where an author may not approve their own post (four-eyes, #740).
+// The channels among these that wait for the client's approval (#770).
+export async function clientApprovalOn(trx: Trx, orgId: string, connectionIds: readonly string[]): Promise<Set<string>> {
+  if (connectionIds.length === 0) return new Set();
+  const rows = await trx
+    .selectFrom('crove_social.channel_policy')
+    .select('channel_connection_id')
+    .where('org_id', '=', orgId)
+    .where('channel_connection_id', 'in', [...connectionIds])
+    .where('client_approval', '=', true)
+    .execute();
+  return new Set(rows.map((r) => r.channel_connection_id));
+}
+
+// The client's standing answer on a post (#770): the latest "Approved" or "Needs changes" given on a review link for the
+// content as it is now (the link made for it and the answer given before any change), else null. Comments say nothing.
+export async function clientVerdict(trx: Trx, orgId: string, postId: string): Promise<'approved' | 'changes_requested' | null> {
+  const { rows } = await sql<{ verdict: 'approved' | 'changes_requested' }>`
+    SELECT f.verdict FROM crove_social.review_feedback f
+    JOIN crove_social.review_link l ON l.org_id = f.org_id AND l.id = f.link_id
+    WHERE f.org_id = ${orgId}::uuid AND f.post_id = ${postId}::uuid AND f.verdict IN ('approved', 'changes_requested') AND NOT f.changed
+      AND l.content_key = crove_social.review_content_key(${orgId}::uuid, ${postId}::uuid)
+    ORDER BY f.created_at DESC, f.id DESC LIMIT 1`.execute(trx);
+  return rows[0]?.verdict ?? null;
+}
+
 export async function fourEyesOn(trx: Trx, orgId: string, connectionIds: readonly string[]): Promise<Set<string>> {
   if (connectionIds.length === 0) return new Set();
   const rows = await trx
@@ -242,12 +268,12 @@ export const policyList = defineQuery({
     const rows = await ctx.trx
       .selectFrom('crove_social.channel_policy as p')
       .innerJoin('crove_kernel.channel_connection as c', (j) => j.onRef('c.org_id', '=', 'p.org_id').onRef('c.id', '=', 'p.channel_connection_id'))
-      .select(['p.channel_connection_id', 'p.approvals_required', 'p.review_reminders', 'p.short_links', 'p.four_eyes', 'p.updated_by', 'p.updated_at'])
+      .select(['p.channel_connection_id', 'p.approvals_required', 'p.review_reminders', 'p.short_links', 'p.four_eyes', 'p.client_approval', 'p.updated_by', 'p.updated_at'])
       .where('p.org_id', '=', ctx.orgId)
       .where('c.status', '<>', 'revoked')
       .orderBy('p.channel_connection_id')
       .execute();
-    return rows.map((r) => ({ connectionId: r.channel_connection_id, approvalsRequired: r.approvals_required, reviewReminders: r.review_reminders, shortLinks: r.short_links, fourEyes: r.four_eyes, updatedBy: r.updated_by, updatedAt: r.updated_at.toISOString() }));
+    return rows.map((r) => ({ connectionId: r.channel_connection_id, approvalsRequired: r.approvals_required, reviewReminders: r.review_reminders, shortLinks: r.short_links, fourEyes: r.four_eyes, clientApproval: r.client_approval, updatedBy: r.updated_by, updatedAt: r.updated_at.toISOString() }));
   },
 });
 
@@ -270,5 +296,34 @@ export const channelWaiting = defineQuery({
   },
 });
 
-export const policyCommands = [policySet, remindersSet, shortLinksSet, fourEyesSet];
+// The client's approval on a channel (#770): its posts also wait for the client's "Approved" on a review link. Owners
+// only, like four-eyes: it changes who decides. Posts already approved stay approved.
+export const clientApprovalSet = defineCommand({
+  name: 'social.channel.set_client_approval',
+  input: z.strictObject({ connectionId: zId, clientApproval: z.boolean() }),
+  risk: 'R2',
+  access: OWNERS,
+  target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const userId = ctx.actor.userId;
+    const connection = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .where('status', '<>', 'revoked')
+      .executeTakeFirst();
+    if (!connection) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh này');
+    await ctx.trx
+      .insertInto('crove_social.channel_policy')
+      .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, client_approval: input.clientApproval, updated_by: userId })
+      .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id']).doUpdateSet({ client_approval: input.clientApproval, updated_by: userId, updated_at: ctx.now }))
+      .execute();
+    ctx.audit({ connection_id: input.connectionId, client_approval: input.clientApproval });
+    return { connectionId: input.connectionId, clientApproval: input.clientApproval };
+  },
+});
+
+export const policyCommands = [policySet, remindersSet, shortLinksSet, fourEyesSet, clientApprovalSet];
 export const policyQueries = [policyList, channelWaiting];
