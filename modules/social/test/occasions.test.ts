@@ -35,6 +35,9 @@ describe('Vietnamese occasions (#702)', () => {
     expect(dateOf('fathers_day', 2026)).toEqual(['2026-06-21']);
     expect(dateOf('black_friday', 2026)).toEqual(['2026-11-27']);
     expect(dateOf('black_friday', 2027)).toEqual(['2027-11-26']);
+    // November 2030 starts on a Friday: the fourth Friday is the 22nd, Black Friday the 29th.
+    expect(dateOf('black_friday', 2030)).toEqual(['2030-11-29']);
+    expect(dateOf('black_friday', 2024)).toEqual(['2024-11-29']);
   });
 
   it('keeps to the range, sorted, across a year end', () => {
@@ -48,5 +51,7 @@ describe('Vietnamese occasions (#702)', () => {
     expect(list[3]?.kind).toBe('lunar');
     expect(occasionsBetween('2026-05-01', '2026-04-01')).toEqual([]);
     expect(occasionsBetween('x', 'y')).toEqual([]);
+    expect(occasionsBetween('', '')).toEqual([]);
+    expect(occasionsBetween('0001-01-01', '0001-12-31')).toEqual([]);
   });
 });

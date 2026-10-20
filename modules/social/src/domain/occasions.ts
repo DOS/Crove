@@ -9,8 +9,9 @@ export type OccasionKind = 'holiday' | 'shopping' | 'lunar';
 export interface OccasionRule {
   id: string;
   kind: OccasionKind;
-  // A solar day, a weekday counted in a month (weekday 1 is Monday; nth -1 is the last), or a lunar day.
-  rule: { solar: [month: number, day: number] } | { nthWeekday: [month: number, weekday: number, nth: number] } | { lunar: [month: number, day: number] };
+  // A solar day, a weekday counted in a month (weekday 1 is Monday; nth -1 is the last) and the days after it, or a
+  // lunar day.
+  rule: { solar: [month: number, day: number] } | { nthWeekday: [month: number, weekday: number, nth: number]; after?: number } | { lunar: [month: number, day: number] };
 }
 
 export const OCCASIONS: readonly OccasionRule[] = [
@@ -29,7 +30,8 @@ export const OCCASIONS: readonly OccasionRule[] = [
   { id: 'halloween', kind: 'shopping', rule: { solar: [10, 31] } },
   { id: 'sale_11_11', kind: 'shopping', rule: { solar: [11, 11] } },
   { id: 'teachers_day', kind: 'holiday', rule: { solar: [11, 20] } },
-  { id: 'black_friday', kind: 'shopping', rule: { nthWeekday: [11, 5, 4] } },
+  // The day after the fourth Thursday of November (not always the fourth Friday: 29 November 2030).
+  { id: 'black_friday', kind: 'shopping', rule: { nthWeekday: [11, 4, 4], after: 1 } },
   { id: 'sale_12_12', kind: 'shopping', rule: { solar: [12, 12] } },
   { id: 'christmas', kind: 'holiday', rule: { solar: [12, 24] } },
   { id: 'tet', kind: 'lunar', rule: { lunar: [1, 1] } },
@@ -167,7 +169,11 @@ function nthWeekday(year: number, month: number, weekday: number, nth: number): 
 function datesIn(year: number, o: OccasionRule): string[] {
   const r = o.rule;
   if ('solar' in r) return [ymd(year, r.solar[0], r.solar[1])];
-  if ('nthWeekday' in r) return [ymd(year, r.nthWeekday[0], nthWeekday(year, r.nthWeekday[0], r.nthWeekday[1], r.nthWeekday[2]))];
+  if ('nthWeekday' in r) {
+    const day = nthWeekday(year, r.nthWeekday[0], r.nthWeekday[1], r.nthWeekday[2]) + (r.after ?? 0);
+    const at = new Date(Date.UTC(year, r.nthWeekday[0] - 1, day));
+    return [ymd(at.getUTCFullYear(), at.getUTCMonth() + 1, at.getUTCDate())];
+  }
   // A lunar day may fall in this solar year from this lunar year or the one before (the 12th month).
   return [year - 1, year].map((ly) => lunarToSolar(r.lunar[1], r.lunar[0], ly)).filter(([, , y]) => y === year).map(([d, m, y]) => ymd(y, m, d));
 }
@@ -176,7 +182,8 @@ function datesIn(year: number, o: OccasionRule): string[] {
 export function occasionsBetween(from: string, to: string, rules: readonly OccasionRule[] = OCCASIONS): Occasion[] {
   const y0 = Number(from.slice(0, 4));
   const y1 = Number(to.slice(0, 4));
-  if (!Number.isInteger(y0) || !Number.isInteger(y1) || y1 < y0 || y1 - y0 > 10) return [];
+  // The lunar algorithm holds from 1900 to 2199.
+  if (!Number.isInteger(y0) || !Number.isInteger(y1) || y0 < 1900 || y1 > 2199 || y1 < y0 || y1 - y0 > 10) return [];
   const out: Occasion[] = [];
   for (let y = y0; y <= y1; y++) {
     for (const o of rules) for (const date of datesIn(y, o)) if (date >= from && date <= to) out.push({ id: o.id, kind: o.kind, date });
