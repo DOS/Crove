@@ -710,7 +710,7 @@ function ChannelEditor({
       {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
       {isProvider(provider) && THREAD_RULES[provider] && postType !== 'story' && <ThreadField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
-      {isProvider(provider) && COMMENT_RULES[provider] && postType !== 'story' && !threadPartsOf(own.settings) && (
+      {isProvider(provider) && COMMENT_RULES[provider] && postType !== 'story' && (!threadPartsOf(own.settings) || typeof own.settings.firstComment === 'string') && (
         <div className="space-y-1">
           <Label className="text-xs">{t('firstComment')}</Label>
           <Textarea
