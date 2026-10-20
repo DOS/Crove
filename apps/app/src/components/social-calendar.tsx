@@ -1,9 +1,11 @@
 // The Social calendar (#580): month and week views of when each channel goes out, in the viewer's time zone. Owners
 // and admins drag a scheduled channel to another day (same time of day) to move it; a click on a day starts a post
-// planned for it. At phone width the week is a list of days.
+// planned for it. At phone width the week is a list of days. Vietnamese occasions (#702) show on their days, each
+// starting a post planned a few days before, with a list of the next 60 days; a viewer can hide them.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useMemo, useState, type DragEvent } from 'react';
+import { occasionsBetween, type Occasion } from '@crove/mod-social/contract';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -13,6 +15,7 @@ import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { providerName, VARIANT_TONE } from '../lib/social.ts';
 import { addDays, calendarItems, DAY_MS, dayId, onDay, startOfDay, viewDays, type CalendarItem, type View } from '../lib/social-calendar.ts';
+import { occasionStart, occasionsShown, setOccasionsShown } from '../lib/social-occasions.ts';
 
 const excerpt = (text: string) => text.replace(/\s+/g, ' ').trim();
 
@@ -39,6 +42,28 @@ function Chip({ item, slug, name, draggable }: { item: CalendarItem; slug: strin
       <span className="font-mono tabular-nums">{f.time(item.at.toISOString())}</span> <span className="text-subtle-foreground">{providerName(item.v.provider)}</span>{' '}
       {excerpt(item.v.effective.body) || t('emptyText')}
     </Link>
+  );
+}
+
+// An occasion on its day: a click starts a post for it, planned a few days before (none once its day is over).
+function OccasionChip({ occasion, onStart }: { occasion: Occasion; onStart: (o: Occasion) => void }) {
+  const t = useTranslations('social.occasions');
+  const open = occasionStart(occasion.date) !== null;
+  const name = t(`names.${occasion.id as 'tet'}`);
+  return (
+    <button
+      type="button"
+      disabled={!open}
+      onClick={() => onStart(occasion)}
+      title={open ? t('draftFor', { name }) : name}
+      className={cn(
+        'block w-full truncate rounded-md px-1.5 py-0.5 text-left text-xs font-medium',
+        occasion.kind === 'shopping' ? 'bg-warning/15 text-foreground' : 'bg-primary/10 text-foreground',
+        open ? 'hover:ring-1 hover:ring-ring/60' : 'cursor-default opacity-70',
+      )}
+    >
+      {name}
+    </button>
   );
 }
 
@@ -91,6 +116,19 @@ export function SocialCalendar({ slug, names, canDecide, labelId }: { slug: stri
     }
     void navigate({ to: '/o/$slug/social/new', params: { slug }, search: { at: at.toISOString() } });
   };
+  const [showOccasions, setShowOccasions] = useState(() => occasionsShown(slug));
+  const occasions = useMemo(() => (showOccasions ? occasionsBetween(dayId(days[0] as Date), dayId(days.at(-1) as Date)) : []), [days, showOccasions]);
+  const occasionsByDay = useMemo(() => {
+    const map = new Map<string, Occasion[]>();
+    for (const o of occasions) map.set(o.date, [...(map.get(o.date) ?? []), o]);
+    return map;
+  }, [occasions]);
+  const upcoming = useMemo(() => (showOccasions ? occasionsBetween(dayId(new Date()), dayId(addDays(new Date(), 60))) : []), [showOccasions]);
+  const startFor = (o: Occasion) => {
+    const at = occasionStart(o.date);
+    if (!at) return;
+    void navigate({ to: '/o/$slug/social/new', params: { slug }, search: { at: at.toISOString(), occasion: o.id, on: o.date } });
+  };
   // Calendar days go to f.date as local YYYY-MM-DD: it reads the date part as written.
   const title = view === 'month' ? f.monthYear(anchor.toISOString()) : `${f.date(dayId(days[0] as Date))} - ${f.date(dayId(days.at(-1) as Date))}`;
   const shown = view === 'month' ? 3 : 20;
@@ -108,7 +146,19 @@ export function SocialCalendar({ slug, names, canDecide, labelId }: { slug: stri
           ›
         </Button>
         <h3 className="text-sm font-medium text-foreground first-letter:uppercase">{title}</h3>
-        <div className="ml-auto flex gap-1" role="group" aria-label={t('calendar.view')}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto"
+          aria-pressed={showOccasions}
+          onClick={() => {
+            setOccasionsShown(slug, !showOccasions);
+            setShowOccasions(!showOccasions);
+          }}
+        >
+          {t(showOccasions ? 'occasions.hide' : 'occasions.show')}
+        </Button>
+        <div className="flex gap-1" role="group" aria-label={t('calendar.view')}>
           {(['month', 'week'] as const).map((v) => (
             <Button key={v} variant={view === v ? 'secondary' : 'ghost'} size="sm" aria-pressed={view === v} onClick={() => setView(v)}>
               {t(`calendar.${v}`)}
@@ -161,6 +211,9 @@ export function SocialCalendar({ slug, names, canDecide, labelId }: { slug: stri
                       </button>
                     )}
                   </div>
+                  {(occasionsByDay.get(id) ?? []).map((o) => (
+                    <OccasionChip key={o.id} occasion={o} onStart={startFor} />
+                  ))}
                   {list.slice(0, shown).map((item) => (
                     <Chip key={item.v.id} item={item} slug={slug} name={names.get(item.v.connectionId)} draggable={canDecide && !item.planned && item.v.status === 'scheduled' && !item.v.queuePaused} />
                   ))}
@@ -174,6 +227,26 @@ export function SocialCalendar({ slug, names, canDecide, labelId }: { slug: stri
             <Badge variant={VARIANT_TONE.published}>{t('status.published')}</Badge>
             <span className="rounded-md border border-dashed px-1.5">{t('calendar.planned')}</span>
           </div>
+          {upcoming.length > 0 && (
+            <section aria-label={t('occasions.upcoming')} className="space-y-2 rounded-xl border p-3">
+              <p className="text-sm font-medium text-foreground">{t('occasions.upcoming')}</p>
+              <ul className="space-y-1.5">
+                {upcoming.map((o) => (
+                  <li key={`${o.id}-${o.date}`} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <span>
+                      <span className="text-foreground">{t(`occasions.names.${o.id as 'tet'}`)}</span>
+                      <span className="text-subtle-foreground">{' · '}{f.date(o.date)}</span>
+                    </span>
+                    {occasionStart(o.date) && (
+                      <Button size="sm" variant="outline" onClick={() => startFor(o)}>
+                        {t('occasions.draft')}
+                      </Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
         </>
       )}
     </div>

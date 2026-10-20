@@ -38,6 +38,10 @@ function run(args: string[], env: Record<string, string> = {}, input?: string) {
       CROVE_WORKER_SETTLE: '0',
       STUB_LOG: log,
       STUB_DEPLOY_DIR: dir,
+      // The account step of the smoke test stays off unless a case turns it on.
+      SMOKE_EMAIL: '',
+      SMOKE_PASSWORD: '',
+      SMOKE_ORG: '',
       ...env,
     },
   });
@@ -154,6 +158,13 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(running()).toContain(image('a'));
     expect(running()).not.toContain(image('b'));
     expect(readFileSync(`${dir}/.deploy/history.log`, 'utf8')).toContain(`deploy ${releaseDir('v1.1.0', 'b')} failed, rolled back to ${releaseDir('v1.0.0', 'a')}`);
+  });
+
+  it('never runs the account step of the smoke test on the host, so a rollback cannot depend on the smoke account', () => {
+    const res = deploy('v1.0.0', 'a', { SMOKE_EMAIL: 'smoke@example.com', SMOKE_PASSWORD: 'x', SMOKE_ORG: 'crove-smoke', STUB_SIGNIN_FAIL: '1' });
+    expect(res.status, res.out).toBe(0);
+    expect(res.out).not.toContain('signs in, uploads');
+    expect(readFileSync(log, 'utf8')).not.toContain('/auth/v1/token');
   });
 
   it('rolls back when the smoke test fails after the instance is ready', () => {
@@ -321,6 +332,87 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
       expect(res.status).toBe(1);
       expect(res.out).toContain('smoke failed: /readyz answers ready');
       expect(res.out).toContain('smoke ok: /healthz answers ok');
+    });
+
+    describe('account step (#690)', () => {
+      // A password with characters a JSON body or a shell would have to escape.
+      const PASSWORD = 'smoke "pass" \\ word $HOME 0123';
+      const account = { SMOKE_EMAIL: 'smoke@example.com', SMOKE_PASSWORD: PASSWORD, SMOKE_ORG: 'crove-smoke', CROVE_SMOKE_POLL_SECONDS: '1' };
+      const STEP = 'signs in, uploads a synthetic e-invoice to org crove-smoke and gets a proposal';
+      const read = (suffix: string) => (existsSync(`${log}.${suffix}`) ? readFileSync(`${log}.${suffix}`, 'utf8') : '');
+
+      it('is skipped with a notice without SMOKE_EMAIL and SMOKE_PASSWORD', () => {
+        const res = run(['smoke', 'https://crove.example.test'], { SMOKE_EMAIL: 'smoke@example.com' });
+        expect(res.status, res.out).toBe(0);
+        expect(res.out).toContain('smoke skipped: sign-in and upload (SMOKE_EMAIL and SMOKE_PASSWORD are not set)');
+        expect(readFileSync(log, 'utf8')).not.toContain('/auth/v1/token');
+      });
+
+      it('fails the smoke command, which makes the workflow roll back', () => {
+        const res = run(['smoke', 'https://crove.example.test'], { ...account, STUB_SIGNIN_FAIL: '1' });
+        expect(res.status).toBe(1);
+        expect(res.out).toContain('smoke test failed on https://crove.example.test');
+      });
+
+      it('signs in, uploads one synthetic e-invoice, waits for its proposal and rejects it', () => {
+        const res = run(['smoke', 'https://crove.example.test'], account);
+        expect(res.status, res.out).toBe(0);
+        expect(res.out).toContain(`smoke ok: ${STEP}`);
+        expect(JSON.parse(read('signin'))).toEqual({ email: 'smoke@example.com', password: PASSWORD });
+        const invoice = read('upload');
+        expect(invoice).toMatch(/<SHDon>\d{10}<\/SHDon>/);
+        // Synthetic parties only: tax codes that fail the checksum.
+        expect(invoice).toContain('<MST>0101234564</MST>');
+        expect(invoice).toContain('<MST>0309876546</MST>');
+        expect(JSON.parse(read('rpc'))).toEqual({ json: { id: 'proposal-1', reason: 'Kiểm thử sau triển khai' } });
+        // Neither the password nor the access token is on any command line.
+        const argv = read('argv');
+        expect(argv).toContain('/auth/v1/token?grant_type=password');
+        expect(argv).not.toContain('"pass"');
+        expect(argv).not.toContain('stub-access-token');
+      });
+
+      it('fails when the sign-in is refused, without uploading', () => {
+        const res = run(['smoke', 'https://crove.example.test'], { ...account, STUB_SIGNIN_FAIL: '1' });
+        expect(res.status).toBe(1);
+        expect(res.out).toContain('smoke: signing in with SMOKE_EMAIL and SMOKE_PASSWORD failed');
+        expect(res.out).toContain(`smoke failed: ${STEP}`);
+        expect(read('upload')).toBe('');
+      });
+
+      it('fails when the worker cannot extract the upload, or no proposal comes in time', () => {
+        const failed = run(['smoke', 'https://crove.example.test'], { ...account, STUB_FILE_STATUS: 'failed' });
+        expect(failed.status).toBe(1);
+        expect(failed.out).toContain('smoke: the worker could not extract the synthetic e-invoice: UNREADABLE');
+        const pending = run(['smoke', 'https://crove.example.test'], { ...account, STUB_FILE_STATUS: 'extracting' });
+        expect(pending.status).toBe(1);
+        expect(pending.out).toContain('smoke: no proposal after 1s (file extracting)');
+        // An empty proposal id is not filled from the next field.
+        const noId = run(['smoke', 'https://crove.example.test'], { ...account, STUB_FILE_STATUS: 'proposed-no-id' });
+        expect(noId.status).toBe(1);
+        expect(noId.out).toContain('smoke: no proposal after 1s (file proposed)');
+        expect(read('rpc')).toBe('');
+      });
+
+      it('fails when the proposal cannot be rejected', () => {
+        const res = run(['smoke', 'https://crove.example.test'], { ...account, STUB_REJECT_FAIL: '1' });
+        expect(res.status).toBe(1);
+        expect(res.out).toContain('smoke: rejecting the smoke proposal proposal-1 failed');
+      });
+
+      it('never sends the password over plain http to another host', () => {
+        const res = run(['smoke', 'http://crove.example.test'], account);
+        expect(res.status).toBe(1);
+        expect(res.out).toContain('the account step signs in only over https');
+        expect(read('signin')).toBe('');
+      });
+
+      it('refuses an org that is not a slug', () => {
+        const res = run(['smoke', 'https://crove.example.test'], { ...account, SMOKE_ORG: 'Crove Smoke' });
+        expect(res.status).toBe(1);
+        expect(res.out).toContain("SMOKE_ORG must be the smoke org's slug");
+        expect(read('signin')).toBe('');
+      });
     });
   });
 });

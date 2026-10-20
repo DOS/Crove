@@ -41,6 +41,8 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.short_link',
+  'crove_social.short_link_click',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -137,6 +139,14 @@ const socialVariantRows = (o: { id: string; owner: string }) => {
       { table: 'crove_social.post', values: post },
     ],
     variant,
+  };
+};
+// A short link of a published variant (#706), with what it needs.
+const socialShortLinkRows = (o: { id: string; owner: string }) => {
+  const { setup, variant } = socialVariantRows(o);
+  return {
+    setup: [...setup, { table: 'crove_social.post_variant', values: variant }],
+    link: { org_id: o.id, id: randomUUID(), code: `rls${tag()}`.slice(0, 16), variant_id: variant.id, post_id: variant.post_id, target_url: 'https://rls.example/' },
   };
 };
 let portalListYear = 2000;
@@ -665,6 +675,21 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     },
   },
   // A saved snippet of text (#584): hashtags, a signature or a whole post to start from.
+  // A post's link as Crove shortened it when the variant went out (#706); the worker writes it.
+  'crove_social.short_link': {
+    make: (o) => {
+      const { setup, link } = socialShortLinkRows(o);
+      return { setup, row: link };
+    },
+  },
+  // A day's clicks on a short link (#706): only the redirect's definer counts them; members read them.
+  'crove_social.short_link_click': {
+    make: (o) => {
+      const { setup, link } = socialShortLinkRows(o);
+      return { setup: [...setup, { table: 'crove_social.short_link', values: link }], row: { org_id: o.id, short_link_id: link.id, day: '2026-10-20', clicks: 3 } };
+    },
+    noInsertControl: 'only the redirect definer counts clicks, for a visitor following the link; tenant roles may only read them',
+  },
   'crove_social.snippet': { make: (o) => ({ row: { org_id: o.id, name: `rls-${tag()}`, body: '#rls', created_by: o.owner } }) },
 };
 
