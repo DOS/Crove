@@ -47,7 +47,8 @@ function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; onChange
   const t = useTranslations('social');
   const [search, setSearch] = useState('');
   const library = useLibrary(search);
-  const items = (library.data?.pages.flatMap((p) => p.items) ?? []).filter((item) => !only || only.includes(item.mime));
+  const all = library.data?.pages.flatMap((p) => p.items) ?? [];
+  const items = all.filter((item) => !only || only.includes(item.mime));
   const chosen = new Set(media.map((m) => m.fileId));
   const toggle = (item: LibraryItem) =>
     onChange(chosen.has(item.fileId) ? media.filter((m) => m.fileId !== item.fileId) : media.length >= MAX_POST_MEDIA ? media : [...media, { fileId: item.fileId, altText: '', mime: item.mime, sizeBytes: item.sizeBytes, durationMs: item.durationMs }]);
@@ -59,7 +60,7 @@ function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; onChange
       ) : library.error ? (
         <ErrorText>{errorMessage(library.error)}</ErrorText>
       ) : items.length === 0 ? (
-        <p className="text-xs text-subtle-foreground">{search.trim() ? t('libraryNoMatch') : t('libraryEmpty')}</p>
+        <p className="text-xs text-subtle-foreground">{search.trim() || all.length > 0 ? t('libraryNoMatch') : t('libraryEmpty')}</p>
       ) : (
         <ul className="grid grid-cols-3 gap-2 sm:grid-cols-5">
           {items.map((item) => (
