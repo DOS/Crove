@@ -276,6 +276,35 @@ suite('social posts on PostgreSQL (S3)', () => {
     expect(await list(new Date(), new Date(Date.now() + 24 * HOUR))).toEqual([soon.id]);
     expect((await list(new Date(), new Date(Date.now() + 72 * HOUR))).sort()).toEqual([soon.id, later.id].sort());
   });
+  it('filters the lists by stage, channel and text, and pages by the last change (#574)', async () => {
+    const o = await org();
+    const [a, b] = [await connection(o.orgId, o.owner), await connection(o.orgId, o.owner)];
+    const draft = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Khai trương 50% off', channels: [{ connectionId: a }] });
+    const inReview = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Menu mới', title: 'Tuần lễ 100%', channels: [{ connectionId: b }] });
+    await exec(o, o.member, 'social.post.submit', { postId: inReview.postId });
+    const list = (input: Record<string, unknown>) => rt.query<PostView[]>('social.post.list', input, { actor: asUser(o.viewer), orgId: o.orgId }).then((ps) => ps.map((p) => p.id));
+    expect(await list({ stage: 'review' })).toEqual([inReview.postId]);
+    expect(await list({ stage: 'drafts' })).toEqual([draft.postId]);
+    expect(await list({ stage: 'done' })).toEqual([]);
+    expect(await list({ connectionId: a })).toEqual([draft.postId]);
+    // Text and title, case-insensitive; a % is matched as itself.
+    expect(await list({ search: 'KHAI' })).toEqual([draft.postId]);
+    expect(await list({ search: '100%' })).toEqual([inReview.postId]);
+    expect(await list({ search: '%' })).toHaveLength(2);
+    expect(await list({ search: 'không có' })).toEqual([]);
+
+    // Pages: newest change first, then the next page after the last one.
+    for (let i = 0; i < 3; i++) await exec(o, o.member, 'social.post.create', { body: `Bài ${i}`, channels: [{ connectionId: a }] });
+    const first = await rt.query<PostView[]>('social.post.list', { stage: 'drafts', limit: 2 }, { actor: asUser(o.viewer), orgId: o.orgId });
+    const last = first.at(-1) as PostView;
+    const second = await list({ stage: 'drafts', limit: 2, before: { updatedAt: last.updatedAt, postId: last.id } });
+    const third = await list({ stage: 'drafts', limit: 2, before: { updatedAt: last.updatedAt, postId: last.id }, search: 'Bài' });
+    const all = await list({ stage: 'drafts' });
+    expect([...first.map((p) => p.id), ...second]).toEqual(all.slice(0, 4));
+    expect(new Set([...first.map((p) => p.id), ...second]).size).toBe(4);
+    expect(third.every((id) => all.includes(id))).toBe(true);
+  });
+
   it('stores an override equal to the base, and inheriting again, though the effective content does not change', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);

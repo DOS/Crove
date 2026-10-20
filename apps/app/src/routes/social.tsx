@@ -1,12 +1,13 @@
 // Crove Social home: what goes out next (an agenda by day), what waits for review, drafts, and what went out.
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useParams } from '@tanstack/react-router';
-import { useMemo, useRef, useState } from 'react';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
+import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
@@ -15,11 +16,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/t
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
-import { dayKey, providerName, VARIANT_TONE } from '../lib/social.ts';
+import { dayKey, dayRange, providerName, SOCIAL_TABS, VARIANT_TONE, type SocialSearch, type SocialTab } from '../lib/social.ts';
 import { pollEvery, SAFETY_POLL_MS, useStreamLive } from '../lib/stream-hook.ts';
 
-type Tab = 'upcoming' | 'review' | 'drafts' | 'done' | 'metrics' | 'library';
-const TABS: Tab[] = ['upcoming', 'review', 'drafts', 'done', 'metrics', 'library'];
+type Tab = SocialTab;
+const TABS = SOCIAL_TABS;
+// Posts a list page shows; Load more asks for the next ones.
+const PAGE = 50;
+type ListTab = 'review' | 'drafts' | 'done';
+type PostCursor = { updatedAt: string; postId: string };
 // The counts the analytics table shows, in order; a platform that does not report one shows a dash.
 const METRIC_COLUMNS = ['reach', 'reactions', 'comments', 'shares'] as const;
 const DAY = 86_400_000;
@@ -329,12 +334,33 @@ function Agenda({ posts, slug, names }: { posts: Post[]; slug: string; names: Ma
   );
 }
 
+// Drops empty filters, so the address shows only what is set.
+const clean = (s: { [K in keyof SocialSearch]?: SocialSearch[K] | undefined }): SocialSearch => Object.fromEntries(Object.entries(s).filter(([, v]) => v !== undefined && v !== '')) as SocialSearch;
+
 export function SocialPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('social');
   const f = useFormat();
   const live = useStreamLive();
-  const [tab, setTab] = useState<Tab>('upcoming');
+  const search: SocialSearch = useSearch({ strict: false });
+  const navigate = useNavigate();
+  const tab: Tab = search.tab ?? 'upcoming';
+  // Changes the address, so the back button and a shared link keep the list; replaces rather than piles up history.
+  const setSearch = useCallback(
+    (next: { [K in keyof SocialSearch]?: SocialSearch[K] | undefined }) => void navigate({ to: '/o/$slug/social', params: { slug }, search: (prev: SocialSearch) => clean({ ...prev, ...next }), replace: true }),
+    [navigate, slug],
+  );
+  const setTab = (next: Tab) => setSearch({ tab: next === 'upcoming' ? undefined : next });
+  // The search box writes the address a moment after typing stops.
+  const [text, setText] = useState(search.q ?? '');
+  useEffect(() => setText(search.q ?? ''), [search.q]);
+  useEffect(() => {
+    const q = text.trim() || undefined;
+    if (q === search.q) return;
+    const timer = setTimeout(() => setSearch({ q }), 300);
+    return () => clearTimeout(timer);
+  }, [text, search.q, setSearch]);
+  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.q ? { search: search.q } : {}) };
   // The agenda window starts now; a new day does not need a reload to move it, a refetch does.
   const range = useMemo(() => {
     const from = new Date(Date.now() - DAY);
@@ -344,17 +370,30 @@ export function SocialPage() {
   const me = useQuery(orpc.me.get.queryOptions());
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
   const canWrite = role === 'owner' || role === 'admin' || role === 'member';
-  const upcoming = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { ...range, limit: 200 } }), enabled: tab === 'upcoming', refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
-  const all = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { limit: 200 } }), enabled: tab !== 'upcoming', refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
+  const upcoming = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { ...range, ...filters, limit: 200 } }), enabled: tab === 'upcoming', refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
+  const listTab: ListTab | null = tab === 'review' || tab === 'drafts' || tab === 'done' ? tab : null;
+  // The server filters and pages (#574); a page at a time, newest change first.
+  const list = useInfiniteQuery({
+    ...orpc.social.posts.list.infiniteOptions({
+      input: (before: PostCursor | undefined) => ({ stage: listTab ?? 'review', ...filters, ...dayRange(search.from, search.to), limit: PAGE, ...(before ? { before } : {}) }),
+      initialPageParam: undefined as PostCursor | undefined,
+      getNextPageParam: (page: Post[]) => {
+        const last = page.at(-1);
+        return page.length === PAGE && last ? { updatedAt: last.updatedAt, postId: last.id } : undefined;
+      },
+      placeholderData: keepPreviousData,
+    }),
+    enabled: listTab !== null,
+    refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS),
+  });
+  // The Review tab's count, whatever list is open.
+  const review = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { stage: 'review', limit: 200 } }), refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
   const names = new Map((channels.data ?? []).map((c) => [c.id, c.displayName]));
   const noChannels = channels.isSuccess && channels.data.length === 0;
 
-  const lists: Record<Exclude<Tab, 'upcoming' | 'metrics' | 'library'>, Post[]> = {
-    review: (all.data ?? []).filter((p) => p.variants.some((v) => v.status === 'in_review')),
-    drafts: (all.data ?? []).filter((p) => p.status === 'draft' && !p.variants.some((v) => v.status === 'in_review')),
-    done: (all.data ?? []).filter((p) => ['published', 'partially_published', 'failed', 'publishing', 'cancelled'].includes(p.status)),
-  };
-  const reviewCount = lists.review.length;
+  const rows = list.data?.pages.flat() ?? [];
+  const reviewCount = review.data?.length ?? 0;
+  const filtered = Boolean(search.channel || search.q || search.from || search.to);
 
   return (
     <>
@@ -398,6 +437,42 @@ export function SocialPage() {
             </TabsTrigger>
           ))}
         </TabsList>
+        {(tab === 'upcoming' || listTab) && (
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="text-xs">
+              <span className="text-subtle-foreground">{t('filters.channel')}</span>
+              <NativeSelect className="mt-1 w-56" value={search.channel ?? ''} onChange={(e) => setSearch({ channel: e.target.value || undefined })}>
+                <NativeSelectOption value="">{t('filters.allChannels')}</NativeSelectOption>
+                {(channels.data ?? []).map((c) => (
+                  <NativeSelectOption key={c.id} value={c.id}>
+                    {c.displayName} · {providerName(c.provider)}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </label>
+            <label className="min-w-48 flex-1 text-xs sm:max-w-80">
+              <span className="text-subtle-foreground">{t('filters.search')}</span>
+              <Input type="search" className="mt-1" value={text} placeholder={t('filters.searchPlaceholder')} onChange={(e) => setText(e.target.value)} />
+            </label>
+            {listTab && (
+              <>
+                <label className="text-xs">
+                  <span className="text-subtle-foreground">{t('filters.from')}</span>
+                  <Input type="date" className="mt-1 w-44" value={search.from ?? ''} onChange={(e) => setSearch({ from: e.target.value || undefined })} />
+                </label>
+                <label className="text-xs">
+                  <span className="text-subtle-foreground">{t('filters.to')}</span>
+                  <Input type="date" className="mt-1 w-44" value={search.to ?? ''} onChange={(e) => setSearch({ to: e.target.value || undefined })} />
+                </label>
+              </>
+            )}
+            {filtered && (
+              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, q: undefined, from: undefined, to: undefined })}>
+                {t('filters.clear')}
+              </Button>
+            )}
+          </div>
+        )}
         <TabsContent value="upcoming">
           {upcoming.isLoading ? <Spinner /> : upcoming.error ? <ErrorText>{errorMessage(upcoming.error)}</ErrorText> : <Agenda posts={upcoming.data ?? []} slug={slug} names={names} />}
         </TabsContent>
@@ -407,18 +482,29 @@ export function SocialPage() {
         <TabsContent value="library">{tab === 'library' && <Library slug={slug} canWrite={canWrite} />}</TabsContent>
         {(['review', 'drafts', 'done'] as const).map((id) => (
           <TabsContent key={id} value={id}>
-            {all.isLoading ? (
-              <Spinner />
-            ) : all.error ? (
-              <ErrorText>{errorMessage(all.error)}</ErrorText>
-            ) : lists[id].length === 0 ? (
-              <Empty title={t(`empty.${id}`)} />
-            ) : (
-              <div className="space-y-2">
-                {lists[id].map((post) => (
-                  <PostRow key={post.id} post={post} slug={slug} names={names} right={f.dateTime(post.updatedAt)} />
-                ))}
-              </div>
+            {tab === id && (
+              <>
+                {list.isLoading ? (
+                  <Spinner />
+                ) : list.error && rows.length === 0 ? (
+                  <ErrorText>{errorMessage(list.error)}</ErrorText>
+                ) : rows.length === 0 ? (
+                  <Empty title={filtered ? t('filters.noMatch') : t(`empty.${id}`)} />
+                ) : (
+                  <div className="space-y-2">
+                    {rows.map((post) => (
+                      <PostRow key={post.id} post={post} slug={slug} names={names} right={f.dateTime(post.updatedAt)} />
+                    ))}
+                  </div>
+                )}
+                {list.hasNextPage && (
+                  <div className="mt-4 flex justify-center">
+                    <Button variant="outline" onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>
+                      {t('filters.loadMore')}
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
           </TabsContent>
         ))}
