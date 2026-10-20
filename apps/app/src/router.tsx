@@ -24,6 +24,7 @@ import { OrgLayout } from './routes/org-layout.tsx';
 import { ResetPasswordPage } from './routes/reset-password.tsx';
 import { SettingsPage } from './routes/settings.tsx';
 import { SocialPage } from './routes/social.tsx';
+import { parseSocialSearch } from './lib/social.ts';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
 import { OAuthCallbackPage } from './routes/social-oauth.tsx';
 import { SocialComposePage, SocialPostPage } from './routes/social-post.tsx';
@@ -200,7 +201,7 @@ const requireSocial = ({ params }: { params: { slug: string } }) => {
   if (!getConfig().modules.includes('social')) throw redirect({ to: '/o/$slug/inbox', params: { slug: params.slug } });
 };
 const socialRoute = createRoute({ getParentRoute: () => orgRoute, path: 'social', beforeLoad: requireSocial, component: () => <Outlet /> });
-const socialIndexRoute = createRoute({ getParentRoute: () => socialRoute, path: '/', component: SocialPage });
+const socialIndexRoute = createRoute({ getParentRoute: () => socialRoute, path: '/', validateSearch: parseSocialSearch, component: SocialPage });
 // ?at=<ISO time>: the calendar starts a post planned for that time (#580).
 const socialNewRoute = createRoute({
   getParentRoute: () => socialRoute,

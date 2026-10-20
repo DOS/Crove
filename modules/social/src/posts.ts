@@ -20,11 +20,11 @@ import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } fr
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { publishingCommands } from './publishing.ts';
-import { libraryQueries } from './library.ts';
+import { libraryQueries, likeTerm } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
 import { approvalsRequired, decisionsOf, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
-import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
+import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -39,13 +39,6 @@ const zLink = z.url({ protocol: /^https?$/ }).max(2000);
 const zTimeZone = z.string().min(1).max(64).refine(isValidTimeZone, 'unknown IANA time zone');
 // Provider settings (privacy level, post type...): plain JSON, 16 KiB at most.
 const zSettings = z.record(z.string().max(100), z.json()).refine((v) => Buffer.byteLength(JSON.stringify(v), 'utf8') <= 16_384, 'settings over 16 KiB');
-const zChannel = z.strictObject({
-  connectionId: zId,
-  body: zBody.nullable().optional(),
-  title: zTitle.nullable().optional(),
-  linkUrl: zLink.nullable().optional(),
-  settings: zSettings.optional(),
-});
 const zVariantIds = z.array(zId).min(1).max(MAX_CHANNELS_PER_POST);
 // A post's images, in order: files of the org uploaded for Social (JPEG, PNG or WEBP). The channel rules decide how
 // many each channel takes; 20 is the most any supported channel shows in one post.
@@ -55,7 +48,15 @@ const zMedia = z
   .max(MAX_MEDIA_PER_POST)
   .refine((list) => new Set(list.map((m) => m.fileId)).size === list.length, 'each image once');
 const MEDIA_TYPES: readonly string[] = [...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES];
-
+const zChannel = z.strictObject({
+  connectionId: zId,
+  body: zBody.nullable().optional(),
+  title: zTitle.nullable().optional(),
+  linkUrl: zLink.nullable().optional(),
+  settings: zSettings.optional(),
+  // The channel's own images or video instead of the post's (#581); null or absent: the post's.
+  media: zMedia.nullable().optional(),
+});
 // The files a media list names, in its order, as the hash and the channel rules see them. Every file must be an image
 // or a video of the org uploaded for posts.
 async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): Promise<PostMedia[]> {
@@ -126,6 +127,7 @@ export async function insertVariants(ctx: CommandContext, post: PostRow, channel
   );
   const created: Array<{ variantId: string; connectionId: string }> = [];
   for (const [i, c] of channels.entries()) {
+    const own = c.media ? await resolveMedia(ctx, c.media) : null;
     const row = {
       channel_connection_id: c.connectionId,
       provider: providers.get(c.connectionId) as string,
@@ -133,6 +135,7 @@ export async function insertVariants(ctx: CommandContext, post: PostRow, channel
       title: c.title ?? null,
       link_url: c.linkUrl ?? null,
       settings: c.settings ?? {},
+      media: own,
     };
     const inserted = await ctx.trx
       .insertInto('crove_social.post_variant')
@@ -141,6 +144,7 @@ export async function insertVariants(ctx: CommandContext, post: PostRow, channel
         post_id: post.id,
         ...row,
         settings: JSON.stringify(row.settings),
+        media: own ? JSON.stringify(own) : null,
         position: startAt + i,
         content_hash: hashOf(base(post), row),
       })
@@ -305,6 +309,8 @@ export const variantUpdate = defineCommand({
     title: zTitle.nullable().optional(),
     linkUrl: zLink.nullable().optional(),
     settings: zSettings.optional(),
+    // The channel's own images or video (#581); null goes back to the post's.
+    media: zMedia.nullable().optional(),
   }),
   risk: 'R1',
   access: MEMBERS,
@@ -321,10 +327,12 @@ export const variantUpdate = defineCommand({
       title: input.title === undefined ? v.title : input.title,
       link_url: input.linkUrl === undefined ? v.link_url : input.linkUrl,
       settings: input.settings ?? settingsOf(v),
+      media: input.media === undefined ? v.media : input.media === null ? null : await resolveMedia(ctx, input.media),
     };
     if (v.content_frozen || FROZEN.has(v.status)) step(v, { type: 'edit' });
-    const columns = { body: next.body, title: next.title, link_url: next.link_url, settings: JSON.stringify(next.settings) };
-    const stored = v.body === next.body && v.title === next.title && v.link_url === next.link_url && canonicalJson(settingsOf(v)) === canonicalJson(next.settings);
+    const columns = { body: next.body, title: next.title, link_url: next.link_url, settings: JSON.stringify(next.settings), media: next.media === null ? null : JSON.stringify(next.media) };
+    const stored =
+      v.body === next.body && v.title === next.title && v.link_url === next.link_url && canonicalJson(settingsOf(v)) === canonicalJson(next.settings) && canonicalJson(v.media) === canonicalJson(next.media);
     const hash = hashOf(base(post), next);
     if (hash === v.content_hash) {
       // The effective content is the same (for example an override equal to the base, or inheriting it again): store
@@ -773,6 +781,7 @@ export interface VariantView {
   provider: string;
   position: number;
   overrides: { body: string | null; title: string | null; linkUrl: string | null };
+  ownMedia: boolean;
   effective: BaseContent;
   // The images this variant shows: its own list, or the post's.
   media: MediaView[];
@@ -912,6 +921,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               provider: v.provider,
               position: v.position,
               overrides: overrides(v),
+              ownMedia: !v.content_frozen && mediaOf(v.media) !== null,
               effective: effectiveContent(b, overrides(v), v.content_frozen),
               media: mediaView(mediaFor(b, v)),
               settings: settingsOf(v),
@@ -961,12 +971,41 @@ export const postList = defineQuery({
     from: z.iso.datetime({ offset: true }).optional(),
     to: z.iso.datetime({ offset: true }).optional(),
     status: z.enum(['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled']).optional(),
+    // The Social home's lists (#574): posts with a channel in review; drafts with none in review; posts that went out
+    // or stopped.
+    stage: z.enum(['review', 'drafts', 'done']).optional(),
+    // Posts with a live channel on this connection.
+    connectionId: zId.optional(),
+    // In the post's or a channel's own text or title; wildcards are matched as themselves.
+    search: z.string().trim().min(1).max(200).optional(),
+    // The last post of the previous page, newest change first.
+    before: z.strictObject({ updatedAt: z.iso.datetime({ offset: true }), postId: zId }).optional(),
     limit: z.number().int().min(1).max(200).optional(),
   }),
   access: ALL,
   handler: async (ctx, input): Promise<PostView[]> => {
     let q = ctx.trx.selectFrom('crove_social.post as p').select('p.id').where('p.org_id', '=', ctx.orgId);
     if (input.status) q = q.where('p.status', '=', input.status);
+    const variantWhere = (status: 'in_review' | null) =>
+      sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status ${status ? sql`= ${status}` : sql`<> 'cancelled'`}${
+        input.connectionId && !status ? sql` AND v.channel_connection_id = ${input.connectionId}::uuid` : sql``
+      })`;
+    // In review on the chosen channel when one is chosen: the same variant, not any of the post's.
+    if (input.stage === 'review') q = q.where(input.connectionId ? sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status = 'in_review' AND v.channel_connection_id = ${input.connectionId}::uuid)` : variantWhere('in_review'));
+    if (input.stage === 'drafts') q = q.where('p.status', '=', 'draft').where(sql<boolean>`NOT ${variantWhere('in_review')}`);
+    if (input.stage === 'done') q = q.where('p.status', 'in', ['published', 'partially_published', 'failed', 'publishing', 'cancelled']);
+    if (input.connectionId) q = q.where(variantWhere(null));
+    if (input.search) {
+      const term = likeTerm(input.search);
+      q = q.where(
+        sql<boolean>`(p.body ILIKE ${term} OR p.title ILIKE ${term} OR EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND (v.body ILIKE ${term} OR v.title ILIKE ${term})))`,
+      );
+    }
+    // Ordered and paged by the change time as the answer carries it (milliseconds), so a page boundary inside one
+    // millisecond neither repeats nor skips a post.
+    const changed = sql`date_trunc('milliseconds', p.updated_at)`;
+    const before = input.before;
+    if (before) q = q.where(sql<boolean>`(${changed}, p.id) < (${new Date(Date.parse(before.updatedAt))}::timestamptz, ${before.postId}::uuid)`);
     if (input.from || input.to) {
       q = q.where((eb) =>
         eb.exists(
@@ -986,7 +1025,7 @@ export const postList = defineQuery({
         ),
       );
     }
-    const rows = await q.orderBy('p.updated_at', 'desc').orderBy('p.id', 'desc').limit(input.limit ?? 50).execute();
+    const rows = await q.orderBy(changed, 'desc').orderBy('p.id', 'desc').limit(input.limit ?? 50).execute();
     return viewPosts(
       ctx,
       rows.map((r) => r.id),
