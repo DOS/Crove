@@ -16,8 +16,8 @@ CREATE TABLE IF NOT EXISTS crove_social.feed (
   url text NOT NULL CHECK (url ~ '^https?://' AND length(url) <= 2000),
   -- The feed's own title, from its last read.
   title text CHECK (title IS NULL OR length(title) BETWEEN 1 AND 300),
-  -- The channels its drafts are for; checked by the commands (the org's own connections).
-  connection_ids uuid[] NOT NULL DEFAULT '{}' CHECK (cardinality(connection_ids) BETWEEN 1 AND 20),
+  -- The channels its drafts are for; checked by the commands (at least one, of the org's own connections).
+  connection_ids uuid[] NOT NULL DEFAULT '{}' CHECK (cardinality(connection_ids) <= 20),
   paused boolean NOT NULL DEFAULT false,
   failures smallint NOT NULL DEFAULT 0 CHECK (failures BETWEEN 0 AND 100),
   last_checked_at timestamptz,
