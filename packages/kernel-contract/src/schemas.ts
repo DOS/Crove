@@ -749,6 +749,8 @@ export const SOCIAL_VARIANT_STATUSES = [
 ] as const;
 export const SOCIAL_POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled'] as const;
 export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as const;
+// The palette a label's colour comes from (#639).
+export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
 
 const zSocialText = z.string().max(100_000);
 const zSocialTitle = z.string().max(500);
@@ -896,6 +898,8 @@ export const zSocialPost = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   variants: z.array(zSocialVariant),
+  // The post's labels (#639), by label name.
+  labelIds: z.array(zId),
 });
 
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
@@ -915,6 +919,11 @@ export const zSocialSnippet = z.object({
 const zSnippetFields = { name: z.string().trim().min(1).max(100), body: z.string().trim().min(1).max(10_000), provider: z.string().min(1).max(32).nullable(), isTemplate: z.boolean() };
 export const zSocialSnippetCreate = z.strictObject({ ...zSnippetFields, provider: zSnippetFields.provider.optional(), isTemplate: z.boolean().optional() });
 export const zSocialSnippetUpdate = z.strictObject({ snippetId: zId, ...zSnippetFields });
+// A label for posts (#639) and how many posts carry it.
+export const zSocialLabel = z.object({ id: zId, name: z.string(), color: z.enum(SOCIAL_LABEL_COLORS), createdBy: zId, postCount: z.number().int() });
+const zLabelName = z.string().trim().min(1).max(50);
+export const zSocialLabelCreate = z.strictObject({ name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS).optional() });
+export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS) });
 // Client review links (#589): the team's view of a post's links and what clients said through them.
 export const zSocialReviewLinks = z.object({
   links: z.array(z.object({ id: zId, createdBy: zId, createdAt: z.string(), expiresAt: z.string(), revokedAt: z.string().nullable(), changed: z.boolean() })),

@@ -34,6 +34,9 @@ import {
   zSocialSnippet,
   zSocialSnippetCreate,
   zSocialSnippetUpdate,
+  zSocialLabel,
+  zSocialLabelCreate,
+  zSocialLabelUpdate,
   zSocialReviewLinks,
   zSocialActivityItem,
   zSocialQueueSet,
@@ -188,6 +191,8 @@ export const contract = {
             // The Social home's lists: a channel in review; drafts with none in review; went out or stopped.
             stage: z.enum(['review', 'drafts', 'done', 'attention']).optional(),
             connectionId: zId.optional(),
+            // Posts with this label (#639).
+            labelId: zId.optional(),
             // Posts assigned to the viewer (#640).
             assignee: z.literal('me').optional(),
             search: z.string().trim().min(1).max(200).optional(),
@@ -241,6 +246,10 @@ export const contract = {
       editComment: oc.input(z.strictObject({ commentId: zId, body: z.string().trim().min(1).max(4000) })).output(z.object({ commentId: zId, postId: zId })),
       // The post's timeline, newest first: comments, decisions and what happened to it and its channels.
       activity: oc.input(z.object({ postId: zId })).output(z.object({ items: z.array(zSocialActivityItem), more: z.boolean() })),
+      // The post's labels become exactly these (#639); its content and revision stay as they are.
+      setLabels: oc
+        .input(z.strictObject({ postId: zId, labelIds: z.array(zId).max(10) }))
+        .output(z.object({ postId: zId, labelIds: z.array(zId) })),
       // A copy of any post as a new draft, for the channels still connected (#575).
       duplicate: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
       // Repost a published post every N days (7 to 365), each repost sent to review; null stops it.
@@ -274,9 +283,19 @@ export const contract = {
     // How published posts did (S8): the latest capture of each variant published in the last days days (30 by default).
     metrics: {
       // postId: that post's published channels, whenever they went out.
-      summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional() })).output(z.array(zSocialMetricsRow)),
+      // labelId: only posts with that label (#639).
+      summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional(), labelId: zId.optional() })).output(z.array(zSocialMetricsRow)),
       // The window as a CSV file (UTF-8 with a byte order mark); every export is audited.
-      export: oc.input(z.strictObject({ days: z.number().int().min(1).max(365) })).output(z.object({ filename: z.string(), csv: z.string(), truncated: z.boolean() })),
+      export: oc
+        .input(z.strictObject({ days: z.number().int().min(1).max(365), labelId: zId.optional() }))
+        .output(z.object({ filename: z.string(), csv: z.string(), truncated: z.boolean() })),
+    },
+    // Labels for posts (#639): members create them and put them on posts; owners and admins rename and delete them.
+    labels: {
+      list: oc.input(z.object({})).output(z.array(zSocialLabel)),
+      create: oc.input(zSocialLabelCreate).output(z.object({ labelId: zId })),
+      update: oc.input(zSocialLabelUpdate).output(z.object({ labelId: zId })),
+      remove: oc.input(z.strictObject({ labelId: zId })).output(z.object({ labelId: zId })),
     },
     // Saved snippets (#584): members create them and change their own; owners and admins any.
     snippets: {

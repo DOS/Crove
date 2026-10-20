@@ -60,11 +60,13 @@ export interface CroveKernelSchema {
 
 export interface CroveSocialSchema {
   'crove_social.channel_policy': SocialChannelPolicyTable;
+  'crove_social.label': SocialLabelTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
   'crove_social.metric_snapshot': SocialMetricSnapshotTable;
   'crove_social.post': SocialPostTable;
   'crove_social.post_approval': SocialPostApprovalTable;
   'crove_social.post_comment': SocialPostCommentTable;
+  'crove_social.post_label': SocialPostLabelTable;
   'crove_social.post_media': SocialPostMediaTable;
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.queue': SocialQueueTable;
@@ -712,6 +714,16 @@ export interface SocialChannelPolicyTable {
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
+/** crove_social.label */
+export interface SocialLabelTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  name: string;
+  color: Generated<string>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
 /** crove_social.link_preview */
 export interface SocialLinkPreviewTable {
   org_id: ColumnType<string, string, NotGranted>;
@@ -765,6 +777,15 @@ export interface SocialPostCommentTable {
   body: string;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   edited_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
+/** crove_social.post_label */
+export interface SocialPostLabelTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  post_id: ColumnType<string, string, NotGranted>;
+  label_id: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_social.post_media */

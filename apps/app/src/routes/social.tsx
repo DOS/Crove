@@ -14,6 +14,7 @@ import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
+import { PostLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
 import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
 import type { BulkAction } from '../lib/social-bulk.ts';
@@ -59,7 +60,7 @@ function ChannelChips({ post, names }: { post: Post; names: Map<string, string> 
   );
 }
 
-function PostRow({ post, slug, names, right }: { post: Post; slug: string; names: Map<string, string>; right?: string }) {
+function PostRow({ post, slug, names, labels, right }: { post: Post; slug: string; names: Map<string, string>; labels: readonly SocialLabel[]; right?: string }) {
   const t = useTranslations('social');
   return (
     <Link
@@ -70,6 +71,7 @@ function PostRow({ post, slug, names, right }: { post: Post; slug: string; names
       <div className="min-w-0 space-y-1.5">
         <p className="line-clamp-2 text-sm [overflow-wrap:anywhere] text-foreground">{excerpt(post.body) || <span className="text-subtle-foreground">{t('emptyText')}</span>}</p>
         <ChannelChips post={post} names={names} />
+        <PostLabels ids={post.labelIds} labels={labels} />
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {isOverdue(post, Date.now()) && <Badge variant="destructive">{t('assign.overdue')}</Badge>}
@@ -79,15 +81,17 @@ function PostRow({ post, slug, names, right }: { post: Post; slug: string; names
   );
 }
 
-// How published posts did (S8): totals over the window, then each published channel with its latest capture.
-function Metrics({ slug, names }: { slug: string; names: Map<string, string> }) {
+// How published posts did (S8): totals over the window, then each published channel with its latest capture; with a
+// label chosen (#639), only the posts that carry it, on the screen and in the export.
+function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, string>; labelId: string | undefined }) {
   const t = useTranslations('social');
   const f = useFormat();
   const [days, setDays] = useState(30);
-  const rows = useQuery(orpc.social.metrics.summary.queryOptions({ input: { days } }));
+  const label = labelId ? { labelId } : {};
+  const rows = useQuery(orpc.social.metrics.summary.queryOptions({ input: { days, ...label } }));
   // The window as a CSV file, built and audited by the server, saved by the browser.
   const exportCsv = useMutation({
-    mutationFn: () => client.social.metrics.export({ days }),
+    mutationFn: () => client.social.metrics.export({ days, ...label }),
     onSuccess: (file) => {
       const url = URL.createObjectURL(new Blob([file.csv], { type: 'text/csv;charset=utf-8' }));
       const a = document.createElement('a');
@@ -315,7 +319,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   );
 }
 
-function Agenda({ posts, slug, names }: { posts: Post[]; slug: string; names: Map<string, string> }) {
+function Agenda({ posts, slug, names, labels }: { posts: Post[]; slug: string; names: Map<string, string>; labels: readonly SocialLabel[] }) {
   const t = useTranslations('social');
   const f = useFormat();
   // One line per variant going out, grouped by local day.
@@ -352,6 +356,7 @@ function Agenda({ posts, slug, names }: { posts: Post[]; slug: string; names: Ma
                     {v.queueSlotAt && <span>· {t('fromQueue')}</span>}
                     {v.status !== 'scheduled' && <Badge variant={VARIANT_TONE[v.status]}>{t(`status.${v.status}`)}</Badge>}
                   </div>
+                  <PostLabels ids={post.labelIds} labels={labels} />
                 </div>
               </Link>
             ))}
@@ -389,13 +394,15 @@ export function SocialPage() {
     const timer = setTimeout(() => setSearch({ q }), 300);
     return () => clearTimeout(timer);
   }, [text, search.q, setSearch]);
-  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.q ? { search: search.q } : {}), ...(search.mine ? { assignee: 'me' as const } : {}) };
+  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.label ? { labelId: search.label } : {}), ...(search.q ? { search: search.q } : {}), ...(search.mine ? { assignee: 'me' as const } : {}) };
   // The agenda window starts now; a new day does not need a reload to move it, a refetch does.
   const range = useMemo(() => {
     const from = new Date(Date.now() - DAY);
     return { from: from.toISOString(), to: new Date(from.getTime() + (AGENDA_DAYS + 1) * DAY).toISOString() };
   }, []);
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
+  const labels = useLabels();
+  const labelList = labels.data ?? [];
   const me = useQuery(orpc.me.get.queryOptions());
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
   const canWrite = role === 'owner' || role === 'admin' || role === 'member';
@@ -424,10 +431,13 @@ export function SocialPage() {
   const rows = list.data?.pages.flat() ?? [];
   const reviewCount = review.data?.length ?? 0;
   const attentionCount = attention.data?.length ?? 0;
-  const filtered = Boolean(search.channel || search.q || search.from || search.to || search.mine);
+  const filtered = Boolean(search.channel || search.label || search.q || search.from || search.to || search.mine);
+  // The label filter applies to the lists, the calendar and the metrics; the other filters to the lists only.
+  const postFilters = tab === 'upcoming' || listTab !== null;
+  const labelFilter = (postFilters || tab === 'calendar' || tab === 'metrics') && (labelList.length > 0 || Boolean(search.label));
   // Posts picked for a bulk action (#635), in the list on screen; a new tab or filter starts afresh.
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  useEffect(() => setPicked(new Set()), [tab, search.channel, search.q, search.from, search.to, search.mine]);
+  useEffect(() => setPicked(new Set()), [tab, search.channel, search.label, search.q, search.from, search.to, search.mine]);
   const canDecide = role === 'owner' || role === 'admin';
   const bulkActions: readonly BulkAction[] = !canWrite ? [] : listTab === 'review' ? (canDecide ? ['approve', 'cancel'] : ['cancel']) : listTab === 'drafts' ? (canDecide ? ['queue', 'cancel'] : ['cancel']) : listTab === 'attention' ? ['cancel'] : [];
   const toggle = (id: string) => setPicked((now) => { const next = new Set(now); if (next.has(id)) next.delete(id); else next.add(id); return next; });
@@ -449,6 +459,9 @@ export function SocialPage() {
             )}
             <Link to="/o/$slug/social/snippets" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
               {t('snippets.title')}
+            </Link>
+            <Link to="/o/$slug/social/labels" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+              {t('labels.title')}
             </Link>
             {!canWrite ? null : noChannels ? (
               <Button size="lg" disabled>
@@ -483,52 +496,71 @@ export function SocialPage() {
             </TabsTrigger>
           ))}
         </TabsList>
-        {(tab === 'upcoming' || listTab) && (
+        {(postFilters || labelFilter) && (
           <div className="flex flex-wrap items-end gap-3">
-            <label className="text-xs">
-              <span className="text-subtle-foreground">{t('filters.channel')}</span>
-              <NativeSelect className="mt-1 w-56" value={search.channel ?? ''} onChange={(e) => setSearch({ channel: e.target.value || undefined })}>
-                <NativeSelectOption value="">{t('filters.allChannels')}</NativeSelectOption>
-                {(channels.data ?? []).map((c) => (
-                  <NativeSelectOption key={c.id} value={c.id}>
-                    {c.displayName} · {providerName(c.provider)}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </label>
-            <label className="min-w-48 flex-1 text-xs sm:max-w-80">
-              <span className="text-subtle-foreground">{t('filters.search')}</span>
-              <Input type="search" className="mt-1" value={text} placeholder={t('filters.searchPlaceholder')} onChange={(e) => setText(e.target.value)} />
-            </label>
-            {(listTab === 'review' || listTab === 'done') && (
+            {labelFilter && (
+              <label className="text-xs">
+                <span className="text-subtle-foreground">{t('filters.label')}</span>
+                <NativeSelect className="mt-1 w-48" value={search.label ?? ''} onChange={(e) => setSearch({ label: e.target.value || undefined })}>
+                  <NativeSelectOption value="">{t('filters.allLabels')}</NativeSelectOption>
+                  {labelList.map((l) => (
+                    <NativeSelectOption key={l.id} value={l.id}>
+                      {l.name}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </label>
+            )}
+            {postFilters && (
               <>
                 <label className="text-xs">
-                  <span className="text-subtle-foreground">{t('filters.from')}</span>
-                  <Input type="date" className="mt-1 w-44" value={search.from ?? ''} onChange={(e) => setSearch({ from: e.target.value || undefined })} />
+                  <span className="text-subtle-foreground">{t('filters.channel')}</span>
+                  <NativeSelect className="mt-1 w-56" value={search.channel ?? ''} onChange={(e) => setSearch({ channel: e.target.value || undefined })}>
+                    <NativeSelectOption value="">{t('filters.allChannels')}</NativeSelectOption>
+                    {(channels.data ?? []).map((c) => (
+                      <NativeSelectOption key={c.id} value={c.id}>
+                        {c.displayName} · {providerName(c.provider)}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
                 </label>
-                <label className="text-xs">
-                  <span className="text-subtle-foreground">{t('filters.to')}</span>
-                  <Input type="date" className="mt-1 w-44" value={search.to ?? ''} onChange={(e) => setSearch({ to: e.target.value || undefined })} />
+                <label className="min-w-48 flex-1 text-xs sm:max-w-80">
+                  <span className="text-subtle-foreground">{t('filters.search')}</span>
+                  <Input type="search" className="mt-1" value={text} placeholder={t('filters.searchPlaceholder')} onChange={(e) => setText(e.target.value)} />
                 </label>
+                {(listTab === 'review' || listTab === 'done') && (
+                  <>
+                    <label className="text-xs">
+                      <span className="text-subtle-foreground">{t('filters.from')}</span>
+                      <Input type="date" className="mt-1 w-44" value={search.from ?? ''} onChange={(e) => setSearch({ from: e.target.value || undefined })} />
+                    </label>
+                    <label className="text-xs">
+                      <span className="text-subtle-foreground">{t('filters.to')}</span>
+                      <Input type="date" className="mt-1 w-44" value={search.to ?? ''} onChange={(e) => setSearch({ to: e.target.value || undefined })} />
+                    </label>
+                  </>
+                )}
               </>
             )}
-            <label className="flex items-center gap-2 pb-2 text-xs text-muted-foreground">
-              <Checkbox checked={search.mine === true} onCheckedChange={(on) => setSearch({ mine: on === true ? true : undefined })} />
-              {t('assign.mine')}
-            </label>
-            {filtered && (
-              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, q: undefined, from: undefined, to: undefined, mine: undefined })}>
+            {postFilters && (
+              <label className="flex items-center gap-2 pb-2 text-xs text-muted-foreground">
+                <Checkbox checked={search.mine === true} onCheckedChange={(on) => setSearch({ mine: on === true ? true : undefined })} />
+                {t('assign.mine')}
+              </label>
+            )}
+            {(postFilters ? filtered : Boolean(search.label)) && (
+              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, label: undefined, q: undefined, from: undefined, to: undefined, mine: undefined })}>
                 {t('filters.clear')}
               </Button>
             )}
           </div>
         )}
         <TabsContent value="upcoming">
-          {upcoming.isLoading ? <Spinner /> : upcoming.error ? <ErrorText>{errorMessage(upcoming.error)}</ErrorText> : <Agenda posts={upcoming.data ?? []} slug={slug} names={names} />}
+          {upcoming.isLoading ? <Spinner /> : upcoming.error ? <ErrorText>{errorMessage(upcoming.error)}</ErrorText> : <Agenda posts={upcoming.data ?? []} slug={slug} names={names} labels={labelList} />}
         </TabsContent>
-        <TabsContent value="calendar">{tab === 'calendar' && <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} />}</TabsContent>
+        <TabsContent value="calendar">{tab === 'calendar' && <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} labelId={search.label} />}</TabsContent>
         <TabsContent value="metrics">
-          <Metrics slug={slug} names={names} />
+          <Metrics slug={slug} names={names} labelId={search.label} />
         </TabsContent>
         <TabsContent value="library">{tab === 'library' && <Library slug={slug} canWrite={canWrite} />}</TabsContent>
         {(['review', 'attention', 'drafts', 'done'] as const).map((id) => (
@@ -569,7 +601,7 @@ export function SocialPage() {
                       <div key={post.id} className="flex items-center gap-2">
                         {bulkActions.length > 0 && <Checkbox checked={picked.has(post.id)} onCheckedChange={() => toggle(post.id)} aria-label={t('bulk.select', { text: excerpt(post.body, 40) || t('emptyText') })} />}
                         <div className="min-w-0 flex-1">
-                          <PostRow post={post} slug={slug} names={names} right={f.dateTime(post.updatedAt)} />
+                          <PostRow post={post} slug={slug} names={names} labels={labelList} right={f.dateTime(post.updatedAt)} />
                         </div>
                       </div>
                     ))}

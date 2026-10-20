@@ -7,6 +7,9 @@ describe('Social home address (#574)', () => {
     expect(parseSocialSearch({ tab: 'drafts', channel, q: '  khai trương ', from: '2026-10-01', to: '2026-10-31' })).toEqual({ tab: 'drafts', channel, q: 'khai trương', from: '2026-10-01', to: '2026-10-31' });
     expect(parseSocialSearch({ tab: 'nope', channel: 'x', q: '   ', from: '01/10/2026', to: 5 })).toEqual({});
     expect(parseSocialSearch({ q: 'a'.repeat(300) }).q).toHaveLength(200);
+    // A label filter (#639) is a label id or nothing.
+    expect(parseSocialSearch({ tab: 'metrics', label: channel })).toEqual({ tab: 'metrics', label: channel });
+    expect(parseSocialSearch({ label: 'Tết' })).toEqual({});
   });
 
   it('turns local days into a range that includes the last day', () => {

@@ -373,11 +373,14 @@ export const SOCIAL_LINK_PREVIEW_STATUSES = ['pending', 'ready', 'failed'] as co
 export const SOCIAL_LINK_PREVIEW_ERRORS = ['invalid_url', 'blocked', 'dns', 'timeout', 'too_large', 'redirects', 'encoding', 'network', 'http', 'not_html'] as const;
 export type SocialLinkPreviewStatus = (typeof SOCIAL_LINK_PREVIEW_STATUSES)[number];
 export type SocialLinkPreviewError = (typeof SOCIAL_LINK_PREVIEW_ERRORS)[number];
+// The palette a label's colour comes from (#639); the app maps each name to a theme tone.
+export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
 export type SocialVariantStatus = (typeof SOCIAL_VARIANT_STATUSES)[number];
 export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 export type SocialActorOrigin = (typeof SOCIAL_ACTOR_ORIGINS)[number];
 export type SocialDecision = (typeof SOCIAL_DECISIONS)[number];
 export type SocialReviewVerdict = (typeof SOCIAL_REVIEW_VERDICTS)[number];
+export type SocialLabelColor = (typeof SOCIAL_LABEL_COLORS)[number];
 
 export type SocialPostTable = Refine<
   G.SocialPostTable,
@@ -402,6 +405,7 @@ export type SocialLinkPreviewTable = Refine<
     error: ColumnType<SocialLinkPreviewError | null, SocialLinkPreviewError | null | undefined, SocialLinkPreviewError | null>;
   }
 >;
+export type SocialLabelTable = Refine<G.SocialLabelTable, { color: Generated<SocialLabelColor> }>;
 
 export type SocialPostApprovalTable = Refine<
   G.SocialPostApprovalTable,
@@ -445,6 +449,7 @@ type Refined = Tables<{
   'crove_social.post_approval': SocialPostApprovalTable;
   'crove_social.review_feedback': SocialReviewFeedbackTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
+  'crove_social.label': SocialLabelTable;
 }>;
 
 // Every table crove_tenant may read: the generated table type, or its refinement above.

@@ -10,6 +10,7 @@ import { METRIC_NAMES, type Publisher } from '@crove/channel';
 import type { Db } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import type { Trx } from './variants.ts';
+import { labelsOfPosts } from './labels.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // How often a published variant is asked again, and how far back the summary looks by default.
@@ -76,10 +77,10 @@ export interface MetricsRow {
 }
 
 // The latest snapshot of each variant published in the window, newest first; or of one post's published channels,
-// whenever they went out (#578, the post screen).
+// whenever they went out (#578, the post screen). labelId: only posts with that label (#639).
 export const metricsSummary = defineQuery({
   name: 'social.metrics.summary',
-  input: z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional() }),
+  input: z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional(), labelId: zId.optional() }),
   access: ALL,
   handler: async (ctx, input): Promise<MetricsRow[]> => (await latestMetrics(ctx.trx, ctx.orgId, input, SUMMARY_LIMIT)).map(({ text: _text, ...row }) => row),
 });
@@ -88,9 +89,18 @@ export const metricsSummary = defineQuery({
 const SUMMARY_LIMIT = 500;
 export const EXPORT_LIMIT = 10_000;
 
-async function latestMetrics(trx: Trx, orgId: string, input: { days?: number | undefined; postId?: string | undefined }, limit: number): Promise<(MetricsRow & { text: string })[]> {
+interface MetricsFilter {
+  days?: number | undefined;
+  postId?: string | undefined;
+  labelId?: string | undefined;
+}
+
+async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limit: number): Promise<(MetricsRow & { text: string })[]> {
   const days = input.days ?? 30;
   const window = input.postId ? sql`v.post_id = ${input.postId}::uuid` : sql`v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days}::int)`;
+  const labelled = input.labelId
+    ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${input.labelId}::uuid)`
+    : sql``;
   const { rows } = await sql<{
     variant_id: string;
     post_id: string;
@@ -112,7 +122,7 @@ async function latestMetrics(trx: Trx, orgId: string, input: { days?: number | u
       -- The last real answer; an empty snapshot (a failed try, a gone post) only when there is nothing else.
       ORDER BY (m.metrics = '{}'::jsonb), m.captured_at DESC LIMIT 1
     ) s ON true
-    WHERE v.org_id = ${orgId} AND v.status = 'published' AND ${window}
+    WHERE v.org_id = ${orgId} AND v.status = 'published' AND ${window} ${labelled}
     ORDER BY v.published_at DESC
     LIMIT ${limit}`.execute(trx);
   return rows.map((r) => ({
@@ -138,25 +148,28 @@ export function csvCell(value: string | number | null): string {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export function metricsCsv(rows: readonly (MetricsRow & { text?: string })[], channelNames: ReadonlyMap<string, string>): string {
-  const head = ['post_id', 'channel', 'provider', 'published_at', 'url', 'text', ...METRIC_NAMES, 'captured_at'];
+// labelNames: each post's label names (#639), written as one cell joined by "; ".
+export function metricsCsv(rows: readonly (MetricsRow & { text?: string })[], channelNames: ReadonlyMap<string, string>, labelNames: ReadonlyMap<string, readonly string[]> = new Map()): string {
+  const head = ['post_id', 'channel', 'provider', 'published_at', 'url', 'text', 'labels', ...METRIC_NAMES, 'captured_at'];
   const lines = rows.map((r) =>
-    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.text ?? r.excerpt, ...METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt].map(csvCell).join(','),
+    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.text ?? r.excerpt, (labelNames.get(r.postId) ?? []).join('; '), ...METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt]
+      .map(csvCell)
+      .join(','),
   );
   // A byte order mark, so a spreadsheet opens Vietnamese text as UTF-8.
   return `﻿${[head.join(','), ...lines].join('\r\n')}\r\n`;
 }
 
-// The window's metrics as a CSV file (#578): one row per published channel with its latest counts. A command, so
-// every export leaves an audit row.
+// The window's metrics as a CSV file (#578): one row per published channel with its latest counts and its post's
+// labels; labelId: only posts with that label (#639). A command, so every export leaves an audit row.
 export const metricsExport = defineCommand({
   name: 'social.metrics.export',
-  input: z.strictObject({ days: z.number().int().min(1).max(365) }),
+  input: z.strictObject({ days: z.number().int().min(1).max(365), labelId: zId.optional() }),
   risk: 'R1',
   access: ALL,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
-    const rows = await latestMetrics(ctx.trx, ctx.orgId, { days: input.days }, EXPORT_LIMIT + 1);
+    const rows = await latestMetrics(ctx.trx, ctx.orgId, { days: input.days, labelId: input.labelId }, EXPORT_LIMIT + 1);
     const truncated = rows.length > EXPORT_LIMIT;
     if (truncated) rows.length = EXPORT_LIMIT;
     const ids = [...new Set(rows.map((r) => r.connectionId))];
@@ -165,8 +178,10 @@ export const metricsExport = defineCommand({
         ? []
         : (await ctx.trx.selectFrom('crove_kernel.channel_connection').select(['id', 'display_name']).where('org_id', '=', ctx.orgId).where('id', 'in', ids).execute()).map((c) => [c.id, c.display_name] as const),
     );
-    ctx.audit({ days: input.days, rows: rows.length, truncated });
-    return { filename: `social-metrics-${input.days}d-${ctx.now.toISOString().slice(0, 10)}.csv`, csv: metricsCsv(rows, names), truncated };
+    const labels = await labelsOfPosts(ctx.trx, ctx.orgId, [...new Set(rows.map((r) => r.postId))]);
+    const labelNames = new Map([...labels].map(([postId, list]) => [postId, list.map((l) => l.name)] as const));
+    ctx.audit({ days: input.days, rows: rows.length, truncated, ...(input.labelId ? { labelId: input.labelId } : {}) });
+    return { filename: `social-metrics-${input.days}d-${ctx.now.toISOString().slice(0, 10)}.csv`, csv: metricsCsv(rows, names, labelNames), truncated };
   },
 });
 
