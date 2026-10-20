@@ -1401,7 +1401,7 @@ export const vi = {
       settings: 'Nhận thông báo về',
       settingsHint: 'Bỏ chọn những loại bạn không muốn nhận. Chỉ áp dụng cho tài khoản của bạn.',
       mail: 'Gửi cả email cho tôi',
-      mailHint: 'Khi có bài chờ duyệt, bài đã được duyệt, bài đăng lỗi hoặc kênh cần kết nối lại, Crove gửi thêm một email tới địa chỉ của bạn.',
+      mailHint: 'Khi có bài chờ duyệt, bài đã được duyệt, bài đăng lỗi, kênh cần kết nối lại hoặc có người nhắc tên bạn, Crove gửi thêm một email tới địa chỉ của bạn.',
       kinds: {
         review_requested: 'Bài cần duyệt',
         decided: 'Kết quả duyệt bài của bạn',
@@ -1412,6 +1412,7 @@ export const vi = {
         client_answer: 'Ý kiến của khách',
         assigned: 'Bài được giao cho bạn',
         feed_paused: 'Nguồn tin ngừng được đọc',
+        mention: 'Khi có người nhắc tên bạn trong bình luận',
         review_reminder: 'Nhắc bài đang chờ duyệt',
       },
       text: {
@@ -1423,6 +1424,7 @@ export const vi = {
         needs_attention: 'Bài trên {provider} cần kiểm tra lại',
         channel_expired: 'Kênh {channel} đã hết hạn kết nối, hãy kết nối lại',
         comment: '{actor} đã bình luận',
+        mention: '{actor} đã nhắc tên bạn trong một bình luận',
         client_approved: 'Khách {name} đồng ý với bài',
         client_changes_requested: 'Khách {name} muốn sửa bài',
         client_comment: 'Khách {name} đã góp ý',
@@ -1814,7 +1816,9 @@ export const vi = {
     activity: {
       title: 'Bình luận và hoạt động',
       hint: 'Bình luận chỉ dành cho nhóm, không bao giờ được đăng lên kênh.',
-      placeholder: 'Viết bình luận cho nhóm',
+      placeholder: 'Viết bình luận cho nhóm; gõ @ để nhắc tên một người',
+      mentionList: 'Thành viên có thể nhắc tên',
+      tooLong: 'Bình luận quá dài khi tính cả phần nhắc tên; hãy giữ dưới {max, number} ký tự',
       about: 'Về',
       wholePost: 'Cả bài',
       send: 'Bình luận',
