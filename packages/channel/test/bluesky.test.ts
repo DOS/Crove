@@ -73,7 +73,7 @@ describe('Bluesky connect', () => {
 describe('Bluesky on its own PDS (#792)', () => {
   const OWN = 'https://pds.example.org';
   const refused = { status: 401, body: { error: 'AuthenticationRequired', message: 'Invalid identifier or password' } };
-  const doc = (pds: string) => ({ body: { id: DID, service: [{ id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: pds }] } });
+  const doc = (pds: string, alsoKnownAs = ['at://quan-a.bsky.social']) => ({ body: { id: DID, alsoKnownAs, service: [{ id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: pds }] } });
   const own = (pds = OWN) => ({
     bluesky: xrpc({
       'POST bsky.social/xrpc/com.atproto.server.createSession': [refused, refused],
@@ -121,6 +121,15 @@ describe('Bluesky on its own PDS (#792)', () => {
     }
   });
 
+  it('names the account by its DID when the DID document does not claim the handle its PDS reports', async () => {
+    const bluesky = xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [refused],
+      'GET public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle': [{ body: { did: DID } }],
+      [`GET plc.directory/${DID}`]: [doc(OWN, ['at://someone-else.example.org'])],
+    });
+    const egress = xrpc({ 'POST pds.example.org/xrpc/com.atproto.server.createSession': [session(OWN)] });
+    expect(await connectBluesky({ handle: 'quan-a.example.org', appPassword: APP_PASSWORD }, bluesky.fetchImpl, egress.fetchImpl)).toMatchObject({ displayName: `@${DID}` });
+  });
   it('never trusts a session that signs in another account', async () => {
     const { bluesky } = own();
     const egress = xrpc({ 'POST pds.example.org/xrpc/com.atproto.server.createSession': [{ body: { ...session(OWN).body, did: 'did:plc:someoneelse0000000000000' } }] });

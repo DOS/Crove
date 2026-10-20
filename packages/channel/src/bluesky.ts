@@ -20,6 +20,8 @@ const PUBLIC_APPVIEW = 'https://public.api.bsky.app';
 // The did:plc directory: DID documents of did:plc accounts, Bluesky-hosted or not.
 const PLC_DIRECTORY = 'https://plc.directory';
 const RESOLVED_MS = 10 * 60_000;
+// Lookups kept at most, so connecting many accounts cannot grow the worker's memory without end.
+const RESOLVED_MAX = 1000;
 const DID_PLC = /^did:plc:[a-z0-9]{8,64}$/;
 const DID_WEB = /^did:web:([a-z0-9.-]{4,253})$/;
 // A host name with a dot, never an address: a PDS is reached by its domain, as a Mastodon instance is.
@@ -109,6 +111,7 @@ export const BLUESKY_HANDLE = /^(?=.{3,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])
 
 interface DidDocument {
   id?: unknown;
+  alsoKnownAs?: unknown;
   service?: { id?: unknown; type?: unknown; serviceEndpoint?: unknown }[];
 }
 
@@ -118,10 +121,17 @@ function pdsOf(doc: DidDocument | null | undefined, did: string): string | null 
   return pdsOrigin(service?.serviceEndpoint);
 }
 
+// A resolved identity: its DID, its PDS and the handles its DID document claims (at://handle in alsoKnownAs).
+interface Own {
+  did: string;
+  pds: string;
+  handles: string[];
+}
+
 class Xrpc {
   private readonly fetch: Fetch;
   private readonly egress: Fetch | undefined;
-  private readonly resolved = new Map<string, { did: string; pds: string; at: number }>();
+  private readonly resolved = new Map<string, Own & { at: number }>();
 
   // egress: the kernel's guarded fetch, for a PDS outside Bluesky's own hosts; without it those accounts are refused.
   constructor(fetchImpl?: Fetch, egress?: Fetch) {
@@ -165,7 +175,7 @@ class Xrpc {
 
   // The account's DID and PDS: a handle through the public AppView, the DID document from the PLC directory or the
   // did:web host. null when the identity cannot be read; the caller then signs in through bsky.social as before.
-  private async resolve(identifier: string): Promise<{ did: string; pds: string } | null> {
+  private async resolve(identifier: string): Promise<Own | null> {
     let did = identifier;
     if (!identifier.startsWith('did:')) {
       const answer = await this.call<{ did?: unknown }>(PUBLIC_APPVIEW, 'GET', 'com.atproto.identity.resolveHandle', { params: { handle: identifier } }).catch(() => null);
@@ -178,11 +188,12 @@ class Xrpc {
     const doc = await this.request<DidDocument>(docUrl, 'GET').catch(() => null);
     if (!doc || doc.id !== did) return null;
     const pds = pdsOf(doc, did);
-    return pds ? { did, pds } : null;
+    const handles = Array.isArray(doc.alsoKnownAs) ? doc.alsoKnownAs.filter((a): a is string => typeof a === 'string' && a.startsWith('at://')).map((a) => a.slice(5).toLowerCase()) : [];
+    return pds ? { did, pds, handles } : null;
   }
 
   // A resolution kept from an earlier call, while it is fresh.
-  private kept(identifier: string): { did: string; pds: string } | null {
+  private kept(identifier: string): Own | null {
     const kept = this.resolved.get(identifier);
     return kept && Date.now() - kept.at < RESOLVED_MS ? kept : null;
   }
@@ -212,7 +223,7 @@ class Xrpc {
   }
 
   // createSession on base. own: the identity resolved for this login (a PDS outside Bluesky), or null.
-  private async open(base: string, identifier: string, appPassword: string, own: { did: string; pds: string } | null): Promise<Session> {
+  private async open(base: string, identifier: string, appPassword: string, own: Own | null): Promise<Session> {
     let answer: { did?: unknown; handle?: unknown; accessJwt?: unknown; didDoc?: DidDocument };
     try {
       answer = await this.call(base, 'POST', 'com.atproto.server.createSession', { json: { identifier, password: appPassword } });
@@ -235,10 +246,17 @@ class Xrpc {
     if (!isBlueskyHost(host) && pds !== own?.pds) throw new BlueskyError(400, 'UnsupportedPds', `accounts hosted on ${host} are not supported`);
     if (own) {
       const found = { ...own, at: Date.now() };
+      // Expired lookups go first, then the oldest, so the map stays under its cap.
+      for (const [key, value] of this.resolved) if (found.at - value.at >= RESOLVED_MS) this.resolved.delete(key);
+      while (this.resolved.size >= RESOLVED_MAX - 1) this.resolved.delete(this.resolved.keys().next().value as string);
       this.resolved.set(identifier, found);
       this.resolved.set(answer.did, found);
     }
-    return { did: answer.did, handle: typeof answer.handle === 'string' ? answer.handle : identifier, accessJwt: answer.accessJwt, pds, scope: tokenScope(answer.accessJwt) };
+    // A PDS outside Bluesky says what the account's handle is; it is shown only when the DID document claims it too,
+    // else the account is named by its DID.
+    const said = typeof answer.handle === 'string' ? answer.handle.toLowerCase() : null;
+    const handle = own ? (said && own.handles.includes(said) ? said : answer.did) : (said ?? identifier);
+    return { did: answer.did, handle, accessJwt: answer.accessJwt, pds, scope: tokenScope(answer.accessJwt) };
   }
 }
 
