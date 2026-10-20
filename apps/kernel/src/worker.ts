@@ -11,7 +11,8 @@ import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, runCommentJob, runPublishJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, runCommentJob, runPublishJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders } from '@crove/mod-social';
+import { sweepFeeds } from './feeds.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
@@ -518,6 +519,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const reminderTimer = deps.runtime.installed('social') ? setInterval(() => void reminderSweep(), REMINDER_SWEEP_MS) : null;
   if (reminderTimer) void reminderSweep();
 
+  // Blog feeds (#708): every quarter hour, the feeds due for their hourly read; new items become drafts.
+  let readingFeeds = false;
+  const feedSweep = async () => {
+    if (readingFeeds) return;
+    readingFeeds = true;
+    try {
+      const drafted = await sweepFeeds({ runtime: deps.runtime, workerDb: deps.workerDb, extract: deps.extract });
+      if (drafted > 0) console.log(`[social-feeds] drafted ${drafted}`);
+    } catch (error) {
+      console.error('[social-feeds] sweep', error);
+    } finally {
+      readingFeeds = false;
+    }
+  };
+  const feedTimer = deps.runtime.installed('social') ? setInterval(() => void feedSweep(), FEED_SWEEP_MS) : null;
+  if (feedTimer) void feedSweep();
+
   // Channel tokens are renewed before they expire (S6.4), whatever module uses the channel.
   const refreshers = channels?.refreshers ?? {};
   let refreshing = false;
@@ -743,6 +761,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (socialTimer) clearInterval(socialTimer);
     if (evergreenTimer) clearInterval(evergreenTimer);
     if (reminderTimer) clearInterval(reminderTimer);
+    if (feedTimer) clearInterval(feedTimer);
     if (refreshTimer) clearInterval(refreshTimer);
     if (metricsTimer) clearInterval(metricsTimer);
     if (accountTimer) clearInterval(accountTimer);

@@ -31,6 +31,7 @@ import {
   zSocialChannelInsights,
   zSocialBioPage,
   zSocialBioSave,
+  zSocialFeed,
   zSocialIdea,
   zSocialIdeaCreate,
   zSocialIdeaUpdate,
@@ -324,6 +325,13 @@ export const contract = {
     bio: {
       get: oc.input(z.object({})).output(zSocialBioPage.nullable()),
       save: oc.input(zSocialBioSave).output(z.object({ pageId: zId, slug: z.string() })),
+    },
+    // Blog feeds that become drafts (#708): owners and admins add, change, pause and remove them; everyone reads them.
+    feeds: {
+      list: oc.input(z.object({})).output(z.array(zSocialFeed)),
+      add: oc.input(z.strictObject({ url: z.url({ protocol: /^https?$/ }).max(2000), connectionIds: z.array(zId).min(1).max(20) })).output(z.object({ feedId: zId })),
+      update: oc.input(z.strictObject({ feedId: zId, connectionIds: z.array(zId).min(1).max(20).optional(), paused: z.boolean().optional() })).output(z.object({ feedId: zId })),
+      remove: oc.input(z.strictObject({ feedId: zId })).output(z.object({ feedId: zId })),
     },
     // Saved snippets (#584): members create them and change their own; owners and admins any.
     snippets: {

@@ -238,6 +238,26 @@ describe('validateVariant', () => {
     expect(codes('facebook_page', { poll: { options: ['a', 'b'] }, topicTag: 'Ăn uống' })).toEqual(['POLL_NOT_SUPPORTED', 'TOPIC_TAG_NOT_SUPPORTED']);
   });
 
+  it('checks Google Business Profile posts, and refuses their settings elsewhere (#709)', () => {
+    const codes = (provider: 'google_business' | 'facebook_page', gbp: unknown, linkUrl: string | null = 'https://tiembanh.example/') =>
+      validateVariant({ provider, body: 'Bánh mới', title: null, media: [], linkUrl, settings: { gbp } }).map((i) => i.code);
+    const day = { startDate: '2026-09-25', endDate: '2026-09-26' };
+    expect(codes('google_business', { topic: 'STANDARD', cta: 'ORDER' })).toEqual([]);
+    expect(codes('google_business', { topic: 'EVENT', event: { title: 'Trung thu', ...day, startTime: '18:30' } })).toEqual([]);
+    expect(codes('google_business', { topic: 'OFFER', event: day, offer: { couponCode: 'SALE' } })).toEqual([]);
+    expect(codes('google_business', { topic: 'EVENT', event: day })).toEqual(['GBP_INVALID']);
+    expect(codes('google_business', { topic: 'OFFER', event: { startDate: '2026-09-26', endDate: '2026-09-25' } })).toEqual(['GBP_INVALID']);
+    expect(codes('google_business', { topic: 'EVENT', event: { title: 'x', ...day, startTime: '25:00' } })).toEqual(['GBP_INVALID']);
+    expect(codes('google_business', { topic: 'PRODUCT' })).toEqual(['GBP_INVALID']);
+    expect(codes('google_business', { cta: 'SHOP' }, null)).toEqual(['GBP_CTA_NEEDS_LINK']);
+    expect(codes('google_business', { cta: 'CALL' }, null)).toEqual([]);
+    expect(codes('facebook_page', { topic: 'STANDARD' })).toEqual(['GBP_NOT_SUPPORTED']);
+    // One photo at most, JPEG or PNG; no video.
+    const photo = (mime: string): MediaItem => ({ kind: 'image', mime, sizeBytes: 1000, durationSeconds: null });
+    expect(validateVariant({ provider: 'google_business', body: 'x', title: null, media: [photo('image/jpeg'), photo('image/png')] }).map((i) => i.code)).toEqual(['TOO_MANY_MEDIA']);
+    expect(validateVariant({ provider: 'google_business', body: 'x', title: null, media: [photo('image/webp')] }).map((i) => i.code)).toEqual(['IMAGE_TYPE_NOT_ALLOWED']);
+    expect(validateVariant({ provider: 'google_business', body: 'x'.repeat(1501), title: null, media: [] }).map((i) => i.code)).toEqual(['TEXT_TOO_LONG']);
+  });
   it('refuses images mixed with video where the channel does not mix them', () => {
     const codes = validateVariant({ provider: 'facebook_page', body: '', title: null, media: [jpeg(), mp4()] }).map((i) => i.code);
     expect(codes).toEqual(['MEDIA_MIX_NOT_ALLOWED']);

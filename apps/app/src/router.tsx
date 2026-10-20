@@ -30,6 +30,7 @@ import { SocialNotificationsPage } from './routes/social-notifications.tsx';
 import { SocialLabelsPage } from './routes/social-labels.tsx';
 import { SocialIdeasPage } from './routes/social-ideas.tsx';
 import { SocialBioPage } from './routes/social-bio.tsx';
+import { SocialFeedsPage } from './routes/social-feeds.tsx';
 import { OCCASION_IDS } from './lib/social-occasions.ts';
 import { SocialReviewPage } from './routes/social-review.tsx';
 import { SocialReportPage } from './routes/social-report.tsx';
@@ -236,6 +237,7 @@ const socialNotificationsRoute = createRoute({ getParentRoute: () => socialRoute
 const socialLabelsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'labels', component: SocialLabelsPage });
 const socialIdeasRoute = createRoute({ getParentRoute: () => socialRoute, path: 'ideas', component: SocialIdeasPage });
 const socialBioRoute = createRoute({ getParentRoute: () => socialRoute, path: 'bio', component: SocialBioPage });
+const socialFeedsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'feeds', component: SocialFeedsPage });
 const socialPostRoute = createRoute({ getParentRoute: () => socialRoute, path: '$id', component: SocialPostPage });
 // ?invite=<email> fills the invite form: onboarding sends a firm here to invite the new client's contact (issue #324).
 const settingsRoute = createRoute({
@@ -261,6 +263,7 @@ const routeTree = rootRoute.addChildren([
   clientsRoute,
   oauthCallbackRoute,
   orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vouchersRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialBioRoute, socialNotificationsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vouchersRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialFeedsRoute, socialNotificationsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });
