@@ -12,6 +12,7 @@ export * from './bluesky.ts';
 export * from './threads.ts';
 export * from './linkedin.ts';
 export * from './google-business.ts';
+export * from './telegram.ts';
 export * from './youtube.ts';
 export * from './tiktok.ts';
 export * from './x.ts';
@@ -31,6 +32,7 @@ export const CHANNEL_PROVIDERS = [
   'x',
   'bluesky',
   'google_business',
+  'telegram',
 ] as const;
 export type ChannelProviderId = (typeof CHANNEL_PROVIDERS)[number];
 

@@ -23,6 +23,7 @@ export const UTM_SOURCE: Readonly<Record<Provider, string>> = {
   x: 'x',
   bluesky: 'bluesky',
   google_business: 'google',
+  telegram: 'telegram',
 };
 
 // Letters with their marks, digits, spaces and common punctuation; the value is percent-encoded in the link anyway.

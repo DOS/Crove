@@ -275,6 +275,16 @@ export function SocialChannelsPage() {
       void queryClient.invalidateQueries();
     },
   });
+  // Telegram: a bot token and the channel, checked by the server and sealed; the form forgets the token.
+  const telegramOn = getConfig().channels?.telegram ?? false;
+  const [tg, setTg] = useState({ botToken: '', channel: '' });
+  const connectTelegram = useMutation({
+    mutationFn: () => client.channels.connectTelegram({ botToken: tg.botToken.trim(), channel: tg.channel.trim() }),
+    onSuccess: () => {
+      setTg({ botToken: '', channel: '' });
+      void queryClient.invalidateQueries();
+    },
+  });
   // The provider's dialog runs in this tab; it comes back to the callback screen, which finishes the attempt.
   const start = useMutation({
     mutationFn: (provider: OAuthProvider) => client.channels.oauthStart({ provider }),
@@ -286,6 +296,7 @@ export function SocialChannelsPage() {
   const waiting = useQuery(orpc.social.channels.waiting.queryOptions({ input: {} }));
   const pausedOn = new Map((waiting.data ?? []).map((w) => [w.connectionId, w.paused]));
   const blueskyForm = useRef<HTMLInputElement>(null);
+  const telegramForm = useRef<HTMLInputElement>(null);
   // Reconnecting connects the same account again: the provider's dialog, or the Bluesky form with its handle.
   const reconnect = (c: Channel) => {
     if (c.provider === 'bluesky') {
@@ -293,9 +304,13 @@ export function SocialChannelsPage() {
       blueskyForm.current?.focus();
       return;
     }
+    if (c.provider === 'telegram') {
+      telegramForm.current?.focus();
+      return;
+    }
     if (oauth.includes(c.provider as OAuthProvider)) start.mutate(c.provider as OAuthProvider);
   };
-  const canReconnect = (c: Channel) => isAdmin && c.status !== 'revoked' && (c.provider === 'bluesky' ? blueskyOn : oauth.includes(c.provider as OAuthProvider));
+  const canReconnect = (c: Channel) => isAdmin && c.status !== 'revoked' && (c.provider === 'bluesky' ? blueskyOn : c.provider === 'telegram' ? telegramOn : oauth.includes(c.provider as OAuthProvider));
   const disconnect = useMutation({
     mutationFn: (connectionId: string) => client.channels.disconnect({ connectionId, idempotencyKey: crypto.randomUUID() }),
     onSuccess: () => {
@@ -452,6 +467,26 @@ export function SocialChannelsPage() {
                 {t('connectWith', { provider: providerName('bluesky') })}
               </Button>
               {connectBluesky.error && <ErrorText>{errorMessage(connectBluesky.error)}</ErrorText>}
+            </form>
+          )}
+          {telegramOn && isAdmin && (
+            <form
+              className="space-y-2 border-t pt-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (tg.botToken.trim() && tg.channel.trim()) connectTelegram.mutate();
+              }}
+            >
+              <p className="text-sm font-medium text-foreground">{providerName('telegram')}</p>
+              <Label htmlFor="tg-token">{t('telegramBotToken')}</Label>
+              <Input id="tg-token" ref={telegramForm} type="password" autoComplete="off" value={tg.botToken} placeholder="123456789:AA..." onChange={(e) => setTg({ ...tg, botToken: e.target.value })} />
+              <Label htmlFor="tg-channel">{t('telegramChannel')}</Label>
+              <Input id="tg-channel" autoComplete="off" value={tg.channel} placeholder="@tenkenh" onChange={(e) => setTg({ ...tg, channel: e.target.value })} />
+              <p className="text-xs text-subtle-foreground">{t('telegramHint')}</p>
+              <Button type="submit" variant="outline" size="sm" disabled={!tg.botToken.trim() || !tg.channel.trim() || connectTelegram.isPending}>
+                {t('connectWith', { provider: providerName('telegram') })}
+              </Button>
+              {connectTelegram.error && <ErrorText>{errorMessage(connectTelegram.error)}</ErrorText>}
             </form>
           )}
         </Card>
