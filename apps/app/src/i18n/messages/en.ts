@@ -2061,6 +2061,7 @@ export const en = {
     composeSubtitle: 'Write the shared text, pick channels, and write per channel where needed.',
     sharedText: 'Shared text',
     sharedTextPlaceholder: 'What do you want to say?',
+    hashtagSuggestions: 'Hashtags that did well:',
     titleField: 'Title',
     titlePlaceholder: 'Title (YouTube, Zalo OA)',
     link: 'Link',
