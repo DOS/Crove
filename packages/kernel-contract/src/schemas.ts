@@ -846,7 +846,7 @@ export const zSocialQueueSet = z.strictObject({
   timeZone: z.string().min(1).max(64),
   paused: z.boolean().optional(),
   slots: z
-    .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional() }))
+    .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional(), labelId: zId.nullable().optional() }))
     .max(100),
 });
 
@@ -1055,7 +1055,7 @@ export const zSocialQueue = z.object({
   queueId: zId.nullable(),
   timeZone: z.string().nullable(),
   paused: z.boolean(),
-  slots: z.array(z.object({ weekday: z.number().int(), minute: z.number().int(), label: z.string().nullable(), active: z.boolean() })),
+  slots: z.array(z.object({ weekday: z.number().int(), minute: z.number().int(), label: z.string().nullable(), labelId: zId.nullable(), active: z.boolean() })),
   nextFree: z.array(z.string()),
 });
 

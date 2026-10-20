@@ -84,6 +84,23 @@ describe('slots', () => {
     expect(nextFreeSlot({ timeZone: HCM, slots: [] }, monday9, new Set())).toBeNull();
   });
 
+  it('keeps a slot of a content category for its label, and gives other posts the open slots (#745)', () => {
+    const wednesday = Date.UTC(2026, 9, 21, 5, 30);
+    const friday = Date.UTC(2026, 9, 23, 13, 0);
+    const labelled: QueueSpec = { timeZone: HCM, slots: queue.slots.map((s) => (s.weekday === 3 ? { ...s, labelId: 'promo' } : s)) };
+    // A promotion takes Wednesday, its own, though Monday is free and sooner.
+    expect(nextFreeSlot(labelled, monday9 - MINUTE, new Set(), 366, new Set(['promo']))).toBe(wednesday);
+    // Its own taken this week, it takes next week's: a category keeps its day.
+    expect(nextFreeSlot(labelled, monday9 - MINUTE, new Set([wednesday]), 366, new Set(['promo']))).toBe(wednesday + 7 * DAY);
+    // With no slot of its own within the horizon, it takes the first open one.
+    expect(nextFreeSlot(labelled, monday9 - MINUTE, new Set([wednesday]), 1, new Set(['promo']))).toBe(monday9);
+    // A post without the label never takes Wednesday.
+    expect(nextFreeSlot(labelled, monday9 - MINUTE, new Set())).toBe(monday9);
+    expect(nextFreeSlot(labelled, monday9 - MINUTE, new Set([monday9]), 366, new Set(['tips']))).toBe(friday);
+    // Placing: a post holding a slot kept for a label it does not have moves to an open one.
+    const placed = placeQueued(labelled, [{ id: 'a', slotAt: wednesday, labelIds: ['promo'] }, { id: 'b', slotAt: wednesday + 7 * DAY }], monday9 - MINUTE);
+    expect(placed).toEqual([{ id: 'a', slotAt: wednesday }, { id: 'b', slotAt: monday9 }]);
+  });
   it('never returns a taken slot, a non-slot, or a time before the start', () => {
     fc.assert(
       fc.property(

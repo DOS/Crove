@@ -1036,6 +1036,7 @@ export interface SocialQueueSlotTable {
   label: string | null;
   active: Generated<boolean>;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  label_id: string | null;
 }
 
 /** crove_social.queue */
