@@ -166,7 +166,7 @@ describe('Pinterest video pins (#813)', () => {
     const api = pinterest(routes);
     const uploads: { url: string; body: unknown }[] = [];
     const fetchImpl: Fetch = async (url, init) => {
-      if (new URL(url).hostname.endsWith('amazonaws.com')) {
+      if (new URL(url).hostname === 'pinterest-media-upload.s3-accelerate.amazonaws.com') {
         uploads.push({ url, body: init?.body });
         return new Response(null, { status: uploadStatus });
       }
