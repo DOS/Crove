@@ -43,6 +43,8 @@ const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_social.bio_click',
   'crove_social.bio_page',
+  'crove_social.report_schedule',
+  'crove_social.report_schedule_run',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -124,6 +126,17 @@ const MUTE_KINDS = ['review_requested', 'decided', 'failed', 'comment'] as const
 const muteRows = new Map<string, number>();
 const socialPostRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), body: 'RLS matrix post' });
 const socialLabelRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), name: `rls-${tag()}`, color: 'blue', created_by: o.owner });
+const socialReportScheduleRow = (o: { id: string; owner: string }) => ({
+  org_id: o.id,
+  id: randomUUID(),
+  name: 'RLS matrix schedule',
+  cadence: 'weekly',
+  weekday: 1,
+  period: 'previous_week',
+  recipients: '{rls@example.com}',
+  next_run_at: new Date(Date.now() + 86_400_000).toISOString(),
+  created_by: o.owner,
+});
 const socialFeedRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), url: `https://rls-${tag()}.example/feed.xml`, created_by: o.owner });
 const socialBioPageRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), slug: `rls-${tag()}`, title: 'RLS matrix bio', created_by: o.owner });
 const socialIdeaRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), title: 'RLS matrix idea', stage: 'new', created_by: o.owner });
@@ -671,6 +684,18 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => ({
       row: { org_id: o.id, id: randomUUID(), token_sha256: hex64(), period_start: '2026-10-01T00:00:00Z', period_end: '2026-11-01T00:00:00Z', created_by: o.owner, expires_at: new Date(Date.now() + 86_400_000).toISOString() },
     }),
+  },
+  // A schedule that mails the client report (#704): weekly or monthly, its period, channels and recipients.
+  'crove_social.report_schedule': { make: (o) => ({ row: socialReportScheduleRow(o) }) },
+  // One time a schedule sent (or a test send): the period, written by the worker or an owner's test.
+  'crove_social.report_schedule_run': {
+    make: (o) => {
+      const schedule = socialReportScheduleRow(o);
+      return {
+        setup: [{ table: 'crove_social.report_schedule', values: schedule }],
+        row: { org_id: o.id, id: randomUUID(), schedule_id: schedule.id, kind: 'scheduled', period_start: '2026-10-12T00:00:00Z', period_end: '2026-10-19T00:00:00Z' },
+      };
+    },
   },
   // What a client said through a review link (#589): only the review definer adds rows, for a client with the link;
   // members read them.
