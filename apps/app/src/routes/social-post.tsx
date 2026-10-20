@@ -673,6 +673,30 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
   }
 }
 
+const POST_METRICS = ['reach', 'impressions', 'views', 'reactions', 'comments', 'shares', 'saves', 'clicks'] as const;
+
+// A published channel's latest counts, as the platform reported them; a count it does not report is left out.
+function VariantMetrics({ row }: { row: { metrics: Record<string, number>; capturedAt: string | null } | undefined }) {
+  const t = useTranslations('social');
+  const f = useFormat();
+  if (!row?.capturedAt) return <p className="text-subtle-foreground">{t('metricsNotYet')}</p>;
+  const shown = POST_METRICS.filter((m) => row.metrics[m] !== undefined);
+  if (shown.length === 0) return <p className="text-subtle-foreground">{t('metricsNone', { when: f.dateTime(row.capturedAt) })}</p>;
+  return (
+    <div className="space-y-1">
+      <dl className="flex flex-wrap gap-x-4 gap-y-1">
+        {shown.map((m) => (
+          <div key={m} className="flex gap-1">
+            <dt>{t(`metric.${m}`)}</dt>
+            <dd className="font-medium text-foreground tabular-nums">{f.number(row.metrics[m] ?? 0)}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="text-subtle-foreground">{t('metricsAt', { when: f.dateTime(row.capturedAt) })}</p>
+    </div>
+  );
+}
+
 // Each post gets fresh page state: the route keeps the page mounted when it opens another post (a repost, its source).
 export function SocialPostPage() {
   const { slug, id: postId } = useParams({ strict: false }) as { slug: string; id: string };
@@ -685,6 +709,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const { canDecide, canWrite } = useRole(slug);
   const navigate = useNavigate();
   const post = useQuery(orpc.social.posts.get.queryOptions({ input: { postId } }));
+  // The latest counts of each published channel (#578).
+  const metrics = useQuery({ ...orpc.social.metrics.summary.queryOptions({ input: { postId } }), enabled: post.data?.variants.some((v) => v.status === 'published') ?? false });
   const channels = useQuery(orpc.channels.list.queryOptions({ input: { includeRevoked: true } }));
   const names = useMemo(() => new Map((channels.data ?? []).map((c: Channel) => [c.id, c.displayName])), [channels.data]);
   const [base, setBase] = useState<Base | null>(null);
@@ -803,6 +829,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
     }
   };
   const published = p.variants.some((v) => v.status === 'published');
+  const metricsOf = new Map((metrics.data ?? []).map((r) => [r.variantId, r]));
   const error = save.error ?? submit.error ?? repost.error ?? duplicate.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
   const reviewable = !dirty && !stale;
 
@@ -905,6 +932,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                         {t('openPost')}
                       </a>
                     )}
+                    {v.status === 'published' && <VariantMetrics row={metricsOf.get(v.id)} />}
                     <div className="flex flex-wrap gap-2">
                       {canDecide && (v.status === 'failed' || v.status === 'needs_attention') && (
                         <Button variant="outline" size="sm" disabled={retry.isPending} onClick={() => retry.mutate(v.id)}>
