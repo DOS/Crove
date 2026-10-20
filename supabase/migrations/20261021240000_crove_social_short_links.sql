@@ -61,7 +61,7 @@ BEGIN
   FROM crove_social.short_link l
   JOIN crove_kernel.tenant t ON t.org_id = l.org_id AND t.status = 'active'
   WHERE l.code = p_code;
-  IF v_link.id IS NULL THEN
+  IF NOT FOUND THEN
     RETURN NULL;
   END IF;
   IF coalesce(p_count, false) THEN

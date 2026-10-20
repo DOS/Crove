@@ -17,5 +17,11 @@ describe('short links (#706)', () => {
     expect(link.url).toBe('https://crove.example/l/AbCdEfGhIjKl');
     expect(shortened({ body: 'Xem tại https://shop.example/a?utm_source=facebook nhé', linkUrl: link.target }, link)).toEqual({ body: 'Xem tại https://crove.example/l/AbCdEfGhIjKl nhé', linkUrl: link.url });
     expect(shortened({ body: 'Không có liên kết', linkUrl: null }, link)).toEqual({ body: 'Không có liên kết', linkUrl: null });
+    // A longer link the target begins, and the target inside a word, stay as they are; the whole link, even in brackets
+    // or before a full stop, is replaced.
+    const site = { target: 'https://shop.example', url: 'https://crove.example/l/AbCdEfGhIjKl' };
+    expect(shortened({ body: 'Trang chủ https://shop.example. Bài https://shop.example/a và (https://shop.example) xhttps://shop.example', linkUrl: site.target }, site).body).toBe(
+      'Trang chủ https://crove.example/l/AbCdEfGhIjKl. Bài https://shop.example/a và (https://crove.example/l/AbCdEfGhIjKl) xhttps://shop.example',
+    );
   });
 });

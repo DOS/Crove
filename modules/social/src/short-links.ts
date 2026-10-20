@@ -27,10 +27,32 @@ export function shortUrl(publicUrl: string, code: string): string {
   return `${base}/l/${code}`;
 }
 
+// Where the text holds the link as a whole: after the start, a space or an opening bracket or quote, and before the end,
+// a space, a closing bracket or quote, or sentence punctuation. A longer link it begins (the same site's other pages)
+// is left alone.
+const BEFORE = new Set([' ', '\n', '\t', '(', '[', '"', "'", '<']);
+const AFTER = new Set([' ', '\n', '\t', ')', ']', '"', "'", '>', ',', '.', '!', '?', ';', ':']);
+function replaceWhole(text: string, target: string, replacement: string): string {
+  let out = '';
+  let from = 0;
+  for (let at = text.indexOf(target); at >= 0; at = text.indexOf(target, at + target.length)) {
+    const before = at === 0 ? undefined : text[at - 1];
+    const after = text[at + target.length];
+    // Punctuation counts as an end only when the text ends or a space follows it.
+    const next = text[at + target.length + 1];
+    const ends = after === undefined || (AFTER.has(after) && (!'.,!?;:'.includes(after) || next === undefined || next === ' ' || next === '\n'));
+    if ((before === undefined || BEFORE.has(before)) && ends) {
+      out += text.slice(from, at) + replacement;
+      from = at + target.length;
+    }
+  }
+  return out + text.slice(from);
+}
+
 // The content as it goes out with its short link: the link replaced, and so is the same link where the text holds it.
 export function shortened<T extends { body: string; linkUrl: string | null }>(content: T, link: { target: string; url: string }): T {
   if (!content.linkUrl) return content;
-  return { ...content, linkUrl: link.url, body: content.body.split(link.target).join(link.url) };
+  return { ...content, linkUrl: link.url, body: replaceWhole(content.body, link.target, link.url) };
 }
 
 // The short link of a publish step: the variant's for its revision when it has one; on a first call, a new one when its
@@ -65,5 +87,7 @@ export async function withShortLink(ctx: CommandContext, w: PublishWork, revisio
       .executeTakeFirst();
     if (row) return { ...w, shortLink: { code: row.code, target: row.target_url } };
   }
-  return w;
+  // Both tries clashed (a code, or another step that made the variant's link meanwhile): the variant's own, if any.
+  const made = await ctx.trx.selectFrom('crove_social.short_link').select(['code', 'target_url']).where('org_id', '=', ctx.orgId).where('variant_id', '=', w.variantId).where('revision', '=', revision).executeTakeFirst();
+  return made ? { ...w, shortLink: { code: made.code, target: made.target_url } } : w;
 }
