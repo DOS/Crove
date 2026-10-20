@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { hashtagSuggestions, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -885,6 +885,32 @@ function ChannelEditor({
   );
 }
 
+// A hashtag appended to the text, on its own line when the text ends with other words.
+const withHashtag = (text: string, tag: string) => {
+  const trimmed = text.replace(/\s+$/, '');
+  if (!trimmed) return `#${tag}`;
+  return /(^|\s)#[^\s#]+$/u.test(trimmed) ? `${trimmed} #${tag}` : `${trimmed}\n\n#${tag}`;
+};
+
+// The org's hashtags that did better than usual over the last 90 days (#818), the ones the text lacks; a click adds one.
+function HashtagSuggestions({ text, connectionId, onPick }: { text: string; connectionId: string | null; onPick: (tag: string) => void }) {
+  const t = useTranslations('social');
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const insights = useQuery({ ...orpc.social.metrics.insights.queryOptions({ input: { days: 90, timeZone } }), staleTime: 10 * 60_000 });
+  const tags = hashtagSuggestions(insights.data?.channels ?? [], text, { connectionId });
+  if (tags.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+      <span className="text-subtle-foreground">{t('hashtagSuggestions')}</span>
+      {tags.map((tag) => (
+        <button key={tag} type="button" className="rounded-full border px-2 py-0.5 text-muted-foreground hover:border-ring/60 hover:text-foreground" onClick={() => onPick(tag)}>
+          #{tag}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false, onAiUsed, slug }: { base: Base; onChange: (base: Base) => void; disabled: boolean; needsTitle: boolean; autoFocus?: boolean; onAiUsed?: () => void; slug?: string }) {
   const t = useTranslations('social');
   return (
@@ -896,6 +922,7 @@ function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false,
           <EmojiPicker targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />
           {slug && <SnippetPicker slug={slug} targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />}
         </div>
+        {!disabled && <HashtagSuggestions text={base.body} connectionId={null} onPick={(tag) => onChange({ ...base, body: withHashtag(base.body, tag) })} />}
         {!disabled && onAiUsed && (
           <AiRewrite
             text={base.body}
