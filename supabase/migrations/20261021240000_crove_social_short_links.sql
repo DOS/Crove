@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS crove_social.short_link (
   id uuid NOT NULL DEFAULT crove_kernel.uuid_v7(),
   code text NOT NULL CHECK (code ~ '^[A-Za-z0-9]{10,16}$'),
   variant_id uuid NOT NULL,
-  revision integer NOT NULL CHECK (revision > 0),
+  -- The variant's revision that went out (the worker always names it; 1, a variant's first, by default).
+  revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
   post_id uuid NOT NULL,
   target_url text NOT NULL CHECK (target_url ~ '^https?://' AND length(target_url) <= 2048),
   created_at timestamptz NOT NULL DEFAULT now(),

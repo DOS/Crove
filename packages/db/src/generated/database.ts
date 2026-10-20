@@ -1023,7 +1023,7 @@ export interface SocialShortLinkTable {
   id: ColumnType<string, string | undefined, NotGranted>;
   code: ColumnType<string, string, NotGranted>;
   variant_id: ColumnType<string, string, NotGranted>;
-  revision: ColumnType<number, number, NotGranted>;
+  revision: ColumnType<number, number | undefined, NotGranted>;
   post_id: ColumnType<string, string, NotGranted>;
   target_url: ColumnType<string, string, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
