@@ -52,8 +52,20 @@ export function mentionsForEditing(body: string, nameOf: (userId: string) => str
 // "@Lan Anh" is not taken as "@Lan" followed by text.
 export function mentionsForStoring(text: string, picked: ReadonlyArray<readonly [string, string]>): string {
   let out = text;
-  for (const [label, userId] of [...picked].sort((a, b) => b[0].length - a[0].length)) out = out.split(`@${label}`).join(mentionToken(userId));
+  for (const [label, userId] of [...picked].sort((a, b) => b[0].length - a[0].length)) {
+    // Only a whole @name: not inside an address (a@Lan), nor the start of a longer word (@Lanh).
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}_.@])@${escaped}(?![\\p{L}\\p{N}_])`, 'gu'), mentionToken(userId));
+  }
   return out;
+}
+
+// How the comment box names each member: the name, or the name and email where two members share one, so picking
+// either always stores the right person.
+export function mentionLabels(members: ReadonlyArray<{ userId: string; name: string; email: string }>): Map<string, string> {
+  const count = new Map<string, number>();
+  for (const m of members) count.set(m.name, (count.get(m.name) ?? 0) + 1);
+  return new Map(members.map((m) => [m.userId, (count.get(m.name) ?? 0) > 1 && m.name !== m.email ? `${m.name} (${m.email})` : m.name]));
 }
 
 // The @query being typed at the caret, for the member list: from an @ that starts a word up to the caret.

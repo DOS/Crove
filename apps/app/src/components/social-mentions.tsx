@@ -4,18 +4,21 @@ import { useQuery } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Textarea } from '@crove/ui/components/textarea';
-import { commentParts, mentionQuery } from '@crove/mod-social/contract';
+import { commentParts, mentionLabels, mentionQuery } from '@crove/mod-social/contract';
 import { orpc } from '../lib/api.ts';
 
 export type Picked = Array<[string, string]>;
 const SHOWN = 6;
 
-// The org's members as comments name them.
+// The org's members as comments name them: name for showing a comment, label (unique, with the email where two
+// members share a name) for the comment box.
 export function useMemberNames() {
   const org = useQuery(orpc.org.get.queryOptions());
-  const members = (org.data?.members ?? []).map((m) => ({ userId: m.userId, name: m.displayName ?? m.email }));
+  const people = (org.data?.members ?? []).map((m) => ({ userId: m.userId, name: m.displayName ?? m.email, email: m.email }));
+  const labels = mentionLabels(people);
+  const members = people.map((m) => ({ ...m, label: labels.get(m.userId) ?? m.name }));
   const names = new Map(members.map((m) => [m.userId, m.name]));
-  return { members, nameOf: (userId: string) => names.get(userId) ?? null };
+  return { members, nameOf: (userId: string) => names.get(userId) ?? null, labelOf: (userId: string) => labels.get(userId) ?? null };
 }
 
 export function MentionBox({
@@ -44,14 +47,14 @@ export function MentionBox({
   const [active, setActive] = useState(0);
   const query = caret === null ? null : mentionQuery(value, caret);
   const q = query?.query.toLowerCase() ?? '';
-  const matches = query ? members.filter((m) => m.name.toLowerCase().includes(q)).slice(0, SHOWN) : [];
-  const pick = (m: { userId: string; name: string }) => {
+  const matches = query ? members.filter((m) => m.label.toLowerCase().includes(q)).slice(0, SHOWN) : [];
+  const pick = (m: { userId: string; label: string }) => {
     if (!query || caret === null) return;
-    const inserted = `@${m.name} `;
+    const inserted = `@${m.label} `;
     const next = `${value.slice(0, query.start)}${inserted}${value.slice(caret)}`;
     if (next.length > maxLength) return;
     onChange(next);
-    if (!picked.some(([label]) => label === m.name)) onPicked([...picked, [m.name, m.userId]]);
+    if (!picked.some(([label]) => label === m.label)) onPicked([...picked, [m.label, m.userId]]);
     const at = query.start + inserted.length;
     setCaret(null);
     requestAnimationFrame(() => {
@@ -84,7 +87,7 @@ export function MentionBox({
             setActive((i) => (i + (e.key === 'ArrowDown' ? 1 : matches.length - 1)) % matches.length);
           } else if (e.key === 'Enter' || e.key === 'Tab') {
             e.preventDefault();
-            pick(matches[active] ?? (matches[0] as { userId: string; name: string }));
+            pick(matches[active] ?? (matches[0] as { userId: string; label: string }));
           } else if (e.key === 'Escape') {
             setCaret(null);
           }
@@ -103,7 +106,7 @@ export function MentionBox({
                 pick(m);
               }}
             >
-              {m.name}
+              {m.label}
             </li>
           ))}
         </ul>

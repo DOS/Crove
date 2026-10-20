@@ -175,6 +175,11 @@ suite('social in-app notifications on PostgreSQL (#637)', () => {
     expect(await kinds(o, o.admin)).toEqual(['mention']);
     expect(await kinds(o, o.member)).toEqual(['mention']);
     expect(await kinds(o, o.viewer)).toEqual(['mention']);
+    // Taking the admin out and back in tells the admin nothing more.
+    await exec(o, o.other, 'social.post_comment.edit', { commentId, body: `<@${o.member}> xem giúp ảnh` });
+    await exec(o, o.other, 'social.post_comment.edit', { commentId, body: `<@${o.member}> <@${o.admin}> xem giúp ảnh` });
+    await deliver(o);
+    expect(await kinds(o, o.admin)).toEqual(['mention']);
     // A member who turned mentions off hears nothing of the next one.
     await exec(o, o.admin, 'social.notification.mute', { kind: 'mention', muted: true });
     await exec(o, o.member, 'social.post_comment.add', { postId, body: `<@${o.admin}> ok chưa?` });

@@ -87,8 +87,12 @@ export const commentEdit = defineCommand({
     if (ctx.now.getTime() - c.created_at.getTime() > COMMENT_EDIT_MS) throw new DomainError('COMMENT_EDIT_CLOSED', 409, 'Đã quá thời gian sửa bình luận này');
     if (c.body !== input.body) {
       await ctx.trx.updateTable('crove_social.post_comment').set({ body: input.body, edited_at: ctx.now }).where('org_id', '=', ctx.orgId).where('id', '=', c.id).execute();
-      // Only members the fix mentions for the first time are told; the ones mentioned before were told already.
-      const before = new Set(mentionsOf(c.body));
+      // Only members this comment never mentioned are told: not the ones in the text before, nor anyone told by an
+      // earlier fix, so taking a mention out and back in tells nobody twice.
+      const told = await sql<{ id: string }>`
+        SELECT DISTINCT pg_catalog.jsonb_array_elements_text(payload -> 'user_ids') AS id FROM crove_kernel.outbox_event
+        WHERE org_id = ${ctx.orgId} AND type = 'social.post.mentioned' AND created_at >= ${c.created_at} AND payload ->> 'comment_id' = ${c.id}`.execute(ctx.trx);
+      const before = new Set([...mentionsOf(c.body), ...told.rows.map((r) => r.id)]);
       const added = (await mentionedMembers(ctx, input.body, userId)).filter((id) => !before.has(id));
       if (added.length) await ctx.emit('social.post.mentioned', { post_id: c.post_id, comment_id: c.id, user_ids: added });
     }

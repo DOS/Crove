@@ -21,7 +21,7 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
   const f = useFormat();
   const [editing, setEditing] = useState<string | null>(null);
   const [picked, setPicked] = useState<Picked>([]);
-  const { nameOf } = useMemberNames();
+  const { labelOf } = useMemberNames();
   const edit = useMutation({
     mutationFn: (body: string) => client.social.posts.editComment({ commentId: item.id, body: mentionsForStoring(body, picked) }),
     onSuccess: () => {
@@ -64,7 +64,7 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
       )}
       {item.kind === 'comment' && item.editable && canWrite && editing === null && (
         <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => {
-            const shown = mentionsForEditing(item.body ?? '', nameOf);
+            const shown = mentionsForEditing(item.body ?? '', labelOf);
             setPicked(shown.picked);
             setEditing(shown.text);
           }}

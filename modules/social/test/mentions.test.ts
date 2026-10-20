@@ -1,6 +1,6 @@
 // @mentions in post comments (#793): tokens in, names out, and the @query being typed.
 import { describe, expect, it } from 'vitest';
-import { MENTIONS_MAX, commentParts, mentionQuery, mentionsForEditing, mentionsForStoring, mentionsOf } from '../src/domain/mentions.ts';
+import { MENTIONS_MAX, commentParts, mentionLabels, mentionQuery, mentionsForEditing, mentionsForStoring, mentionsOf } from '../src/domain/mentions.ts';
 
 const LAN = '018f0000-0000-7000-8000-000000000001';
 const ANH = '018f0000-0000-7000-8000-000000000002';
@@ -30,6 +30,22 @@ describe('comment mentions', () => {
     expect(mentionsForEditing(`<@${LAN}>`, () => null).text).toBe(`<@${LAN}>`);
     // A name typed by hand, not picked, stays text.
     expect(mentionsForStoring('@Lan xem', [])).toBe('@Lan xem');
+    // Only a whole @name: not a longer word, not inside an address.
+    expect(mentionsForStoring('@Lanh và lan@Lan.vn, @Lan.', [['Lan', LAN]])).toBe(`@Lanh và lan@Lan.vn, <@${LAN}>.`);
+  });
+
+  it('tells two members with the same name apart by their email', () => {
+    const labels = mentionLabels([
+      { userId: LAN, name: 'Nam', email: 'nam1@shop.vn' },
+      { userId: ANH, name: 'Nam', email: 'nam2@shop.vn' },
+      { userId: 'x', name: 'Hà', email: 'ha@shop.vn' },
+    ]);
+    expect([...labels.values()]).toEqual(['Nam (nam1@shop.vn)', 'Nam (nam2@shop.vn)', 'Hà']);
+    const stored = mentionsForStoring('@Nam (nam2@shop.vn) và @Nam (nam1@shop.vn)', [
+      ['Nam (nam1@shop.vn)', LAN],
+      ['Nam (nam2@shop.vn)', ANH],
+    ]);
+    expect(stored).toBe(`<@${ANH}> và <@${LAN}>`);
   });
 
   it('finds the @query at the caret only at the start of a word', () => {
