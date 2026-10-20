@@ -1058,3 +1058,10 @@ export const zSocialNotifications = z.object({
   unread: z.number().int(),
   muted: z.array(zSocialNotificationKind),
 });
+
+// A channel's daily account snapshots (#645), oldest first.
+export const zSocialAccountTrend = z.object({
+  connectionId: zId,
+  provider: z.string(),
+  points: z.array(z.object({ day: z.string(), followers: z.number().int().nullable(), reach: z.number().int().nullable() })),
+});

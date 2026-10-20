@@ -21,6 +21,7 @@ import { ReportLinks } from '../components/social-report-links.tsx';
 import type { BulkAction } from '../lib/social-bulk.ts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { AccountGrowth, TopPosts } from '../components/social-growth.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { dayKey, dayRange, providerName, SOCIAL_TABS, VARIANT_TONE, type SocialSearch, type SocialTab } from '../lib/social.ts';
@@ -123,6 +124,7 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
       </div>
       {exportCsv.error && <ErrorText>{errorMessage(exportCsv.error)}</ErrorText>}
       {exportCsv.data?.truncated && <p className="text-xs text-warning">{t('metricsExportCut')}</p>}
+      <AccountGrowth days={days} names={names} />
       {data.length === 0 ? (
         <Empty title={t('empty.metrics')} hint={t('metricsHint')} />
       ) : (
@@ -137,6 +139,7 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
           </div>
           {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t('metricsCapped')}</p>}
           <BestTimes rows={data} names={names} />
+          <TopPosts rows={data} names={names} slug={slug} />
           <div className="overflow-x-auto rounded-xl border">
             <table className="w-full text-sm">
               <thead className="bg-muted text-xs text-subtle-foreground">

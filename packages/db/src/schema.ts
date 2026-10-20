@@ -369,6 +369,8 @@ export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as
 export const SOCIAL_REVIEW_VERDICTS = ['approved', 'changes_requested', 'comment'] as const;
 // What an in-app notification is about (#637); a member may turn each kind off.
 export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned'] as const;
+// Why a channel's daily account snapshot has no counts (#645).
+export const SOCIAL_ACCOUNT_SNAPSHOT_ERRORS = ['no_answer', 'token_expired', 'permission'] as const;
 export const SOCIAL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
 // A link preview card (#641): waiting for the worker, read, or not readable and why.
 export const SOCIAL_LINK_PREVIEW_STATUSES = ['pending', 'ready', 'failed'] as const;
@@ -384,6 +386,7 @@ export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 export type SocialActorOrigin = (typeof SOCIAL_ACTOR_ORIGINS)[number];
 export type SocialDecision = (typeof SOCIAL_DECISIONS)[number];
 export type SocialReviewVerdict = (typeof SOCIAL_REVIEW_VERDICTS)[number];
+export type SocialAccountSnapshotError = (typeof SOCIAL_ACCOUNT_SNAPSHOT_ERRORS)[number];
 export type SocialNotificationKind = (typeof SOCIAL_NOTIFICATION_KINDS)[number];
 export type SocialLabelColor = (typeof SOCIAL_LABEL_COLORS)[number];
 export type SocialIdeaStage = (typeof SOCIAL_IDEA_STAGES)[number];
@@ -404,6 +407,7 @@ export type SocialPostVariantTable = Refine<
   }
 >;
 export type SocialReviewFeedbackTable = Refine<G.SocialReviewFeedbackTable, { verdict: ColumnType<SocialReviewVerdict, never, never> }>;
+export type SocialAccountSnapshotTable = Refine<G.SocialAccountSnapshotTable, { error: ColumnType<SocialAccountSnapshotError | null, SocialAccountSnapshotError | null | undefined, never> }>;
 export type SocialLinkPreviewTable = Refine<
   G.SocialLinkPreviewTable,
   {
@@ -457,6 +461,7 @@ type Refined = Tables<{
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.post_approval': SocialPostApprovalTable;
   'crove_social.review_feedback': SocialReviewFeedbackTable;
+  'crove_social.account_snapshot': SocialAccountSnapshotTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
   'crove_social.notification': SocialNotificationTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;
