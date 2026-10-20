@@ -106,6 +106,17 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
     expect(await response.json()).toEqual(REFUSED);
   }
 
+  async function expectEmailChangeRefused(response: Response) {
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ code: 403, error_code: 'email_change_not_allowed', msg: 'Không thể đổi sang email ở tên miền này' });
+  }
+
+  async function expectRefusalsLimited(response: Response) {
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toMatch(/^[1-9]\d*$/);
+    expect(await response.json()).toMatchObject({ code: 429, error_code: 'over_request_rate_limit' });
+  }
+
   // An org whose owner invites `emails`; returns the invite ids and the tokens of their accept links by email.
   async function orgInviting(emails: string[]) {
     const db = createDb(pool);
@@ -248,16 +259,19 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
       // Go matches keys ignoring case and the last one wins: two different addresses are refused.
       await expectRefused(await post(app, '/signup', { email: invited, EMAIL: other, password: 'pw-12345678' }, undefined, tok));
       await expectRefused(await post(app, '/signup', { Email: other, email: invited, password: 'pw-12345678' }, undefined, tok));
-      // The same address twice is fine; a key Go does not fold into "email" (dotless i) is not the email.
-      expect((await post(app, '/signup', { email: invited, EMAIL: invited.toUpperCase(), password: 'pw-12345678' }, undefined, tok)).status).toBe(200);
+      // A key repeated after Go's folding is refused even with one address; a key Go does not fold into "email"
+      // (dotless i) is not the email.
+      await expectRefused(await post(app, '/signup', { email: invited, EMAIL: invited.toUpperCase(), password: 'pw-12345678' }, undefined, tok));
       expect((await post(app, '/signup', { email: invited, 'emaıl': other, password: 'pw-12345678' }, undefined, tok)).status).toBe(200);
+      // JSON.parse keeps the last copy of a repeated key, Go keeps a phone a later null does not clear.
+      await expectRefused(await post(app, '/signup', `{"email":${JSON.stringify(invited)},"phone":"+84901234567","phone":null,"password":"pw-12345678"}`, undefined, tok));
       // Phone and anonymous sign-ups carry no email to check; a body that is not a JSON object neither.
       await expectRefused(await post(app, '/signup', { phone: '+84901234567', password: 'pw-12345678' }));
       await expectRefused(await post(app, '/signup', { email: invited, phone: '+84901234567', password: 'pw-12345678' }));
       await expectRefused(await post(app, '/signup', {}));
       await expectRefused(await post(app, '/signup', 'not json'));
       await expectRefused(await post(app, '/signup', [invited]));
-      expect(reached.length).toBe(before + 2);
+      expect(reached.length).toBe(before + 1);
     });
 
     it('lets an email code through for existing accounts only, unless it carries the invite token of its email', async () => {
@@ -287,6 +301,12 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
       await expectMethodRefused(await call(app, 'POST', '/token?grant_type=password', 'grant_type=id_token', nextClient(), 'application/x-www-form-urlencoded'));
       await expectMethodRefused(await post(app, '/token', { email: invited, password: 'x' }));
       expect(reached.length).toBe(before);
+    });
+
+    it('leaves email changes to Supabase Auth, which confirms the new address (#564 item 4)', async () => {
+      const before = reached.length;
+      expect((await call(app, 'PUT', '/user', { email: `moved-${tag}@anywhere.test` })).status).toBe(200);
+      expect(reached.length).toBe(before + 1);
     });
 
     it('keeps sign-in, refresh and password recovery working for everyone', async () => {
@@ -355,6 +375,98 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
       expect(reached.length).toBe(before);
     });
 
+    // #564 item 4: the allowlist would otherwise gate only creation.
+    it('forwards an email change to an allowed domain and refuses one anywhere else, before Supabase Auth', async () => {
+      const before = reached.length;
+      const put = (body: unknown, method = 'PUT', contentType = 'application/json') => call(app, method, '/user', body, nextClient(), contentType);
+      expect((await put({ email: `moved-${tag}@corp.test` })).status).toBe(200);
+      expect((await put({ EMAIL: `Moved-${tag}+Tax@Partner.VN `, data: { email: 'x@evil.test' } })).status).toBe(200);
+      expect((await put({ password: 'pw-87654321' })).status).toBe(200);
+      expect((await put({ email: '', data: { name: 'An' } })).status).toBe(200);
+      expect((await call(app, 'GET', '/user')).status).toBe(200);
+      expect(reached.length).toBe(before + 5);
+
+      for (const body of [
+        { email: `moved-${tag}@outside.test` },
+        { Email: `moved-${tag}@outside.test` },
+        { email: `moved-${tag}@corp.test`, EMAIL: `moved-${tag}@outside.test` },
+        { email: `moved-${tag}@sub.corp.test` },
+        { email: `moved-${tag}@c\u043erp.test` },
+        { email: `moved-${tag}@corp.test\u0000` },
+        { email: `moved-${tag}@corp.test@evil.test` },
+        { email: 42 },
+        [{ email: `moved-${tag}@outside.test` }],
+        'not json',
+        { email: null },
+        // JSON.parse keeps the last copy (null), Go keeps the address: the change would start.
+        `{"email":"moved-${tag}@gmail.com","email":null}`,
+        `{"EMAIL":"moved-${tag}@outside.test","EMAIL":null}`,
+        `{"email":"moved-${tag}@outside.test","Email":null}`,
+        `{"email":"moved-${tag}@corp.test","email":"moved-${tag}@corp.test"}`,
+      ]) {
+        await expectEmailChangeRefused(await put(body));
+      }
+      // Supabase Auth reads the body as JSON whatever its type, and the proxy gates every method that carries one.
+      await expectEmailChangeRefused(await put({ email: `moved-${tag}@outside.test` }, 'PUT', 'text/plain'));
+      await expectEmailChangeRefused(await put({ email: `moved-${tag}@outside.test` }, 'POST'));
+      await expectEmailChangeRefused(await put({ email: `moved-${tag}@outside.test` }, 'PATCH'));
+      expect(reached.length).toBe(before + 5);
+    });
+
+    // #564 item 1: each refusal of an allowed-domain address tells that it holds an invite. One IPv6 /48 holds 65,536
+    // /64s, each with an email budget of its own, so the refusals are capped per /48 as well.
+    it('caps the refusals that tell an address is invited per IPv6 /48, however many /64s ask', async () => {
+      const capped = appWith({ AUTH_SIGNUP_POLICY: 'allowlist', AUTH_SIGNUP_ALLOWED_DOMAINS: 'corp.test', AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR: '3' });
+      // A different /64 of one /48 for each call.
+      const site = (n: number) => `2001:db8:564:${n.toString(16)}::1`;
+      const before = reached.length;
+      // An admitted sign-up gives its slot back, so more than the cap get through.
+      for (let n = 0; n < 5; n++) expect((await signup(capped, `free-${n}-${tag}@corp.test`, site(0x100 + n))).status).toBe(200);
+      for (let n = 0; n < 3; n++) await expectRefused(await signup(capped, insider, site(n)));
+      // At the cap the answer no longer depends on the address: invited or not, 429, and nothing is forwarded.
+      await expectRefusalsLimited(await signup(capped, insider, site(10)));
+      await expectRefusalsLimited(await signup(capped, `free-x-${tag}@corp.test`, site(11)));
+      // Refusals that tell nothing, and sign-ups with the invite's link, still work from that /48.
+      await expectRefused(await signup(capped, `a-${tag}@evil.test`, site(12)));
+      expect((await signup(capped, insider, site(13), token.get(insider))).status).toBe(200);
+      // Another /48 and an IPv4 address have budgets of their own.
+      await expectRefused(await signup(capped, insider, '2001:db8:565::1'));
+      await expectRefused(await signup(capped, insider, '203.0.113.64'));
+      expect(reached.length).toBe(before + 6);
+    });
+
+    it('caps them for the whole deployment too, counting a repeated address once', async () => {
+      await admin((c) => c.query('DELETE FROM crove_kernel.auth_email_send'));
+      const capped = appWith({ AUTH_SIGNUP_POLICY: 'allowlist', AUTH_SIGNUP_ALLOWED_DOMAINS: 'corp.test', AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR: '2' });
+      const [g1, g2, g3] = [`g1-${tag}@corp.test`, `g2-${tag}@corp.test`, `g3-${tag}@corp.test`] as const;
+      const tokens = (await orgInviting([g1, g2, g3])).tokens;
+      const before = reached.length;
+      // Fresh client addresses every time: only the deployment's cap can bite.
+      await expectRefused(await signup(capped, g1));
+      await expectRefused(await signup(capped, g1));
+      await expectRefused(await signup(capped, g1));
+      await expectRefused(await signup(capped, g2));
+      const full = await signup(capped, g3);
+      // An hour, not the wait until the deployment's oldest refusal expires.
+      expect(full.headers.get('retry-after')).toBe('3600');
+      await expectRefusalsLimited(full);
+      await expectRefusalsLimited(await signup(capped, `g-free-${tag}@corp.test`));
+      expect((await signup(capped, g3, undefined, tokens.get(g3))).status).toBe(200);
+      await expectRefused(await signup(capped, `g-${tag}@evil.test`));
+      // 0 turns the deployment's cap off.
+      const uncapped = appWith({ AUTH_SIGNUP_POLICY: 'allowlist', AUTH_SIGNUP_ALLOWED_DOMAINS: 'corp.test', AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR: '0' });
+      await expectRefused(await signup(uncapped, g3));
+      expect(reached.length).toBe(before + 1);
+    });
+
+    it('holds with confirmations off as well, where a sign-up takes no email slot', async () => {
+      const capped = appWith({ AUTH_SIGNUP_POLICY: 'allowlist', AUTH_SIGNUP_ALLOWED_DOMAINS: 'corp.test', AUTH_AUTOCONFIRM: 'true', AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR: '2' });
+      const client = '203.0.113.65';
+      await expectRefused(await signup(capped, insider, client));
+      await expectRefused(await signup(capped, insider, client));
+      await expectRefusalsLimited(await signup(capped, insider, client));
+    });
+
     it('refuses other domains, subdomains, look-alikes and uninvited outsiders alike', async () => {
       const before = reached.length;
       for (const email of [
@@ -386,7 +498,8 @@ suite('sign-up policy through the /auth/v1 proxy (#350)', () => {
     expect(leakedTokens).toEqual([]);
     expect((await post(app, '/signup', { phone: '+84901234567', password: 'pw-12345678' })).status).toBe(200);
     expect((await call(app, 'GET', '/authorize?provider=google')).status).toBe(200);
-    expect(reached.length).toBe(before + 4);
+    expect((await call(app, 'PUT', '/user', { email: 'moved@anywhere.test' })).status).toBe(200);
+    expect(reached.length).toBe(before + 5);
   });
 
   it('reports the policy, never the domains, in /api/config', async () => {

@@ -971,6 +971,37 @@ export const zSocialQueue = z.object({
   nextFree: z.array(z.string()),
 });
 
+// A client report link of a period (#643); its token is in the create answer only.
+export const zSocialReportLink = z.object({
+  id: zId,
+  title: z.string().nullable(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  connectionIds: z.array(zId),
+  createdBy: zId,
+  createdAt: z.string(),
+  expiresAt: z.string(),
+  revokedAt: z.string().nullable(),
+});
+export const zSocialReportLinkCreate = z.strictObject({
+  periodStart: z.iso.datetime({ offset: true }),
+  periodEnd: z.iso.datetime({ offset: true }),
+  connectionIds: z.array(zId).max(50).optional(),
+  title: z.string().trim().min(1).max(120).optional(),
+  days: z.number().int().min(1).max(90).optional(),
+});
+
+// A link's preview card (#641): pending until the worker read the page; failed with why.
+export const zSocialLinkPreview = z.object({
+  url: z.string(),
+  status: z.enum(['pending', 'ready', 'failed']),
+  title: z.string().nullable(),
+  description: z.string().nullable(),
+  siteName: z.string().nullable(),
+  error: z.string().nullable(),
+  fetchedAt: z.string().nullable(),
+});
+
 // In-app notifications (#637): the viewer's newest, how many are unread, and the kinds they turned off.
 export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned'] as const;
 export const zSocialNotificationKind = z.enum(SOCIAL_NOTIFICATION_KINDS);
