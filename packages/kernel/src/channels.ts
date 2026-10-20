@@ -18,7 +18,8 @@ import { DomainError, defineCommand, defineQuery, type CommandContext, type Quer
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 
-const zProvider = z.string().regex(/^[a-z][a-z0-9_]{1,31}$/);
+// One character is enough: X's id is x (#784).
+const zProvider = z.string().regex(/^[a-z][a-z0-9_]{0,31}$/);
 const zKeyId = z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/);
 // The sealed envelope as base64; its size is checked again by the column (64 KiB).
 const zEnvelope = z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/).max(90_000);
