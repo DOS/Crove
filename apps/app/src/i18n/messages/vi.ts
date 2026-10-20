@@ -1431,6 +1431,17 @@ export const vi = {
     draftFound: 'Trình duyệt này còn giữ thay đổi chưa lưu lúc {when}.',
     draftRestore: 'Khôi phục',
     draftDiscard: 'Bỏ đi',
+    assign: {
+      title: 'Người phụ trách và hạn',
+      assignee: 'Giao cho',
+      nobody: 'Chưa giao ai',
+      due: 'Hạn hoàn thành',
+      dueOn: 'hạn {when}',
+      save: 'Lưu',
+      overdue: 'Quá hạn',
+      formerMember: 'Một người đã rời tổ chức',
+      mine: 'Việc của tôi',
+    },
     tabs: { upcoming: 'Lịch đăng', calendar: 'Xem lịch', review: 'Cần duyệt', attention: 'Cần xử lý', drafts: 'Nháp', done: 'Đã đăng', metrics: 'Số liệu', library: 'Thư viện ảnh' },
     filters: {
       channel: 'Kênh',
@@ -1869,6 +1880,7 @@ export const vi = {
       // Crove Social and connected channels.
       POST_NOT_FOUND: 'Không tìm thấy bài đăng này',
       VARIANT_NOT_FOUND: 'Không tìm thấy kênh này của bài đăng',
+      ASSIGNEE_NOT_MEMBER: 'Người này không phải thành viên của tổ chức',
       REVIEW_LINK_NOT_FOUND: 'Không tìm thấy liên kết duyệt này',
       REVIEW_LINK_LIMIT: 'Bài này đã có 10 liên kết duyệt còn hạn; hãy thu hồi bớt',
       REVIEW_LINK_INVALID: 'Liên kết duyệt không hợp lệ, đã bị thu hồi hoặc đã hết hạn',

@@ -20,6 +20,7 @@ import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } fr
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { activityCommands, activityQueries } from './activity.ts';
+import { assignCommands } from './assign.ts';
 import { publishingCommands } from './publishing.ts';
 import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { libraryQueries, likeTerm } from './library.ts';
@@ -897,6 +898,9 @@ export interface PostView {
   origin: string;
   tainted: boolean;
   authorUserId: string | null;
+  // Who should move the post along, and by when (#640).
+  assigneeUserId: string | null;
+  dueAt: string | null;
   createdAt: string;
   updatedAt: string;
   variants: VariantView[];
@@ -981,6 +985,8 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
         origin: p.origin,
         tainted: p.tainted,
         authorUserId: p.author_user_id,
+        assigneeUserId: p.assignee_user_id,
+        dueAt: iso(p.due_at),
         createdAt: iso(p.created_at) ?? '',
         updatedAt: iso(p.updated_at) ?? '',
         variants: variants
@@ -1051,6 +1057,8 @@ export const postList = defineQuery({
     stage: z.enum(['review', 'drafts', 'done', 'attention']).optional(),
     // Posts with a live channel on this connection.
     connectionId: zId.optional(),
+    // Posts assigned to the viewer (#640).
+    assignee: z.literal('me').optional(),
     // In the post's or a channel's own text or title; wildcards are matched as themselves.
     search: z.string().trim().min(1).max(200).optional(),
     // The last post of the previous page, newest change first.
@@ -1061,6 +1069,7 @@ export const postList = defineQuery({
   handler: async (ctx, input): Promise<PostView[]> => {
     let q = ctx.trx.selectFrom('crove_social.post as p').select('p.id').where('p.org_id', '=', ctx.orgId);
     if (input.status) q = q.where('p.status', '=', input.status);
+    if (input.assignee === 'me') q = q.where('p.assignee_user_id', '=', ctx.actor.type === 'user' ? ctx.actor.userId : '00000000-0000-0000-0000-000000000000');
     const variantWhere = (status: 'in_review' | null) =>
       sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status ${status ? sql`= ${status}` : sql`<> 'cancelled'`}${
         input.connectionId && !status ? sql` AND v.channel_connection_id = ${input.connectionId}::uuid` : sql``
@@ -1164,6 +1173,7 @@ export const socialCommands = [
   ...evergreenCommands,
   ...commentCommands,
   ...policyCommands,
+  ...assignCommands,
   ...reviewLinkCommands,
   ...activityCommands,
 ];

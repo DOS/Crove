@@ -1430,6 +1430,17 @@ export const en = {
     draftFound: 'Unsaved changes from {when} are kept in this browser.',
     draftRestore: 'Restore them',
     draftDiscard: 'Discard',
+    assign: {
+      title: 'Who and by when',
+      assignee: 'Assigned to',
+      nobody: 'Nobody',
+      due: 'Ready by',
+      dueOn: 'ready by {when}',
+      save: 'Save',
+      overdue: 'Overdue',
+      formerMember: 'A former member',
+      mine: 'Assigned to me',
+    },
     tabs: { upcoming: 'Schedule', calendar: 'Calendar', review: 'To review', attention: 'Needs attention', drafts: 'Drafts', done: 'Published', metrics: 'Metrics', library: 'Image library' },
     filters: {
       channel: 'Channel',
@@ -1867,6 +1878,7 @@ export const en = {
       // Crove Social and connected channels.
       POST_NOT_FOUND: 'This post was not found',
       VARIANT_NOT_FOUND: 'This channel of the post was not found',
+      ASSIGNEE_NOT_MEMBER: 'That person is not a member of the organization',
       REVIEW_LINK_NOT_FOUND: 'This review link was not found',
       REVIEW_LINK_LIMIT: 'This post already has 10 live review links; revoke some first',
       REVIEW_LINK_INVALID: 'This review link is not valid, was revoked or has expired',

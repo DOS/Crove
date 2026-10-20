@@ -6,6 +6,7 @@ import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
@@ -13,6 +14,7 @@ import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
+import { isOverdue } from '../lib/social-assign.ts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -67,7 +69,10 @@ function PostRow({ post, slug, names, right }: { post: Post; slug: string; names
         <p className="line-clamp-2 text-sm [overflow-wrap:anywhere] text-foreground">{excerpt(post.body) || <span className="text-subtle-foreground">{t('emptyText')}</span>}</p>
         <ChannelChips post={post} names={names} />
       </div>
-      {right && <span className="shrink-0 text-xs text-subtle-foreground tabular-nums">{right}</span>}
+      <div className="flex shrink-0 items-center gap-2">
+        {isOverdue(post, Date.now()) && <Badge variant="destructive">{t('assign.overdue')}</Badge>}
+        {right && <span className="text-xs text-subtle-foreground tabular-nums">{right}</span>}
+      </div>
     </Link>
   );
 }
@@ -382,7 +387,7 @@ export function SocialPage() {
     const timer = setTimeout(() => setSearch({ q }), 300);
     return () => clearTimeout(timer);
   }, [text, search.q, setSearch]);
-  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.q ? { search: search.q } : {}) };
+  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.q ? { search: search.q } : {}), ...(search.mine ? { assignee: 'me' as const } : {}) };
   // The agenda window starts now; a new day does not need a reload to move it, a refetch does.
   const range = useMemo(() => {
     const from = new Date(Date.now() - DAY);
@@ -417,7 +422,7 @@ export function SocialPage() {
   const rows = list.data?.pages.flat() ?? [];
   const reviewCount = review.data?.length ?? 0;
   const attentionCount = attention.data?.length ?? 0;
-  const filtered = Boolean(search.channel || search.q || search.from || search.to);
+  const filtered = Boolean(search.channel || search.q || search.from || search.to || search.mine);
 
   return (
     <>
@@ -496,8 +501,12 @@ export function SocialPage() {
                 </label>
               </>
             )}
+            <label className="flex items-center gap-2 pb-2 text-xs text-muted-foreground">
+              <Checkbox checked={search.mine === true} onCheckedChange={(on) => setSearch({ mine: on === true ? true : undefined })} />
+              {t('assign.mine')}
+            </label>
             {filtered && (
-              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, q: undefined, from: undefined, to: undefined })}>
+              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, q: undefined, from: undefined, to: undefined, mine: undefined })}>
                 {t('filters.clear')}
               </Button>
             )}
