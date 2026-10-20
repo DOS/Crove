@@ -22,11 +22,13 @@ class FakeAccounts implements Publisher {
   readonly publishSafety = 'reconcile_only' as const;
   asked: AccountMetricsInput[] = [];
   answers = new Map<string, AccountMetricsResult>();
+  throwing = new Set<string>();
   async publish(): Promise<PublishResult> {
     return { kind: 'rejected', error: 'bad_request', code: 'NOT_IN_THIS_TEST' };
   }
   async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
     this.asked.push(input);
+    if (this.throwing.has(input.externalAccountId)) throw new Error('socket hang up');
     return this.answers.has(input.externalAccountId) ? (this.answers.get(input.externalAccountId) as AccountMetricsResult) : null;
   }
 }
@@ -152,7 +154,12 @@ suite('social account growth on PostgreSQL (#645)', () => {
     const platform = new FakeAccounts();
     platform.answers.set('acct-live', { followers: 10 });
     platform.answers.set('acct-gone', { followers: 99 });
+    // An adapter that throws: the try is still kept for today, so the channel does not come back first on every pass.
+    const boom = await connect(o, 'acct-boom');
+    platform.throwing.add('acct-boom');
     await sweep(platform);
+    const kept = await admin(async (cl) => (await cl.query<{ error: string | null }>('SELECT error FROM crove_social.account_snapshot WHERE channel_connection_id = $1', [boom])).rows);
+    expect(kept).toEqual([{ error: 'no_answer' }]);
     expect(platform.asked.map((x) => x.externalAccountId)).toContain('acct-live');
     expect(platform.asked.map((x) => x.externalAccountId)).not.toContain('acct-gone');
     expect(await trends(stranger, 30)).toEqual([]);

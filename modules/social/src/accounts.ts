@@ -77,7 +77,7 @@ export const accountTrends = defineQuery({
         AND s.captured_on > (pg_catalog.now() AT TIME ZONE 'UTC')::date - ${input.days}::int
         AND (s.followers IS NOT NULL OR s.reach IS NOT NULL)
       ORDER BY s.channel_connection_id, s.captured_on
-      LIMIT 20000`.execute(ctx.trx);
+      LIMIT 60000`.execute(ctx.trx);
     const byChannel = new Map<string, AccountTrend>();
     for (const r of rows) {
       const trend = byChannel.get(r.connection_id) ?? { connectionId: r.connection_id, provider: r.provider, points: [] };
@@ -128,6 +128,9 @@ export async function sweepAccounts(deps: AccountDeps): Promise<{ recorded: numb
       // A connection whose owner left, or a credential that will not open: nothing to read; the publish path reports it.
       if (!(error instanceof DomainError)) console.warn(`[social-accounts] channel ${row.connection_id.slice(0, 8)}`, error instanceof Error ? error.message : error);
       out.skipped += 1;
+      // Kept as today's try all the same, so a channel that keeps failing waits a day instead of coming back first on
+      // every pass ahead of the others.
+      await deps.runtime.execute('social.account.record', { connectionId: row.connection_id, capturedOn: day, error: 'no_answer' }, { actor: ACTOR, orgId: row.org_id }).catch(() => undefined);
     }
   }
   return out;
