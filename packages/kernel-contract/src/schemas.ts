@@ -227,7 +227,7 @@ export const zChannelConnection = z.object({
 });
 
 // Providers connected through an OAuth dialog (Social plan S6), and the attempt's state: 32 random bytes, base64url.
-export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x', 'google_business'] as const;
+export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x', 'google_business', 'pinterest'] as const;
 // Accounts one OAuth grant connects in a request, one command each (#375): a Meta user may manage hundreds of Pages.
 export const OAUTH_MAX_ACCOUNTS_PER_GRANT = 100;
 export const zOAuthProvider = z.enum(OAUTH_CHANNEL_PROVIDERS);

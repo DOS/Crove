@@ -17,6 +17,7 @@ export const PROVIDERS = [
   'google_business',
   'telegram',
   'mastodon',
+  'pinterest',
 ] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
@@ -110,6 +111,8 @@ export const LINK_PLACEMENT: Readonly<Record<Provider, LinkPlacement>> = {
   google_business: 'apart',
   telegram: 'text',
   mastodon: 'text',
+  // The pin leads to the link itself (#798).
+  pinterest: 'apart',
 };
 
 // The link as a whole: followed by the end, a space, or sentence punctuation and then the end or a space (the
@@ -490,6 +493,17 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     maxLinks: null,
     scrapesLinkPreview: true,
     unverified: ['body.max'],
+  },
+  // Pinterest (#798): a pin's title of 100 characters and description of 800, saved to a board; one image or a
+  // carousel of 2 to 5 (20 MB each). The adapter does not post video pins yet, so Pinterest stays out of VIDEO_READY.
+  pinterest: {
+    provider: 'pinterest',
+    body: { max: 800, count: 'codepoints', required: false },
+    title: { max: 100, count: 'codepoints', required: false },
+    media: { min: 1, max: 5, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'], maxImageBytes: 20 * MB, maxVideoBytes: 2048 * MB, maxVideoSeconds: 900 },
+    maxLinks: null,
+    scrapesLinkPreview: false,
+    unverified: ['media.max'],
   },
 };
 

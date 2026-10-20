@@ -17,6 +17,7 @@ export * from './mastodon.ts';
 export * from './youtube.ts';
 export * from './tiktok.ts';
 export * from './x.ts';
+export * from './pinterest.ts';
 export * from './comment.ts';
 export * from './cover.ts';
 export * from './post-type.ts';
@@ -35,6 +36,7 @@ export const CHANNEL_PROVIDERS = [
   'google_business',
   'telegram',
   'mastodon',
+  'pinterest',
 ] as const;
 export type ChannelProviderId = (typeof CHANNEL_PROVIDERS)[number];
 
