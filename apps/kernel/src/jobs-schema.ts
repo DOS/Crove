@@ -25,6 +25,8 @@ export const QUEUES = {
   agentProposal: 'kernel-agent-proposal',
   // Created by the portal invoice list migration (20261020060000).
   portalList: 'finance-portal-list',
+  // Created by the Social notifications migration (20261021110000).
+  socialNotify: 'social-notify',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 

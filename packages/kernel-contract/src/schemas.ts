@@ -959,3 +959,25 @@ export const zSocialQueue = z.object({
   slots: z.array(z.object({ weekday: z.number().int(), minute: z.number().int(), label: z.string().nullable(), active: z.boolean() })),
   nextFree: z.array(z.string()),
 });
+
+// In-app notifications (#637): the viewer's newest, how many are unread, and the kinds they turned off.
+export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned'] as const;
+export const zSocialNotificationKind = z.enum(SOCIAL_NOTIFICATION_KINDS);
+export const zSocialNotifications = z.object({
+  items: z.array(
+    z.object({
+      id: zId,
+      kind: zSocialNotificationKind,
+      postId: zId.nullable(),
+      postText: z.string().nullable(),
+      connectionId: zId.nullable(),
+      channel: z.string().nullable(),
+      actorName: z.string().nullable(),
+      detail: z.record(z.string(), z.string()),
+      createdAt: z.string(),
+      read: z.boolean(),
+    }),
+  ),
+  unread: z.number().int(),
+  muted: z.array(zSocialNotificationKind),
+});

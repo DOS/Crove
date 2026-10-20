@@ -60,6 +60,8 @@ export interface CroveKernelSchema {
 export interface CroveSocialSchema {
   'crove_social.channel_policy': SocialChannelPolicyTable;
   'crove_social.metric_snapshot': SocialMetricSnapshotTable;
+  'crove_social.notification': SocialNotificationTable;
+  'crove_social.notification_mute': SocialNotificationMuteTable;
   'crove_social.post': SocialPostTable;
   'crove_social.post_approval': SocialPostApprovalTable;
   'crove_social.post_comment': SocialPostCommentTable;
@@ -706,6 +708,29 @@ export interface SocialMetricSnapshotTable {
   captured_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   metrics: ColumnType<unknown, string | undefined, NotGranted>;
   extra: ColumnType<unknown, string | null | undefined, NotGranted>;
+}
+
+/** crove_social.notification_mute */
+export interface SocialNotificationMuteTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  kind: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.notification */
+export interface SocialNotificationTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  kind: ColumnType<string, string, NotGranted>;
+  event_id: ColumnType<string, string, NotGranted>;
+  post_id: ColumnType<string | null, string | null, NotGranted>;
+  connection_id: ColumnType<string | null, string | null, NotGranted>;
+  actor_user_id: ColumnType<string | null, string | null, NotGranted>;
+  detail: ColumnType<unknown, string | undefined, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  read_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.post_approval */
