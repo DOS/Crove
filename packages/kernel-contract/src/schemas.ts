@@ -894,6 +894,14 @@ export const zSocialPost = z.object({
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
 // A media library item (S9): an image of the org uploaded for posts, and how many posts show it.
 export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int() });
+// Client review links (#589): the team's view of a post's links and what clients said through them.
+export const zSocialReviewLinks = z.object({
+  links: z.array(z.object({ id: zId, createdBy: zId, createdAt: z.string(), expiresAt: z.string(), revokedAt: z.string().nullable(), changed: z.boolean() })),
+  feedback: z.array(
+    z.object({ id: zId, linkId: zId, name: z.string(), verdict: z.enum(['approved', 'changes_requested', 'comment']), body: z.string().nullable(), changed: z.boolean(), createdAt: z.string() }),
+  ),
+});
+
 export const zSocialLibraryUse = z.object({ postId: zId, status: z.string(), excerpt: z.string(), updatedAt: z.string() });
 
 export const zSocialMetricsRow = z.object({

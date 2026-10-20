@@ -16,6 +16,7 @@ import { cn } from '@crove/ui/lib/utils';
 import { COMMENT_RULES, isProvider, type Issue } from '@crove/mod-social/contract';
 import { MediaField, type MediaItem } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
+import { ReviewLinks } from '../components/social-review-links.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -1060,6 +1061,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} />}
           {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
           {canWrite && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
+            <ReviewLinks postId={p.id} canDecide={canDecide} />
           {dirty && <p className="text-xs text-subtle-foreground">{t('unsaved')}</p>}
         </div>
         <div className="space-y-4">

@@ -30,6 +30,7 @@ import {
   zSocialMetricsRow,
   zSocialLibraryItem,
   zSocialLibraryUse,
+  zSocialReviewLinks,
   zSocialQueueSet,
   zSocialSchedule,
   zSocialVariantUpdate,
@@ -260,6 +261,12 @@ export const contract = {
       summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional() })).output(z.array(zSocialMetricsRow)),
       // The window as a CSV file (UTF-8 with a byte order mark); every export is audited.
       export: oc.input(z.strictObject({ days: z.number().int().min(1).max(365) })).output(z.object({ filename: z.string(), csv: z.string(), truncated: z.boolean() })),
+    },
+    // Client review links (#589): owners and admins make and revoke them; the token is in the create answer only.
+    reviewLinks: {
+      list: oc.input(z.object({ postId: zId })).output(zSocialReviewLinks),
+      create: oc.input(z.strictObject({ postId: zId, days: z.number().int().min(1).max(30).optional() })).output(z.object({ linkId: zId, token: z.string(), expiresAt: z.string() })),
+      revoke: oc.input(z.strictObject({ linkId: zId })).output(z.object({ linkId: zId, postId: zId })),
     },
     // The media library (S9): the org's post images, newest first, and the posts that show one.
     media: {

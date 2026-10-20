@@ -74,6 +74,7 @@ import { createInviteMailSender } from './invite-mail.ts';
 import { pgBossSchemaVersion } from './jobs-schema.ts';
 import type { Mailer } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
+import { reviewAnswer, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
@@ -110,6 +111,8 @@ export interface HttpDeps {
   signupInviteChecks?: InviteChecks;
   // Per-user request limit on /api (issue #162). Default: built from API_RATE_LIMIT_PER_MINUTE; null turns it off.
   rateLimiter?: RateLimiter | null;
+  // Per-client budgets of the public review page (#589). Unset: REVIEW_VIEWS_PER_MINUTE and REVIEW_ANSWERS_PER_MINUTE.
+  reviewLimits?: { views: RateLimiter; answers: RateLimiter };
   // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
   uploadCompletes?: ConcurrencyLimiter;
   // Uploads that may be larger than MAX_UPLOAD_BYTES (Social videos, #409) running at once. Default: 2 per process.
@@ -452,6 +455,41 @@ export function createHttpApp(deps: HttpDeps) {
         // Stored and queued only; the worker parses it and files the attachments (External-tenant gate T5).
         const result = await acceptInboundEmail({ runtime, store, domain }, raw, c.req.header('x-crove-recipient') ?? null);
         return c.json(result, 202);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+  }
+
+  // The client review page (#589): no account, the link's token is the only credential. It comes in the body, never the
+  // URL, so it stays out of access logs; each client address has a small budget, and an unknown, revoked or expired
+  // link answers like a malformed one.
+  if (runtime.installed('social')) {
+    const reviewLimits = deps.reviewLimits ?? { views: new RateLimiter({ perMinute: REVIEW_VIEWS_PER_MINUTE }), answers: new RateLimiter({ perMinute: REVIEW_ANSWERS_PER_MINUTE }) };
+    const reviewBudget = (c: Context, bucket: RateLimiter) => {
+      const decision = bucket.take(clientBucket(clientIp(c, config.TRUSTED_PROXY_HOPS)));
+      if (decision.allowed) return null;
+      c.header('retry-after', String(decision.retryAfterSeconds));
+      return c.json({ code: 'RATE_LIMITED', message: 'Bạn gửi quá nhiều yêu cầu, hãy thử lại sau', retryAfterSeconds: decision.retryAfterSeconds }, 429);
+    };
+    app.post('/api/review/view', bodyLimit({ maxSize: 1024 }), async (c) => {
+      const limited = reviewBudget(c, reviewLimits.views);
+      if (limited) return limited;
+      c.header('cache-control', 'no-store');
+      try {
+        const view = await reviewView(runtime, await c.req.json().catch(() => null));
+        return view ? c.json(view) : c.json({ code: 'REVIEW_LINK_INVALID', message: 'Liên kết duyệt không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    app.post('/api/review/answer', bodyLimit({ maxSize: 8 * 1024 }), async (c) => {
+      const limited = reviewBudget(c, reviewLimits.answers);
+      if (limited) return limited;
+      c.header('cache-control', 'no-store');
+      try {
+        const done = await reviewAnswer(runtime, await c.req.json().catch(() => null));
+        return done ? c.json(done) : c.json({ code: 'REVIEW_LINK_INVALID', message: 'Liên kết duyệt không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
       } catch (error) {
         return problem(c, error);
       }
