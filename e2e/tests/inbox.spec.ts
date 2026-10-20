@@ -37,6 +37,9 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await page.getByRole('link', { name: 'Xem hướng dẫn nhanh: tải lên, duyệt, xuất Excel' }).click();
     await expect(page).toHaveURL(new RegExp(`/o/${slug}/guide$`));
     await expect(page.getByRole('heading', { name: 'Hướng dẫn nhanh' })).toBeVisible();
+    // The firm guide follows (#661).
+    await expect(page.getByRole('heading', { name: 'Hướng dẫn cho công ty dịch vụ kế toán' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Bước 7. Đưa số liệu sang phần mềm kế toán của hãng' })).toBeVisible();
     for (const step of ['Bước 1. Tải hóa đơn lên', 'Bước 2. Kiểm tra và duyệt', 'Bước 3. Xuất Excel cho kế toán']) {
       await expect(page.getByRole('heading', { name: step })).toBeVisible();
     }

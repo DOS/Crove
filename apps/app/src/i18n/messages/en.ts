@@ -990,6 +990,9 @@ export const en = {
   guide: {
     title: 'Quick guide',
     subtitle: 'Three steps to record purchase invoices: upload, approve and export to Excel. The guide is in Vietnamese.',
+    firmTitle: 'Guide for accounting firms',
+    firmSubtitle:
+      "One client company's month in Crove: add the client, take in and approve invoices, bank and cash, period close, the VAT return and handing the figures to the firm's accounting software. The steps are in Vietnamese.",
     supportHint: 'Found a problem or need help? Tell us through',
   },
   invite: {
