@@ -120,6 +120,40 @@ describe('InstagramPublisher', () => {
     expect(await publisher.status({ externalAccountId: IG, secret: SECRET, externalRef: ref('9101') })).toEqual({ kind: 'accepted', externalId: '18000000000000101', url: 'https://www.instagram.com/reel/xyz/' });
   });
 
+  it('posts a Story of one image or video with no caption, and never guesses which Story a container became (#644)', async () => {
+    const { fetchImpl, calls } = graph({
+      [`POST /${IG}/media`]: [{ body: { id: '9201' } }, { body: { id: '9202' } }],
+      'GET /9201': [{ body: { status_code: 'FINISHED' } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000201' } }],
+      'GET /18000000000000201': [{ body: { permalink: 'https://www.instagram.com/stories/quan.a/1/' } }],
+      'GET /9202': [{ body: { status_code: 'IN_PROGRESS' } }, { body: { status_code: 'PUBLISHED' } }],
+    });
+    const publisher = new InstagramPublisher(APP, fetchImpl, fast);
+    expect(await publisher.publish(input({ settings: { postType: 'story' } }))).toEqual({ kind: 'accepted', externalId: '18000000000000201', url: 'https://www.instagram.com/stories/quan.a/1/' });
+    expect(calls[0]?.form).toEqual({ media_type: 'STORIES', image_url: 'https://bucket.example/f-1?sig=1' });
+    // A video Story still processing: pending, and once Meta says it went out without the id, unknown rather than a guess.
+    const video = { body: 'Không gửi chữ', title: null, linkUrl: 'https://shop.example/', media: [{ fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: null }] };
+    const pending = await publisher.publish(input({ content: video, settings: { postType: 'story' } }));
+    expect(pending).toEqual({ kind: 'pending', externalRef: `9202.${'0'.repeat(16)}`, checkAfterSeconds: 30 });
+    expect(calls.find((c) => c.form.media_type === 'STORIES' && c.form.video_url)?.form).toEqual({ media_type: 'STORIES', video_url: 'https://bucket.example/v-1?sig=1' });
+    expect(await publisher.status({ externalAccountId: IG, secret: SECRET, externalRef: `9202.${'0'.repeat(16)}` })).toMatchObject({ kind: 'unknown', code: 'STORY_NOT_FOUND' });
+    expect(calls.some((c) => c.route === `GET /${IG}/media`)).toBe(false);
+    // Reconcile never matches a Story by text.
+    expect(await publisher.reconcile({ externalAccountId: IG, secret: SECRET, callKey: 'k', contentHash: 'h', content: video, settings: { postType: 'story' }, after: new Date(), before: new Date() })).toEqual({ found: 'unknown' });
+  });
+
+  it('refuses a Story of several images, a Reel without a video, a cover on a Story and an unknown post type, before calling Meta (#644)', async () => {
+    const { fetchImpl, calls } = graph({});
+    const publisher = new InstagramPublisher(APP, fetchImpl, fast);
+    const two = { body: 'x', title: null, linkUrl: null, media: [image('f-1'), image('f-2')] };
+    expect(await publisher.publish(input({ content: two, settings: { postType: 'story' } }))).toMatchObject({ kind: 'rejected', code: 'STORY_ONE_MEDIA' });
+    expect(await publisher.publish(input({ settings: { postType: 'reel' } }))).toMatchObject({ kind: 'rejected', code: 'REEL_ONE_VIDEO' });
+    const clip = { body: 'x', title: null, linkUrl: null, media: [{ fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: null }] };
+    expect(await publisher.publish(input({ content: clip, settings: { postType: 'story', cover: { atMs: 1000 } } }))).toMatchObject({ kind: 'rejected', code: 'COVER_NOT_SUPPORTED' });
+    expect(await publisher.publish(input({ settings: { postType: 'carousel' } }))).toMatchObject({ kind: 'rejected', code: 'POST_TYPE_NOT_SUPPORTED' });
+    expect(calls).toEqual([]);
+  });
+
   it('gives a Reel its cover: a frame as thumb_offset in milliseconds, or an image Meta fetches as cover_url (#642)', async () => {
     const reel = { body: 'Khai trương!', title: null, linkUrl: null, media: [{ fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: null }] };
     const answers = () => ({

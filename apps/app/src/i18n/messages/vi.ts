@@ -1402,6 +1402,14 @@ export const vi = {
         assigned: '{actor} giao cho bạn một bài',
       },
     },
+    postType: {
+      label: 'Kiểu bài',
+      types: { feed: 'Bài thường', story: 'Tin (Story)', reel: 'Reels' },
+      hints: {
+        story: 'Tin hiện 24 giờ, gồm đúng một ảnh hoặc một video tối đa 60 giây (nên để khung dọc 9:16). Chữ, liên kết và bình luận đầu tiên không được đăng.',
+        reel: 'Reels gồm đúng một video; nội dung chữ thành phần mô tả. Facebook nhận Reels dài tối đa 90 giây.',
+      },
+    },
     snippets: {
       title: 'Đoạn mẫu',
       subtitle: 'Hashtag, chữ ký và mẫu bài cả nhóm dùng lại. Chọn trong khung soạn bài để chèn vào nội dung.',
@@ -1674,6 +1682,9 @@ export const vi = {
       COVER_NEEDS_VIDEO: 'Chỉ đặt được ảnh bìa khi kênh này đăng đúng một video',
       COVER_NOT_SUPPORTED: 'Kênh này không nhận loại ảnh bìa này; TikTok chỉ lấy một khoảnh khắc trong video, YouTube chỉ nhận ảnh tải lên',
       COVER_OUT_OF_RANGE: 'Ảnh bìa ở giây thứ {actual, number}, nhưng video chỉ dài {limit, number} giây',
+      POST_TYPE_NOT_SUPPORTED: 'Kênh này không đăng được kiểu bài đã chọn',
+      STORY_ONE_MEDIA: 'Tin (Story) cần đúng một ảnh hoặc một video',
+      REEL_ONE_VIDEO: 'Reels cần đúng một video',
     },
     composeTitle: 'Soạn bài',
     composeSubtitle: 'Viết nội dung chung, chọn kênh, viết riêng cho kênh nào cần.',
@@ -1697,6 +1708,7 @@ export const vi = {
     previewMore: 'Xem thêm',
     previewNoTitle: '(Chưa có tiêu đề)',
     previewLinkNotSent: 'Liên kết ({host}) không được đăng lên nền tảng này; hãy đưa vào phần giới thiệu của trang hoặc viết vào nội dung.',
+    previewStory: 'Tin (Story) - chỉ hiện ảnh hoặc video',
     previewCount: '{count, number} ảnh hoặc video',
     aiRewrite: 'Nhờ AI viết lại',
     aiRewrites: { shorten: 'Rút gọn cho vừa kênh', formal: 'Trang trọng hơn', casual: 'Thân mật hơn', translate_en: 'Dịch sang tiếng Anh', translate_vi: 'Dịch sang tiếng Việt' },

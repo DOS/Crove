@@ -171,6 +171,29 @@ describe('validateVariant', () => {
     expect(codes([jpeg(5 * 1024 * 1024)])).toEqual(['IMAGE_TOO_LARGE']);
   });
 
+  it('checks Stories and Reels on the channels that post them (#644)', () => {
+    const img = (): MediaItem => ({ kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null });
+    const vid = (seconds: number): MediaItem => ({ kind: 'video', mime: 'video/mp4', sizeBytes: 1_000_000, durationSeconds: seconds });
+    const codes = (provider: 'instagram' | 'facebook_page' | 'x', postType: unknown, media: MediaItem[], extra: Record<string, unknown> = {}, body = 'Chữ không gửi') =>
+      validateVariant({ provider, body, title: null, linkUrl: 'https://shop.example/', media, settings: { postType, ...extra } }).map((i) => i.code);
+    // A Story: one image or a video of up to a minute; its text and link are not checked, since they are not sent.
+    expect(codes('instagram', 'story', [img()], {}, 'x'.repeat(5000))).toEqual([]);
+    expect(codes('facebook_page', 'story', [vid(45)])).toEqual([]);
+    expect(codes('instagram', 'story', [img(), img()])).toEqual(['STORY_ONE_MEDIA']);
+    expect(codes('instagram', 'story', [])).toEqual(['STORY_ONE_MEDIA']);
+    expect(codes('instagram', 'story', [vid(61)])).toEqual(['VIDEO_TOO_LONG']);
+    expect(codes('instagram', 'story', [img()], { firstComment: 'Mua ngay' })).toEqual(['COMMENT_NOT_SUPPORTED']);
+    expect(codes('instagram', 'story', [vid(10)], { cover: { atMs: 1000 } })).toEqual(['COVER_NOT_SUPPORTED']);
+    // A Reel: one video, as long as the platform takes; Facebook Reels last at most 90 s.
+    expect(codes('facebook_page', 'reel', [vid(60)])).toEqual([]);
+    expect(codes('facebook_page', 'reel', [vid(91)])).toEqual(['VIDEO_TOO_LONG']);
+    expect(codes('instagram', 'reel', [img()])).toEqual(['REEL_ONE_VIDEO']);
+    // Other channels, and unknown types, are refused; a feed post is checked as before.
+    expect(codes('x', 'story', [img()])).toEqual(['POST_TYPE_NOT_SUPPORTED']);
+    expect(codes('instagram', 'carousel', [img()])).toEqual(['POST_TYPE_NOT_SUPPORTED']);
+    expect(codes('instagram', 'feed', [img()])).toEqual([]);
+  });
+
   it('refuses images mixed with video where the channel does not mix them', () => {
     const codes = validateVariant({ provider: 'facebook_page', body: '', title: null, media: [jpeg(), mp4()] }).map((i) => i.code);
     expect(codes).toEqual(['MEDIA_MIX_NOT_ALLOWED']);

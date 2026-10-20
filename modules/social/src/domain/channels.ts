@@ -160,6 +160,28 @@ export const coverKind = (cover: Cover): CoverKind => ('atMs' in cover ? 'frame'
 // Reels take a frame (thumb_offset) or an image (cover_url); TikTok's direct post takes a frame
 // (video_cover_timestamp_ms) and no uploaded image; YouTube takes an image (thumbnails.set) and no frame, since the
 // Data API has no way to pick one. Facebook Page videos and the other channels take none from Crove yet.
+// A channel's post type (#644), in the variant's settings (`settings.postType`): a feed post (the default), a Story or
+// a Reel, on the channels whose adapter posts them. The adapters' postTypeOf in @crove/channel reads the same value.
+// A Story is one image or video shown for a day: its text and link are not sent, and a video lasts at most a minute.
+// A Reel is one video. A Story image is upright, about 9:16 (phone screens from 1:2.2 to 2:3 count).
+export const POST_TYPES = ['feed', 'story', 'reel'] as const;
+export type PostType = (typeof POST_TYPES)[number];
+export const POST_TYPE_RULES: Readonly<Partial<Record<Provider, readonly PostType[]>>> = {
+  instagram: ['feed', 'story', 'reel'],
+  facebook_page: ['feed', 'story', 'reel'],
+};
+export const STORY_IMAGE = { minRatio: 0.45, maxRatio: 2 / 3 } as const;
+export const STORY_MAX_VIDEO_SECONDS = 60;
+// The longest Reel each platform takes through its API.
+export const REEL_MAX_VIDEO_SECONDS: Readonly<Partial<Record<Provider, number>>> = { instagram: 900, facebook_page: 90 };
+
+// The post type in a variant's settings; null when it is not one of POST_TYPES.
+export function postTypeOf(settings: Readonly<Record<string, unknown>> | undefined): PostType | null {
+  const value = settings?.postType;
+  if (value === undefined || value === null) return 'feed';
+  return (POST_TYPES as readonly unknown[]).includes(value) ? (value as PostType) : null;
+}
+
 export const COVER_RULES: Readonly<Partial<Record<Provider, readonly CoverKind[]>>> = {
   sandbox: ['frame', 'image'],
   instagram: ['frame', 'image'],
