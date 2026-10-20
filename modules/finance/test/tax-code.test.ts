@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { normalizeTaxCode } from '@crove/kernel-contract';
 import { parseTaxCode } from '@crove/l10n-vn';
 import { journalMemo } from '../src/memo.ts';
+import { isOwnTaxCode } from '../src/own-tax-code.ts';
 
 describe('the org tax code and the invoice seller tax code', () => {
   it('normalize every input the same way', () => {
@@ -25,6 +26,29 @@ describe('the org tax code and the invoice seller tax code', () => {
       null,
     ];
     for (const input of inputs) expect(normalizeTaxCode(input), String(input)).toBe(parseTaxCode(input)?.normalized ?? null);
+  });
+});
+
+describe('the org\'s own tax code (#686)', () => {
+  it('is the org\'s code and the codes of its branches, however they are written', () => {
+    for (const code of ['0101234564', ' 0101.234.564 ', '0101234564-001', '0101234564001', '0101234564 - 123']) expect(isOwnTaxCode(code, '0101234564'), code).toBe(true);
+  });
+
+  it('is not another company, another company\'s branch, or a missing code', () => {
+    for (const code of ['0309876546', '0309876546-001', '01012345640', '010123456', '', null]) expect(isOwnTaxCode(code, '0101234564'), String(code)).toBe(false);
+    expect(isOwnTaxCode('0101234564', null)).toBe(false);
+    expect(isOwnTaxCode('0101234564-001', '')).toBe(false);
+  });
+
+  it('gives an org whose own code is a branch only that code, not its head office or the other branches', () => {
+    expect(isOwnTaxCode('0101234564-001', '0101234564-001')).toBe(true);
+    expect(isOwnTaxCode('0101234564', '0101234564-001')).toBe(false);
+    expect(isOwnTaxCode('0101234564-002', '0101234564-001')).toBe(false);
+  });
+
+  it('keeps an individual\'s 12-digit code exact', () => {
+    expect(isOwnTaxCode('012345678901', '012345678901')).toBe(true);
+    expect(isOwnTaxCode('012345678901', '0123456789')).toBe(false);
   });
 });
 
