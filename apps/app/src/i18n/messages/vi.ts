@@ -2020,6 +2020,8 @@ export const vi = {
       REVIEW_LINK_INVALID: 'Liên kết duyệt không hợp lệ, đã bị thu hồi hoặc đã hết hạn',
       REVIEW_ANSWER_INVALID: 'Hãy nhập tên của bạn; một bình luận cần có nội dung',
       REVIEW_ANSWER_LIMIT: 'Liên kết này đã nhận đủ số ý kiến tối đa',
+      LINK_INVALID: 'Liên kết phải bắt đầu bằng http:// hoặc https://',
+      LINK_PREVIEW_LIMIT: 'Đang lấy quá nhiều liên kết, hãy thử lại sau ít phút',
       COMMENT_NOT_FOUND: 'Không tìm thấy bình luận này',
       COMMENT_EDIT_CLOSED: 'Chỉ sửa được bình luận trong 15 phút đầu',
       VARIANTS_OF_SEVERAL_POSTS: 'Chỉ chọn các kênh của cùng một bài đăng',

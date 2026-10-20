@@ -20,6 +20,7 @@ import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } fr
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { activityCommands, activityQueries } from './activity.ts';
+import { linkPreviewCommands, linkPreviewQueries } from './link-preview.ts';
 import { notificationCommands, notificationQueries } from './notifications.ts';
 import { assignCommands } from './assign.ts';
 import { publishingCommands } from './publishing.ts';
@@ -1212,6 +1213,7 @@ export const socialCommands = [
   ...labelCommands,
   ...reviewLinkCommands,
   ...activityCommands,
+  ...linkPreviewCommands,
   ...notificationCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
@@ -1255,4 +1257,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...activityQueries, ...reviewLinkQueries, ...notificationQueries];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...activityQueries, ...reviewLinkQueries, ...linkPreviewQueries, ...notificationQueries];

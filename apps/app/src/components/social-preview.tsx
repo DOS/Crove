@@ -1,10 +1,12 @@
 // The composer's preview of a channel (#588): the post laid out the way its platform shows it in the feed, with the
 // text cut where the platform cuts it, images in its frame and a link card where it makes one.
 import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { isProvider, LINK_PLACEMENT, sentText, type Cover } from '@crove/mod-social/contract';
 import { useTranslations } from 'use-intl';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, type MediaItem } from './social-media.tsx';
+import { client } from '../lib/api.ts';
 import { previewRule, previewText } from '../lib/social-preview.ts';
 import { hasTitle, providerName } from '../lib/social.ts';
 
@@ -64,7 +66,30 @@ function Media({ media, layout, max, cover }: { media: readonly MediaItem[]; lay
   );
 }
 
-export function PlatformPreview({ channel, provider, content }: { channel: string; provider: string; content: PreviewContent }) {
+// The page's own title and description for a link card (#641), read by the worker; the platform shows its card from
+// the same tags. Asked for once per link (after typing stops), then read until the worker answers.
+function useLinkPreview(url: string, enabled: boolean) {
+  const [settled, setSettled] = useState(url);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(url), 800);
+    return () => clearTimeout(timer);
+  }, [url]);
+  const on = enabled && settled === url && /^https?:\/\//i.test(url);
+  const asked = useQuery({ queryKey: ['social-link-preview', 'request', url], queryFn: () => client.social.linkPreviews.request({ url }), enabled: on, staleTime: 10 * 60_000, retry: false });
+  const waiting = asked.data?.status === 'pending';
+  const read = useQuery({
+    queryKey: ['social-link-preview', 'get', url],
+    queryFn: () => client.social.linkPreviews.get({ url }),
+    enabled: on && waiting,
+    retry: false,
+    // About half a minute, then the card keeps the host only.
+    refetchInterval: (q) => (q.state.data?.status !== 'pending' && q.state.dataUpdateCount > 0) || q.state.dataUpdateCount >= 20 ? false : 1500,
+  });
+  const latest = read.data ?? asked.data;
+  return latest?.status === 'ready' ? latest : null;
+}
+
+export function PlatformPreview({ channel, provider, content, readLink = false }: { channel: string; provider: string; content: PreviewContent; readLink?: boolean }) {
   const t = useTranslations('social');
   const rule = previewRule(provider);
   const [open, setOpen] = useState(false);
@@ -104,10 +129,16 @@ export function PlatformPreview({ channel, provider, content }: { channel: strin
       </div>
     </div>
   );
-  const card = rule.linkCard && host && !linkInText && content.media.length === 0 && (
+  const showCard = Boolean(rule.linkCard && host && !linkInText && content.media.length === 0);
+  const page = useLinkPreview(content.linkUrl, readLink && showCard);
+  const card = showCard && (
     <div className="mt-3 overflow-hidden rounded-lg border bg-muted">
-      <div className="aspect-[1.91/1] bg-background/40" />
-      <p className="truncate px-3 py-2 font-mono text-xs text-muted-foreground uppercase">{host}</p>
+      {!page?.title && <div className="aspect-[1.91/1] bg-background/40" />}
+      <div className="space-y-0.5 px-3 py-2">
+        <p className="truncate font-mono text-xs text-muted-foreground uppercase">{page?.siteName ?? host}</p>
+        {page?.title && <p className="line-clamp-2 text-sm font-semibold text-foreground">{page.title}</p>}
+        {page?.description && <p className="line-clamp-2 text-xs text-muted-foreground">{page.description}</p>}
+      </div>
     </div>
   );
   const plainLink = linkDropped ? <p className="mt-2 text-xs text-subtle-foreground">{t('previewLinkNotSent', { host })}</p> : null;

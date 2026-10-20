@@ -30,6 +30,7 @@ import {
   zSocialMetricsRow,
   zSocialLibraryItem,
   zSocialLibraryUse,
+  zSocialLinkPreview,
   zSocialNotificationKind,
   zSocialNotifications,
   zSocialSnippet,
@@ -304,6 +305,11 @@ export const contract = {
       create: oc.input(zSocialSnippetCreate).output(z.object({ snippetId: zId })),
       update: oc.input(zSocialSnippetUpdate).output(z.object({ snippetId: zId })),
       remove: oc.input(z.strictObject({ snippetId: zId })).output(z.object({ snippetId: zId })),
+    },
+    // Link preview cards (#641): what a link's page says, read by the worker; shown in Crove only.
+    linkPreviews: {
+      request: oc.input(z.strictObject({ url: z.string().min(1).max(2048) })).output(zSocialLinkPreview),
+      get: oc.input(z.object({ url: z.string().min(1).max(2048) })).output(zSocialLinkPreview.nullable()),
     },
     // In-app notifications (#637): each member reads, marks and turns off only their own.
     notifications: {

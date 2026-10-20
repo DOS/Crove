@@ -971,6 +971,17 @@ export const zSocialQueue = z.object({
   nextFree: z.array(z.string()),
 });
 
+// A link's preview card (#641): pending until the worker read the page; failed with why.
+export const zSocialLinkPreview = z.object({
+  url: z.string(),
+  status: z.enum(['pending', 'ready', 'failed']),
+  title: z.string().nullable(),
+  description: z.string().nullable(),
+  siteName: z.string().nullable(),
+  error: z.string().nullable(),
+  fetchedAt: z.string().nullable(),
+});
+
 // In-app notifications (#637): the viewer's newest, how many are unread, and the kinds they turned off.
 export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned'] as const;
 export const zSocialNotificationKind = z.enum(SOCIAL_NOTIFICATION_KINDS);
