@@ -5,7 +5,7 @@ import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import { afterAll, describe, expect, it } from 'vitest';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, pgBossSchemaVersion } from '../src/jobs-schema.ts';
+import { JOB_SCHEMA, MAIL_QUEUES, QUEUES, SOCIAL_PUBLISH_QUEUES, pgBossSchemaVersion } from '../src/jobs-schema.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -52,9 +52,9 @@ suite('crove_jobs from committed migrations', () => {
       expect(version.rows[0]?.version).toBe(pgBossSchemaVersion());
       const queues = await admin.query<{ name: string; policy: string }>(`SELECT name, policy FROM ${JOB_SCHEMA}.queue ORDER BY name`);
       expect(queues.rows).toEqual(
-        [...Object.values(QUEUES), ...SOCIAL_PUBLISH_QUEUES]
+        [...Object.values(QUEUES), ...SOCIAL_PUBLISH_QUEUES, ...MAIL_QUEUES]
           .sort()
-          .map((name) => ({ name, policy: name === QUEUES.agentWake || SOCIAL_PUBLISH_QUEUES.includes(name) ? 'stately' : 'standard' })),
+          .map((name) => ({ name, policy: name === QUEUES.agentWake || SOCIAL_PUBLISH_QUEUES.includes(name) || MAIL_QUEUES.includes(name) ? 'stately' : 'standard' })),
       );
 
       const functions = await admin.query<{ fn: string; pinned: boolean; public: boolean; worker: boolean; app: boolean }>(`
@@ -126,7 +126,7 @@ suite('crove_jobs from committed migrations', () => {
     await migrate({ adminUrl, dir: MIGRATIONS });
     await withClient(adminUrl, async (admin) => {
       const { rows } = await admin.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${JOB_SCHEMA}.queue`);
-      expect(rows[0]?.n).toBe(Object.values(QUEUES).length + SOCIAL_PUBLISH_QUEUES.length);
+      expect(rows[0]?.n).toBe(Object.values(QUEUES).length + SOCIAL_PUBLISH_QUEUES.length + MAIL_QUEUES.length);
       // The functions pg-boss created get the pinned search_path, like the vendored ones.
       const unpinned = await admin.query<{ fn: string }>(
         `SELECT p.oid::regprocedure::text AS fn FROM pg_proc p
