@@ -8,6 +8,9 @@
 // person posting chooses the privacy level and the interaction settings (TikTok's rules for the posting UI); an app TikTok
 // has not audited can only post SELF_ONLY. A post is visible only after the bytes are in, so a failure before then
 // posted nothing; after init, the publish_id says where it stands.
+// Photo posts (#710): 1 to 35 JPEG or WebP images through content/init with media_type PHOTO, which TikTok pulls from
+// Crove's presigned URLs (PULL_FROM_URL; the URL's domain must be verified for the TikTok app, or TikTok answers
+// url_ownership_unverified). The text goes as the description; the status check is the same as for a video.
 import type { ConnectedAccount, Publisher, PublishInput, PublishResult, Refresher, RetrySafety, StatusInput } from './index.ts';
 import { videoCoverOf } from './cover.ts';
 import { holdsLink } from './text.ts';
@@ -22,6 +25,10 @@ const OPEN_ID = /^[A-Za-z0-9_.-]{1,128}$/;
 const PUBLISH_ID = /^[A-Za-z0-9_.~-]{1,128}$/;
 const CHECK_AFTER_SECONDS = 30;
 const TITLE_MAX = 2200;
+// A photo post's description, and how many images it takes.
+const PHOTO_DESCRIPTION_MAX = 4000;
+const PHOTO_MAX = 35;
+const PHOTO_TYPES: readonly string[] = ['image/jpeg', 'image/webp'];
 // TikTok takes chunks of 5 to 64 MB, the last one up to 128 MB; a video under 5 MB goes whole.
 const CHUNK = 64 * 1024 * 1024;
 
@@ -239,9 +246,15 @@ interface StatusAnswer {
   publicaly_available_post_id?: unknown;
 }
 
-const captionOf = (content: { body: string; linkUrl: string | null }) => {
+const captionOf = (content: { body: string; linkUrl: string | null }, max = TITLE_MAX) => {
   const body = content.body.trim();
-  return (content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body).slice(0, TITLE_MAX);
+  return (content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body).slice(0, max);
+};
+
+// What TikTok's answers about photo URLs mean for the deployment, in plain words for the post screen.
+const PHOTO_HINTS: Readonly<Record<string, string>> = {
+  url_ownership_unverified: "TikTok did not take the image links: this deployment's media domain must be verified in the TikTok app's settings",
+  unaudited_client_can_only_post_to_private_accounts: 'This TikTok app is not audited yet, so it can post only to private accounts (privacy SELF_ONLY)',
 };
 
 export class TikTokPublisher implements Publisher {
@@ -260,9 +273,14 @@ export class TikTokPublisher implements Publisher {
   async publish(input: PublishInput): Promise<PublishResult> {
     const s = tiktokSecretOf(input.secret);
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
-    const video = input.content.media[0];
-    if (!video || !video.mime.startsWith('video/') || input.content.media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
     const privacy = TIKTOK_PRIVACY_LEVELS.find((p) => p === input.settings.privacyLevel);
+    const media = input.content.media;
+    if (media.length > 0 && media.every((m) => m.mime.startsWith('image/'))) {
+      if (!privacy) return { kind: 'rejected', error: 'bad_request', code: 'PRIVACY_REQUIRED' };
+      return this.publishPhotos(input, s.accessToken, privacy);
+    }
+    const video = media[0];
+    if (!video || !video.mime.startsWith('video/') || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
     if (!privacy) return { kind: 'rejected', error: 'bad_request', code: 'PRIVACY_REQUIRED' };
     // A cover (#642): direct post takes a frame of the video (video_cover_timestamp_ms), never an uploaded image.
     const cover = videoCoverOf(input.settings);
@@ -324,6 +342,51 @@ export class TikTokPublisher implements Publisher {
       const result = publishResult(error);
       return result.kind === 'rejected' ? { kind: 'rejected', error: 'transient', ...(result.code ? { code: result.code } : {}) } : { kind: 'pending', externalRef: publishId, checkAfterSeconds: CHECK_AFTER_SECONDS };
     }
+    return { kind: 'pending', externalRef: publishId, checkAfterSeconds: CHECK_AFTER_SECONDS };
+  }
+
+  // A photo post: every image's URL first (nothing is sent without all of them), the creator's options, then one init.
+  private async publishPhotos(input: PublishInput, token: string, privacy: TikTokPrivacy): Promise<PublishResult> {
+    const images = input.content.media;
+    if (images.length > PHOTO_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_MEDIA' };
+    if (images.some((m) => !PHOTO_TYPES.includes(m.mime.toLowerCase()))) return { kind: 'rejected', error: 'bad_request', code: 'IMAGE_TYPE_NOT_ALLOWED', message: 'TikTok takes JPEG or WebP photos' };
+    const urls: string[] = [];
+    for (const m of images) {
+      const url = await input.mediaUrl(m.fileId).catch(() => null);
+      if (!url) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+      urls.push(url);
+    }
+    let creator: CreatorInfo;
+    try {
+      creator = await this.client.call<CreatorInfo>('POST', '/post/publish/creator_info/query/', token, {});
+    } catch (error) {
+      const result = publishResult(error);
+      return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
+    }
+    const options = Array.isArray(creator.privacy_level_options) ? creator.privacy_level_options : [];
+    if (!options.includes(privacy)) return { kind: 'rejected', error: 'permission', code: 'PRIVACY_NOT_ALLOWED', message: `${privacy} is not available for this account` };
+    let init: { publish_id?: unknown };
+    try {
+      init = await this.client.call('POST', '/post/publish/content/init/', token, {
+        post_info: {
+          description: captionOf(input.content, PHOTO_DESCRIPTION_MAX),
+          privacy_level: privacy,
+          disable_comment: creator.comment_disabled === true || input.settings.allowComments !== true,
+          auto_add_music: input.settings.autoAddMusic === true,
+        },
+        source_info: { source: 'PULL_FROM_URL', photo_cover_index: 0, photo_images: urls },
+        post_mode: 'DIRECT_POST',
+        media_type: 'PHOTO',
+      });
+    } catch (error) {
+      // An init TikTok refused posted nothing; an unclear answer did not either, since no publish_id came back.
+      const result = publishResult(error);
+      const hint = result.kind === 'rejected' && result.code ? PHOTO_HINTS[result.code] : undefined;
+      if (result.kind === 'rejected') return hint ? { ...result, message: hint } : result;
+      return { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
+    }
+    const publishId = typeof init.publish_id === 'string' ? init.publish_id : '';
+    if (!PUBLISH_ID.test(publishId)) return { kind: 'rejected', error: 'transient', code: 'NO_PUBLISH_ID' };
     return { kind: 'pending', externalRef: publishId, checkAfterSeconds: CHECK_AFTER_SECONDS };
   }
 

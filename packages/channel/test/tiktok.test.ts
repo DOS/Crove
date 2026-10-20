@@ -92,6 +92,46 @@ describe('TikTokPublisher', () => {
     expect(calls[2]?.headers.get('content-range')).toBe('bytes 0-3/4');
   });
 
+  it('posts photos through content/init from their URLs, with the text as the description (#710)', async () => {
+    const { fetchImpl, calls } = tiktok({
+      'POST open.tiktokapis.com/v2/post/publish/creator_info/query/': [creator()],
+      'POST open.tiktokapis.com/v2/post/publish/content/init/': [{ body: { data: { publish_id: 'p_pub_url~v2.123' }, error: ok } }],
+    });
+    const photos = [
+      { fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 4, altText: null },
+      { fileId: 'f-2', mime: 'image/webp', sizeBytes: 4, altText: null },
+    ];
+    const url = async (fileId: string) => `https://media.crove.example/${fileId}`;
+    const content = { body: 'Bộ ảnh bánh mới', title: null, linkUrl: 'https://tiembanh.example/', media: photos };
+    expect(await new TikTokPublisher(APP, fetchImpl).publish(input({ content, mediaUrl: url, settings: { privacyLevel: 'PUBLIC_TO_EVERYONE', allowComments: true } }))).toEqual({ kind: 'pending', externalRef: 'p_pub_url~v2.123', checkAfterSeconds: 30 });
+    expect(calls[1]?.body).toEqual({
+      post_info: { description: 'Bộ ảnh bánh mới\n\nhttps://tiembanh.example/', privacy_level: 'PUBLIC_TO_EVERYONE', disable_comment: false, auto_add_music: false },
+      source_info: { source: 'PULL_FROM_URL', photo_cover_index: 0, photo_images: ['https://media.crove.example/f-1', 'https://media.crove.example/f-2'] },
+      post_mode: 'DIRECT_POST',
+      media_type: 'PHOTO',
+    });
+  });
+
+  it('refuses photos it cannot send before any call, and explains an unverified media domain (#710)', async () => {
+    const none = tiktok({});
+    const publisher = new TikTokPublisher(APP, none.fetchImpl);
+    const jpeg = { fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 4, altText: null };
+    const photos = (media: PublishInput['content']['media']) => ({ body: 'Ảnh', title: null, linkUrl: null, media });
+    expect(await publisher.publish(input({ content: photos([jpeg]) }))).toMatchObject({ kind: 'rejected', code: 'MEDIA_URL_UNAVAILABLE' });
+    expect(await publisher.publish(input({ content: photos([{ ...jpeg, mime: 'image/png' }]), mediaUrl: async () => 'https://m.example/a' }))).toMatchObject({ kind: 'rejected', code: 'IMAGE_TYPE_NOT_ALLOWED' });
+    expect(await publisher.publish(input({ content: photos(Array.from({ length: 36 }, (_, i) => ({ ...jpeg, fileId: `f-${i}` }))), mediaUrl: async () => 'https://m.example/a' }))).toMatchObject({ kind: 'rejected', code: 'TOO_MANY_MEDIA' });
+    expect(await publisher.publish(input({ content: photos([jpeg]), settings: {} }))).toMatchObject({ kind: 'rejected', code: 'PRIVACY_REQUIRED' });
+    expect(none.calls).toHaveLength(0);
+
+    const unverified = tiktok({
+      'POST open.tiktokapis.com/v2/post/publish/creator_info/query/': [creator()],
+      'POST open.tiktokapis.com/v2/post/publish/content/init/': [{ status: 403, body: { error: { code: 'url_ownership_unverified', message: 'Please verify the ownership of the URL prefix or domain.' } } }],
+    });
+    const refused = await new TikTokPublisher(APP, unverified.fetchImpl).publish(input({ content: photos([jpeg]), mediaUrl: async () => 'https://m.example/a' }));
+    expect(refused).toMatchObject({ kind: 'rejected', error: 'permission', code: 'url_ownership_unverified' });
+    expect(refused.kind === 'rejected' && refused.message).toContain('media domain must be verified');
+  });
+
   it('sends a frame cover as video_cover_timestamp_ms, and refuses an image cover with nothing sent (#642)', async () => {
     const { fetchImpl, calls } = tiktok({
       'POST open.tiktokapis.com/v2/post/publish/creator_info/query/': [creator()],
