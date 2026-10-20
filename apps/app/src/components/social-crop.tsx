@@ -11,14 +11,34 @@ import type { MediaItem } from './social-media.tsx';
 import { errorMessage, fetchFile, queryClient, uploadFiles } from '../lib/api.ts';
 import { CROP_PRESETS, cropAxis, cropName, cropRect, cropType, outputSize, type CropPreset } from '../lib/social-crop.ts';
 
-// The image decoded once, turned the way its EXIF says.
+// The image decoded while the panel is open, turned the way its EXIF says, and closed when it goes away (a decoded
+// bitmap holds graphics memory the garbage collector does not see). The file's bytes come from the thumbnails' cache.
 function useBitmap(fileId: string) {
-  return useQuery({
-    queryKey: ['social-media-bitmap', fileId],
-    queryFn: async () => createImageBitmap(await fetchFile(fileId), { imageOrientation: 'from-image' }),
-    staleTime: Infinity,
-    gcTime: 60_000,
-  });
+  const blob = useQuery({ queryKey: ['social-media', fileId], queryFn: () => fetchFile(fileId), staleTime: Infinity });
+  const [state, setState] = useState<{ data?: ImageBitmap; error?: unknown }>({});
+  useEffect(() => {
+    if (!blob.data) return;
+    let bitmap: ImageBitmap | undefined;
+    let gone = false;
+    createImageBitmap(blob.data, { imageOrientation: 'from-image' }).then(
+      (b) => {
+        if (gone) b.close();
+        else {
+          bitmap = b;
+          setState({ data: b });
+        }
+      },
+      (error: unknown) => {
+        if (!gone) setState({ error });
+      },
+    );
+    return () => {
+      gone = true;
+      bitmap?.close();
+      setState({});
+    };
+  }, [blob.data]);
+  return { data: state.data, error: state.error ?? blob.error, isLoading: !state.data && !state.error && !blob.error };
 }
 
 function draw(canvas: HTMLCanvasElement, bitmap: ImageBitmap, rect: { x: number; y: number; width: number; height: number }, width: number, height: number) {
