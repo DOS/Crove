@@ -294,8 +294,9 @@ export const journalList = defineQuery({
 // entries exported, never their content. Same roles as finance.journal.list, which the export reads.
 // The MISA SME voucher exports (GET /api/export/misa/purchases.xlsx, #317, and /api/export/misa/sales.xlsx, #313)
 // record themselves here too, with `format`, so the usage report counts every export to the accountant; `entries` is
-// then the number of vouchers.
-export const EXPORT_FORMATS = ['journal', 'misa_sme_purchases', 'misa_sme_sales'] as const;
+// then the number of vouchers. So do the cash receipts and payments (/api/export/misa/receipts.xlsx and
+// payments.xlsx, #657).
+export const EXPORT_FORMATS = ['journal', 'misa_sme_purchases', 'misa_sme_sales', 'misa_sme_cash_receipts', 'misa_sme_cash_payments'] as const;
 export const journalExport = defineCommand({
   name: 'finance.journal.export',
   input: zRange.extend({

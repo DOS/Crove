@@ -594,4 +594,81 @@ suite('cash and bank vouchers (#327)', () => {
     expect(all.map(key)).toEqual(all.map(key).sort().reverse());
     expect(all[0]).toMatchObject({ code: 'PC00001', date: '2026-09-20' });
   });
+
+  it('exports posted phiếu thu and phiếu chi in the MISA SME templates, without reversed vouchers (#657)', async () => {
+    const posted = async (input: Record<string, unknown>) => {
+      const asked = await ask(member, input);
+      expect(asked.status).toBe(200);
+      const approved = await approve(owner, String(asked.body.proposalId));
+      expect(approved.status).toBe(200);
+      return approved.body as { voucherId: string; journalEntryId: string };
+    };
+    const paid = await posted(
+      payment('300000', {
+        date: '2026-11-03',
+        lines: [
+          { account: '331', amount: '250000', memo: 'HĐ 77' },
+          { account: '6422', amount: '50000' },
+        ],
+      }),
+    );
+    const received = await posted({ type: 'cash_receipt', date: '2026-11-04', cashAccount: '1111', partyId: customer, personName: 'Trần Thị Bình', description: 'Thu tiền hàng', lines: [{ account: '131', amount: '700000' }] });
+    // A payment reversed in the same month leaves the export.
+    const undone = await posted(payment('1000', { date: '2026-11-05' }));
+    const reversal = await rpc('inbox/request', await tokenFor(member), {
+      command: 'finance.journal.reverse',
+      input: { entryId: undone.journalEntryId, entryDate: '2026-11-06', reason: 'Chi nhầm' },
+      idempotencyKey: randomUUID(),
+    });
+    expect((await approve(adminUser, String(reversal.body.proposalId))).status).toBe(200);
+
+    const november = { from: '2026-11-01', to: '2026-11-30' };
+    const codeOf = new Map(((await rpc('vouchers/list', await tokenFor(viewer), november)).body.items as any[]).map((v) => [v.id, v.code]));
+    const asViewer = { actor: asUser(viewer.userId), orgId: org.orgId };
+    const payments = await runtime.query<any[]>('finance.vouchers.cash', { ...november, type: 'cash_payment' }, asViewer);
+    expect(payments).toEqual([
+      {
+        type: 'cash_payment',
+        code: codeOf.get(paid.voucherId),
+        date: '2026-11-03',
+        cashAccount: '1111',
+        party: { name: await vendorName(), taxCode: expect.any(String), address: expect.toSatisfy((a: unknown) => a === null || typeof a === 'string') },
+        personName: 'Nguyễn Văn An',
+        description: 'Trả tiền hàng HĐ 1234',
+        lines: [
+          { lineNo: 1, account: '331', amount: expect.stringMatching(/^250000(\.0+)?$/), memo: 'HĐ 77' },
+          { lineNo: 2, account: '6422', amount: expect.stringMatching(/^50000(\.0+)?$/), memo: 'Trả tiền hàng HĐ 1234' },
+        ],
+      },
+    ]);
+    const receipts = await runtime.query<any[]>('finance.vouchers.cash', { ...november, type: 'cash_receipt' }, asViewer);
+    expect(receipts).toMatchObject([{ code: codeOf.get(received.voucherId), personName: 'Trần Thị Bình', cashAccount: '1111', lines: [{ account: '131', amount: expect.stringMatching(/^700000(\.0+)?$/) }] }]);
+    expect(receipts[0].party).toMatchObject({ name: expect.any(String) });
+
+    // Viewers may download (same roles as the other exports); each download writes its audit row first.
+    for (const [path, name, format, entries] of [
+      ['receipts', 'crove-misa-phieu-thu-', 'misa_sme_cash_receipts', 1],
+      ['payments', 'crove-misa-phieu-chi-', 'misa_sme_cash_payments', 1],
+    ] as const) {
+      const response = await app.request(`/api/export/misa/${path}.xlsx?from=2026-11-01&to=2026-11-30`, { headers: { authorization: `Bearer ${await tokenFor(viewer)}`, 'x-crove-org': org.slug } });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-disposition')).toContain(name);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      expect(String.fromCharCode(bytes[0] ?? 0, bytes[1] ?? 0)).toBe('PK');
+      const audits = await admin(
+        async (c) => (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.journal.export' AND outcome = 'ok'`, [org.orgId])).rows,
+      );
+      expect(audits.map((a) => a.detail)).toContainEqual({ entries, format });
+    }
+    // A bad date is refused before any file is built; another org's member gets nothing of this org.
+    const bad = await app.request('/api/export/misa/payments.xlsx?from=2026-13-01', { headers: { authorization: `Bearer ${await tokenFor(viewer)}`, 'x-crove-org': org.slug } });
+    expect(bad.status).toBe(422);
+    const foreign = await app.request('/api/export/misa/payments.xlsx', { headers: { authorization: `Bearer ${await tokenFor(outsider)}`, 'x-crove-org': org.slug } });
+    expect(foreign.status).toBe(403);
+    // The other org's export holds its own posted vouchers only (rows written without an entry are not posted).
+    const theirList = (await rpc('vouchers/list', await tokenFor(outsider), { type: 'cash_payment' }, other.slug)).body.items as any[];
+    const theirs = await runtime.query<any[]>('finance.vouchers.cash', { type: 'cash_payment' }, { actor: asUser(outsider.userId), orgId: other.orgId });
+    expect(theirs.map((v) => v.code).sort()).toEqual(theirList.filter((v) => v.journalEntryId && !v.reversal).map((v) => v.code).sort());
+    expect(theirs.flatMap((v) => v.lines.map((l: any) => l.memo))).not.toContain('HĐ 77');
+  });
 });
