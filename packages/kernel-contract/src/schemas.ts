@@ -931,6 +931,22 @@ export const zSocialSnippet = z.object({
 const zSnippetFields = { name: z.string().trim().min(1).max(100), body: z.string().trim().min(1).max(10_000), provider: z.string().min(1).max(32).nullable(), isTemplate: z.boolean() };
 export const zSocialSnippetCreate = z.strictObject({ ...zSnippetFields, provider: zSnippetFields.provider.optional(), isTemplate: z.boolean().optional() });
 export const zSocialSnippetUpdate = z.strictObject({ snippetId: zId, ...zSnippetFields });
+// What works (#705): a group of a channel's posts and its median engagement against the channel's.
+const zInsightGroup = z.object({ key: z.string(), posts: z.number().int(), median: z.number(), ratio: z.number().nullable() });
+const zInsightPost = z.object({ variantId: zId, postId: zId, excerpt: z.string(), publishedAt: z.string().nullable(), externalUrl: z.string().nullable(), engagement: z.number() });
+export const zSocialChannelInsights = z.object({
+  connectionId: zId,
+  provider: z.string(),
+  posts: z.number().int(),
+  median: z.number(),
+  best: z.array(zInsightPost),
+  worst: z.array(zInsightPost),
+  byLabel: z.array(zInsightGroup),
+  byFormat: z.array(zInsightGroup),
+  byWeekday: z.array(zInsightGroup),
+  byHour: z.array(zInsightGroup),
+  byHashtag: z.array(zInsightGroup),
+});
 // An idea on the ideas board (#701), with the library files it still has.
 export const zSocialIdea = z.object({
   id: zId,

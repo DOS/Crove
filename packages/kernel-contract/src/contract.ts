@@ -28,6 +28,7 @@ import {
   zSocialPostUpdate,
   zSocialQueue,
   zSocialMetricsRow,
+  zSocialChannelInsights,
   zSocialIdea,
   zSocialIdeaCreate,
   zSocialIdeaUpdate,
@@ -293,6 +294,10 @@ export const contract = {
       // postId: that post's published channels, whenever they went out.
       // labelId: only posts with that label (#639).
       summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional(), labelId: zId.optional() })).output(z.array(zSocialMetricsRow)),
+      // What works (#705): each channel's posts against its own median, by label, format, weekday, hour and hashtag.
+      insights: oc
+        .input(z.object({ days: z.number().int().min(1).max(365), labelId: zId.optional(), timeZone: z.string().min(1).max(64) }))
+        .output(z.object({ channels: z.array(zSocialChannelInsights), truncated: z.boolean() })),
       // The window as a CSV file (UTF-8 with a byte order mark); every export is audited.
       export: oc
         .input(z.strictObject({ days: z.number().int().min(1).max(365), labelId: zId.optional() }))

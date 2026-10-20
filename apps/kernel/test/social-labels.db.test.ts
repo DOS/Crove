@@ -194,6 +194,37 @@ suite('social labels on PostgreSQL (#639)', () => {
     expect(await admin(async (cl) => (await cl.query('SELECT 1 FROM crove_social.post_label WHERE label_id = $1', [a])).rowCount)).toBe(0);
   });
 
+  it('compares posts by label, format and hashtag in What works (#705)', async () => {
+    const o = await org();
+    const sale = await create(o, o.member, 'Khuyến mãi');
+    const rows: [string, number, boolean][] = [
+      ['#GiamGia Bài một', 30, true],
+      ['#giamgia Bài hai', 10, true],
+      ['#giamgia Bài ba', 20, false],
+      ['Bài bốn', 2, false],
+    ];
+    for (const [body, reactions, tagged] of rows) {
+      const postId = await post(o, body);
+      if (tagged) await exec(o, o.member, 'social.post.set_labels', { postId, labelIds: [sale] });
+      await admin(async (c) => {
+        const { rows: v } = await c.query<{ id: string }>("UPDATE crove_social.post_variant SET status = 'published', published_at = now() WHERE post_id = $1 RETURNING id", [postId]);
+        await c.query('INSERT INTO crove_social.metric_snapshot (org_id, variant_id, capture_key, metrics) VALUES ($1, $2, $3, $4)', [o.orgId, v[0]?.id, 'k1', JSON.stringify({ reactions })]);
+      });
+    }
+    type Insights = { channels: { posts: number; median: number; best: { excerpt: string; engagement: number }[]; byLabel: unknown[]; byFormat: { key: string }[]; byHashtag: unknown[] }[]; truncated: boolean };
+    const insights = (input: Record<string, unknown>) => query<Insights>(o, o.viewer, 'social.metrics.insights', { days: 30, timeZone: 'Asia/Ho_Chi_Minh', ...input });
+    const all = await insights({});
+    expect(all.truncated).toBe(false);
+    expect(all.channels).toHaveLength(1);
+    const [c] = all.channels;
+    expect(c).toMatchObject({ posts: 4, median: 15 });
+    expect(c?.best[0]).toEqual(expect.objectContaining({ excerpt: '#GiamGia Bài một', engagement: 30 }));
+    expect(c?.byLabel).toEqual([{ key: sale, posts: 2, median: 20, ratio: 20 / 15 }]);
+    expect(c?.byHashtag).toEqual([{ key: 'giamgia', posts: 3, median: 20, ratio: 20 / 15 }]);
+    expect(c?.byFormat.map((g) => g.key)).toEqual(['text']);
+    expect((await insights({ labelId: sale })).channels[0]).toMatchObject({ posts: 2, median: 20 });
+    await expect(insights({ timeZone: 'Mars/Base' })).rejects.toThrow();
+  });
   it('filters the metrics summary and export by label and writes the labels column', async () => {
     const o = await org();
     const campaign = await create(o, o.member, 'Tết 2027', 'red');

@@ -410,6 +410,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       },
       metrics: {
         summary: os.social.metrics.summary.handler(socialQuery('social.metrics.summary')),
+        insights: os.social.metrics.insights.handler(socialQuery('social.metrics.insights')),
         export: os.social.metrics.export.handler(socialCommand('social.metrics.export')),
       },
       labels: {
