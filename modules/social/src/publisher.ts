@@ -12,7 +12,8 @@ import { withCallSignal, type Publisher, type PublishResult, type ReconcileResul
 import { DomainError, readVerified, type BlobStore, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { COVER_RULES, VIDEO_READY, coverKind, coverOf, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
-import type { CommentWork } from './comments.ts';
+import type { CommentWork } from './comments.ts';import { shortened, shortUrl } from './short-links.ts';
+
 
 export interface PublishDeps {
   runtime: Runtime;
@@ -24,6 +25,8 @@ export interface PublishDeps {
   // Where the images of posts are stored. Unset: a post with images is refused by the adapter with nothing posted.
   store?: BlobStore;
   staleSeconds?: number;
+  // The deployment's public URL (PUBLIC_URL), where short links (#706) point. Unset: a post goes out with its own link.
+  publicUrl?: string;
 }
 
 const ACTOR: SystemActor = { type: 'system', component: 'social.publisher' };
@@ -131,6 +134,8 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
     // The exact version the post was approved with, checked against its hash.
     return readVerified(deps.store, { key: file.storageKey, generation: file.generation, sha256: file.sha256 });
   };
+  // The content as it goes out: with its short link (#706) when it has one.
+  const content = work.shortLink && deps.publicUrl ? shortened(work.content, { target: work.shortLink.target, url: shortUrl(deps.publicUrl, work.shortLink.code) }) : work.content;
   try {
     switch (work.action) {
       case 'call':
@@ -144,7 +149,7 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
         }
         return fromPublish(
           await withTimeout(timeout, () =>
-            publisher.publish({ ...credential, content: work.content, readMedia, mediaUrl, settings: work.settings, callKey: work.callKey, contentHash: work.contentHash }),
+            publisher.publish({ ...credential, content, readMedia, mediaUrl, settings: work.settings, callKey: work.callKey, contentHash: work.contentHash }),
           ),
         );
       case 'status':
@@ -156,7 +161,7 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
         const after = new Date(Date.parse(work.callStartedAt) - 60_000);
         return fromReconcile(
           await withTimeout(timeout, () =>
-            publisher.reconcile!({ ...credential, callKey: work.callKey, contentHash: work.contentHash, content: work.content, settings: work.settings, after, before: new Date() }),
+            publisher.reconcile!({ ...credential, callKey: work.callKey, contentHash: work.contentHash, content, settings: work.settings, after, before: new Date() }),
           ),
         );
       }

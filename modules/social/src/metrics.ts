@@ -76,6 +76,8 @@ export interface MetricsRow {
   externalUrl: string | null;
   metrics: Record<string, number>;
   capturedAt: string | null;
+  // Clicks on its short link (#706); null when it went out without one.
+  clicks: number | null;
 }
 
 // The latest snapshot of each variant published in the window, newest first; or of one post's published channels,
@@ -113,9 +115,13 @@ async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limi
     external_url: string | null;
     metrics: Record<string, number> | null;
     captured_at: Date | null;
+    clicks: string | null;
   }>`
     SELECT v.id AS variant_id, v.post_id, v.provider, v.channel_connection_id, coalesce(v.body, p.body) AS body,
-           v.published_at, v.external_url, s.metrics, s.captured_at
+           v.published_at, v.external_url, s.metrics, s.captured_at,
+           (SELECT CASE WHEN count(l.id) = 0 THEN NULL ELSE coalesce(sum(c.clicks), 0) END FROM crove_social.short_link l
+            LEFT JOIN crove_social.short_link_click c ON c.org_id = l.org_id AND c.short_link_id = l.id
+            WHERE l.org_id = v.org_id AND l.variant_id = v.id) AS clicks
     FROM crove_social.post_variant v
     JOIN crove_social.post p ON p.org_id = v.org_id AND p.id = v.post_id
     LEFT JOIN LATERAL (
@@ -138,6 +144,7 @@ async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limi
     externalUrl: r.external_url,
     metrics: r.metrics ?? {},
     capturedAt: r.captured_at ? r.captured_at.toISOString() : null,
+    clicks: r.clicks === null ? null : Number(r.clicks),
   }));
 }
 
