@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import type { CommentInput, CommentResult, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
 import { commentResult } from './comment.ts';
 import { videoCoverOf } from './cover.ts';
+import { postTypeOf } from './post-type.ts';
 import { Graph, GraphError, graphPublishResult, MetaLogin, type MetaAppConfig } from './meta.ts';
 import type { AuthorizeInput, ExchangeInput, Fetch, OAuthConnector } from './oauth.ts';
 
@@ -94,7 +95,10 @@ const isVideo = (m: { mime: string }) => m.mime.startsWith('video/');
 // A pending post's reference: the container and a short hash of its caption, so a later status check can recognise the
 // post the container became without the content.
 const captionKey = (caption: string) => createHash('sha256').update(caption).digest('hex').slice(0, 16);
-const refOf = (container: string, caption: string) => `${container}.${captionKey(caption)}`;
+// A Story has no caption and is not listed with the account's media, so its reference carries this key instead: a
+// published Story whose id was not answered cannot be found again, and is unknown.
+const STORY_KEY = '0'.repeat(16);
+const refOf = (container: string, caption: string, story = false) => `${container}.${story ? STORY_KEY : captionKey(caption)}`;
 function parseRef(ref: string): { container: string; key: string } | null {
   const m = /^(\d{1,32})\.([0-9a-f]{16})$/.exec(ref);
   return m ? { container: m[1] as string, key: m[2] as string } : null;
@@ -130,14 +134,23 @@ export class InstagramPublisher implements Publisher {
     // A cover (#642) belongs to a Reel: a frame (thumb_offset, in milliseconds) or an image Meta fetches (cover_url).
     const cover = videoCoverOf(input.settings);
     const reel = media.length === 1 && isVideo(media[0] as { mime: string });
-    if (cover && !reel) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
+    // The post type (#644): a Story is one image or video, with no caption, cover or link; a Reel is one video.
+    const type = postTypeOf(input.settings);
+    if (type === null) return { kind: 'rejected', error: 'bad_request', code: 'POST_TYPE_NOT_SUPPORTED' };
+    const story = type === 'story';
+    if (story && media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'STORY_ONE_MEDIA' };
+    if (type === 'reel' && !reel) return { kind: 'rejected', error: 'bad_request', code: 'REEL_ONE_VIDEO' };
+    if (cover && (!reel || story)) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
     const first = await input.mediaUrl((media[0] as { fileId: string }).fileId).catch(() => null);
     if (!first) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
-    const caption = captionOf(input.content);
+    const caption = story ? '' : captionOf(input.content);
     // Containers are invisible until published, so any failure while making them posted nothing.
     let container: string;
     try {
-      if (media.length === 1) {
+      if (story) {
+        // A Story: Meta fetches the image or video from the URL; it takes no caption.
+        container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'STORIES', ...(reel ? { video_url: first } : { image_url: first }) });
+      } else if (media.length === 1) {
         // One video is a Reel, shown in the feed too; Meta fetches it from the URL and processes it before publishing.
         const coverForm = !cover ? {} : 'atMs' in cover ? { thumb_offset: String(cover.atMs) } : { cover_url: await urlOf(cover.fileId) };
         const single = reel ? { media_type: 'REELS', video_url: first, share_to_feed: 'true', ...coverForm } : { image_url: first };
@@ -159,12 +172,13 @@ export class InstagramPublisher implements Publisher {
     const deadline = Date.now() + this.waitMs;
     for (;;) {
       const state = await this.containerStatus(container, s.accessToken);
-      if (state === 'FINISHED') return this.publishContainer(input.externalAccountId, s.accessToken, container, captionKey(caption));
+      const key = story ? STORY_KEY : captionKey(caption);
+      if (state === 'FINISHED') return this.publishContainer(input.externalAccountId, s.accessToken, container, key);
       if (state === 'ERROR' || state === 'EXPIRED') return { kind: 'rejected', error: 'bad_request', code: `CONTAINER_${state}` };
-      if (state === 'PUBLISHED') return this.findPublished(input.externalAccountId, s.accessToken, captionKey(caption), container);
+      if (state === 'PUBLISHED') return this.findPublished(input.externalAccountId, s.accessToken, key, container);
       // Nothing is published yet, so a refused token here posted nothing.
       if (state === 'TOKEN_EXPIRED') return { kind: 'rejected', error: 'token_expired', code: '190' };
-      if (Date.now() >= deadline) return { kind: 'pending', externalRef: refOf(container, caption), checkAfterSeconds: CHECK_AFTER_SECONDS };
+      if (Date.now() >= deadline) return { kind: 'pending', externalRef: refOf(container, caption, story), checkAfterSeconds: CHECK_AFTER_SECONDS };
       await sleep(this.pollMs);
     }
   }
@@ -202,7 +216,8 @@ export class InstagramPublisher implements Publisher {
     const s = secretOf(input.secret);
     if (!s || !NUMERIC_ID.test(input.externalAccountId)) return { found: 'unknown' };
     const caption = captionOf(input.content);
-    if (!caption) return { found: 'unknown' };
+    // A Story has no caption and is not listed with the account's media (#644).
+    if (!caption || postTypeOf(input.settings) === 'story') return { found: 'unknown' };
     try {
       const post = await this.recent(input.externalAccountId, s.accessToken, (p) => p.caption === caption && p.at >= input.after.getTime() - 60_000 && p.at <= input.before.getTime() + 60_000);
       return post ? { found: true, externalId: post.id, url: post.permalink } : { found: false };
@@ -296,6 +311,8 @@ export class InstagramPublisher implements Publisher {
   // The post a published container became: the newest post with the same caption in the last day (Meta does not link
   // them back, and its listing may lag). Never a guess: no match is unknown. quiet: a miss is not worth reporting.
   private async findPublished(account: string, token: string, key: string, container: string, quiet = false): Promise<PublishResult> {
+    // A Story is not listed with the account's media: never matched by guess.
+    if (key === STORY_KEY) return { kind: 'unknown', code: quiet ? 'NOT_YET' : 'STORY_NOT_FOUND', message: `container ${container}` };
     const since = Date.now() - 86_400_000;
     try {
       const post = await this.recent(account, token, (p) => captionKey(p.caption) === key && !(p.at < since));
