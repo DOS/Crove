@@ -98,6 +98,8 @@ function mastodonFailure(code: string | undefined): DomainError {
   if (code === 'MASTODON_TOKEN_REFUSED') return new DomainError('MASTODON_TOKEN_REFUSED', 422, 'Máy chủ Mastodon không chấp nhận mã truy cập này');
   if (code === 'MASTODON_NOT_AN_INSTANCE') return new DomainError('MASTODON_NOT_AN_INSTANCE', 422, 'Địa chỉ này không phải một máy chủ Mastodon');
   return new DomainError('MASTODON_INSTANCE_UNREACHABLE', 422, 'Không kết nối được tới máy chủ Mastodon này; hãy kiểm tra địa chỉ rồi thử lại');
+}
+
 type LinkPreviewView = { status: 'pending' | 'ready' | 'failed'; title: string | null; description: string | null; siteName: string | null } | null;
 const SOURCE_WAIT_MS = 10_000;
 // The link preview of a page an AI draft is written from (#769): requested when there is none, then waited for. A page
