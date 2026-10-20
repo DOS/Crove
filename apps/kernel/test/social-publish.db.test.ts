@@ -544,6 +544,48 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect((await calls(id)).map((c) => c.state)).toEqual(['failed', 'succeeded']);
   });
 
+  it('waits with nothing sent once an account used its counted limit, and goes out when a post leaves the window (#775)', async () => {
+    const o = await org();
+    const account = `acct-${randomUUID().slice(0, 8)}`;
+    const sealed = vault.seal(JSON.stringify({ accessToken: 'li-1' }), { orgId: o.orgId, provider: 'linkedin', externalAccountId: account });
+    const { connectionId } = await exec<{ connectionId: string }>(o, 'kernel.channel.connect', { provider: 'linkedin', externalAccountId: account, displayName: 'Quán A', scopes: ['w_member_social'], expiresAt: null, credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') } });
+    const due = async () => {
+      const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: `Bài ${randomUUID().slice(0, 6)}`, channels: [{ connectionId }] });
+      await exec(o, 'social.post.submit', { postId });
+      const post = await get(o, postId);
+      await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+      await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+      await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+      return { postId, id: post.variants[0]?.id as string };
+    };
+    let sent = 0;
+    const linkedin: Publisher = { provider: 'linkedin', publishSafety: 'never', publish: async () => ({ kind: 'accepted', externalId: `urn:li:share:71000000000000${String(++sent).padStart(5, '0')}`, url: null }) };
+    const deps = { runtime: worker, broker: vault, publishers: { linkedin }, callTimeoutMs: 2_000 };
+    const earlier = await due();
+    // The account made 150 posts in the last day (as the call ledger holds them), the oldest 23 hours 50 minutes ago.
+    await admin((c) =>
+      c.query(
+        "INSERT INTO crove_kernel.external_call (org_id, key, module, target, step, retry_safety, request_hash, state, started_at) SELECT $1, 'social.publish:' || $2 || ':1:' || n || ':publish', 'social', 'linkedin', 'publish', 'never', NULL, 'started', now() - interval '23 hours 50 minutes' + make_interval(secs => n) FROM generate_series(1, 150) n",
+        [o.orgId, earlier.id],
+      ),
+    );
+    // All but the oldest went out; the oldest is still on its way, and counts too.
+    await admin((c) => c.query("UPDATE crove_kernel.external_call SET state = 'succeeded', finished_at = now() WHERE org_id = $1 AND key LIKE 'social.publish:' || $2 || ':1:%:publish' AND key <> 'social.publish:' || $2 || ':1:1:publish'", [o.orgId, earlier.id]));
+    const next = await due();
+    expect(await runPublishJob(deps, o.orgId, next.id, 'linkedin')).toMatchObject({ action: 'none' });
+    expect(sent).toBe(0);
+    const row = await admin(async (c) => (await c.query<{ status: string; error_code: string; error_retry_at: Date }>('SELECT status, error_code, error_retry_at FROM crove_social.post_variant WHERE id = $1', [next.id])).rows[0]);
+    expect(row).toMatchObject({ status: 'scheduled', error_code: 'QUOTA_EXHAUSTED' });
+    // About 10 minutes from now, when the oldest of the 150 leaves the day.
+    const retryIn = (row ? row.error_retry_at.getTime() : 0) - Date.now();
+    expect(retryIn).toBeGreaterThan(9 * 60_000);
+    expect(retryIn).toBeLessThan(11 * 60_000);
+    // A refused call used no allowance: with the oldest refused, the post goes out once due.
+    await admin((c) => c.query("UPDATE crove_kernel.external_call SET state = 'failed', finished_at = now() WHERE org_id = $1 AND key = 'social.publish:' || $2 || ':1:1:publish'", [o.orgId, earlier.id]));
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET error_retry_at = now() - interval '1 second' WHERE id = $1", [next.id]));
+    expect(await runPublishJob(deps, o.orgId, next.id, 'linkedin')).toMatchObject({ status: 'published' });
+    expect(sent).toBe(1);
+  });
   it('keeps waiting on a used-up publishing quota past the usual attempt limit (#743)', async () => {
     const o = await org();
     const platform = new FakePlatform();

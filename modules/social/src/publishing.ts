@@ -17,7 +17,7 @@ import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
 import { shortOfPolicy } from './policy.ts';
-import { isProvider } from './domain/channels.ts';
+import { PUBLISH_LIMITS, isProvider, limitWait } from './domain/channels.ts';
 import { sentLink } from './domain/utm.ts';
 import { withShortLink } from './short-links.ts';
 import { nextAction, publishCallKey, type RetrySafety } from './domain/publish.ts';
@@ -257,6 +257,22 @@ async function queuePaused(ctx: CommandContext, v: VariantRow): Promise<boolean>
   return q?.paused === true;
 }
 
+// When the variant's account may post again under its channel's counted limit (#775), or null when it may now. Counts
+// the account's publish calls in the window from the call ledger, whatever came of them except a refusal: a post that
+// went out, one still on its way, and an unclear one all used the account's allowance.
+async function limitedUntil(ctx: CommandContext, v: VariantRow): Promise<Date | null> {
+  const limit = isProvider(v.provider) ? PUBLISH_LIMITS[v.provider] : undefined;
+  if (!limit) return null;
+  const since = new Date(ctx.now.getTime() - limit.windowMs);
+  const { rows } = await sql<{ started_at: Date }>`
+    SELECT c.started_at FROM crove_kernel.external_call c
+    JOIN crove_social.post_variant pv ON pv.org_id = c.org_id AND pv.id::text = split_part(c.key, ':', 2)
+    WHERE c.org_id = ${ctx.orgId}::uuid AND c.module = 'social' AND c.step = ${PUBLISH_STEP} AND c.started_at > ${since}
+      AND c.state <> 'failed' AND pv.channel_connection_id = ${v.channel_connection_id}::uuid AND pv.id <> ${v.id}::uuid
+    ORDER BY c.started_at DESC LIMIT ${limit.count}`.execute(ctx.trx);
+  return limitWait(rows.map((r) => r.started_at), limit, ctx.now);
+}
+
 export const publishBegin = defineCommand({
   name: 'social.publish.begin',
   input: z.strictObject({ variantId: zId, provider: z.string().min(1).max(32), safety: zSafety, staleSeconds: z.number().int().min(60).max(86_400).optional() }),
@@ -301,6 +317,14 @@ export const publishBegin = defineCommand({
           await ctx.emit('social.variant.paused', { post_id: post.id, variant_id: v.id, reason: code });
           result = none('paused');
           break;
+        }
+        // A channel whose limit Crove counts itself (#775): with the account's posts in the window used up, the variant
+        // waits until one leaves it, with nothing sent.
+        const wait = await limitedUntil(ctx, v);
+        if (wait) {
+          await setVariant(ctx, v.id, { error_kind: 'rate_limited', error_code: 'QUOTA_EXHAUSTED', error_message: null, error_http_status: null, error_action: null, error_retry_at: wait });
+          await ctx.emit('social.variant.rate_limited', { post_id: post.id, variant_id: v.id, retry_at: wait.toISOString(), code: 'QUOTA_EXHAUSTED' });
+          return none('quota');
         }
         let callKey = key;
         let existing = await callRow(ctx, callKey);
