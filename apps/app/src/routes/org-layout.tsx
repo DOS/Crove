@@ -54,6 +54,10 @@ export function OrgLayout() {
     ...orpc.inbox.list.queryOptions({ input: { status: 'pending' } }),
     refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS),
   });
+  // Social posts waiting for the viewer's review (#749) count toward the inbox, where Social runs.
+  const socialOn = NAV.some((n) => n.module === 'social');
+  const reviews = useQuery({ ...orpc.social.reviewInbox.queryOptions({ input: {} }), enabled: socialOn, refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
+  const inboxCount = (pending.data?.length ?? 0) + (reviews.data?.total ?? 0);
   // The member's unread notifications (#637), where Social runs.
   const notifications = useNotifications(NAV.some((n) => n.module === 'social'));
   const unread = unreadLabel(notifications.data?.unread ?? 0);
@@ -84,6 +88,13 @@ export function OrgLayout() {
         group: 'go' as const,
         label: t(item.label),
         run: () => void navigate({ to: item.to, params: { slug } }),
+      })),
+      ...(reviews.data?.items ?? []).map((item) => ({
+        id: `social-review:${item.postId}`,
+        group: 'proposals' as const,
+        label: item.title || item.excerpt,
+        detail: item.channels.map((c) => c.displayName).join(', '),
+        run: () => void navigate({ to: '/o/$slug/social/$id', params: { slug, id: item.postId } }),
       })),
       ...(pending.data ?? []).map((item) => ({
         id: `proposal:${item.id}`,
@@ -116,7 +127,7 @@ export function OrgLayout() {
       })),
       { id: 'sign-out', group: 'actions' as const, label: tc('signOut'), run: () => void signOut() },
     ],
-    [NAV, pending.data, me.data, slug, locale, theme, t, tp, tc, f, navigate, setLocale, setTheme],
+    [NAV, pending.data, reviews.data, me.data, slug, locale, theme, t, tp, tc, f, navigate, setLocale, setTheme],
   );
 
   return (
@@ -170,8 +181,8 @@ export function OrgLayout() {
               activeProps={{ className: 'bg-primary/15 !text-foreground' }}
             >
               {t(item.label)}
-              {item.to === '/o/$slug/inbox' && (pending.data?.length ?? 0) > 0 && (
-                <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground">{pending.data?.length}</span>
+              {item.to === '/o/$slug/inbox' && inboxCount > 0 && (
+                <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground">{inboxCount}</span>
               )}
               {item.to === '/o/$slug/social/notifications' && unread && <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground">{unread}</span>}
             </Link>
