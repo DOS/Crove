@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { hashtagSuggestions, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -692,6 +692,7 @@ function GbpField({ provider, settings, onChange, disabled }: { provider: string
       ...settings,
       gbp: {
         topic: next.topic,
+        ...(next.language !== 'vi' ? { language: next.language } : {}),
         ...(next.cta ? { cta: next.cta } : {}),
         ...(next.topic !== 'STANDARD' ? { event: next.event } : {}),
         ...(next.topic === 'OFFER' ? { offer: next.offer } : {}),
@@ -719,6 +720,16 @@ function GbpField({ provider, settings, onChange, disabled }: { provider: string
           {GBP_CTAS.map((x) => (
             <NativeSelectOption key={x} value={x}>
               {t(`ctas.${x}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <Label htmlFor={id('language')} className="text-xs">
+          {t('language')}
+        </Label>
+        <NativeSelect id={id('language')} size="sm" className="w-auto" value={g.language} disabled={disabled} onChange={(e) => set({ ...g, language: e.target.value as typeof g.language })}>
+          {GBP_LANGUAGES.map((x) => (
+            <NativeSelectOption key={x} value={x}>
+              {t(`languages.${x}`)}
             </NativeSelectOption>
           ))}
         </NativeSelect>

@@ -256,14 +256,18 @@ export function topicTagOf(settings: Readonly<Record<string, unknown>> | undefin
 
 // Google Business Profile posts (#709), in the variant's settings (`settings.gbp`): a topic (a standard post, an event
 // or an offer), an optional call to action (its URL is the post's link; CALL needs none), an event's title and dates
-// (YYYY-MM-DD, times HH:MM optional) for events and offers, and an offer's coupon code and terms. The adapter's
+// (YYYY-MM-DD, times HH:MM optional) for events and offers, an offer's coupon code and terms, and the post's language. The adapter's
 // gbpSettingsOf in @crove/channel reads the same shape.
 export const GBP_TOPICS = ['STANDARD', 'EVENT', 'OFFER'] as const;
 export const GBP_CTAS = ['BOOK', 'ORDER', 'SHOP', 'LEARN_MORE', 'SIGN_UP', 'CALL'] as const;
 export type GbpTopic = (typeof GBP_TOPICS)[number];
 export type GbpCta = (typeof GBP_CTAS)[number];
+// The post's language (#730), Vietnamese when unsaid.
+export const GBP_LANGUAGES = ['vi', 'en', 'zh', 'ja', 'ko'] as const;
+export type GbpLanguage = (typeof GBP_LANGUAGES)[number];
 export interface Gbp {
   topic: GbpTopic;
+  language: GbpLanguage;
   cta: GbpCta | null;
   event: { title: string; startDate: string; startTime: string; endDate: string; endTime: string };
   offer: { couponCode: string; terms: string };
@@ -278,6 +282,7 @@ export function gbpOf(settings: Readonly<Record<string, unknown>> | undefined): 
   const o = (g.offer && typeof g.offer === 'object' ? g.offer : {}) as Record<string, unknown>;
   return {
     topic: (GBP_TOPICS as readonly unknown[]).includes(g.topic) ? (g.topic as GbpTopic) : 'STANDARD',
+    language: (GBP_LANGUAGES as readonly unknown[]).includes(g.language) ? (g.language as GbpLanguage) : 'vi',
     cta: (GBP_CTAS as readonly unknown[]).includes(g.cta) ? (g.cta as GbpCta) : null,
     event: { title: asText(e.title), startDate: asText(e.startDate), startTime: asText(e.startTime), endDate: asText(e.endDate), endTime: asText(e.endTime) },
     offer: { couponCode: asText(o.couponCode), terms: asText(o.terms) },
