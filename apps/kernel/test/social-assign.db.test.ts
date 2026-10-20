@@ -119,6 +119,12 @@ suite('social post assignment on PostgreSQL (#640)', () => {
     const stranger = await person('stranger');
     await expect(exec(o, o.owner, 'social.post.assign', { postId, assigneeUserId: stranger, dueAt: null })).rejects.toMatchObject({ code: 'ASSIGNEE_NOT_MEMBER' });
 
+    // Someone assigned who has since left keeps the post until changed: its due date can still move.
+    await exec(o, o.owner, 'social.post.assign', { postId, assigneeUserId: other, dueAt: null });
+    await admin((c) => c.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [o.orgId, other]));
+    await exec(o, o.owner, 'social.post.assign', { postId, assigneeUserId: other, dueAt: due });
+    expect(await get(o, o.owner, postId)).toMatchObject({ assigneeUserId: other });
+
     // Cleared by the owner.
     await exec(o, o.owner, 'social.post.assign', { postId, assigneeUserId: null, dueAt: null });
     expect(await get(o, o.member, postId)).toMatchObject({ assigneeUserId: null, dueAt: null });

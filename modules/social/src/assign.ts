@@ -28,7 +28,8 @@ export const postAssign = defineCommand({
     if (ctx.role !== 'owner' && ctx.role !== 'admin' && post.author_user_id !== userId) {
       throw new DomainError('FORBIDDEN', 403, 'Chỉ người viết bài, chủ sở hữu hoặc quản trị viên mới giao được bài này');
     }
-    if (input.assigneeUserId) {
+    // A new assignee must be a member; keeping one who has since left (to change only the due date) is allowed.
+    if (input.assigneeUserId && input.assigneeUserId !== post.assignee_user_id) {
       // Only a member of the org (crove_kernel.member_profiles answers for members only).
       const { rows } = await sql<{ user_id: string }>`SELECT user_id FROM crove_kernel.member_profiles(${[input.assigneeUserId]}::uuid[])`.execute(ctx.trx);
       if (rows.length === 0) throw new DomainError('ASSIGNEE_NOT_MEMBER', 422, 'Người được giao không phải thành viên của tổ chức');

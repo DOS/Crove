@@ -47,6 +47,7 @@ export function AssignCard({ post, canEdit }: { post: { id: string; assigneeUser
             <Label htmlFor="post-assignee">{t('assignee')}</Label>
             <NativeSelect id="post-assignee" value={assignee} onChange={(e) => setAssignee(e.target.value)}>
               <NativeSelectOption value="">{t('nobody')}</NativeSelectOption>
+              {post.assigneeUserId && !members.some((m) => m.userId === post.assigneeUserId) && <NativeSelectOption value={post.assigneeUserId}>{t('formerMember')}</NativeSelectOption>}
               {members.map((m) => (
                 <NativeSelectOption key={m.userId} value={m.userId}>
                   {m.displayName ?? m.email}
