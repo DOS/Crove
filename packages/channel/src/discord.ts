@@ -161,6 +161,8 @@ export class DiscordPublisher implements Publisher {
       const description = m.altText?.trim() ? m.altText.trim().slice(0, DESCRIPTION_MAX) : null;
       files.push({ bytes, mime: m.mime, filename: `${kindOf(m.mime) as string}-${i + 1}.${extensionOf(m.mime)}`, description });
     }
+    // The whole message on what was read, not on the sizes stored.
+    if (files.reduce((sum, f) => sum + f.bytes.byteLength, 0) > DISCORD_MESSAGE_MAX_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'MESSAGE_TOO_LARGE' };
     // Mentions are never parsed, whatever the text holds.
     const payload = {
       ...(text ? { content: text } : {}),
