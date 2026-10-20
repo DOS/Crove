@@ -7,8 +7,9 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { cn } from '@crove/ui/lib/utils';
-import { client, errorMessage, fetchFile, queryClient, uploadFiles } from '../lib/api.ts';
+import { client, errorMessage, fetchFile, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
+import { drawWatermark, watermarkName } from '../lib/social-watermark.ts';
 import { ErrorText, Spinner } from './ui.tsx';
 import { CropPanel } from './social-crop.tsx';
 
@@ -188,6 +189,24 @@ export function MediaField({ media, onChange, disabled, onAiUsed }: { media: Med
     },
   });
   const canDescribe = getConfig().aiEnabled === true && onAiUsed !== undefined;
+  // The org's logo watermark (#834): drawn on a copy of an image, which takes the image's place; the original stays.
+  const watermark = useQuery({ ...orpc.social.watermark.get.queryOptions({ input: {} }), staleTime: 5 * 60_000 });
+  const stamp = useMutation({
+    mutationFn: async (item: MediaItem): Promise<MediaItem> => {
+      const mark = watermark.data;
+      if (!mark) throw new Error(t('watermark.none'));
+      const [image, logo] = await Promise.all([fetchFile(item.fileId), fetchFile(mark.fileId)]);
+      const drawn = await drawWatermark(image, item.mime, logo, mark);
+      const file = new File([drawn.blob], watermarkName('anh', drawn.type), { type: drawn.type });
+      const stored = (await uploadFiles([file], 'social')).files[0];
+      if (!stored) throw new Error(t('watermark.failed'));
+      return { fileId: stored.fileId, altText: item.altText, mime: drawn.type, sizeBytes: drawn.blob.size, width: drawn.width, height: drawn.height };
+    },
+    onSuccess: (next, item) => {
+      onChange(media.map((x) => (x.fileId === item.fileId ? next : x)));
+      void queryClient.invalidateQueries({ queryKey: ['social-library'] });
+    },
+  });
   const picker = useRef<HTMLInputElement>(null);
   const [browsing, setBrowsing] = useState(false);
   // The image being cropped (#636), by its file: moving or removing images while the panel is open never retargets it.
@@ -252,6 +271,12 @@ export function MediaField({ media, onChange, disabled, onAiUsed }: { media: Med
                     {t('crop.open')}
                   </Button>
                 )}
+                {watermark.data && !m.mime.startsWith('video/') && (
+                  <Button variant="ghost" size="sm" disabled={disabled || stamp.isPending} onClick={() => stamp.mutate(m)}>
+                    {stamp.isPending && stamp.variables?.fileId === m.fileId ? <Spinner className="text-current" /> : null}
+                    {t('watermark.apply')}
+                  </Button>
+                )}
                 <Button variant="ghost" size="sm" disabled={disabled} className="ml-auto text-destructive" onClick={() => onChange(media.filter((_, j) => j !== i))}>
                   {t('removeImage')}
                 </Button>
@@ -295,6 +320,7 @@ export function MediaField({ media, onChange, disabled, onAiUsed }: { media: Med
       <p className="text-xs text-subtle-foreground">{t('imagesHint')}</p>
       {upload.error && <ErrorText>{errorMessage(upload.error)}</ErrorText>}
       {describe.error && <ErrorText>{errorMessage(describe.error)}</ErrorText>}
+      {stamp.error && <ErrorText>{errorMessage(stamp.error)}</ErrorText>}
     </div>
   );
 }

@@ -594,6 +594,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         save: os.social.brandVoices.save.handler(socialCommand('social.brand_voice.save')),
         remove: os.social.brandVoices.remove.handler(socialCommand('social.brand_voice.remove')),
       },
+      watermark: {
+        get: os.social.watermark.get.handler(socialQuery('social.watermark.get')),
+        save: os.social.watermark.save.handler(socialCommand('social.watermark.save')),
+        remove: os.social.watermark.remove.handler(socialCommand('social.watermark.remove')),
+      },
       reportSchedules: {
         list: os.social.reportSchedules.list.handler(socialQuery('social.report_schedule.list')),
         save: os.social.reportSchedules.save.handler(socialCommand('social.report_schedule.save')),

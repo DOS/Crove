@@ -58,6 +58,7 @@ import {
   zSocialVariantUpdate,
   zSocialChannelInput,
   SOCIAL_LABEL_COLORS,
+  SOCIAL_WATERMARK_CORNERS,
   SOCIAL_POST_STATUSES,
   MAX_BATCH_FILES,
   zBatchFile,
@@ -404,6 +405,14 @@ export const contract = {
         .input(z.strictObject({ connectionId: zId.nullable().optional(), description: z.string().trim().min(1).max(600), useWords: z.array(z.string().trim().min(1).max(40)).max(20), avoidWords: z.array(z.string().trim().min(1).max(40)).max(20), emoji: z.boolean() }))
         .output(z.object({ connectionId: zId.nullable() })),
       remove: oc.input(z.strictObject({ connectionId: zId.nullable().optional() })).output(z.object({ connectionId: zId.nullable(), removed: z.boolean() })),
+    },
+    // The org's logo watermark for post images (#834): the composer draws it on a copy of an image.
+    watermark: {
+      get: oc.input(z.object({})).output(z.object({ fileId: zId, mime: z.string(), corner: z.enum(SOCIAL_WATERMARK_CORNERS), scalePercent: z.number().int(), opacityPercent: z.number().int(), updatedAt: z.string() }).nullable()),
+      save: oc
+        .input(z.strictObject({ fileId: zId, corner: z.enum(SOCIAL_WATERMARK_CORNERS), scalePercent: z.number().int().min(5).max(50), opacityPercent: z.number().int().min(10).max(100) }))
+        .output(z.object({ saved: z.boolean() })),
+      remove: oc.input(z.strictObject({})).output(z.object({ removed: z.boolean() })),
     },
     // Scheduled client report mail (#704): owners and admins set, pause, test and remove schedules.
     reportSchedules: {

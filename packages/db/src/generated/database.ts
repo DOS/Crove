@@ -93,6 +93,7 @@ export interface CroveSocialSchema {
   'crove_social.short_link': SocialShortLinkTable;
   'crove_social.short_link_click': SocialShortLinkClickTable;
   'crove_social.snippet': SocialSnippetTable;
+  'crove_social.watermark': SocialWatermarkTable;
 }
 
 /** crove_finance.account */
@@ -1189,5 +1190,18 @@ export interface SocialSnippetTable {
   is_template: Generated<boolean>;
   created_by: ColumnType<string, string, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.watermark */
+export interface SocialWatermarkTable {
+  org_id: string;
+  id: Generated<string>;
+  file_id: string;
+  corner: string;
+  scale_percent: number;
+  opacity_percent: number;
+  updated_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
