@@ -19,6 +19,7 @@ import { approvalCovers, effectiveContent, type BaseContent } from './domain/app
 import { shortOfPolicy } from './policy.ts';
 import { isProvider } from './domain/channels.ts';
 import { sentLink } from './domain/utm.ts';
+import { withShortLink } from './short-links.ts';
 import { nextAction, publishCallKey, type RetrySafety } from './domain/publish.ts';
 import { startsNewAttempt, type VariantEvent } from './domain/state.ts';
 import {
@@ -80,6 +81,8 @@ export interface PublishWork {
   // The connection's updated_at as begin saw it: an expired token marks the connection only if it has not changed
   // since (a reconnect in between brought a new token).
   connectionVersion: string | null;
+  // The post's link as Crove shortened it (#706): its code, and the link it stands for (content.linkUrl).
+  shortLink?: { code: string; target: string };
 }
 
 export type BeginResult = { action: 'none'; reason: string } | PublishWork;
@@ -323,7 +326,7 @@ export const publishBegin = defineCommand({
         const existing = await callRow(ctx, key);
         const startedAt = existing?.started_at ?? v.updated_at;
         const connection = await connectionOf(ctx, v.channel_connection_id);
-        if (now - startedAt.getTime() < MAX_PROCESSING_MS) return work('status', post, v, key, startedAt, connection);
+        if (now - startedAt.getTime() < MAX_PROCESSING_MS) return withShortLink(ctx, work('status', post, v, key, startedAt, connection), v.revision);
         // Processing for a day: ask whether it is on the platform; if not, a person decides.
         await move(ctx, v, { type: 'unknown' }, { error_kind: 'unknown', error_code: 'PROCESSING_TOO_LONG', next_check_at: null });
         result = work('reconcile', post, v, key, startedAt, connection);
@@ -334,7 +337,7 @@ export const publishBegin = defineCommand({
         // could miss it and send a person to publish it again.
         if (now - v.updated_at.getTime() < RECONCILE_WAIT_MS) return none('reconcile_wait');
         const existing = await callRow(ctx, key);
-        return work('reconcile', post, v, key, existing?.started_at ?? v.updated_at, await connectionOf(ctx, v.channel_connection_id));
+        return withShortLink(ctx, work('reconcile', post, v, key, existing?.started_at ?? v.updated_at, await connectionOf(ctx, v.channel_connection_id)), v.revision);
       }
       case 'paused': {
         // Paused on its channel: once the channel is active and has changed since the pause (reconnected), a new
@@ -352,7 +355,8 @@ export const publishBegin = defineCommand({
         return none(v.status);
     }
     await refreshPostStatus(ctx, post.id);
-    return result;
+    // The link the step sends (#706): the variant's short link, made on its first call where its channel asks for one.
+    return result.action === 'none' ? result : withShortLink(ctx, result, v.revision);
   },
 });
 
