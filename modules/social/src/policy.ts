@@ -10,6 +10,7 @@ import { approvedValues, lockPost, lockVariants, refreshPostStatus, regateValues
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
+const OWNERS: readonly MemberRole[] = ['owner'];
 export const MAX_APPROVALS = 3;
 // Variants a policy change re-checks: in review, or approved and not yet handed to the publisher.
 const GATED: readonly SocialVariantStatus[] = ['in_review', 'approved', 'scheduled', 'paused'];
@@ -31,6 +32,19 @@ export async function approvalsRequired(trx: Trx, orgId: string, connectionIds: 
 // The review decisions of variants, newest first, as approvalsInRound reads them. Newest by id: uuid_v7 takes the clock
 // when the row is written, under the post lock, while created_at is the start of its transaction, which a decision
 // that waited for the lock may share with an older one.
+// The channels where an author may not approve their own post (four-eyes, #740).
+export async function fourEyesOn(trx: Trx, orgId: string, connectionIds: readonly string[]): Promise<Set<string>> {
+  if (connectionIds.length === 0) return new Set();
+  const rows = await trx
+    .selectFrom('crove_social.channel_policy')
+    .select('channel_connection_id')
+    .where('org_id', '=', orgId)
+    .where('channel_connection_id', 'in', [...connectionIds])
+    .where('four_eyes', '=', true)
+    .execute();
+  return new Set(rows.map((r) => r.channel_connection_id));
+}
+
 export async function decisionsOf(trx: Trx, orgId: string, variantIds: readonly string[]) {
   const out = new Map<string, { decision: string; decidedBy: string; revision: number; contentHash: string }[]>();
   if (variantIds.length === 0) return out;
@@ -161,6 +175,35 @@ export const remindersSet = defineCommand({
   },
 });
 
+// Four-eyes on a channel (#740): its posts are approved by someone other than their author. Owners only: turning it off
+// weakens review. Posts already approved stay approved.
+export const fourEyesSet = defineCommand({
+  name: 'social.channel.set_four_eyes',
+  input: z.strictObject({ connectionId: zId, fourEyes: z.boolean() }),
+  risk: 'R2',
+  access: OWNERS,
+  target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const userId = ctx.actor.userId;
+    const connection = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .where('status', '<>', 'revoked')
+      .executeTakeFirst();
+    if (!connection) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh này');
+    await ctx.trx
+      .insertInto('crove_social.channel_policy')
+      .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, four_eyes: input.fourEyes, updated_by: userId })
+      .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id']).doUpdateSet({ four_eyes: input.fourEyes, updated_by: userId, updated_at: ctx.now }))
+      .execute();
+    ctx.audit({ connection_id: input.connectionId, four_eyes: input.fourEyes });
+    return { connectionId: input.connectionId, fourEyes: input.fourEyes };
+  },
+});
+
 // Whether the channel's posts send their link through Crove's short links (#706), to count clicks; off unless turned on.
 // The link of a post that went out already stays as it went.
 export const shortLinksSet = defineCommand({
@@ -199,12 +242,12 @@ export const policyList = defineQuery({
     const rows = await ctx.trx
       .selectFrom('crove_social.channel_policy as p')
       .innerJoin('crove_kernel.channel_connection as c', (j) => j.onRef('c.org_id', '=', 'p.org_id').onRef('c.id', '=', 'p.channel_connection_id'))
-      .select(['p.channel_connection_id', 'p.approvals_required', 'p.review_reminders', 'p.short_links', 'p.updated_by', 'p.updated_at'])
+      .select(['p.channel_connection_id', 'p.approvals_required', 'p.review_reminders', 'p.short_links', 'p.four_eyes', 'p.updated_by', 'p.updated_at'])
       .where('p.org_id', '=', ctx.orgId)
       .where('c.status', '<>', 'revoked')
       .orderBy('p.channel_connection_id')
       .execute();
-    return rows.map((r) => ({ connectionId: r.channel_connection_id, approvalsRequired: r.approvals_required, reviewReminders: r.review_reminders, shortLinks: r.short_links, updatedBy: r.updated_by, updatedAt: r.updated_at.toISOString() }));
+    return rows.map((r) => ({ connectionId: r.channel_connection_id, approvalsRequired: r.approvals_required, reviewReminders: r.review_reminders, shortLinks: r.short_links, fourEyes: r.four_eyes, updatedBy: r.updated_by, updatedAt: r.updated_at.toISOString() }));
   },
 });
 
@@ -227,5 +270,5 @@ export const channelWaiting = defineQuery({
   },
 });
 
-export const policyCommands = [policySet, remindersSet, shortLinksSet];
+export const policyCommands = [policySet, remindersSet, shortLinksSet, fourEyesSet];
 export const policyQueries = [policyList, channelWaiting];
