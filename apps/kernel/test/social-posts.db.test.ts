@@ -304,6 +304,25 @@ suite('social posts on PostgreSQL (S3)', () => {
     expect((await get(o, o.owner, queued.id)).variants[0]?.queuePaused).toBe(false);
   });
 
+  it('imports drafts from a sheet, and sends to review only the channels that fit (#586)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    await expect(exec(o, o.viewer, 'social.post.import', { posts: [{ body: 'x', connectionIds: [conn] }] })).rejects.toMatchObject({ status: 403 });
+    const planned = new Date(Date.now() + 48 * HOUR).toISOString();
+    const done = await exec<{ posts: { postId: string; submitted: number }[] }>(o, o.member, 'social.post.import', {
+      submit: true,
+      posts: [
+        { body: 'Bài một', scheduledAt: planned, connectionIds: [conn] },
+        // Over the sandbox's 1000 characters: created as a draft, not sent to review.
+        { body: 'x'.repeat(1001), connectionIds: [conn] },
+      ],
+    });
+    expect(done.posts.map((p) => p.submitted)).toEqual([1, 0]);
+    const [first, second] = [await get(o, o.owner, done.posts[0]?.postId as string), await get(o, o.owner, done.posts[1]?.postId as string)];
+    expect([first.scheduledAt, first.variants[0]?.status, second.variants[0]?.status]).toEqual([planned, 'in_review', 'draft']);
+    await expect(exec(o, o.member, 'social.post.import', { posts: [{ body: 'x', connectionIds: [randomUUID()] }] })).rejects.toBeDefined();
+  });
+
   it('stores an override equal to the base, and inheriting again, though the effective content does not change', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);

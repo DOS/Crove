@@ -176,38 +176,95 @@ export const zPostCreate = z.strictObject({
   origin: z.enum(['human', 'ai']).optional(),
 });
 
+async function createPost(ctx: CommandContext, input: z.infer<typeof zPostCreate>) {
+  const userId = requireUser(ctx);
+  distinctConnections(input.channels);
+  const media = await resolveMedia(ctx, input.media ?? []);
+  const inserted = await ctx.trx
+    .insertInto('crove_social.post')
+    .values({
+      org_id: ctx.orgId,
+      body: input.body,
+      title: input.title ?? null,
+      link_url: input.linkUrl ?? null,
+      // The surface sets actor_origin once API and MCP clients exist; today every write comes from the app.
+      origin: input.origin ?? 'human',
+      tainted: input.origin === 'ai',
+      actor_origin: 'ui',
+      author_user_id: userId,
+      ...(input.timeZone ? { time_zone: input.timeZone } : {}),
+      scheduled_at: input.scheduledAt ?? null,
+    })
+    .returning(POST_COLUMNS)
+    .executeTakeFirstOrThrow();
+  await writePostMedia(ctx, inserted.id, media);
+  const post: PostRow = { ...inserted, media };
+  const variants = await insertVariants(ctx, post, input.channels, 0);
+  await ctx.emit('social.post.created', { post_id: post.id });
+  return { post, variants, media };
+}
+
 export const postCreate = defineCommand({
   name: 'social.post.create',
   input: zPostCreate,
   risk: 'R1',
   access: MEMBERS,
   handler: async (ctx, input) => {
-    const userId = requireUser(ctx);
-    distinctConnections(input.channels);
-    const media = await resolveMedia(ctx, input.media ?? []);
-    const inserted = await ctx.trx
-      .insertInto('crove_social.post')
-      .values({
-        org_id: ctx.orgId,
-        body: input.body,
-        title: input.title ?? null,
-        link_url: input.linkUrl ?? null,
-        // The surface sets actor_origin once API and MCP clients exist; today every write comes from the app.
-        origin: input.origin ?? 'human',
-        tainted: input.origin === 'ai',
-        actor_origin: 'ui',
-        author_user_id: userId,
-        ...(input.timeZone ? { time_zone: input.timeZone } : {}),
-        scheduled_at: input.scheduledAt ?? null,
-      })
-      .returning(POST_COLUMNS)
-      .executeTakeFirstOrThrow();
-    await writePostMedia(ctx, inserted.id, media);
-    const post: PostRow = { ...inserted, media };
-    const variants = await insertVariants(ctx, post, input.channels, 0);
+    const { post, variants, media } = await createPost(ctx, input);
     ctx.audit({ post_id: post.id, variants: variants.length, media: media.length, origin: input.origin ?? 'human' });
-    await ctx.emit('social.post.created', { post_id: post.id });
     return { postId: post.id, revision: post.revision, variants };
+  },
+});
+
+// Many drafts at once from a sheet (#586): each row a post for its channels, text only (images are added on the post
+// afterwards). With submit, the channels that fit their rules go to review; nothing is published without one.
+export const MAX_IMPORT_ROWS = 200;
+export const postImport = defineCommand({
+  name: 'social.post.import',
+  input: z.strictObject({
+    posts: z
+      .array(
+        z.strictObject({
+          body: zBody,
+          title: zTitle.nullable().optional(),
+          linkUrl: zLink.nullable().optional(),
+          scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
+          timeZone: zTimeZone.optional(),
+          connectionIds: z.array(zId).min(1).max(MAX_CHANNELS_PER_POST),
+        }),
+      )
+      .min(1)
+      .max(MAX_IMPORT_ROWS),
+    submit: z.boolean().optional(),
+  }),
+  risk: 'R1',
+  access: MEMBERS,
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const created: { postId: string; submitted: number }[] = [];
+    for (const row of input.posts) {
+      const { post, variants } = await createPost(ctx, {
+        body: row.body,
+        title: row.title ?? null,
+        linkUrl: row.linkUrl ?? null,
+        ...(row.scheduledAt ? { scheduledAt: row.scheduledAt } : {}),
+        ...(row.timeZone ? { timeZone: row.timeZone } : {}),
+        channels: row.connectionIds.map((connectionId) => ({ connectionId })),
+      });
+      let submitted = 0;
+      if (input.submit) {
+        const ready = (await lockVariants(ctx.trx, ctx.orgId, post.id)).filter((v) => variants.some((c) => c.variantId === v.id) && issuesOf(base(post), v).length === 0);
+        for (const v of ready) await setVariant(ctx, v.id, { status: step(v, { type: 'submit' }) });
+        if (ready.length > 0) {
+          await refreshPostStatus(ctx, post.id);
+          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: ready.map((v) => v.id) });
+        }
+        submitted = ready.length;
+      }
+      created.push({ postId: post.id, submitted });
+    }
+    ctx.audit({ posts: created.length, submitted: created.reduce((n, c) => n + c.submitted, 0) });
+    return { posts: created };
   },
 });
 
@@ -1002,6 +1059,7 @@ export const queueGet = defineQuery({
 
 export const socialCommands = [
   postCreate,
+  postImport,
   postAddChannels,
   postUpdate,
   variantUpdate,
