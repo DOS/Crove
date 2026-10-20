@@ -112,7 +112,7 @@ describe('PinterestPublisher', () => {
     expect(source.items).toHaveLength(2);
     const none = pinterest({});
     const publisher = new PinterestPublisher(APP, none.fetchImpl);
-    expect(await publisher.publish(input({ content: { ...input().content, media: [{ fileId: 'v', mime: 'video/mp4', sizeBytes: 1, altText: null }] } }))).toMatchObject({ kind: 'rejected', code: 'VIDEO_NOT_SUPPORTED_YET' });
+    expect(await publisher.publish(input({ content: { ...input().content, media: [image('a'), { fileId: 'v', mime: 'video/mp4', sizeBytes: 1, altText: null }] } }))).toMatchObject({ kind: 'rejected', code: 'ONE_VIDEO_ALONE' });
     expect(await publisher.publish(input({ content: { ...input().content, media: ['a', 'b', 'c', 'd', 'e', 'f'].map((f) => image(f)) } }))).toMatchObject({ kind: 'rejected', code: 'TOO_MANY_IMAGES' });
     expect(await publisher.publish(input({ readMedia: async () => Promise.reject(new Error('gone')) }))).toMatchObject({ kind: 'rejected', code: 'MEDIA_UNREADABLE' });
     expect(none.calls).toHaveLength(0);
@@ -154,5 +154,52 @@ describe('PinterestPublisher', () => {
     expect(calls[0]?.url.searchParams.get('pin_metrics')).toBe('true');
     const gone = pinterest({ 'GET /v5/pins/813744226420795884': [{ status: 404, body: { code: 50, message: 'Pin not found' } }] });
     expect(await new PinterestPublisher(APP, gone.fetchImpl).metrics({ externalAccountId: BOARD, secret: SECRET, externalId: '813744226420795884' })).toEqual({ refused: 'gone' });
+  });
+});
+
+describe('Pinterest video pins (#813)', () => {
+  const UPLOAD = 'https://pinterest-media-upload.s3-accelerate.amazonaws.com/';
+  const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: 'Lò bánh' };
+  const videoInput = (settings: Record<string, unknown> = {}) => input({ content: { ...input().content, media: [clip] }, settings });
+  const fast = { pollMs: 1, videoWaitMs: 1000 };
+  function withUpload(routes: Record<string, Answer[]>, uploadStatus = 204) {
+    const api = pinterest(routes);
+    const uploads: { url: string; body: unknown }[] = [];
+    const fetchImpl: Fetch = async (url, init) => {
+      if (new URL(url).hostname === 'pinterest-media-upload.s3-accelerate.amazonaws.com') {
+        uploads.push({ url, body: init?.body });
+        return new Response(null, { status: uploadStatus });
+      }
+      return api.fetchImpl(url, init);
+    };
+    return { ...api, uploads, fetchImpl };
+  }
+
+  it('registers the upload, sends the bytes to the storage URL, waits for processing, and pins it with a cover frame', async () => {
+    const t = withUpload({
+      'POST /v5/media': [{ status: 201, body: { media_id: '12345', media_type: 'video', upload_url: UPLOAD, upload_parameters: { key: 'uploads/12345', policy: 'p', 'x-amz-signature': 's' } } }],
+      'GET /v5/media/12345': [{ body: { media_id: '12345', status: 'processing' } }, { body: { media_id: '12345', status: 'succeeded' } }],
+      'POST /v5/pins': [{ status: 201, body: { id: '813744226420795999' } }],
+    });
+    expect(await new PinterestPublisher(APP, t.fetchImpl, fast).publish(videoInput({ cover: { atMs: 2500 } }))).toMatchObject({ kind: 'accepted', externalId: '813744226420795999' });
+    expect(t.calls[0]?.body).toEqual({ media_type: 'video' });
+    const form = t.uploads[0]?.body as FormData;
+    expect([form.get('key'), form.get('policy'), (form.get('file') as Blob).type]).toEqual(['uploads/12345', 'p', 'video/mp4']);
+    const pinned = t.calls.at(-1)?.body as { media_source: unknown } | undefined;
+    // Whole seconds.
+    expect(pinned?.media_source).toEqual({ source_type: 'video_id', media_id: '12345', cover_image_key_frame_time: 3 });
+  });
+
+  it('posts nothing when the storage URL is elsewhere, processing fails or runs late', async () => {
+    const elsewhere = withUpload({ 'POST /v5/media': [{ body: { media_id: '1', upload_url: 'https://evil.example/upload', upload_parameters: {} } }] });
+    expect(await new PinterestPublisher(APP, elsewhere.fetchImpl, fast).publish(videoInput())).toMatchObject({ kind: 'rejected', code: 'UPLOAD_HOST' });
+    const failed = withUpload({ 'POST /v5/media': [{ body: { media_id: '2', upload_url: UPLOAD, upload_parameters: {} } }], 'GET /v5/media/2': [{ body: { status: 'failed' } }] });
+    expect(await new PinterestPublisher(APP, failed.fetchImpl, fast).publish(videoInput())).toMatchObject({ kind: 'rejected', code: 'VIDEO_PROCESSING_FAILED' });
+    const slow = withUpload({ 'POST /v5/media': [{ body: { media_id: '3', upload_url: UPLOAD, upload_parameters: {} } }], 'GET /v5/media/3': Array.from({ length: 50 }, () => ({ body: { status: 'processing' } })) });
+    expect(await new PinterestPublisher(APP, slow.fetchImpl, { pollMs: 5, videoWaitMs: 20 }).publish(videoInput())).toMatchObject({ kind: 'rejected', error: 'transient', code: 'VIDEO_PROCESSING_SLOW' });
+    // Done, but after the budget: retried rather than pinned late.
+    const late = withUpload({ 'POST /v5/media': [{ body: { media_id: '4', upload_url: UPLOAD, upload_parameters: {} } }], 'GET /v5/media/4': [{ body: { status: 'succeeded' } }] });
+    expect(await new PinterestPublisher(APP, late.fetchImpl, { ...fast, budgetMs: -1 }).publish(videoInput())).toMatchObject({ kind: 'rejected', error: 'transient' });
+    for (const t of [elsewhere, failed, slow, late]) expect(t.calls.some((c) => c.route === 'POST /v5/pins')).toBe(false);
   });
 });

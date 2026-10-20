@@ -175,6 +175,8 @@ suite('social multi-step approval on PostgreSQL (S9)', () => {
     expect((await get(o, approvedPost)).variants[0]).toMatchObject({ status: 'approved', error: null });
     const events = await admin(async (c) => (await c.query<{ payload: { post_id: string } }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.post.submitted' AND payload->>'by_policy' = 'true'", [o.orgId])).rows);
     expect(events.map((e) => e.payload.post_id).sort()).toEqual([approvedPost, scheduledPost].sort());
+    // Re-submitted by the policy, each still goes to the content manager agent's pre-review (#816).
+    expect(events.every((e) => (e.payload as { agent_task?: { ref?: { id?: string } } }).agent_task?.ref?.id === e.payload.post_id)).toBe(true);
   });
 
   it('leaves a re-approved variant approved when its kept time has passed, and an edit ends the mark', async () => {

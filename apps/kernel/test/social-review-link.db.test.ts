@@ -2,7 +2,7 @@
 // hash, the public definers answer for a live link and nothing else, clients' answers are capped and recorded with the
 // name they typed, and a content change shows. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own
 // database.
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -10,6 +10,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
+import { reviewFile } from '../src/review-link.ts';
 import { reviewTokenHash, socialCommands, socialQueries, type PostView, type ReviewFeedbackView, type ReviewLinkView } from '@crove/mod-social';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -150,7 +151,7 @@ suite('social client review links on PostgreSQL (#589)', () => {
     expect((await view(token))?.changed).toBe(true);
     expect(await answer(token, 'Anh Minh', 'changes_requested', 'Thêm giờ mở cửa')).toEqual({ recorded: true });
     const seen = await links(o, o.viewer, postId);
-    expect(seen.links).toEqual([expect.objectContaining({ id: linkId, changed: true, revokedAt: null })]);
+    expect(seen.links).toEqual([expect.objectContaining({ id: linkId, changed: true, revokedAt: null, answers: 2 })]);
     expect(seen.feedback.map((f) => [f.name, f.verdict, f.body, f.changed])).toEqual([
       ['Anh Minh', 'changes_requested', 'Thêm giờ mở cửa', true],
       ['Chị Lan', 'approved', null, false],
@@ -161,6 +162,8 @@ suite('social client review links on PostgreSQL (#589)', () => {
     // At most 100 answers per link.
     await pool.query("SELECT crove_social.review_feedback_add($1, 'Khách', 'approved', NULL) FROM generate_series(1, 98)", [token]);
     await expect(answer(token, 'Khách', 'approved', null)).rejects.toMatchObject({ code: '54000' });
+    // The card counts every answer, past the 200 it lists (#626).
+    expect((await links(o, o.viewer, postId)).links[0]?.answers).toBe(100);
 
     // Revoked: nothing more, by either function.
     await expect(exec(o, o.member, 'social.review_link.revoke', { linkId })).rejects.toMatchObject({ status: 403 });
@@ -200,7 +203,7 @@ suite('social client review links on PostgreSQL (#589)', () => {
     );
     expect(grants).toEqual({ review_link: ['INSERT', 'SELECT'], review_feedback: ['SELECT'] });
 
-    const fns = ['crove_social.review_link_view(text)', 'crove_social.review_feedback_add(text,text,text,text)', 'crove_social.review_link_by_token(text,boolean)'];
+    const fns = ['crove_social.review_link_view(text)', 'crove_social.review_feedback_add(text,text,text,text)', 'crove_social.review_link_by_token(text,boolean)', 'crove_social.review_link_media(text)', 'crove_social.review_link_file(text,uuid)'];
     const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'public'];
     const matrix = await admin(async (c) => {
       const { rows } = await c.query<{ fn: string; role: string; can: boolean }>(
@@ -213,6 +216,52 @@ suite('social client review links on PostgreSQL (#589)', () => {
       'crove_social.review_link_view(text)': ['crove_app'],
       'crove_social.review_feedback_add(text,text,text,text)': ['crove_app'],
       'crove_social.review_link_by_token(text,boolean)': [],
+      'crove_social.review_link_media(text)': ['crove_app'],
+      'crove_social.review_link_file(text,uuid)': ['crove_app'],
     });
+  });
+
+  it('shows the post\'s files through the link, and only those, checked by their hash (#624)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const image = async (bytes: Uint8Array) => {
+      const id = randomUUID();
+      const sha = createHash('sha256').update(bytes).digest('hex');
+      await admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source)
+           VALUES ($1, $2, $3, $4, $5, 'anh.jpg', 'image/jpeg', $6, 'social')`,
+          [o.orgId, id, sha, `org/${o.orgId}/${sha}`, `content:${sha}`, bytes.byteLength],
+        ),
+      );
+      return { id, key: `org/${o.orgId}/${sha}` };
+    };
+    const bytes = new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3]);
+    const shown = await image(bytes);
+    const other = await image(new Uint8Array([0xff, 0xd8, 0xff, 9]));
+    const { postId } = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Ảnh khai trương', media: [{ fileId: shown.id }], channels: [{ connectionId: conn }] });
+    await exec(o, o.member, 'social.post.create', { body: 'Bài khác', media: [{ fileId: other.id }], channels: [{ connectionId: conn }] });
+    const { token, linkId } = await exec<{ token: string; linkId: string }>(o, o.owner, 'social.review_link.create', { postId });
+    const media = async (t: string) => (await pool.query<{ media: unknown }>('SELECT crove_social.review_link_media($1) AS media', [t])).rows[0]?.media ?? null;
+    const file = async (t: string, id: string) => (await pool.query<{ file: unknown }>('SELECT crove_social.review_link_file($1, $2::uuid) AS file', [t, id])).rows[0]?.file ?? null;
+    expect(await media(token)).toEqual([[{ id: shown.id, type: 'image/jpeg' }]]);
+    expect(await file(token, shown.id)).toMatchObject({ key: shown.key, type: 'image/jpeg', filename: 'anh.jpg' });
+    // Another post's file, an unknown id, a malformed token: nothing.
+    expect(await file(token, other.id)).toBeNull();
+    expect(await file(token, randomUUID())).toBeNull();
+    expect(await media('nope')).toBeNull();
+
+    // The API reads the bytes and checks them against the recorded hash; a store without download URLs streams them.
+    const store = { get: async (key: string) => (key === shown.key ? bytes : new Uint8Array([0])), direct: undefined };
+    expect(await reviewFile(rt, store, { token, fileId: shown.id })).toMatchObject({ type: 'image/jpeg', bytes });
+    const tampered = { get: async () => new Uint8Array([1]), direct: undefined };
+    await expect(reviewFile(rt, tampered, { token, fileId: shown.id })).rejects.toThrow();
+    expect(await reviewFile(rt, store, { token, fileId: other.id })).toBeNull();
+    expect(await reviewFile(rt, store, { token: 'nope', fileId: shown.id })).toBeNull();
+
+    // Revoked: the files go with the page.
+    await exec(o, o.owner, 'social.review_link.revoke', { linkId });
+    expect(await media(token)).toBeNull();
+    expect(await file(token, shown.id)).toBeNull();
   });
 });

@@ -349,13 +349,15 @@ export const COVER_RULES: Readonly<Partial<Record<Provider, readonly CoverKind[]
   instagram: ['frame', 'image'],
   tiktok: ['frame'],
   youtube: ['image'],
+  // A video pin's cover is a frame of the video (#813).
+  pinterest: ['frame'],
 };
 // YouTube refuses a thumbnail over 2 MB (thumbnails.set).
 export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> = { youtube: 2 * 1024 * 1024 };
 
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram', 'mastodon']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram', 'mastodon', 'bluesky', 'pinterest']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
@@ -451,8 +453,8 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'bluesky',
     body: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
     title: null,
-    // Up to 4 images (1 MB each, Bluesky's blob limit) or one video of up to 3 minutes and 100 MB; the Crove adapter
-    // does not post video yet, so it stays out of VIDEO_READY.
+    // Up to 4 images (1 MB each, Bluesky's blob limit) or one MP4 of up to 3 minutes and 100 MB, through Bluesky's
+    // video service (#455).
     media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: 1_000_000, maxVideoBytes: 100 * MB, maxVideoSeconds: 180 },
     maxLinks: null,
     scrapesLinkPreview: false,
@@ -495,12 +497,12 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     unverified: ['body.max'],
   },
   // Pinterest (#798): a pin's title of 100 characters and description of 800, saved to a board; one image or a
-  // carousel of 2 to 5, JPEG or PNG (kept to 10 MB each, sent in the request). The adapter does not post video pins yet, so Pinterest stays out of VIDEO_READY.
+  // carousel of 2 to 5, JPEG or PNG (kept to 10 MB each, sent in the request); or one MP4 or MOV video pin (#813).
   pinterest: {
     provider: 'pinterest',
     body: { max: 800, count: 'codepoints', required: false },
     title: { max: 100, count: 'codepoints', required: false },
-    media: { min: 1, max: 5, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png'], maxImageBytes: 10 * MB, maxVideoBytes: 2048 * MB, maxVideoSeconds: 900 },
+    media: { min: 1, max: 5, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png'], maxImageBytes: 10 * MB, maxVideoBytes: 100 * MB, maxVideoSeconds: 900 },
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: ['media.max'],
