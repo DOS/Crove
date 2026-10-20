@@ -700,6 +700,66 @@ suite('social publishing on PostgreSQL (S4)', () => {
     });
   });
 
+  // #642: a video's cover image is a file of the org the variant names in its settings; the job reads it like media.
+  it('reads a video cover image for the platform, and only files a variant shows', async () => {
+    const o = await org();
+    const stored = new Map<string, Uint8Array>();
+    const file = async (name: string, contentType: string, source = 'social') => {
+      const bytes = new Uint8Array(Buffer.from(`${name}-${randomUUID()}`));
+      const sha = createHash('sha256').update(bytes).digest('hex');
+      const fileId = randomUUID();
+      await admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [o.orgId, fileId, sha, `org/${o.orgId}/${sha}`, `content:${sha}`, name, contentType, bytes.byteLength, source],
+        ),
+      );
+      stored.set(`org/${o.orgId}/${sha}`, bytes);
+      return { fileId, bytes };
+    };
+    const video = await file('clip.mp4', 'video/mp4');
+    const cover = await file('bia.png', 'image/png');
+    const stray = await file('khac.png', 'image/png');
+    const webp = await file('bia.webp', 'image/webp');
+    const document = await file('hoadon.png', 'image/png', 'upload');
+    const { connectionId } = await connect(o, `acct-${randomUUID().slice(0, 8)}`);
+    const create = (settings: Record<string, unknown>) => exec<{ postId: string }>(o, 'social.post.create', { body: 'Video có ảnh bìa', media: [{ fileId: video.fileId }], channels: [{ connectionId, settings }] });
+    // Only a JPEG or PNG image uploaded for posts, in a shape the adapters read.
+    await expect(create({ cover: { fileId: document.fileId } })).rejects.toMatchObject({ code: 'MEDIA_NOT_FOUND' });
+    await expect(create({ cover: { fileId: webp.fileId } })).rejects.toMatchObject({ code: 'COVER_TYPE_UNSUPPORTED' });
+    await expect(create({ cover: { atMs: -1 } })).rejects.toMatchObject({ code: 'COVER_INVALID' });
+    await expect(create({ cover: { fileId: 'not-a-uuid' } })).rejects.toMatchObject({ code: 'MEDIA_NOT_FOUND' });
+
+    const { postId } = await create({ cover: { fileId: cover.fileId } });
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    const v = post.variants[0];
+    expect(v?.settings).toEqual({ cover: { fileId: cover.fileId } });
+    expect(v?.issues).toEqual([]);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((x) => ({ variantId: x.id, revision: x.revision, contentHash: x.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+
+    const read: Record<string, string> = {};
+    const platform = new FakePlatform();
+    const publish = platform.publish.bind(platform);
+    platform.publish = async (input) => {
+      for (const f of [video, cover, stray]) {
+        read[f.fileId] = await input.readMedia(f.fileId).then(
+          (b) => (Buffer.from(b).equals(Buffer.from(f.bytes)) ? 'read' : 'other'),
+          () => 'refused',
+        );
+      }
+      return publish(input);
+    };
+    const store = { get: async (key: string) => stored.get(key) as Uint8Array } as unknown as BlobStore;
+    const outcome = await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, store, callTimeoutMs: 2_000 }, o.orgId, v?.id as string, 'sandbox');
+    expect(outcome).toEqual({ action: 'call', status: 'published' });
+    expect(platform.posts[0]?.settings).toEqual({ cover: { fileId: cover.fileId } });
+    expect(read).toEqual({ [video.fileId]: 'read', [cover.fileId]: 'read', [stray.fileId]: 'refused' });
+  });
+
   // S8 (#238): the metrics sweep asks the platform about published variants and keeps a snapshot per 6-hour capture.
   it('captures metrics of published variants once per capture and shows the latest in the summary', async () => {
     const o = await org();

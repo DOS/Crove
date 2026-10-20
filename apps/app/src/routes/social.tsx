@@ -15,6 +15,7 @@ import { cn } from '@crove/ui/lib/utils';
 import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
 import { PostLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
+import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
 import type { BulkAction } from '../lib/social-bulk.ts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
@@ -72,7 +73,10 @@ function PostRow({ post, slug, names, labels, right }: { post: Post; slug: strin
         <ChannelChips post={post} names={names} />
         <PostLabels ids={post.labelIds} labels={labels} />
       </div>
-      {right && <span className="shrink-0 text-xs text-subtle-foreground tabular-nums">{right}</span>}
+      <div className="flex shrink-0 items-center gap-2">
+        {isOverdue(post, Date.now()) && <Badge variant="destructive">{t('assign.overdue')}</Badge>}
+        {right && <span className="text-xs text-subtle-foreground tabular-nums">{right}</span>}
+      </div>
     </Link>
   );
 }
@@ -390,7 +394,7 @@ export function SocialPage() {
     const timer = setTimeout(() => setSearch({ q }), 300);
     return () => clearTimeout(timer);
   }, [text, search.q, setSearch]);
-  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.label ? { labelId: search.label } : {}), ...(search.q ? { search: search.q } : {}) };
+  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.label ? { labelId: search.label } : {}), ...(search.q ? { search: search.q } : {}), ...(search.mine ? { assignee: 'me' as const } : {}) };
   // The agenda window starts now; a new day does not need a reload to move it, a refetch does.
   const range = useMemo(() => {
     const from = new Date(Date.now() - DAY);
@@ -427,13 +431,13 @@ export function SocialPage() {
   const rows = list.data?.pages.flat() ?? [];
   const reviewCount = review.data?.length ?? 0;
   const attentionCount = attention.data?.length ?? 0;
-  const filtered = Boolean(search.channel || search.label || search.q || search.from || search.to);
+  const filtered = Boolean(search.channel || search.label || search.q || search.from || search.to || search.mine);
   // The label filter applies to the lists, the calendar and the metrics; the other filters to the lists only.
   const postFilters = tab === 'upcoming' || listTab !== null;
   const labelFilter = (postFilters || tab === 'calendar' || tab === 'metrics') && (labelList.length > 0 || Boolean(search.label));
   // Posts picked for a bulk action (#635), in the list on screen; a new tab or filter starts afresh.
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  useEffect(() => setPicked(new Set()), [tab, search.channel, search.label, search.q, search.from, search.to]);
+  useEffect(() => setPicked(new Set()), [tab, search.channel, search.label, search.q, search.from, search.to, search.mine]);
   const canDecide = role === 'owner' || role === 'admin';
   const bulkActions: readonly BulkAction[] = !canWrite ? [] : listTab === 'review' ? (canDecide ? ['approve', 'cancel'] : ['cancel']) : listTab === 'drafts' ? (canDecide ? ['queue', 'cancel'] : ['cancel']) : listTab === 'attention' ? ['cancel'] : [];
   const toggle = (id: string) => setPicked((now) => { const next = new Set(now); if (next.has(id)) next.delete(id); else next.add(id); return next; });
@@ -538,8 +542,14 @@ export function SocialPage() {
                 )}
               </>
             )}
+            {postFilters && (
+              <label className="flex items-center gap-2 pb-2 text-xs text-muted-foreground">
+                <Checkbox checked={search.mine === true} onCheckedChange={(on) => setSearch({ mine: on === true ? true : undefined })} />
+                {t('assign.mine')}
+              </label>
+            )}
             {(postFilters ? filtered : Boolean(search.label)) && (
-              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, label: undefined, q: undefined, from: undefined, to: undefined })}>
+              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, label: undefined, q: undefined, from: undefined, to: undefined, mine: undefined })}>
                 {t('filters.clear')}
               </Button>
             )}

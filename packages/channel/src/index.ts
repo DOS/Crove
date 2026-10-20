@@ -15,6 +15,7 @@ export * from './youtube.ts';
 export * from './tiktok.ts';
 export * from './x.ts';
 export * from './comment.ts';
+export * from './cover.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
@@ -105,6 +106,8 @@ export interface PublishInput {
   // A short-lived public URL for one of content.media, for platforms that fetch images themselves (Instagram); null
   // when the deployment's storage cannot hand one out (local disk).
   mediaUrl(fileId: string): Promise<string | null>;
+  // The variant's provider settings; a video's cover (#642) is `settings.cover`, read with videoCoverOf. readMedia and
+  // mediaUrl also serve a cover image's file.
   settings: Record<string, unknown>;
   // The external_call key of this step: unique per attempt, so a provider with idempotency keys can use it.
   callKey: string;

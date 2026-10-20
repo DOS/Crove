@@ -138,6 +138,37 @@ export function firstCommentOf(settings: Readonly<Record<string, unknown>> | und
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+// A video's cover (#642), in the variant's settings (`settings.cover`): a frame of the video, at a time in
+// milliseconds from its start, or an image of the org (a file uploaded for Social, JPEG or PNG), by file id. The
+// adapters' videoCoverOf in @crove/channel reads the same shape.
+export type Cover = { atMs: number } | { fileId: string };
+export type CoverKind = 'frame' | 'image';
+export const COVER_IMAGE_TYPES: readonly string[] = ['image/jpeg', 'image/png'];
+
+export function coverOf(settings: Readonly<Record<string, unknown>> | undefined): Cover | null {
+  const value = settings?.cover;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { atMs, fileId } = value as Record<string, unknown>;
+  if (typeof atMs === 'number' && Number.isSafeInteger(atMs) && atMs >= 0 && fileId === undefined) return { atMs };
+  if (typeof fileId === 'string' && fileId !== '' && atMs === undefined) return { fileId: fileId.toLowerCase() };
+  return null;
+}
+
+export const coverKind = (cover: Cover): CoverKind => ('atMs' in cover ? 'frame' : 'image');
+
+// What each channel's Crove adapter sends as a video's cover (#642); a channel missing here takes none. Instagram
+// Reels take a frame (thumb_offset) or an image (cover_url); TikTok's direct post takes a frame
+// (video_cover_timestamp_ms) and no uploaded image; YouTube takes an image (thumbnails.set) and no frame, since the
+// Data API has no way to pick one. Facebook Page videos and the other channels take none from Crove yet.
+export const COVER_RULES: Readonly<Partial<Record<Provider, readonly CoverKind[]>>> = {
+  sandbox: ['frame', 'image'],
+  instagram: ['frame', 'image'],
+  tiktok: ['frame'],
+  youtube: ['image'],
+};
+// YouTube refuses a thumbnail over 2 MB (thumbnails.set).
+export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> = { youtube: 2 * 1024 * 1024 };
+
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
 export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin']);

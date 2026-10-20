@@ -801,6 +801,8 @@ export interface SocialPostTable {
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
   evergreen_days: number | null;
   repost_of: string | null;
+  assignee_user_id: string | null;
+  due_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.post_variant */

@@ -92,6 +92,20 @@ describe('TikTokPublisher', () => {
     expect(calls[2]?.headers.get('content-range')).toBe('bytes 0-3/4');
   });
 
+  it('sends a frame cover as video_cover_timestamp_ms, and refuses an image cover with nothing sent (#642)', async () => {
+    const { fetchImpl, calls } = tiktok({
+      'POST open.tiktokapis.com/v2/post/publish/creator_info/query/': [creator()],
+      'POST open.tiktokapis.com/v2/post/publish/video/init/': [{ body: { data: { publish_id: 'v_pub_file~v2-1.124', upload_url: UPLOAD }, error: ok } }],
+      'PUT open-upload.tiktokapis.com/video/': [{ status: 201 }],
+    });
+    const frame = input({ settings: { privacyLevel: 'SELF_ONLY', cover: { atMs: 1500 } } });
+    expect(await new TikTokPublisher(APP, fetchImpl).publish(frame)).toMatchObject({ kind: 'pending', externalRef: 'v_pub_file~v2-1.124' });
+    expect(calls[1]?.body).toMatchObject({ post_info: { privacy_level: 'SELF_ONLY', video_cover_timestamp_ms: 1500 } });
+    const none = tiktok({});
+    expect(await new TikTokPublisher(APP, none.fetchImpl).publish(input({ settings: { privacyLevel: 'SELF_ONLY', cover: { fileId: 'c-1' } } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' });
+    expect(none.calls).toHaveLength(0);
+  });
+
   it('finishes on the status check, and ends one TikTok failed', async () => {
     const done = tiktok({ 'POST open.tiktokapis.com/v2/post/publish/status/fetch/': [{ body: { data: { status: 'PROCESSING_UPLOAD' }, error: ok } }, { raw: '{"data":{"status":"PUBLISH_COMPLETE","publicaly_available_post_id":[7300000000000000001]},"error":{"code":"ok"}}' }] });
     const publisher = new TikTokPublisher(APP, done.fetchImpl);

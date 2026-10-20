@@ -192,6 +192,8 @@ export const contract = {
             connectionId: zId.optional(),
             // Posts with this label (#639).
             labelId: zId.optional(),
+            // Posts assigned to the viewer (#640).
+            assignee: z.literal('me').optional(),
             search: z.string().trim().min(1).max(200).optional(),
             // The last post of the previous page (newest change first).
             before: z.strictObject({ updatedAt: z.iso.datetime({ offset: true }), postId: zId }).optional(),
@@ -200,6 +202,10 @@ export const contract = {
         )
         .output(z.array(zSocialPost)),
       get: oc.input(z.object({ postId: zId })).output(zSocialPost),
+      // Who should move the post along and by when (#640): owners, admins and the author; null clears.
+      assign: oc
+        .input(z.strictObject({ postId: zId, assigneeUserId: zId.nullable(), dueAt: z.iso.datetime({ offset: true }).nullable() }))
+        .output(z.object({ postId: zId, assigneeUserId: zId.nullable(), dueAt: z.string().nullable() })),
       // A retry with the same idempotencyKey returns the first result instead of a second post.
       create: oc
         .input(zSocialPostCreate.extend({ idempotencyKey: zId }))

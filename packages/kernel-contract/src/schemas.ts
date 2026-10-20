@@ -893,6 +893,8 @@ export const zSocialPost = z.object({
   origin: z.string(),
   tainted: z.boolean(),
   authorUserId: zId.nullable(),
+  assigneeUserId: zId.nullable(),
+  dueAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   variants: z.array(zSocialVariant),
