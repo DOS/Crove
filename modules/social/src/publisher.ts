@@ -10,9 +10,10 @@
 // - record failing: the job throws, pg-boss retries it, and the retry's begin finds the variant in flight.
 import { withCallSignal, type Publisher, type PublishResult, type ReconcileResult } from '@crove/channel';
 import { DomainError, readVerified, type BlobStore, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
-import { COVER_RULES, VIDEO_READY, coverKind, coverOf, type Provider } from './domain/channels.ts';
+import { COVER_RULES, THREAD_PARTS_MAX, VIDEO_READY, coverKind, coverOf, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
-import type { CommentWork } from './comments.ts';import { shortened, shortUrl } from './short-links.ts';
+import type { CommentWork } from './comments.ts';
+import type { ThreadWork } from './thread.ts';import { shortened, shortUrl } from './short-links.ts';
 
 
 export interface PublishDeps {
@@ -215,6 +216,8 @@ export async function runPublishJob(deps: PublishDeps, orgId: string, variantId:
   // Published now: its first comment, if it has one (#587). A failure there never touches the post.
   if (result.kind === 'accepted' || result.kind === 'found') {
     await runCommentJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-comment] variant ${variantId.slice(0, 8)}`, (error as Error).message));
+    // And its thread (#742), part after part.
+    await runThreadJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-thread] variant ${variantId.slice(0, 8)}`, (error as Error).message));
   }
   return { action: begun.action, status: recorded.status ?? recorded.reason ?? 'not_recorded' };
 }
@@ -238,4 +241,37 @@ export async function runCommentJob(deps: PublishDeps, orgId: string, variantId:
   }
   const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.comment.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
   return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}) };
+}
+
+/**
+ * The thread parts of a published variant (#742): begin, one call, record, for each part in turn, as replies to the
+ * part before. It stops at the first part that does not go out. retry: a person asked again, after the call they saw
+ * last.
+ */
+export async function runThreadJob(deps: PublishDeps, orgId: string, variantId: string, provider: string, retry?: { after: string | null }): Promise<{ action: string; reason?: string; state?: string; parts: number }> {
+  const publisher = deps.publishers[provider];
+  if (!publisher?.comment) return { action: 'none', reason: 'provider_not_configured', parts: 0 };
+  let credential: Awaited<ReturnType<typeof openCredential>> | null = null;
+  let parts = 0;
+  for (let i = 0; i < THREAD_PARTS_MAX; i += 1) {
+    const begun = await deps.runtime.execute<ThreadWork>('social.thread.begin', { variantId, provider, ...(retry && i === 0 ? { retry } : {}) }, { actor: ACTOR, orgId });
+    // Nothing more to post: the chain is out, or waits on a person. state: the last part this job posted.
+    if (begun.action === 'none') return parts > 0 ? { action: 'call', state: 'succeeded', reason: begun.reason, parts } : { action: 'none', reason: begun.reason, parts };
+    credential ??= await openCredential(deps, orgId, begun.connectionId);
+    let result: Awaited<ReturnType<NonNullable<Publisher['comment']>>> | { kind: 'blocked'; code: string };
+    if ('blocked' in credential) result = { kind: 'blocked', code: credential.blocked };
+    else {
+      const open = credential;
+      const timeout = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+      try {
+        result = await withTimeout(timeout, () => publisher.comment!({ ...open, externalId: begun.externalId, rootExternalId: begun.rootExternalId, text: begun.text, callKey: begun.callKey }));
+      } catch (error) {
+        result = { kind: 'unknown', code: error instanceof Timeout ? 'TIMEOUT' : 'ADAPTER_ERROR' };
+      }
+    }
+    const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.thread.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
+    parts += 1;
+    if (recorded.state !== 'succeeded') return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}), parts };
+  }
+  return { action: 'call', state: 'succeeded', parts };
 }

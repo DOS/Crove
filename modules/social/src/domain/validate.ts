@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, GBP_CTAS, GBP_TOPICS, gbpOf, COMMENT_RULES, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { CAPABILITIES, GBP_CTAS, GBP_TOPICS, gbpOf, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -59,6 +59,13 @@ export type IssueCode =
   // The first comment (#587): too long for the channel, or a channel that takes none yet.
   | 'COMMENT_TOO_LONG'
   | 'COMMENT_NOT_SUPPORTED'
+  // Thread parts (#742): a channel that takes none; more than THREAD_PARTS_MAX; an empty part or one too long for the
+  // channel (field settings.threadParts.<index>); a first comment beside a thread.
+  | 'THREAD_NOT_SUPPORTED'
+  | 'THREAD_TOO_MANY_PARTS'
+  | 'THREAD_PART_EMPTY'
+  | 'THREAD_PART_TOO_LONG'
+  | 'THREAD_WITH_COMMENT'
   // A video's cover (#642): not a frame or an image; set on a post that is not one video; a kind the channel's
   // adapter cannot send; a frame past the end of the video.
   | 'COVER_INVALID'
@@ -199,6 +206,24 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
       const bytes = countText(comment, 'bytes');
       if (rule.max !== null && n > rule.max) issues.push({ code: 'COMMENT_TOO_LONG', field: 'settings.firstComment', limit: rule.max, actual: n });
       else if (rule.maxBytes !== undefined && bytes > rule.maxBytes) issues.push({ code: 'COMMENT_TOO_LONG', field: 'settings.firstComment', limit: rule.maxBytes, actual: bytes });
+    }
+  }
+  const parts = threadPartsOf(variant.settings);
+  if (variant.settings?.threadParts !== undefined && !Array.isArray(variant.settings.threadParts)) issues.push({ code: 'THREAD_PART_EMPTY', field: 'settings.threadParts', limit: null, actual: null });
+  if (parts) {
+    const rule = story ? undefined : THREAD_RULES[variant.provider];
+    if (!rule) issues.push({ code: 'THREAD_NOT_SUPPORTED', field: 'settings.threadParts', limit: null, actual: null });
+    else {
+      if (parts.length > THREAD_PARTS_MAX) issues.push({ code: 'THREAD_TOO_MANY_PARTS', field: 'settings.threadParts', limit: THREAD_PARTS_MAX, actual: parts.length });
+      if (comment !== null) issues.push({ code: 'THREAD_WITH_COMMENT', field: 'settings.firstComment', limit: null, actual: null });
+      parts.slice(0, THREAD_PARTS_MAX).forEach((part, i) => {
+        const field = `settings.threadParts.${i}`;
+        if (!part) return void issues.push({ code: 'THREAD_PART_EMPTY', field, limit: null, actual: null });
+        const n = countText(part, rule.count);
+        const bytes = countText(part, 'bytes');
+        if (rule.max !== null && n > rule.max) issues.push({ code: 'THREAD_PART_TOO_LONG', field, limit: rule.max, actual: n });
+        else if (rule.maxBytes !== undefined && bytes > rule.maxBytes) issues.push({ code: 'THREAD_PART_TOO_LONG', field, limit: rule.maxBytes, actual: bytes });
+      });
     }
   }
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);

@@ -80,6 +80,28 @@ describe('first comments', () => {
     expect(record.text).toBe('#khaitruong #quan3');
   });
 
+  it('replies on Bluesky to a thread part, naming the first post of the thread as root (#742)', async () => {
+    const DID = 'did:plc:abc123def456ghi789jkl012';
+    const PDS = 'https://morel.us-east.host.bsky.network';
+    const root = `at://${DID}/app.bsky.feed.post/3kroot22222z`;
+    const part = `at://${DID}/app.bsky.feed.post/3kpart22222z`;
+    const { fetchImpl, calls } = fake({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [{ body: { did: DID, handle: 'quan-a.bsky.social', accessJwt: 'a', refreshJwt: 'r', didDoc: { service: [{ id: '#atproto_pds', serviceEndpoint: PDS }] } } }],
+      'GET morel.us-east.host.bsky.network/xrpc/com.atproto.repo.getRecord': [{ body: { uri: part, cid: 'bafypart' } }, { body: { uri: root, cid: 'bafyroot' } }],
+      'POST morel.us-east.host.bsky.network/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3kpart32222z`, cid: 'bafy3' } }],
+    });
+    const secret = JSON.stringify({ identifier: DID, appPassword: 'abcd-efgh-ijkl-mnop' });
+    const result = await new BlueskyPublisher(fetchImpl).comment(input({ externalAccountId: DID, secret, externalId: part, rootExternalId: root, text: 'Phần ba' }));
+    expect(result).toEqual({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kpart32222z` });
+    expect(calls.filter((c) => c.route.endsWith('getRecord')).map((c) => c.url.searchParams.get('rkey'))).toEqual(['3kpart22222z', '3kroot22222z']);
+    expect(calls.at(-1)?.body).toMatchObject({ record: { reply: { root: { uri: root, cid: 'bafyroot' }, parent: { uri: part, cid: 'bafypart' } } } });
+    // A root of another account is refused before any post.
+    const other = await new BlueskyPublisher(fake({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [{ body: { did: DID, handle: 'quan-a.bsky.social', accessJwt: 'a', refreshJwt: 'r', didDoc: { service: [{ id: '#atproto_pds', serviceEndpoint: PDS }] } } }] }).fetchImpl).comment(
+      input({ externalAccountId: DID, secret, externalId: part, rootExternalId: 'at://did:plc:someoneelse0000000000000/app.bsky.feed.post/3kroot22222z' }),
+    );
+    expect(other).toMatchObject({ kind: 'rejected', code: 'NOT_OWN_POST' });
+  });
+
   // Graph API errors (developers.facebook.com/docs/graph-api/guides/error-handling): 190 an expired or revoked token,
   // 200 and 10 a permission the token lacks, 2 a Meta outage.
   const graphError = (status: number, code: number, message: string): Answer => ({ status, body: { error: { message, type: 'OAuthException', code, fbtrace_id: 'AbCdEf' } } });
