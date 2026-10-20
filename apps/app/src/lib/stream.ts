@@ -56,6 +56,9 @@ export function hintMatches(hint: StreamHint, query: Query): boolean {
       const options = query.queryKey[1] as { input?: { postId?: unknown } } | undefined;
       return path === 'social.posts.get' && options?.input?.postId === id;
     }
+    // A notification written or read (#637), of anyone in the org: the bell reads its own again.
+    case 'social_notification':
+      return path === 'social.notifications.list';
   }
 }
 

@@ -11,7 +11,7 @@ import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runCommentJob, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
+import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, runCommentJob, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
@@ -32,6 +32,8 @@ const AGENT_PROPOSAL_COMMANDS: Readonly<Record<string, string>> = {
   'kernel.agent.proposal_approved': 'kernel.agent.proposal.approve',
 };
 const AGENT_RETRY_LIMIT = 3;
+const SOCIAL_NOTIFY_RETRY_LIMIT = 3;
+const NOTIFYING: ReadonlySet<string> = new Set(NOTIFYING_EVENTS);
 // Every 10 minutes the worker wakes agents whose wake-up is still pending and that can run now
 // (crove_kernel.agent_wakeups_due): a run refused earlier by the daily cap, a kill switch or a budget that has since
 // lifted, or blocked by a run left live by a crashed worker. Agents still capped, switched off, out of budget or of a
@@ -270,6 +272,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // Jobs of a module this deployment leaves out are not worked and never queued (CROVE_MODULES, plan Decision 12).
   // Reading files is the finance module's job today: without it an uploaded file is stored and stays unread.
   const finance = deps.runtime.installed('finance');
+  const social = deps.runtime.installed('social');
 
   // version: a requested re-extraction (kernel.file.reextract_requested); absent for the first read of a new file.
   // pg-boss waits the polling interval between fetches (2 s by default, less the job's run time), so a batch of 200
@@ -396,6 +399,15 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (!job) return;
     await deps.runtime.execute('kernel.agent.dispatch_event', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'kernel.agent' }, orgId: job.data.orgId });
   });
+
+  // In-app notifications (#637): the command reads the event from the outbox and writes one row per person; the job
+  // carries only its id.
+  if (social) {
+    await boss.work<AgentDispatchJob>(QUEUES.socialNotify, { batchSize: 1 }, async ([job]) => {
+      if (!job) return;
+      await deps.runtime.execute('social.notification.dispatch', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.notify' }, orgId: job.data.orgId });
+    });
+  }
 
   // Agent proposals and approvals: the worker acts on what an agent recorded, after checking it again.
   await boss.work<AgentDispatchJob & { type: string }>(QUEUES.agentProposal, { batchSize: 1 }, async ([job]) => {
@@ -555,6 +567,14 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 return boss.send(socialPublishQueue(provider), { orgId: row.org_id, variantId, provider, comment: true, after } satisfies SocialPublishJob, {
                   singletonKey: `${row.org_id}:${variantId}:comment:${after ?? '-'}`,
                   retryLimit: 0,
+                });
+              }
+              if (social && NOTIFYING.has(row.type)) {
+                return boss.send(QUEUES.socialNotify, { orgId: row.org_id, eventId: row.event_id } satisfies AgentDispatchJob, {
+                  singletonKey: `${row.org_id}:${row.event_id}`,
+                  retryLimit: SOCIAL_NOTIFY_RETRY_LIMIT,
+                  retryDelay: 20,
+                  retryBackoff: true,
                 });
               }
               if (row.type === 'kernel.agent.wakeup_requested') {

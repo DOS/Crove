@@ -41,11 +41,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
-  'crove_social.label',
   'crove_social.link_preview',
-  'crove_social.notification',
-  'crove_social.notification_mute',
-  'crove_social.post_label',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;

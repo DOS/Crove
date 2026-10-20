@@ -32,6 +32,8 @@ import {
   zSocialLibraryUse,
   zSocialReportLink,
   zSocialReportLinkCreate,
+  zSocialNotificationKind,
+  zSocialNotifications,
   zSocialSnippet,
   zSocialSnippetCreate,
   zSocialSnippetUpdate,
@@ -310,6 +312,12 @@ export const contract = {
       list: oc.input(z.object({})).output(z.array(zSocialReportLink)),
       create: oc.input(zSocialReportLinkCreate).output(z.object({ linkId: zId, token: z.string(), expiresAt: z.string() })),
       revoke: oc.input(z.strictObject({ linkId: zId })).output(z.object({ linkId: zId })),
+    },
+    // In-app notifications (#637): each member reads, marks and turns off only their own.
+    notifications: {
+      list: oc.input(z.object({})).output(zSocialNotifications),
+      read: oc.input(z.union([z.strictObject({ ids: z.array(zId).min(1).max(100) }), z.strictObject({ all: z.literal(true) })])).output(z.object({ read: z.number().int() })),
+      mute: oc.input(z.strictObject({ kind: zSocialNotificationKind, muted: z.boolean() })).output(z.object({ kind: zSocialNotificationKind, muted: z.boolean() })),
     },
     // Client review links (#589): owners and admins make and revoke them; the token is in the create answer only.
     reviewLinks: {
