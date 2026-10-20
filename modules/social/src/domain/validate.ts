@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -29,6 +29,10 @@ export interface VariantDraft {
 }
 
 export type IssueCode =
+  // Instagram collaborators and people tags (#796): not usernames, too many, or on a post that takes none.
+  | 'IG_COLLABORATORS_INVALID'
+  | 'IG_USER_TAGS_INVALID'
+  | 'IG_TAGS_NOT_SUPPORTED'
   | 'CONTENT_REQUIRED'
   | 'TEXT_REQUIRED'
   | 'TEXT_TOO_LONG'
@@ -126,6 +130,24 @@ function checkText(issues: Issue[], field: 'body' | 'title', text: string, rule:
   if (rule.maxBytes !== undefined) {
     const bytes = countText(text, 'bytes');
     if (bytes > rule.maxBytes) issues.push({ code: 'TEXT_TOO_MANY_BYTES', field, limit: rule.maxBytes, actual: bytes });
+  }
+}
+
+// Collaborators go on feed posts and Reels, people tags on image posts (on the first image); a Story takes neither.
+function checkInstagramPeople(issues: Issue[], variant: VariantDraft) {
+  const collaborators = instagramPeopleOf(variant.settings, 'collaborators');
+  const tags = instagramPeopleOf(variant.settings, 'userTags');
+  if (collaborators === null && tags === null) return;
+  const story = postTypeOf(variant.settings) === 'story';
+  if (collaborators === 'invalid' || (collaborators && collaborators.length > IG_COLLABORATORS_MAX)) {
+    issues.push({ code: 'IG_COLLABORATORS_INVALID', field: 'settings.collaborators', limit: IG_COLLABORATORS_MAX, actual: Array.isArray(collaborators) ? collaborators.length : null });
+  } else if (collaborators && story) {
+    issues.push({ code: 'IG_TAGS_NOT_SUPPORTED', field: 'settings.collaborators', limit: null, actual: null });
+  }
+  if (tags === 'invalid' || (tags && tags.length > IG_USER_TAGS_MAX)) {
+    issues.push({ code: 'IG_USER_TAGS_INVALID', field: 'settings.userTags', limit: IG_USER_TAGS_MAX, actual: Array.isArray(tags) ? tags.length : null });
+  } else if (tags && (story || variant.media[0]?.kind !== 'image')) {
+    issues.push({ code: 'IG_TAGS_NOT_SUPPORTED', field: 'settings.userTags', limit: null, actual: null });
   }
 }
 
@@ -262,6 +284,7 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
     const cw = variant.settings?.contentWarning;
     if (cw !== undefined && (typeof cw !== 'string' || countText(cw, 'codepoints') > CONTENT_WARNING_MAX)) issues.push({ code: 'CONTENT_WARNING_TOO_LONG', field: 'settings.contentWarning', limit: CONTENT_WARNING_MAX, actual: typeof cw === 'string' ? countText(cw, 'codepoints') : null });
   }
+  if (variant.provider === 'instagram') checkInstagramPeople(issues, variant);
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
   checkPollAndTag(issues, variant, caps);
   checkGbp(issues, variant);

@@ -76,6 +76,31 @@ const canonical = (value: unknown): string =>
   JSON.stringify(value, (_key, v: unknown) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))) : v));
 const sameSettings = (a: Record<string, unknown> | null | undefined, b: Record<string, unknown> | null | undefined) => canonical(a ?? {}) === canonical(b ?? {});
 
+// Instagram usernames typed as text (#796): separated by commas or spaces, an @ in front is dropped. The text is
+// kept as typed while the field has focus, so a comma can be typed.
+function PeopleField({ id, label, hint, names, onChange, disabled }: { id: string; label: string; hint: string; names: readonly string[]; onChange: (names: string[]) => void; disabled: boolean }) {
+  const [text, setText] = useState<string | null>(null);
+  return (
+    <div className="space-y-1">
+      <Label htmlFor={id} className="text-xs">
+        {label}
+      </Label>
+      <Input
+        id={id}
+        value={text ?? names.map((n) => `@${n}`).join(' ')}
+        disabled={disabled}
+        onFocus={() => setText(names.map((n) => `@${n}`).join(' '))}
+        onBlur={() => setText(null)}
+        onChange={(e) => {
+          setText(e.target.value);
+          onChange([...new Set(e.target.value.split(/[\s,]+/).map((n) => n.replace(/^@+/, '').toLowerCase()).filter(Boolean))]);
+        }}
+      />
+      <p className="text-xs text-subtle-foreground">{hint}</p>
+    </div>
+  );
+}
+
 // The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
 function ProviderSettings({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
   const t = useTranslations('social');
@@ -102,6 +127,20 @@ function ProviderSettings({ provider, settings, onChange, disabled }: { provider
         </Label>
         <Input id="mastodon-cw" value={typeof settings.contentWarning === 'string' ? settings.contentWarning : ''} disabled={disabled} onChange={(e) => onChange(e.target.value ? { ...settings, contentWarning: e.target.value } : without('contentWarning'))} />
         <p className="text-xs text-subtle-foreground">{t('mastodonContentWarningHint')}</p>
+      </div>
+    );
+  }
+  // Instagram (#796): collaborators on feed posts and Reels, people tagged on the first image.
+  if (provider === 'instagram') {
+    const names = (key: string) => (Array.isArray(settings[key]) ? (settings[key] as unknown[]).filter((v): v is string => typeof v === 'string') : []);
+    const set = (key: string, value: string[]) => {
+      const { [key]: _gone, ...rest } = settings;
+      onChange(value.length > 0 ? { ...rest, [key]: value } : rest);
+    };
+    return (
+      <div className="space-y-2">
+        <PeopleField id="ig-collaborators" label={t('igCollaborators')} hint={t('igCollaboratorsHint')} names={names('collaborators')} disabled={disabled} onChange={(v) => set('collaborators', v)} />
+        <PeopleField id="ig-user-tags" label={t('igUserTags')} hint={t('igUserTagsHint')} names={names('userTags')} disabled={disabled} onChange={(v) => set('userTags', v)} />
       </div>
     );
   }
@@ -376,6 +415,10 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TOO_MANY_LINKS', { limit, actual });
       case 'CONTENT_WARNING_TOO_LONG':
         return t('CONTENT_WARNING_TOO_LONG', { limit, actual });
+      case 'IG_COLLABORATORS_INVALID':
+        return t('IG_COLLABORATORS_INVALID', { limit });
+      case 'IG_USER_TAGS_INVALID':
+        return t('IG_USER_TAGS_INVALID', { limit });
       case 'COMMENT_TOO_LONG':
         return t('COMMENT_TOO_LONG', { limit, actual });
       case 'THREAD_TOO_MANY_PARTS':
