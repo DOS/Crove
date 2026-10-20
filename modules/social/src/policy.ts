@@ -150,5 +150,24 @@ export const policyList = defineQuery({
   },
 });
 
+// Per connection, the variants waiting paused on it (an expired or disconnected channel, #577): they go out again
+// once the channel is reconnected.
+export const channelWaiting = defineQuery({
+  name: 'social.channel.waiting',
+  input: z.object({}),
+  access: ALL,
+  handler: async (ctx) => {
+    const rows = await ctx.trx
+      .selectFrom('crove_social.post_variant')
+      .select(['channel_connection_id', (eb) => eb.fn.countAll<string>().as('paused')])
+      .where('org_id', '=', ctx.orgId)
+      .where('status', '=', 'paused')
+      .groupBy('channel_connection_id')
+      .orderBy('channel_connection_id')
+      .execute();
+    return rows.map((r) => ({ connectionId: r.channel_connection_id, paused: Number(r.paused) }));
+  },
+});
+
 export const policyCommands = [policySet];
-export const policyQueries = [policyList];
+export const policyQueries = [policyList, channelWaiting];

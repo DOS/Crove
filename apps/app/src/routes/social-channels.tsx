@@ -2,7 +2,7 @@
 // disconnect, and each channel's posting queue: weekly slots in a time zone.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { OAUTH_CHANNEL_PROVIDERS } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
@@ -213,6 +213,19 @@ export function SocialChannelsPage() {
       window.location.assign(attempt.authorizeUrl);
     },
   });
+  const waiting = useQuery(orpc.social.channels.waiting.queryOptions({ input: {} }));
+  const pausedOn = new Map((waiting.data ?? []).map((w) => [w.connectionId, w.paused]));
+  const blueskyForm = useRef<HTMLInputElement>(null);
+  // Reconnecting connects the same account again: the provider's dialog, or the Bluesky form with its handle.
+  const reconnect = (c: Channel) => {
+    if (c.provider === 'bluesky') {
+      setBsky({ handle: c.displayName.replace(/^@/, ''), appPassword: '' });
+      blueskyForm.current?.focus();
+      return;
+    }
+    if (oauth.includes(c.provider as OAuthProvider)) start.mutate(c.provider as OAuthProvider);
+  };
+  const canReconnect = (c: Channel) => isAdmin && c.status !== 'revoked' && (c.provider === 'bluesky' ? blueskyOn : oauth.includes(c.provider as OAuthProvider));
   const disconnect = useMutation({
     mutationFn: (connectionId: string) => client.channels.disconnect({ connectionId, idempotencyKey: crypto.randomUUID() }),
     onSuccess: () => {
@@ -256,6 +269,19 @@ export function SocialChannelsPage() {
                       <p className={Date.parse(c.expiresAt) - Date.now() < WARN_BEFORE_MS ? 'mt-1 text-xs text-warning' : 'mt-1 text-xs text-subtle-foreground'}>
                         {t(Date.parse(c.expiresAt) - Date.now() < WARN_BEFORE_MS ? 'expiresSoon' : 'expiresOn', { when: f.date(c.expiresAt) })}
                       </p>
+                    )}
+                    {(pausedOn.get(c.id) ?? 0) > 0 && (
+                      <p className="mt-1 text-xs text-warning">
+                        {t('pausedPosts', { count: pausedOn.get(c.id) ?? 0 })}{' '}
+                        <Link to="/o/$slug/social" params={{ slug }} className="text-link hover:underline">
+                          {t('seePosts')}
+                        </Link>
+                      </p>
+                    )}
+                    {canReconnect(c) && (c.status !== 'active' || (c.expiresAt !== null && NO_RENEWAL.includes(c.provider) && Date.parse(c.expiresAt) - Date.now() < WARN_BEFORE_MS)) && (
+                      <Button variant="outline" size="sm" className="mt-2" disabled={start.isPending} onClick={() => reconnect(c)}>
+                        {t('reconnect')}
+                      </Button>
                     )}
                   </div>
                   {isAdmin &&
@@ -336,7 +362,7 @@ export function SocialChannelsPage() {
             >
               <p className="text-sm font-medium text-foreground">{providerName('bluesky')}</p>
               <Label htmlFor="bsky-handle">{t('blueskyHandle')}</Label>
-              <Input id="bsky-handle" value={bsky.handle} autoComplete="off" placeholder="ten.bsky.social" onChange={(e) => setBsky({ ...bsky, handle: e.target.value })} />
+              <Input id="bsky-handle" ref={blueskyForm} value={bsky.handle} autoComplete="off" placeholder="ten.bsky.social" onChange={(e) => setBsky({ ...bsky, handle: e.target.value })} />
               <Label htmlFor="bsky-password">{t('blueskyAppPassword')}</Label>
               <Input id="bsky-password" type="password" autoComplete="off" value={bsky.appPassword} placeholder="xxxx-xxxx-xxxx-xxxx" onChange={(e) => setBsky({ ...bsky, appPassword: e.target.value })} />
               <p className="text-xs text-subtle-foreground">{t('blueskyHint')}</p>

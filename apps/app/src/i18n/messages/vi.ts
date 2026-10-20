@@ -1464,6 +1464,8 @@ export const vi = {
     channelStatus: { active: 'Hoạt động', expired: 'Hết hạn', error: 'Lỗi', revoked: 'Đã ngắt' },
     connectedAt: 'Kết nối lúc {when}',
     reconnectHint: 'Kênh cần được kết nối lại; bài đã lên lịch cho kênh này tạm dừng, không bị mất.',
+    pausedPosts: '{count, plural, other {# bài đang chờ kênh này được kết nối lại.}}',
+    seePosts: 'Xem bài',
     disconnect: 'Ngắt kết nối',
     confirmDisconnect: 'Ngắt kết nối',
     keep: 'Giữ lại',
