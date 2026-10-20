@@ -8,6 +8,7 @@ import { Label } from '@crove/ui/components/label';
 import { ErrorText, Logo, Notice } from '../components/ui.tsx';
 import { LocaleSwitcher } from '../i18n/provider.tsx';
 import { auth, authErrorText, authFailure, callbackNoticeText, clearCallbackNotice, peekCallbackNotice, type AuthFailure, type CallbackNotice } from '../lib/auth.ts';
+import { LegalConsent } from '../components/legal-consent.tsx';
 
 type Mode = 'login' | 'signup' | 'reset';
 // The notices the screen shows after sending an email, by message key: state holds no translated text (issue #215).
@@ -90,6 +91,7 @@ export function AuthPage() {
           <Button type="submit" size="lg" className="w-full" disabled={busy}>
             {busy ? root('common.processing') : titles[mode]}
           </Button>
+          {mode === 'signup' && <LegalConsent />}
         </form>
         <div className="mt-4 flex justify-between text-sm">
           {mode === 'login' ? (
