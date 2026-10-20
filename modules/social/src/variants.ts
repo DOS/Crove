@@ -47,6 +47,7 @@ export interface VariantRow {
   error_action: string | null;
   next_check_at: Date | null;
   external_post_id: string | null;
+  published_at: Date | null;
   updated_at: Date;
 }
 
@@ -74,6 +75,7 @@ export const VARIANT_COLUMNS = [
   'error_action',
   'next_check_at',
   'external_post_id',
+  'published_at',
   'updated_at',
 ] as const;
 
