@@ -2,9 +2,10 @@
 // entry. Runs only through kernel.proposal.approve, on the stored revision as is. A purchase (the org bought) records
 // the seller as the vendor and posts Dr expense or asset, Dr 1331/1332, Cr 331. A sale (direction 'sale', issue #313:
 // the org issued the invoice) records the buyer as the customer and posts Dr 131, Cr revenue, Cr 3331.
-// A purchase invoice dated in a locked month (#478) may be posted later: the approver picks a posting date in an open
-// month (kernel.proposal.approve postingDate). The document keeps the invoice date, the journal entry is dated on the
-// posting date, and the VAT working declares the invoice in the period of that date (vat.ts).
+// A purchase invoice dated in a locked month (#478), or on or before the org's opening entry (#366), may be posted
+// later: the approver picks a later posting date (kernel.proposal.approve postingDate). The document keeps the invoice
+// date, the journal entry is dated on the posting date, and the VAT working declares the invoice in the period of that
+// date (vat.ts).
 // finance.purchase.revise: computes the payload of a new revision when a user edits a pending proposal
 // (kernel.proposal.edit); it writes nothing.
 import { z } from 'zod';
@@ -24,7 +25,7 @@ import {
 import { assertUsableAccounts, isInactiveDefaultRefusal } from './accounts.ts';
 import { postJournalEntry } from './ledger.ts';
 import { journalMemo } from './memo.ts';
-import { databaseToday, dateLabel } from './period-lock.ts';
+import { databaseToday, dateLabel, liveOpeningDate } from './period-lock.ts';
 
 function directionOf(payload: PurchaseProposal): DocumentDirection {
   return payload.direction ?? 'purchase';
@@ -119,8 +120,9 @@ async function assertDirection(ctx: CommandContext, payload: PurchaseProposal): 
 
 // A posting date other than the invoice date (#478), checked before anything is written: only for a purchase, never
 // before the invoice date, never after today in Vietnam (`today` by the database clock, as lock_period() counts
-// months). Whether the invoice's own month is locked is checked once the entry is posted (assertInvoiceMonthLocked),
-// under the lock the posting guard holds.
+// months). Whether the invoice's own date is closed (its month locked, or on or before the opening entry) is checked
+// once the entry is posted (lateReason), under the lock the posting guard holds. The guard itself refuses a posting date
+// inside the locked months or on or before the opening entry.
 export function latePostingRefusal(direction: DocumentDirection, issueDate: string, postingDate: string, today: string): DomainError | null {
   if (direction === 'sale') {
     return new DomainError('POSTING_DATE_NOT_ALLOWED', 422, 'Hóa đơn bán ra ghi sổ theo ngày lập hóa đơn, không chọn được ngày ghi sổ khác', { postingDate });
@@ -134,20 +136,22 @@ export function latePostingRefusal(direction: DocumentDirection, issueDate: stri
   return null;
 }
 
-// The posted entry holds the org's period_lock row FOR SHARE until commit (the guard on journal_entry), so the lock
-// read here cannot move before this posting commits. A later posting date is only for an invoice whose own month is
-// locked: otherwise the entry stays on the invoice date, as before #478.
-async function assertInvoiceMonthLocked(ctx: CommandContext, issueDate: string, postingDate: string): Promise<void> {
+// Why the invoice may not post on its own date, so a later posting date is allowed: its month is locked (#478), or it is
+// dated on or before the org's opening entry in force (#366). Otherwise the entry stays on the invoice date, as before
+// #478. Read after the posting: the posted entry holds the org's period_lock row FOR SHARE until commit (the guard on
+// journal_entry), and both a lock and an opening entry need it FOR UPDATE, so neither moves before this posting commits.
+async function lateReason(ctx: CommandContext, issueDate: string, postingDate: string): Promise<'locked' | 'opening'> {
   const row = await ctx.trx.selectFrom('crove_finance.period_lock').select('locked_through').where('org_id', '=', ctx.orgId).executeTakeFirst();
   const lockedThrough = row?.locked_through ?? null;
-  if (lockedThrough === null || issueDate > lockedThrough) {
-    throw new DomainError(
-      'POSTING_DATE_NOT_ALLOWED',
-      422,
-      `Tháng của hóa đơn ngày ${dateLabel(issueDate)} chưa khóa sổ nên bút toán ghi theo ngày hóa đơn; hãy duyệt mà không chọn ngày ghi sổ khác`,
-      { postingDate, issueDate, lockedThrough },
-    );
-  }
+  if (lockedThrough !== null && issueDate <= lockedThrough) return 'locked';
+  const openingDate = await liveOpeningDate(ctx);
+  if (openingDate !== null && issueDate <= openingDate) return 'opening';
+  throw new DomainError(
+    'POSTING_DATE_NOT_ALLOWED',
+    422,
+    `Tháng của hóa đơn ngày ${dateLabel(issueDate)} chưa khóa sổ và ngày đó sau ngày số dư đầu kỳ, nên bút toán ghi theo ngày hóa đơn; hãy duyệt mà không chọn ngày ghi sổ khác`,
+    { postingDate, issueDate, lockedThrough, openingDate },
+  );
 }
 
 // A sale line goes to a revenue account and a purchase line never does (#430, isRevenueAccount); the database holds
@@ -314,6 +318,8 @@ export const recordPurchase = defineCommand({
       entryDate: lateDate ?? invoice.issueDate,
       description: memo,
       sourceType: 'finance.purchase_document',
+      // A purchase invoice's approver may choose a later posting date; a sale posts on its invoice date.
+      beforeOpening: sale ? 'fixed' : 'posting_date',
       sourceId: document.id,
       lines: journal.map((j) => ({
         lineNo: j.lineNo,
@@ -324,7 +330,7 @@ export const recordPurchase = defineCommand({
         memo: j.memo,
       })),
     });
-    if (lateDate) await assertInvoiceMonthLocked(ctx, invoice.issueDate, lateDate);
+    const late = lateDate ? await lateReason(ctx, invoice.issueDate, lateDate) : null;
 
     // Remember the debit account carrying the largest amount (either sign) for this vendor. Sales remember nothing.
     const main = sale ? undefined : [...lines].sort((a, b) => money(b.amount).abs().comparedTo(money(a.amount).abs()))[0];
@@ -355,7 +361,7 @@ export const recordPurchase = defineCommand({
     ctx.audit({
       direction,
       ...(replaces ? { replaces_document_id: replaces } : {}),
-      ...(lateDate ? { invoice_date: invoice.issueDate, posting_date: lateDate } : {}),
+      ...(lateDate ? { invoice_date: invoice.issueDate, posting_date: lateDate, late_reason: late } : {}),
     });
     const event = sale ? 'sale.recorded' : 'purchase.recorded';
     const recorded = replaces ? `Ghi sổ lại ${memo} (thay chứng từ đã hủy)` : `Ghi sổ ${memo}`;
@@ -363,7 +369,9 @@ export const recordPurchase = defineCommand({
       'finance.purchase_document',
       document.id,
       event,
-      lateDate ? `${recorded} vào ngày ${dateLabel(lateDate)} (tháng của hóa đơn đã khóa sổ)` : recorded,
+      lateDate
+        ? `${recorded} vào ngày ${dateLabel(lateDate)} (${late === 'opening' ? 'ngày hóa đơn không sau ngày số dư đầu kỳ' : 'tháng của hóa đơn đã khóa sổ'})`
+        : recorded,
     );
     await ctx.emit('finance.purchase.recorded', {
       documentId: document.id,

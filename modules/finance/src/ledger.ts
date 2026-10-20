@@ -2,11 +2,12 @@
 // and all of its lines in one call, stamps org and author from the context and checks that it balances.
 // The database refuses direct inserts, and lines added to an entry after the transaction that created it.
 // A reversal (reversal.ts) is posted here too, as a new entry naming the one it reverses; the database checks
-// that its lines mirror the original's. Nothing posts into a locked month (period-lock.ts).
+// that its lines mirror the original's. Nothing posts into a locked month, nor on or before the org's opening entry
+// (period-lock.ts).
 import { sql } from 'kysely';
 import { DomainError, type CommandContext } from '@crove/kernel-runtime';
 import type { Money } from '@crove/l10n-vn';
-import { periodLockedError } from './period-lock.ts';
+import { postingGuardError, type BeforeOpeningChoice } from './period-lock.ts';
 
 export interface PostingLine {
   lineNo: number;
@@ -25,6 +26,9 @@ export interface Posting {
   lines: PostingLine[];
   // The posted entry this one reverses, or omitted for an ordinary entry.
   reversesEntryId?: string;
+  // How a refusal for a date on or before the opening entry tells the user to go on (period-lock.ts); a later date by
+  // default.
+  beforeOpening?: BeforeOpeningChoice;
 }
 
 export async function postJournalEntry(ctx: CommandContext, posting: Posting): Promise<string> {
@@ -44,8 +48,9 @@ export async function postJournalEntry(ctx: CommandContext, posting: Posting): P
         ${posting.reversesEntryId ?? null}::uuid
       ) AS id`.execute(ctx.trx));
   } catch (error) {
-    // An entry dated in a locked month (period-lock.ts): say so instead of a system error.
-    throw periodLockedError(error) ?? error;
+    // An entry dated in a locked month, or on or before the opening entry (period-lock.ts): say so instead of a
+    // system error.
+    throw postingGuardError(error, posting.beforeOpening) ?? error;
   }
   const id = rows[0]?.id;
   if (!id) throw new DomainError('INTERNAL', 500, 'Không ghi được bút toán');

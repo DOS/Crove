@@ -6,14 +6,15 @@
 // issue #313); both live in crove_finance.purchase_document, told apart by direction.
 //
 // The period of an input invoice is its posting date, the date of its journal entry (#478). That is its invoice date,
-// except for an invoice recorded after its own month was locked, which the approver posts in an open month: it is
-// then declared in that later period, flagged declared_late. Source (checked 2026-10-19 against the General Department
-// of Taxation's published answers, not the texts themselves): input VAT is declared in the period it arises (Law on
-// VAT No. 48/2024/QH15, Article 14(1)(đ)), and an omission found later that lowers the tax payable, as a missed input
-// invoice does, is declared in the period it is found (Decree 181/2025/ND-CP, Article 23(5) and (6)); one that raises
-// it needs a supplementary return for its own period. Treating a late-received invoice as such an omission is an
-// inference for the partner's accountant to confirm (#61). An output invoice always stays in its invoice period: a
-// sale is never posted late (record.ts).
+// except for an invoice recorded after its own month was locked, or dated on or before the org's opening entry (#366),
+// which the approver posts on a later date: it is then declared in the period of that date, flagged declared_late when
+// that is a later period than its invoice date's (posted later in the same period, it is an ordinary invoice of it).
+// Source (checked 2026-10-19 against the General Department of Taxation's published answers, not the texts themselves):
+// input VAT is declared in the period it arises (Law on VAT No. 48/2024/QH15, Article 14(1)(đ)), and an omission found
+// later that lowers the tax payable, as a missed input invoice does, is declared in the period it is found (Decree
+// 181/2025/ND-CP, Article 23(5) and (6)); one that raises it needs a supplementary return for its own period. Treating
+// a late-received invoice as such an omission is an inference for the partner's accountant to confirm (#61). An output
+// invoice always stays in its invoice period: a sale is never posted late (record.ts).
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
 import { VAT_WARNINGS, zVatPeriod, type DocumentDirection } from '@crove/kernel-contract';

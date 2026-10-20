@@ -610,6 +610,8 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   'BANK_LINE_MATCHED',
   // Posting into a locked month (#329): the proposal's date is in or before the last locked month.
   'PERIOD_LOCKED',
+  // Posting on or before the org's opening entry (#366).
+  'BEFORE_OPENING_BALANCE',
 ]);
 
 // Whether a nested approval's error refuses only that item.
