@@ -13,6 +13,7 @@ import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { VoiceEditor } from '../components/social-brand-voice.tsx';
+import { ChannelSetsCard } from '../components/social-channel-sets.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -371,6 +372,8 @@ export function SocialChannelsPage() {
             </div>
             {!voices.isLoading && <VoiceEditor key={orgVoice?.updatedAt ?? 'none'} connectionId={null} voice={orgVoice} canEdit={isAdmin} />}
           </Card>
+          {/* Once the channels are loaded: before, every set would read as having none left. */}
+          {channels.data && <ChannelSetsCard channels={channels.data.filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />}
           {channels.isLoading ? (
             <Spinner />
           ) : channels.error ? (

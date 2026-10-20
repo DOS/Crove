@@ -518,6 +518,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         create: os.social.reportLinks.create.handler(socialCommand('social.report_link.create')),
         revoke: os.social.reportLinks.revoke.handler(socialCommand('social.report_link.revoke')),
       },
+      channelSets: {
+        list: os.social.channelSets.list.handler(socialQuery('social.channel_set.list')),
+        save: os.social.channelSets.save.handler(socialCommand('social.channel_set.save')),
+        remove: os.social.channelSets.remove.handler(socialCommand('social.channel_set.remove')),
+      },
       brandVoices: {
         list: os.social.brandVoices.list.handler(socialQuery('social.brand_voice.list')),
         save: os.social.brandVoices.save.handler(socialCommand('social.brand_voice.save')),
