@@ -236,7 +236,7 @@ async function mailNotifications(ctx: CommandContext, plan: Plan, created: reado
   const post = plan.postId
     ? await ctx.trx.selectFrom('crove_social.post').select(['title', 'body']).where('org_id', '=', ctx.orgId).where('id', '=', plan.postId).executeTakeFirst()
     : undefined;
-  const postText = post ? oneLine((post.title?.trim() || post.body || '').slice(0, 400), 200) || null : null;
+  const postText = post ? oneLine([...(post.title?.trim() || post.body || '')].slice(0, 400).join(''), 200) || null : null;
   const channel = plan.connectionId
     ? ((await ctx.trx.selectFrom('crove_kernel.channel_connection').select('display_name').where('org_id', '=', ctx.orgId).where('id', '=', plan.connectionId).executeTakeFirst())?.display_name ?? null)
     : null;
