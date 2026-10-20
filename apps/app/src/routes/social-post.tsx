@@ -371,6 +371,11 @@ function PostTypeField({ provider, settings, onChange, disabled }: { provider: s
           disabled={disabled}
           onChange={(e) => {
             const { postType: _old, ...rest } = settings;
+            // A Story takes no first comment and no cover, and their fields are hidden for it: dropped with the change.
+            if (e.target.value === 'story') {
+              delete rest.firstComment;
+              delete rest.cover;
+            }
             onChange(e.target.value === 'feed' ? rest : { ...rest, postType: e.target.value });
           }}
         >

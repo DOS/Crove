@@ -101,8 +101,10 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
   if (postType === null || (postType !== 'feed' && !POST_TYPE_RULES[variant.provider]?.includes(postType))) {
     issues.push({ code: 'POST_TYPE_NOT_SUPPORTED', field: 'settings.postType', limit: null, actual: null });
   }
-  const story = postType === 'story';
-  const reel = postType === 'reel';
+  // Story and Reel rules hold only where the channel posts them; elsewhere the refusal above is the one issue to fix.
+  const supported = postType !== null && (postType === 'feed' || Boolean(POST_TYPE_RULES[variant.provider]?.includes(postType)));
+  const story = supported && postType === 'story';
+  const reel = supported && postType === 'reel';
   const sent = story ? '' : sentText(variant.provider, variant.body, sentLink(variant.provider, variant.linkUrl ?? null, variant.settings, variant.body), variant.media.length);
   if (!story) checkText(issues, 'body', sent, caps.body);
   if (story) {
