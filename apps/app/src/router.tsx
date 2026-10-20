@@ -25,6 +25,7 @@ import { ResetPasswordPage } from './routes/reset-password.tsx';
 import { SettingsPage } from './routes/settings.tsx';
 import { SocialPage } from './routes/social.tsx';
 import { SocialImportPage } from './routes/social-import.tsx';
+import { parseSocialSearch } from './lib/social.ts';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
 import { OAuthCallbackPage } from './routes/social-oauth.tsx';
 import { SocialComposePage, SocialPostPage } from './routes/social-post.tsx';
@@ -201,7 +202,7 @@ const requireSocial = ({ params }: { params: { slug: string } }) => {
   if (!getConfig().modules.includes('social')) throw redirect({ to: '/o/$slug/inbox', params: { slug: params.slug } });
 };
 const socialRoute = createRoute({ getParentRoute: () => orgRoute, path: 'social', beforeLoad: requireSocial, component: () => <Outlet /> });
-const socialIndexRoute = createRoute({ getParentRoute: () => socialRoute, path: '/', component: SocialPage });
+const socialIndexRoute = createRoute({ getParentRoute: () => socialRoute, path: '/', validateSearch: parseSocialSearch, component: SocialPage });
 const socialNewRoute = createRoute({ getParentRoute: () => socialRoute, path: 'new', component: SocialComposePage });
 const socialChannelsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'channels', component: SocialChannelsPage });
 const socialImportRoute = createRoute({ getParentRoute: () => socialRoute, path: 'import', component: SocialImportPage });

@@ -276,6 +276,37 @@ suite('social posts on PostgreSQL (S3)', () => {
     expect(await list(new Date(), new Date(Date.now() + 24 * HOUR))).toEqual([soon.id]);
     expect((await list(new Date(), new Date(Date.now() + 72 * HOUR))).sort()).toEqual([soon.id, later.id].sort());
   });
+  it('filters the lists by stage, channel and text, and pages by the last change (#574)', async () => {
+    const o = await org();
+    const [a, b] = [await connection(o.orgId, o.owner), await connection(o.orgId, o.owner)];
+    // A draft may hold a title its channel does not take; only submitting checks the channel's rules.
+    const draft = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Khai trương', title: 'Giảm 50%', channels: [{ connectionId: a }] });
+    const inReview = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Menu mới 100%', channels: [{ connectionId: b }] });
+    await exec(o, o.member, 'social.post.submit', { postId: inReview.postId });
+    const list = (input: Record<string, unknown>) => rt.query<PostView[]>('social.post.list', input, { actor: asUser(o.viewer), orgId: o.orgId }).then((ps) => ps.map((p) => p.id));
+    expect(await list({ stage: 'review' })).toEqual([inReview.postId]);
+    expect(await list({ stage: 'drafts' })).toEqual([draft.postId]);
+    expect(await list({ stage: 'done' })).toEqual([]);
+    expect(await list({ connectionId: a })).toEqual([draft.postId]);
+    // Text and title, case-insensitive; a % is matched as itself.
+    expect(await list({ search: 'KHAI' })).toEqual([draft.postId]);
+    expect(await list({ search: '100%' })).toEqual([inReview.postId]);
+    expect(await list({ search: '50%' })).toEqual([draft.postId]);
+    expect(await list({ search: '%' })).toHaveLength(2);
+    expect(await list({ search: 'không có' })).toEqual([]);
+
+    // Pages: newest change first, then the next page after the last one.
+    for (let i = 0; i < 3; i++) await exec(o, o.member, 'social.post.create', { body: `Bài ${i}`, channels: [{ connectionId: a }] });
+    const first = await rt.query<PostView[]>('social.post.list', { stage: 'drafts', limit: 2 }, { actor: asUser(o.viewer), orgId: o.orgId });
+    const last = first.at(-1) as PostView;
+    const second = await list({ stage: 'drafts', limit: 2, before: { updatedAt: last.updatedAt, postId: last.id } });
+    const third = await list({ stage: 'drafts', limit: 2, before: { updatedAt: last.updatedAt, postId: last.id }, search: 'Bài' });
+    const all = await list({ stage: 'drafts' });
+    expect([...first.map((p) => p.id), ...second]).toEqual(all.slice(0, 4));
+    expect(new Set([...first.map((p) => p.id), ...second]).size).toBe(4);
+    expect(third.every((id) => all.includes(id))).toBe(true);
+  });
+
   it('schedules each channel at its own time, and shows a post waiting in a paused queue (#576)', async () => {
     const o = await org();
     const [a, b] = [await connection(o.orgId, o.owner), await connection(o.orgId, o.owner)];
@@ -476,6 +507,31 @@ suite('social posts on PostgreSQL (S3)', () => {
       );
       return id;
     }
+
+    it('gives a channel its own images on create and update, checked and hashed as its own (#581)', async () => {
+      const o = await org();
+      const [fb, ig] = [await connection(o.orgId, o.owner, 'facebook_page'), await connection(o.orgId, o.owner, 'instagram')];
+      const [png, jpg] = [await image(o.orgId, 'image/png'), await image(o.orgId)];
+      // The post's PNG does not fit Instagram; Instagram gets its own JPEG.
+      const { postId } = await exec<{ postId: string }>(o, o.member, 'social.post.create', {
+        body: 'Khai trương',
+        media: [{ fileId: png }],
+        channels: [{ connectionId: fb }, { connectionId: ig, media: [{ fileId: jpg, altText: 'Ảnh vuông' }] }],
+      });
+      let post = await get(o, o.viewer, postId);
+      const [vf, vi] = [post.variants.find((v) => v.provider === 'facebook_page'), post.variants.find((v) => v.provider === 'instagram')];
+      expect([vf?.ownMedia, vf?.media.map((m) => m.fileId), vf?.issues]).toEqual([false, [png], []]);
+      expect([vi?.ownMedia, vi?.media.map((m) => [m.fileId, m.altText]), vi?.issues]).toEqual([true, [[jpg, 'Ảnh vuông']], []]);
+      // A file that is not a social upload is refused.
+      const doc = await image(o.orgId, 'image/jpeg', 120_000, 'upload');
+      await expect(exec(o, o.member, 'social.variant.update', { variantId: vi?.id, revision: vi?.revision, media: [{ fileId: doc }] })).rejects.toMatchObject({ code: 'MEDIA_NOT_FOUND' });
+      // Back to the post's images: a new revision, and the PNG issue is back.
+      const back = await exec<{ changed: boolean; revision: number }>(o, o.member, 'social.variant.update', { variantId: vi?.id, revision: vi?.revision, media: null });
+      expect(back.changed).toBe(true);
+      post = await get(o, o.viewer, postId);
+      const after = post.variants.find((v) => v.provider === 'instagram');
+      expect([after?.ownMedia, after?.media.map((m) => m.fileId), after?.issues.map((i) => i.code), after?.contentHash === vi?.contentHash]).toEqual([false, [png], ['IMAGE_TYPE_NOT_ALLOWED'], false]);
+    });
 
     it('keeps the images in order, binds them into the hash and checks them per channel', async () => {
       const o = await org();
