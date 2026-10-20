@@ -1,7 +1,7 @@
 // @mentions in post comments (#793): typing @ lists the org's members; a picked name is kept as @name in the box and
 // stored as the member's token, so the server knows whom to tell. A stored comment shows each mention as @name.
 import { useQuery } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Textarea } from '@crove/ui/components/textarea';
 import { commentParts, mentionLabels, mentionQuery } from '@crove/mod-social/contract';
@@ -43,6 +43,7 @@ export function MentionBox({
   const t = useTranslations('social.activity');
   const { members } = useMemberNames();
   const box = useRef<HTMLTextAreaElement>(null);
+  const listId = useId();
   const [caret, setCaret] = useState<number | null>(null);
   const [active, setActive] = useState(0);
   const query = caret === null ? null : mentionQuery(value, caret);
@@ -71,8 +72,11 @@ export function MentionBox({
         rows={rows}
         placeholder={placeholder}
         aria-label={label}
+        role="combobox"
         aria-autocomplete="list"
         aria-expanded={matches.length > 0}
+        aria-controls={matches.length > 0 ? listId : undefined}
+        aria-activedescendant={matches.length > 0 ? `${listId}-${active}` : undefined}
         onChange={(e) => {
           onChange(e.target.value);
           setCaret(e.target.selectionStart);
@@ -94,10 +98,11 @@ export function MentionBox({
         }}
       />
       {matches.length > 0 && (
-        <ul role="listbox" aria-label={t('mentionList')} className="absolute z-10 mt-1 max-h-56 w-64 overflow-auto rounded-md border border-border bg-popover p-1 text-sm shadow-md">
+        <ul id={listId} role="listbox" aria-label={t('mentionList')} className="absolute z-10 mt-1 max-h-56 w-64 overflow-auto rounded-md border border-border bg-popover p-1 text-sm shadow-md">
           {matches.map((m, i) => (
             <li
               key={m.userId}
+              id={`${listId}-${i}`}
               role="option"
               aria-selected={i === active}
               className={`cursor-pointer rounded px-2 py-1 ${i === active ? 'bg-accent text-accent-foreground' : 'text-foreground'}`}

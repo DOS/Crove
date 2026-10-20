@@ -49,9 +49,10 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
       {editing !== null ? (
         <div className="space-y-2">
           <MentionBox value={editing} onChange={setEditing} picked={picked} onPicked={setPicked} maxLength={MAX} rows={3} label={t('editLabel')} />
+          {mentionsForStoring(editing.trim(), picked).length > MAX && <ErrorText>{t('tooLong', { max: MAX })}</ErrorText>}
           {edit.error && <ErrorText>{errorMessage(edit.error)}</ErrorText>}
           <div className="flex gap-2">
-            <Button size="sm" disabled={edit.isPending || editing.trim() === ''} onClick={() => edit.mutate(editing.trim())}>
+            <Button size="sm" disabled={edit.isPending || editing.trim() === '' || mentionsForStoring(editing.trim(), picked).length > MAX} onClick={() => edit.mutate(editing.trim())}>
               {t('saveEdit')}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
@@ -91,6 +92,8 @@ export function PostActivity({ postId, channels, canWrite, className }: { postId
     },
   });
   const nameOf = new Map(channels.map((c) => [c.variantId, c.name]));
+  // Each mention is stored as its member's token, longer than the @name shown, so the limit counts what is stored.
+  const tooLong = mentionsForStoring(body.trim(), picked).length > MAX;
   return (
     <Card className={cn('block space-y-3 p-4', className)}>
       <div>
@@ -102,7 +105,7 @@ export function PostActivity({ postId, channels, canWrite, className }: { postId
           className="space-y-2"
           onSubmit={(e) => {
             e.preventDefault();
-            if (body.trim() !== '' && !add.isPending) add.mutate();
+            if (body.trim() !== '' && !add.isPending && !tooLong) add.mutate();
           }}
         >
           <MentionBox value={body} onChange={setBody} picked={picked} onPicked={setPicked} maxLength={MAX} rows={3} placeholder={t('placeholder')} label={t('placeholder')} />
@@ -117,11 +120,12 @@ export function PostActivity({ postId, channels, canWrite, className }: { postId
                 ))}
               </NativeSelect>
             )}
-            <Button type="submit" size="sm" disabled={add.isPending || body.trim() === ''}>
+            <Button type="submit" size="sm" disabled={add.isPending || body.trim() === '' || tooLong}>
               {add.isPending ? <Spinner className="text-current" /> : null}
               {t('send')}
             </Button>
           </div>
+          {tooLong && <ErrorText>{t('tooLong', { max: MAX })}</ErrorText>}
           {add.error && <ErrorText>{errorMessage(add.error)}</ErrorText>}
         </form>
       )}

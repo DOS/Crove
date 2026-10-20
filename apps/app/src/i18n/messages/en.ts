@@ -1818,6 +1818,7 @@ export const en = {
       hint: 'Comments are for the team only and are never posted.',
       placeholder: 'Write a comment for the team; type @ to mention someone',
       mentionList: 'Members to mention',
+      tooLong: 'The comment is too long once mentions are counted; keep it under {max, number} characters',
       about: 'About',
       wholePost: 'The whole post',
       send: 'Comment',

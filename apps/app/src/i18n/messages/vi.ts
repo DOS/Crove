@@ -1818,6 +1818,7 @@ export const vi = {
       hint: 'Bình luận chỉ dành cho nhóm, không bao giờ được đăng lên kênh.',
       placeholder: 'Viết bình luận cho nhóm; gõ @ để nhắc tên một người',
       mentionList: 'Thành viên có thể nhắc tên',
+      tooLong: 'Bình luận quá dài khi tính cả phần nhắc tên; hãy giữ dưới {max, number} ký tự',
       about: 'Về',
       wholePost: 'Cả bài',
       send: 'Bình luận',
