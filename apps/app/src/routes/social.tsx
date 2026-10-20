@@ -1,5 +1,5 @@
 // Crove Social home: what goes out next (an agenda by day), what waits for review, drafts, and what went out.
-import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -353,7 +353,8 @@ export function SocialPage() {
   const setTab = (next: Tab) => setSearch({ tab: next === 'upcoming' ? undefined : next });
   // The search box writes the address a moment after typing stops.
   const [text, setText] = useState(search.q ?? '');
-  useEffect(() => setText(search.q ?? ''), [search.q]);
+  // The address changed from outside (back, a link, Clear): the box follows, unless it already says the same.
+  useEffect(() => setText((now) => (now.trim() === (search.q ?? '') ? now : (search.q ?? ''))), [search.q]);
   useEffect(() => {
     const q = text.trim() || undefined;
     if (q === search.q) return;
@@ -381,7 +382,6 @@ export function SocialPage() {
         const last = page.at(-1);
         return page.length === PAGE && last ? { updatedAt: last.updatedAt, postId: last.id } : undefined;
       },
-      placeholderData: keepPreviousData,
     }),
     enabled: listTab !== null,
     refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS),
@@ -454,7 +454,7 @@ export function SocialPage() {
               <span className="text-subtle-foreground">{t('filters.search')}</span>
               <Input type="search" className="mt-1" value={text} placeholder={t('filters.searchPlaceholder')} onChange={(e) => setText(e.target.value)} />
             </label>
-            {listTab && (
+            {(listTab === 'review' || listTab === 'done') && (
               <>
                 <label className="text-xs">
                   <span className="text-subtle-foreground">{t('filters.from')}</span>

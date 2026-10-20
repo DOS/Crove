@@ -921,7 +921,8 @@ export const postList = defineQuery({
       sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status ${status ? sql`= ${status}` : sql`<> 'cancelled'`}${
         input.connectionId && !status ? sql` AND v.channel_connection_id = ${input.connectionId}::uuid` : sql``
       })`;
-    if (input.stage === 'review') q = q.where(variantWhere('in_review'));
+    // In review on the chosen channel when one is chosen: the same variant, not any of the post's.
+    if (input.stage === 'review') q = q.where(input.connectionId ? sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status = 'in_review' AND v.channel_connection_id = ${input.connectionId}::uuid)` : variantWhere('in_review'));
     if (input.stage === 'drafts') q = q.where('p.status', '=', 'draft').where(sql<boolean>`NOT ${variantWhere('in_review')}`);
     if (input.stage === 'done') q = q.where('p.status', 'in', ['published', 'partially_published', 'failed', 'publishing', 'cancelled']);
     if (input.connectionId) q = q.where(variantWhere(null));
