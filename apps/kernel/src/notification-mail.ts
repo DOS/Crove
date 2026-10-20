@@ -39,7 +39,7 @@ ${typeof channel === 'string' && channel ? `<p style="margin:0 0 4px"><strong>K�
 <p style="margin:16px 0"><a href="${escapeHtml(url)}" style="color:#b91c1c">${escapeHtml(open)}</a></p>
 <p style="font-size:12px;color:#71717a">Thư này được gửi từ Crove cho ${escapeHtml(oneLine(org))}. Bạn có thể tắt email trong mục Thông báo của Social.</p>
 </body></html>`;
-  return { subject: oneLine(input.subject ?? lead).slice(0, 200), text: lines.join('\n'), html };
+  return { subject: [...oneLine(input.subject ?? lead)].slice(0, 200).join(''), text: lines.join('\n'), html };
 }
 
 export const notificationMailTemplate: MailTemplate = { render: renderNotificationMail };
