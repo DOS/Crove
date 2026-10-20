@@ -78,6 +78,7 @@ case "$url" in
       case "${STUB_FILE_STATUS:-proposed}" in
         proposed) mine='{"id":"file-1","status":"proposed","proposalId":"proposal-1","error":null}' ;;
         failed) mine='{"id":"file-1","status":"failed","proposalId":null,"error":"UNREADABLE"}' ;;
+        proposed-no-id) mine='{"id":"file-1","status":"proposed","proposalId":null,"error":"SOME_ERROR"}' ;;
         *) mine="{\"id\":\"file-1\",\"status\":\"$STUB_FILE_STATUS\",\"proposalId\":null,\"error\":null}" ;;
       esac
       body="{\"json\":[{\"id\":\"file-0\",\"status\":\"proposed\",\"proposalId\":\"proposal-0\",\"error\":null},$mine]}"

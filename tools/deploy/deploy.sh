@@ -143,7 +143,7 @@ smoke_rpc() {
 }
 
 smoke_account() {
-  local base="$1" work token headers number answer file_id row status proposal deadline rc=1
+  local base="$1" work token headers number answer file_id status proposal error deadline rc=1
   command -v jq >/dev/null || {
     err 'the account step needs jq'
     return 1
@@ -193,11 +193,16 @@ smoke_account() {
         err 'smoke: listing the recent files failed'
         exit 1
       }
-      row="$(jq -r --arg id "$file_id" '.json[]? | select(.id == $id) | [.status, (.proposalId // ""), (.error // "")] | @tsv' <<<"$answer")"
-      IFS=$'\t' read -r status proposal _ <<<"$row"
+      # One field per line, so an empty field stays empty (a whitespace IFS would merge it with the next one); line
+      # breaks in the error text become spaces, so it stays one log line.
+      {
+        IFS= read -r status
+        IFS= read -r proposal
+        IFS= read -r error
+      } < <(jq -r --arg id "$file_id" 'first(.json[]? | select(.id == $id)) // {} | (.status // ""), (.proposalId // ""), (.error // "" | gsub("[\r\n]"; " "))' <<<"$answer")
       if [ "$status" = proposed ] && [ -n "$proposal" ]; then break; fi
       if [ "$status" = failed ]; then
-        err "smoke: the worker could not extract the synthetic e-invoice: ${row##*$'\t'}"
+        err "smoke: the worker could not extract the synthetic e-invoice: $error"
         exit 1
       fi
       if ((SECONDS >= deadline)); then

@@ -387,6 +387,11 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
         const pending = run(['smoke', 'https://crove.example.test'], { ...account, STUB_FILE_STATUS: 'extracting' });
         expect(pending.status).toBe(1);
         expect(pending.out).toContain('smoke: no proposal after 1s (file extracting)');
+        // An empty proposal id is not filled from the next field.
+        const noId = run(['smoke', 'https://crove.example.test'], { ...account, STUB_FILE_STATUS: 'proposed-no-id' });
+        expect(noId.status).toBe(1);
+        expect(noId.out).toContain('smoke: no proposal after 1s (file proposed)');
+        expect(read('rpc')).toBe('');
       });
 
       it('fails when the proposal cannot be rejected', () => {
