@@ -806,6 +806,12 @@ export const zSocialSchedule = z.strictObject({
   variantIds: z.array(zId).min(1).max(20).optional(),
   at: zInstant.optional(),
   queue: z.literal(true).optional(),
+  // A time per channel (#576), instead of variantIds and at.
+  times: z
+    .array(z.strictObject({ variantId: zId, at: zInstant }))
+    .min(1)
+    .max(20)
+    .optional(),
 });
 
 export const zSocialQueueSet = z.strictObject({
@@ -835,6 +841,8 @@ export const zSocialVariant = z.object({
   status: z.enum(SOCIAL_VARIANT_STATUSES),
   effectiveAt: z.string().nullable(),
   queueSlotAt: z.string().nullable(),
+  // Waiting on a slot of a queue a person paused.
+  queuePaused: z.boolean(),
   attempt: z.number().int(),
   externalUrl: z.string().nullable(),
   publishedAt: z.string().nullable(),
