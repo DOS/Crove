@@ -286,6 +286,20 @@ test('shows the latest metrics of a published channel on the post and in the Met
   await expect(row.getByRole('cell')).toHaveText([new RegExp(`^${body}`), '1.234', '56', '7', '3']);
   await expect(row).toContainText(channel);
   await expect(panel.locator('[data-slot="card"]').filter({ hasText: 'Người tiếp cận' })).toContainText('1.234');
+  // The best post of the window (#645), and the channel's followers over it from the daily snapshots.
+  await expect(panel.locator('[data-slot="card"]').filter({ hasText: 'Bài nổi bật trong khoảng này' })).toContainText(body);
+  exec(
+    `INSERT INTO crove_social.account_snapshot (org_id, channel_connection_id, captured_on, followers)
+     SELECT c.org_id, c.id, d.day, d.n FROM crove_kernel.channel_connection c,
+       (VALUES ((now() AT TIME ZONE 'UTC')::date - 3, 1000), ((now() AT TIME ZONE 'UTC')::date, 1080)) AS d(day, n)
+     WHERE c.display_name = :'channel'`,
+    { channel },
+  );
+  await page.reload();
+  await page.getByRole('tab', { name: 'Số liệu' }).click();
+  const growth = page.getByRole('tabpanel').locator('[data-slot="card"]').filter({ hasText: 'Tăng trưởng kênh trong 30 ngày' });
+  await expect(growth).toContainText('1.080 người theo dõi');
+  await expect(growth).toContainText('+80');
 
   // A client report link of today (#643), opened without an account: the totals, the channel and the post.
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date());

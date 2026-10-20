@@ -165,6 +165,15 @@ export interface MetricsInput {
 }
 export type MetricsResult = { metrics: Partial<Record<MetricName, number>>; extra?: Record<string, unknown> } | { refused: 'token_expired' | 'gone' } | null;
 
+// What a platform says about a connected account itself (#645): its followers (subscribers on YouTube), and the people
+// it reached over the last day where the platform gives that. null: no answer worth keeping (a network failure, a
+// malformed answer); refused: the token or the permission was refused.
+export interface AccountMetricsInput {
+  externalAccountId: string;
+  secret: string;
+}
+export type AccountMetricsResult = { followers: number | null; reach?: number | null } | { refused: 'token_expired' | 'permission' } | null;
+
 // A first comment under a published post (#587, #609): a comment where the platform has comments (LinkedIn, Facebook
 // Pages, Instagram), a reply in the post's thread where it has none (X, Bluesky, Threads). The comment never touches
 // the post; a failure leaves it as it is.
@@ -197,6 +206,8 @@ export interface Publisher {
   // Providers that report how a post did: null when the platform did not answer (try again later), refused when the
   // token no longer works or the post is gone.
   metrics?(input: MetricsInput): Promise<MetricsResult>;
+  // Providers that report an account's followers (#645), read once a day.
+  accountMetrics?(input: AccountMetricsInput): Promise<AccountMetricsResult>;
   // Providers that post a first comment (#587). Never retried by itself: an unclear answer goes to a person.
   comment?(input: CommentInput): Promise<CommentResult>;
 }

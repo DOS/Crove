@@ -7,7 +7,7 @@
 // `/me/accounts` lists the Pages the user granted in Meta's dialog, each with its own Page token. A Page token from a
 // long-lived user token has no expiry timer, so it is sealed as is; the user token is dropped.
 import { createHmac } from 'node:crypto';
-import type { CommentInput, CommentResult, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
 import { commentResult } from './comment.ts';
 import { videoCoverOf } from './cover.ts';
 import { holdsLink } from './text.ts';
@@ -409,6 +409,22 @@ export class FacebookPagePublisher implements Publisher {
 
   // Reactions, comments and shares of a Page post: plain fields of the post, which Meta's 2026 Page Insights changes do
   // not touch; impressions need Page Insights metrics that are being retired, so they are not read.
+  // The Page's followers (#645): followers_count, or the older fan_count (likes) where Meta gives only that.
+  async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
+    const token = pageToken(input.secret);
+    if (!token) return { refused: 'token_expired' };
+    if (!/^\d{1,32}$/.test(input.externalAccountId)) return null;
+    try {
+      const answer = await this.graph.call<{ followers_count?: unknown; fan_count?: unknown }>('GET', input.externalAccountId, { token, params: { fields: 'followers_count,fan_count' } });
+      const n = (v: unknown) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
+      return { followers: n(answer.followers_count) ?? n(answer.fan_count) };
+    } catch (error) {
+      const result = graphPublishResult(error);
+      if (result.kind === 'rejected' && (result.error === 'token_expired' || result.error === 'permission')) return { refused: result.error };
+      return null;
+    }
+  }
+
   async metrics(input: MetricsInput): Promise<MetricsResult> {
     const token = pageToken(input.secret);
     if (!token) return { refused: 'token_expired' };

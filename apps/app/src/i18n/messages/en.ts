@@ -1402,6 +1402,17 @@ export const en = {
         assigned: '{actor} assigned you a post',
       },
     },
+    growth: {
+      title: 'Channel growth over {days} days',
+      hint: "Each channel's followers per day, read once a day from the platform; reach is the latest day's, where the platform gives it.",
+      empty: 'No channel figures yet; Crove reads them within an hour of a channel being connected.',
+      line: 'Followers over time',
+      followers: '{count} followers',
+      reach: '{count} reached',
+      topTitle: 'Best posts in this window',
+      engagement: '{count} engagements',
+      noText: '(No text)',
+    },
     snippets: {
       title: 'Snippets',
       subtitle: 'Hashtags, signatures and post templates the team reuses. Pick one in the composer to put it in the text.',
