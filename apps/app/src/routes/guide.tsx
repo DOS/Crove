@@ -36,8 +36,10 @@ export function GuidePage() {
           </Card>
         ))}
       </div>
-      <div className="mt-10">
-        <PageHeader title={t('firmTitle')} subtitle={t('firmSubtitle')} />
+      {/* A section of the same page: an h2, so the page keeps one h1. */}
+      <div className="mt-10 mb-6">
+        <h2 className="text-lg font-semibold tracking-tight text-foreground">{t('firmTitle')}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">{t('firmSubtitle')}</p>
       </div>
       <div lang="vi" className="grid max-w-3xl gap-4">
         {FIRM_GUIDE.map((step) => (

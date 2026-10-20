@@ -16,7 +16,7 @@ const q = (label: string) => `"${label}"`;
 // A catalog label with its ICU placeholders filled in: "Duyệt {count, number} đề xuất" with { count: 'N' } reads
 // "Duyệt N đề xuất".
 export function fill(label: string, values: Readonly<Record<string, string>>): string {
-  return label.replace(/\{(\w+)(?:,[^}]*)?\}/g, (whole, name: string) => values[name] ?? whole);
+  return label.replace(/\{(\w+)(?:,[^}]*)?\}/g, (whole, name: string) => (Object.hasOwn(values, name) ? (values[name] ?? whole) : whole));
 }
 
 export const FIRM_GUIDE: readonly FirmGuideStep[] = [

@@ -95,6 +95,8 @@ describe('firm guide (#661)', () => {
     expect(fill('Duyệt {count, number} đề xuất', { count: 'N' })).toBe('Duyệt N đề xuất');
     expect(fill('Khóa sổ tháng {month}', { month: '09/2026' })).toBe('Khóa sổ tháng 09/2026');
     expect(fill('{a} và {b}', { a: 'x' })).toBe('x và {b}');
+    // A placeholder named like an Object.prototype member is not filled from the prototype.
+    expect(fill('{toString}', {})).toBe('{toString}');
   });
 
   it('is Vietnamese with diacritics and has no em dashes or en dashes', () => {
