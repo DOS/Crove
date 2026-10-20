@@ -211,6 +211,17 @@ describe('FacebookPagePublisher with images', () => {
     });
   });
 
+  it('gives each described photo its alt text, cut to 1000 characters, and leaves the others to Facebook (#790)', async () => {
+    const { calls, publisher } = sequence([{ body: { id: 'photo-1' } }, { body: { id: 'photo-2' } }, { body: { id: `${PAGE}_7` } }]);
+    const described = [
+      { ...(media[0] as PublishInput['content']['media'][number]), altText: `Bánh mới ${'b'.repeat(1200)}` },
+      { ...(media[1] as PublishInput['content']['media'][number]), altText: null },
+    ];
+    await publisher.publish(input({ content: { body: 'Ảnh', title: null, linkUrl: null, media: described }, readMedia: async () => new Uint8Array([1]) }));
+    expect(String(calls[0]?.multipart?.get('alt_text_custom'))).toHaveLength(1000);
+    expect(calls[1]?.multipart?.has('alt_text_custom')).toBe(false);
+  });
+
   it('puts the link in a photo post once when the text already holds it', async () => {
     const { calls, publisher } = sequence([{ body: { id: 'photo-1' } }, { body: { id: `${PAGE}_8` } }]);
     const one = input({ content: { body: 'Xem https://example.com/a nhé', title: null, linkUrl: 'https://example.com/a', media: [media[0]!] }, readMedia: async () => new Uint8Array([1]) });

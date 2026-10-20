@@ -308,15 +308,18 @@ export class ThreadsPublisher implements Publisher {
       if (!url) throw new NoUrl();
       return url;
     };
-    // An image or a video (#446), each fetched by Meta from its presigned URL.
-    const mediaForm = async (m: { fileId: string; mime: string }) =>
-      m.mime.startsWith('video/') ? { media_type: 'VIDEO', video_url: await urlOf(m.fileId) } : { media_type: 'IMAGE', image_url: await urlOf(m.fileId) };
+    // An image or a video (#446), each fetched by Meta from its presigned URL, with its description for screen readers
+    // (#790), which Threads takes on both, up to 1000 characters.
+    const mediaForm = async (m: { fileId: string; mime: string; altText?: string | null }) => ({
+      ...(m.mime.startsWith('video/') ? { media_type: 'VIDEO', video_url: await urlOf(m.fileId) } : { media_type: 'IMAGE', image_url: await urlOf(m.fileId) }),
+      ...(m.altText ? { alt_text: m.altText.slice(0, 1000) } : {}),
+    });
     let container: string;
     try {
       if (media.length === 0) {
         container = await this.create(user, token, { media_type: 'TEXT', text, ...extras });
       } else if (media.length === 1) {
-        const only = media[0] as { fileId: string; mime: string };
+        const only = media[0] as { fileId: string; mime: string; altText?: string | null };
         container = await this.create(user, token, { ...(await mediaForm(only)), ...(text ? { text } : {}), ...extras });
       } else {
         // A carousel may mix images and videos.

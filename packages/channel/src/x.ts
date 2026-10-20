@@ -20,6 +20,8 @@ const MEDIA_ID = /^\d{1,32}$/;
 const USERNAME = /^[A-Za-z0-9_]{1,15}$/;
 // X shows at most 4 images in a post.
 const MAX_IMAGES = 4;
+// X takes at most 1000 characters of alt text per image.
+const ALT_TEXT_MAX = 1000;
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
 export interface XAppConfig {
@@ -297,10 +299,10 @@ export class XPublisher implements Publisher {
     const text = textOf(input.content);
     if (!text && media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
     // Every image is read before the first upload, so a read failure posts nothing.
-    const files: { bytes: Uint8Array; mime: string }[] = [];
+    const files: { bytes: Uint8Array; mime: string; altText?: string }[] = [];
     for (const m of media) {
       try {
-        files.push({ bytes: await input.readMedia(m.fileId), mime: m.mime });
+        files.push({ bytes: await input.readMedia(m.fileId), mime: m.mime, ...(m.altText ? { altText: m.altText } : {}) });
       } catch {
         return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
       }
@@ -314,6 +316,8 @@ export class XPublisher implements Publisher {
         const uploaded = await this.client.call<{ data?: { id?: unknown } }>('POST', '/media/upload', s.accessToken, { form });
         const id = uploaded?.data?.id;
         if (typeof id !== 'string' || !MEDIA_ID.test(id)) return { kind: 'rejected', error: 'transient', code: 'NO_MEDIA_ID' };
+        // The image's description for screen readers (#790), set before the post names the image: still nothing visible.
+        if (f.altText) await this.client.call('POST', '/media/metadata', s.accessToken, { json: { id, metadata: { alt_text: { text: f.altText.slice(0, ALT_TEXT_MAX) } } } });
         mediaIds.push(id);
       } catch (error) {
         return beforePost(publishResult(error));
