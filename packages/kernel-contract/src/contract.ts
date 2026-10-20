@@ -29,6 +29,8 @@ import {
   zSocialQueue,
   zSocialMetricsRow,
   zSocialChannelInsights,
+  zSocialBioPage,
+  zSocialBioSave,
   zSocialFeed,
   zSocialIdea,
   zSocialIdeaCreate,
@@ -320,6 +322,11 @@ export const contract = {
       create: oc.input(zSocialIdeaCreate).output(z.object({ ideaId: zId })),
       update: oc.input(zSocialIdeaUpdate).output(z.object({ ideaId: zId })),
       move: oc.input(z.strictObject({ ideaId: zId, stage: z.enum(['new', 'planned', 'archived']) })).output(z.object({ ideaId: zId, stage: z.string() })),
+    },
+    // The org's link-in-bio page (#707): everyone reads it and its clicks; owners and admins save it.
+    bio: {
+      get: oc.input(z.object({})).output(zSocialBioPage.nullable()),
+      save: oc.input(zSocialBioSave).output(z.object({ pageId: zId, slug: z.string() })),
     },
     // Blog feeds that become drafts (#708): owners and admins add, change, pause and remove them; everyone reads them.
     feeds: {

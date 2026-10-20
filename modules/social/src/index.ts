@@ -15,6 +15,7 @@ export * from './assign.ts';
 export * from './snippets.ts';
 export * from './labels.ts';
 export * from './ideas.ts';
+export * from './bio-page.ts';
 export * from './feeds.ts';
 export * from './report-schedules.ts';
 export * from './domain/report-schedule.ts';
