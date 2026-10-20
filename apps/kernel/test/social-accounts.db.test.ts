@@ -143,6 +143,9 @@ suite('social account growth on PostgreSQL (#645)', () => {
     expect(week).toEqual([{ connectionId: a, provider: 'sandbox', points: [{ day: day(5), followers: 1100, reach: null }, { day: day(2), followers: 1150, reach: null }, { day: day(0), followers: 1200, reach: 80 }] }]);
     expect((await trends(o, 90))[0]?.points[0]).toEqual({ day: day(40), followers: 900, reach: null });
     expect((await trends(o, 1))[0]?.points).toEqual([{ day: day(0), followers: 1200, reach: 80 }]);
+    // The day `days` ago is the window's baseline.
+    expect((await trends(o, 5))[0]?.points[0]).toEqual({ day: day(5), followers: 1100, reach: null });
+    expect((await trends(o, 4))[0]?.points[0]).toEqual({ day: day(2), followers: 1150, reach: null });
   });
 
   it('asks only active channels of active orgs, keeps snapshots to their org, and lets only the system record them', async () => {

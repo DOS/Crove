@@ -63,7 +63,8 @@ export interface AccountTrend {
   points: AccountPoint[];
 }
 
-// Each channel's snapshots of the last `days` days (UTC), oldest first; days with no answer are left out.
+// Each channel's snapshots from `days` days ago (UTC) to today, oldest first, so the first is the window's baseline and
+// the change over 7 days is today against 7 days ago; days with no answer are left out.
 export const accountTrends = defineQuery({
   name: 'social.account.trends',
   input: z.object({ days: z.number().int().min(1).max(366) }),
@@ -74,7 +75,7 @@ export const accountTrends = defineQuery({
       FROM crove_social.account_snapshot s
       JOIN crove_kernel.channel_connection c ON c.org_id = s.org_id AND c.id = s.channel_connection_id
       WHERE s.org_id = ${ctx.orgId}
-        AND s.captured_on > (pg_catalog.now() AT TIME ZONE 'UTC')::date - ${input.days}::int
+        AND s.captured_on >= (pg_catalog.now() AT TIME ZONE 'UTC')::date - ${input.days}::int
         AND (s.followers IS NOT NULL OR s.reach IS NOT NULL)
       ORDER BY s.channel_connection_id, s.captured_on
       LIMIT 60000`.execute(ctx.trx);
