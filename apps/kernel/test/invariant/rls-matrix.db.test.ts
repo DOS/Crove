@@ -538,7 +538,6 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
-  // A saved snippet of text (#584): hashtags, a signature or a whole post to start from.
   // What a client said through a review link (#589): only the review definer adds rows, for a client with the link;
   // members read them.
   'crove_social.review_feedback': {
@@ -561,6 +560,7 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       return { setup: [{ table: 'crove_social.post', values: link.post }], row: link.row };
     },
   },
+  // A saved snippet of text (#584): hashtags, a signature or a whole post to start from.
   'crove_social.snippet': { make: (o) => ({ row: { org_id: o.id, name: `rls-${tag()}`, body: '#rls', created_by: o.owner } }) },
 };
 
