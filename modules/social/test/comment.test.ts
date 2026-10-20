@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { COMMENT_STALE_MS, commentStatus, type CommentCall } from '../src/comments.ts';
 import { threadStatus } from '../src/thread.ts';
-import { autoReplyOf, type Provider } from '../src/domain/channels.ts';
+import { autoReplyOf, repostRuleOf, type Provider } from '../src/domain/channels.ts';
 import { validateVariant } from '../src/domain/validate.ts';
 
 describe('thread parts (#742)', () => {
@@ -32,6 +32,22 @@ describe('thread parts (#742)', () => {
     expect(threadStatus(2, [call('part_2', 'succeeded', 2, 'r2'), call('part_3', 'ambiguous', 1)], NOW, published)).toMatchObject({ state: 'unknown', posted: 2 });
     expect(threadStatus(2, [call('part_2', 'succeeded', 20, 'r2'), call('part_3', 'started', 11)], NOW, published)).toMatchObject({ state: 'unknown', posted: 2 });
     expect(threadStatus(2, [call('part_2', 'succeeded', 3, 'r2'), call('part_3', 'failed', 2), call('part_3_2', 'succeeded', 1, 'r3')], NOW, published)).toEqual({ state: 'posted', posted: 3, total: 3, next: null, lastKey: 'social.publish:v:1:1:part_3_2' });
+  });
+});
+
+describe('reposts when a post takes off (#773)', () => {
+  const base = { body: 'Khai trương', title: null, media: [] };
+  const codes = (provider: Provider, repost: unknown) => validateVariant({ ...base, provider, settings: { repost } }).map((i) => i.code);
+  it('takes a like count, hours, or both, on the channels that repost', () => {
+    for (const provider of ['threads', 'bluesky', 'mastodon'] as const) expect(codes(provider, { likes: 100 })).toEqual([]);
+    expect(codes('threads', { afterHours: 24 })).toEqual([]);
+    expect(repostRuleOf({ repost: { likes: 50, afterHours: 12 } })).toEqual({ likes: 50, afterHours: 12 });
+    expect(repostRuleOf({})).toBeNull();
+  });
+  it('refuses an empty rule, numbers out of range, and other channels', () => {
+    for (const bad of [{}, { likes: 0 }, { afterHours: 721 }, { likes: 2.5 }, 'soon']) expect(codes('threads', bad)).toEqual(['REPOST_INVALID']);
+    expect(codes('x', { likes: 5 })).toEqual(['REPOST_NOT_SUPPORTED']);
+    expect(codes('facebook_page', { likes: 5 })).toEqual(['REPOST_NOT_SUPPORTED']);
   });
 });
 

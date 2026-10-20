@@ -43,6 +43,7 @@ import { evergreenCommands } from './evergreen.ts';
 import { commentCallsOf, commentCommands, commentStatus, type CommentStatus } from './comments.ts';
 import { threadCallsOf, threadCommands, threadStatus } from './thread.ts';
 import { autoReplyCommands } from './auto-reply.ts';
+import { repostCommands } from './repost.ts';
 import { approvalsRequired, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
@@ -1270,6 +1271,7 @@ export const socialCommands = [
   ...commentCommands,
   ...threadCommands,
   ...autoReplyCommands,
+  ...repostCommands,
   ...policyCommands,
   ...assignCommands,
   ...snippetCommands,

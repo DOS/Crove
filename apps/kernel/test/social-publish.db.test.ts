@@ -1033,6 +1033,41 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(await activityOf(o, quiet.postId)).toContainEqual(expect.objectContaining({ kind: 'auto_reply_failed', variantId: quiet.id, code: 'OUTCOME_UNKNOWN' }));
   });
 
+  async function dueRepost(o: Awaited<ReturnType<typeof org>>, repost: { likes?: number; afterHours?: number }) {
+    const conn = (await connect(o, `acct-${randomUUID().slice(0, 8)}`)).connectionId;
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Bài nổi', channels: [{ connectionId: conn, settings: { repost } }] });
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    return { postId, id: post.variants[0]?.id as string };
+  }
+
+  it('reposts once when the post reaches its like count or its hours, and shows it on the post (#773)', async () => {
+    const o = await org();
+    const platform = new SandboxPublisher();
+    // The sandbox reports 3 likes on a new post.
+    const liked = await dueRepost(o, { likes: 3 });
+    const later = await dueRepost(o, { afterHours: 24 });
+    const notYet = await dueRepost(o, { likes: 50, afterHours: 48 });
+    for (const v of [liked, later, notYet]) expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000 }, o.orgId, v.id, 'sandbox')).toMatchObject({ status: 'published' });
+    // A day has passed for one of them.
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET published_at = now() - interval '25 hours' WHERE id = $1", [later.id]));
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
+    const reposted = (id: string) => calls(id).then((rows) => rows.filter((r) => r.key.endsWith(':repost')));
+    expect(await reposted(liked.id)).toEqual([expect.objectContaining({ state: 'succeeded' })]);
+    expect(await reposted(later.id)).toEqual([expect.objectContaining({ state: 'succeeded' })]);
+    expect(await reposted(notYet.id)).toEqual([]);
+    expect(platform.reposts).toHaveLength(2);
+    expect(await activityOf(o, liked.postId)).toContainEqual(expect.objectContaining({ kind: 'reposted', variantId: liked.id }));
+    // Asked again later: no second repost.
+    await ageCaptures(liked.id);
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
+    expect(platform.reposts).toHaveLength(2);
+    await expect(api.execute('social.repost.begin', { variantId: liked.id, likes: 100 }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ status: 403 });
+  });
+
   it('keeps a failed metrics try as an empty capture, never asks a gone post again, and shows the last real answer', async () => {
     const o = await org();
     const platform = new SandboxPublisher();

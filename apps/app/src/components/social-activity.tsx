@@ -32,12 +32,12 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
   return (
     <li className={cn('space-y-1 border-l-2 py-1 pl-3 text-sm', item.kind === 'comment' ? 'border-primary' : 'border-border')}>
       <p className="text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">{item.kind === 'published' || item.kind === 'failed' || item.kind === 'cancelled' || item.kind === 'auto_replied' || item.kind === 'auto_reply_failed' ? (channel ?? t('channel')) : who}</span>{' '}
+        <span className="font-medium text-foreground">{item.kind === 'published' || item.kind === 'failed' || item.kind === 'cancelled' || item.kind === 'auto_replied' || item.kind === 'auto_reply_failed' || item.kind === 'reposted' || item.kind === 'repost_failed' ? (channel ?? t('channel')) : who}</span>{' '}
         {what}
-        {channel && !['published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed'].includes(item.kind) ? ` · ${channel}` : ''} · <time dateTime={item.at}>{f.dateTime(item.at)}</time>
+        {channel && !['published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed'].includes(item.kind) ? ` · ${channel}` : ''} · <time dateTime={item.at}>{f.dateTime(item.at)}</time>
         {item.editedAt ? ` · ${t('edited')}` : ''}
       </p>
-      {(item.kind === 'failed' || item.kind === 'auto_reply_failed') && item.code && <p className="font-mono text-xs text-warning">{item.code}</p>}
+      {(item.kind === 'failed' || item.kind === 'auto_reply_failed' || item.kind === 'repost_failed') && item.code && <p className="font-mono text-xs text-warning">{item.code}</p>}
       {item.kind === 'published' && item.url && /^https?:\/\//.test(item.url) && (
         <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-xs text-link hover:underline">
           {t('open')}

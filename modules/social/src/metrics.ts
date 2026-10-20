@@ -14,7 +14,8 @@ import { labelsOfPosts } from './labels.ts';
 import { formatOf, whatWorks, type ChannelInsights, type InsightSample } from './domain/insights.ts';
 import { isValidTimeZone } from './domain/queue.ts';
 import { runAutoReply } from './auto-reply.ts';
-import { autoReplyOf } from './domain/channels.ts';
+import { runRepost } from './repost.ts';
+import { autoReplyOf, repostRuleOf } from './domain/channels.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // How often a published variant is asked again, and how far back the summary looks by default.
@@ -65,8 +66,12 @@ export const metricsTarget = defineQuery({
       .executeTakeFirst();
     if (!row || row.status !== 'published' || !row.external_post_id) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy bài đã đăng này');
     const reply = autoReplyOf((row.settings ?? {}) as Record<string, unknown>);
+    const repostOf = (s: unknown) => {
+      const rule = repostRuleOf((s ?? {}) as Record<string, unknown>);
+      return rule && rule !== 'invalid' ? rule : null;
+    };
     // The like count that sets off the variant's auto-reply (#746), so the sweep begins one only when it is reached.
-    return { connectionId: row.channel_connection_id, externalPostId: row.external_post_id, provider: row.provider, autoReplyLikes: reply && reply !== 'invalid' ? reply.likes : null };
+    return { connectionId: row.channel_connection_id, externalPostId: row.external_post_id, provider: row.provider, autoReplyLikes: reply && reply !== 'invalid' ? reply.likes : null, repost: repostOf(row.settings) };
   },
 });
 
@@ -319,7 +324,7 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
     const publisher = deps.publishers[row.provider];
     try {
       const options = { actor: ACTOR, orgId: row.org_id };
-      const target = await deps.runtime.query<{ connectionId: string; externalPostId: string; autoReplyLikes: number | null }>('social.metrics.target', { variantId: row.variant_id }, options);
+      const target = await deps.runtime.query<{ connectionId: string; externalPostId: string; autoReplyLikes: number | null; repost: { likes: number | null; afterHours: number | null } | null }>('social.metrics.target', { variantId: row.variant_id }, options);
       const sealed = await deps.runtime.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: target.connectionId }, options);
       const secret = deps.broker.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, { orgId: row.org_id, provider: sealed.provider, externalAccountId: sealed.externalAccountId });
       const result = await publisher?.metrics?.({ externalAccountId: sealed.externalAccountId, secret, externalId: target.externalPostId });
@@ -335,6 +340,12 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
       if (done.recorded && result && !('refused' in result)) out.recorded += 1;
       // The count may set off the variant's auto-reply (#746); its failure never touches the metrics.
       const likes = result && !('refused' in result) ? result.metrics.reactions : undefined;
+      // And its repost rule (#773): a like count or a delay, checked by the command against the post's time.
+      if (publisher && target.repost && (target.repost.afterHours !== null || (likes !== undefined && target.repost.likes !== null && likes >= target.repost.likes))) {
+        await runRepost(deps, row.org_id, row.variant_id, publisher, { externalAccountId: sealed.externalAccountId, secret }, likes ?? null).catch((error: unknown) =>
+          console.warn(`[social-repost] variant ${row.variant_id.slice(0, 8)}`, error instanceof Error ? error.message : error),
+        );
+      }
       if (publisher && likes !== undefined && target.autoReplyLikes !== null && likes >= target.autoReplyLikes) {
         await runAutoReply(deps, row.org_id, row.variant_id, publisher, { externalAccountId: sealed.externalAccountId, secret }, likes).catch((error: unknown) =>
           console.warn(`[social-auto-reply] variant ${row.variant_id.slice(0, 8)}`, error instanceof Error ? error.message : error),

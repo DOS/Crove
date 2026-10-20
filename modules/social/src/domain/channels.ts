@@ -186,6 +186,28 @@ export const AUTO_REPLY_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
   mastodon: COMMENT_RULES.mastodon as TextRule,
 };
 
+// Reposts when a post takes off (#773): on the channels whose adapter reposts the account's own post and reports likes
+// (Threads, Bluesky, Mastodon; X reports no counts to Crove yet), a variant may carry one repost rule
+// (`settings.repost`: { likes?, afterHours? }), at a like count, after some hours, or whichever comes first.
+export const REPOST_PROVIDERS: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'threads', 'bluesky', 'mastodon']);
+export const REPOST_LIKES_MAX = 1_000_000;
+// Metrics are read for 30 days after a post goes out.
+export const REPOST_HOURS_MAX = 720;
+
+// The repost rule in a variant's settings: null when there is none, 'invalid' when it is not an object with a whole like
+// count from 1 to REPOST_LIKES_MAX and/or whole hours from 1 to REPOST_HOURS_MAX.
+export function repostRuleOf(settings: Readonly<Record<string, unknown>> | undefined): { likes: number | null; afterHours: number | null } | 'invalid' | null {
+  const value = settings?.repost;
+  if (value === undefined) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'invalid';
+  const { likes, afterHours } = value as { likes?: unknown; afterHours?: unknown };
+  const whole = (n: unknown, max: number) => (n === undefined || n === null ? null : typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= max ? n : 'invalid');
+  const l = whole(likes, REPOST_LIKES_MAX);
+  const h = whole(afterHours, REPOST_HOURS_MAX);
+  if (l === 'invalid' || h === 'invalid' || (l === null && h === null)) return 'invalid';
+  return { likes: l, afterHours: h };
+}
+
 // The auto-reply in a variant's settings: null when there is none, 'invalid' when it is not { text, likes } with a
 // text and a whole number of likes from 1 to AUTO_REPLY_LIKES_MAX.
 export function autoReplyOf(settings: Readonly<Record<string, unknown>> | undefined): { text: string; likes: number } | 'invalid' | null {
