@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, COVER_RULES, GBP_CTAS, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
@@ -209,6 +209,50 @@ function CoverField({ provider, media, settings, onChange, disabled }: { provide
   );
 }
 
+// Thread parts (#742): the post's text is part 1; each part added here goes out as a reply to the one before.
+function ThreadField({ settings, disabled, onChange }: { settings: Record<string, unknown>; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
+  const t = useTranslations('social');
+  const parts = Array.isArray(settings.threadParts) ? settings.threadParts.map((p) => (typeof p === 'string' ? p : '')) : [];
+  const set = (next: string[]) => {
+    const { threadParts: _old, ...rest } = settings;
+    onChange(next.length > 0 ? { ...rest, threadParts: next } : rest);
+  };
+  const move = (i: number, by: number) => {
+    const next = [...parts];
+    const [part] = next.splice(i, 1);
+    next.splice(i + by, 0, part as string);
+    set(next);
+  };
+  return (
+    <div className="space-y-2">
+      <Label className="text-xs">{t('threadParts')}</Label>
+      {parts.map((part, i) => (
+        <div key={i} className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{t('threadPart', { n: i + 2 })}</span>
+            <Button variant="ghost" size="sm" disabled={disabled || i === 0} onClick={() => move(i, -1)}>
+              {t('threadMoveUp')}
+            </Button>
+            <Button variant="ghost" size="sm" disabled={disabled || i === parts.length - 1} onClick={() => move(i, 1)}>
+              {t('threadMoveDown')}
+            </Button>
+            <Button variant="ghost" size="sm" disabled={disabled} onClick={() => set(parts.filter((_, j) => j !== i))}>
+              {t('threadRemove')}
+            </Button>
+          </div>
+          <Textarea rows={2} disabled={disabled} value={part} aria-label={t('threadPart', { n: i + 2 })} onChange={(e) => set(parts.map((p, j) => (j === i ? e.target.value : p)))} />
+        </div>
+      ))}
+      {parts.length < THREAD_PARTS_MAX && (
+        <Button variant="outline" size="sm" disabled={disabled} onClick={() => set([...parts, ''])}>
+          {t('threadAdd')}
+        </Button>
+      )}
+      <p className="text-xs text-subtle-foreground">{t('threadHint', { max: THREAD_PARTS_MAX + 1 })}</p>
+    </div>
+  );
+}
+
 // The auto-reply on likes (#746): a text and the like count that sets it off; both or neither.
 function AutoReplyField({ settings, disabled, onChange }: { settings: Record<string, unknown>; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
   const t = useTranslations('social');
@@ -275,6 +319,13 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TOO_MANY_LINKS', { limit, actual });
       case 'COMMENT_TOO_LONG':
         return t('COMMENT_TOO_LONG', { limit, actual });
+      case 'THREAD_TOO_MANY_PARTS':
+        return t('THREAD_TOO_MANY_PARTS', { limit });
+      // Which part: threadParts.<index> on the issue; the post's own text is part 1.
+      case 'THREAD_PART_EMPTY':
+        return t('THREAD_PART_EMPTY', { n: Number(issue.field.split('.')[2] ?? 0) + 2 });
+      case 'THREAD_PART_TOO_LONG':
+        return t('THREAD_PART_TOO_LONG', { n: Number(issue.field.split('.')[2] ?? 0) + 2, limit, actual });
       case 'AUTO_REPLY_INVALID':
         return t('AUTO_REPLY_INVALID', { limit });
       case 'AUTO_REPLY_TOO_LONG':
@@ -427,9 +478,10 @@ function PostTypeField({ provider, settings, onChange, disabled }: { provider: s
           disabled={disabled}
           onChange={(e) => {
             const { postType: _old, ...rest } = settings;
-            // A Story takes no first comment and no cover, and their fields are hidden for it: dropped with the change.
+            // A Story takes no first comment, thread or cover, and their fields are hidden for it: dropped with the change.
             if (e.target.value === 'story') {
               delete rest.firstComment;
+              delete rest.threadParts;
               delete rest.autoReply;
               delete rest.cover;
             }
@@ -702,7 +754,8 @@ function ChannelEditor({
       {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
       {isProvider(provider) && AUTO_REPLY_RULES[provider] && postType !== 'story' && <AutoReplyField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
-      {isProvider(provider) && COMMENT_RULES[provider] && postType !== 'story' && (
+      {isProvider(provider) && THREAD_RULES[provider] && postType !== 'story' && <ThreadField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
+      {isProvider(provider) && COMMENT_RULES[provider] && postType !== 'story' && (!threadPartsOf(own.settings) || typeof own.settings.firstComment === 'string') && (
         <div className="space-y-1">
           <Label className="text-xs">{t('firstComment')}</Label>
           <Textarea
@@ -1542,6 +1595,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const unschedule = useMutation({ mutationFn: (variantId: string) => client.social.variants.unschedule({ variantIds: [variantId] }), onSuccess: refresh });
   // The first comment again (#587); the worker posts it in a moment.
   const retryComment = useMutation({ mutationFn: (variantId: string) => client.social.variants.retryComment({ variantId }), onSuccess: refresh });
+  const retryThread = useMutation({ mutationFn: (variantId: string) => client.social.variants.retryThread({ variantId }), onSuccess: refresh });
   const cancel = useMutation({ mutationFn: (variantId: string) => client.social.variants.cancel({ variantIds: [variantId] }), onSuccess: refresh });
   const retry = useMutation({ mutationFn: (variantId: string) => client.social.variants.retry({ variantIds: [variantId] }), onSuccess: refresh });
   const resolve = useMutation({
@@ -1572,7 +1626,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   };
   const published = p.variants.some((v) => v.status === 'published');
   const metricsOf = new Map((metrics.data ?? []).map((r) => [r.variantId, r]));
-  const error = save.error ?? submit.error ?? retryComment.error ?? repost.error ?? duplicate.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
+  const error = save.error ?? submit.error ?? retryComment.error ?? retryThread.error ?? repost.error ?? duplicate.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
   const reviewable = !dirty && !stale;
 
   return (
@@ -1727,6 +1781,18 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                         {canDecide && (v.commentStatus === 'failed' || v.commentStatus === 'unknown') && (
                           <Button variant="outline" size="sm" disabled={retryComment.isPending} onClick={() => retryComment.mutate(v.id)}>
                             {t('commentRetry')}
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {v.threadStatus && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={v.threadStatus.state === 'failed' || v.threadStatus.state === 'unknown' ? 'text-warning' : ''}>
+                          {t(`threadStatus.${v.threadStatus.state}`, { posted: v.threadStatus.posted, total: v.threadStatus.total })}
+                        </span>
+                        {canDecide && (v.threadStatus.state === 'failed' || v.threadStatus.state === 'unknown') && (
+                          <Button variant="outline" size="sm" disabled={retryThread.isPending} onClick={() => retryThread.mutate(v.id)}>
+                            {t('threadRetry')}
                           </Button>
                         )}
                       </div>

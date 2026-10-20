@@ -11,7 +11,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey, type BlobStore } from '@crove/kernel-runtime';
-import { captureKey, runCommentJob, runPublishJob, socialCommands, socialQueries, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
+import { captureKey, runCommentJob, runPublishJob, runThreadJob, socialCommands, socialQueries, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
 import { shortLinkTarget } from '../src/short-link.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -322,6 +322,106 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(sandbox.comments.map((c) => c.text)).toEqual(['#khaitruong']);
     expect(await calls(id)).toContainEqual(expect.objectContaining({ key: `${key}_2`, state: 'succeeded' }));
     expect((await variant(o, postId)).commentStatus).toBe('posted');
+  });
+
+  // A post with thread parts, approved and due.
+  async function dueThread(o: Awaited<ReturnType<typeof org>>, threadParts: string[]) {
+    const conn = (await connect(o, `acct-${randomUUID().slice(0, 8)}`)).connectionId;
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Phần một', channels: [{ connectionId: conn, settings: { threadParts } }] });
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    return { postId, id: post.variants[0]?.id as string };
+  }
+  const partRefs = (variantId: string) =>
+    admin(async (c) => (await c.query<{ key: string; state: string; external_ref: string | null }>("SELECT key, state, external_ref, error_code FROM crove_kernel.external_call WHERE key LIKE $1 ORDER BY started_at, key", [`social.publish:${variantId}:%:part\\_%`])).rows);
+
+  it('posts thread parts as a chain of replies after the post, each once (#742)', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const { postId, id } = await dueThread(o, ['Phần hai', 'Phần ba', 'Phần bốn']);
+    expect(await run(o, id, sandbox)).toMatchObject({ status: 'published' });
+    const v = await variant(o, postId);
+    expect(v.threadStatus).toEqual({ state: 'posted', posted: 4, total: 4 });
+    expect(v.commentStatus).toBeNull();
+    const refs = await partRefs(id);
+    expect(refs.map((r) => [r.key.split(':').at(-1), r.state])).toEqual([['part_2', 'succeeded'], ['part_3', 'succeeded'], ['part_4', 'succeeded']]);
+    // Part 2 answers the post, each later part the part before it.
+    expect(sandbox.comments.map((c) => c.text)).toEqual(['Phần hai', 'Phần ba', 'Phần bốn']);
+    const root = await admin(async (c) => (await c.query<{ external_post_id: string }>('SELECT external_post_id FROM crove_social.post_variant WHERE id = $1', [id])).rows[0]?.external_post_id);
+    expect(sandbox.comments.map((c) => c.postId)).toEqual([root, refs[0]?.external_ref, refs[1]?.external_ref]);
+    expect(sandbox.comments.map((c) => c.rootId)).toEqual([root, root, root]);
+    // A later run posts nothing again, and there is nothing to retry.
+    expect(await runThreadJob({ runtime: worker, broker: vault, publishers: { sandbox }, callTimeoutMs: 2_000 }, o.orgId, id, 'sandbox')).toMatchObject({ action: 'none', reason: 'posted' });
+    expect(sandbox.comments).toHaveLength(3);
+    await expect(exec(o, 'social.thread.retry', { variantId: id })).rejects.toMatchObject({ code: 'THREAD_NOT_RETRYABLE' });
+  });
+
+  it('stops at a part that fails, keeps the parts that went out, and goes on from there when a person asks (#742)', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const { postId, id } = await dueThread(o, ['Phần hai', 'Phần ba', 'Phần bốn']);
+    // The platform refuses the second reply once, then answers an unclear one.
+    let n = 0;
+    const answers: ('ok' | 'refuse' | 'unclear')[] = ['ok', 'refuse', 'ok', 'unclear'];
+    const flaky: Publisher = {
+      provider: 'sandbox',
+      publishSafety: sandbox.publishSafety,
+      publish: (i) => sandbox.publish(i),
+      reconcile: (i) => sandbox.reconcile(i),
+      comment: async (i) => {
+        const answer = answers[n++] ?? 'ok';
+        if (answer === 'refuse') return { kind: 'rejected', error: 'bad_request', code: 'TOO_FAST' };
+        if (answer === 'unclear') return { kind: 'unknown', code: 'TIMEOUT' };
+        return sandbox.comment(i);
+      },
+    };
+    const deps = { runtime: worker, broker: vault, publishers: { sandbox: flaky }, callTimeoutMs: 2_000 };
+    expect(await run(o, id, flaky)).toMatchObject({ status: 'published' });
+    expect((await variant(o, postId)).threadStatus).toEqual({ state: 'failed', posted: 2, total: 4 });
+    // Only a person's ask goes on, once per ask: it names the last call it saw.
+    expect(await runThreadJob(deps, o.orgId, id, 'sandbox')).toMatchObject({ action: 'none', reason: 'failed' });
+    const failedKey = `social.publish:${id}:1:1:part_3`;
+    await exec(o, 'social.thread.retry', { variantId: id });
+    const asks = await admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.thread.retry_requested'", [o.orgId])).rows);
+    expect(asks.map((a) => a.payload)).toEqual([{ post_id: postId, variant_id: id, provider: 'sandbox', after: failedKey }]);
+    // The retry posts part 3 under a new key, then stops at an unclear part 4, which nothing posts again by itself.
+    expect(await runThreadJob(deps, o.orgId, id, 'sandbox', { after: failedKey })).toMatchObject({ action: 'call', state: 'ambiguous', parts: 2 });
+    expect(await runThreadJob(deps, o.orgId, id, 'sandbox', { after: failedKey })).toMatchObject({ action: 'none', reason: 'unknown' });
+    expect((await variant(o, postId)).threadStatus).toEqual({ state: 'unknown', posted: 3, total: 4 });
+    // The person checked part 4 is not there and asks again: it goes out, answering part 3.
+    const unclearKey = `social.publish:${id}:1:1:part_4`;
+    await exec(o, 'social.thread.retry', { variantId: id });
+    expect(await runThreadJob(deps, o.orgId, id, 'sandbox', { after: unclearKey })).toMatchObject({ action: 'call', state: 'succeeded', parts: 1 });
+    const refs = await partRefs(id);
+    expect(refs.map((r) => [r.key.split(':').at(-1), r.state])).toEqual([['part_2', 'succeeded'], ['part_3', 'failed'], ['part_3_2', 'succeeded'], ['part_4', 'ambiguous'], ['part_4_2', 'succeeded']]);
+    expect(sandbox.comments.map((c) => c.text)).toEqual(['Phần hai', 'Phần ba', 'Phần bốn']);
+    expect(sandbox.comments.at(-1)?.postId).toBe(refs[2]?.external_ref);
+    expect((await variant(o, postId)).threadStatus).toEqual({ state: 'posted', posted: 4, total: 4 });
+  });
+
+  it('resumes a chain whose worker died between parts, without posting a part twice (#742)', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const { postId, id } = await dueThread(o, ['Phần hai', 'Phần ba']);
+    // Published by a publisher without replies, as if the worker died before the thread.
+    const quiet: Publisher = { provider: 'sandbox', publishSafety: sandbox.publishSafety, publish: (i) => sandbox.publish(i), reconcile: (i) => sandbox.reconcile(i) };
+    expect(await run(o, id, quiet)).toMatchObject({ status: 'published' });
+    const deps = { runtime: worker, broker: vault, publishers: { sandbox }, callTimeoutMs: 2_000 };
+    // Part 2 goes out; the worker dies before part 3.
+    const only: Publisher = { ...quiet, comment: (i) => sandbox.comment(i) };
+    let left = 1;
+    const dying: Publisher = { ...only, comment: async (i) => (left-- > 0 ? sandbox.comment(i) : Promise.reject(new Error('worker died'))) };
+    await runThreadJob({ ...deps, publishers: { sandbox: dying } }, o.orgId, id, 'sandbox');
+    expect((await variant(o, postId)).threadStatus).toEqual({ state: 'unknown', posted: 2, total: 3 });
+    // Its part-3 call never got an answer: once a person checked and asks, part 3 goes out once; part 2 is not posted again.
+    const key = `social.publish:${id}:1:1:part_3`;
+    await exec(o, 'social.thread.retry', { variantId: id });
+    expect(await runThreadJob(deps, o.orgId, id, 'sandbox', { after: key })).toMatchObject({ action: 'call', state: 'succeeded', parts: 1 });
+    expect((await partRefs(id)).map((r) => [r.key.split(':').at(-1), r.state])).toEqual([['part_2', 'succeeded'], ['part_3', 'ambiguous'], ['part_3_2', 'succeeded']]);
+    expect(sandbox.comments.map((c) => c.text)).toEqual(['Phần hai', 'Phần ba']);
   });
 
   it('does nothing before the time, and never for a variant of another provider', async () => {

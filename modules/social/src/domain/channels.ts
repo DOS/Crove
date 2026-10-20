@@ -151,6 +151,25 @@ export function firstCommentOf(settings: Readonly<Record<string, unknown>> | und
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+// Thread posts (#742): on Threads, X and Bluesky a variant may go on in up to 9 more parts after its text, posted as a
+// chain of replies to the account's own post (`settings.threadParts`, an array of strings). Each part is counted as a
+// post of that channel. A thread takes no first comment: its first reply would be the comment.
+export const THREAD_PARTS_MAX = 9;
+export const THREAD_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
+  sandbox: { max: 1000, count: 'graphemes', required: false },
+  threads: { max: 500, count: 'codepoints', required: false },
+  x: { max: 280, count: 'weighted', required: false },
+  bluesky: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
+};
+
+// The thread parts in a variant's settings, trimmed, or null when there are none. An entry that is not a string reads
+// as empty, so validation names it.
+export function threadPartsOf(settings: Readonly<Record<string, unknown>> | undefined): string[] | null {
+  const value = settings?.threadParts;
+  if (!Array.isArray(value) || value.length === 0) return null;
+  return value.map((part) => (typeof part === 'string' ? part.trim() : ''));
+}
+
 // Auto-replies on likes (#746): on the channels whose adapter both replies under its own post and reports likes
 // (Facebook Pages, Threads, Bluesky; X and LinkedIn report no counts yet), a variant may carry one reply posted once the post has that many likes (`settings.autoReply`: { text, likes }). The
 // reply is counted like a first comment there.

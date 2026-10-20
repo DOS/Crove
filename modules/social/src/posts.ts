@@ -15,7 +15,7 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contr
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
-import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_TYPES, coverOf, firstCommentOf, isProvider } from './domain/channels.ts';
+import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_TYPES, coverOf, firstCommentOf, isProvider, threadPartsOf } from './domain/channels.ts';
 import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
@@ -39,6 +39,7 @@ import { libraryQueries, likeTerm } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
 import { commentCallsOf, commentCommands, commentStatus, type CommentStatus } from './comments.ts';
+import { threadCallsOf, threadCommands, threadStatus } from './thread.ts';
 import { autoReplyCommands } from './auto-reply.ts';
 import { approvalsRequired, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
@@ -920,6 +921,8 @@ export interface VariantView {
   effectiveAt: string | null;
   queueSlotAt: string | null;
   commentStatus: CommentStatus | null;
+  // The thread of a published channel (#742): how many parts are out (the post counts as one) and the next one's state.
+  threadStatus: { state: 'pending' | 'posted' | 'failed' | 'unknown'; posted: number; total: number } | null;
   queuePaused: boolean;
   attempt: number;
   externalUrl: string | null;
@@ -1016,6 +1019,15 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
   const calls = await commentCallsOf(ctx.trx, ctx.orgId, commented);
   const now = new Date();
   const comments = new Map<string, CommentStatus>(commented.map((v) => [v.id, commentStatus(calls.get(v.id) ?? [], now, v.published_at)]));
+  // The thread of each published channel that has one (#742).
+  const threaded = variants.filter((v) => v.status === 'published' && v.external_post_id && threadPartsOf(settingsOf(v)));
+  const partCalls = await threadCallsOf(ctx.trx, ctx.orgId, threaded);
+  const threads = new Map(
+    threaded.map((v) => {
+      const s = threadStatus((threadPartsOf(settingsOf(v)) as string[]).length, partCalls.get(v.id) ?? [], now, v.published_at);
+      return [v.id, { state: s.state, posted: s.posted, total: s.total }] as const;
+    }),
+  );
   const mediaRows = await ctx.trx
     .selectFrom('crove_social.post_media as m')
     .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
@@ -1078,6 +1090,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               effectiveAt: iso(v.status === 'published' ? v.published_at : (v.error_retry_at ?? v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at)),
               queueSlotAt: iso(v.queue_slot_at),
               commentStatus: comments.get(v.id) ?? null,
+              threadStatus: threads.get(v.id) ?? null,
               // As the publisher decides it (queuePaused in publishing.ts): a retry time goes out whatever the queue does.
               queuePaused: v.queue_slot_at !== null && v.scheduled_at === null && v.error_retry_at === null && pausedQueues.has(v.channel_connection_id),
               attempt: v.attempt,
@@ -1253,6 +1266,7 @@ export const socialCommands = [
   ...metricsCommands,
   ...evergreenCommands,
   ...commentCommands,
+  ...threadCommands,
   ...autoReplyCommands,
   ...policyCommands,
   ...assignCommands,
