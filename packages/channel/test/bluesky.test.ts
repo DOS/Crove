@@ -260,3 +260,43 @@ describe('BlueskyPublisher metrics', () => {
     expect(await new BlueskyPublisher(down.fetchImpl).metrics(metricsInput)).toBeNull();
   });
 });
+
+describe('Bluesky video (#455)', () => {
+  const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: 'Lò bánh buổi sáng' };
+  const videoInput = (over: Partial<PublishInput['content']> = {}) => input({ content: { body: 'Mẻ bánh đầu tiên', title: null, linkUrl: null, media: [clip], ...over } });
+  const blob = { $type: 'blob', ref: { $link: 'bafkreivideo' }, mimeType: 'video/mp4', size: 4_000_000 };
+  const fast = { pollMs: 1, videoWaitMs: 1000 };
+  const routes = (job: { status?: number; body: unknown }, statuses: { body: unknown }[]) => ({
+    'POST bsky.social/xrpc/com.atproto.server.createSession': [session()],
+    'GET morel.us-east.host.bsky.network/xrpc/com.atproto.server.getServiceAuth': [{ body: { token: 'service-jwt-1' } }],
+    'POST video.bsky.app/xrpc/app.bsky.video.uploadVideo': [job],
+    'GET video.bsky.app/xrpc/app.bsky.video.getJobStatus': statuses,
+    'POST morel.us-east.host.bsky.network/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3kvid`, cid: 'bafy' } }],
+  });
+
+  it('uploads the MP4 to the video service with a service token, waits for the job, and posts it embedded', async () => {
+    const { fetchImpl, calls } = xrpc(
+      routes({ body: { jobStatus: { jobId: 'job-1', state: 'JOB_STATE_CREATED' } } }, [{ body: { jobStatus: { jobId: 'job-1', state: 'JOB_STATE_ENCODING' } } }, { body: { jobStatus: { jobId: 'job-1', state: 'JOB_STATE_COMPLETED', blob } } }]),
+    );
+    expect(await new BlueskyPublisher(fetchImpl, undefined, fast).publish(videoInput())).toMatchObject({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kvid` });
+    const upload = calls.find((c) => c.route === 'POST video.bsky.app/xrpc/app.bsky.video.uploadVideo');
+    expect(upload?.auth).toBe('Bearer service-jwt-1');
+    expect(upload?.type).toBe('video/mp4');
+    const sent = calls.at(-1)?.json as { record: { embed: unknown } } | undefined;
+    if (!sent) throw new Error('no post call');
+    const record = sent.record;
+    expect(record.embed).toEqual({ $type: 'app.bsky.embed.video', video: blob, alt: 'Lò bánh buổi sáng' });
+  });
+
+  it('takes the job of a video sent before, and posts nothing when processing fails, runs late, or the video comes with images', async () => {
+    const again = xrpc(routes({ status: 409, body: { error: 'already_exists', message: 'Video already processed', jobId: 'job-0' } }, [{ body: { jobStatus: { jobId: 'job-0', state: 'JOB_STATE_COMPLETED', blob } } }]));
+    expect((await new BlueskyPublisher(again.fetchImpl, undefined, fast).publish(videoInput())).kind).toBe('accepted');
+    const failed = xrpc(routes({ body: { jobStatus: { jobId: 'job-2' } } }, [{ body: { jobStatus: { jobId: 'job-2', state: 'JOB_STATE_FAILED', message: 'Video too long' } } }]));
+    expect(await new BlueskyPublisher(failed.fetchImpl, undefined, fast).publish(videoInput())).toMatchObject({ kind: 'rejected', code: 'VIDEO_PROCESSING_FAILED' });
+    expect(failed.calls.some((c) => c.route.endsWith('createRecord'))).toBe(false);
+    const slow = xrpc(routes({ body: { jobStatus: { jobId: 'job-3' } } }, Array.from({ length: 50 }, () => ({ body: { jobStatus: { jobId: 'job-3', state: 'JOB_STATE_ENCODING' } } }))));
+    expect(await new BlueskyPublisher(slow.fetchImpl, undefined, { pollMs: 5, videoWaitMs: 20 }).publish(videoInput())).toMatchObject({ kind: 'rejected', error: 'transient', code: 'VIDEO_PROCESSING_SLOW' });
+    const mixed = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
+    expect(await new BlueskyPublisher(mixed.fetchImpl, undefined, fast).publish(videoInput({ media: [clip, { fileId: 'i', mime: 'image/jpeg', sizeBytes: 3, altText: null }] }))).toMatchObject({ code: 'ONE_VIDEO_ALONE' });
+  });
+});

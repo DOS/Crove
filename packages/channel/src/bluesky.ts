@@ -19,6 +19,13 @@ const ENTRYWAY = 'https://bsky.social';
 const PUBLIC_APPVIEW = 'https://public.api.bsky.app';
 // The did:plc directory: DID documents of did:plc accounts, Bluesky-hosted or not.
 const PLC_DIRECTORY = 'https://plc.directory';
+// Bluesky's video service (#455): it takes the MP4, transcodes it and hands back the blob the post embeds.
+const VIDEO_SERVICE = 'https://video.bsky.app';
+// One MP4 per post, as the channel rules allow (Bluesky's service takes more; the rules keep the smaller limit).
+const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+// How long a publish waits for the video service; with the upload it stays inside callTimeoutMs.
+const VIDEO_WAIT_MS = 300_000;
+const VIDEO_CALL_MARGIN_MS = 90_000;
 const RESOLVED_MS = 10 * 60_000;
 // Lookups kept at most, so connecting many accounts cannot grow the worker's memory without end.
 const RESOLVED_MAX = 1000;
@@ -36,7 +43,7 @@ export function isBlueskyHost(host: string): boolean {
 
 // fetch limited to Bluesky's own servers (its PDS hosts, the public AppView, the PLC directory) over https, with a
 // timeout and no redirects.
-const isBlueskyOrigin = (url: URL) => isBlueskyHost(url.hostname) || url.origin === PUBLIC_APPVIEW || url.origin === PLC_DIRECTORY;
+const isBlueskyOrigin = (url: URL) => isBlueskyHost(url.hostname) || url.origin === PUBLIC_APPVIEW || url.origin === PLC_DIRECTORY || url.origin === VIDEO_SERVICE;
 function blueskyFetch(fetchImpl: Fetch = fetch, timeoutMs = 15_000): Fetch {
   return async (input, init) => {
     const url = new URL(input);
@@ -62,11 +69,14 @@ export function pdsOrigin(raw: unknown): string | null {
 export class BlueskyError extends Error {
   readonly status: number;
   readonly code: string | undefined;
-  constructor(status: number, code: string | undefined, message: string) {
+  // The video service names the job of a video it already has (409 already_exists).
+  readonly jobId: string | undefined;
+  constructor(status: number, code: string | undefined, message: string, jobId?: string) {
     super(message);
     this.name = 'BlueskyError';
     this.status = status;
     this.code = code;
+    this.jobId = jobId;
   }
 }
 
@@ -169,7 +179,7 @@ class Xrpc {
     const json = (await response.json().catch(() => null)) as ({ error?: unknown; message?: unknown } & Record<string, unknown>) | null;
     // A success whose body cannot be read may still have done what was asked: never a refusal.
     if (response.ok && !json) throw new BlueskyError(response.status, 'UnreadableAnswer', 'Bluesky answered without a readable body');
-    if (!response.ok || !json) throw new BlueskyError(response.status, typeof json?.error === 'string' ? json.error : undefined, typeof json?.message === 'string' ? json.message : `Bluesky answered ${response.status}`);
+    if (!response.ok || !json) throw new BlueskyError(response.status, typeof json?.error === 'string' ? json.error : undefined, typeof json?.message === 'string' ? json.message : `Bluesky answered ${response.status}`, typeof json?.jobId === 'string' ? json.jobId : undefined);
     return json as T;
   }
 
@@ -326,9 +336,68 @@ export class BlueskyPublisher implements Publisher {
   readonly publishSafety: RetrySafety = 'reconcile_only';
   private readonly xrpc: Xrpc;
 
+  // A video's upload and processing take minutes (#455); within the job's stale limit (600 s).
+  readonly callTimeoutMs = 420_000;
+  private readonly videoWaitMs: number;
+  private readonly pollMs: number;
+  private readonly budgetMs: number;
+
   // egress: the kernel's guarded fetch, for accounts on their own PDS (#792).
-  constructor(fetchImpl?: Fetch, egress?: Fetch) {
+  constructor(fetchImpl?: Fetch, egress?: Fetch, timing: { videoWaitMs?: number; pollMs?: number; budgetMs?: number } = {}) {
     this.xrpc = new Xrpc(fetchImpl, egress);
+    this.videoWaitMs = timing.videoWaitMs ?? VIDEO_WAIT_MS;
+    this.pollMs = timing.pollMs ?? 2000;
+    this.budgetMs = timing.budgetMs ?? this.callTimeoutMs - VIDEO_CALL_MARGIN_MS;
+  }
+
+  // One MP4 through the video service: a service-auth token from the account's PDS, the upload, then a wait on the
+  // job until the service hands back the blob. Nothing is visible before the post names the blob, so any failure here
+  // posted nothing; a wait past the budget is a failure to retry.
+  private async uploadVideo(session: Session, bytes: Uint8Array, started: number): Promise<{ blob: unknown } | { rejected: PublishResult }> {
+    const fail = (error: unknown): { rejected: PublishResult } => {
+      const result = blueskyResult(error);
+      return { rejected: result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) } };
+    };
+    let token: string;
+    try {
+      const auth = await this.xrpc.call<{ token?: unknown }>(session.pds, 'GET', 'com.atproto.server.getServiceAuth', {
+        token: session.accessJwt,
+        params: { aud: `did:web:${new URL(session.pds).hostname}`, lxm: 'com.atproto.repo.uploadBlob', exp: String(Math.floor(Date.now() / 1000) + 30 * 60) },
+      });
+      if (typeof auth.token !== 'string' || !auth.token) return { rejected: { kind: 'rejected', error: 'transient', code: 'NO_SERVICE_TOKEN' } };
+      token = auth.token;
+    } catch (error) {
+      return fail(error);
+    }
+    let jobId: string;
+    try {
+      const answer = await this.xrpc.call<{ jobStatus?: { jobId?: unknown }; jobId?: unknown }>(VIDEO_SERVICE, 'POST', 'app.bsky.video.uploadVideo', {
+        token,
+        params: { did: session.did, name: `crove-${Date.now().toString(36)}.mp4` },
+        bytes: { data: bytes, type: 'video/mp4' },
+      });
+      const id = answer.jobStatus?.jobId ?? answer.jobId;
+      if (typeof id !== 'string' || !id) return { rejected: { kind: 'rejected', error: 'transient', code: 'NO_VIDEO_JOB' } };
+      jobId = id;
+    } catch (error) {
+      // The same video sent again (a retry): the service names the job it already has.
+      if (error instanceof BlueskyError && error.status === 409 && error.jobId) jobId = error.jobId;
+      else return fail(error);
+    }
+    const until = Math.min(started + this.budgetMs, Date.now() + this.videoWaitMs);
+    for (;;) {
+      let status: { state?: unknown; blob?: unknown; error?: unknown; message?: unknown };
+      try {
+        const answer = await this.xrpc.call<{ jobStatus?: typeof status }>(VIDEO_SERVICE, 'GET', 'app.bsky.video.getJobStatus', { token, params: { jobId } });
+        status = answer.jobStatus ?? {};
+      } catch (error) {
+        return fail(error);
+      }
+      if (status.state === 'JOB_STATE_COMPLETED' && status.blob) return { blob: status.blob };
+      if (status.state === 'JOB_STATE_FAILED') return { rejected: { kind: 'rejected', error: 'bad_request', code: 'VIDEO_PROCESSING_FAILED', ...(typeof status.message === 'string' ? { message: status.message.slice(0, 500) } : {}) } };
+      if (Date.now() + this.pollMs > until) return { rejected: { kind: 'rejected', error: 'transient', code: 'VIDEO_PROCESSING_SLOW' } };
+      await new Promise((resolve) => setTimeout(resolve, this.pollMs));
+    }
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -342,9 +411,27 @@ export class BlueskyPublisher implements Publisher {
       const result = blueskyResult(error);
       return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
     }
+    const started = Date.now();
+    // One video (#455): through the video service, embedded as app.bsky.embed.video. Not mixed with images.
+    const video = input.content.media.find((m) => m.mime.startsWith('video/'));
+    let videoEmbed: Record<string, unknown> | null = null;
+    if (video) {
+      if (input.content.media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_ALONE' };
+      if (video.mime !== 'video/mp4') return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TYPE' };
+      if (video.sizeBytes > MAX_VIDEO_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TOO_LARGE' };
+      let bytes: Uint8Array;
+      try {
+        bytes = await input.readMedia(video.fileId);
+      } catch {
+        return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
+      }
+      const uploaded = await this.uploadVideo(session, bytes, started);
+      if ('rejected' in uploaded) return uploaded.rejected;
+      videoEmbed = { $type: 'app.bsky.embed.video', video: uploaded.blob, ...(video.altText ? { alt: video.altText.slice(0, 1000) } : {}) };
+    }
     // Images are uploaded as blobs first; a blob nobody references is never shown, so a failure here posted nothing.
     const images: { alt: string; image: unknown }[] = [];
-    for (const m of input.content.media.slice(0, 4)) {
+    for (const m of video ? [] : input.content.media.slice(0, 4)) {
       if (m.sizeBytes > MAX_IMAGE_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'IMAGE_TOO_LARGE' };
       let bytes: Uint8Array;
       try {
@@ -362,11 +449,12 @@ export class BlueskyPublisher implements Publisher {
       }
     }
     const text = textOf(input.content);
-    if (!text && images.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    if (!text && images.length === 0 && !videoEmbed) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
     const record: Record<string, unknown> = { $type: POST_COLLECTION, text, createdAt: new Date().toISOString() };
     const facets = linkFacets(text);
     if (facets.length > 0) record.facets = facets;
     if (images.length > 0) record.embed = { $type: 'app.bsky.embed.images', images };
+    if (videoEmbed) record.embed = videoEmbed;
     try {
       const answer = await this.xrpc.call<{ uri?: unknown }>(session.pds, 'POST', 'com.atproto.repo.createRecord', { token: session.accessJwt, json: { repo: session.did, collection: POST_COLLECTION, record } });
       if (typeof answer.uri !== 'string' || !answer.uri.startsWith('at://')) return { kind: 'unknown', code: 'NO_URI' };
