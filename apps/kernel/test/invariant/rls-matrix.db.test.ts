@@ -42,6 +42,7 @@ const MACHINERY = new Set([
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_social.label',
+  'crove_social.link_preview',
   'crove_social.post_label',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
@@ -484,6 +485,10 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   // A metrics snapshot of a published variant (S8, issue #238): append-only, one per capture key.
   // An org's label for posts (#639): a name and a colour from the app's palette.
   'crove_social.label': { make: (o) => ({ row: socialLabelRow(o) }) },
+  // A link's preview card (#641), cached per org and URL: asked for by a member, filled in by the worker.
+  'crove_social.link_preview': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), url: `https://example.com/rls-${tag()}`, url_sha256: hex64(), status: 'pending', requested_at: new Date().toISOString() } }),
+  },
   'crove_social.metric_snapshot': {
     make: (o) => {
       const { setup, variant } = socialVariantRows(o);
