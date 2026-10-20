@@ -80,7 +80,7 @@ describe('ThreadsRefresher', () => {
 });
 
 describe('ThreadsPublisher', () => {
-  it('waits an hour with nothing created when the publishing quota is used up (#743)', async () => {
+  it('waits hours with nothing created when the publishing quota is used up (#743)', async () => {
     const { fetchImpl, calls } = threads({ [`GET /v1.0/${USER}/threads_publishing_limit`]: [{ body: { data: [{ quota_usage: 250, config: { quota_total: 250, quota_duration: 86400 } }] } }] });
     expect(await new ThreadsPublisher(fetchImpl, fast).publish(input())).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED' });
     expect(calls).toEqual([]);

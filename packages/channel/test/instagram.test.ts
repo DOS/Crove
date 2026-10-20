@@ -78,13 +78,13 @@ describe('InstagramConnector', () => {
 });
 
 describe('InstagramPublisher', () => {
-  it('waits an hour with nothing created when the publishing quota is used up, and posts while some is left (#743)', async () => {
+  it('waits hours with nothing created when the publishing quota is used up, and posts while some is left (#743)', async () => {
     const full = graph({ [`GET /${IG}/content_publishing_limit`]: [{ body: { data: [{ quota_usage: 100, config: { quota_total: 100, quota_duration: 86400 } }] } }] });
     const before = Date.now();
     const result = await new InstagramPublisher(APP, full.fetchImpl, fast).publish(input());
     expect(result).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED' });
     const at = (result as { retryAt?: Date }).retryAt?.getTime() ?? 0;
-    expect(at - before).toBeGreaterThanOrEqual(59 * 60 * 1000);
+    expect(at - before).toBeGreaterThanOrEqual(5 * 60 * 60 * 1000 - 1000);
     expect(full.quota).toEqual([`GET /${IG}/content_publishing_limit`]);
     expect(full.calls).toEqual([]);
     const left = graph({
