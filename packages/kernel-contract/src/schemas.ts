@@ -908,6 +908,21 @@ export const zSocialSnippet = z.object({
 const zSnippetFields = { name: z.string().trim().min(1).max(100), body: z.string().trim().min(1).max(10_000), provider: z.string().min(1).max(32).nullable(), isTemplate: z.boolean() };
 export const zSocialSnippetCreate = z.strictObject({ ...zSnippetFields, provider: zSnippetFields.provider.optional(), isTemplate: z.boolean().optional() });
 export const zSocialSnippetUpdate = z.strictObject({ snippetId: zId, ...zSnippetFields });
+// One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
+export const zSocialActivityItem = z.object({
+  id: z.string(),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'published', 'failed', 'cancelled']),
+  at: z.string(),
+  userId: zId.nullable(),
+  name: z.string().nullable(),
+  variantId: zId.nullable(),
+  body: z.string().nullable(),
+  decision: z.string().nullable(),
+  editedAt: z.string().nullable(),
+  editable: z.boolean(),
+  url: z.string().nullable(),
+  code: z.string().nullable(),
+});
 
 export const zSocialLibraryUse = z.object({ postId: zId, status: z.string(), excerpt: z.string(), updatedAt: z.string() });
 
