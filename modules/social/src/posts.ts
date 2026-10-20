@@ -20,7 +20,7 @@ import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } fr
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { publishingCommands } from './publishing.ts';
-import { libraryQueries } from './library.ts';
+import { libraryQueries, likeTerm } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
 import { approvalsRequired, decisionsOf, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
@@ -932,12 +932,41 @@ export const postList = defineQuery({
     from: z.iso.datetime({ offset: true }).optional(),
     to: z.iso.datetime({ offset: true }).optional(),
     status: z.enum(['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled']).optional(),
+    // The Social home's lists (#574): posts with a channel in review; drafts with none in review; posts that went out
+    // or stopped.
+    stage: z.enum(['review', 'drafts', 'done']).optional(),
+    // Posts with a live channel on this connection.
+    connectionId: zId.optional(),
+    // In the post's or a channel's own text or title; wildcards are matched as themselves.
+    search: z.string().trim().min(1).max(200).optional(),
+    // The last post of the previous page, newest change first.
+    before: z.strictObject({ updatedAt: z.iso.datetime({ offset: true }), postId: zId }).optional(),
     limit: z.number().int().min(1).max(200).optional(),
   }),
   access: ALL,
   handler: async (ctx, input): Promise<PostView[]> => {
     let q = ctx.trx.selectFrom('crove_social.post as p').select('p.id').where('p.org_id', '=', ctx.orgId);
     if (input.status) q = q.where('p.status', '=', input.status);
+    const variantWhere = (status: 'in_review' | null) =>
+      sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status ${status ? sql`= ${status}` : sql`<> 'cancelled'`}${
+        input.connectionId && !status ? sql` AND v.channel_connection_id = ${input.connectionId}::uuid` : sql``
+      })`;
+    // In review on the chosen channel when one is chosen: the same variant, not any of the post's.
+    if (input.stage === 'review') q = q.where(input.connectionId ? sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status = 'in_review' AND v.channel_connection_id = ${input.connectionId}::uuid)` : variantWhere('in_review'));
+    if (input.stage === 'drafts') q = q.where('p.status', '=', 'draft').where(sql<boolean>`NOT ${variantWhere('in_review')}`);
+    if (input.stage === 'done') q = q.where('p.status', 'in', ['published', 'partially_published', 'failed', 'publishing', 'cancelled']);
+    if (input.connectionId) q = q.where(variantWhere(null));
+    if (input.search) {
+      const term = likeTerm(input.search);
+      q = q.where(
+        sql<boolean>`(p.body ILIKE ${term} OR p.title ILIKE ${term} OR EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND (v.body ILIKE ${term} OR v.title ILIKE ${term})))`,
+      );
+    }
+    // Ordered and paged by the change time as the answer carries it (milliseconds), so a page boundary inside one
+    // millisecond neither repeats nor skips a post.
+    const changed = sql`date_trunc('milliseconds', p.updated_at)`;
+    const before = input.before;
+    if (before) q = q.where(sql<boolean>`(${changed}, p.id) < (${new Date(Date.parse(before.updatedAt))}::timestamptz, ${before.postId}::uuid)`);
     if (input.from || input.to) {
       q = q.where((eb) =>
         eb.exists(
@@ -957,7 +986,7 @@ export const postList = defineQuery({
         ),
       );
     }
-    const rows = await q.orderBy('p.updated_at', 'desc').orderBy('p.id', 'desc').limit(input.limit ?? 50).execute();
+    const rows = await q.orderBy(changed, 'desc').orderBy('p.id', 'desc').limit(input.limit ?? 50).execute();
     return viewPosts(
       ctx,
       rows.map((r) => r.id),

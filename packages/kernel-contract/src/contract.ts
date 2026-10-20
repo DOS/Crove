@@ -174,7 +174,20 @@ export const contract = {
   social: {
     posts: {
       list: oc
-        .input(z.object({ from: z.iso.datetime({ offset: true }).optional(), to: z.iso.datetime({ offset: true }).optional(), status: z.enum(SOCIAL_POST_STATUSES).optional(), limit: z.number().int().min(1).max(200).optional() }))
+        .input(
+          z.object({
+            from: z.iso.datetime({ offset: true }).optional(),
+            to: z.iso.datetime({ offset: true }).optional(),
+            status: z.enum(SOCIAL_POST_STATUSES).optional(),
+            // The Social home's lists: a channel in review; drafts with none in review; went out or stopped.
+            stage: z.enum(['review', 'drafts', 'done']).optional(),
+            connectionId: zId.optional(),
+            search: z.string().trim().min(1).max(200).optional(),
+            // The last post of the previous page (newest change first).
+            before: z.strictObject({ updatedAt: z.iso.datetime({ offset: true }), postId: zId }).optional(),
+            limit: z.number().int().min(1).max(200).optional(),
+          }),
+        )
         .output(z.array(zSocialPost)),
       get: oc.input(z.object({ postId: zId })).output(zSocialPost),
       // A retry with the same idempotencyKey returns the first result instead of a second post.
