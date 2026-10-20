@@ -19,6 +19,9 @@ export interface PreviewContent {
   cover?: Cover | null;
   // The channel's post type (#644): a Story shows only its image or video, in a phone frame.
   postType?: string;
+  // A Threads poll's options and topic tag (#711).
+  poll?: readonly string[];
+  topicTag?: string;
 }
 
 function hostOf(link: string): string {
@@ -209,7 +212,17 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
     <div className={cn('rounded-xl border bg-background p-3', rule.layout === 'short' && 'space-y-0')}>
       {header}
       {title && <p className="mt-3 text-sm font-semibold text-foreground">{title}</p>}
+      {content.topicTag && <p className="mt-2 text-xs font-medium text-link">{content.topicTag}</p>}
       <div className="mt-2">{body}</div>
+      {content.poll && content.poll.length > 0 && (
+        <ul className="mt-2 space-y-1" aria-label={t('previewPoll')}>
+          {content.poll.map((option, i) => (
+            <li key={i} className="rounded-full border px-3 py-1 text-xs text-foreground">
+              {option || '\u00a0'}
+            </li>
+          ))}
+        </ul>
+      )}
       <Media media={content.media} layout="feed" max={rule.gridMax} />
       {card}
     </div>
