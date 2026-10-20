@@ -2061,6 +2061,7 @@ export const vi = {
     composeSubtitle: 'Viết nội dung chung, chọn kênh, viết riêng cho kênh nào cần.',
     sharedText: 'Nội dung chung',
     sharedTextPlaceholder: 'Bạn muốn nói gì?',
+    hashtagSuggestions: 'Hashtag từng hiệu quả:',
     titleField: 'Tiêu đề',
     titlePlaceholder: 'Tiêu đề (YouTube, Zalo OA)',
     link: 'Liên kết',

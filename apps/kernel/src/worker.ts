@@ -471,6 +471,11 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await boss.work<AgentDispatchJob & { type?: string }>(QUEUES.socialNotify, { batchSize: 1 }, async ([job]) => {
       if (!job) return;
       // A client's answer on a review link may settle variants waiting for it (#770), before the team is told.
+      // A member who lost the right to make links (#625): their review and report links stop working.
+      if (job.data.type === 'kernel.member.removed' || job.data.type === 'kernel.member.role_changed') {
+        await deps.runtime.execute('social.links.revoke_for_member', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.links' }, orgId: job.data.orgId });
+        return;
+      }
       if (job.data.type === 'social.review.answered') {
         await deps.runtime.execute('social.review.client_settle', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.review' }, orgId: job.data.orgId });
       }
@@ -694,7 +699,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           const priorities = finance ? await extractPriorities(trx, rows) : new Map<OutboxRow, number>();
           // A failed send rolls back the claim; singletonKey makes the retry idempotent.
           await Promise.all(
-            rows.map((row) => {
+            rows.map(async (row) => {
               if (!finance && (row.type === 'kernel.file.ingested' || row.type === 'kernel.file.reextract_requested' || row.type === 'finance.portal_list.import_requested')) {
                 return null;
               }
@@ -757,6 +762,17 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   retryBackoff: true,
                 });
               }
+              // A post sent for review also goes to the content manager agent's triage (#799), besides the notices.
+              const triage =
+                social && row.type === 'social.post.submitted'
+                  ? boss.send(QUEUES.agentDispatch, { orgId: row.org_id, eventId: row.event_id } satisfies AgentDispatchJob, {
+                      singletonKey: `${row.org_id}:${row.event_id}`,
+                      retryLimit: AGENT_RETRY_LIMIT,
+                      retryDelay: 20,
+                      retryBackoff: true,
+                    })
+                  : null;
+              if (triage) await triage;
               if (social && NOTIFYING.has(row.type)) {
                 return boss.send(QUEUES.socialNotify, { orgId: row.org_id, eventId: row.event_id, type: row.type } satisfies AgentDispatchJob & { type: string }, {
                   singletonKey: `${row.org_id}:${row.event_id}`,

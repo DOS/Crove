@@ -11,14 +11,15 @@
 // First comment (#609): a reply to the account's own post, made the same way (a TEXT container with reply_to_id, then
 // threads_publish); replying needs threads_manage_replies.
 import { createHash } from 'node:crypto';
-import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import type { AccountMetricsInput, AccountMetricsResult, CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 import { QUOTA_RETRY_MS, quotaExhausted } from './instagram.ts';
 
 export const THREADS_HOSTS = ['graph.threads.net'] as const;
-export const THREADS_SCOPES = ['threads_basic', 'threads_content_publish', 'threads_manage_replies'] as const;
+// threads_manage_insights (#819): post counts and the account's followers; a channel connected before asks again.
+export const THREADS_SCOPES = ['threads_basic', 'threads_content_publish', 'threads_manage_replies', 'threads_manage_insights'] as const;
 const API = 'https://graph.threads.net';
 const VERSION = 'v1.0';
 const WAIT_MS = 15_000;
@@ -258,6 +259,23 @@ export class ThreadsPublisher implements Publisher {
 
   // A post's counts (plan §3.6, #744): views, likes, replies, and reposts, quotes and shares together, from the media
   // insights endpoint (threads_manage_insights). A post that is gone, or insights not granted, give no counts.
+  // The account's followers (#819), from threads_insights (followers_count is a total, not a daily series).
+  async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { refused: 'token_expired' };
+    if (!NUMERIC_ID.test(input.externalAccountId)) return null;
+    try {
+      const answer = await this.client.call<{ data?: { name?: unknown; total_value?: { value?: unknown } }[] }>('GET', `${VERSION}/${input.externalAccountId}/threads_insights`, { token, params: { metric: 'followers_count' } });
+      const value = (answer.data ?? []).find((r) => r.name === 'followers_count')?.total_value?.value;
+      return { followers: typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null };
+    } catch (error) {
+      const result = threadsResult(error);
+      if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
+      if (result.kind === 'rejected' && result.error === 'permission') return { refused: 'permission' };
+      return null;
+    }
+  }
+
   async metrics(input: MetricsInput): Promise<MetricsResult> {
     const token = tokenIn(input.secret);
     if (!token) return { refused: 'token_expired' };

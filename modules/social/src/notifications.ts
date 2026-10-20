@@ -41,6 +41,9 @@ export const NOTIFYING_EVENTS = [
   'social.post.assigned',
   'social.review.reminder',
   'social.feed.paused',
+  // Not a notice: a member's links stop working when they lose the right to make them (#625).
+  'kernel.member.removed',
+  'kernel.member.role_changed',
 ] as const;
 
 function requireUser(ctx: Pick<CommandContext, 'actor'>): string {

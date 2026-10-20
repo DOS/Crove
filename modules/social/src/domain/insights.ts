@@ -148,6 +148,30 @@ export function hashtagsOf(text: string): string[] {
   return [...out];
 }
 
+// Hashtags to suggest while writing (#818): the org's hashtags whose posts did better than their channel's median,
+// best first (the strongest channel's ratio, then the most posts), leaving out the ones the text holds already. With
+// connectionId, that channel's alone. Deterministic, from the What works groups.
+export function hashtagSuggestions(
+  channels: readonly Pick<ChannelInsights, 'connectionId' | 'byHashtag'>[],
+  text: string,
+  options: { connectionId?: string | null; max?: number } = {},
+): string[] {
+  const used = new Set(hashtagsOf(text));
+  const best = new Map<string, { ratio: number; posts: number }>();
+  for (const c of channels) {
+    if (options.connectionId && c.connectionId !== options.connectionId) continue;
+    for (const g of c.byHashtag) {
+      if (g.ratio === null || g.ratio <= 1 || used.has(g.key)) continue;
+      const seen = best.get(g.key);
+      if (!seen || g.ratio > seen.ratio || (g.ratio === seen.ratio && g.posts > seen.posts)) best.set(g.key, { ratio: g.ratio, posts: g.posts });
+    }
+  }
+  return [...best.entries()]
+    .sort((a, b) => b[1].ratio - a[1].ratio || b[1].posts - a[1].posts || (a[0] < b[0] ? -1 : 1))
+    .slice(0, options.max ?? 8)
+    .map(([tag]) => tag);
+}
+
 export function median(values: readonly number[]): number {
   if (values.length === 0) return 0;
   const s = [...values].sort((a, b) => a - b);
