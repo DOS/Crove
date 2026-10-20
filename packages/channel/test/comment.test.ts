@@ -34,7 +34,10 @@ function fake(routes: Record<string, Answer[]>) {
     const route = `${init?.method ?? 'GET'} ${url.host}${url.pathname}`;
     const raw = init?.body;
     calls.push({ route, url, body: typeof raw === 'string' ? bodyOf(raw) : raw, auth: new Headers(init?.headers).get('authorization') });
-    const answer = routes[route]?.shift() ?? { status: 500, body: { message: `no answer for ${route}` } };
+    // A Bluesky DID's document names a Bluesky-hosted PDS unless a test says otherwise (#804).
+    const did = url.host === 'plc.directory' ? url.pathname.slice(1) : null;
+    const hosted: Answer | null = did ? { body: { id: did, service: [{ id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: 'https://morel.us-east.host.bsky.network' }] } } : null;
+    const answer = routes[route]?.shift() ?? hosted ?? { status: 500, body: { message: `no answer for ${route}` } };
     if (answer.network) throw new TypeError('fetch failed');
     return new Response(answer.body === undefined ? null : JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json', ...answer.headers } });
   };
