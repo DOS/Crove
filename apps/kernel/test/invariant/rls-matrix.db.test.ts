@@ -42,6 +42,8 @@ const MACHINERY = new Set([
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_social.post_comment',
+  'crove_social.review_feedback',
+  'crove_social.review_link',
   'crove_social.snippet',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
@@ -109,6 +111,10 @@ const channelConnectionRow = (o: { id: string; owner: string }) => ({
 // Crove Social (S3): a post, and a variant of it for a fresh channel connection (one variant per connection).
 const ZERO_HASH = `sha256:${'0'.repeat(64)}`;
 const socialPostRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), body: 'RLS matrix post' });
+const socialReviewLinkRow = (o: { id: string; owner: string }) => {
+  const post = socialPostRow(o);
+  return { post, row: { org_id: o.id, id: randomUUID(), post_id: post.id, token_sha256: hex64(), created_by: o.owner, expires_at: '2099-01-01T00:00:00Z' } };
+};
 const socialVariantRows = (o: { id: string; owner: string }) => {
   const connection = channelConnectionRow(o);
   const post = socialPostRow(o);
@@ -536,6 +542,28 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     },
   },
   // A saved snippet of text (#584): hashtags, a signature or a whole post to start from.
+  // What a client said through a review link (#589): only the review definer adds rows, for a client with the link;
+  // members read them.
+  'crove_social.review_feedback': {
+    make: (o) => {
+      const link = socialReviewLinkRow(o);
+      return {
+        setup: [
+          { table: 'crove_social.post', values: link.post },
+          { table: 'crove_social.review_link', values: link.row },
+        ],
+        row: { org_id: o.id, link_id: link.row.id, post_id: link.post.id, reviewer_name: 'RLS matrix client', verdict: 'comment', body: 'RLS matrix feedback' },
+      };
+    },
+    noInsertControl: 'only the review definer adds rows, for a client holding the link; tenant roles may only read them',
+  },
+  // A client review link of a post (#589): the hash of its token, its expiry and its revocation.
+  'crove_social.review_link': {
+    make: (o) => {
+      const link = socialReviewLinkRow(o);
+      return { setup: [{ table: 'crove_social.post', values: link.post }], row: link.row };
+    },
+  },
   'crove_social.snippet': { make: (o) => ({ row: { org_id: o.id, name: `rls-${tag()}`, body: '#rls', created_by: o.owner } }) },
 };
 
