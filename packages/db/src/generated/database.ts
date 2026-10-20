@@ -795,6 +795,7 @@ export interface SocialChannelPolicyTable {
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
   review_reminders: Generated<boolean>;
   short_links: Generated<boolean>;
+  four_eyes: Generated<boolean>;
 }
 
 /** crove_social.feed_item */

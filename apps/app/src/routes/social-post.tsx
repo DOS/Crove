@@ -873,7 +873,10 @@ export function SocialComposePage() {
   // Owners and admins may approve their own post: for one written by a person (no AI text), one action approves it and
   // schedules it (#638). A channel whose policy needs another reviewer still waits for them.
   const { canDecide } = useRole(slug);
-  const oneStep = canDecide && !aiUsed;
+  // Not where four-eyes (#740) asks for another reviewer: the author's approval would be refused.
+  const policies = useQuery({ ...orpc.social.policies.list.queryOptions({ input: {} }), enabled: canDecide });
+  const fourEyes = new Set((policies.data ?? []).filter((p) => p.fourEyes).map((p) => p.connectionId));
+  const oneStep = canDecide && !aiUsed && policies.isSuccess && !selected.some((c) => fourEyes.has(c.id));
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !blocking && !create.isPending) {
       e.preventDefault();
@@ -1071,6 +1074,9 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
   // The reviewer may still ask for changes or reject such a channel, which ends the round; only approving it again is
   // refused.
   const mine = (v: Variant) => self !== undefined && v.review.approvedBy.includes(self);
+  // Four-eyes (#740): on these channels the author may not approve their own post.
+  const ownPost = self !== undefined && post.authorUserId === self;
+  const barred = (v: Variant) => ownPost && v.review.fourEyes;
   const waiting = inReview;
   const [unticked, setUnticked] = useState<string[]>([]);
   const picked = waiting.map((v) => v.id).filter((id) => !unticked.includes(id));
@@ -1082,7 +1088,7 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
         decision,
         ...(comment.trim() ? { comment: comment.trim() } : {}),
         // What this reviewer sees: a newer revision is refused, never approved by mistake.
-        variants: waiting.filter((v) => picked.includes(v.id) && (decision !== 'approved' || !mine(v))).map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })),
+        variants: waiting.filter((v) => picked.includes(v.id) && (decision !== 'approved' || (!mine(v) && !barred(v)))).map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })),
       }),
     onSuccess: () => {
       setComment('');
@@ -1092,11 +1098,13 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
   });
   if (inReview.length === 0) return null;
   const done = inReview.filter(mine);
-  const approvable = waiting.filter((v) => picked.includes(v.id) && !mine(v));
+  const approvable = waiting.filter((v) => picked.includes(v.id) && !mine(v) && !barred(v));
+  const others = inReview.filter(barred);
 
   return (
     <Card className="block space-y-3 border-warning/40 p-4">
       <p className="text-sm font-medium text-foreground">{t('reviewTitle')}</p>
+      {others.length > 0 && <p className="text-xs text-subtle-foreground">{t('reviewFourEyes', { channels: others.map((v) => names.get(v.connectionId) ?? providerName(v.provider)).join(', ') })}</p>}
       {done.length > 0 && <p className="text-xs text-subtle-foreground">{t('reviewYouApproved', { channels: done.map((v) => names.get(v.connectionId) ?? providerName(v.provider)).join(', ') })}</p>}
       {waiting.length > 0 && (
         <div className="space-y-1.5">
