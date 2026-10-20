@@ -434,6 +434,9 @@ export function SocialPage() {
                 {t('import.open')}
               </Link>
             )}
+            <Link to="/o/$slug/social/snippets" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+              {t('snippets.title')}
+            </Link>
             {!canWrite ? null : noChannels ? (
               <Button size="lg" disabled>
                 {t('compose')}

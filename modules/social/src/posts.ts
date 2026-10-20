@@ -21,6 +21,7 @@ import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { activityCommands, activityQueries } from './activity.ts';
 import { publishingCommands } from './publishing.ts';
+import { snippetCommands, snippetQueries } from './snippets.ts';
 import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
@@ -1164,6 +1165,7 @@ export const socialCommands = [
   ...evergreenCommands,
   ...commentCommands,
   ...policyCommands,
+  ...snippetCommands,
   ...reviewLinkCommands,
   ...activityCommands,
 ];
@@ -1197,4 +1199,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...reviewLinkQueries, ...activityQueries];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...activityQueries, ...reviewLinkQueries];

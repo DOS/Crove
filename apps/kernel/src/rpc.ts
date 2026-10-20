@@ -409,6 +409,12 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         summary: os.social.metrics.summary.handler(socialQuery('social.metrics.summary')),
         export: os.social.metrics.export.handler(socialCommand('social.metrics.export')),
       },
+      snippets: {
+        list: os.social.snippets.list.handler(socialQuery('social.snippet.list')),
+        create: os.social.snippets.create.handler(socialCommand('social.snippet.create')),
+        update: os.social.snippets.update.handler(socialCommand('social.snippet.update')),
+        remove: os.social.snippets.remove.handler(socialCommand('social.snippet.delete')),
+      },
       reviewLinks: {
         list: os.social.reviewLinks.list.handler(socialQuery('social.review_link.list')),
         create: os.social.reviewLinks.create.handler(socialCommand('social.review_link.create')),

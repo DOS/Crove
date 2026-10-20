@@ -69,6 +69,7 @@ export interface CroveSocialSchema {
   'crove_social.queue_slot': SocialQueueSlotTable;
   'crove_social.review_feedback': SocialReviewFeedbackTable;
   'crove_social.review_link': SocialReviewLinkTable;
+  'crove_social.snippet': SocialSnippetTable;
 }
 
 /** crove_finance.account */
@@ -850,4 +851,17 @@ export interface SocialReviewLinkTable {
   expires_at: ColumnType<Date, Date | string, NotGranted>;
   revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   revoked_by: string | null;
+}
+
+/** crove_social.snippet */
+export interface SocialSnippetTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  name: string;
+  body: string;
+  provider: string | null;
+  is_template: Generated<boolean>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
