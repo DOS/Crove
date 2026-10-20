@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calendarItems, dayId, onDay, startOfWeek, viewDays } from '../src/lib/social-calendar.ts';
+import { calendarItems, dayId, notesByDay, onDay, startOfWeek, viewDays } from '../src/lib/social-calendar.ts';
 
 type Post = Parameters<typeof calendarItems>[0][number];
 
@@ -33,5 +33,11 @@ describe('Social calendar (#580)', () => {
       ['a', '2026-10-22T02:00:00.000Z', false],
       ['b', '2026-10-25T02:00:00.000Z', true],
     ]);
+  });
+it('puts a note on every day it covers, both ends included (#794)', () => {
+    const days = viewDays('week', new Date(2026, 9, 21));
+    const byDay = notesByDay([{ id: 'sale', startsOn: '2026-10-20', endsOn: '2026-10-22' }, { id: 'later', startsOn: '2026-11-01', endsOn: '2026-11-01' }], days);
+    expect([...byDay.keys()]).toEqual(['2026-10-20', '2026-10-21', '2026-10-22']);
+    expect(byDay.get('2026-10-21')?.map((n) => n.id)).toEqual(['sale']);
   });
 });

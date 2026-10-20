@@ -57,6 +57,7 @@ import {
   zSocialSchedule,
   zSocialVariantUpdate,
   zSocialChannelInput,
+  SOCIAL_LABEL_COLORS,
   SOCIAL_POST_STATUSES,
   MAX_BATCH_FILES,
   zBatchFile,
@@ -370,6 +371,25 @@ export const contract = {
       list: oc.input(z.object({})).output(z.array(z.object({ id: zId, name: z.string(), connectionIds: z.array(zId), updatedAt: z.string() }))),
       save: oc.input(z.strictObject({ setId: zId.optional(), name: z.string().trim().min(1).max(80), connectionIds: z.array(zId).min(1).max(20) })).output(z.object({ setId: zId })),
       remove: oc.input(z.strictObject({ setId: zId })).output(z.object({ setId: zId, removed: z.boolean() })),
+    },
+    // Notes on calendar dates (#794): owners, admins and members save and remove them; everyone reads the ones that
+    // overlap the days shown.
+    calendarNotes: {
+      list: oc
+        .input(z.strictObject({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+        .output(z.array(z.object({ id: zId, startsOn: z.string(), endsOn: z.string(), title: z.string(), color: z.enum(SOCIAL_LABEL_COLORS), updatedBy: zId, updatedAt: z.string() }))),
+      save: oc
+        .input(
+          z.strictObject({
+            noteId: zId.optional(),
+            startsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+            endsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+            title: z.string().trim().min(1).max(120),
+            color: z.enum(SOCIAL_LABEL_COLORS).optional(),
+          }),
+        )
+        .output(z.object({ noteId: zId })),
+      remove: oc.input(z.strictObject({ noteId: zId })).output(z.object({ noteId: zId, removed: z.boolean() })),
     },
     // The saved brand voice for AI drafts (#741): the org's and each channel's.
     brandVoices: {

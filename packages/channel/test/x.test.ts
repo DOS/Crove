@@ -254,3 +254,26 @@ describe('XPublisher', () => {
     expect(comparableText('Việt'.normalize('NFD'))).toBe('Việt');
   });
 });
+
+describe('X post counts (#797)', () => {
+  const POST = '1445880548472328192';
+  const metricsInput = { externalAccountId: USER, secret: SECRET, externalId: POST };
+
+  it('reads nothing unless the deployment turns it on, since X bills every read', () => {
+    expect(new XPublisher(APP).metrics).toBeUndefined();
+    expect(new XPublisher(APP, undefined, {}, { metrics: true }).metrics).toBeTypeOf('function');
+  });
+
+  it('maps public_metrics, counting quotes with reposts', async () => {
+    const { fetchImpl, calls } = x({ 'GET api.x.com/2/tweets/1445880548472328192': [{ body: { data: { id: POST, public_metrics: { like_count: 12, reply_count: 3, retweet_count: 4, quote_count: 1, bookmark_count: 2, impression_count: 900 } } } }] });
+    expect(await new XPublisher(APP, fetchImpl, {}, { metrics: true }).metrics?.(metricsInput)).toEqual({ metrics: { reactions: 12, comments: 3, shares: 5, saves: 2, impressions: 900 } });
+    expect(calls[0]?.url.searchParams.get('tweet.fields')).toBe('public_metrics');
+  });
+
+  it('tells a deleted post, a dead token and an outage apart', async () => {
+    const ask = (answer: { status?: number; body?: unknown }) => new XPublisher(APP, x({ 'GET api.x.com/2/tweets/1445880548472328192': [answer] }).fetchImpl, {}, { metrics: true }).metrics?.(metricsInput);
+    expect(await ask({ body: { errors: [{ title: 'Not Found Error', type: 'https://api.x.com/2/problems/resource-not-found' }] } })).toEqual({ refused: 'gone' });
+    expect(await ask({ status: 401, body: { title: 'Unauthorized', type: 'about:blank', status: 401 } })).toEqual({ refused: 'token_expired' });
+    expect(await ask({ status: 503, body: {} })).toBeNull();
+  });
+});
