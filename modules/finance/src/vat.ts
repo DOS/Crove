@@ -118,8 +118,9 @@ function invoiceView(
 
 // The recorded documents of one direction in the period, except those voided by a reversal (#165), oldest first:
 // purchases for the input side, by posting date (#478), and sales (#313) for the output side, by invoice date. The
-// party is the supplier or the customer. Each document has exactly one entry of its own (journal_entry is unique by
-// source); a reversal is an entry of another source.
+// party is the supplier or the customer. Each document has exactly one entry of its own: journal_entry is unique by
+// source, and a document commits only together with its entry (purchase_document_entry, #560), so the inner join drops
+// none. A reversal is an entry of another source.
 async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: DocumentDirection): Promise<VatInvoiceView[]> {
   const periodDate = direction === 'purchase' ? 'j.entry_date' : 'd.invoice_date';
   const docs = await ctx.trx

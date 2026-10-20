@@ -18,7 +18,6 @@ export interface VatDeadline {
 }
 
 const DAY_MS = 86_400_000;
-const VIETNAM_OFFSET_MS = 7 * 3_600_000;
 
 function iso(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -26,11 +25,6 @@ function iso(date: Date): string {
 
 function utcDate(year: number, monthIndex: number, day: number): Date {
   return new Date(Date.UTC(year, monthIndex, day));
-}
-
-// Today's date in Vietnam.
-export function vietnamToday(now: Date = new Date()): string {
-  return iso(new Date(now.getTime() + VIETNAM_OFFSET_MS));
 }
 
 // Saturday and Sunday move to the following Monday.

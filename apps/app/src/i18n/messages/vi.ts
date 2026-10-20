@@ -383,6 +383,10 @@ export const vi = {
         title: 'Khớp ({count})',
         hint: 'Có trên cổng thuế và đã ghi sổ trong Crove với cùng số tiền.',
       },
+      declared_late: {
+        title: 'Hóa đơn kỳ trước kê khai vào kỳ này ({count})',
+        hint: 'Tháng của các hóa đơn này đã khóa sổ khi được duyệt nên chúng được ghi sổ và kê khai thuế GTGT vào kỳ này. Cổng thuế xếp hóa đơn theo ngày lập, nên hãy đối chiếu chúng với danh sách của kỳ chứa ngày lập.',
+      },
       void: {
         title: 'Đã hủy hoặc bị thay thế, Crove không có ({count})',
         hint: 'Đúng như mong đợi: hóa đơn không còn giá trị nên không cần ghi sổ.',
@@ -404,6 +408,8 @@ export const vi = {
       outsidePeriod: 'Ngoài kỳ',
       withoutTaxCode: 'Khớp không theo MST',
       duplicateInCrove: 'Trùng hóa đơn đã có trong Crove',
+      postedOn: 'Ghi sổ ngày {date}',
+      declaredInLaterPeriod: 'Ghi sổ ngày {date}, kê khai vào kỳ sau',
       duplicateRows: 'Lặp {count, plural, other {# lần}} trong danh sách',
     },
     differences: {

@@ -24,7 +24,7 @@ import {
 import { assertUsableAccounts, isInactiveDefaultRefusal } from './accounts.ts';
 import { postJournalEntry } from './ledger.ts';
 import { journalMemo } from './memo.ts';
-import { dateLabel, vietnamDate } from './period-lock.ts';
+import { databaseToday, dateLabel } from './period-lock.ts';
 
 function directionOf(payload: PurchaseProposal): DocumentDirection {
   return payload.direction ?? 'purchase';
@@ -118,8 +118,9 @@ async function assertDirection(ctx: CommandContext, payload: PurchaseProposal): 
 }
 
 // A posting date other than the invoice date (#478), checked before anything is written: only for a purchase, never
-// before the invoice date, never after today in Vietnam. Whether the invoice's own month is locked is checked once
-// the entry is posted (assertInvoiceMonthLocked), under the lock the posting guard holds.
+// before the invoice date, never after today in Vietnam (`today` by the database clock, as lock_period() counts
+// months). Whether the invoice's own month is locked is checked once the entry is posted (assertInvoiceMonthLocked),
+// under the lock the posting guard holds.
 export function latePostingRefusal(direction: DocumentDirection, issueDate: string, postingDate: string, today: string): DomainError | null {
   if (direction === 'sale') {
     return new DomainError('POSTING_DATE_NOT_ALLOWED', 422, 'Hóa đơn bán ra ghi sổ theo ngày lập hóa đơn, không chọn được ngày ghi sổ khác', { postingDate });
@@ -221,7 +222,8 @@ export const recordPurchase = defineCommand({
     // Posted later than its invoice date (#478); the invoice date itself is the ordinary case.
     const lateDate = postingDate !== undefined && postingDate !== invoice.issueDate ? postingDate : null;
     if (lateDate) {
-      const refusal = latePostingRefusal(direction, invoice.issueDate, lateDate, vietnamDate(ctx.now));
+      // Today by the database clock, as lock_period() counts it (period-lock.ts databaseToday).
+      const refusal = latePostingRefusal(direction, invoice.issueDate, lateDate, await databaseToday(ctx.trx));
       if (refusal) throw refusal;
     }
     // The checks shown in the Inbox are enforced here, not only in the UI.

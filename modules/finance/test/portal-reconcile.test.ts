@@ -31,21 +31,26 @@ const portal = (number: string, extra: Partial<PortalRow> = {}): PortalRow => ({
 });
 
 let id = 0;
-const crove = (number: string, extra: Partial<CroveInvoice> = {}): CroveInvoice => ({
-  kind: 'document',
-  id: `00000000-0000-7000-8000-${String(++id).padStart(12, '0')}`,
-  sellerTaxCode: SELLER,
-  sellerName: 'Nhà cung cấp',
-  template: '1',
-  series: 'C26TAA',
-  number,
-  issueDate: '2026-09-10',
-  currency: 'VND',
-  vatAmount: '100000',
-  total: '1100000',
-  sourceFileId: null,
-  ...extra,
-});
+// A document is posted on its invoice date unless the test says otherwise; a proposal has no posting date.
+const crove = (number: string, extra: Partial<CroveInvoice> = {}): CroveInvoice => {
+  const base: CroveInvoice = {
+    kind: 'document',
+    id: `00000000-0000-7000-8000-${String(++id).padStart(12, '0')}`,
+    sellerTaxCode: SELLER,
+    sellerName: 'Nhà cung cấp',
+    template: '1',
+    series: 'C26TAA',
+    number,
+    issueDate: '2026-09-10',
+    currency: 'VND',
+    vatAmount: '100000',
+    total: '1100000',
+    sourceFileId: null,
+    postingDate: null,
+    ...extra,
+  };
+  return 'postingDate' in extra ? base : { ...base, postingDate: base.kind === 'document' ? base.issueDate : null };
+};
 
 const outcomes = (rows: PortalRow[], invoices: CroveInvoice[]) =>
   reconcilePortalList(rows, invoices, PERIOD).items.map((i) => [i.portal?.number ?? i.crove?.number, i.outcome, i.crove?.kind ?? null]);
@@ -63,7 +68,7 @@ describe('reconcilePortalList', () => {
       ['3', 'in_inbox'],
       ['1', 'matched'],
     ]);
-    expect(result.summary).toEqual({ portalInvoices: 3, matched: 1, inInbox: 1, amountMismatch: 0, missing: 1, voidInCrove: 0, void: 0, notOnPortal: 1, duplicateRows: 0 });
+    expect(result.summary).toEqual({ portalInvoices: 3, matched: 1, inInbox: 1, amountMismatch: 0, missing: 1, voidInCrove: 0, void: 0, notOnPortal: 1, declaredLate: 0, duplicateRows: 0 });
   });
 
   it('does not match another seller, series or template, and normalizes numbers and series', () => {
@@ -155,6 +160,39 @@ describe('reconcilePortalList', () => {
   it('flags portal rows outside the period, and reports only Crove invoices of the period as not on the portal', () => {
     const result = reconcilePortalList([portal('1', { issueDate: '2026-10-01' })], [crove('1', { issueDate: '2026-10-01' }), crove('2', { issueDate: '2026-08-31' })], PERIOD);
     expect(result.items).toEqual([expect.objectContaining({ outcome: 'matched', outsidePeriod: true })]);
+  });
+});
+
+describe('late invoices (#478, #560)', () => {
+  // A September invoice approved after September was locked, posted on 1 October.
+  const late = { issueDate: '2026-09-20', postingDate: '2026-10-01' };
+  const OCTOBER = { from: '2026-10-01', to: '2026-10-31' };
+
+  it('matches a late invoice in its own period and says it is declared in the later period of its posting date', () => {
+    const result = reconcilePortalList([portal('1', { issueDate: '2026-09-20' })], [crove('1', late)], PERIOD);
+    expect(result.items).toEqual([expect.objectContaining({ outcome: 'matched', declaredInLaterPeriod: true, crove: expect.objectContaining({ postingDate: '2026-10-01' }) })]);
+    // Not on the list either: still Crove's invoice of the period, and still declared later.
+    expect(reconcilePortalList([], [crove('2', late)], PERIOD).items).toEqual([expect.objectContaining({ outcome: 'not_on_portal', declaredInLaterPeriod: true })]);
+    // An invoice posted on its own date is declared in its own period.
+    expect(reconcilePortalList([portal('3')], [crove('3')], PERIOD).items).toEqual([expect.objectContaining({ outcome: 'matched', declaredInLaterPeriod: false })]);
+  });
+
+  it('reports a late invoice in the period it was posted in as declared late there, not as missing from the portal', () => {
+    const result = reconcilePortalList([portal('5', { issueDate: '2026-10-05' })], [crove('4', late), crove('5', { issueDate: '2026-10-05' })], OCTOBER);
+    expect(result.items.map((i) => [i.crove?.number, i.outcome, i.outsidePeriod, i.declaredInLaterPeriod])).toEqual([
+      ['5', 'matched', false, false],
+      ['4', 'declared_late', true, false],
+    ]);
+    expect(result.summary).toMatchObject({ matched: 1, notOnPortal: 0, declaredLate: 1 });
+    // A proposal has no posting date and an invoice of an earlier period posted then is none of this period's.
+    expect(reconcilePortalList([], [crove('6', { issueDate: '2026-09-20', kind: 'proposal' }), crove('7', { issueDate: '2026-09-20' })], OCTOBER).items).toEqual([]);
+    // Posted after this period too: declared in neither this period nor its own.
+    expect(reconcilePortalList([], [crove('8', { issueDate: '2026-09-20', postingDate: '2026-11-02' })], OCTOBER).items).toEqual([]);
+  });
+
+  it('matches a late invoice to a row of the period it was posted in when that list happens to hold it', () => {
+    const result = reconcilePortalList([portal('9', { issueDate: '2026-09-20' })], [crove('9', late)], OCTOBER);
+    expect(result.items).toEqual([expect.objectContaining({ outcome: 'matched', outsidePeriod: true, declaredInLaterPeriod: false })]);
   });
 });
 

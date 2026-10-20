@@ -385,6 +385,10 @@ export const en = {
         title: 'Matched ({count})',
         hint: 'On the tax portal and booked in Crove with the same amount.',
       },
+      declared_late: {
+        title: 'Invoices of earlier periods declared in this one ({count})',
+        hint: 'Their month was locked when they were approved, so they are posted and declared for VAT in this period. The tax portal lists invoices by issue date: reconcile these with the list of the period of their issue date.',
+      },
       void: {
         title: 'Cancelled or replaced, not in Crove ({count})',
         hint: 'As expected: these invoices are no longer valid, so nothing is booked.',
@@ -406,6 +410,8 @@ export const en = {
       outsidePeriod: 'Outside the period',
       withoutTaxCode: 'Matched without tax code',
       duplicateInCrove: 'Duplicate of an invoice already in Crove',
+      postedOn: 'Posted on {date}',
+      declaredInLaterPeriod: 'Posted on {date}, declared in a later period',
       duplicateRows: 'Repeated {count, plural, one {# time} other {# times}} in the lists',
     },
     differences: {

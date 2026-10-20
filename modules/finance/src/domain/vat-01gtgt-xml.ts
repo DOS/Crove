@@ -127,13 +127,9 @@ function periodElements(period: VatPeriod): XmlElement[] {
 }
 
 export interface Vat01Options {
-  // The day the file is made, YYYY-MM-DD (Vietnam time); it is the return's date and the signing date.
+  // The day the file is made, YYYY-MM-DD (Vietnam time, @crove/kernel-contract vietnamToday); it is the return's date
+  // and the signing date.
   today: string;
-}
-
-// Today's date in Vietnam (UTC+7, no daylight saving).
-export function vietnamToday(now: Date = new Date()): string {
-  return new Date(now.getTime() + 7 * 3600_000).toISOString().slice(0, 10);
 }
 
 /** The 01/GTGT return of `input.period` for `taxpayer`, as the UTF-8 XML text HTKK reads. */
