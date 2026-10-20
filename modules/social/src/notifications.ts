@@ -229,7 +229,7 @@ async function mailNotifications(ctx: CommandContext, plan: Plan, created: reado
   const to = created.filter((c) => !offSet.has(c.user_id));
   if (to.length === 0) return 0;
   const { rows: people } = await sql<{ user_id: string; email: string | null }>`
-    SELECT user_id, email FROM crove_kernel.member_profiles(${to.map((c) => c.user_id)}::uuid[])`.execute(ctx.trx);
+    SELECT user_id, email FROM crove_kernel.member_emails(${to.map((c) => c.user_id)}::uuid[])`.execute(ctx.trx);
   const emails = new Map(people.filter((p) => p.email).map((p) => [p.user_id, p.email as string]));
   const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['slug', 'name']).where('org_id', '=', ctx.orgId).executeTakeFirst();
   if (!org) return 0;
@@ -273,18 +273,18 @@ export const notificationDispatch = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.eventId)
       .executeTakeFirst();
-    if (!event) return { sent: 0 };
+    if (!event) return { sent: 0, mailed: 0 };
     const plan = await planFor(ctx, event.type, event.payload);
-    if (!plan) return { sent: 0 };
+    if (!plan) return { sent: 0, mailed: 0 };
     const actor = event.actor_type === 'user' || event.actor_type === null ? event.actor_id : null;
     const wanted = [...new Set(plan.users)].filter((u) => u !== actor);
-    if (wanted.length === 0) return { sent: 0 };
+    if (wanted.length === 0) return { sent: 0, mailed: 0 };
     // Members now, who have not turned this kind off.
     const { rows } = await sql<{ user_id: string }>`
       SELECT m.user_id FROM crove_kernel.tenant_member m
       WHERE m.org_id = ${ctx.orgId} AND m.user_id = ANY(${wanted}::uuid[])
         AND NOT EXISTS (SELECT 1 FROM crove_social.notification_mute x WHERE x.org_id = m.org_id AND x.user_id = m.user_id AND x.kind = ${plan.kind})`.execute(ctx.trx);
-    if (rows.length === 0) return { sent: 0 };
+    if (rows.length === 0) return { sent: 0, mailed: 0 };
     const users = rows.map((r) => r.user_id);
     const inserted = await ctx.trx
       .insertInto('crove_social.notification')

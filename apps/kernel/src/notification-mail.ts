@@ -1,0 +1,45 @@
+// The Social notification mail (#579, template social.notification): what happened, to which post or channel, and a
+// link that opens it in Crove. The subject was written with the notification; nothing secret is in the mail.
+import type { MailTemplate, MailTemplateInput } from './mail-queue.ts';
+
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
+const oneLine = (text: string) => text.replace(/[\r\n\t]+/g, ' ').trim();
+// An app path the notification names: the org's post or channels page, nothing else.
+const PATH = /^\/o\/[a-z0-9][a-z0-9-]{0,62}\/social\/(channels|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+const LEAD: Record<string, string> = {
+  review_requested: 'Có một bài đang chờ bạn duyệt.',
+  decided_approved: 'Bài của bạn đã được duyệt.',
+  decided_changes_requested: 'Người duyệt đề nghị sửa bài của bạn.',
+  decided_rejected: 'Bài của bạn bị từ chối.',
+  failed: 'Một bài đăng không thành công.',
+  needs_attention: 'Một bài đăng cần bạn xử lý trước khi đăng tiếp.',
+  channel_expired: 'Một kênh đã hết hạn kết nối; bài lên lịch trên kênh này sẽ chờ đến khi bạn kết nối lại.',
+};
+
+export async function renderNotificationMail(input: MailTemplateInput): Promise<{ subject: string; text: string; html: string } | null> {
+  const { kind, org, post, channel, decision, path } = input.payload;
+  if (typeof kind !== 'string' || typeof org !== 'string' || typeof path !== 'string' || !PATH.test(path)) return null;
+  const lead = LEAD[kind === 'decided' ? `decided_${typeof decision === 'string' ? decision : ''}` : kind];
+  if (!lead) return null;
+  const url = `${input.publicUrl.replace(/\/+$/, '')}${path}`;
+  const open = path.endsWith('/channels') ? 'Mở trang kênh' : 'Mở bài viết';
+  const lines = [
+    lead,
+    typeof post === 'string' && post ? `Bài: ${oneLine(post)}` : null,
+    typeof channel === 'string' && channel ? `Kênh: ${oneLine(channel)}` : null,
+    `${open}: ${url}`,
+    '',
+    `Thư này được gửi từ Crove cho ${oneLine(org)}. Bạn có thể tắt email trong mục Thông báo của Social.`,
+  ].filter((l) => l !== null);
+  const html = `<!doctype html><html lang="vi"><body style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#18181b;line-height:1.5">
+<p style="margin:0 0 12px">${escapeHtml(lead)}</p>
+${typeof post === 'string' && post ? `<p style="margin:0 0 4px"><strong>Bài:</strong> ${escapeHtml(oneLine(post))}</p>` : ''}
+${typeof channel === 'string' && channel ? `<p style="margin:0 0 4px"><strong>Kênh:</strong> ${escapeHtml(oneLine(channel))}</p>` : ''}
+<p style="margin:16px 0"><a href="${escapeHtml(url)}" style="color:#b91c1c">${escapeHtml(open)}</a></p>
+<p style="font-size:12px;color:#71717a">Thư này được gửi từ Crove cho ${escapeHtml(oneLine(org))}. Bạn có thể tắt email trong mục Thông báo của Social.</p>
+</body></html>`;
+  return { subject: oneLine(input.subject ?? lead).slice(0, 200), text: lines.join('\n'), html };
+}
+
+export const notificationMailTemplate: MailTemplate = { render: renderNotificationMail };
