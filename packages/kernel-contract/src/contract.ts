@@ -30,6 +30,9 @@ import {
   zSocialMetricsRow,
   zSocialLibraryItem,
   zSocialLibraryUse,
+  zSocialSnippet,
+  zSocialSnippetCreate,
+  zSocialSnippetUpdate,
   zSocialQueueSet,
   zSocialSchedule,
   zSocialVariantUpdate,
@@ -260,6 +263,13 @@ export const contract = {
       summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional() })).output(z.array(zSocialMetricsRow)),
       // The window as a CSV file (UTF-8 with a byte order mark); every export is audited.
       export: oc.input(z.strictObject({ days: z.number().int().min(1).max(365) })).output(z.object({ filename: z.string(), csv: z.string(), truncated: z.boolean() })),
+    },
+    // Saved snippets (#584): members create them and change their own; owners and admins any.
+    snippets: {
+      list: oc.input(z.object({ provider: z.string().max(32).optional() })).output(z.array(zSocialSnippet)),
+      create: oc.input(zSocialSnippetCreate).output(z.object({ snippetId: zId })),
+      update: oc.input(zSocialSnippetUpdate).output(z.object({ snippetId: zId })),
+      remove: oc.input(z.strictObject({ snippetId: zId })).output(z.object({ snippetId: zId })),
     },
     // The media library (S9): the org's post images, newest first, and the posts that show one.
     media: {

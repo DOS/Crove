@@ -66,6 +66,7 @@ export interface CroveSocialSchema {
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.queue': SocialQueueTable;
   'crove_social.queue_slot': SocialQueueSlotTable;
+  'crove_social.snippet': SocialSnippetTable;
 }
 
 /** crove_finance.account */
@@ -806,5 +807,18 @@ export interface SocialQueueTable {
   time_zone: Generated<string>;
   paused: Generated<boolean>;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.snippet */
+export interface SocialSnippetTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  name: string;
+  body: string;
+  provider: string | null;
+  is_template: Generated<boolean>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }

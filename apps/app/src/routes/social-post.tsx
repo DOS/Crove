@@ -16,6 +16,7 @@ import { cn } from '@crove/ui/lib/utils';
 import type { Issue } from '@crove/mod-social/contract';
 import { MediaField, type MediaItem } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
+import { SnippetPicker } from '../components/social-snippets.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -226,6 +227,7 @@ function ChannelEditor({
   footer,
   connectionId,
   onAiUsed,
+  slug,
 }: {
   provider: string;
   channel: string;
@@ -237,6 +239,7 @@ function ChannelEditor({
   footer?: ReactNode;
   connectionId?: string;
   onAiUsed?: () => void;
+  slug?: string;
 }) {
   const t = useTranslations('social');
   const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl: base.linkUrl, media: mediaOfOwn(own, base) };
@@ -258,7 +261,8 @@ function ChannelEditor({
       {own.custom && (
         <div className="space-y-2">
           {hasTitle(provider) && <Input value={own.title} disabled={disabled} aria-label={t('titleField')} placeholder={base.title || t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
-          <Textarea value={own.body} disabled={disabled} rows={5} aria-label={t('ownTextPlaceholder')} placeholder={t('ownTextPlaceholder')} onChange={(e) => onChange({ ...own, body: e.target.value })} />
+          <Textarea id={`social-own-${connectionId ?? provider}`} value={own.body} disabled={disabled} rows={5} aria-label={t('ownTextPlaceholder')} placeholder={t('ownTextPlaceholder')} onChange={(e) => onChange({ ...own, body: e.target.value })} />
+          {slug && <SnippetPicker slug={slug} targetId={`social-own-${connectionId ?? provider}`} value={own.body} provider={provider} disabled={disabled} onChange={(body) => onChange({ ...own, body })} />}
           {!disabled && onAiUsed && (
             <AiRewrite
               text={own.body}
@@ -286,13 +290,14 @@ function ChannelEditor({
   );
 }
 
-function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false, onAiUsed }: { base: Base; onChange: (base: Base) => void; disabled: boolean; needsTitle: boolean; autoFocus?: boolean; onAiUsed?: () => void }) {
+function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false, onAiUsed, slug }: { base: Base; onChange: (base: Base) => void; disabled: boolean; needsTitle: boolean; autoFocus?: boolean; onAiUsed?: () => void; slug?: string }) {
   const t = useTranslations('social');
   return (
     <Card className="block space-y-3 p-4">
       <div className="space-y-1.5">
         <Label htmlFor="social-body">{t('sharedText')}</Label>
         <Textarea id="social-body" autoFocus={autoFocus} value={base.body} disabled={disabled} rows={7} placeholder={t('sharedTextPlaceholder')} onChange={(e) => onChange({ ...base, body: e.target.value })} />
+        {slug && <SnippetPicker slug={slug} targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />}
         {!disabled && onAiUsed && (
           <AiRewrite
             text={base.body}
@@ -441,7 +446,7 @@ export function SocialComposePage() {
       )}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
-          <SharedFields base={base} onChange={setBase} disabled={create.isPending} autoFocus needsTitle={selected.some((c) => hasTitle(c.provider))} onAiUsed={() => setAiUsed(true)} />
+          <SharedFields base={base} onChange={setBase} disabled={create.isPending} autoFocus needsTitle={selected.some((c) => hasTitle(c.provider))} onAiUsed={() => setAiUsed(true)} slug={slug} />
           <Card className="block p-4">
             <p className="mb-3 text-sm font-medium text-foreground">{t('pickChannels')}</p>
             {live.length === 0 ? (
@@ -501,6 +506,7 @@ export function SocialComposePage() {
           ) : (
             selected.map((c) => (
               <ChannelEditor
+                slug={slug}
                 key={c.id}
                 provider={c.provider}
                 channel={c.displayName}
@@ -1037,7 +1043,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
       )}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
-          <SharedFields base={base} onChange={setBase} disabled={!editable || save.isPending} needsTitle={p.variants.some((v) => hasTitle(v.provider))} onAiUsed={() => setAiUsed(true)} />
+          <SharedFields base={base} onChange={setBase} disabled={!editable || save.isPending} needsTitle={p.variants.some((v) => hasTitle(v.provider))} onAiUsed={() => setAiUsed(true)} slug={slug} />
           {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} />}
           {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
           {canWrite && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
@@ -1049,6 +1055,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             const decision = v.latestDecision;
             return (
               <ChannelEditor
+                slug={slug}
                 key={v.id}
                 provider={v.provider}
                 channel={names.get(v.connectionId) ?? providerName(v.provider)}

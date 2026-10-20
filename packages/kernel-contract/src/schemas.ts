@@ -892,6 +892,21 @@ export const zSocialPost = z.object({
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
 // A media library item (S9): an image of the org uploaded for posts, and how many posts show it.
 export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int() });
+// A saved snippet (#584): hashtags, a signature, or a whole post to start from (isTemplate).
+export const zSocialSnippet = z.object({
+  id: zId,
+  name: z.string(),
+  body: z.string(),
+  provider: z.string().nullable(),
+  isTemplate: z.boolean(),
+  createdBy: zId,
+  updatedAt: z.string(),
+  mine: z.boolean(),
+});
+const zSnippetFields = { name: z.string().trim().min(1).max(100), body: z.string().trim().min(1).max(10_000), provider: z.string().min(1).max(32).nullable(), isTemplate: z.boolean() };
+export const zSocialSnippetCreate = z.strictObject({ ...zSnippetFields, provider: zSnippetFields.provider.optional(), isTemplate: z.boolean().optional() });
+export const zSocialSnippetUpdate = z.strictObject({ snippetId: zId, ...zSnippetFields });
+
 export const zSocialLibraryUse = z.object({ postId: zId, status: z.string(), excerpt: z.string(), updatedAt: z.string() });
 
 export const zSocialMetricsRow = z.object({
