@@ -118,6 +118,10 @@ suite('social post assignment on PostgreSQL (#640)', () => {
     await expect(exec(o, other, 'social.post.assign', { postId, assigneeUserId: other, dueAt: null })).rejects.toMatchObject({ status: 403 });
     const stranger = await person('stranger');
     await expect(exec(o, o.owner, 'social.post.assign', { postId, assigneeUserId: stranger, dueAt: null })).rejects.toMatchObject({ code: 'ASSIGNEE_NOT_MEMBER' });
+    // A member of another org (here, the owner of a second org the caller also belongs to) is no member of this one.
+    const second = await org();
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [second.orgId, o.owner]));
+    await expect(exec(o, o.owner, 'social.post.assign', { postId, assigneeUserId: second.owner, dueAt: null })).rejects.toMatchObject({ code: 'ASSIGNEE_NOT_MEMBER' });
 
     // Someone assigned who has since left keeps the post until changed: its due date can still move.
     await exec(o, o.owner, 'social.post.assign', { postId, assigneeUserId: other, dueAt: null });
