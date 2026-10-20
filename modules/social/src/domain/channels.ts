@@ -15,6 +15,7 @@ export const PROVIDERS = [
   'x',
   'bluesky',
   'google_business',
+  'telegram',
 ] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
@@ -84,6 +85,9 @@ export const VIDEO_ONLY_ADAPTERS: ReadonlySet<Provider> = new Set<Provider>([]);
 // A longer text where a channel's photo posts take one (#710): TikTok sends a photo post's text as its description,
 // up to 4,000 characters, where a video's caption takes 2,200.
 export const PHOTO_BODY_MAX: Readonly<Partial<Record<Provider, number>>> = { tiktok: 4000 };
+// A shorter text where a channel's posts with media take one (#747): a Telegram caption is 1,024 characters, where a
+// message's text is 4,096.
+export const MEDIA_BODY_MAX: Readonly<Partial<Record<Provider, number>>> = { telegram: 1024 };
 
 // Where each adapter puts the post's link, so the checks count the text the platform receives:
 // - text: after a blank line at the end of the text, unless the text already holds it;
@@ -103,6 +107,7 @@ export const LINK_PLACEMENT: Readonly<Record<Provider, LinkPlacement>> = {
   bluesky: 'text',
   // The link goes as the call to action's URL (or an offer's redeem link), never in the text.
   google_business: 'apart',
+  telegram: 'text',
 };
 
 // The link as a whole: followed by the end, a space, or sentence punctuation and then the end or a space (the
@@ -144,6 +149,25 @@ export const COMMENT_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
 export function firstCommentOf(settings: Readonly<Record<string, unknown>> | undefined): string | null {
   const value = settings?.firstComment;
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+// Thread posts (#742): on Threads, X and Bluesky a variant may go on in up to 9 more parts after its text, posted as a
+// chain of replies to the account's own post (`settings.threadParts`, an array of strings). Each part is counted as a
+// post of that channel. A thread takes no first comment: its first reply would be the comment.
+export const THREAD_PARTS_MAX = 9;
+export const THREAD_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
+  sandbox: { max: 1000, count: 'graphemes', required: false },
+  threads: { max: 500, count: 'codepoints', required: false },
+  x: { max: 280, count: 'weighted', required: false },
+  bluesky: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
+};
+
+// The thread parts in a variant's settings, trimmed, or null when there are none. An entry that is not a string reads
+// as empty, so validation names it.
+export function threadPartsOf(settings: Readonly<Record<string, unknown>> | undefined): string[] | null {
+  const value = settings?.threadParts;
+  if (!Array.isArray(value) || value.length === 0) return null;
+  return value.map((part) => (typeof part === 'string' ? part.trim() : ''));
 }
 
 // Polls and topic tags (#711), in the variant's settings, on the channels that take them (Threads): `settings.poll`
@@ -275,7 +299,7 @@ export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> 
 
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
@@ -388,6 +412,18 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     media: { min: 0, max: 1, kinds: ['image'], mixed: false, maxVideos: 0, imageTypes: ['image/jpeg', 'image/png'], maxImageBytes: 5 * MB, maxVideoBytes: null, maxVideoSeconds: null },
     maxLinks: null,
     scrapesLinkPreview: false,
+    unverified: [],
+  },
+  // Telegram channels (#747): a message of 4,096 characters (UTF-16, as the Bot API counts), a caption of 1,024 with
+  // media (MEDIA_BODY_MAX); one photo or video, or an album of 2 to 10 mixing them. Files are uploaded with the call:
+  // photos up to 10 MB, videos up to 50 MB. Telegram shows the link's preview itself.
+  telegram: {
+    provider: 'telegram',
+    body: { max: 4096, count: 'utf16', required: false },
+    title: null,
+    media: { min: 0, max: 10, kinds: ['image', 'video'], mixed: true, maxVideos: 10, imageTypes: ['image/jpeg', 'image/png', 'image/webp'], maxImageBytes: 10 * MB, maxVideoBytes: 50 * MB, maxVideoSeconds: null },
+    maxLinks: null,
+    scrapesLinkPreview: true,
     unverified: [],
   },
 };

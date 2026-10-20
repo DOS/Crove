@@ -175,6 +175,11 @@ export const contract = {
       // The format of an app password is checked by the server, which says so in words rather than as a validation error.
       .input(z.object({ handle: z.string().trim().min(3).max(260), appPassword: z.string().trim().min(1).max(100) }))
       .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
+    // A Telegram channel (#747): a bot token from @BotFather and the channel's @username, t.me link or numeric id. The
+    // server checks the bot may post there, then seals the token; the formats are checked by the server, in words.
+    connectTelegram: oc
+      .input(z.object({ botToken: z.string().trim().min(1).max(100), channel: z.string().trim().min(1).max(100) }))
+      .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
     // Connecting through a provider's OAuth dialog (Social plan S6). Start returns where to send the browser; the
     // provider sends it back to /channels/oauth/:provider/callback, and that screen finishes the attempt with the code
     // and state. Finish connects every account the grant covers (for Facebook, the Pages picked in Meta's dialog).
@@ -417,6 +422,8 @@ export const contract = {
       unschedule: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
       // Post a published channel's first comment again (#587), after a failure or an unclear answer.
       retryComment: oc.input(z.strictObject({ variantId: zId })).output(z.object({ variantId: zId })),
+      // Post the rest of a published channel's thread (#742), from the first part not out.
+      retryThread: oc.input(z.strictObject({ variantId: zId })).output(z.object({ variantId: zId })),
       // A scheduled variant at another time, its approvals kept (#580).
       reschedule: oc.input(z.strictObject({ variantId: zId, at: z.iso.datetime({ offset: true }) })).output(z.object({ postId: zId, variantId: zId, at: z.string() })),
       cancel: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),

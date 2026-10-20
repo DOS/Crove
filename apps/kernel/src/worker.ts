@@ -11,7 +11,7 @@ import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
@@ -189,7 +189,9 @@ interface SocialPublishJob {
   provider: string;
   // A person asked for the variant's first comment again (#587): the job posts the comment, not the post.
   comment?: true;
-  // The last comment call the person saw when they asked (null: none was made).
+  // A person asked for the rest of the variant's thread again (#742).
+  thread?: true;
+  // The last comment (or thread) call the person saw when they asked (null: none was made).
   after?: string | null;
 }
 
@@ -504,6 +506,11 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await boss.work<SocialPublishJob>(socialPublishQueue(provider), { batchSize: 1 }, async ([job]) => {
       if (!job || !channels) return;
       const { orgId, variantId } = job.data;
+      if (job.data.thread) {
+        const done = await runThreadJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, { after: job.data.after ?? null });
+        console.log(`[social-thread] ${provider} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason} (${done.parts} parts)`);
+        return;
+      }
       if (job.data.comment) {
         const done = await runCommentJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, { after: job.data.after ?? null });
         console.log(`[social-comment] ${provider} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
@@ -696,6 +703,20 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 const after = typeof row.payload.after === 'string' ? row.payload.after : null;
                 return boss.send(socialPublishQueue(provider), { orgId: row.org_id, variantId, provider, comment: true, after } satisfies SocialPublishJob, {
                   singletonKey: `${row.org_id}:${variantId}:comment:${after ?? '-'}`,
+                  retryLimit: 0,
+                });
+              }
+              // A person asked for the rest of a thread again (#742): like a comment retry, keyed apart.
+              if (row.type === 'social.thread.retry_requested') {
+                const provider = String(row.payload.provider);
+                const variantId = String(row.payload.variant_id);
+                if (!SOCIAL_PUBLISH_QUEUES.includes(socialPublishQueue(provider))) {
+                  console.warn(`[social-thread] no publish queue for provider ${provider.slice(0, 32)}, variant ${variantId.slice(0, 8)}: retry dropped`);
+                  return null;
+                }
+                const after = typeof row.payload.after === 'string' ? row.payload.after : null;
+                return boss.send(socialPublishQueue(provider), { orgId: row.org_id, variantId, provider, thread: true, after } satisfies SocialPublishJob, {
+                  singletonKey: `${row.org_id}:${variantId}:thread:${after ?? '-'}`,
                   retryLimit: 0,
                 });
               }

@@ -12,6 +12,7 @@ export * from './bluesky.ts';
 export * from './threads.ts';
 export * from './linkedin.ts';
 export * from './google-business.ts';
+export * from './telegram.ts';
 export * from './youtube.ts';
 export * from './tiktok.ts';
 export * from './x.ts';
@@ -31,6 +32,7 @@ export const CHANNEL_PROVIDERS = [
   'x',
   'bluesky',
   'google_business',
+  'telegram',
 ] as const;
 export type ChannelProviderId = (typeof CHANNEL_PROVIDERS)[number];
 
@@ -185,8 +187,10 @@ export type AccountMetricsResult = { followers: number | null; reach?: number | 
 export interface CommentInput {
   externalAccountId: string;
   secret: string;
-  // The published post's id, as publish returned it.
+  // The published post's id, as publish returned it; for a thread's part (#742), the part it answers.
   externalId: string;
+  // A thread's part: the thread's first post, where the platform names it in a reply (Bluesky's root).
+  rootExternalId?: string;
   text: string;
   // The external_call key of this comment.
   callKey: string;
@@ -232,15 +236,19 @@ export class SandboxPublisher implements Publisher {
   readonly publishSafety: RetrySafety = 'reconcile_only';
   private readonly accounts = new Map<string, SandboxPost[]>();
 
-  // A comment on a post the sandbox holds, kept beside it.
-  readonly comments: { postId: string; text: string; callKey: string }[] = [];
+  // A comment on a post the sandbox holds, or a reply to one of its comments (a thread's part, #742), kept beside it.
+  readonly comments: { postId: string; text: string; callKey: string; id: string; rootId?: string }[] = [];
 
   async comment(input: CommentInput): Promise<CommentResult> {
     const accessToken = (JSON.parse(input.secret) as { accessToken?: unknown }).accessToken;
     if (typeof accessToken !== 'string' || !accessToken.startsWith('sbx_')) return { kind: 'rejected', error: 'token_expired', code: 'SANDBOX_TOKEN' };
-    if (!(this.accounts.get(input.externalAccountId) ?? []).some((p) => p.id === input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'NO_SUCH_POST' };
-    this.comments.push({ postId: input.externalId, text: input.text, callKey: input.callKey });
-    return { kind: 'accepted', externalId: `sbx_comment_${randomBytes(9).toString('base64url')}` };
+    const posts = this.accounts.get(input.externalAccountId) ?? [];
+    const onPost = posts.some((p) => p.id === input.externalId);
+    const onReply = this.comments.some((c) => c.id === input.externalId) && posts.some((p) => p.id === input.rootExternalId);
+    if (!onPost && !onReply) return { kind: 'rejected', error: 'bad_request', code: 'NO_SUCH_POST' };
+    const id = `sbx_comment_${randomBytes(9).toString('base64url')}`;
+    this.comments.push({ postId: input.externalId, text: input.text, callKey: input.callKey, id, ...(input.rootExternalId ? { rootId: input.rootExternalId } : {}) });
+    return { kind: 'accepted', externalId: id };
   }
   async publish(input: PublishInput): Promise<PublishResult> {
     const accessToken = (JSON.parse(input.secret) as { accessToken?: unknown }).accessToken;

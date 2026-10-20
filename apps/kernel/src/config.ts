@@ -188,6 +188,9 @@ const schema = z.object({
   CHANNEL_SANDBOX: z.enum(['true', 'false']).default('true'),
   // Bluesky (S9): accounts connect with an app password, no app of the deployment's own is needed. On unless false.
   CHANNEL_BLUESKY: z.enum(['true', 'false']).default('true'),
+  // Telegram channels (#747): a bot the shop makes with @BotFather posts to its channel; no app of the deployment's own is
+  // needed. On unless false.
+  CHANNEL_TELEGRAM: z.enum(['true', 'false']).default('true'),
   // The deployment's Meta app (Facebook Pages, Social plan S6). Set both to offer Facebook Pages; neither hides them.
   // The app's valid OAuth redirect URI is PUBLIC_URL/channels/oauth/facebook_page/callback.
   CHANNEL_META_APP_ID: optional,
