@@ -348,6 +348,14 @@ export const contract = {
       create: oc.input(zSocialReportLinkCreate).output(z.object({ linkId: zId, token: z.string(), expiresAt: z.string() })),
       revoke: oc.input(z.strictObject({ linkId: zId })).output(z.object({ linkId: zId })),
     },
+    // The saved brand voice for AI drafts (#741): the org's and each channel's.
+    brandVoices: {
+      list: oc.input(z.object({})).output(z.array(z.object({ connectionId: zId.nullable(), description: z.string(), useWords: z.array(z.string()), avoidWords: z.array(z.string()), emoji: z.boolean(), updatedAt: z.string() }))),
+      save: oc
+        .input(z.strictObject({ connectionId: zId.nullable().optional(), description: z.string().trim().min(1).max(600), useWords: z.array(z.string().trim().min(1).max(40)).max(20), avoidWords: z.array(z.string().trim().min(1).max(40)).max(20), emoji: z.boolean() }))
+        .output(z.object({ connectionId: zId.nullable() })),
+      remove: oc.input(z.strictObject({ connectionId: zId.nullable().optional() })).output(z.object({ connectionId: zId.nullable(), removed: z.boolean() })),
+    },
     // Scheduled client report mail (#704): owners and admins set, pause, test and remove schedules.
     reportSchedules: {
       list: oc.input(z.object({})).output(z.array(zSocialReportSchedule)),

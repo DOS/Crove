@@ -12,6 +12,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { VoiceEditor } from '../components/social-brand-voice.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -215,6 +216,9 @@ export function SocialChannelsPage() {
   const me = useQuery(orpc.me.get.queryOptions());
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
   const isAdmin = role === 'owner' || role === 'admin';
+  const voices = useQuery(orpc.social.brandVoices.list.queryOptions({ input: {} }));
+  const orgVoice = voices.data?.find((v) => v.connectionId === null);
+  const channelVoice = new Map((voices.data ?? []).filter((v) => v.connectionId !== null).map((v) => [v.connectionId as string, v]));
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
   const policyRows = useQuery(orpc.social.policies.list.queryOptions({ input: {} }));
   const policies = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.approvalsRequired]));
@@ -283,6 +287,13 @@ export function SocialChannelsPage() {
       />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="space-y-3">
+          <Card className="block space-y-2 p-4">
+            <div>
+              <p className="text-sm font-medium text-foreground">{t('voice.orgTitle')}</p>
+              <p className="text-xs text-subtle-foreground">{t('voice.orgHint')}</p>
+            </div>
+            {!voices.isLoading && <VoiceEditor key={orgVoice?.updatedAt ?? 'none'} connectionId={null} voice={orgVoice} canEdit={isAdmin} />}
+          </Card>
           {channels.isLoading ? (
             <Spinner />
           ) : channels.error ? (
@@ -339,6 +350,10 @@ export function SocialChannelsPage() {
                 {confirming === c.id && <p className="text-xs text-muted-foreground">{t('disconnectHint')}</p>}
                 <div className="border-t pt-3">
                   <ReviewPolicy channel={c} required={policies.get(c.id) ?? 1} reminders={reminders.get(c.id) ?? true} shortLinks={shortLinks.get(c.id) ?? false} canEdit={isAdmin} loading={policyRows.isLoading} />
+                </div>
+                <div className="border-t pt-3">
+                  <p className="mb-2 text-sm font-medium text-muted-foreground">{t('voice.channelTitle')}</p>
+                  {!voices.isLoading && <VoiceEditor key={channelVoice.get(c.id)?.updatedAt ?? 'none'} connectionId={c.id} voice={channelVoice.get(c.id)} canEdit={isAdmin} inherited={orgVoice !== undefined} />}
                 </div>
                 <div className="border-t pt-3">
                   <p className="mb-2 text-sm font-medium text-muted-foreground">{t('queueTitle')}</p>
