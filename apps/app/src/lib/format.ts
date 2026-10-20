@@ -90,6 +90,16 @@ export function formatTime(value: string | null | undefined, locale: Locale): st
   return new Date(value).toLocaleTimeString(FORMAT_LOCALE[locale], { hour: '2-digit', minute: '2-digit' });
 }
 
+// The month and year of a point in time, in the browser's time zone ("tháng 10 năm 2026", "October 2026").
+export function formatMonthYear(value: string, locale: Locale): string {
+  return new Date(value).toLocaleDateString(FORMAT_LOCALE[locale], { month: 'long', year: 'numeric' });
+}
+
+// The short weekday of a point in time, in the browser's time zone ("Th 2", "Mon").
+export function formatWeekdayShort(value: string, locale: Locale): string {
+  return new Date(value).toLocaleDateString(FORMAT_LOCALE[locale], { weekday: 'short' });
+}
+
 export function formatDateTime(value: string | null | undefined, locale: Locale): string {
   if (!value) return '';
   return new Date(value).toLocaleString(FORMAT_LOCALE[locale], { dateStyle: 'short', timeStyle: 'short' });
