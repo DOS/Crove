@@ -9,6 +9,7 @@ import { Input } from '@crove/ui/components/input';
 import { cn } from '@crove/ui/lib/utils';
 import { client, errorMessage, fetchFile, queryClient, uploadFiles } from '../lib/api.ts';
 import { ErrorText, Spinner } from './ui.tsx';
+import { CropPanel } from './social-crop.tsx';
 
 export interface MediaItem {
   fileId: string;
@@ -17,6 +18,9 @@ export interface MediaItem {
   sizeBytes: number;
   // A video's duration as the server read it; unknown (null or absent) until the post is saved.
   durationMs?: number | null | undefined;
+  // An image's size as shown (#636): read by the server at upload, measured here until the post is saved.
+  width?: number | null | undefined;
+  height?: number | null | undefined;
 }
 
 export const MAX_POST_MEDIA = 20;
@@ -51,7 +55,7 @@ function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; onChange
   const items = all.filter((item) => !only || only.includes(item.mime));
   const chosen = new Set(media.map((m) => m.fileId));
   const toggle = (item: LibraryItem) =>
-    onChange(chosen.has(item.fileId) ? media.filter((m) => m.fileId !== item.fileId) : media.length >= MAX_POST_MEDIA ? media : [...media, { fileId: item.fileId, altText: '', mime: item.mime, sizeBytes: item.sizeBytes, durationMs: item.durationMs }]);
+    onChange(chosen.has(item.fileId) ? media.filter((m) => m.fileId !== item.fileId) : media.length >= MAX_POST_MEDIA ? media : [...media, { fileId: item.fileId, altText: '', mime: item.mime, sizeBytes: item.sizeBytes, durationMs: item.durationMs, width: item.width, height: item.height }]);
   return (
     <div className="space-y-3 rounded-xl border bg-muted/40 p-3">
       <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('librarySearch')} aria-label={t('librarySearch')} className="h-8 max-w-xs text-sm" />
@@ -152,16 +156,34 @@ export function MediaPreview({ media }: { media: readonly MediaItem[] }) {
   );
 }
 
+// An uploaded image's size as shown, measured in the browser for the checks until the post is saved (the server reads
+// its own from the file); nothing for a video or an image the browser cannot decode.
+async function measure(file: File): Promise<{ width: number; height: number } | null> {
+  if (!file.type.startsWith('image/')) return null;
+  try {
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const size = { width: bitmap.width, height: bitmap.height };
+    bitmap.close();
+    return size;
+  } catch {
+    return null;
+  }
+}
+
 export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; onChange: (media: MediaItem[]) => void; disabled: boolean }) {
   const t = useTranslations('social');
   const picker = useRef<HTMLInputElement>(null);
   const [browsing, setBrowsing] = useState(false);
+  // The image being cropped (#636), by its file: moving or removing images while the panel is open never retargets it.
+  const [cropping, setCropping] = useState<string | null>(null);
+  const croppingItem = cropping === null ? undefined : media.find((m) => m.fileId === cropping);
   const upload = useMutation({
     mutationFn: async (files: File[]) => {
       const room = MAX_POST_MEDIA - media.length;
       const chosen = files.slice(0, Math.max(0, room));
       const { files: stored } = await uploadFiles(chosen, 'social');
-      return stored.map((s, i) => ({ fileId: s.fileId, altText: '', mime: chosen[i]?.type ?? '', sizeBytes: chosen[i]?.size ?? 0 }));
+      const sizes = await Promise.all(chosen.map(measure));
+      return stored.map((s, i) => ({ fileId: s.fileId, altText: '', mime: chosen[i]?.type ?? '', sizeBytes: chosen[i]?.size ?? 0, ...sizes[i] }));
     },
     onSuccess: (added) => {
       onChange([...media, ...added.filter((a) => !media.some((m) => m.fileId === a.fileId))]);
@@ -203,6 +225,11 @@ export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; 
                 <Button variant="ghost" size="sm" disabled={disabled || i === media.length - 1} aria-label={t('moveLater')} onClick={() => move(i, 1)}>
                   →
                 </Button>
+                {!m.mime.startsWith('video/') && (
+                  <Button variant="ghost" size="sm" disabled={disabled} aria-expanded={cropping === m.fileId} onClick={() => setCropping(cropping === m.fileId ? null : m.fileId)}>
+                    {t('crop.open')}
+                  </Button>
+                )}
                 <Button variant="ghost" size="sm" disabled={disabled} className="ml-auto text-destructive" onClick={() => onChange(media.filter((_, j) => j !== i))}>
                   {t('removeImage')}
                 </Button>
@@ -210,6 +237,18 @@ export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; 
             </li>
           ))}
         </ul>
+      )}
+      {croppingItem && !disabled && (
+        <CropPanel
+          key={croppingItem.fileId}
+          item={croppingItem}
+          onCancel={() => setCropping(null)}
+          onDone={(next) => {
+            // The cropped file takes the place of the one it was cut from, wherever that is now; gone, nothing changes.
+            onChange(media.map((x) => (x.fileId === croppingItem.fileId ? next : x)));
+            setCropping(null);
+          }}
+        />
       )}
       <input
         ref={picker}

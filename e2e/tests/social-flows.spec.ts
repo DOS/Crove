@@ -3,6 +3,7 @@
 // reposting, the metrics of a published post, and the AI drafting card on a server without a model. Each test signs
 // up its own user and org. States the worker reaches only on a real platform (a refusal, an unknown outcome, a metrics
 // capture) are written with SQL, as social.spec.ts moves a slot forward.
+import { crc32, deflateSync } from 'node:zlib';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { exec, sql } from '../lib/db.ts';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
@@ -11,6 +12,26 @@ import { createOrg, newEmail, signUp } from '../lib/session.ts';
 const TIME_ZONE = 'Asia/Ho_Chi_Minh';
 test.use({ timezoneId: TIME_ZONE });
 
+// A width x height PNG of one colour (an RGB image, rows unfiltered, deflated).
+function solidPng(width: number, height: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  const row = Buffer.alloc(1 + width * 3);
+  for (let x = 0; x < width; x++) row.set([200, 60, 60], 1 + x * 3);
+  const raw = Buffer.concat(Array.from({ length: height }, () => row));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
 // A 1x1 PNG.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==', 'base64');
 
@@ -396,4 +417,25 @@ test('lets an owner approve and schedule their own post in one step (#638)', asy
   await expect(channelCard(page, 'Trang Một Bước').getByText('Đã lên lịch', { exact: true })).toBeVisible();
   const decided = sql<{ n: number }>(`SELECT count(*)::int AS n FROM crove_social.post_approval WHERE post_id = :'post' AND decision = 'approved'`, { post: postIdOf(page) });
   expect(decided).toEqual([{ n: 1 }]);
+});
+
+test('crops a post image to a frame, and the server reads the new size (#636)', async ({ page }) => {
+  await signUp(page, newEmail('social-crop'));
+  await createOrg(page, 'Công ty Cắt Ảnh');
+  await connectSandbox(page, 'Trang Cắt Ảnh');
+  await compose(page, 'Bài có ảnh dọc');
+  await page.locator('input[type="file"]').first().setInputFiles([{ name: 'doc.png', mimeType: 'image/png', buffer: solidPng(1080, 1920) }]);
+  await expect(page.getByText('1/20').first()).toBeVisible();
+  await page.getByRole('button', { name: 'Cắt', exact: true }).first().click();
+  await page.getByRole('radio', { name: '1:1 · vuông' }).click();
+  await expect(page.getByText('Ảnh gốc 1080 × 1920, sau khi cắt 1080 × 1080')).toBeVisible();
+  await page.getByRole('button', { name: 'Lưu ảnh đã cắt' }).click();
+  await expect(page.getByRole('button', { name: 'Lưu ảnh đã cắt' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  const media = sql<{ image_width: number; image_height: number; content_type: string }>(
+    `SELECT f.image_width, f.image_height, f.content_type FROM crove_social.post_media m JOIN crove_kernel.file f ON f.org_id = m.org_id AND f.id = m.file_id WHERE m.post_id = :'post'`,
+    { post: postIdOf(page) },
+  );
+  expect(media).toEqual([{ image_width: 1080, image_height: 1080, content_type: 'image/png' }]);
 });

@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, COMMENT_RULES, COVER_RULES, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { CAPABILITIES, COMMENT_RULES, COVER_RULES, IMAGE_RULES, RATIO_SLACK, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -12,6 +12,9 @@ export interface MediaItem {
   mime: string;
   sizeBytes: number;
   durationSeconds: number | null;
+  // An image's size as shown (#636); absent or null when unknown, and then not checked.
+  width?: number | null;
+  height?: number | null;
 }
 
 export interface VariantDraft {
@@ -41,6 +44,9 @@ export type IssueCode =
   | 'TOO_MANY_VIDEOS'
   | 'IMAGE_TYPE_NOT_ALLOWED'
   | 'IMAGE_TOO_LARGE'
+  // An image's shape (actual: width / height x 1000) or width (limit, actual: pixels) the channel refuses (#636).
+  | 'IMAGE_RATIO_NOT_ALLOWED'
+  | 'IMAGE_TOO_SMALL'
   | 'VIDEO_TOO_LARGE'
   | 'VIDEO_TOO_LONG'
   // The platform takes video, Crove's adapter for it does not yet.
@@ -120,6 +126,14 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
       }
       if (rule.maxImageBytes !== null && m.sizeBytes > rule.maxImageBytes) {
         issues.push({ code: 'IMAGE_TOO_LARGE', field, limit: rule.maxImageBytes, actual: m.sizeBytes });
+      }
+      const shape = IMAGE_RULES[variant.provider];
+      if (shape && m.width && m.height) {
+        const ratio = m.width / m.height;
+        if (ratio < shape.minRatio * (1 - RATIO_SLACK) || ratio > shape.maxRatio * (1 + RATIO_SLACK)) {
+          issues.push({ code: 'IMAGE_RATIO_NOT_ALLOWED', field, limit: null, actual: Math.round(ratio * 1000) });
+        }
+        if (m.width < shape.minWidth) issues.push({ code: 'IMAGE_TOO_SMALL', field, limit: shape.minWidth, actual: m.width });
       }
     } else {
       if (!VIDEO_READY.has(variant.provider)) issues.push({ code: 'VIDEO_NOT_SUPPORTED_YET', field, limit: null, actual: null });

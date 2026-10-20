@@ -770,7 +770,7 @@ export const zSocialChannelInput = z.strictObject({
   media: zSocialMediaInput.nullable().optional(),
 });
 
-export const zSocialMedia = z.object({ fileId: zId, altText: z.string().nullable(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable() });
+export const zSocialMedia = z.object({ fileId: zId, altText: z.string().nullable(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable() });
 
 export const zSocialPostCreate = z.strictObject({
   body: zSocialText,
@@ -904,7 +904,7 @@ export const zSocialPost = z.object({
 
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
 // A media library item (S9): an image of the org uploaded for posts, and how many posts show it.
-export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int() });
+export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int() });
 // A saved snippet (#584): hashtags, a signature, or a whole post to start from (isTemplate).
 export const zSocialSnippet = z.object({
   id: zId,
