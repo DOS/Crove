@@ -24,7 +24,7 @@ import { libraryQueries } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
 import { approvalsRequired, decisionsOf, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
-import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
+import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -39,13 +39,6 @@ const zLink = z.url({ protocol: /^https?$/ }).max(2000);
 const zTimeZone = z.string().min(1).max(64).refine(isValidTimeZone, 'unknown IANA time zone');
 // Provider settings (privacy level, post type...): plain JSON, 16 KiB at most.
 const zSettings = z.record(z.string().max(100), z.json()).refine((v) => Buffer.byteLength(JSON.stringify(v), 'utf8') <= 16_384, 'settings over 16 KiB');
-const zChannel = z.strictObject({
-  connectionId: zId,
-  body: zBody.nullable().optional(),
-  title: zTitle.nullable().optional(),
-  linkUrl: zLink.nullable().optional(),
-  settings: zSettings.optional(),
-});
 const zVariantIds = z.array(zId).min(1).max(MAX_CHANNELS_PER_POST);
 // A post's images, in order: files of the org uploaded for Social (JPEG, PNG or WEBP). The channel rules decide how
 // many each channel takes; 20 is the most any supported channel shows in one post.
@@ -55,7 +48,15 @@ const zMedia = z
   .max(MAX_MEDIA_PER_POST)
   .refine((list) => new Set(list.map((m) => m.fileId)).size === list.length, 'each image once');
 const MEDIA_TYPES: readonly string[] = [...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES];
-
+const zChannel = z.strictObject({
+  connectionId: zId,
+  body: zBody.nullable().optional(),
+  title: zTitle.nullable().optional(),
+  linkUrl: zLink.nullable().optional(),
+  settings: zSettings.optional(),
+  // The channel's own images or video instead of the post's (#581); null or absent: the post's.
+  media: zMedia.nullable().optional(),
+});
 // The files a media list names, in its order, as the hash and the channel rules see them. Every file must be an image
 // or a video of the org uploaded for posts.
 async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): Promise<PostMedia[]> {
@@ -126,6 +127,7 @@ export async function insertVariants(ctx: CommandContext, post: PostRow, channel
   );
   const created: Array<{ variantId: string; connectionId: string }> = [];
   for (const [i, c] of channels.entries()) {
+    const own = c.media ? await resolveMedia(ctx, c.media) : null;
     const row = {
       channel_connection_id: c.connectionId,
       provider: providers.get(c.connectionId) as string,
@@ -133,6 +135,7 @@ export async function insertVariants(ctx: CommandContext, post: PostRow, channel
       title: c.title ?? null,
       link_url: c.linkUrl ?? null,
       settings: c.settings ?? {},
+      media: own,
     };
     const inserted = await ctx.trx
       .insertInto('crove_social.post_variant')
@@ -141,6 +144,7 @@ export async function insertVariants(ctx: CommandContext, post: PostRow, channel
         post_id: post.id,
         ...row,
         settings: JSON.stringify(row.settings),
+        media: own ? JSON.stringify(own) : null,
         position: startAt + i,
         content_hash: hashOf(base(post), row),
       })
@@ -305,6 +309,8 @@ export const variantUpdate = defineCommand({
     title: zTitle.nullable().optional(),
     linkUrl: zLink.nullable().optional(),
     settings: zSettings.optional(),
+    // The channel's own images or video (#581); null goes back to the post's.
+    media: zMedia.nullable().optional(),
   }),
   risk: 'R1',
   access: MEMBERS,
@@ -321,10 +327,12 @@ export const variantUpdate = defineCommand({
       title: input.title === undefined ? v.title : input.title,
       link_url: input.linkUrl === undefined ? v.link_url : input.linkUrl,
       settings: input.settings ?? settingsOf(v),
+      media: input.media === undefined ? v.media : input.media === null ? null : await resolveMedia(ctx, input.media),
     };
     if (v.content_frozen || FROZEN.has(v.status)) step(v, { type: 'edit' });
-    const columns = { body: next.body, title: next.title, link_url: next.link_url, settings: JSON.stringify(next.settings) };
-    const stored = v.body === next.body && v.title === next.title && v.link_url === next.link_url && canonicalJson(settingsOf(v)) === canonicalJson(next.settings);
+    const columns = { body: next.body, title: next.title, link_url: next.link_url, settings: JSON.stringify(next.settings), media: next.media === null ? null : JSON.stringify(next.media) };
+    const stored =
+      v.body === next.body && v.title === next.title && v.link_url === next.link_url && canonicalJson(settingsOf(v)) === canonicalJson(next.settings) && canonicalJson(v.media) === canonicalJson(next.media);
     const hash = hashOf(base(post), next);
     if (hash === v.content_hash) {
       // The effective content is the same (for example an override equal to the base, or inheriting it again): store
@@ -726,6 +734,7 @@ export interface VariantView {
   provider: string;
   position: number;
   overrides: { body: string | null; title: string | null; linkUrl: string | null };
+  ownMedia: boolean;
   effective: BaseContent;
   // The images this variant shows: its own list, or the post's.
   media: MediaView[];
@@ -855,6 +864,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               provider: v.provider,
               position: v.position,
               overrides: overrides(v),
+              ownMedia: !v.content_frozen && mediaOf(v.media) !== null,
               effective: effectiveContent(b, overrides(v), v.content_frozen),
               media: mediaView(mediaFor(b, v)),
               settings: settingsOf(v),
