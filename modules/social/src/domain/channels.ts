@@ -146,6 +146,8 @@ export const COMMENT_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
   x: { max: 280, count: 'weighted', required: false },
   bluesky: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
   mastodon: { max: 500, count: 'codepoints', required: false },
+  // A top-level comment on the video (#791), up to 10000 characters.
+  youtube: { max: 10000, count: 'codepoints', required: false },
 };
 
 // The first comment in a variant's settings, or null.
@@ -164,6 +166,8 @@ export const THREAD_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
   x: { max: 280, count: 'weighted', required: false },
   bluesky: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
   mastodon: { max: 500, count: 'codepoints', required: false },
+  // A top-level comment on the video (#791), up to 10000 characters.
+  youtube: { max: 10000, count: 'codepoints', required: false },
 };
 
 // The thread parts in a variant's settings, trimmed, or null when there are none. An entry that is not a string reads

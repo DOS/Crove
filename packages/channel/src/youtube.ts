@@ -7,13 +7,18 @@
 // answer names the video. The project's quota allows about 100 uploads a day; a quota refusal waits, never fails.
 // An unclear answer is checked by listing the channel's latest uploads (one quota unit), matched by title and time.
 // Metrics: views, likes and comments from videos.list (one quota unit each).
-import type { ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+// First comment (#791): commentThreads.insert on the video, with the force-ssl scope (50 quota units).
+import type { CommentInput, CommentResult, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
 import { coverImageType, videoCoverOf } from './cover.ts';
+import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const YOUTUBE_HOSTS = ['oauth2.googleapis.com', 'www.googleapis.com'] as const;
 export const YOUTUBE_SCOPES = ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'] as const;
+// Asked for too but not required (#791): the first comment needs it. A channel connected without it posts videos and
+// is told to reconnect when a comment is refused.
+export const YOUTUBE_COMMENT_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl';
 const API = 'https://www.googleapis.com/youtube/v3';
 const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
@@ -142,7 +147,7 @@ export class YouTubeConnector implements OAuthConnector {
     url.searchParams.set('client_id', this.client.clientId);
     url.searchParams.set('redirect_uri', input.redirectUri);
     url.searchParams.set('response_type', 'code');
-    url.searchParams.set('scope', YOUTUBE_SCOPES.join(' '));
+    url.searchParams.set('scope', [...YOUTUBE_SCOPES, YOUTUBE_COMMENT_SCOPE].join(' '));
     url.searchParams.set('state', input.state);
     // Offline access with consent each time, so Google returns a refresh token even for a channel connected before.
     url.searchParams.set('access_type', 'offline');
@@ -315,6 +320,27 @@ export class YouTubePublisher implements Publisher {
 
   // thumbnails.set with the cover's bytes. The video is out already, so a refused thumbnail (a channel not allowed
   // custom thumbnails, an image over 2 MB) never fails the post: it is logged, and the video keeps YouTube's own.
+  // A top-level comment on the channel's own video. A grant without the comment scope is told apart, so the post page
+  // can say to reconnect; a video with comments turned off (made for kids, or by its settings) is refused as such.
+  async comment(input: CommentInput): Promise<CommentResult> {
+    const s = youtubeSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!CHANNEL_ID.test(input.externalAccountId) || !VIDEO_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    const thread = { snippet: { channelId: input.externalAccountId, videoId: input.externalId, topLevelComment: { snippet: { textOriginal: input.text } } } };
+    try {
+      const answer = await this.client.call<{ id?: unknown }>('POST', `${API}/commentThreads?part=snippet`, s.accessToken, { json: thread });
+      const id = answer.body?.id;
+      if (typeof id !== 'string' || !id || id.length > 200) return { kind: 'unknown', code: 'NO_COMMENT_ID' };
+      return { kind: 'accepted', externalId: id };
+    } catch (error) {
+      if (error instanceof YouTubeError && error.status === 403 && (error.reason === 'insufficientPermissions' || error.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT')) {
+        return { kind: 'rejected', error: 'permission', code: 'RECONNECT_FOR_COMMENTS', message: error.message };
+      }
+      if (error instanceof YouTubeError && error.reason === 'commentsDisabled') return { kind: 'rejected', error: 'bad_request', code: 'COMMENTS_DISABLED', message: error.message };
+      return commentResult(publishResult(error));
+    }
+  }
+
   private async setThumbnail(videoId: string, token: string, image: Uint8Array): Promise<void> {
     try {
       await this.client.call('POST', `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?uploadType=media&videoId=${videoId}`, token, { bytes: { data: image, type: coverImageType(image) } });
