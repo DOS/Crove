@@ -6,6 +6,7 @@ import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
@@ -14,6 +15,8 @@ import { cn } from '@crove/ui/lib/utils';
 import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
 import { PostLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
+import { BulkBar } from '../components/social-bulk.tsx';
+import type { BulkAction } from '../lib/social-bulk.ts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -428,6 +431,12 @@ export function SocialPage() {
   // The label filter applies to the lists, the calendar and the metrics; the other filters to the lists only.
   const postFilters = tab === 'upcoming' || listTab !== null;
   const labelFilter = (postFilters || tab === 'calendar' || tab === 'metrics') && (labelList.length > 0 || Boolean(search.label));
+  // Posts picked for a bulk action (#635), in the list on screen; a new tab or filter starts afresh.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  useEffect(() => setPicked(new Set()), [tab, search.channel, search.label, search.q, search.from, search.to]);
+  const canDecide = role === 'owner' || role === 'admin';
+  const bulkActions: readonly BulkAction[] = !canWrite ? [] : listTab === 'review' ? (canDecide ? ['approve', 'cancel'] : ['cancel']) : listTab === 'drafts' ? (canDecide ? ['queue', 'cancel'] : ['cancel']) : listTab === 'attention' ? ['cancel'] : [];
+  const toggle = (id: string) => setPicked((now) => { const next = new Set(now); if (next.has(id)) next.delete(id); else next.add(id); return next; });
 
   return (
     <>
@@ -548,6 +557,17 @@ export function SocialPage() {
           <TabsContent key={id} value={id}>
             {tab === id && (
               <>
+                {bulkActions.length > 0 && (
+                  <div className="mb-2">
+                    <BulkBar
+                      posts={rows.filter((p) => picked.has(p.id))}
+                      actions={bulkActions}
+                      canDecide={canDecide}
+                      excerptOf={(postId) => excerpt(rows.find((p) => p.id === postId)?.body ?? '', 60) || t('emptyText')}
+                      onClear={() => setPicked(new Set())}
+                    />
+                  </div>
+                )}
                 {list.isLoading ? (
                   <Spinner />
                 ) : list.error && rows.length === 0 ? (
@@ -556,8 +576,24 @@ export function SocialPage() {
                   <Empty title={filtered ? t('filters.noMatch') : t(`empty.${id}`)} />
                 ) : (
                   <div className="space-y-2">
+                    {bulkActions.length > 0 && (
+                      <>
+                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <Checkbox
+                            checked={rows.length > 0 && rows.every((p) => picked.has(p.id))}
+                            onCheckedChange={(on) => setPicked(on === true ? new Set(rows.map((p) => p.id)) : new Set())}
+                          />
+                          {t('bulk.selectAll')}
+                        </label>
+                      </>
+                    )}
                     {rows.map((post) => (
-                      <PostRow key={post.id} post={post} slug={slug} names={names} labels={labelList} right={f.dateTime(post.updatedAt)} />
+                      <div key={post.id} className="flex items-center gap-2">
+                        {bulkActions.length > 0 && <Checkbox checked={picked.has(post.id)} onCheckedChange={() => toggle(post.id)} aria-label={t('bulk.select', { text: excerpt(post.body, 40) || t('emptyText') })} />}
+                        <div className="min-w-0 flex-1">
+                          <PostRow post={post} slug={slug} names={names} labels={labelList} right={f.dateTime(post.updatedAt)} />
+                        </div>
+                      </div>
                     ))}
                   </div>
                 )}
