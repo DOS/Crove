@@ -1,6 +1,6 @@
 // SocialWriter with a stand-in for the model: what it is told, and what it keeps of the answer.
 import { describe, expect, it } from 'vitest';
-import { SocialWriter, cleanHashtag, type DraftGenerator, type HashtagGenerator, type RewriteGenerator, type WriterChannel } from '../src/index.ts';
+import { SocialWriter, cleanHashtag, type DescribeGenerator, type DraftGenerator, type HashtagGenerator, type RewriteGenerator, type WriterChannel } from '../src/index.ts';
 
 const CONFIG = { baseURL: 'http://localhost:1/v1', apiKey: null, model: 'test' };
 const channels: WriterChannel[] = [
@@ -133,5 +133,23 @@ describe('SocialWriter hashtags (#824)', () => {
     expect(cleanHashtag('#KhaiTrương')).toBe('khaitrương');
     expect(cleanHashtag('hai từ')).toBeNull();
     expect(cleanHashtag('2026')).toBeNull();
+  });
+});
+
+describe('SocialWriter alt text (#817)', () => {
+  it('sends the image with the ask, and keeps one cleaned description of at most 250 characters', async () => {
+    const asked: { system: string; image: Uint8Array; mime: string }[] = [];
+    const generate: DescribeGenerator = async (args) => {
+      asked.push(args);
+      return { altText: `  Ổ bánh mì giòn   trên khay gỗ ${'x'.repeat(400)} ` };
+    };
+    const writer = new SocialWriter(CONFIG, undefined, undefined, undefined, generate);
+    const image = new Uint8Array([0xff, 0xd8, 0xff]);
+    const alt = await writer.describeImage({ image, mime: 'image/jpeg', language: 'vi' });
+    expect(alt?.startsWith('Ổ bánh mì giòn trên khay gỗ')).toBe(true);
+    expect(Array.from(alt ?? '')).toHaveLength(250);
+    expect(asked[0]).toMatchObject({ mime: 'image/jpeg', image });
+    expect(asked[0]?.system).toContain('Vietnamese');
+    expect(await writer.describeImage({ image: new Uint8Array(), mime: 'image/jpeg', language: 'vi' })).toBeNull();
   });
 });

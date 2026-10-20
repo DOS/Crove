@@ -259,6 +259,8 @@ const schema = z.object({
   AI_BASE_URL: optional,
   AI_API_KEY: optional,
   AI_MODEL: optional,
+  // The model takes images (#817): the composer may ask it for an image's alt text.
+  AI_VISION: z.enum(['true', 'false']).default('false'),
   AI_STRUCTURED_OUTPUTS: z.enum(['true', 'false']).default('true'),
   // crove-extract, the parsing sandbox (plan §7.6, External-tenant gate T12), e.g. http://crove-extract:8090.
   // Required for the worker role: the worker never parses PDF, XML or MIME itself. The API role does not use it.

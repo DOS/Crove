@@ -68,7 +68,11 @@ interface CreatedInvite {
 }
 
 // Drafts Social posts with the deployment's model (SocialWriter in @crove/agent); unset: AI drafting is off.
-export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'> & Partial<Pick<SocialWriter, 'hashtags'>>;
+export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'> &
+  Partial<Pick<SocialWriter, 'hashtags'>> & {
+    // An image's alt text from its stored bytes (#817), when the deployment's model takes images (AI_VISION).
+    describeStored?: (file: { key: string; generation: string | null; sha256: string }, mime: string, language: 'vi' | 'en') => Promise<string | null>;
+  };
 
 // The org's saved brand voices (#741) as notes for the writer: the org's, and each channel's by connection.
 async function savedVoices(runtime: Runtime, actor: UserActor, orgId: string): Promise<{ org: string | null; byChannel: Map<string, string> }> {
@@ -472,6 +476,34 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             }
             if (!result) throw new DomainError('AI_REWRITE_EMPTY', 422, 'AI không viết lại được đoạn này, hãy thử cách khác');
             return result;
+          }),
+        ),
+        describeImage: os.social.posts.describeImage.handler(({ context, input }) =>
+          inSocial(context, async (orgId, actor) => {
+            const { role } = await resolveMembership(runtime, context.user, context.orgSlug);
+            if (role !== 'owner' && role !== 'admin' && role !== 'member') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không soạn được bài');
+            if (!socialWriter?.describeStored) throw new DomainError('AI_VISION_OFF', 422, 'Mô hình AI của máy chủ chưa đọc được ảnh (AI_VISION)');
+            // The member's own org's file, an image, small enough to send: the same read a download makes.
+            const file = await runtime.query<{ content_type: string; storage_key: string; generation: string | null; sha256: string; size_bytes: string }>('kernel.file.get', { id: input.fileId }, { actor, orgId });
+            if (!file.content_type.startsWith('image/')) throw new DomainError('ALT_TEXT_IMAGE_ONLY', 422, 'Chỉ gợi ý mô tả cho ảnh');
+            if (Number(file.size_bytes) > 10 * 1024 * 1024) throw new DomainError('TOO_LARGE', 413, 'Ảnh quá lớn để AI đọc');
+            const ticket = drafts.take(orgId, actor.userId);
+            if (!ticket.allowed) {
+              throw new DomainError('RATE_LIMITED', 429, ticket.reason === 'busy' ? 'Đang chờ AI trả lời, hãy đợi xong rồi thử tiếp' : 'Đã dùng AI nhiều lần trong phút này, hãy thử lại sau ít phút', {
+                retryAfterSeconds: ticket.retryAfterSeconds,
+              });
+            }
+            let altText: string | null;
+            try {
+              altText = await socialWriter.describeStored({ key: file.storage_key, generation: file.generation, sha256: file.sha256 }, file.content_type, input.language);
+            } catch (error: unknown) {
+              console.error('[social-ai] describe failed', error instanceof Error ? error.name : typeof error);
+              throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
+            } finally {
+              ticket.release();
+            }
+            if (!altText) throw new DomainError('AI_REWRITE_EMPTY', 422, 'AI không viết lại được đoạn này, hãy thử cách khác');
+            return { altText };
           }),
         ),
         suggestHashtags: os.social.posts.suggestHashtags.handler(({ context, input }) =>

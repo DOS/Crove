@@ -317,6 +317,8 @@ export const contract = {
         )
         .output(z.object({ text: z.string(), title: z.string().nullable() })),
       // Hashtags the writer suggests for a text (#824), tainted like every AI text; the same budget as drafts.
+      // An image's alt text the writer suggests (#817), when the model takes images; the same budget as drafts.
+      describeImage: oc.input(z.strictObject({ fileId: zId, language: z.enum(['vi', 'en']) })).output(z.object({ altText: z.string() })),
       suggestHashtags: oc
         .input(z.strictObject({ text: z.string().trim().min(1).max(20_000), connectionId: zId.optional(), language: z.enum(['vi', 'en']), exclude: z.array(z.string().max(100)).max(50) }))
         .output(z.object({ hashtags: z.array(z.string()) })),
