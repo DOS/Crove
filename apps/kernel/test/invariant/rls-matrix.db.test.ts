@@ -549,7 +549,7 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     },
   },
   // A saved set of channels for the composer (#774): a name and the connections it picks.
-  'crove_social.channel_set': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), name: `RLS matrix set ${randomUUID().slice(0, 6)}`, connection_ids: [], updated_by: o.owner } }) },
+  'crove_social.channel_set': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), name: `RLS matrix set ${randomUUID().slice(0, 6)}`, updated_by: o.owner } }) },
   // A metrics snapshot of a published variant (S8, issue #238): append-only, one per capture key.
   // An org's label for posts (#639): a name and a colour from the app's palette.
   // A blog feed an org drafts posts from (#708).
