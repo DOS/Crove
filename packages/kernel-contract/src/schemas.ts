@@ -1021,7 +1021,7 @@ export const zSocialReviewLinks = z.object({
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
 export const zSocialActivityItem = z.object({
   id: z.string(),
-  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'published', 'failed', 'cancelled']),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed']),
   at: z.string(),
   userId: zId.nullable(),
   name: z.string().nullable(),

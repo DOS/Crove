@@ -1,7 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { COMMENT_STALE_MS, commentStatus, type CommentCall } from '../src/comments.ts';
-import type { Provider } from '../src/domain/channels.ts';
+import { autoReplyOf, type Provider } from '../src/domain/channels.ts';
 import { validateVariant } from '../src/domain/validate.ts';
+
+describe('auto-replies on likes (#746)', () => {
+  const base = { body: 'Khai trương', title: null, media: [] };
+  const codes = (provider: Provider, autoReply: unknown) => validateVariant({ ...base, provider, settings: { autoReply } }).map((i) => [i.code, i.field, i.limit, i.actual]);
+  it('takes a text and a like count on the channels that reply and count likes', () => {
+    for (const provider of ['facebook_page', 'threads', 'linkedin', 'x', 'bluesky'] as const) expect(codes(provider, { text: 'Cảm ơn!', likes: 100 })).toEqual([]);
+    expect(autoReplyOf({ autoReply: { text: '  Cảm ơn!  ', likes: 5 } })).toEqual({ text: 'Cảm ơn!', likes: 5 });
+    expect(autoReplyOf({})).toBeNull();
+  });
+  it('refuses a reply without both parts, a count out of range, a long text and other channels', () => {
+    expect(codes('x', { text: '', likes: 5 })).toEqual([['AUTO_REPLY_INVALID', 'settings.autoReply', 1_000_000, null]]);
+    expect(codes('x', { text: 'a', likes: 0 })).toEqual([['AUTO_REPLY_INVALID', 'settings.autoReply', 1_000_000, null]]);
+    expect(codes('x', { text: 'a', likes: 2.5 })).toEqual([['AUTO_REPLY_INVALID', 'settings.autoReply', 1_000_000, null]]);
+    expect(codes('x', 'Cảm ơn')).toEqual([['AUTO_REPLY_INVALID', 'settings.autoReply', 1_000_000, null]]);
+    expect(codes('x', { text: 'ệ'.repeat(141), likes: 5 })).toEqual([['AUTO_REPLY_TOO_LONG', 'settings.autoReply.text', 280, 282]]);
+    expect(codes('instagram', { text: 'a', likes: 5 })).toContainEqual(['AUTO_REPLY_NOT_SUPPORTED', 'settings.autoReply', null, null]);
+    expect(codes('youtube', { text: 'a', likes: 5 })).toContainEqual(['AUTO_REPLY_NOT_SUPPORTED', 'settings.autoReply', null, null]);
+  });
+});
 
 describe('first comments (#587)', () => {
   const base = { body: 'Khai trương', title: null, media: [] };

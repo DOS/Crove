@@ -13,6 +13,7 @@ import type { Trx } from './variants.ts';
 import { labelsOfPosts } from './labels.ts';
 import { formatOf, whatWorks, type ChannelInsights, type InsightSample } from './domain/insights.ts';
 import { isValidTimeZone } from './domain/queue.ts';
+import { runAutoReply } from './auto-reply.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // How often a published variant is asked again, and how far back the summary looks by default.
@@ -329,6 +330,13 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
       if (!result || 'refused' in result) out.skipped += 1;
       const done = await deps.runtime.execute<{ recorded: boolean }>('social.metrics.record', { variantId: row.variant_id, captureKey: key, ...input }, options);
       if (done.recorded && result && !('refused' in result)) out.recorded += 1;
+      // The count may set off the variant's auto-reply (#746); its failure never touches the metrics.
+      const likes = result && !('refused' in result) ? result.metrics.reactions : undefined;
+      if (publisher && likes !== undefined) {
+        await runAutoReply(deps, row.org_id, row.variant_id, publisher, { externalAccountId: sealed.externalAccountId, secret }, likes).catch((error: unknown) =>
+          console.warn(`[social-auto-reply] variant ${row.variant_id.slice(0, 8)}`, error instanceof Error ? error.message : error),
+        );
+      }
     } catch (error) {
       // A connection whose owner left, or a credential that will not open: nothing to read; the publish path reports it.
       if (!(error instanceof DomainError)) console.warn(`[social-metrics] variant ${row.variant_id.slice(0, 8)}`, error instanceof Error ? error.message : error);
