@@ -103,6 +103,11 @@ export const en = {
       signup_disabled: "Sign-up is closed on this server. Ask your organization's admin.",
     },
   },
+  legal: {
+    consentBoth: 'By continuing, you agree to the Crove <terms>Terms of Service</terms> and <privacy>Privacy Notice</privacy>.',
+    consentTerms: 'By continuing, you agree to the Crove <terms>Terms of Service</terms>.',
+    consentPrivacy: 'By continuing, you confirm you have read the Crove <privacy>Privacy Notice</privacy>.',
+  },
   onboarding: {
     title: 'Create your first organization',
     subtitle: 'Each organization has its own books, document inbox and members.',

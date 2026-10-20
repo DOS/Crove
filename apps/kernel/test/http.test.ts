@@ -155,6 +155,36 @@ describe('configuration guards', () => {
     expect(await config({})).toBeNull();
     expect(await config({ SUPPORT_URL: 'mailto:support@example.com' })).toBe('mailto:support@example.com');
   });
+
+  // #688: the terms of service and privacy notice linked at sign-up and invite acceptance are https: pages.
+  it('accepts https: TERMS_URL and PRIVACY_URL only, and hands them to the app or null', async () => {
+    for (const name of ['TERMS_URL', 'PRIVACY_URL'] as const) {
+      expect(loadConfig(base)[name]).toBeUndefined();
+      expect(loadConfig({ ...base, [name]: ' ' })[name]).toBeUndefined();
+      expect(loadConfig({ ...base, [name]: ' https://crove.example.com/legal/terms ' })[name]).toBe('https://crove.example.com/legal/terms');
+      for (const url of ['http://crove.example.com/terms', 'javascript:alert(1)', 'mailto:legal@example.com', 'data:text/html,x', '/terms', 'https://']) {
+        expect(() => loadConfig({ ...base, [name]: url }), `${name}=${url}`).toThrow(new RegExp(name));
+      }
+    }
+    const app = (env: Record<string, string>) =>
+      createHttpApp({
+        config: loadConfig({ ...base, WEB_DIST: '/nonexistent', ...env }),
+        runtime: { installed: () => true, modules: () => ['kernel'] } as unknown as Runtime,
+        store: {} as BlobStore,
+        authenticate: async () => {
+          throw new Error('not used');
+        },
+        pool: {} as pg.Pool,
+        aiEnabled: false,
+      });
+    const read = async (env: Record<string, string>) =>
+      (await (await app(env).request('/api/config')).json()) as { termsUrl: unknown; privacyUrl: unknown };
+    expect(await read({})).toMatchObject({ termsUrl: null, privacyUrl: null });
+    expect(await read({ TERMS_URL: 'https://crove.example.com/terms', PRIVACY_URL: 'https://crove.example.com/privacy' })).toMatchObject({
+      termsUrl: 'https://crove.example.com/terms',
+      privacyUrl: 'https://crove.example.com/privacy',
+    });
+  });
 });
 
 // A compact JWS with this payload (a JSON value, or raw text) and a dummy signature: the proxy decodes, never verifies.

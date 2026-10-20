@@ -101,6 +101,11 @@ export const vi = {
       signup_disabled: 'Máy chủ này đang tạm đóng đăng ký tài khoản mới. Hãy hỏi quản trị viên của tổ chức.',
     },
   },
+  legal: {
+    consentBoth: 'Khi tiếp tục, bạn đồng ý với <terms>Điều khoản sử dụng</terms> và <privacy>Chính sách quyền riêng tư</privacy> của Crove.',
+    consentTerms: 'Khi tiếp tục, bạn đồng ý với <terms>Điều khoản sử dụng</terms> của Crove.',
+    consentPrivacy: 'Khi tiếp tục, bạn xác nhận đã đọc <privacy>Chính sách quyền riêng tư</privacy> của Crove.',
+  },
   onboarding: {
     title: 'Tạo tổ chức đầu tiên',
     subtitle: 'Mỗi tổ chức có sổ sách, hộp thư chứng từ và thành viên riêng.',

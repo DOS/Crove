@@ -371,6 +371,9 @@ export function createHttpApp(deps: HttpDeps) {
       mailEnabled: deps.mailer?.enabled ?? false,
       // The shell's feedback and support link (SUPPORT_URL, issue #310); null hides it.
       supportUrl: config.SUPPORT_URL ?? null,
+      // The terms and privacy notice linked at sign-up and invite acceptance (#688); null hides each link.
+      termsUrl: config.TERMS_URL ?? null,
+      privacyUrl: config.PRIVACY_URL ?? null,
       // Onboarding offers "look up" next to the tax code only when the server has a registry to ask (issue #324).
       taxCodeLookup: Boolean(deps.taxLookup),
       // The SPA shows the menus of these modules only (plan Decision 12).

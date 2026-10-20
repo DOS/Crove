@@ -270,6 +270,10 @@ const schema = z.object({
       })
       .optional(),
   ),
+  // The terms of service and the privacy notice that sign-up and invite acceptance link to (#688, plan M3-6): https:
+  // pages the deployment publishes. Unset hides the line. Browsers read them from /api/config.
+  TERMS_URL: optional.pipe(z.url({ protocol: /^https$/ }).optional()),
+  PRIVACY_URL: optional.pipe(z.url({ protocol: /^https$/ }).optional()),
   // The public tax registry lookup that prefills a new org from its tax code (issue #324): an https URL template with
   // {taxCode}, answering in the VietQR business shape (https://api.vietqr.io/v2/business/{taxCode}). Unset turns the
   // lookup off: it sends the tax codes your users type to that provider.
