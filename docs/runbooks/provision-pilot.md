@@ -122,7 +122,28 @@ Supabase Auth sends the confirmation, recovery and invite emails through `SMTP_H
 
 Send one recovery email to an address at a large mail provider and check that it lands in the inbox, not in spam, before the partner signs up.
 
-Inbound email (invoices sent to `<org token>@<INBOUND_DOMAIN>`) needs an MX record and a mail worker that posts each message to `/api/inbound/email` with `INBOUND_SECRET` (#53).
+### Inbound email
+
+Invoices sent to `<org token>@<INBOUND_DOMAIN>` reach Crove through a mail worker that posts each message, as raw MIME, to `https://<your domain>/api/inbound/email` with `INBOUND_SECRET` (#53). [`tools/inbound-mail/worker.js`](../../tools/inbound-mail/worker.js) is that worker for Cloudflare Email Routing, one file with no dependencies. About 10 minutes once the domain is on Cloudflare (#53):
+
+1. Pick `INBOUND_DOMAIN`. Email Routing takes over the MX records of the name it runs on, so if the domain already receives mail elsewhere (Google Workspace, Microsoft 365), use a subdomain such as `hoadon.<your domain>`.
+2. Generate the secret on the server and put it in `/opt/crove/.env` with the domain (section 7), then redeploy so the kernel picks them up:
+   ```bash
+   openssl rand -hex 32        # INBOUND_SECRET, at least 32 characters; keep a copy in the owner's secret store
+   ```
+3. In the Cloudflare dashboard, **Workers & Pages**, **Create**, **Create Worker**: name it `crove-inbound-mail`, deploy it, then **Edit code**, replace the sample with the whole content of `tools/inbound-mail/worker.js` and **Deploy**.
+4. In the worker's **Settings**, **Variables and Secrets**, add:
+   - `KERNEL_URL`, type Text: `https://<your domain>` (the `PUBLIC_URL`; the worker refuses plain http);
+   - `INBOUND_SECRET`, type Secret: the value from step 2.
+5. On the zone of `INBOUND_DOMAIN`, **Email**, **Email Routing**: enable it (for a subdomain, add it under **Settings**, subdomains) and let Cloudflare add the MX and SPF records it proposes.
+6. **Routing rules**, **Catch-all address**: action **Send to a Worker**, destination `crove-inbound-mail`, status enabled. The catch-all is what takes every org's `<token>@` address, and the `bounce+<token>@` addresses Crove's own mails use as their Return-Path (#539).
+7. Check, from outside:
+   ```bash
+   dig +short MX <INBOUND_DOMAIN>     # Cloudflare's route*.mx.cloudflare.net servers
+   ```
+   In the app, open an org's **Settings** and copy "Địa chỉ nhận hóa đơn qua email". Send it a message with an e-invoice XML or a PDF attached from any mailbox: within a minute the document shows in that org's **Inbox**. A message to a made-up address on the domain comes back to its sender as "Unknown recipient".
+
+What the worker does with Crove's answer: accepted, done; the address is unknown, the message empty or larger than 40 MB, it rejects the message with that reason; a wrong secret, a redirect (a `KERNEL_URL` that is not the https address) or Crove being down or busy, it fails, and Email Routing's **Activity log** and the worker's **Logs** show the error. When messages are accepted but not filed, the prober's alert "oldest unrelayed inbound email ... the relay is behind or stopped" fires (README, "Monitoring and alerts"): the kernel's worker or `crove-extract` is the problem then, not the mail relay.
 
 ## 6. DNS
 
@@ -145,7 +166,7 @@ Write `/opt/crove/.env` (owner the deploy user, mode 600) from `.env.example`. G
 | `AUTH_SIGNUP_POLICY`, `AUTH_SIGNUP_ALLOWED_DOMAINS` | `invite_only` (no window needed), or unset with sign-up closed ([pilot-readiness.md](pilot-readiness.md), section 5) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | the provider's, `SMTP_FROM` on the verified domain |
 | `STORAGE` and `S3_*` | `s3`, the endpoint, region, bucket and Crove's key from section 4 |
-| `INBOUND_DOMAIN`, `INBOUND_SECRET` | per #53 |
+| `INBOUND_DOMAIN`, `INBOUND_SECRET` | section 5, "Inbound email" (#53) |
 | `ALERT_WEBHOOK_URL` and the other `ALERT_*` | the owner's Telegram or Slack (README, "Monitoring and alerts"; #309) |
 | `AI_*` | per #312; empty until then (e-invoice XML works without it) |
 
