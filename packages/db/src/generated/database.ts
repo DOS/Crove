@@ -731,6 +731,7 @@ export interface SocialPostCommentTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   edited_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
+
 /** crove_social.post_media */
 export interface SocialPostMediaTable {
   org_id: string;

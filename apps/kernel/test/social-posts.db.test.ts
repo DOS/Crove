@@ -276,6 +276,30 @@ suite('social posts on PostgreSQL (S3)', () => {
     expect(await list(new Date(), new Date(Date.now() + 24 * HOUR))).toEqual([soon.id]);
     expect((await list(new Date(), new Date(Date.now() + 72 * HOUR))).sort()).toEqual([soon.id, later.id].sort());
   });
+  it('moves a scheduled channel to another time and keeps its approval (#580)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const post = await approved(o, [conn], 'Đổi giờ');
+    const v = post.variants[0] as PostView['variants'][number];
+    await expect(exec(o, o.owner, 'social.variant.reschedule', { variantId: v.id, at: new Date(Date.now() + 3 * HOUR).toISOString() })).rejects.toMatchObject({ code: 'VARIANT_STATE' });
+    await exec(o, o.owner, 'social.variant.schedule', { postId: post.id, at: new Date(Date.now() + 2 * HOUR).toISOString() });
+    const later = new Date(Date.now() + 26 * HOUR).toISOString();
+    await expect(exec(o, o.member, 'social.variant.reschedule', { variantId: v.id, at: later })).rejects.toMatchObject({ status: 403 });
+    await expect(exec(o, o.owner, 'social.variant.reschedule', { variantId: v.id, at: new Date(Date.now() - HOUR).toISOString() })).rejects.toMatchObject({ code: 'SCHEDULE_IN_PAST' });
+    await exec(o, o.owner, 'social.variant.reschedule', { variantId: v.id, at: later });
+    const moved = (await get(o, o.owner, post.id)).variants[0];
+    expect(moved).toMatchObject({ status: 'scheduled', effectiveAt: later, revision: v.revision, contentHash: v.contentHash });
+    expect(moved?.review.approvedBy).toEqual(v.review.approvedBy);
+
+    // A channel waiting in a paused queue stays held: moving it to an exact time is refused.
+    const queued = await approved(o, [conn], 'Hàng đợi tạm dừng');
+    const slots = [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, minute: 9 * 60 }));
+    await exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots });
+    await exec(o, o.owner, 'social.variant.schedule', { postId: queued.id, queue: true });
+    await exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots, paused: true });
+    await expect(exec(o, o.owner, 'social.variant.reschedule', { variantId: queued.variants[0]?.id, at: later })).rejects.toMatchObject({ code: 'QUEUE_PAUSED' });
+  });
+
   it('filters the lists by stage, channel and text, and pages by the last change (#574)', async () => {
     const o = await org();
     const [a, b] = [await connection(o.orgId, o.owner), await connection(o.orgId, o.owner)];

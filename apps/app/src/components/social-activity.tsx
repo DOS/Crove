@@ -38,7 +38,7 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
         {item.editedAt ? ` · ${t('edited')}` : ''}
       </p>
       {item.kind === 'failed' && item.code && <p className="font-mono text-xs text-warning">{item.code}</p>}
-      {item.kind === 'published' && item.url && (
+      {item.kind === 'published' && item.url && /^https?:\/\//.test(item.url) && (
         <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-xs text-link hover:underline">
           {t('open')}
         </a>

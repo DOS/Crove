@@ -15,6 +15,31 @@ Crove is the open-source Business OS (AGPL). It must run with `docker compose up
 - The PR body says `Closes #<n>`; merging moves the issue to Done. If a task needs work in another area (for example UI for a new kernel API), open a follow-up issue (P3, Icebox, unless it blocks the current milestone) instead of growing the PR.
 - New migrations: rebase on `origin/main` right before merging and keep your migration timestamp greater than every file on `main`. The "Migration order" step of the Docs check job fails a PR that adds an older or equal version (`tools/ci/migration-order.mjs`). GitHub does not re-run PR checks when `main` moves, so after every push to `main` the migration-recheck workflow re-runs the Docs check of open PRs whose migrations fell behind (`tools/ci/migration-recheck.mjs`). When it fails, rename your migration to a version above the newest on `main` (the error suggests one), push, and never merge with the old version.
 
+## The owner, merging and reporting
+
+- The owner (JOY) does not code, run commands or merge. Agents merge their own PRs: never leave a PR that meets the bar below waiting for the owner, and never ask the owner for permission to merge it.
+- The merge bar, all on the PR's final head:
+  - every CI check is green (a neutral result or a quota notice from a review bot is not a failure);
+  - the branch is rebased on `origin/main` with no conflict, and a PR with a migration passes the migration order check;
+  - every review thread has a reply (the fix commit, or why not) and is resolved;
+  - a protected-path PR carries the security review (the agent's, or the session's own while #95 is pending).
+
+  Squash merge with the expected head SHA, then remove the worktree.
+- A review bot that is out of quota or rate limited has not reviewed the PR. Do not wait for it, retry it in a loop or work around its quota. Say so in the PR; on a protected-path PR the session's own security review stands in for it.
+- Never merge, push to or take over another session's PR unless the owner names it (for example "merge #481"). Even then, first check that it is still open and that its head matches what you checked: another agent may have merged or replaced it.
+- Ask the owner only for:
+  - a product or business decision;
+  - something only a person can do: accounts, secrets, payments, real sample files, legal or accounting sign-off;
+  - authority not yet granted.
+
+  Decide everything else yourself and say what you decided.
+- Writing to the owner:
+  - Vietnamese with full diacritics, in plain words. Explain any technical term on first use, and give every issue or PR number with its short name.
+  - Each question says what is being decided, why it matters, the options, your recommendation, and what happens if there is no answer.
+  - Name who must act on each open item: the owner, the accountant (#61, the pilot partner's accountant), a lawyer, or another agent.
+  - Links must open in a browser: GitHub URLs (`https://github.com/DOS/Crove/blob/main/<path>`, `https://github.com/DOS/Crove/issues/<n>`), never a local path or a bare file name. GitHub shows an `.html` file as source code, so publish an owner page (`*.vi.html`) as a private claude.ai artifact when the session can, or summarize it in the message.
+- Report what actually happened, and keep these words distinct: opened, merged, deployed. Say what was verified and what was not.
+
 ## Worktrees (several agents work on this repo at once)
 
 - Never edit in the main checkout (`D:\Projects\Crove` or wherever the repo is cloned). Do every task in its own worktree, on its own branch, created from a freshly fetched `origin/main`:

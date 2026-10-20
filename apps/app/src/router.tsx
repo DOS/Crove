@@ -203,7 +203,13 @@ const requireSocial = ({ params }: { params: { slug: string } }) => {
 };
 const socialRoute = createRoute({ getParentRoute: () => orgRoute, path: 'social', beforeLoad: requireSocial, component: () => <Outlet /> });
 const socialIndexRoute = createRoute({ getParentRoute: () => socialRoute, path: '/', validateSearch: parseSocialSearch, component: SocialPage });
-const socialNewRoute = createRoute({ getParentRoute: () => socialRoute, path: 'new', component: SocialComposePage });
+// ?at=<ISO time>: the calendar starts a post planned for that time (#580).
+const socialNewRoute = createRoute({
+  getParentRoute: () => socialRoute,
+  path: 'new',
+  validateSearch: (search: Record<string, unknown>): { at?: string } => (typeof search.at === 'string' && !Number.isNaN(Date.parse(search.at)) ? { at: new Date(search.at).toISOString() } : {}),
+  component: SocialComposePage,
+});
 const socialChannelsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'channels', component: SocialChannelsPage });
 const socialImportRoute = createRoute({ getParentRoute: () => socialRoute, path: 'import', component: SocialImportPage });
 const socialPostRoute = createRoute({ getParentRoute: () => socialRoute, path: '$id', component: SocialPostPage });

@@ -73,6 +73,7 @@ const suite = ADMIN ? describe : describe.skip;
 suite('ledger reports per month, quarter or year (#321)', () => {
   const dbName = `crove_test_ledger_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let adminUrl = '';
+  let appUrl = '';
   let pool: pg.Pool;
   let workerPool: pg.Pool;
   let runtime: Runtime;
@@ -175,7 +176,7 @@ suite('ledger reports per month, quarter or year (#321)', () => {
       url.password = password;
       return url.toString();
     };
-    const appUrl = login('crove_app', 'test-app-pw');
+    appUrl = login('crove_app', 'test-app-pw');
     pool = createPool({ connectionString: appUrl, max: 4 });
     const db: Db = createDb(pool);
     workerPool = createPool({ connectionString: login('crove_worker', 'test-worker-pw'), max: 2 });
@@ -226,6 +227,40 @@ suite('ledger reports per month, quarter or year (#321)', () => {
     const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
     expect(approved.status).toBe(200);
   });
+
+  // A runtime of its own pool whose connection runs `between` once, right after the first statement that reads
+  // journal lines has returned and before the next one is sent (#365): whatever `between` commits lands between the
+  // reads of a report that reads in more than one statement.
+  function pausedRuntime(between: () => Promise<void>) {
+    let pending: (() => Promise<void>) | null = between;
+    const paused = createPool({ connectionString: appUrl, max: 1 });
+    paused.on('connect', (client) => {
+      const query = client.query.bind(client) as (...args: unknown[]) => unknown;
+      client.query = (async (...args: unknown[]) => {
+        const result = await query(...args);
+        if (pending && typeof args[0] === 'string' && args[0].includes('journal_line')) {
+          const run = pending;
+          pending = null;
+          await run();
+        }
+        return result;
+      }) as typeof client.query;
+    });
+    const reader = new Runtime(createDb(paused)).register({
+      commands: [...kernelCommands, ...financeCommands],
+      queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
+    });
+    return { runtime: reader, ran: () => pending === null, end: () => paused.end() };
+  }
+
+  // A new org of the owner's with one September invoice, for the tests that post while a report reads.
+  async function freshOrg(name: string, invoiceNumber: string): Promise<OrgRef> {
+    const created = await rpc('org/create', await tokenFor(owner), { name, idempotencyKey: randomUUID() }, null);
+    expect(created.status).toBe(200);
+    const fresh = { slug: String(created.body?.slug), orgId: String(created.body?.orgId) };
+    await record(fresh, owner, invoiceNumber, '2026-09-10');
+    return fresh;
+  }
 
   afterAll(async () => {
     await pool?.end();
@@ -433,5 +468,66 @@ suite('ledger reports per month, quarter or year (#321)', () => {
     expect((await statementAudits()).map((r) => r.detail)).toEqual([{ period: '2026-09' }]);
     expect((await statementsFile(await tokenFor(owner), '2026-Q9')).status).toBe(422);
     expect(await statementAudits()).toHaveLength(1);
+  });
+
+  it('reads the ledger reports at one moment while entries are posted (#365)', async () => {
+    const fresh = await freshOrg('Công ty Một thời điểm', '5001');
+    const actor = { actor: asUser(owner), orgId: fresh.orgId };
+    // Posted while the report reads: an August invoice, then its reversal in September. Read at two moments, the
+    // report would show the reversal (a September line) without the invoice it undoes (an opening balance).
+    const post = async () => {
+      const late = await record(fresh, owner, '5002', '2026-08-25');
+      const asked = await rpc(
+        'inbox/request',
+        await tokenFor(owner),
+        { command: 'finance.journal.reverse', input: { entryId: late.journalEntryId, entryDate: '2026-09-28', reason: 'Hóa đơn ghi nhầm' }, idempotencyKey: randomUUID() },
+        fresh.slug,
+      );
+      expect(asked.status).toBe(200);
+      const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() }, fresh.slug);
+      expect(approved.status).toBe(200);
+    };
+
+    const before = await runtime.query<{ trialBalance: { rows: TrialRow[] } }>('finance.ledger.book', { period: '2026-09' }, actor);
+    expect(amounts(rowOf(before.trialBalance.rows, '331'))).toEqual(['0', '0', '0', '1980000', '0', '1980000']);
+    const paused = pausedRuntime(post);
+    let during: unknown;
+    try {
+      during = await paused.runtime.query('finance.ledger.book', { period: '2026-09' }, actor);
+    } finally {
+      await paused.end();
+    }
+    expect(paused.ran()).toBe(true);
+    // The whole report is the moment its one statement began: none of what was posted while it read.
+    expect(during).toEqual(before);
+
+    // Both entries are committed: the next read has the August invoice as the opening balance and its reversal.
+    const after = await runtime.query<{ trialBalance: { rows: TrialRow[]; balanced: boolean } }>('finance.ledger.book', { period: '2026-09' }, actor);
+    expect(amounts(rowOf(after.trialBalance.rows, '331'))).toEqual(['0', '1980000', '1980000', '1980000', '0', '1980000']);
+    expect(after.trialBalance.balanced).toBe(true);
+  });
+
+  it('reads B01 and B02 at one moment while entries are posted (#365)', async () => {
+    const fresh = await freshOrg('Công ty Báo cáo một thời điểm', '6001');
+    const actor = { actor: asUser(owner), orgId: fresh.orgId };
+    type Statements = { b01: { lines: StatementLine[] }; b02: { lines: StatementLine[] } };
+    const before = await runtime.query<Statements>('finance.statements.period', { period: '2026-09' }, actor);
+    expect(nonZero(before.b02.lines)[0]).toEqual(['24', '1800000', false]);
+    // A September invoice posted while the statements read. Read at two moments, B02 could count its expense while
+    // B01 at the period end does not.
+    const paused = pausedRuntime(async () => {
+      await record(fresh, owner, '6002', '2026-09-20');
+    });
+    let during: unknown;
+    try {
+      during = await paused.runtime.query('finance.statements.period', { period: '2026-09' }, actor);
+    } finally {
+      await paused.end();
+    }
+    expect(paused.ran()).toBe(true);
+    expect(during).toEqual(before);
+    const after = await runtime.query<Statements>('finance.statements.period', { period: '2026-09' }, actor);
+    expect(nonZero(after.b02.lines)[0]).toEqual(['24', '3600000', false]);
+    expect(nonZero(after.b01.lines).find(([code]) => code === '417')).toEqual(['417', '-3600000', false]);
   });
 });

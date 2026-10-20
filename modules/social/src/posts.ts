@@ -666,6 +666,35 @@ export const variantUnschedule = defineCommand({
   },
 });
 
+// Moves a scheduled variant to another time (#580, the calendar's drag): its approvals stay, since its content does
+// not change. A variant waiting on a queue slot leaves the slot for the exact time.
+export const variantReschedule = defineCommand({
+  name: 'social.variant.reschedule',
+  input: z.strictObject({ variantId: zId, at: z.iso.datetime({ offset: true }) }),
+  risk: 'R2',
+  access: ADMINS,
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const postId = await variantPost(ctx.trx, ctx.orgId, [input.variantId]);
+    await lockPost(ctx.trx, ctx.orgId, postId);
+    const [v] = pick(await lockVariants(ctx.trx, ctx.orgId, postId), [input.variantId]);
+    if (!v) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy kênh này của bài đăng');
+    if (v.status !== 'scheduled') throw new DomainError('VARIANT_STATE', 409, 'Chỉ đổi giờ được kênh đã lên lịch', { variantId: v.id, status: v.status });
+    const at = new Date(Date.parse(input.at));
+    if (at.getTime() <= ctx.now.getTime()) throw new DomainError('SCHEDULE_IN_PAST', 422, 'Giờ đăng phải ở tương lai', { variantId: v.id });
+    // A variant waiting on a slot of a paused queue stays held by the pause: moving it to an exact time would let it go out.
+    if (v.queue_slot_at && !v.scheduled_at && !v.error_retry_at) {
+      const queue = await ctx.trx.selectFrom('crove_social.queue').select('paused').where('org_id', '=', ctx.orgId).where('channel_connection_id', '=', v.channel_connection_id).executeTakeFirst();
+      if (queue?.paused) throw new DomainError('QUEUE_PAUSED', 409, 'Hàng đợi của kênh này đang tạm dừng; hãy chạy lại hàng đợi hoặc bỏ lịch trước', { variantId: v.id });
+    }
+    // The earlier refusal and its retry time belong to the old time.
+    await setVariant(ctx, v.id, { ...CLEAR_ERROR, scheduled_at: at, queue_slot_at: null });
+    await refreshPostStatus(ctx, postId);
+    await ctx.emit('social.variant.scheduled', { post_id: postId, variant_ids: [v.id], rescheduled: true });
+    return { postId, variantId: v.id, at: at.toISOString() };
+  },
+});
+
 export const variantCancel = defineCommand({
   name: 'social.variant.cancel',
   input: z.strictObject({ variantIds: zVariantIds }),
@@ -1118,6 +1147,7 @@ export const socialCommands = [
   variantDecide,
   variantSchedule,
   variantUnschedule,
+  variantReschedule,
   variantCancel,
   queueSet,
   ...publishingCommands,
