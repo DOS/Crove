@@ -166,6 +166,8 @@ export const KERNEL_ERROR_CODES = [
   // Crove Social and connected channels.
   'POST_NOT_FOUND',
   'VARIANT_NOT_FOUND',
+  'COMMENT_NOT_FOUND',
+  'COMMENT_EDIT_CLOSED',
   'VARIANTS_OF_SEVERAL_POSTS',
   'VARIANT_STATE',
   'VARIANT_INVALID',
