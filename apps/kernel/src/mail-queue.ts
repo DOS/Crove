@@ -74,8 +74,13 @@ export async function sweepMail(boss: Sender, workerDb: Db, runtime: Runtime, ma
       continue;
     }
     const queue = row.stream === 'marketing' ? MAIL_BULK_QUEUE : MAIL_SEND_QUEUE;
-    await boss.send(queue, { orgId: row.org_id, messageId: row.message_id } satisfies MailJob, { singletonKey: row.message_id, retryLimit: 2, retryDelay: 30 });
-    queued++;
+    // One mail that cannot be queued (a lost connection) leaves the others to this pass and itself to the next.
+    try {
+      await boss.send(queue, { orgId: row.org_id, messageId: row.message_id } satisfies MailJob, { singletonKey: row.message_id, retryLimit: 2, retryDelay: 30 });
+      queued++;
+    } catch (error) {
+      console.error(`[mail] \${row.message_id.slice(0, 8)} not queued: \${mailErrorCode(error)}`);
+    }
   }
   return queued;
 }
