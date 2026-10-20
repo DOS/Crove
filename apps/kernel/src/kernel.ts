@@ -50,7 +50,7 @@ import {
   type SessionStatusSource,
 } from '@crove/kernel-runtime';
 import { financeAgentPrograms, financeCommands, financeQueries } from '@crove/mod-finance';
-import { socialCommands, socialQueries } from '@crove/mod-social';
+import { socialAgentPrograms, socialCommands, socialQueries } from '@crove/mod-social';
 import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, assertExportKey, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
@@ -357,7 +357,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             inboundDomain: config.INBOUND_DOMAIN ?? null,
             revoker: resolved.identity.revoker,
             refusalTallyRetentionDays: config.REFUSAL_TALLY_RETENTION_DAYS,
-            agentPrograms: financeAgentPrograms,
+            agentPrograms: { ...financeAgentPrograms, ...socialAgentPrograms },
             exportSealer: exportSealer(config),
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,
             channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config) },
