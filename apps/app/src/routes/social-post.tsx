@@ -951,10 +951,13 @@ export function SocialComposePage() {
   // AI drafting (S7): the server asks the model for a draft of the brief for the chosen channels and saves it as a
   // new post marked as written by AI; every channel of it is reviewed before it can go out.
   const [brief, setBrief] = useState(() => (occasion ? tOcc('brief', occasion) : ''));
+  // A page to write about (#769): the post links to it.
+  const [sourceUrl, setSourceUrl] = useState('');
+  const source = /^https?:\/\/\S+$/.test(sourceUrl.trim()) ? sourceUrl.trim() : null;
   const locale = useLocale();
   const aiEnabled = getConfig().aiEnabled === true;
   const aiDraft = useMutation({
-    mutationFn: () => client.social.posts.draftWithAi({ brief: brief.trim(), connectionIds: chosen, language: locale === 'en' ? 'en' : 'vi' }),
+    mutationFn: () => client.social.posts.draftWithAi({ brief: brief.trim(), connectionIds: chosen, language: locale === 'en' ? 'en' : 'vi', ...(source ? { sourceUrl: source } : {}) }),
     onSuccess: ({ postId }) => {
       leaving.current = true;
       void queryClient.invalidateQueries();
@@ -1097,8 +1100,15 @@ export function SocialComposePage() {
                   setBrief(e.target.value);
                   if (aiDraft.error) aiDraft.reset();
                 }} />
+                <Label htmlFor="social-ai-source" className="text-xs">
+                  {t('aiSource')}
+                </Label>
+                <Input id="social-ai-source" type="url" value={sourceUrl} placeholder="https://" disabled={aiDraft.isPending} onChange={(e) => {
+                  setSourceUrl(e.target.value);
+                  if (aiDraft.error) aiDraft.reset();
+                }} />
                 <p className="text-xs text-subtle-foreground">{t('aiDraftHint')}</p>
-                <Button variant="outline" size="sm" disabled={!brief.trim() || chosen.length === 0 || aiDraft.isPending} onClick={() => aiDraft.mutate()}>
+                <Button variant="outline" size="sm" disabled={(!brief.trim() && !source) || (sourceUrl.trim() !== '' && !source) || chosen.length === 0 || aiDraft.isPending} onClick={() => aiDraft.mutate()}>
                   {aiDraft.isPending ? <Spinner className="text-current" /> : null}
                   {t('aiDraft')}
                 </Button>
