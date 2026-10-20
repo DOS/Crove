@@ -11,6 +11,7 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
+import { SocialCalendar } from '../components/social-calendar.tsx';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -18,8 +19,8 @@ import { errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { dayKey, providerName, VARIANT_TONE } from '../lib/social.ts';
 import { pollEvery, SAFETY_POLL_MS, useStreamLive } from '../lib/stream-hook.ts';
 
-type Tab = 'upcoming' | 'review' | 'drafts' | 'done' | 'metrics' | 'library';
-const TABS: Tab[] = ['upcoming', 'review', 'drafts', 'done', 'metrics', 'library'];
+type Tab = 'upcoming' | 'calendar' | 'review' | 'drafts' | 'done' | 'metrics' | 'library';
+const TABS: Tab[] = ['upcoming', 'calendar', 'review', 'drafts', 'done', 'metrics', 'library'];
 // The counts the analytics table shows, in order; a platform that does not report one shows a dash.
 const METRIC_COLUMNS = ['reach', 'reactions', 'comments', 'shares'] as const;
 const DAY = 86_400_000;
@@ -349,7 +350,7 @@ export function SocialPage() {
   const names = new Map((channels.data ?? []).map((c) => [c.id, c.displayName]));
   const noChannels = channels.isSuccess && channels.data.length === 0;
 
-  const lists: Record<Exclude<Tab, 'upcoming' | 'metrics' | 'library'>, Post[]> = {
+  const lists: Record<Exclude<Tab, 'upcoming' | 'calendar' | 'metrics' | 'library'>, Post[]> = {
     review: (all.data ?? []).filter((p) => p.variants.some((v) => v.status === 'in_review')),
     drafts: (all.data ?? []).filter((p) => p.status === 'draft' && !p.variants.some((v) => v.status === 'in_review')),
     done: (all.data ?? []).filter((p) => ['published', 'partially_published', 'failed', 'publishing', 'cancelled'].includes(p.status)),
@@ -401,6 +402,7 @@ export function SocialPage() {
         <TabsContent value="upcoming">
           {upcoming.isLoading ? <Spinner /> : upcoming.error ? <ErrorText>{errorMessage(upcoming.error)}</ErrorText> : <Agenda posts={upcoming.data ?? []} slug={slug} names={names} />}
         </TabsContent>
+        <TabsContent value="calendar">{tab === 'calendar' && <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} />}</TabsContent>
         <TabsContent value="metrics">
           <Metrics slug={slug} names={names} />
         </TabsContent>

@@ -276,6 +276,22 @@ suite('social posts on PostgreSQL (S3)', () => {
     expect(await list(new Date(), new Date(Date.now() + 24 * HOUR))).toEqual([soon.id]);
     expect((await list(new Date(), new Date(Date.now() + 72 * HOUR))).sort()).toEqual([soon.id, later.id].sort());
   });
+  it('moves a scheduled channel to another time and keeps its approval (#580)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const post = await approved(o, [conn], 'Đổi giờ');
+    const v = post.variants[0] as PostView['variants'][number];
+    await expect(exec(o, o.owner, 'social.variant.reschedule', { variantId: v.id, at: new Date(Date.now() + 3 * HOUR).toISOString() })).rejects.toMatchObject({ code: 'VARIANT_STATE' });
+    await exec(o, o.owner, 'social.variant.schedule', { postId: post.id, at: new Date(Date.now() + 2 * HOUR).toISOString() });
+    const later = new Date(Date.now() + 26 * HOUR).toISOString();
+    await expect(exec(o, o.member, 'social.variant.reschedule', { variantId: v.id, at: later })).rejects.toMatchObject({ status: 403 });
+    await expect(exec(o, o.owner, 'social.variant.reschedule', { variantId: v.id, at: new Date(Date.now() - HOUR).toISOString() })).rejects.toMatchObject({ code: 'SCHEDULE_IN_PAST' });
+    await exec(o, o.owner, 'social.variant.reschedule', { variantId: v.id, at: later });
+    const moved = (await get(o, o.owner, post.id)).variants[0];
+    expect(moved).toMatchObject({ status: 'scheduled', effectiveAt: later, revision: v.revision, contentHash: v.contentHash });
+    expect(moved?.review.approvedBy).toEqual(v.review.approvedBy);
+  });
+
   it('stores an override equal to the base, and inheriting again, though the effective content does not change', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);

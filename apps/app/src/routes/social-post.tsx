@@ -1,7 +1,7 @@
 // Compose a post and work on it: shared text, a variant per channel that inherits it or has its own text, live
 // channel rules and a preview, then review (owners and admins decide on what they see), schedule and cancel.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useNavigate, useParams } from '@tanstack/react-router';
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
@@ -264,12 +264,16 @@ const mediaItems = (media: readonly { fileId: string; altText: string | null; mi
 export function SocialComposePage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('social');
+  const f = useFormat();
   const navigate = useNavigate();
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
   const [base, setBase] = useState<Base>({ body: '', title: '', linkUrl: '', media: [] });
   const [chosen, setChosen] = useState<string[]>([]);
   const [own, setOwn] = useState<Record<string, Own>>({});
   const live = (channels.data ?? []).filter((c) => c.status === 'active');
+  // A planned time from the calendar (#580), kept on the draft; scheduling starts from it.
+  const search: { at?: string } = useSearch({ strict: false });
+  const [plannedAt, setPlannedAt] = useState<string | null>(() => (search.at && Date.parse(search.at) > Date.now() ? search.at : null));
   useEffect(() => {
     // The only channel is chosen for you.
     if (chosen.length === 0 && live.length === 1 && live[0]) setChosen([live[0].id]);
@@ -285,6 +289,7 @@ export function SocialComposePage() {
         title: orNull(base.title),
         linkUrl: orNull(base.linkUrl),
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        ...(plannedAt ? { scheduledAt: plannedAt } : {}),
         media: mediaInput(base.media),
         channels: chosen.map((connectionId) => {
           const mine = own[connectionId] ?? EMPTY_OWN;
@@ -353,6 +358,14 @@ export function SocialComposePage() {
         <div className="mb-4">
           <ErrorText>{errorMessage(create.error)}</ErrorText>
         </div>
+      )}
+      {plannedAt && (
+        <p className="mb-4 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          {t('plannedFor', { when: f.dateTime(plannedAt) })}
+          <Button variant="ghost" size="sm" onClick={() => setPlannedAt(null)}>
+            {t('plannedClear')}
+          </Button>
+        </p>
       )}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
@@ -647,6 +660,39 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
   }
 }
 
+// Another time for a scheduled channel, its approvals kept (#580): the calendar's drag, from the keyboard.
+function MoveTime({ variantId, at, onDone }: { variantId: string; at: string | null; onDone: () => void }) {
+  const t = useTranslations('social');
+  const [open, setOpen] = useState(false);
+  const [when, setWhen] = useState(() => toLocalInput(at ?? new Date(Date.now() + 3_600_000).toISOString()));
+  const move = useMutation({
+    mutationFn: () => client.social.variants.reschedule({ variantId, at: fromLocalInput(when) as string }),
+    onSuccess: () => {
+      setOpen(false);
+      onDone();
+    },
+  });
+  if (!open) {
+    return (
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        {t('moveTime')}
+      </Button>
+    );
+  }
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <Input type="datetime-local" aria-label={t('moveTime')} value={when} min={toLocalInput(new Date().toISOString())} onChange={(e) => setWhen(e.target.value)} className="h-8 max-w-56" />
+      <Button size="sm" disabled={move.isPending || !fromLocalInput(when)} onClick={() => move.mutate()}>
+        {t('moveTimeSave')}
+      </Button>
+      <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+        {t('keep')}
+      </Button>
+      {move.error && <ErrorText>{errorMessage(move.error)}</ErrorText>}
+    </span>
+  );
+}
+
 // Each post gets fresh page state: the route keeps the page mounted when it opens another post (a repost, its source).
 export function SocialPostPage() {
   const { slug, id: postId } = useParams({ strict: false }) as { slug: string; id: string };
@@ -881,6 +927,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                           </Button>
                         </>
                       )}
+                      {canDecide && v.status === 'scheduled' && <MoveTime variantId={v.id} at={v.effectiveAt} onDone={refresh} />}
                       {canDecide && ['scheduled', 'paused'].includes(v.status) && (
                         <Button variant="outline" size="sm" disabled={unschedule.isPending} onClick={() => unschedule.mutate(v.id)}>
                           {t('unschedule')}

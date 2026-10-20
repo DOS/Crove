@@ -1,7 +1,7 @@
 import { createContext, useContext, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { IntlProvider, useTranslations } from 'use-intl';
-import { formatDate, formatDateTime, formatTime, formatDecimal, formatMoney, formatNumber } from '../lib/format.ts';
+import { formatDate, formatDateTime, formatTime, formatDecimal, formatMoney, formatMonthYear, formatNumber, formatWeekdayShort } from '../lib/format.ts';
 import { LOCALES, LOCALE_NAMES, type Locale } from './locale.ts';
 import { CATALOGS, activeLocale, setActiveLocale, subscribeLocale } from './runtime.ts';
 
@@ -43,6 +43,8 @@ export function useFormat() {
       date: (value: string | null | undefined) => formatDate(value, locale),
       dateTime: (value: string | null | undefined) => formatDateTime(value, locale),
       time: (value: string | null | undefined) => formatTime(value, locale),
+      monthYear: (value: string) => formatMonthYear(value, locale),
+      weekdayShort: (value: string) => formatWeekdayShort(value, locale),
     }),
     [locale],
   );

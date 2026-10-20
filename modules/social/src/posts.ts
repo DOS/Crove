@@ -575,6 +575,29 @@ export const variantUnschedule = defineCommand({
   },
 });
 
+// Moves a scheduled variant to another time (#580, the calendar's drag): its approvals stay, since its content does
+// not change. A variant waiting on a queue slot leaves the slot for the exact time.
+export const variantReschedule = defineCommand({
+  name: 'social.variant.reschedule',
+  input: z.strictObject({ variantId: zId, at: z.iso.datetime({ offset: true }) }),
+  risk: 'R2',
+  access: ADMINS,
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const postId = await variantPost(ctx.trx, ctx.orgId, [input.variantId]);
+    await lockPost(ctx.trx, ctx.orgId, postId);
+    const [v] = pick(await lockVariants(ctx.trx, ctx.orgId, postId), [input.variantId]);
+    if (!v) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy kênh này của bài đăng');
+    if (v.status !== 'scheduled') throw new DomainError('VARIANT_STATE', 409, 'Chỉ đổi giờ được kênh đã lên lịch', { variantId: v.id, status: v.status });
+    const at = new Date(Date.parse(input.at));
+    if (at.getTime() <= ctx.now.getTime()) throw new DomainError('SCHEDULE_IN_PAST', 422, 'Giờ đăng phải ở tương lai', { variantId: v.id });
+    await setVariant(ctx, v.id, { scheduled_at: at, queue_slot_at: null, error_retry_at: null });
+    await refreshPostStatus(ctx, postId);
+    await ctx.emit('social.variant.scheduled', { post_id: postId, variant_ids: [v.id], rescheduled: true });
+    return { postId, variantId: v.id, at: at.toISOString() };
+  },
+});
+
 export const variantCancel = defineCommand({
   name: 'social.variant.cancel',
   input: z.strictObject({ variantIds: zVariantIds }),
@@ -979,6 +1002,7 @@ export const socialCommands = [
   variantDecide,
   variantSchedule,
   variantUnschedule,
+  variantReschedule,
   variantCancel,
   queueSet,
   ...publishingCommands,
