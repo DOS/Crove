@@ -12,6 +12,9 @@ const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const EXCERPT = 200;
 // The most posts the inbox lists; the Social home holds the rest.
 export const REVIEW_INBOX_MAX = 50;
+// The most channels in review one read looks at, oldest first. Each waits for a person, so an org has few; the cap
+// keeps the menu's poll bounded when one does not, and the total then counts what was looked at.
+export const REVIEW_SCAN_MAX = 500;
 
 export interface ReviewInboxItem {
   postId: string;
@@ -47,6 +50,7 @@ export const reviewInbox = defineQuery({
       .where('v.status', '=', 'in_review')
       .orderBy('v.updated_at', 'asc')
       .orderBy('v.id', 'asc')
+      .limit(REVIEW_SCAN_MAX)
       .execute();
     const decisions = await decisionsOf(ctx.trx, ctx.orgId, rows.map((r) => r.variant_id));
     const ownChannels = [...new Set(rows.filter((r) => r.author_user_id === userId).map((r) => r.channel_connection_id))];
@@ -59,7 +63,8 @@ export const reviewInbox = defineQuery({
       const item = posts.get(r.post_id) ?? {
         postId: r.post_id,
         title: r.title,
-        excerpt: excerptOf(r.body || r.variant_body || ''),
+        // The text the reviewer approves: the channel's own text where it has one (null inherits the post's).
+        excerpt: excerptOf(r.variant_body ?? r.body ?? ''),
         channels: [],
         at: null,
         submittedAt: r.updated_at.toISOString(),

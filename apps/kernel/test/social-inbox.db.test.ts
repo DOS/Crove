@@ -146,5 +146,9 @@ suite('social reviews in the inbox on PostgreSQL (#749)', () => {
     expect(listed.items).toHaveLength(1);
     expect(listed.items[0]?.channels).toHaveLength(2);
     expect(listed.items[0]).toMatchObject({ title: null, excerpt: 'Hai kênh', at: at.toISOString() });
+    // A channel with its own text shows that text, the one its reviewer approves.
+    const own = (await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Chung', channels: [{ connectionId: a, body: 'Riêng của kênh' }] })).postId;
+    await exec(o, o.member, 'social.post.submit', { postId: own });
+    expect((await inbox(o, o.owner)).items.find((i) => i.postId === own)?.excerpt).toBe('Riêng của kênh');
   });
 });
