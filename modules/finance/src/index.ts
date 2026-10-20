@@ -1,6 +1,6 @@
 import { createAccount, setVendorDefaultAccount, updateAccount } from './accounts.ts';
 import { recordPurchase, revisePurchase } from './record.ts';
-import { prepareVoucher, recordVoucher, vouchersList } from './cash-voucher.ts';
+import { cashVouchers, prepareVoucher, recordVoucher, vouchersList } from './cash-voucher.ts';
 import { prepareReversal, reverseEntry } from './reversal.ts';
 import { openingBalancePost, openingBalancePreview } from './opening-balance.ts';
 import { fileForExtraction, purchaseLookup } from './extract.ts';
@@ -32,11 +32,15 @@ export { buildVat01Xml } from './vat-xml.ts';
 export { buildLedgerWorkbook } from './ledger-export.ts';
 export { buildStatementsWorkbook } from './statements-export.ts';
 export {
+  MISA_SME_CASH_PAYMENT,
+  MISA_SME_CASH_RECEIPT,
   MISA_SME_PURCHASE_SERVICE,
   MISA_SME_SALES,
   buildMisaWorkbook,
+  cashRows,
   purchaseRows,
   salesRows,
+  type CashVoucher,
   type PurchaseVoucher,
   type SalesVoucher,
 } from './misa.ts';
@@ -88,6 +92,7 @@ export const financeQueries = [
   statementsPeriodQuery,
   openingBalancePreview,
   vouchersList,
+  cashVouchers,
   portalListSource,
   portalListReconcile,
   periodLockStateQuery,

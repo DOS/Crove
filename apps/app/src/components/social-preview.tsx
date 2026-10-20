@@ -1,7 +1,7 @@
 // The composer's preview of a channel (#588): the post laid out the way its platform shows it in the feed, with the
 // text cut where the platform cuts it, images in its frame and a link card where it makes one.
 import { useEffect, useState } from 'react';
-import { isProvider, LINK_PLACEMENT, sentText } from '@crove/mod-social/contract';
+import { isProvider, LINK_PLACEMENT, sentText, type Cover } from '@crove/mod-social/contract';
 import { useTranslations } from 'use-intl';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, type MediaItem } from './social-media.tsx';
@@ -13,6 +13,8 @@ export interface PreviewContent {
   title: string;
   linkUrl: string;
   media: readonly MediaItem[];
+  // A video's cover (#642): a frame of it, or an image shown in its place.
+  cover?: Cover | null;
 }
 
 function hostOf(link: string): string {
@@ -23,16 +25,22 @@ function hostOf(link: string): string {
   }
 }
 
-function Media({ media, layout, max }: { media: readonly MediaItem[]; layout: string; max: number }) {
+function Media({ media, layout, max, cover }: { media: readonly MediaItem[]; layout: string; max: number; cover?: Cover | null | undefined }) {
   const t = useTranslations('social');
   if (media.length === 0) return null;
   const alt = (m: MediaItem, i: number) => m.altText || t('imageAlt', { n: String(i + 1) });
   if (layout === 'vertical' || layout === 'video' || layout === 'square' || layout === 'article') {
     const first = media[0] as MediaItem;
     const frame = layout === 'vertical' ? 'aspect-[9/16] max-h-96' : layout === 'video' ? 'aspect-video' : layout === 'square' ? 'aspect-square' : 'aspect-[16/9]';
+    // One video with a cover shows the cover, as the feed does before the video plays.
+    const covered = media.length === 1 && first.mime.startsWith('video/') ? cover : null;
     return (
       <div className="relative mt-3">
-        <Thumb fileId={first.fileId} alt={alt(first, 0)} mime={first.mime} durationMs={first.durationMs} className={cn(frame, 'mx-auto w-full')} />
+        {covered && 'fileId' in covered ? (
+          <Thumb fileId={covered.fileId} alt={t('coverImageAlt')} mime="image/jpeg" className={cn(frame, 'mx-auto w-full')} />
+        ) : (
+          <Thumb fileId={first.fileId} alt={alt(first, 0)} mime={first.mime} durationMs={first.durationMs} frameMs={covered?.atMs} className={cn(frame, 'mx-auto w-full')} />
+        )}
         {media.length > 1 && (
           <span className="absolute top-2 right-2 rounded-full bg-background/80 px-2 text-xs text-foreground tabular-nums" aria-label={t('previewCount', { count: media.length })}>
             1/{media.length}
@@ -108,7 +116,7 @@ export function PlatformPreview({ channel, provider, content }: { channel: strin
     // TikTok: the video fills the frame, the caption sits over its lower part.
     return (
       <div className="mx-auto max-w-56 rounded-xl border bg-background p-2">
-        <Media media={content.media} layout="vertical" max={1} />
+        <Media media={content.media} layout="vertical" max={1} cover={content.cover} />
         <div className="mt-2 space-y-1">
           <p className="text-xs font-semibold text-foreground">@{channel.replace(/^@/, '')}</p>
           {body}
@@ -120,7 +128,7 @@ export function PlatformPreview({ channel, provider, content }: { channel: strin
     // YouTube: the video first, its title under it, the description below.
     return (
       <div className="rounded-xl border bg-background p-3">
-        <Media media={content.media} layout="video" max={1} />
+        <Media media={content.media} layout="video" max={1} cover={content.cover} />
         <p className="mt-2 text-sm font-semibold text-foreground">{title || t('previewNoTitle')}</p>
         <p className="text-xs text-subtle-foreground">{channel}</p>
         <div className="mt-2 rounded-lg bg-muted p-2">{body}</div>
@@ -143,7 +151,7 @@ export function PlatformPreview({ channel, provider, content }: { channel: strin
     return (
       <div className="rounded-xl border bg-background p-3">
         {header}
-        <Media media={content.media} layout="square" max={1} />
+        <Media media={content.media} layout="square" max={1} cover={content.cover} />
         <div className="mt-2">{body}</div>
         {plainLink}
       </div>

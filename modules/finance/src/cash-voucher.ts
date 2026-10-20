@@ -11,6 +11,8 @@
 //   more than it checks; applied migrations are never edited). The entry is this transaction's because this command
 //   writes it right after the insert, for a voucher id the database has just generated.
 // - finance.vouchers.list: the posted vouchers, page by page, with their reversal when their entry was reversed.
+// - finance.vouchers.cash: the posted phiếu thu or phiếu chi of a date range, with their lines, for the MISA SME
+//   export (#657).
 // A voucher is corrected by reversing its entry (finance.journal.reverse); it keeps its number and shows as reversed.
 // A bank voucher may be made from a bank statement line (#326, bank-match.ts): it then names the line (bankLineId),
 // follows it (account, date, direction, amount) and settles it; both commands check that, and the database holds it.
@@ -46,6 +48,8 @@ import {
   type VoucherProblem,
 } from './domain/cash-voucher.ts';
 import { postJournalEntry } from './ledger.ts';
+import type { CashVoucher } from './misa.ts';
+import { JOURNAL_EXPORT_LIMIT } from './queries.ts';
 
 const REQUESTERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -259,6 +263,83 @@ export const vouchersList = defineQuery({
       proposalId: r.proposal_id,
     }));
     return { items, more: rows.length > VOUCHER_PAGE_SIZE };
+  },
+});
+
+// The cash vouchers of one type for the MISA SME export (GET /api/export/misa/receipts.xlsx and payments.xlsx,
+// #657), oldest first, with their lines as posted: every line of the voucher's entry but the cash line. A voucher
+// whose entry was reversed is left out: it is no longer in Crove's books. At most `limit` vouchers.
+export const cashVouchers = defineQuery({
+  name: 'finance.vouchers.cash',
+  input: z.object({
+    from: zLocalDate.optional(),
+    to: zLocalDate.optional(),
+    type: z.enum(['cash_receipt', 'cash_payment']),
+    limit: z.number().int().positive().max(JOURNAL_EXPORT_LIMIT).optional(),
+  }),
+  access: ALL,
+  handler: async (ctx, input): Promise<CashVoucher[]> => {
+    let query = ctx.trx
+      .selectFrom('crove_finance.cash_voucher as v')
+      .innerJoin('crove_finance.journal_entry as j', (join) =>
+        join.onRef('j.org_id', '=', 'v.org_id').onRef('j.source_id', '=', 'v.id').on('j.source_type', '=', VOUCHER_SOURCE).on('j.reverses_entry_id', 'is', null),
+      )
+      .leftJoin('crove_finance.journal_entry as r', (join) => join.onRef('r.org_id', '=', 'j.org_id').onRef('r.reverses_entry_id', '=', 'j.id'))
+      .leftJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'v.org_id').onRef('p.id', '=', 'v.party_id'))
+      .select([
+        'v.voucher_type',
+        'v.number',
+        'v.voucher_date',
+        'v.cash_account',
+        'v.person_name',
+        'v.description',
+        'j.id as entry_id',
+        'p.name as party_name',
+        'p.tax_code as party_tax_code',
+        'p.address as party_address',
+      ])
+      .where('v.org_id', '=', ctx.orgId)
+      .where('v.voucher_type', '=', input.type)
+      .where('r.id', 'is', null)
+      .orderBy('v.voucher_date')
+      .orderBy('v.number')
+      .limit(input.limit ?? 1000);
+    if (input.from) query = query.where('v.voucher_date', '>=', input.from);
+    if (input.to) query = query.where('v.voucher_date', '<=', input.to);
+    const vouchers = await query.execute();
+    if (vouchers.length === 0) return [];
+    const lines = await ctx.trx
+      .selectFrom('crove_finance.journal_line')
+      .select(['entry_id', 'line_no', 'account_code', 'debit', 'credit', 'memo'])
+      .where('org_id', '=', ctx.orgId)
+      .where(
+        'entry_id',
+        'in',
+        vouchers.map((v) => v.entry_id),
+      )
+      .orderBy('entry_id')
+      .orderBy('line_no')
+      .execute();
+    const byEntry = new Map<string, CashVoucher['lines']>();
+    const cashAccountOf = new Map(vouchers.map((v) => [v.entry_id, v.cash_account]));
+    for (const l of lines) {
+      // The cash line carries the total; a voucher line never posts to the voucher's own cash account.
+      if (l.account_code === cashAccountOf.get(l.entry_id)) continue;
+      const list = byEntry.get(l.entry_id) ?? [];
+      // A receipt's lines are credits, a payment's debits; the other side is 0.
+      list.push({ lineNo: l.line_no, account: l.account_code, amount: input.type === 'cash_receipt' ? l.credit : l.debit, memo: l.memo });
+      byEntry.set(l.entry_id, list);
+    }
+    return vouchers.map((v) => ({
+      type: input.type,
+      code: voucherCode(v.voucher_type, v.number),
+      date: v.voucher_date,
+      cashAccount: v.cash_account,
+      party: v.party_name !== null ? { name: v.party_name, taxCode: v.party_tax_code, address: v.party_address } : null,
+      personName: v.person_name,
+      description: v.description,
+      lines: byEntry.get(v.entry_id) ?? [],
+    }));
   },
 });
 

@@ -2,14 +2,18 @@ import ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
 import { money, sum } from '@crove/l10n-vn';
 import {
+  MISA_SME_CASH_PAYMENT,
+  MISA_SME_CASH_RECEIPT,
   MISA_SME_PURCHASE_SERVICE,
   MISA_SME_SALES,
   allocateVat,
   buildMisaWorkbook,
+  cashRows,
   misaVatRate,
   misaVoucherNo,
   purchaseRows,
   salesRows,
+  type CashVoucher,
   type MisaTemplate,
   type PurchaseVoucher,
   type SalesVoucher,
@@ -429,5 +433,148 @@ describe('sales vouchers (same mapper, template Ban_hang_VND)', () => {
       Kho: null,
     });
     expect(rowValues(sheet, 3, SALES_HEADERS)).toMatchObject({ 'Số chứng từ (*)': 'CRBH6172839A4B5C', 'Tên hàng': 'Phần mềm', '% thuế GTGT': 10, 'Tiền thuế GTGT': 50000 });
+  });
+});
+
+// The cash templates (#657), verbatim from the MISA SME.NET "Phiếu thu" and "Phiếu chi" templates (source S6 in
+// docs/integrations/misa-sme-import.md).
+const RECEIPT_HEADERS = [
+  'Hiển thị trên sổ',
+  'Ngày hạch toán (*)',
+  'Ngày chứng từ (*)',
+  'Số chứng từ (*)',
+  'Mã đối tượng',
+  'Tên đối tượng',
+  'Địa chỉ',
+  'Lý do nộp',
+  'Diễn giải lý do nộp',
+  'Người nộp',
+  'Nhân viên thu',
+  'Kèm theo',
+  'Diễn giải',
+  'TK Nợ (*)',
+  'TK Có (*)',
+  'Số tiền',
+  'Đối tượng',
+  'TK ngân hàng',
+];
+const PAYMENT_HEADERS = [
+  'Hiển thị trên sổ',
+  'Ngày hạch toán (*)',
+  'Ngày chứng từ (*)',
+  'Số chứng từ (*)',
+  'Mã đối tượng',
+  'Tên đối tượng',
+  'Địa chỉ',
+  'Nhân viên',
+  'Kèm theo',
+  'Lý do chi',
+  'Diễn giải lý do chi',
+  'Người nhận',
+  'Diễn giải',
+  'TK Nợ (*)',
+  'TK Có (*)',
+  'Số tiền',
+  'Đối tượng',
+  'TK ngân hàng',
+  'Diễn giải (Thuế)',
+  'TK thuế GTGT',
+  'Tiền thuế GTGT',
+  '% thuế GTGT',
+  'Tỷ lệ tính thuế (Thuế suất KHAC)',
+  'Giá trị HHDV chưa thuế',
+  'Ngày hóa đơn',
+  'Số hóa đơn',
+  'Mẫu số hóa đơn',
+  'Ký hiệu hóa đơn',
+  'Nhóm HHDV mua vào',
+  'Mã nhà cung cấp',
+  'Tên nhà cung cấp',
+  'Mã số thuế nhà cung cấp',
+];
+
+function cashVoucher(overrides: Partial<CashVoucher> = {}): CashVoucher {
+  return {
+    type: 'cash_payment',
+    code: 'PC00012',
+    date: '2026-10-07',
+    cashAccount: '1111',
+    party: { name: 'Công ty TNHH ABC', taxCode: '0101234564', address: '1 Láng Hạ, Hà Nội' },
+    personName: 'Nguyễn Văn An',
+    description: 'Trả tiền hóa đơn tháng 9',
+    lines: [
+      { lineNo: 1, account: '331', amount: '1650000', memo: 'HĐ C26TAA/123' },
+      { lineNo: 2, account: '6422', amount: '35000.5', memo: null },
+    ],
+    ...overrides,
+  };
+}
+
+describe('MISA SME cash vouchers (#657)', () => {
+  it('uses the 18 columns of Phiếu thu and the 32 of Phiếu chi, in order, without duplicates', async () => {
+    expect(MISA_SME_CASH_RECEIPT.columns.map((c) => c.header)).toEqual(RECEIPT_HEADERS);
+    expect(MISA_SME_CASH_PAYMENT.columns.map((c) => c.header)).toEqual(PAYMENT_HEADERS);
+    for (const template of [MISA_SME_CASH_RECEIPT, MISA_SME_CASH_PAYMENT]) {
+      expect(new Set(template.columns.map((c) => c.header)).size).toBe(template.columns.length);
+      const sheet = await readBack(template, []);
+      expect(sheet.name).toBe(template === MISA_SME_CASH_RECEIPT ? 'Phiếu thu' : 'Phiếu chi');
+      expect(sheet.rowCount).toBe(1);
+    }
+  });
+
+  it('writes a phiếu chi as one row per line: Dr the line, Cr the cash account, under one voucher number', async () => {
+    const rows = cashRows(cashVoucher());
+    expect(rows.map((r) => r.voucherNo)).toEqual(['CRPC00012', 'CRPC00012']);
+    const sheet = await readBack(MISA_SME_CASH_PAYMENT, rows);
+    expect(sheet.rowCount).toBe(3);
+    expect(rowValues(sheet, 2, PAYMENT_HEADERS)).toMatchObject({
+      'Hiển thị trên sổ': null,
+      'Ngày hạch toán (*)': new Date(Date.UTC(2026, 9, 7)),
+      'Ngày chứng từ (*)': new Date(Date.UTC(2026, 9, 7)),
+      'Số chứng từ (*)': 'CRPC00012',
+      'Mã đối tượng': null,
+      'Tên đối tượng': 'Công ty TNHH ABC',
+      'Địa chỉ': '1 Láng Hạ, Hà Nội',
+      'Lý do chi': null,
+      'Diễn giải lý do chi': 'Trả tiền hóa đơn tháng 9',
+      'Người nhận': 'Nguyễn Văn An',
+      'Diễn giải': 'HĐ C26TAA/123',
+      'TK Nợ (*)': '331',
+      'TK Có (*)': '1111',
+      'Số tiền': 1650000,
+      'Đối tượng': null,
+      'TK thuế GTGT': null,
+      'Tiền thuế GTGT': null,
+      'Mã số thuế nhà cung cấp': null,
+    });
+    // A line without its own memo takes the voucher's reason; fractional amounts stay exact.
+    expect(rowValues(sheet, 3, PAYMENT_HEADERS)).toMatchObject({ 'Số chứng từ (*)': 'CRPC00012', 'Diễn giải': 'Trả tiền hóa đơn tháng 9', 'TK Nợ (*)': '6422', 'TK Có (*)': '1111', 'Số tiền': 35000.5 });
+  });
+
+  it('writes a phiếu thu with the cash account debited, and a voucher with no party or person', async () => {
+    const receipt = cashVoucher({ type: 'cash_receipt', code: 'PT00003', party: null, personName: null, description: 'Thu hoàn ứng', lines: [{ lineNo: 1, account: '141', amount: '2000000', memo: null }] });
+    const sheet = await readBack(MISA_SME_CASH_RECEIPT, cashRows(receipt));
+    expect(sheet.rowCount).toBe(2);
+    expect(rowValues(sheet, 2, RECEIPT_HEADERS)).toMatchObject({
+      'Số chứng từ (*)': 'CRPT00003',
+      'Tên đối tượng': null,
+      'Địa chỉ': null,
+      'Lý do nộp': null,
+      'Diễn giải lý do nộp': 'Thu hoàn ứng',
+      'Người nộp': null,
+      'Diễn giải': 'Thu hoàn ứng',
+      'TK Nợ (*)': '1111',
+      'TK Có (*)': '141',
+      'Số tiền': 2000000,
+    });
+  });
+
+  it('keeps voucher numbers within 20 characters and formula-like text inert', async () => {
+    const rows = cashRows(cashVoucher({ code: 'PC1234567890123', description: '=HYPERLINK("http://x")', personName: 'x'.repeat(300) }));
+    expect(rows[0]?.voucherNo.length).toBeLessThanOrEqual(20);
+    const sheet = await readBack(MISA_SME_CASH_PAYMENT, rows);
+    const values = rowValues(sheet, 2, PAYMENT_HEADERS);
+    expect(values['Diễn giải lý do chi']).toBe('=HYPERLINK("http://x")');
+    expect(String(values['Người nhận']).length).toBe(255);
   });
 });

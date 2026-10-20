@@ -211,7 +211,7 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
       expect(await (await fetch(`${origin}/api/config`)).json()).toMatchObject({ modules: ['kernel'] });
 
       // Finance routes are not registered.
-      for (const file of ['journal.xlsx', 'misa/purchases.xlsx', 'vat.xlsx?period=2026-09', 'ledger.xlsx?period=2026-09', 'statements.xlsx?period=2026-09']) {
+      for (const file of ['journal.xlsx', 'misa/purchases.xlsx', 'misa/receipts.xlsx', 'misa/payments.xlsx', 'vat.xlsx?period=2026-09', 'ledger.xlsx?period=2026-09', 'statements.xlsx?period=2026-09']) {
         const exported = await fetch(`${origin}/api/export/${file}`, { headers });
         expect(exported.status, file).toBe(404);
         expect(await exported.json()).toEqual({ code: 'NOT_FOUND' });

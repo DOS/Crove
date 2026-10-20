@@ -1,7 +1,9 @@
 // Cash and bank vouchers (issue #327), end to end: enter a giấy báo Nợ for a bank fee on the "Thu chi" screen, approve
 // it in the Inbox (R3: the page asks for a second factor and approves again by itself), then find it numbered BN00001
-// on the vouchers screen, in the journal and in the database.
+// on the vouchers screen, in the journal and in the database. The MISA exports of cash receipts and payments (#657)
+// download from the same screen, and leave the bank note out (bank vouchers have their own MISA templates).
 import { expect, test } from '@playwright/test';
+import ExcelJS from 'exceljs';
 import { sql } from '../lib/db.ts';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
 import { nextTotp } from '../lib/totp.ts';
@@ -53,6 +55,25 @@ test('enter a bank debit note, approve it and find it numbered in the books', as
     await expect(row).toContainText('Đã ghi sổ');
     await row.getByRole('link', { name: 'Xem bút toán' }).click();
     await expect(page.getByText('BN00001 Phí chuyển khoản tháng 10')).toBeVisible();
+  });
+
+  await test.step('the MISA exports download from the cash and bank screen, without the bank note', async () => {
+    await page.getByRole('navigation').getByRole('link', { name: 'Thu chi' }).click();
+    for (const [button, file, sheet] of [
+      ['Xuất phiếu thu cho MISA', `crove-misa-phieu-thu-${slug}.xlsx`, 'Phiếu thu'],
+      ['Xuất phiếu chi cho MISA', `crove-misa-phieu-chi-${slug}.xlsx`, 'Phiếu chi'],
+    ] as const) {
+      const download = page.waitForEvent('download');
+      await page.getByRole('button', { name: button }).click();
+      const saved = await download;
+      expect(saved.suggestedFilename()).toBe(file);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(await saved.path());
+      const worksheet = workbook.getWorksheet(sheet);
+      if (!worksheet) throw new Error(`sheet ${sheet} missing`);
+      expect((worksheet.getRow(1).values as unknown[]).slice(1, 5)).toEqual(['Hiển thị trên sổ', 'Ngày hạch toán (*)', 'Ngày chứng từ (*)', 'Số chứng từ (*)']);
+      expect(worksheet.rowCount).toBe(1);
+    }
   });
 
   await test.step('the approved proposal shows the number the voucher was given', async () => {

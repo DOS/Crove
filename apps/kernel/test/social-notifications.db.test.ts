@@ -228,6 +228,20 @@ suite('social in-app notifications on PostgreSQL (#637)', () => {
     expect(left).toBe(3);
   });
 
+  it('tells a member a post was assigned to them, but not one who assigns it to themselves (#640)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const { postId } = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Giao việc', channels: [{ connectionId: conn }] });
+    await exec(o, o.owner, 'social.post.assign', { postId, assigneeUserId: o.other, dueAt: null });
+    await deliver(o);
+    expect((await list(o, o.other)).items).toEqual([expect.objectContaining({ kind: 'assigned', postId, postText: 'Giao việc' })]);
+    expect((await list(o, o.other)).items[0]?.actorName).toMatch(/^owner-/);
+    await exec(o, o.member, 'social.post.assign', { postId, assigneeUserId: o.member, dueAt: null });
+    await exec(o, o.member, 'social.post.assign', { postId, assigneeUserId: null, dueAt: null });
+    await deliver(o);
+    expect(await kinds(o, o.member)).toEqual([]);
+  });
+
   it('tells the author of a client answer through a review link, and keeps the org to the server', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);

@@ -36,6 +36,8 @@ import {
 import type { OrgExportView } from '@crove/kernel';
 import {
   JOURNAL_EXPORT_LIMIT,
+  MISA_SME_CASH_PAYMENT,
+  MISA_SME_CASH_RECEIPT,
   MISA_SME_PURCHASE_SERVICE,
   MISA_SME_SALES,
   buildJournalWorkbook,
@@ -44,8 +46,10 @@ import {
   buildMisaWorkbook,
   buildVat01Xml,
   buildVatWorkbook,
+  cashRows,
   purchaseRows,
   salesRows,
+  type CashVoucher,
   type JournalEntryView,
   type FinancialStatements,
   type LedgerBook,
@@ -1060,6 +1064,42 @@ export function createHttpApp(deps: HttpDeps) {
         return problem(c, error);
       }
     });
+
+    // Cash receipts and payments in MISA SME's "Phiếu thu" and "Phiếu chi" templates (#657), one file per voucher type
+    // (MISA imports one type per file), same roles, range and audit as the purchase export.
+    const cashExports = [
+      { path: '/api/export/misa/receipts.xlsx', type: 'cash_receipt', template: MISA_SME_CASH_RECEIPT, format: 'misa_sme_cash_receipts', name: 'misa-phieu-thu' },
+      { path: '/api/export/misa/payments.xlsx', type: 'cash_payment', template: MISA_SME_CASH_PAYMENT, format: 'misa_sme_cash_payments', name: 'misa-phieu-chi' },
+    ] as const;
+    for (const cash of cashExports) {
+      app.get(cash.path, async (c) => {
+        try {
+          const user = c.get('user');
+          const orgSlug = c.req.header(ORG_HEADER) ?? null;
+          const orgId = await resolveOrg(runtime, user, orgSlug);
+          const range = { from: c.req.query('from') || undefined, to: c.req.query('to') || undefined, limit: JOURNAL_EXPORT_LIMIT };
+          const vouchers = await runtime.query<CashVoucher[]>('finance.vouchers.cash', { ...range, type: cash.type }, { actor: actorOf(user), orgId });
+          if (vouchers.length >= JOURNAL_EXPORT_LIMIT) {
+            throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều chứng từ để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
+          }
+          const bytes = await buildMisaWorkbook(cash.template, vouchers.flatMap(cashRows));
+          await runtime.execute(
+            'finance.journal.export',
+            { from: range.from, to: range.to, entries: vouchers.length, format: cash.format },
+            { actor: actorOf(user), orgId },
+          );
+          return new Response(body(bytes), {
+            headers: {
+              'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              'content-disposition': attachmentDisposition(orgSlug, ['crove', cash.name, ORG_SLUG], 'xlsx'),
+              'cache-control': 'private, no-store',
+            },
+          });
+        } catch (error) {
+          return problem(c, error);
+        }
+      });
+    }
 
     // VAT working of one month or quarter (issue #316), ?period=2026-09 or ?period=2026-Q3. The query checks the
     // period (422 otherwise) and the roles, so the file name below only ever holds a valid period.
