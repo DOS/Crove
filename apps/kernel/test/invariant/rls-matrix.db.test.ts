@@ -111,7 +111,7 @@ const ZERO_HASH = `sha256:${'0'.repeat(64)}`;
 const socialPostRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), body: 'RLS matrix post' });
 const socialReviewLinkRow = (o: { id: string; owner: string }) => {
   const post = socialPostRow(o);
-  return { post, row: { org_id: o.id, id: randomUUID(), post_id: post.id, token_sha256: hex64(), created_by: o.owner, expires_at: '2099-01-01T00:00:00Z' } };
+  return { post, row: { org_id: o.id, id: randomUUID(), post_id: post.id, token_sha256: hex64(), created_by: o.owner, expires_at: new Date(Date.now() + 86_400_000).toISOString() } };
 };
 const socialVariantRows = (o: { id: string; owner: string }) => {
   const connection = channelConnectionRow(o);
@@ -555,7 +555,7 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     },
     noInsertControl: 'only the review definer adds rows, for a client holding the link; tenant roles may only read them',
   },
-  // A client review link of a post (#589): the hash of its token, its expiry and its revocation.
+  // A client review link of a post (#589): the hash of its token, its expiry (at most 31 days ahead) and its revocation.
   'crove_social.review_link': {
     make: (o) => {
       const link = socialReviewLinkRow(o);
