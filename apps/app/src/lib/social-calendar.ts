@@ -48,6 +48,17 @@ export function onDay(at: Date, day: Date): Date {
   return new Date(day.getFullYear(), day.getMonth(), day.getDate(), at.getHours(), at.getMinutes());
 }
 
+// The notes (#794) on each day a view shows: a note covers every day from its start to its end, both included.
+export function notesByDay<N extends { startsOn: string; endsOn: string }>(notes: readonly N[], days: readonly Date[]): Map<string, N[]> {
+  const map = new Map<string, N[]>();
+  for (const d of days) {
+    const id = dayId(d);
+    const on = notes.filter((n) => n.startsOn <= id && id <= n.endsOn);
+    if (on.length > 0) map.set(id, on);
+  }
+  return map;
+}
+
 export function calendarItems(posts: readonly Post[]): CalendarItem[] {
   return posts
     .flatMap((post) =>

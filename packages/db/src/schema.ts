@@ -424,6 +424,7 @@ export type SocialLinkPreviewTable = Refine<
 >;
 export type SocialNotificationTable = Refine<G.SocialNotificationTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
 export type SocialNotificationMuteTable = Refine<G.SocialNotificationMuteTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
+export type SocialCalendarNoteTable = Refine<G.SocialCalendarNoteTable, { color: Generated<SocialLabelColor> }>;
 export type SocialLabelTable = Refine<G.SocialLabelTable, { color: Generated<SocialLabelColor> }>;
 export type SocialIdeaTable = Refine<G.SocialIdeaTable, { stage: Generated<SocialIdeaStage> }>;
 export type SocialReportScheduleTable = Refine<G.SocialReportScheduleTable, { cadence: SocialReportCadence; period: SocialReportPeriod }>;
@@ -474,6 +475,7 @@ type Refined = Tables<{
   'crove_social.link_preview': SocialLinkPreviewTable;
   'crove_social.notification': SocialNotificationTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;
+  'crove_social.calendar_note': SocialCalendarNoteTable;
   'crove_social.label': SocialLabelTable;
   'crove_social.idea': SocialIdeaTable;
   'crove_social.report_schedule': SocialReportScheduleTable;

@@ -585,7 +585,7 @@ export function SocialPage() {
         <TabsContent value="upcoming">
           {upcoming.isLoading ? <Spinner /> : upcoming.error ? <ErrorText>{errorMessage(upcoming.error)}</ErrorText> : <Agenda posts={upcoming.data ?? []} slug={slug} names={names} labels={labelList} />}
         </TabsContent>
-        <TabsContent value="calendar">{tab === 'calendar' && <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} labelId={search.label} />}</TabsContent>
+        <TabsContent value="calendar">{tab === 'calendar' && <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} canWrite={canWrite} labelId={search.label} />}</TabsContent>
         <TabsContent value="metrics">
           <div className="space-y-4">
             <Metrics slug={slug} names={names} labelId={search.label} />

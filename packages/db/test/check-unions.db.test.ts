@@ -139,6 +139,7 @@ const UNIONS = unions({
   'crove_social.report_schedule.cadence': SOCIAL_REPORT_CADENCES,
   'crove_social.report_schedule.period': SOCIAL_REPORT_PERIODS,
   'crove_social.report_schedule_run.kind': SOCIAL_REPORT_RUN_KINDS,
+  'crove_social.calendar_note.color': SOCIAL_LABEL_COLORS,
   'crove_social.label.color': SOCIAL_LABEL_COLORS,
   'crove_social.post.actor_origin': SOCIAL_ACTOR_ORIGINS,
   'crove_social.post.origin': SOCIAL_ORIGINS,
