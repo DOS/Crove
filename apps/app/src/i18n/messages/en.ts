@@ -1470,6 +1470,16 @@ export const en = {
       fromIdeaTaken: 'The idea "{title}" already has a draft or is archived, so this post will not be linked to it.',
       madeFrom: 'This post was written from the idea',
     },
+    occasions: {
+      show: 'Show occasions',
+      hide: 'Hide occasions',
+      upcoming: 'Occasions in the next 60 days',
+      draft: 'Write a post for it',
+      draftFor: 'Write a post for {name}',
+      composing: 'Writing a post for {name} ({date}); it is planned a few days before, and you can change the time.',
+      brief: 'A post for {name} ({date}): the shop\'s wishes and offer, in a friendly voice.',
+      names: { new_year: "New Year's Day", valentine: "Valentine's Day", women_day: "International Women's Day", reunification: 'Reunification Day (30/4)', labour_day: 'Labour Day', mothers_day: "Mother's Day", children_day: "Children's Day", fathers_day: "Father's Day", national_day: 'National Day (2/9)', sale_9_9: '9.9 sale', sale_10_10: '10.10 sale', vietnam_women_day: "Vietnamese Women's Day (20/10)", halloween: 'Halloween', sale_11_11: '11.11 sale', teachers_day: "Teachers' Day (20/11)", black_friday: 'Black Friday', sale_12_12: '12.12 sale', christmas: 'Christmas', tet: 'Lunar New Year (Tết)', first_full_moon: 'First Full Moon', hung_kings: 'Hung Kings Festival', vu_lan: 'Vu Lan', mid_autumn: 'Mid-Autumn Festival', kitchen_gods: 'Kitchen Gods Day' },
+    },
     snippets: {
       title: 'Snippets',
       subtitle: 'Hashtags, signatures and post templates the team reuses. Pick one in the composer to put it in the text.',

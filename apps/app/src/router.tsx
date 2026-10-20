@@ -29,6 +29,7 @@ import { SocialSnippetsPage } from './routes/social-snippets.tsx';
 import { SocialNotificationsPage } from './routes/social-notifications.tsx';
 import { SocialLabelsPage } from './routes/social-labels.tsx';
 import { SocialIdeasPage } from './routes/social-ideas.tsx';
+import { OCCASION_IDS } from './lib/social-occasions.ts';
 import { SocialReviewPage } from './routes/social-review.tsx';
 import { SocialReportPage } from './routes/social-report.tsx';
 import { parseSocialSearch } from './lib/social.ts';
@@ -219,8 +220,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const socialNewRoute = createRoute({
   getParentRoute: () => socialRoute,
   path: 'new',
-  validateSearch: (search: Record<string, unknown>): { at?: string; idea?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { at?: string; idea?: string; occasion?: string; on?: string } => ({
     ...(typeof search.at === 'string' && !Number.isNaN(Date.parse(search.at)) ? { at: new Date(search.at).toISOString() } : {}),
+    // ?occasion=<id>&on=<YYYY-MM-DD>: a post for an occasion of the calendar (#702).
+    ...(typeof search.occasion === 'string' && OCCASION_IDS.has(search.occasion) && typeof search.on === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.on) ? { occasion: search.occasion, on: search.on } : {}),
     ...(typeof search.idea === 'string' && UUID.test(search.idea) ? { idea: search.idea.toLowerCase() } : {}),
   }),
   component: SocialComposePage,

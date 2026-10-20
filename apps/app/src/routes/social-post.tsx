@@ -570,7 +570,10 @@ export function SocialComposePage() {
   const [aiUsed, setAiUsed] = useState(false);
   const live = (channels.data ?? []).filter((c) => c.status === 'active');
   // A planned time from the calendar (#580), kept on the draft; scheduling starts from it.
-  const search: { at?: string; idea?: string } = useSearch({ strict: false });
+  const search: { at?: string; idea?: string; occasion?: string; on?: string } = useSearch({ strict: false });
+  // A post for an occasion of the calendar (#702): named above the form, and the AI brief starts from it.
+  const tOcc = useTranslations('social.occasions');
+  const occasion = search.occasion && search.on ? { name: tOcc(`names.${search.occasion as 'tet'}`), date: f.date(search.on) } : null;
   const [plannedAt, setPlannedAt] = useState<string | null>(() => (search.at && Date.parse(search.at) > Date.now() ? search.at : null));
   // A draft made from an idea (#701): its title and note become the text, its link and media the post's; the saved
   // post names the idea, which then shows as drafted.
@@ -661,7 +664,7 @@ export function SocialComposePage() {
 
   // AI drafting (S7): the server asks the model for a draft of the brief for the chosen channels and saves it as a
   // new post marked as written by AI; every channel of it is reviewed before it can go out.
-  const [brief, setBrief] = useState('');
+  const [brief, setBrief] = useState(() => (occasion ? tOcc('brief', occasion) : ''));
   const locale = useLocale();
   const aiEnabled = getConfig().aiEnabled === true;
   const aiDraft = useMutation({
@@ -732,6 +735,11 @@ export function SocialComposePage() {
               {t('draftDiscard')}
             </Button>
           </div>
+        </Notice>
+      )}
+      {occasion && (
+        <Notice>
+          <span>{tOcc('composing', occasion)}</span>
         </Notice>
       )}
       {idea.data && (
