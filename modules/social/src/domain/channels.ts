@@ -355,7 +355,7 @@ export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> 
 
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram', 'mastodon']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram', 'mastodon', 'pinterest']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
@@ -495,7 +495,7 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     unverified: ['body.max'],
   },
   // Pinterest (#798): a pin's title of 100 characters and description of 800, saved to a board; one image or a
-  // carousel of 2 to 5, JPEG or PNG (kept to 10 MB each, sent in the request). The adapter does not post video pins yet, so Pinterest stays out of VIDEO_READY.
+  // carousel of 2 to 5, JPEG or PNG (kept to 10 MB each, sent in the request); or one MP4 or MOV video pin (#813).
   pinterest: {
     provider: 'pinterest',
     body: { max: 800, count: 'codepoints', required: false },

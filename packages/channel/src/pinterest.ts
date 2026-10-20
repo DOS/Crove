@@ -8,13 +8,22 @@
 // 2025 notes); if it turns out to rotate, sibling boards ask to reconnect (follow-up in the PR).
 // Publish: one call, POST /v5/pins, with the image's bytes in the request (base64, no public URL needed), or 2 to 5
 // images as a carousel pin. The post's title is the pin's title, its text the description, its link where the pin
-// leads. Video pins are not posted yet (VIDEO_NOT_SUPPORTED_YET). An unclear answer is checked by listing the board's
+// leads. A video pin (#813) registers the upload (POST /v5/media), sends the bytes to the storage URL Pinterest hands
+// back (its S3 upload host, the only one allowed), waits until the media is processed, then pins it with a cover frame.
+// An unclear answer is checked by listing the board's
 // latest pins, matched by title and description and their time.
 // Metrics: impressions, saves and clicks of a pin from its pin_metrics.
 import type { ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+import { videoCoverOf } from './cover.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const PINTEREST_HOSTS = ['api.pinterest.com'] as const;
+// Where Pinterest takes a video's bytes (the upload_url of POST /v5/media).
+export const PINTEREST_UPLOAD_HOSTS = ['pinterest-media-upload.s3-accelerate.amazonaws.com'] as const;
+const VIDEO_TYPES = ['video/mp4', 'video/quicktime'];
+// How long a publish waits for Pinterest to process a video; with the upload it stays inside callTimeoutMs.
+const VIDEO_WAIT_MS = 300_000;
+const VIDEO_CALL_MARGIN_MS = 90_000;
 export const PINTEREST_SCOPES = ['boards:read', 'pins:read', 'pins:write', 'user_accounts:read'] as const;
 const API = 'https://api.pinterest.com/v5';
 const ID = /^\d{1,32}$/;
@@ -69,6 +78,7 @@ interface TokenAnswer {
 
 class PinterestClient {
   private readonly fetch: Fetch;
+  private readonly uploadFetch: Fetch;
   private readonly app: PinterestAppConfig;
 
   constructor(app: PinterestAppConfig, fetchImpl?: Fetch) {
@@ -76,6 +86,7 @@ class PinterestClient {
     if (!app.appSecret) throw new Error('missing Pinterest app secret');
     this.app = app;
     this.fetch = allowlistedFetch(PINTEREST_HOSTS, fetchImpl, 60_000);
+    this.uploadFetch = allowlistedFetch(PINTEREST_UPLOAD_HOSTS, fetchImpl, 300_000);
   }
 
   get appId(): string {
@@ -92,6 +103,15 @@ class PinterestClient {
     const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
     if (!response.ok || !json) throw new PinterestError(response.status, json);
     return json as TokenAnswer;
+  }
+
+  // A video's bytes to the storage URL Pinterest handed out, as a form with the fields it named and then the file.
+  async upload(url: string, fields: Record<string, string>, bytes: Uint8Array, type: string): Promise<void> {
+    const form = new FormData();
+    for (const [k, v] of Object.entries(fields)) form.set(k, v);
+    form.set('file', new Blob([new Uint8Array(bytes)], { type }), 'video');
+    const response = await this.uploadFetch(url, { method: 'POST', body: form });
+    if (!response.ok) throw new PinterestError(response.status, null);
   }
 
   async call<T>(method: 'GET' | 'POST', path: string, token: string, json?: unknown): Promise<T | null> {
@@ -226,10 +246,55 @@ interface PinList {
 export class PinterestPublisher implements Publisher {
   readonly provider = 'pinterest' as const;
   readonly publishSafety: RetrySafety = 'reconcile_only';
+  // A video's upload and processing take minutes (#813); within the job's stale limit (600 s).
+  readonly callTimeoutMs = 420_000;
   private readonly client: PinterestClient;
+  private readonly videoWaitMs: number;
+  private readonly pollMs: number;
+  private readonly budgetMs: number;
 
-  constructor(app: PinterestAppConfig, fetchImpl?: Fetch) {
+  constructor(app: PinterestAppConfig, fetchImpl?: Fetch, timing: { videoWaitMs?: number; pollMs?: number; budgetMs?: number } = {}) {
     this.client = new PinterestClient(app, fetchImpl);
+    this.videoWaitMs = timing.videoWaitMs ?? VIDEO_WAIT_MS;
+    this.pollMs = timing.pollMs ?? 3000;
+    this.budgetMs = timing.budgetMs ?? this.callTimeoutMs - VIDEO_CALL_MARGIN_MS;
+  }
+
+  // The media id of an uploaded, processed video; nothing is visible before the pin names it, so any failure here
+  // posted nothing, and a wait past the budget is a failure to retry.
+  private async uploadVideo(token: string, bytes: Uint8Array, type: string, started: number): Promise<{ mediaId: string } | { rejected: PublishResult }> {
+    const before = (error: unknown): { rejected: PublishResult } => {
+      const result = publishResult(error);
+      return { rejected: result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) } };
+    };
+    let mediaId: string;
+    try {
+      const registered = await this.client.call<{ media_id?: unknown; upload_url?: unknown; upload_parameters?: unknown }>('POST', '/media', token, { media_type: 'video' });
+      const id = registered?.media_id;
+      const url = registered?.upload_url;
+      const params = registered?.upload_parameters;
+      if (typeof id !== 'string' || !ID.test(id) || typeof url !== 'string' || params === null || typeof params !== 'object') return { rejected: { kind: 'rejected', error: 'transient', code: 'NO_UPLOAD' } };
+      const fields = Object.fromEntries(Object.entries(params as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string'));
+      await this.client.upload(url, fields, bytes, type);
+      mediaId = id;
+    } catch (error) {
+      // A storage URL on another host is refused by the upload fetch before anything is sent.
+      if (error instanceof Error && !(error instanceof PinterestError) && /host not allowed/.test(error.message)) return { rejected: { kind: 'rejected', error: 'transient', code: 'UPLOAD_HOST' } };
+      return before(error);
+    }
+    const until = Math.min(started + this.budgetMs, Date.now() + this.videoWaitMs);
+    for (;;) {
+      let status: unknown;
+      try {
+        status = (await this.client.call<{ status?: unknown }>('GET', `/media/${mediaId}`, token))?.status;
+      } catch (error) {
+        return before(error);
+      }
+      if (status === 'succeeded') return { mediaId };
+      if (status === 'failed') return { rejected: { kind: 'rejected', error: 'bad_request', code: 'VIDEO_PROCESSING_FAILED' } };
+      if (Date.now() + this.pollMs > until) return { rejected: { kind: 'rejected', error: 'transient', code: 'VIDEO_PROCESSING_SLOW' } };
+      await new Promise((resolve) => setTimeout(resolve, this.pollMs));
+    }
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -237,7 +302,8 @@ export class PinterestPublisher implements Publisher {
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
     if (!ID.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_BOARD_ID' };
     const { media } = input.content;
-    if (media.some((m) => m.mime.startsWith('video/'))) return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_NOT_SUPPORTED_YET' };
+    const video = media.find((m) => m.mime.startsWith('video/'));
+    if (video) return this.publishVideo(input, s.accessToken, video);
     if (media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_REQUIRED' };
     if (media.length > CAROUSEL_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_IMAGES' };
     if (media.some((m) => !IMAGE_TYPES.includes(m.mime))) return { kind: 'rejected', error: 'bad_request', code: 'IMAGE_TYPE' };
@@ -268,6 +334,41 @@ export class PinterestPublisher implements Publisher {
     };
     try {
       const answer = await this.client.call<{ id?: unknown }>('POST', '/pins', s.accessToken, pin);
+      const id = answer?.id;
+      if (typeof id !== 'string' || !ID.test(id)) return { kind: 'unknown', code: 'NO_PIN_ID' };
+      return { kind: 'accepted', externalId: id, url: pinUrl(id) };
+    } catch (error) {
+      return publishResult(error);
+    }
+  }
+
+  // A video pin (#813): one video alone, with its cover frame (the composer's cover time, else its first frame).
+  private async publishVideo(input: PublishInput, token: string, video: PublishInput['content']['media'][number]): Promise<PublishResult> {
+    const started = Date.now();
+    if (input.content.media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_ALONE' };
+    if (!VIDEO_TYPES.includes(video.mime)) return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TYPE' };
+    let bytes: Uint8Array;
+    try {
+      bytes = await input.readMedia(video.fileId);
+    } catch {
+      return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
+    }
+    const uploaded = await this.uploadVideo(token, bytes, video.mime, started);
+    if ('rejected' in uploaded) return uploaded.rejected;
+    const cover = videoCoverOf(input.settings);
+    const link = linkOf(input.content);
+    const title = titleOf(input.content);
+    const description = descriptionOf(input.content);
+    const pin = {
+      board_id: input.externalAccountId,
+      ...(title ? { title } : {}),
+      ...(description ? { description } : {}),
+      ...(link ? { link } : {}),
+      ...(video.altText ? { alt_text: clip(video.altText, ALT_TEXT_MAX) } : {}),
+      media_source: { source_type: 'video_id', media_id: uploaded.mediaId, cover_image_key_frame_time: cover && 'atMs' in cover ? Math.round(cover.atMs / 100) / 10 : 0 },
+    };
+    try {
+      const answer = await this.client.call<{ id?: unknown }>('POST', '/pins', token, pin);
       const id = answer?.id;
       if (typeof id !== 'string' || !ID.test(id)) return { kind: 'unknown', code: 'NO_PIN_ID' };
       return { kind: 'accepted', externalId: id, url: pinUrl(id) };
