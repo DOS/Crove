@@ -1405,6 +1405,17 @@ export const en = {
         reminder_due: 'A post goes out within 24 hours and is not approved yet',
       },
     },
+    growth: {
+      title: 'Channel growth over {days} days',
+      hint: "Each channel's followers per day, read once a day from the platform; reach is the latest day's, where the platform gives it.",
+      empty: 'No channel figures yet; Crove reads them within an hour of a channel being connected.',
+      line: 'Followers over time',
+      followers: '{count} followers',
+      reach: '{count} reached',
+      topTitle: 'Best posts in this window',
+      engagement: '{count} engagements',
+      noText: '(No text)',
+    },
     postType: {
       label: 'Post type',
       types: { feed: 'Post', story: 'Story', reel: 'Reel' },

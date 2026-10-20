@@ -1405,6 +1405,17 @@ export const vi = {
         reminder_due: 'Có bài sắp đến giờ đăng nhưng chưa được duyệt',
       },
     },
+    growth: {
+      title: 'Tăng trưởng kênh trong {days} ngày',
+      hint: 'Số người theo dõi mỗi ngày của từng kênh, Crove lấy một lần mỗi ngày từ nền tảng; lượt tiếp cận là của ngày gần nhất, ở nền tảng nào có.',
+      empty: 'Chưa có số liệu kênh; Crove lấy lần đầu trong vòng một giờ sau khi kênh được kết nối.',
+      line: 'Đường số người theo dõi',
+      followers: '{count} người theo dõi',
+      reach: '{count} lượt tiếp cận',
+      topTitle: 'Bài nổi bật trong khoảng này',
+      engagement: '{count} tương tác',
+      noText: '(Không có chữ)',
+    },
     postType: {
       label: 'Kiểu bài',
       types: { feed: 'Bài thường', story: 'Tin (Story)', reel: 'Reels' },

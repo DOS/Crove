@@ -11,7 +11,7 @@ import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, runCommentJob, runPublishJob, sweepEvergreen, sweepMetrics, sweepReminders } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, runCommentJob, runPublishJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders } from '@crove/mod-social';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
@@ -550,6 +550,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   };
   const metricsTimer = publishing.size > 0 ? setInterval(() => void metricsSweep(), METRICS_SWEEP_MS) : null;
 
+  // Account growth (#645): every hour, the channels with no snapshot for today (UTC) get one.
+  let counting = false;
+  const accountSweep = async () => {
+    if (counting || publishing.size === 0 || !channels) return;
+    counting = true;
+    try {
+      const done = await sweepAccounts({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb, publishers });
+      if (done.recorded > 0) console.log(`[social-accounts] recorded ${done.recorded}, skipped ${done.skipped}`);
+    } catch (error) {
+      console.error('[social-accounts] sweep', error);
+    } finally {
+      counting = false;
+    }
+  };
+  const accountTimer = publishing.size > 0 ? setInterval(() => void accountSweep(), ACCOUNT_SWEEP_MS) : null;
+  void accountSweep();
+
   let running = false;
   let stopped = false;
   const relay = async () => {
@@ -726,6 +743,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (reminderTimer) clearInterval(reminderTimer);
     if (refreshTimer) clearInterval(refreshTimer);
     if (metricsTimer) clearInterval(metricsTimer);
+    if (accountTimer) clearInterval(accountTimer);
     await listener.end().catch(() => {});
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});
   };

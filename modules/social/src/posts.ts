@@ -20,6 +20,7 @@ import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } fr
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { activityCommands, activityQueries } from './activity.ts';
+import { accountCommands, accountQueries } from './accounts.ts';
 import { reportLinkCommands, reportLinkQueries } from './report-links.ts';
 import { linkPreviewCommands, linkPreviewQueries } from './link-preview.ts';
 import { notificationCommands, notificationQueries } from './notifications.ts';
@@ -1217,6 +1218,7 @@ export const socialCommands = [
   ...labelCommands,
   ...reviewLinkCommands,
   ...activityCommands,
+  ...accountCommands,
   ...reportLinkCommands,
   ...linkPreviewCommands,
   ...notificationCommands,
@@ -1263,4 +1265,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...activityQueries, ...reviewLinkQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...activityQueries, ...reviewLinkQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];

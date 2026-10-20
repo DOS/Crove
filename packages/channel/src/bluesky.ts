@@ -5,7 +5,7 @@
 //
 // Only Bluesky-hosted accounts are supported for now (PDS hosts under bsky.network, or bsky.social): the PDS address
 // comes from the account's DID document, and an arbitrary host there would let anyone point the worker at any server.
-import type { CommentInput, CommentResult, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { requestSignal, type Fetch } from './oauth.ts';
@@ -281,6 +281,19 @@ export class BlueskyPublisher implements Publisher {
 
   // Likes, replies, reposts and quotes of a post, from the public AppView. A post of another account is never read; a
   // post the AppView no longer lists was deleted.
+  // The account's followers (#645), from the public AppView: no session needed.
+  async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
+    if (!/^did:[a-z0-9]+:[A-Za-z0-9._:%-]{1,256}$/.test(input.externalAccountId)) return null;
+    try {
+      const answer = await this.xrpc.call<{ did?: unknown; followersCount?: unknown }>(PUBLIC_APPVIEW, 'GET', 'app.bsky.actor.getProfile', { params: { actor: input.externalAccountId } });
+      if (answer.did !== input.externalAccountId) return null;
+      const n = answer.followersCount;
+      return { followers: typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : null };
+    } catch {
+      return null;
+    }
+  }
+
   async metrics(input: MetricsInput): Promise<MetricsResult> {
     const match = /^at:\/\/(did:[a-z0-9]+:[A-Za-z0-9._:%-]{1,256})\/app\.bsky\.feed\.post\/[A-Za-z0-9._~:-]{1,512}$/.exec(input.externalId);
     if (!match || match[1] !== input.externalAccountId) return { refused: 'gone' };
