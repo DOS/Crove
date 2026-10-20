@@ -156,7 +156,7 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
         const after = new Date(Date.parse(work.callStartedAt) - 60_000);
         return fromReconcile(
           await withTimeout(timeout, () =>
-            publisher.reconcile!({ ...credential, callKey: work.callKey, contentHash: work.contentHash, content: work.content, after, before: new Date() }),
+            publisher.reconcile!({ ...credential, callKey: work.callKey, contentHash: work.contentHash, content: work.content, settings: work.settings, after, before: new Date() }),
           ),
         );
       }

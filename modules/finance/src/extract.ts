@@ -200,6 +200,15 @@ async function readInvoice(
   }
 }
 
+// The invoice's own VAT table (#685), from e-invoice XML only: the VAT working splits the invoice by rate with it. A
+// table the proposal cannot hold (a rate longer than a line's, an amount out of range) is left out rather than failing
+// the extraction; the VAT working then estimates the split from the lines, as for a PDF.
+function invoiceTaxTable(method: Method, invoice: ParsedInvoice): Pick<PurchaseProposal['invoice'], 'taxBreakdown'> {
+  if (method !== 'einvoice_xml' || invoice.taxBreakdown.length === 0) return {};
+  const parsed = zPurchaseProposal.shape.invoice.shape.taxBreakdown.safeParse(invoice.taxBreakdown);
+  return parsed.success && parsed.data ? { taxBreakdown: parsed.data } : {};
+}
+
 interface ExtractionFile {
   id: string;
   filename: string;
@@ -284,6 +293,7 @@ export async function extractAndPropose(
       subtotal: invoice.subtotal,
       vatTotal: invoice.vatTotal,
       total: invoice.total,
+      ...invoiceTaxTable(method, invoice),
     },
     lines,
     journal: sale ? buildSalesJournal(lines, invoice.vatTotal, memo) : buildPurchaseJournal(lines, invoice.vatTotal, memo),

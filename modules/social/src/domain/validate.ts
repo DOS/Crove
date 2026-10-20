@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, COMMENT_RULES, COVER_RULES, IMAGE_RULES, RATIO_SLACK, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { CAPABILITIES, COMMENT_RULES, COVER_RULES, IMAGE_RULES, POST_TYPE_RULES, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -64,7 +64,12 @@ export type IssueCode =
   | 'COVER_INVALID'
   | 'COVER_NEEDS_VIDEO'
   | 'COVER_NOT_SUPPORTED'
-  | 'COVER_OUT_OF_RANGE';
+  | 'COVER_OUT_OF_RANGE'
+  // The post type (#644): one the channel does not post; a Story that is not one image or video; a Reel that is not one
+  // video.
+  | 'POST_TYPE_NOT_SUPPORTED'
+  | 'STORY_ONE_MEDIA'
+  | 'REEL_ONE_VIDEO';
 
 export interface Issue {
   code: IssueCode;
@@ -97,15 +102,30 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
   if (variant.body.trim() === '' && variant.media.length === 0) issues.push({ code: 'CONTENT_REQUIRED', field: 'body', limit: null, actual: null });
   // The text as the adapter sends it, with the link it appends.
   // The link as the channel sends it, with its UTM tags (#585), counted where the channel counts it.
-  const sent = sentText(variant.provider, variant.body, sentLink(variant.provider, variant.linkUrl ?? null, variant.settings, variant.body), variant.media.length);
-  checkText(issues, 'body', sent, caps.body);
-  if (caps.title) checkText(issues, 'title', variant.title ?? '', caps.title);
+  // The post type (#644): a Story sends no text or link, so neither is checked; a Reel's text is checked as a post's.
+  const postType = postTypeOf(variant.settings);
+  if (postType === null || (postType !== 'feed' && !POST_TYPE_RULES[variant.provider]?.includes(postType))) {
+    issues.push({ code: 'POST_TYPE_NOT_SUPPORTED', field: 'settings.postType', limit: null, actual: null });
+  }
+  // Story and Reel rules hold only where the channel posts them; elsewhere the refusal above is the one issue to fix.
+  const supported = postType !== null && (postType === 'feed' || Boolean(POST_TYPE_RULES[variant.provider]?.includes(postType)));
+  const story = supported && postType === 'story';
+  const reel = supported && postType === 'reel';
+  const sent = story ? '' : sentText(variant.provider, variant.body, sentLink(variant.provider, variant.linkUrl ?? null, variant.settings, variant.body), variant.media.length);
+  if (!story) checkText(issues, 'body', sent, caps.body);
+  if (story) {
+    // Nothing to check: the title is not sent either.
+  } else if (caps.title) checkText(issues, 'title', variant.title ?? '', caps.title);
   else if (variant.title !== null && variant.title.trim() !== '') issues.push({ code: 'TITLE_NOT_SUPPORTED', field: 'title', limit: null, actual: null });
 
   const { media } = variant;
   const rule = caps.media;
-  if (media.length < rule.min) issues.push({ code: 'MEDIA_REQUIRED', field: 'media', limit: rule.min, actual: media.length });
-  if (media.length > rule.max) issues.push({ code: 'TOO_MANY_MEDIA', field: 'media', limit: rule.max, actual: media.length });
+  if (story && media.length !== 1) issues.push({ code: 'STORY_ONE_MEDIA', field: 'media', limit: 1, actual: media.length });
+  else if (reel && (media.length !== 1 || media[0]?.kind !== 'video')) issues.push({ code: 'REEL_ONE_VIDEO', field: 'media', limit: 1, actual: media.length });
+  else if (!story && !reel) {
+    if (media.length < rule.min) issues.push({ code: 'MEDIA_REQUIRED', field: 'media', limit: rule.min, actual: media.length });
+    if (media.length > rule.max) issues.push({ code: 'TOO_MANY_MEDIA', field: 'media', limit: rule.max, actual: media.length });
+  }
   const videos = media.filter((m) => m.kind === 'video').length;
   if (videos > rule.maxVideos && rule.kinds.includes('video')) {
     issues.push({ code: 'TOO_MANY_VIDEOS', field: 'media', limit: rule.maxVideos, actual: videos });
@@ -127,7 +147,9 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
       if (rule.maxImageBytes !== null && m.sizeBytes > rule.maxImageBytes) {
         issues.push({ code: 'IMAGE_TOO_LARGE', field, limit: rule.maxImageBytes, actual: m.sizeBytes });
       }
-      const shape = IMAGE_RULES[variant.provider];
+      // A Story image is held to the upright Story frame instead of the feed's shapes, on every channel that posts one.
+      const feed = IMAGE_RULES[variant.provider];
+      const shape = story ? { ...STORY_IMAGE, minWidth: feed?.minWidth ?? 0 } : feed;
       if (shape && m.width && m.height) {
         const ratio = m.width / m.height;
         if (ratio < shape.minRatio * (1 - RATIO_SLACK) || ratio > shape.maxRatio * (1 + RATIO_SLACK)) {
@@ -140,15 +162,17 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
       if (rule.maxVideoBytes !== null && m.sizeBytes > rule.maxVideoBytes) {
         issues.push({ code: 'VIDEO_TOO_LARGE', field, limit: rule.maxVideoBytes, actual: m.sizeBytes });
       }
-      if (rule.maxVideoSeconds !== null && m.durationSeconds !== null && m.durationSeconds > rule.maxVideoSeconds) {
-        issues.push({ code: 'VIDEO_TOO_LONG', field, limit: rule.maxVideoSeconds, actual: m.durationSeconds });
+      const maxSeconds = story ? STORY_MAX_VIDEO_SECONDS : reel ? (REEL_MAX_VIDEO_SECONDS[variant.provider] ?? rule.maxVideoSeconds) : rule.maxVideoSeconds;
+      if (maxSeconds !== null && m.durationSeconds !== null && m.durationSeconds > maxSeconds) {
+        issues.push({ code: 'VIDEO_TOO_LONG', field, limit: maxSeconds, actual: m.durationSeconds });
       }
     }
   });
 
   const comment = firstCommentOf(variant.settings);
   if (comment !== null) {
-    const rule = COMMENT_RULES[variant.provider];
+    // A Story takes no comment from its account.
+    const rule = story ? undefined : COMMENT_RULES[variant.provider];
     if (!rule) issues.push({ code: 'COMMENT_NOT_SUPPORTED', field: 'settings.firstComment', limit: null, actual: null });
     else {
       const n = countText(comment, rule.count);
@@ -181,7 +205,8 @@ function checkCover(issues: Issue[], variant: VariantDraft): void {
     issues.push({ code: 'COVER_NEEDS_VIDEO', field, limit: null, actual: null });
     return;
   }
-  if (!COVER_RULES[variant.provider]?.includes(coverKind(cover))) {
+  // A Story takes no cover (#644).
+  if (postTypeOf(variant.settings) === 'story' || !COVER_RULES[variant.provider]?.includes(coverKind(cover))) {
     issues.push({ code: 'COVER_NOT_SUPPORTED', field, limit: null, actual: null });
     return;
   }

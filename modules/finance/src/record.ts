@@ -313,6 +313,24 @@ export const recordPurchase = defineCommand({
         })),
       )
       .execute();
+    // The invoice's own VAT table (#685), written before the entry is posted: once a document has its entry, the
+    // database refuses more rows for it (purchase_tax_rate_before_insert).
+    const taxRates = invoice.taxBreakdown ?? [];
+    if (taxRates.length > 0) {
+      await ctx.trx
+        .insertInto('crove_finance.purchase_tax_rate')
+        .values(
+          taxRates.map((t, i) => ({
+            org_id: ctx.orgId,
+            document_id: document.id,
+            row_no: i + 1,
+            vat_rate: t.rate,
+            taxable_amount: t.taxableAmount,
+            vat_amount: t.vatAmount,
+          })),
+        )
+        .execute();
+    }
 
     const journalEntryId = await postJournalEntry(ctx, {
       entryDate: lateDate ?? invoice.issueDate,

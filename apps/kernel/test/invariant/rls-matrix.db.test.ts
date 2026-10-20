@@ -280,6 +280,28 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_finance.purchase_line': {
     make: (o) => ({ row: { org_id: o.id, document_id: o.document, line_no: lineNo++, description: 'RLS matrix', amount: '100', debit_account: '6422' } }),
   },
+  // The invoice's own VAT table by rate (#685). It joins its document only before the document's entry is posted
+  // (purchase_tax_rate_before_insert), so each row gets a fresh document, completed with its entry after the row.
+  'crove_finance.purchase_tax_rate': {
+    make: (o) => {
+      const document = randomUUID();
+      const entry = randomUUID();
+      return {
+        setup: [
+          {
+            table: 'crove_finance.purchase_document',
+            values: { org_id: o.id, id: document, party_id: o.party, invoice_number: tag(), invoice_date: '2026-10-01', subtotal: '100', vat_amount: '10', total: '110' },
+          },
+        ],
+        row: { org_id: o.id, document_id: document, row_no: 1, vat_rate: '10%', taxable_amount: '100', vat_amount: '10' },
+        complete: [
+          { table: 'crove_finance.journal_entry', values: { ...journalEntry(o.id, entry).values, source_type: 'finance.purchase_document', source_id: document } },
+          balancingLine(o.id, entry, 1, 'debit'),
+          balancingLine(o.id, entry, 2, 'credit'),
+        ],
+      };
+    },
+  },
   'crove_finance.vendor_account_rule': {
     make: (o) => {
       const party = randomUUID();

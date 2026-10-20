@@ -16,6 +16,7 @@ export * from './tiktok.ts';
 export * from './x.ts';
 export * from './comment.ts';
 export * from './cover.ts';
+export * from './post-type.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
@@ -137,6 +138,8 @@ export interface ReconcileInput {
   callKey: string;
   contentHash: string;
   content: PublishContent;
+  // The variant's provider settings (its post type, #644): a Story or a Reel cannot be matched by its text.
+  settings?: Readonly<Record<string, unknown>>;
   // The window the post would have appeared in.
   after: Date;
   before: Date;
