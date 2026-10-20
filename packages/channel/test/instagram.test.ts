@@ -84,7 +84,7 @@ describe('InstagramPublisher', () => {
     const result = await new InstagramPublisher(APP, full.fetchImpl, fast).publish(input());
     expect(result).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED' });
     const at = (result as { retryAt?: Date }).retryAt?.getTime() ?? 0;
-    expect(at - before).toBeGreaterThanOrEqual(5 * 60 * 60 * 1000 - 1000);
+    expect(at - before).toBeGreaterThanOrEqual(2 * 60 * 60 * 1000 - 1000);
     expect(full.quota).toEqual([`GET /${IG}/content_publishing_limit`]);
     expect(full.calls).toEqual([]);
     const left = graph({

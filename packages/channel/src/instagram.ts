@@ -106,9 +106,9 @@ function parseRef(ref: string): { container: string; key: string } | null {
 
 // The account's publishing quota (plan §3.6): Instagram takes a limited number of posts in a rolling 24 hours (100
 // today, Stories included). With none left the post waits and is tried again later, instead of failing in the middle
-// of a publish. The API does not say when the quota frees, and every try counts toward the publisher's automatic
-// attempts (5), so the wait is 5 hours: the tries span about a day, the length of the quota's window.
-export const QUOTA_RETRY_MS = 5 * 60 * 60 * 1000;
+// of a publish. The API does not say when the quota frees, so the post is tried again every 2 hours; the publisher
+// bounds these waits on their own (MAX_QUOTA_WAITS in modules/social), past the quota's rolling day.
+export const QUOTA_RETRY_MS = 2 * 60 * 60 * 1000;
 
 // Whether the quota answer says the account has nothing left; a quota that cannot be read says nothing.
 export function quotaExhausted(answer: { data?: { quota_usage?: unknown; config?: { quota_total?: unknown } }[] } | null): boolean {

@@ -48,6 +48,9 @@ export const PUBLISH_STEP = 'publish';
 export const PUBLISH_STALE_SECONDS = 600;
 // Automatic new attempts after a rate limit or a transient failure; then the variant fails and waits for a person.
 export const MAX_AUTO_ATTEMPTS = 5;
+// Waits on a used-up publishing quota (#743, QUOTA_EXHAUSTED) have their own bound: the quota frees within its
+// rolling day, so a post waits up to about two days of tries before a person is asked.
+export const MAX_QUOTA_WAITS = 24;
 const MAX_RETRY_DELAY_MS = 60 * 60_000;
 // A pending post whose status check cannot be answered is checked again after this long.
 const STATUS_RECHECK_MS = 60_000;
@@ -465,7 +468,7 @@ export const publishRecord = defineCommand({
           await expire(r.code);
           await pauseOnChannel(ctx, v, values);
           event = 'social.variant.paused';
-        } else if (v.attempt >= MAX_AUTO_ATTEMPTS) {
+        } else if (v.attempt >= (r.code === 'QUOTA_EXHAUSTED' ? MAX_QUOTA_WAITS : MAX_AUTO_ATTEMPTS)) {
           await move(ctx, v, { type: 'failed' }, { ...values, error_code: r.code ?? 'TOO_MANY_ATTEMPTS' });
           event = 'social.variant.failed';
         } else {

@@ -444,6 +444,24 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect((await calls(id)).map((c) => c.state)).toEqual(['failed', 'succeeded']);
   });
 
+  it('keeps waiting on a used-up publishing quota past the usual attempt limit (#743)', async () => {
+    const o = await org();
+    const platform = new FakePlatform();
+    const retryAt = new Date(Date.now() + 600_000);
+    const { postId, variants } = await duePost(o);
+    const id = variants[0] as string;
+    await admin((c) => c.query('UPDATE crove_social.post_variant SET attempt = 5 WHERE id = $1', [id]));
+    platform.answers.push({ kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED', retryAt });
+    expect(await run(o, id, platform)).toEqual({ action: 'call', status: 'scheduled' });
+    expect((await variant(o, postId)).error).toMatchObject({ code: 'QUOTA_EXHAUSTED', retryAt: retryAt.toISOString() });
+    // Any other rate limit at that count stops for a person.
+    const other = await duePost(o);
+    const second = other.variants[0] as string;
+    await admin((c) => c.query('UPDATE crove_social.post_variant SET attempt = 5 WHERE id = $1', [second]));
+    platform.answers.push({ kind: 'rejected', error: 'rate_limited', code: 'LIMIT', retryAt });
+    expect(await run(o, second, platform)).toEqual({ action: 'call', status: 'failed' });
+  });
+
   it('fails a variant the platform refused for good, and lets an admin publish it again', async () => {
     const o = await org();
     const platform = new FakePlatform();
