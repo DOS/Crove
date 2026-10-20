@@ -26,6 +26,7 @@ export const UTM_SOURCE: Readonly<Record<Provider, string>> = {
   telegram: 'telegram',
   mastodon: 'mastodon',
   pinterest: 'pinterest',
+  discord: 'discord',
 };
 
 // Letters with their marks, digits, spaces and common punctuation; the value is percent-encoded in the link anyway.

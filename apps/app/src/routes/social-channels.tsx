@@ -311,6 +311,16 @@ export function SocialChannelsPage() {
       void queryClient.invalidateQueries();
     },
   });
+  // Discord: a channel's webhook URL, checked by the server and sealed; the form forgets it.
+  const discordOn = getConfig().channels?.discord ?? false;
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const connectDiscord = useMutation({
+    mutationFn: () => client.channels.connectDiscord({ webhookUrl: webhookUrl.trim() }),
+    onSuccess: () => {
+      setWebhookUrl('');
+      void queryClient.invalidateQueries();
+    },
+  });
   // The provider's dialog runs in this tab; it comes back to the callback screen, which finishes the attempt.
   const start = useMutation({
     mutationFn: (provider: OAuthProvider) => client.channels.oauthStart({ provider }),
@@ -324,6 +334,7 @@ export function SocialChannelsPage() {
   const blueskyForm = useRef<HTMLInputElement>(null);
   const telegramForm = useRef<HTMLInputElement>(null);
   const mastodonForm = useRef<HTMLInputElement>(null);
+  const discordForm = useRef<HTMLInputElement>(null);
   // Reconnecting connects the same account again: the provider's dialog, or the Bluesky form with its handle.
   const reconnect = (c: Channel) => {
     if (c.provider === 'bluesky') {
@@ -335,6 +346,10 @@ export function SocialChannelsPage() {
       telegramForm.current?.focus();
       return;
     }
+    if (c.provider === 'discord') {
+      discordForm.current?.focus();
+      return;
+    }
     if (c.provider === 'mastodon') {
       // The account id ends with its instance's host.
       setMdn({ instance: c.displayName.match(/@([^@\s)]+)\)$/)?.[1] ?? '', accessToken: '' });
@@ -343,7 +358,7 @@ export function SocialChannelsPage() {
     }
     if (oauth.includes(c.provider as OAuthProvider)) start.mutate(c.provider as OAuthProvider);
   };
-  const canReconnect = (c: Channel) => isAdmin && c.status !== 'revoked' && (c.provider === 'bluesky' ? blueskyOn : c.provider === 'telegram' ? telegramOn : c.provider === 'mastodon' ? mastodonOn : oauth.includes(c.provider as OAuthProvider));
+  const canReconnect = (c: Channel) => isAdmin && c.status !== 'revoked' && (c.provider === 'bluesky' ? blueskyOn : c.provider === 'telegram' ? telegramOn : c.provider === 'mastodon' ? mastodonOn : c.provider === 'discord' ? discordOn : oauth.includes(c.provider as OAuthProvider));
   const disconnect = useMutation({
     mutationFn: (connectionId: string) => client.channels.disconnect({ connectionId, idempotencyKey: crypto.randomUUID() }),
     onSuccess: () => {
@@ -542,6 +557,24 @@ export function SocialChannelsPage() {
                 {t('connectWith', { provider: providerName('telegram') })}
               </Button>
               {connectTelegram.error && <ErrorText>{errorMessage(connectTelegram.error)}</ErrorText>}
+            </form>
+          )}
+          {discordOn && isAdmin && (
+            <form
+              className="space-y-2 border-t pt-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (webhookUrl.trim()) connectDiscord.mutate();
+              }}
+            >
+              <p className="text-sm font-medium text-foreground">{providerName('discord')}</p>
+              <Label htmlFor="dc-webhook">{t('discordWebhook')}</Label>
+              <Input id="dc-webhook" ref={discordForm} type="password" autoComplete="off" value={webhookUrl} placeholder="https://discord.com/api/webhooks/..." onChange={(e) => setWebhookUrl(e.target.value)} />
+              <p className="text-xs text-subtle-foreground">{t('discordHint')}</p>
+              <Button type="submit" variant="outline" size="sm" disabled={!webhookUrl.trim() || connectDiscord.isPending}>
+                {t('connectWith', { provider: providerName('discord') })}
+              </Button>
+              {connectDiscord.error && <ErrorText>{errorMessage(connectDiscord.error)}</ErrorText>}
             </form>
           )}
         </Card>
