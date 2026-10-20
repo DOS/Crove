@@ -1842,6 +1842,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                     )}
                     {decision && decision.comment && ['changes_requested', 'rejected'].includes(v.status) && <p className="text-warning">{t('reviewerSaid', { comment: decision.comment })}</p>}
                     {v.status === 'in_review' && v.review.required > 1 && <p>{t('reviewSteps', { given: String(v.review.approvedBy.length), required: String(v.review.required) })}</p>}
+                    {v.status === 'in_review' && v.review.client && <p>{t(v.review.clientVerdict === 'approved' ? 'clientApproved' : 'clientWaiting')}</p>}
                     <Outcome variant={v} slug={slug} />
                     {v.externalUrl && (
                       <a href={v.externalUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">

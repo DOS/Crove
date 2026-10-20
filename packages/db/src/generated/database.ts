@@ -796,6 +796,7 @@ export interface SocialChannelPolicyTable {
   review_reminders: Generated<boolean>;
   short_links: Generated<boolean>;
   four_eyes: Generated<boolean>;
+  client_approval: Generated<boolean>;
 }
 
 /** crove_social.feed_item */

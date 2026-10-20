@@ -24,6 +24,7 @@ export * from './review-links.ts';
 export * from './report-links.ts';
 export * from './activity.ts';
 export * from './comments.ts';
+export * from './client-review.ts';
 export * from './thread.ts';
 export * from './review-inbox.ts';
 export * from './attention-inbox.ts';
