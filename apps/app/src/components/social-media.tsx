@@ -1,7 +1,7 @@
 // Images of a Social post (#372): pick, reorder and remove them, and show them in the channel previews. Files are
 // uploaded with purpose=social, so they are stored like documents but never read as invoices.
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
@@ -96,10 +96,14 @@ function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; onChange
   );
 }
 
+// Where the previews get a file's bytes: the signed-in API, or the client review page's token-scoped route (#624).
+export const FileSource = createContext<{ key: string; fetch: (fileId: string) => Promise<Blob> }>({ key: 'social-media', fetch: fetchFile });
+
 // A stored image, fetched once per file while it is shown (the bytes of a file id never change). Each thumbnail makes
 // its own object URL and revokes it when it goes away.
 function useImageUrl(fileId: string) {
-  const blob = useQuery({ queryKey: ['social-media', fileId], queryFn: () => fetchFile(fileId), staleTime: Infinity });
+  const source = useContext(FileSource);
+  const blob = useQuery({ queryKey: [source.key, fileId], queryFn: () => source.fetch(fileId), staleTime: Infinity });
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!blob.data) return;
