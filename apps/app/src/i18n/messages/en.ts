@@ -89,6 +89,7 @@ export const en = {
       email_not_confirmed: 'Email not confirmed yet, open the confirmation email',
       weak_password: 'Password too weak (at least 8 characters)',
       over_email_send_rate_limit: 'Too many emails sent, try again later',
+      over_request_rate_limit: 'Too many attempts, try again later',
       same_password: 'The new password must differ from the old one',
       otp_expired: 'This link has expired or was already used. Ask for a new one.',
       flow_state_expired: 'This link has expired. Ask for a new one.',

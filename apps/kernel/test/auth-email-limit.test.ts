@@ -75,6 +75,13 @@ describe('clientBucket', () => {
     expect(clientBucket('::1')).toBe('v6:0:0:0:0::/64');
     expect(clientBucket('fe80::1%eth0')).toBe('v6:fe80:0:0:0::/64');
     expect(clientBucket('64:ff9b::192.0.2.1')).toBe('v6:64:ff9b:0:0::/64');
+    // The sign-up refusal cap (#564) counts one IPv6 /48, whose 65,536 /64s would each have a budget of their own.
+    expect(clientBucket('2001:db8:1:2:aaaa::1', 48)).toBe('v6:2001:db8:1::/48');
+    expect(clientBucket('2001:db8:1:ffff::1', 48)).toBe('v6:2001:db8:1::/48');
+    expect(clientBucket('2001:db8:2::1', 48)).toBe('v6:2001:db8:2::/48');
+    expect(clientBucket('203.0.113.9', 48)).toBe('v4:203.0.113.9');
+    expect(clientBucket('::ffff:127.0.0.1', 48)).toBe('v4:127.0.0.1');
+    expect(clientBucket(null, 48)).toBe('unknown');
   });
 
   it('maps IPv4-mapped IPv6 (a dual-stack socket) to the IPv4 address', () => {

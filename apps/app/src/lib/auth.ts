@@ -96,6 +96,7 @@ const AUTH_ERRORS = [
   'weak_password',
   'same_password',
   'over_email_send_rate_limit',
+  'over_request_rate_limit',
   'otp_expired',
   'flow_state_expired',
   'flow_state_not_found',

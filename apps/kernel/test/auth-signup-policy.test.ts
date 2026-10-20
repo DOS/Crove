@@ -2,15 +2,22 @@
 // read from a body the way Supabase Auth's Go decoder reads it, and the configuration that stops the boot.
 import { describe, expect, it } from 'vitest';
 import {
+  emailChangeGate,
+  emailChangeRefused,
   goFoldKey,
+  limitInviteChecks,
   methodRefused,
   parseAllowedDomains,
   signupAllowed,
   signupEmail,
   signupGate,
   signupInviteToken,
+  SignupRefusalsLimited,
+  signupRefusalsLimited,
   signupRefused,
+  topLevelKeys,
   type InviteChecks,
+  type RefusalLimiter,
   type SignupRules,
 } from '../src/auth-signup-policy.ts';
 import { loadConfig } from '../src/config.ts';
@@ -55,8 +62,21 @@ describe('signupGate', () => {
   it('checks the one email of a sign-up and refuses what it cannot read', () => {
     const r = rules('invite_only');
     expect(gate(r, '/signup', { email: 'An@Corp.test', password: 'x' })).toEqual({ kind: 'check', email: 'an@corp.test' });
-    expect(gate(r, '/signup', { email: 'an@corp.test', EMAIL: 'AN@corp.test' })).toEqual({ kind: 'check', email: 'an@corp.test' });
-    for (const body of [{ email: 'an@corp.test', Email: 'x@corp.test' }, { email: 'an@corp.test', EMAIL: null }, { phone: '+84901234567' }, { email: 'an@corp.test', phone: '1' }, {}, [], 'x']) {
+    // A key repeated after Go's folding is refused, even with one address: JavaScript and Go may keep different copies.
+    expect(gate(r, '/signup', { email: 'an@corp.test', EMAIL: 'AN@corp.test' })).toEqual({ kind: 'refuse' });
+    for (const body of [
+      { email: 'an@corp.test', Email: 'x@corp.test' },
+      { email: 'an@corp.test', EMAIL: null },
+      { phone: '+84901234567' },
+      { email: 'an@corp.test', phone: '1' },
+      {},
+      [],
+      'x',
+      // JSON.parse keeps the last copy of a repeated key (null: no phone); Go keeps the phone, as a null leaves it.
+      '{"email":"an@corp.test","phone":"+84901234567","phone":null}',
+      '{"email":"an@corp.test","email":"an@corp.test"}',
+      '{"email":"an@corp.test","PHONE":"+84901234567","Phone":null}',
+    ]) {
       expect(gate(r, '/signup', body)).toEqual({ kind: 'refuse' });
     }
     expect(gate(r, '/signup')).toEqual({ kind: 'refuse' });
@@ -67,7 +87,8 @@ describe('signupGate', () => {
     const r = rules('allowlist', ['corp.test']);
     expect(gate(r, '/otp', { email: 'x@else.test', create_user: false })).toEqual({ kind: 'pass' });
     expect(gate(r, '/otp', { phone: '+84901234567', CREATE_USER: false })).toEqual({ kind: 'pass' });
-    expect(gate(r, '/otp', { email: 'x@else.test', create_user: false, 'create_uſer': true })).toEqual({ kind: 'check', email: 'x@else.test' });
+    expect(gate(r, '/otp', { email: 'x@else.test', create_user: false, 'create_uſer': true })).toEqual({ kind: 'refuse' });
+    expect(gate(r, '/otp', '{"email":"x@else.test","create_user":false,"create_user":false}')).toEqual({ kind: 'refuse' });
     expect(gate(r, '/otp', { email: 'x@else.test', create_user: 'false' })).toEqual({ kind: 'check', email: 'x@else.test' });
     expect(gate(r, '/otp', { email: 'x@else.test', create_user: null })).toEqual({ kind: 'check', email: 'x@else.test' });
   });
@@ -146,6 +167,188 @@ describe('signupAllowed', () => {
   });
 });
 
+describe('emailChangeGate (#564 item 4)', () => {
+  const r = rules('allowlist', ['corp.test', 'partner.vn']);
+  const change = (body: unknown, method = 'PUT', path = '/user', policy = r) =>
+    emailChangeGate(policy, { method, path, body: body === undefined ? null : json(body) });
+
+  it('lets an email change through only to an allowed domain, read as the sign-up gate reads it', () => {
+    expect(change({ email: 'a@corp.test' })).toBe('pass');
+    expect(change({ email: ' A+Tax@CORP.TEST ' })).toBe('pass');
+    // Only the top-level key is the account's email; metadata may say anything.
+    expect(change({ email: 'b@partner.vn', data: { email: 'x@evil.test' } })).toBe('pass');
+    for (const email of [
+      'a@evil.test',
+      'a@sub.corp.test',
+      'a@corp.test.evil.test',
+      'a@c\u043erp.test',
+      'a@corp.test\u0000',
+      'a@corp.test@evil.test',
+      '"a@corp.test"@evil.test',
+      'a@\uff43orp.test',
+      'a\u200b@corp.test',
+      'not-an-email',
+    ]) {
+      expect(change({ email }), email).toBe('refuse');
+    }
+  });
+
+  it('matches the email key the way Go decodes it and checks every value it might keep', () => {
+    expect(change({ EMAIL: 'a@evil.test' })).toBe('refuse');
+    expect(change({ eMaIl: 'a@corp.test' })).toBe('pass');
+    expect(change({ email: 'a@corp.test', Email: 'a@evil.test' })).toBe('refuse');
+    expect(change({ Email: 'a@evil.test', email: 'a@corp.test' })).toBe('refuse');
+    // An empty value last makes Go keep "", no change; the proxy still refuses the other value, failing closed.
+    expect(change({ email: 'a@evil.test', EMAIL: '' })).toBe('refuse');
+    // Dotless i does not fold to i in Go, so this key is not the email and Supabase Auth ignores it.
+    expect(change({ 'ema\u0131l': 'a@evil.test' })).toBe('pass');
+    // A number, an object or an array is no address; Supabase Auth would refuse it, and so does the proxy.
+    expect(change({ email: 42 })).toBe('refuse');
+    expect(change({ email: { address: 'a@corp.test' } })).toBe('refuse');
+    expect(change({ email: ['a@corp.test'] })).toBe('refuse');
+  });
+
+  it('passes updates that change no email: no key, an empty value, password and metadata', () => {
+    expect(change({ password: 'new-password-1' })).toBe('pass');
+    expect(change({ data: { name: 'An' } })).toBe('pass');
+    expect(change({ email: '' })).toBe('pass');
+    // A null is refused: the proxy does not rely on how Go treats it.
+    expect(change({ email: null, password: 'new-password-1' })).toBe('refuse');
+    expect(change(undefined)).toBe('pass');
+    expect(change('')).toBe('pass');
+  });
+
+  // JSON.parse keeps the last copy of a repeated key, here null, while Go assigns each copy in turn and a null leaves
+  // the string as it was: Supabase Auth would start the change to the first address.
+  it('refuses a body that repeats the email key, exactly or after Go folding', () => {
+    for (const body of [
+      '{"email":"me@gmail.com","email":null}',
+      '{"EMAIL":"x@evil.test","EMAIL":null}',
+      '{"email":"x@evil.test","Email":null}',
+      '{"email":"x@evil.test","email":""}',
+      '{"email":"a@corp.test","email":"a@corp.test"}',
+      '{"email":"x@evil.test","em\\u0061il":null}',
+      '{"password":"a","PASSWORD":"b"}',
+    ]) {
+      expect(change(body), body).toBe('refuse');
+    }
+  });
+
+  it('refuses a body it cannot read as one JSON object, whatever the method on /user', () => {
+    for (const body of ['not json', '{"email": "a@evil.test"', '[{"email": "a@evil.test"}]', 'null', '"a@evil.test"', 'email=a@evil.test']) {
+      expect(change(body), body).toBe('refuse');
+    }
+    expect(change({ email: 'a@evil.test' }, 'POST')).toBe('refuse');
+    expect(change({ email: 'a@evil.test' }, 'patch')).toBe('refuse');
+    expect(change({ email: 'a@evil.test' }, 'GET')).toBe('pass');
+    expect(change({ email: 'a@evil.test' }, 'HEAD')).toBe('pass');
+  });
+
+  it('applies to /user under allowlist only', () => {
+    for (const path of ['/signup', '/otp', '/recover', '/resend', '/verify', '/token']) expect(change({ email: 'a@evil.test' }, 'POST', path)).toBe('pass');
+    expect(change({ email: 'a@evil.test' }, 'PUT', '/user', rules('open'))).toBe('pass');
+    expect(change({ email: 'a@evil.test' }, 'PUT', '/user', rules('invite_only'))).toBe('pass');
+    expect(change('not json', 'PUT', '/user', rules('invite_only'))).toBe('pass');
+  });
+
+  it('answers one 403 in Supabase Auth error shape', async () => {
+    const response = emailChangeRefused();
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ code: 403, error_code: 'email_change_not_allowed', msg: expect.any(String) });
+  });
+});
+
+describe('topLevelKeys', () => {
+  it('lists the top-level keys with repeats, decoding escapes, and skips nested objects and strings', () => {
+    expect(topLevelKeys('{"a":1,"b":{"a":2,"c":[{"a":3}]},"a":"x,\\"a\\":{"}')).toEqual(['a', 'b', 'a']);
+    expect(topLevelKeys(' { "em\\u0061il" : null , "x\\\\" : [1, {"y": 2}] } ')).toEqual(['email', 'x\\']);
+    expect(topLevelKeys('{}')).toEqual([]);
+  });
+});
+
+describe('limitInviteChecks (#564 item 1)', () => {
+  // A limiter with room for `room` slots that records what it was asked and what was given back.
+  const limiter = (room: number) => {
+    const log: string[] = [];
+    let used = 0;
+    const l: RefusalLimiter & { log: string[] } = {
+      log,
+      reserve: async ({ client, email }) => {
+        log.push(`reserve ${client} ${email}`);
+        if (used >= room) return { allowed: false, retryAfterSeconds: 120 };
+        used++;
+        return {
+          allowed: true,
+          release: async () => {
+            used--;
+            log.push(`release ${client} ${email}`);
+          },
+        };
+      },
+    };
+    return l;
+  };
+  const inner = (held: boolean | 'throw'): InviteChecks => ({
+    held: async () => {
+      if (held === 'throw') throw new Error('database down');
+      return held;
+    },
+    matches: async () => true,
+  });
+
+  it('keeps the slot of a refusal and gives it back when the address holds no invite', async () => {
+    const l = limiter(1);
+    const client = 'v6:2001:db8:1::/48';
+    expect(await limitInviteChecks(inner(false), l, client).held('a@corp.test')).toBe(false);
+    expect(await limitInviteChecks(inner(false), l, client).held('b@corp.test')).toBe(false);
+    expect(await limitInviteChecks(inner(true), l, client).held('c@corp.test')).toBe(true);
+    await expect(limitInviteChecks(inner(false), l, client).held('d@corp.test')).rejects.toBeInstanceOf(SignupRefusalsLimited);
+    expect(l.log).toEqual([
+      `reserve ${client} a@corp.test`,
+      `release ${client} a@corp.test`,
+      `reserve ${client} b@corp.test`,
+      `release ${client} b@corp.test`,
+      `reserve ${client} c@corp.test`,
+      `reserve ${client} d@corp.test`,
+    ]);
+  });
+
+  it('at the limit throws before it asks whether the address is invited', async () => {
+    let asked = 0;
+    const checks = limitInviteChecks({ held: async () => (asked++, false), matches: async () => true }, limiter(0), 'v4:203.0.113.9');
+    await expect(checks.held('a@corp.test')).rejects.toBeInstanceOf(SignupRefusalsLimited);
+    await expect(checks.held('a@corp.test')).rejects.toMatchObject({ retryAfterSeconds: 120 });
+    expect(asked).toBe(0);
+  });
+
+  it('gives the slot back when the invite check fails, and never counts the token check', async () => {
+    const l = limiter(1);
+    await expect(limitInviteChecks(inner('throw'), l, 'unknown').held('a@corp.test')).rejects.toThrow('database down');
+    expect(l.log).toEqual(['reserve unknown a@corp.test', 'release unknown a@corp.test']);
+    expect(await limitInviteChecks(inner(true), l, 'unknown').matches('a@corp.test', 'T'.repeat(43))).toBe(true);
+    expect(l.log).toHaveLength(2);
+  });
+
+  it('under signupAllowed counts only the lookups whose answer depends on an invite', async () => {
+    const l = limiter(10);
+    const checks = limitInviteChecks(inner(true), l, 'v4:203.0.113.9');
+    // Another domain, invite_only and a matching token never ask held().
+    expect(await signupAllowed(rules('allowlist', ['corp.test']), 'a@evil.test', null, checks)).toBe(false);
+    expect(await signupAllowed(rules('invite_only'), 'a@corp.test', null, checks)).toBe(false);
+    expect(await signupAllowed(rules('allowlist', ['corp.test']), 'a@corp.test', 'T'.repeat(43), checks)).toBe(true);
+    expect(l.log).toEqual([]);
+    expect(await signupAllowed(rules('allowlist', ['corp.test']), 'b@corp.test', null, checks)).toBe(false);
+    expect(l.log).toEqual(['reserve v4:203.0.113.9 b@corp.test']);
+  });
+
+  it("answers 429 with Supabase Auth's request rate limit code and Retry-After", async () => {
+    const response = signupRefusalsLimited(42.2);
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toBe('43');
+    expect(await response.json()).toEqual({ code: 429, error_code: 'over_request_rate_limit', msg: expect.any(String) });
+  });
+});
+
 describe('the refusal', () => {
   it('is one 403 in Supabase Auth error shape', async () => {
     const response = signupRefused();
@@ -169,6 +372,21 @@ describe('configuration', () => {
       'partner.vn',
     ]);
     expect(parseAllowedDomains('*.corp.test, @corp.test, corp, cоrp.test, ok.test')).toEqual({ domains: ['ok.test'], invalid: ['*.corp.test', '@corp.test', 'corp', 'cоrp.test'] });
+  });
+
+  it('caps sign-up refusals by default and takes 0 to turn the deployment cap off', () => {
+    const config = loadConfig(BUNDLED);
+    expect(config.AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR).toBe(5);
+    // Off by default: a member who may invite could fill a deployment cap and stop plain sign-ups for the domain.
+    expect(config.AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR).toBe(0);
+    expect(loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR: '50' }).AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR).toBe(50);
+    // Blank is unset, as for the other optional settings, not 0.
+    expect(loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR: ' ' }).AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR).toBe(5);
+    expect(loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR: '' }).AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR).toBe(0);
+    expect(() => loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR: 'five' })).toThrow(/AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR/);
+    expect(loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR: '0' }).AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR).toBe(0);
+    expect(() => loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR: '0' })).toThrow(/AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR/);
+    expect(() => loadConfig({ ...BUNDLED, AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR: '-1' })).toThrow(/AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR/);
   });
 
   it('stops the boot on a policy it cannot enforce or one set halfway', () => {
