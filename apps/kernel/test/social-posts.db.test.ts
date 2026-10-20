@@ -489,6 +489,31 @@ suite('social posts on PostgreSQL (S3)', () => {
       return id;
     }
 
+    it('gives a channel its own images on create and update, checked and hashed as its own (#581)', async () => {
+      const o = await org();
+      const [fb, ig] = [await connection(o.orgId, o.owner, 'facebook_page'), await connection(o.orgId, o.owner, 'instagram')];
+      const [png, jpg] = [await image(o.orgId, 'image/png'), await image(o.orgId)];
+      // The post's PNG does not fit Instagram; Instagram gets its own JPEG.
+      const { postId } = await exec<{ postId: string }>(o, o.member, 'social.post.create', {
+        body: 'Khai trương',
+        media: [{ fileId: png }],
+        channels: [{ connectionId: fb }, { connectionId: ig, media: [{ fileId: jpg, altText: 'Ảnh vuông' }] }],
+      });
+      let post = await get(o, o.viewer, postId);
+      const [vf, vi] = [post.variants.find((v) => v.provider === 'facebook_page'), post.variants.find((v) => v.provider === 'instagram')];
+      expect([vf?.ownMedia, vf?.media.map((m) => m.fileId), vf?.issues]).toEqual([false, [png], []]);
+      expect([vi?.ownMedia, vi?.media.map((m) => [m.fileId, m.altText]), vi?.issues]).toEqual([true, [[jpg, 'Ảnh vuông']], []]);
+      // A file that is not a social upload is refused.
+      const doc = await image(o.orgId, 'image/jpeg', 120_000, 'upload');
+      await expect(exec(o, o.member, 'social.variant.update', { variantId: vi?.id, revision: vi?.revision, media: [{ fileId: doc }] })).rejects.toMatchObject({ code: 'MEDIA_NOT_FOUND' });
+      // Back to the post's images: a new revision, and the PNG issue is back.
+      const back = await exec<{ changed: boolean; revision: number }>(o, o.member, 'social.variant.update', { variantId: vi?.id, revision: vi?.revision, media: null });
+      expect(back.changed).toBe(true);
+      post = await get(o, o.viewer, postId);
+      const after = post.variants.find((v) => v.provider === 'instagram');
+      expect([after?.ownMedia, after?.media.map((m) => m.fileId), after?.issues.map((i) => i.code), after?.contentHash === vi?.contentHash]).toEqual([false, [png], ['IMAGE_TYPE_NOT_ALLOWED'], false]);
+    });
+
     it('keeps the images in order, binds them into the hash and checks them per channel', async () => {
       const o = await org();
       const [fb, ig] = [await connection(o.orgId, o.owner, 'facebook_page'), await connection(o.orgId, o.owner, 'instagram')];

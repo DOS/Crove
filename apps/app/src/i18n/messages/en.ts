@@ -1423,6 +1423,8 @@ export const en = {
     pickChannels: 'Post to',
     pickChannelsHint: 'Pick at least one channel to preview the post and check it against the channel rules.',
     ownText: 'Write this channel its own text',
+    ownMedia: 'Give this channel its own images or video',
+    ownMediaEmpty: 'This channel will post without images or video.',
     ownTextPlaceholder: 'Text for this channel only',
     saveDraft: 'Save draft',
     saveAndSubmit: 'Save and submit',

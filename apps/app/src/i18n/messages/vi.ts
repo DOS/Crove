@@ -1424,6 +1424,8 @@ export const vi = {
     pickChannels: 'Đăng lên kênh',
     pickChannelsHint: 'Chọn ít nhất một kênh để xem trước và kiểm tra theo luật của kênh.',
     ownText: 'Viết riêng cho kênh này',
+    ownMedia: 'Ảnh hoặc video riêng cho kênh này',
+    ownMediaEmpty: 'Kênh này sẽ đăng không kèm ảnh hay video.',
     ownTextPlaceholder: 'Nội dung riêng cho kênh này',
     saveDraft: 'Lưu nháp',
     saveAndSubmit: 'Lưu và gửi duyệt',
