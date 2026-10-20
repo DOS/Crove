@@ -23,7 +23,8 @@ BEGIN
       CASE WHEN pg_catalog.jsonb_typeof(v.media) = 'array' THEN coalesce((
         SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('id', f.id, 'type', f.content_type) ORDER BY x.n)
         FROM pg_catalog.jsonb_array_elements(v.media) WITH ORDINALITY x(e, n)
-        JOIN crove_kernel.file f ON f.org_id = v.org_id AND f.id::text = x.e->>'fileId'
+        -- Compared as uuids, so the join uses the file's key; an entry that is no uuid matches nothing.
+        JOIN crove_kernel.file f ON f.org_id = v.org_id AND f.id = CASE WHEN (x.e->>'fileId') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN (x.e->>'fileId')::uuid END
       ), '[]'::jsonb)
       ELSE coalesce((
         SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('id', f.id, 'type', f.content_type) ORDER BY m.position)

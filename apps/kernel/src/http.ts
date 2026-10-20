@@ -640,6 +640,10 @@ export function createHttpApp(deps: HttpDeps) {
     });
     // The post's images and video (#624): ids per channel, then each file by id, both for the link's token only.
     const reviewFiles = deps.reviewLimits?.files ?? new RateLimiter({ perMinute: REVIEW_FILES_PER_MINUTE });
+    // Files read whole into memory (no download URL to hand out) at most this many at once, across every client: the
+    // route needs no account, so its memory is capped here, not only per request.
+    let reviewStreams = 0;
+    const REVIEW_STREAMS_MAX = 4;
     app.post('/api/review/media', bodyLimit({ maxSize: 1024 }), async (c) => {
       const limited = reviewBudget(c, reviewLimits.views);
       if (limited) return limited;
@@ -655,7 +659,14 @@ export function createHttpApp(deps: HttpDeps) {
       const limited = reviewBudget(c, reviewFiles);
       if (limited) return limited;
       try {
-        const file = await reviewFile(runtime, deps.store, await c.req.json().catch(() => null));
+        if (reviewStreams >= REVIEW_STREAMS_MAX) return c.json({ code: 'RATE_LIMITED', message: 'Máy chủ đang bận, hãy thử lại sau ít giây', retryAfterSeconds: 2 }, 429);
+        reviewStreams += 1;
+        let file: Awaited<ReturnType<typeof reviewFile>>;
+        try {
+          file = await reviewFile(runtime, deps.store, await c.req.json().catch(() => null));
+        } finally {
+          reviewStreams -= 1;
+        }
         if (!file) {
           c.header('cache-control', 'no-store');
           return c.json({ code: 'REVIEW_LINK_INVALID', message: 'Liên kết duyệt không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
