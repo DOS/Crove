@@ -355,7 +355,7 @@ export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> 
 
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram', 'mastodon']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram', 'mastodon', 'bluesky']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
@@ -451,8 +451,8 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'bluesky',
     body: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
     title: null,
-    // Up to 4 images (1 MB each, Bluesky's blob limit) or one video of up to 3 minutes and 100 MB; the Crove adapter
-    // does not post video yet, so it stays out of VIDEO_READY.
+    // Up to 4 images (1 MB each, Bluesky's blob limit) or one MP4 of up to 3 minutes and 100 MB, through Bluesky's
+    // video service (#455).
     media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: 1_000_000, maxVideoBytes: 100 * MB, maxVideoSeconds: 180 },
     maxLinks: null,
     scrapesLinkPreview: false,
