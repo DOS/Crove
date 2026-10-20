@@ -161,10 +161,12 @@ function Counter({ provider, body, linkUrl, mediaCount }: { provider: string; bo
 type UtmTags = { campaign: string; medium: string };
 type ApiSettings = NonNullable<Parameters<typeof client.social.variants.update>[0]['settings']>;
 
-// The channel's settings with the post's UTM tags, or without any (#585).
+// The channel's settings with the post's UTM tags, or without any (#585). A utm_content the channel already has (set
+// through the API) is kept.
 function withUtm(own: Own, utm: UtmTags | null): Own {
-  const { utm: _old, ...rest } = own.settings;
-  return { ...own, settings: utm && utm.campaign.trim() ? { ...rest, utm: { campaign: utm.campaign.trim(), medium: utm.medium.trim() || 'social' } } : rest };
+  const { utm: old, ...rest } = own.settings;
+  const content = old && typeof old === 'object' && typeof (old as { content?: unknown }).content === 'string' ? { content: (old as { content: string }).content } : {};
+  return { ...own, settings: utm && utm.campaign.trim() ? { ...rest, utm: { campaign: utm.campaign.trim(), medium: utm.medium.trim() || 'social', ...content } } : rest };
 }
 
 // UTM tags for the post's link (#585): one campaign for every channel, each channel its own utm_source.
@@ -180,6 +182,7 @@ function UtmFields({ utm, onChange, disabled }: { utm: UtmTags | null; onChange:
         <div className="grid gap-2 sm:grid-cols-2">
           <Input value={utm.campaign} disabled={disabled} maxLength={100} aria-label={t('utmCampaign')} placeholder={t('utmCampaign')} onChange={(e) => onChange({ ...utm, campaign: e.target.value })} />
           <Input value={utm.medium} disabled={disabled} maxLength={100} aria-label={t('utmMedium')} placeholder="social" onChange={(e) => onChange({ ...utm, medium: e.target.value })} />
+          {!utm.campaign.trim() && <p className="text-xs text-warning sm:col-span-2">{t('utmNeedsCampaign')}</p>}
           <p className="text-xs text-subtle-foreground sm:col-span-2">{t('utmHint')}</p>
         </div>
       )}
@@ -1004,7 +1007,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   if (post.isLoading || !base || !origin) return post.error ? <ErrorText>{errorMessage(post.error)}</ErrorText> : <Spinner />;
   if (!post.data) return null;
   const p = post.data;
-  const firstUtm = p.variants.map((v) => utmOf(v.settings)).find((u) => u !== null) ?? null;
+  // The tags the channels still to go out carry; a published channel keeps the tags it went out with.
+  const firstUtm = p.variants.filter((v) => EDITABLE.includes(v.status)).map((v) => utmOf(v.settings)).find((u) => u !== null) ?? null;
   const shownUtm = utm === undefined ? (firstUtm ? { campaign: firstUtm.campaign, medium: firstUtm.medium ?? 'social' } : null) : utm;
   const setUtm = (next: UtmTags | null) => {
     setUtmState(next);
