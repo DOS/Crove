@@ -9,6 +9,8 @@ import type { FeedResult } from '@crove/mod-social';
 
 export const FEED_TIMEOUT_MS = 10_000;
 const FEED_LIMIT = 50;
+// Batches of FEED_LIMIT read in one pass (400 feeds a quarter hour); the rest wait for the next pass, oldest first.
+const FEED_BATCHES = 8;
 const ACTOR = { type: 'system' as const, component: 'social.feeds' };
 
 export interface FeedDeps {
@@ -38,7 +40,9 @@ export async function readFeedOnce(deps: FeedDeps, url: string): Promise<FeedRes
   const type = (page.contentType ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
   // Many blogs serve their feed as text/html or text/plain: anything but an image or a video is given to the reader.
   if (/^(image|video|audio)\//.test(type)) return { ok: false, error: 'not_feed' };
-  const read = await deps.extract.extract('feed', page.body);
+  const body = page.truncated ? wholeItems(page.body) : page.body;
+  if (!body) return { ok: false, error: 'too_large' };
+  const read = await deps.extract.extract('feed', body);
   if (!read.ok) {
     if (read.code === 'invalid' || read.code === 'too_large' || read.code === 'timeout' || read.code === 'memory') return { ok: false, error: 'not_feed' };
     return null;
@@ -46,21 +50,45 @@ export async function readFeedOnce(deps: FeedDeps, url: string): Promise<FeedRes
   return { ok: true, title: read.feed.title, items: read.feed.items };
 }
 
-// One pass over the feeds due; returns how many drafts it made.
+// A feed cut at the size limit, kept up to its last whole item (RSS, RSS 1.0) or entry (Atom) and closed again, so a
+// cut inside an item or a CDATA section does not make the whole feed unreadable. null: no whole item in the part read.
+export function wholeItems(body: Buffer): Buffer | null {
+  const text = body.toString('latin1');
+  const root = /<(rss|feed|rdf:RDF)[\s>]/.exec(text)?.[1];
+  const tag = root === 'feed' ? '</entry>' : '</item>';
+  const end = text.lastIndexOf(tag);
+  if (!root || end < 0) return null;
+  const close = root === 'rss' ? '</channel></rss>' : `</${root}>`;
+  return Buffer.concat([body.subarray(0, end + tag.length), Buffer.from(close)]);
+}
+
+// One pass over the feeds due, a batch at a time; returns how many drafts it made. A feed is read once a pass, even if
+// it is still due after (the extract service could not answer).
 export async function sweepFeeds(deps: FeedDeps): Promise<number> {
-  const { rows } = await sql<{ org_id: string; feed_id: string }>`SELECT org_id, feed_id FROM crove_social.feeds_due(${FEED_LIMIT}::int)`.execute(deps.workerDb);
+  const seen = new Set<string>();
   let drafted = 0;
-  for (const row of rows) {
-    try {
-      const feed = await deps.runtime.query<{ url: string } | null>('social.feed.load', { feedId: row.feed_id }, { actor: ACTOR, orgId: row.org_id });
-      if (!feed) continue;
-      const result = await readFeedOnce(deps, feed.url);
-      if (!result) continue;
-      const done = await deps.runtime.execute<{ drafted: number }>('social.feed.record', { feedId: row.feed_id, result }, { actor: ACTOR, orgId: row.org_id });
-      drafted += done.drafted;
-    } catch (error) {
-      console.warn(`[social-feeds] feed ${row.feed_id.slice(0, 8)}`, error instanceof Error ? error.message : error);
+  for (let batch = 0; batch < FEED_BATCHES; batch++) {
+    const { rows } = await sql<{ org_id: string; feed_id: string }>`SELECT org_id, feed_id FROM crove_social.feeds_due(${FEED_LIMIT}::int)`.execute(deps.workerDb);
+    const fresh = rows.filter((r) => !seen.has(r.feed_id));
+    for (const row of fresh) {
+      seen.add(row.feed_id);
+      drafted += await readOne(deps, row);
     }
+    if (rows.length < FEED_LIMIT || fresh.length === 0) break;
   }
   return drafted;
+}
+
+async function readOne(deps: FeedDeps, row: { org_id: string; feed_id: string }): Promise<number> {
+  try {
+    const feed = await deps.runtime.query<{ url: string } | null>('social.feed.load', { feedId: row.feed_id }, { actor: ACTOR, orgId: row.org_id });
+    if (!feed) return 0;
+    const result = await readFeedOnce(deps, feed.url);
+    if (!result) return 0;
+    const done = await deps.runtime.execute<{ drafted: number }>('social.feed.record', { feedId: row.feed_id, result }, { actor: ACTOR, orgId: row.org_id });
+    return done.drafted;
+  } catch (error) {
+    console.warn(`[social-feeds] feed ${row.feed_id.slice(0, 8)}`, error instanceof Error ? error.message : error);
+    return 0;
+  }
 }

@@ -55,9 +55,9 @@ function FeedRow({ feed, channels, canManage }: { feed: Feed; channels: readonly
       <p className="text-xs text-subtle-foreground">
         {feed.lastCheckedAt ? t('lastRead', { when: f.dateTime(feed.lastCheckedAt) }) : t('notReadYet')}
         {' · '}
-        {t('drafts', { count: String(feed.drafts) })}
+        {t('drafts', { count: feed.drafts })}
       </p>
-      {feed.lastError && <p className="text-xs text-destructive">{t('lastError', { failures: String(feed.failures), error: t(`errors.${feed.lastError in ERRORS ? (feed.lastError as keyof typeof ERRORS) : 'other'}`) })}</p>}
+      {feed.lastError && <p className="text-xs text-destructive">{t('lastError', { failures: feed.failures, error: t(`errors.${feed.lastError in ERRORS ? (feed.lastError as keyof typeof ERRORS) : 'other'}`) })}</p>}
       {canManage && (
         <div className="flex gap-1.5">
           <Button size="sm" variant="outline" disabled={update.isPending} onClick={() => update.mutate(!feed.paused)}>
