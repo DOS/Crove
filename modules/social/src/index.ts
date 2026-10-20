@@ -18,4 +18,5 @@ export * from './review-links.ts';
 export * from './report-links.ts';
 export * from './activity.ts';
 export * from './comments.ts';
+export * from './link-preview.ts';
 export * from './notifications.ts';

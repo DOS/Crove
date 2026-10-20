@@ -17,6 +17,7 @@ import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from './jobs-schema.ts';
+import { runLinkPreviewJob } from './link-preview.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
 import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
@@ -78,6 +79,12 @@ interface AgentDispatchJob {
   orgId: string;
   eventId: string;
 }
+
+interface LinkPreviewJob {
+  orgId: string;
+  previewId: string;
+}
+const LINK_PREVIEW_RETRY_LIMIT = 2;
 
 interface ExtractJob {
   orgId: string;
@@ -400,6 +407,15 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await deps.runtime.execute('kernel.agent.dispatch_event', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'kernel.agent' }, orgId: job.data.orgId });
   });
 
+  // Link preview cards (#641): fetch a requested link's page through the egress guard and read its head in crove-extract.
+  if (social) {
+    await boss.work<LinkPreviewJob>(QUEUES.socialLinkPreview, { batchSize: 1 }, async ([job]) => {
+      if (!job) return;
+      const done = await runLinkPreviewJob({ runtime: deps.runtime, extract: deps.extract }, job.data.orgId, job.data.previewId);
+      if (done !== 'none') console.log(`[social-link-preview] ${job.data.previewId.slice(0, 8)}: ${done}`);
+    });
+  }
+
   // In-app notifications (#637): the command reads the event from the outbox and writes one row per person; the job
   // carries only its id.
   if (social) {
@@ -567,6 +583,15 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 return boss.send(socialPublishQueue(provider), { orgId: row.org_id, variantId, provider, comment: true, after } satisfies SocialPublishJob, {
                   singletonKey: `${row.org_id}:${variantId}:comment:${after ?? '-'}`,
                   retryLimit: 0,
+                });
+              }
+              if (social && row.type === 'social.link_preview.requested') {
+                const previewId = String(row.payload.preview_id);
+                return boss.send(QUEUES.socialLinkPreview, { orgId: row.org_id, previewId } satisfies LinkPreviewJob, {
+                  singletonKey: `${row.org_id}:${previewId}`,
+                  retryLimit: LINK_PREVIEW_RETRY_LIMIT,
+                  retryDelay: 10,
+                  retryBackoff: true,
                 });
               }
               if (social && NOTIFYING.has(row.type)) {

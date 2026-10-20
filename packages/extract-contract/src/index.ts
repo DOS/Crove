@@ -8,7 +8,7 @@ import { z } from 'zod';
 // files each one as a document of its own.
 // portal_invoice_list: the purchase-invoice list exported from the tax authority's e-invoice portal as .xlsx (#465);
 // the rows come back read and normalized, and the worker checks them again before they are stored.
-export const EXTRACT_KINDS = ['einvoice_xml', 'pdf_text', 'mime', 'zip', 'portal_invoice_list', 'dsn'] as const;
+export const EXTRACT_KINDS = ['einvoice_xml', 'pdf_text', 'mime', 'zip', 'portal_invoice_list', 'dsn', 'html_meta'] as const;
 export type ExtractKind = (typeof EXTRACT_KINDS)[number];
 export const zExtractKind = z.enum(EXTRACT_KINDS);
 
@@ -40,6 +40,11 @@ export const EXTRACT_LIMITS = {
   maxPortalListRows: 20_000,
   // A bounce report (DSN, #539): at most this many recipients are read.
   maxDsnRecipients: 20,
+  // A web page for a link preview (#641): the worker sends at most its first bytes, enough for the head.
+  maxHtmlBytes: 512 * 1024,
+  maxPageTitleChars: 300,
+  maxPageDescriptionChars: 1000,
+  maxPageSiteChars: 200,
   // Rows of the sheet that were not read as invoices (a totals row, a row without a number), reported by number.
   maxPortalListSkipped: 1000,
 } as const;
@@ -53,6 +58,7 @@ export type ArchiveRejection = (typeof ARCHIVE_REJECTIONS)[number];
 export function maxRequestBytes(kind: ExtractKind): number {
   if (kind === 'mime' || kind === 'dsn') return EXTRACT_LIMITS.maxEmailBytes;
   if (kind === 'portal_invoice_list') return EXTRACT_LIMITS.maxPortalListBytes;
+  if (kind === 'html_meta') return EXTRACT_LIMITS.maxHtmlBytes;
   return EXTRACT_LIMITS.maxFileBytes;
 }
 
@@ -125,6 +131,15 @@ export type ExtractedEmail = z.infer<typeof zExtractedEmail>;
 // A delivery status notification (RFC 3464, #539): each recipient's action and status code, and the Message-ID of the
 // bounced mail when the report quotes its headers. No address or diagnostic text leaves the sandbox.
 export const DSN_ACTIONS = ['failed', 'delayed', 'delivered', 'relayed', 'expanded'] as const;
+// What a web page says about itself (#641): Open Graph first, then Twitter cards, then the HTML title and description.
+// Text only, already decoded and trimmed; nothing here is ever sent to a platform.
+export const zExtractedPage = z.strictObject({
+  title: z.string().min(1).max(EXTRACT_LIMITS.maxPageTitleChars).nullable(),
+  description: z.string().min(1).max(EXTRACT_LIMITS.maxPageDescriptionChars).nullable(),
+  siteName: z.string().min(1).max(EXTRACT_LIMITS.maxPageSiteChars).nullable(),
+});
+export type ExtractedPage = z.infer<typeof zExtractedPage>;
+
 export const zExtractedDsn = z.strictObject({
   originalMessageId: z
     .string()
@@ -247,6 +262,7 @@ export const zExtractSuccess = z.discriminatedUnion('kind', [
   z.strictObject({ ok: z.literal(true), kind: z.literal('zip'), archive: zExtractedArchive }),
   z.strictObject({ ok: z.literal(true), kind: z.literal('portal_invoice_list'), list: zExtractedPortalList }),
   z.strictObject({ ok: z.literal(true), kind: z.literal('dsn'), report: zExtractedDsn }),
+  z.strictObject({ ok: z.literal(true), kind: z.literal('html_meta'), page: zExtractedPage }),
 ]);
 export type ExtractSuccess = z.infer<typeof zExtractSuccess>;
 

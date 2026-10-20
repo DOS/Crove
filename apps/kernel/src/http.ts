@@ -61,13 +61,20 @@ import {
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
 import {
   createDbInviteChecks,
+  createDbRefusalLimiter,
+  emailChangeGate,
+  emailChangeRefused,
   INVITE_TOKEN_HEADER,
+  limitInviteChecks,
   methodRefused,
   signupAllowed,
   signupGate,
   signupInviteToken,
+  SignupRefusalsLimited,
+  signupRefusalsLimited,
   signupRefused,
   type InviteChecks,
+  type RefusalLimiter,
   type SignupRules,
 } from './auth-signup-policy.ts';
 import { actorOf, bearerIssuedToOAuthClient, oauthClientRefused, type Authenticate, type AuthUser } from './auth.ts';
@@ -116,6 +123,8 @@ export interface HttpDeps {
   emailLimiter?: EmailLimiter;
   // The member invite checks for AUTH_SIGNUP_POLICY (#350, #563). Unset: the database checks on `pool`.
   signupInviteChecks?: InviteChecks;
+  // The cap on sign-up refusals that tell who holds an invite (#564). Unset: the database limiter on `pool`.
+  signupRefusalLimiter?: RefusalLimiter;
   // Per-user request limit on /api (issue #162). Default: built from API_RATE_LIMIT_PER_MINUTE; null turns it off.
   rateLimiter?: RateLimiter | null;
   // Per-client budgets of the public review page (#589). Unset: REVIEW_VIEWS_PER_MINUTE and REVIEW_ANSWERS_PER_MINUTE.
@@ -223,14 +232,14 @@ function oauthClientTokenRefused(): Response {
   return new Response(JSON.stringify(error), { status: refused.status, headers: { 'content-type': 'application/json' } });
 }
 
-// With TRUSTED_PROXY_HOPS=0 behind a reverse proxy, every client shares the proxy's address and so one email budget
-// and one budget of failed stream ticket redeems.
+// With TRUSTED_PROXY_HOPS=0 behind a reverse proxy, every client shares the proxy's address and so one email budget,
+// one budget of sign-up refusals and one budget of failed stream ticket redeems.
 let proxyWarned = false;
 function warnIfUntrustedProxy(c: Context, trustedHops: number): void {
   if (proxyWarned || trustedHops > 0 || !c.req.header('x-forwarded-for')) return;
   proxyWarned = true;
   console.warn(
-    '[http] requests carry X-Forwarded-For but TRUSTED_PROXY_HOPS=0: behind a reverse proxy every client shares its address, and so one email budget and one budget of failed stream ticket redeems; set TRUSTED_PROXY_HOPS',
+    '[http] requests carry X-Forwarded-For but TRUSTED_PROXY_HOPS=0: behind a reverse proxy every client shares its address, and so one email budget, one budget of sign-up refusals and one budget of failed stream ticket redeems; set TRUSTED_PROXY_HOPS',
   );
 }
 
@@ -382,6 +391,12 @@ export function createHttpApp(deps: HttpDeps) {
     const autoconfirm = config.AUTH_AUTOCONFIRM === 'true';
     const signupRules: SignupRules = { policy: config.AUTH_SIGNUP_POLICY, domains: new Set(config.AUTH_SIGNUP_ALLOWED_DOMAINS) };
     const inviteChecks = deps.signupInviteChecks ?? createDbInviteChecks(deps.pool);
+    const refusalLimiter =
+      deps.signupRefusalLimiter ??
+      createDbRefusalLimiter(deps.pool, {
+        perClientPerHour: config.AUTH_SIGNUP_REFUSAL_LIMIT_PER_HOUR,
+        globalPerHour: config.AUTH_SIGNUP_REFUSAL_GLOBAL_LIMIT_PER_HOUR,
+      });
     app.all('/auth/v1/*', bodyLimit({ maxSize: 1024 * 1024 }), async (c) => {
       const url = new URL(c.req.url);
       const path = url.pathname.replace(/^\/auth\/v1/, '');
@@ -403,6 +418,8 @@ export function createHttpApp(deps: HttpDeps) {
       const gate = signupGate(signupRules, { path, search: url.searchParams, contentType: headers.get('content-type'), body: payload });
       if (gate.kind === 'refuse') return signupRefused();
       if (gate.kind === 'method') return methodRefused();
+      // Under allowlist an account may not move to an address outside it either (#564 item 4).
+      if (emailChangeGate(signupRules, { method, path, body: payload }) === 'refuse') return emailChangeRefused();
       // A request that makes Supabase Auth send an email takes a slot of its client's budget first (#190).
       const sends = emailSendRequest(method, path, payload, autoconfirm);
       const client = clientBucket(ip);
@@ -420,16 +437,24 @@ export function createHttpApp(deps: HttpDeps) {
       if (gate.kind === 'check') {
         // The invite token the web app sends with a sign-up from an accept link (#563); the header is never forwarded.
         const token = signupInviteToken(c.req.header(INVITE_TOKEN_HEADER));
-        const allowed = await signupAllowed(signupRules, gate.email, token, inviteChecks).catch((error: unknown) => {
+        // Each lookup of whether the address holds an invite takes a refusal slot of the client's IPv4 address or IPv6
+        // /48 and of the deployment, given back when the sign-up is admitted (#564 item 1).
+        // The refusal cap counts per client address too, so warn about a reverse proxy without TRUSTED_PROXY_HOPS
+        // here as well (with AUTH_AUTOCONFIRM a sign-up takes no email slot, so the warning above never ran).
+        warnIfUntrustedProxy(c, config.TRUSTED_PROXY_HOPS);
+        const checks = limitInviteChecks(inviteChecks, refusalLimiter, clientBucket(ip, 48));
+        const allowed = await signupAllowed(signupRules, gate.email, token, checks).catch((error: unknown) => {
+          if (error instanceof SignupRefusalsLimited) return error;
           console.error('[auth-proxy] sign-up policy check unavailable:', error instanceof Error ? error.message : error);
           return null;
         });
-        if (allowed === null) {
+        if (allowed === null || allowed instanceof SignupRefusalsLimited) {
           if (reservation) {
             await emailLimiter.release(reservation, client).catch((error: unknown) => {
               console.error('[auth-proxy] email reservation not released:', error instanceof Error ? error.message : error);
             });
           }
+          if (allowed) return signupRefusalsLimited(allowed.retryAfterSeconds);
           return c.json({ code: 'AUTH_UNAVAILABLE', message: 'Dịch vụ đăng nhập không phản hồi' }, 503);
         }
         // A refused sign-up keeps its email slot: the per-client budget (AUTH_EMAIL_CLIENT_LIMIT_PER_HOUR) also bounds

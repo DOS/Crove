@@ -61,6 +61,7 @@ export interface CroveKernelSchema {
 export interface CroveSocialSchema {
   'crove_social.channel_policy': SocialChannelPolicyTable;
   'crove_social.label': SocialLabelTable;
+  'crove_social.link_preview': SocialLinkPreviewTable;
   'crove_social.metric_snapshot': SocialMetricSnapshotTable;
   'crove_social.notification': SocialNotificationTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;
@@ -723,6 +724,22 @@ export interface SocialLabelTable {
   name: string;
   color: Generated<string>;
   created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.link_preview */
+export interface SocialLinkPreviewTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  url: ColumnType<string, string, NotGranted>;
+  url_sha256: ColumnType<string, string, NotGranted>;
+  status: string;
+  title: string | null;
+  description: string | null;
+  site_name: string | null;
+  error: string | null;
+  requested_at: ColumnType<Date, Date | string, Date | string>;
+  fetched_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
