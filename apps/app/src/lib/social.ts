@@ -49,6 +49,7 @@ export const PROVIDER_NAMES: Record<Provider, string> = {
   linkedin: 'LinkedIn',
   x: 'X',
   bluesky: 'Bluesky',
+  google_business: 'Google Business',
 };
 
 export function providerName(provider: string): string {
