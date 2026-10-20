@@ -11,6 +11,10 @@
 #   deploy.sh status   [--dir <dir>]
 #   deploy.sh smoke <base url>
 #
+# Smoke: the checks a user needs to sign in (health, readiness, config, Supabase Auth, the sign-in page), and, with
+# SMOKE_EMAIL, SMOKE_PASSWORD and SMOKE_ORG set, an account step that signs in and uploads one synthetic e-invoice
+# (see smoke_account). Without them it says the account step is skipped.
+#
 # Deploy: pull both images by digest, start the database, run `migrate`, start Supabase Auth and run `auth-grants`,
 # start the other services, then the app: the worker before the API when they run as separate services (`worker`
 # and `api`), else the all-in-one `crove` service. It waits for /readyz (every committed migration in the ledger,
@@ -43,6 +47,8 @@ WORKER_SETTLE="${CROVE_WORKER_SETTLE:-15}"
 KEEP_RELEASES="${CROVE_KEEP_RELEASES:-5}"
 # Base URL of the smoke test on the host; default: the loopback port the API service publishes.
 SMOKE_URL="${CROVE_SMOKE_URL:-}"
+# Seconds the account step of the smoke test waits for the worker to turn its upload into a proposal.
+SMOKE_POLL_SECONDS="${CROVE_SMOKE_POLL_SECONDS:-120}"
 
 # Output may go to an SSH session that has dropped (see the signal traps in main): a failed write never stops a
 # deploy halfway.
@@ -82,8 +88,144 @@ smoke_login() {
   [ -n "$asset" ] && smoke_get "$base$asset" >/dev/null
 }
 
+# The account step (#690): sign in with a password, upload one synthetic e-invoice into the smoke org, wait until the
+# worker extracts it into a proposal, then reject that proposal so the smoke org's inbox stays empty. It runs only
+# where SMOKE_EMAIL and SMOKE_PASSWORD are set: the workflow's public smoke test, from the environment's secrets
+# (docs/runbooks/deploy.md, "Smoke account"). SMOKE_ORG is the smoke org's slug. Needs jq.
+#
+# Neither the password nor the access token is ever on a command line: the sign-in body is built by jq from the
+# environment and piped to curl, and the token goes to curl in a header file only this user can read.
+
+# The synthetic e-invoice: a fixed fake seller and buyer (tax codes that fail the checksum, so they belong to nobody)
+# and a number from the clock, so each run files a new document instead of a duplicate of the last one.
+smoke_invoice() {
+  local number="$1" day="$2"
+  cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<HDon>
+  <DLHDon Id="data">
+    <TTChung>
+      <PBan>2.1.0</PBan><THDon>HÓA ĐƠN GIÁ TRỊ GIA TĂNG</THDon><KHMSHDon>1</KHMSHDon><KHHDon>C26SMK</KHHDon>
+      <SHDon>$number</SHDon><NLap>$day</NLap><DVTTe>VND</DVTTe><TGia>1</TGia><HTTToan>TM/CK</HTTToan>
+    </TTChung>
+    <NDHDon>
+      <NBan><Ten>CÔNG TY KIỂM THỬ TRIỂN KHAI</Ten><MST>0101234564</MST><DChi>1 Đường Mẫu, Hà Nội</DChi></NBan>
+      <NMua><Ten>TỔ CHỨC KIỂM THỬ CROVE</Ten><MST>0309876546</MST><DChi>2 Đường Thử, TP Hồ Chí Minh</DChi></NMua>
+      <DSHHDVu>
+        <HHDVu>
+          <TChat>1</TChat><STT>1</STT><THHDVu>Kiểm thử sau triển khai</THHDVu><DVTinh>Lần</DVTinh>
+          <SLuong>1</SLuong><DGia>100000</DGia><ThTien>100000</ThTien><TSuat>10%</TSuat>
+        </HHDVu>
+      </DSHHDVu>
+      <TToan>
+        <THTTLTSuat><LTSuat><TSuat>10%</TSuat><ThTien>100000</ThTien><TThue>10000</TThue></LTSuat></THTTLTSuat>
+        <TgTCThue>100000</TgTCThue><TgTThue>10000</TgTThue><TgTTTBSo>110000</TgTTTBSo>
+        <TgTTTBChu>Một trăm mười nghìn đồng</TgTTTBChu>
+      </TToan>
+    </NDHDon>
+  </DLHDon>
+</HDon>
+EOF
+}
+
+# smoke_api <headers file> <url> [curl args...]: like smoke_get, as the signed-in user, without following redirects.
+smoke_api() {
+  local headers="$1" url="$2"
+  shift 2
+  curl --silent --show-error --fail --max-time 30 --header "@$headers" "$@" "$url"
+}
+
+# smoke_rpc <headers file> <base> <procedure> [input json]: the web app's oRPC call, POST /api/rpc/<procedure>.
+smoke_rpc() {
+  local body='{}'
+  if [ -n "${4:-}" ]; then body="{\"json\":$4}"; fi
+  smoke_api "$1" "$2/api/rpc/$3" --request POST --header 'content-type: application/json' --data-binary "$body"
+}
+
+smoke_account() {
+  local base="$1" work token headers number answer file_id status proposal error deadline rc=1
+  command -v jq >/dev/null || {
+    err 'the account step needs jq'
+    return 1
+  }
+  # The password never travels in clear text.
+  [[ "$base" == https://* || "$base" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]+)?$ ]] || {
+    err 'the account step signs in only over https'
+    return 1
+  }
+  [[ "${SMOKE_ORG:-}" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] || {
+    err 'SMOKE_ORG must be the smoke org'"'"'s slug (lowercase letters, digits and dashes)'
+    return 1
+  }
+  work="$(mktemp -d)" || return 1
+  (
+    umask 077
+    headers="$work/headers"
+    answer="$(jq -n '{email: env.SMOKE_EMAIL, password: env.SMOKE_PASSWORD}' |
+      curl --silent --show-error --fail --max-time 15 --request POST --header 'content-type: application/json' \
+        --data-binary @- "$base/auth/v1/token?grant_type=password")" || {
+      err 'smoke: signing in with SMOKE_EMAIL and SMOKE_PASSWORD failed'
+      exit 1
+    }
+    token="$(jq -r '.access_token // empty' <<<"$answer")"
+    # A JWT: written into the header file below, so nothing else (no line break) may come with it.
+    [[ "$token" =~ ^[A-Za-z0-9._-]+$ ]] || {
+      err 'smoke: sign-in answered without an access token'
+      exit 1
+    }
+    printf 'authorization: Bearer %s\nx-crove-org: %s\n' "$token" "$SMOKE_ORG" >"$headers"
+
+    number="$(date -u +%s)"
+    smoke_invoice "$number" "$(date -u +%F)" >"$work/crove-smoke-$number.xml"
+    answer="$(smoke_api "$headers" "$base/api/files" --form "file=@$work/crove-smoke-$number.xml;type=application/xml")" || {
+      err "smoke: uploading the synthetic e-invoice to org $SMOKE_ORG failed"
+      exit 1
+    }
+    file_id="$(jq -r '.files[0].fileId // empty' <<<"$answer")"
+    [ -n "$file_id" ] || {
+      err 'smoke: the upload answered without a file id'
+      exit 1
+    }
+
+    deadline=$((SECONDS + SMOKE_POLL_SECONDS))
+    while :; do
+      answer="$(smoke_rpc "$headers" "$base" files/recent)" || {
+        err 'smoke: listing the recent files failed'
+        exit 1
+      }
+      # One field per line, so an empty field stays empty (a whitespace IFS would merge it with the next one); line
+      # breaks in the error text become spaces, so it stays one log line.
+      {
+        IFS= read -r status
+        IFS= read -r proposal
+        IFS= read -r error
+      } < <(jq -r --arg id "$file_id" 'first(.json[]? | select(.id == $id)) // {} | (.status // ""), (.proposalId // ""), (.error // "" | gsub("[\r\n]"; " "))' <<<"$answer")
+      if [ "$status" = proposed ] && [ -n "$proposal" ]; then break; fi
+      if [ "$status" = failed ]; then
+        err "smoke: the worker could not extract the synthetic e-invoice: $error"
+        exit 1
+      fi
+      if ((SECONDS >= deadline)); then
+        err "smoke: no proposal after ${SMOKE_POLL_SECONDS}s (file ${status:-not listed})"
+        exit 1
+      fi
+      sleep 2
+    done
+
+    smoke_rpc "$headers" "$base" inbox/reject "$(jq -cn --arg id "$proposal" '{id: $id, reason: "Kiểm thử sau triển khai"}')" >/dev/null || {
+      err "smoke: rejecting the smoke proposal $proposal failed"
+      exit 1
+    }
+  ) && rc=0
+  rm -rf "$work"
+  return "$rc"
+}
+
+# smoke <base url> [account]: with "account" (the `smoke` command), the account step runs too when its settings are
+# there. The deploy's own smoke test on the host never runs it: the workflow's public smoke test does, and a rollback
+# must not depend on the smoke account, or a broken account would fail the rollback too.
 smoke() {
-  local base="${1%/}" failed=0
+  local base="${1%/}" account="${2:-}" failed=0
   smoke_check() {
     local name="$1"
     shift
@@ -99,6 +241,13 @@ smoke() {
   # Supabase Auth through the kernel's /auth/v1 proxy, the way signing in goes.
   smoke_check '/auth/v1/health answers (Supabase Auth through the proxy)' smoke_body "$base/auth/v1/health" ''
   smoke_check '/login loads the app shell and its script bundle' smoke_login "$base"
+  if [ "$account" = account ]; then
+    if [ -n "${SMOKE_EMAIL:-}" ] && [ -n "${SMOKE_PASSWORD:-}" ]; then
+      smoke_check "signs in, uploads a synthetic e-invoice to org ${SMOKE_ORG:-?} and gets a proposal" smoke_account "$base"
+    else
+      log 'smoke skipped: sign-in and upload (SMOKE_EMAIL and SMOKE_PASSWORD are not set)'
+    fi
+  fi
   return "$failed"
 }
 
@@ -543,7 +692,7 @@ main() {
     status) do_status "$@" ;;
     smoke)
       [ -n "${1:-}" ] || die "$EXIT_USAGE" 'usage: deploy.sh smoke <base url>'
-      smoke "$1" || die "$EXIT_FAILED" "smoke test failed on $1"
+      smoke "$1" account || die "$EXIT_FAILED" "smoke test failed on $1"
       ;;
     *) die "$EXIT_USAGE" 'usage: deploy.sh deploy|rollback|status|smoke (see the header of this file)' ;;
   esac
