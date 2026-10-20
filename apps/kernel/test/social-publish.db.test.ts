@@ -577,8 +577,9 @@ suite('social publishing on PostgreSQL (S4)', () => {
     const row = await admin(async (c) => (await c.query<{ status: string; error_code: string; error_retry_at: Date }>('SELECT status, error_code, error_retry_at FROM crove_social.post_variant WHERE id = $1', [next.id])).rows[0]);
     expect(row).toMatchObject({ status: 'scheduled', error_code: 'QUOTA_EXHAUSTED' });
     // About 10 minutes from now, when the oldest of the 150 leaves the day.
-    expect((row?.error_retry_at as Date).getTime() - Date.now()).toBeGreaterThan(9 * 60_000);
-    expect((row?.error_retry_at as Date).getTime() - Date.now()).toBeLessThan(11 * 60_000);
+    const retryIn = (row ? row.error_retry_at.getTime() : 0) - Date.now();
+    expect(retryIn).toBeGreaterThan(9 * 60_000);
+    expect(retryIn).toBeLessThan(11 * 60_000);
     // A refused call used no allowance: with the oldest refused, the post goes out once due.
     await admin((c) => c.query("UPDATE crove_kernel.external_call SET state = 'failed', finished_at = now() WHERE org_id = $1 AND key = 'social.publish:' || $2 || ':1:1:publish'", [o.orgId, earlier.id]));
     await admin((c) => c.query("UPDATE crove_social.post_variant SET error_retry_at = now() - interval '1 second' WHERE id = $1", [next.id]));
