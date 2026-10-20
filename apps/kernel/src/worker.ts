@@ -174,6 +174,8 @@ export interface WorkerDeps {
   // Social publishing: the credential broker that opens channel tokens, and the providers this deployment can publish
   // to. Without it, or without the social module, scheduled posts wait.
   channels?: { broker: CredentialBroker; publishers: Readonly<Record<string, Publisher>>; refreshers?: Readonly<Record<string, Refresher>> };
+  // PUBLIC_URL, where Social short links (#706) point.
+  publicUrl?: string;
 }
 
 interface SocialPublishJob {
@@ -463,7 +465,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         console.log(`[social-comment] ${provider} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
         return;
       }
-      const outcome = await runPublishJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider);
+      const outcome = await runPublishJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store, ...(deps.publicUrl ? { publicUrl: deps.publicUrl } : {}) }, orgId, variantId, provider);
       if (outcome.action !== 'none') console.log(`[social-publish] ${provider} variant ${variantId.slice(0, 8)}: ${outcome.action} -> ${outcome.status}`);
     });
   }

@@ -344,6 +344,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             exportSealer: exportSealer(config),
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,
             channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config) },
+            publicUrl: config.PUBLIC_URL,
           }),
         );
       }
