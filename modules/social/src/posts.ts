@@ -33,6 +33,7 @@ import { ideaCommands, ideaOfPost, ideaQueries, linkIdeaToPost } from './ideas.t
 import { bioCommands, bioQueries } from './bio-page.ts';
 import { feedCommands, feedQueries } from './feeds.ts';
 import { reportScheduleCommands, reportScheduleQueries } from './report-schedules.ts';
+import { brandVoiceCommands, brandVoiceQueries } from './brand-voice.ts';
 import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
@@ -1236,6 +1237,7 @@ export const socialCommands = [
   ...bioCommands,
   ...feedCommands,
   ...reportScheduleCommands,
+  ...brandVoiceCommands,
   ...reviewLinkCommands,
   ...activityCommands,
   ...accountCommands,
@@ -1285,4 +1287,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];
