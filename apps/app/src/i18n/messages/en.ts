@@ -1974,7 +1974,7 @@ export const en = {
     bestTimesTitle: 'Best times to post',
     bestTimesHint: 'The hours (in your time zone) when the posts of each channel drew the most engagement in the chosen window: reactions, comments, shares and saves, averaged per post. A slot needs a few posts.',
     bestTimesSlot: '{day} {hour}:00 (avg {engagement} engagements, {posts} posts)',
-    metricsCapped: 'Showing the latest 500 published channels; totals cover these only.',
+    metricsCapped: 'Showing the latest 500 published channels; the totals above cover them all.',
     metricsClicks: 'Link clicks',
     metricsExport: 'Download CSV',
     metricsExportCut: 'The file holds the latest 10,000 published channels only; choose a shorter window to get them all.',
