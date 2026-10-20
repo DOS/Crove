@@ -1213,14 +1213,17 @@ export const mediaFile = defineQuery({
               .whereRef('v.org_id', '=', 'f.org_id')
               .where(sql<boolean>`v.media @> jsonb_build_array(jsonb_build_object('fileId', ${input.fileId}::text))`),
           ),
-          // A video's cover image (#642).
-          eb.exists(
+          // A video's cover image (#642): only a Social upload, whatever the write-time checks let through.
+          eb.and([
+            eb('f.source', '=', 'social'),
+            eb.exists(
             eb
               .selectFrom('crove_social.post_variant as v')
               .select('v.id')
               .whereRef('v.org_id', '=', 'f.org_id')
               .where(sql<boolean>`v.settings -> 'cover' ->> 'fileId' = ${input.fileId}::text`),
-          ),
+            ),
+          ]),
         ]),
       )
       .executeTakeFirst();
