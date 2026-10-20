@@ -57,7 +57,9 @@ export function OrgLayout() {
   // Social posts waiting for the viewer's review (#749) count toward the inbox, where Social runs.
   const socialOn = NAV.some((n) => n.module === 'social');
   const reviews = useQuery({ ...orpc.social.reviewInbox.queryOptions({ input: {} }), enabled: socialOn, refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
-  const inboxCount = (pending.data?.length ?? 0) + (reviews.data?.total ?? 0);
+  // And what needs a person there (#771): channels to reconnect, posts that did not go out.
+  const attention = useQuery({ ...orpc.social.attentionInbox.queryOptions({ input: {} }), enabled: socialOn, refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
+  const inboxCount = (pending.data?.length ?? 0) + (reviews.data?.total ?? 0) + (attention.data?.total ?? 0);
   // The member's unread notifications (#637), where Social runs.
   const notifications = useNotifications(NAV.some((n) => n.module === 'social'));
   const unread = unreadLabel(notifications.data?.unread ?? 0);

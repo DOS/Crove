@@ -777,6 +777,12 @@ export const en = {
     },
   },
   inbox: {
+    socialAttention: {
+      title: 'Social needs you ({count, number})',
+      noText: 'Post without text',
+      channel: { expired: '{channel}: sign-in expired, reconnect it', error: '{channel}: connection error, reconnect it' },
+      post: { failed: 'did not go out', needs_attention: 'unclear whether it went out, check it', paused: 'paused while its channel is disconnected' },
+    },
     socialReviews: {
       title: 'Posts waiting for your review ({count, number})',
       noText: 'Post without text',

@@ -401,6 +401,21 @@ export const contract = {
         total: z.number().int().min(0),
       }),
     ),
+    // Channels and posts that need a person (#771), for the kernel inbox: empty for members and viewers.
+    attentionInbox: oc.input(z.object({})).output(
+      z.object({
+        channels: z.array(z.object({ connectionId: zId, provider: z.string(), displayName: z.string(), status: z.enum(['expired', 'error']) })),
+        posts: z.array(
+          z.object({
+            postId: zId,
+            excerpt: z.string(),
+            channels: z.array(z.object({ variantId: zId, provider: z.string(), displayName: z.string(), status: z.string(), errorCode: z.string().nullable() })),
+            updatedAt: z.string(),
+          }),
+        ),
+        total: z.number().int().min(0),
+      }),
+    ),
     // Client review links (#589): owners and admins make and revoke them; the token is in the create answer only.
     reviewLinks: {
       list: oc.input(z.object({ postId: zId })).output(zSocialReviewLinks),
