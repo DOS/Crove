@@ -6,6 +6,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { CommandPalette, type PaletteEntry } from '../components/command-palette.tsx';
 import { ThemeSwitcher } from '../components/theme-switcher.tsx';
+import { StatusLink } from '../components/status-link.tsx';
 import { SupportLink } from '../components/support-link.tsx';
 import { Logo, OrgLeftNotice } from '../components/ui.tsx';
 import { LOCALE_NAMES, LOCALES } from '../i18n/locale.ts';
@@ -192,6 +193,7 @@ export function OrgLayout() {
         </nav>
         <div className="mt-3 shrink-0 border-t px-2 pt-3 text-xs text-subtle-foreground">
           <SupportLink className="mb-2 block text-sm text-link" />
+          <StatusLink className="mb-2 block text-sm text-link" />
           <p className="truncate">{me.data?.email}</p>
           <div className="mt-1 flex items-center justify-between gap-2">
             <button className="hover:text-muted-foreground" onClick={() => void signOut()}>

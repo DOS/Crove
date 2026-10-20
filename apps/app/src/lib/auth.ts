@@ -21,11 +21,13 @@ export interface PublicConfig {
   // The terms of service and privacy notice (TERMS_URL, PRIVACY_URL, #688): https: pages, null when unset.
   termsUrl?: string | null;
   privacyUrl?: string | null;
+  // The deployment serves the public status page /status (STATUS_FILE, issue #678).
+  statusPage?: boolean;
   // The server can look up a tax code in the public registry to prefill a new org (TAX_CODE_LOOKUP_URL, issue #324).
   taxCodeLookup?: boolean;
   // The offline sandbox channel can be connected (CHANNEL_SANDBOX); `oauth` lists the providers connected through
   // their OAuth dialog that the server has app credentials for.
-  channels?: { sandbox: boolean; bluesky?: boolean; telegram?: boolean; oauth?: string[] };
+  channels?: { sandbox: boolean; bluesky?: boolean; telegram?: boolean; mastodon?: boolean; oauth?: string[] };
 }
 
 let config: PublicConfig | null = null;

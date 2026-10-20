@@ -275,6 +275,16 @@ export function SocialChannelsPage() {
       void queryClient.invalidateQueries();
     },
   });
+  // Mastodon: the instance and an access token, checked by the server and sealed; the form forgets the token.
+  const mastodonOn = getConfig().channels?.mastodon ?? false;
+  const [mdn, setMdn] = useState({ instance: '', accessToken: '' });
+  const connectMastodon = useMutation({
+    mutationFn: () => client.channels.connectMastodon({ instance: mdn.instance.trim(), accessToken: mdn.accessToken.trim() }),
+    onSuccess: () => {
+      setMdn({ instance: '', accessToken: '' });
+      void queryClient.invalidateQueries();
+    },
+  });
   // Telegram: a bot token and the channel, checked by the server and sealed; the form forgets the token.
   const telegramOn = getConfig().channels?.telegram ?? false;
   const [tg, setTg] = useState({ botToken: '', channel: '' });
@@ -297,6 +307,7 @@ export function SocialChannelsPage() {
   const pausedOn = new Map((waiting.data ?? []).map((w) => [w.connectionId, w.paused]));
   const blueskyForm = useRef<HTMLInputElement>(null);
   const telegramForm = useRef<HTMLInputElement>(null);
+  const mastodonForm = useRef<HTMLInputElement>(null);
   // Reconnecting connects the same account again: the provider's dialog, or the Bluesky form with its handle.
   const reconnect = (c: Channel) => {
     if (c.provider === 'bluesky') {
@@ -308,9 +319,15 @@ export function SocialChannelsPage() {
       telegramForm.current?.focus();
       return;
     }
+    if (c.provider === 'mastodon') {
+      // The account id ends with its instance's host.
+      setMdn({ instance: c.displayName.match(/@([^@\s)]+)\)$/)?.[1] ?? '', accessToken: '' });
+      mastodonForm.current?.focus();
+      return;
+    }
     if (oauth.includes(c.provider as OAuthProvider)) start.mutate(c.provider as OAuthProvider);
   };
-  const canReconnect = (c: Channel) => isAdmin && c.status !== 'revoked' && (c.provider === 'bluesky' ? blueskyOn : c.provider === 'telegram' ? telegramOn : oauth.includes(c.provider as OAuthProvider));
+  const canReconnect = (c: Channel) => isAdmin && c.status !== 'revoked' && (c.provider === 'bluesky' ? blueskyOn : c.provider === 'telegram' ? telegramOn : c.provider === 'mastodon' ? mastodonOn : oauth.includes(c.provider as OAuthProvider));
   const disconnect = useMutation({
     mutationFn: (connectionId: string) => client.channels.disconnect({ connectionId, idempotencyKey: crypto.randomUUID() }),
     onSuccess: () => {
@@ -467,6 +484,26 @@ export function SocialChannelsPage() {
                 {t('connectWith', { provider: providerName('bluesky') })}
               </Button>
               {connectBluesky.error && <ErrorText>{errorMessage(connectBluesky.error)}</ErrorText>}
+            </form>
+          )}
+          {mastodonOn && isAdmin && (
+            <form
+              className="space-y-2 border-t pt-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (mdn.instance.trim() && mdn.accessToken.trim()) connectMastodon.mutate();
+              }}
+            >
+              <p className="text-sm font-medium text-foreground">{providerName('mastodon')}</p>
+              <Label htmlFor="mdn-instance">{t('mastodonInstance')}</Label>
+              <Input id="mdn-instance" ref={mastodonForm} autoComplete="off" value={mdn.instance} placeholder="mastodon.social" onChange={(e) => setMdn({ ...mdn, instance: e.target.value })} />
+              <Label htmlFor="mdn-token">{t('mastodonToken')}</Label>
+              <Input id="mdn-token" type="password" autoComplete="off" value={mdn.accessToken} onChange={(e) => setMdn({ ...mdn, accessToken: e.target.value })} />
+              <p className="text-xs text-subtle-foreground">{t('mastodonHint')}</p>
+              <Button type="submit" variant="outline" size="sm" disabled={!mdn.instance.trim() || !mdn.accessToken.trim() || connectMastodon.isPending}>
+                {t('connectWith', { provider: providerName('mastodon') })}
+              </Button>
+              {connectMastodon.error && <ErrorText>{errorMessage(connectMastodon.error)}</ErrorText>}
             </form>
           )}
           {telegramOn && isAdmin && (

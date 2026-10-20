@@ -177,6 +177,11 @@ export const contract = {
       .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
     // A Telegram channel (#747): a bot token from @BotFather and the channel's @username, t.me link or numeric id. The
     // server checks the bot may post there, then seals the token; the formats are checked by the server, in words.
+    // A Mastodon account (#748): the instance's address and an access token made in its settings. The server checks the
+    // token with the instance through the egress guard, then seals it.
+    connectMastodon: oc
+      .input(z.object({ instance: z.string().trim().min(1).max(260), accessToken: z.string().trim().min(1).max(300) }))
+      .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
     connectTelegram: oc
       .input(z.object({ botToken: z.string().trim().min(1).max(100), channel: z.string().trim().min(1).max(100) }))
       .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
