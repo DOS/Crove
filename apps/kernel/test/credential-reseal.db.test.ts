@@ -1,7 +1,7 @@
 // Credential reseal after a key rotation on PostgreSQL 17 (#776): the worker seals every active credential still under the
 // previous key with the current one, once, with a compare on the key it read, and counts what is left. Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -141,13 +141,32 @@ suite('credential reseal after a key rotation on PostgreSQL (#776)', () => {
     const sealed = rotated.seal(JSON.stringify({ accessToken: 'token-d' }), { orgId: o.orgId, provider: 'zalo_oa', externalAccountId: (await admin(async (c) => (await c.query<{ external_account_id: string }>('SELECT external_account_id FROM crove_kernel.channel_connection WHERE id = $1', [id])).rows[0]?.external_account_id)) as string });
     const credential = { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') };
     // A reconnect or refresh sealed a newer envelope after the worker read it: the read key no longer matches.
-    expect(await worker.execute('kernel.channel.reseal', { connectionId: id, fromKeyId: newKey.id, credential }, { actor: system, orgId: o.orgId })).toMatchObject({ resealed: false });
+    const stored = await worker.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: id }, { actor: system, orgId: o.orgId });
+    const readSha = createHash('sha256').update(Buffer.from(stored.envelope, 'base64')).digest('hex');
+    expect(await worker.execute('kernel.channel.reseal', { connectionId: id, fromKeyId: newKey.id, fromEnvelopeSha256: readSha, credential }, { actor: system, orgId: o.orgId })).toMatchObject({ resealed: false });
+    // A replica still on the old key refreshed it: same key id, other bytes. The worker's copy is stale, nothing changes.
+    expect(await worker.execute('kernel.channel.reseal', { connectionId: id, fromKeyId: oldKey.id, fromEnvelopeSha256: '0'.repeat(64), credential }, { actor: system, orgId: o.orgId })).toMatchObject({ resealed: false });
     expect(await keyOf(id)).toBe(oldKey.id);
-    await expect(api.execute('kernel.channel.reseal', { connectionId: id, fromKeyId: oldKey.id, credential }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ status: 403 });
+    await expect(api.execute('kernel.channel.reseal', { connectionId: id, fromKeyId: oldKey.id, fromEnvelopeSha256: readSha, credential }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ status: 403 });
     const roles = await admin(async (c) =>
-      (await c.query<{ role: string }>(`SELECT r AS role FROM unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant']) r WHERE has_function_privilege(r, 'crove_kernel.credential_reseal_due(text, int)', 'EXECUTE') OR has_function_privilege(r, 'crove_kernel.credential_key_counts()', 'EXECUTE')`)).rows,
+      (await c.query<{ role: string }>(`SELECT r AS role FROM unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant']) r WHERE has_function_privilege(r, 'crove_kernel.credential_reseal_due(text, int, timestamptz, uuid)', 'EXECUTE') OR has_function_privilege(r, 'crove_kernel.credential_key_counts()', 'EXECUTE')`)).rows,
     );
     expect(roles.map((r) => r.role)).toEqual(['crove_worker']);
+  });
+
+  it('leaves credentials whose member left to their reconnect, counted apart, and goes past them', async () => {
+    const o = await org();
+    const usable = await connect(o, 30 * 24 * HOUR, JSON.stringify({ accessToken: 'token-e' }));
+    const orphan = await connect(o, 30 * 24 * HOUR, JSON.stringify({ accessToken: 'token-f' }));
+    // The orphan was sealed first, so a scan that stopped at it would never reach the other one.
+    await admin((c) => c.query("UPDATE crove_kernel.credential SET sealed_at = now() - interval '1 day' WHERE connection_id = $1", [orphan]));
+    const admin2 = await upsertIdentity(appDb, { issuer: 'test', subject: randomUUID(), email: `gone-${randomUUID().slice(0, 8)}@reseal.test`, name: null });
+    await admin((c) => c.query('UPDATE crove_kernel.channel_connection SET connected_by = $2 WHERE id = $1', [orphan, admin2]));
+    const done = await resealCredentials({ runtime: worker, broker: rotated, workerDb });
+    expect(await keyOf(usable)).toBe(newKey.id);
+    expect(await keyOf(orphan)).toBe(oldKey.id);
+    expect(done.leftActive).toBe(0);
+    expect(done.leftInactive).toBeGreaterThanOrEqual(1);
   });
 
   it('skips a broker that does not say which key it seals with', async () => {
