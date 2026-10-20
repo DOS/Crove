@@ -27,9 +27,28 @@ describe('metrics CSV (#578)', () => {
     const csv = metricsCsv([row], new Map([['c1', 'Quán A']]));
     expect(csv.startsWith('﻿')).toBe(true);
     expect(csv.slice(1).split('\r\n')).toEqual([
-      'post_id,channel,provider,published_at,url,text,impressions,reach,reactions,comments,shares,saves,clicks,views,captured_at',
-      'p1,Quán A,facebook_page,2026-10-20T01:00:00.000Z,https://example.test/p/1,"Khai trương, giảm 50%",,30,3,,,,,,2026-10-20T07:00:00.000Z',
+      'post_id,channel,provider,published_at,url,text,labels,impressions,reach,reactions,comments,shares,saves,clicks,views,captured_at',
+      'p1,Quán A,facebook_page,2026-10-20T01:00:00.000Z,https://example.test/p/1,"Khai trương, giảm 50%",,,30,3,,,,,,2026-10-20T07:00:00.000Z',
       '',
     ]);
+  });
+
+  it("writes a post's label names in one cell, joined and guarded like any text (#639)", () => {
+    const row: MetricsRow = {
+      variantId: 'v1',
+      postId: 'p1',
+      provider: 'facebook_page',
+      connectionId: 'c1',
+      excerpt: 'Hi',
+      publishedAt: null,
+      externalUrl: null,
+      metrics: {},
+      capturedAt: null,
+    };
+    const line = (labels?: Map<string, string[]>) => metricsCsv([row], new Map(), labels).slice(1).split('\r\n')[1];
+    expect(line(new Map([['p1', ['Khai trương', 'Tết']]]))).toBe('p1,,facebook_page,,,Hi,Khai trương; Tết,,,,,,,,,');
+    expect(line(new Map([['p1', ['=SUM(A1)', 'b']]]))).toBe("p1,,facebook_page,,,Hi,'=SUM(A1); b,,,,,,,,,");
+    expect(line(new Map([['p1', ['a, b']]]))).toBe('p1,,facebook_page,,,Hi,"a, b",,,,,,,,,');
+    expect(line()).toBe('p1,,facebook_page,,,Hi,,,,,,,,,,');
   });
 });

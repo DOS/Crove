@@ -193,8 +193,8 @@ export const notificationDispatch = defineCommand({
     await sql`
       DELETE FROM crove_social.notification
       WHERE org_id = ${ctx.orgId} AND user_id = ANY(${users}::uuid[])
-        AND (read_at < ${ctx.now}::timestamptz - make_interval(days => ${NOTIFICATION_READ_KEEP_DAYS})
-             OR created_at < ${ctx.now}::timestamptz - make_interval(days => ${NOTIFICATION_KEEP_DAYS}))`.execute(ctx.trx);
+        AND (read_at < ${ctx.now}::timestamptz - make_interval(days => ${NOTIFICATION_READ_KEEP_DAYS}::int)
+             OR created_at < ${ctx.now}::timestamptz - make_interval(days => ${NOTIFICATION_KEEP_DAYS}::int))`.execute(ctx.trx);
     return { sent: inserted.length };
   },
 });

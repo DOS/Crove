@@ -370,12 +370,15 @@ export const SOCIAL_REVIEW_VERDICTS = ['approved', 'changes_requested', 'comment
 // What an in-app notification is about (#637); a member may turn each kind off.
 export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned'] as const;
 export const SOCIAL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
+// The palette a label's colour comes from (#639); the app maps each name to a theme tone.
+export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
 export type SocialVariantStatus = (typeof SOCIAL_VARIANT_STATUSES)[number];
 export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 export type SocialActorOrigin = (typeof SOCIAL_ACTOR_ORIGINS)[number];
 export type SocialDecision = (typeof SOCIAL_DECISIONS)[number];
 export type SocialReviewVerdict = (typeof SOCIAL_REVIEW_VERDICTS)[number];
 export type SocialNotificationKind = (typeof SOCIAL_NOTIFICATION_KINDS)[number];
+export type SocialLabelColor = (typeof SOCIAL_LABEL_COLORS)[number];
 
 export type SocialPostTable = Refine<
   G.SocialPostTable,
@@ -395,6 +398,7 @@ export type SocialPostVariantTable = Refine<
 export type SocialReviewFeedbackTable = Refine<G.SocialReviewFeedbackTable, { verdict: ColumnType<SocialReviewVerdict, never, never> }>;
 export type SocialNotificationTable = Refine<G.SocialNotificationTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
 export type SocialNotificationMuteTable = Refine<G.SocialNotificationMuteTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
+export type SocialLabelTable = Refine<G.SocialLabelTable, { color: Generated<SocialLabelColor> }>;
 
 export type SocialPostApprovalTable = Refine<
   G.SocialPostApprovalTable,
@@ -439,6 +443,7 @@ type Refined = Tables<{
   'crove_social.review_feedback': SocialReviewFeedbackTable;
   'crove_social.notification': SocialNotificationTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;
+  'crove_social.label': SocialLabelTable;
 }>;
 
 // Every table crove_tenant may read: the generated table type, or its refinement above.
