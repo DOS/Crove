@@ -428,6 +428,11 @@ export function SocialPage() {
             <Link to="/o/$slug/social/channels" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
               {t('channels')}
             </Link>
+            {canWrite && !noChannels && (
+              <Link to="/o/$slug/social/import" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+                {t('import.open')}
+              </Link>
+            )}
             {!canWrite ? null : noChannels ? (
               <Button size="lg" disabled>
                 {t('compose')}

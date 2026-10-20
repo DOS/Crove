@@ -201,6 +201,29 @@ export const contract = {
       submit: oc.input(z.strictObject({ postId: zId, variantIds: z.array(zId).min(1).max(20).optional() })).output(z.object({ postId: zId, submitted: z.array(zId) })),
       // A new post with the content of a published one, for the channels it went out on (S9); it is reviewed as usual.
       repost: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
+      // Drafts from a sheet (#586), up to 200 rows; with submit, the channels that fit their rules go to review.
+      import: oc
+        .input(
+          z.strictObject({
+            posts: z
+              .array(
+                z.strictObject({
+                  body: zSocialPostCreate.shape.body,
+                  title: zSocialPostCreate.shape.title,
+                  linkUrl: zSocialPostCreate.shape.linkUrl,
+                  scheduledAt: zSocialPostCreate.shape.scheduledAt,
+                  timeZone: zSocialPostCreate.shape.timeZone,
+                  connectionIds: z.array(zId).min(1).max(20),
+                }),
+              )
+              .min(1)
+              .max(200),
+            submit: z.boolean().optional(),
+            // One key per import: a retry after a lost answer returns the first result.
+            idempotencyKey: zId,
+          }),
+        )
+        .output(z.object({ posts: z.array(z.object({ postId: zId, submitted: z.number().int() })) })),
       // A copy of any post as a new draft, for the channels still connected (#575).
       duplicate: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
       // Repost a published post every N days (7 to 365), each repost sent to review; null stops it.
