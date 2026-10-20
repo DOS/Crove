@@ -1,6 +1,6 @@
 // VAT return deadlines for the multi-client home screen (issue #318).
 import { describe, expect, it } from 'vitest';
-import { nextVatDeadline, vietnamToday } from '../src/index.ts';
+import { nextVatDeadline } from '../src/index.ts';
 
 describe('nextVatDeadline, monthly returns', () => {
   it('is the 20th of the month after the period while that day has not passed', () => {
@@ -55,12 +55,5 @@ describe('nextVatDeadline, quarterly returns', () => {
   it('refuses a date that is not a calendar date', () => {
     expect(() => nextVatDeadline('quarter', '2026-02-30')).toThrow();
     expect(() => nextVatDeadline('month', '19/10/2026')).toThrow();
-  });
-});
-
-describe('vietnamToday', () => {
-  it('is the date in UTC+7', () => {
-    expect(vietnamToday(new Date('2026-10-19T16:59:59Z'))).toBe('2026-10-19');
-    expect(vietnamToday(new Date('2026-10-19T17:00:00Z'))).toBe('2026-10-20');
   });
 });

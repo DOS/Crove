@@ -307,6 +307,34 @@ suite('social posts on PostgreSQL (S3)', () => {
     expect(third.every((id) => all.includes(id))).toBe(true);
   });
 
+  it('schedules each channel at its own time, and shows a post waiting in a paused queue (#576)', async () => {
+    const o = await org();
+    const [a, b] = [await connection(o.orgId, o.owner), await connection(o.orgId, o.owner)];
+    const post = await approved(o, [a, b], 'Giờ riêng');
+    const [va, vb] = post.variants as [PostView['variants'][number], PostView['variants'][number]];
+    const t1 = new Date(Date.now() + 2 * HOUR).toISOString();
+    const t2 = new Date(Date.now() + 5 * HOUR).toISOString();
+    await expect(exec(o, o.owner, 'social.variant.schedule', { postId: post.id, times: [{ variantId: va.id, at: t1 }], at: t2 })).rejects.toBeDefined();
+    await expect(exec(o, o.owner, 'social.variant.schedule', { postId: post.id, times: [{ variantId: va.id, at: new Date(Date.now() - HOUR).toISOString() }] })).rejects.toMatchObject({ code: 'SCHEDULE_IN_PAST' });
+    await exec(o, o.owner, 'social.variant.schedule', { postId: post.id, times: [{ variantId: va.id, at: t1 }, { variantId: vb.id, at: t2 }] });
+    const after = await get(o, o.owner, post.id);
+    expect(after.variants.map((v) => [v.status, v.effectiveAt])).toEqual([
+      ['scheduled', t1],
+      ['scheduled', t2],
+    ]);
+
+    // A queued post on a queue paused by a person says so; resumed, it does not.
+    const queued = await approved(o, [a], 'Hàng đợi');
+    await exec(o, o.owner, 'social.queue.set', { connectionId: a, timeZone: 'Asia/Ho_Chi_Minh', slots: [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, minute: 9 * 60 })) });
+    await exec(o, o.owner, 'social.variant.schedule', { postId: queued.id, queue: true });
+    expect((await get(o, o.owner, queued.id)).variants[0]?.queuePaused).toBe(false);
+    const slots = [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, minute: 9 * 60 }));
+    await exec(o, o.owner, 'social.queue.set', { connectionId: a, timeZone: 'Asia/Ho_Chi_Minh', slots, paused: true });
+    expect((await get(o, o.owner, queued.id)).variants[0]).toMatchObject({ status: 'scheduled', queuePaused: true });
+    await exec(o, o.owner, 'social.queue.set', { connectionId: a, timeZone: 'Asia/Ho_Chi_Minh', slots, paused: false });
+    expect((await get(o, o.owner, queued.id)).variants[0]?.queuePaused).toBe(false);
+  });
+
   it('stores an override equal to the base, and inheriting again, though the effective content does not change', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);

@@ -9,7 +9,7 @@ import type { Db, MemberRole } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { effectiveContent } from './domain/approval.ts';
 import { insertVariants, writePostMedia } from './posts.ts';
-import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, setVariant, settingsOf, step, type PostRow } from './variants.ts';
+import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, setVariant, settingsOf, step, type PostRow, type VariantRow } from './variants.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const EVERGREEN_SWEEP_MS = 60 * 60_000;
@@ -37,24 +37,34 @@ async function repost(ctx: CommandContext, sourceId: string, submit: boolean): P
   const liveIds = new Set(live.filter((c) => c.status === 'active').map((c) => c.id));
   const targets = published.filter((v) => liveIds.has(v.channel_connection_id));
   if (targets.length === 0) return live.some((c) => c.status !== 'revoked') ? 'waiting' : 'gone';
+  return copyPost(ctx, source, targets, { repostOf: source.id, submit });
+}
+
+// A new post with the content of `source`'s channels `targets` (#393, #575). A repost's base is what the channels
+// went out with; a duplicate's is the source's own base. Either way a channel whose content or images differ from the
+// copy's base keeps them as its own, with its settings.
+async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRow[], options: { repostOf: string | null; submit: boolean }): Promise<{ postId: string; submitted: number }> {
+  const { submit } = options;
   const meta = await ctx.trx.selectFrom('crove_social.post').select(['tainted', 'author_user_id', 'origin']).where('org_id', '=', ctx.orgId).where('id', '=', source.id).executeTakeFirstOrThrow();
   const author = ctx.actor.type === 'user' ? ctx.actor.userId : meta.author_user_id;
-  // What each channel went out with (the source's base may have been edited since). The repost's own base is built
-  // from it: a title or link is left empty there when any channel went out without one, since a channel's own value
-  // can add a title or link but not take one away; the others then carry theirs as the channel's own.
   const b = base(source);
   const baseMedia = JSON.stringify(b.media);
-  // Each channel once: the content it went out with, and its images when they are its own (not the base's).
+  // Each channel once: its effective content, and its images when they are its own (not the base's).
   const outs = targets.map((v) => {
     const media = mediaFor(b, v);
     return { v, kept: effectiveContent(b, overrides(v), v.content_frozen), ownMedia: JSON.stringify(media) !== baseMedia ? media : null };
   });
   const [first] = outs;
-  const shared = {
-    body: first ? first.kept.body : b.body,
-    title: !first || outs.some((o) => o.kept.title === null) ? null : first.kept.title,
-    linkUrl: !first || outs.some((o) => o.kept.linkUrl === null) ? null : first.kept.linkUrl,
-  };
+  // A repost's base is built from what went out (the source's base may have been edited since): a title or link is
+  // left empty there when any channel went out without one, since a channel's own value can add a title or link but
+  // not take one away; the others then carry theirs as the channel's own.
+  const shared = options.repostOf
+    ? {
+        body: first ? first.kept.body : b.body,
+        title: !first || outs.some((o) => o.kept.title === null) ? null : first.kept.title,
+        linkUrl: !first || outs.some((o) => o.kept.linkUrl === null) ? null : first.kept.linkUrl,
+      }
+    : { body: b.body, title: b.title, linkUrl: b.linkUrl };
   const inserted = await ctx.trx
     .insertInto('crove_social.post')
     .values({
@@ -68,7 +78,7 @@ async function repost(ctx: CommandContext, sourceId: string, submit: boolean): P
       tainted: meta.tainted,
       actor_origin: ctx.actor.type === 'user' ? 'ui' : 'system',
       author_user_id: author,
-      repost_of: source.id,
+      repost_of: options.repostOf,
     })
     .returning(POST_COLUMNS)
     .executeTakeFirstOrThrow();
@@ -122,8 +132,8 @@ async function repost(ctx: CommandContext, sourceId: string, submit: boolean): P
     }
   }
   await refreshPostStatus(ctx, post.id);
-  ctx.audit({ post_id: post.id, repost_of: source.id, variants: created.length });
-  await ctx.emit('social.post.created', { post_id: post.id, repost_of: source.id });
+  ctx.audit({ post_id: post.id, ...(options.repostOf ? { repost_of: source.id } : { copy_of: source.id }), variants: created.length });
+  await ctx.emit('social.post.created', { post_id: post.id, ...(options.repostOf ? { repost_of: source.id } : { copy_of: source.id }) });
   if (submitted.length > 0) await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: submitted });
   return { postId: post.id, submitted: submitted.length };
 }
@@ -200,7 +210,43 @@ export const postSetEvergreen = defineCommand({
   },
 });
 
-export const evergreenCommands = [postRepost, postRepostEvergreen, postSetEvergreen];
+// A copy of any post as a new draft (#575): its text, title, link and images, and each channel still connected with
+// its own content and settings; never its schedule, approvals or history. As tainted as its source.
+export const postDuplicate = defineCommand({
+  name: 'social.post.duplicate',
+  input: z.strictObject({ postId: zId }),
+  risk: 'R1',
+  access: MEMBERS,
+  target: (input) => ({ type: 'social.post', id: input.postId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const source = await lockPost(ctx.trx, ctx.orgId, input.postId);
+    const variants = (await lockVariants(ctx.trx, ctx.orgId, source.id)).filter((v) => v.status !== 'cancelled');
+    const connected =
+      variants.length === 0
+        ? new Set<string>()
+        : new Set(
+            (
+              await ctx.trx
+                .selectFrom('crove_kernel.channel_connection')
+                .select('id')
+                .where('org_id', '=', ctx.orgId)
+                .where(
+                  'id',
+                  'in',
+                  variants.map((v) => v.channel_connection_id),
+                )
+                .where('status', '<>', 'revoked')
+                .execute()
+            ).map((c) => c.id),
+          );
+    const targets = variants.filter((v) => connected.has(v.channel_connection_id));
+    if (targets.length === 0) throw new DomainError('NOTHING_TO_DUPLICATE', 409, 'Các kênh của bài này không còn kết nối');
+    return { postId: (await copyPost(ctx, source, targets, { repostOf: null, submit: false })).postId };
+  },
+});
+
+export const evergreenCommands = [postRepost, postRepostEvergreen, postSetEvergreen, postDuplicate];
 
 // One pass: every evergreen post due gets its repost, sent to review.
 export async function sweepEvergreen(deps: { runtime: Runtime; workerDb: Db }): Promise<number> {

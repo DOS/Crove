@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { BLOCKING_CHECK_IDS, type CashVoucherProposal } from '@crove/kernel-contract';
+import { BLOCKING_CHECK_IDS, vietnamToday, type CashVoucherProposal } from '@crove/kernel-contract';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
@@ -16,7 +16,7 @@ import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { errorMessage, fetchFile, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal } from '../lib/decimal.ts';
-import { currentDate, nextDay, postingDateAllowed } from '../lib/period-lock.ts';
+import { nextDay, postingDateAllowed } from '../lib/period-lock.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { reversalErrorMessage } from '../lib/reversal.ts';
 import { previewVoucherJournal, voucherProblem } from '../lib/vouchers.ts';
@@ -262,7 +262,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const firstOpenDay = lockedThrough ? nextDay(lockedThrough) : null;
   const chosenPostingDate = postingDate ?? firstOpenDay;
   const latePosting = invoiceLocked && postLate ? chosenPostingDate : null;
-  const latePostingValid = latePosting === null || (lockedThrough !== null && postingDateAllowed(latePosting, lockedThrough, currentDate()));
+  const latePostingValid = latePosting === null || (lockedThrough !== null && postingDateAllowed(latePosting, lockedThrough, vietnamToday()));
   const journal = useMemo(
     () => (payload ? (payload.direction === 'sale' ? previewSalesJournal : previewPurchaseJournal)(lines, payload.invoice.vatTotal) : []),
     [payload, lines],
@@ -588,7 +588,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                 type="date"
                 className="w-44"
                 min={firstOpenDay}
-                max={currentDate()}
+                max={vietnamToday()}
                 disabled={busy}
                 value={chosenPostingDate ?? ''}
                 onChange={(e) => setPostingDate(e.target.value)}

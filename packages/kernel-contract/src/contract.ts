@@ -75,7 +75,7 @@ import {
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { zPortalReconciliation } from './portal-list.ts';
-import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankStatementImport } from './bank-statement.ts';
+import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
 export const contract = {
@@ -201,6 +201,8 @@ export const contract = {
       submit: oc.input(z.strictObject({ postId: zId, variantIds: z.array(zId).min(1).max(20).optional() })).output(z.object({ postId: zId, submitted: z.array(zId) })),
       // A new post with the content of a published one, for the channels it went out on (S9); it is reviewed as usual.
       repost: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
+      // A copy of any post as a new draft, for the channels still connected (#575).
+      duplicate: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
       // Repost a published post every N days (7 to 365), each repost sent to review; null stops it.
       setEvergreen: oc.input(z.strictObject({ postId: zId, days: z.number().int().min(7).max(365).nullable() })).output(z.object({ postId: zId, evergreenDays: z.number().int().nullable() })),
       // AI drafting (Social plan §3.7): the server asks the deployment's model for a draft from the brief and saves it as
@@ -219,7 +221,10 @@ export const contract = {
     },
     // How published posts did (S8): the latest capture of each variant published in the last days days (30 by default).
     metrics: {
-      summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional() })).output(z.array(zSocialMetricsRow)),
+      // postId: that post's published channels, whenever they went out.
+      summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional() })).output(z.array(zSocialMetricsRow)),
+      // The window as a CSV file (UTF-8 with a byte order mark); every export is audited.
+      export: oc.input(z.strictObject({ days: z.number().int().min(1).max(365) })).output(z.object({ filename: z.string(), csv: z.string(), truncated: z.boolean() })),
     },
     // The media library (S9): the org's post images, newest first, and the posts that show one.
     media: {
@@ -248,6 +253,10 @@ export const contract = {
       set: oc
         .input(z.strictObject({ connectionId: zId, approvalsRequired: z.number().int().min(1).max(3) }))
         .output(z.object({ connectionId: zId, approvalsRequired: z.number().int(), approved: z.array(zId) })),
+    },
+    // Variants waiting paused on each channel (expired or disconnected), for the channels screen.
+    channels: {
+      waiting: oc.input(z.object({})).output(z.array(z.object({ connectionId: zId, paused: z.number().int() }))),
     },
     queues: {
       get: oc.input(z.object({ connectionId: zId })).output(zSocialQueue),
@@ -440,6 +449,11 @@ export const contract = {
     // voucher itself is asked for with inbox.request (finance.voucher.record, bankLineId set). Owners, admins and
     // members, who may ask for vouchers.
     lineVoucher: oc.input(z.object({ bankLineId: zId })).output(zBankLineVoucher),
+    // The open lines of an account and period whose party is named by its tax code or an invoice of the amount, with
+    // the voucher each makes (stage 2b); the SPA asks for them one by one with inbox.request. Owners, admins and members.
+    suggestions: oc.input(z.object({ bankAccount: zAccountCode, period: zLedgerPeriod })).output(z.array(zBankLineVoucher)),
+    // The open lines per bank account, for the Inbox (stage 2b). Every member.
+    openLines: oc.output(zBankOpenLines),
   },
   // The org chart (ADR-0029): positions shared by members and AI agents. Every member reads it; changing it is the
   // owner's (R3: role keys, holders and reporting lines decide what agents may do). A retry with the same

@@ -43,6 +43,30 @@ function isFileStatus(status: string): status is FileStatus {
   return Object.hasOwn(FILE_STATUS, status);
 }
 
+// Bank statement lines with no voucher yet, per bank account (#326, stage 2b): each links to its account and the month
+// of its oldest open line on the bank screen, where its voucher is entered.
+function OpenBankLines({ slug }: { slug: string }) {
+  const t = useTranslations('inbox');
+  const f = useFormat();
+  const open = useQuery(orpc.bank.openLines.queryOptions());
+  const accounts = (open.data?.accounts ?? []).filter((a) => a.open > 0);
+  if (accounts.length === 0) return null;
+  return (
+    <Card className="mt-6 block p-4">
+      <p className="text-sm font-medium text-foreground">{t('bankLines.title')}</p>
+      <ul className="mt-2 space-y-1 text-sm">
+        {accounts.map((a) => (
+          <li key={a.bankAccount}>
+            <Link to="/o/$slug/bank" params={{ slug }} search={{ account: a.bankAccount, month: a.oldest.slice(0, 7) }} className="text-link underline">
+              {t('bankLines.account', { account: a.bankAccount, count: a.open, ambiguous: a.ambiguous, date: f.date(a.oldest) })}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
 // The name a proposal goes by in the list, its checkbox and the bulk report: the customer of a sale (#313; its seller is
 // the org itself), the seller of a purchase, else its title.
 export function InboxPage() {
@@ -183,6 +207,7 @@ export function InboxPage() {
       </div>
 
       <IntakePanel intake={intake} />
+      {config.modules.includes('finance') && <OpenBankLines slug={slug} />}
 
       {(files.data?.length ?? 0) > 0 && (
         <div className="mt-6">

@@ -15,7 +15,7 @@ import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/so
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
+import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { dayKey, dayRange, providerName, SOCIAL_TABS, VARIANT_TONE, type SocialSearch, type SocialTab } from '../lib/social.ts';
 import { pollEvery, SAFETY_POLL_MS, useStreamLive } from '../lib/stream-hook.ts';
 
@@ -77,19 +77,39 @@ function Metrics({ slug, names }: { slug: string; names: Map<string, string> }) 
   const f = useFormat();
   const [days, setDays] = useState(30);
   const rows = useQuery(orpc.social.metrics.summary.queryOptions({ input: { days } }));
+  // The window as a CSV file, built and audited by the server, saved by the browser.
+  const exportCsv = useMutation({
+    mutationFn: () => client.social.metrics.export({ days }),
+    onSuccess: (file) => {
+      const url = URL.createObjectURL(new Blob([file.csv], { type: 'text/csv;charset=utf-8' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.filename;
+      a.click();
+      // Some browsers still read the link a moment after the click.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    },
+  });
   if (rows.isLoading) return <Spinner />;
   if (rows.error) return <ErrorText>{errorMessage(rows.error)}</ErrorText>;
   const data = rows.data ?? [];
   const total = (name: string) => data.reduce((sum, r) => sum + (r.metrics[name] ?? 0), 0);
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {[7, 30, 90].map((d) => (
           <Button key={d} variant={d === days ? 'secondary' : 'ghost'} size="sm" onClick={() => setDays(d)}>
             {t('metricsDays', { days: String(d) })}
           </Button>
         ))}
+        {data.length > 0 && (
+          <Button variant="outline" size="sm" className="ml-auto" disabled={exportCsv.isPending} onClick={() => exportCsv.mutate()}>
+            {t('metricsExport')}
+          </Button>
+        )}
       </div>
+      {exportCsv.error && <ErrorText>{errorMessage(exportCsv.error)}</ErrorText>}
+      {exportCsv.data?.truncated && <p className="text-xs text-warning">{t('metricsExportCut')}</p>}
       {data.length === 0 ? (
         <Empty title={t('empty.metrics')} hint={t('metricsHint')} />
       ) : (

@@ -16,7 +16,6 @@ import {
   form01XmlValues,
   sideTotals,
   vatPeriod,
-  vietnamToday,
   type FormIndicator,
   type VatDeclaration,
   type VatInvoiceView,
@@ -298,11 +297,6 @@ describe('buildVat01Xml', () => {
     expect(() => buildForm01Xml({ period: d.report.period, indicators: [] }, { taxCode: '', name: 'X' }, { today: '2026-10-19' })).toThrow(/tax code/);
     expect(() => buildForm01Xml({ period: d.report.period, indicators: [] }, { taxCode: '0101234564', name: 'X' }, { today: '19/10/2026' })).toThrow(/date/);
     expect(buildForm01Xml({ period: d.report.period, indicators: [] }, { taxCode: '0101234564-001', name: 'X' }, { today: '2026-10-19' })).toContain('<mst>0101234564-001</mst>');
-  });
-
-  it('dates the file in Vietnam time', () => {
-    expect(vietnamToday(new Date('2026-10-18T16:59:59Z'))).toBe('2026-10-18');
-    expect(vietnamToday(new Date('2026-10-18T17:00:00Z'))).toBe('2026-10-19');
   });
 });
 

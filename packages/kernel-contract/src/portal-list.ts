@@ -11,7 +11,9 @@ export type PortalInvoiceStatus = (typeof PORTAL_INVOICE_STATUSES)[number];
 export const PORTAL_LIST_STATUSES = ['pending', 'done', 'failed'] as const;
 export type PortalListStatus = (typeof PORTAL_LIST_STATUSES)[number];
 
-export const RECONCILE_OUTCOMES = ['matched', 'in_inbox', 'amount_mismatch', 'missing', 'void_in_crove', 'void', 'not_on_portal'] as const;
+// declared_late (#560): a Crove document of an earlier invoice date, posted in this period after its own month was
+// locked (#478). The VAT working declares it here; the portal lists it under its invoice date, in an earlier period.
+export const RECONCILE_OUTCOMES = ['matched', 'in_inbox', 'amount_mismatch', 'missing', 'void_in_crove', 'void', 'not_on_portal', 'declared_late'] as const;
 export type ReconcileOutcome = (typeof RECONCILE_OUTCOMES)[number];
 
 export const RECONCILE_DIFFERENCES = ['total', 'vat', 'currency'] as const;
@@ -76,6 +78,9 @@ export const zCroveInvoice = z.object({
   vatAmount: zMoney,
   total: zMoney,
   sourceFileId: zId.nullable(),
+  // A recorded document's posting date, the date of its journal entry, which picks its VAT period (#478); null for a
+  // proposal.
+  postingDate: zLocalDate.nullable(),
 });
 
 export const zReconcileItem = z.object({
@@ -87,6 +92,10 @@ export const zReconcileItem = z.object({
   outsidePeriod: z.boolean(),
   duplicateRows: z.number().int().nonnegative(),
   duplicateInCrove: z.boolean(),
+  // The Crove document is dated in (or, matched to a row of this period's lists, before) this period but posted after
+  // it (#478): the VAT working declares it in the period of its posting date (crove.postingDate), flagged declared_late
+  // there, not in this one (#560).
+  declaredInLaterPeriod: z.boolean(),
 });
 
 export const zPortalReconciliation = z.object({
@@ -101,6 +110,7 @@ export const zPortalReconciliation = z.object({
     voidInCrove: z.number().int().nonnegative(),
     void: z.number().int().nonnegative(),
     notOnPortal: z.number().int().nonnegative(),
+    declaredLate: z.number().int().nonnegative(),
     duplicateRows: z.number().int().nonnegative(),
   }),
   // At most a fixed number of items per outcome (the first ones, what needs work first); the summary counts all of

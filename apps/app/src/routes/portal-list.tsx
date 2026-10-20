@@ -25,7 +25,10 @@ function ItemRow({ item, slug }: { item: ReconcileItem; slug: string }) {
   const sellerName = item.portal?.sellerName || item.crove?.sellerName || '';
   const sellerTaxCode = item.portal?.sellerTaxCode ?? item.crove?.sellerTaxCode ?? null;
   const notes: string[] = [];
-  if (item.outsidePeriod) notes.push(t('notes.outsidePeriod'));
+  // A declared_late item is outside the period by definition; its section says so, and the note gives its posting date.
+  if (item.outsidePeriod && item.outcome !== 'declared_late') notes.push(t('notes.outsidePeriod'));
+  if (item.outcome === 'declared_late' && item.crove?.postingDate) notes.push(t('notes.postedOn', { date: f.date(item.crove.postingDate) }));
+  if (item.declaredInLaterPeriod && item.crove?.postingDate) notes.push(t('notes.declaredInLaterPeriod', { date: f.date(item.crove.postingDate) }));
   if (item.withoutTaxCode) notes.push(t('notes.withoutTaxCode'));
   if (item.duplicateInCrove) notes.push(t('notes.duplicateInCrove'));
   if (item.duplicateRows > 0) notes.push(t('notes.duplicateRows', { count: item.duplicateRows }));
