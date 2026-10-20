@@ -362,11 +362,14 @@ export const SOCIAL_VARIANT_STATUSES = [
 export const SOCIAL_ORIGINS = ['human', 'ai'] as const;
 export const SOCIAL_ACTOR_ORIGINS = ['ui', 'api', 'mcp', 'agent', 'system'] as const;
 export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as const;
+// What a client said through a review link (#589): a signal for the team, never an approval.
+export const SOCIAL_REVIEW_VERDICTS = ['approved', 'changes_requested', 'comment'] as const;
 export const SOCIAL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
 export type SocialVariantStatus = (typeof SOCIAL_VARIANT_STATUSES)[number];
 export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 export type SocialActorOrigin = (typeof SOCIAL_ACTOR_ORIGINS)[number];
 export type SocialDecision = (typeof SOCIAL_DECISIONS)[number];
+export type SocialReviewVerdict = (typeof SOCIAL_REVIEW_VERDICTS)[number];
 
 export type SocialPostTable = Refine<
   G.SocialPostTable,
@@ -383,6 +386,8 @@ export type SocialPostVariantTable = Refine<
     error_kind: (typeof SOCIAL_ERROR_KINDS)[number] | null;
   }
 >;
+export type SocialReviewFeedbackTable = Refine<G.SocialReviewFeedbackTable, { verdict: ColumnType<SocialReviewVerdict, never, never> }>;
+
 export type SocialPostApprovalTable = Refine<
   G.SocialPostApprovalTable,
   {
@@ -422,6 +427,7 @@ type Refined = Tables<{
   'crove_social.post': SocialPostTable;
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.post_approval': SocialPostApprovalTable;
+  'crove_social.review_feedback': SocialReviewFeedbackTable;
 }>;
 
 // Every table crove_tenant may read: the generated table type, or its refinement above.

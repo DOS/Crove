@@ -11,5 +11,6 @@ export * from './metrics.ts';
 export * from './evergreen.ts';
 export * from './library.ts';
 export * from './policy.ts';
+export * from './review-links.ts';
 export * from './activity.ts';
 export * from './comments.ts';

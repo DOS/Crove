@@ -67,6 +67,8 @@ export interface CroveSocialSchema {
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.queue': SocialQueueTable;
   'crove_social.queue_slot': SocialQueueSlotTable;
+  'crove_social.review_feedback': SocialReviewFeedbackTable;
+  'crove_social.review_link': SocialReviewLinkTable;
 }
 
 /** crove_finance.account */
@@ -821,4 +823,31 @@ export interface SocialQueueTable {
   paused: Generated<boolean>;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.review_feedback */
+export interface SocialReviewFeedbackTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  link_id: ColumnType<string, NotGranted, NotGranted>;
+  post_id: ColumnType<string, NotGranted, NotGranted>;
+  reviewer_name: ColumnType<string, NotGranted, NotGranted>;
+  verdict: ColumnType<string, NotGranted, NotGranted>;
+  body: ColumnType<string | null, NotGranted, NotGranted>;
+  changed: ColumnType<boolean, NotGranted, NotGranted>;
+  created_at: ColumnType<Date, NotGranted, NotGranted>;
+}
+
+/** crove_social.review_link */
+export interface SocialReviewLinkTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  post_id: ColumnType<string, string, NotGranted>;
+  token_sha256: ColumnType<string, string, NotGranted>;
+  content_key: ColumnType<string, string | undefined, NotGranted>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  expires_at: ColumnType<Date, Date | string, NotGranted>;
+  revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  revoked_by: string | null;
 }
