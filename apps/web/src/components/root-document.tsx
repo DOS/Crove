@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import '../app/globals.css';
-import { bodyFont, codeFont, headingFont } from '../app/fonts';
+import { bodyFont, codeFont } from '../app/fonts';
 import type { Dictionary } from '../content/vi';
 import { SITE_URL } from '../content/site';
 
@@ -28,7 +28,7 @@ export const landingViewport: Viewport = {
 
 export function RootDocument({ lang, children }: { lang: string; children: ReactNode }) {
   return (
-    <html lang={lang} suppressHydrationWarning className={`${bodyFont.variable} ${headingFont.variable} ${codeFont.variable}`}>
+    <html lang={lang} suppressHydrationWarning className={`${bodyFont.variable} ${codeFont.variable}`}>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>

@@ -27,11 +27,15 @@ export const vi = {
     closeMenu: 'Đóng menu',
   },
   hero: {
-    line1: 'Hoá đơn về là có bút toán.',
-    line2: 'Bạn chỉ cần kiểm tra và duyệt.',
-    lead: 'Crove đọc hoá đơn điện tử, kiểm tra từng con số và soạn sẵn bút toán theo Thông tư 133. Bạn xem lại, sửa tài khoản nếu cần, rồi bấm duyệt.',
+    title: 'Agent AI làm việc dưới quyền của bạn.',
+    lead: 'Mỗi agent là một vị trí trong sơ đồ tổ chức: có người quản lý, ngân sách tháng, giới hạn rủi ro và nút dừng. Agent Kế toán đọc hoá đơn và soạn sẵn bút toán; chỉ người có thẩm quyền mới duyệt và ghi sổ.',
     primary: 'Tự cài đặt miễn phí',
     secondary: 'Xem mã nguồn trên GitHub',
+    note: 'Mã nguồn mở AGPL. Cài trên máy chủ của bạn bằng docker compose. Crove Cloud sắp ra mắt.',
+  },
+  tour: {
+    title: 'Duyệt cả tháng chứng từ bằng bàn phím',
+    lead: 'Crove đọc hoá đơn điện tử, kiểm tra từng con số và soạn sẵn bút toán theo Thông tư 133. Bạn xem lại, sửa tài khoản nếu cần, rồi bấm duyệt.',
     sample: 'Dữ liệu mẫu',
     replay: 'Xem lại',
   },
@@ -50,8 +54,8 @@ export const vi = {
     tabs: ['Cần duyệt', 'Cảnh báo', 'Đã duyệt'],
     rows: [
       { party: 'Công ty CP Bao Bì Phú Thịnh', sub: 'HĐ 00001284, 14/10/2026', amount: '32.832.000 ₫', account: 'TK 152', flag: '' },
-      { party: 'EVN', sub: 'Hoá đơn điện tháng 9', amount: '1.946.780 ₫', account: 'TK 6427', flag: '' },
-      { party: 'Viettel', sub: 'Cước viễn thông tháng 9', amount: '880.000 ₫', account: 'TK 6427', flag: '' },
+      { party: 'EVN', sub: 'Hoá đơn điện tháng 9', amount: '1.946.780 ₫', account: 'TK 6422', flag: '' },
+      { party: 'Viettel', sub: 'Cước viễn thông tháng 9', amount: '880.000 ₫', account: 'TK 6422', flag: '' },
       { party: 'Hợp tác xã Tân Hồng', sub: 'Phiếu mua gạo nguyên liệu', amount: '148.500.000 ₫', account: 'TK 152', flag: 'Thiếu mã CQT' },
     ],
     waiting: 'Chờ duyệt',
@@ -114,7 +118,6 @@ export const vi = {
     ],
   },
   keys: {
-    title: 'Xử lý chứng từ cả tháng chỉ bằng bàn phím',
     items: [
       { keys: ['J', 'K'], label: 'Di chuyển', body: 'Lên xuống giữa các dòng trong AI Inbox.' },
       { keys: ['A'], label: 'Duyệt', body: 'Hỏi mã hai lớp rồi ghi sổ.' },
@@ -127,6 +130,37 @@ export const vi = {
     lead: 'Crove làm ba bước đầu và ghi lại từng bước. Bước cuối luôn do người có thẩm quyền duyệt bằng mã xác thực hai lớp.',
     actorLabel: 'Xử lý',
     timeLabel: 'Lúc',
+    invoice: {
+      kind: 'Hoá đơn GTGT',
+      series: '1C26TPT',
+      meta: 'Số 00001284, ngày 14/10/2026',
+      sellerLabel: 'Bên bán',
+      seller: 'CP Bao Bì Phú Thịnh',
+      taxIdLabel: 'MST',
+      taxId: '0312 345 678',
+      lines: [
+        { name: 'Thùng carton 5 lớp, 2.000 cái', amount: '25.000.000' },
+        { name: 'Băng keo 48mm, 300 cuộn', amount: '5.400.000' },
+        { name: 'Thuế GTGT 8%', amount: '2.432.000' },
+      ],
+      totalLabel: 'Tổng thanh toán',
+      total: '32.832.000 ₫',
+    },
+    checks: {
+      items: ['Tổng từng dòng khớp', 'Thuế suất 8% đúng', 'Mã số thuế hợp lệ', 'Có mã của cơ quan thuế', 'Không trùng hoá đơn đã nhập'],
+      foot: 'Thiếu một mục thì hoá đơn bị giữ lại và chuyển cho người.',
+    },
+    proposal: {
+      balanced: 'Cân',
+      balancedNote: 'Nợ bằng Có',
+      foot: 'Tài khoản 152 đã dùng 6 lần cho nhà cung cấp này.',
+    },
+    approve: {
+      title: 'Duyệt HĐ 00001284',
+      sub: 'Nhập mã hai lớp để ghi sổ',
+      code: '481027',
+      button: 'Duyệt và ghi sổ',
+    },
     steps: [
       {
         name: 'Nhận',
@@ -162,36 +196,7 @@ export const vi = {
       },
     ],
   },
-  ledger: {
-    title: 'Sổ sách rõ ràng, số dư cập nhật sau từng bút toán',
-    lead: 'Bút toán đã duyệt đi vào sổ nhật ký chung và sổ cái. Công nợ theo dõi tới từng nhà cung cấp. Xuất Excel khi kế toán cần.',
-    tableTitle: 'Sổ chi tiết tài khoản 331, Phải trả người bán',
-    tableSub: 'Đối tượng: Công ty CP Bao Bì Phú Thịnh. Kỳ: tháng 10/2026. Đơn vị: đồng.',
-    cols: ['Ngày ghi sổ', 'Số chứng từ', 'Diễn giải', 'TK đối ứng', 'Nợ', 'Có', 'Số dư Có'],
-    opening: { date: '01/10/2026', label: 'Số dư đầu kỳ', balance: '18.360.000' },
-    rows: [
-      { date: '03/10/2026', doc: 'UNC0412', desc: 'Thanh toán hoá đơn 00001197', contra: '1121', debit: '18.360.000', credit: '', balance: '0', mark: false },
-      { date: '14/10/2026', doc: '00001284', desc: 'Mua thùng carton, băng keo', contra: '152', debit: '', credit: '30.400.000', balance: '30.400.000', mark: true },
-      { date: '14/10/2026', doc: '00001284', desc: 'Thuế GTGT đầu vào 8%', contra: '1331', debit: '', credit: '2.432.000', balance: '32.832.000', mark: true },
-    ],
-    totals: { label: 'Cộng phát sinh trong kỳ', debit: '18.360.000', credit: '32.832.000' },
-    closing: { date: '31/10/2026', label: 'Số dư cuối kỳ', balance: '32.832.000' },
-    note: 'Hai dòng tô nền là bút toán của hoá đơn 00001284 sau khi được duyệt.',
-    vat: {
-      title: 'Thuế GTGT đầu vào quý IV/2026',
-      sub: 'Được khấu trừ, số liệu đến 18/10/2026',
-      rows: [
-        { name: 'Công ty CP Bao Bì Phú Thịnh', sub: 'HĐ 00001284, thuế suất 8%', amount: '2.432.000', width: '100%' },
-        { name: 'EVN', sub: 'Điện tháng 9, thuế suất 10%', amount: '176.980', width: '7.3%' },
-        { name: 'Viettel', sub: 'Cước tháng 9, thuế suất 10%', amount: '80.000', width: '3.3%' },
-      ],
-      total: ['Tổng thuế đầu vào được khấu trừ', '2.688.980'],
-      pending: 'Chưa tính phiếu của Hợp tác xã Tân Hồng: còn thiếu mã CQT, đang chờ người xem.',
-    },
-  },
   agents: {
-    title: 'Agent AI làm việc dưới quyền của bạn',
-    lead: 'Mỗi agent là một vị trí trong sơ đồ tổ chức: có người quản lý, ngân sách tháng, giới hạn rủi ro và nút dừng. Agent chỉ đề xuất, quy tắc kiểm tra quyết định số liệu đúng hay sai, và chỉ khi có người duyệt thì mới ghi sổ.',
     chartTitle: 'Sơ đồ tổ chức',
     chartSub: 'Gạo Sạch Mekong, dữ liệu mẫu',
     legendPerson: 'Người',
@@ -243,7 +248,7 @@ export const vi = {
         items: [
           { title: 'HĐ 00001284', amount: '32.832.000 ₫', sub: 'Công ty CP Bao Bì Phú Thịnh', tone: 'ok', chip: '5/5 kiểm tra đạt', note: 'Nợ 152, 1331 / Có 331' },
           { title: 'Phiếu mua gạo', amount: '148.500.000 ₫', sub: 'Hợp tác xã Tân Hồng', tone: 'warn', chip: 'Thiếu mã CQT', note: 'Đã chuyển lên Chị Lan' },
-          { title: 'Điện EVN tháng 9', amount: '1.946.780 ₫', sub: 'TK 6427', tone: 'ok', chip: 'Sẵn sàng duyệt', note: '' },
+          { title: 'Điện EVN tháng 9', amount: '1.946.780 ₫', sub: 'TK 6422', tone: 'ok', chip: 'Sẵn sàng duyệt', note: '' },
         ],
       },
       tasks: {
@@ -319,35 +324,88 @@ export const vi = {
     },
   },
   modules: {
-    title: 'Các phân hệ dùng chung một bộ sổ sách',
-    lead: 'Bật phân hệ nào thì dùng phân hệ đó. Tất cả dùng chung thành viên, quy trình duyệt và nhật ký thay đổi.',
-    items: [
-      {
-        name: 'Tài chính',
-        body: 'AI Inbox, chứng từ, sổ nhật ký chung, sổ cái, hệ thống tài khoản TT133, nhà cung cấp, tờ khai VAT, số dư đầu kỳ.',
-        sample: { primary: 'Sổ cái 331, Bao Bì Phú Thịnh', secondary: 'Số dư Có 32.832.000', chips: [{ tone: 'ok', label: 'Cân' }] },
+    title: 'Mỗi phòng một phân hệ, chung một sơ đồ',
+    lead: 'Người và agent của từng phòng làm việc trên cùng dữ liệu, cùng quy trình duyệt và cùng nhật ký thay đổi. Bật phân hệ nào thì dùng phân hệ đó.',
+    deptLabel: 'Phòng của',
+    finance: {
+      name: 'Tài chính',
+      body: 'AI Inbox, chứng từ, sổ nhật ký chung, sổ cái, hệ thống tài khoản TT133, nhà cung cấp, tờ khai VAT và số dư đầu kỳ.',
+      people: [
+        { name: 'Chị Lan', initials: 'L', agent: false },
+        { name: 'Agent Kế toán', initials: '', agent: true },
+      ],
+      inboxTitle: 'AI Inbox',
+      inboxSub: '1 đã ghi sổ, 3 đang chờ duyệt',
+      inbox: [
+        { title: 'HĐ 00001284, Bao Bì Phú Thịnh', amount: '32.832.000 ₫', account: 'TK 152, 1331', tone: 'ok', label: 'Đã ghi sổ' },
+        { title: 'Phiếu mua gạo, HTX Tân Hồng', amount: '148.500.000 ₫', account: 'TK 152', tone: 'warn', label: 'Thiếu mã CQT' },
+        { title: 'Hoá đơn điện EVN tháng 9', amount: '1.946.780 ₫', account: 'TK 6422', tone: 'ok', label: 'Sẵn sàng duyệt' },
+        { title: 'Cước Viettel tháng 9', amount: '880.000 ₫', account: 'TK 6422', tone: 'ok', label: 'Sẵn sàng duyệt' },
+      ],
+      tail: 'Tài khoản được nhớ theo từng nhà cung cấp. Lần sau Crove đề xuất đúng tài khoản Chị Lan đã chọn.',
+      taccount: {
+        title: 'Sổ chi tiết TK 331',
+        sub: 'Bao Bì Phú Thịnh, sau khi Chị Lan duyệt',
+        debit: 'Nợ',
+        credit: 'Có',
+        debitRow: ['Thanh toán 03/10', '18.360.000'],
+        creditRows: [
+          ['Số dư đầu kỳ 01/10', '18.360.000'],
+          ['HĐ 00001284, 14/10', '32.832.000'],
+        ],
+        balanceLabel: 'Số dư Có',
+        balance: '32.832.000',
       },
-      {
-        name: 'Công việc',
-        body: 'Việc cho người và cho agent, có hạn, có người chịu trách nhiệm, gắn với chứng từ liên quan.',
-        sample: { primary: 'Bổ sung mã CQT, HTX Tân Hồng', secondary: 'Hạn 20/10/2026', chips: [{ tone: 'accent', label: 'Agent Kế toán' }] },
+      vat: {
+        title: 'Thuế GTGT đầu vào dự kiến quý IV',
+        total: '2.688.980',
+        rows: [
+          { name: 'Bao Bì Phú Thịnh', amount: '2.432.000', pct: 90.4 },
+          { name: 'EVN', amount: '176.980', pct: 6.6 },
+          { name: 'Viettel', amount: '80.000', pct: 3 },
+        ],
       },
-      {
-        name: 'AI Agents',
-        body: 'Agent trong sơ đồ tổ chức, có người quản lý, ngân sách, giới hạn rủi ro và nút dừng.',
-        sample: { primary: 'Agent Kế toán', secondary: '1.240.000 / 2.000.000 ₫', chips: [{ tone: 'neutral', label: 'R1' }] },
-      },
-      {
-        name: 'Social',
-        body: 'Lên lịch bài cho Facebook, LinkedIn, X, YouTube, TikTok. Duyệt nhiều bước theo từng kênh, thư viện ảnh và video.',
-        sample: { primary: 'Gạo ST25 vụ mới đã về', secondary: '19:30 18/10/2026', chips: [{ tone: 'warn', label: 'Chờ duyệt' }] },
-      },
-      {
-        name: 'Thành viên và bảo mật',
-        body: 'Vai trò, lời mời, xác thực hai lớp, phiên đăng nhập, nhật ký thay đổi chỉ ghi thêm.',
-        sample: { primary: 'Chị Lan, Kế toán trưởng', secondary: 'Xác thực hai lớp đang bật', chips: [{ tone: 'ok', label: 'Người duyệt' }] },
-      },
-    ],
+    },
+    agents: {
+      name: 'Agents',
+      body: 'Thêm agent như thêm một vị trí: chọn người quản lý, ngân sách và giới hạn rủi ro.',
+      budgetLabel: 'Ngân sách tháng 10',
+      running: 'Đang chạy',
+      roster: [
+        { name: 'Agent Kế toán', risk: 'R1', manager: 'Quản lý: Chị Lan', spent: '1.240.000 / 2.000.000 ₫', pct: 62 },
+        { name: 'Agent Social', risk: 'R1', manager: 'Quản lý: Anh Minh', spent: '310.000 / 1.000.000 ₫', pct: 31 },
+      ],
+    },
+    tasks: {
+      name: 'Công việc',
+      body: 'Một danh sách việc cho cả người và agent, có hạn và người nhận.',
+      doneLabel: 'Đã xong',
+      items: [
+        { title: 'Đối chiếu công nợ Bao Bì Phú Thịnh', who: 'Agent Kế toán', initials: '', agent: true, due: '20/10/2026', done: false },
+        { title: 'Bổ sung mã CQT phiếu HTX Tân Hồng', who: 'Chị Lan', initials: 'L', agent: false, due: '21/10/2026', done: false },
+        { title: 'Chụp ảnh gạo ST25 cho bài đăng', who: 'Anh Minh', initials: 'M', agent: false, due: '18/10/2026', done: false },
+        { title: 'Xuất sổ nhật ký chung tháng 9', who: 'Agent Kế toán', initials: '', agent: true, due: '15/10/2026', done: true },
+      ],
+    },
+    social: {
+      name: 'Social',
+      body: 'Lên lịch bài cho Facebook, LinkedIn, X, YouTube và TikTok. Mỗi kênh có các bước duyệt riêng, ảnh và video nằm trong thư viện chung.',
+      people: [
+        { name: 'Anh Minh', initials: 'M', agent: false },
+        { name: 'Agent Social', initials: '', agent: true },
+      ],
+      weekLabel: 'Lịch đăng tuần 16/10 đến 22/10/2026',
+      todayLabel: 'Hôm nay',
+      days: [
+        { label: 'T6 16/10', today: false, post: { title: 'Quy trình xay xát', time: '09:00', channels: ['Facebook'], state: 'Đã đăng', tone: 'ok', art: 'mill' } },
+        { label: 'T7 17/10', today: false, post: null },
+        { label: 'CN 18/10', today: true, post: { title: 'Gạo ST25 vụ mới đã về', time: '19:30', channels: ['Facebook', 'TikTok'], state: 'Chờ Anh Minh duyệt', tone: 'warn', art: 'rice' } },
+        { label: 'T2 19/10', today: false, post: null },
+        { label: 'T3 20/10', today: false, post: { title: 'Tuyển nhân viên kho', time: '08:30', channels: ['LinkedIn'], state: 'Đã duyệt', tone: 'ok', art: 'warehouse' } },
+        { label: 'T4 21/10', today: false, post: null },
+        { label: 'T5 22/10', today: false, post: null },
+      ],
+    },
   },
   trust: {
     title: 'AI đề xuất, người duyệt, mọi thay đổi đều được ghi lại',

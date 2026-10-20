@@ -1,23 +1,18 @@
 import { Lock } from 'lucide-react';
 import type { Dictionary } from '../../content/vi';
-import { OrgChart } from './org-chart';
 import { Section, SectionHead } from './ui';
 
-// AI agents as positions in the org chart, then the permission matrix: which risk levels an agent handles alone and
-// which go to a person, plus what agents can never touch.
+// What an agent may do (the org chart itself is the hero): which risk levels it handles alone and which go to a
+// person, plus what agents can never touch.
 export function Agents({ dict }: { dict: Dictionary }) {
   const a = dict.agents;
   const m = a.matrix;
   return (
     <Section id="agents" labelledBy="agents-title">
-      <SectionHead id="agents-title" title={a.title} lead={a.lead} />
-      <OrgChart dict={dict} />
-
-      <div className="mt-16 grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-10">
+      <SectionHead id="agents-title" title={m.title} lead={m.lead} />
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-10">
         <div className="min-w-0">
-          <h3 className="font-display text-2xl leading-tight font-semibold tracking-[-0.015em]">{m.title}</h3>
-          <p className="mt-3 max-w-[62ch] text-muted">{m.lead}</p>
-          <div className="mt-6 overflow-x-auto rounded-lg border border-line bg-surface">
+          <div className="overflow-x-auto rounded-lg border border-line bg-surface">
             <table className="w-full min-w-[640px] border-collapse text-sm">
               <thead>
                 <tr className="text-left text-xs">

@@ -66,7 +66,7 @@ export function OrgChart({ dict }: { dict: Dictionary }) {
   const node = (id: PanelId) => <NodeCard node={byId[id]} selected={selected === id} onSelect={() => setSelected(id)} a={a} />;
 
   return (
-    <div className="grid overflow-hidden rounded-lg border border-line bg-surface lg:grid-cols-[minmax(0,1fr)_340px]">
+    <div className="grid overflow-hidden rounded-lg border border-line bg-surface lg:grid-cols-[minmax(0,1fr)_360px]">
       <div className="min-w-0 border-b border-line lg:border-r lg:border-b-0">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
           <div className="text-sm">
@@ -101,6 +101,8 @@ export function OrgChart({ dict }: { dict: Dictionary }) {
             <div className="relative col-span-3 h-14" aria-hidden="true">
               <span className="absolute top-0 left-[16.667%] h-full border-l border-dashed border-accent/70" />
               <span className="absolute top-0 right-[16.667%] h-full border-l border-dashed border-accent/70" />
+              <span className="travel-up absolute top-0 left-[16.667%] size-2 rounded-full bg-accent ring-4 ring-accent/20" />
+              <span className="travel-up absolute top-0 left-[83.333%] size-2 rounded-full bg-accent ring-4 ring-accent/20 [animation-delay:1.8s]" />
               <span className="absolute top-1/2 left-1/2 hidden -translate-x-1/2 -translate-y-1/2 text-[11px] whitespace-nowrap text-subtle sm:block">{a.edgeLabel}</span>
             </div>
             <div className="relative col-span-3 grid grid-cols-3 gap-x-2 sm:gap-x-4">

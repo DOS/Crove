@@ -13,7 +13,7 @@ const NAV_ICONS = [FileText, BookOpen, Table2, Building2, Percent, ListChecks, B
 // orchestrated moment of the page: the command palette approves the entry with a two-factor code and the row is
 // posted. Without JavaScript, or with reduced motion, it stays in the waiting state and the button shows the result.
 export function AppShell({ dict }: { dict: Dictionary }) {
-  const { shell, entry, hero } = dict;
+  const { shell, entry, tour } = dict;
   const [phase, setPhase] = useState<Phase>('wait');
   const [typed, setTyped] = useState(0);
   const [digits, setDigits] = useState(0);
@@ -359,7 +359,7 @@ export function AppShell({ dict }: { dict: Dictionary }) {
         ) : null}
       </div>
       <figcaption className="mt-3 flex items-center justify-between gap-3 text-xs text-subtle">
-        <span>{hero.sample}</span>
+        <span>{tour.sample}</span>
         {showReplay ? (
           // Stays mounted while the run plays, so a keyboard user keeps focus on it; clicks wait until the run ends.
           <button
@@ -369,7 +369,7 @@ export function AppShell({ dict }: { dict: Dictionary }) {
             className={`inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-muted transition-colors hover:bg-surface-2 hover:text-fg ${canReplay ? '' : 'cursor-default opacity-50'}`}
           >
             <RotateCcw className="size-3.5" aria-hidden="true" />
-            {hero.replay}
+            {tour.replay}
           </button>
         ) : null}
       </figcaption>
