@@ -68,7 +68,7 @@ interface CreatedInvite {
 }
 
 // Drafts Social posts with the deployment's model (SocialWriter in @crove/agent); unset: AI drafting is off.
-export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'>;
+export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'> & Partial<Pick<SocialWriter, 'hashtags'>>;
 
 // The org's saved brand voices (#741) as notes for the writer: the org's, and each channel's by connection.
 async function savedVoices(runtime: Runtime, actor: UserActor, orgId: string): Promise<{ org: string | null; byChannel: Map<string, string> }> {
@@ -464,6 +464,35 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             }
             if (!result) throw new DomainError('AI_REWRITE_EMPTY', 422, 'AI không viết lại được đoạn này, hãy thử cách khác');
             return result;
+          }),
+        ),
+        suggestHashtags: os.social.posts.suggestHashtags.handler(({ context, input }) =>
+          inSocial(context, async (orgId, actor) => {
+            const { role } = await resolveMembership(runtime, context.user, context.orgSlug);
+            if (role !== 'owner' && role !== 'admin' && role !== 'member') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không soạn được bài');
+            if (!socialWriter?.hashtags) throw new DomainError('AI_NOT_CONFIGURED', 503, 'Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL)');
+            let channel: WriterChannel | undefined;
+            if (input.connectionId) {
+              const connections = await runtime.query<{ id: string; provider: string; displayName: string; status: string }[]>('kernel.channel.list', {}, { actor, orgId });
+              const found = connections.find((c) => c.id === input.connectionId && c.status !== 'revoked');
+              if (!found) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
+              channel = writerChannel(found);
+            }
+            // The same budget as drafts and rewrites: each ask is a paid model call (#386).
+            const ticket = drafts.take(orgId, actor.userId);
+            if (!ticket.allowed) {
+              throw new DomainError('RATE_LIMITED', 429, ticket.reason === 'busy' ? 'Đang chờ AI trả lời, hãy đợi xong rồi thử tiếp' : 'Đã dùng AI nhiều lần trong phút này, hãy thử lại sau ít phút', {
+                retryAfterSeconds: ticket.retryAfterSeconds,
+              });
+            }
+            try {
+              return { hashtags: await socialWriter.hashtags({ text: input.text, language: input.language, ...(channel ? { channel } : {}), exclude: input.exclude }) };
+            } catch (error: unknown) {
+              console.error('[social-ai] hashtags failed', error instanceof Error ? error.name : typeof error);
+              throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
+            } finally {
+              ticket.release();
+            }
           }),
         ),
       },
