@@ -1414,6 +1414,15 @@ export const en = {
       },
       decision: { approved: 'approved', changes_requested: 'asked for changes', rejected: 'rejected' },
     },
+    bulk: {
+      select: 'Select: {text}',
+      selectAll: 'Select every post shown',
+      selected: '{count, plural, one {# post selected} other {# posts selected}}',
+      clear: 'Clear',
+      action: { approve: 'Approve', queue: 'Put in the queue', cancel: 'Cancel posts' },
+      confirmCancel: 'Cancel {count, plural, one {# post} other {# posts}} on every channel that has not gone out?',
+      result: '{action}: {done, number} done, {skipped, number} with nothing to do, {refused, number} refused.',
+    },
     tabs: { upcoming: 'Schedule', calendar: 'Calendar', review: 'To review', attention: 'Needs attention', drafts: 'Drafts', done: 'Published', metrics: 'Metrics', library: 'Image library' },
     filters: {
       channel: 'Channel',
