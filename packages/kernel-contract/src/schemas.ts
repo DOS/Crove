@@ -970,6 +970,19 @@ const zIdeaFields = {
 };
 export const zSocialIdeaCreate = z.strictObject({ ...zIdeaFields, stage: z.enum(['new', 'planned']).optional() });
 export const zSocialIdeaUpdate = z.strictObject({ ideaId: zId, ...zIdeaFields });
+// A blog feed an org drafts posts from (#708), and how its reads went.
+export const zSocialFeed = z.object({
+  id: zId,
+  url: z.string(),
+  title: z.string().nullable(),
+  connectionIds: z.array(zId),
+  paused: z.boolean(),
+  failures: z.number().int(),
+  lastCheckedAt: z.string().nullable(),
+  lastError: z.string().nullable(),
+  drafts: z.number().int(),
+  createdAt: z.string(),
+});
 // A label for posts (#639) and how many posts carry it.
 export const zSocialLabel = z.object({ id: zId, name: z.string(), color: z.enum(SOCIAL_LABEL_COLORS), createdBy: zId, postCount: z.number().int() });
 const zLabelName = z.string().trim().min(1).max(50);
@@ -1054,7 +1067,7 @@ export const zSocialLinkPreview = z.object({
 });
 
 // In-app notifications (#637): the viewer's newest, how many are unread, and the kinds they turned off.
-export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder'] as const;
+export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused'] as const;
 export const zSocialNotificationKind = z.enum(SOCIAL_NOTIFICATION_KINDS);
 export const zSocialNotifications = z.object({
   items: z.array(
