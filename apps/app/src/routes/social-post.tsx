@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -904,20 +904,56 @@ const withHashtag = (text: string, tag: string) => {
 };
 
 // The org's hashtags that did better than usual over the last 90 days (#818), the ones the text lacks; a click adds one.
-function HashtagSuggestions({ text, connectionId, onPick }: { text: string; connectionId: string | null; onPick: (tag: string) => void }) {
+// onAiUsed: the post becomes AI-assisted (tainted) when a hashtag the writer suggested goes in (#824).
+function HashtagSuggestions({ text, connectionId, onPick, onAiUsed }: { text: string; connectionId: string | null; onPick: (tag: string) => void; onAiUsed?: (() => void) | undefined }) {
   const t = useTranslations('social');
+  const locale = useLocale();
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const insights = useQuery({ ...orpc.social.metrics.insights.queryOptions({ input: { days: 90, timeZone } }), staleTime: 10 * 60_000 });
   const tags = hashtagSuggestions(insights.data?.channels ?? [], text, { connectionId });
-  if (tags.length === 0) return null;
+  const ai = useMutation({
+    mutationFn: () =>
+      client.social.posts.suggestHashtags({ text: text.trim(), language: locale === 'en' ? 'en' : 'vi', exclude: [...hashtagsOf(text), ...tags].slice(0, 50), ...(connectionId ? { connectionId } : {}) }),
+  });
+  const aiTags = (ai.data?.hashtags ?? []).filter((tag) => !hashtagsOf(text).includes(tag));
+  const canAsk = getConfig().aiEnabled === true && onAiUsed !== undefined && text.trim() !== '';
+  if (tags.length === 0 && !canAsk) return null;
+  const chip = 'rounded-full border px-2 py-0.5 text-muted-foreground hover:border-ring/60 hover:text-foreground';
   return (
-    <div className="flex flex-wrap items-center gap-1.5 text-xs">
-      <span className="text-subtle-foreground">{t('hashtagSuggestions')}</span>
-      {tags.map((tag) => (
-        <button key={tag} type="button" className="rounded-full border px-2 py-0.5 text-muted-foreground hover:border-ring/60 hover:text-foreground" onClick={() => onPick(tag)}>
-          #{tag}
-        </button>
-      ))}
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+        {tags.length > 0 && <span className="text-subtle-foreground">{t('hashtagSuggestions')}</span>}
+        {tags.map((tag) => (
+          <button key={tag} type="button" className={chip} onClick={() => onPick(tag)}>
+            #{tag}
+          </button>
+        ))}
+        {canAsk && (
+          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={ai.isPending} onClick={() => ai.mutate()}>
+            {ai.isPending ? <Spinner className="text-current" /> : null}
+            {t('hashtagsAi')}
+          </Button>
+        )}
+      </div>
+      {aiTags.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-subtle-foreground">{t('hashtagsAiLabel')}</span>
+          {aiTags.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              className={cn(chip, 'border-dashed')}
+              onClick={() => {
+                onPick(tag);
+                onAiUsed?.();
+              }}
+            >
+              #{tag}
+            </button>
+          ))}
+        </div>
+      )}
+      {ai.error && <ErrorText>{errorMessage(ai.error)}</ErrorText>}
     </div>
   );
 }
@@ -933,7 +969,7 @@ function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false,
           <EmojiPicker targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />
           {slug && <SnippetPicker slug={slug} targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />}
         </div>
-        {!disabled && <HashtagSuggestions text={base.body} connectionId={null} onPick={(tag) => onChange({ ...base, body: withHashtag(base.body, tag) })} />}
+        {!disabled && <HashtagSuggestions text={base.body} connectionId={null} onAiUsed={onAiUsed} onPick={(tag) => onChange({ ...base, body: withHashtag(base.body, tag) })} />}
         {!disabled && onAiUsed && (
           <AiRewrite
             text={base.body}
@@ -955,7 +991,7 @@ function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false,
         <Label htmlFor="social-link">{t('link')}</Label>
         <Input id="social-link" type="url" inputMode="url" value={base.linkUrl} disabled={disabled} placeholder="https://" onChange={(e) => onChange({ ...base, linkUrl: e.target.value })} />
       </div>
-      <MediaField media={base.media} disabled={disabled} onChange={(media) => onChange({ ...base, media })} />
+      <MediaField media={base.media} disabled={disabled} onAiUsed={onAiUsed} onChange={(media) => onChange({ ...base, media })} />
     </Card>
   );
 }

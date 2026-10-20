@@ -2,12 +2,13 @@
 // uploaded with purpose=social, so they are stored like documents but never read as invoices.
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { useTranslations } from 'use-intl';
+import { useLocale, useTranslations } from 'use-intl';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { cn } from '@crove/ui/lib/utils';
 import { client, errorMessage, fetchFile, queryClient, uploadFiles } from '../lib/api.ts';
+import { getConfig } from '../lib/auth.ts';
 import { ErrorText, Spinner } from './ui.tsx';
 import { CropPanel } from './social-crop.tsx';
 
@@ -174,8 +175,19 @@ async function measure(file: File): Promise<{ width: number; height: number } | 
   }
 }
 
-export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; onChange: (media: MediaItem[]) => void; disabled: boolean }) {
+// onAiUsed: when given (a post's media), an image's alt text may be suggested by AI (#817); keeping one marks the post
+// AI-assisted.
+export function MediaField({ media, onChange, disabled, onAiUsed }: { media: MediaItem[]; onChange: (media: MediaItem[]) => void; disabled: boolean; onAiUsed?: (() => void) | undefined }) {
   const t = useTranslations('social');
+  const locale = useLocale();
+  const describe = useMutation({
+    mutationFn: (fileId: string) => client.social.posts.describeImage({ fileId, language: locale === 'en' ? 'en' : 'vi' }),
+    onSuccess: (r, fileId) => {
+      onChange(media.map((x) => (x.fileId === fileId ? { ...x, altText: r.altText } : x)));
+      onAiUsed?.();
+    },
+  });
+  const canDescribe = getConfig().aiEnabled === true && onAiUsed !== undefined;
   const picker = useRef<HTMLInputElement>(null);
   const [browsing, setBrowsing] = useState(false);
   // The image being cropped (#636), by its file: moving or removing images while the panel is open never retargets it.
@@ -222,6 +234,12 @@ export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; 
                 className="h-7 text-xs"
                 onChange={(e) => onChange(media.map((x, j) => (j === i ? { ...x, altText: e.target.value } : x)))}
               />
+              {canDescribe && m.mime.startsWith('image/') && !disabled && (
+                <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={describe.isPending} onClick={() => describe.mutate(m.fileId)}>
+                  {describe.isPending && describe.variables === m.fileId ? <Spinner className="text-current" /> : null}
+                  {t('altTextAi')}
+                </Button>
+              )}
               <div className="flex gap-1">
                 <Button variant="ghost" size="sm" disabled={disabled || i === 0} aria-label={t('moveEarlier')} onClick={() => move(i, -1)}>
                   ←
@@ -276,6 +294,7 @@ export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; 
       {browsing && !disabled && <LibraryPicker media={media} onChange={onChange} />}
       <p className="text-xs text-subtle-foreground">{t('imagesHint')}</p>
       {upload.error && <ErrorText>{errorMessage(upload.error)}</ErrorText>}
+      {describe.error && <ErrorText>{errorMessage(describe.error)}</ErrorText>}
     </div>
   );
 }

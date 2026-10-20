@@ -47,6 +47,7 @@ import {
   egressFetch,
   Runtime,
   type BlobStore,
+  readVerified,
   type CommandDef,
   type CredentialBroker,
   type QueryDef,
@@ -65,6 +66,7 @@ import { createLogProvider, createMailer, messageIdDomain, type MailProvider } f
 import { MAIL_TEMPLATES } from './mail-templates.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
 import { createBlobStore } from './storage.ts';
+import type { SocialDrafter } from './rpc.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource } from './stream.ts';
 import { createTaxCodeLookup } from './tax-lookup.ts';
 import { startWorker } from './worker.ts';
@@ -99,7 +101,7 @@ export interface KernelAdapters {
   // The AI invoice reader; null runs without AI (e-invoice XML still works, PDF and images do not).
   ai: InvoiceReader | null;
   // Drafts Social posts (Social plan S7) through the same endpoint; null runs without AI drafting.
-  writer?: Pick<SocialWriter, 'draft' | 'rewrite'> | null;
+  writer?: (Pick<SocialWriter, 'draft' | 'rewrite'> & Partial<Pick<SocialWriter, 'hashtags' | 'describeImage'>>) | null;
   storage: BlobStore;
   // Outbound mail (member invites, issue #129); the default logs that nothing was sent.
   mail?: MailProvider;
@@ -334,7 +336,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           authenticate,
           pool,
           aiEnabled: resolved.ai !== null,
-          ...(resolved.writer ? { socialWriter: resolved.writer } : {}),
+          ...(resolved.writer ? { socialWriter: socialDrafter(resolved.writer, config.AI_VISION === 'true' ? store : null) } : {}),
           ...(config.TAX_CODE_LOOKUP_URL ? { taxLookup: createTaxCodeLookup(config.TAX_CODE_LOOKUP_URL) } : {}),
           mailer: resolved.mail,
           channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', telegram: config.CHANNEL_TELEGRAM === 'true', mastodon: config.CHANNEL_MASTODON === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL },
@@ -400,6 +402,18 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
   }
 
   return { config, modules: config.CROVE_MODULES, adapters: resolved, start, rebindExports };
+}
+
+// The Social writer as the API uses it: drafts, rewrites and hashtags as they are, and with an image-capable model
+// (AI_VISION) an image's alt text from its stored bytes, read and checked like a download (#817).
+function socialDrafter(writer: NonNullable<KernelAdapters['writer']>, store: BlobStore | null): SocialDrafter {
+  const describe = writer.describeImage?.bind(writer);
+  return {
+    draft: (request) => writer.draft(request),
+    rewrite: (request) => writer.rewrite(request),
+    ...(writer.hashtags ? { hashtags: writer.hashtags.bind(writer) } : {}),
+    ...(store && describe ? { describeStored: async (file, mime, language) => describe({ image: await readVerified(store, file), mime, language }) } : {}),
+  };
 }
 
 // The open-source defaults, built from configuration: Supabase Auth identity (ADR-0028), any OpenAI-compatible
