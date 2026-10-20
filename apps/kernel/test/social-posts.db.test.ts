@@ -279,8 +279,9 @@ suite('social posts on PostgreSQL (S3)', () => {
   it('filters the lists by stage, channel and text, and pages by the last change (#574)', async () => {
     const o = await org();
     const [a, b] = [await connection(o.orgId, o.owner), await connection(o.orgId, o.owner)];
-    const draft = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Khai trương 50% off', channels: [{ connectionId: a }] });
-    const inReview = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Menu mới', title: 'Tuần lễ 100%', channels: [{ connectionId: b }] });
+    // A draft may hold a title its channel does not take; only submitting checks the channel's rules.
+    const draft = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Khai trương', title: 'Giảm 50%', channels: [{ connectionId: a }] });
+    const inReview = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Menu mới 100%', channels: [{ connectionId: b }] });
     await exec(o, o.member, 'social.post.submit', { postId: inReview.postId });
     const list = (input: Record<string, unknown>) => rt.query<PostView[]>('social.post.list', input, { actor: asUser(o.viewer), orgId: o.orgId }).then((ps) => ps.map((p) => p.id));
     expect(await list({ stage: 'review' })).toEqual([inReview.postId]);
@@ -290,6 +291,7 @@ suite('social posts on PostgreSQL (S3)', () => {
     // Text and title, case-insensitive; a % is matched as itself.
     expect(await list({ search: 'KHAI' })).toEqual([draft.postId]);
     expect(await list({ search: '100%' })).toEqual([inReview.postId]);
+    expect(await list({ search: '50%' })).toEqual([draft.postId]);
     expect(await list({ search: '%' })).toHaveLength(2);
     expect(await list({ search: 'không có' })).toEqual([]);
 
