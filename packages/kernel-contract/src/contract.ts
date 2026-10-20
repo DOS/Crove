@@ -188,6 +188,8 @@ export const contract = {
       submit: oc.input(z.strictObject({ postId: zId, variantIds: z.array(zId).min(1).max(20).optional() })).output(z.object({ postId: zId, submitted: z.array(zId) })),
       // A new post with the content of a published one, for the channels it went out on (S9); it is reviewed as usual.
       repost: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
+      // A copy of any post as a new draft, for the channels still connected (#575).
+      duplicate: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
       // Repost a published post every N days (7 to 365), each repost sent to review; null stops it.
       setEvergreen: oc.input(z.strictObject({ postId: zId, days: z.number().int().min(7).max(365).nullable() })).output(z.object({ postId: zId, evergreenDays: z.number().int().nullable() })),
       // AI drafting (Social plan §3.7): the server asks the deployment's model for a draft from the brief and saves it as
