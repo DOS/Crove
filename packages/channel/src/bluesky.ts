@@ -3,8 +3,12 @@
 // and which cannot change the account's own password or email. The kernel seals the app password; each publish opens
 // a fresh session with it, so no rotating refresh token has to be kept.
 //
-// Only Bluesky-hosted accounts are supported for now (PDS hosts under bsky.network, or bsky.social): the PDS address
-// comes from the account's DID document, and an arbitrary host there would let anyone point the worker at any server.
+// Accounts on any PDS (#792): the handle or DID is resolved to its DID document (plc.directory for did:plc, the host's
+// /.well-known/did.json for did:web), which names the account's PDS. A PDS under bsky.network signs in through
+// bsky.social, as before; any other PDS is the tenant's to name, so every call to it goes through the egress fetch the
+// kernel hands in (public addresses only, the connection pinned to the checked address, no redirects). Without one,
+// such accounts are refused (UnsupportedPds). The resolution is kept 10 minutes, so an account that moves PDS is
+// followed on a later call.
 import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
@@ -13,6 +17,15 @@ import { requestSignal, type Fetch } from './oauth.ts';
 const ENTRYWAY = 'https://bsky.social';
 // Bluesky's public AppView: post counts without a session, so reading metrics never spends the account's session quota.
 const PUBLIC_APPVIEW = 'https://public.api.bsky.app';
+// The did:plc directory: DID documents of did:plc accounts, Bluesky-hosted or not.
+const PLC_DIRECTORY = 'https://plc.directory';
+const RESOLVED_MS = 10 * 60_000;
+// Lookups kept at most, so connecting many accounts cannot grow the worker's memory without end.
+const RESOLVED_MAX = 1000;
+const DID_PLC = /^did:plc:[a-z0-9]{8,64}$/;
+const DID_WEB = /^did:web:([a-z0-9.-]{4,253})$/;
+// A host name with a dot, never an address: a PDS is reached by its domain, as a Mastodon instance is.
+const HOST_NAME = /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const POST_COLLECTION = 'app.bsky.feed.post';
 // Bluesky's own image limit per blob.
 const MAX_IMAGE_BYTES = 1_000_000;
@@ -21,13 +34,29 @@ export function isBlueskyHost(host: string): boolean {
   return host === 'bsky.social' || /^[a-z0-9-]+(\.[a-z0-9-]+)*\.bsky\.network$/.test(host);
 }
 
-// fetch limited to Bluesky-hosted servers over https, with a timeout and no redirects.
+// fetch limited to Bluesky's own servers (its PDS hosts, the public AppView, the PLC directory) over https, with a
+// timeout and no redirects.
+const isBlueskyOrigin = (url: URL) => isBlueskyHost(url.hostname) || url.origin === PUBLIC_APPVIEW || url.origin === PLC_DIRECTORY;
 function blueskyFetch(fetchImpl: Fetch = fetch, timeoutMs = 15_000): Fetch {
   return async (input, init) => {
     const url = new URL(input);
-    if (url.protocol !== 'https:' || url.port !== '' || !(isBlueskyHost(url.hostname) || url.origin === PUBLIC_APPVIEW)) throw new Error(`host not allowed for Bluesky: ${url.hostname}`);
+    if (url.protocol !== 'https:' || url.port !== '' || !isBlueskyOrigin(url)) throw new Error(`host not allowed for Bluesky: ${url.hostname}`);
     return fetchImpl(url.toString(), { ...init, redirect: 'manual', signal: requestSignal(init?.signal ?? AbortSignal.timeout(timeoutMs)) });
   };
+}
+
+// The origin of a PDS as Crove calls it: https on the default port, a host name and no path; null for anything else.
+export function pdsOrigin(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw.length > 300) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || url.port || url.username || url.password || (url.pathname !== '/' && url.pathname !== '') || url.search || url.hash) return null;
+  const host = url.hostname.toLowerCase();
+  return HOST_NAME.test(host) ? `https://${host}` : null;
 }
 
 export class BlueskyError extends Error {
@@ -80,16 +109,52 @@ function tokenScope(jwt: string): string | null {
 export const APP_PASSWORD = /^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/;
 export const BLUESKY_HANDLE = /^(?=.{3,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
+interface DidDocument {
+  id?: unknown;
+  alsoKnownAs?: unknown;
+  service?: { id?: unknown; type?: unknown; serviceEndpoint?: unknown }[];
+}
+
+// The PDS a DID document names, or null.
+function pdsOf(doc: DidDocument | null | undefined, did: string): string | null {
+  const service = doc?.service?.find((x) => x.id === '#atproto_pds' || x.id === `${did}#atproto_pds`);
+  return pdsOrigin(service?.serviceEndpoint);
+}
+
+// A resolved identity: its DID, its PDS and the handles its DID document claims (at://handle in alsoKnownAs).
+interface Own {
+  did: string;
+  pds: string;
+  handles: string[];
+}
+
 class Xrpc {
   private readonly fetch: Fetch;
+  private readonly egress: Fetch | undefined;
+  private readonly resolved = new Map<string, Own & { at: number }>();
 
-  constructor(fetchImpl?: Fetch) {
+  // egress: the kernel's guarded fetch, for a PDS outside Bluesky's own hosts; without it those accounts are refused.
+  constructor(fetchImpl?: Fetch, egress?: Fetch) {
     this.fetch = blueskyFetch(fetchImpl);
+    this.egress = egress;
+  }
+
+  // Bluesky's own servers through the allowlisted fetch; any other host only through the egress guard, over https,
+  // with no redirects.
+  private route(url: URL): Fetch {
+    if (url.protocol === 'https:' && url.port === '' && isBlueskyOrigin(url)) return this.fetch;
+    const egress = this.egress;
+    if (!egress || url.protocol !== 'https:' || url.port !== '' || !HOST_NAME.test(url.hostname)) throw new BlueskyError(400, 'UnsupportedPds', `accounts hosted on ${url.host} are not supported`);
+    return (input, init) => egress(input, { ...init, redirect: 'manual', signal: requestSignal(init?.signal ?? AbortSignal.timeout(30_000)) });
   }
 
   async call<T>(base: string, method: 'GET' | 'POST', nsid: string, options: { token?: string; params?: Record<string, string>; json?: unknown; bytes?: { data: Uint8Array; type: string } } = {}): Promise<T> {
     const url = new URL(`${base}/xrpc/${nsid}`);
     for (const [k, v] of Object.entries(options.params ?? {})) url.searchParams.set(k, v);
+    return this.request<T>(url, method, options);
+  }
+
+  private async request<T>(url: URL, method: 'GET' | 'POST', options: { token?: string; json?: unknown; bytes?: { data: Uint8Array; type: string } } = {}): Promise<T> {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (options.token) headers.authorization = `Bearer ${options.token}`;
     let body: string | Uint8Array | undefined;
@@ -100,7 +165,7 @@ class Xrpc {
       headers['content-type'] = options.bytes.type;
       body = options.bytes.data;
     }
-    const response = await this.fetch(url.toString(), { method, headers, ...(body === undefined ? {} : { body: typeof body === 'string' ? body : new Blob([new Uint8Array(body)]) }) });
+    const response = await this.route(url)(url.toString(), { method, headers, ...(body === undefined ? {} : { body: typeof body === 'string' ? body : new Blob([new Uint8Array(body)]) }) });
     const json = (await response.json().catch(() => null)) as ({ error?: unknown; message?: unknown } & Record<string, unknown>) | null;
     // A success whose body cannot be read may still have done what was asked: never a refusal.
     if (response.ok && !json) throw new BlueskyError(response.status, 'UnreadableAnswer', 'Bluesky answered without a readable body');
@@ -108,24 +173,90 @@ class Xrpc {
     return json as T;
   }
 
-  // A session for an app password, on the account's own PDS.
+  // The account's DID and PDS: a handle through the public AppView, the DID document from the PLC directory or the
+  // did:web host. null when the identity cannot be read; the caller then signs in through bsky.social as before.
+  private async resolve(identifier: string): Promise<Own | null> {
+    let did = identifier;
+    if (!identifier.startsWith('did:')) {
+      const answer = await this.call<{ did?: unknown }>(PUBLIC_APPVIEW, 'GET', 'com.atproto.identity.resolveHandle', { params: { handle: identifier } }).catch(() => null);
+      if (typeof answer?.did !== 'string') return null;
+      did = answer.did;
+    }
+    const web = DID_WEB.exec(did);
+    if (!DID_PLC.test(did) && !(web && HOST_NAME.test(web[1] as string))) return null;
+    const docUrl = web ? new URL(`https://${web[1]}/.well-known/did.json`) : new URL(`${PLC_DIRECTORY}/${did}`);
+    const doc = await this.request<DidDocument>(docUrl, 'GET').catch(() => null);
+    if (!doc || doc.id !== did) return null;
+    const pds = pdsOf(doc, did);
+    const handles = Array.isArray(doc.alsoKnownAs) ? doc.alsoKnownAs.filter((a): a is string => typeof a === 'string' && a.startsWith('at://')).map((a) => a.slice(5).toLowerCase()) : [];
+    return pds ? { did, pds, handles } : null;
+  }
+
+  // A resolution kept from an earlier call, while it is fresh.
+  private kept(identifier: string): Own | null {
+    const kept = this.resolved.get(identifier);
+    return kept && Date.now() - kept.at < RESOLVED_MS ? kept : null;
+  }
+
+  // A session for an app password, on the account's own PDS. Bluesky-hosted accounts sign in through bsky.social, as
+  // before. When it refuses the login, the account may live on another PDS: the identity is resolved and, if it names
+  // a PDS outside Bluesky, the login is tried there. Later calls go straight to that PDS while the resolution is kept.
   async session(identifier: string, appPassword: string): Promise<Session> {
-    const answer = await this.call<{ did?: unknown; handle?: unknown; accessJwt?: unknown; didDoc?: { service?: { id?: unknown; serviceEndpoint?: unknown }[] } }>(ENTRYWAY, 'POST', 'com.atproto.server.createSession', {
-      json: { identifier, password: appPassword },
-    });
-    if (typeof answer.did !== 'string' || !answer.did.startsWith('did:') || typeof answer.accessJwt !== 'string') throw new BlueskyError(502, 'BadSession', 'Bluesky answered without a session');
-    const endpoint = answer.didDoc?.service?.find((s) => s.id === '#atproto_pds')?.serviceEndpoint;
-    const pds = typeof endpoint === 'string' ? endpoint.replace(/\/$/, '') : ENTRYWAY;
-    let url: URL | null = null;
+    const refused = (error: unknown) => error instanceof BlueskyError && (error.status === 400 || error.status === 401) && error.code !== 'UnsupportedPds';
+    const kept = this.kept(identifier);
+    if (kept && !isBlueskyHost(new URL(kept.pds).hostname)) {
+      try {
+        return await this.open(kept.pds, identifier, appPassword, kept);
+      } catch (error) {
+        // Refused where it was: the account may have moved, so it is looked up again below.
+        if (!refused(error)) throw error;
+      }
+    }
     try {
-      url = new URL(pds);
-    } catch {
-      url = null;
+      return await this.open(ENTRYWAY, identifier, appPassword, null);
+    } catch (error) {
+      if (!refused(error)) throw error;
+      const own = await this.resolve(identifier).catch(() => null);
+      if (!own || isBlueskyHost(new URL(own.pds).hostname)) throw error;
+      return this.open(own.pds, identifier, appPassword, own);
     }
-    if (!url || url.protocol !== 'https:' || url.port !== '' || url.pathname !== '/' || !isBlueskyHost(url.hostname)) {
-      throw new BlueskyError(400, 'UnsupportedPds', `accounts hosted on ${url?.host ?? 'this server'} are not supported yet`);
+  }
+
+  // createSession on base. own: the identity resolved for this login (a PDS outside Bluesky), or null.
+  private async open(base: string, identifier: string, appPassword: string, own: Own | null): Promise<Session> {
+    let answer: { did?: unknown; handle?: unknown; accessJwt?: unknown; didDoc?: DidDocument };
+    try {
+      answer = await this.call(base, 'POST', 'com.atproto.server.createSession', { json: { identifier, password: appPassword } });
+    } catch (error) {
+      // The account may have moved since it was resolved: resolve it afresh next time.
+      this.resolved.delete(identifier);
+      throw error;
     }
-    return { did: answer.did, handle: typeof answer.handle === 'string' ? answer.handle : identifier, accessJwt: answer.accessJwt, pds, scope: tokenScope(answer.accessJwt) };
+    if (typeof answer.did !== 'string' || !answer.did.startsWith('did:') || typeof answer.accessJwt !== 'string') throw new BlueskyError(502, 'BadSession', 'Bluesky answered without a session');
+    // The server signed in someone other than the account resolved: never use that session.
+    if (own && answer.did !== own.did) throw new BlueskyError(502, 'BadSession', 'Bluesky signed in another account');
+    // The PDS the session's DID document names, else the one resolved, else the entryway.
+    const named = answer.didDoc ? pdsOf(answer.didDoc, answer.did) : null;
+    const listed = answer.didDoc?.service?.some((x) => x.id === '#atproto_pds' || x.id === `${answer.did}#atproto_pds`);
+    // A PDS named in a form Crove does not call (another port, a path, an address): refused, not guessed.
+    if (listed && !named) throw new BlueskyError(400, 'UnsupportedPds', 'the account names a PDS Crove cannot call');
+    const pds = named ?? own?.pds ?? ENTRYWAY;
+    const host = new URL(pds).hostname;
+    // A PDS outside Bluesky is called only when the resolved identity named it, never on a session's word alone.
+    if (!isBlueskyHost(host) && pds !== own?.pds) throw new BlueskyError(400, 'UnsupportedPds', `accounts hosted on ${host} are not supported`);
+    if (own) {
+      const found = { ...own, at: Date.now() };
+      // Expired lookups go first, then the oldest, so the map stays under its cap.
+      for (const [key, value] of this.resolved) if (found.at - value.at >= RESOLVED_MS) this.resolved.delete(key);
+      while (this.resolved.size >= RESOLVED_MAX - 1) this.resolved.delete(this.resolved.keys().next().value as string);
+      this.resolved.set(identifier, found);
+      this.resolved.set(answer.did, found);
+    }
+    // A PDS outside Bluesky says what the account's handle is; it is shown only when the DID document claims it too,
+    // else the account is named by its DID.
+    const said = typeof answer.handle === 'string' ? answer.handle.toLowerCase() : null;
+    const handle = own ? (said && own.handles.includes(said) ? said : answer.did) : (said ?? identifier);
+    return { did: answer.did, handle, accessJwt: answer.accessJwt, pds, scope: tokenScope(answer.accessJwt) };
   }
 }
 
@@ -140,9 +271,10 @@ export function blueskyLogin(input: { handle: string; appPassword: string }): { 
   return { handle, appPassword };
 }
 
-export async function connectBluesky(input: { handle: string; appPassword: string }, fetchImpl?: Fetch): Promise<ConnectedAccount> {
+// egress: the kernel's guarded fetch, so an account on its own PDS can connect (#792).
+export async function connectBluesky(input: { handle: string; appPassword: string }, fetchImpl?: Fetch, egress?: Fetch): Promise<ConnectedAccount> {
   const { handle, appPassword } = blueskyLogin(input);
-  const session = await new Xrpc(fetchImpl).session(handle, appPassword);
+  const session = await new Xrpc(fetchImpl, egress).session(handle, appPassword);
   // The format check above cannot tell an account password shaped like an app password; the session can (#399). A
   // privileged app password also reads direct messages, which Crove never needs. An unreadable scope is let through:
   // the token format is Bluesky's to change.
@@ -194,8 +326,9 @@ export class BlueskyPublisher implements Publisher {
   readonly publishSafety: RetrySafety = 'reconcile_only';
   private readonly xrpc: Xrpc;
 
-  constructor(fetchImpl?: Fetch) {
-    this.xrpc = new Xrpc(fetchImpl);
+  // egress: the kernel's guarded fetch, for accounts on their own PDS (#792).
+  constructor(fetchImpl?: Fetch, egress?: Fetch) {
+    this.xrpc = new Xrpc(fetchImpl, egress);
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {

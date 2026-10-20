@@ -70,6 +70,91 @@ describe('Bluesky connect', () => {
   });
 });
 
+describe('Bluesky on its own PDS (#792)', () => {
+  const OWN = 'https://pds.example.org';
+  const refused = { status: 401, body: { error: 'AuthenticationRequired', message: 'Invalid identifier or password' } };
+  const doc = (pds: string, alsoKnownAs = ['at://quan-a.bsky.social']) => ({ body: { id: DID, alsoKnownAs, service: [{ id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: pds }] } });
+  const own = (pds = OWN) => ({
+    bluesky: xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [refused, refused],
+      'GET public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle': [{ body: { did: DID } }],
+      [`GET plc.directory/${DID}`]: [doc(pds), doc(pds)],
+    }),
+    egress: xrpc({
+      'POST pds.example.org/xrpc/com.atproto.server.createSession': [session(OWN), session(OWN)],
+      'POST pds.example.org/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3kown`, cid: 'bafy' } }, { body: { uri: `at://${DID}/app.bsky.feed.post/3kown2`, cid: 'bafy' } }],
+    }),
+  });
+
+  it('connects through the PDS the DID document names, called only through the egress fetch', async () => {
+    const { bluesky, egress } = own();
+    const account = await connectBluesky({ handle: 'quan-a.example.org', appPassword: APP_PASSWORD }, bluesky.fetchImpl, egress.fetchImpl);
+    expect(account).toMatchObject({ externalAccountId: DID, displayName: '@quan-a.bsky.social' });
+    expect(bluesky.calls.map((c) => c.route)).toEqual(['POST bsky.social/xrpc/com.atproto.server.createSession', 'GET public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle', `GET plc.directory/${DID}`]);
+    expect(egress.calls.map((c) => c.route)).toEqual(['POST pds.example.org/xrpc/com.atproto.server.createSession']);
+    expect(egress.calls[0]?.json).toEqual({ identifier: 'quan-a.example.org', password: APP_PASSWORD });
+  });
+
+  it('posts on that PDS, and goes straight there while the lookup is kept', async () => {
+    const { bluesky, egress } = own();
+    const publisher = new BlueskyPublisher(bluesky.fetchImpl, egress.fetchImpl);
+    expect(await publisher.publish(input())).toMatchObject({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kown` });
+    expect(await publisher.publish(input())).toMatchObject({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kown2` });
+    // The DID needs no handle lookup; the second publish skips bsky.social and the directory.
+    expect(bluesky.calls.map((c) => c.route)).toEqual(['POST bsky.social/xrpc/com.atproto.server.createSession', `GET plc.directory/${DID}`]);
+    expect(egress.calls.map((c) => c.route)).toEqual([
+      'POST pds.example.org/xrpc/com.atproto.server.createSession',
+      'POST pds.example.org/xrpc/com.atproto.repo.createRecord',
+      'POST pds.example.org/xrpc/com.atproto.server.createSession',
+      'POST pds.example.org/xrpc/com.atproto.repo.createRecord',
+    ]);
+  });
+
+  it('refuses such an account without an egress fetch, and a PDS named by address or on another port', async () => {
+    const plain = own();
+    await expect(connectBluesky({ handle: 'quan-a.example.org', appPassword: APP_PASSWORD }, plain.bluesky.fetchImpl)).rejects.toMatchObject({ code: 'UnsupportedPds' });
+    for (const pds of ['https://10.0.0.5', 'https://pds.example.org:8443', 'http://pds.example.org']) {
+      const { bluesky, egress } = own(pds);
+      // The identity names no PDS Crove calls, so the login stays refused as bsky.social said.
+      await expect(connectBluesky({ handle: 'quan-a.example.org', appPassword: APP_PASSWORD }, bluesky.fetchImpl, egress.fetchImpl)).rejects.toMatchObject({ status: 401 });
+      expect(egress.calls).toHaveLength(0);
+    }
+  });
+
+  it('names the account by its DID when the DID document does not claim the handle its PDS reports', async () => {
+    const bluesky = xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [refused],
+      'GET public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle': [{ body: { did: DID } }],
+      [`GET plc.directory/${DID}`]: [doc(OWN, ['at://someone-else.example.org'])],
+    });
+    const egress = xrpc({ 'POST pds.example.org/xrpc/com.atproto.server.createSession': [session(OWN)] });
+    expect(await connectBluesky({ handle: 'quan-a.example.org', appPassword: APP_PASSWORD }, bluesky.fetchImpl, egress.fetchImpl)).toMatchObject({ displayName: `@${DID}` });
+  });
+  it('never trusts a session that signs in another account', async () => {
+    const { bluesky } = own();
+    const egress = xrpc({ 'POST pds.example.org/xrpc/com.atproto.server.createSession': [{ body: { ...session(OWN).body, did: 'did:plc:someoneelse0000000000000' } }] });
+    await expect(connectBluesky({ handle: 'quan-a.example.org', appPassword: APP_PASSWORD }, bluesky.fetchImpl, egress.fetchImpl)).rejects.toMatchObject({ code: 'BadSession' });
+  });
+
+  it('looks the account up again when its PDS refuses the login, as after a move', async () => {
+    const moved = 'https://pds2.example.org';
+    const bluesky = xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [refused, refused],
+      [`GET plc.directory/${DID}`]: [doc(OWN), doc(moved)],
+    });
+    const egress = xrpc({
+      'POST pds.example.org/xrpc/com.atproto.server.createSession': [session(OWN), refused],
+      'POST pds.example.org/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3ka`, cid: 'bafy' } }],
+      'POST pds2.example.org/xrpc/com.atproto.server.createSession': [session(moved)],
+      'POST pds2.example.org/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3kb`, cid: 'bafy' } }],
+    });
+    const publisher = new BlueskyPublisher(bluesky.fetchImpl, egress.fetchImpl);
+    expect(await publisher.publish(input())).toMatchObject({ kind: 'accepted' });
+    expect(await publisher.publish(input())).toMatchObject({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kb` });
+    expect(egress.calls.at(-1)?.route).toBe('POST pds2.example.org/xrpc/com.atproto.repo.createRecord');
+  });
+});
+
 describe('BlueskyPublisher', () => {
   it('posts the text with link facets on the account PDS', async () => {
     const { fetchImpl, calls } = xrpc({

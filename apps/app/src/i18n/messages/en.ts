@@ -2486,7 +2486,7 @@ export const en = {
       AI_REWRITE_EMPTY: 'AI could not rewrite this text; try another way',
       BLUESKY_APP_PASSWORD: 'Use a Bluesky app password, not the account password',
       BLUESKY_APP_PASSWORD_PRIVILEGED: 'This app password can also read direct messages; create a new one without direct message access',
-      BLUESKY_PDS_UNSUPPORTED: 'Crove supports accounts hosted by Bluesky only for now',
+      BLUESKY_PDS_UNSUPPORTED: 'Crove cannot reach the server this Bluesky account lives on (its PDS must be a public domain over https)',
       BLUESKY_LOGIN_FAILED: 'Bluesky did not accept this handle or app password',
       SOURCE_NOT_READY: 'Still reading this page; try again in a few seconds',
       SOURCE_UNREADABLE: 'Crove could not read this page; describe the post in words instead',
