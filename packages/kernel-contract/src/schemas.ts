@@ -443,7 +443,41 @@ export const zParty = z.object({
   documentCount: z.number().int(),
   // The debit account proposed first for this vendor's invoices (set by approving one, or by hand), or null.
   defaultAccount: z.string().nullable(),
+  // The contact email, read from the invoice or entered by hand (#670).
+  email: z.string().nullable(),
 });
+
+// Customers (#670): the parties on the org's sales documents, and any party with a line on 131 (an opening balance or
+// a receipt). The list goes by name, CUSTOMER_PAGE_SIZE at a time; a page starts after the last customer shown.
+export const CUSTOMER_PAGE_SIZE = 50;
+export const zCustomerCursor = z.object({ name: z.string().max(2000), id: zId });
+export type CustomerCursor = z.infer<typeof zCustomerCursor>;
+export const zCustomer = z.object({
+  id: zId,
+  name: z.string(),
+  taxCode: z.string().nullable(),
+  address: z.string().nullable(),
+  email: z.string().nullable(),
+  // Sales documents still in the books (a voided one, #165, no longer counts), and the latest invoice date among them.
+  invoiceCount: z.number().int(),
+  lastInvoiceDate: zLocalDate.nullable(),
+  // What the customer owes today: debit minus credit of every posted line on 131 and its sub-accounts naming the
+  // party. Negative when the customer paid ahead.
+  receivable: zMoney,
+});
+export type Customer = z.infer<typeof zCustomer>;
+export const zCustomerPage = z.object({ items: z.array(zCustomer), more: z.boolean() });
+export type CustomerPage = z.infer<typeof zCustomerPage>;
+
+// What owners and admins may correct on a customer or vendor (#670): its name, tax code and contact email. A field
+// left out stays as it is; null clears the tax code or the email.
+export const zPartyUpdate = z.object({
+  partyId: zId,
+  name: z.string().trim().min(1).max(200).optional(),
+  taxCode: z.string().trim().max(20).nullable().optional(),
+  email: z.email().max(254).nullable().optional(),
+});
+export type PartyUpdate = z.infer<typeof zPartyUpdate>;
 
 export const zPurchaseDocument = z.object({
   id: zId,

@@ -1,9 +1,10 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useDeferredValue, useState } from 'react';
+import { Fragment, useDeferredValue, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { EditPartyButton, PartyEditRow } from '../components/party-edit.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { accountLabel, pickableAccounts, type ChartAccount } from '../lib/accounts.ts';
@@ -47,6 +48,9 @@ export function VendorsPage() {
   const accounts = useQuery(orpc.accounts.list.queryOptions());
   const org = useQuery(orpc.org.get.queryOptions());
   const canManage = org.data?.role === 'owner' || org.data?.role === 'admin';
+  const [editing, setEditing] = useState<string | null>(null);
+  const head = [t('columns.name'), t('columns.taxCode'), t('columns.address'), t('columns.documents'), t('columns.defaultAccount')];
+  if (canManage) head.push('');
   return (
     <>
       <PageHeader title={t('title')} subtitle={t('subtitle')} />
@@ -60,17 +64,25 @@ export function VendorsPage() {
       ) : (vendors.data?.length ?? 0) === 0 ? (
         <Empty title={t('empty')} />
       ) : (
-        <DataTable head={[t('columns.name'), t('columns.taxCode'), t('columns.address'), t('columns.documents'), t('columns.defaultAccount')]}>
+        <DataTable head={head}>
           {vendors.data?.map((v) => (
-            <TableRow key={v.id}>
-              <TableCell className="px-4 py-3 font-medium text-foreground">{v.name}</TableCell>
-              <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{v.taxCode}</TableCell>
-              <TableCell className="px-4 py-3 text-subtle-foreground">{v.address}</TableCell>
-              <TableCell className="px-4 py-3 text-muted-foreground tabular-nums">{f.number(v.documentCount)}</TableCell>
-              <TableCell className="px-4 py-3 text-muted-foreground">
-                <DefaultAccount vendor={v} accounts={accounts.data ?? []} canManage={canManage} />
-              </TableCell>
-            </TableRow>
+            <Fragment key={v.id}>
+              <TableRow>
+                <TableCell className="px-4 py-3 font-medium text-foreground">{v.name}</TableCell>
+                <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{v.taxCode}</TableCell>
+                <TableCell className="px-4 py-3 text-subtle-foreground">{v.address}</TableCell>
+                <TableCell className="px-4 py-3 text-muted-foreground tabular-nums">{f.number(v.documentCount)}</TableCell>
+                <TableCell className="px-4 py-3 text-muted-foreground">
+                  <DefaultAccount vendor={v} accounts={accounts.data ?? []} canManage={canManage} />
+                </TableCell>
+                {canManage && (
+                  <TableCell className="px-4 py-3 text-right">
+                    <EditPartyButton party={v} onEdit={() => setEditing(v.id)} />
+                  </TableCell>
+                )}
+              </TableRow>
+              {editing === v.id && <PartyEditRow party={v} columns={head.length} onClose={() => setEditing(null)} />}
+            </Fragment>
           ))}
         </DataTable>
       )}

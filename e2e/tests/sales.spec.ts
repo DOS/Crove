@@ -44,7 +44,7 @@ test('set the tax code, upload a sales e-invoice, approve it, then find it in th
     await proposal.getByRole('link', { name: BUYER }).click();
     await expect(page.getByRole('heading', { name: BUYER })).toBeVisible();
     await expect(page.getByText('Hóa đơn bán ra: người bán có mã số thuế của tổ chức.', { exact: false })).toBeVisible();
-    await expect(page.getByText('Khách hàng', { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByText('Khách hàng', { exact: true })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'TK doanh thu' })).toBeVisible();
   });
 

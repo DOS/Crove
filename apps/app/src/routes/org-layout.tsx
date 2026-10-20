@@ -26,6 +26,7 @@ import { useNotifications } from './social-notifications.tsx';
 const ALL_NAV = [
   { to: '/o/$slug/inbox', label: 'inbox', module: 'kernel' },
   { to: '/o/$slug/documents', label: 'documents', module: 'finance' },
+  { to: '/o/$slug/customers', label: 'customers', module: 'finance' },
   { to: '/o/$slug/vendors', label: 'vendors', module: 'finance' },
   { to: '/o/$slug/journal', label: 'journal', module: 'finance' },
   { to: '/o/$slug/vouchers', label: 'vouchers', module: 'finance' },

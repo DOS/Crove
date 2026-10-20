@@ -20,6 +20,7 @@ import { nextDay, postingDateAllowed } from '../lib/period-lock.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { reversalErrorMessage } from '../lib/reversal.ts';
 import { previewVoucherJournal, voucherProblem } from '../lib/vouchers.ts';
+import { partySearch } from '../lib/parties.ts';
 import { nextPendingId, previousPendingId, reviewShortcut, type ReviewAction } from '../lib/review.ts';
 import { pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
@@ -632,6 +633,12 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                 <p className="text-xs text-subtle-foreground">{sale ? t('customer') : t('buyer')}</p>
                 <p className="mt-1 text-sm font-medium text-foreground">{payload.buyer.name || t('notStated')}</p>
                 <p className="text-xs text-muted-foreground">{t('taxCode', { code: payload.buyer.taxCode ?? t('noTaxCode') })}</p>
+                {/* The customer on the customers screen (#670), found by its tax code, else its name. */}
+                {sale && partySearch(payload.buyer) && (
+                  <Link to="/o/$slug/customers" params={{ slug }} search={{ q: partySearch(payload.buyer) }} className="mt-1 inline-block text-xs text-link hover:underline">
+                    {t('viewCustomer')}
+                  </Link>
+                )}
               </div>
               <div className="grid grid-cols-3 gap-2 sm:col-span-2">
                 <div>

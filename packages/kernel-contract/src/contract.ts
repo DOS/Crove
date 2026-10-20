@@ -67,6 +67,9 @@ import {
   zOrgExport,
   zOrgSummary,
   zParty,
+  zCustomerCursor,
+  zCustomerPage,
+  zPartyUpdate,
   zProposalStatus,
   zPurchaseDocument,
   zRole,
@@ -477,6 +480,12 @@ export const contract = {
     setDefaultAccount: oc
       .input(z.object({ partyId: zId, accountCode: zAccountCode.nullable() }))
       .output(z.object({ partyId: zId, accountCode: zAccountCode.nullable() })),
+    // Every role (#670): the customers, by name, a page at a time (after: the last customer shown; more: others
+    // follow), each with its receivable on 131 and its last invoice date. q searches the name and the tax code.
+    customers: oc.input(z.object({ q: z.string().max(100).optional(), after: zCustomerCursor.optional() })).output(zCustomerPage),
+    // Owners and admins (R1, #670): corrects a customer's or vendor's name, tax code or contact email. A tax code must
+    // be valid and not another party's; posted entries keep pointing at the same party.
+    update: oc.input(zPartyUpdate).output(z.object({ partyId: zId, name: z.string(), taxCode: z.string().nullable(), email: z.string().nullable() })),
   },
   documents: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zPurchaseDocument)),

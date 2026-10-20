@@ -82,8 +82,9 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await nav.getByRole('link', { name: 'Nhà cung cấp' }).click();
     const vendor = page.getByRole('row').filter({ hasText: SELLER });
     await expect(vendor).toHaveCount(1);
-    // The last cell is the vendor's default account (#319): for an owner, a picker on the account approving set.
-    await expect(vendor.getByRole('cell')).toHaveText([SELLER, SELLER_TAX_CODE, /Hà Nội/, '1', /6422 · Chi phí quản lý doanh nghiệp/]);
+    // The vendor's default account (#319): for an owner, a picker on the account approving set; then the owner's Edit
+    // button for its name, tax code and email (#670).
+    await expect(vendor.getByRole('cell')).toHaveText([SELLER, SELLER_TAX_CODE, /Hà Nội/, '1', /6422 · Chi phí quản lý doanh nghiệp/, 'Sửa']);
     await expect(vendor.getByRole('combobox', { name: `Tài khoản mặc định của ${SELLER}` })).toHaveValue('6422');
 
     await nav.getByRole('link', { name: 'Chứng từ', exact: true }).click();

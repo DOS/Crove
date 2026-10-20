@@ -126,6 +126,8 @@ export const KERNEL_ERROR_CODES = [
   'PARENT_TAGGED',
   'PARENT_NOT_DEEPEST',
   'PARTY_NOT_FOUND',
+  // Customers and vendors corrected by hand (#670).
+  'TAX_CODE_TAKEN',
   // Cash and bank vouchers (#327), and bank vouchers made from a statement line (#326).
   'VOUCHER_INVALID',
   'BANK_LINE_NOT_FOUND',

@@ -3,6 +3,7 @@
 // lock (#329) sits above the reports. The financial statements tab (issue #154) shows the DRAFT B01-DNN and B02-DNN
 // of the same period, with a workbook of its own.
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { Link, useParams } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Alert } from '@crove/ui/components/alert';
@@ -15,6 +16,7 @@ import { PeriodLockPanel } from '../components/period-lock.tsx';
 import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc } from '../lib/api.ts';
+import { partySearch } from '../lib/parties.ts';
 import { balanceSide, defaultLedgerPeriod, ledgerPeriodKey, switchLedgerKind, type LedgerPeriodChoice, type LedgerPeriodKind } from '../lib/ledger.ts';
 import { yearOptions } from '../lib/vat.ts';
 
@@ -46,16 +48,28 @@ function Balance({ value }: { value: string }) {
   return <>{side === 'debit' ? t('balanceDebit', { amount: f.money(amount) }) : t('balanceCredit', { amount: f.money(amount) })}</>;
 }
 
-function PartyTable({ ledger, partyLabel }: { ledger: PartyLedger; partyLabel: string }) {
+// customers: each party's name opens it on the customers screen (#670).
+function PartyTable({ ledger, partyLabel, customers = false }: { ledger: PartyLedger; partyLabel: string; customers?: boolean }) {
   const t = useTranslations('ledger');
   const f = useFormat();
+  const { slug } = useParams({ strict: false }) as { slug: string };
   if (ledger.rows.length === 0) return <Empty title={t('partiesEmpty')} />;
   return (
     <DataTable numeric={[2, 3, 4, 5]} head={[t('columns.taxCode'), partyLabel, t('columns.opening'), t('columns.increase'), t('columns.decrease'), t('columns.closing')]}>
       {ledger.rows.map((row) => (
         <TableRow key={row.partyId ?? 'none'}>
           <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{row.partyTaxCode ?? ''}</TableCell>
-          <TableCell className="px-4 py-3 text-foreground">{row.partyId === null ? t('noParty') : (row.partyName ?? '')}</TableCell>
+          <TableCell className="px-4 py-3 text-foreground">
+            {row.partyId === null ? (
+              t('noParty')
+            ) : customers ? (
+              <Link to="/o/$slug/customers" params={{ slug }} search={{ q: partySearch({ taxCode: row.partyTaxCode, name: row.partyName }) }} className="text-link hover:underline">
+                {row.partyName ?? ''}
+              </Link>
+            ) : (
+              (row.partyName ?? '')
+            )}
+          </TableCell>
           <TableCell className={NUM}>{f.money(row.opening)}</TableCell>
           <TableCell className={NUM}>{f.money(row.increase)}</TableCell>
           <TableCell className={NUM}>{f.money(row.decrease)}</TableCell>
@@ -433,7 +447,7 @@ export function LedgerPage() {
               <div className="space-y-8">
                 <section>
                   <h2 className="mb-2 text-base font-semibold text-foreground">{t('receivablesTitle')}</h2>
-                  <PartyTable ledger={data.receivables} partyLabel={t('columns.customer')} />
+                  <PartyTable ledger={data.receivables} partyLabel={t('columns.customer')} customers />
                 </section>
                 <section>
                   <h2 className="mb-2 text-base font-semibold text-foreground">{t('payablesTitle')}</h2>
