@@ -41,6 +41,8 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.post_comment',
+  'crove_social.snippet',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -471,6 +473,18 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     },
   },
   'crove_social.post': { make: (o) => ({ row: socialPostRow(o) }) },
+  // An internal comment on a post (#582), by a member, never published.
+  'crove_social.post_comment': {
+    make: (o) => {
+      const post = socialPostRow(o);
+      return {
+        setup: [{ table: 'crove_social.post', values: post }],
+        row: { org_id: o.id, post_id: post.id, author_user_id: o.owner, body: 'RLS matrix comment' },
+      };
+    },
+  },
+  // A saved snippet of text (#584): hashtags, a signature or a whole post to start from.
+  'crove_social.snippet': { make: (o) => ({ row: { org_id: o.id, name: `rls-${tag()}`, body: '#rls', created_by: o.owner } }) },
   // Append-only review decisions: tenant roles may only read and insert.
   'crove_social.post_approval': {
     make: (o) => {
