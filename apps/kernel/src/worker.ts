@@ -11,7 +11,7 @@ import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, PUBLISH_STALE_SECONDS, runCommentJob, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
+import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, runCommentJob, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
@@ -33,6 +33,8 @@ const AGENT_PROPOSAL_COMMANDS: Readonly<Record<string, string>> = {
   'kernel.agent.proposal_approved': 'kernel.agent.proposal.approve',
 };
 const AGENT_RETRY_LIMIT = 3;
+const SOCIAL_NOTIFY_RETRY_LIMIT = 3;
+const NOTIFYING: ReadonlySet<string> = new Set(NOTIFYING_EVENTS);
 // Every 10 minutes the worker wakes agents whose wake-up is still pending and that can run now
 // (crove_kernel.agent_wakeups_due): a run refused earlier by the daily cap, a kill switch or a budget that has since
 // lifted, or blocked by a run left live by a crashed worker. Agents still capped, switched off, out of budget or of a
@@ -414,6 +416,15 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     });
   }
 
+  // In-app notifications (#637): the command reads the event from the outbox and writes one row per person; the job
+  // carries only its id.
+  if (social) {
+    await boss.work<AgentDispatchJob>(QUEUES.socialNotify, { batchSize: 1 }, async ([job]) => {
+      if (!job) return;
+      await deps.runtime.execute('social.notification.dispatch', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.notify' }, orgId: job.data.orgId });
+    });
+  }
+
   // Agent proposals and approvals: the worker acts on what an agent recorded, after checking it again.
   await boss.work<AgentDispatchJob & { type: string }>(QUEUES.agentProposal, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
@@ -580,6 +591,14 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   singletonKey: `${row.org_id}:${previewId}`,
                   retryLimit: LINK_PREVIEW_RETRY_LIMIT,
                   retryDelay: 10,
+                  retryBackoff: true,
+                });
+              }
+              if (social && NOTIFYING.has(row.type)) {
+                return boss.send(QUEUES.socialNotify, { orgId: row.org_id, eventId: row.event_id } satisfies AgentDispatchJob, {
+                  singletonKey: `${row.org_id}:${row.event_id}`,
+                  retryLimit: SOCIAL_NOTIFY_RETRY_LIMIT,
+                  retryDelay: 20,
                   retryBackoff: true,
                 });
               }

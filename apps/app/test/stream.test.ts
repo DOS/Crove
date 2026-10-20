@@ -48,6 +48,7 @@ function seeded() {
     socialPost: orpc.social.posts.get.queryKey({ input: { postId: SOCIAL } }),
     socialOther: orpc.social.posts.get.queryKey({ input: { postId: '0190a000-0000-7000-8000-0000000000c2' } }),
     socialQueue: orpc.social.queues.get.queryKey({ input: { connectionId: '0190a000-0000-7000-8000-0000000000c3' } }),
+    socialNotifications: orpc.social.notifications.list.queryKey({ input: {} }),
   };
   // Partial records: invalidateHint reads only the ids, so the seeds skip the rest of each response's shape.
   const seed = (key: QueryKey, data: unknown) => qc.setQueryData(key, data);
@@ -93,6 +94,12 @@ describe('invalidateHint', () => {
     const { qc, stale } = seeded();
     await invalidateHint(qc, { type: 'social_post', id: SOCIAL });
     expect(stale()).toEqual(['socialList', 'socialPost', 'socialQueue']);
+  });
+
+  it('social_notification: only the notification list (#637)', async () => {
+    const { qc, stale } = seeded();
+    await invalidateHint(qc, { type: 'social_notification', id: SOCIAL });
+    expect(stale()).toEqual(['socialNotifications']);
   });
 
   it('never touches unrelated queries', async () => {

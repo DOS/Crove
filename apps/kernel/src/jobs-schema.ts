@@ -29,6 +29,8 @@ export const QUEUES = {
   mailEvent: 'kernel-mail-event',
   // Created by the Social link preview migration (20261021150000).
   socialLinkPreview: 'social-link-preview',
+  // Created by the Social notifications migration (20261021140000).
+  socialNotify: 'social-notify',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
