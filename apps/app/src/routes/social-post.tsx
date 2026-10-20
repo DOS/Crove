@@ -14,7 +14,8 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
 import type { Issue } from '@crove/mod-social/contract';
-import { MediaField, MediaPreview, type MediaItem } from '../components/social-media.tsx';
+import { MediaField, type MediaItem } from '../components/social-media.tsx';
+import { PlatformPreview } from '../components/social-preview.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -155,36 +156,6 @@ function Counter({ provider, body, linkUrl, mediaCount }: { provider: string; bo
   return <span className={cn('font-mono text-xs tabular-nums', over ? 'text-destructive' : used > max * 0.9 ? 'text-warning' : 'text-subtle-foreground')}>{used}/{max}</span>;
 }
 
-// How the post reads on the channel: name, text, title and link, without the platform's chrome.
-function Preview({ channel, provider, content }: { channel: string; provider: string; content: { body: string; title: string; linkUrl: string; media: readonly MediaItem[] } }) {
-  const t = useTranslations('social');
-  let host = '';
-  try {
-    host = content.linkUrl ? new URL(content.linkUrl).host : '';
-  } catch {
-    host = '';
-  }
-  return (
-    <div className="rounded-xl border bg-background p-3">
-      <div className="flex items-center gap-2">
-        <span className="flex size-8 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-link">{channel.slice(0, 1).toUpperCase()}</span>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-foreground">{channel}</p>
-          <p className="text-xs text-subtle-foreground">{providerName(provider)}</p>
-        </div>
-      </div>
-      {hasTitle(provider) && content.title && <p className="mt-3 text-sm font-semibold text-foreground">{content.title}</p>}
-      <p className="mt-2 text-sm [overflow-wrap:anywhere] whitespace-pre-wrap text-foreground">{content.body || <span className="text-subtle-foreground">{t('emptyText')}</span>}</p>
-      <MediaPreview media={content.media} />
-      {host && (
-        <div className="mt-3 rounded-lg border bg-muted px-3 py-2 text-xs text-muted-foreground">
-          <span className="font-mono">{host}</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
 const REWRITES = ['shorten', 'formal', 'casual', 'translate_en', 'translate_vi'] as const;
 
 // An AI rewrite of a text (#583): a proposal shown next to the text, which the member takes or leaves. Taking it marks
@@ -309,7 +280,7 @@ function ChannelEditor({
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
       <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
-      <Preview channel={channel} provider={provider} content={content} />
+      <PlatformPreview channel={channel} provider={provider} content={content} />
       {footer}
     </Card>
   );
