@@ -581,6 +581,22 @@ export function countLinks(text: string): number {
 export const MASTODON_VISIBILITY = ['public', 'unlisted'] as const;
 export const CONTENT_WARNING_MAX = 500;
 
+// Instagram people (#796): up to 3 collaborators (`settings.collaborators`, on feed posts and Reels; each must accept
+// the invitation in Instagram) and up to 20 people tagged on the first image (`settings.userTags`, image posts only).
+// Usernames as Instagram writes them, without the @. The adapter reads the same shapes.
+export const IG_COLLABORATORS_MAX = 3;
+export const IG_USER_TAGS_MAX = 20;
+export const IG_USERNAME = /^[a-z0-9._]{1,30}$/;
+
+// The usernames in settings[key]: null when there are none, 'invalid' when the value is not a list of usernames.
+export function instagramPeopleOf(settings: Readonly<Record<string, unknown>> | undefined, key: 'collaborators' | 'userTags'): string[] | 'invalid' | null {
+  const value = settings?.[key];
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value) || value.length > 50 || !value.every((v) => typeof v === 'string' && IG_USERNAME.test(v))) return 'invalid';
+  const names = [...new Set(value as string[])];
+  return names.length > 0 ? names : null;
+}
+
 // Publishing limits Crove counts itself (#775, plan §3.6: "Rate limits and quotas tracked per app and per account"),
 // for the channels whose API has no quota endpoint: how many posts one account may make in a window. Instagram and
 // Threads read their own quota from the platform (#743). The numbers are the platforms' documented per-account limits,

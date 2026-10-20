@@ -7,7 +7,7 @@
 // Publish: images are uploaded first (initializeUpload, then a PUT of the bytes; nothing is visible until the post
 // names them), then one POST /rest/posts. A member app cannot list the member's posts, so an unclear answer cannot be
 // checked: publishSafety 'never', and such a post waits for a person.
-import type { CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
+import type { MetricName, MetricsInput, MetricsResult, CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
@@ -15,6 +15,17 @@ import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInp
 // Upload URLs LinkedIn hands out are on www.linkedin.com (dms-uploads) or api.linkedin.com (mediaUpload).
 export const LINKEDIN_HOSTS = ['www.linkedin.com', 'api.linkedin.com'] as const;
 export const LINKEDIN_SCOPES = ['openid', 'profile', 'w_member_social'] as const;
+// Asked for too when the deployment's app has LinkedIn's member post analytics (#797, CHANNEL_LINKEDIN_ANALYTICS);
+// never required, so a member who declines still connects.
+export const LINKEDIN_ANALYTICS_SCOPE = 'r_member_postAnalytics';
+// What memberCreatorPostAnalytics counts, one call each, and the name Crove keeps it under.
+const LINKEDIN_METRICS = [
+  ['IMPRESSION', 'impressions'],
+  ['MEMBERS_REACHED', 'reach'],
+  ['REACTION', 'reactions'],
+  ['COMMENT', 'comments'],
+  ['RESHARE', 'shares'],
+] as const;
 const API = 'https://api.linkedin.com';
 // The Posts and Images APIs are versioned by month (Linkedin-Version: YYYYMM); each version is served for a year.
 export const LINKEDIN_VERSION = '202604';
@@ -27,6 +38,8 @@ export interface LinkedInAppConfig {
   clientId: string;
   clientSecret: string;
   version?: string;
+  // The app has the member post analytics product: connect asks for its scope, the publisher reads post counts.
+  analytics?: boolean;
 }
 
 export class LinkedInError extends Error {
@@ -121,7 +134,7 @@ export class LinkedInConnector implements OAuthConnector {
     url.searchParams.set('client_id', this.app.clientId);
     url.searchParams.set('redirect_uri', input.redirectUri);
     url.searchParams.set('state', input.state);
-    url.searchParams.set('scope', LINKEDIN_SCOPES.join(' '));
+    url.searchParams.set('scope', [...LINKEDIN_SCOPES, ...(this.app.analytics ? [LINKEDIN_ANALYTICS_SCOPE] : [])].join(' '));
     return url.toString();
   }
 
@@ -190,12 +203,41 @@ export class LinkedInPublisher implements Publisher {
   private readonly pollMs: number;
   private readonly budgetMs: number;
 
-  constructor(app: Pick<LinkedInAppConfig, 'version'> = {}, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMs?: number; budgetMs?: number } = {}) {
+  // Post counts (#797), when the app has member post analytics (CHANNEL_LINKEDIN_ANALYTICS).
+  readonly metrics?: (input: MetricsInput) => Promise<MetricsResult>;
+
+  constructor(app: Pick<LinkedInAppConfig, 'version' | 'analytics'> = {}, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMs?: number; budgetMs?: number } = {}) {
     this.client = new LinkedInClient(app.version ?? LINKEDIN_VERSION, fetchImpl);
+    if (app.analytics) this.metrics = (input) => this.readMetrics(input);
     this.processingWaitMs = timing.processingWaitMs ?? PROCESSING_WAIT_MS;
     this.pollMs = timing.pollMs ?? 5000;
     // The last status check and the post (30 s each at most) plus slack fit between the budget and callTimeoutMs.
     this.budgetMs = timing.budgetMs ?? this.callTimeoutMs - VIDEO_CALL_MARGIN_MS;
+  }
+
+  // Impressions, members reached, reactions, comments and reshares of the member's own post, from
+  // memberCreatorPostAnalytics (one call per count). A grant without the analytics scope answers nothing to keep; a
+  // post LinkedIn no longer has is gone.
+  private async readMetrics(input: MetricsInput): Promise<MetricsResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { refused: 'token_expired' };
+    const urn = /^urn:li:(share|ugcPost):\d{1,32}$/.exec(input.externalId);
+    if (!urn) return { refused: 'gone' };
+    const entity = `(${urn[1] === 'share' ? 'share' : 'ugc'}:${encodeURIComponent(input.externalId)})`;
+    const metrics: Partial<Record<MetricName, number>> = {};
+    for (const [queryType, name] of LINKEDIN_METRICS) {
+      try {
+        const answer = await this.client.call<{ elements?: { count?: unknown }[] }>('GET', `/rest/memberCreatorPostAnalytics?q=entity&entity=${entity}&queryType=${queryType}&aggregation=TOTAL`, token);
+        const count = answer.body?.elements?.[0]?.count;
+        if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0) metrics[name] = count;
+      } catch (error) {
+        if (error instanceof LinkedInError && error.status === 401) return { refused: 'token_expired' };
+        if (error instanceof LinkedInError && error.status === 404) return { refused: 'gone' };
+        // No analytics permission, or LinkedIn is down: nothing to keep this time.
+        return null;
+      }
+    }
+    return { metrics };
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {

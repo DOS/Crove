@@ -589,7 +589,7 @@ export function SocialPage() {
         <TabsContent value="calendar">
           {tab === 'calendar' && (
             <div className="space-y-4">
-              <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} labelId={search.label} />
+              <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} canWrite={canWrite} labelId={search.label} />
               <InstagramGrid slug={slug} channels={(channels.data ?? []).filter((c) => c.provider === 'instagram' && c.status !== 'revoked')} canDecide={role === 'owner' || role === 'admin'} />
             </div>
           )}

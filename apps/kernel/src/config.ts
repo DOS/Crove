@@ -211,6 +211,8 @@ const schema = z.object({
   // PUBLIC_URL/channels/oauth/linkedin/callback.
   CHANNEL_LINKEDIN_CLIENT_ID: optional,
   CHANNEL_LINKEDIN_CLIENT_SECRET: optional,
+  // LinkedIn post counts (#797): true once the LinkedIn app has member post analytics (r_member_postAnalytics).
+  CHANNEL_LINKEDIN_ANALYTICS: z.enum(['true', 'false']).default('false'),
   // The deployment's Google Cloud project for YouTube uploads (YouTube Data API v3, an OAuth web client), S9. Callback
   // URL: PUBLIC_URL/channels/oauth/youtube/callback.
   CHANNEL_GOOGLE_CLIENT_ID: optional,
@@ -229,6 +231,8 @@ const schema = z.object({
   // Callback URL: PUBLIC_URL/channels/oauth/x/callback.
   CHANNEL_X_CLIENT_ID: optional,
   CHANNEL_X_CLIENT_SECRET: optional,
+  // X post counts (#797): every read is billed by X, so the metrics sweep reads X posts only when this is true.
+  CHANNEL_X_METRICS: z.enum(['true', 'false']).default('false'),
   // Pinterest (#798): the deployment's Pinterest app.
   CHANNEL_PINTEREST_APP_ID: optional,
   CHANNEL_PINTEREST_APP_SECRET: optional,

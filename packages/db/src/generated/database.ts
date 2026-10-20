@@ -64,6 +64,7 @@ export interface CroveSocialSchema {
   'crove_social.bio_click': SocialBioClickTable;
   'crove_social.bio_page': SocialBioPageTable;
   'crove_social.brand_voice': SocialBrandVoiceTable;
+  'crove_social.calendar_note': SocialCalendarNoteTable;
   'crove_social.channel_policy': SocialChannelPolicyTable;
   'crove_social.channel_set': SocialChannelSetTable;
   'crove_social.feed': SocialFeedTable;
@@ -783,6 +784,20 @@ export interface SocialBrandVoiceTable {
   emoji: Generated<boolean>;
   updated_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.calendar_note */
+export interface SocialCalendarNoteTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  starts_on: string;
+  ends_on: string;
+  title: string;
+  color: Generated<string>;
+  created_by: ColumnType<string, string, NotGranted>;
+  updated_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 

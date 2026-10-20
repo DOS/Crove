@@ -161,7 +161,8 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
 
 // OAuth connectors of the providers this deployment has app credentials for (Social plan S6); a provider without
 // them is not offered.
-type ChannelConfig = Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_BLUESKY' | 'CHANNEL_TELEGRAM' | 'CHANNEL_MASTODON' | 'CHANNEL_THREADS_APP_ID' | 'CHANNEL_THREADS_APP_SECRET' | 'CHANNEL_LINKEDIN_CLIENT_ID' | 'CHANNEL_LINKEDIN_CLIENT_SECRET' | 'CHANNEL_GOOGLE_CLIENT_ID' | 'CHANNEL_GOOGLE_CLIENT_SECRET' | 'CHANNEL_GOOGLE_BUSINESS' | 'CHANNEL_TIKTOK_CLIENT_KEY' | 'CHANNEL_TIKTOK_CLIENT_SECRET' | 'CHANNEL_TIKTOK_VIDEO_LIST' | 'CHANNEL_X_CLIENT_ID' | 'CHANNEL_X_CLIENT_SECRET' | 'CHANNEL_PINTEREST_APP_ID' | 'CHANNEL_PINTEREST_APP_SECRET' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION' | 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'>;
+type ChannelConfig = Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_BLUESKY' | 'CHANNEL_TELEGRAM' | 'CHANNEL_MASTODON' | 'CHANNEL_THREADS_APP_ID' | 'CHANNEL_THREADS_APP_SECRET' | 'CHANNEL_LINKEDIN_CLIENT_ID' | 'CHANNEL_LINKEDIN_CLIENT_SECRET' | 'CHANNEL_GOOGLE_CLIENT_ID' | 'CHANNEL_GOOGLE_CLIENT_SECRET' | 'CHANNEL_GOOGLE_BUSINESS' | 'CHANNEL_TIKTOK_CLIENT_KEY' | 'CHANNEL_TIKTOK_CLIENT_SECRET' | 'CHANNEL_TIKTOK_VIDEO_LIST' | 'CHANNEL_X_CLIENT_ID' | 'CHANNEL_X_CLIENT_SECRET' | 'CHANNEL_PINTEREST_APP_ID' | 'CHANNEL_PINTEREST_APP_SECRET' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION' | 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'> &
+  Partial<Pick<Config, 'CHANNEL_X_METRICS' | 'CHANNEL_LINKEDIN_ANALYTICS'>>;
 const xApp = (config: Pick<Config, 'CHANNEL_X_CLIENT_ID' | 'CHANNEL_X_CLIENT_SECRET'>) => (config.CHANNEL_X_CLIENT_ID && config.CHANNEL_X_CLIENT_SECRET ? { clientId: config.CHANNEL_X_CLIENT_ID, clientSecret: config.CHANNEL_X_CLIENT_SECRET } : null);
 const pinterestApp = (config: Pick<Config, 'CHANNEL_PINTEREST_APP_ID' | 'CHANNEL_PINTEREST_APP_SECRET'>) =>
   config.CHANNEL_PINTEREST_APP_ID && config.CHANNEL_PINTEREST_APP_SECRET ? { appId: config.CHANNEL_PINTEREST_APP_ID, appSecret: config.CHANNEL_PINTEREST_APP_SECRET } : null;
@@ -178,7 +179,7 @@ export function channelConnectors(config: Omit<ChannelConfig, 'CHANNEL_SANDBOX'>
   const zalo = zaloApp(config);
   if (zalo) connectors.zalo_oa = new ZaloOaConnector(zalo);
   if (config.CHANNEL_THREADS_APP_ID && config.CHANNEL_THREADS_APP_SECRET) connectors.threads = new ThreadsConnector({ appId: config.CHANNEL_THREADS_APP_ID, appSecret: config.CHANNEL_THREADS_APP_SECRET });
-  if (config.CHANNEL_LINKEDIN_CLIENT_ID && config.CHANNEL_LINKEDIN_CLIENT_SECRET) connectors.linkedin = new LinkedInConnector({ clientId: config.CHANNEL_LINKEDIN_CLIENT_ID, clientSecret: config.CHANNEL_LINKEDIN_CLIENT_SECRET });
+  if (config.CHANNEL_LINKEDIN_CLIENT_ID && config.CHANNEL_LINKEDIN_CLIENT_SECRET) connectors.linkedin = new LinkedInConnector({ clientId: config.CHANNEL_LINKEDIN_CLIENT_ID, clientSecret: config.CHANNEL_LINKEDIN_CLIENT_SECRET, analytics: config.CHANNEL_LINKEDIN_ANALYTICS === 'true' });
   if (config.CHANNEL_TIKTOK_CLIENT_KEY && config.CHANNEL_TIKTOK_CLIENT_SECRET) connectors.tiktok = new TikTokConnector({ clientKey: config.CHANNEL_TIKTOK_CLIENT_KEY, clientSecret: config.CHANNEL_TIKTOK_CLIENT_SECRET, videoList: config.CHANNEL_TIKTOK_VIDEO_LIST === 'true' });
   if (config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) connectors.youtube = new YouTubeConnector({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
   if (config.CHANNEL_GOOGLE_BUSINESS === 'true' && config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) connectors.google_business = new GoogleBusinessConnector({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
@@ -205,12 +206,12 @@ export function channelPublishers(config: ChannelConfig): Record<string, Publish
   const zalo = zaloApp(config);
   if (zalo) publishers.zalo_oa = new ZaloOaPublisher(zalo);
   if (config.CHANNEL_THREADS_APP_ID && config.CHANNEL_THREADS_APP_SECRET) publishers.threads = new ThreadsPublisher();
-  if (config.CHANNEL_LINKEDIN_CLIENT_ID && config.CHANNEL_LINKEDIN_CLIENT_SECRET) publishers.linkedin = new LinkedInPublisher();
+  if (config.CHANNEL_LINKEDIN_CLIENT_ID && config.CHANNEL_LINKEDIN_CLIENT_SECRET) publishers.linkedin = new LinkedInPublisher({ analytics: config.CHANNEL_LINKEDIN_ANALYTICS === 'true' });
   if (config.CHANNEL_TIKTOK_CLIENT_KEY && config.CHANNEL_TIKTOK_CLIENT_SECRET) publishers.tiktok = new TikTokPublisher({ clientKey: config.CHANNEL_TIKTOK_CLIENT_KEY, clientSecret: config.CHANNEL_TIKTOK_CLIENT_SECRET, videoList: config.CHANNEL_TIKTOK_VIDEO_LIST === 'true' });
   if (config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) publishers.youtube = new YouTubePublisher({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
   if (config.CHANNEL_GOOGLE_BUSINESS === 'true' && config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) publishers.google_business = new GoogleBusinessPublisher({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
   const x = xApp(config);
-  if (x) publishers.x = new XPublisher(x);
+  if (x) publishers.x = new XPublisher(x, undefined, {}, { metrics: config.CHANNEL_X_METRICS === 'true' });
   const pinterest = pinterestApp(config);
   if (pinterest) publishers.pinterest = new PinterestPublisher(pinterest);
   return publishers;

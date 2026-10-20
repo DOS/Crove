@@ -14,7 +14,8 @@ import { ErrorText, Spinner } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { providerName, VARIANT_TONE } from '../lib/social.ts';
-import { addDays, calendarItems, DAY_MS, dayId, onDay, startOfDay, viewDays, type CalendarItem, type View } from '../lib/social-calendar.ts';
+import { addDays, calendarItems, DAY_MS, dayId, notesByDay, onDay, startOfDay, viewDays, type CalendarItem, type View } from '../lib/social-calendar.ts';
+import { NoteChip, NoteEditor, type NoteDraft } from './social-calendar-notes.tsx';
 import { occasionStart, occasionsShown, setOccasionsShown } from '../lib/social-occasions.ts';
 
 const excerpt = (text: string) => text.replace(/\s+/g, ' ').trim();
@@ -67,8 +68,8 @@ function OccasionChip({ occasion, onStart }: { occasion: Occasion; onStart: (o: 
   );
 }
 
-// labelId: only posts with that label (#639).
-export function SocialCalendar({ slug, names, canDecide, labelId }: { slug: string; names: Map<string, string>; canDecide: boolean; labelId?: string | undefined }) {
+// labelId: only posts with that label (#639). canWrite: may add and change notes on dates (#794).
+export function SocialCalendar({ slug, names, canDecide, canWrite, labelId }: { slug: string; names: Map<string, string>; canDecide: boolean; canWrite: boolean; labelId?: string | undefined }) {
   const t = useTranslations('social');
   const f = useFormat();
   const navigate = useNavigate();
@@ -78,6 +79,9 @@ export function SocialCalendar({ slug, names, canDecide, labelId }: { slug: stri
   const range = useMemo(() => ({ from: (days[0] as Date).toISOString(), to: addDays(days.at(-1) as Date, 1).toISOString() }), [days]);
   const posts = useQuery(orpc.social.posts.list.queryOptions({ input: { ...range, ...(labelId ? { labelId } : {}), limit: 200 } }));
   const items = useMemo(() => calendarItems(posts.data ?? []), [posts.data]);
+  const notes = useQuery(orpc.social.calendarNotes.list.queryOptions({ input: { from: dayId(days[0] as Date), to: dayId(days.at(-1) as Date) } }));
+  const notesOn = useMemo(() => notesByDay(notes.data ?? [], days), [notes.data, days]);
+  const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null);
   const byDay = useMemo(() => {
     const map = new Map<string, CalendarItem[]>();
     for (const item of items) map.set(dayId(item.at), [...(map.get(dayId(item.at)) ?? []), item]);
@@ -158,6 +162,11 @@ export function SocialCalendar({ slug, names, canDecide, labelId }: { slug: stri
         >
           {t(showOccasions ? 'occasions.hide' : 'occasions.show')}
         </Button>
+        {canWrite && (
+          <Button variant="ghost" size="sm" onClick={() => setNoteDraft({ day: dayId(new Date()) })}>
+            {t('calendarNotes.add')}
+          </Button>
+        )}
         <div className="flex gap-1" role="group" aria-label={t('calendar.view')}>
           {(['month', 'week'] as const).map((v) => (
             <Button key={v} variant={view === v ? 'secondary' : 'ghost'} size="sm" aria-pressed={view === v} onClick={() => setView(v)}>
@@ -167,6 +176,8 @@ export function SocialCalendar({ slug, names, canDecide, labelId }: { slug: stri
         </div>
       </div>
       {canDecide && <p className="text-xs text-subtle-foreground">{t('calendar.dragHint')}</p>}
+      {noteDraft && <NoteEditor key={'note' in noteDraft ? noteDraft.note.id : noteDraft.day} draft={noteDraft} onClose={() => setNoteDraft(null)} />}
+      {notes.error && <ErrorText>{errorMessage(notes.error)}</ErrorText>}
       {move.error && <ErrorText>{errorMessage(move.error)}</ErrorText>}
       {dropError && <ErrorText>{t('calendar.dropPast')}</ErrorText>}
       {posts.isLoading ? (
@@ -211,6 +222,9 @@ export function SocialCalendar({ slug, names, canDecide, labelId }: { slug: stri
                       </button>
                     )}
                   </div>
+                  {(notesOn.get(id) ?? []).map((n) => (
+                    <NoteChip key={n.id} note={n} onOpen={canWrite ? (note) => setNoteDraft({ note }) : null} />
+                  ))}
                   {(occasionsByDay.get(id) ?? []).map((o) => (
                     <OccasionChip key={o.id} occasion={o} onStart={startFor} />
                   ))}

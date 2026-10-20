@@ -15,6 +15,7 @@ const LEAD: Record<string, string> = {
   failed: 'Một bài đăng không thành công.',
   needs_attention: 'Một bài đăng cần bạn xử lý trước khi đăng tiếp.',
   channel_expired: 'Một kênh đã hết hạn kết nối; bài lên lịch trên kênh này sẽ chờ đến khi bạn kết nối lại.',
+  mention: 'Một thành viên đã nhắc đến bạn trong bình luận nội bộ của một bài.',
 };
 
 export async function renderNotificationMail(input: MailTemplateInput): Promise<{ subject: string; text: string; html: string } | null> {
