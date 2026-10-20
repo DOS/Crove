@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { COMMENT_RULES, COVER_RULES, POST_TYPE_RULES, coverKind, coverOf, isProvider, postTypeOf, sentLink, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { COMMENT_RULES, COVER_RULES, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
@@ -236,6 +236,12 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TOO_MANY_LINKS', { limit, actual });
       case 'COMMENT_TOO_LONG':
         return t('COMMENT_TOO_LONG', { limit, actual });
+      case 'POLL_OPTIONS':
+        return t('POLL_OPTIONS', { limit });
+      case 'POLL_OPTION_LENGTH':
+        return t('POLL_OPTION_LENGTH', { limit });
+      case 'TOPIC_TAG_INVALID':
+        return t('TOPIC_TAG_INVALID', { limit });
       // Which image: media.<index> on the issue, counted from 1 for the person.
       case 'IMAGE_RATIO_NOT_ALLOWED':
         return t('IMAGE_RATIO_NOT_ALLOWED', { n: Number(issue.field.split('.')[1] ?? 0) + 1 });
@@ -396,6 +402,80 @@ function PostTypeField({ provider, settings, onChange, disabled }: { provider: s
   );
 }
 
+// Threads polls and topic tags (#711): a poll of 2 to 4 short options on a post without media, and one topic tag. The
+// options are kept as typed; the server trims them.
+function PollAndTagField({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social.threadsExtras');
+  if (!isProvider(provider)) return null;
+  const pollRule = POLL_RULES[provider];
+  const tagRule = TOPIC_TAG_RULES[provider];
+  if (!pollRule && !tagRule) return null;
+  const rawOptions = (settings.poll as { options?: unknown } | undefined)?.options;
+  const options = Array.isArray(rawOptions) ? rawOptions.map((o) => (typeof o === 'string' ? o : '')) : null;
+  const without = (key: string) => {
+    const { [key]: _gone, ...rest } = settings;
+    return rest;
+  };
+  const setOptions = (next: string[] | null) => onChange(next ? { ...settings, poll: { options: next } } : without('poll'));
+  const tag = typeof settings.topicTag === 'string' ? settings.topicTag : '';
+  return (
+    <div className="space-y-2">
+      {pollRule && (
+        <div className="space-y-1.5">
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Checkbox checked={options !== null} disabled={disabled} onCheckedChange={(checked) => setOptions(checked === true ? ['', ''] : null)} />
+            {t('poll')}
+          </label>
+          {options && (
+            <div className="space-y-1.5 pl-6">
+              {options.map((option, i) => (
+                <div key={i} className="flex items-center gap-1.5">
+                  <Input
+                    value={option}
+                    disabled={disabled}
+                    maxLength={pollRule.maxChars + 10}
+                    aria-label={t('option', { n: String(i + 1) })}
+                    placeholder={t('option', { n: String(i + 1) })}
+                    className="h-8 max-w-xs"
+                    onChange={(e) => setOptions(options.map((o, j) => (j === i ? e.target.value : o)))}
+                  />
+                  {options.length > pollRule.minOptions && (
+                    <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={() => setOptions(options.filter((_, j) => j !== i))}>
+                      {t('remove')}
+                    </Button>
+                  )}
+                </div>
+              ))}
+              {options.length < pollRule.maxOptions && (
+                <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => setOptions([...options, ''])}>
+                  {t('addOption')}
+                </Button>
+              )}
+              <p className="text-xs text-subtle-foreground">{t('pollHint', { max: String(pollRule.maxChars) })}</p>
+            </div>
+          )}
+        </div>
+      )}
+      {tagRule && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Label htmlFor={`topic-tag-${provider}`} className="text-xs">
+            {t('topicTag')}
+          </Label>
+          <Input
+            id={`topic-tag-${provider}`}
+            value={tag}
+            disabled={disabled}
+            maxLength={tagRule.maxChars + 1}
+            placeholder={t('topicTagPlaceholder')}
+            className="h-8 max-w-56"
+            onChange={(e) => onChange(e.target.value ? { ...settings, topicTag: e.target.value } : without('topicTag'))}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChannelEditor({
   provider,
   channel,
@@ -425,7 +505,18 @@ function ChannelEditor({
   // The link as the channel sends it, with its UTM tags (#585).
   const linkUrl = (isProvider(provider) ? sentLink(provider, base.linkUrl || null, own.settings, own.custom ? own.body : base.body) : base.linkUrl) ?? '';
   const postType = postTypeOf(own.settings) ?? 'feed';
-  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl, media: mediaOfOwn(own, base), cover: coverOf(own.settings), postType };
+  const poll = pollOptionsOf(own.settings);
+  const tag = topicTagOf(own.settings);
+  const content = {
+    body: own.custom ? own.body : base.body,
+    title: own.custom ? own.title : base.title,
+    linkUrl,
+    media: mediaOfOwn(own, base),
+    cover: coverOf(own.settings),
+    postType,
+    ...(Array.isArray(poll) ? { poll } : {}),
+    ...(typeof tag === 'string' && tag ? { topicTag: tag } : {}),
+  };
   const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   return (
     <Card className="block space-y-3 p-4">
@@ -438,6 +529,7 @@ function ChannelEditor({
         <Counter provider={provider} body={content.body} linkUrl={content.linkUrl} mediaCount={content.media.length} />
       </div>
       <PostTypeField provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
+      <PollAndTagField provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <label className="flex items-center gap-2 text-sm text-muted-foreground">
         <Checkbox checked={own.custom} disabled={disabled} onCheckedChange={(checked) => onChange({ ...own, custom: checked === true, body: own.body || base.body })} />
         {t('ownText')}
