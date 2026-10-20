@@ -1465,6 +1465,8 @@ export const en = {
     draftFound: 'Unsaved changes from {when} are kept in this browser.',
     draftRestore: 'Restore them',
     draftDiscard: 'Discard',
+    publishNow: 'Approve and schedule',
+    publishNowHint: 'Saves the post, approves it as you and schedules it: at the planned time, or in the queue of each channel. A channel that needs another reviewer waits for them.',
     tabs: { upcoming: 'Schedule', calendar: 'Calendar', review: 'To review', attention: 'Needs attention', drafts: 'Drafts', done: 'Published', metrics: 'Metrics', library: 'Image library' },
     filters: {
       channel: 'Channel',

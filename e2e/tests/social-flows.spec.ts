@@ -346,3 +346,20 @@ test('keeps a post being written through a reload, and offers it back (#634)', a
   await page.goto(page.url().replace(/\/social\/[0-9a-f-]{36}$/, '/social/new'));
   await expect(page.getByRole('button', { name: 'Khôi phục' })).toHaveCount(0);
 });
+
+test('lets an owner approve and schedule their own post in one step (#638)', async ({ page }) => {
+  await signUp(page, newEmail('social-one-step'));
+  await createOrg(page, 'Công ty Một Bước');
+  await connectSandbox(page, 'Trang Một Bước');
+  // The channel's queue gives the post its slot.
+  await page.getByRole('textbox', { name: 'Giờ' }).fill('09:00');
+  await page.getByRole('button', { name: 'Thêm cho mọi ngày' }).click();
+  await page.getByRole('button', { name: 'Lưu hàng đợi' }).click();
+  await expect(page.getByText(/Khung giờ trống kế tiếp:/)).toBeVisible();
+  await compose(page, 'Khai trương chi nhánh mới');
+  await page.getByRole('button', { name: 'Duyệt và lên lịch' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  await expect(channelCard(page, 'Trang Một Bước').getByText('Đã lên lịch', { exact: true })).toBeVisible();
+  const decided = sql<{ n: number }>(`SELECT count(*)::int AS n FROM crove_social.post_approval WHERE post_id = :'post' AND decision = 'approved'`, { post: postIdOf(page) });
+  expect(decided).toEqual([{ n: 1 }]);
+});
