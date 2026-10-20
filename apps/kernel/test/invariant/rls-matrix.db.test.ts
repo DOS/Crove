@@ -41,6 +41,8 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.bio_click',
+  'crove_social.bio_page',
   'crove_social.feed',
   'crove_social.feed_item',
 ]);
@@ -125,6 +127,7 @@ const muteRows = new Map<string, number>();
 const socialPostRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), body: 'RLS matrix post' });
 const socialLabelRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), name: `rls-${tag()}`, color: 'blue', created_by: o.owner });
 const socialFeedRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), url: `https://rls-${tag()}.example/feed.xml`, created_by: o.owner });
+const socialBioPageRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), slug: `rls-${tag()}`, title: 'RLS matrix bio', created_by: o.owner });
 const socialIdeaRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), title: 'RLS matrix idea', stage: 'new', created_by: o.owner });
 const socialReviewLinkRow = (o: { id: string; owner: string }) => {
   const post = socialPostRow(o);
@@ -515,6 +518,15 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // An org's link-in-bio page (#707), and a day's clicks on one of its links; only the page's definer counts clicks.
+  'crove_social.bio_click': {
+    make: (o) => {
+      const page = socialBioPageRow(o);
+      return { setup: [{ table: 'crove_social.bio_page', values: page }], row: { org_id: o.id, page_id: page.id, target: 'button:0', day: '2026-10-20', clicks: 2 } };
+    },
+    noInsertControl: 'only the bio page definer counts clicks, for a visitor following a link; tenant roles may only read them',
+  },
+  'crove_social.bio_page': { make: (o) => ({ row: socialBioPageRow(o) }) },
   // The review policy of a channel (S9, issue #394): how many people approve a variant, and whether its reviewers
   // are reminded (#703), one row per connection.
   'crove_social.channel_policy': {
