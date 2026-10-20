@@ -180,7 +180,13 @@ export function whatWorks(samples: readonly InsightSample[], timeZone: string, o
     const all = median(posts.map((p) => p.engagement));
     const group = (keyOf: (p: (typeof posts)[number]) => readonly string[], min = 1): InsightGroup[] => {
       const groups = new Map<string, number[]>();
-      for (const p of posts) for (const key of keyOf(p)) groups.set(key, [...(groups.get(key) ?? []), p.engagement]);
+      for (const p of posts) {
+        for (const key of keyOf(p)) {
+          const list = groups.get(key);
+          if (list) list.push(p.engagement);
+          else groups.set(key, [p.engagement]);
+        }
+      }
       return [...groups.entries()]
         .filter(([, values]) => values.length >= min)
         .map(([key, values]) => {
