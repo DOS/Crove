@@ -186,7 +186,7 @@ export function SocialBioPage() {
               )}
             </div>
           )}
-          <Editor key={page.data?.updatedAt ?? 'new'} page={page.data ?? null} orgName={org?.name ?? ''} canManage={canManage} />
+          <Editor key={`${slug}-${page.data?.updatedAt ?? 'new'}`} page={page.data ?? null} orgName={org?.name ?? ''} canManage={canManage} />
           {page.data && <Clicks page={page.data} />}
         </>
       )}
