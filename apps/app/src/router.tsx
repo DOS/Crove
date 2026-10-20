@@ -28,6 +28,7 @@ import { SocialImportPage } from './routes/social-import.tsx';
 import { SocialSnippetsPage } from './routes/social-snippets.tsx';
 import { SocialNotificationsPage } from './routes/social-notifications.tsx';
 import { SocialLabelsPage } from './routes/social-labels.tsx';
+import { SocialIdeasPage } from './routes/social-ideas.tsx';
 import { SocialReviewPage } from './routes/social-review.tsx';
 import { SocialReportPage } from './routes/social-report.tsx';
 import { parseSocialSearch } from './lib/social.ts';
@@ -213,11 +214,15 @@ const requireSocial = ({ params }: { params: { slug: string } }) => {
 };
 const socialRoute = createRoute({ getParentRoute: () => orgRoute, path: 'social', beforeLoad: requireSocial, component: () => <Outlet /> });
 const socialIndexRoute = createRoute({ getParentRoute: () => socialRoute, path: '/', validateSearch: parseSocialSearch, component: SocialPage });
-// ?at=<ISO time>: the calendar starts a post planned for that time (#580).
+// ?at=<ISO time>: the calendar starts a post planned for that time (#580); ?idea=<id>: a draft made from an idea (#701).
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const socialNewRoute = createRoute({
   getParentRoute: () => socialRoute,
   path: 'new',
-  validateSearch: (search: Record<string, unknown>): { at?: string } => (typeof search.at === 'string' && !Number.isNaN(Date.parse(search.at)) ? { at: new Date(search.at).toISOString() } : {}),
+  validateSearch: (search: Record<string, unknown>): { at?: string; idea?: string } => ({
+    ...(typeof search.at === 'string' && !Number.isNaN(Date.parse(search.at)) ? { at: new Date(search.at).toISOString() } : {}),
+    ...(typeof search.idea === 'string' && UUID.test(search.idea) ? { idea: search.idea.toLowerCase() } : {}),
+  }),
   component: SocialComposePage,
 });
 const socialChannelsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'channels', component: SocialChannelsPage });
@@ -225,6 +230,7 @@ const socialImportRoute = createRoute({ getParentRoute: () => socialRoute, path:
 const socialSnippetsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'snippets', component: SocialSnippetsPage });
 const socialNotificationsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'notifications', component: SocialNotificationsPage });
 const socialLabelsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'labels', component: SocialLabelsPage });
+const socialIdeasRoute = createRoute({ getParentRoute: () => socialRoute, path: 'ideas', component: SocialIdeasPage });
 const socialPostRoute = createRoute({ getParentRoute: () => socialRoute, path: '$id', component: SocialPostPage });
 // ?invite=<email> fills the invite form: onboarding sends a firm here to invite the new client's contact (issue #324).
 const settingsRoute = createRoute({
@@ -249,7 +255,7 @@ const routeTree = rootRoute.addChildren([
   onboardingRoute,
   clientsRoute,
   oauthCallbackRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vouchersRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialNotificationsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vouchersRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialNotificationsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

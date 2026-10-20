@@ -62,6 +62,8 @@ export interface CroveKernelSchema {
 export interface CroveSocialSchema {
   'crove_social.account_snapshot': SocialAccountSnapshotTable;
   'crove_social.channel_policy': SocialChannelPolicyTable;
+  'crove_social.idea': SocialIdeaTable;
+  'crove_social.idea_label': SocialIdeaLabelTable;
   'crove_social.label': SocialLabelTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
   'crove_social.metric_snapshot': SocialMetricSnapshotTable;
@@ -740,6 +742,30 @@ export interface SocialChannelPolicyTable {
   channel_connection_id: string;
   approvals_required: Generated<number>;
   updated_by: string;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.idea_label */
+export interface SocialIdeaLabelTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  idea_id: ColumnType<string, string, NotGranted>;
+  label_id: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.idea */
+export interface SocialIdeaTable {
+  org_id: string;
+  id: Generated<string>;
+  title: string;
+  note: string | null;
+  link_url: string | null;
+  file_ids: Generated<string[]>;
+  stage: Generated<string>;
+  post_id: string | null;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
