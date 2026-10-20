@@ -54,9 +54,15 @@ interface Own {
   title: string;
   // The channel's provider settings (TikTok privacy and interactions, YouTube visibility).
   settings: Record<string, unknown>;
+  // The channel's own images or video instead of the post's (#581).
+  customMedia: boolean;
+  media: MediaItem[];
 }
 
-const EMPTY_OWN: Own = { custom: false, body: '', title: '', settings: {} };
+const EMPTY_OWN: Own = { custom: false, body: '', title: '', settings: {}, customMedia: false, media: [] };
+const sameMediaList = (a: readonly MediaItem[], b: readonly MediaItem[]) => JSON.stringify(mediaInput(a)) === JSON.stringify(mediaInput(b));
+// The images a channel shows: its own when it has them, else the post's.
+const mediaOfOwn = (own: Own, base: Base) => (own.customMedia ? own.media : base.media);
 const sameSettings = (a: Record<string, unknown> | null | undefined, b: Record<string, unknown> | null | undefined) =>
   JSON.stringify(Object.entries(a ?? {}).sort()) === JSON.stringify(Object.entries(b ?? {}).sort());
 
@@ -170,7 +176,7 @@ function ChannelEditor({
   footer?: ReactNode;
 }) {
   const t = useTranslations('social');
-  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl: base.linkUrl, media: base.media };
+  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl: base.linkUrl, media: mediaOfOwn(own, base) };
   const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   return (
     <Card className="block space-y-3 p-4">
@@ -192,6 +198,12 @@ function ChannelEditor({
           <Textarea value={own.body} disabled={disabled} rows={5} aria-label={t('ownTextPlaceholder')} placeholder={t('ownTextPlaceholder')} onChange={(e) => onChange({ ...own, body: e.target.value })} />
         </div>
       )}
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Checkbox checked={own.customMedia} disabled={disabled} onCheckedChange={(checked) => onChange({ ...own, customMedia: checked === true, media: own.media.length > 0 ? own.media : base.media })} />
+        {t('ownMedia')}
+      </label>
+      {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
+      {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
       <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
       <PlatformPreview channel={channel} provider={provider} content={content} />
@@ -260,7 +272,8 @@ export function SocialComposePage() {
         channels: chosen.map((connectionId) => {
           const mine = own[connectionId] ?? EMPTY_OWN;
           const settings = Object.keys(mine.settings).length > 0 ? { settings: mine.settings as Record<string, string | boolean> } : {};
-          return mine.custom ? { connectionId, body: mine.body, title: orNull(mine.title), ...settings } : { connectionId, ...settings };
+          const media = mine.customMedia ? { media: mediaInput(mine.media) } : {};
+          return mine.custom ? { connectionId, body: mine.body, title: orNull(mine.title), ...settings, ...media } : { connectionId, ...settings, ...media };
         }),
       };
       const payload = JSON.stringify(request);
@@ -293,7 +306,7 @@ export function SocialComposePage() {
   const blocking = selected.some((c) => {
     const mine = own[c.id] ?? EMPTY_OWN;
     const content = { body: mine.custom ? mine.body : base.body, title: mine.custom ? mine.title : base.title };
-    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null, linkUrl: base.linkUrl, media: base.media, settings: mine.settings }).length > 0;
+    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: mine.settings }).length > 0;
   });
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !blocking && !create.isPending) {
@@ -408,13 +421,13 @@ export function SocialComposePage() {
 // ---------------------------------------------------------------------------------------------------------------------
 
 function ownOf(v: Variant): Own {
-  return { custom: v.overrides.body !== null, body: v.overrides.body ?? '', title: v.overrides.title ?? '', settings: v.settings };
+  return { custom: v.overrides.body !== null, body: v.overrides.body ?? '', title: v.overrides.title ?? '', settings: v.settings, customMedia: v.ownMedia, media: v.ownMedia ? mediaItems(v.media) : [] };
 }
 
 // What a post says, not its status: the post's revision and each variant's revision and own content (an override
 // change elsewhere shows as an edit even if it did not move the revision).
 function contentKey(p: Post): string {
-  return `${p.revision}|${p.variants.map((v) => `${v.id}:${v.revision}:${JSON.stringify([v.overrides, v.settings])}`).join(',')}`;
+  return `${p.revision}|${p.variants.map((v) => `${v.id}:${v.revision}:${JSON.stringify([v.overrides, v.settings, v.ownMedia])}`).join(',')}`;
 }
 
 function baseOf(p: Post): Base {
@@ -422,7 +435,13 @@ function baseOf(p: Post): Base {
 }
 
 function sameOwn(a: Own, b: Own): boolean {
-  return a.custom === b.custom && (!a.custom || (a.body === b.body && a.title === b.title)) && sameSettings(a.settings, b.settings);
+  return (
+    a.custom === b.custom &&
+    (!a.custom || (a.body === b.body && a.title === b.title)) &&
+    sameSettings(a.settings, b.settings) &&
+    a.customMedia === b.customMedia &&
+    (!a.customMedia || sameMediaList(a.media, b.media))
+  );
 }
 
 function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, string>; onDone: () => void }) {
@@ -750,6 +769,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             body: mine.custom ? mine.body : null,
             title: mine.custom ? orNull(mine.title) : null,
             ...(sameSettings(mine.settings, v.settings) ? {} : { settings: mine.settings as Record<string, string | boolean> }),
+            ...(mine.customMedia === v.ownMedia && (!mine.customMedia || sameMediaList(mine.media, mediaItems(v.media))) ? {} : { media: mine.customMedia ? mediaInput(mine.media) : null }),
           });
         }
       } catch (error) {
