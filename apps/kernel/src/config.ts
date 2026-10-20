@@ -233,6 +233,9 @@ const schema = z.object({
   CHANNEL_X_CLIENT_SECRET: optional,
   // X post counts (#797): every read is billed by X, so the metrics sweep reads X posts only when this is true.
   CHANNEL_X_METRICS: z.enum(['true', 'false']).default('false'),
+  // Pinterest (#798): the deployment's Pinterest app.
+  CHANNEL_PINTEREST_APP_ID: optional,
+  CHANNEL_PINTEREST_APP_SECRET: optional,
   // Requests per minute per signed-in user on /api (429 RATE_LIMITED with Retry-After past it), per API process; see
   // rate-limit.ts. 0 turns it off, for a deployment whose edge (proxy, CDN or WAF) limits per user instead.
   API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(0).max(999_999).default(600),
@@ -391,6 +394,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.CHANNEL_GOOGLE_BUSINESS === 'true' && !config.CHANNEL_GOOGLE_CLIENT_ID) throw new Error('CHANNEL_GOOGLE_BUSINESS needs CHANNEL_GOOGLE_CLIENT_ID and CHANNEL_GOOGLE_CLIENT_SECRET');
   if (config.CHANNEL_GOOGLE_CLIENT_ID && !/^[0-9]{6,32}-[A-Za-z0-9_-]{8,64}\.apps\.googleusercontent\.com$/.test(config.CHANNEL_GOOGLE_CLIENT_ID)) throw new Error('CHANNEL_GOOGLE_CLIENT_ID is the client id of a Google OAuth web client');
   if (Boolean(config.CHANNEL_X_CLIENT_ID) !== Boolean(config.CHANNEL_X_CLIENT_SECRET)) throw new Error('set both CHANNEL_X_CLIENT_ID and CHANNEL_X_CLIENT_SECRET, or neither');
+  if (Boolean(config.CHANNEL_PINTEREST_APP_ID) !== Boolean(config.CHANNEL_PINTEREST_APP_SECRET)) throw new Error('set both CHANNEL_PINTEREST_APP_ID and CHANNEL_PINTEREST_APP_SECRET, or neither');
+  if (config.CHANNEL_PINTEREST_APP_ID && !/^\d{4,32}$/.test(config.CHANNEL_PINTEREST_APP_ID)) throw new Error('CHANNEL_PINTEREST_APP_ID is the numeric id of the Pinterest app');
   if (config.CHANNEL_X_CLIENT_ID && !/^[A-Za-z0-9_-]{16,64}$/.test(config.CHANNEL_X_CLIENT_ID)) throw new Error('CHANNEL_X_CLIENT_ID is the OAuth 2.0 client id of the X app');
   if (Boolean(config.CHANNEL_ZALO_APP_ID) !== Boolean(config.CHANNEL_ZALO_APP_SECRET)) throw new Error('set both CHANNEL_ZALO_APP_ID and CHANNEL_ZALO_APP_SECRET, or neither');
   if (config.CHANNEL_ZALO_APP_ID && !/^\d{1,32}$/.test(config.CHANNEL_ZALO_APP_ID)) throw new Error('CHANNEL_ZALO_APP_ID is the numeric id of the Zalo app');
@@ -411,7 +416,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       throw new Error('AUTH_STEP_UP=off lets a stolen session approve and change roles without MFA; set it to required');
     }
     // A provider sends the authorization code to PUBLIC_URL/channels/oauth/<provider>/callback (#375).
-    const oauthApps = [config.CHANNEL_META_APP_ID, config.CHANNEL_ZALO_APP_ID, config.CHANNEL_THREADS_APP_ID, config.CHANNEL_LINKEDIN_CLIENT_ID, config.CHANNEL_GOOGLE_CLIENT_ID, config.CHANNEL_TIKTOK_CLIENT_KEY, config.CHANNEL_X_CLIENT_ID];
+    const oauthApps = [config.CHANNEL_META_APP_ID, config.CHANNEL_ZALO_APP_ID, config.CHANNEL_THREADS_APP_ID, config.CHANNEL_LINKEDIN_CLIENT_ID, config.CHANNEL_GOOGLE_CLIENT_ID, config.CHANNEL_TIKTOK_CLIENT_KEY, config.CHANNEL_X_CLIENT_ID, config.CHANNEL_PINTEREST_APP_ID];
     if (oauthApps.some(Boolean) && !config.PUBLIC_URL.startsWith('https://')) {
       throw new Error('channel OAuth sends authorization codes back to PUBLIC_URL; a public PUBLIC_URL must be https when a CHANNEL_* app is set');
     }
