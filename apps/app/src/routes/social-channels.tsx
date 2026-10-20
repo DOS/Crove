@@ -77,7 +77,7 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
   const [time, setTime] = useState('09:00');
   const current = draft ?? (queue.data ? { timeZone: queue.data.timeZone ?? 'Asia/Ho_Chi_Minh', slots: queue.data.slots.map((s) => ({ weekday: s.weekday, minute: s.minute, ...(s.label ? { label: s.label } : {}) })) } : null);
   const save = useMutation({
-    mutationFn: (next: { timeZone: string; slots: Slot[] }) => client.social.queues.set({ connectionId: channel.id, ...next }),
+    mutationFn: (next: { timeZone: string; slots: Slot[]; paused?: boolean }) => client.social.queues.set({ connectionId: channel.id, ...next }),
     onSuccess: () => {
       setDraft(null);
       void queryClient.invalidateQueries();
@@ -96,9 +96,23 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
     const missing = WEEKDAYS.filter((d) => !current.slots.some((s) => s.weekday === d && s.minute === minute)).map((d) => ({ weekday: d, minute }));
     setDraft({ ...current, slots: [...current.slots, ...missing] });
   };
+  const paused = queue.data?.paused ?? false;
   return (
     <div className="space-y-3">
+      {paused && <p className="text-xs text-warning">{t('queuePausedNote')}</p>}
       <div className="flex flex-wrap items-end gap-2">
+        {canEdit && queue.data?.queueId && (
+          <label className="flex h-7 items-center gap-2 text-sm text-muted-foreground" title={draft ? t('saveQueueFirst') : undefined}>
+            <input
+              type="checkbox"
+              className="size-4 accent-primary"
+              checked={paused}
+              disabled={Boolean(draft) || save.isPending}
+              onChange={(e) => save.mutate({ ...current, paused: e.target.checked })}
+            />
+            {t('pauseQueue')}
+          </label>
+        )}
         <div className="space-y-1">
           <Label className="text-xs">{t('timeZone')}</Label>
           <NativeSelect size="sm" value={current.timeZone} disabled={!canEdit} onChange={(e) => setDraft({ ...current, timeZone: e.target.value })}>

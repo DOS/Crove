@@ -501,8 +501,20 @@ async function takenSlots(trx: Trx, orgId: string, connectionId: string, exceptI
 export const variantSchedule = defineCommand({
   name: 'social.variant.schedule',
   input: z
-    .strictObject({ postId: zId, variantIds: zVariantIds.optional(), at: z.iso.datetime({ offset: true }).optional(), queue: z.literal(true).optional() })
-    .refine((x) => !(x.at && x.queue), 'choose a time or the queue, not both'),
+    .strictObject({
+      postId: zId,
+      variantIds: zVariantIds.optional(),
+      at: z.iso.datetime({ offset: true }).optional(),
+      queue: z.literal(true).optional(),
+      // A time per channel (#576): these variants, each at its own time.
+      times: z
+        .array(z.strictObject({ variantId: zId, at: z.iso.datetime({ offset: true }) }))
+        .min(1)
+        .max(MAX_CHANNELS_PER_POST)
+        .optional(),
+    })
+    .refine((x) => !(x.at && x.queue), 'choose a time or the queue, not both')
+    .refine((x) => !x.times || (!x.at && !x.queue && !x.variantIds), 'times names the variants and their times on its own'),
   risk: 'R2',
   access: ADMINS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
@@ -524,12 +536,17 @@ export const variantSchedule = defineCommand({
     }
     const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     const all = await lockVariants(ctx.trx, ctx.orgId, post.id);
-    const chosen = input.variantIds ? pick(all, input.variantIds) : all.filter((v) => v.status === 'approved');
+    const times = new Map((input.times ?? []).map((x) => [x.variantId, new Date(Date.parse(x.at))]));
+    const chosen = input.times ? pick(all, [...times.keys()]) : input.variantIds ? pick(all, input.variantIds) : all.filter((v) => v.status === 'approved');
     if (chosen.length === 0) throw new DomainError('NOTHING_TO_SCHEDULE', 409, 'Không có kênh nào đã duyệt để lên lịch');
-    const at = input.at ? new Date(Date.parse(input.at)) : post.scheduled_at;
+    const shared = input.at ? new Date(Date.parse(input.at)) : post.scheduled_at;
+    const timeOf = (v: VariantRow) => times.get(v.id) ?? shared;
     if (!input.queue) {
-      if (!at) throw new DomainError('SCHEDULE_REQUIRED', 422, 'Hãy chọn giờ đăng hoặc dùng hàng đợi');
-      if (at.getTime() <= ctx.now.getTime()) throw new DomainError('SCHEDULE_IN_PAST', 422, 'Giờ đăng phải ở tương lai');
+      for (const v of chosen) {
+        const at = timeOf(v);
+        if (!at) throw new DomainError('SCHEDULE_REQUIRED', 422, 'Hãy chọn giờ đăng hoặc dùng hàng đợi');
+        if (at.getTime() <= ctx.now.getTime()) throw new DomainError('SCHEDULE_IN_PAST', 422, 'Giờ đăng phải ở tương lai', { variantId: v.id });
+      }
     }
     const scheduled: Array<{ variantId: string; at: string }> = [];
     for (const v of chosen) {
@@ -549,8 +566,9 @@ export const variantSchedule = defineCommand({
         scheduled.push({ variantId: v.id, at: new Date(slot).toISOString() });
       } else {
         // The time is stored on the variant, so a later change of the post's planned time does not move it.
+        const at = timeOf(v) as Date;
         await setVariant(ctx, v.id, { status, queue_slot_at: null, scheduled_at: at, error_retry_at: null });
-        scheduled.push({ variantId: v.id, at: (at as Date).toISOString() });
+        scheduled.push({ variantId: v.id, at: at.toISOString() });
       }
     }
     await refreshPostStatus(ctx, post.id);
@@ -736,6 +754,7 @@ export interface VariantView {
   // When it goes out: a retry time after a rate limit, else its queue slot, else its own time, else the post's.
   effectiveAt: string | null;
   queueSlotAt: string | null;
+  queuePaused: boolean;
   attempt: number;
   externalUrl: string | null;
   publishedAt: string | null;
@@ -807,6 +826,15 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
   const latest = new Map<string, (typeof decisions)[number]>();
   for (const d of decisions) if (!latest.has(d.variant_id)) latest.set(d.variant_id, d);
   const required = await approvalsRequired(ctx.trx, ctx.orgId, [...new Set(variants.map((v) => v.channel_connection_id))]);
+  // Queues paused by a person (#576): a variant waiting on a slot there does not go out until it is resumed.
+  const queued = [...new Set(variants.filter((v) => v.queue_slot_at !== null).map((v) => v.channel_connection_id))];
+  const pausedQueues = new Set(
+    queued.length === 0
+      ? []
+      : (await ctx.trx.selectFrom('crove_social.queue').select('channel_connection_id').where('org_id', '=', ctx.orgId).where('channel_connection_id', 'in', queued).where('paused', '=', true).execute()).map(
+          (q) => q.channel_connection_id,
+        ),
+  );
   const mediaRows = await ctx.trx
     .selectFrom('crove_social.post_media as m')
     .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
@@ -863,6 +891,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               status: v.status,
               effectiveAt: iso(v.status === 'published' ? v.published_at : (v.error_retry_at ?? v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at)),
               queueSlotAt: iso(v.queue_slot_at),
+              queuePaused: v.queue_slot_at !== null && v.scheduled_at === null && pausedQueues.has(v.channel_connection_id),
               attempt: v.attempt,
               externalUrl: v.external_url,
               publishedAt: iso(v.published_at),

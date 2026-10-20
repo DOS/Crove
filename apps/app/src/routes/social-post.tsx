@@ -521,19 +521,28 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
   );
 }
 
-function SchedulePanel({ post, onDone }: { post: Post; onDone: () => void }) {
+function SchedulePanel({ post, names, onDone }: { post: Post; names: Map<string, string>; onDone: () => void }) {
   const t = useTranslations('social');
   const ready = post.variants.filter((v) => v.status === 'approved');
   const [mode, setMode] = useState<'time' | 'queue'>('time');
   const [when, setWhen] = useState(() => toLocalInput(post.scheduledAt ?? new Date(Date.now() + 3_600_000).toISOString()));
+  // A time per channel (#576): each starts at the shared time.
+  const [perChannel, setPerChannel] = useState(false);
+  const [times, setTimes] = useState<Record<string, string>>({});
+  const timeOf = (variantId: string) => times[variantId] ?? when;
+  const allSet = perChannel ? ready.every((v) => fromLocalInput(timeOf(v.id))) : Boolean(fromLocalInput(when));
   const schedule = useMutation({
     mutationFn: () => {
+      if (mode === 'time' && perChannel) {
+        return client.social.variants.schedule({ postId: post.id, times: ready.map((v) => ({ variantId: v.id, at: fromLocalInput(timeOf(v.id)) as string })) });
+      }
       const at = fromLocalInput(when);
       return client.social.variants.schedule({ postId: post.id, variantIds: ready.map((v) => v.id), ...(mode === 'queue' ? { queue: true as const } : at ? { at } : {}) });
     },
     onSuccess: onDone,
   });
   if (ready.length === 0) return null;
+  const min = toLocalInput(new Date().toISOString());
   return (
     <Card className="block space-y-3 border-primary/40 p-4">
       <p className="text-sm font-medium text-foreground">{t('scheduleTitle', { count: ready.length })}</p>
@@ -553,12 +562,28 @@ function SchedulePanel({ post, onDone }: { post: Post; onDone: () => void }) {
           </button>
         ))}
       </div>
-      {mode === 'time' && (
-        <Input type="datetime-local" aria-label={t('atTime')} value={when} min={toLocalInput(new Date().toISOString())} onChange={(e) => setWhen(e.target.value)} className="max-w-xs" />
+      {mode === 'time' && !perChannel && <Input type="datetime-local" aria-label={t('atTime')} value={when} min={min} onChange={(e) => setWhen(e.target.value)} className="max-w-xs" />}
+      {mode === 'time' && ready.length > 1 && (
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <input type="checkbox" checked={perChannel} onChange={(e) => setPerChannel(e.target.checked)} className="size-4 accent-primary" />
+          {t('timePerChannel')}
+        </label>
+      )}
+      {mode === 'time' && perChannel && (
+        <div className="space-y-2">
+          {ready.map((v) => (
+            <label key={v.id} className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="min-w-40 text-foreground">
+                {names.get(v.connectionId) ?? providerName(v.provider)} <span className="text-xs text-subtle-foreground">{providerName(v.provider)}</span>
+              </span>
+              <Input type="datetime-local" value={timeOf(v.id)} min={min} onChange={(e) => setTimes((prev) => ({ ...prev, [v.id]: e.target.value }))} className="max-w-xs" />
+            </label>
+          ))}
+        </div>
       )}
       {mode === 'queue' && <p className="text-xs text-subtle-foreground">{t('nextSlotHint')}</p>}
       {schedule.error && <ErrorText>{errorMessage(schedule.error)}</ErrorText>}
-      <Button size="lg" disabled={schedule.isPending || (mode === 'time' && !fromLocalInput(when))} onClick={() => schedule.mutate()}>
+      <Button size="lg" disabled={schedule.isPending || (mode === 'time' && !allSet)} onClick={() => schedule.mutate()}>
         {t('schedule')}
       </Button>
     </Card>
@@ -614,6 +639,7 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
         <p className="text-warning">{t(v.error.action === 'reschedule' && v.effectiveAt && Date.parse(v.effectiveAt) > Date.now() ? 'outcome.policyRaisedReschedule' : 'outcome.policyRaised')}</p>
       ) : null;
     case 'scheduled':
+      if (v.queuePaused) return <p className="text-warning">{t('outcome.queuePaused')}</p>;
       return v.error?.retryAt ? <p className="text-warning">{t('outcome.retrying', { when: f.dateTime(v.error.retryAt) })}</p> : null;
     case 'publishing':
     case 'processing':
@@ -833,7 +859,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
         <div className="space-y-4">
           <SharedFields base={base} onChange={setBase} disabled={!editable || save.isPending} needsTitle={p.variants.some((v) => hasTitle(v.provider))} />
           {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} />}
-          {canDecide && reviewable && <SchedulePanel post={p} onDone={refresh} />}
+          {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
           {canWrite && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
           {dirty && <p className="text-xs text-subtle-foreground">{t('unsaved')}</p>}
         </div>
