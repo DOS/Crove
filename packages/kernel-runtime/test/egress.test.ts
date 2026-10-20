@@ -188,6 +188,9 @@ describe('guardedRequest and egressFetch', () => {
 
   it('never follows a redirect with the request, and refuses what the guard refuses', async () => {
     expect((await guardedRequest(`${base}/moved`, { method: 'POST', headers: { authorization: 'Bearer t' } }, opts())).status).toBe(302);
+    // Headers that would change where or how the request goes are dropped.
+    const sent = await guardedRequest(`${base}/statuses`, { method: 'POST', headers: { Host: 'metadata.internal', 'Transfer-Encoding': 'chunked', Connection: 'upgrade', Upgrade: 'websocket' }, body: Buffer.from('x') }, opts());
+    expect(JSON.parse(sent.body.toString('utf8'))).toMatchObject({ method: 'POST', length: '1', body: 'x' });
     await expect(guardedRequest('http://10.0.0.1/', { method: 'POST' }, { timeoutMs: 2000, maxBytes: 1024, overLimit: 'fail', anyPort: true })).rejects.toMatchObject({ code: 'blocked' });
     await expect(guardedRequest(`${base}/statuses`, { method: 'POST' }, { timeoutMs: 2000, maxBytes: 1024, overLimit: 'fail', anyPort: true })).rejects.toMatchObject({ code: 'blocked' });
   });

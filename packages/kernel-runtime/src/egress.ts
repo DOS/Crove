@@ -288,11 +288,16 @@ export interface GuardedRequest {
   body?: Buffer;
 }
 
+const HOP_HEADERS = new Set(['host', 'connection', 'upgrade', 'transfer-encoding', 'keep-alive', 'proxy-connection', 'te', 'trailer', 'content-length', 'accept-encoding']);
+// Statuses whose answer has no body (a Response refuses one).
+const NULL_BODY = new Set([101, 103, 204, 205, 304]);
+
 export async function guardedRequest(raw: string, request: GuardedRequest, options: EgressOptions): Promise<EgressResponse> {
   const deadline = Date.now() + options.timeoutMs;
   const url = egressTarget(raw, options.anyPort);
   const target = await addressFor(url, options, deadline);
-  const headers = Object.fromEntries(Object.entries(request.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+  // Headers that would change where or how the request goes are the guard's, never the caller's.
+  const headers = Object.fromEntries(Object.entries(request.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]).filter(([k]) => !HOP_HEADERS.has(k as string)));
   const result = await once(url, target, options, deadline, { method: request.method, headers, body: request.body ?? null });
   if ('response' in result) return result.response;
   return { url: url.toString(), status: 302, contentType: null, body: Buffer.alloc(0), truncated: false };
@@ -319,6 +324,6 @@ export function egressFetch(options: EgressOptions & { httpsOnly?: boolean }): (
       if (type) headers['content-type'] = type;
     }
     const answer = await guardedRequest(input, { method, headers, ...(body ? { body } : {}) }, options);
-    return new Response(answer.status === 204 || answer.status === 304 ? null : new Uint8Array(answer.body), { status: answer.status, headers: answer.contentType ? { 'content-type': answer.contentType } : {} });
+    return new Response(NULL_BODY.has(answer.status) ? null : new Uint8Array(answer.body), { status: answer.status, headers: answer.contentType ? { 'content-type': answer.contentType } : {} });
   };
 }
