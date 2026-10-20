@@ -302,10 +302,16 @@ jobs:
               "bash '$REMOTE/deploy.sh' deploy $registry --release '$RELEASE' --image '$IMAGE' --extract-image '$EXTRACT' --compose '$REMOTE/docker-compose.yml'"
           fi
 
-      # The same checks through the public URL: DNS, TLS and the reverse proxy. Optional (DEPLOY_PUBLIC_URL).
+      # The same checks through the public URL: DNS, TLS and the reverse proxy. Optional (DEPLOY_PUBLIC_URL). With the
+      # smoke account's secrets (#690, docs/runbooks/deploy.md "Smoke account") it also signs in and uploads one
+      # synthetic e-invoice into the smoke org; without them that step is skipped with a notice.
       - name: Smoke test through the public URL
         id: public-smoke
         if: steps.config.outputs.ready == 'true' && env.PUBLIC_URL != ''
+        env:
+          SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
+          SMOKE_ORG: ${{ vars.SMOKE_ORG }}
         run: bash tools/deploy/deploy.sh smoke "$PUBLIC_URL"
 
       - name: Roll back after a failed public smoke test
