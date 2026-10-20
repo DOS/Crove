@@ -89,6 +89,31 @@ describe('YouTubeRefresher', () => {
   });
 });
 
+describe('YouTubePublisher first comment (#791)', () => {
+  const comment = { externalAccountId: CHANNEL, secret: SECRET, externalId: 'dQw4w9WgXcQ', text: 'Đặt bánh tại https://example.com/a', callKey: 'call-c1' };
+
+  it('asks for the comment scope without requiring it, and posts a top-level comment on the video', async () => {
+    const connector = new YouTubeConnector(APP, google({}).fetchImpl);
+    const url = new URL(connector.authorizeUrl({ state: 's', redirectUri: REDIRECT, codeChallenge: null }));
+    expect(url.searchParams.get('scope')?.split(' ')).toContain('https://www.googleapis.com/auth/youtube.force-ssl');
+    const { fetchImpl, calls } = google({ 'POST www.googleapis.com/youtube/v3/commentThreads': [{ body: { id: 'UgzComment1', snippet: {} } }] });
+    expect(await new YouTubePublisher(APP, fetchImpl).comment(comment)).toEqual({ kind: 'accepted', externalId: 'UgzComment1' });
+    expect(calls[0]?.url.searchParams.get('part')).toBe('snippet');
+    expect(calls[0]?.body).toEqual({ snippet: { channelId: CHANNEL, videoId: 'dQw4w9WgXcQ', topLevelComment: { snippet: { textOriginal: comment.text } } } });
+    expect(calls[0]?.headers.get('authorization')).toBe('Bearer ya29.token-1');
+  });
+
+  it('tells a grant without the comment scope, comments turned off and a lost answer apart', async () => {
+    const scope = google({ 'POST www.googleapis.com/youtube/v3/commentThreads': [{ status: 403, body: { error: { code: 403, message: 'Request had insufficient authentication scopes.', errors: [{ reason: 'insufficientPermissions' }] } } }] });
+    expect(await new YouTubePublisher(APP, scope.fetchImpl).comment(comment)).toMatchObject({ kind: 'rejected', error: 'permission', code: 'RECONNECT_FOR_COMMENTS' });
+    const off = google({ 'POST www.googleapis.com/youtube/v3/commentThreads': [{ status: 403, body: { error: { code: 403, message: 'Comments are disabled.', errors: [{ reason: 'commentsDisabled' }] } } }] });
+    expect(await new YouTubePublisher(APP, off.fetchImpl).comment(comment)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'COMMENTS_DISABLED' });
+    const lost = google({ 'POST www.googleapis.com/youtube/v3/commentThreads': [{ status: 503, body: { error: { message: 'Backend Error', errors: [{ reason: 'backendError' }] } } }] });
+    expect(await new YouTubePublisher(APP, lost.fetchImpl).comment(comment)).toMatchObject({ kind: 'unknown' });
+    expect(await new YouTubePublisher(APP, google({}).fetchImpl).comment({ ...comment, externalId: 'not a video' })).toMatchObject({ kind: 'rejected', code: 'BAD_POST_ID' });
+  });
+});
+
 describe('YouTubePublisher', () => {
   it('opens a resumable session with the metadata, then sends the bytes once', async () => {
     const { fetchImpl, calls } = google({

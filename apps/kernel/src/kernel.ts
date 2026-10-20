@@ -186,7 +186,8 @@ export function channelConnectors(config: Omit<ChannelConfig, 'CHANNEL_SANDBOX'>
 export function channelPublishers(config: ChannelConfig): Record<string, Publisher> {
   const publishers: Record<string, Publisher> = {};
   if (config.CHANNEL_SANDBOX === 'true') publishers.sandbox = new SandboxPublisher();
-  if (config.CHANNEL_BLUESKY === 'true') publishers.bluesky = new BlueskyPublisher();
+  // An account on its own PDS (#792) is called through the egress guard; images go up to 1 MB each.
+  if (config.CHANNEL_BLUESKY === 'true') publishers.bluesky = new BlueskyPublisher(undefined, egressFetch({ timeoutMs: 30_000, maxBytes: 2_000_000, overLimit: 'fail' }));
   if (config.CHANNEL_TELEGRAM === 'true') publishers.telegram = new TelegramPublisher();
   // An instance is the tenant's to name: its calls go through the egress guard, never a plain fetch.
   if (config.CHANNEL_MASTODON === 'true') publishers.mastodon = new MastodonPublisher(egressFetch({ timeoutMs: 300_000, maxBytes: 2_000_000, overLimit: 'fail' }));
