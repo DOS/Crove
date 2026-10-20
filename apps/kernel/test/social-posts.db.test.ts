@@ -225,6 +225,29 @@ suite('social posts on PostgreSQL (S3)', () => {
     expect(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(tokyo.variants[0]?.queueSlotAt as string))).toBe('09:00');
   });
 
+  it('keeps the slots of a content category for posts with its label, and opens them when the label goes (#745)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const local = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
+    const { labelId } = await exec<{ labelId: string }>(o, o.member, 'social.label.create', { name: 'Khuyến mãi' });
+    const days = [1, 2, 3, 4, 5, 6, 7];
+    // 09:00 is open to every post; 20:00 is kept for promotions.
+    await exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots: [...days.map((weekday) => ({ weekday, minute: 540 })), ...days.map((weekday) => ({ weekday, minute: 1200, labelId }))] });
+    await expect(exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots: [{ weekday: 1, minute: 600, labelId: '00000000-0000-4000-8000-000000000000' }] })).rejects.toMatchObject({ code: 'LABEL_NOT_FOUND' });
+    const promo = await approved(o, [conn], 'Giảm giá');
+    await exec(o, o.member, 'social.post.set_labels', { postId: promo.id, labelIds: [labelId] });
+    const plain = await approved(o, [conn], 'Mẹo hay');
+    const p = await exec<{ scheduled: Array<{ at: string }> }>(o, o.owner, 'social.variant.schedule', { postId: promo.id, queue: true });
+    const q = await exec<{ scheduled: Array<{ at: string }> }>(o, o.owner, 'social.variant.schedule', { postId: plain.id, queue: true });
+    expect(local(p.scheduled[0]?.at as string)).toBe('20:00');
+    expect(local(q.scheduled[0]?.at as string)).toBe('09:00');
+    const queue = await rt.query<{ slots: { minute: number; labelId: string | null }[] }>('social.queue.get', { connectionId: conn }, { actor: asUser(o.viewer), orgId: o.orgId });
+    expect(queue.slots.filter((s) => s.labelId === labelId).map((s) => s.minute)).toEqual(days.map(() => 1200));
+    // The label deleted, its slots are open again.
+    await exec(o, o.owner, 'social.label.delete', { labelId });
+    const after = await rt.query<{ slots: { labelId: string | null }[] }>('social.queue.get', { connectionId: conn }, { actor: asUser(o.viewer), orgId: o.orgId });
+    expect(after.slots.every((s) => s.labelId === null)).toBe(true);
+  });
   it('never edits or cancels a variant in flight, and keeps what a published variant said', async () => {
     const o = await org();
     const [a, b] = [await connection(o.orgId, o.owner), await connection(o.orgId, o.owner)];

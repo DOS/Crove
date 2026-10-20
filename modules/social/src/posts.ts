@@ -593,12 +593,12 @@ async function lockQueue(trx: Trx, orgId: string, connectionId: string): Promise
   if (!queue) return null;
   const slots = await trx
     .selectFrom('crove_social.queue_slot')
-    .select(['weekday', 'minute'])
+    .select(['weekday', 'minute', 'label_id'])
     .where('org_id', '=', orgId)
     .where('queue_id', '=', queue.id)
     .where('active', '=', true)
     .execute();
-  return { id: queue.id, paused: queue.paused, spec: { timeZone: queue.time_zone, slots } };
+  return { id: queue.id, paused: queue.paused, spec: { timeZone: queue.time_zone, slots: slots.map((s) => ({ weekday: s.weekday, minute: s.minute, labelId: s.label_id })) } };
 }
 
 
@@ -656,6 +656,9 @@ export const variantSchedule = defineCommand({
     const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     const all = await lockVariants(ctx.trx, ctx.orgId, post.id);
     const times = new Map((input.times ?? []).map((x) => [x.variantId, new Date(Date.parse(x.at))]));
+    // The post's labels, read once, for the slots of content categories (#745).
+    let labels: Set<string> | null = null;
+    const postLabels = async () => (labels ??= new Set(((await labelsOfPosts(ctx.trx, ctx.orgId, [post.id])).get(post.id) ?? []).map((l) => l.id)));
     const chosen = input.times ? pick(all, [...times.keys()]) : input.variantIds ? pick(all, input.variantIds) : all.filter((v) => v.status === 'approved');
     if (chosen.length === 0) throw new DomainError('NOTHING_TO_SCHEDULE', 409, 'Không có kênh nào đã duyệt để lên lịch');
     const shared = input.at ? new Date(Date.parse(input.at)) : post.scheduled_at;
@@ -679,7 +682,8 @@ export const variantSchedule = defineCommand({
       if (input.queue) {
         const queue = queues.get(v.channel_connection_id) ?? null;
         if (!queue || queue.spec.slots.length === 0) throw new DomainError('QUEUE_EMPTY', 409, 'Kênh này chưa có khung giờ đăng trong hàng đợi', { variantId: v.id });
-        const slot = nextFreeSlot(queue.spec, ctx.now.getTime(), await takenSlots(ctx.trx, ctx.orgId, v.channel_connection_id, v.id));
+        // A post's labels pick the slots of their content categories first (#745).
+        const slot = nextFreeSlot(queue.spec, ctx.now.getTime(), await takenSlots(ctx.trx, ctx.orgId, v.channel_connection_id, v.id), 366, await postLabels());
         if (slot === null) throw new DomainError('QUEUE_FULL', 409, 'Hàng đợi của kênh này đã kín trong năm tới', { variantId: v.id });
         await setVariant(ctx, v.id, { status, queue_slot_at: new Date(slot), scheduled_at: null, error_retry_at: null });
         scheduled.push({ variantId: v.id, at: new Date(slot).toISOString() });
@@ -772,7 +776,7 @@ export const queueSet = defineCommand({
     timeZone: zTimeZone,
     paused: z.boolean().optional(),
     slots: z
-      .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional() }))
+      .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional(), labelId: zId.nullable().optional() }))
       .max(MAX_SLOTS),
   }),
   risk: 'R1',
@@ -782,6 +786,12 @@ export const queueSet = defineCommand({
     await liveConnections(ctx, [input.connectionId]);
     if (new Set(input.slots.map((s) => `${s.weekday}:${s.minute}`)).size !== input.slots.length) {
       throw new DomainError('DUPLICATE_SLOT', 422, 'Có khung giờ bị trùng');
+    }
+    // A slot kept for a content category names one of the org's labels (#745).
+    const labelIds = [...new Set(input.slots.map((s) => s.labelId).filter((id): id is string => typeof id === 'string'))];
+    if (labelIds.length > 0) {
+      const found = await ctx.trx.selectFrom('crove_social.label').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', labelIds).execute();
+      if (found.length !== labelIds.length) throw new DomainError('LABEL_NOT_FOUND', 404, 'Không tìm thấy nhãn này');
     }
     // Create the row if missing (a concurrent first set waits here instead of failing on the unique key), then lock
     // it: schedule commands lock the same row before any variant.
@@ -806,10 +816,10 @@ export const queueSet = defineCommand({
     if (input.slots.length > 0) {
       await ctx.trx
         .insertInto('crove_social.queue_slot')
-        .values(input.slots.map((s) => ({ org_id: ctx.orgId, queue_id: queueId, weekday: s.weekday, minute: s.minute, label: s.label ?? null })))
+        .values(input.slots.map((s) => ({ org_id: ctx.orgId, queue_id: queueId, weekday: s.weekday, minute: s.minute, label: s.label ?? null, label_id: s.labelId ?? null })))
         .execute();
     }
-    const spec: QueueSpec = { timeZone: input.timeZone, slots: input.slots };
+    const spec: QueueSpec = { timeZone: input.timeZone, slots: input.slots.map((x) => ({ weekday: x.weekday, minute: x.minute, labelId: x.labelId ?? null })) };
     // Lock order: queue row, then the posts of the variants holding its slots (sorted), then those variants, as every
     // post command locks a post before its variants. No new slot holder appears meanwhile: only schedule assigns
     // slots, and it waits for the queue row this command holds.
@@ -853,11 +863,16 @@ export const queueSet = defineCommand({
     const movable = holders.filter((h) => MOVABLE.includes(h.status) && (h.queue_slot_at as Date).getTime() > now);
     const reserved = new Set(holders.filter((h) => !movable.includes(h)).map((h) => (h.queue_slot_at as Date).getTime()));
     const zoneChanged = before !== null && before.spec.timeZone !== input.timeZone;
+    const labelsOf = await labelsOfPosts(
+      ctx.trx,
+      ctx.orgId,
+      [...new Set(movable.map((q) => q.post_id))],
+    );
     const placed = placeQueued(
       spec,
       movable.map((q) => {
         const at = (q.queue_slot_at as Date).getTime();
-        return { id: q.id, slotAt: zoneChanged ? retime(at, (before as QueueState).spec.timeZone, input.timeZone) : at };
+        return { id: q.id, slotAt: zoneChanged ? retime(at, (before as QueueState).spec.timeZone, input.timeZone) : at, labelIds: (labelsOf.get(q.post_id) ?? []).map((l) => l.id) };
       }),
       now,
       reserved,
@@ -1191,13 +1206,14 @@ export const queueGet = defineQuery({
     if (!queue) return { connectionId: input.connectionId, queueId: null, timeZone: null, paused: false, slots: [], nextFree: [] };
     const slots = await ctx.trx
       .selectFrom('crove_social.queue_slot')
-      .select(['weekday', 'minute', 'label', 'active'])
+      .select(['weekday', 'minute', 'label', 'label_id', 'active'])
       .where('org_id', '=', ctx.orgId)
       .where('queue_id', '=', queue.id)
       .orderBy('weekday')
       .orderBy('minute')
       .execute();
-    const spec: QueueSpec = { timeZone: queue.time_zone, slots: slots.filter((s) => s.active) };
+    // The next open slots (a post without a content category's label takes these).
+    const spec: QueueSpec = { timeZone: queue.time_zone, slots: slots.filter((s) => s.active).map((s) => ({ weekday: s.weekday, minute: s.minute, labelId: s.label_id })) };
     const taken = await takenSlots(ctx.trx, ctx.orgId, input.connectionId);
     const nextFree: string[] = [];
     let after = Date.now();
@@ -1208,7 +1224,14 @@ export const queueGet = defineQuery({
       taken.add(at);
       after = at;
     }
-    return { connectionId: input.connectionId, queueId: queue.id, timeZone: queue.time_zone, paused: queue.paused, slots, nextFree };
+    return {
+      connectionId: input.connectionId,
+      queueId: queue.id,
+      timeZone: queue.time_zone,
+      paused: queue.paused,
+      slots: slots.map((s) => ({ weekday: s.weekday, minute: s.minute, label: s.label, labelId: s.label_id, active: s.active })),
+      nextFree,
+    };
   },
 });
 
