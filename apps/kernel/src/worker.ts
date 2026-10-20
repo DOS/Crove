@@ -16,6 +16,7 @@ import { sweepFeeds } from './feeds.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
+import { MAIL_BULK_GAP_MS, MAIL_BULK_QUEUE, MAIL_SEND_QUEUE, MAIL_SWEEP_MS, mailErrorCode, purgeMail, runMailJob, sweepMail, type MailJob, type MailQueueDeps } from './mail-queue.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from './jobs-schema.ts';
 import { runLinkPreviewJob } from './link-preview.ts';
@@ -177,6 +178,9 @@ export interface WorkerDeps {
   channels?: { broker: CredentialBroker; publishers: Readonly<Record<string, Publisher>>; refreshers?: Readonly<Record<string, Refresher>> };
   // PUBLIC_URL, where Social short links (#706) point.
   publicUrl?: string;
+  // Queued mail (#548): the mailer, the templates queued mail is rendered from, and the bounce domain. Unset: queued
+  // mail waits.
+  mail?: Omit<MailQueueDeps, 'runtime' | 'publicUrl'>;
 }
 
 interface SocialPublishJob {
@@ -363,6 +367,43 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     }
   });
 
+  // Queued mail (#548): a sweep queues what is due; system and transactional mail go out at once, marketing one at a
+  // time with a gap. Without a mailer (tests, an embedder) queued mail stays queued.
+  const mail = deps.mail;
+  if (mail) {
+    const mailDeps: MailQueueDeps = { runtime: deps.runtime, ...mail, publicUrl: deps.publicUrl ?? '' };
+    const sendMail = async (job: { data: MailJob; retryCount: number } | undefined, gap: number) => {
+      if (!job) return;
+      const label = job.data.messageId.slice(0, 8);
+      try {
+        const done = await runMailJob(mailDeps, job.data);
+        if (done.action === 'recorded') console.log(`[mail] ${label}: ${done.outcome}${done.code ? ` ${done.code}` : ''}`);
+        else if (done.action === 'suppressed') console.log(`[mail] ${label}: suppressed`);
+      } catch (error) {
+        console.error(`[mail] ${label} attempt ${job.retryCount + 1}: ${mailErrorCode(error)}`);
+        throw error;
+      } finally {
+        if (gap > 0) await new Promise<void>((resolve) => setTimeout(resolve, gap));
+      }
+    };
+    await boss.work<MailJob>(MAIL_SEND_QUEUE, { batchSize: 1 }, async ([job]) => sendMail(job, 0));
+    await boss.work<MailJob>(MAIL_BULK_QUEUE, { batchSize: 1 }, async ([job]) => sendMail(job, MAIL_BULK_GAP_MS));
+  }
+  let mailSweeping = false;
+  const mailSweep = async () => {
+    if (mailSweeping || !mail) return;
+    mailSweeping = true;
+    try {
+      await sweepMail(boss, deps.workerDb, deps.runtime, mail.mailer);
+    } catch (error) {
+      console.error(`[mail] sweep: ${mailErrorCode(error)}`);
+    } finally {
+      mailSweeping = false;
+    }
+  };
+  const mailTimer = mail ? setInterval(() => void mailSweep(), MAIL_SWEEP_MS) : null;
+  void mailSweep();
+
   await boss.work<SignOutTarget>(QUEUES.signOut, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
     await runSignOut(deps.revoker, job.data, job.retryCount);
@@ -392,6 +433,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   await boss.work(QUEUES.retention, { batchSize: 1 }, async () => {
     try {
       await runRetention(deps.workerDb);
+      const mailCleared = await purgeMail(deps.workerDb);
+      console.log(`[retention] ${Object.entries(mailCleared).map(([store, n]) => `${store}=${n}`).join(' ')}`);
       const pruned = await pruneRefusalTally(deps.workerDb, keepDays);
       console.log(`[retention] refusal_tally=${pruned}`);
     } finally {
@@ -759,6 +802,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     clearInterval(timer);
     clearInterval(heartbeatTimer);
     if (socialTimer) clearInterval(socialTimer);
+    if (mailTimer) clearInterval(mailTimer);
     if (evergreenTimer) clearInterval(evergreenTimer);
     if (reminderTimer) clearInterval(reminderTimer);
     if (feedTimer) clearInterval(feedTimer);

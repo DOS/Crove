@@ -6,8 +6,13 @@
 //
 // E1a sends nothing itself: the invite mail carries the raw invite token, which no table may hold, so the request
 // that holds the token reads the row back (kernel.mail.direct.get), sends the mail unless it is suppressed and records
-// the outcome with kernel.mail.record_direct. Queued mail, sent by the
-// worker through crove_kernel.external_call, is step E1b.
+// the outcome with kernel.mail.record_direct.
+//
+// Queued mail (step E1b, #548): a command writes the row 'queued' with its merge data, and the worker sends it. One
+// send per attempt through crove_kernel.external_call (key mail:<message>:<attempt>): kernel.mail.queue.begin checks
+// the suppression list again, marks the mail 'sending' and writes the call 'started' in one transaction; the worker
+// renders and sends the mail outside it; kernel.mail.queue.record writes the outcome. An unknown outcome is
+// 'ambiguous': marketing is never sent again, transactional mail only through a mailer that dedupes.
 import { randomUUID } from 'node:crypto';
 import { sql } from 'kysely';
 import { z } from 'zod';
@@ -86,6 +91,8 @@ export interface MailToSend {
   // 'sending': the caller sends it now and records the outcome; 'queued': the worker sends it (step E1b).
   status: 'sending' | 'queued';
   messageIdDomain?: string | undefined;
+  // The merge data the worker renders a queued mail from (never a secret); dropped 30 days after a final status.
+  payload?: Readonly<Record<string, unknown>> | null;
 }
 
 export interface MailRecord {
@@ -111,6 +118,7 @@ export async function createMailMessage(ctx: CommandContext, mail: MailToSend): 
       to_address: to,
       to_hash: hash,
       subject: mail.subject ?? null,
+      payload: mail.payload ? JSON.stringify(mail.payload) : null,
       message_id_header: messageIdHeader,
       status,
       created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
@@ -350,5 +358,199 @@ export const recordMailEvent = defineCommand({
   },
 });
 
-export const mailCommands = [recordDirectMail, addMailSuppression, liftMailSuppression, recordMailEvent];
+export type MailRetrySafety = 'safe' | 'idempotent' | 'reconcile_only' | 'never';
+// Sends of one transactional mail after an unknown outcome, the first included (crove_kernel.mail_queued_due).
+export const MAIL_MAX_ATTEMPTS = 3;
+export const mailCallKey = (messageId: string, attempt: number) => `mail:${messageId}:${attempt}`;
+const zProviderName = z.string().regex(/^[a-z][a-z0-9_]{0,31}$/);
+const zSafety = z.enum(['safe', 'idempotent', 'reconcile_only', 'never']);
+
+function requireSystem(ctx: CommandContext): void {
+  if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình nền mới gửi được thư trong hàng đợi');
+}
+
+export type QueuedMailBegin =
+  | { action: 'none'; reason: string }
+  | { action: 'suppressed' }
+  | {
+      action: 'send';
+      attempt: number;
+      stream: MailStream;
+      templateKey: string;
+      templateVersion: number;
+      to: string;
+      subject: string | null;
+      payload: Record<string, unknown>;
+      messageIdHeader: string;
+      bounceToken: string | null;
+    };
+
+// A mail that cannot be sent leaves the queue as 'failed' with the reason, so no later pass picks it up again.
+async function stop(ctx: CommandContext, messageId: string, again: boolean, reason: string): Promise<QueuedMailBegin> {
+  if (!again) {
+    await ctx.trx
+      .updateTable('crove_kernel.mail_message')
+      .set({ status: 'failed', error_code: reason, updated_at: ctx.now })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', messageId)
+      .execute();
+  }
+  return { action: 'none', reason };
+}
+
+// The worker starts one send of a queued mail (or of a transactional one whose last send is unknown, when the mailer
+// dedupes): the suppression list is read again, since an address may have bounced or been stopped since the mail was
+// queued, then the mail becomes 'sending' and the call 'started', in this transaction, before the worker calls the
+// mailer. Anything else (sent, being sent, marketing after an unknown outcome) is left as it is.
+export const beginQueuedMail = defineCommand({
+  name: 'kernel.mail.queue.begin',
+  input: z.object({ messageId: zId, provider: zProviderName, safety: zSafety }),
+  risk: 'R1',
+  access: 'system',
+  handler: async (ctx, input): Promise<QueuedMailBegin> => {
+    requireSystem(ctx);
+    const mail = await ctx.trx
+      .selectFrom('crove_kernel.mail_message')
+      .select(['id', 'stream', 'status', 'attempts', 'template_key', 'template_version', 'to_address', 'to_hash', 'subject', 'payload', 'message_id_header'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.messageId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!mail) return { action: 'none', reason: 'NOT_FOUND' };
+    const again = mail.status === 'ambiguous';
+    if (mail.status !== 'queued' && !again) return { action: 'none', reason: mail.status.toUpperCase() };
+    if (again) {
+      if (mail.stream === 'marketing') return { action: 'none', reason: 'MARKETING_NOT_REPEATED' };
+      if (input.safety !== 'idempotent' && input.safety !== 'safe') return { action: 'none', reason: 'NOT_REPEATABLE' };
+      if (mail.attempts >= MAIL_MAX_ATTEMPTS) return { action: 'none', reason: 'ATTEMPTS' };
+    }
+    if (!mail.to_address) return stop(ctx, mail.id, again, 'NO_ADDRESS');
+    if (await isSuppressed(ctx, mail.to_hash, mail.stream, ctx.now)) {
+      // A queued mail is stopped before any call; one whose last send is unknown is not tried again.
+      await ctx.trx
+        .updateTable('crove_kernel.mail_message')
+        .set(again ? { status: 'failed', error_code: 'SUPPRESSED', updated_at: ctx.now } : { status: 'suppressed', updated_at: ctx.now })
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', mail.id)
+        .execute();
+      ctx.audit({ message_id: mail.id, outcome: 'suppressed' });
+      return { action: 'suppressed' };
+    }
+    const attempt = mail.attempts + 1;
+    const inserted = await ctx.trx
+      .insertInto('crove_kernel.external_call')
+      .values({ org_id: ctx.orgId, key: mailCallKey(mail.id, attempt), module: 'kernel', target: input.provider, step: 'mail_send', retry_safety: input.safety, started_at: ctx.now })
+      .onConflict((oc) => oc.columns(['org_id', 'key']).doNothing())
+      .returning('id')
+      .executeTakeFirst();
+    if (!inserted) return stop(ctx, mail.id, again, 'CALL_EXISTS');
+    await ctx.trx
+      .updateTable('crove_kernel.mail_message')
+      .set({ status: 'sending', attempts: attempt, provider: input.provider, error_code: null, updated_at: ctx.now })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', mail.id)
+      .execute();
+    const { rows } = await sql<{ token: string | null }>`SELECT crove_kernel.mail_bounce_token(${mail.id}) AS token`.execute(ctx.trx);
+    const payload = mail.payload && typeof mail.payload === 'object' && !Array.isArray(mail.payload) ? (mail.payload as Record<string, unknown>) : {};
+    return {
+      action: 'send',
+      attempt,
+      stream: mail.stream,
+      templateKey: mail.template_key,
+      templateVersion: mail.template_version,
+      to: mail.to_address,
+      subject: mail.subject,
+      payload,
+      messageIdHeader: mail.message_id_header,
+      bounceToken: rows[0]?.token ?? null,
+    };
+  },
+});
+
+// What a refusal from the mailer means for external_call.error_kind.
+const CALL_ERROR_KIND = {
+  invalid_recipient: 'bad_request',
+  suppressed_by_provider: 'bad_request',
+  rate_limited: 'rate_limited',
+  auth: 'permission',
+  bad_request: 'bad_request',
+  transient: 'transient',
+} as const;
+
+// The outcome of one send the worker started (kernel.mail.queue.begin), for that attempt only: 'sent' with the
+// provider's id, 'failed' with a code, or 'ambiguous' when the mailer may have taken it (a timeout, an unknown
+// answer, a send lost with its worker). A refusal naming the recipient as invalid is a hard bounce, and one the
+// provider makes from its own suppression list a provider stop: both stop the org's mail to the address.
+export const recordQueuedMail = defineCommand({
+  name: 'kernel.mail.queue.record',
+  input: z.object({
+    messageId: zId,
+    attempt: z.number().int().min(1).max(1000),
+    outcome: z.enum(['sent', 'failed', 'ambiguous']),
+    errorCode: z
+      .string()
+      .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
+      .optional(),
+    errorKind: z.enum(['invalid_recipient', 'suppressed_by_provider', 'rate_limited', 'auth', 'bad_request', 'transient']).optional(),
+    providerMessageId: z.string().min(1).max(255).optional(),
+  }),
+  risk: 'R1',
+  access: 'system',
+  handler: async (ctx, input) => {
+    requireSystem(ctx);
+    const mail = await ctx.trx
+      .selectFrom('crove_kernel.mail_message')
+      .select(['id', 'to_hash'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.messageId)
+      .where('status', '=', 'sending')
+      .where('attempts', '=', input.attempt)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!mail) return { recorded: false };
+    const sent = input.outcome === 'sent';
+    await ctx.trx
+      .updateTable('crove_kernel.mail_message')
+      .set({
+        status: input.outcome,
+        error_code: sent ? null : (input.errorCode ?? (input.outcome === 'failed' ? 'SEND_FAILED' : 'OUTCOME_UNKNOWN')),
+        ...(sent ? { sent_at: ctx.now } : {}),
+        ...(sent && input.providerMessageId ? { provider_message_id: input.providerMessageId } : {}),
+        updated_at: ctx.now,
+      })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', mail.id)
+      .execute();
+    await ctx.trx
+      .updateTable('crove_kernel.external_call')
+      .set(
+        sent
+          ? { state: 'succeeded', external_ref: input.providerMessageId ?? null, finished_at: ctx.now, updated_at: ctx.now }
+          : input.outcome === 'failed'
+            ? { state: 'failed', error_kind: input.errorKind ? CALL_ERROR_KIND[input.errorKind] : 'unknown', error_code: input.errorCode ?? 'SEND_FAILED', finished_at: ctx.now, updated_at: ctx.now }
+            : { state: 'ambiguous', error_kind: 'unknown', error_code: input.errorCode ?? 'OUTCOME_UNKNOWN', updated_at: ctx.now },
+      )
+      .where('org_id', '=', ctx.orgId)
+      .where('key', '=', mailCallKey(mail.id, input.attempt))
+      .where('state', 'in', ['started', 'ambiguous'])
+      .execute();
+    const stop =
+      input.outcome === 'failed' && input.errorKind === 'invalid_recipient'
+        ? ('hard_bounce' as const)
+        : input.outcome === 'failed' && input.errorKind === 'suppressed_by_provider'
+          ? ('provider' as const)
+          : null;
+    if (stop) {
+      await ctx.trx
+        .insertInto('crove_kernel.mail_suppression')
+        .values({ org_id: ctx.orgId, to_hash: mail.to_hash, scope: 'all', reason: stop, source_message_id: mail.id })
+        .onConflict((oc) => oc.columns(['org_id', 'to_hash', 'scope']).where('lifted_at', 'is', null).doNothing())
+        .execute();
+    }
+    ctx.audit({ message_id: mail.id, attempt: input.attempt, outcome: input.outcome, ...(stop ? { suppressed: stop } : {}) });
+    return { recorded: true };
+  },
+});
+
+export const mailCommands = [recordDirectMail, addMailSuppression, liftMailSuppression, recordMailEvent, beginQueuedMail, recordQueuedMail];
 export const mailQueries = [directMailGet];

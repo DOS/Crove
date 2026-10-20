@@ -56,6 +56,7 @@ import { exportSealer } from './export-seal.ts';
 import { ConcurrencyLimiter, Semaphore } from './concurrency.ts';
 import { createHttpApp, type StreamDeps } from './http.ts';
 import { createLogProvider, createMailer, messageIdDomain, type MailProvider } from './mail.ts';
+import { MAIL_TEMPLATES } from './mail-templates.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
 import { createBlobStore } from './storage.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource } from './stream.ts';
@@ -351,6 +352,8 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,
             channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config) },
             publicUrl: config.PUBLIC_URL,
+            // Bounce reports reach this deployment only with both inbound settings (as for the invite mail).
+            mail: { mailer: resolved.mail, templates: MAIL_TEMPLATES, bounceDomain: config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null },
           }),
         );
       }
