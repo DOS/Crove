@@ -14,6 +14,7 @@ import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
+import { InstagramGrid } from '../components/social-instagram-grid.tsx';
 import { PostLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
 import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
@@ -585,7 +586,14 @@ export function SocialPage() {
         <TabsContent value="upcoming">
           {upcoming.isLoading ? <Spinner /> : upcoming.error ? <ErrorText>{errorMessage(upcoming.error)}</ErrorText> : <Agenda posts={upcoming.data ?? []} slug={slug} names={names} labels={labelList} />}
         </TabsContent>
-        <TabsContent value="calendar">{tab === 'calendar' && <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} canWrite={canWrite} labelId={search.label} />}</TabsContent>
+        <TabsContent value="calendar">
+          {tab === 'calendar' && (
+            <div className="space-y-4">
+              <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} canWrite={canWrite} labelId={search.label} />
+              <InstagramGrid slug={slug} channels={(channels.data ?? []).filter((c) => c.provider === 'instagram' && c.status !== 'revoked')} canDecide={role === 'owner' || role === 'admin'} />
+            </div>
+          )}
+        </TabsContent>
         <TabsContent value="metrics">
           <div className="space-y-4">
             <Metrics slug={slug} names={names} labelId={search.label} />
