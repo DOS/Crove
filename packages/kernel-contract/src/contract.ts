@@ -380,6 +380,22 @@ export const contract = {
     accounts: {
       trends: oc.input(z.object({ days: z.number().int().min(1).max(366) })).output(z.array(zSocialAccountTrend)),
     },
+    // Posts waiting for the viewer's review (#749), for the kernel inbox: empty for members and viewers.
+    reviewInbox: oc.input(z.object({})).output(
+      z.object({
+        items: z.array(
+          z.object({
+            postId: zId,
+            title: z.string().nullable(),
+            excerpt: z.string(),
+            channels: z.array(z.object({ variantId: zId, provider: z.string(), displayName: z.string() })),
+            at: z.string().nullable(),
+            submittedAt: z.string(),
+          }),
+        ),
+        total: z.number().int().min(0),
+      }),
+    ),
     // Client review links (#589): owners and admins make and revoke them; the token is in the create answer only.
     reviewLinks: {
       list: oc.input(z.object({ postId: zId })).output(zSocialReviewLinks),

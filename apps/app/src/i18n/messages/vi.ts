@@ -775,6 +775,13 @@ export const vi = {
     },
   },
   inbox: {
+    socialReviews: {
+      title: 'Bài đăng chờ bạn duyệt ({count, number})',
+      noText: 'Bài chưa có nội dung',
+      goesOut: 'dự kiến đăng {when}',
+      noTime: 'chưa hẹn giờ',
+      more: 'Xem thêm {count, number} bài trong Mạng xã hội',
+    },
     bankLines: {
       title: 'Dòng sao kê ngân hàng chưa lập chứng từ',
       account: '{account}: {count, number} dòng{ambiguous, plural, =0 {} other {, # dòng cần xem}}; cũ nhất ngày {date}',

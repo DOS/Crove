@@ -777,6 +777,13 @@ export const en = {
     },
   },
   inbox: {
+    socialReviews: {
+      title: 'Posts waiting for your review ({count, number})',
+      noText: 'Post without text',
+      goesOut: 'goes out {when}',
+      noTime: 'no time set',
+      more: 'See {count, number} more in Social',
+    },
     bankLines: {
       title: 'Bank statement lines without a voucher',
       account: '{account}: {count, plural, one {# line} other {# lines}}{ambiguous, plural, =0 {} one {, # to look at} other {, # to look at}}; oldest on {date}',
