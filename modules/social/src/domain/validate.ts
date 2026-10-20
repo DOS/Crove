@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, COMMENT_RULES, COVER_RULES, IMAGE_RULES, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { CAPABILITIES, COMMENT_RULES, COVER_RULES, IMAGE_RULES, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -104,8 +104,12 @@ function checkText(issues: Issue[], field: 'body' | 'title', text: string, rule:
   }
 }
 
-export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities = CAPABILITIES[variant.provider]): Issue[] {
+export function validateVariant(variant: VariantDraft, given: ChannelCapabilities = CAPABILITIES[variant.provider]): Issue[] {
   const issues: Issue[] = [];
+  // A photo post's own text limit, where the channel has one (#710).
+  const photoMax = PHOTO_BODY_MAX[variant.provider];
+  const photos = variant.media.length > 0 && variant.media.every((m) => m.kind === 'image');
+  const caps = photoMax !== undefined && photos ? { ...given, body: { ...given.body, max: photoMax } } : given;
   // No channel takes an empty post: it needs text or media.
   if (variant.body.trim() === '' && variant.media.length === 0) issues.push({ code: 'CONTENT_REQUIRED', field: 'body', limit: null, actual: null });
   // The text as the adapter sends it, with the link it appends.
