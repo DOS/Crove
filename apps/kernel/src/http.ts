@@ -90,6 +90,7 @@ import { RateLimiter } from './rate-limit.ts';
 import { reviewAnswer, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
 import { reportView, REPORT_VIEWS_PER_MINUTE } from './report-link.ts';
 import { BIO_HITS_PER_MINUTE, BIO_PAGE_CSP, bioGo, bioImage, bioView, renderBioPage } from './bio-page.ts';
+import { STATUS_PAGE_CSP, readStatusFile, renderStatusPage, statusView, type ProbeStatus } from './status-page.ts';
 import { shortLinkTarget, SHORT_LINK_HITS_PER_MINUTE } from './short-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
@@ -294,6 +295,8 @@ const PROXY_DROPPED = new Set([...SPOOFABLE, INVITE_TOKEN_HEADER]);
 // Public Supabase Auth endpoints the web app needs. Everything else (notably /admin) is not reachable.
 const AUTH_PUBLIC_PATHS =
   /^\/(?:token|signup|verify|recover|user|logout|otp|resend|settings|health|authorize|callback|reauthenticate|factors(?:\/[\w-]+(?:\/(?:challenge|verify))?)?|\.well-known\/jwks\.json)$/;
+// The status page re-reads the prober's file at most this often (#678).
+const STATUS_CACHE_MS = 5_000;
 const MAX_FILES_PER_UPLOAD = 5;
 // A Social video (#409) is one file of up to 100 MB; a batch of documents stays under 60 MB.
 const UPLOAD_BODY_LIMIT = MAX_SOCIAL_VIDEO_BYTES + 2 * 1024 * 1024;
@@ -374,6 +377,8 @@ export function createHttpApp(deps: HttpDeps) {
       // The terms and privacy notice linked at sign-up and invite acceptance (#688); null hides each link.
       termsUrl: config.TERMS_URL ?? null,
       privacyUrl: config.PRIVACY_URL ?? null,
+      // The shell links to /status only when the deployment serves it (STATUS_FILE, #678).
+      statusPage: Boolean(config.STATUS_FILE),
       // Onboarding offers "look up" next to the tax code only when the server has a registry to ask (issue #324).
       taxCodeLookup: Boolean(deps.taxLookup),
       // The SPA shows the menus of these modules only (plan Decision 12).
@@ -387,6 +392,19 @@ export function createHttpApp(deps: HttpDeps) {
       channels: { sandbox: Boolean(deps.channels?.sandbox), bluesky: Boolean(deps.channels?.bluesky), telegram: Boolean(deps.channels?.telegram), oauth: deps.channels && deps.channels.broker.id !== 'none' ? Object.keys(deps.channels.connectors ?? {}).sort() : [] },
     }),
   );
+
+  // The public status page (#678): drawn from the prober's last result, no account needed and nothing about an org on
+  // it. The file is read at most every few seconds, whatever the traffic.
+  if (config.STATUS_FILE) {
+    const statusFile = config.STATUS_FILE;
+    let cached: { readAt: number; status: ProbeStatus | null } | null = null;
+    app.get('/status', async (c) => {
+      const now = Date.now();
+      if (!cached || now - cached.readAt > STATUS_CACHE_MS) cached = { readAt: now, status: await readStatusFile(statusFile) };
+      const page = renderStatusPage(statusView(cached.status, new Date(now)));
+      return c.html(page, 200, { 'content-security-policy': STATUS_PAGE_CSP, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
+    });
+  }
 
   // Self-hosted Supabase Auth behind the same origin.
   if (config.AUTH_UPSTREAM_URL) {

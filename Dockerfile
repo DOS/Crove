@@ -30,7 +30,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY --from=kernel --chown=node:node /app /app
 COPY --from=web --chown=node:node /app/apps/app/dist /app/apps/app/dist
-RUN mkdir -p /data/files /data/keys && chown node:node /data/files /data/keys && chmod 700 /data/keys
+RUN mkdir -p /data/files /data/keys /data/status && chown node:node /data/files /data/keys /data/status && chmod 700 /data/keys
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --retries=6 CMD node -e "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

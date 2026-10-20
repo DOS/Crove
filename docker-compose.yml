@@ -130,6 +130,8 @@ services:
       SUPPORT_URL: ${SUPPORT_URL:-}
       TERMS_URL: ${TERMS_URL:-}
       PRIVACY_URL: ${PRIVACY_URL:-}
+      # The public status page PUBLIC_URL/status (#678): the prober's last result, on the shared `status` volume.
+      STATUS_FILE: ${STATUS_FILE:-}
       TAX_CODE_LOOKUP_URL: ${TAX_CODE_LOOKUP_URL:-}
       INBOUND_DOMAIN: ${INBOUND_DOMAIN:-}
       INBOUND_SECRET: ${INBOUND_SECRET:-}
@@ -219,6 +221,7 @@ services:
     volumes:
       - files:/data/files
       - keys:/data/keys
+      - status:/data/status:ro
     ports:
       # Loopback only. Put a TLS reverse proxy in front (and set PUBLIC_URL) to serve other machines.
       - '127.0.0.1:${PORT:-8080}:8080'
@@ -279,12 +282,16 @@ services:
       PROBER_HEARTBEAT_URL: ${PROBER_HEARTBEAT_URL:-}
       # Pinged by `prober --backup-ok` after each complete backup (tools/backup/backup.sh, issue #351).
       BACKUP_HEARTBEAT_URL: ${BACKUP_HEARTBEAT_URL:-}
+      # Each probe's result for the status page; the API reads the same file as STATUS_FILE.
+      PROBER_STATUS_FILE: ${STATUS_FILE:-}
       PROBER_MAX_OUTBOX_AGE_SECONDS: ${PROBER_MAX_OUTBOX_AGE_SECONDS:-300}
       PROBER_MAX_JOB_AGE_SECONDS: ${PROBER_MAX_JOB_AGE_SECONDS:-900}
       PROBER_MAX_HEARTBEAT_AGE_SECONDS: ${PROBER_MAX_HEARTBEAT_AGE_SECONDS:-120}
       PROBER_MAX_DEAD_LETTERS: ${PROBER_MAX_DEAD_LETTERS:-0}
       # Unset: the probe interval plus 60 s, so each dead letter alerts once (twice at most).
       PROBER_DEAD_LETTER_WINDOW_SECONDS: ${PROBER_DEAD_LETTER_WINDOW_SECONDS:-}
+    volumes:
+      - status:/data/status
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -327,3 +334,5 @@ volumes:
   db-data:
   files:
   keys:
+  # The prober's last result for the status page (#678): written by the prober, read by the API.
+  status:
