@@ -43,8 +43,6 @@ const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_social.bio_click',
   'crove_social.bio_page',
-  'crove_social.report_schedule',
-  'crove_social.report_schedule_run',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
