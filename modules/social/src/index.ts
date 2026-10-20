@@ -17,3 +17,4 @@ export * from './labels.ts';
 export * from './review-links.ts';
 export * from './activity.ts';
 export * from './comments.ts';
+export * from './notifications.ts';

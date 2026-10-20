@@ -19,6 +19,8 @@ import { THEMES } from '../lib/theme.ts';
 import { useThemeSetting } from '../lib/theme-runtime.ts';
 import { signOut } from '../lib/session-actions.ts';
 import { SAFETY_POLL_MS, pollEvery, useInvalidationStream, useStreamLive } from '../lib/stream-hook.ts';
+import { unreadLabel } from '../lib/social-notifications.ts';
+import { useNotifications } from './social-notifications.tsx';
 
 // Each item belongs to a module; the menu shows only the modules this deployment runs (CROVE_MODULES).
 const ALL_NAV = [
@@ -34,6 +36,7 @@ const ALL_NAV = [
   { to: '/o/$slug/agents', label: 'agents', module: 'kernel' },
   { to: '/o/$slug/tasks', label: 'tasks', module: 'kernel' },
   { to: '/o/$slug/social', label: 'social', module: 'social' },
+  { to: '/o/$slug/social/notifications', label: 'notifications', module: 'social' },
   { to: '/o/$slug/settings', label: 'settings', module: 'kernel' },
 ] as const;
 
@@ -51,6 +54,9 @@ export function OrgLayout() {
     ...orpc.inbox.list.queryOptions({ input: { status: 'pending' } }),
     refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS),
   });
+  // The member's unread notifications (#637), where Social runs.
+  const notifications = useNotifications(NAV.some((n) => n.module === 'social'));
+  const unread = unreadLabel(notifications.data?.unread ?? 0);
   const org = me.data?.orgs.find((o) => o.slug === slug);
   const orgSelectId = useId();
   const tp = useTranslations('palette');
@@ -167,6 +173,7 @@ export function OrgLayout() {
               {item.to === '/o/$slug/inbox' && (pending.data?.length ?? 0) > 0 && (
                 <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground">{pending.data?.length}</span>
               )}
+              {item.to === '/o/$slug/social/notifications' && unread && <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground">{unread}</span>}
             </Link>
           ))}
         </nav>
@@ -199,12 +206,14 @@ export function OrgLayout() {
           <ThemeSwitcher />
           <NativeSelect
             size="sm"
-            value={NAV.find((n) => window.location.pathname.split('/')[3] === n.to.split('/').pop())?.to ?? '/o/$slug/inbox'}
+            // The item whose path is the longest start of the current one (Social and its notifications share a start).
+            value={NAV.filter((n) => window.location.pathname.startsWith(n.to.replace('$slug', slug))).sort((a, b) => b.to.length - a.to.length)[0]?.to ?? '/o/$slug/inbox'}
             onChange={(e) => void navigate({ to: e.target.value as (typeof ALL_NAV)[number]['to'], params: { slug } })}
           >
             {NAV.map((n) => (
               <NativeSelectOption key={n.to} value={n.to}>
                 {t(n.label)}
+                {n.to === '/o/$slug/social/notifications' && unread ? ` (${unread})` : ''}
               </NativeSelectOption>
             ))}
           </NativeSelect>

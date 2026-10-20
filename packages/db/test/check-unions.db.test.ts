@@ -34,6 +34,7 @@ import {
   MAIL_SUPPRESSION_SCOPES,
   SOCIAL_ACTOR_ORIGINS,
   SOCIAL_DECISIONS,
+  SOCIAL_NOTIFICATION_KINDS,
   SOCIAL_LABEL_COLORS,
   SOCIAL_REVIEW_VERDICTS,
   SOCIAL_ERROR_KINDS,
@@ -134,6 +135,8 @@ const UNIONS = unions({
   'crove_social.post_approval.actor_origin': SOCIAL_ACTOR_ORIGINS,
   'crove_social.post_approval.decision': SOCIAL_DECISIONS,
   'crove_social.review_feedback.verdict': SOCIAL_REVIEW_VERDICTS,
+  'crove_social.notification.kind': SOCIAL_NOTIFICATION_KINDS,
+  'crove_social.notification_mute.kind': SOCIAL_NOTIFICATION_KINDS,
   'crove_social.post_variant.error_kind': SOCIAL_ERROR_KINDS,
   'crove_social.post_variant.status': SOCIAL_VARIANT_STATUSES,
 });
