@@ -122,7 +122,7 @@ suite('social review reminders on PostgreSQL (#703)', () => {
   const backdate = (postId: string, hours: number) =>
     admin(async (c) => {
       await c.query("SET session_replication_role = 'replica'");
-      await c.query("UPDATE crove_social.post_variant SET review_since = now() - make_interval(hours => $2) WHERE post_id = $1", [postId, hours]);
+      await c.query("UPDATE crove_social.post_variant SET review_since = now() - make_interval(hours => $2::int) WHERE post_id = $1", [postId, hours]);
     });
   const sweep = () => sweepReminders({ runtime: worker, workerDb: createDb(workerPool) });
   const reminders = async (o: Org, user: string) => (await list(o, user)).items.filter((i) => i.kind === 'review_reminder').map((i) => i.detail.stage);
