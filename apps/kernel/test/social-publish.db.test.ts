@@ -656,6 +656,16 @@ suite('social publishing on PostgreSQL (S4)', () => {
 
     const summary = await api.query<MetricsRow[]>('social.metrics.summary', {}, { actor: asUser(o.owner), orgId: o.orgId });
     expect(summary).toMatchObject([{ variantId: id, postId, provider: 'sandbox', metrics: { reach: 30 } }]);
+    // One post's channels, for the post screen (#578), and the window as an audited CSV file.
+    expect(await api.query<MetricsRow[]>('social.metrics.summary', { postId }, { actor: asUser(o.owner), orgId: o.orgId })).toMatchObject([{ variantId: id }]);
+    expect(await api.query<MetricsRow[]>('social.metrics.summary', { postId: randomUUID() }, { actor: asUser(o.owner), orgId: o.orgId })).toEqual([]);
+    const file = await api.execute<{ filename: string; csv: string }>('social.metrics.export', { days: 30 }, { actor: asUser(o.owner), orgId: o.orgId });
+    const lines = file.csv.replace(/^﻿/, '').trim().split('\r\n');
+    expect(lines[0]).toBe('post_id,channel,provider,published_at,url,text,impressions,reach,reactions,comments,shares,saves,clicks,views,captured_at');
+    expect(lines[1]).toContain(`${postId},Trang thử,sandbox,`);
+    const audits = await admin(async (c) => (await c.query<{ detail: Record<string, unknown> }>("SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'social.metrics.export' AND outcome = 'ok'", [o.orgId])).rows);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.detail).toMatchObject({ days: 30, rows: 1 });
     // Tenant roles read snapshots but never write them: the record command is the system's.
     await expect(api.execute('social.metrics.record', { variantId: id, captureKey: 'x', metrics: {} }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ status: 403 });
     const roles = await admin(async (c) =>

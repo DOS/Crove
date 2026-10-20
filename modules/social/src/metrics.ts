@@ -9,6 +9,7 @@ import type { MemberRole } from '@crove/db';
 import { METRIC_NAMES, type Publisher } from '@crove/channel';
 import type { Db } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
+import type { Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // How often a published variant is asked again, and how far back the summary looks by default.
@@ -74,53 +75,95 @@ export interface MetricsRow {
   capturedAt: string | null;
 }
 
-// The latest snapshot of each variant published in the window, newest first.
+// The latest snapshot of each variant published in the window, newest first; or of one post's published channels,
+// whenever they went out (#578, the post screen).
 export const metricsSummary = defineQuery({
   name: 'social.metrics.summary',
-  input: z.object({ days: z.number().int().min(1).max(365).optional() }),
+  input: z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional() }),
   access: ALL,
-  handler: async (ctx, input): Promise<MetricsRow[]> => {
-    const days = input.days ?? 30;
-    const { rows } = await sql<{
-      variant_id: string;
-      post_id: string;
-      provider: string;
-      channel_connection_id: string;
-      body: string;
-      published_at: Date | null;
-      external_url: string | null;
-      metrics: Record<string, number> | null;
-      captured_at: Date | null;
-    }>`
-      SELECT v.id AS variant_id, v.post_id, v.provider, v.channel_connection_id, coalesce(v.body, p.body) AS body,
-             v.published_at, v.external_url, s.metrics, s.captured_at
-      FROM crove_social.post_variant v
-      JOIN crove_social.post p ON p.org_id = v.org_id AND p.id = v.post_id
-      LEFT JOIN LATERAL (
-        SELECT m.metrics, m.captured_at FROM crove_social.metric_snapshot m
-        WHERE m.org_id = v.org_id AND m.variant_id = v.id
-        -- The last real answer; an empty snapshot (a failed try, a gone post) only when there is nothing else.
-        ORDER BY (m.metrics = '{}'::jsonb), m.captured_at DESC LIMIT 1
-      ) s ON true
-      WHERE v.org_id = ${ctx.orgId} AND v.status = 'published'
-        AND v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days}::int)
-      ORDER BY v.published_at DESC
-      LIMIT 500`.execute(ctx.trx);
-    return rows.map((r) => ({
-      variantId: r.variant_id,
-      postId: r.post_id,
-      provider: r.provider,
-      connectionId: r.channel_connection_id,
-      excerpt: r.body.replace(/\s+/g, ' ').trim().slice(0, 160),
-      publishedAt: r.published_at ? r.published_at.toISOString() : null,
-      externalUrl: r.external_url,
-      metrics: r.metrics ?? {},
-      capturedAt: r.captured_at ? r.captured_at.toISOString() : null,
-    }));
+  handler: async (ctx, input): Promise<MetricsRow[]> => latestMetrics(ctx.trx, ctx.orgId, input),
+});
+
+async function latestMetrics(trx: Trx, orgId: string, input: { days?: number | undefined; postId?: string | undefined }): Promise<MetricsRow[]> {
+  const days = input.days ?? 30;
+  const window = input.postId ? sql`v.post_id = ${input.postId}::uuid` : sql`v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days}::int)`;
+  const { rows } = await sql<{
+    variant_id: string;
+    post_id: string;
+    provider: string;
+    channel_connection_id: string;
+    body: string;
+    published_at: Date | null;
+    external_url: string | null;
+    metrics: Record<string, number> | null;
+    captured_at: Date | null;
+  }>`
+    SELECT v.id AS variant_id, v.post_id, v.provider, v.channel_connection_id, coalesce(v.body, p.body) AS body,
+           v.published_at, v.external_url, s.metrics, s.captured_at
+    FROM crove_social.post_variant v
+    JOIN crove_social.post p ON p.org_id = v.org_id AND p.id = v.post_id
+    LEFT JOIN LATERAL (
+      SELECT m.metrics, m.captured_at FROM crove_social.metric_snapshot m
+      WHERE m.org_id = v.org_id AND m.variant_id = v.id
+      -- The last real answer; an empty snapshot (a failed try, a gone post) only when there is nothing else.
+      ORDER BY (m.metrics = '{}'::jsonb), m.captured_at DESC LIMIT 1
+    ) s ON true
+    WHERE v.org_id = ${orgId} AND v.status = 'published' AND ${window}
+    ORDER BY v.published_at DESC
+    LIMIT 500`.execute(trx);
+  return rows.map((r) => ({
+    variantId: r.variant_id,
+    postId: r.post_id,
+    provider: r.provider,
+    connectionId: r.channel_connection_id,
+    excerpt: r.body.replace(/\s+/g, ' ').trim().slice(0, 160),
+    publishedAt: r.published_at ? r.published_at.toISOString() : null,
+    externalUrl: r.external_url,
+    metrics: r.metrics ?? {},
+    capturedAt: r.captured_at ? r.captured_at.toISOString() : null,
+  }));
+}
+
+// A cell as a spreadsheet reads it: quoted when it holds a comma, quote or line break, and a leading =, +, - or @
+// (which a spreadsheet would run as a formula) taken as text.
+export function csvCell(value: string | number | null): string {
+  if (value === null) return '';
+  let s = String(value);
+  if (typeof value === 'string' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+export function metricsCsv(rows: readonly MetricsRow[], channelNames: ReadonlyMap<string, string>): string {
+  const head = ['post_id', 'channel', 'provider', 'published_at', 'url', 'text', ...METRIC_NAMES, 'captured_at'];
+  const lines = rows.map((r) =>
+    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.excerpt, ...METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt].map(csvCell).join(','),
+  );
+  // A byte order mark, so a spreadsheet opens Vietnamese text as UTF-8.
+  return `﻿${[head.join(','), ...lines].join('\r\n')}\r\n`;
+}
+
+// The window's metrics as a CSV file (#578): one row per published channel with its latest counts. A command, so
+// every export leaves an audit row.
+export const metricsExport = defineCommand({
+  name: 'social.metrics.export',
+  input: z.strictObject({ days: z.number().int().min(1).max(365) }),
+  risk: 'R1',
+  access: ALL,
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const rows = await latestMetrics(ctx.trx, ctx.orgId, { days: input.days });
+    const ids = [...new Set(rows.map((r) => r.connectionId))];
+    const names = new Map(
+      ids.length === 0
+        ? []
+        : (await ctx.trx.selectFrom('crove_kernel.channel_connection').select(['id', 'display_name']).where('org_id', '=', ctx.orgId).where('id', 'in', ids).execute()).map((c) => [c.id, c.display_name] as const),
+    );
+    ctx.audit({ days: input.days, rows: rows.length });
+    return { filename: `social-metrics-${input.days}d-${ctx.now.toISOString().slice(0, 10)}.csv`, csv: metricsCsv(rows, names) };
   },
 });
 
-export const metricsCommands = [metricsRecord];
+export const metricsCommands = [metricsRecord, metricsExport];
 export const metricsQueries = [metricsTarget, metricsSummary];
 
 interface SealedChannelCredential {

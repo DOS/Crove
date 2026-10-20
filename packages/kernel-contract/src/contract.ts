@@ -206,7 +206,10 @@ export const contract = {
     },
     // How published posts did (S8): the latest capture of each variant published in the last days days (30 by default).
     metrics: {
-      summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional() })).output(z.array(zSocialMetricsRow)),
+      // postId: that post's published channels, whenever they went out.
+      summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional() })).output(z.array(zSocialMetricsRow)),
+      // The window as a CSV file (UTF-8 with a byte order mark); every export is audited.
+      export: oc.input(z.strictObject({ days: z.number().int().min(1).max(365) })).output(z.object({ filename: z.string(), csv: z.string() })),
     },
     // The media library (S9): the org's post images, newest first, and the posts that show one.
     media: {
