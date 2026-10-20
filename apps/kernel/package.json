@@ -22,6 +22,7 @@
     "@crove/kernel-contract": "workspace:*",
     "@crove/kernel-runtime": "workspace:*",
     "@crove/l10n-vn": "workspace:*",
+    "@crove/mail": "workspace:*",
     "@crove/mod-finance": "workspace:*",
     "@crove/mod-social": "workspace:*",
     "@hono/node-server": "catalog:",
@@ -29,7 +30,6 @@
     "hono": "catalog:",
     "jose": "catalog:",
     "kysely": "catalog:",
-    "nodemailer": "catalog:",
     "pg": "catalog:",
     "pg-boss": "catalog:",
     "zod": "catalog:"

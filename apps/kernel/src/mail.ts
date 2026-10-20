@@ -1,84 +1,33 @@
-// Outbound mail (issue #129). One generic adapter: SMTP, configured by SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS and
-// SMTP_FROM (the settings the bundled Supabase Auth uses for its own mails; Mailpit locally). Without SMTP_HOST, mail
-// is off: send() logs one line naming the subject and sends nothing. Crove Cloud may plug its own Mailer.
+// Outbound mail (issue #129). The providers live in @crove/mail (Email plan §3.9): SMTP, configured by SMTP_HOST,
+// SMTP_PORT, SMTP_USER, SMTP_PASS and SMTP_FROM (the settings the bundled Supabase Auth uses for its own mails;
+// Mailpit locally), or Resend with MAIL_PROVIDER=resend (#539). Without a provider, mail is off: send() logs one line
+// naming the subject and sends nothing. Crove Cloud may plug its own provider.
 //
 // Mail bodies may carry secrets (an invite's accept link), so nothing here logs a body, a recipient or an error
-// message: failures are reported by error code and SMTP reply code only.
-import nodemailer from 'nodemailer';
+// message: failures are reported by error code only.
+import { createLogProvider, createResendProvider, createSmtpProvider, describeMailError, type MailProvider, type OutboundMail, type SendResult } from '@crove/mail';
 import type { Config } from './config.ts';
 
-export interface OutboundMail {
-  to: string;
-  subject: string;
-  text: string;
-  html: string;
-  // The Message-ID header, "<id@domain>"; unset, the transport makes one.
-  messageId?: string;
-}
-
-export interface Mailer {
-  /** false: no mail server is configured and send() only logs that the mail was not sent. */
-  readonly enabled: boolean;
-  /** Sends one mail or throws. */
-  send(mail: OutboundMail): Promise<void>;
-}
+export { createLogProvider, describeMailError, type MailProvider, type OutboundMail } from '@crove/mail';
 
 export type Delivery = 'sent' | 'failed' | 'off';
 
-export interface SmtpOptions {
-  host: string;
-  port: number;
-  user?: string | undefined;
-  pass?: string | undefined;
-  from: string;
+// What deliver() reports: the outcome, the provider that took the mail and the id it gave it (stored on the mail's
+// row, so its delivery events find it).
+export interface DeliveryResult {
+  status: Delivery;
+  provider: string;
+  providerMessageId?: string;
 }
 
-export function createSmtpMailer(options: SmtpOptions): Mailer {
-  const auth = options.user && options.pass ? { user: options.user, pass: options.pass } : undefined;
-  // 465 is implicit TLS; other ports upgrade with STARTTLS when the server offers it, and must when credentials
-  // would otherwise cross the network in the clear.
-  const secure = options.port === 465;
-  const transport = nodemailer.createTransport({
-    host: options.host,
-    port: options.port,
-    secure,
-    requireTLS: !secure && auth !== undefined,
-    ...(auth ? { auth } : {}),
-    connectionTimeout: 5_000,
-    greetingTimeout: 5_000,
-    socketTimeout: 10_000,
-    logger: false,
-    debug: false,
-  });
-  // A bare address gets the display name Supabase Auth's mails use; "Name <address>" is kept as given.
-  const from = options.from.includes('<') ? options.from : { name: 'Crove', address: options.from };
-  return {
-    enabled: true,
-    async send(mail) {
-      await transport.sendMail({
-        from,
-        to: mail.to,
-        subject: mail.subject,
-        text: mail.text,
-        html: mail.html,
-        ...(mail.messageId ? { messageId: mail.messageId } : {}),
-      });
-    },
-  };
-}
+type MailConfig = Pick<Config, 'MAIL_PROVIDER' | 'SMTP_HOST' | 'SMTP_PORT' | 'SMTP_USER' | 'SMTP_PASS' | 'SMTP_FROM' | 'RESEND_API_KEY' | 'RESEND_WEBHOOK_SECRET'>;
 
-export function createLogMailer(log: (line: string) => void = (line) => console.log(line)): Mailer {
-  return {
-    enabled: false,
-    async send(mail) {
-      log(`[mail] not sent, SMTP_HOST is not set: "${mail.subject}"`);
-    },
-  };
-}
-
-export function createMailer(config: Pick<Config, 'SMTP_HOST' | 'SMTP_PORT' | 'SMTP_USER' | 'SMTP_PASS' | 'SMTP_FROM'>): Mailer {
-  if (!config.SMTP_HOST || !config.SMTP_FROM) return createLogMailer();
-  return createSmtpMailer({ host: config.SMTP_HOST, port: config.SMTP_PORT, user: config.SMTP_USER, pass: config.SMTP_PASS, from: config.SMTP_FROM });
+export function createMailer(config: MailConfig): MailProvider {
+  if (config.MAIL_PROVIDER === 'resend' && config.RESEND_API_KEY && config.SMTP_FROM) {
+    return createResendProvider({ apiKey: config.RESEND_API_KEY, from: config.SMTP_FROM, webhookSecret: config.RESEND_WEBHOOK_SECRET });
+  }
+  if (!config.SMTP_HOST || !config.SMTP_FROM) return createLogProvider();
+  return createSmtpProvider({ host: config.SMTP_HOST, port: config.SMTP_PORT, user: config.SMTP_USER, pass: config.SMTP_PASS, from: config.SMTP_FROM });
 }
 
 // The right-hand side of the Message-ID of the mail Crove sends (#538): the domain of SMTP_FROM, else the host of
@@ -89,28 +38,9 @@ export function messageIdDomain(config: Pick<Config, 'SMTP_FROM' | 'PUBLIC_URL'>
   return new URL(config.PUBLIC_URL).hostname;
 }
 
-export function describeMailer(config: Pick<Config, 'SMTP_HOST' | 'SMTP_PORT'>): string {
+export function describeMailer(config: Pick<Config, 'MAIL_PROVIDER' | 'SMTP_HOST' | 'SMTP_PORT'>): string {
+  if (config.MAIL_PROVIDER === 'resend') return 'Resend (api.resend.com)';
   return config.SMTP_HOST ? `SMTP at ${config.SMTP_HOST}:${config.SMTP_PORT}` : 'off (SMTP_HOST is not set; mails are logged, not sent)';
-}
-
-interface SmtpError {
-  code?: unknown;
-  responseCode?: unknown;
-}
-
-// An error code and SMTP reply code, never the message (it may quote the recipient or the server's reply).
-export function describeMailError(error: unknown): string {
-  const e = (error ?? {}) as SmtpError;
-  const code = typeof e.code === 'string' ? e.code : error instanceof Error ? error.name : 'unknown';
-  return typeof e.responseCode === 'number' ? `${code} ${e.responseCode}` : code;
-}
-
-// A 5xx reply, refused credentials, a server without the TLS we require or a malformed message fail the same way on
-// every attempt; a 4xx reply is the server asking to try again later.
-function permanent(error: unknown): boolean {
-  const e = (error ?? {}) as SmtpError;
-  if (typeof e.responseCode === 'number') return e.responseCode >= 500;
-  return ['EAUTH', 'ENOAUTH', 'ETLS', 'EENVELOPE', 'EMESSAGE', 'ECONFIG'].includes(String(e.code));
 }
 
 const DEADLINE = Symbol('deadline');
@@ -130,42 +60,54 @@ export interface DeliverOptions {
 }
 
 /**
- * Sends one mail with retries on transient errors, within a deadline. Never throws: the result says what happened.
- * A retry after a timeout may deliver the mail twice; for an invite that is harmless.
+ * Sends one mail with retries on a transient refusal, within a deadline. Never throws: the result says what happened.
+ * An unknown outcome (the provider may have taken the mail) is retried only when the provider drops a repeat of the
+ * same Message-ID; plain SMTP retries only refusals, so a lost reply is reported as failed rather than sent twice.
  */
-export async function deliver(mailer: Mailer, mail: OutboundMail, options: DeliverOptions = {}): Promise<Delivery> {
+export async function deliver(mailer: MailProvider, mail: OutboundMail, options: DeliverOptions = {}): Promise<DeliveryResult> {
   const log = options.log ?? ((line: string) => console.error(line));
   const label = options.label ?? 'mail';
+  const provider = mailer.name;
   if (!mailer.enabled) {
     await Promise.resolve()
       .then(() => mailer.send(mail))
       .catch(() => undefined);
-    return 'off';
+    return { status: 'off', provider };
   }
+  const repeatable = mail.messageId !== undefined && (mailer.sendRetrySafety === 'idempotent' || mailer.sendRetrySafety === 'safe');
   const delays = options.retryDelaysMs ?? [500, 2_000];
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const now = options.now ?? Date.now;
   const deadline = now() + (options.deadlineMs ?? 10_000);
   for (let attempt = 0; ; attempt++) {
+    let result: SendResult;
     try {
-      await withDeadline(mailer, mail, deadline - now());
-      return 'sent';
+      result = await withDeadline(mailer, mail, deadline - now());
     } catch (error) {
       if (error === DEADLINE) {
         log(`[mail] ${label} not sent within the deadline (attempt ${attempt + 1})`);
-        return 'failed';
-      }
-      const delay = delays[attempt];
-      if (permanent(error) || delay === undefined || now() + delay >= deadline) {
+      } else {
+        // A provider that throws broke its contract: not retried.
         log(`[mail] ${label} not sent after ${attempt + 1} attempt(s): ${describeMailError(error)}`);
-        return 'failed';
       }
-      await sleep(delay);
+      return { status: 'failed', provider };
     }
+    if (result.status === 'accepted') {
+      return { status: 'sent', provider, ...(result.providerMessageId ? { providerMessageId: result.providerMessageId } : {}) };
+    }
+    const retryable = result.status === 'unknown' ? repeatable : result.error === 'transient' || result.error === 'rate_limited';
+    const base = delays[attempt];
+    // A provider that names its wait (a rate limit) is not asked again sooner.
+    const delay = base !== undefined && result.status === 'rejected' && result.retryAfterMs !== undefined ? Math.max(base, result.retryAfterMs) : base;
+    if (!retryable || delay === undefined || now() + delay >= deadline) {
+      log(`[mail] ${label} not sent after ${attempt + 1} attempt(s): ${result.code}`);
+      return { status: 'failed', provider };
+    }
+    await sleep(delay);
   }
 }
 
-async function withDeadline(mailer: Mailer, mail: OutboundMail, remainingMs: number): Promise<void> {
+async function withDeadline(mailer: MailProvider, mail: OutboundMail, remainingMs: number): Promise<SendResult> {
   if (remainingMs <= 0) throw DEADLINE;
   // A send that throws synchronously becomes a rejection here.
   const send = Promise.resolve().then(() => mailer.send(mail));
@@ -176,7 +118,7 @@ async function withDeadline(mailer: Mailer, mail: OutboundMail, remainingMs: num
     timer = setTimeout(() => reject(DEADLINE), remainingMs);
   });
   try {
-    await Promise.race([send, expired]);
+    return await Promise.race([send, expired]);
   } finally {
     clearTimeout(timer);
   }
