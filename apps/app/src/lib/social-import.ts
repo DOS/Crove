@@ -24,7 +24,22 @@ export interface ImportChannel {
   status: string;
 }
 
-export type ImportProblem = 'NO_TEXT' | 'NO_CHANNEL' | 'UNKNOWN_CHANNEL' | 'AMBIGUOUS_CHANNEL' | 'BAD_TIME' | 'PAST_TIME' | 'BAD_LINK';
+export type ImportProblem = 'NO_TEXT' | 'TEXT_TOO_LONG' | 'TITLE_TOO_LONG' | 'NO_CHANNEL' | 'UNKNOWN_CHANNEL' | 'AMBIGUOUS_CHANNEL' | 'BAD_TIME' | 'PAST_TIME' | 'BAD_LINK';
+
+// What the server takes for a post (social.post.create): a row past these would refuse the whole import.
+const MAX_BODY = 100_000;
+const MAX_TITLE = 500;
+const MAX_LINK = 2000;
+
+function validLink(link: string): boolean {
+  if (link.length > MAX_LINK || !/^https?:\/\/\S+$/i.test(link)) return false;
+  try {
+    const url = new URL(link);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 export interface ImportRow {
   // The row number in the sheet, from 1.
@@ -126,6 +141,8 @@ export function importRows(rows: SheetRows, channels: readonly ImportChannel[], 
     if (!body && !title && !link && !channelText && !timeText) continue;
     const problems: ImportRow['problems'] = [];
     if (!body) problems.push({ code: 'NO_TEXT' });
+    if (body.length > MAX_BODY) problems.push({ code: 'TEXT_TOO_LONG' });
+    if (title.length > MAX_TITLE) problems.push({ code: 'TITLE_TOO_LONG' });
     const connectionIds = channelText ? channelsOf(channelText, channels, problems) : [];
     if (connectionIds.length === 0 && !problems.some((p) => p.code === 'UNKNOWN_CHANNEL' || p.code === 'AMBIGUOUS_CHANNEL')) problems.push({ code: 'NO_CHANNEL' });
     let plannedAt: string | null = null;
@@ -135,7 +152,7 @@ export function importRows(rows: SheetRows, channels: readonly ImportChannel[], 
       else if (at.getTime() <= now) problems.push({ code: 'PAST_TIME', value: timeText });
       else plannedAt = at.toISOString();
     }
-    if (link && !/^https?:\/\/\S+$/i.test(link)) problems.push({ code: 'BAD_LINK', value: link });
+    if (link && !validLink(link)) problems.push({ code: 'BAD_LINK', value: link.slice(0, 80) });
     out.push({ row: rowNo, body, title, link, connectionIds, plannedAt, problems });
     if (out.length > MAX_IMPORT_ROWS) break;
   }

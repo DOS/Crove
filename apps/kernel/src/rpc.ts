@@ -301,7 +301,13 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         addChannels: os.social.posts.addChannels.handler(socialCommand('social.post.add_channels')),
         submit: os.social.posts.submit.handler(socialCommand('social.post.submit')),
         repost: os.social.posts.repost.handler(socialCommand('social.post.repost')),
-        import: os.social.posts.import.handler(socialCommand('social.post.import')),
+        // A retry with the same idempotencyKey returns the first import instead of a second set of posts.
+        import: os.social.posts.import.handler(({ context, input }) =>
+          inSocial(context, (orgId, actor) => {
+            const { idempotencyKey, ...rest } = input;
+            return runtime.execute('social.post.import', rest, { actor, orgId, idempotencyKey });
+          }),
+        ),
         duplicate: os.social.posts.duplicate.handler(socialCommand('social.post.duplicate')),
         setEvergreen: os.social.posts.setEvergreen.handler(socialCommand('social.post.set_evergreen')),
         draftWithAi: os.social.posts.draftWithAi.handler(({ context, input }) =>

@@ -1381,6 +1381,8 @@ export const vi = {
       createAndSubmit: 'Tạo và gửi duyệt {count, number} bài',
       problem: {
         NO_TEXT: 'Thiếu nội dung',
+        TEXT_TOO_LONG: 'Nội dung dài quá 100.000 ký tự',
+        TITLE_TOO_LONG: 'Tiêu đề dài quá 500 ký tự',
         NO_CHANNEL: 'Chưa chọn kênh',
         UNKNOWN_CHANNEL: 'Không thấy kênh "{value}" đang kết nối',
         AMBIGUOUS_CHANNEL: 'Có nhiều kênh khớp "{value}"; hãy ghi tên kênh',

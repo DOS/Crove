@@ -2,17 +2,18 @@
 // rule issues, and creates drafts (or sends them to review) for the rows that are ready. Nothing is published here.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { TableCell, TableRow } from '@crove/ui/components/table';
-import { DataTable, ErrorText, PageHeader } from '../components/ui.tsx';
+import { DataTable, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { MAX_STATEMENT_BYTES, readStatementFile } from '../lib/bank-statement.ts';
-import { draftIssues, hasTitle, providerName } from '../lib/social.ts';
+import { draftIssues, providerName } from '../lib/social.ts';
+import type { SheetRows } from '../lib/xlsx.ts';
 import { IMPORT_TEMPLATE, importRows, MAX_IMPORT_ROWS, type ImportRow } from '../lib/social-import.ts';
 
 export function SocialImportPage() {
@@ -21,45 +22,52 @@ export function SocialImportPage() {
   const f = useFormat();
   const navigate = useNavigate();
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
-  const [rows, setRows] = useState<ImportRow[] | null>(null);
+  // The sheet as read; its rows are worked out against the channels, again whenever those load or change.
+  const [sheet, setSheet] = useState<SheetRows | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  const rows = useMemo<ImportRow[] | null>(() => (sheet && channels.data ? importRows(sheet, channels.data) : null), [sheet, channels.data]);
+  const tooMany = rows !== null && rows.length > MAX_IMPORT_ROWS;
+  const headerMissing = sheet !== null && channels.data !== undefined && rows === null;
+  // One key per set of rows sent: a retry after a lost answer returns the first import.
+  const attempt = useRef<{ key: string; payload: string } | null>(null);
   const byId = new Map((channels.data ?? []).map((c) => [c.id, c]));
   // A row is ready when the sheet gave it no problem and every channel takes it as it is.
   const issuesOf = (r: ImportRow) =>
     r.connectionIds.flatMap((id) => {
       const c = byId.get(id);
-      return c ? draftIssues(c.provider, { body: r.body, title: hasTitle(c.provider) ? r.title || null : null, linkUrl: r.link || null }).map((i) => ({ channel: c, issue: i })) : [];
+      // The title goes to every channel, as the import sends it: one without titles says so.
+      return c ? draftIssues(c.provider, { body: r.body, title: r.title || null, linkUrl: r.link || null }).map((i) => ({ channel: c, issue: i })) : [];
     });
-  const ready = (rows ?? []).filter((r) => r.problems.length === 0);
+  const ready = tooMany ? [] : (rows ?? []).filter((r) => r.problems.length === 0);
 
-  const pick = async (file: File | undefined) => {
+  const pick = async (input: HTMLInputElement) => {
+    const file = input.files?.[0];
+    // The same file picked again (fixed and saved) is read again.
+    input.value = '';
     setFileError(null);
-    setRows(null);
+    setSheet(null);
     if (!file) return;
     if (file.size > MAX_STATEMENT_BYTES) return setFileError(t('import.tooBig'));
     try {
-      const sheet = await readStatementFile(new Uint8Array(await file.arrayBuffer()), file.name);
-      const found = importRows(sheet, channels.data ?? []);
-      if (!found) return setFileError(t('import.noHeader'));
-      if (found.length > MAX_IMPORT_ROWS) return setFileError(t('import.tooMany', { max: MAX_IMPORT_ROWS }));
-      setRows(found);
+      setSheet(await readStatementFile(new Uint8Array(await file.arrayBuffer()), file.name));
     } catch {
       setFileError(t('import.unreadable'));
     }
   };
   const create = useMutation({
-    mutationFn: (submit: boolean) =>
-      client.social.posts.import({
-        submit,
-        posts: ready.map((r) => ({
+    mutationFn: (submit: boolean) => {
+      const posts = ready.map((r) => ({
           body: r.body,
           title: r.title || null,
           linkUrl: r.link || null,
           ...(r.plannedAt ? { scheduledAt: r.plannedAt } : {}),
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           connectionIds: r.connectionIds,
-        })),
-      }),
+      }));
+      const payload = JSON.stringify({ submit, posts });
+      if (attempt.current?.payload !== payload) attempt.current = { key: crypto.randomUUID(), payload };
+      return client.social.posts.import({ submit, posts, idempotencyKey: attempt.current.key });
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries();
       void navigate({ to: '/o/$slug/social', params: { slug } });
@@ -88,14 +96,17 @@ export function SocialImportPage() {
       <Card className="mb-4 block space-y-3 p-4">
         <p className="text-sm text-muted-foreground">{t('import.howTo')}</p>
         <div className="flex flex-wrap items-center gap-2">
-          <input type="file" accept=".csv,.xlsx,text/csv" aria-label={t('import.pick')} onChange={(e) => void pick(e.target.files?.[0])} className="text-sm" />
+          <input type="file" accept=".csv,.xlsx,text/csv" aria-label={t('import.pick')} onChange={(e) => void pick(e.currentTarget)} className="text-sm" />
           <Button variant="ghost" size="sm" onClick={template}>
             {t('import.template')}
           </Button>
         </div>
         {fileError && <ErrorText>{fileError}</ErrorText>}
+        {headerMissing && <ErrorText>{t('import.noHeader')}</ErrorText>}
+        {tooMany && <ErrorText>{t('import.tooMany', { max: MAX_IMPORT_ROWS })}</ErrorText>}
+        {sheet && channels.isLoading && <Spinner />}
       </Card>
-      {rows && (
+      {rows && !tooMany && (
         <div className="space-y-3">
           <p className="text-sm text-foreground">{t('import.summary', { ready: ready.length, total: rows.length })}</p>
           <DataTable head={[t('import.row'), t('import.text'), t('import.channels'), t('import.time'), t('import.problems')]}>

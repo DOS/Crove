@@ -219,6 +219,8 @@ export const contract = {
               .min(1)
               .max(200),
             submit: z.boolean().optional(),
+            // One key per import: a retry after a lost answer returns the first result.
+            idempotencyKey: zId,
           }),
         )
         .output(z.object({ posts: z.array(z.object({ postId: zId, submitted: z.number().int() })) })),

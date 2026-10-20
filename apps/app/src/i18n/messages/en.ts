@@ -1380,6 +1380,8 @@ export const en = {
       createAndSubmit: 'Create and send {count, number} to review',
       problem: {
         NO_TEXT: 'No text',
+        TEXT_TOO_LONG: 'The text is over 100,000 characters',
+        TITLE_TOO_LONG: 'The title is over 500 characters',
         NO_CHANNEL: 'No channel chosen',
         UNKNOWN_CHANNEL: 'No connected channel "{value}"',
         AMBIGUOUS_CHANNEL: 'Several channels match "{value}"; write the channel name',
