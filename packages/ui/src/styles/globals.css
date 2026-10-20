@@ -58,6 +58,15 @@
   --color-warning: var(--warning);
   /* AI-proposed data that no one has approved yet (DESIGN.md 3.1, principle 2): outline and chip color. */
   --color-proposal: var(--proposal);
+  /* Post labels (#639): the hues a member picks for a label; gray uses the neutral tokens. */
+  --color-label-red: var(--label-red);
+  --color-label-orange: var(--label-orange);
+  --color-label-yellow: var(--label-yellow);
+  --color-label-green: var(--label-green);
+  --color-label-teal: var(--label-teal);
+  --color-label-blue: var(--label-blue);
+  --color-label-purple: var(--label-purple);
+  --color-label-pink: var(--label-pink);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -107,6 +116,14 @@
   --sidebar-border: oklch(0.915 0.007 290);
   --sidebar-ring: oklch(0.55 0.2 290);
   --proposal: oklch(0.5 0.13 245);
+  --label-red: oklch(0.52 0.19 25);
+  --label-orange: oklch(0.56 0.15 50);
+  --label-yellow: oklch(0.55 0.11 90);
+  --label-green: oklch(0.52 0.13 145);
+  --label-teal: oklch(0.52 0.09 190);
+  --label-blue: oklch(0.52 0.15 255);
+  --label-purple: oklch(0.5 0.18 300);
+  --label-pink: oklch(0.55 0.18 350);
 }
 
 .dark {
@@ -148,6 +165,14 @@
   --sidebar-border: oklch(0.285 0.012 285);
   --sidebar-ring: oklch(0.75 0.13 293);
   --proposal: oklch(0.78 0.11 245);
+  --label-red: oklch(0.74 0.15 25);
+  --label-orange: oklch(0.79 0.13 55);
+  --label-yellow: oklch(0.86 0.13 95);
+  --label-green: oklch(0.8 0.14 145);
+  --label-teal: oklch(0.8 0.1 190);
+  --label-blue: oklch(0.76 0.12 255);
+  --label-purple: oklch(0.76 0.13 300);
+  --label-pink: oklch(0.78 0.13 350);
 }
 
 @layer base {

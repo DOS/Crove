@@ -23,6 +23,7 @@ import { activityCommands, activityQueries } from './activity.ts';
 import { assignCommands } from './assign.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
+import { labelCommands, labelQueries, labelsOfPosts } from './labels.ts';
 import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
@@ -929,6 +930,8 @@ export interface PostView {
   createdAt: string;
   updatedAt: string;
   variants: VariantView[];
+  // Its labels (#639), by label name.
+  labelIds: string[];
 }
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
@@ -989,6 +992,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
     list.push({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes), durationMs: r.duration_ms === null ? null : Number(r.duration_ms) });
     mediaByPost.set(r.post_id, list);
   }
+  const labels = await labelsOfPosts(ctx.trx, ctx.orgId, postIds);
   const byPost = new Map(posts.map((p) => [p.id, p]));
   return postIds
     .map((id) => byPost.get(id))
@@ -1014,6 +1018,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
         dueAt: iso(p.due_at),
         createdAt: iso(p.created_at) ?? '',
         updatedAt: iso(p.updated_at) ?? '',
+        labelIds: (labels.get(p.id) ?? []).map((l) => l.id),
         variants: variants
           .filter((v) => v.post_id === p.id)
           .map((v) => {
@@ -1082,6 +1087,8 @@ export const postList = defineQuery({
     stage: z.enum(['review', 'drafts', 'done', 'attention']).optional(),
     // Posts with a live channel on this connection.
     connectionId: zId.optional(),
+    // Posts with this label (#639).
+    labelId: zId.optional(),
     // Posts assigned to the viewer (#640).
     assignee: z.literal('me').optional(),
     // In the post's or a channel's own text or title; wildcards are matched as themselves.
@@ -1107,6 +1114,7 @@ export const postList = defineQuery({
       q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status IN ('failed', 'needs_attention', 'paused'))`);
     }
     if (input.connectionId) q = q.where(variantWhere(null));
+    if (input.labelId) q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = p.org_id AND pl.post_id = p.id AND pl.label_id = ${input.labelId}::uuid)`);
     if (input.search) {
       const term = likeTerm(input.search);
       q = q.where(
@@ -1200,6 +1208,7 @@ export const socialCommands = [
   ...policyCommands,
   ...assignCommands,
   ...snippetCommands,
+  ...labelCommands,
   ...reviewLinkCommands,
   ...activityCommands,
 ];
@@ -1244,4 +1253,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...activityQueries, ...reviewLinkQueries];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...activityQueries, ...reviewLinkQueries];

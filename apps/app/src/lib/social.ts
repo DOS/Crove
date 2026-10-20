@@ -131,6 +131,8 @@ export type SocialTab = (typeof SOCIAL_TABS)[number];
 export interface SocialSearch {
   tab?: SocialTab;
   channel?: string;
+  // A label's id (#639): the lists, the calendar and the metrics show only posts with it.
+  label?: string;
   q?: string;
   // Local calendar days, YYYY-MM-DD, both included.
   from?: string;
@@ -146,6 +148,7 @@ export function parseSocialSearch(search: Record<string, unknown>): SocialSearch
   const out: SocialSearch = {};
   if (typeof search.tab === 'string' && (SOCIAL_TABS as readonly string[]).includes(search.tab)) out.tab = search.tab as SocialTab;
   if (typeof search.channel === 'string' && UUID_RE.test(search.channel)) out.channel = search.channel;
+  if (typeof search.label === 'string' && UUID_RE.test(search.label)) out.label = search.label;
   if (typeof search.q === 'string' && search.q.trim()) out.q = search.q.trim().slice(0, 200);
   if (typeof search.from === 'string' && DAY_RE.test(search.from)) out.from = search.from;
   if (typeof search.to === 'string' && DAY_RE.test(search.to)) out.to = search.to;
