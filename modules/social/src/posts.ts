@@ -30,6 +30,7 @@ import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
 import { labelCommands, labelQueries, labelsOfPosts } from './labels.ts';
 import { ideaCommands, ideaOfPost, ideaQueries, linkIdeaToPost } from './ideas.ts';
+import { bioCommands, bioQueries } from './bio-page.ts';
 import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
@@ -1223,6 +1224,7 @@ export const socialCommands = [
   ...snippetCommands,
   ...labelCommands,
   ...ideaCommands,
+  ...bioCommands,
   ...reviewLinkCommands,
   ...activityCommands,
   ...accountCommands,
@@ -1272,4 +1274,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...activityQueries, ...reviewLinkQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];
+export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];
