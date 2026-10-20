@@ -217,6 +217,9 @@ export class InstagramPublisher implements Publisher {
       if (typeof answer.id !== 'string' || !NUMERIC_ID.test(answer.id)) return { kind: 'unknown', code: 'NO_COMMENT_ID' };
       return { kind: 'accepted', externalId: answer.id };
     } catch (error) {
+      // A Reel or carousel still being processed right after it went out takes no comment yet (code 9007, subcode
+      // 2207027): nothing was posted, so the person can try again shortly.
+      if (error instanceof GraphError && (error.code === 9007 || error.subcode === 2207027)) return { kind: 'rejected', error: 'transient', code: 'MEDIA_NOT_READY' };
       return commentResult(graphPublishResult(error));
     }
   }

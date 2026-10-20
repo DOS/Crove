@@ -23,6 +23,10 @@ const POLL_MS = 2_000;
 // How long a reply waits for its text container; a text container is usually ready at once, and the comment job's
 // call timeout (60 s) leaves room for the two calls around the wait.
 const COMMENT_WAIT_MS = 10_000;
+// A first comment's calls each end within COMMENT_CALL_MS, and its publish is not made after COMMENT_BUDGET_MS, well
+// inside the worker's call timeout.
+const COMMENT_CALL_MS = 10_000;
+const COMMENT_BUDGET_MS = 30_000;
 const CHECK_AFTER_SECONDS = 30;
 const NUMERIC_ID = /^\d{1,32}$/;
 // Threads takes 2 to 20 items in a carousel.
@@ -55,7 +59,7 @@ class ThreadsClient {
 
   // path is relative to graph.threads.net; a token goes in the Authorization header unless an endpoint needs it as a
   // parameter (the token exchanges).
-  async call<T>(method: 'GET' | 'POST', path: string, options: { token?: string; params?: Record<string, string>; form?: Record<string, string> } = {}): Promise<T> {
+  async call<T>(method: 'GET' | 'POST', path: string, options: { token?: string; params?: Record<string, string>; form?: Record<string, string>; timeoutMs?: number } = {}): Promise<T> {
     const url = new URL(`${API}/${path.replace(/^\//, '')}`);
     for (const [k, v] of Object.entries(options.params ?? {})) url.searchParams.set(k, v);
     const headers: Record<string, string> = { accept: 'application/json' };
@@ -65,7 +69,7 @@ class ThreadsClient {
       headers['content-type'] = 'application/x-www-form-urlencoded';
       body = new URLSearchParams(options.form).toString();
     }
-    const response = await this.fetch(url.toString(), { method, headers, ...(body === undefined ? {} : { body }) });
+    const response = await this.fetch(url.toString(), { method, headers, ...(body === undefined ? {} : { body }), ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}) });
     const json = (await response.json().catch(() => null)) as ({ error?: { message?: unknown; code?: unknown; error_subcode?: unknown } } & Record<string, unknown>) | null;
     if (!response.ok || !json || json.error) throw new ThreadsError(response.ok && !json ? 200 : response.status, json?.error);
     return json as T;
@@ -212,12 +216,14 @@ export class ThreadsPublisher implements Publisher {
   private readonly waitMs: number;
   private readonly pollMs: number;
   private readonly commentWaitMs: number;
+  private readonly commentBudgetMs: number;
 
-  constructor(fetchImpl?: Fetch, timing: { waitMs?: number; pollMs?: number; commentWaitMs?: number } = {}) {
+  constructor(fetchImpl?: Fetch, timing: { waitMs?: number; pollMs?: number; commentWaitMs?: number; commentBudgetMs?: number } = {}) {
     this.client = new ThreadsClient(fetchImpl);
     this.waitMs = timing.waitMs ?? WAIT_MS;
     this.pollMs = timing.pollMs ?? POLL_MS;
     this.commentWaitMs = timing.commentWaitMs ?? COMMENT_WAIT_MS;
+    this.commentBudgetMs = timing.commentBudgetMs ?? COMMENT_BUDGET_MS;
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -302,16 +308,19 @@ export class ThreadsPublisher implements Publisher {
     if (!NUMERIC_ID.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
     if (!NUMERIC_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
     const user = input.externalAccountId;
+    // Each call is bounded, and the publish is never made past the budget: the job stops waiting at its own timeout,
+    // and a reply published after that would be recorded as unclear while it went out.
+    const started = Date.now();
     let container: string;
     try {
-      container = await this.create(user, token, { media_type: 'TEXT', text: input.text, reply_to_id: input.externalId });
+      container = await this.create(user, token, { media_type: 'TEXT', text: input.text, reply_to_id: input.externalId }, COMMENT_CALL_MS);
     } catch (error) {
       const result = threadsResult(error);
       return commentResult(result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) });
     }
     const deadline = Date.now() + this.commentWaitMs;
     for (;;) {
-      const state = await this.status_(container, token);
+      const state = await this.status_(container, token, COMMENT_CALL_MS);
       if (state === 'FINISHED') break;
       if (state === 'ERROR' || state === 'EXPIRED') return { kind: 'rejected', error: 'bad_request', code: `CONTAINER_${state}` };
       // This call has not published the container yet; if Meta says it is published, whether a reply went out is unclear.
@@ -320,8 +329,10 @@ export class ThreadsPublisher implements Publisher {
       if (Date.now() >= deadline) return { kind: 'rejected', error: 'transient', code: 'CONTAINER_NOT_READY' };
       await sleep(Math.min(this.pollMs, Math.max(0, deadline - Date.now())));
     }
+    // Nothing is published yet: too late to publish within the job's time, so nothing goes out and the person retries.
+    if (Date.now() - started > this.commentBudgetMs) return { kind: 'rejected', error: 'transient', code: 'LATE_PUBLISH' };
     try {
-      const answer = await this.client.call<{ id?: unknown }>('POST', `${VERSION}/${user}/threads_publish`, { token, form: { creation_id: container } });
+      const answer = await this.client.call<{ id?: unknown }>('POST', `${VERSION}/${user}/threads_publish`, { token, form: { creation_id: container }, timeoutMs: COMMENT_CALL_MS });
       const id = typeof answer.id === 'string' || typeof answer.id === 'number' ? String(answer.id) : '';
       if (!NUMERIC_ID.test(id)) return { kind: 'unknown', code: 'NO_POST_ID' };
       return { kind: 'accepted', externalId: id };
@@ -342,16 +353,16 @@ export class ThreadsPublisher implements Publisher {
     }
   }
 
-  private async create(user: string, token: string, form: Record<string, string>): Promise<string> {
-    const answer = await this.client.call<{ id?: unknown }>('POST', `${VERSION}/${user}/threads`, { token, form });
+  private async create(user: string, token: string, form: Record<string, string>, timeoutMs?: number): Promise<string> {
+    const answer = await this.client.call<{ id?: unknown }>('POST', `${VERSION}/${user}/threads`, { token, form, ...(timeoutMs ? { timeoutMs } : {}) });
     const id = typeof answer.id === 'string' || typeof answer.id === 'number' ? String(answer.id) : '';
     if (!NUMERIC_ID.test(id)) throw new ThreadsError(502, { message: 'no container id', code: 1 });
     return id;
   }
 
-  private async status_(container: string, token: string): Promise<string> {
+  private async status_(container: string, token: string, timeoutMs?: number): Promise<string> {
     try {
-      const answer = await this.client.call<{ status?: unknown }>('GET', `${VERSION}/${container}`, { token, params: { fields: 'status' } });
+      const answer = await this.client.call<{ status?: unknown }>('GET', `${VERSION}/${container}`, { token, params: { fields: 'status' }, ...(timeoutMs ? { timeoutMs } : {}) });
       return typeof answer.status === 'string' ? answer.status : 'UNKNOWN';
     } catch (error) {
       const result = threadsResult(error);

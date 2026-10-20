@@ -392,7 +392,8 @@ export class FacebookPagePublisher implements Publisher {
   async comment(input: CommentInput): Promise<CommentResult> {
     const token = pageToken(input.secret);
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_PAGE_TOKEN' };
-    if (!/^\d{1,32}_\d{1,32}$/.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    // A feed post is <page>_<post>; a bare object id (a video) is taken as it is.
+    if (!/^\d{1,32}(_\d{1,32})?$/.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
     try {
       const answer = await this.graph.call<FeedAnswer>('POST', `${input.externalId}/comments`, { token, form: { message: input.text } });
       // Meta answered 200 without an id: the comment may be there.

@@ -110,6 +110,9 @@ describe('first comments', () => {
     expect(await new FacebookPagePublisher(META, old.fetchImpl).comment(post)).toMatchObject({ kind: 'rejected', error: 'permission', code: '10' });
     expect(await new FacebookPagePublisher(META, fetchImpl).comment({ ...post, externalId: '../me/feed' })).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
     expect(await new FacebookPagePublisher(META, fetchImpl).comment({ ...post, secret: '{}' })).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    // A bare object id (a video) is commented on as it is.
+    const video = fake({ ['POST graph.facebook.com/v24.0/444555777/comments']: [{ body: { id: '444555777_1' } }] });
+    expect(await new FacebookPagePublisher(META, video.fetchImpl).comment({ ...post, externalId: '444555777' })).toEqual({ kind: 'accepted', externalId: '444555777_1' });
   });
 
   it('comments on an Instagram post as the account, and asks for instagram_manage_comments when connecting', async () => {
@@ -126,6 +129,9 @@ describe('first comments', () => {
     expect(await new InstagramPublisher(META, old.fetchImpl).comment(media)).toMatchObject({ kind: 'rejected', error: 'permission', code: '10' });
     expect(await new InstagramPublisher(META, fetchImpl).comment({ ...media, externalId: 'abc' })).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
     expect(await new InstagramPublisher(META, fetchImpl).comment({ ...media, secret: '{}' })).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    // A Reel still processing right after it went out takes no comment yet: nothing was posted, try again shortly.
+    const notReady = fake({ [route]: [graphError(400, 9007, 'Media ID is not available')] });
+    expect(await new InstagramPublisher(META, notReady.fetchImpl).comment(media)).toEqual({ kind: 'rejected', error: 'transient', code: 'MEDIA_NOT_READY' });
   });
 
   it('replies on Threads under its own post through a reply container, and asks for threads_manage_replies when connecting', async () => {
@@ -165,6 +171,11 @@ describe('first comments', () => {
     const slow = fake({ [create]: [{ body: { id: CONTAINER } }], [status]: [{ body: { status: 'IN_PROGRESS' } }] });
     expect(await new ThreadsPublisher(slow.fetchImpl, { pollMs: 0, commentWaitMs: 0 }).comment(reply)).toEqual({ kind: 'rejected', error: 'transient', code: 'CONTAINER_NOT_READY' });
     expect(slow.calls.some((c) => c.route === publish)).toBe(false);
+    // Past its time budget the reply is never published: the job has stopped waiting, so a late reply would be
+    // recorded as unclear while it went out.
+    const late = fake({ [create]: [{ body: { id: CONTAINER } }], [status]: [{ body: { status: 'FINISHED' } }], [publish]: [{ body: { id: '18100000000000003' } }] });
+    expect(await new ThreadsPublisher(late.fetchImpl, { pollMs: 0, commentBudgetMs: -1 }).comment(reply)).toEqual({ kind: 'rejected', error: 'transient', code: 'LATE_PUBLISH' });
+    expect(late.calls.some((c) => c.route === publish)).toBe(false);
     expect(await new ThreadsPublisher(fetchImpl, fast).comment({ ...reply, externalId: 'at://not-threads' })).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
   });
 
