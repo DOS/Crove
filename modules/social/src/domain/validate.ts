@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, GBP_CTAS, GBP_TOPICS, gbpOf, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, CAPABILITIES, GBP_CTAS, GBP_TOPICS, gbpOf, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -66,6 +66,11 @@ export type IssueCode =
   | 'THREAD_PART_EMPTY'
   | 'THREAD_PART_TOO_LONG'
   | 'THREAD_WITH_COMMENT'
+  // The auto-reply (#746): not a text and a like count from 1 to AUTO_REPLY_LIKES_MAX; a channel that takes none; a
+  // text too long for the channel.
+  | 'AUTO_REPLY_INVALID'
+  | 'AUTO_REPLY_NOT_SUPPORTED'
+  | 'AUTO_REPLY_TOO_LONG'
   // A video's cover (#642): not a frame or an image; set on a post that is not one video; a kind the channel's
   // adapter cannot send; a frame past the end of the video.
   | 'COVER_INVALID'
@@ -224,6 +229,18 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
         if (rule.max !== null && n > rule.max) issues.push({ code: 'THREAD_PART_TOO_LONG', field, limit: rule.max, actual: n });
         else if (rule.maxBytes !== undefined && bytes > rule.maxBytes) issues.push({ code: 'THREAD_PART_TOO_LONG', field, limit: rule.maxBytes, actual: bytes });
       });
+    }
+  }
+  const reply = autoReplyOf(variant.settings);
+  if (reply !== null) {
+    const rule = story ? undefined : AUTO_REPLY_RULES[variant.provider];
+    if (!rule) issues.push({ code: 'AUTO_REPLY_NOT_SUPPORTED', field: 'settings.autoReply', limit: null, actual: null });
+    else if (reply === 'invalid') issues.push({ code: 'AUTO_REPLY_INVALID', field: 'settings.autoReply', limit: AUTO_REPLY_LIKES_MAX, actual: null });
+    else {
+      const n = countText(reply.text, rule.count);
+      const bytes = countText(reply.text, 'bytes');
+      if (rule.max !== null && n > rule.max) issues.push({ code: 'AUTO_REPLY_TOO_LONG', field: 'settings.autoReply.text', limit: rule.max, actual: n });
+      else if (rule.maxBytes !== undefined && bytes > rule.maxBytes) issues.push({ code: 'AUTO_REPLY_TOO_LONG', field: 'settings.autoReply.text', limit: rule.maxBytes, actual: bytes });
     }
   }
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);

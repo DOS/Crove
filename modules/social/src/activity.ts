@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
+import { AUTO_REPLY_STALE_MS, autoReplyCallsOf } from './auto-reply.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -90,6 +91,9 @@ export const ACTIVITY_KINDS = [
   'published',
   'failed',
   'cancelled',
+  // The auto-reply on likes (#746): posted, or not (its code says why).
+  'auto_replied',
+  'auto_reply_failed',
 ] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
@@ -170,6 +174,7 @@ export const postActivity = defineQuery({
             OR (target_type = 'social.post_variant' AND target_id = ANY(${variantIds}::uuid[])))
         ORDER BY occurred_at DESC LIMIT ${ACTIVITY_LIMIT}`.execute(ctx.trx),
     ]);
+    const replies = await autoReplyCallsOf(ctx.trx, ctx.orgId, await ctx.trx.selectFrom('crove_social.post_variant').select(['id', 'revision', 'attempt']).where('org_id', '=', ctx.orgId).where('post_id', '=', post.id).execute());
     const viewer = ctx.actor.type === 'user' ? ctx.actor.userId : null;
     const now = Date.now();
     const none = { userId: null, name: null, variantId: null, body: null, decision: null, editedAt: null, editable: false, url: null, code: null };
@@ -201,6 +206,12 @@ export const postActivity = defineQuery({
         if (v.status === 'cancelled') return [{ ...none, id: `cancelled:${v.id}`, kind: 'cancelled', at: v.updated_at.toISOString(), variantId: v.id }];
         return [];
       }),
+      ...[...replies].flatMap(([variantId, call]): ActivityItem[] =>
+        // A call still on its way shows nothing yet; one that went quiet is unclear.
+        call.state === 'started' && now - call.started_at.getTime() <= AUTO_REPLY_STALE_MS
+          ? []
+          : [{ ...none, id: `auto_reply:${variantId}`, kind: call.state === 'succeeded' ? 'auto_replied' : 'auto_reply_failed', at: (call.finished_at ?? call.started_at).toISOString(), variantId, code: call.state === 'succeeded' ? null : call.state === 'started' ? 'OUTCOME_UNKNOWN' : (call.error_code ?? 'OUTCOME_UNKNOWN') }],
+      ),
     ];
     items.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
     const shown = items.slice(0, ACTIVITY_LIMIT);

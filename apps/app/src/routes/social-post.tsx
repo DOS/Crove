@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
@@ -253,6 +253,45 @@ function ThreadField({ settings, disabled, onChange }: { settings: Record<string
   );
 }
 
+// The auto-reply on likes (#746): a text and the like count that sets it off; both or neither.
+function AutoReplyField({ settings, disabled, onChange }: { settings: Record<string, unknown>; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const current = settings.autoReply && typeof settings.autoReply === 'object' ? (settings.autoReply as { text?: unknown; likes?: unknown }) : null;
+  const text = typeof current?.text === 'string' ? current.text : '';
+  const likes = typeof current?.likes === 'number' ? current.likes : null;
+  const set = (next: { text: string; likes: number | null }) => {
+    const { autoReply: _old, ...rest } = settings;
+    // An empty count is kept as null, which validation names, rather than shown as 0.
+    onChange(next.text || next.likes !== null ? { ...rest, autoReply: { text: next.text, likes: next.likes } } : rest);
+  };
+  return (
+    <div className="space-y-1">
+      <Label htmlFor={`${id}-text`} className="text-xs">
+        {t('autoReply')}
+      </Label>
+      <Textarea id={`${id}-text`} rows={2} disabled={disabled} value={text} placeholder={t('autoReplyPlaceholder')} onChange={(e) => set({ text: e.target.value, likes })} />
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={`${id}-likes`} className="text-xs text-muted-foreground">
+          {t('autoReplyLikes')}
+        </Label>
+        <Input
+          id={`${id}-likes`}
+          type="number"
+          min={1}
+          max={AUTO_REPLY_LIKES_MAX}
+          className="w-28"
+          disabled={disabled}
+          value={likes ?? ''}
+          placeholder="100"
+          onChange={(e) => set({ text, likes: e.target.value === '' ? null : Math.floor(Number(e.target.value)) })}
+        />
+      </div>
+      <p className="text-xs text-subtle-foreground">{t('autoReplyHint')}</p>
+    </div>
+  );
+}
+
 function useRole(slug: string) {
   const me = useQuery(orpc.me.get.queryOptions());
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
@@ -287,6 +326,10 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('THREAD_PART_EMPTY', { n: Number(issue.field.split('.')[2] ?? 0) + 2 });
       case 'THREAD_PART_TOO_LONG':
         return t('THREAD_PART_TOO_LONG', { n: Number(issue.field.split('.')[2] ?? 0) + 2, limit, actual });
+      case 'AUTO_REPLY_INVALID':
+        return t('AUTO_REPLY_INVALID', { limit });
+      case 'AUTO_REPLY_TOO_LONG':
+        return t('AUTO_REPLY_TOO_LONG', { limit, actual });
       case 'POLL_OPTIONS':
         return t('POLL_OPTIONS', { limit });
       case 'POLL_OPTION_LENGTH':
@@ -439,6 +482,7 @@ function PostTypeField({ provider, settings, onChange, disabled }: { provider: s
             if (e.target.value === 'story') {
               delete rest.firstComment;
               delete rest.threadParts;
+              delete rest.autoReply;
               delete rest.cover;
             }
             onChange(e.target.value === 'feed' ? rest : { ...rest, postType: e.target.value });
@@ -709,6 +753,7 @@ function ChannelEditor({
       </label>
       {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
+      {isProvider(provider) && AUTO_REPLY_RULES[provider] && postType !== 'story' && <AutoReplyField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {isProvider(provider) && THREAD_RULES[provider] && postType !== 'story' && <ThreadField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {isProvider(provider) && COMMENT_RULES[provider] && postType !== 'story' && (!threadPartsOf(own.settings) || typeof own.settings.firstComment === 'string') && (
         <div className="space-y-1">
