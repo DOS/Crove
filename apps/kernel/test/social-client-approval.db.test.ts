@@ -152,6 +152,25 @@ suite('social client approval on PostgreSQL (#770)', () => {
     expect(await status(o, second)).toEqual(['changes_requested']);
   });
 
+  it('approves what the team approved when the client step is turned off, and takes back a revoked link answer', async () => {
+    const o = await org();
+    const conn = await clientChannel(o);
+    const postId = await inReview(o, conn, 'Đang chờ khách');
+    await exec(o, o.owner, 'social.variant.decide', { postId, decision: 'approved', variants: seen(await get(o, o.owner, postId)) });
+    expect(await status(o, postId)).toEqual(['in_review']);
+    expect(await exec(o, o.owner, 'social.channel.set_client_approval', { connectionId: conn, clientApproval: false })).toMatchObject({ approved: [expect.any(String)] });
+    expect(await status(o, postId)).toEqual(['approved']);
+
+    // A client yes on a link that was then revoked counts no more.
+    await exec(o, o.owner, 'social.channel.set_client_approval', { connectionId: conn, clientApproval: true });
+    const next = await inReview(o, conn, 'Link bị thu hồi');
+    const { linkId, token } = await exec<{ linkId: string; token: string }>(o, o.owner, 'social.review_link.create', { postId: next });
+    await answer(o, token, 'approved');
+    await exec(o, o.owner, 'social.review_link.revoke', { linkId });
+    await exec(o, o.owner, 'social.variant.decide', { postId: next, decision: 'approved', variants: seen(await get(o, o.owner, next)) });
+    expect(await status(o, next)).toEqual(['in_review']);
+  });
+
   it('ignores a yes given for content that changed since, and changes nothing on channels without it', async () => {
     const o = await org();
     const conn = await clientChannel(o);

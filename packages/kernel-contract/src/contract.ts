@@ -474,7 +474,7 @@ export const contract = {
       // Four-eyes (#740): owners only.
       setFourEyes: oc.input(z.strictObject({ connectionId: zId, fourEyes: z.boolean() })).output(z.object({ connectionId: zId, fourEyes: z.boolean() })),
       // The client's approval on a review link as a review step (#770): owners only.
-      setClientApproval: oc.input(z.strictObject({ connectionId: zId, clientApproval: z.boolean() })).output(z.object({ connectionId: zId, clientApproval: z.boolean() })),
+      setClientApproval: oc.input(z.strictObject({ connectionId: zId, clientApproval: z.boolean() })).output(z.object({ connectionId: zId, clientApproval: z.boolean(), approved: z.array(zId) })),
     },
     // Variants waiting paused on each channel (expired or disconnected), for the channels screen.
     channels: {

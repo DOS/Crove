@@ -48,12 +48,13 @@ export async function clientApprovalOn(trx: Trx, orgId: string, connectionIds: r
 }
 
 // The client's standing answer on a post (#770): the latest "Approved" or "Needs changes" given on a review link for the
-// content as it is now (the link made for it and the answer given before any change), else null. Comments say nothing.
+// content as it is now (the link made for it and the answer given before any change), else null. Comments say nothing,
+// and a revoked link takes its answers back.
 export async function clientVerdict(trx: Trx, orgId: string, postId: string): Promise<'approved' | 'changes_requested' | null> {
   const { rows } = await sql<{ verdict: 'approved' | 'changes_requested' }>`
     SELECT f.verdict FROM crove_social.review_feedback f
     JOIN crove_social.review_link l ON l.org_id = f.org_id AND l.id = f.link_id
-    WHERE f.org_id = ${orgId}::uuid AND f.post_id = ${postId}::uuid AND f.verdict IN ('approved', 'changes_requested') AND NOT f.changed
+    WHERE f.org_id = ${orgId}::uuid AND f.post_id = ${postId}::uuid AND f.verdict IN ('approved', 'changes_requested') AND NOT f.changed AND l.revoked_at IS NULL
       AND l.content_key = crove_social.review_content_key(${orgId}::uuid, ${postId}::uuid)
     ORDER BY f.created_at DESC, f.id DESC LIMIT 1`.execute(trx);
   return rows[0]?.verdict ?? null;
@@ -320,8 +321,42 @@ export const clientApprovalSet = defineCommand({
       .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, client_approval: input.clientApproval, updated_by: userId })
       .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id']).doUpdateSet({ client_approval: input.clientApproval, updated_by: userId, updated_at: ctx.now }))
       .execute();
-    ctx.audit({ connection_id: input.connectionId, client_approval: input.clientApproval });
-    return { connectionId: input.connectionId, clientApproval: input.clientApproval };
+    // Turned off, the client no longer holds anything: a variant in review that the team approved in full is approved now,
+    // as a lowered approval count does (#408). Turning it on leaves approved posts as they are.
+    const approved: string[] = [];
+    if (!input.clientApproval) {
+      const touched = await ctx.trx
+        .selectFrom('crove_social.post_variant')
+        .select(['post_id'])
+        .distinct()
+        .where('org_id', '=', ctx.orgId)
+        .where('channel_connection_id', '=', input.connectionId)
+        .where('status', '=', 'in_review')
+        .orderBy('post_id')
+        .execute();
+      const required = (await approvalsRequired(ctx.trx, ctx.orgId, [input.connectionId])).get(input.connectionId) ?? 1;
+      for (const { post_id } of touched) {
+        await lockPost(ctx.trx, ctx.orgId, post_id);
+        const variants = (await lockVariants(ctx.trx, ctx.orgId, post_id)).filter((v) => v.channel_connection_id === input.connectionId && v.status === 'in_review');
+        const decisions = await decisionsOf(ctx.trx, ctx.orgId, variants.map((v) => v.id));
+        const up: string[] = [];
+        const scheduled: string[] = [];
+        for (const v of variants) {
+          if (approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash }).length < required) continue;
+          const values = approvedValues(v, ctx.now);
+          await setVariant(ctx, v.id, values);
+          up.push(v.id);
+          if (values.status === 'scheduled') scheduled.push(v.id);
+        }
+        if (up.length === 0) continue;
+        await refreshPostStatus(ctx, post_id);
+        approved.push(...up);
+        await ctx.emit('social.variant.decided', { post_id, decision: 'approved', variant_ids: up, waiting_variant_ids: [], by_policy: true });
+        if (scheduled.length > 0) await ctx.emit('social.variant.scheduled', { post_id, variant_ids: scheduled, by_policy: true });
+      }
+    }
+    ctx.audit({ connection_id: input.connectionId, client_approval: input.clientApproval, approved_variants: approved });
+    return { connectionId: input.connectionId, clientApproval: input.clientApproval, approved };
   },
 });
 

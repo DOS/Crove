@@ -8,7 +8,7 @@ import { zId } from '@crove/kernel-contract';
 import { DomainError, defineCommand } from '@crove/kernel-runtime';
 import { approvalsInRound } from './domain/approval.ts';
 import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf } from './policy.ts';
-import { approvedValues, lockPost, lockVariants, refreshPostStatus, setVariant, step } from './variants.ts';
+import { CLEAR_ERROR, POLICY_RAISED, approvedValues, lockPost, lockVariants, refreshPostStatus, setVariant, step } from './variants.ts';
 
 export const clientSettle = defineCommand({
   name: 'social.review.client_settle',
@@ -34,7 +34,8 @@ export const clientSettle = defineCommand({
     const scheduled: string[] = [];
     for (const v of waiting) {
       if (verdict === 'changes_requested') {
-        await setVariant(ctx, v.id, { status: step(v, { type: 'request_changes' }) });
+        // As a reviewer's request for changes does: it also ends a raised policy's hold on the variant.
+        await setVariant(ctx, v.id, { status: step(v, { type: 'request_changes' }), ...(v.error_code === POLICY_RAISED ? CLEAR_ERROR : {}) });
         settled.push(v.id);
         continue;
       }
