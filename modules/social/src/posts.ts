@@ -93,6 +93,8 @@ async function checkCover(ctx: CommandContext, provider: string, settings: Recor
   const cover = coverOf(settings);
   if (!cover) throw new DomainError('COVER_INVALID', 422, 'Ảnh bìa phải là một thời điểm trong video hoặc một ảnh');
   if (!('fileId' in cover)) return;
+  // Stored in the lower case ids are kept in, so the hash and the worker's lookup see one spelling.
+  (settings.cover as { fileId: string }).fileId = cover.fileId;
   const file = zId.safeParse(cover.fileId).success
     ? await ctx.trx.selectFrom('crove_kernel.file').select(['source', 'content_type', 'size_bytes']).where('org_id', '=', ctx.orgId).where('id', '=', cover.fileId).executeTakeFirst()
     : undefined;
@@ -1221,7 +1223,7 @@ export const mediaFile = defineQuery({
               .selectFrom('crove_social.post_variant as v')
               .select('v.id')
               .whereRef('v.org_id', '=', 'f.org_id')
-              .where(sql<boolean>`v.settings -> 'cover' ->> 'fileId' = ${input.fileId}::text`),
+              .where(sql<boolean>`lower(v.settings -> 'cover' ->> 'fileId') = lower(${input.fileId}::text)`),
             ),
           ]),
         ]),

@@ -150,7 +150,7 @@ export function coverOf(settings: Readonly<Record<string, unknown>> | undefined)
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
   const { atMs, fileId } = value as Record<string, unknown>;
   if (typeof atMs === 'number' && Number.isSafeInteger(atMs) && atMs >= 0 && fileId === undefined) return { atMs };
-  if (typeof fileId === 'string' && fileId !== '' && atMs === undefined) return { fileId };
+  if (typeof fileId === 'string' && fileId !== '' && atMs === undefined) return { fileId: fileId.toLowerCase() };
   return null;
 }
 
