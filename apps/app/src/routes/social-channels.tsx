@@ -24,7 +24,7 @@ type OAuthProvider = (typeof OAUTH_CHANNEL_PROVIDERS)[number];
 // Platforms in the order Crove adds them (Social plan §6).
 const PLATFORMS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x', 'google_business'] as const;
 const OAUTH_PROVIDERS: readonly string[] = OAUTH_CHANNEL_PROVIDERS;
-type Slot = { weekday: number; minute: number; label?: string };
+type Slot = { weekday: number; minute: number; label?: string; labelId?: string | null };
 
 const CHANNEL_TONE = { active: 'success', expired: 'warning', error: 'destructive', revoked: 'outline' } as const;
 // Platforms whose tokens Crove cannot renew: the member reconnects before the date, and is warned two weeks ahead.
@@ -123,7 +123,11 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
   const [draft, setDraft] = useState<{ timeZone: string; slots: Slot[] } | null>(null);
   const [weekday, setWeekday] = useState(1);
   const [time, setTime] = useState('09:00');
-  const current = draft ?? (queue.data ? { timeZone: queue.data.timeZone ?? 'Asia/Ho_Chi_Minh', slots: queue.data.slots.map((s) => ({ weekday: s.weekday, minute: s.minute, ...(s.label ? { label: s.label } : {}) })) } : null);
+  // A content category (#745): the label a new slot is kept for; '' is an open slot.
+  const [category, setCategory] = useState('');
+  const labels = useQuery(orpc.social.labels.list.queryOptions({ input: {} }));
+  const labelName = new Map((labels.data ?? []).map((l) => [l.id, l.name]));
+  const current = draft ?? (queue.data ? { timeZone: queue.data.timeZone ?? 'Asia/Ho_Chi_Minh', slots: queue.data.slots.map((s) => ({ weekday: s.weekday, minute: s.minute, ...(s.label ? { label: s.label } : {}), ...(s.labelId ? { labelId: s.labelId } : {}) })) } : null);
   const save = useMutation({
     mutationFn: (next: { timeZone: string; slots: Slot[]; paused?: boolean }) => client.social.queues.set({ connectionId: channel.id, ...next }),
     onSuccess: () => {
@@ -136,12 +140,12 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
   const add = () => {
     const minute = parseMinute(time);
     if (minute === null || current.slots.some((s) => s.weekday === weekday && s.minute === minute)) return;
-    setDraft({ ...current, slots: [...current.slots, { weekday, minute }] });
+    setDraft({ ...current, slots: [...current.slots, { weekday, minute, ...(category ? { labelId: category } : {}) }] });
   };
   const everyDay = () => {
     const minute = parseMinute(time);
     if (minute === null) return;
-    const missing = WEEKDAYS.filter((d) => !current.slots.some((s) => s.weekday === d && s.minute === minute)).map((d) => ({ weekday: d, minute }));
+    const missing = WEEKDAYS.filter((d) => !current.slots.some((s) => s.weekday === d && s.minute === minute)).map((d) => ({ weekday: d, minute, ...(category ? { labelId: category } : {}) }));
     setDraft({ ...current, slots: [...current.slots, ...missing] });
   };
   const paused = queue.data?.paused ?? false;
@@ -179,6 +183,7 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
           {sorted.map((s) => (
             <span key={`${s.weekday}:${s.minute}`} className="inline-flex items-center gap-1.5 rounded-lg border bg-background px-2 py-1 text-xs text-foreground">
               {t(`weekday.${dayKeyOf(s.weekday)}`)} <span className="font-mono tabular-nums">{minuteLabel(s.minute)}</span>
+              {s.labelId && <span className="text-subtle-foreground">· {labelName.get(s.labelId) ?? t('queueCategoryGone')}</span>}
               {canEdit && (
                 <button
                   type="button"
@@ -203,6 +208,16 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
             ))}
           </NativeSelect>
           <Input type="time" step={60} value={time} onChange={(e) => setTime(e.target.value)} className="h-7 w-28" aria-label={t('timeLabel')} />
+          {(labels.data?.length ?? 0) > 0 && (
+            <NativeSelect size="sm" value={category} onChange={(e) => setCategory(e.target.value)} aria-label={t('queueCategory')} title={t('queueCategoryHint')}>
+              <NativeSelectOption value="">{t('queueCategoryOpen')}</NativeSelectOption>
+              {(labels.data ?? []).map((l) => (
+                <NativeSelectOption key={l.id} value={l.id}>
+                  {t('queueCategoryFor', { label: l.name })}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          )}
           <Button variant="outline" size="sm" onClick={add}>
             {t('addSlot')}
           </Button>
