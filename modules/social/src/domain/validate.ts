@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, VIDEO_ONLY_ADAPTERS, VIDEO_READY, countLinks, countText, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { CAPABILITIES, COMMENT_RULES, VIDEO_ONLY_ADAPTERS, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -49,7 +49,10 @@ export type IssueCode =
   | 'PRIVACY_REQUIRED'
   // The platform takes photos, Crove's adapter for it posts only video.
   | 'IMAGES_NOT_SUPPORTED_YET'
-  | 'TOO_MANY_LINKS';
+  | 'TOO_MANY_LINKS'
+  // The first comment (#587): too long for the channel, or a channel that takes none yet.
+  | 'COMMENT_TOO_LONG'
+  | 'COMMENT_NOT_SUPPORTED';
 
 export interface Issue {
   code: IssueCode;
@@ -123,6 +126,17 @@ export function validateVariant(variant: VariantDraft, caps: ChannelCapabilities
     }
   });
 
+  const comment = firstCommentOf(variant.settings);
+  if (comment !== null) {
+    const rule = COMMENT_RULES[variant.provider];
+    if (!rule) issues.push({ code: 'COMMENT_NOT_SUPPORTED', field: 'settings.firstComment', limit: null, actual: null });
+    else {
+      const n = countText(comment, rule.count);
+      const bytes = countText(comment, 'bytes');
+      if (rule.max !== null && n > rule.max) issues.push({ code: 'COMMENT_TOO_LONG', field: 'settings.firstComment', limit: rule.max, actual: n });
+      else if (rule.maxBytes !== undefined && bytes > rule.maxBytes) issues.push({ code: 'COMMENT_TOO_LONG', field: 'settings.firstComment', limit: rule.maxBytes, actual: bytes });
+    }
+  }
   if (variant.provider === 'tiktok' && !TIKTOK_PRIVACY.includes(String(variant.settings?.privacyLevel ?? ''))) {
     issues.push({ code: 'PRIVACY_REQUIRED', field: 'settings.privacyLevel', limit: null, actual: null });
   }
