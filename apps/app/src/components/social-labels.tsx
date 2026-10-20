@@ -82,9 +82,10 @@ export function LabelPicker({ slug, postId, labelIds, canWrite }: { slug: string
     onSettled: refreshLabels,
   });
   const create = useMutation({
-    mutationFn: async (newName: string) => {
+    // The post's labels as shown when the name was submitted; picking is disabled until this settles.
+    mutationFn: async ({ newName, ids }: { newName: string; ids: readonly string[] }) => {
       const { labelId } = await client.social.labels.create({ name: newName });
-      const next = toggleLabel(labelIds, labelId);
+      const next = toggleLabel(ids, labelId);
       if (next) await client.social.posts.setLabels({ postId, labelIds: next });
     },
     onSuccess: () => setName(''),
@@ -126,7 +127,7 @@ export function LabelPicker({ slug, postId, labelIds, canWrite }: { slug: string
                     key={l.id}
                     type="button"
                     aria-pressed={on}
-                    disabled={save.isPending}
+                    disabled={save.isPending || create.isPending}
                     onClick={() => toggle(l.id)}
                     className="rounded-4xl focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-70"
                   >
@@ -141,11 +142,11 @@ export function LabelPicker({ slug, postId, labelIds, canWrite }: { slug: string
             onSubmit={(e) => {
               e.preventDefault();
               const next = name.trim();
-              if (next && !create.isPending) create.mutate(next);
+              if (next && !create.isPending && !save.isPending && current.length < MAX_LABELS_PER_POST) create.mutate({ newName: next, ids: current });
             }}
           >
             <Input value={name} maxLength={50} placeholder={t('newPlaceholder')} aria-label={t('newPlaceholder')} onChange={(e) => setName(e.target.value)} className="h-8 max-w-56" />
-            <Button type="submit" size="sm" variant="outline" disabled={!name.trim() || create.isPending || current.length >= MAX_LABELS_PER_POST}>
+            <Button type="submit" size="sm" variant="outline" disabled={!name.trim() || create.isPending || save.isPending || current.length >= MAX_LABELS_PER_POST}>
               {create.isPending ? <Spinner className="text-current" /> : null}
               {t('add')}
             </Button>
