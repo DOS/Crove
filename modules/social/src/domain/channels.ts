@@ -540,3 +540,30 @@ export function countLinks(text: string): number {
 // and the visibility (`settings.visibility`: public, the default, or unlisted). The adapter reads the same shapes.
 export const MASTODON_VISIBILITY = ['public', 'unlisted'] as const;
 export const CONTENT_WARNING_MAX = 500;
+
+// Publishing limits Crove counts itself (#775, plan §3.6: "Rate limits and quotas tracked per app and per account"),
+// for the channels whose API has no quota endpoint: how many posts one account may make in a window. Instagram and
+// Threads read their own quota from the platform (#743). The numbers are the platforms' documented per-account limits,
+// kept a little under where they are approximate: TikTok about 15 posts a day per creator, YouTube's 100 uploads a day,
+// X 100 posts per 15 minutes per user, LinkedIn 150 member posts a day.
+export interface PublishLimit {
+  count: number;
+  windowMs: number;
+}
+export const PUBLISH_LIMITS: Readonly<Partial<Record<Provider, PublishLimit>>> = {
+  tiktok: { count: 15, windowMs: 24 * 3_600_000 },
+  youtube: { count: 100, windowMs: 24 * 3_600_000 },
+  x: { count: 100, windowMs: 15 * 60_000 },
+  linkedin: { count: 150, windowMs: 24 * 3_600_000 },
+};
+
+// When the next post may go out under a limit, given when the account's earlier posts in the window started: null when
+// one may go now, else the time the oldest of the counted posts leaves the window.
+export function limitWait(starts: readonly Date[], limit: PublishLimit, now: Date): Date | null {
+  const since = now.getTime() - limit.windowMs;
+  const inWindow = starts.map((d) => d.getTime()).filter((t) => t > since).sort((a, b) => a - b);
+  if (inWindow.length < limit.count) return null;
+  // The post that has to leave the window for one more to fit.
+  const leaving = inWindow[inWindow.length - limit.count] as number;
+  return new Date(leaving + limit.windowMs + 1000);
+}

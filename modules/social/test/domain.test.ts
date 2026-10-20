@@ -10,6 +10,8 @@ import {
   countText,
   sentText,
   effectiveContent,
+  limitWait,
+  PUBLISH_LIMITS,
   nextAction,
   POST_STATUSES,
   postStatus,
@@ -602,5 +604,25 @@ describe('nextAction', () => {
     expect(() => publishCallKey('v-1', 1, 1, 'Publish:x')).toThrow();
     expect(() => publishCallKey('v:1', 1, 1, 'publish')).toThrow();
     expect(() => publishJobKey('o:1', 'v-1', 1, 1)).toThrow();
+  });
+});
+
+describe('counted publishing limits (#775)', () => {
+  const now = new Date('2026-10-21T10:00:00Z');
+  const ago = (ms: number) => new Date(now.getTime() - ms);
+  it('lets a post go while the window has room, and says when the oldest counted post leaves it', () => {
+    const limit = { count: 3, windowMs: 60 * 60_000 };
+    expect(limitWait([], limit, now)).toBeNull();
+    expect(limitWait([ago(10 * 60_000), ago(20 * 60_000)], limit, now)).toBeNull();
+    // Three in the hour, the oldest 50 minutes ago: room again in 10 minutes (and a second).
+    expect(limitWait([ago(10 * 60_000), ago(30 * 60_000), ago(50 * 60_000)], limit, now)).toEqual(new Date(now.getTime() + 10 * 60_000 + 1000));
+    // Posts older than the window do not count.
+    expect(limitWait([ago(10 * 60_000), ago(30 * 60_000), ago(70 * 60_000)], limit, now)).toBeNull();
+    // With more than the limit in the window, the one that must leave is the count-th newest.
+    expect(limitWait([ago(5 * 60_000), ago(10 * 60_000), ago(30 * 60_000), ago(50 * 60_000)], limit, now)).toEqual(new Date(now.getTime() + 30 * 60_000 + 1000));
+  });
+  it('counts the platforms without a quota endpoint', () => {
+    expect(Object.keys(PUBLISH_LIMITS).sort()).toEqual(['linkedin', 'tiktok', 'x', 'youtube']);
+    expect(PUBLISH_LIMITS.youtube).toEqual({ count: 100, windowMs: 24 * 3_600_000 });
   });
 });
