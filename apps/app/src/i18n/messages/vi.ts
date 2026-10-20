@@ -2474,7 +2474,7 @@ export const vi = {
       AI_REWRITE_EMPTY: 'AI không viết lại được đoạn này, hãy thử cách khác',
       BLUESKY_APP_PASSWORD: 'Hãy dùng mật khẩu ứng dụng (app password) của Bluesky, không dùng mật khẩu tài khoản',
       BLUESKY_APP_PASSWORD_PRIVILEGED: 'Mật khẩu ứng dụng này được đọc cả tin nhắn riêng; hãy tạo mật khẩu ứng dụng mới không bật quyền tin nhắn',
-      BLUESKY_PDS_UNSUPPORTED: 'Hiện Crove chỉ hỗ trợ tài khoản lưu trên máy chủ của Bluesky',
+      BLUESKY_PDS_UNSUPPORTED: 'Crove không gọi được máy chủ lưu tài khoản Bluesky này (PDS phải là tên miền công khai, qua https)',
       BLUESKY_LOGIN_FAILED: 'Bluesky không chấp nhận tên tài khoản hoặc mật khẩu ứng dụng này',
       SOURCE_NOT_READY: 'Đang đọc trang này, hãy thử lại sau vài giây',
       SOURCE_UNREADABLE: 'Không đọc được nội dung trang này; hãy mô tả bài bằng lời',

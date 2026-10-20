@@ -613,7 +613,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
               if (error.code === 'PrivilegedAppPassword') {
                 return new DomainError('BLUESKY_APP_PASSWORD_PRIVILEGED', 422, 'Mật khẩu ứng dụng này được đọc cả tin nhắn riêng; hãy tạo mật khẩu ứng dụng mới không bật quyền tin nhắn');
               }
-              if (error.code === 'UnsupportedPds') return new DomainError('BLUESKY_PDS_UNSUPPORTED', 422, 'Hiện Crove chỉ hỗ trợ tài khoản lưu trên máy chủ của Bluesky');
+              if (error.code === 'UnsupportedPds') return new DomainError('BLUESKY_PDS_UNSUPPORTED', 422, 'Crove không gọi được máy chủ lưu tài khoản Bluesky này (PDS phải là tên miền công khai, qua https)');
               if (error.status === 401 || error.status === 400) return new DomainError('BLUESKY_LOGIN_FAILED', 422, 'Bluesky không chấp nhận tên tài khoản hoặc mật khẩu ứng dụng này');
             }
             return new DomainError('OAUTH_PROVIDER_FAILED', 503, 'Nền tảng không phản hồi đúng, hãy thử lại sau');
@@ -631,7 +631,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           if (!ticket.allowed) {
             throw new DomainError('RATE_LIMITED', 429, 'Đã thử kết nối Bluesky nhiều lần trong phút này, hãy đợi một lát rồi thử lại', { retryAfterSeconds: ticket.retryAfterSeconds });
           }
-          const account = await connectBluesky(login).catch((error: unknown) => {
+          const account = await connectBluesky(login, undefined, egressFetch({ timeoutMs: 15_000, maxBytes: 200_000, overLimit: 'fail' })).catch((error: unknown) => {
             throw failure(error);
           });
           const sealed = channels.broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });
