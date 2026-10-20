@@ -1,7 +1,8 @@
 // Client report links (#643): the period a report covers, from the dates a person picks in their own time zone, and
 // the counts a report shows, in order.
 
-export const REPORT_METRICS = ['impressions', 'reach', 'views', 'reactions', 'comments', 'shares', 'saves', 'clicks'] as const;
+// linkClicks: the clicks on Crove's short links (#724), shown only when a post went out with one.
+export const REPORT_METRICS = ['impressions', 'reach', 'views', 'reactions', 'comments', 'shares', 'saves', 'clicks', 'linkClicks'] as const;
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const dateInput = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
