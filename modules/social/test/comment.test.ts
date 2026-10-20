@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { COMMENT_STALE_MS, commentStatus, type CommentCall } from '../src/comments.ts';
 import { threadStatus } from '../src/thread.ts';
-import type { Provider } from '../src/domain/channels.ts';
+import { autoReplyOf, type Provider } from '../src/domain/channels.ts';
 import { validateVariant } from '../src/domain/validate.ts';
 
 describe('thread parts (#742)', () => {
@@ -32,6 +32,29 @@ describe('thread parts (#742)', () => {
     expect(threadStatus(2, [call('part_2', 'succeeded', 2, 'r2'), call('part_3', 'ambiguous', 1)], NOW, published)).toMatchObject({ state: 'unknown', posted: 2 });
     expect(threadStatus(2, [call('part_2', 'succeeded', 20, 'r2'), call('part_3', 'started', 11)], NOW, published)).toMatchObject({ state: 'unknown', posted: 2 });
     expect(threadStatus(2, [call('part_2', 'succeeded', 3, 'r2'), call('part_3', 'failed', 2), call('part_3_2', 'succeeded', 1, 'r3')], NOW, published)).toEqual({ state: 'posted', posted: 3, total: 3, next: null, lastKey: 'social.publish:v:1:1:part_3_2' });
+  });
+});
+
+describe('auto-replies on likes (#746)', () => {
+  const base = { body: 'Khai trương', title: null, media: [] };
+  const codes = (provider: Provider, autoReply: unknown) => validateVariant({ ...base, provider, settings: { autoReply } }).map((i) => [i.code, i.field, i.limit, i.actual]);
+  it('takes a text and a like count on the channels that reply and count likes', () => {
+    for (const provider of ['facebook_page', 'threads', 'bluesky'] as const) expect(codes(provider, { text: 'Cảm ơn!', likes: 100 })).toEqual([]);
+    expect(autoReplyOf({ autoReply: { text: '  Cảm ơn!  ', likes: 5 } })).toEqual({ text: 'Cảm ơn!', likes: 5 });
+    expect(autoReplyOf({})).toBeNull();
+  });
+  it('refuses a reply without both parts, a count out of range, a long text and other channels', () => {
+    expect(codes('threads', { text: '', likes: 5 })).toEqual([['AUTO_REPLY_INVALID', 'settings.autoReply', 1_000_000, null]]);
+    expect(codes('threads', { text: 'a', likes: 0 })).toEqual([['AUTO_REPLY_INVALID', 'settings.autoReply', 1_000_000, null]]);
+    expect(codes('threads', { text: 'a', likes: null })).toEqual([['AUTO_REPLY_INVALID', 'settings.autoReply', 1_000_000, null]]);
+    expect(codes('threads', { text: 'a', likes: 2.5 })).toEqual([['AUTO_REPLY_INVALID', 'settings.autoReply', 1_000_000, null]]);
+    expect(codes('threads', 'Cảm ơn')).toEqual([['AUTO_REPLY_INVALID', 'settings.autoReply', 1_000_000, null]]);
+    expect(codes('threads', { text: '😀'.repeat(501), likes: 5 })).toEqual([['AUTO_REPLY_TOO_LONG', 'settings.autoReply.text', 500, 501]]);
+    // X and LinkedIn report no like counts to Crove yet.
+    expect(codes('x', { text: 'a', likes: 5 })).toEqual([['AUTO_REPLY_NOT_SUPPORTED', 'settings.autoReply', null, null]]);
+    expect(codes('linkedin', { text: 'a', likes: 5 })).toEqual([['AUTO_REPLY_NOT_SUPPORTED', 'settings.autoReply', null, null]]);
+    expect(codes('instagram', { text: 'a', likes: 5 })).toContainEqual(['AUTO_REPLY_NOT_SUPPORTED', 'settings.autoReply', null, null]);
+    expect(codes('youtube', { text: 'a', likes: 5 })).toContainEqual(['AUTO_REPLY_NOT_SUPPORTED', 'settings.autoReply', null, null]);
   });
 });
 

@@ -965,6 +965,74 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(roles.map((r) => r.role)).toEqual(['crove_worker']);
   });
 
+  // A post with an auto-reply on likes, approved and due (#746).
+  async function dueReply(o: Awaited<ReturnType<typeof org>>, autoReply: { text: string; likes: number }) {
+    const conn = (await connect(o, `acct-${randomUUID().slice(0, 8)}`)).connectionId;
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Khai trương', channels: [{ connectionId: conn, settings: { autoReply } }] });
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    return { postId, id: post.variants[0]?.id as string };
+  }
+  const activityOf = async (o: Awaited<ReturnType<typeof org>>, postId: string) =>
+    (await api.query<{ items: { kind: string; code: string | null; variantId: string | null }[] }>('social.post.activity', { postId }, { actor: asUser(o.owner), orgId: o.orgId })).items;
+  // Makes a variant's metrics due again, as if its last capture were 7 hours old.
+  const ageCaptures = (variantId: string) => admin((c) => c.query("UPDATE crove_social.metric_snapshot SET captured_at = captured_at - interval '7 hours', capture_key = capture_key || '-old' WHERE variant_id = $1", [variantId]));
+
+  it('replies once when the post reaches its like count, and shows it on the post (#746)', async () => {
+    const o = await org();
+    const platform = new SandboxPublisher();
+    // The sandbox reports 3 likes on a new post.
+    const low = await dueReply(o, { text: 'Cảm ơn cả nhà!', likes: 50 });
+    const high = await dueReply(o, { text: 'Đặt hàng tại đây', likes: 3 });
+    for (const v of [low, high]) expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000 }, o.orgId, v.id, 'sandbox')).toMatchObject({ status: 'published' });
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
+    expect(platform.comments.map((c) => c.text)).toEqual(['Đặt hàng tại đây']);
+    expect(await calls(high.id)).toContainEqual(expect.objectContaining({ key: `social.publish:${high.id}:1:1:autoreply`, state: 'succeeded' }));
+    expect(await calls(low.id)).not.toContainEqual(expect.objectContaining({ key: expect.stringContaining('autoreply') }));
+    expect(await activityOf(o, high.postId)).toContainEqual(expect.objectContaining({ kind: 'auto_replied', variantId: high.id, code: null }));
+    // Asked again later, the count still over the mark: no second reply.
+    await ageCaptures(high.id);
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
+    expect(platform.comments.filter((c) => c.text === 'Đặt hàng tại đây')).toHaveLength(1);
+    // Only the worker begins or records a reply.
+    await expect(api.execute('social.auto_reply.begin', { variantId: high.id, likes: 100 }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('records a refused auto-reply on the post and never tries it again by itself (#746)', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    let tries = 0;
+    const refusing: Publisher = {
+      provider: 'sandbox',
+      publishSafety: sandbox.publishSafety,
+      publish: (i) => sandbox.publish(i),
+      reconcile: (i) => sandbox.reconcile(i),
+      metrics: (i) => sandbox.metrics(i),
+      comment: async () => {
+        tries += 1;
+        return { kind: 'rejected', error: 'permission', code: 'NO_REPLY_RIGHT' };
+      },
+    };
+    const v = await dueReply(o, { text: 'Cảm ơn!', likes: 1 });
+    expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: refusing }, callTimeoutMs: 2_000 }, o.orgId, v.id, 'sandbox')).toMatchObject({ status: 'published' });
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: refusing } });
+    expect(tries).toBe(1);
+    expect(await activityOf(o, v.postId)).toContainEqual(expect.objectContaining({ kind: 'auto_reply_failed', variantId: v.id, code: 'NO_REPLY_RIGHT' }));
+    await ageCaptures(v.id);
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: refusing } });
+    expect(tries).toBe(1);
+
+    // A reply whose worker died mid-call shows as unclear on the activity once it went quiet.
+    const quiet = await dueReply(o, { text: 'Cảm ơn!', likes: 1 });
+    expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox }, callTimeoutMs: 2_000 }, o.orgId, quiet.id, 'sandbox')).toMatchObject({ status: 'published' });
+    const key = `social.publish:${quiet.id}:1:1:autoreply`;
+    await admin((c) => c.query("INSERT INTO crove_kernel.external_call (org_id, key, module, target, step, retry_safety, request_hash, started_at) VALUES ($1, $2, 'social', 'sandbox', 'autoreply', 'never', NULL, now() - interval '11 minutes')", [o.orgId, key]));
+    expect(await activityOf(o, quiet.postId)).toContainEqual(expect.objectContaining({ kind: 'auto_reply_failed', variantId: quiet.id, code: 'OUTCOME_UNKNOWN' }));
+  });
+
   it('keeps a failed metrics try as an empty capture, never asks a gone post again, and shows the last real answer', async () => {
     const o = await org();
     const platform = new SandboxPublisher();

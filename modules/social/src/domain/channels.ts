@@ -174,6 +174,29 @@ export function threadPartsOf(settings: Readonly<Record<string, unknown>> | unde
   return value.map((part) => (typeof part === 'string' ? part.trim() : ''));
 }
 
+// Auto-replies on likes (#746): on the channels whose adapter both replies under its own post and reports likes
+// (Facebook Pages, Threads, Bluesky, Mastodon; X and LinkedIn report no counts yet), a variant may carry one reply posted once the post has that many likes (`settings.autoReply`: { text, likes }). The
+// reply is counted like a first comment there.
+export const AUTO_REPLY_LIKES_MAX = 1_000_000;
+export const AUTO_REPLY_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
+  sandbox: COMMENT_RULES.sandbox as TextRule,
+  facebook_page: COMMENT_RULES.facebook_page as TextRule,
+  threads: COMMENT_RULES.threads as TextRule,
+  bluesky: COMMENT_RULES.bluesky as TextRule,
+  mastodon: COMMENT_RULES.mastodon as TextRule,
+};
+
+// The auto-reply in a variant's settings: null when there is none, 'invalid' when it is not { text, likes } with a
+// text and a whole number of likes from 1 to AUTO_REPLY_LIKES_MAX.
+export function autoReplyOf(settings: Readonly<Record<string, unknown>> | undefined): { text: string; likes: number } | 'invalid' | null {
+  const value = settings?.autoReply;
+  if (value === undefined) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'invalid';
+  const { text, likes } = value as { text?: unknown; likes?: unknown };
+  if (typeof text !== 'string' || !text.trim() || typeof likes !== 'number' || !Number.isInteger(likes) || likes < 1 || likes > AUTO_REPLY_LIKES_MAX) return 'invalid';
+  return { text: text.trim(), likes };
+}
+
 // Polls and topic tags (#711), in the variant's settings, on the channels that take them (Threads): `settings.poll`
 // is { options: 2 to 4 strings of 1 to 25 characters } on a post without media; `settings.topicTag` is one tag of 1 to 50
 // characters with no period or ampersand (a leading # is dropped). The Threads adapter reads the same shapes.

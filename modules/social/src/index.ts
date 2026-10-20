@@ -25,6 +25,8 @@ export * from './report-links.ts';
 export * from './activity.ts';
 export * from './comments.ts';
 export * from './thread.ts';
+export * from './review-inbox.ts';
+export * from './auto-reply.ts';
 export * from './accounts.ts';
 export * from './link-preview.ts';
 export * from './notifications.ts';

@@ -13,6 +13,8 @@ import type { Trx } from './variants.ts';
 import { labelsOfPosts } from './labels.ts';
 import { formatOf, whatWorks, type ChannelInsights, type InsightSample } from './domain/insights.ts';
 import { isValidTimeZone } from './domain/queue.ts';
+import { runAutoReply } from './auto-reply.ts';
+import { autoReplyOf } from './domain/channels.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // How often a published variant is asked again, and how far back the summary looks by default.
@@ -57,12 +59,14 @@ export const metricsTarget = defineQuery({
   handler: async (ctx, input) => {
     const row = await ctx.trx
       .selectFrom('crove_social.post_variant')
-      .select(['channel_connection_id', 'external_post_id', 'provider', 'status'])
+      .select(['channel_connection_id', 'external_post_id', 'provider', 'status', 'settings'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.variantId)
       .executeTakeFirst();
     if (!row || row.status !== 'published' || !row.external_post_id) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy bài đã đăng này');
-    return { connectionId: row.channel_connection_id, externalPostId: row.external_post_id, provider: row.provider };
+    const reply = autoReplyOf((row.settings ?? {}) as Record<string, unknown>);
+    // The like count that sets off the variant's auto-reply (#746), so the sweep begins one only when it is reached.
+    return { connectionId: row.channel_connection_id, externalPostId: row.external_post_id, provider: row.provider, autoReplyLikes: reply && reply !== 'invalid' ? reply.likes : null };
   },
 });
 
@@ -315,7 +319,7 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
     const publisher = deps.publishers[row.provider];
     try {
       const options = { actor: ACTOR, orgId: row.org_id };
-      const target = await deps.runtime.query<{ connectionId: string; externalPostId: string }>('social.metrics.target', { variantId: row.variant_id }, options);
+      const target = await deps.runtime.query<{ connectionId: string; externalPostId: string; autoReplyLikes: number | null }>('social.metrics.target', { variantId: row.variant_id }, options);
       const sealed = await deps.runtime.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: target.connectionId }, options);
       const secret = deps.broker.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, { orgId: row.org_id, provider: sealed.provider, externalAccountId: sealed.externalAccountId });
       const result = await publisher?.metrics?.({ externalAccountId: sealed.externalAccountId, secret, externalId: target.externalPostId });
@@ -329,6 +333,13 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
       if (!result || 'refused' in result) out.skipped += 1;
       const done = await deps.runtime.execute<{ recorded: boolean }>('social.metrics.record', { variantId: row.variant_id, captureKey: key, ...input }, options);
       if (done.recorded && result && !('refused' in result)) out.recorded += 1;
+      // The count may set off the variant's auto-reply (#746); its failure never touches the metrics.
+      const likes = result && !('refused' in result) ? result.metrics.reactions : undefined;
+      if (publisher && likes !== undefined && target.autoReplyLikes !== null && likes >= target.autoReplyLikes) {
+        await runAutoReply(deps, row.org_id, row.variant_id, publisher, { externalAccountId: sealed.externalAccountId, secret }, likes).catch((error: unknown) =>
+          console.warn(`[social-auto-reply] variant ${row.variant_id.slice(0, 8)}`, error instanceof Error ? error.message : error),
+        );
+      }
     } catch (error) {
       // A connection whose owner left, or a credential that will not open: nothing to read; the publish path reports it.
       if (!(error instanceof DomainError)) console.warn(`[social-metrics] variant ${row.variant_id.slice(0, 8)}`, error instanceof Error ? error.message : error);
