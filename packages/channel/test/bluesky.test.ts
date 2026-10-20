@@ -17,7 +17,9 @@ function xrpc(routes: Record<string, { status?: number; body: unknown }[]>) {
     const route = `${init?.method ?? 'GET'} ${url.host}${url.pathname}`;
     const headers = new Headers(init?.headers);
     calls.push({ route, auth: headers.get('authorization'), json: typeof init?.body === 'string' ? JSON.parse(init.body) : null, type: headers.get('content-type') });
-    const answer = routes[route]?.shift() ?? { status: 500, body: { error: 'InternalServerError', message: `no answer for ${route}` } };
+    // A Bluesky-hosted DID document unless a test says otherwise: a publish reads it before signing in (#804).
+    const hosted: { status?: number; body: unknown } | null = route === `GET plc.directory/${DID}` ? { body: { id: DID, service: [{ id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: PDS }] } } : null;
+    const answer = routes[route]?.shift() ?? hosted ?? { status: 500, body: { error: 'InternalServerError', message: `no answer for ${route}` } };
     return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
   };
   return { calls, fetchImpl };
@@ -146,6 +148,21 @@ describe('Bluesky on its own PDS (#792)', () => {
     expect(revoked.calls.map((c) => c.route)).toEqual([`GET plc.directory/${DID}`, 'POST bsky.social/xrpc/com.atproto.server.createSession', 'POST bsky.social/xrpc/com.atproto.server.createSession']);
   });
 
+  it('sends the password nowhere when the DID document cannot be read or names no PDS Crove calls', async () => {
+    for (const answer of [{ status: 503, body: {} }, doc('https://10.0.0.5'), { body: { id: DID, service: [] } }]) {
+      const down = xrpc({ [`GET plc.directory/${DID}`]: [answer], 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
+      const egress = xrpc({});
+      expect(await new BlueskyPublisher(down.fetchImpl, egress.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'transient' });
+      expect(down.calls.map((c) => c.route)).toEqual([`GET plc.directory/${DID}`]);
+      expect(egress.calls).toHaveLength(0);
+    }
+    // A did:web account without an egress fetch: its document host is not reachable, so nothing is sent either.
+    const web = 'did:web:pds.example.org';
+    const plain = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
+    expect(await new BlueskyPublisher(plain.fetchImpl).publish(input({ externalAccountId: web, secret: JSON.stringify({ identifier: web, appPassword: APP_PASSWORD }) }))).toMatchObject({ kind: 'rejected', error: 'transient' });
+    expect(plain.calls).toHaveLength(0);
+  });
+
   it('takes a PDS on an IDN top-level domain in its xn-- form (#804)', () => {
     expect(pdsOrigin('https://pds.example.xn--p1ai')).toBe('https://pds.example.xn--p1ai');
     expect(pdsOrigin('https://pds.example.xn--')).toBeNull();
@@ -236,6 +253,7 @@ describe('Bluesky edge answers', () => {
     const fetchImpl: Fetch = async (input) => {
       const url = new URL(input);
       calls.push(url.pathname);
+      if (url.host === 'plc.directory') return new Response(JSON.stringify({ id: DID, service: [{ id: '#atproto_pds', serviceEndpoint: PDS }] }), { status: 200 });
       if (url.pathname.endsWith('createSession')) return new Response(JSON.stringify(session().body), { status: 200 });
       return new Response('', { status: 200 });
     };

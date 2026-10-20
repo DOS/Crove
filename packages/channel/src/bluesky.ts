@@ -214,7 +214,11 @@ class Xrpc {
     const found = { ...own, at: Date.now() };
     for (const [key, value] of this.resolved) if (found.at - value.at >= RESOLVED_MS) this.resolved.delete(key);
     while (this.resolved.size > RESOLVED_MAX - keys.length) this.resolved.delete(this.resolved.keys().next().value as string);
-    for (const key of keys) this.resolved.set(key, found);
+    // Taken out first, so a refreshed lookup counts as the newest.
+    for (const key of keys) {
+      this.resolved.delete(key);
+      this.resolved.set(key, found);
+    }
   }
 
   // The identity read afresh and kept, wherever it is hosted; null when it cannot be read.
@@ -236,10 +240,13 @@ class Xrpc {
     const refused = (error: unknown) => error instanceof BlueskyError && (error.status === 400 || error.status === 401) && error.code !== 'UnsupportedPds';
     // A DID's document names its PDS and is read without the app password, so the login goes straight there: bsky.social
     // never sees the password of an account hosted elsewhere (#804). The lookup is kept for Bluesky-hosted accounts too,
-    // so a refused password costs no directory read while it is fresh.
+    // so a refused password costs no directory read while it is fresh; an account that leaves Bluesky is found when its
+    // lookup expires. A document that cannot be read, or names no PDS Crove calls, sends the password nowhere: the
+    // session fails as unclear and is tried again later.
     if (identifier.startsWith('did:')) {
       const kept = this.kept(identifier);
       const own = kept ?? (await this.lookup(identifier));
+      if (!own) throw new BlueskyError(503, 'IdentityUnavailable', 'the account DID document could not be read');
       try {
         return await this.openAt(own, identifier, appPassword);
       } catch (error) {
