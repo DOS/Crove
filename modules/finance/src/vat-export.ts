@@ -75,9 +75,9 @@ function invoiceSheet(workbook: ExcelJS.Workbook, name: string, side: VatSide, p
 export async function buildVatWorkbook(report: VatReport, orgName: string): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Crove';
-  workbook.title = `To khai GTGT ${report.period.period} ${orgName}`;
+  workbook.title = `Tờ khai GTGT ${report.period.period} ${orgName}`;
 
-  const summary = workbook.addWorksheet('Tong hop');
+  const summary = workbook.addWorksheet('Tổng hợp');
   summary.columns = [
     { key: 'code', width: 10 },
     { key: 'label', width: 70 },
@@ -133,7 +133,7 @@ export async function buildVatWorkbook(report: VatReport, orgName: string): Prom
     total.font = { bold: true };
   }
 
-  invoiceSheet(workbook, 'Ban ra', report.output, 'Tên người mua', 'MST người mua');
-  invoiceSheet(workbook, 'Mua vao', report.input, 'Tên người bán', 'MST người bán');
+  invoiceSheet(workbook, 'Bán ra', report.output, 'Tên người mua', 'MST người mua');
+  invoiceSheet(workbook, 'Mua vào', report.input, 'Tên người bán', 'MST người bán');
   return new Uint8Array(await workbook.xlsx.writeBuffer());
 }

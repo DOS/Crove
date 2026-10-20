@@ -1698,6 +1698,7 @@ export const en = {
       AI_DRAFT_FAILED: 'AI could not draft the post right now; try again later',
       AI_DRAFT_EMPTY: 'AI could not draft a post from this brief; describe it more clearly',
       BLUESKY_APP_PASSWORD: 'Use a Bluesky app password, not the account password',
+      BLUESKY_APP_PASSWORD_PRIVILEGED: 'This app password can also read direct messages; create a new one without direct message access',
       BLUESKY_PDS_UNSUPPORTED: 'Crove supports accounts hosted by Bluesky only for now',
       BLUESKY_LOGIN_FAILED: 'Bluesky did not accept this handle or app password',
       MEDIA_NOT_FOUND: 'This image was not found',

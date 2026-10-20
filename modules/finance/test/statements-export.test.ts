@@ -5,6 +5,7 @@ import ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
 import { buildStatementsWorkbook, ledgerPeriod, type FinancialStatements } from '../src/index.ts';
 import { DRAFT_NOTICE } from '../src/statements-export.ts';
+import { expectExcelSheetNames } from './sheet-names.ts';
 
 function statements(overrides: { balanced?: boolean; unmapped?: FinancialStatements['b01']['unmapped']; payable?: string } = {}): FinancialStatements {
   return {
@@ -45,6 +46,8 @@ describe('buildStatementsWorkbook', () => {
   it('writes B01 and B02, each under the draft notice, with totals in bold', async () => {
     const workbook = await readBack(statements());
     expect(workbook.worksheets.map((s) => s.name)).toEqual(['B01-DNN', 'B02-DNN']);
+    expectExcelSheetNames(workbook);
+    expect(workbook.title).toMatch(/^Báo cáo tài chính /);
     const b01 = workbook.getWorksheet('B01-DNN');
     expect(rowsOf(b01)).toEqual([
       [DRAFT_NOTICE],

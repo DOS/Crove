@@ -1,9 +1,9 @@
-// No audit row, no download (issue #365): every Excel export of the finance module writes its audit row through an
-// export command after the workbook is built, and only then answers with the file. Here the export commands fail as
-// a failed audit write would, and each route must answer an error instead of a workbook: the journal, both MISA
-// exports, the VAT working and the ledger reports. On a real PostgreSQL 17; the commands themselves are covered by
-// the export tests of each report. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own
-// database.
+// No audit row, no download (issue #365): every file export of the finance module writes its audit row through an
+// export command after the file is built, and only then answers with the file. Here the export commands fail as a
+// failed audit write would, and each route must answer an error instead of a file: the journal, both MISA exports, the
+// VAT working and its HTKK XML (finance.vat.export), the ledger reports (finance.ledger.export) and the financial
+// statements. On a real PostgreSQL 17; the commands themselves are covered by the export tests of each report. Set
+// CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { SignJWT } from 'jose';
@@ -23,7 +23,7 @@ const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
 const SECRET = 'test-only-jwt-secret-for-export-audit-0123456789';
 const ISSUER = 'crove-auth';
-const EXPORT_COMMANDS = ['finance.journal.export', 'finance.vat.export', 'finance.ledger.export'];
+const EXPORT_COMMANDS = ['finance.journal.export', 'finance.vat.export', 'finance.ledger.export', 'finance.statements.export'];
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 class MemoryStore implements BlobStore {
@@ -36,6 +36,10 @@ class MemoryStore implements BlobStore {
   async delete() {}
 }
 
+// The export commands each route reached, so a 500 is known to come from the failed audit write and not from an
+// earlier step (the report query, the file builder).
+const reached: string[] = [];
+
 // An export command whose audit write fails: the runtime refuses the command, as it would on a database error.
 const failing = (name: string) =>
   defineCommand({
@@ -44,6 +48,7 @@ const failing = (name: string) =>
     risk: 'R0',
     access: ['owner', 'admin', 'member', 'viewer'],
     handler: async () => {
+      reached.push(name);
       throw new DomainError('INTERNAL', 500, 'Lỗi hệ thống');
     },
   });
@@ -107,6 +112,13 @@ suite('finance exports: no audit row, no download (#365)', () => {
     const body = (await created.json()) as { json: { slug: string; orgId: string } };
     slug = body.json.slug;
     orgId = body.json.orgId;
+    // The HTKK XML needs the org's tax code; without it the route refuses before the export command runs.
+    const taxCode = await app.request('/api/rpc/org/setTaxCode', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${await token()}`, 'content-type': 'application/json', 'x-crove-org': slug },
+      body: JSON.stringify({ json: { taxCode: '0309876546' } }),
+    });
+    expect(taxCode.status).toBe(200);
   });
 
   afterAll(async () => {
@@ -119,15 +131,20 @@ suite('finance exports: no audit row, no download (#365)', () => {
   });
 
   it.each([
-    ['the journal', '/api/export/journal.xlsx?from=2026-09-01&to=2026-09-30'],
-    ['MISA purchases', '/api/export/misa/purchases.xlsx?from=2026-09-01&to=2026-09-30'],
-    ['MISA sales', '/api/export/misa/sales.xlsx?from=2026-09-01&to=2026-09-30'],
-    ['the VAT working', '/api/export/vat.xlsx?period=2026-09'],
-    ['the ledger reports', '/api/export/ledger.xlsx?period=2026-09'],
-  ])('answers an error, not a workbook, for %s', async (_name, path) => {
+    ['the journal', '/api/export/journal.xlsx?from=2026-09-01&to=2026-09-30', 'finance.journal.export'],
+    ['MISA purchases', '/api/export/misa/purchases.xlsx?from=2026-09-01&to=2026-09-30', 'finance.journal.export'],
+    ['MISA sales', '/api/export/misa/sales.xlsx?from=2026-09-01&to=2026-09-30', 'finance.journal.export'],
+    ['the VAT working', '/api/export/vat.xlsx?period=2026-09', 'finance.vat.export'],
+    ['the VAT return as HTKK XML', '/api/export/vat-01gtgt.xml?period=2026-09', 'finance.vat.export'],
+    ['the ledger reports', '/api/export/ledger.xlsx?period=2026-09', 'finance.ledger.export'],
+    ['the financial statements', '/api/export/statements.xlsx?period=2026-09', 'finance.statements.export'],
+  ])('answers an error, not a file, for %s', async (_name, path, command) => {
+    reached.length = 0;
     const response = await app.request(path, { headers: { authorization: `Bearer ${await token()}`, 'x-crove-org': slug } });
+    expect(reached).toEqual([command]);
     expect(response.status).toBe(500);
     expect(response.headers.get('content-type')).not.toBe(XLSX);
+    expect(response.headers.get('content-type') ?? '').not.toMatch(/^application\/xml/);
     expect(response.headers.get('content-disposition')).toBeNull();
     expect(await response.json()).toMatchObject({ code: 'INTERNAL' });
   });

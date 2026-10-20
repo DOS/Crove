@@ -40,17 +40,17 @@ export class BlueskyError extends Error {
   }
 }
 
-// What the kernel seals for a Bluesky connection.
+// What the kernel seals for a Bluesky connection. Each call opens a session, which names the account's PDS, so none
+// is kept (secrets sealed before #399 also carry a `pds`, which is ignored).
 export interface BlueskySecret {
   identifier: string;
   appPassword: string;
-  pds: string;
 }
 
 function secretOf(secret: string): BlueskySecret | null {
   try {
     const s = JSON.parse(secret) as Partial<BlueskySecret>;
-    return typeof s.identifier === 'string' && typeof s.appPassword === 'string' && typeof s.pds === 'string' ? { identifier: s.identifier, appPassword: s.appPassword, pds: s.pds } : null;
+    return typeof s.identifier === 'string' && typeof s.appPassword === 'string' ? { identifier: s.identifier, appPassword: s.appPassword } : null;
   } catch {
     return null;
   }
@@ -61,6 +61,18 @@ interface Session {
   handle: string;
   accessJwt: string;
   pds: string;
+  // The access token's `scope` claim: com.atproto.appPass for an app password, com.atproto.appPassPrivileged for one
+  // that may also read direct messages, com.atproto.access for the account password; null when it cannot be read.
+  scope: string | null;
+}
+
+function tokenScope(jwt: string): string | null {
+  try {
+    const payload = JSON.parse(Buffer.from(jwt.split('.')[1] ?? '', 'base64url').toString('utf8')) as { scope?: unknown };
+    return typeof payload.scope === 'string' ? payload.scope : null;
+  } catch {
+    return null;
+  }
 }
 
 // App passwords look like xxxx-xxxx-xxxx-xxxx; the account password is refused here so it is never stored.
@@ -112,19 +124,30 @@ class Xrpc {
     if (!url || url.protocol !== 'https:' || url.port !== '' || url.pathname !== '/' || !isBlueskyHost(url.hostname)) {
       throw new BlueskyError(400, 'UnsupportedPds', `accounts hosted on ${url?.host ?? 'this server'} are not supported yet`);
     }
-    return { did: answer.did, handle: typeof answer.handle === 'string' ? answer.handle : identifier, accessJwt: answer.accessJwt, pds };
+    return { did: answer.did, handle: typeof answer.handle === 'string' ? answer.handle : identifier, accessJwt: answer.accessJwt, pds, scope: tokenScope(answer.accessJwt) };
   }
 }
 
 // Connecting checks the app password once by opening a session; the answer names the account.
-export async function connectBluesky(input: { handle: string; appPassword: string }, fetchImpl?: Fetch): Promise<ConnectedAccount> {
+// The handle and app password as Bluesky takes them, checked here without a call (so a typo costs no login try).
+export function blueskyLogin(input: { handle: string; appPassword: string }): { handle: string; appPassword: string } {
   const handle = input.handle.trim().replace(/^@/, '').toLowerCase();
   if (!BLUESKY_HANDLE.test(handle)) throw new BlueskyError(400, 'InvalidHandle', 'not a Bluesky handle');
   // App passwords are lowercase; one typed in capitals is the same password.
   const appPassword = input.appPassword.trim().toLowerCase();
   if (!APP_PASSWORD.test(appPassword)) throw new BlueskyError(400, 'NotAnAppPassword', 'use an app password, not the account password');
+  return { handle, appPassword };
+}
+
+export async function connectBluesky(input: { handle: string; appPassword: string }, fetchImpl?: Fetch): Promise<ConnectedAccount> {
+  const { handle, appPassword } = blueskyLogin(input);
   const session = await new Xrpc(fetchImpl).session(handle, appPassword);
-  const secret: BlueskySecret = { identifier: session.did, appPassword, pds: session.pds };
+  // The format check above cannot tell an account password shaped like an app password; the session can (#399). A
+  // privileged app password also reads direct messages, which Crove never needs. An unreadable scope is let through:
+  // the token format is Bluesky's to change.
+  if (session.scope === 'com.atproto.access') throw new BlueskyError(400, 'NotAnAppPassword', 'use an app password, not the account password');
+  if (session.scope === 'com.atproto.appPassPrivileged') throw new BlueskyError(400, 'PrivilegedAppPassword', 'use an app password without direct message access');
+  const secret: BlueskySecret = { identifier: session.did, appPassword };
   return { provider: 'bluesky', externalAccountId: session.did, displayName: `@${session.handle}`.slice(0, 200), scopes: ['app_password'], expiresAt: null, secret: JSON.stringify(secret) };
 }
 
