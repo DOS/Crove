@@ -2065,6 +2065,8 @@ export const vi = {
     sharedText: 'Nội dung chung',
     sharedTextPlaceholder: 'Bạn muốn nói gì?',
     hashtagSuggestions: 'Hashtag từng hiệu quả:',
+    hashtagsAi: 'Nhờ AI gợi ý hashtag',
+    hashtagsAiLabel: 'AI gợi ý (hãy xem lại trước khi dùng):',
     titleField: 'Tiêu đề',
     titlePlaceholder: 'Tiêu đề (YouTube, Zalo OA)',
     link: 'Liên kết',

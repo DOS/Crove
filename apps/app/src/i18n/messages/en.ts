@@ -2065,6 +2065,8 @@ export const en = {
     sharedText: 'Shared text',
     sharedTextPlaceholder: 'What do you want to say?',
     hashtagSuggestions: 'Hashtags that did well:',
+    hashtagsAi: 'Suggest hashtags with AI',
+    hashtagsAiLabel: 'AI suggests (check before keeping):',
     titleField: 'Title',
     titlePlaceholder: 'Title (YouTube, Zalo OA)',
     link: 'Link',

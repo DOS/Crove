@@ -311,6 +311,10 @@ export const contract = {
           }),
         )
         .output(z.object({ text: z.string(), title: z.string().nullable() })),
+      // Hashtags the writer suggests for a text (#824), tainted like every AI text; the same budget as drafts.
+      suggestHashtags: oc
+        .input(z.strictObject({ text: z.string().trim().min(1).max(20_000), connectionId: zId.optional(), language: z.enum(['vi', 'en']), exclude: z.array(z.string().max(100)).max(50) }))
+        .output(z.object({ hashtags: z.array(z.string()) })),
     },
     // How published posts did (S8): the latest capture of each variant published in the last days days (30 by default).
     metrics: {
