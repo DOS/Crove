@@ -14,6 +14,7 @@ export const PROVIDERS = [
   'linkedin',
   'x',
   'bluesky',
+  'google_business',
 ] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
@@ -100,6 +101,8 @@ export const LINK_PLACEMENT: Readonly<Record<Provider, LinkPlacement>> = {
   linkedin: 'text',
   x: 'text',
   bluesky: 'text',
+  // The link goes as the call to action's URL (or an offer's redeem link), never in the text.
+  google_business: 'apart',
 };
 
 // The link as a whole: followed by the end, a space, or sentence punctuation and then the end or a space (the
@@ -169,6 +172,36 @@ export function topicTagOf(settings: Readonly<Record<string, unknown>> | undefin
   const tag = settings?.topicTag;
   if (tag === undefined || tag === null) return null;
   return typeof tag === 'string' ? tag.trim().replace(/^#/, '') : false;
+}
+
+// Google Business Profile posts (#709), in the variant's settings (`settings.gbp`): a topic (a standard post, an event
+// or an offer), an optional call to action (its URL is the post's link; CALL needs none), an event's title and dates
+// (YYYY-MM-DD, times HH:MM optional) for events and offers, and an offer's coupon code and terms. The adapter's
+// gbpSettingsOf in @crove/channel reads the same shape.
+export const GBP_TOPICS = ['STANDARD', 'EVENT', 'OFFER'] as const;
+export const GBP_CTAS = ['BOOK', 'ORDER', 'SHOP', 'LEARN_MORE', 'SIGN_UP', 'CALL'] as const;
+export type GbpTopic = (typeof GBP_TOPICS)[number];
+export type GbpCta = (typeof GBP_CTAS)[number];
+export interface Gbp {
+  topic: GbpTopic;
+  cta: GbpCta | null;
+  event: { title: string; startDate: string; startTime: string; endDate: string; endTime: string };
+  offer: { couponCode: string; terms: string };
+}
+const asText = (v: unknown) => (typeof v === 'string' ? v : '');
+// The settings as the composer edits them; null when they are not an object (an issue of their own).
+export function gbpOf(settings: Readonly<Record<string, unknown>> | undefined): Gbp | null {
+  const raw = settings?.gbp;
+  const g = raw === undefined || raw === null ? {} : typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  if (!g) return null;
+  const e = (g.event && typeof g.event === 'object' ? g.event : {}) as Record<string, unknown>;
+  const o = (g.offer && typeof g.offer === 'object' ? g.offer : {}) as Record<string, unknown>;
+  return {
+    topic: (GBP_TOPICS as readonly unknown[]).includes(g.topic) ? (g.topic as GbpTopic) : 'STANDARD',
+    cta: (GBP_CTAS as readonly unknown[]).includes(g.cta) ? (g.cta as GbpCta) : null,
+    event: { title: asText(e.title), startDate: asText(e.startDate), startTime: asText(e.startTime), endDate: asText(e.endDate), endTime: asText(e.endTime) },
+    offer: { couponCode: asText(o.couponCode), terms: asText(o.terms) },
+  };
 }
 
 // A video's cover (#642), in the variant's settings (`settings.cover`): a frame of the video, at a time in
@@ -345,6 +378,17 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     scrapesLinkPreview: false,
     // Bluesky also caps post text in bytes.
     unverified: ['body.max'],
+  },
+  // Google Business Profile (#709): localPosts' summary of 1,500 characters and one photo (JPEG or PNG, 10 KB to 5 MB);
+  // no video through the API. The link goes as the call to action, an offer's redeem link, or not at all.
+  google_business: {
+    provider: 'google_business',
+    body: { max: 1500, count: 'codepoints', required: false },
+    title: null,
+    media: { min: 0, max: 1, kinds: ['image'], mixed: false, maxVideos: 0, imageTypes: ['image/jpeg', 'image/png'], maxImageBytes: 5 * MB, maxVideoBytes: null, maxVideoSeconds: null },
+    maxLinks: null,
+    scrapesLinkPreview: false,
+    unverified: [],
   },
 };
 

@@ -11,6 +11,7 @@ export * from './zalo.ts';
 export * from './bluesky.ts';
 export * from './threads.ts';
 export * from './linkedin.ts';
+export * from './google-business.ts';
 export * from './youtube.ts';
 export * from './tiktok.ts';
 export * from './x.ts';
@@ -29,6 +30,7 @@ export const CHANNEL_PROVIDERS = [
   'linkedin',
   'x',
   'bluesky',
+  'google_business',
 ] as const;
 export type ChannelProviderId = (typeof CHANNEL_PROVIDERS)[number];
 

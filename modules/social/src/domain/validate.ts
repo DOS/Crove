@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, COMMENT_RULES, COVER_RULES, IMAGE_RULES, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { CAPABILITIES, GBP_CTAS, GBP_TOPICS, gbpOf, COMMENT_RULES, COVER_RULES, IMAGE_RULES, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -77,7 +77,12 @@ export type IssueCode =
   | 'POLL_OPTION_LENGTH'
   | 'POLL_WITH_MEDIA'
   | 'TOPIC_TAG_NOT_SUPPORTED'
-  | 'TOPIC_TAG_INVALID';
+  | 'TOPIC_TAG_INVALID'
+  // Google Business Profile (#709): settings on another channel, or ones Google would refuse (an unknown topic or call to
+  // action, an event without its title or dates, an offer without dates); a call to action with no link to open.
+  | 'GBP_NOT_SUPPORTED'
+  | 'GBP_INVALID'
+  | 'GBP_CTA_NEEDS_LINK';
 
 export interface Issue {
   code: IssueCode;
@@ -195,6 +200,7 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   }
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
   checkPollAndTag(issues, variant, caps);
+  checkGbp(issues, variant);
   if (variant.provider === 'tiktok' && !TIKTOK_PRIVACY.includes(String(variant.settings?.privacyLevel ?? ''))) {
     issues.push({ code: 'PRIVACY_REQUIRED', field: 'settings.privacyLevel', limit: null, actual: null });
   }
@@ -229,6 +235,33 @@ function checkPollAndTag(issues: Issue[], variant: VariantDraft, caps: ChannelCa
       if (tag === false || n < 1 || n > rule.maxChars || /[.&]/.test(tag)) issues.push({ code: 'TOPIC_TAG_INVALID', field: 'settings.topicTag', limit: rule.maxChars, actual: n });
     }
   }
+}
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+function checkGbp(issues: Issue[], variant: VariantDraft): void {
+  const raw = variant.settings?.gbp;
+  if (raw === undefined || raw === null) return;
+  const field = 'settings.gbp';
+  if (variant.provider !== 'google_business') {
+    issues.push({ code: 'GBP_NOT_SUPPORTED', field, limit: null, actual: null });
+    return;
+  }
+  const g = gbpOf(variant.settings);
+  const r = raw as Record<string, unknown>;
+  const known = g !== null && (r.topic === undefined || (GBP_TOPICS as readonly unknown[]).includes(r.topic)) && (r.cta === undefined || r.cta === null || (GBP_CTAS as readonly unknown[]).includes(r.cta));
+  if (!g || !known) {
+    issues.push({ code: 'GBP_INVALID', field, limit: null, actual: null });
+    return;
+  }
+  if (g.topic !== 'STANDARD') {
+    const e = g.event;
+    const titleLength = [...e.title.trim()].length;
+    const dated = DAY.test(e.startDate) && DAY.test(e.endDate) && e.endDate >= e.startDate;
+    const timed = (e.startTime === '' || TIME.test(e.startTime)) && (e.endTime === '' || TIME.test(e.endTime));
+    if (!dated || !timed || titleLength > 58 || (g.topic === 'EVENT' && titleLength === 0)) issues.push({ code: 'GBP_INVALID', field: 'settings.gbp.event', limit: 58, actual: titleLength });
+  }
+  if (g.cta && g.cta !== 'CALL' && !(variant.linkUrl ?? '').trim()) issues.push({ code: 'GBP_CTA_NEEDS_LINK', field, limit: null, actual: null });
 }
 
 // A cover belongs to one video, alone in the post (a Reel on Instagram); the channel decides which kinds it takes.
