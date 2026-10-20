@@ -16,5 +16,9 @@
     "@crove/l10n-vn": "workspace:*",
     "ai": "catalog:",
     "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@crove/extract": "workspace:*",
+    "@crove/extract-contract": "workspace:*"
   }
 }
