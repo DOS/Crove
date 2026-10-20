@@ -41,10 +41,15 @@ suite('social posts through the API', () => {
   // Stands in for the model: answers what the test queued, remembers what it was asked.
   const writerAnswers: (DraftResult | null)[] = [];
   const writerAsked: DraftRequest[] = [];
+  const rewriteAsked: Parameters<SocialDrafter['rewrite']>[0][] = [];
   const writer: SocialDrafter = {
     draft: async (request) => {
       writerAsked.push(request);
       return writerAnswers.shift() ?? null;
+    },
+    rewrite: async (request) => {
+      rewriteAsked.push(request);
+      return request.text === 'nothing' ? null : { text: `${request.action}: ${request.text}`, title: request.title };
     },
   };
   const vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
@@ -222,5 +227,28 @@ suite('social posts through the API', () => {
     expect(await rpc('social/posts/draftWithAi', owner_, { brief: 'x', connectionIds: [connectionId] }, { app: 'noAi' })).toMatchObject({ status: 503, body: { code: 'AI_NOT_CONFIGURED' } });
     writerAnswers.push(null);
     expect(await rpc('social/posts/draftWithAi', owner_, { brief: 'x', connectionIds: [connectionId] })).toMatchObject({ status: 422, body: { code: 'AI_DRAFT_EMPTY' } });
+  });
+
+  it('rewrites a text for a channel as a proposal, and an accepted one marks the post AI-assisted (#583)', async () => {
+    const owner_ = await tokenFor(owner);
+    const connected = await rpc('channels/connectSandbox', owner_, { displayName: 'Trang viết lại', key: randomUUID() });
+    const connectionId = String(connected.body?.connectionId);
+    const rewritten = await rpc('social/posts/rewriteWithAi', owner_, { text: 'Khai trương chi nhánh mới', action: 'shorten', connectionId });
+    expect(rewritten).toMatchObject({ status: 200, body: { text: 'shorten: Khai trương chi nhánh mới', title: null } });
+    expect(rewriteAsked.at(-1)?.channel).toMatchObject({ key: connectionId, maxChars: 1000 });
+    expect((await rpc('social/posts/rewriteWithAi', await tokenFor(viewer), { text: 'x', action: 'formal' })).status).toBe(403);
+    expect(await rpc('social/posts/rewriteWithAi', owner_, { text: 'nothing', action: 'casual' })).toMatchObject({ status: 422, body: { code: 'AI_REWRITE_EMPTY' } });
+    expect(await rpc('social/posts/rewriteWithAi', owner_, { text: 'x', action: 'formal' }, { app: 'noAi' })).toMatchObject({ status: 503, body: { code: 'AI_NOT_CONFIGURED' } });
+
+    // A person's post stays untainted until they accept a rewrite into it.
+    const created = await rpc('social/posts/create', owner_, { body: 'Viết tay', channels: [{ connectionId }], idempotencyKey: randomUUID() });
+    const postId = String(created.body?.postId);
+    let post = await rpc('social/posts/get', owner_, { postId });
+    expect(post.body).toMatchObject({ origin: 'human', tainted: false });
+    await rpc('social/posts/update', owner_, { postId, revision: post.body.revision, body: 'shorten: Viết tay', aiAssisted: true });
+    post = await rpc('social/posts/get', owner_, { postId });
+    expect(post.body).toMatchObject({ origin: 'human', tainted: true });
+    const assisted = await rpc('social/posts/create', owner_, { body: 'formal: x', aiAssisted: true, channels: [{ connectionId }], idempotencyKey: randomUUID() });
+    expect((await rpc('social/posts/get', owner_, { postId: assisted.body?.postId })).body).toMatchObject({ tainted: true });
   });
 });

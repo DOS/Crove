@@ -38,7 +38,7 @@ const postsUsing = sql`(
 )`;
 
 // LIKE wildcards in a search are matched as themselves.
-const likeTerm = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+export const likeTerm = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 // Newest first, 60 a page; before is the last item of the previous page.
 export const mediaList = defineQuery({
