@@ -16,6 +16,7 @@ import { cn } from '@crove/ui/lib/utils';
 import { COMMENT_RULES, isProvider, sentLink, utmOf, type Issue } from '@crove/mod-social/contract';
 import { MediaField, type MediaItem } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
+import { PostActivity } from '../components/social-activity.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -1200,6 +1201,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             );
           })}
         </div>
+        <PostActivity postId={p.id} channels={p.variants.map((v) => ({ variantId: v.id, name: names.get(v.connectionId) ?? providerName(v.provider) }))} canWrite={canWrite} className="lg:col-span-2" />
       </div>
     </div>
   );
