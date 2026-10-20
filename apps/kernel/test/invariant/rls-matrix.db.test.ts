@@ -214,10 +214,21 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // A document is recorded together with its journal entry (#560: from 20261020190000 a document commits only with its
+  // own entry), so seeding completes it with that entry (written as the database owner); the probes roll back first.
   'crove_finance.purchase_document': {
-    make: (o) => ({
-      row: { org_id: o.id, party_id: o.party, invoice_number: tag(), invoice_date: '2026-10-01', subtotal: '100', vat_amount: '10', total: '110' },
-    }),
+    make: (o) => {
+      const id = randomUUID();
+      const entry = randomUUID();
+      return {
+        row: { org_id: o.id, id, party_id: o.party, invoice_number: tag(), invoice_date: '2026-10-01', subtotal: '100', vat_amount: '10', total: '110' },
+        complete: [
+          { table: 'crove_finance.journal_entry', values: { ...journalEntry(o.id, entry).values, source_type: 'finance.purchase_document', source_id: id } },
+          balancingLine(o.id, entry, 1, 'debit'),
+          balancingLine(o.id, entry, 2, 'credit'),
+        ],
+      };
+    },
   },
   // Voids of purchase documents (#165): a void names the reversal of its document's journal entry, which only the
   // posting definer writes, so the own-org insert control cannot build its setup as a login role. Seeding (as the
@@ -720,7 +731,8 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
           table: 'crove_finance.purchase_document',
           values: { org_id: orgId, id: org.document, party_id: org.party, invoice_number: `base-${key}`, invoice_date: '2026-10-01', subtotal: '100', vat_amount: '10', total: '110' },
         },
-        journalEntry(orgId, org.entry),
+        // The document's own entry (#560).
+        { table: 'crove_finance.journal_entry', values: { ...journalEntry(orgId, org.entry).values, source_type: 'finance.purchase_document', source_id: org.document } },
         balancingLine(orgId, org.entry, 1, 'debit'),
         balancingLine(orgId, org.entry, 2, 'credit'),
       ]);
