@@ -91,12 +91,52 @@ interface PortalListJob {
 }
 const PORTAL_LIST_RETRY_LIMIT = 3;
 
-interface OutboxRow {
+export interface OutboxRow {
   seq: string;
   org_id: string;
   event_id: string;
   type: string;
   payload: Record<string, unknown>;
+}
+
+const EXTRACT_EVENTS: readonly string[] = ['kernel.file.ingested', 'kernel.file.reextract_requested'];
+
+// Fair order on the extraction queue (#432, ADR-0035, docs/adr/0035-fair-extraction-order.md). Every org
+// shares one extraction queue and one parser slot, and pg-boss fetches by priority first, then by creation order. Each
+// extraction job is sent in its org's group with priority -n, n being how many extraction jobs of that org are already
+// queued, retrying or running: the k-th waiting job of every org runs in round k. An org's 500-entry ZIP queues its
+// entries at priorities 0 to -499, so another org's single upload, at priority 0, waits only for the job running and
+// for other orgs' rank-0 jobs queued before it. Counted per relay batch, one query; jobs of the same org within the
+// batch take the next ranks. Several worker processes count apart, so the order is fair to within their number.
+export async function extractPriorities(db: Db, rows: readonly OutboxRow[]): Promise<Map<OutboxRow, number>> {
+  const extracts = rows.filter((row) => EXTRACT_EVENTS.includes(row.type));
+  const priorities = new Map<OutboxRow, number>();
+  if (extracts.length === 0) return priorities;
+  const orgIds = [...new Set(extracts.map((row) => row.org_id))];
+  const { rows: counted } = await sql<{ group_id: string; n: number }>`
+    SELECT group_id, count(*)::int AS n FROM ${sql.table(`${JOB_SCHEMA}.job`)}
+    WHERE name = ${QUEUES.extract} AND state IN ('created', 'retry', 'active') AND group_id = ANY(${orgIds}::text[])
+    GROUP BY group_id`.execute(db);
+  const rank = new Map(counted.map((c) => [c.group_id, c.n]));
+  for (const row of extracts) {
+    const n = rank.get(row.org_id) ?? 0;
+    priorities.set(row, -n);
+    rank.set(row.org_id, n + 1);
+  }
+  return priorities;
+}
+
+// The extraction job of an ingested file, or of a requested re-extraction (version), in its org's group with its fair
+// priority. null for a re-extraction event without a valid version.
+export function sendExtractJob(boss: PgBoss, row: OutboxRow, priority: number): Promise<string | null> | null {
+  const fileId = String(row.payload.fileId);
+  const options = { priority, group: { id: row.org_id }, retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true };
+  if (row.type === 'kernel.file.reextract_requested') {
+    const version = Number(row.payload.version);
+    if (!Number.isInteger(version) || version < 1) return null;
+    return boss.send(QUEUES.extract, { orgId: row.org_id, fileId, version } satisfies ExtractJob, { ...options, singletonKey: `${row.org_id}:${fileId}:${version}` });
+  }
+  return boss.send(QUEUES.extract, { orgId: row.org_id, fileId } satisfies ExtractJob, { ...options, singletonKey: `${row.org_id}:${fileId}` });
 }
 
 export interface WorkerDeps {
@@ -459,6 +499,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       for (;;) {
         const sent = await deps.workerDb.transaction().execute(async (trx) => {
           const { rows } = await sql<OutboxRow>`SELECT * FROM crove_kernel.outbox_claim(100)`.execute(trx);
+          const priorities = finance ? await extractPriorities(trx, rows) : new Map<OutboxRow, number>();
           // A failed send rolls back the claim; singletonKey makes the retry idempotent.
           await Promise.all(
             rows.map((row) => {
@@ -474,23 +515,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   retryBackoff: true,
                 });
               }
-              if (row.type === 'kernel.file.ingested') {
-                const fileId = String(row.payload.fileId);
-                return boss.send(
-                  QUEUES.extract,
-                  { orgId: row.org_id, fileId },
-                  { singletonKey: `${row.org_id}:${fileId}`, retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
-                );
-              }
-              if (row.type === 'kernel.file.reextract_requested') {
-                const fileId = String(row.payload.fileId);
-                const version = Number(row.payload.version);
-                if (!Number.isInteger(version) || version < 1) return null;
-                return boss.send(
-                  QUEUES.extract,
-                  { orgId: row.org_id, fileId, version } satisfies ExtractJob,
-                  { singletonKey: `${row.org_id}:${fileId}:${version}`, retryLimit: EXTRACT_RETRY_LIMIT, retryDelay: 20, retryBackoff: true },
-                );
+              if (row.type === 'kernel.file.ingested' || row.type === 'kernel.file.reextract_requested') {
+                return sendExtractJob(boss, row, priorities.get(row) ?? 0);
               }
               if (row.type === 'kernel.org.export_requested') {
                 return boss.send(QUEUES.orgExport, { orgId: row.org_id } satisfies OrgExportJob, {
