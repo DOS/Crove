@@ -368,6 +368,11 @@ export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as
 // What a client said through a review link (#589): a signal for the team, never an approval.
 export const SOCIAL_REVIEW_VERDICTS = ['approved', 'changes_requested', 'comment'] as const;
 export const SOCIAL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
+// A link preview card (#641): waiting for the worker, read, or not readable and why.
+export const SOCIAL_LINK_PREVIEW_STATUSES = ['pending', 'ready', 'failed'] as const;
+export const SOCIAL_LINK_PREVIEW_ERRORS = ['invalid_url', 'blocked', 'dns', 'timeout', 'too_large', 'redirects', 'encoding', 'network', 'http', 'not_html'] as const;
+export type SocialLinkPreviewStatus = (typeof SOCIAL_LINK_PREVIEW_STATUSES)[number];
+export type SocialLinkPreviewError = (typeof SOCIAL_LINK_PREVIEW_ERRORS)[number];
 export type SocialVariantStatus = (typeof SOCIAL_VARIANT_STATUSES)[number];
 export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 export type SocialActorOrigin = (typeof SOCIAL_ACTOR_ORIGINS)[number];
@@ -390,6 +395,13 @@ export type SocialPostVariantTable = Refine<
   }
 >;
 export type SocialReviewFeedbackTable = Refine<G.SocialReviewFeedbackTable, { verdict: ColumnType<SocialReviewVerdict, never, never> }>;
+export type SocialLinkPreviewTable = Refine<
+  G.SocialLinkPreviewTable,
+  {
+    status: ColumnType<SocialLinkPreviewStatus, SocialLinkPreviewStatus, SocialLinkPreviewStatus>;
+    error: ColumnType<SocialLinkPreviewError | null, SocialLinkPreviewError | null | undefined, SocialLinkPreviewError | null>;
+  }
+>;
 
 export type SocialPostApprovalTable = Refine<
   G.SocialPostApprovalTable,
@@ -432,6 +444,7 @@ type Refined = Tables<{
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.post_approval': SocialPostApprovalTable;
   'crove_social.review_feedback': SocialReviewFeedbackTable;
+  'crove_social.link_preview': SocialLinkPreviewTable;
 }>;
 
 // Every table crove_tenant may read: the generated table type, or its refinement above.

@@ -42,7 +42,6 @@ const MACHINERY = new Set([
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_social.label',
-  'crove_social.link_preview',
   'crove_social.notification',
   'crove_social.notification_mute',
   'crove_social.post_label',

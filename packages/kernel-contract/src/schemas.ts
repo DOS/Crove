@@ -961,3 +961,14 @@ export const zSocialQueue = z.object({
   slots: z.array(z.object({ weekday: z.number().int(), minute: z.number().int(), label: z.string().nullable(), active: z.boolean() })),
   nextFree: z.array(z.string()),
 });
+
+// A link's preview card (#641): pending until the worker read the page; failed with why.
+export const zSocialLinkPreview = z.object({
+  url: z.string(),
+  status: z.enum(['pending', 'ready', 'failed']),
+  title: z.string().nullable(),
+  description: z.string().nullable(),
+  siteName: z.string().nullable(),
+  error: z.string().nullable(),
+  fetchedAt: z.string().nullable(),
+});

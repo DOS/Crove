@@ -1305,6 +1305,7 @@ Superseded design (kept only so older references resolve): Crove-issued session 
 ### 7.7 Egress and SSRF
 
 - One egress policy lives in `@crove/kernel-runtime/egress`; jobs must declare `egress`.
+  - The guard for tenant-supplied URLs is `guardedFetch` in `packages/kernel-runtime/src/egress.ts` (#641; first used by Social link previews). It allows HTTP(S) on default ports only. Every resolved address must be public, and the connection is pinned to the checked one. Redirects are followed by hand and checked again. One deadline covers the whole fetch, and there is a byte limit. It sends no credentials and asks for no compression. Declaring `egress` per job is not built yet.
 - Tenant-supplied URLs must pass the guard:
   - block private, link-local and metadata ranges;
   - pin the resolved IP before connecting;

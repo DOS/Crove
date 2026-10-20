@@ -438,7 +438,7 @@ function ChannelEditor({
       <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
-      <PlatformPreview channel={channel} provider={provider} content={content} />
+      <PlatformPreview channel={channel} provider={provider} content={content} readLink />
       {footer}
     </Card>
   );

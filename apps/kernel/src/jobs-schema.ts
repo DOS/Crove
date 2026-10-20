@@ -27,6 +27,8 @@ export const QUEUES = {
   portalList: 'finance-portal-list',
   // Created by the mail events migration (20261021030000).
   mailEvent: 'kernel-mail-event',
+  // Created by the Social link preview migration (20261021150000).
+  socialLinkPreview: 'social-link-preview',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 

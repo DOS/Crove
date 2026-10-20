@@ -1946,6 +1946,8 @@ export const en = {
       REVIEW_LINK_INVALID: 'This review link is not valid, was revoked or has expired',
       REVIEW_ANSWER_INVALID: 'Enter your name; a comment needs some text',
       REVIEW_ANSWER_LIMIT: 'This link has received the most answers it takes',
+      LINK_INVALID: 'A link must start with http:// or https://',
+      LINK_PREVIEW_LIMIT: 'Too many links are being read; try again in a few minutes',
       COMMENT_NOT_FOUND: 'This comment was not found',
       COMMENT_EDIT_CLOSED: 'A comment can be changed only in the first 15 minutes',
       VARIANTS_OF_SEVERAL_POSTS: 'Pick channels of one post only',
