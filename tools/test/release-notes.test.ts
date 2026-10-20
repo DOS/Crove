@@ -18,6 +18,13 @@ describe('noteOf', () => {
     expect(noteOf('Release note (vi): none')).toBeNull();
   });
 
+  it('lets no HTML through, nested or unclosed comments included', () => {
+    expect(noteOf('Release note (vi): <!--<!-- x -->--> Sửa lỗi')).toBe('--&gt; Sửa lỗi');
+    expect(noteOf('Release note (vi): Sửa <b>lỗi</b>')).toBe('Sửa &lt;b&gt;lỗi&lt;/b&gt;');
+    expect(noteOf('Release note (vi): Sửa lỗi <!-- chưa đóng')).toBe('Sửa lỗi');
+    expect(noteOf('Release note (vi): <<!---->!-- ẩn -->')).toBeNull();
+  });
+
   it('keeps one line and bounds its length', () => {
     expect(noteOf('Release note (vi): Dòng một\nDòng hai')).toBe('Dòng một');
     expect(noteOf(`Release note (vi): ${'a'.repeat(400)}`)).toHaveLength(300);

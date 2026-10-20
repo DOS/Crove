@@ -26,12 +26,23 @@ const MAX_LENGTH = 300;
  */
 export function noteOf(body) {
   if (!body) return null;
-  const text = body.replace(/<!--[\s\S]*?-->/g, '');
-  const match = NOTE_LINE.exec(text);
+  const match = NOTE_LINE.exec(withoutComments(body));
   if (!match) return null;
   const note = match[1].trim().replace(/\s+/g, ' ');
   if (EMPTY.has(note.toLowerCase().replace(/[.]$/, ''))) return null;
-  return note.length > MAX_LENGTH ? `${note.slice(0, MAX_LENGTH - 1)}…` : note;
+  // The note is the PR author's text, published as Markdown: no raw HTML gets through.
+  const safe = note.replace(/[<>]/g, (c) => (c === '<' ? '&lt;' : '&gt;'));
+  return safe.length > MAX_LENGTH ? `${safe.slice(0, MAX_LENGTH - 1)}…` : safe;
+}
+
+// HTML comments removed until none is left (nested or overlapping ones too); an unclosed one runs to the end.
+function withoutComments(text) {
+  let previous;
+  do {
+    previous = text;
+    text = text.replace(/<!--[\s\S]*?(?:-->|$)/g, '');
+  } while (text !== previous);
+  return text;
 }
 
 /**
