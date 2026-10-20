@@ -480,6 +480,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         set: os.social.policies.set.handler(socialCommand('social.channel.set_policy')),
         setReminders: os.social.policies.setReminders.handler(socialCommand('social.channel.set_reminders')),
         setShortLinks: os.social.policies.setShortLinks.handler(socialCommand('social.channel.set_short_links')),
+        setFourEyes: os.social.policies.setFourEyes.handler(socialCommand('social.channel.set_four_eyes')),
       },
       channels: {
         waiting: os.social.channels.waiting.handler(socialQuery('social.channel.waiting')),
