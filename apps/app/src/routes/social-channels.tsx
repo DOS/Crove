@@ -40,7 +40,7 @@ const dayKeyOf = (weekday: number) => DAY_KEYS[(weekday - 1) % 7] ?? 'mon';
 
 // How many different people approve a post for this channel before it may be scheduled (S9 review policy).
 // loading: the policies are still being read, so the select waits instead of showing the default.
-function ReviewPolicy({ channel, required, reminders, shortLinks, fourEyes, canEdit, canOwn, loading }: { channel: Channel; required: number; reminders: boolean; shortLinks: boolean; fourEyes: boolean; canEdit: boolean; canOwn: boolean; loading: boolean }) {
+function ReviewPolicy({ channel, required, reminders, shortLinks, fourEyes, clientApproval, canEdit, canOwn, loading }: { channel: Channel; required: number; reminders: boolean; shortLinks: boolean; fourEyes: boolean; clientApproval: boolean; canEdit: boolean; canOwn: boolean; loading: boolean }) {
   const t = useTranslations('social');
   const set = useMutation({
     mutationFn: (approvalsRequired: number) => client.social.policies.set({ connectionId: channel.id, approvalsRequired }),
@@ -64,6 +64,12 @@ function ReviewPolicy({ channel, required, reminders, shortLinks, fourEyes, canE
     onSettled: () => void queryClient.invalidateQueries(),
   });
   const eyesOn = eyes.isPending && eyes.variables !== undefined ? eyes.variables : fourEyes;
+  // The client's approval on a review link as a step (#770): owners only, like four-eyes.
+  const clientStep = useMutation({
+    mutationFn: (on: boolean) => client.social.policies.setClientApproval({ connectionId: channel.id, clientApproval: on }),
+    onSettled: () => void queryClient.invalidateQueries(),
+  });
+  const clientOn = clientStep.isPending && clientStep.variables !== undefined ? clientStep.variables : clientApproval;
   return (
     <div className="space-y-1.5">
       <Label htmlFor={`policy-${channel.id}`} className="text-sm font-medium text-muted-foreground">
@@ -114,6 +120,14 @@ function ReviewPolicy({ channel, required, reminders, shortLinks, fourEyes, canE
         </span>
       </label>
       {eyes.error && <ErrorText>{errorMessage(eyes.error)}</ErrorText>}
+      <label className="flex items-start gap-2 pt-1 text-sm text-muted-foreground">
+        <Checkbox className="mt-0.5" checked={clientOn} disabled={loading || !canOwn || clientStep.isPending || channel.status === 'revoked'} onCheckedChange={(checked) => clientStep.mutate(checked === true)} />
+        <span>
+          {t('clientApprovalLabel')}
+          <span className="block text-xs text-subtle-foreground">{t(canOwn ? 'clientApprovalHint' : 'fourEyesOwners')}</span>
+        </span>
+      </label>
+      {clientStep.error && <ErrorText>{errorMessage(clientStep.error)}</ErrorText>}
     </div>
   );
 }
@@ -255,6 +269,7 @@ export function SocialChannelsPage() {
   const reminders = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.reviewReminders]));
   const shortLinks = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.shortLinks]));
   const fourEyes = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.fourEyes]));
+  const clientApproval = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.clientApproval]));
   const [name, setName] = useState('');
   const [confirming, setConfirming] = useState<string | null>(null);
   const sandbox = getConfig().channels?.sandbox ?? false;
@@ -414,7 +429,7 @@ export function SocialChannelsPage() {
                 </div>
                 {confirming === c.id && <p className="text-xs text-muted-foreground">{t('disconnectHint')}</p>}
                 <div className="border-t pt-3">
-                  <ReviewPolicy channel={c} required={policies.get(c.id) ?? 1} reminders={reminders.get(c.id) ?? true} shortLinks={shortLinks.get(c.id) ?? false} fourEyes={fourEyes.get(c.id) ?? false} canEdit={isAdmin} canOwn={role === 'owner'} loading={policyRows.isLoading} />
+                  <ReviewPolicy channel={c} required={policies.get(c.id) ?? 1} reminders={reminders.get(c.id) ?? true} shortLinks={shortLinks.get(c.id) ?? false} fourEyes={fourEyes.get(c.id) ?? false} clientApproval={clientApproval.get(c.id) ?? false} canEdit={isAdmin} canOwn={role === 'owner'} loading={policyRows.isLoading} />
                 </div>
                 <div className="border-t pt-3">
                   <p className="mb-2 text-sm font-medium text-muted-foreground">{t('voice.channelTitle')}</p>

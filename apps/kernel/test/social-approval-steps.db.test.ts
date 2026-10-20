@@ -112,7 +112,7 @@ suite('social multi-step approval on PostgreSQL (S9)', () => {
 
     const first = await decide(o, o.owner, postId, 'approved');
     let v = (await get(o, postId)).variants[0];
-    expect([first.waiting, v?.status, v?.review]).toEqual([[v?.id], 'in_review', { required: 2, approvedBy: [o.owner], fourEyes: false }]);
+    expect([first.waiting, v?.status, v?.review]).toEqual([[v?.id], 'in_review', { required: 2, approvedBy: [o.owner], fourEyes: false, client: false, clientVerdict: null }]);
     await expect(decide(o, o.owner, postId, 'approved')).rejects.toMatchObject({ code: 'ALREADY_APPROVED' });
     await expect(schedule(o, postId)).rejects.toBeDefined();
 
@@ -241,7 +241,7 @@ suite('social multi-step approval on PostgreSQL (S9)', () => {
     expect(events.map((e) => e.payload)).toEqual([{ post_id: postId, decision: 'approved', variant_ids: lowered.approved, waiting_variant_ids: [], by_policy: true }]);
 
     const plain = await inReview(o, await connection(o));
-    expect((await get(o, plain)).variants[0]?.review).toEqual({ required: 1, approvedBy: [], fourEyes: false });
+    expect((await get(o, plain)).variants[0]?.review).toEqual({ required: 1, approvedBy: [], fourEyes: false, client: false, clientVerdict: null });
     expect((await decide(o, o.admin, plain, 'approved')).waiting).toEqual([]);
     expect((await get(o, plain)).variants[0]?.status).toBe('approved');
   });

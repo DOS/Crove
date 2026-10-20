@@ -887,7 +887,9 @@ export const zSocialVariant = z.object({
     .object({ decision: z.enum(SOCIAL_DECISIONS), comment: z.string().nullable(), decidedBy: zId, at: z.string(), revision: z.number().int(), current: z.boolean() })
     .nullable(),
   // Approvals the channel needs (S9) and who approved the current content in the open review round.
-  review: z.object({ required: z.number().int(), approvedBy: z.array(zId), fourEyes: z.boolean() }),
+  // client: the channel also waits for the client's approval on a review link (#770); clientVerdict: the client's
+  // standing answer for the content as it is now.
+  review: z.object({ required: z.number().int(), approvedBy: z.array(zId), fourEyes: z.boolean(), client: z.boolean(), clientVerdict: z.enum(['approved', 'changes_requested']).nullable() }),
 });
 
 export const zSocialPost = z.object({

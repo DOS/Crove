@@ -45,7 +45,8 @@ import { commentCallsOf, commentCommands, commentStatus, type CommentStatus } fr
 import { threadCallsOf, threadCommands, threadStatus } from './thread.ts';
 import { autoReplyCommands } from './auto-reply.ts';
 import { repostCommands } from './repost.ts';
-import { approvalsRequired, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
+import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
+import { clientReviewCommands } from './client-review.ts';
 import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -526,6 +527,10 @@ export const variantDecide = defineCommand({
     // Four-eyes (#740): on these channels the author approves nothing of their own post.
     const author = (await ctx.trx.selectFrom('crove_social.post').select('author_user_id').where('org_id', '=', ctx.orgId).where('id', '=', post.id).executeTakeFirst())?.author_user_id ?? null;
     const foureyes = input.decision === 'approved' && author === userId ? await fourEyesOn(ctx.trx, ctx.orgId, chosen.map((v) => v.channel_connection_id)) : new Set<string>();
+    // The client's approval (#770): on its channels, the team's last approval leaves the variant waiting for the client's
+    // "Approved" on a review link, unless it was given for this content already.
+    const clientOn = input.decision === 'approved' ? await clientApprovalOn(ctx.trx, ctx.orgId, chosen.map((v) => v.channel_connection_id)) : new Set<string>();
+    const client = clientOn.size > 0 ? await clientVerdict(ctx.trx, ctx.orgId, post.id) : null;
     const waiting: string[] = [];
     const rescheduled: string[] = [];
     for (const v of chosen) {
@@ -538,7 +543,7 @@ export const variantDecide = defineCommand({
         const given = approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash });
         if (foureyes.has(v.channel_connection_id)) throw new DomainError('SOCIAL_SELF_APPROVAL', 403, 'Kênh này cần người khác duyệt bài của bạn', { variantId: v.id });
         if (given.includes(userId)) throw new DomainError('ALREADY_APPROVED', 409, 'Bạn đã duyệt nội dung này của kênh, cần người khác duyệt tiếp', { variantId: v.id });
-        if (given.length + 1 < (required.get(v.channel_connection_id) ?? 1)) {
+        if (given.length + 1 < (required.get(v.channel_connection_id) ?? 1) || (clientOn.has(v.channel_connection_id) && client !== 'approved')) {
           status = v.status;
           waiting.push(v.id);
         }
@@ -935,7 +940,8 @@ export interface VariantView {
   issues: Issue[];
   latestDecision: { decision: SocialDecision; comment: string | null; decidedBy: string; at: string; revision: number; current: boolean } | null;
   // The approvals its channel needs (S9) and who approved its current content in the open review round.
-  review: { required: number; approvedBy: string[]; fourEyes: boolean };
+  // client: the channel also waits for the client's approval (#770); clientVerdict: the client's standing answer.
+  review: { required: number; approvedBy: string[]; fourEyes: boolean; client: boolean; clientVerdict: 'approved' | 'changes_requested' | null };
 }
 
 export interface MediaView {
@@ -1009,6 +1015,9 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
   for (const d of decisions) if (!latest.has(d.variant_id)) latest.set(d.variant_id, d);
   const required = await approvalsRequired(ctx.trx, ctx.orgId, [...new Set(variants.map((v) => v.channel_connection_id))]);
   const foureyes = await fourEyesOn(ctx.trx, ctx.orgId, [...new Set(variants.map((v) => v.channel_connection_id))]);
+  const clientOn = await clientApprovalOn(ctx.trx, ctx.orgId, [...new Set(variants.map((v) => v.channel_connection_id))]);
+  const clientVerdicts = new Map<string, Awaited<ReturnType<typeof clientVerdict>>>();
+  for (const postId of new Set(variants.filter((v) => clientOn.has(v.channel_connection_id)).map((v) => v.post_id))) clientVerdicts.set(postId, await clientVerdict(ctx.trx, ctx.orgId, postId));
   // Queues paused by a person (#576): a variant waiting on a slot there does not go out until it is resumed.
   const queued = [...new Set(variants.filter((v) => v.queue_slot_at !== null).map((v) => v.channel_connection_id))];
   const pausedQueues = new Set(
@@ -1109,6 +1118,8 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
                 required: required.get(v.channel_connection_id) ?? 1,
                 // The author may not approve on this channel (#740).
                 fourEyes: foureyes.has(v.channel_connection_id),
+                client: clientOn.has(v.channel_connection_id),
+                clientVerdict: clientOn.has(v.channel_connection_id) ? (clientVerdicts.get(v.post_id) ?? null) : null,
                 approvedBy: approvalsInRound(
                   decisions.filter((x) => x.variant_id === v.id).map((x) => ({ decision: x.decision, decidedBy: x.decided_by, revision: x.revision, contentHash: x.content_hash })),
                   { revision: v.revision, contentHash: v.content_hash },
@@ -1274,6 +1285,7 @@ export const socialCommands = [
   ...autoReplyCommands,
   ...repostCommands,
   ...policyCommands,
+  ...clientReviewCommands,
   ...assignCommands,
   ...snippetCommands,
   ...labelCommands,
