@@ -1135,7 +1135,7 @@ export const zSocialLinkPreview = z.object({
 });
 
 // In-app notifications (#637): the viewer's newest, how many are unread, and the kinds they turned off.
-export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused'] as const;
+export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention'] as const;
 export const zSocialNotificationKind = z.enum(SOCIAL_NOTIFICATION_KINDS);
 export const zSocialNotifications = z.object({
   items: z.array(

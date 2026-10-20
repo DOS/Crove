@@ -10,6 +10,7 @@ import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { AUTO_REPLY_STALE_MS, autoReplyCallsOf } from './auto-reply.ts';
 import { REPOST_STALE_MS, repostCallsOf } from './repost.ts';
+import { mentionsOf } from './domain/mentions.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -18,6 +19,15 @@ export const COMMENT_EDIT_MS = 15 * 60_000;
 export const ACTIVITY_LIMIT = 500;
 
 const zBody = z.string().trim().min(1).max(4000);
+
+// The members of the org among the ones a comment mentions (#793), other than its author; anyone else is text.
+async function mentionedMembers(ctx: CommandContext, body: string, author: string): Promise<string[]> {
+  const ids = mentionsOf(body).filter((id) => id !== author);
+  if (ids.length === 0) return [];
+  const rows = await ctx.trx.selectFrom('crove_kernel.tenant_member').select('user_id').where('org_id', '=', ctx.orgId).where('user_id', 'in', ids).execute();
+  const members = new Set(rows.map((r) => r.user_id));
+  return ids.filter((id) => members.has(id));
+}
 
 function requireUser(ctx: CommandContext): string {
   if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
@@ -49,7 +59,10 @@ export const commentAdd = defineCommand({
       .values({ org_id: ctx.orgId, post_id: input.postId, variant_id: input.variantId ?? null, author_user_id: userId, body: input.body, created_at: ctx.now })
       .returning('id')
       .executeTakeFirstOrThrow();
-    await ctx.emit('social.post.commented', { post_id: input.postId, comment_id: row.id, ...(input.variantId ? { variant_id: input.variantId } : {}) });
+    const mentioned = await mentionedMembers(ctx, input.body, userId);
+    // The people mentioned hear of it once, as a mention, not as one more comment on the thread.
+    await ctx.emit('social.post.commented', { post_id: input.postId, comment_id: row.id, ...(input.variantId ? { variant_id: input.variantId } : {}), ...(mentioned.length ? { mentioned } : {}) });
+    if (mentioned.length) await ctx.emit('social.post.mentioned', { post_id: input.postId, comment_id: row.id, user_ids: mentioned });
     return { commentId: row.id };
   },
 });
@@ -74,6 +87,10 @@ export const commentEdit = defineCommand({
     if (ctx.now.getTime() - c.created_at.getTime() > COMMENT_EDIT_MS) throw new DomainError('COMMENT_EDIT_CLOSED', 409, 'Đã quá thời gian sửa bình luận này');
     if (c.body !== input.body) {
       await ctx.trx.updateTable('crove_social.post_comment').set({ body: input.body, edited_at: ctx.now }).where('org_id', '=', ctx.orgId).where('id', '=', c.id).execute();
+      // Only members the fix mentions for the first time are told; the ones mentioned before were told already.
+      const before = new Set(mentionsOf(c.body));
+      const added = (await mentionedMembers(ctx, input.body, userId)).filter((id) => !before.has(id));
+      if (added.length) await ctx.emit('social.post.mentioned', { post_id: c.post_id, comment_id: c.id, user_ids: added });
     }
     return { commentId: c.id, postId: c.post_id };
   },

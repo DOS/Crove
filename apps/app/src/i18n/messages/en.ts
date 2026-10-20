@@ -1401,7 +1401,7 @@ export const en = {
       settings: 'Notify me about',
       settingsHint: 'Untick what you do not want. This applies to your account only.',
       mail: 'Email me too',
-      mailHint: 'When a post waits for review, gets a decision, fails, or a channel needs reconnecting, Crove also sends an email to your address.',
+      mailHint: 'When a post waits for review, gets a decision, fails, a channel needs reconnecting, or someone mentions you, Crove also sends an email to your address.',
       kinds: {
         review_requested: 'Posts to review',
         decided: 'Review results of your posts',
@@ -1412,6 +1412,7 @@ export const en = {
         client_answer: 'Client answers',
         assigned: 'Posts assigned to you',
         feed_paused: 'Feeds that stopped being read',
+        mention: 'Mentions of you in comments',
         review_reminder: 'Reminders of posts waiting for review',
       },
       text: {
@@ -1423,6 +1424,7 @@ export const en = {
         needs_attention: 'A post on {provider} needs checking',
         channel_expired: 'The channel {channel} expired; connect it again',
         comment: '{actor} commented',
+        mention: '{actor} mentioned you in a comment',
         client_approved: 'Client {name} is happy with the post',
         client_changes_requested: 'Client {name} wants changes',
         client_comment: 'Client {name} left a note',
@@ -1804,7 +1806,8 @@ export const en = {
     activity: {
       title: 'Comments and activity',
       hint: 'Comments are for the team only and are never posted.',
-      placeholder: 'Write a comment for the team',
+      placeholder: 'Write a comment for the team; type @ to mention someone',
+      mentionList: 'Members to mention',
       about: 'About',
       wholePost: 'The whole post',
       send: 'Comment',

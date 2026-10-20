@@ -6,8 +6,9 @@ import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
-import { Textarea } from '@crove/ui/components/textarea';
+import { mentionsForEditing, mentionsForStoring } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
+import { CommentBody, MentionBox, useMemberNames, type Picked } from './social-mentions.tsx';
 import { ErrorText, Spinner } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -19,8 +20,10 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
   const t = useTranslations('social.activity');
   const f = useFormat();
   const [editing, setEditing] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Picked>([]);
+  const { nameOf } = useMemberNames();
   const edit = useMutation({
-    mutationFn: (body: string) => client.social.posts.editComment({ commentId: item.id, body }),
+    mutationFn: (body: string) => client.social.posts.editComment({ commentId: item.id, body: mentionsForStoring(body, picked) }),
     onSuccess: () => {
       setEditing(null);
       void queryClient.invalidateQueries({ queryKey: orpc.social.posts.activity.key() });
@@ -45,7 +48,7 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
       )}
       {editing !== null ? (
         <div className="space-y-2">
-          <Textarea value={editing} maxLength={MAX} rows={3} onChange={(e) => setEditing(e.target.value)} aria-label={t('editLabel')} />
+          <MentionBox value={editing} onChange={setEditing} picked={picked} onPicked={setPicked} maxLength={MAX} rows={3} label={t('editLabel')} />
           {edit.error && <ErrorText>{errorMessage(edit.error)}</ErrorText>}
           <div className="flex gap-2">
             <Button size="sm" disabled={edit.isPending || editing.trim() === ''} onClick={() => edit.mutate(editing.trim())}>
@@ -57,10 +60,15 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
           </div>
         </div>
       ) : (
-        item.body && <p className="whitespace-pre-wrap break-words text-foreground">{item.body}</p>
+        item.body && (item.kind === 'comment' ? <CommentBody body={item.body} /> : <p className="whitespace-pre-wrap break-words text-foreground">{item.body}</p>)
       )}
       {item.kind === 'comment' && item.editable && canWrite && editing === null && (
-        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setEditing(item.body ?? '')}>
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => {
+            const shown = mentionsForEditing(item.body ?? '', nameOf);
+            setPicked(shown.picked);
+            setEditing(shown.text);
+          }}
+        >
           {t('edit')}
         </Button>
       )}
@@ -73,10 +81,12 @@ export function PostActivity({ postId, channels, canWrite, className }: { postId
   const activity = useQuery(orpc.social.posts.activity.queryOptions({ input: { postId } }));
   const [body, setBody] = useState('');
   const [variantId, setVariantId] = useState('');
+  const [picked, setPicked] = useState<Picked>([]);
   const add = useMutation({
-    mutationFn: () => client.social.posts.comment({ postId, body: body.trim(), ...(variantId ? { variantId } : {}) }),
+    mutationFn: () => client.social.posts.comment({ postId, body: mentionsForStoring(body.trim(), picked), ...(variantId ? { variantId } : {}) }),
     onSuccess: () => {
       setBody('');
+      setPicked([]);
       void queryClient.invalidateQueries({ queryKey: orpc.social.posts.activity.key() });
     },
   });
@@ -95,7 +105,7 @@ export function PostActivity({ postId, channels, canWrite, className }: { postId
             if (body.trim() !== '' && !add.isPending) add.mutate();
           }}
         >
-          <Textarea value={body} maxLength={MAX} rows={3} placeholder={t('placeholder')} aria-label={t('placeholder')} onChange={(e) => setBody(e.target.value)} />
+          <MentionBox value={body} onChange={setBody} picked={picked} onPicked={setPicked} maxLength={MAX} rows={3} placeholder={t('placeholder')} label={t('placeholder')} />
           <div className="flex flex-wrap items-center gap-2">
             {channels.length > 1 && (
               <NativeSelect value={variantId} onChange={(e) => setVariantId(e.target.value)} aria-label={t('about')} className="w-auto">

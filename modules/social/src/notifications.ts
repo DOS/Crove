@@ -36,6 +36,7 @@ export const NOTIFYING_EVENTS = [
   'social.variant.needs_attention',
   'kernel.channel.expired',
   'social.post.commented',
+  'social.post.mentioned',
   'social.review.answered',
   'social.post.assigned',
   'social.review.reminder',
@@ -129,7 +130,16 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
       if (!e.success) return null;
       const p = await authorOf(ctx, e.data.post_id);
       if (!p) return null;
-      return { ...base, kind: 'comment', users: await threadOf(ctx, e.data.post_id, p.author), postId: e.data.post_id };
+      // Those the comment mentions get a mention instead (#793).
+      const mentioned = new Set(z.object({ mentioned: z.array(zId).max(50) }).safeParse(payload).data?.mentioned ?? []);
+      return { ...base, kind: 'comment', users: (await threadOf(ctx, e.data.post_id, p.author)).filter((u) => !mentioned.has(u)), postId: e.data.post_id };
+    }
+    case 'social.post.mentioned': {
+      const e = z.object({ post_id: zId, user_ids: z.array(zId).min(1).max(50) }).safeParse(payload);
+      if (!e.success) return null;
+      // Gone since (deleted): nothing to open.
+      if (!(await authorOf(ctx, e.data.post_id))) return null;
+      return { ...base, kind: 'mention', users: e.data.user_ids, postId: e.data.post_id };
     }
     case 'social.review.answered': {
       const e = z.object({ post_id: zId, feedback_id: zId }).safeParse(payload);
@@ -188,7 +198,7 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
 }
 
 // The kinds that also go out by email, and the template they use.
-export const MAILED_KINDS: ReadonlySet<SocialNotificationKind> = new Set(['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired']);
+export const MAILED_KINDS: ReadonlySet<SocialNotificationKind> = new Set(['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'mention']);
 export const NOTIFICATION_MAIL_TEMPLATE = 'social.notification';
 
 const oneLine = (text: string, max: number) => {
@@ -207,6 +217,8 @@ function subjectOf(kind: SocialNotificationKind, detail: Record<string, string>,
       return `Đăng bài không thành công${channel ? ` trên ${oneLine(channel, 60)}` : ''}${about}`;
     case 'needs_attention':
       return `Bài đăng cần bạn xử lý${channel ? ` trên ${oneLine(channel, 60)}` : ''}${about}`;
+    case 'mention':
+      return `Bạn được nhắc đến trong một bình luận${about}`;
     default:
       return `Kênh ${channel ? oneLine(channel, 60) : 'mạng xã hội'} cần kết nối lại`;
   }
