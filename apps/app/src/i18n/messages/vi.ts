@@ -1653,6 +1653,7 @@ export const vi = {
       recipients: 'Người nhận',
       recipientsHint: 'Tối đa 10 email, cách nhau bằng dấu phẩy hoặc xuống dòng.',
       recipientsInvalid: 'Email không hợp lệ: {list}',
+      recipientsTooMany: 'Đang có {count} email; mỗi lịch gửi tối đa 10 người nhận.',
       channels: 'Kênh',
       channelsHint: 'Không chọn kênh nào thì báo cáo gồm mọi kênh.',
       zoneHint: 'Giờ gửi theo múi giờ {zone}.',

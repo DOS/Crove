@@ -135,7 +135,9 @@ function Form({ channels, onDone }: { channels: readonly { id: string; displayNa
       <div className="space-y-1.5">
         <Label htmlFor="schedule-recipients">{t('recipients')}</Label>
         <Textarea id="schedule-recipients" rows={2} value={recipients} placeholder="khach@example.com, sep@example.com" onChange={(e) => setRecipients(e.target.value)} />
-        <p className="text-xs text-subtle-foreground">{parsed.invalid.length > 0 ? t('recipientsInvalid', { list: parsed.invalid.join(', ') }) : t('recipientsHint')}</p>
+        <p className={`text-xs ${parsed.invalid.length > 0 || parsed.valid.length > 10 ? 'text-destructive' : 'text-subtle-foreground'}`}>
+          {parsed.invalid.length > 0 ? t('recipientsInvalid', { list: parsed.invalid.join(', ') }) : parsed.valid.length > 10 ? t('recipientsTooMany', { count: String(parsed.valid.length) }) : t('recipientsHint')}
+        </p>
       </div>
       {channels.length > 1 && (
         <fieldset className="space-y-1.5">
@@ -260,7 +262,7 @@ export function ReportSchedules({ channels }: { channels: readonly { id: string;
           <h3 className="text-sm font-medium text-foreground">{t('title')}</h3>
           <p className="text-xs text-subtle-foreground">{t('hint')}</p>
         </div>
-        {schedules.length < 5 && (
+        {(schedules.length < 5 || adding) && (
           <Button size="sm" variant="outline" onClick={() => setAdding(!adding)}>
             {adding ? t('cancel') : t('add')}
           </Button>
@@ -283,7 +285,7 @@ export function ReportSchedules({ channels }: { channels: readonly { id: string;
           ))}
         </ul>
       ) : (
-        !adding && <p className="text-xs text-subtle-foreground">{t('empty')}</p>
+        !adding && !list.isPending && <p className="text-xs text-subtle-foreground">{t('empty')}</p>
       )}
     </Card>
   );

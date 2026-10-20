@@ -1653,6 +1653,7 @@ export const en = {
       recipients: 'Recipients',
       recipientsHint: 'Up to 10 emails, separated by commas or new lines.',
       recipientsInvalid: 'Invalid emails: {list}',
+      recipientsTooMany: '{count} emails; a schedule has at most 10 recipients.',
       channels: 'Channels',
       channelsHint: 'With no channel picked, the report covers every channel.',
       zoneHint: 'Send times are in the {zone} time zone.',
