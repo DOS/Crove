@@ -126,7 +126,7 @@ export function takeFlash(): string | null {
 }
 
 // The Social home's tab and filters, kept in the address (#574) so a reload or a shared link shows the same list.
-export const SOCIAL_TABS = ['upcoming', 'calendar', 'review', 'drafts', 'done', 'metrics', 'library'] as const;
+export const SOCIAL_TABS = ['upcoming', 'calendar', 'review', 'attention', 'drafts', 'done', 'metrics', 'library'] as const;
 export type SocialTab = (typeof SOCIAL_TABS)[number];
 export interface SocialSearch {
   tab?: SocialTab;

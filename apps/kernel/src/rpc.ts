@@ -67,7 +67,7 @@ interface CreatedInvite {
 }
 
 // Drafts Social posts with the deployment's model (SocialWriter in @crove/agent); unset: AI drafting is off.
-export type SocialDrafter = Pick<SocialWriter, 'draft'>;
+export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'>;
 
 // What the writer is told about a channel: the limits the channel rules check afterwards.
 function writerChannel(c: { id: string; provider: string; displayName: string }): WriterChannel {
@@ -301,6 +301,13 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         addChannels: os.social.posts.addChannels.handler(socialCommand('social.post.add_channels')),
         submit: os.social.posts.submit.handler(socialCommand('social.post.submit')),
         repost: os.social.posts.repost.handler(socialCommand('social.post.repost')),
+        // A retry with the same idempotencyKey returns the first import instead of a second set of posts.
+        import: os.social.posts.import.handler(({ context, input }) =>
+          inSocial(context, (orgId, actor) => {
+            const { idempotencyKey, ...rest } = input;
+            return runtime.execute('social.post.import', rest, { actor, orgId, idempotencyKey });
+          }),
+        ),
         duplicate: os.social.posts.duplicate.handler(socialCommand('social.post.duplicate')),
         setEvergreen: os.social.posts.setEvergreen.handler(socialCommand('social.post.set_evergreen')),
         draftWithAi: os.social.posts.draftWithAi.handler(({ context, input }) =>
@@ -347,6 +354,38 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
               { actor, orgId },
             );
             return { postId: created.postId };
+          }),
+        ),
+        rewriteWithAi: os.social.posts.rewriteWithAi.handler(({ context, input }) =>
+          inSocial(context, async (orgId, actor) => {
+            const { role } = await resolveMembership(runtime, context.user, context.orgSlug);
+            if (role !== 'owner' && role !== 'admin' && role !== 'member') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không soạn được bài');
+            if (!socialWriter) throw new DomainError('AI_NOT_CONFIGURED', 503, 'Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL)');
+            let channel: WriterChannel | undefined;
+            if (input.connectionId) {
+              const connections = await runtime.query<{ id: string; provider: string; displayName: string; status: string }[]>('kernel.channel.list', {}, { actor, orgId });
+              const found = connections.find((c) => c.id === input.connectionId && c.status !== 'revoked');
+              if (!found) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
+              channel = writerChannel(found);
+            }
+            // The same budget as drafts: each rewrite is a paid model call (#386).
+            const ticket = drafts.take(orgId, actor.userId);
+            if (!ticket.allowed) {
+              throw new DomainError('RATE_LIMITED', 429, ticket.reason === 'busy' ? 'Đang chờ AI trả lời, hãy đợi xong rồi thử tiếp' : 'Đã dùng AI nhiều lần trong phút này, hãy thử lại sau ít phút', {
+                retryAfterSeconds: ticket.retryAfterSeconds,
+              });
+            }
+            let result: Awaited<ReturnType<SocialDrafter['rewrite']>>;
+            try {
+              result = await socialWriter.rewrite({ text: input.text, title: input.title ?? null, action: input.action, ...(channel ? { channel } : {}) });
+            } catch (error: unknown) {
+              console.error('[social-ai] rewrite failed', error instanceof Error ? error.name : typeof error);
+              throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
+            } finally {
+              ticket.release();
+            }
+            if (!result) throw new DomainError('AI_REWRITE_EMPTY', 422, 'AI không viết lại được đoạn này, hãy thử cách khác');
+            return result;
           }),
         ),
       },

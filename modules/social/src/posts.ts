@@ -178,7 +178,37 @@ export const zPostCreate = z.strictObject({
   // Set by the server only (the AI drafting route); the app's create never sends it. An AI draft is tainted: every
   // variant needs a person's approval of what the model wrote (plan §3.7).
   origin: z.enum(['human', 'ai']).optional(),
+  // The member accepted an AI rewrite into the text (#583).
+  aiAssisted: z.literal(true).optional(),
 });
+
+async function createPost(ctx: CommandContext, input: z.infer<typeof zPostCreate>) {
+  const userId = requireUser(ctx);
+  distinctConnections(input.channels);
+  const media = await resolveMedia(ctx, input.media ?? []);
+  const inserted = await ctx.trx
+    .insertInto('crove_social.post')
+    .values({
+      org_id: ctx.orgId,
+      body: input.body,
+      title: input.title ?? null,
+      link_url: input.linkUrl ?? null,
+      // The surface sets actor_origin once API and MCP clients exist; today every write comes from the app.
+      origin: input.origin ?? 'human',
+      tainted: input.origin === 'ai' || input.aiAssisted === true,
+      actor_origin: 'ui',
+      author_user_id: userId,
+      ...(input.timeZone ? { time_zone: input.timeZone } : {}),
+      scheduled_at: input.scheduledAt ?? null,
+    })
+    .returning(POST_COLUMNS)
+    .executeTakeFirstOrThrow();
+  await writePostMedia(ctx, inserted.id, media);
+  const post: PostRow = { ...inserted, media };
+  const variants = await insertVariants(ctx, post, input.channels, 0);
+  await ctx.emit('social.post.created', { post_id: post.id });
+  return { post, variants, media };
+}
 
 export const postCreate = defineCommand({
   name: 'social.post.create',
@@ -186,32 +216,61 @@ export const postCreate = defineCommand({
   risk: 'R1',
   access: MEMBERS,
   handler: async (ctx, input) => {
-    const userId = requireUser(ctx);
-    distinctConnections(input.channels);
-    const media = await resolveMedia(ctx, input.media ?? []);
-    const inserted = await ctx.trx
-      .insertInto('crove_social.post')
-      .values({
-        org_id: ctx.orgId,
-        body: input.body,
-        title: input.title ?? null,
-        link_url: input.linkUrl ?? null,
-        // The surface sets actor_origin once API and MCP clients exist; today every write comes from the app.
-        origin: input.origin ?? 'human',
-        tainted: input.origin === 'ai',
-        actor_origin: 'ui',
-        author_user_id: userId,
-        ...(input.timeZone ? { time_zone: input.timeZone } : {}),
-        scheduled_at: input.scheduledAt ?? null,
-      })
-      .returning(POST_COLUMNS)
-      .executeTakeFirstOrThrow();
-    await writePostMedia(ctx, inserted.id, media);
-    const post: PostRow = { ...inserted, media };
-    const variants = await insertVariants(ctx, post, input.channels, 0);
+    const { post, variants, media } = await createPost(ctx, input);
     ctx.audit({ post_id: post.id, variants: variants.length, media: media.length, origin: input.origin ?? 'human' });
-    await ctx.emit('social.post.created', { post_id: post.id });
     return { postId: post.id, revision: post.revision, variants };
+  },
+});
+
+// Many drafts at once from a sheet (#586): each row a post for its channels, text only (images are added on the post
+// afterwards). With submit, the channels that fit their rules go to review; nothing is published without one.
+export const MAX_IMPORT_ROWS = 200;
+export const postImport = defineCommand({
+  name: 'social.post.import',
+  input: z.strictObject({
+    posts: z
+      .array(
+        z.strictObject({
+          body: zBody,
+          title: zTitle.nullable().optional(),
+          linkUrl: zLink.nullable().optional(),
+          scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
+          timeZone: zTimeZone.optional(),
+          connectionIds: z.array(zId).min(1).max(MAX_CHANNELS_PER_POST),
+        }),
+      )
+      .min(1)
+      .max(MAX_IMPORT_ROWS),
+    submit: z.boolean().optional(),
+  }),
+  risk: 'R1',
+  access: MEMBERS,
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const created: { postId: string; submitted: number }[] = [];
+    for (const row of input.posts) {
+      const { post, variants } = await createPost(ctx, {
+        body: row.body,
+        title: row.title ?? null,
+        linkUrl: row.linkUrl ?? null,
+        ...(row.scheduledAt ? { scheduledAt: row.scheduledAt } : {}),
+        ...(row.timeZone ? { timeZone: row.timeZone } : {}),
+        channels: row.connectionIds.map((connectionId) => ({ connectionId })),
+      });
+      let submitted = 0;
+      if (input.submit) {
+        const ready = (await lockVariants(ctx.trx, ctx.orgId, post.id)).filter((v) => variants.some((c) => c.variantId === v.id) && issuesOf(base(post), v).length === 0);
+        for (const v of ready) await setVariant(ctx, v.id, { status: step(v, { type: 'submit' }) });
+        if (ready.length > 0) {
+          await refreshPostStatus(ctx, post.id);
+          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: ready.map((v) => v.id) });
+        }
+        submitted = ready.length;
+      }
+      created.push({ postId: post.id, submitted });
+    }
+    ctx.audit({ posts: created.length, submitted: created.reduce((n, c) => n + c.submitted, 0) });
+    return { posts: created };
   },
 });
 
@@ -251,6 +310,8 @@ export const postUpdate = defineCommand({
     scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
     // The whole list of images, replacing the post's; omitted leaves them as they are.
     media: zMedia.optional(),
+    // The member accepted an AI rewrite into the text (#583).
+    aiAssisted: z.literal(true).optional(),
   }),
   risk: 'R1',
   access: MEMBERS,
@@ -290,7 +351,7 @@ export const postUpdate = defineCommand({
     const revision = post.revision + 1;
     await ctx.trx
       .updateTable('crove_social.post')
-      .set({ body: next.body, title: next.title, link_url: next.link_url, time_zone: next.time_zone, scheduled_at: next.scheduled_at, revision, updated_at: ctx.now })
+      .set({ body: next.body, title: next.title, link_url: next.link_url, time_zone: next.time_zone, scheduled_at: next.scheduled_at, revision, updated_at: ctx.now, ...(input.aiAssisted ? { tainted: true } : {}) })
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', post.id)
       .execute();
@@ -309,6 +370,8 @@ export const variantUpdate = defineCommand({
     title: zTitle.nullable().optional(),
     linkUrl: zLink.nullable().optional(),
     settings: zSettings.optional(),
+    // The member accepted an AI rewrite into the text (#583): the post is tainted.
+    aiAssisted: z.literal(true).optional(),
     // The channel's own images or video (#581); null goes back to the post's.
     media: zMedia.nullable().optional(),
   }),
@@ -341,6 +404,7 @@ export const variantUpdate = defineCommand({
       return { variantId: v.id, revision: v.revision, changed: false };
     }
     await setVariant(ctx, v.id, { ...columns, content_hash: hash, revision: v.revision + 1, ...editValues(v) });
+    if (input.aiAssisted) await ctx.trx.updateTable('crove_social.post').set({ tainted: true, updated_at: ctx.now }).where('org_id', '=', ctx.orgId).where('id', '=', postId).execute();
     await refreshPostStatus(ctx, postId);
     return { variantId: v.id, revision: v.revision + 1, changed: true };
   },
@@ -973,7 +1037,8 @@ export const postList = defineQuery({
     status: z.enum(['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled']).optional(),
     // The Social home's lists (#574): posts with a channel in review; drafts with none in review; posts that went out
     // or stopped.
-    stage: z.enum(['review', 'drafts', 'done']).optional(),
+    // attention: a channel failed, needs a person, or waits paused on its channel (#579).
+    stage: z.enum(['review', 'drafts', 'done', 'attention']).optional(),
     // Posts with a live channel on this connection.
     connectionId: zId.optional(),
     // In the post's or a channel's own text or title; wildcards are matched as themselves.
@@ -994,6 +1059,9 @@ export const postList = defineQuery({
     if (input.stage === 'review') q = q.where(input.connectionId ? sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status = 'in_review' AND v.channel_connection_id = ${input.connectionId}::uuid)` : variantWhere('in_review'));
     if (input.stage === 'drafts') q = q.where('p.status', '=', 'draft').where(sql<boolean>`NOT ${variantWhere('in_review')}`);
     if (input.stage === 'done') q = q.where('p.status', 'in', ['published', 'partially_published', 'failed', 'publishing', 'cancelled']);
+    if (input.stage === 'attention') {
+      q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status IN ('failed', 'needs_attention', 'paused'))`);
+    }
     if (input.connectionId) q = q.where(variantWhere(null));
     if (input.search) {
       const term = likeTerm(input.search);
@@ -1070,6 +1138,7 @@ export const queueGet = defineQuery({
 
 export const socialCommands = [
   postCreate,
+  postImport,
   postAddChannels,
   postUpdate,
   variantUpdate,

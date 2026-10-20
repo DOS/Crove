@@ -537,4 +537,63 @@ suite('late purchase invoice in an open month (#478)', () => {
     // With its entry posted after it in the same transaction: committed.
     expect(await attempt((c, id) => post(c, id))).toEqual({ ok: true });
   });
+
+  it('posts an invoice dated on or before the opening balances on a later posting date, and refuses a sale there (#366)', async () => {
+    // A new org whose opening balances are as at the 10th of last month, no month locked. The tests below act in it.
+    const created = await rpc('org/create', await tokenFor(owner), { name: 'Công ty Số dư đầu kỳ', idempotencyKey: randomUUID() }, null);
+    org = { slug: String(created.body?.slug), orgId: String(created.body?.orgId) };
+    const invite = await rpc('org/invite', await tokenFor(owner, { mfa: true }), { email: adminUser.email, role: 'admin' });
+    expect((await rpc('invites/accept', await tokenFor(adminUser), { token: String(invite.body?.acceptPath).split('#')[1] }, null)).status).toBe(200);
+    const opening = day(OPEN, 10);
+    const imported = await rpc('openingBalance/post', await tokenFor(owner, { mfa: true }), {
+      asOf: opening,
+      rows: [
+        { rowNo: 2, accountCode: '111', accountName: '', debit: '50000000', credit: '' },
+        { rowNo: 3, accountCode: '411', accountName: '', debit: '', credit: '50000000' },
+      ],
+      idempotencyKey: randomUUID(),
+    });
+    expect(imported.status, JSON.stringify(imported.body)).toBe(200);
+
+    // An invoice dated before the opening balances, in an open month: on its own date the guard refuses it and says to
+    // choose a posting date; on or before the opening date too; after it, it posts.
+    const early = await propose(day(OPEN, 5));
+    expect(await approve(early)).toMatchObject({
+      status: 409,
+      body: { code: 'BEFORE_OPENING_BALANCE', data: { openingDate: opening, entryDate: day(OPEN, 5), rule: 'before_opening_posting_date' } },
+    });
+    expect((await approve(early)).body.message).toContain('Hãy chọn ngày ghi sổ sau ngày');
+    expect(await approve(early, { postingDate: opening })).toMatchObject({ status: 409, body: { code: 'BEFORE_OPENING_BALANCE', data: { entryDate: opening } } });
+    const approved = await approve(early, { postingDate: day(OPEN, 15) });
+    expect(approved).toMatchObject({ status: 200, body: { postingDate: day(OPEN, 15) } });
+    const records = (await auditsOf('finance.purchase.record')).filter((a) => a.outcome === 'ok' && a.detail.late_reason === 'opening');
+    expect(records).toEqual([expect.objectContaining({ detail: expect.objectContaining({ invoice_date: day(OPEN, 5), posting_date: day(OPEN, 15) }) })]);
+    const activity = await admin(
+      async (c) => (await c.query(`SELECT summary FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2`, [org.orgId, approved.body.documentId])).rows,
+    );
+    expect(activity).toEqual([{ summary: expect.stringContaining(`vào ngày ${dmy(day(OPEN, 15))} (ngày hóa đơn không sau ngày số dư đầu kỳ)`) }]);
+
+    // The VAT working counts it in the period of its posting date: the same month here, so an ordinary invoice of it,
+    // not declared late.
+    const input = (await rpc('vat/period', await tokenFor(owner), { period: OPEN })).body.input;
+    expect(input.documents).toEqual([expect.objectContaining({ id: approved.body.documentId, issueDate: day(OPEN, 5), postingDate: day(OPEN, 15), warnings: [] })]);
+
+    // An invoice dated after the opening balances in an open month: no other posting date.
+    const later = await propose(day(OPEN, 12));
+    expect(await approve(later, { postingDate: day(OPEN, 16) })).toMatchObject({
+      status: 422,
+      body: { code: 'POSTING_DATE_NOT_ALLOWED', data: { issueDate: day(OPEN, 12), lockedThrough: null, openingDate: opening } },
+    });
+
+    // The SPA reads the opening date with the lock state, to offer the posting date.
+    expect((await rpc('periodLock/state', await tokenFor(owner), undefined)).body).toMatchObject({ lockedThrough: null, openingDate: opening });
+
+    // A sale posts on its invoice date only: before the opening balances it cannot post, and the refusal says why.
+    expect((await rpc('org/setTaxCode', await tokenFor(owner), { taxCode: SELLER })).status).toBe(200);
+    const sale = await propose(day(OPEN, 6));
+    expect(await approve(sale, { postingDate: day(OPEN, 15) })).toMatchObject({ status: 422, body: { code: 'POSTING_DATE_NOT_ALLOWED' } });
+    const refused = await approve(sale);
+    expect(refused).toMatchObject({ status: 409, body: { code: 'BEFORE_OPENING_BALANCE', data: { rule: 'before_opening_fixed' } } });
+    expect(refused.body.message).toContain('không chọn được ngày khác');
+  });
 });

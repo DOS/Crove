@@ -14,7 +14,8 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
 import type { Issue } from '@crove/mod-social/contract';
-import { MediaField, MediaPreview, type MediaItem } from '../components/social-media.tsx';
+import { MediaField, type MediaItem } from '../components/social-media.tsx';
+import { PlatformPreview } from '../components/social-preview.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -155,30 +156,59 @@ function Counter({ provider, body, linkUrl, mediaCount }: { provider: string; bo
   return <span className={cn('font-mono text-xs tabular-nums', over ? 'text-destructive' : used > max * 0.9 ? 'text-warning' : 'text-subtle-foreground')}>{used}/{max}</span>;
 }
 
-// How the post reads on the channel: name, text, title and link, without the platform's chrome.
-function Preview({ channel, provider, content }: { channel: string; provider: string; content: { body: string; title: string; linkUrl: string; media: readonly MediaItem[] } }) {
+const REWRITES = ['shorten', 'formal', 'casual', 'translate_en', 'translate_vi'] as const;
+
+// An AI rewrite of a text (#583): a proposal shown next to the text, which the member takes or leaves. Taking it marks
+// the post as AI-assisted.
+function AiRewrite({ text, title, connectionId, onAccept }: { text: string; title: string | null; connectionId?: string; onAccept: (next: { text: string; title: string | null }) => void }) {
   const t = useTranslations('social');
-  let host = '';
-  try {
-    host = content.linkUrl ? new URL(content.linkUrl).host : '';
-  } catch {
-    host = '';
-  }
+  const [action, setAction] = useState<(typeof REWRITES)[number]>('shorten');
+  // The text the proposal was made from: typed on since, it no longer fits and is not offered.
+  const [asked, setAsked] = useState<string | null>(null);
+  const rewrite = useMutation({
+    mutationFn: () => {
+      setAsked(text);
+      return client.social.posts.rewriteWithAi({ text, title, action, ...(connectionId ? { connectionId } : {}) });
+    },
+  });
+  const outdated = rewrite.data !== undefined && asked !== text;
+  if (getConfig().aiEnabled !== true || !text.trim()) return null;
   return (
-    <div className="rounded-xl border bg-background p-3">
-      <div className="flex items-center gap-2">
-        <span className="flex size-8 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-link">{channel.slice(0, 1).toUpperCase()}</span>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-foreground">{channel}</p>
-          <p className="text-xs text-subtle-foreground">{providerName(provider)}</p>
-        </div>
+    <div className="space-y-2 rounded-lg border border-dashed p-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <NativeSelect size="sm" value={action} aria-label={t('aiRewrite')} onChange={(e) => setAction(e.target.value as (typeof REWRITES)[number])}>
+          {REWRITES.map((a) => (
+            <NativeSelectOption key={a} value={a}>
+              {t(`aiRewrites.${a}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <Button variant="outline" size="sm" disabled={rewrite.isPending} onClick={() => rewrite.mutate()}>
+          {rewrite.isPending ? <Spinner className="text-current" /> : null}
+          {t('aiRewrite')}
+        </Button>
       </div>
-      {hasTitle(provider) && content.title && <p className="mt-3 text-sm font-semibold text-foreground">{content.title}</p>}
-      <p className="mt-2 text-sm [overflow-wrap:anywhere] whitespace-pre-wrap text-foreground">{content.body || <span className="text-subtle-foreground">{t('emptyText')}</span>}</p>
-      <MediaPreview media={content.media} />
-      {host && (
-        <div className="mt-3 rounded-lg border bg-muted px-3 py-2 text-xs text-muted-foreground">
-          <span className="font-mono">{host}</span>
+      {rewrite.error && <ErrorText>{errorMessage(rewrite.error)}</ErrorText>}
+      {rewrite.data && (
+        <div className="space-y-2">
+          {rewrite.data.title && <p className="text-sm font-medium text-foreground">{rewrite.data.title}</p>}
+          <p className="text-sm whitespace-pre-wrap [overflow-wrap:anywhere] text-foreground">{rewrite.data.text}</p>
+          <p className="text-xs text-subtle-foreground">{t(outdated ? 'aiRewriteOutdated' : 'aiRewriteHint')}</p>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              disabled={outdated}
+              onClick={() => {
+                onAccept(rewrite.data);
+                rewrite.reset();
+              }}
+            >
+              {t('aiRewriteUse')}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => rewrite.reset()}>
+              {t('aiRewriteDrop')}
+            </Button>
+          </div>
         </div>
       )}
     </div>
@@ -194,6 +224,8 @@ function ChannelEditor({
   disabled,
   status,
   footer,
+  connectionId,
+  onAiUsed,
 }: {
   provider: string;
   channel: string;
@@ -203,6 +235,8 @@ function ChannelEditor({
   disabled: boolean;
   status?: VariantStatus;
   footer?: ReactNode;
+  connectionId?: string;
+  onAiUsed?: () => void;
 }) {
   const t = useTranslations('social');
   const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl: base.linkUrl, media: mediaOfOwn(own, base) };
@@ -225,6 +259,17 @@ function ChannelEditor({
         <div className="space-y-2">
           {hasTitle(provider) && <Input value={own.title} disabled={disabled} aria-label={t('titleField')} placeholder={base.title || t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
           <Textarea value={own.body} disabled={disabled} rows={5} aria-label={t('ownTextPlaceholder')} placeholder={t('ownTextPlaceholder')} onChange={(e) => onChange({ ...own, body: e.target.value })} />
+          {!disabled && onAiUsed && (
+            <AiRewrite
+              text={own.body}
+              title={hasTitle(provider) ? own.title || null : null}
+              {...(connectionId ? { connectionId } : {})}
+              onAccept={(next) => {
+                onChange({ ...own, body: next.text, title: next.title ?? own.title });
+                onAiUsed();
+              }}
+            />
+          )}
         </div>
       )}
       <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -235,19 +280,29 @@ function ChannelEditor({
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
       <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
-      <Preview channel={channel} provider={provider} content={content} />
+      <PlatformPreview channel={channel} provider={provider} content={content} />
       {footer}
     </Card>
   );
 }
 
-function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false }: { base: Base; onChange: (base: Base) => void; disabled: boolean; needsTitle: boolean; autoFocus?: boolean }) {
+function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false, onAiUsed }: { base: Base; onChange: (base: Base) => void; disabled: boolean; needsTitle: boolean; autoFocus?: boolean; onAiUsed?: () => void }) {
   const t = useTranslations('social');
   return (
     <Card className="block space-y-3 p-4">
       <div className="space-y-1.5">
         <Label htmlFor="social-body">{t('sharedText')}</Label>
         <Textarea id="social-body" autoFocus={autoFocus} value={base.body} disabled={disabled} rows={7} placeholder={t('sharedTextPlaceholder')} onChange={(e) => onChange({ ...base, body: e.target.value })} />
+        {!disabled && onAiUsed && (
+          <AiRewrite
+            text={base.body}
+            title={needsTitle ? base.title || null : null}
+            onAccept={(next) => {
+              onChange({ ...base, body: next.text, title: next.title ?? base.title });
+              onAiUsed();
+            }}
+          />
+        )}
       </div>
       {needsTitle && (
         <div className="space-y-1.5">
@@ -282,6 +337,8 @@ export function SocialComposePage() {
   const [base, setBase] = useState<Base>({ body: '', title: '', linkUrl: '', media: [] });
   const [chosen, setChosen] = useState<string[]>([]);
   const [own, setOwn] = useState<Record<string, Own>>({});
+  // An AI rewrite was taken into the text (#583): the post is saved as AI-assisted.
+  const [aiUsed, setAiUsed] = useState(false);
   const live = (channels.data ?? []).filter((c) => c.status === 'active');
   // A planned time from the calendar (#580), kept on the draft; scheduling starts from it.
   const search: { at?: string } = useSearch({ strict: false });
@@ -303,6 +360,7 @@ export function SocialComposePage() {
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         // A planned time that went by while the page was open is dropped.
         ...(plannedAt && Date.parse(plannedAt) > Date.now() ? { scheduledAt: plannedAt } : {}),
+        ...(aiUsed ? { aiAssisted: true as const } : {}),
         media: mediaInput(base.media),
         channels: chosen.map((connectionId) => {
           const mine = own[connectionId] ?? EMPTY_OWN;
@@ -383,7 +441,7 @@ export function SocialComposePage() {
       )}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
-          <SharedFields base={base} onChange={setBase} disabled={create.isPending} autoFocus needsTitle={selected.some((c) => hasTitle(c.provider))} />
+          <SharedFields base={base} onChange={setBase} disabled={create.isPending} autoFocus needsTitle={selected.some((c) => hasTitle(c.provider))} onAiUsed={() => setAiUsed(true)} />
           <Card className="block p-4">
             <p className="mb-3 text-sm font-medium text-foreground">{t('pickChannels')}</p>
             {live.length === 0 ? (
@@ -450,6 +508,8 @@ export function SocialComposePage() {
                 own={own[c.id] ?? EMPTY_OWN}
                 disabled={create.isPending}
                 onChange={(next) => setOwn({ ...own, [c.id]: next })}
+                connectionId={c.id}
+                onAiUsed={() => setAiUsed(true)}
               />
             ))
           )}
@@ -789,6 +849,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const names = useMemo(() => new Map((channels.data ?? []).map((c: Channel) => [c.id, c.displayName])), [channels.data]);
   const [base, setBase] = useState<Base | null>(null);
   const [own, setOwn] = useState<Record<string, Own>>({});
+  // An AI rewrite was taken into the text (#583): the next save marks the post AI-assisted.
+  const [aiUsed, setAiUsed] = useState(false);
   // The server content the edits started from. A status change elsewhere (a teammate approving another channel, the
   // publisher) keeps the edits; a content change elsewhere replaces them only when there are none, else it says so.
   const [origin, setOrigin] = useState<Post | null>(null);
@@ -837,6 +899,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             title: orNull(base.title),
             linkUrl: orNull(base.linkUrl),
             ...(mediaChanged ? { media: mediaInput(base.media) } : {}),
+            ...(aiUsed ? { aiAssisted: true as const } : {}),
           });
           baseSaved = true;
         }
@@ -853,6 +916,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             body: mine.custom ? mine.body : null,
             title: mine.custom ? orNull(mine.title) : null,
             ...(sameSettings(mine.settings, v.settings) ? {} : { settings: mine.settings as Record<string, string | boolean> }),
+            ...(aiUsed ? { aiAssisted: true as const } : {}),
             ...(mine.customMedia === v.ownMedia && (!mine.customMedia || sameMediaList(mine.media, mediaItems(v.media))) ? {} : { media: mine.customMedia ? mediaInput(mine.media) : null }),
           });
         }
@@ -949,10 +1013,10 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           <ErrorText>{error ? errorMessage(error) : flash}</ErrorText>
         </div>
       )}
-      {p.origin === 'ai' && (
+      {(p.origin === 'ai' || p.tainted) && (
         <div className="mb-4 flex items-center gap-2 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
-          <Badge variant="secondary">{t('aiBadge')}</Badge>
-          <span>{t('aiBadgeHint')}</span>
+          <Badge variant="secondary">{t(p.origin === 'ai' ? 'aiBadge' : 'aiAssistedBadge')}</Badge>
+          <span>{t(p.origin === 'ai' ? 'aiBadgeHint' : 'aiAssistedHint')}</span>
         </div>
       )}
       {p.repostOf && (
@@ -973,7 +1037,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
       )}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
-          <SharedFields base={base} onChange={setBase} disabled={!editable || save.isPending} needsTitle={p.variants.some((v) => hasTitle(v.provider))} />
+          <SharedFields base={base} onChange={setBase} disabled={!editable || save.isPending} needsTitle={p.variants.some((v) => hasTitle(v.provider))} onAiUsed={() => setAiUsed(true)} />
           {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} />}
           {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
           {canWrite && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
@@ -991,6 +1055,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 // A channel's own link (set on the variant) is the one its adapter sends, so its checks count that one.
                 base={frozen ? { body: v.effective.body, title: v.effective.title ?? '', linkUrl: v.effective.linkUrl ?? '', media: mediaItems(v.media) } : v.overrides.linkUrl != null ? { ...base, linkUrl: v.overrides.linkUrl } : base}
                 own={frozen ? EMPTY_OWN : (own[v.id] ?? ownOf(v))}
+                connectionId={v.connectionId}
+                onAiUsed={() => setAiUsed(true)}
                 disabled={frozen || !canWrite || save.isPending}
                 status={v.status}
                 onChange={(next) => setOwn({ ...own, [v.id]: next })}

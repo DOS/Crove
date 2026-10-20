@@ -359,6 +359,37 @@ suite('social posts on PostgreSQL (S3)', () => {
     expect((await get(o, o.owner, queued.id)).variants[0]?.queuePaused).toBe(false);
   });
 
+  it('imports drafts from a sheet, and sends to review only the channels that fit (#586)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    await expect(exec(o, o.viewer, 'social.post.import', { posts: [{ body: 'x', connectionIds: [conn] }] })).rejects.toMatchObject({ status: 403 });
+    const planned = new Date(Date.now() + 48 * HOUR).toISOString();
+    const done = await exec<{ posts: { postId: string; submitted: number }[] }>(o, o.member, 'social.post.import', {
+      submit: true,
+      posts: [
+        { body: 'Bài một', scheduledAt: planned, connectionIds: [conn] },
+        // Over the sandbox's 1000 characters: created as a draft, not sent to review.
+        { body: 'x'.repeat(1001), connectionIds: [conn] },
+      ],
+    });
+    expect(done.posts.map((p) => p.submitted)).toEqual([1, 0]);
+    const [first, second] = [await get(o, o.owner, done.posts[0]?.postId as string), await get(o, o.owner, done.posts[1]?.postId as string)];
+    expect([first.scheduledAt, first.variants[0]?.status, second.variants[0]?.status]).toEqual([planned, 'in_review', 'draft']);
+    await expect(exec(o, o.member, 'social.post.import', { posts: [{ body: 'x', connectionIds: [randomUUID()] }] })).rejects.toBeDefined();
+  });
+
+  it('lists the posts that need someone: a channel failed, needs attention or waits paused (#579)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const posts = await Promise.all(['Lỗi', 'Cần xem', 'Tạm dừng', 'Bình thường'].map((body) => approved(o, [conn], body)));
+    const statuses = ['failed', 'needs_attention', 'paused'];
+    for (const [i, status] of statuses.entries()) {
+      await admin((c) => c.query('UPDATE crove_social.post_variant SET status = $2 WHERE post_id = $1', [posts[i]?.id, status]));
+    }
+    const listed = await rt.query<PostView[]>('social.post.list', { stage: 'attention' }, { actor: asUser(o.viewer), orgId: o.orgId });
+    expect(listed.map((p) => p.id).sort()).toEqual(posts.slice(0, 3).map((p) => p.id).sort());
+  });
+
   it('stores an override equal to the base, and inheriting again, though the effective content does not change', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);
