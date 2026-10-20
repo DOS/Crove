@@ -91,8 +91,6 @@ suite('social reviews in the inbox on PostgreSQL (#749)', () => {
     await root.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
     await root.end();
   });
-  const refusal = (p: Promise<unknown>) => p.then(() => 'resolved', (e: unknown) => (e as { code?: string }).code ?? String(e));
-  const status = async (o: Org, postId: string) => (await get(o, o.owner, postId)).variants.map((v) => v.status);
 
   type Inbox = { items: { postId: string; title: string | null; excerpt: string; channels: { variantId: string; provider: string; displayName: string }[]; at: string | null }[]; total: number };
   const inbox = (o: Org, user: string) => rt.query<Inbox>('social.review.inbox', {}, { actor: asUser(user), orgId: o.orgId });
