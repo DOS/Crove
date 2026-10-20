@@ -72,6 +72,7 @@ export interface CroveSocialSchema {
   'crove_social.link_preview': SocialLinkPreviewTable;
   'crove_social.metric_snapshot': SocialMetricSnapshotTable;
   'crove_social.notification': SocialNotificationTable;
+  'crove_social.notification_mail_off': SocialNotificationMailOffTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;
   'crove_social.post': SocialPostTable;
   'crove_social.post_approval': SocialPostApprovalTable;
@@ -867,6 +868,14 @@ export interface SocialMetricSnapshotTable {
   captured_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   metrics: ColumnType<unknown, string | undefined, NotGranted>;
   extra: ColumnType<unknown, string | null | undefined, NotGranted>;
+}
+
+/** crove_social.notification_mail_off */
+export interface SocialNotificationMailOffTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_social.notification_mute */

@@ -150,7 +150,7 @@ suite('social in-app notifications on PostgreSQL (#637)', () => {
 
     // A dispatch run twice for one event writes nothing the second time.
     const last = [...o.dispatched].at(-1) as string;
-    await expect(worker.execute('social.notification.dispatch', { eventId: last }, { actor: system, orgId: o.orgId })).resolves.toEqual({ sent: 0 });
+    await expect(worker.execute('social.notification.dispatch', { eventId: last }, { actor: system, orgId: o.orgId })).resolves.toEqual({ sent: 0, mailed: 0 });
   });
 
   it('says nothing to reviewers when the post is no longer waiting, and tells the deciders when a channel expires', async () => {
@@ -277,7 +277,7 @@ suite('social in-app notifications on PostgreSQL (#637)', () => {
     await expect(exec(stranger, stranger.owner, 'social.notification.read', { ids })).resolves.toEqual({ read: 0 });
     // An event of another org is not found from this one.
     const foreign = [...o.dispatched][0] as string;
-    await expect(worker.execute('social.notification.dispatch', { eventId: foreign }, { actor: system, orgId: stranger.orgId })).resolves.toEqual({ sent: 0 });
+    await expect(worker.execute('social.notification.dispatch', { eventId: foreign }, { actor: system, orgId: stranger.orgId })).resolves.toEqual({ sent: 0, mailed: 0 });
     // Only the system runs the dispatch.
     await expect(exec(o, o.owner, 'social.notification.dispatch', { eventId: foreign })).rejects.toMatchObject({ status: 403 });
   });

@@ -365,6 +365,8 @@ export const contract = {
       list: oc.input(z.object({})).output(zSocialNotifications),
       read: oc.input(z.union([z.strictObject({ ids: z.array(zId).min(1).max(100) }), z.strictObject({ all: z.literal(true) })])).output(z.object({ read: z.number().int() })),
       mute: oc.input(z.strictObject({ kind: zSocialNotificationKind, muted: z.boolean() })).output(z.object({ kind: zSocialNotificationKind, muted: z.boolean() })),
+      // The viewer's Social emails on or off (#579).
+      mail: oc.input(z.strictObject({ enabled: z.boolean() })).output(z.object({ enabled: z.boolean() })),
     },
     // Account growth (#645): each channel's daily followers and reach over the last days.
     accounts: {

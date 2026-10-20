@@ -1377,6 +1377,8 @@ export const vi = {
       someone: 'Một thành viên',
       settings: 'Nhận thông báo về',
       settingsHint: 'Bỏ chọn những loại bạn không muốn nhận. Chỉ áp dụng cho tài khoản của bạn.',
+      mail: 'Gửi cả email cho tôi',
+      mailHint: 'Khi có bài chờ duyệt, bài đã được duyệt, bài đăng lỗi hoặc kênh cần kết nối lại, Crove gửi thêm một email tới địa chỉ của bạn.',
       kinds: {
         review_requested: 'Bài cần duyệt',
         decided: 'Kết quả duyệt bài của bạn',

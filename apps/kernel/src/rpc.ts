@@ -461,6 +461,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         list: os.social.notifications.list.handler(socialQuery('social.notification.list')),
         read: os.social.notifications.read.handler(socialCommand('social.notification.read')),
         mute: os.social.notifications.mute.handler(socialCommand('social.notification.mute')),
+        mail: os.social.notifications.mail.handler(socialCommand('social.notification.mail')),
       },
       accounts: {
         trends: os.social.accounts.trends.handler(socialQuery('social.account.trends')),

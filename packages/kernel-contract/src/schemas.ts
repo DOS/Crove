@@ -1150,6 +1150,8 @@ export const zSocialNotifications = z.object({
   ),
   unread: z.number().int(),
   muted: z.array(zSocialNotificationKind),
+  // Social emails turned off by the viewer (#579).
+  mailOff: z.boolean(),
 });
 
 // A channel's daily account snapshots (#645), oldest first.

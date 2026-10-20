@@ -53,12 +53,14 @@ function useLine() {
   };
 }
 
-function Settings({ muted }: { muted: readonly NotificationKind[] }) {
+function Settings({ muted, mailOff }: { muted: readonly NotificationKind[]; mailOff: boolean }) {
   const t = useTranslations('social.notifications');
   const mute = useMutation({
     mutationFn: (v: { kind: NotificationKind; muted: boolean }) => client.social.notifications.mute(v),
     onSettled: refresh,
   });
+  const mail = useMutation({ mutationFn: (enabled: boolean) => client.social.notifications.mail({ enabled }), onSettled: refresh });
+  const mailOn = mail.isPending && mail.variables !== undefined ? mail.variables : !mailOff;
   return (
     <Card className="block space-y-3 p-4">
       <div>
@@ -76,7 +78,14 @@ function Settings({ muted }: { muted: readonly NotificationKind[] }) {
           );
         })}
       </div>
-      {mute.error && <ErrorText>{errorMessage(mute.error)}</ErrorText>}
+      <label className="flex items-start gap-2 border-t pt-3 text-sm text-muted-foreground">
+        <Checkbox checked={mailOn} disabled={mail.isPending} onCheckedChange={(checked) => mail.mutate(checked === true)} />
+        <span>
+          <span className="block text-foreground">{t('mail')}</span>
+          <span className="block text-xs text-subtle-foreground">{t('mailHint')}</span>
+        </span>
+      </label>
+      {(mute.error ?? mail.error) && <ErrorText>{errorMessage(mute.error ?? mail.error)}</ErrorText>}
     </Card>
   );
 }
@@ -145,7 +154,7 @@ export function SocialNotificationsPage() {
         </Card>
       )}
       {read.error && <ErrorText>{errorMessage(read.error)}</ErrorText>}
-      {list.data && <Settings muted={list.data.muted} />}
+      {list.data && <Settings muted={list.data.muted} mailOff={list.data.mailOff} />}
     </div>
   );
 }

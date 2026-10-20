@@ -1377,6 +1377,8 @@ export const en = {
       someone: 'A member',
       settings: 'Notify me about',
       settingsHint: 'Untick what you do not want. This applies to your account only.',
+      mail: 'Email me too',
+      mailHint: 'When a post waits for review, gets a decision, fails, or a channel needs reconnecting, Crove also sends an email to your address.',
       kinds: {
         review_requested: 'Posts to review',
         decided: 'Review results of your posts',
