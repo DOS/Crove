@@ -543,6 +543,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         trends: os.social.accounts.trends.handler(socialQuery('social.account.trends')),
       },
       reviewInbox: os.social.reviewInbox.handler(socialQuery('social.review.inbox')),
+      attentionInbox: os.social.attentionInbox.handler(socialQuery('social.attention.inbox')),
       reviewLinks: {
         list: os.social.reviewLinks.list.handler(socialQuery('social.review_link.list')),
         create: os.social.reviewLinks.create.handler(socialCommand('social.review_link.create')),

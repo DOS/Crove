@@ -776,6 +776,13 @@ export const vi = {
     },
   },
   inbox: {
+    socialAttention: {
+      title: 'Mạng xã hội cần bạn xử lý ({count, number})',
+      noText: 'Bài chưa có nội dung',
+      channel: { expired: '{channel}: hết hạn đăng nhập, hãy kết nối lại', error: '{channel}: lỗi kết nối, hãy kết nối lại' },
+      more: 'Xem thêm {count, number} bài trong Mạng xã hội',
+      post: { failed: 'đăng không được', needs_attention: 'chưa rõ đã lên chưa, cần bạn kiểm tra', paused: 'tạm dừng vì kênh mất kết nối' },
+    },
     socialReviews: {
       title: 'Bài đăng chờ bạn duyệt ({count, number})',
       noText: 'Bài chưa có nội dung',

@@ -71,6 +71,45 @@ function OpenBankLines({ slug }: { slug: string }) {
 // The name a proposal goes by in the list, its checkbox and the bulk report: the customer of a sale (#313; its seller is
 // the org itself), the seller of a purchase, else its title.
 // Social posts waiting for the viewer's review (#749), where Social runs: each opens its post, where it is decided.
+// Social work that needs a person (#771): channels to reconnect and posts that did not go out, each opening where it
+// is fixed.
+function SocialAttention({ slug }: { slug: string }) {
+  const t = useTranslations('inbox.socialAttention');
+  const live = useStreamLive();
+  const attention = useQuery({ ...orpc.social.attentionInbox.queryOptions({ input: {} }), refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
+  const data = attention.data;
+  if (!data || data.total === 0) return null;
+  const status = (s: string) => (s === 'failed' || s === 'needs_attention' || s === 'paused' ? t(`post.${s}`) : s);
+  return (
+    <Card className="mt-6 block p-4">
+      <p className="text-sm font-medium text-foreground">{t('title', { count: data.total })}</p>
+      <ul className="mt-2 divide-y text-sm">
+        {data.channels.map((c) => (
+          <li key={c.connectionId} className="py-2">
+            <Link to="/o/$slug/social/channels" params={{ slug }} className="block text-foreground hover:underline">
+              {t(`channel.${c.status}`, { channel: `${providerName(c.provider)} · ${c.displayName}` })}
+            </Link>
+          </li>
+        ))}
+        {data.posts.map((p) => (
+          <li key={p.postId} className="py-2">
+            <Link to="/o/$slug/social/$id" params={{ slug, id: p.postId }} className="block text-foreground hover:underline">
+              {p.excerpt || t('noText')}
+            </Link>
+            <p className="text-xs text-warning">{p.channels.map((c) => `${providerName(c.provider)} · ${c.displayName}: ${status(c.status)}`).join(', ')}</p>
+          </li>
+        ))}
+      </ul>
+      {/* The total counts every post that needs a person; past the first 50, the Social home lists them all. */}
+      {data.total > data.channels.length + data.posts.length && (
+        <Link to="/o/$slug/social" params={{ slug }} className="mt-2 inline-block text-sm text-link underline">
+          {t('more', { count: data.total - data.channels.length - data.posts.length })}
+        </Link>
+      )}
+    </Card>
+  );
+}
+
 function SocialReviews({ slug }: { slug: string }) {
   const t = useTranslations('inbox.socialReviews');
   const f = useFormat();
@@ -244,6 +283,7 @@ export function InboxPage() {
 
       <IntakePanel intake={intake} />
       {config.modules.includes('finance') && <OpenBankLines slug={slug} />}
+      {config.modules.includes('social') && <SocialAttention slug={slug} />}
       {config.modules.includes('social') && <SocialReviews slug={slug} />}
 
       {(files.data?.length ?? 0) > 0 && (
