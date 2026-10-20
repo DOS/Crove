@@ -42,6 +42,8 @@ const MACHINERY = new Set([
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_kernel.mail_event',
+  'crove_social.label',
+  'crove_social.post_label',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -120,6 +122,7 @@ const mailMessageRow = (o: { id: string }) => ({
 // Crove Social (S3): a post, and a variant of it for a fresh channel connection (one variant per connection).
 const ZERO_HASH = `sha256:${'0'.repeat(64)}`;
 const socialPostRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), body: 'RLS matrix post' });
+const socialLabelRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), name: `rls-${tag()}`, color: 'blue', created_by: o.owner });
 const socialReviewLinkRow = (o: { id: string; owner: string }) => {
   const post = socialPostRow(o);
   return { post, row: { org_id: o.id, id: randomUUID(), post_id: post.id, token_sha256: hex64(), created_by: o.owner, expires_at: new Date(Date.now() + 86_400_000).toISOString() } };
@@ -480,6 +483,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     },
   },
   // A metrics snapshot of a published variant (S8, issue #238): append-only, one per capture key.
+  // An org's label for posts (#639): a name and a colour from the app's palette.
+  'crove_social.label': { make: (o) => ({ row: socialLabelRow(o) }) },
   'crove_social.metric_snapshot': {
     make: (o) => {
       const { setup, variant } = socialVariantRows(o);
@@ -520,6 +525,20 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     },
   },
   // An image of a post (issue #372): a file of the org, at a position in the post's media list.
+  // A label on a post (#639).
+  'crove_social.post_label': {
+    make: (o) => {
+      const post = socialPostRow(o);
+      const label = socialLabelRow(o);
+      return {
+        setup: [
+          { table: 'crove_social.post', values: post },
+          { table: 'crove_social.label', values: label },
+        ],
+        row: { org_id: o.id, post_id: post.id, label_id: label.id },
+      };
+    },
+  },
   'crove_social.post_media': {
     make: (o) => {
       const post = socialPostRow(o);

@@ -397,6 +397,19 @@ const mediaItems = (media: readonly { fileId: string; altText: string | null; mi
 // New post
 // ---------------------------------------------------------------------------------------------------------------------
 
+// Approves every channel of a post just submitted, as its owner or admin sees it, then schedules the ones that need no
+// other reviewer: at the planned time, or in each channel's queue (#638).
+async function approveAndSchedule(postId: string, plannedAt: string | null): Promise<void> {
+  const post = await client.social.posts.get({ postId });
+  const review = post.variants.filter((v) => v.status === 'in_review');
+  if (review.length === 0) return;
+  const decided = await client.social.variants.decide({ postId, decision: 'approved', variants: review.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+  const ready = decided.variants.filter((id) => !decided.waiting.includes(id));
+  if (ready.length === 0) return;
+  const at = plannedAt && Date.parse(plannedAt) > Date.now() ? plannedAt : null;
+  await client.social.variants.schedule({ postId, variantIds: ready, ...(at ? { at } : { queue: true as const }) });
+}
+
 // What the composer keeps of a post not yet created (#634).
 type ComposeDraft = { base: Base; chosen: string[]; own: Record<string, Own>; utm: UtmTags | null; plannedAt: string | null; aiUsed: boolean };
 
@@ -446,7 +459,8 @@ export function SocialComposePage() {
   // content edited after a failed attempt is a new request (the server would refuse the old key with other content).
   const attempt = useRef<{ key: string; payload: string } | null>(null);
   const create = useMutation({
-    mutationFn: async (submit: boolean) => {
+    // draft: saved only; submit: sent to review; publish: also approved by this owner or admin and scheduled (#638).
+    mutationFn: async (mode: 'draft' | 'submit' | 'publish') => {
       const request = {
         body: base.body,
         title: orNull(base.title),
@@ -467,7 +481,15 @@ export function SocialComposePage() {
       if (attempt.current?.payload !== payload) attempt.current = { key: crypto.randomUUID(), payload };
       const created = await client.social.posts.create({ idempotencyKey: attempt.current.key, ...request });
       // The draft exists now: a failed submit is shown on its page, never answered with a second post.
-      if (submit) await client.social.posts.submit({ postId: created.postId }).catch((error: unknown) => setFlash(errorMessage(error)));
+      if (mode === 'draft') return created.postId;
+      const submitted = await client.social.posts.submit({ postId: created.postId }).then(
+        () => true,
+        (error: unknown) => {
+          setFlash(errorMessage(error));
+          return false;
+        },
+      );
+      if (mode === 'publish' && submitted) await approveAndSchedule(created.postId, plannedAt).catch((error: unknown) => setFlash(errorMessage(error)));
       return created.postId;
     },
     onSuccess: (postId) => {
@@ -498,10 +520,14 @@ export function SocialComposePage() {
     const content = { body: mine.custom ? mine.body : base.body, title: mine.custom ? mine.title : base.title };
     return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: withUtm(mine, utm).settings }).length > 0;
   });
+  // Owners and admins may approve their own post: for one written by a person (no AI text), one action approves it and
+  // schedules it (#638). A channel whose policy needs another reviewer still waits for them.
+  const { canDecide } = useRole(slug);
+  const oneStep = canDecide && !aiUsed;
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !blocking && !create.isPending) {
       e.preventDefault();
-      create.mutate(true);
+      create.mutate('submit');
     }
   };
 
@@ -513,13 +539,19 @@ export function SocialComposePage() {
         subtitle={t('composeSubtitle')}
         actions={
           <>
-            <Button variant="outline" size="lg" disabled={chosen.length === 0 || create.isPending} onClick={() => create.mutate(false)}>
+            <Button variant="outline" size="lg" disabled={chosen.length === 0 || create.isPending} onClick={() => create.mutate('draft')}>
               {t('saveDraft')}
             </Button>
-            <Button size="lg" disabled={chosen.length === 0 || blocking || create.isPending} onClick={() => create.mutate(true)}>
-              {create.isPending ? <Spinner className="text-current" /> : null}
+            <Button size="lg" variant={oneStep ? 'outline' : 'default'} disabled={chosen.length === 0 || blocking || create.isPending} onClick={() => create.mutate('submit')}>
+              {create.isPending && create.variables === 'submit' ? <Spinner className="text-current" /> : null}
               {t('saveAndSubmit')}
             </Button>
+            {oneStep && (
+              <Button size="lg" disabled={chosen.length === 0 || blocking || create.isPending} onClick={() => create.mutate('publish')} title={t('publishNowHint')}>
+                {create.isPending && create.variables === 'publish' ? <Spinner className="text-current" /> : null}
+                {t('publishNow')}
+              </Button>
+            )}
           </>
         }
       />

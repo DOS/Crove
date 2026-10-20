@@ -1477,6 +1477,8 @@ export const vi = {
       formerMember: 'Một người đã rời tổ chức',
       mine: 'Việc của tôi',
     },
+    publishNow: 'Duyệt và lên lịch',
+    publishNowHint: 'Lưu bài, tự duyệt và lên lịch: vào giờ đã hẹn, hoặc theo hàng đợi của từng kênh. Kênh cần người khác duyệt sẽ chờ người đó.',
     tabs: { upcoming: 'Lịch đăng', calendar: 'Xem lịch', review: 'Cần duyệt', attention: 'Cần xử lý', drafts: 'Nháp', done: 'Đã đăng', metrics: 'Số liệu', library: 'Thư viện ảnh' },
     filters: {
       channel: 'Kênh',
