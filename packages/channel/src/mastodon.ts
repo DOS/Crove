@@ -33,7 +33,9 @@ export interface MastodonSecret {
 
 // The instance as Crove keeps it: https on the default port, a host name and nothing else.
 export function mastodonInstance(raw: string): string | null {
-  const trimmed = raw.trim().replace(/\/+$/, '');
+  // Trailing slashes cut by hand: a regular expression for them is slow on a long run of slashes.
+  let trimmed = raw.trim();
+  while (trimmed.endsWith('/')) trimmed = trimmed.slice(0, -1);
   let url: URL;
   try {
     url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
