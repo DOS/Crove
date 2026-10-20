@@ -71,6 +71,7 @@ import { ConcurrencyLimiter, type Semaphore } from './concurrency.ts';
 import { publicAuthUrl, type Config } from './config.ts';
 import { exportAad, exportSealer } from './export-seal.ts';
 import { MAX_EMAIL_BYTES, acceptInboundEmail, secretMatches } from './inbound.ts';
+import { MAX_MAIL_WEBHOOK_BYTES, acceptMailWebhook } from './mail-events.ts';
 import { createInviteMailSender } from './invite-mail.ts';
 import { pgBossSchemaVersion } from './jobs-schema.ts';
 import type { MailProvider } from './mail.ts';
@@ -308,7 +309,7 @@ function clientIp(c: Context, trustedHops: number): string | null {
 export function createHttpApp(deps: HttpDeps) {
   const { config, runtime, store, authenticate } = deps;
   const app = new Hono<{ Variables: { user: AuthUser } }>();
-  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL) : undefined, deps.channels, deps.socialWriter, deps.taxLookup);
+  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL, {}, config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null) : undefined, deps.channels, deps.socialWriter, deps.taxLookup);
   const perMinute = config.API_RATE_LIMIT_PER_MINUTE;
   const limiter = deps.rateLimiter !== undefined ? deps.rateLimiter : perMinute > 0 ? new RateLimiter({ perMinute }) : null;
 
@@ -446,6 +447,26 @@ export function createHttpApp(deps: HttpDeps) {
       // fetch() already decoded the body, so the upstream content-encoding no longer applies.
       const out = forwardable(response.headers, new Set(['content-encoding']));
       return new Response(response.body, { status: response.status, headers: out });
+    });
+  }
+
+  // Delivery events from the mail provider (#539), when it has signed webhooks (Resend with RESEND_WEBHOOK_SECRET).
+  // Outside /api: the provider authenticates with its signature, not a session. Any other provider name is a 404.
+  const mailer = deps.mailer;
+  if (mailer?.parseWebhook) {
+    app.post('/webhooks/mail/:provider', bodyLimit({ maxSize: MAX_MAIL_WEBHOOK_BYTES }), async (c) => {
+      if (c.req.param('provider') !== mailer.name) return c.json({ code: 'NOT_FOUND' }, 404);
+      try {
+        const headers: Record<string, string | undefined> = {};
+        c.req.raw.headers.forEach((value, name) => {
+          headers[name.toLowerCase()] = value;
+        });
+        const outcome = await acceptMailWebhook(runtime, mailer, { headers, body: await c.req.text() });
+        if (outcome.status === 401 || outcome.status === 400) return c.json({ code: outcome.code }, outcome.status);
+        return c.json({ queued: outcome.queued }, outcome.status);
+      } catch (error) {
+        return problem(c, error);
+      }
     });
   }
 

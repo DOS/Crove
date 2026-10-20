@@ -239,6 +239,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
                   expiresAt: created.expiresAt,
                   acceptPath: created.acceptPath,
                   messageId: mail.messageIdHeader,
+                  bounceToken: mail.bounceToken,
                 });
               delivery = sent?.status ?? 'off';
             } catch (error) {

@@ -37,9 +37,10 @@ SELECT crove_kernel.apply_tenant_rls('crove_social.notification');
 REVOKE UPDATE ON crove_social.notification FROM crove_tenant;
 GRANT UPDATE (read_at) ON crove_social.notification TO crove_tenant;
 DROP POLICY IF EXISTS own_notification ON crove_social.notification;
+-- Each context function is wrapped in a subquery, as the tenant policy is, so it runs once per statement.
 CREATE POLICY own_notification ON crove_social.notification AS RESTRICTIVE FOR ALL TO crove_tenant
-  USING (user_id = crove_kernel.ctx_user_id() OR (crove_kernel.ctx_user_id() IS NULL AND crove_kernel.ctx_agent_id() IS NULL))
-  WITH CHECK (user_id = crove_kernel.ctx_user_id() OR (crove_kernel.ctx_user_id() IS NULL AND crove_kernel.ctx_agent_id() IS NULL));
+  USING (user_id = (SELECT crove_kernel.ctx_user_id()) OR ((SELECT crove_kernel.ctx_user_id()) IS NULL AND (SELECT crove_kernel.ctx_agent_id()) IS NULL))
+  WITH CHECK (user_id = (SELECT crove_kernel.ctx_user_id()) OR ((SELECT crove_kernel.ctx_user_id()) IS NULL AND (SELECT crove_kernel.ctx_agent_id()) IS NULL));
 -- An open app re-reads its own notifications when one arrives or is read elsewhere (ids only, as every hint).
 DROP TRIGGER IF EXISTS stream_hint ON crove_social.notification;
 CREATE TRIGGER stream_hint AFTER INSERT OR UPDATE ON crove_social.notification
@@ -56,8 +57,8 @@ SELECT crove_kernel.apply_tenant_rls('crove_social.notification_mute');
 REVOKE UPDATE ON crove_social.notification_mute FROM crove_tenant;
 DROP POLICY IF EXISTS own_notification_mute ON crove_social.notification_mute;
 CREATE POLICY own_notification_mute ON crove_social.notification_mute AS RESTRICTIVE FOR ALL TO crove_tenant
-  USING (user_id = crove_kernel.ctx_user_id() OR (crove_kernel.ctx_user_id() IS NULL AND crove_kernel.ctx_agent_id() IS NULL))
-  WITH CHECK (user_id = crove_kernel.ctx_user_id() OR (crove_kernel.ctx_user_id() IS NULL AND crove_kernel.ctx_agent_id() IS NULL));
+  USING (user_id = (SELECT crove_kernel.ctx_user_id()) OR ((SELECT crove_kernel.ctx_user_id()) IS NULL AND (SELECT crove_kernel.ctx_agent_id()) IS NULL))
+  WITH CHECK (user_id = (SELECT crove_kernel.ctx_user_id()) OR ((SELECT crove_kernel.ctx_user_id()) IS NULL AND (SELECT crove_kernel.ctx_agent_id()) IS NULL));
 
 -- The worker's queue for the dispatch: one job per event (singleton key <org>:<event>). create_queue skips a queue
 -- that exists.

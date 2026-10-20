@@ -35,9 +35,32 @@ export async function mailAddressHash(ctx: Pick<CommandContext, 'trx'>, address:
   return hash;
 }
 
-// Whether the org must not send mail of this stream to the address: a live suppression of scope 'all', or of scope
-// 'marketing' for marketing mail.
-export async function isSuppressed(ctx: Pick<CommandContext, 'trx' | 'orgId'>, hash: string, stream: MailStream): Promise<boolean> {
+// Soft bounces (#539, Email plan §3.3): SOFT_BOUNCE_LIMIT of them within SOFT_BOUNCE_WINDOW_MS suppress marketing to
+// the address for SOFT_BOUNCE_PAUSE_MS after the last one. Worked out from mail_event when a marketing mail is
+// written, so the pause ends by itself and no row has to be lifted.
+export const SOFT_BOUNCE_LIMIT = 3;
+export const SOFT_BOUNCE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+export const SOFT_BOUNCE_PAUSE_MS = 30 * 24 * 60 * 60 * 1000;
+
+async function softBouncePaused(ctx: Pick<CommandContext, 'trx' | 'orgId'>, hash: string, now: Date): Promise<boolean> {
+  const since = new Date(now.getTime() - SOFT_BOUNCE_PAUSE_MS - SOFT_BOUNCE_WINDOW_MS);
+  const { rows } = await sql<{ at: Date }>`
+    SELECT e.occurred_at AS at FROM crove_kernel.mail_event e
+    JOIN crove_kernel.mail_message m ON m.org_id = e.org_id AND m.id = e.message_id
+    WHERE e.org_id = ${ctx.orgId} AND m.to_hash = ${hash} AND e.kind = 'bounce_soft' AND e.occurred_at >= ${since}
+    ORDER BY e.occurred_at`.execute(ctx.trx);
+  // A bounce that completes SOFT_BOUNCE_LIMIT within the window, recent enough that its pause still runs.
+  return rows.some(
+    (row, i) =>
+      i >= SOFT_BOUNCE_LIMIT - 1 &&
+      row.at.getTime() >= now.getTime() - SOFT_BOUNCE_PAUSE_MS &&
+      row.at.getTime() - (rows[i - SOFT_BOUNCE_LIMIT + 1]?.at.getTime() ?? Number.NEGATIVE_INFINITY) < SOFT_BOUNCE_WINDOW_MS,
+  );
+}
+
+// Whether the org must not send mail of this stream to the address: a live suppression of scope 'all', or for
+// marketing mail one of scope 'marketing' or a run of soft bounces.
+export async function isSuppressed(ctx: Pick<CommandContext, 'trx' | 'orgId'>, hash: string, stream: MailStream, now: Date = new Date()): Promise<boolean> {
   const scopes: MailScope[] = stream === 'marketing' ? ['all', 'marketing'] : ['all'];
   const row = await ctx.trx
     .selectFrom('crove_kernel.mail_suppression')
@@ -48,7 +71,8 @@ export async function isSuppressed(ctx: Pick<CommandContext, 'trx' | 'orgId'>, h
     .where('lifted_at', 'is', null)
     .limit(1)
     .executeTakeFirst();
-  return row !== undefined;
+  if (row) return true;
+  return stream === 'marketing' && softBouncePaused(ctx, hash, now);
 }
 
 export interface MailToSend {
@@ -74,7 +98,7 @@ export interface MailRecord {
 export async function createMailMessage(ctx: CommandContext, mail: MailToSend): Promise<MailRecord> {
   const to = mail.to.trim().toLowerCase();
   const hash = await mailAddressHash(ctx, to);
-  const status = (await isSuppressed(ctx, hash, mail.stream)) ? 'suppressed' : mail.status;
+  const status = (await isSuppressed(ctx, hash, mail.stream, ctx.now)) ? 'suppressed' : mail.status;
   const messageIdHeader = `<${randomUUID()}@${mail.messageIdDomain ?? DEFAULT_MESSAGE_ID_DOMAIN}>`;
   const row = await ctx.trx
     .insertInto('crove_kernel.mail_message')
@@ -105,6 +129,9 @@ export interface DirectMail {
   messageId: string;
   status: 'queued' | 'sending' | 'sent' | 'delivered' | 'bounced' | 'complained' | 'suppressed' | 'failed' | 'ambiguous';
   messageIdHeader: string;
+  // The mail's VERP token (#539): sent over SMTP with the Return-Path bounce+<token>@INBOUND_DOMAIN, so a bounce
+  // report names this mail.
+  bounceToken: string | null;
 }
 
 // The mail a command just wrote for the request to send itself (the invite mail): the newest row of this source and
@@ -127,7 +154,9 @@ export const directMailGet = defineQuery({
       .orderBy('created_at', 'desc')
       .limit(1)
       .executeTakeFirst();
-    return row ? { messageId: row.id, status: row.status, messageIdHeader: row.message_id_header } : null;
+    if (!row) return null;
+    const { rows } = await sql<{ token: string | null }>`SELECT crove_kernel.mail_bounce_token(${row.id}) AS token`.execute(ctx.trx);
+    return { messageId: row.id, status: row.status, messageIdHeader: row.message_id_header, bounceToken: rows[0]?.token ?? null };
   },
 });
 
@@ -242,5 +271,84 @@ export const liftMailSuppression = defineCommand({
   },
 });
 
-export const mailCommands = [recordDirectMail, addMailSuppression, liftMailSuppression];
+// What an event does to its mail's status, when the move is one the mail may make (a bounce after a complaint, or
+// an event for a mail still 'sending', leaves the status as it is; the event is recorded all the same).
+const EVENT_STATUS: Partial<Record<MailEventKind, 'delivered' | 'bounced' | 'complained'>> = {
+  delivered: 'delivered',
+  bounce_hard: 'bounced',
+  complaint: 'complained',
+};
+const STATUS_MOVES: Record<string, readonly string[]> = { sent: ['delivered', 'bounced', 'complained'], delivered: ['bounced', 'complained'] };
+
+export type MailEventKind = 'delivered' | 'deferred' | 'bounce_hard' | 'bounce_soft' | 'complaint';
+
+// One delivery event from the mail provider (#539, Email plan §3.3), recorded by the worker in the system context of
+// the mail's org: the org was found from the stored mail, never from the payload. A replayed event (same provider
+// and event id) changes nothing. A hard bounce suppresses all of the org's mail to the address; a complaint
+// suppresses marketing (and marks the mail complained). Soft bounces are counted at send time (isSuppressed).
+export const recordMailEvent = defineCommand({
+  name: 'kernel.mail.event.record',
+  input: z.object({
+    messageId: zId,
+    provider: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
+    providerEventId: z.string().min(1).max(255),
+    kind: z.enum(['delivered', 'deferred', 'bounce_hard', 'bounce_soft', 'complaint']),
+    occurredAt: z.iso.datetime({ offset: true }),
+    detail: z.record(z.string().max(32), z.string().max(64)).refine((d) => Object.keys(d).length <= 8),
+  }),
+  risk: 'R1',
+  access: 'system',
+  handler: async (ctx, input) => {
+    const mail = await ctx.trx
+      .selectFrom('crove_kernel.mail_message')
+      .select(['id', 'status', 'to_hash'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.messageId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!mail) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy thư');
+    const event = await ctx.trx
+      .insertInto('crove_kernel.mail_event')
+      .values({
+        org_id: ctx.orgId,
+        message_id: mail.id,
+        provider: input.provider,
+        provider_event_id: input.providerEventId,
+        kind: input.kind,
+        occurred_at: new Date(input.occurredAt),
+        detail: JSON.stringify(input.detail),
+      })
+      .onConflict((oc) => oc.columns(['org_id', 'provider', 'provider_event_id']).doNothing())
+      .returning('id')
+      .executeTakeFirst();
+    if (!event) return { recorded: false, status: mail.status, suppressed: null };
+    const next = EVENT_STATUS[input.kind];
+    let status = mail.status;
+    if (next && STATUS_MOVES[mail.status]?.includes(next)) {
+      await ctx.trx
+        .updateTable('crove_kernel.mail_message')
+        .set({ status: next, updated_at: ctx.now })
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', mail.id)
+        .execute();
+      status = next;
+    }
+    const suppression =
+      input.kind === 'bounce_hard' ? { scope: 'all' as const, reason: 'hard_bounce' as const } : input.kind === 'complaint' ? { scope: 'marketing' as const, reason: 'complaint' as const } : null;
+    let suppressed: MailScope | null = null;
+    if (suppression) {
+      const added = await ctx.trx
+        .insertInto('crove_kernel.mail_suppression')
+        .values({ org_id: ctx.orgId, to_hash: mail.to_hash, scope: suppression.scope, reason: suppression.reason, source_message_id: mail.id })
+        .onConflict((oc) => oc.columns(['org_id', 'to_hash', 'scope']).where('lifted_at', 'is', null).doNothing())
+        .returning('id')
+        .executeTakeFirst();
+      if (added) suppressed = suppression.scope;
+    }
+    ctx.audit({ message_id: mail.id, event_id: event.id, kind: input.kind, ...(suppressed ? { suppressed } : {}) });
+    return { recorded: true, status, suppressed };
+  },
+});
+
+export const mailCommands = [recordDirectMail, addMailSuppression, liftMailSuppression, recordMailEvent];
 export const mailQueries = [directMailGet];

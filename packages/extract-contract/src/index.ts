@@ -8,7 +8,7 @@ import { z } from 'zod';
 // files each one as a document of its own.
 // portal_invoice_list: the purchase-invoice list exported from the tax authority's e-invoice portal as .xlsx (#465);
 // the rows come back read and normalized, and the worker checks them again before they are stored.
-export const EXTRACT_KINDS = ['einvoice_xml', 'pdf_text', 'mime', 'zip', 'portal_invoice_list'] as const;
+export const EXTRACT_KINDS = ['einvoice_xml', 'pdf_text', 'mime', 'zip', 'portal_invoice_list', 'dsn'] as const;
 export type ExtractKind = (typeof EXTRACT_KINDS)[number];
 export const zExtractKind = z.enum(EXTRACT_KINDS);
 
@@ -38,6 +38,8 @@ export const EXTRACT_LIMITS = {
   // portal searches about a month at a time, so a month of a small company's purchases is far below either.
   maxPortalListBytes: 10 * MiB,
   maxPortalListRows: 20_000,
+  // A bounce report (DSN, #539): at most this many recipients are read.
+  maxDsnRecipients: 20,
   // Rows of the sheet that were not read as invoices (a totals row, a row without a number), reported by number.
   maxPortalListSkipped: 1000,
 } as const;
@@ -49,7 +51,7 @@ export const ARCHIVE_REJECTIONS = ['encrypted', 'unsupported_method', 'nested_ar
 export type ArchiveRejection = (typeof ARCHIVE_REJECTIONS)[number];
 
 export function maxRequestBytes(kind: ExtractKind): number {
-  if (kind === 'mime') return EXTRACT_LIMITS.maxEmailBytes;
+  if (kind === 'mime' || kind === 'dsn') return EXTRACT_LIMITS.maxEmailBytes;
   if (kind === 'portal_invoice_list') return EXTRACT_LIMITS.maxPortalListBytes;
   return EXTRACT_LIMITS.maxFileBytes;
 }
@@ -119,6 +121,29 @@ export const zExtractedEmail = z.strictObject({
   attachments: z.array(z.strictObject({ filename: zText.nullable(), content: z.base64() })).max(EXTRACT_LIMITS.maxAttachments),
 });
 export type ExtractedEmail = z.infer<typeof zExtractedEmail>;
+
+// A delivery status notification (RFC 3464, #539): each recipient's action and status code, and the Message-ID of the
+// bounced mail when the report quotes its headers. No address or diagnostic text leaves the sandbox.
+export const DSN_ACTIONS = ['failed', 'delayed', 'delivered', 'relayed', 'expanded'] as const;
+export const zExtractedDsn = z.strictObject({
+  originalMessageId: z
+    .string()
+    .regex(/^<[^<>\s]{3,253}>$/)
+    .nullable(),
+  recipients: z
+    .array(
+      z.strictObject({
+        action: z.enum(DSN_ACTIONS),
+        status: z
+          .string()
+          .regex(/^[245]\.\d{1,3}\.\d{1,3}$/)
+          .nullable(),
+      }),
+    )
+    .min(1)
+    .max(EXTRACT_LIMITS.maxDsnRecipients),
+});
+export type ExtractedDsn = z.infer<typeof zExtractedDsn>;
 
 // The file entries of a ZIP archive, in central directory order (directories and __MACOSX entries left out). name is
 // the path inside the archive with / separators; sizeBytes is the decompressed size the archive declares, checked
@@ -221,6 +246,7 @@ export const zExtractSuccess = z.discriminatedUnion('kind', [
   z.strictObject({ ok: z.literal(true), kind: z.literal('mime'), email: zExtractedEmail }),
   z.strictObject({ ok: z.literal(true), kind: z.literal('zip'), archive: zExtractedArchive }),
   z.strictObject({ ok: z.literal(true), kind: z.literal('portal_invoice_list'), list: zExtractedPortalList }),
+  z.strictObject({ ok: z.literal(true), kind: z.literal('dsn'), report: zExtractedDsn }),
 ]);
 export type ExtractSuccess = z.infer<typeof zExtractSuccess>;
 

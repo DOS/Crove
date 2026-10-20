@@ -550,6 +550,12 @@ suite('kernel invariants on PostgreSQL', () => {
       'crove_kernel.outbox_claim(integer)',
       'crove_kernel.retention_purge(integer)',
       'crove_kernel.inbound_pending_blobs(text[])',
+      'crove_kernel.mail_event_enqueue(text,jsonb)',
+      'crove_kernel.mail_event_claim(integer)',
+      'crove_kernel.mail_message_by_provider_id(text,text)',
+      'crove_kernel.mail_bounce_mac(uuid)',
+      'crove_kernel.mail_bounce_token(uuid)',
+      'crove_kernel.mail_message_by_bounce_token(text)',
     ];
     const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant'];
     const matrix = await withAdmin(async (admin) => {
@@ -569,6 +575,16 @@ suite('kernel invariants on PostgreSQL', () => {
       'crove_kernel.outbox_claim(integer)': ['crove_worker'],
       'crove_kernel.retention_purge(integer)': ['crove_worker'],
       'crove_kernel.inbound_pending_blobs(text[])': ['crove_worker'],
+      // Delivery events (#539): the API queues verified webhooks; only the worker claims them and finds their mail.
+      'crove_kernel.mail_event_enqueue(text,jsonb)': ['crove_app'],
+      'crove_kernel.mail_event_claim(integer)': ['crove_worker'],
+      'crove_kernel.mail_message_by_provider_id(text,text)': ['crove_worker'],
+      // Bounces of SMTP mail (#539): a mail's token is granted to crove_tenant, which every login role inherits, and
+      // answers only for a mail of the org in context; only the worker resolves a token, and the MAC under the mail
+      // key is called by those two definers alone.
+      'crove_kernel.mail_bounce_mac(uuid)': [],
+      'crove_kernel.mail_bounce_token(uuid)': ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant'],
+      'crove_kernel.mail_message_by_bounce_token(text)': ['crove_worker'],
     });
 
     // The API login role is refused by the database itself, and so is a system command run through it.

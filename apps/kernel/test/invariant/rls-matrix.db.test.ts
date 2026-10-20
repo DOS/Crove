@@ -41,7 +41,6 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
-  'crove_kernel.mail_event',
   'crove_social.label',
   'crove_social.post_label',
 ]);
@@ -505,7 +504,7 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => {
       const n = muteRows.get(o.id) ?? 0;
       muteRows.set(o.id, n + 1);
-      return { row: { org_id: o.id, user_id: o.owner, kind: MUTE_KINDS[n === 0 ? 0 : 1 + ((n - 1) % (MUTE_KINDS.length - 1))] } };
+      return { row: { org_id: o.id, user_id: o.owner, kind: MUTE_KINDS[n === 0 ? 0 : 1 + ((n - 1) % (MUTE_KINDS.length - 1))] ?? 'comment' } };
     },
   },
   'crove_social.post': { make: (o) => ({ row: socialPostRow(o) }) },

@@ -137,6 +137,8 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
     case 'social.post.assigned': {
       const e = z.object({ post_id: zId, assignee_user_id: zId.nullable() }).safeParse(payload);
       if (!e.success || !e.data.assignee_user_id) return null;
+      // Gone since (deleted): nothing to open.
+      if (!(await authorOf(ctx, e.data.post_id))) return null;
       return { ...base, kind: 'assigned', users: [e.data.assignee_user_id], postId: e.data.post_id };
     }
     default:
