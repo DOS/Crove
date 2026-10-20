@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { COMMENT_RULES, COVER_RULES, coverKind, coverOf, isProvider, sentLink, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { COMMENT_RULES, COVER_RULES, POST_TYPE_RULES, coverKind, coverOf, isProvider, postTypeOf, sentLink, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
@@ -355,6 +355,47 @@ function AiRewrite({ text, title, connectionId, onAccept }: { text: string; titl
   );
 }
 
+// A channel's post type (#644): a feed post, a Story or a Reel, where the channel posts them. A feed post keeps no
+// setting, so a post saved before this keeps its hash.
+function PostTypeField({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social.postType');
+  const types = isProvider(provider) ? POST_TYPE_RULES[provider] : undefined;
+  if (!types) return null;
+  const current = postTypeOf(settings) ?? 'feed';
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={`post-type-${provider}`} className="text-xs">
+          {t('label')}
+        </Label>
+        <NativeSelect
+          id={`post-type-${provider}`}
+          size="sm"
+          className="w-auto"
+          value={current}
+          disabled={disabled}
+          onChange={(e) => {
+            const { postType: _old, ...rest } = settings;
+            // A Story takes no first comment and no cover, and their fields are hidden for it: dropped with the change.
+            if (e.target.value === 'story') {
+              delete rest.firstComment;
+              delete rest.cover;
+            }
+            onChange(e.target.value === 'feed' ? rest : { ...rest, postType: e.target.value });
+          }}
+        >
+          {types.map((type) => (
+            <NativeSelectOption key={type} value={type}>
+              {t(`types.${type}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      {current !== 'feed' && <p className="text-xs text-subtle-foreground">{t(`hints.${current}`)}</p>}
+    </div>
+  );
+}
+
 function ChannelEditor({
   provider,
   channel,
@@ -383,7 +424,8 @@ function ChannelEditor({
   const t = useTranslations('social');
   // The link as the channel sends it, with its UTM tags (#585).
   const linkUrl = (isProvider(provider) ? sentLink(provider, base.linkUrl || null, own.settings, own.custom ? own.body : base.body) : base.linkUrl) ?? '';
-  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl, media: mediaOfOwn(own, base), cover: coverOf(own.settings) };
+  const postType = postTypeOf(own.settings) ?? 'feed';
+  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl, media: mediaOfOwn(own, base), cover: coverOf(own.settings), postType };
   const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   return (
     <Card className="block space-y-3 p-4">
@@ -395,6 +437,7 @@ function ChannelEditor({
         </div>
         <Counter provider={provider} body={content.body} linkUrl={content.linkUrl} mediaCount={content.media.length} />
       </div>
+      <PostTypeField provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <label className="flex items-center gap-2 text-sm text-muted-foreground">
         <Checkbox checked={own.custom} disabled={disabled} onCheckedChange={(checked) => onChange({ ...own, custom: checked === true, body: own.body || base.body })} />
         {t('ownText')}
@@ -426,7 +469,7 @@ function ChannelEditor({
       </label>
       {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
-      {isProvider(provider) && COMMENT_RULES[provider] && (
+      {isProvider(provider) && COMMENT_RULES[provider] && postType !== 'story' && (
         <div className="space-y-1">
           <Label className="text-xs">{t('firstComment')}</Label>
           <Textarea

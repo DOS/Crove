@@ -1413,6 +1413,14 @@ export const en = {
       engagement: '{count} engagements',
       noText: '(No text)',
     },
+    postType: {
+      label: 'Post type',
+      types: { feed: 'Post', story: 'Story', reel: 'Reel' },
+      hints: {
+        story: 'A Story shows for 24 hours and holds exactly one image or one video of up to 60 seconds (best upright, 9:16). Its text, link and first comment are not posted.',
+        reel: 'A Reel holds exactly one video; the text becomes its description. Facebook takes Reels of up to 90 seconds.',
+      },
+    },
     crop: {
       open: 'Crop',
       frame: 'Frame',
@@ -1744,6 +1752,9 @@ export const en = {
       COVER_NEEDS_VIDEO: 'A cover can only be set when this channel posts exactly one video',
       COVER_NOT_SUPPORTED: 'This channel does not take this kind of cover; TikTok only takes a moment in the video, YouTube only an uploaded image',
       COVER_OUT_OF_RANGE: 'The cover is at {actual, number} seconds, but the video is only {limit, number} seconds long',
+      POST_TYPE_NOT_SUPPORTED: 'This channel cannot post the chosen post type',
+      STORY_ONE_MEDIA: 'A Story needs exactly one image or one video',
+      REEL_ONE_VIDEO: 'A Reel needs exactly one video',
     },
     composeTitle: 'Compose',
     composeSubtitle: 'Write the shared text, pick channels, and write per channel where needed.',
@@ -1767,6 +1778,7 @@ export const en = {
     previewMore: 'See more',
     previewNoTitle: '(No title yet)',
     previewLinkNotSent: 'The link ({host}) is not posted on this platform; put it in the profile or write it in the text.',
+    previewStory: 'Story - only the image or video shows',
     previewCount: '{count, number} images or videos',
     aiRewrite: 'Rewrite with AI',
     aiRewrites: { shorten: 'Shorten to fit', formal: 'More formal', casual: 'More casual', translate_en: 'Translate to English', translate_vi: 'Translate to Vietnamese' },

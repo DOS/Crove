@@ -433,6 +433,30 @@ test('lets an owner approve and schedule their own post in one step (#638)', asy
   expect(decided).toEqual([{ n: 1 }]);
 });
 
+test('posts a Story of one image, with no text, in a phone frame (#644)', async ({ page }) => {
+  await signUp(page, newEmail('social-story'));
+  await createOrg(page, 'Công ty Tin');
+  await connectSandbox(page, 'Trang Tin');
+  await compose(page, 'Chữ này không lên Tin');
+  await page.locator('input[type="file"]').first().setInputFiles([{ name: 'tin.png', mimeType: 'image/png', buffer: solidPng(1080, 1920) }]);
+  await expect(page.getByText('1/20').first()).toBeVisible();
+  await page.getByLabel('Kiểu bài').selectOption('story');
+  await expect(page.getByText('Tin (Story) - chỉ hiện ảnh hoặc video')).toBeVisible();
+  await expect(page.getByText('Bình luận đầu tiên (không bắt buộc)')).toHaveCount(0);
+  // A second image is one too many for a Story.
+  await page.locator('input[type="file"]').first().setInputFiles([{ name: 'tin-2.png', mimeType: 'image/png', buffer: solidPng(1080, 1910) }]);
+  await expect(page.getByText('2/20').first()).toBeVisible();
+  await expect(page.getByText('Tin (Story) cần đúng một ảnh hoặc một video')).toBeVisible();
+  await page.getByRole('button', { name: 'Bỏ', exact: true }).last().click();
+  await expect(page.getByText('Tin (Story) cần đúng một ảnh hoặc một video')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  const saved = sql<{ post_type: string }>(`SELECT settings->>'postType' AS post_type FROM crove_social.post_variant WHERE post_id = :'post'`, { post: postIdOf(page) });
+  expect(saved).toEqual([{ post_type: 'story' }]);
+  // The saved post keeps the type in its channel's editor.
+  await expect(page.getByLabel('Kiểu bài')).toHaveValue('story');
+});
+
 test('crops a post image to a frame, and the server reads the new size (#636)', async ({ page }) => {
   await signUp(page, newEmail('social-crop'));
   await createOrg(page, 'Công ty Cắt Ảnh');

@@ -171,6 +171,36 @@ describe('validateVariant', () => {
     expect(codes([jpeg(5 * 1024 * 1024)])).toEqual(['IMAGE_TOO_LARGE']);
   });
 
+  it('checks Stories and Reels on the channels that post them (#644)', () => {
+    const img = (): MediaItem => ({ kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null });
+    const vid = (seconds: number): MediaItem => ({ kind: 'video', mime: 'video/mp4', sizeBytes: 1_000_000, durationSeconds: seconds });
+    const codes = (provider: 'instagram' | 'facebook_page' | 'x', postType: unknown, media: MediaItem[], extra: Record<string, unknown> = {}, body = 'Chữ không gửi') =>
+      validateVariant({ provider, body, title: null, linkUrl: 'https://shop.example/', media, settings: { postType, ...extra } }).map((i) => i.code);
+    // A Story: one image or a video of up to a minute; its text and link are not checked, since they are not sent.
+    expect(codes('instagram', 'story', [img()], {}, 'x'.repeat(5000))).toEqual([]);
+    expect(codes('facebook_page', 'story', [vid(45)])).toEqual([]);
+    expect(codes('instagram', 'story', [img(), img()])).toEqual(['STORY_ONE_MEDIA']);
+    expect(codes('instagram', 'story', [])).toEqual(['STORY_ONE_MEDIA']);
+    expect(codes('instagram', 'story', [vid(61)])).toEqual(['VIDEO_TOO_LONG']);
+    expect(codes('instagram', 'story', [img()], { firstComment: 'Mua ngay' })).toEqual(['COMMENT_NOT_SUPPORTED']);
+    expect(codes('instagram', 'story', [vid(10)], { cover: { atMs: 1000 } })).toEqual(['COVER_NOT_SUPPORTED']);
+    // A Reel: one video, as long as the platform takes; Facebook Reels last at most 90 s.
+    expect(codes('facebook_page', 'reel', [vid(60)])).toEqual([]);
+    expect(codes('facebook_page', 'reel', [vid(91)])).toEqual(['VIDEO_TOO_LONG']);
+    expect(codes('instagram', 'reel', [img()])).toEqual(['REEL_ONE_VIDEO']);
+    // Other channels, and unknown types, are refused; a feed post is checked as before.
+    expect(codes('x', 'story', [img()])).toEqual(['POST_TYPE_NOT_SUPPORTED']);
+    expect(codes('instagram', 'carousel', [img()])).toEqual(['POST_TYPE_NOT_SUPPORTED']);
+    expect(codes('instagram', 'feed', [img()])).toEqual([]);
+    // A Story image is upright (9:16 passes, the feed's 4:5 and wider do not), whatever the feed takes; an unknown size is not checked.
+    const sized = (width: number, height: number): MediaItem => ({ ...img(), width, height });
+    expect(codes('instagram', 'story', [sized(1080, 1920)])).toEqual([]);
+    expect(codes('facebook_page', 'story', [sized(1080, 2340)])).toEqual([]);
+    expect(codes('instagram', 'story', [sized(1080, 1350)])).toEqual(['IMAGE_RATIO_NOT_ALLOWED']);
+    expect(codes('facebook_page', 'story', [sized(1920, 1080)])).toEqual(['IMAGE_RATIO_NOT_ALLOWED']);
+    expect(codes('instagram', 'story', [sized(180, 320)])).toEqual(['IMAGE_TOO_SMALL']);
+  });
+
   it("holds Instagram and Threads images to their shapes and widths, when the size is known (#636)", () => {
     const img = (width: number | null, height: number | null): MediaItem => ({ kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null, width, height });
     const codes = (provider: 'instagram' | 'threads' | 'facebook_page', media: MediaItem[]) => validateVariant({ provider, body: 'x', title: null, media }).map((i) => i.code);
