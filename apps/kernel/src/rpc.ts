@@ -5,6 +5,7 @@ import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
 import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
 import type { SocialWriter, WriterChannel } from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider } from '@crove/mod-social/contract';
+import { voiceNotes, type BrandVoice } from '@crove/mod-social';
 import {
   clientOverviews,
   createOrg,
@@ -68,6 +69,13 @@ interface CreatedInvite {
 
 // Drafts Social posts with the deployment's model (SocialWriter in @crove/agent); unset: AI drafting is off.
 export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'>;
+
+// The org's saved brand voices (#741) as notes for the writer: the org's, and each channel's by connection.
+async function savedVoices(runtime: Runtime, actor: UserActor, orgId: string): Promise<{ org: string | null; byChannel: Map<string, string> }> {
+  const rows = await runtime.query<BrandVoice[]>('social.brand_voice.list', {}, { actor, orgId });
+  const org = rows.find((v) => v.connectionId === null);
+  return { org: org ? voiceNotes(org) : null, byChannel: new Map(rows.filter((v) => v.connectionId !== null).map((v) => [v.connectionId as string, voiceNotes(v)])) };
+}
 
 // What the writer is told about a channel: the limits the channel rules check afterwards.
 function writerChannel(c: { id: string; provider: string; displayName: string }): WriterChannel {
@@ -339,7 +347,15 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             }
             let draft: Awaited<ReturnType<SocialDrafter['draft']>>;
             try {
-              draft = await socialWriter.draft({ brief: input.brief, channels, language: input.language ?? 'vi', ...(input.tone ? { tone: input.tone } : {}) });
+              const voices = input.tone ? null : await savedVoices(runtime, actor, orgId);
+              draft = await socialWriter.draft({
+                brief: input.brief,
+                channels,
+                language: input.language ?? 'vi',
+                ...(input.tone ? { tone: input.tone } : {}),
+                ...(voices?.org ? { voice: voices.org } : {}),
+                ...(voices ? { channelVoices: Object.fromEntries(input.connectionIds.flatMap((id) => (voices.byChannel.has(id) ? [[id, voices.byChannel.get(id) as string]] : []))) } : {}),
+              });
             } catch (error: unknown) {
               console.error('[social-ai] draft failed', error instanceof Error ? error.name : typeof error);
               throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
@@ -385,7 +401,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             }
             let result: Awaited<ReturnType<SocialDrafter['rewrite']>>;
             try {
-              result = await socialWriter.rewrite({ text: input.text, title: input.title ?? null, action: input.action, ...(channel ? { channel } : {}) });
+              const voices = await savedVoices(runtime, actor, orgId);
+              const voice = (input.connectionId ? voices.byChannel.get(input.connectionId) : undefined) ?? voices.org;
+              result = await socialWriter.rewrite({ text: input.text, title: input.title ?? null, action: input.action, ...(channel ? { channel } : {}), ...(voice ? { voice } : {}) });
             } catch (error: unknown) {
               console.error('[social-ai] rewrite failed', error instanceof Error ? error.name : typeof error);
               throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
