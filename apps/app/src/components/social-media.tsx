@@ -41,12 +41,14 @@ export function useLibrary(search: string, enabled = true) {
 
 export const sizeLabel = (bytes: number) => (bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
-// Images from the library to add to a post: a click adds one, a second click takes it out again.
-function LibraryPicker({ media, onChange }: { media: MediaItem[]; onChange: (media: MediaItem[]) => void }) {
+// Images from the library to add to a post: a click adds one, a second click takes it out again. only: the file types
+// offered (a video's cover takes JPEG or PNG images).
+function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; onChange: (media: MediaItem[]) => void; only?: readonly string[] }) {
   const t = useTranslations('social');
   const [search, setSearch] = useState('');
   const library = useLibrary(search);
-  const items = library.data?.pages.flatMap((p) => p.items) ?? [];
+  const all = library.data?.pages.flatMap((p) => p.items) ?? [];
+  const items = all.filter((item) => !only || only.includes(item.mime));
   const chosen = new Set(media.map((m) => m.fileId));
   const toggle = (item: LibraryItem) =>
     onChange(chosen.has(item.fileId) ? media.filter((m) => m.fileId !== item.fileId) : media.length >= MAX_POST_MEDIA ? media : [...media, { fileId: item.fileId, altText: '', mime: item.mime, sizeBytes: item.sizeBytes, durationMs: item.durationMs }]);
@@ -58,7 +60,7 @@ function LibraryPicker({ media, onChange }: { media: MediaItem[]; onChange: (med
       ) : library.error ? (
         <ErrorText>{errorMessage(library.error)}</ErrorText>
       ) : items.length === 0 ? (
-        <p className="text-xs text-subtle-foreground">{search.trim() ? t('libraryNoMatch') : t('libraryEmpty')}</p>
+        <p className="text-xs text-subtle-foreground">{search.trim() || all.length > 0 ? t('libraryNoMatch') : t('libraryEmpty')}</p>
       ) : (
         <ul className="grid grid-cols-3 gap-2 sm:grid-cols-5">
           {items.map((item) => (
@@ -109,8 +111,8 @@ const clock = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
-// An image, or a video's first frame with its length, from the stored file.
-export function Thumb({ fileId, alt, className, mime, durationMs }: { fileId: string; alt: string; className?: string; mime?: string; durationMs?: number | null | undefined }) {
+// An image, or a video's first frame (or the frame at frameMs, its cover) with its length, from the stored file.
+export function Thumb({ fileId, alt, className, mime, durationMs, frameMs }: { fileId: string; alt: string; className?: string; mime?: string; durationMs?: number | null | undefined; frameMs?: number | undefined }) {
   const url = useImageUrl(fileId);
   const video = mime?.startsWith('video/') ?? false;
   return (
@@ -118,7 +120,7 @@ export function Thumb({ fileId, alt, className, mime, durationMs }: { fileId: st
       {!url.url ? (
         <div className="flex size-full items-center justify-center">{url.isLoading ? <Spinner /> : null}</div>
       ) : video ? (
-        <video src={`${url.url}#t=0.001`} aria-label={alt} muted playsInline preload="metadata" className="size-full object-cover" />
+        <video src={`${url.url}#t=${Math.max(0.001, (frameMs ?? 0) / 1000)}`} aria-label={alt} muted playsInline preload="metadata" className="size-full object-cover" />
       ) : (
         <img src={url.url} alt={alt} className="size-full object-cover" />
       )}
@@ -230,6 +232,61 @@ export function MediaField({ media, onChange, disabled }: { media: MediaItem[]; 
       </Button>
       {browsing && !disabled && <LibraryPicker media={media} onChange={onChange} />}
       <p className="text-xs text-subtle-foreground">{t('imagesHint')}</p>
+      {upload.error && <ErrorText>{errorMessage(upload.error)}</ErrorText>}
+    </div>
+  );
+}
+
+// The image types a video's cover takes (#642).
+export const COVER_IMAGE_ACCEPT: readonly string[] = ['image/jpeg', 'image/png'];
+
+// One image for a video's cover (#642): uploaded here or taken from the library, shown with a button to change it.
+export function CoverImageField({ fileId, onChange, disabled }: { fileId: string | null; onChange: (fileId: string | null) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const picker = useRef<HTMLInputElement>(null);
+  const [browsing, setBrowsing] = useState(false);
+  const upload = useMutation({
+    mutationFn: async (file: File) => (await uploadFiles([file], 'social')).files[0]?.fileId ?? null,
+    onSuccess: (added) => {
+      if (added) onChange(added);
+      void queryClient.invalidateQueries({ queryKey: ['social-library'] });
+    },
+  });
+  const chosen: MediaItem[] = fileId ? [{ fileId, altText: '', mime: 'image/jpeg', sizeBytes: 0 }] : [];
+  return (
+    <div className="space-y-2">
+      {fileId && <Thumb fileId={fileId} alt={t('coverImageAlt')} mime="image/jpeg" className="aspect-video max-w-48" />}
+      <input
+        ref={picker}
+        type="file"
+        accept={COVER_IMAGE_ACCEPT.join(',')}
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) upload.mutate(file);
+        }}
+      />
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" disabled={disabled || upload.isPending} onClick={() => picker.current?.click()}>
+          {upload.isPending ? <Spinner className="text-current" /> : null}
+          {t(fileId ? 'coverImageReplace' : 'coverImageUpload')}
+        </Button>
+        <Button variant="ghost" size="sm" disabled={disabled} aria-expanded={browsing} onClick={() => setBrowsing(!browsing)}>
+          {t(browsing ? 'libraryClose' : 'libraryOpen')}
+        </Button>
+      </div>
+      {browsing && !disabled && (
+        <LibraryPicker
+          media={chosen}
+          only={COVER_IMAGE_ACCEPT}
+          onChange={(next) => {
+            // One image: a click on another replaces it, a click on the chosen one takes it out.
+            onChange(next.at(-1)?.fileId ?? null);
+            setBrowsing(false);
+          }}
+        />
+      )}
       {upload.error && <ErrorText>{errorMessage(upload.error)}</ErrorText>}
     </div>
   );
