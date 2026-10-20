@@ -4,10 +4,12 @@ import { Card } from '@crove/ui/components/card';
 import { SupportLink } from '../components/support-link.tsx';
 import { PageHeader } from '../components/ui.tsx';
 import { getConfig } from '../lib/auth.ts';
+import { FIRM_GUIDE } from '../lib/firm-guide.ts';
 import { QUICK_GUIDE } from '../lib/quick-guide.ts';
 import { supportLink } from '../lib/support.ts';
 
-// The one-page quick guide (issue #310). Its steps are Vietnamese in every interface language (see quick-guide.ts).
+// The one-page quick guide (issue #310), then the guide for an accounting firm (#661). Their steps are Vietnamese in
+// every interface language (see quick-guide.ts and firm-guide.ts).
 export function GuidePage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('guide');
@@ -24,6 +26,23 @@ export function GuidePage() {
       </div>
       <div lang="vi" className="grid max-w-3xl gap-4">
         {QUICK_GUIDE.map((step) => (
+          <Card key={step.id} className="block p-5">
+            <h2 className="text-base font-semibold text-foreground">{step.title}</h2>
+            <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
+              {step.items.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ol>
+          </Card>
+        ))}
+      </div>
+      {/* A section of the same page: an h2, so the page keeps one h1. */}
+      <div className="mt-10 mb-6">
+        <h2 className="text-lg font-semibold tracking-tight text-foreground">{t('firmTitle')}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">{t('firmSubtitle')}</p>
+      </div>
+      <div lang="vi" className="grid max-w-3xl gap-4">
+        {FIRM_GUIDE.map((step) => (
           <Card key={step.id} className="block p-5">
             <h2 className="text-base font-semibold text-foreground">{step.title}</h2>
             <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-muted-foreground">

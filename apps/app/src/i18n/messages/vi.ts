@@ -987,6 +987,8 @@ export const vi = {
   guide: {
     title: 'Hướng dẫn nhanh',
     subtitle: 'Ba bước để ghi sổ hóa đơn đầu vào: tải lên, duyệt và xuất Excel.',
+    firmTitle: 'Hướng dẫn cho công ty dịch vụ kế toán',
+    firmSubtitle: 'Một tháng của một doanh nghiệp khách hàng trong Crove: thêm khách hàng, nhận và duyệt hóa đơn, ngân hàng, khóa sổ, tờ khai GTGT và chuyển số liệu sang phần mềm kế toán.',
     supportHint: 'Gặp lỗi hoặc cần hỗ trợ? Gửi cho chúng tôi qua',
   },
   invite: {
