@@ -926,7 +926,8 @@ async function dispatchModuleEvent(ctx: CommandContext, event: { id: string; typ
     .execute();
   let created = 0;
   // Only the agents of the module the event is about: a template cannot be fed another module's records.
-  for (const seat of seats.filter((s) => ctx.installed(s.module) && ref.type.startsWith(`${s.module}.`))) {
+  // The event, too, must be the template's own module's: a template subscribed to another module's event gets nothing.
+  for (const seat of seats.filter((s) => ctx.installed(s.module) && ref.type.startsWith(`${s.module}.`) && event.type.startsWith(`${s.module}.`))) {
     const task = await ctx.trx
       .insertInto('crove_kernel.task')
       .values({
