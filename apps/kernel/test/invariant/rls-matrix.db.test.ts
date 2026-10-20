@@ -41,6 +41,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.channel_set',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -547,6 +548,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // A saved set of channels for the composer (#774): a name and the connections it picks.
+  'crove_social.channel_set': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), name: `RLS matrix set ${randomUUID().slice(0, 6)}`, connection_ids: [], updated_by: o.owner } }) },
   // A metrics snapshot of a published variant (S8, issue #238): append-only, one per capture key.
   // An org's label for posts (#639): a name and a colour from the app's palette.
   // A blog feed an org drafts posts from (#708).
