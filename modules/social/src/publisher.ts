@@ -10,7 +10,7 @@
 // - record failing: the job throws, pg-boss retries it, and the retry's begin finds the variant in flight.
 import { withCallSignal, type Publisher, type PublishResult, type ReconcileResult } from '@crove/channel';
 import { DomainError, readVerified, type BlobStore, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
-import { VIDEO_READY, type Provider } from './domain/channels.ts';
+import { COVER_RULES, VIDEO_READY, coverKind, coverOf, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
 import type { CommentWork } from './comments.ts';
 
@@ -111,9 +111,10 @@ async function openCredential(deps: PublishDeps, orgId: string, connectionId: st
 async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, work: PublishWork, credential: { externalAccountId: string; secret: string }): Promise<PublishRecord> {
   // A deployment's (or a test's) own limit first, then the adapter's (video uploads take minutes), then the default.
   const timeout = deps.callTimeoutMs ?? publisher.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-  // Only the variant's own images, of this org.
+  // Only the variant's own images and its video's cover image (#642), of this org.
+  const cover = coverOf(work.settings);
   const mediaFile = async (fileId: string) => {
-    if (!work.content.media.some((m) => m.fileId === fileId)) throw new Error('not an image of this variant');
+    if (!work.content.media.some((m) => m.fileId === fileId) && !(cover && 'fileId' in cover && cover.fileId === fileId)) throw new Error('not an image of this variant');
     return deps.runtime.query<{ storageKey: string; generation: string | null; sha256: string; contentType: string; filename: string }>('social.media.file', { fileId }, { actor: ACTOR, orgId });
   };
   // A presigned GET of the exact version, where the store hands them out (S3); valid briefly, enough for the platform
@@ -136,6 +137,10 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
         // The channel rules hold a video back from a channel whose adapter cannot post it; this keeps it so if a rule changed.
         if (!VIDEO_READY.has(publisher.provider as Provider) && work.content.media.some((m) => m.mime.startsWith('video/'))) {
           return fromPublish({ kind: 'rejected', error: 'bad_request', code: 'VIDEO_NOT_SUPPORTED' });
+        }
+        // Likewise a cover the channel's adapter cannot send (#642): refused, never published without it.
+        if (cover && !COVER_RULES[publisher.provider as Provider]?.includes(coverKind(cover))) {
+          return fromPublish({ kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' });
         }
         return fromPublish(
           await withTimeout(timeout, () =>

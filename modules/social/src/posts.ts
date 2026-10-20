@@ -15,7 +15,7 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contr
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
-import { firstCommentOf, isProvider } from './domain/channels.ts';
+import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_TYPES, coverOf, firstCommentOf, isProvider } from './domain/channels.ts';
 import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
@@ -85,6 +85,26 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
   });
 }
 
+// A video's cover in a variant's settings (#642): a frame (a whole number of milliseconds) or an image of the org
+// uploaded for Social, JPEG or PNG, within the channel's size limit. Which channels take which kind, and whether the
+// variant shows one video, are channel rules (validateVariant), checked when it goes to review.
+async function checkCover(ctx: CommandContext, provider: string, settings: Record<string, unknown> | undefined): Promise<void> {
+  if (settings?.cover === undefined) return;
+  const cover = coverOf(settings);
+  if (!cover) throw new DomainError('COVER_INVALID', 422, 'Ảnh bìa phải là một thời điểm trong video hoặc một ảnh');
+  if (!('fileId' in cover)) return;
+  const file = zId.safeParse(cover.fileId).success
+    ? await ctx.trx.selectFrom('crove_kernel.file').select(['source', 'content_type', 'size_bytes']).where('org_id', '=', ctx.orgId).where('id', '=', cover.fileId).executeTakeFirst()
+    : undefined;
+  // Only images uploaded for posts, as for the post's media.
+  if (!file || file.source !== 'social') throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh bìa này');
+  if (!COVER_IMAGE_TYPES.includes(file.content_type)) throw new DomainError('COVER_TYPE_UNSUPPORTED', 422, 'Ảnh bìa phải là ảnh JPG hoặc PNG');
+  const max = isProvider(provider) ? COVER_IMAGE_MAX_BYTES[provider] : undefined;
+  if (max !== undefined && Number(file.size_bytes) > max) {
+    throw new DomainError('COVER_TOO_LARGE', 422, `Ảnh bìa cho kênh này tối đa ${Math.floor(max / 1_048_576)} MB`, { limit: max, actual: Number(file.size_bytes) });
+  }
+}
+
 // Replaces a post's media rows with a list, positions from 1.
 export async function writePostMedia(ctx: CommandContext, postId: string, media: readonly PostMedia[]): Promise<void> {
   await ctx.trx.deleteFrom('crove_social.post_media').where('org_id', '=', ctx.orgId).where('post_id', '=', postId).execute();
@@ -132,6 +152,7 @@ export async function insertVariants(ctx: CommandContext, post: PostRow, channel
   const created: Array<{ variantId: string; connectionId: string }> = [];
   for (const [i, c] of channels.entries()) {
     const own = c.media ? await resolveMedia(ctx, c.media) : null;
+    await checkCover(ctx, providers.get(c.connectionId) as string, c.settings);
     const row = {
       channel_connection_id: c.connectionId,
       provider: providers.get(c.connectionId) as string,
@@ -388,6 +409,7 @@ export const variantUpdate = defineCommand({
     const post = await lockPost(ctx.trx, ctx.orgId, postId);
     const [v] = pick(await lockVariants(ctx.trx, ctx.orgId, postId), [input.variantId]) as [VariantRow];
     if (v.revision !== input.revision) throw new DomainError('STALE_REVISION', 409, 'Kênh này đã được sửa ở nơi khác, hãy tải lại', { revision: v.revision });
+    if (input.settings) await checkCover(ctx, v.provider, input.settings);
     const next = {
       ...v,
       body: input.body === undefined ? v.body : input.body,
@@ -1170,7 +1192,7 @@ export const socialCommands = [
   ...activityCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
-// org shows, so the job never reads another kind of file through it.
+// org shows, or a variant's video cover, so the job never reads another kind of file through it.
 export const mediaFile = defineQuery({
   name: 'social.media.file',
   input: z.strictObject({ fileId: zId }),
@@ -1190,6 +1212,14 @@ export const mediaFile = defineQuery({
               .select('v.id')
               .whereRef('v.org_id', '=', 'f.org_id')
               .where(sql<boolean>`v.media @> jsonb_build_array(jsonb_build_object('fileId', ${input.fileId}::text))`),
+          ),
+          // A video's cover image (#642).
+          eb.exists(
+            eb
+              .selectFrom('crove_social.post_variant as v')
+              .select('v.id')
+              .whereRef('v.org_id', '=', 'f.org_id')
+              .where(sql<boolean>`v.settings -> 'cover' ->> 'fileId' = ${input.fileId}::text`),
           ),
         ]),
       )

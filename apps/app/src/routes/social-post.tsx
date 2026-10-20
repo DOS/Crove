@@ -2,7 +2,7 @@
 // channel rules and a preview, then review (owners and admins decide on what they see), schedule and cancel.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useBlocker, useNavigate, useParams, useSearch } from '@tanstack/react-router';
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -13,8 +13,8 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { COMMENT_RULES, isProvider, sentLink, utmOf, type Issue } from '@crove/mod-social/contract';
-import { MediaField, type MediaItem } from '../components/social-media.tsx';
+import { COMMENT_RULES, COVER_RULES, coverKind, coverOf, isProvider, sentLink, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
 import { ReviewLinks } from '../components/social-review-links.tsx';
@@ -118,6 +118,95 @@ function ProviderSettings({ provider, settings, onChange, disabled }: { provider
   );
 }
 
+// The time of a video's frame, in seconds as typed; the cover keeps whole milliseconds.
+function FrameInput({ atMs, maxMs, disabled, onChange }: { atMs: number; maxMs: number | null; disabled: boolean; onChange: (atMs: number) => void }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const [text, setText] = useState(String(atMs / 1000));
+  // A value set elsewhere (a reload, another cover) shows; a half-typed one ("1.") is left as it is.
+  useEffect(() => {
+    if (text.trim() !== '' && Math.round(Number(text) * 1000) !== atMs) setText(String(atMs / 1000));
+  }, [atMs, text]);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Label className="text-xs" htmlFor={id}>
+        {t('coverAt')}
+      </Label>
+      <Input
+        id={id}
+        type="number"
+        inputMode="decimal"
+        min={0}
+        step={0.1}
+        {...(maxMs !== null ? { max: maxMs / 1000 } : {})}
+        value={text}
+        disabled={disabled}
+        className="h-8 w-24 text-sm"
+        onChange={(e) => {
+          setText(e.target.value);
+          const seconds = Number(e.target.value);
+          if (e.target.value.trim() !== '' && Number.isFinite(seconds) && seconds >= 0) onChange(Math.round(seconds * 1000));
+        }}
+      />
+      {maxMs !== null && <span className="text-xs text-subtle-foreground">{t('coverAtOf', { total: Math.floor(maxMs / 100) / 10 })}</span>}
+    </div>
+  );
+}
+
+// A video's cover (#642) on the channels whose adapter sends one: a moment in the video or an uploaded image. Shown
+// while the channel posts one video, or while a cover is set (so a cover left over from a change of media can go).
+function CoverField({ provider, media, settings, onChange, disabled }: { provider: string; media: readonly MediaItem[]; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const cover = coverOf(settings);
+  // An image chosen as the kind, before a file is: nothing is stored until there is one.
+  const [pickingImage, setPickingImage] = useState(false);
+  const kinds = isProvider(provider) ? COVER_RULES[provider] : undefined;
+  const video = media.length === 1 && media[0]?.mime.startsWith('video/') ? media[0] : null;
+  if (!kinds || (!video && settings.cover === undefined)) return null;
+  const set = (next: Cover | null) => {
+    const { cover: _old, ...rest } = settings;
+    onChange(next ? { ...rest, cover: next } : rest);
+  };
+  const mode: CoverKind | 'none' = cover ? coverKind(cover) : pickingImage ? 'image' : 'none';
+  // A kind the channel does not take still shows when set (through the API), so it can be changed.
+  const options: (CoverKind | 'none')[] = ['none', ...kinds, ...(cover && !kinds.includes(coverKind(cover)) ? [coverKind(cover)] : [])];
+  const hint = provider === 'instagram' || provider === 'tiktok' || provider === 'youtube' ? provider : 'other';
+  return (
+    <div className="space-y-2 rounded-lg border p-3">
+      <Label className="text-xs" htmlFor={id}>
+        {t('cover')}
+      </Label>
+      <NativeSelect
+        id={id}
+        size="sm"
+        className="w-full max-w-xs"
+        value={mode}
+        disabled={disabled}
+        onChange={(e) => {
+          const next = e.target.value as CoverKind | 'none';
+          setPickingImage(next === 'image');
+          set(next === 'frame' ? { atMs: 0 } : null);
+        }}
+      >
+        {options.map((o) => (
+          <NativeSelectOption key={o} value={o}>
+            {t(`coverOption.${o}`)}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      {cover && 'atMs' in cover && <FrameInput atMs={cover.atMs} maxMs={video?.durationMs ?? null} disabled={disabled} onChange={(atMs) => set({ atMs })} />}
+      {mode === 'image' && (
+        <>
+          <CoverImageField fileId={cover && 'fileId' in cover ? cover.fileId : null} disabled={disabled} onChange={(fileId) => set(fileId ? { fileId } : null)} />
+          {!cover && <p className="text-xs text-subtle-foreground">{t('coverImageNone')}</p>}
+        </>
+      )}
+      <p className="text-xs text-subtle-foreground">{t(`coverHint.${hint}`)}</p>
+    </div>
+  );
+}
+
 function useRole(slug: string) {
   const me = useQuery(orpc.me.get.queryOptions());
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
@@ -145,6 +234,9 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TOO_MANY_LINKS', { limit, actual });
       case 'COMMENT_TOO_LONG':
         return t('COMMENT_TOO_LONG', { limit, actual });
+      // In milliseconds on the issue, in seconds for the person.
+      case 'COVER_OUT_OF_RANGE':
+        return t('COVER_OUT_OF_RANGE', { limit: limit / 1000, actual: actual / 1000 });
       default:
         return t(issue.code);
     }
@@ -284,7 +376,7 @@ function ChannelEditor({
   const t = useTranslations('social');
   // The link as the channel sends it, with its UTM tags (#585).
   const linkUrl = (isProvider(provider) ? sentLink(provider, base.linkUrl || null, own.settings, own.custom ? own.body : base.body) : base.linkUrl) ?? '';
-  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl, media: mediaOfOwn(own, base) };
+  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl, media: mediaOfOwn(own, base), cover: coverOf(own.settings) };
   const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   return (
     <Card className="block space-y-3 p-4">
@@ -343,6 +435,7 @@ function ChannelEditor({
         </div>
       )}
       <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
+      <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
       <PlatformPreview channel={channel} provider={provider} content={content} />
       {footer}

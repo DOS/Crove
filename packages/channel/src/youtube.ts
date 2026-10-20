@@ -8,6 +8,7 @@
 // An unclear answer is checked by listing the channel's latest uploads (one quota unit), matched by title and time.
 // Metrics: views, likes and comments from videos.list (one quota unit each).
 import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+import { coverImageType, videoCoverOf } from './cover.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -276,9 +277,15 @@ export class YouTubePublisher implements Publisher {
     if (!video || !video.mime.startsWith('video/') || input.content.media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
     const title = titleOf(input.content);
     if (!title) return { kind: 'rejected', error: 'bad_request', code: 'TITLE_REQUIRED' };
+    // A cover (#642) is an image YouTube takes as the video's thumbnail once it is uploaded; the Data API cannot pick
+    // a frame. The image is read before anything is sent, like the video.
+    const cover = videoCoverOf(input.settings);
+    if (cover && !('fileId' in cover)) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
     let bytes: Uint8Array;
+    let thumbnail: Uint8Array | null = null;
     try {
       bytes = await input.readMedia(video.fileId);
+      if (cover) thumbnail = await input.readMedia(cover.fileId);
     } catch {
       return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
     }
@@ -299,9 +306,21 @@ export class YouTubePublisher implements Publisher {
       const uploaded = await this.client.call<{ id?: unknown }>('PUT', session, s.accessToken, { bytes: { data: bytes, type: video.mime }, timeoutMs: UPLOAD_TIMEOUT_MS });
       const id = typeof uploaded.body?.id === 'string' ? uploaded.body.id : '';
       if (!VIDEO_ID.test(id)) return { kind: 'unknown', code: 'NO_VIDEO_ID' };
+      if (thumbnail) await this.setThumbnail(id, s.accessToken, thumbnail);
       return { kind: 'accepted', externalId: id, url: `https://www.youtube.com/watch?v=${id}` };
     } catch (error) {
       return publishResult(error);
+    }
+  }
+
+  // thumbnails.set with the cover's bytes. The video is out already, so a refused thumbnail (a channel not allowed
+  // custom thumbnails, an image over 2 MB) never fails the post: it is logged, and the video keeps YouTube's own.
+  private async setThumbnail(videoId: string, token: string, image: Uint8Array): Promise<void> {
+    try {
+      await this.client.call('POST', `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?uploadType=media&videoId=${videoId}`, token, { bytes: { data: image, type: coverImageType(image) } });
+    } catch (error) {
+      const reason = error instanceof YouTubeError ? (error.reason ?? `HTTP_${error.status}`) : 'NETWORK';
+      console.warn(`[youtube] thumbnail of video ${videoId} not set: ${reason}`);
     }
   }
 
