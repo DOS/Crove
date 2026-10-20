@@ -211,6 +211,8 @@ const schema = z.object({
   // PUBLIC_URL/channels/oauth/linkedin/callback.
   CHANNEL_LINKEDIN_CLIENT_ID: optional,
   CHANNEL_LINKEDIN_CLIENT_SECRET: optional,
+  // LinkedIn post counts (#797): true once the LinkedIn app has member post analytics (r_member_postAnalytics).
+  CHANNEL_LINKEDIN_ANALYTICS: z.enum(['true', 'false']).default('false'),
   // The deployment's Google Cloud project for YouTube uploads (YouTube Data API v3, an OAuth web client), S9. Callback
   // URL: PUBLIC_URL/channels/oauth/youtube/callback.
   CHANNEL_GOOGLE_CLIENT_ID: optional,
@@ -229,6 +231,8 @@ const schema = z.object({
   // Callback URL: PUBLIC_URL/channels/oauth/x/callback.
   CHANNEL_X_CLIENT_ID: optional,
   CHANNEL_X_CLIENT_SECRET: optional,
+  // X post counts (#797): every read is billed by X, so the metrics sweep reads X posts only when this is true.
+  CHANNEL_X_METRICS: z.enum(['true', 'false']).default('false'),
   // Requests per minute per signed-in user on /api (429 RATE_LIMITED with Retry-After past it), per API process; see
   // rate-limit.ts. 0 turns it off, for a deployment whose edge (proxy, CDN or WAF) limits per user instead.
   API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(0).max(999_999).default(600),
