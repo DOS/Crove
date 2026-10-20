@@ -87,7 +87,7 @@ import { createInviteMailSender } from './invite-mail.ts';
 import { pgBossSchemaVersion } from './jobs-schema.ts';
 import type { MailProvider } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
-import { reviewAnswer, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
+import { reviewAnswer, reviewFile, reviewMedia, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_FILES_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
 import { reportView, REPORT_VIEWS_PER_MINUTE } from './report-link.ts';
 import { BIO_HITS_PER_MINUTE, BIO_PAGE_CSP, bioGo, bioImage, bioView, renderBioPage } from './bio-page.ts';
 import { STATUS_PAGE_CSP, readStatusFile, renderStatusPage, statusView, type ProbeStatus } from './status-page.ts';
@@ -131,7 +131,7 @@ export interface HttpDeps {
   // Per-user request limit on /api (issue #162). Default: built from API_RATE_LIMIT_PER_MINUTE; null turns it off.
   rateLimiter?: RateLimiter | null;
   // Per-client budgets of the public review page (#589). Unset: REVIEW_VIEWS_PER_MINUTE and REVIEW_ANSWERS_PER_MINUTE.
-  reviewLimits?: { views: RateLimiter; answers: RateLimiter };
+  reviewLimits?: { views: RateLimiter; answers: RateLimiter; files?: RateLimiter };
   // The public report page's budget per client (#643). Unset: REPORT_VIEWS_PER_MINUTE.
   reportLimit?: RateLimiter;
   // The per-client budget of link-in-bio pages, their links and images (#707), replaceable in tests.
@@ -633,6 +633,58 @@ export function createHttpApp(deps: HttpDeps) {
         if (!image) return notFound(c);
         return new Response(body(image.bytes), {
           headers: { 'content-type': image.contentType, 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    // The post's images and video (#624): ids per channel, then each file by id, both for the link's token only.
+    const reviewFiles = deps.reviewLimits?.files ?? new RateLimiter({ perMinute: REVIEW_FILES_PER_MINUTE });
+    // Files read whole into memory (no download URL to hand out) at most this many at once, across every client: the
+    // route needs no account, so its memory is capped here, not only per request.
+    let reviewStreams = 0;
+    const REVIEW_STREAMS_MAX = 4;
+    app.post('/api/review/media', bodyLimit({ maxSize: 1024 }), async (c) => {
+      const limited = reviewBudget(c, reviewLimits.views);
+      if (limited) return limited;
+      c.header('cache-control', 'no-store');
+      try {
+        const media = await reviewMedia(runtime, await c.req.json().catch(() => null));
+        return media ? c.json({ channels: media }) : c.json({ code: 'REVIEW_LINK_INVALID', message: 'Liên kết duyệt không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    app.post('/api/review/file', bodyLimit({ maxSize: 1024 }), async (c) => {
+      const limited = reviewBudget(c, reviewFiles);
+      if (limited) return limited;
+      try {
+        if (reviewStreams >= REVIEW_STREAMS_MAX) return c.json({ code: 'RATE_LIMITED', message: 'Máy chủ đang bận, hãy thử lại sau ít giây', retryAfterSeconds: 2 }, 429);
+        reviewStreams += 1;
+        let file: Awaited<ReturnType<typeof reviewFile>>;
+        try {
+          file = await reviewFile(runtime, deps.store, await c.req.json().catch(() => null));
+        } finally {
+          reviewStreams -= 1;
+        }
+        if (!file) {
+          c.header('cache-control', 'no-store');
+          return c.json({ code: 'REVIEW_LINK_INVALID', message: 'Liên kết duyệt không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
+        }
+        // A presigned GET of the exact version: the page fetches it itself, without this request's headers.
+        if ('url' in file) {
+          c.header('cache-control', 'no-store');
+          return c.json({ url: file.url });
+        }
+        return new Response(body(file.bytes), {
+          headers: {
+            'content-type': file.type,
+            'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+            'content-security-policy': "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+            'x-content-type-options': 'nosniff',
+            'cache-control': 'no-store',
+            'referrer-policy': 'no-referrer',
+          },
         });
       } catch (error) {
         return problem(c, error);
