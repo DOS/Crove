@@ -11,7 +11,7 @@ import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, runCommentJob, runPublishJob, sweepAccounts, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, runCommentJob, runPublishJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders } from '@crove/mod-social';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
@@ -499,6 +499,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const evergreenTimer = deps.runtime.installed('social') ? setInterval(() => void evergreenSweep(), EVERGREEN_SWEEP_MS) : null;
   void evergreenSweep();
 
+  // Review reminders (#703): every 15 minutes, the posts whose review has waited a day or whose time is close.
+  let reminding = false;
+  const reminderSweep = async () => {
+    if (reminding) return;
+    reminding = true;
+    try {
+      const sent = await sweepReminders({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (sent > 0) console.log(`[social-reminders] reminded ${sent}`);
+    } catch (error) {
+      console.error('[social-reminders] sweep', error);
+    } finally {
+      reminding = false;
+    }
+  };
+  const reminderTimer = deps.runtime.installed('social') ? setInterval(() => void reminderSweep(), REMINDER_SWEEP_MS) : null;
+  if (reminderTimer) void reminderSweep();
+
   // Channel tokens are renewed before they expire (S6.4), whatever module uses the channel.
   const refreshers = channels?.refreshers ?? {};
   let refreshing = false;
@@ -723,6 +740,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     clearInterval(heartbeatTimer);
     if (socialTimer) clearInterval(socialTimer);
     if (evergreenTimer) clearInterval(evergreenTimer);
+    if (reminderTimer) clearInterval(reminderTimer);
     if (refreshTimer) clearInterval(refreshTimer);
     if (metricsTimer) clearInterval(metricsTimer);
     if (accountTimer) clearInterval(accountTimer);

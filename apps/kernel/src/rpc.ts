@@ -410,6 +410,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       },
       metrics: {
         summary: os.social.metrics.summary.handler(socialQuery('social.metrics.summary')),
+        insights: os.social.metrics.insights.handler(socialQuery('social.metrics.insights')),
         export: os.social.metrics.export.handler(socialCommand('social.metrics.export')),
       },
       labels: {
@@ -460,6 +461,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       policies: {
         list: os.social.policies.list.handler(socialQuery('social.channel.policies')),
         set: os.social.policies.set.handler(socialCommand('social.channel.set_policy')),
+        setReminders: os.social.policies.setReminders.handler(socialCommand('social.channel.set_reminders')),
       },
       channels: {
         waiting: os.social.channels.waiting.handler(socialQuery('social.channel.waiting')),

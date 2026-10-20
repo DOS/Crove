@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bestTimes, engagementOf, type PublishedSample } from '../src/domain/insights.ts';
+import { bestTimes, engagementOf, formatOf, hashtagsOf, median, whatWorks, type InsightSample, type PublishedSample } from '../src/domain/insights.ts';
 
 // 2026-10-13 is a Tuesday; 12:00 UTC is 19:00 in Ho Chi Minh City.
 const at = (day: number, hourUtc: number) => new Date(Date.UTC(2026, 9, day, hourUtc, 15)).toISOString();
@@ -38,5 +38,74 @@ describe('bestTimes', () => {
 
   it('counts reactions, comments, shares and saves, not views', () => {
     expect(engagementOf({ reactions: 3, comments: 2, shares: 1, saves: 4, views: 1000, impressions: 5000 })).toBe(10);
+  });
+});
+
+describe('what works (#705)', () => {
+  const at = (day: number, hour: number) => new Date(Date.UTC(2026, 9, 5 + day, hour, 0)).toISOString(); // 2026-10-05 is a Monday
+  const post = (variantId: string, engagement: number, over: Partial<InsightSample> = {}): InsightSample => ({
+    variantId,
+    connectionId: 'c1',
+    publishedAt: at(0, 9),
+    metrics: { reactions: engagement },
+    text: '',
+    labelIds: [],
+    format: 'text',
+    ...over,
+  });
+
+  it('reads hashtags the Vietnamese way, each once', () => {
+    expect(hashtagsOf('Khai trương #ĂnUống #ănuống, #cafe_sang và email a#b #2026 #')).toEqual(['ănuống', 'cafe_sang']);
+    expect(hashtagsOf('Ne\u0301t #Đà_Lạt')).toEqual(['đà_lạt']);
+  });
+
+  it('tells a format from the post type and the media', () => {
+    expect(formatOf(null, [])).toBe('text');
+    expect(formatOf(undefined, ['image/jpeg'])).toBe('image');
+    expect(formatOf(null, ['video/mp4'])).toBe('video');
+    expect(formatOf(null, ['image/jpeg', 'video/mp4'])).toBe('carousel');
+    expect(formatOf('story', ['image/jpeg'])).toBe('story');
+    expect(formatOf('reel', ['video/mp4'])).toBe('reel');
+  });
+
+  it('compares groups with the channel median, best and worst first', () => {
+    expect(median([])).toBe(0);
+    expect(median([5, 1, 3])).toBe(3);
+    expect(median([4, 1, 3, 2])).toBe(2.5);
+    const samples = [
+      post('v1', 10, { labelIds: ['sale'], format: 'image', text: '#giamgia', publishedAt: at(0, 9) }),
+      post('v2', 30, { labelIds: ['sale'], format: 'image', text: '#giamgia #moi', publishedAt: at(0, 9) }),
+      post('v3', 20, { format: 'video', text: '#giamgia', publishedAt: at(2, 20) }),
+      post('v4', 2, { format: 'text', publishedAt: at(2, 20) }),
+      post('v5', 4, { format: 'text', publishedAt: at(5, 12) }),
+      post('v6', 6, { format: 'text', publishedAt: at(5, 12) }),
+      // Not captured yet: left out.
+      post('v7', 0, { metrics: {} }),
+      post('w1', 50, { connectionId: 'c2' }),
+    ];
+    const [c1, c2] = whatWorks(samples, 'UTC', { top: 2 });
+    expect(c1).toMatchObject({ connectionId: 'c1', posts: 6, median: 8 });
+    expect(c1?.best).toEqual([
+      { variantId: 'v2', engagement: 30 },
+      { variantId: 'v3', engagement: 20 },
+    ]);
+    expect(c1?.worst).toEqual([
+      { variantId: 'v4', engagement: 2 },
+      { variantId: 'v5', engagement: 4 },
+    ]);
+    expect(c1?.byLabel).toEqual([{ key: 'sale', posts: 2, median: 20, ratio: 2.5 }]);
+    expect(c1?.byFormat.map((g) => [g.key, g.posts, g.median])).toEqual([
+      // A tie goes to the group with more posts.
+      ['image', 2, 20],
+      ['video', 1, 20],
+      ['text', 3, 4],
+    ]);
+    // Monday 9:00, Wednesday 20:00, Saturday 12:00 in UTC.
+    expect(c1?.byWeekday.map((g) => g.key)).toEqual(['1', '3', '6']);
+    expect(c1?.byHour.map((g) => g.key)).toEqual(['9', '20', '12']);
+    expect(c1?.byHashtag).toEqual([{ key: 'giamgia', posts: 3, median: 20, ratio: 2.5 }]);
+    // Too few posts for a worst list; a channel median of 0 has no ratios.
+    expect(c2).toMatchObject({ connectionId: 'c2', posts: 1, best: [{ variantId: 'w1', engagement: 50 }], worst: [] });
+    expect(whatWorks([post('z', 0)], 'UTC')[0]?.byFormat).toEqual([{ key: 'text', posts: 1, median: 0, ratio: null }]);
   });
 });

@@ -43,6 +43,8 @@ function useLine() {
         return t(`text.${n.kind}`, { provider });
       case 'channel_expired':
         return t('text.channel_expired', { channel: n.channel ?? provider });
+      case 'review_reminder':
+        return t(n.detail.stage === 'due' ? 'text.reminder_due' : 'text.reminder_waiting');
       default:
         return t(`text.${n.kind}`, { actor });
     }
