@@ -1375,7 +1375,7 @@ export const en = {
       approve: 'Approved',
       requestChanges: 'Needs changes',
       sendComment: 'Send the comment',
-      note: 'The team sees your name and answer. Approving here does not publish the post.',
+      note: 'The team, and anyone else with this link, sees your name and answer. Approving here does not publish the post.',
       earlier: 'Answers so far',
       thanks: { approved: 'Thank you: the team knows you approved.', changes_requested: 'Thank you: the team knows what to change.', comment: 'Thank you: your comment was sent.' },
       verdict: { approved: 'Approved', changes_requested: 'Needs changes', comment: 'Comment' },

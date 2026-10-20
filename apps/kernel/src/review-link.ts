@@ -10,11 +10,13 @@ export const REVIEW_ANSWERS_PER_MINUTE = 10;
 
 const zToken = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const zView = z.strictObject({ token: zToken });
+// No NUL: PostgreSQL text cannot hold it, and it would end as a server error rather than a refusal.
+const zText = (max: number) => z.string().trim().max(max).refine((s) => !s.includes('\u0000'), 'NUL is not allowed');
 const zAnswer = z.strictObject({
   token: zToken,
-  name: z.string().trim().min(1).max(100),
+  name: zText(100).pipe(z.string().min(1)),
   verdict: z.enum(['approved', 'changes_requested', 'comment']),
-  body: z.string().trim().max(2000).optional(),
+  body: zText(2000).optional(),
 });
 
 export interface ReviewPage {
@@ -53,7 +55,7 @@ export async function reviewAnswer(runtime: Runtime, body: unknown): Promise<{ r
     } catch (error) {
       const code = (error as { code?: unknown }).code;
       if (code === '54000') throw new DomainError('REVIEW_ANSWER_LIMIT', 429, 'Liên kết này đã nhận đủ số ý kiến tối đa');
-      if (code === '22023') throw new DomainError('REVIEW_ANSWER_INVALID', 422, 'Hãy nhập tên của bạn; một bình luận cần có nội dung');
+      if (code === '22023' || code === '22021' || code === '22P05') throw new DomainError('REVIEW_ANSWER_INVALID', 422, 'Hãy nhập tên của bạn; một bình luận cần có nội dung');
       throw error;
     }
   });

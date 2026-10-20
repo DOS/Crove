@@ -469,6 +469,8 @@ export function createHttpApp(deps: HttpDeps) {
     const reviewBudget = (c: Context, bucket: RateLimiter) => {
       const decision = bucket.take(clientBucket(clientIp(c, config.TRUSTED_PROXY_HOPS)));
       if (decision.allowed) return null;
+      // Behind a proxy that is not trusted, every client shares one budget: say so, as the auth and stream routes do.
+      warnIfUntrustedProxy(c, config.TRUSTED_PROXY_HOPS);
       c.header('retry-after', String(decision.retryAfterSeconds));
       return c.json({ code: 'RATE_LIMITED', message: 'Bạn gửi quá nhiều yêu cầu, hãy thử lại sau', retryAfterSeconds: decision.retryAfterSeconds }, 429);
     };

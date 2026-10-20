@@ -1376,7 +1376,7 @@ export const vi = {
       approve: 'Đồng ý',
       requestChanges: 'Cần sửa',
       sendComment: 'Gửi góp ý',
-      note: 'Nhóm sẽ thấy tên và ý kiến của bạn. Đồng ý ở đây không làm bài được đăng ngay.',
+      note: 'Nhóm, và bất kỳ ai có liên kết này, sẽ thấy tên và ý kiến của bạn. Đồng ý ở đây không làm bài được đăng ngay.',
       earlier: 'Các ý kiến đã gửi',
       thanks: { approved: 'Cảm ơn bạn: nhóm đã biết bạn đồng ý.', changes_requested: 'Cảm ơn bạn: nhóm đã biết cần sửa gì.', comment: 'Cảm ơn bạn: góp ý đã được gửi.' },
       verdict: { approved: 'Đồng ý', changes_requested: 'Cần sửa', comment: 'Góp ý' },
