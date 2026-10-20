@@ -335,6 +335,18 @@ suite('social posts on PostgreSQL (S3)', () => {
     expect((await get(o, o.owner, queued.id)).variants[0]?.queuePaused).toBe(false);
   });
 
+  it('lists the posts that need someone: a channel failed, needs attention or waits paused (#579)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const posts = await Promise.all(['Lỗi', 'Cần xem', 'Tạm dừng', 'Bình thường'].map((body) => approved(o, [conn], body)));
+    const statuses = ['failed', 'needs_attention', 'paused'];
+    for (const [i, status] of statuses.entries()) {
+      await admin((c) => c.query('UPDATE crove_social.post_variant SET status = $2 WHERE post_id = $1', [posts[i]?.id, status]));
+    }
+    const listed = await rt.query<PostView[]>('social.post.list', { stage: 'attention' }, { actor: asUser(o.viewer), orgId: o.orgId });
+    expect(listed.map((p) => p.id).sort()).toEqual(posts.slice(0, 3).map((p) => p.id).sort());
+  });
+
   it('stores an override equal to the base, and inheriting again, though the effective content does not change', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);

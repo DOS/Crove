@@ -41,6 +41,8 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.post_comment',
+  'crove_social.snippet',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -490,6 +492,16 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // An internal comment on a post (#582), by a member, never published.
+  'crove_social.post_comment': {
+    make: (o) => {
+      const post = socialPostRow(o);
+      return {
+        setup: [{ table: 'crove_social.post', values: post }],
+        row: { org_id: o.id, post_id: post.id, author_user_id: o.owner, body: 'RLS matrix comment' },
+      };
+    },
+  },
   // An image of a post (issue #372): a file of the org, at a position in the post's media list.
   'crove_social.post_media': {
     make: (o) => {
@@ -523,6 +535,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // A saved snippet of text (#584): hashtags, a signature or a whole post to start from.
+  'crove_social.snippet': { make: (o) => ({ row: { org_id: o.id, name: `rls-${tag()}`, body: '#rls', created_by: o.owner } }) },
 };
 
 function insertSql(row: Row): { text: string; values: Array<string | number> } {
