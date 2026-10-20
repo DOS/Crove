@@ -158,12 +158,17 @@ type Hop = { redirect: string } | { response: EgressResponse };
 function once(url: URL, target: { address: string; family: number }, options: EgressOptions, deadline: number): Promise<Hop> {
   const client = url.protocol === 'https:' ? https : http;
   const host = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
+  // Before the request exists: a deadline already past throws here, with nothing to clean up.
+  const ms = remaining(deadline);
   return new Promise<Hop>((resolve, reject) => {
     let settled = false;
+    // Every way out (an answer, a redirect, a refusal, the deadline) closes the socket: a server that keeps a
+    // connection open after a redirect, or after the byte limit, holds nothing of ours.
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      req.destroy();
       fn();
     };
     const req = client.request(
@@ -190,7 +195,6 @@ function once(url: URL, target: { address: string; family: number }, options: Eg
         const status = res.statusCode ?? 0;
         const location = res.headers.location;
         if (status >= 300 && status < 400 && location) {
-          res.resume();
           finish(() => resolve({ redirect: location }));
           return;
         }
@@ -237,7 +241,7 @@ function once(url: URL, target: { address: string; family: number }, options: Eg
     const timer = setTimeout(() => {
       req.destroy();
       finish(() => reject(new EgressError('timeout', 'took too long')));
-    }, remaining(deadline));
+    }, ms);
     req.on('error', () => finish(() => reject(new EgressError('network', 'the connection failed'))));
     req.end();
   });

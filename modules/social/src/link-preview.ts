@@ -90,8 +90,14 @@ export const linkPreviewRequest = defineCommand({
       : await ctx.trx
           .insertInto('crove_social.link_preview')
           .values({ org_id: ctx.orgId, url, url_sha256: key, status: 'pending', requested_at: ctx.now, created_at: ctx.now })
+          .onConflict((oc) => oc.columns(['org_id', 'url_sha256']).doNothing())
           .returning(['id', ...COLUMNS])
-          .executeTakeFirstOrThrow();
+          .executeTakeFirst();
+    // Asked for at the same moment by someone else, who queued it: theirs is the answer.
+    if (!saved) {
+      const theirs = await ctx.trx.selectFrom('crove_social.link_preview').select(COLUMNS).where('org_id', '=', ctx.orgId).where('url_sha256', '=', key).executeTakeFirstOrThrow();
+      return view(theirs);
+    }
     await ctx.emit('social.link_preview.requested', { preview_id: saved.id });
     return view(saved);
   },

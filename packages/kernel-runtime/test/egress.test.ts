@@ -39,6 +39,7 @@ describe('egressTarget', () => {
 describe('guardedFetch', () => {
   let server: Server;
   let base = '';
+  const held = { closed: false };
   const local: Partial<EgressOptions> = { allowed: (a) => a === '127.0.0.1', anyPort: true };
   const opts = (o: Partial<EgressOptions> = {}): EgressOptions => ({ timeoutMs: 2000, maxBytes: 1024, overLimit: 'truncate', ...local, ...o });
 
@@ -69,6 +70,11 @@ describe('guardedFetch', () => {
       } else if (path === '/gzip') {
         res.writeHead(200, { 'content-type': 'text/html', 'content-encoding': 'gzip' });
         res.end('not really gzip');
+      } else if (path === '/redirect-hold') {
+        // A redirect whose body never ends.
+        req.socket.once('close', () => (held.closed = true));
+        res.writeHead(302, { location: '/page', 'content-type': 'text/plain' });
+        res.write('x');
       } else if (path === '/slow') {
         // Never answers.
       } else {
@@ -118,6 +124,12 @@ describe('guardedFetch', () => {
     expect(await code(guardedFetch(`${base}/metadata`, opts()))).toBe('blocked');
     expect(await code(guardedFetch(`${base}/file`, opts()))).toBe('invalid_url');
     expect(await code(guardedFetch(`${base}/loop`, opts()))).toBe('redirects');
+  });
+
+  it('closes the connection of a redirect that keeps it open', async () => {
+    await guardedFetch(`${base}/redirect-hold`, opts());
+    await new Promise((r) => setTimeout(r, 100));
+    expect(held.closed).toBe(true);
   });
 
   it('cuts a body at the limit, or refuses it', async () => {
