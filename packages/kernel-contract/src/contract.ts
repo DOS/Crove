@@ -180,7 +180,7 @@ export const contract = {
             to: z.iso.datetime({ offset: true }).optional(),
             status: z.enum(SOCIAL_POST_STATUSES).optional(),
             // The Social home's lists: a channel in review; drafts with none in review; went out or stopped.
-            stage: z.enum(['review', 'drafts', 'done']).optional(),
+            stage: z.enum(['review', 'drafts', 'done', 'attention']).optional(),
             connectionId: zId.optional(),
             search: z.string().trim().min(1).max(200).optional(),
             // The last post of the previous page (newest change first).
