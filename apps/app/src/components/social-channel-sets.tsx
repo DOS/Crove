@@ -68,7 +68,11 @@ export function ChannelSetsCard({ channels, canEdit }: { channels: readonly Chan
           <div className="flex flex-wrap gap-3">
             {channels.map((c) => (
               <label key={c.id} className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Checkbox checked={picked.includes(c.id)} onCheckedChange={(on) => setPicked(on === true ? [...picked, c.id] : picked.filter((id) => id !== c.id))} />
+                <Checkbox
+                  checked={picked.includes(c.id)}
+                  // A set holds at most 20 channels, as the server allows.
+                  disabled={!picked.includes(c.id) && picked.length >= 20}
+                  onCheckedChange={(on) => setPicked(on === true ? [...picked, c.id] : picked.filter((id) => id !== c.id))} />
                 {names.get(c.id)}
               </label>
             ))}

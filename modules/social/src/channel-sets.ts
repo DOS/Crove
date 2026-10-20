@@ -46,7 +46,8 @@ export const channelSetSave = defineCommand({
       .selectFrom('crove_social.channel_set')
       .select('id')
       .where('org_id', '=', ctx.orgId)
-      .where((w) => w(w.fn('lower', ['name']), '=', name.toLowerCase()))
+      // lower() on both sides, so the check agrees with the unique index whatever the collation.
+      .where((w) => w(w.fn('lower', ['name']), '=', w.fn('lower', [w.val(name)])))
       .executeTakeFirst();
     if (clash && clash.id !== input.setId) throw new DomainError('CHANNEL_SET_NAME_TAKEN', 409, 'Đã có bộ kênh tên này');
     const values = { name, connection_ids: ids, updated_by: userId, updated_at: ctx.now };
