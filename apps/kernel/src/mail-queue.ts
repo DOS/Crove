@@ -79,7 +79,7 @@ export async function sweepMail(boss: Sender, workerDb: Db, runtime: Runtime, ma
       await boss.send(queue, { orgId: row.org_id, messageId: row.message_id } satisfies MailJob, { singletonKey: row.message_id, retryLimit: 2, retryDelay: 30 });
       queued++;
     } catch (error) {
-      console.error(`[mail] \${row.message_id.slice(0, 8)} not queued: \${mailErrorCode(error)}`);
+      console.error(`[mail] ${row.message_id.slice(0, 8)} not queued: ${mailErrorCode(error)}`);
     }
   }
   return queued;
