@@ -46,6 +46,7 @@ const PENDING_TABLES = new Set<string>([
   'crove_social.notification',
   'crove_social.notification_mute',
   'crove_social.post_label',
+  'crove_social.report_link',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -590,6 +591,12 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         row: { org_id: o.id, queue_id: queue.id, weekday: 1, minute: 540 },
       };
     },
+  },
+  // A client report link of a period (#643): the SHA-256 of its token, the period, the channels (none: all), an expiry.
+  'crove_social.report_link': {
+    make: (o) => ({
+      row: { org_id: o.id, id: randomUUID(), token_sha256: hex64(), period_start: '2026-10-01T00:00:00Z', period_end: '2026-11-01T00:00:00Z', created_by: o.owner, expires_at: new Date(Date.now() + 86_400_000).toISOString() },
+    }),
   },
   // What a client said through a review link (#589): only the review definer adds rows, for a client with the link;
   // members read them.
