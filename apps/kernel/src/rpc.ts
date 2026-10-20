@@ -132,7 +132,7 @@ function telegramFailure(code: string | undefined): DomainError | null {
   if (code === 'TELEGRAM_BOT_CANNOT_POST') return new DomainError('TELEGRAM_BOT_CANNOT_POST', 422, 'Bot chưa được đăng bài trong kênh; hãy đặt bot làm quản trị viên có quyền đăng bài');
   return null;
 }
-const PROVIDER_LABELS: Record<string, string> = { sandbox: 'test channel', facebook_page: 'Facebook Page', instagram: 'Instagram', zalo_oa: 'Zalo Official Account (article)', tiktok: 'TikTok', youtube: 'YouTube', threads: 'Threads', linkedin: 'LinkedIn', x: 'X', bluesky: 'Bluesky', google_business: 'Google Business Profile', telegram: 'Telegram', mastodon: 'Mastodon' };
+const PROVIDER_LABELS: Record<string, string> = { sandbox: 'test channel', facebook_page: 'Facebook Page', instagram: 'Instagram', zalo_oa: 'Zalo Official Account (article)', tiktok: 'TikTok', youtube: 'YouTube', threads: 'Threads', linkedin: 'LinkedIn', x: 'X', bluesky: 'Bluesky', google_business: 'Google Business Profile', telegram: 'Telegram', mastodon: 'Mastodon', pinterest: 'Pinterest' };
 
 export interface RpcChannels {
   // Seals tokens before kernel.channel.connect stores them; never opens one in the API.
