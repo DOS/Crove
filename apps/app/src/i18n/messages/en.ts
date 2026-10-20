@@ -1386,6 +1386,7 @@ export const en = {
         comment: 'Internal comments',
         client_answer: 'Client answers',
         assigned: 'Posts assigned to you',
+        review_reminder: 'Reminders of posts waiting for review',
       },
       text: {
         review_requested: '{actor} sent a post for review',
@@ -1400,6 +1401,8 @@ export const en = {
         client_changes_requested: 'Client {name} wants changes',
         client_comment: 'Client {name} left a note',
         assigned: '{actor} assigned you a post',
+        reminder_waiting: 'A post has waited more than 24 hours for your review',
+        reminder_due: 'A post goes out within 24 hours and is not approved yet',
       },
     },
     growth: {
@@ -1977,6 +1980,8 @@ export const en = {
     libraryUsageNone: 'No post uses this image yet.',
     policyTitle: 'Review before posting',
     policyApprovals: '{count} approvers',
+    remindersLabel: 'Remind reviewers of posts waiting long',
+    remindersHint: 'A post waiting for review over 24 hours, or less than 24 hours before its time and still not approved, reminds the owners and admins who have not approved it, in their notifications.',
     policyHint: 'Every post for this channel needs this many different people to approve its current content before it can be scheduled. Lowering it approves posts in review that already have enough approvals; raising it applies to posts not approved yet, and posts already approved or scheduled stay as they are.',
     policyAdmins: 'Owners and admins set the number of approvers.',
     reviewSteps: 'Approved {given}/{required}',

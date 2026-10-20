@@ -22,3 +22,4 @@ export * from './comments.ts';
 export * from './accounts.ts';
 export * from './link-preview.ts';
 export * from './notifications.ts';
+export * from './reminders.ts';

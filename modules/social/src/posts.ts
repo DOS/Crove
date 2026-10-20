@@ -24,6 +24,7 @@ import { accountCommands, accountQueries } from './accounts.ts';
 import { reportLinkCommands, reportLinkQueries } from './report-links.ts';
 import { linkPreviewCommands, linkPreviewQueries } from './link-preview.ts';
 import { notificationCommands, notificationQueries } from './notifications.ts';
+import { reminderCommands } from './reminders.ts';
 import { assignCommands } from './assign.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
@@ -1228,6 +1229,7 @@ export const socialCommands = [
   ...reportLinkCommands,
   ...linkPreviewCommands,
   ...notificationCommands,
+  ...reminderCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
 // org shows, or a variant's video cover, so the job never reads another kind of file through it.
