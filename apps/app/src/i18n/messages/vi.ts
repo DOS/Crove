@@ -1892,6 +1892,15 @@ export const vi = {
     },
     empty: { review: 'Không có bài nào chờ duyệt', attention: 'Không có bài nào lỗi hay cần bạn xem', drafts: 'Chưa có bản nháp', done: 'Chưa có bài nào được đăng', metrics: 'Chưa có bài nào đăng trong khoảng này' },
     metricsDays: '{days} ngày',
+    grid: {
+      title: 'Lưới Instagram',
+      hint: 'Trang cá nhân sẽ trông thế nào: bài sắp đăng (viền nét đứt) nằm trước các bài vừa đăng, mới nhất ở đầu. Không tính Story.',
+      hintDrag: 'Trang cá nhân sẽ trông thế nào: bài sắp đăng (viền nét đứt) nằm trước các bài vừa đăng, mới nhất ở đầu. Kéo một bài đã lên lịch thả vào bài đã lên lịch khác để đổi giờ đăng của hai bài.',
+      channel: 'Kênh Instagram',
+      upcoming: 'Sắp đăng',
+      published: 'Đã đăng',
+      empty: 'Chưa có bài Instagram nào có ảnh hoặc video trong hai tháng qua và bốn tháng tới.',
+    },
     calendar: {
       previous: 'Trước',
       next: 'Sau',

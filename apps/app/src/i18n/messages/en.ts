@@ -1892,6 +1892,15 @@ export const en = {
     },
     empty: { review: 'Nothing waits for review', attention: 'Nothing failed or needs you', drafts: 'No drafts yet', done: 'Nothing published yet', metrics: 'Nothing published in this period' },
     metricsDays: '{days} days',
+    grid: {
+      title: 'Instagram grid',
+      hint: 'How the profile grid will look: posts to come (dashed) ahead of the latest ones out, newest first. Stories are left out.',
+      hintDrag: 'How the profile grid will look: posts to come (dashed) ahead of the latest ones out, newest first. Drag a scheduled post onto another scheduled one to swap their times.',
+      channel: 'Instagram channel',
+      upcoming: 'To come',
+      published: 'Out',
+      empty: 'No Instagram posts with images or video in the last two months or the next four.',
+    },
     calendar: {
       previous: 'Previous',
       next: 'Next',
