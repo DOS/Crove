@@ -717,6 +717,7 @@ export interface SocialChannelPolicyTable {
   approvals_required: Generated<number>;
   updated_by: string;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  review_reminders: Generated<boolean>;
 }
 
 /** crove_social.label */
@@ -883,6 +884,9 @@ export interface SocialPostVariantTable {
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
   paused_connection_version: ColumnType<Date | null, Date | string | null, Date | string | null>;
   media: ColumnType<unknown, string | null | undefined, string | null>;
+  review_since: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  reminded_waiting_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  reminded_due_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.queue_slot */

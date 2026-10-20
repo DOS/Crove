@@ -1386,6 +1386,7 @@ export const vi = {
         comment: 'Bình luận nội bộ',
         client_answer: 'Ý kiến của khách',
         assigned: 'Bài được giao cho bạn',
+        review_reminder: 'Nhắc bài đang chờ duyệt',
       },
       text: {
         review_requested: '{actor} gửi một bài cần duyệt',
@@ -1400,6 +1401,8 @@ export const vi = {
         client_changes_requested: 'Khách {name} muốn sửa bài',
         client_comment: 'Khách {name} đã góp ý',
         assigned: '{actor} giao cho bạn một bài',
+        reminder_waiting: 'Có bài đã chờ bạn duyệt hơn 24 giờ',
+        reminder_due: 'Có bài sắp đến giờ đăng nhưng chưa được duyệt',
       },
     },
     crop: {
@@ -1920,6 +1923,8 @@ export const vi = {
     libraryUsageNone: 'Chưa bài nào dùng ảnh này.',
     policyTitle: 'Duyệt trước khi đăng',
     policyApprovals: '{count} người duyệt',
+    remindersLabel: 'Nhắc người duyệt khi bài chờ lâu',
+    remindersHint: 'Bài chờ duyệt quá 24 giờ, hoặc còn dưới 24 giờ là đến giờ đăng mà chưa duyệt, sẽ được nhắc trong mục Thông báo của chủ sở hữu và quản trị viên chưa duyệt bài.',
     policyHint: 'Mỗi bài cho kênh này cần ngần ấy người khác nhau duyệt đúng nội dung hiện tại rồi mới lên lịch được. Hạ số này thì bài đang chờ đã đủ người duyệt sẽ được duyệt ngay; nâng số này thì chỉ áp dụng cho bài chưa duyệt, bài đã duyệt hoặc đã lên lịch giữ nguyên.',
     policyAdmins: 'Chủ sở hữu và quản trị viên đặt số người duyệt.',
     reviewSteps: 'Đã duyệt {given}/{required}',

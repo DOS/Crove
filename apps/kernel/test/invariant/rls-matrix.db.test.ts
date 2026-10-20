@@ -472,7 +472,6 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => ({ row: { org_id: o.id, slug: `rls-${tag()}`, name: 'RLS matrix', created_by: o.owner } }),
   },
   'crove_kernel.tenant_member': { make: (o) => ({ row: { org_id: o.id, user_id: o.freshUser(), role: 'member' } }) },
-  // The review policy of a channel (S9, issue #394): how many people approve a variant, one row per connection.
   // A channel's daily count of followers (#645), recorded by the worker: one per channel and day.
   'crove_social.account_snapshot': {
     make: (o) => {
@@ -483,6 +482,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // The review policy of a channel (S9, issue #394): how many people approve a variant, and whether its reviewers
+  // are reminded (#703), one row per connection.
   'crove_social.channel_policy': {
     make: (o) => {
       const connection = channelConnectionRow(o);

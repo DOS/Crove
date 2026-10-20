@@ -3,13 +3,16 @@
 // and never trusts the job): a post sent to review tells the owners and admins; a review decision tells the author; a
 // channel that failed or needs attention tells the owners, the admins and the author; an expired channel tells the
 // owners and admins; an internal comment or a client's answer tells the author and the people who commented before;
-// an assignment tells the assignee. Never the person who acted, never a kind the person turned off, and only people
+// an assignment tells the assignee; a reminder of a post still waiting for review (#703) tells the owners and admins who
+// have not approved its current content yet. Never the person who acted, never a kind the person turned off, and only people
 // who are members when it is written. Each member reads and marks only their own (a restrictive policy).
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import { SOCIAL_NOTIFICATION_KINDS, type MemberRole, type SocialNotificationKind } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
+import { approvalsInRound } from './domain/approval.ts';
+import { decisionsOf } from './policy.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // The newest notifications a read returns, and the unread count it reports at most.
@@ -29,6 +32,7 @@ export const NOTIFYING_EVENTS = [
   'social.post.commented',
   'social.review.answered',
   'social.post.assigned',
+  'social.review.reminder',
 ] as const;
 
 function requireUser(ctx: Pick<CommandContext, 'actor'>): string {
@@ -141,6 +145,29 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
       if (!(await authorOf(ctx, e.data.post_id))) return null;
       return { ...base, kind: 'assigned', users: [e.data.assignee_user_id], postId: e.data.post_id };
     }
+    case 'social.review.reminder': {
+      const e = z.object({ post_id: zId, stage: z.enum(['waiting', 'due']), variant_ids: z.array(zId).min(1).max(100) }).safeParse(payload);
+      if (!e.success) return null;
+      // Still waiting: decided or edited since, there is nothing to remind of.
+      const waiting = await ctx.trx
+        .selectFrom('crove_social.post_variant')
+        .select(['id', 'revision', 'content_hash'])
+        .where('org_id', '=', ctx.orgId)
+        .where('post_id', '=', e.data.post_id)
+        .where('id', 'in', e.data.variant_ids)
+        .where('status', '=', 'in_review')
+        .execute();
+      if (waiting.length === 0) return null;
+      // A reviewer who already approved the current content of every waiting channel has nothing left to do.
+      const decisions = await decisionsOf(
+        ctx.trx,
+        ctx.orgId,
+        waiting.map((v) => v.id),
+      );
+      const done = (user: string) => waiting.every((v) => approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash }).includes(user));
+      const users = (await deciders(ctx)).filter((u) => !done(u));
+      return { ...base, kind: 'review_reminder', users, postId: e.data.post_id, detail: { stage: e.data.stage } };
+    }
     default:
       return null;
   }
@@ -189,6 +216,12 @@ export const notificationDispatch = defineCommand({
       .onConflict((oc) => oc.columns(['org_id', 'event_id', 'user_id']).doNothing())
       .returning('id')
       .execute();
+    // A post's newest reminder replaces the ones before it.
+    if (plan.kind === 'review_reminder' && plan.postId) {
+      await sql`
+        DELETE FROM crove_social.notification
+        WHERE org_id = ${ctx.orgId} AND user_id = ANY(${users}::uuid[]) AND kind = 'review_reminder' AND post_id = ${plan.postId} AND event_id <> ${event.id}`.execute(ctx.trx);
+    }
     // The recipients' old ones go.
     await sql`
       DELETE FROM crove_social.notification
@@ -215,7 +248,10 @@ export interface NotificationItem {
 }
 
 // The viewer's newest notifications, how many are unread (up to NOTIFICATION_UNREAD_CAP + 1) and the kinds they
-// turned off.
+// turned off. A review reminder shows only while its post still has a channel in the round of review it was about.
+const STILL_WAITING = sql`(n.kind <> 'review_reminder' OR EXISTS (
+  SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = n.org_id AND v.post_id = n.post_id AND v.status = 'in_review'
+    AND v.review_since <= n.created_at))`;
 export const notificationList = defineQuery({
   name: 'social.notification.list',
   input: z.object({}),
@@ -239,12 +275,12 @@ export const notificationList = defineQuery({
       FROM crove_social.notification n
       LEFT JOIN crove_social.post p ON p.org_id = n.org_id AND p.id = n.post_id
       LEFT JOIN crove_kernel.channel_connection c ON c.org_id = n.org_id AND c.id = n.connection_id
-      WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me}
+      WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me} AND ${STILL_WAITING}
       ORDER BY n.created_at DESC, n.id DESC
       LIMIT ${NOTIFICATION_LIST_LIMIT}`.execute(ctx.trx);
     const unread = await sql<{ n: number }>`
       SELECT count(*)::int AS n FROM (
-        SELECT 1 FROM crove_social.notification WHERE org_id = ${ctx.orgId} AND user_id = ${me} AND read_at IS NULL LIMIT ${NOTIFICATION_UNREAD_CAP + 1}
+        SELECT 1 FROM crove_social.notification n WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me} AND n.read_at IS NULL AND ${STILL_WAITING} LIMIT ${NOTIFICATION_UNREAD_CAP + 1}
       ) u`.execute(ctx.trx);
     const muted = await ctx.trx.selectFrom('crove_social.notification_mute').select('kind').where('org_id', '=', ctx.orgId).where('user_id', '=', me).orderBy('kind').execute();
     const ids = [...new Set(rows.map((r) => r.actor_user_id).filter((u): u is string => u !== null))];

@@ -132,6 +132,35 @@ export const policySet = defineCommand({
   },
 });
 
+// Whether the channel's reviewers are reminded of posts waiting for review (#703); on unless turned off.
+export const remindersSet = defineCommand({
+  name: 'social.channel.set_reminders',
+  input: z.strictObject({ connectionId: zId, reviewReminders: z.boolean() }),
+  risk: 'R1',
+  access: ADMINS,
+  target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const userId = ctx.actor.userId;
+    const connection = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .where('status', '<>', 'revoked')
+      .executeTakeFirst();
+    if (!connection) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh này');
+    // A new policy row keeps the default of one approval.
+    await ctx.trx
+      .insertInto('crove_social.channel_policy')
+      .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, review_reminders: input.reviewReminders, updated_by: userId })
+      .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id']).doUpdateSet({ review_reminders: input.reviewReminders, updated_by: userId, updated_at: ctx.now }))
+      .execute();
+    ctx.audit({ connection_id: input.connectionId, review_reminders: input.reviewReminders });
+    return { connectionId: input.connectionId, reviewReminders: input.reviewReminders };
+  },
+});
+
 export const policyList = defineQuery({
   name: 'social.channel.policies',
   input: z.object({}),
@@ -141,12 +170,12 @@ export const policyList = defineQuery({
     const rows = await ctx.trx
       .selectFrom('crove_social.channel_policy as p')
       .innerJoin('crove_kernel.channel_connection as c', (j) => j.onRef('c.org_id', '=', 'p.org_id').onRef('c.id', '=', 'p.channel_connection_id'))
-      .select(['p.channel_connection_id', 'p.approvals_required', 'p.updated_by', 'p.updated_at'])
+      .select(['p.channel_connection_id', 'p.approvals_required', 'p.review_reminders', 'p.updated_by', 'p.updated_at'])
       .where('p.org_id', '=', ctx.orgId)
       .where('c.status', '<>', 'revoked')
       .orderBy('p.channel_connection_id')
       .execute();
-    return rows.map((r) => ({ connectionId: r.channel_connection_id, approvalsRequired: r.approvals_required, updatedBy: r.updated_by, updatedAt: r.updated_at.toISOString() }));
+    return rows.map((r) => ({ connectionId: r.channel_connection_id, approvalsRequired: r.approvals_required, reviewReminders: r.review_reminders, updatedBy: r.updated_by, updatedAt: r.updated_at.toISOString() }));
   },
 });
 
@@ -169,5 +198,5 @@ export const channelWaiting = defineQuery({
   },
 });
 
-export const policyCommands = [policySet];
+export const policyCommands = [policySet, remindersSet];
 export const policyQueries = [policyList, channelWaiting];
