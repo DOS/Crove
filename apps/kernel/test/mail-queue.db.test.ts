@@ -40,7 +40,7 @@ const queueTest = defineCommand({
 
 const TEMPLATES: MailTemplates = {
   'kernel.mail_test': {
-    render: ({ subject, payload, publicUrl }) =>
+    render: async ({ subject, payload, publicUrl }) =>
       typeof payload.reach === 'number' ? { subject: subject ?? 'Báo cáo', text: `Tiếp cận ${payload.reach}\n${publicUrl}`, html: `<p>Tiếp cận ${payload.reach}</p>` } : null,
   },
 };

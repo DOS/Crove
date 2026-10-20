@@ -30,9 +30,18 @@ export interface MailJob {
 }
 
 // How a template turns a mail's merge data into its content; null when the data is not what the template needs (the
-// mail fails with TEMPLATE_DATA). The subject the command stored comes first; a template may build its own.
+// mail fails with TEMPLATE_DATA). The subject the command stored comes first; a template may build its own. A mail
+// whose link must carry a secret (a report link's token) gets it here, at send time, through a command of the mail's
+// org (`execute`, as the worker): the secret is then only in the mail, never in the queue.
+export interface MailTemplateInput {
+  messageId: string;
+  subject: string | null;
+  payload: Readonly<Record<string, unknown>>;
+  publicUrl: string;
+  execute<T>(command: string, input: unknown): Promise<T>;
+}
 export interface MailTemplate {
-  render(input: { subject: string | null; payload: Readonly<Record<string, unknown>>; publicUrl: string }): { subject: string; text: string; html: string } | null;
+  render(input: MailTemplateInput): Promise<{ subject: string; text: string; html: string } | null>;
 }
 export type MailTemplates = Readonly<Record<string, MailTemplate>>;
 
@@ -80,7 +89,7 @@ export async function runMailJob(deps: MailQueueDeps, job: MailJob): Promise<Mai
   const ctx = { actor: ACTOR, orgId: job.orgId };
   const begun = await deps.runtime.execute<QueuedMailBegin>('kernel.mail.queue.begin', { messageId: job.messageId, provider: deps.mailer.name, safety: deps.mailer.sendRetrySafety }, ctx);
   if (begun.action !== 'send') return begun;
-  const result = await sendOne(deps, begun);
+  const result = await sendOne(deps, job, begun);
   await deps.runtime.execute(
     'kernel.mail.queue.record',
     {
@@ -95,12 +104,18 @@ export async function runMailJob(deps: MailQueueDeps, job: MailJob): Promise<Mai
   return { action: 'recorded', outcome: result.outcome, code: result.outcome === 'sent' ? null : result.code };
 }
 
-async function sendOne(deps: MailQueueDeps, mail: Extract<QueuedMailBegin, { action: 'send' }>): Promise<Sent> {
+async function sendOne(deps: MailQueueDeps, job: MailJob, mail: Extract<QueuedMailBegin, { action: 'send' }>): Promise<Sent> {
   const template = Object.hasOwn(deps.templates, mail.templateKey) ? deps.templates[mail.templateKey] : undefined;
   if (!template) return { outcome: 'failed', code: 'TEMPLATE_UNKNOWN' };
-  let content: ReturnType<MailTemplate['render']>;
+  let content: Awaited<ReturnType<MailTemplate['render']>>;
   try {
-    content = template.render({ subject: mail.subject, payload: mail.payload, publicUrl: deps.publicUrl });
+    content = await template.render({
+      messageId: job.messageId,
+      subject: mail.subject,
+      payload: mail.payload,
+      publicUrl: deps.publicUrl,
+      execute: <T>(command: string, input: unknown) => deps.runtime.execute<T>(command, input, { actor: ACTOR, orgId: job.orgId }),
+    });
   } catch {
     content = null;
   }
