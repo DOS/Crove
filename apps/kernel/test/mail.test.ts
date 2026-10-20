@@ -4,7 +4,8 @@ import { createServer, type AddressInfo, type Server, type Socket } from 'node:n
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.ts';
 import { acceptUrl, createInviteMailSender, inviteMail, type InviteMailInput } from '../src/invite-mail.ts';
-import { createLogMailer, createMailer, createSmtpMailer, deliver, describeMailError, type Mailer, type OutboundMail } from '../src/mail.ts';
+import { classifySmtpError, createLogProvider, createSmtpProvider, type MailProvider, type OutboundMail, type SendResult } from '@crove/mail';
+import { createMailer, deliver, describeMailError } from '../src/mail.ts';
 
 const TOKEN = 'T0kenT0kenT0kenT0kenT0kenT0kenT0kenT0kenT0k';
 const INVITE: InviteMailInput = {
@@ -101,11 +102,11 @@ describe('SMTP adapter', () => {
   afterAll(() => smtp.stop());
 
   it('sends one mail through the configured server, with the accept link', async () => {
-    const mailer = createSmtpMailer({ host: '127.0.0.1', port, from: 'noreply@crove.local' });
+    const mailer = createSmtpProvider({ host: '127.0.0.1', port, from: 'noreply@crove.local' });
     expect(mailer.enabled).toBe(true);
     const logs: string[] = [];
     const send = createInviteMailSender(mailer, 'https://books.example.com/', { log: (l) => logs.push(l) });
-    expect(await send(INVITE)).toBe('sent');
+    expect((await send(INVITE)).status).toBe('sent');
     expect(smtp.received).toHaveLength(1);
     const [mail] = smtp.received;
     expect(mail?.from).toContain('<noreply@crove.local>');
@@ -124,8 +125,8 @@ describe('SMTP adapter, refusals', () => {
     const port = await smtp.start();
     try {
       const logs: string[] = [];
-      const mailer = createSmtpMailer({ host: '127.0.0.1', port, user: 'u', pass: 'p', from: 'noreply@crove.local' });
-      expect(await deliver(mailer, MAIL, { log: (l) => logs.push(l) })).toBe('failed');
+      const mailer = createSmtpProvider({ host: '127.0.0.1', port, user: 'u', pass: 'p', from: 'noreply@crove.local' });
+      expect((await deliver(mailer, MAIL, { log: (l) => logs.push(l) })).status).toBe('failed');
       // Not retried: the server will not offer TLS on a second attempt either.
       expect(logs).toEqual([expect.stringMatching(/^\[mail\] mail not sent after 1 attempt\(s\): ETLS/)]);
       expect(smtp.commands).not.toContain('AUTH');
@@ -143,11 +144,11 @@ describe('SMTP adapter, refusals', () => {
     const rejectingPort = await rejecting.start();
     try {
       const noSleep = async () => undefined;
-      expect(await deliver(createSmtpMailer({ host: '127.0.0.1', port, from: 'noreply@crove.local' }), MAIL, { sleep: noSleep })).toBe('sent');
+      expect((await deliver(createSmtpProvider({ host: '127.0.0.1', port, from: 'noreply@crove.local' }), MAIL, { sleep: noSleep })).status).toBe('sent');
       expect(smtp.received).toHaveLength(1);
       const logs: string[] = [];
-      const mailer = createSmtpMailer({ host: '127.0.0.1', port: rejectingPort, from: 'noreply@crove.local' });
-      expect(await deliver(mailer, MAIL, { sleep: noSleep, log: (l) => logs.push(l) })).toBe('failed');
+      const mailer = createSmtpProvider({ host: '127.0.0.1', port: rejectingPort, from: 'noreply@crove.local' });
+      expect((await deliver(mailer, MAIL, { sleep: noSleep, log: (l) => logs.push(l) })).status).toBe('failed');
       expect(logs).toEqual(['[mail] mail not sent after 1 attempt(s): EENVELOPE 550']);
     } finally {
       await smtp.stop();
@@ -158,10 +159,10 @@ describe('SMTP adapter, refusals', () => {
 
 describe('log fallback', () => {
   it('is used without SMTP_HOST and never logs the body or the recipient', async () => {
-    expect(createMailer({ SMTP_HOST: undefined, SMTP_PORT: 587, SMTP_USER: undefined, SMTP_PASS: undefined, SMTP_FROM: undefined }).enabled).toBe(false);
+    expect(createMailer({ MAIL_PROVIDER: 'smtp', SMTP_HOST: undefined, SMTP_PORT: 587, SMTP_USER: undefined, SMTP_PASS: undefined, SMTP_FROM: undefined, RESEND_API_KEY: undefined, RESEND_WEBHOOK_SECRET: undefined }).enabled).toBe(false);
     const lines: string[] = [];
-    const mailer = createLogMailer((l) => lines.push(l));
-    expect(await deliver(mailer, MAIL, { log: (l) => lines.push(l) })).toBe('off');
+    const mailer = createLogProvider((l) => lines.push(l));
+    expect((await deliver(mailer, MAIL, { log: (l) => lines.push(l) })).status).toBe('off');
     expect(lines).toEqual(['[mail] not sent, SMTP_HOST is not set: "Chủ đề"']);
     expect(lines.join('\n')).not.toContain(TOKEN);
     expect(lines.join('\n')).not.toContain(MAIL.to);
@@ -169,15 +170,16 @@ describe('log fallback', () => {
 });
 
 describe('deliver', () => {
-  const failing = (errors: unknown[]): Mailer & { calls: number } => {
+  const provider = (send: MailProvider['send'], sendRetrySafety: MailProvider['sendRetrySafety'] = 'never'): MailProvider => ({ name: 'test', enabled: true, sendRetrySafety, send });
+  // A provider whose sends meet these SMTP errors in turn, then succeed.
+  const failing = (errors: unknown[]): MailProvider & { calls: number } => {
     const m = {
-      enabled: true,
-      calls: 0,
-      async send() {
+      ...provider(async (): Promise<SendResult> => {
         m.calls++;
         const error = errors.shift();
-        if (error) throw error;
-      },
+        return error ? classifySmtpError(error) : { status: 'accepted' };
+      }),
+      calls: 0,
     };
     return m;
   };
@@ -188,7 +190,7 @@ describe('deliver', () => {
   it('retries transient errors and reports success', async () => {
     const mailer = failing([smtpError('ECONNECTION'), smtpError('EENVELOPE', 451)]);
     const logs: string[] = [];
-    expect(await deliver(mailer, MAIL, { sleep: noSleep, log: (l) => logs.push(l) })).toBe('sent');
+    expect((await deliver(mailer, MAIL, { sleep: noSleep, log: (l) => logs.push(l) })).status).toBe('sent');
     expect(mailer.calls).toBe(3);
     expect(logs).toEqual([]);
   });
@@ -196,7 +198,7 @@ describe('deliver', () => {
   it('gives up after the retries, logging codes only', async () => {
     const mailer = failing([smtpError('ETIMEDOUT'), smtpError('ETIMEDOUT'), smtpError('ETIMEDOUT')]);
     const logs: string[] = [];
-    expect(await deliver(mailer, MAIL, { sleep: noSleep, log: (l) => logs.push(l), label: 'invite mail' })).toBe('failed');
+    expect((await deliver(mailer, MAIL, { sleep: noSleep, log: (l) => logs.push(l), label: 'invite mail' })).status).toBe('failed');
     expect(mailer.calls).toBe(3);
     expect(logs).toEqual(['[mail] invite mail not sent after 3 attempt(s): ETIMEDOUT']);
   });
@@ -205,7 +207,7 @@ describe('deliver', () => {
     for (const error of [smtpError('EENVELOPE', 550), smtpError('EAUTH', 535), smtpError('EMESSAGE')]) {
       const mailer = failing([error]);
       const logs: string[] = [];
-      expect(await deliver(mailer, MAIL, { sleep: noSleep, log: (l) => logs.push(l) })).toBe('failed');
+      expect((await deliver(mailer, MAIL, { sleep: noSleep, log: (l) => logs.push(l) })).status).toBe('failed');
       expect(mailer.calls).toBe(1);
       expect(logs.join('\n')).not.toContain(TOKEN);
       expect(logs.join('\n')).not.toContain('khach@example.test');
@@ -217,39 +219,72 @@ describe('deliver', () => {
     const port = await smtp.start();
     await smtp.stop();
     const logs: string[] = [];
-    const mailer = createSmtpMailer({ host: '127.0.0.1', port, from: 'noreply@crove.local' });
-    expect(await deliver(mailer, MAIL, { sleep: noSleep, log: (l) => logs.push(l) })).toBe('failed');
+    const mailer = createSmtpProvider({ host: '127.0.0.1', port, from: 'noreply@crove.local' });
+    expect((await deliver(mailer, MAIL, { sleep: noSleep, log: (l) => logs.push(l) })).status).toBe('failed');
     expect(logs).toHaveLength(1);
     expect(logs[0]).toMatch(/^\[mail\] mail not sent after 3 attempt\(s\): [A-Z]+/);
     expect(logs[0]).not.toContain(TOKEN);
   });
 
   it('answers within the deadline, whatever the server does', async () => {
-    const hanging: Mailer = { enabled: true, send: () => new Promise<void>(() => undefined) };
+    const hanging = provider(() => new Promise<SendResult>(() => undefined));
     const logs: string[] = [];
     const started = Date.now();
-    expect(await deliver(hanging, MAIL, { deadlineMs: 50, log: (l) => logs.push(l), label: 'invite mail' })).toBe('failed');
+    expect((await deliver(hanging, MAIL, { deadlineMs: 50, log: (l) => logs.push(l), label: 'invite mail' })).status).toBe('failed');
     expect(Date.now() - started).toBeLessThan(1_000);
     expect(logs).toEqual(['[mail] invite mail not sent within the deadline (attempt 1)']);
     // No retry starts when its wait would pass the deadline.
     const once = failing([smtpError('ECONNECTION'), smtpError('ECONNECTION')]);
     let clock = 0;
-    expect(await deliver(once, MAIL, { deadlineMs: 1_000, retryDelaysMs: [5_000], now: () => clock, sleep: async (ms) => void (clock += ms), log: () => undefined })).toBe(
+    expect((await deliver(once, MAIL, { deadlineMs: 1_000, retryDelaysMs: [5_000], now: () => clock, sleep: async (ms) => void (clock += ms), log: () => undefined })).status).toBe(
       'failed',
     );
     expect(once.calls).toBe(1);
   });
 
   it('turns a sender that throws synchronously into a failure', async () => {
-    const sync: Mailer = {
-      enabled: true,
-      send: () => {
-        throw Object.assign(new Error(TOKEN), { code: 'EMESSAGE' });
-      },
-    };
+    const sync = provider(() => {
+      throw Object.assign(new Error(TOKEN), { code: 'EMESSAGE' });
+    });
     const logs: string[] = [];
-    expect(await deliver(sync, MAIL, { log: (l) => logs.push(l) })).toBe('failed');
+    expect((await deliver(sync, MAIL, { log: (l) => logs.push(l) })).status).toBe('failed');
     expect(logs).toEqual(['[mail] mail not sent after 1 attempt(s): EMESSAGE']);
+  });
+
+  it('repeats an unknown outcome only for a provider that drops repeats of the same Message-ID', async () => {
+    const outcomes = (): SendResult[] => [{ status: 'unknown', code: 'RESEND_503' }, { status: 'accepted', providerMessageId: 'em_1' }];
+    const run = async (safety: MailProvider['sendRetrySafety'], mail: OutboundMail) => {
+      const queue = outcomes();
+      let calls = 0;
+      const result = await deliver(
+        provider(async () => {
+          calls++;
+          return queue.shift() ?? { status: 'accepted' };
+        }, safety),
+        mail,
+        { sleep: noSleep, log: () => undefined },
+      );
+      return { result, calls };
+    };
+    const withId = { ...MAIL, messageId: '<a@crove.test>' };
+    expect(await run('idempotent', withId)).toEqual({ result: { status: 'sent', provider: 'test', providerMessageId: 'em_1' }, calls: 2 });
+    // Plain SMTP, or a mail without a Message-ID to dedupe on: reported as failed, never sent twice.
+    expect(await run('never', withId)).toEqual({ result: { status: 'failed', provider: 'test' }, calls: 1 });
+    expect(await run('idempotent', MAIL)).toEqual({ result: { status: 'failed', provider: 'test' }, calls: 1 });
+  });
+
+  it('waits at least as long as a rate limit asks, and gives up when that passes the deadline', async () => {
+    const waits: number[] = [];
+    let clock = 0;
+    const limited = (retryAfterMs: number) => {
+      const queue: SendResult[] = [{ status: 'rejected', error: 'rate_limited', code: 'RESEND_429', retryAfterMs }, { status: 'accepted' }];
+      return provider(async () => queue.shift() ?? { status: 'accepted' });
+    };
+    const options = { now: () => clock, sleep: async (ms: number) => void waits.push(ms), log: () => undefined };
+    expect((await deliver(limited(1_500), MAIL, options)).status).toBe('sent');
+    expect(waits).toEqual([1_500]);
+    expect((await deliver(limited(60_000), MAIL, options)).status).toBe('failed');
+    expect(waits).toEqual([1_500]);
   });
 
   it('describes errors without their message', () => {
@@ -304,5 +339,18 @@ describe('mail configuration', () => {
     expect(loadConfig({ ...base, SMTP_PORT: '' }).SMTP_PORT).toBe(587);
     expect(() => loadConfig({ ...base, SMTP_PORT: '70000' })).toThrow(/SMTP_PORT/);
     expect(createMailer(on).enabled).toBe(true);
+    expect(createMailer(on).name).toBe('smtp');
+  });
+
+  it('sends through Resend with MAIL_PROVIDER=resend, which needs a key and a sender', () => {
+    expect(loadConfig(base).MAIL_PROVIDER).toBe('smtp');
+    expect(() => loadConfig({ ...base, MAIL_PROVIDER: 'resend' })).toThrow(/RESEND_API_KEY/);
+    expect(() => loadConfig({ ...base, MAIL_PROVIDER: 'resend', RESEND_API_KEY: 're_test' })).toThrow(/SMTP_FROM/);
+    expect(() => loadConfig({ ...base, MAIL_PROVIDER: 'ses' })).toThrow(/MAIL_PROVIDER/);
+    expect(() => loadConfig({ ...base, RESEND_WEBHOOK_SECRET: 'not-a-secret' })).toThrow(/RESEND_WEBHOOK_SECRET/);
+    const resend = loadConfig({ ...base, MAIL_PROVIDER: 'resend', RESEND_API_KEY: 're_test', SMTP_FROM: 'noreply@mail.example.com', RESEND_WEBHOOK_SECRET: `whsec_${Buffer.alloc(24, 1).toString('base64')}` });
+    const provider = createMailer(resend);
+    expect(provider).toMatchObject({ name: 'resend', enabled: true, sendRetrySafety: 'idempotent' });
+    expect(provider.parseWebhook).toBeTypeOf('function');
   });
 });

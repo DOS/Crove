@@ -137,6 +137,10 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-noreply@crove.local}
+      # smtp (above) or resend: Crove's own mails through Resend's API, delivery events through its webhooks (#539).
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-smtp}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:-}
       TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
       # Emails Supabase Auth sends per client address and per recipient (#190); the same budget as the auth service,
       # so a public deployment refuses to start when fewer than 10 client addresses could use it up.
