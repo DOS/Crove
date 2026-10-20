@@ -177,9 +177,12 @@ export AI_BASE_URL=http://localhost:11434/v1 AI_MODEL=<model> AI_API_KEY=<key-if
 pnpm ai:conformance   # chat, tool calls, structured output (zod), streaming, error mapping
 pnpm ai:eval          # extraction accuracy on synthetic invoices; fails below AI_EVAL_THRESHOLD (default 0.9)
                       # or when isInvoice or the total is wrong on any fixture
+pnpm ai:eval:documents  # XML, PDF and photos through their production paths: accuracy per kind and field;
+                        # fails on any wrong XML amount. AI_EVAL_DIR=<folder> scores a private set instead
+                        # (docs/runbooks/ai-eval.md)
 ```
 
-Fixtures live in `packages/agent/test/fixtures/extraction` (`<id>.txt` document text plus `<id>.json` expected fields). They are synthetic: use invented names and checksum-invalid tax codes only (a unit test rejects checksum-valid tax codes and 12-digit IDs). 429 and 5xx mapping is tested against a local fake server in `pnpm test`.
+Fixtures live in `packages/agent/test/fixtures/extraction` (`<id>.txt` document text plus `<id>.json` expected fields) and `packages/agent/test/fixtures/documents` (one XML, PDF and PNG, each with its `.json`). They are synthetic: use invented names and checksum-invalid tax codes only (a unit test rejects checksum-valid tax codes and 12-digit IDs). 429 and 5xx mapping is tested against a local fake server in `pnpm test`.
 
 ## License
 

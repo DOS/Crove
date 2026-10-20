@@ -1,11 +1,12 @@
 // The document eval without an AI endpoint (#687): the committed synthetic set is complete, its e-invoice XML reads
 // through the sandboxed parser with every field right, and the set loader refuses a document without its expected
 // answer. The AI kinds run in document-eval.ai.test.ts.
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { summarizeDocumentEval } from '../src/index.ts';
+import { checkInvoice, parseTaxCode } from '@crove/l10n-vn';
+import { expectedAsParsed, summarizeDocumentEval } from '../src/index.ts';
 import { inProcessExtract, loadDocumentSet, scoreDocument, SYNTHETIC_DOCUMENTS } from './documents.ts';
 
 describe('synthetic document set', () => {
@@ -17,6 +18,20 @@ describe('synthetic document set', () => {
       ['synthetic-pdf-invoice', 'pdf'],
       ['synthetic-photo-invoice', 'image'],
     ]);
+  });
+
+  // Plan §8.7, as for the text fixtures: a checksum-valid tax code could belong to a real business, and a 12-digit
+  // run could be a real national ID. The PDF and the photo carry the same codes as their answers (checked by the
+  // AI eval reading them); the XML is text.
+  it.each(documents.map((d) => [d.id, d] as const))('%s uses only checksum-invalid tax codes and passes the checks', (_id, document) => {
+    const texts = [JSON.stringify(document.expected), ...(document.kind === 'xml' ? [readFileSync(document.path, 'utf8')] : [])];
+    for (const text of texts) {
+      expect(text).not.toMatch(/(?<!\d)\d{12}(?!\d)/);
+      for (const run of text.match(/(?<!\d)\d{10}(-\d{3})?(?!\d)/g) ?? []) {
+        expect(parseTaxCode(run)?.checksumValid, run).toBe(false);
+      }
+    }
+    expect(checkInvoice(expectedAsParsed(document.expected!)).filter((c) => c.status === 'fail').map((c) => c.id)).toEqual([]);
   });
 
   it('reads the e-invoice XML through the parser with every field right, the note line left out', async () => {
