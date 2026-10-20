@@ -16,6 +16,7 @@ export const PROVIDERS = [
   'bluesky',
   'google_business',
   'telegram',
+  'mastodon',
 ] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
@@ -108,6 +109,7 @@ export const LINK_PLACEMENT: Readonly<Record<Provider, LinkPlacement>> = {
   // The link goes as the call to action's URL (or an offer's redeem link), never in the text.
   google_business: 'apart',
   telegram: 'text',
+  mastodon: 'text',
 };
 
 // The link as a whole: followed by the end, a space, or sentence punctuation and then the end or a space (the
@@ -143,6 +145,7 @@ export const COMMENT_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
   linkedin: { max: 1250, count: 'utf16', required: false },
   x: { max: 280, count: 'weighted', required: false },
   bluesky: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
+  mastodon: { max: 500, count: 'codepoints', required: false },
 };
 
 // The first comment in a variant's settings, or null.
@@ -160,6 +163,7 @@ export const THREAD_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
   threads: { max: 500, count: 'codepoints', required: false },
   x: { max: 280, count: 'weighted', required: false },
   bluesky: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
+  mastodon: { max: 500, count: 'codepoints', required: false },
 };
 
 // The thread parts in a variant's settings, trimmed, or null when there are none. An entry that is not a string reads
@@ -299,7 +303,7 @@ export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> 
 
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram', 'mastodon']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
@@ -426,6 +430,18 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     scrapesLinkPreview: true,
     unverified: [],
   },
+  // Mastodon (#748): 500 characters on most instances (the adapter reads the instance's own limit before posting), up to
+  // 4 images or one video; mainline Mastodon takes images up to 16 MB and videos up to 99 MB. Instances show the link's
+  // preview card themselves. A content warning and the visibility are settings (MASTODON_SETTINGS).
+  mastodon: {
+    provider: 'mastodon',
+    body: { max: 500, count: 'codepoints', required: false },
+    title: null,
+    media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'], maxImageBytes: 16 * MB, maxVideoBytes: 99 * MB, maxVideoSeconds: null },
+    maxLinks: null,
+    scrapesLinkPreview: true,
+    unverified: ['body.max'],
+  },
 };
 
 let segmenter: Intl.Segmenter | null = null;
@@ -496,3 +512,8 @@ const X_LINK = new RegExp(`\\bhttps?:\\/\\/[^\\s<>"']*[^\\s<>"'.,!?;:)\\]]|(?<![
 export function countLinks(text: string): number {
   return text.match(URL_PATTERN)?.length ?? 0;
 }
+
+// Mastodon settings (#748): a content warning shown before the post (`settings.contentWarning`, up to 500 characters)
+// and the visibility (`settings.visibility`: public, the default, or unlisted). The adapter reads the same shapes.
+export const MASTODON_VISIBILITY = ['public', 'unlisted'] as const;
+export const CONTENT_WARNING_MAX = 500;

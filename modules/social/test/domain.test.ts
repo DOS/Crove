@@ -284,6 +284,16 @@ describe('validateVariant', () => {
     expect(long([{ kind: 'video', mime: 'video/mp4', sizeBytes: 1000, durationSeconds: 10 }], 2201)).toEqual(['TEXT_TOO_LONG']);
   });
 
+  it('checks a Mastodon post: 500 characters by default, its visibility and content warning (#748)', () => {
+    const md = (body: string, settings: Record<string, unknown> = {}) => validateVariant({ provider: 'mastodon', body, title: null, media: [], settings }).map((i) => i.code);
+    expect(md('x'.repeat(500))).toEqual([]);
+    expect(md('x'.repeat(501))).toEqual(['TEXT_TOO_LONG']);
+    expect(md('Khai trương', { visibility: 'unlisted', contentWarning: 'Đồ ăn' })).toEqual([]);
+    expect(md('Khai trương', { visibility: 'direct' })).toEqual(['VISIBILITY_INVALID']);
+    expect(md('Khai trương', { contentWarning: 'x'.repeat(501) })).toEqual(['CONTENT_WARNING_TOO_LONG']);
+    expect(md('Khai trương', { contentWarning: 7 })).toEqual(['CONTENT_WARNING_TOO_LONG']);
+  });
+
   it('gives a Telegram post with media the caption limit of 1,024, and text alone 4,096 (#747)', () => {
     const tg = (media: MediaItem[], n: number) => validateVariant({ provider: 'telegram', body: 'x'.repeat(n), title: null, media, settings: {} }).map((i) => i.code);
     expect(tg([], 4096)).toEqual([]);

@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { CAPABILITIES, GBP_CTAS, GBP_TOPICS, gbpOf, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { CAPABILITIES, GBP_CTAS, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -59,6 +59,9 @@ export type IssueCode =
   // The first comment (#587): too long for the channel, or a channel that takes none yet.
   | 'COMMENT_TOO_LONG'
   | 'COMMENT_NOT_SUPPORTED'
+  // Mastodon (#748): a visibility other than public or unlisted; a content warning over CONTENT_WARNING_MAX characters.
+  | 'VISIBILITY_INVALID'
+  | 'CONTENT_WARNING_TOO_LONG'
   // Thread parts (#742): a channel that takes none; more than THREAD_PARTS_MAX; an empty part or one too long for the
   // channel (field settings.threadParts.<index>); a first comment beside a thread.
   | 'THREAD_NOT_SUPPORTED'
@@ -225,6 +228,12 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
         else if (rule.maxBytes !== undefined && bytes > rule.maxBytes) issues.push({ code: 'THREAD_PART_TOO_LONG', field, limit: rule.maxBytes, actual: bytes });
       });
     }
+  }
+  if (variant.provider === 'mastodon') {
+    const visibility = variant.settings?.visibility;
+    if (visibility !== undefined && !(MASTODON_VISIBILITY as readonly unknown[]).includes(visibility)) issues.push({ code: 'VISIBILITY_INVALID', field: 'settings.visibility', limit: null, actual: null });
+    const cw = variant.settings?.contentWarning;
+    if (cw !== undefined && (typeof cw !== 'string' || countText(cw, 'codepoints') > CONTENT_WARNING_MAX)) issues.push({ code: 'CONTENT_WARNING_TOO_LONG', field: 'settings.contentWarning', limit: CONTENT_WARNING_MAX, actual: typeof cw === 'string' ? countText(cw, 'codepoints') : null });
   }
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
   checkPollAndTag(issues, variant, caps);

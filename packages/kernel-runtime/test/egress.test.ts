@@ -3,7 +3,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { EgressError, egressTarget, guardedFetch, isPublicAddress, type EgressOptions } from '../src/egress.ts';
+import { EgressError, egressFetch, egressTarget, guardedFetch, guardedRequest, isPublicAddress, type EgressOptions } from '../src/egress.ts';
 
 describe('isPublicAddress', () => {
   it('refuses private, loopback, link-local, metadata, shared and reserved IPv4 ranges', () => {
@@ -148,5 +148,63 @@ describe('guardedFetch', () => {
     expect(await code(guardedFetch('http://slow-dns.example/', { timeoutMs: 200, maxBytes: 1024, overLimit: 'truncate', resolve: never }))).toBe('timeout');
     const fails = () => Promise.reject(new Error('ENOTFOUND'));
     expect(await code(guardedFetch('http://nowhere.example/', { timeoutMs: 200, maxBytes: 1024, overLimit: 'truncate', resolve: fails }))).toBe('dns');
+  });
+});
+
+// Requests with a method, headers and a body (#748), through the same guard.
+describe('guardedRequest and egressFetch', () => {
+  let server: Server;
+  let base = '';
+  const opts = (o: Partial<EgressOptions> = {}): EgressOptions => ({ timeoutMs: 2000, maxBytes: 1024, overLimit: 'fail', allowed: (a) => a === '127.0.0.1', anyPort: true, ...o });
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      if (req.url === '/moved') {
+        res.writeHead(307, { location: 'http://10.0.0.1/steal' });
+        res.end();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        res.writeHead(201, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ method: req.method, auth: req.headers.authorization ?? null, type: req.headers['content-type'] ?? null, encoding: req.headers['accept-encoding'] ?? null, length: req.headers['content-length'] ?? null, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('sends the method, the headers and the body, with the length and encoding the guard sets', async () => {
+    const answer = await guardedRequest(`${base}/statuses`, { method: 'POST', headers: { Authorization: 'Bearer t', 'Accept-Encoding': 'gzip', 'Content-Length': '1' }, body: Buffer.from('{"a":1}') }, opts());
+    expect(answer.status).toBe(201);
+    expect(JSON.parse(answer.body.toString('utf8'))).toEqual({ method: 'POST', auth: 'Bearer t', type: null, encoding: 'identity', length: '7', body: '{"a":1}' });
+  });
+
+  it('never follows a redirect with the request, and refuses what the guard refuses', async () => {
+    expect((await guardedRequest(`${base}/moved`, { method: 'POST', headers: { authorization: 'Bearer t' } }, opts())).status).toBe(302);
+    await expect(guardedRequest('http://10.0.0.1/', { method: 'POST' }, { timeoutMs: 2000, maxBytes: 1024, overLimit: 'fail', anyPort: true })).rejects.toMatchObject({ code: 'blocked' });
+    await expect(guardedRequest(`${base}/statuses`, { method: 'POST' }, { timeoutMs: 2000, maxBytes: 1024, overLimit: 'fail', anyPort: true })).rejects.toMatchObject({ code: 'blocked' });
+  });
+
+  it('is a fetch for adapters: JSON and FormData bodies, https only unless allowed', async () => {
+    const plain = egressFetch(opts({ httpsOnly: false } as Partial<EgressOptions>));
+    const json = await plain(`${base}/statuses`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer t' }, body: JSON.stringify({ status: 'Xin chào' }) });
+    expect(json.status).toBe(201);
+    expect(await json.json()).toMatchObject({ method: 'POST', type: 'application/json', body: '{"status":"Xin chào"}' });
+    const form = new FormData();
+    form.append('description', 'Ảnh');
+    form.append('file', new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }), 'a.png');
+    const multipart = (await (await plain(`${base}/media`, { method: 'POST', body: form })).json()) as { type: string; body: string };
+    expect(multipart.type).toMatch(/^multipart\/form-data; boundary=/);
+    expect(multipart.body).toContain('name="description"');
+    expect(multipart.body).toContain('filename="a.png"');
+    await expect(egressFetch(opts())(`${base}/statuses`)).rejects.toMatchObject({ code: 'invalid_url' });
+    await expect(plain(`${base}/x`, { method: 'PATCH' })).rejects.toMatchObject({ code: 'invalid_url' });
   });
 });
