@@ -1,6 +1,7 @@
 // Test helper: writes ZIP archives byte by byte, including the hostile ones a real tool would never make (a declared
-// size that lies, overlapping entries, a path outside the archive). Node built-ins only, so the kernel tests import it
-// too.
+// size that lies, overlapping entries, a path outside the archive). Node built-ins only, so the kernel tests and the
+// container smoke test (apps/extract/test/container/smoke.mjs) import it too.
+import { randomBytes } from 'node:crypto';
 import { crc32, deflateRawSync } from 'node:zlib';
 
 export interface ZipEntrySpec {
@@ -77,4 +78,31 @@ export function buildZip(entries: ZipEntrySpec[], spec: ZipSpec = {}): Uint8Arra
   const locator = Buffer.alloc(spec.zip64Locator ? 20 : 0);
   if (spec.zip64Locator) locator.writeUInt32LE(0x07064b50, 0);
   return new Uint8Array(Buffer.concat([...locals, directory, locator, end, comment]));
+}
+
+export interface LimitArchiveSpec {
+  // How many entries, and how many bytes they decompress to in all (spread as evenly as whole bytes allow).
+  entries: number;
+  totalBytes: number;
+  // Incompressible bytes in each entry: the archive itself then weighs about entries * randomBytesPerEntry.
+  randomBytesPerEntry: number;
+}
+
+// An archive at the reader's limits (#432): `entries` e-invoice-like files that decompress to exactly `totalBytes`.
+// Each entry starts with an XML declaration (so it is not taken for a nested archive), then random bytes, then
+// repeated text, so the ZIP stays under the upload limit while the entries fill the decompressed limit.
+export function buildLimitArchive(spec: LimitArchiveSpec): Uint8Array<ArrayBuffer> {
+  const base = Math.floor(spec.totalBytes / spec.entries);
+  const extra = spec.totalBytes - base * spec.entries;
+  const head = new TextEncoder().encode('<?xml version="1.0" encoding="UTF-8"?><HDon>');
+  const filler = new TextEncoder().encode('<DLHDon><TTChung><SHDon>1</SHDon></TTChung></DLHDon>');
+  return buildZip(
+    Array.from({ length: spec.entries }, (_, i) => {
+      const data = new Uint8Array(base + (i < extra ? 1 : 0));
+      data.set(head);
+      data.set(randomBytes(Math.min(spec.randomBytesPerEntry, data.length - head.length)), head.length);
+      for (let at = head.length + spec.randomBytesPerEntry; at < data.length; at += filler.length) data.set(filler.subarray(0, data.length - at), at);
+      return { name: `thang-10/hd-${String(i).padStart(3, '0')}.xml`, data };
+    }),
+  );
 }

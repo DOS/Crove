@@ -3,7 +3,7 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
-import { MAX_IMPORT_BYTES, MAX_SOCIAL_VIDEO_BYTES, MAX_UPLOAD_BYTES, type contract, type UploadPurpose } from '@crove/kernel-contract';
+import { DIRECT_UPLOAD_MAX_BYTES, MAX_IMPORT_BYTES, MAX_SOCIAL_VIDEO_BYTES, MAX_UPLOAD_BYTES, type contract, type UploadPurpose } from '@crove/kernel-contract';
 import { activeLocale, translator } from '../i18n/runtime.ts';
 import { accessToken, auth, getConfig } from './auth.ts';
 import { ClientError, apiErrorFromResponse, describeError, isMfaRequired, isOrgAccessRevoked, isUnauthenticated, retryWhileBusy } from './errors.ts';
@@ -154,10 +154,9 @@ async function uploadStaged(file: File, purpose: UploadPurpose): Promise<Uploade
   return (await response.json()) as Uploaded;
 }
 
-// Bulk intake (#314) sends a file this small through the kernel even when the store takes presigned uploads: a batch of
-// 200 e-invoice XML files would otherwise open 200 upload grants, past the per-user grant rate.
-export const DIRECT_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
-
+// Bulk intake (#314) sends a file of at most DIRECT_UPLOAD_MAX_BYTES through the kernel even when the store takes
+// presigned uploads: a batch of 200 e-invoice XML files would otherwise open 200 upload grants, past the per-user grant
+// rate. The kernel refuses a larger one on that path (#432).
 // One document of an upload batch, alone in its request, so a refused file never fails the others.
 export async function uploadDocument(file: File): Promise<Uploaded> {
   if (file.size > MAX_UPLOAD_BYTES) throw tooLarge(file, 'document');

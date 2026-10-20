@@ -264,6 +264,70 @@ suite('bulk intake of a ZIP archive on PostgreSQL (issue #314)', () => {
     expect(recent.find((f) => f.id === ids[0])).not.toHaveProperty('entries');
   });
 
+  it('keeps the entry count in a column the database sets from the result, and backfills older archives (#432)', async () => {
+    const ingestArchive = async (label: string) => {
+      const bytes = new Uint8Array(Buffer.from(`PK\u0005\u0006 entry count ${label} ${Date.now()}`));
+      const sha256 = sha256Hex(bytes);
+      const storageKey = fileKey(orgA, sha256);
+      const generation = await store.put(storageKey, bytes);
+      const { fileId } = await runtime.execute<{ fileId: string }>(
+        'kernel.file.ingest',
+        { filename: `dem-${label}.zip`, contentType: 'application/zip', sizeBytes: bytes.byteLength, sha256, storageKey, generation, source: 'upload' },
+        { actor: asUser(owner), orgId: orgA },
+      );
+      return fileId;
+    };
+    const countOf = (fileId: string) =>
+      admin(async (c) => (await c.query<{ n: number | null }>('SELECT entry_count AS n FROM crove_kernel.extraction WHERE file_id = $1', [fileId])).rows[0]?.n);
+    const entries = (n: number) => Array.from({ length: n }, (_, i) => ({ outcome: 'rejected' as const, name: `muc-${i}.txt`, reason: 'unsupported_type' as const }));
+    const system = { actor: { type: 'system' as const, component: 'test' }, orgId: orgA };
+
+    // Recorded by the worker: the count is the length of the stored list, and files.batch reads it from the column.
+    const opened = await ingestArchive('opened');
+    await workerRuntime.execute('kernel.file.archive.record', { fileId: opened, status: 'done', error: null, entries: entries(3) }, system);
+    expect(await countOf(opened)).toBe(3);
+    expect((await batch([opened]))[0]).toMatchObject({ status: 'expanded', entryCount: 3 });
+    // A failed opening lists no entry; a run of any other method has no count.
+    const failed = await ingestArchive('failed');
+    await workerRuntime.execute('kernel.file.archive.record', { fileId: failed, status: 'failed', error: 'hỏng', entries: [] }, system);
+    expect(await countOf(failed)).toBe(0);
+    expect((await batch([failed]))[0]).toMatchObject({ status: 'failed', entryCount: null });
+
+    // Nobody writes it: an insert that names another count gets the real one, and the API role may not update it.
+    const forged = await ingestArchive('forged');
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.extraction (org_id, file_id, method, status, result, checks, completed_at, entry_count)
+         VALUES ($1, $2, 'archive', 'done', $3::jsonb, '[]', now(), 99)`,
+        [orgA, forged, JSON.stringify({ entries: [{ name: 'a.txt', outcome: 'rejected', reason: 'unsupported_type', fileId: null }] })],
+      ),
+    );
+    expect(await countOf(forged)).toBe(1);
+    await expect(pool.query('UPDATE crove_kernel.extraction SET entry_count = 7 WHERE false')).rejects.toThrow(/permission denied/);
+
+    // An archive opened before the column existed (the trigger off, as before the migration) is counted when the
+    // migration runs, and running the migration again changes nothing.
+    const older = await ingestArchive('older');
+    await admin(async (c) => {
+      await c.query('ALTER TABLE crove_kernel.extraction DISABLE TRIGGER extraction_entry_count');
+      try {
+        await c.query(
+          `INSERT INTO crove_kernel.extraction (org_id, file_id, method, status, result, checks, completed_at)
+           VALUES ($1, $2, 'archive', 'done', $3::jsonb, '[]', now())`,
+          [orgA, older, JSON.stringify({ entries: entries(4).map((e) => ({ ...e, fileId: null })) })],
+        );
+      } finally {
+        await c.query('ALTER TABLE crove_kernel.extraction ENABLE TRIGGER extraction_entry_count');
+      }
+    });
+    expect(await countOf(older)).toBeNull();
+    const migration = readFileSync(new URL('../../../supabase/migrations/20261020235000_crove_kernel_extraction_entry_count.sql', import.meta.url), 'utf8');
+    for (let run = 0; run < 2; run++) await admin((c) => c.query(`BEGIN;\n${migration}\nCOMMIT;`));
+    expect(await countOf(older)).toBe(4);
+    expect(await countOf(opened)).toBe(3);
+    expect((await batch([older]))[0]).toMatchObject({ status: 'expanded', entryCount: 4 });
+  });
+
   it('opens ZIPs attached to an email as email documents, bounded per message and per ZIP (#432)', async () => {
     // Org B, so the counts of org A's other cases stay as they are.
     const token = await admin(async (c) => (await c.query<{ t: string }>('SELECT inbound_token AS t FROM crove_kernel.tenant WHERE org_id = $1', [orgB])).rows[0]?.t);

@@ -4,6 +4,8 @@
 //   node smoke.mjs <base url> <fixture directory>
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+// Node built-ins only, run as TypeScript by type stripping.
+import { buildLimitArchive } from '../zip-fixture.ts';
 
 const [base = 'http://crove-extract:8090', fixtures = '/t/fixtures'] = process.argv.slice(2);
 const encode = (text) => new TextEncoder().encode(text);
@@ -80,6 +82,25 @@ check('DOCTYPE and entities are refused', laughs.status === 422 && laughs.json.c
 
 const broken = await extract('pdf_text', encode('%PDF-1.4 not really a pdf'));
 check('a malformed PDF gives a typed error', broken.status === 422 && broken.json.code === 'invalid', broken);
+
+// #432: an archive at every limit at once (EXTRACT_LIMITS: 500 entries, 40 MiB decompressed, an upload just under the
+// 25 MiB file limit) opens in the real container, whose 1 GiB holds the service and the parser process together, and
+// the service is still up afterwards. The values are the contract's; this script runs outside the workspace.
+const MiB = 1024 * 1024;
+const limits = buildLimitArchive({ entries: 500, totalBytes: 40 * MiB, randomBytesPerEntry: 50_000 });
+const opened = await extract('zip', limits);
+const entries = opened.json.ok ? opened.json.archive.entries : [];
+check(
+  'an archive at the entry and size limits opens in the 1 GiB container',
+  limits.byteLength <= 25 * MiB &&
+    opened.status === 200 &&
+    entries.length === 500 &&
+    entries.every((e) => e.rejected === null && e.content !== null) &&
+    entries.reduce((sum, e) => sum + e.sizeBytes, 0) === 40 * MiB,
+  { status: opened.status, code: opened.json.code, message: opened.json.message, entries: entries.length, zipBytes: limits.byteLength },
+);
+const health = await fetch(`${base}/healthz`).then((r) => r.status).catch(() => 0);
+check('the service is still up after the archive at the limits', health === 200, { health });
 
 if (failures.length > 0) {
   console.error(failures.join('\n'));
