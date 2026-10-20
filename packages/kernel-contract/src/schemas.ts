@@ -757,6 +757,8 @@ export const SOCIAL_POST_STATUSES = ['draft', 'scheduled', 'publishing', 'publis
 export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as const;
 // The palette a label's colour comes from (#639).
 export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
+// The stages of an idea on the ideas board (#701).
+export const SOCIAL_IDEA_STAGES = ['new', 'planned', 'drafted', 'archived'] as const;
 
 const zSocialText = z.string().max(100_000);
 const zSocialTitle = z.string().max(500);
@@ -788,6 +790,8 @@ export const zSocialPostCreate = z.strictObject({
   channels: z.array(zSocialChannelInput).min(1).max(20),
   // The member accepted an AI rewrite into the text (#583): the post is tainted. Never cleared.
   aiAssisted: z.literal(true).optional(),
+  // The idea the post is made from (#701): linked to it, its labels copied, moved to drafted.
+  ideaId: zId.optional(),
 });
 
 export const zSocialPostUpdate = z.strictObject({
@@ -906,6 +910,8 @@ export const zSocialPost = z.object({
   variants: z.array(zSocialVariant),
   // The post's labels (#639), by label name.
   labelIds: z.array(zId),
+  // The idea it was made from (#701); on a single post's read only.
+  idea: z.object({ id: zId, title: z.string() }).nullable().optional(),
 });
 
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
@@ -941,6 +947,29 @@ export const zSocialChannelInsights = z.object({
   byHour: z.array(zInsightGroup),
   byHashtag: z.array(zInsightGroup),
 });
+// An idea on the ideas board (#701), with the library files it still has.
+export const zSocialIdea = z.object({
+  id: zId,
+  title: z.string(),
+  note: z.string().nullable(),
+  linkUrl: z.string().nullable(),
+  media: z.array(z.object({ fileId: zId, mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable() })),
+  labelIds: z.array(zId),
+  stage: z.enum(SOCIAL_IDEA_STAGES),
+  postId: zId.nullable(),
+  createdBy: zId,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+const zIdeaFields = {
+  title: z.string().trim().min(1).max(200),
+  note: z.string().max(5000).nullable().optional(),
+  linkUrl: zSocialLink.nullable().optional(),
+  fileIds: z.array(zId).max(10).optional(),
+  labelIds: z.array(zId).max(10).optional(),
+};
+export const zSocialIdeaCreate = z.strictObject({ ...zIdeaFields, stage: z.enum(['new', 'planned']).optional() });
+export const zSocialIdeaUpdate = z.strictObject({ ideaId: zId, ...zIdeaFields });
 // A label for posts (#639) and how many posts carry it.
 export const zSocialLabel = z.object({ id: zId, name: z.string(), color: z.enum(SOCIAL_LABEL_COLORS), createdBy: zId, postCount: z.number().int() });
 const zLabelName = z.string().trim().min(1).max(50);

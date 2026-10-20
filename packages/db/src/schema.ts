@@ -379,6 +379,8 @@ export type SocialLinkPreviewStatus = (typeof SOCIAL_LINK_PREVIEW_STATUSES)[numb
 export type SocialLinkPreviewError = (typeof SOCIAL_LINK_PREVIEW_ERRORS)[number];
 // The palette a label's colour comes from (#639); the app maps each name to a theme tone.
 export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
+// The stages of an idea on the ideas board (#701).
+export const SOCIAL_IDEA_STAGES = ['new', 'planned', 'drafted', 'archived'] as const;
 export type SocialVariantStatus = (typeof SOCIAL_VARIANT_STATUSES)[number];
 export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 export type SocialActorOrigin = (typeof SOCIAL_ACTOR_ORIGINS)[number];
@@ -387,6 +389,7 @@ export type SocialReviewVerdict = (typeof SOCIAL_REVIEW_VERDICTS)[number];
 export type SocialAccountSnapshotError = (typeof SOCIAL_ACCOUNT_SNAPSHOT_ERRORS)[number];
 export type SocialNotificationKind = (typeof SOCIAL_NOTIFICATION_KINDS)[number];
 export type SocialLabelColor = (typeof SOCIAL_LABEL_COLORS)[number];
+export type SocialIdeaStage = (typeof SOCIAL_IDEA_STAGES)[number];
 
 export type SocialPostTable = Refine<
   G.SocialPostTable,
@@ -415,6 +418,7 @@ export type SocialLinkPreviewTable = Refine<
 export type SocialNotificationTable = Refine<G.SocialNotificationTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
 export type SocialNotificationMuteTable = Refine<G.SocialNotificationMuteTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
 export type SocialLabelTable = Refine<G.SocialLabelTable, { color: Generated<SocialLabelColor> }>;
+export type SocialIdeaTable = Refine<G.SocialIdeaTable, { stage: Generated<SocialIdeaStage> }>;
 
 export type SocialPostApprovalTable = Refine<
   G.SocialPostApprovalTable,
@@ -462,6 +466,7 @@ type Refined = Tables<{
   'crove_social.notification': SocialNotificationTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;
   'crove_social.label': SocialLabelTable;
+  'crove_social.idea': SocialIdeaTable;
 }>;
 
 // Every table crove_tenant may read: the generated table type, or its refinement above.
