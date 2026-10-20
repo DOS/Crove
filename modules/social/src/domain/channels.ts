@@ -167,6 +167,8 @@ export const coverKind = (cover: Cover): CoverKind => ('atMs' in cover ? 'frame'
 export const POST_TYPES = ['feed', 'story', 'reel'] as const;
 export type PostType = (typeof POST_TYPES)[number];
 export const POST_TYPE_RULES: Readonly<Partial<Record<Provider, readonly PostType[]>>> = {
+  // The offline test channel takes every type, so the composer can be tried end to end.
+  sandbox: ['feed', 'story', 'reel'],
   instagram: ['feed', 'story', 'reel'],
   facebook_page: ['feed', 'story', 'reel'],
 };

@@ -294,7 +294,7 @@ describe('FacebookPagePublisher Stories and Reels (#644)', () => {
       [`POST /${PAGE}/photo_stories`]: [{ body: { success: true, post_id: '7771' } }],
     });
     const result = await publisher.publish(input({ content: { body: 'Không gửi', title: null, linkUrl: null, media: [photo] }, readMedia: read, settings: { postType: 'story' } }));
-    expect(result).toEqual({ kind: 'accepted', externalId: '7771', url: 'https://www.facebook.com/7771' });
+    expect(result).toEqual({ kind: 'accepted', externalId: `${PAGE}_7771`, url: `https://www.facebook.com/${PAGE}_7771` });
     expect(calls.map((c) => c.route)).toEqual([`POST /${PAGE}/photos`, `POST /${PAGE}/photo_stories`]);
     expect(Object.fromEntries(calls[1]?.form ?? [])).toEqual({ photo_id: '5551' });
   });
@@ -325,7 +325,7 @@ describe('FacebookPagePublisher Stories and Reels (#644)', () => {
       'POST /video-upload/4441': [{ body: { success: true } }],
     });
     const result = await publisher.publish(input({ content: { body: 'Reel khai trương', title: null, linkUrl: null, media: [clip] }, readMedia: read, settings: { postType: 'reel' } }));
-    expect(result).toEqual({ kind: 'accepted', externalId: '4441', url: 'https://www.facebook.com/reel/4441' });
+    expect(result).toEqual({ kind: 'accepted', externalId: `${PAGE}_4441`, url: 'https://www.facebook.com/reel/4441' });
     expect(Object.fromEntries(calls[2]?.form ?? [])).toEqual({ upload_phase: 'finish', video_id: '4441', video_state: 'PUBLISHED', description: 'Reel khai trương' });
   });
 

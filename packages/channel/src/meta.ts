@@ -281,9 +281,11 @@ interface StoryAnswer {
   success?: unknown;
   post_id?: unknown;
 }
-function storyResult(answer: StoryAnswer): PublishResult {
+// The Story as a Page post id, <page>_<post>, the shape the metrics read and comments take; a bare id gets the Page's.
+function storyResult(page: string, answer: StoryAnswer): PublishResult {
   if (answer.success !== true || typeof answer.post_id !== 'string' || !/^\d{1,32}(_\d{1,32})?$/.test(answer.post_id)) return { kind: 'unknown', code: 'STORY_NOT_CONFIRMED' };
-  return { kind: 'accepted', externalId: answer.post_id, url: `https://www.facebook.com/${answer.post_id}` };
+  const id = answer.post_id.includes('_') ? answer.post_id : `${page}_${answer.post_id}`;
+  return { kind: 'accepted', externalId: id, url: `https://www.facebook.com/${id}` };
 }
 interface PostsAnswer {
   data?: { id?: unknown; message?: unknown; created_time?: unknown; permalink_url?: unknown }[];
@@ -407,7 +409,7 @@ export class FacebookPagePublisher implements Publisher {
       if ('rejected' in uploaded) return uploaded.rejected;
       try {
         const answer = await this.graph.call<StoryAnswer>('POST', `${page}/photo_stories`, { token, form: { photo_id: uploaded.ids[0] as string } });
-        return storyResult(answer);
+        return storyResult(page, answer);
       } catch (error) {
         return graphPublishResult(error);
       }
@@ -416,7 +418,7 @@ export class FacebookPagePublisher implements Publisher {
     if ('rejected' in started) return started.rejected;
     try {
       const answer = await this.graph.call<StoryAnswer>('POST', `${page}/video_stories`, { token, form: { upload_phase: 'finish', video_id: started.videoId } });
-      return storyResult(answer);
+      return storyResult(page, answer);
     } catch (error) {
       return graphPublishResult(error);
     }
@@ -438,7 +440,8 @@ export class FacebookPagePublisher implements Publisher {
         form: { upload_phase: 'finish', video_id: started.videoId, video_state: 'PUBLISHED', description: feedMessage(input.content) },
       });
       if (answer.success !== true) return { kind: 'unknown', code: 'REEL_NOT_CONFIRMED' };
-      return { kind: 'accepted', externalId: started.videoId, url: `https://www.facebook.com/reel/${started.videoId}` };
+      // Named like a Page video post, <page>_<video>, which the metrics read takes (#443).
+      return { kind: 'accepted', externalId: `${page}_${started.videoId}`, url: `https://www.facebook.com/reel/${started.videoId}` };
     } catch (error) {
       return graphPublishResult(error);
     }
