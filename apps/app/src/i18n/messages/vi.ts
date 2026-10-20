@@ -1500,6 +1500,16 @@ export const vi = {
       fromIdeaTaken: 'Ý tưởng "{title}" đã có bài nháp hoặc đã được lưu trữ, nên bài này sẽ không gắn với ý tưởng đó.',
       madeFrom: 'Bài này được viết từ ý tưởng',
     },
+    occasions: {
+      show: 'Hiện các dịp lễ',
+      hide: 'Ẩn các dịp lễ',
+      upcoming: 'Dịp lễ trong 60 ngày tới',
+      draft: 'Soạn bài cho dịp này',
+      draftFor: 'Soạn bài cho {name}',
+      composing: 'Đang soạn bài cho dịp {name} ({date}); bài được hẹn trước vài ngày, bạn có thể đổi giờ.',
+      brief: 'Bài đăng cho dịp {name} ({date}): lời chúc và ưu đãi của cửa hàng, giọng thân thiện.',
+      names: { new_year: 'Tết Dương lịch', valentine: 'Lễ Tình nhân', women_day: 'Quốc tế Phụ nữ 8/3', reunification: 'Giải phóng miền Nam 30/4', labour_day: 'Quốc tế Lao động 1/5', mothers_day: 'Ngày của Mẹ', children_day: 'Quốc tế Thiếu nhi 1/6', fathers_day: 'Ngày của Cha', national_day: 'Quốc khánh 2/9', sale_9_9: 'Ngày đôi 9.9', sale_10_10: 'Ngày đôi 10.10', vietnam_women_day: 'Phụ nữ Việt Nam 20/10', halloween: 'Halloween', sale_11_11: 'Ngày đôi 11.11', teachers_day: 'Nhà giáo Việt Nam 20/11', black_friday: 'Black Friday', sale_12_12: 'Ngày đôi 12.12', christmas: 'Giáng sinh', tet: 'Tết Nguyên đán', first_full_moon: 'Rằm tháng Giêng', hung_kings: 'Giỗ Tổ Hùng Vương', vu_lan: 'Lễ Vu Lan', mid_autumn: 'Tết Trung thu', kitchen_gods: 'Ông Công Ông Táo' },
+    },
     snippets: {
       title: 'Đoạn mẫu',
       subtitle: 'Hashtag, chữ ký và mẫu bài cả nhóm dùng lại. Chọn trong khung soạn bài để chèn vào nội dung.',
