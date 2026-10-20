@@ -52,7 +52,23 @@ Exit codes of `deploy.sh`: 0 done; 1 the deploy failed and the previous release 
 | `/auth/v1/health` answers | Supabase Auth is reachable through the kernel's proxy, the path every sign-in takes |
 | `/login` serves the app shell and its first script bundle loads | the sign-in page loads in a browser |
 
-It does not sign in or upload a file: the end-to-end flow (sign up, upload, approve, export) is the Playwright suite, which must be green on the commit before the deploy starts.
+With the smoke account set up (below), the workflow's smoke test through the public URL adds one more check:
+
+| Check | Why |
+|---|---|
+| signs in with the smoke account's password, uploads one synthetic e-invoice XML into the smoke org, waits up to 2 minutes for the worker to turn it into a proposal, then rejects that proposal | sign-in, upload, the worker and `crove-extract` work end to end on the new release |
+
+Without the account's secrets this check is skipped and the log says `smoke skipped: sign-in and upload`. It needs `jq` (GitHub's runners have it). The deploy's own smoke test on the host never runs it: a rollback must not depend on the smoke account, or a broken account would fail the rollback too. So it runs only through `DEPLOY_PUBLIC_URL`, and when it fails, the workflow rolls back like for any failed public check. The full flow (sign up, upload, approve, export) is still the Playwright suite, which must be green on the commit before the deploy starts.
+
+### Smoke account
+
+Off until the owner creates it (#690). Once per environment:
+
+1. Create an account for it, such as `smoke@<your domain>`, with a long random password (`openssl rand -base64 24`), the way any user joins (sign-up while it is open, or an invite). Do not enroll a second factor: the check signs in with the password alone.
+2. Signed in as that account, create its own org, for example `Crove smoke test`, and note the org's slug (the part after `/o/` in the app's address). Nobody else joins it, and the account belongs to no other org: each deploy uploads a document into it and rejects the proposal.
+3. In the GitHub environment (`pilot` or `beta`, section "Settings of each GitHub environment"), add the secrets `SMOKE_EMAIL` and `SMOKE_PASSWORD` and the variable `SMOKE_ORG` (the slug). `DEPLOY_PUBLIC_URL` must be set too.
+
+The synthetic e-invoice has a made-up seller and buyer whose tax codes fail the checksum, and a new number each run, so it is never a duplicate. The smoke org counts in the weekly usage report like any org: one active org, one uploaded document and one rejected proposal per deploy. Read the report with `--by-org` and leave out the smoke org's row (its name) when you count the pilot's usage. To stop the check, delete the two secrets.
 
 ## Migrations are forward only
 
@@ -95,6 +111,8 @@ Create the environment (`pilot`, later `beta`) under Settings, Environments. A r
 | `DEPLOY_ENV_FILE` | variable | no | env file on the host, default `<DEPLOY_DIR>/.env` |
 | `DEPLOY_PUBLIC_URL` | variable | no | the public origin, for example `https://crove.example.com`, for the smoke test through the proxy |
 | `DEPLOY_REQUIRED_CHECKS` | variable | no | check runs that must be green on the commit, one per line |
+| `SMOKE_EMAIL`, `SMOKE_PASSWORD` | secret | no | the smoke account (section "Smoke account"); without them the public smoke test does not sign in |
+| `SMOKE_ORG` | variable | with the two above | the smoke org's slug |
 
 The images go to the repository's GHCR packages with the run's own token, so no registry secret is needed. The deploy job's token can only read packages; only the build job, which never talks to the host, can push.
 
