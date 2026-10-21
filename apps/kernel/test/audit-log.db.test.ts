@@ -187,6 +187,33 @@ suite('audit log for owners and admins on PostgreSQL (#672)', () => {
     expect((await seeded(other, other.owner)).map((i) => i.targetId)).toEqual([theirs]);
   });
 
+  it('pages rows that differ by microseconds without skipping any', async () => {
+    const o = await org();
+    // More than a page inside one millisecond, each a microsecond apart, so every page boundary falls inside it.
+    const total = AUDIT_PAGE_SIZE + 20;
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.audit_event (org_id, occurred_at, actor_type, command, command_id, outcome, input_sha256, detail)
+         SELECT $1, timestamptz '2026-10-02 03:00:00.123Z' + make_interval(secs => g / 1000000.0), 'system', 'kernel.test.micro', gen_random_uuid(), 'ok', repeat('a', 64), '{}'
+         FROM generate_series(1, $2::int) g`,
+        [o.orgId, total],
+      ),
+    );
+    const seen: AuditEntry[] = [];
+    let before: { at: string; id: string } | undefined;
+    for (;;) {
+      const page = await list(o, o.owner, { ...SEEDED, command: 'kernel.test.micro', ...(before ? { before } : {}) });
+      seen.push(...page.items);
+      if (!page.more) break;
+      const last = page.items.at(-1) as AuditEntry;
+      before = { at: last.at, id: last.id };
+    }
+    expect(seen).toHaveLength(total);
+    expect(new Set(seen.map((s) => s.id)).size).toBe(total);
+    // A cursor that names no row of this org matches nothing.
+    expect((await list(o, o.owner, { ...SEEDED, before: { at: '2026-10-05T00:00:00.000Z', id: randomUUID() } })).items).toEqual([]);
+  });
+
   it('never shows what looks like a secret in a row detail', async () => {
     const o = await org();
     await seed(o.orgId, [

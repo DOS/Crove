@@ -18,6 +18,7 @@ describe('audit detail', () => {
     expect(auditDetailLine({ role: 'admin', previous: { role: 'member' }, ids: ['a', 'b'] })).toBe('role=admin; previous.role=member; ids=[a, b]');
     expect(auditDetailLine('{"provider":"x","token":"t"}')).toBe('provider=x; token=[ẩn]');
     expect(auditDetailLine({ note: 'a\nb\u0000c' })).toBe('note=a b c');
+    expect(auditDetailLine({ notes: ['a\nb', 'z'.repeat(250)] })).toBe(`notes=[a b, ${'z'.repeat(200)}…]`);
     expect(auditDetailLine({ deep: { a: { b: { c: { d: 1 } } } } })).toBe('deep.a.b={…}');
     expect(auditDetailLine({ list: Array.from({ length: 12 }, (_, i) => i) })).toBe('list=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, … (12)]');
     expect([...(auditDetailLine({ text: 'x'.repeat(5000) }) ?? '')].length).toBeLessThanOrEqual(206);

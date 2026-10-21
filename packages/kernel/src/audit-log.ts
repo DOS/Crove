@@ -51,6 +51,12 @@ const HIDDEN = '[ẩn]';
 const DETAIL_MAX = 1000;
 const VALUE_MAX = 200;
 
+// A value as text on one line: control characters (line breaks included) as a space, at most VALUE_MAX characters.
+function cleanValue(value: unknown): string {
+  const text = String(value).replace(/\p{Cc}+/gu, ' ');
+  return [...text].length > VALUE_MAX ? `${[...text].slice(0, VALUE_MAX).join('')}…` : text;
+}
+
 function flatten(value: unknown, prefix: string, out: string[], depth: number): void {
   if (out.length >= 60) return;
   if (value === null || value === undefined) {
@@ -59,7 +65,7 @@ function flatten(value: unknown, prefix: string, out: string[], depth: number): 
   }
   if (Array.isArray(value)) {
     if (depth >= 3 || value.every((v) => v === null || typeof v !== 'object')) {
-      const shown = value.slice(0, 10).map((v) => (v !== null && typeof v === 'object' ? '…' : String(v)));
+      const shown = value.slice(0, 10).map((v) => (v !== null && typeof v === 'object' ? '…' : cleanValue(v)));
       out.push(`${prefix}=[${shown.join(', ')}${value.length > 10 ? `, … (${value.length})` : ''}]`);
       return;
     }
@@ -78,8 +84,7 @@ function flatten(value: unknown, prefix: string, out: string[], depth: number): 
     }
     return;
   }
-  const text = String(value).replace(/\p{Cc}+/gu, ' ');
-  out.push(`${prefix || 'value'}=${[...text].slice(0, VALUE_MAX).join('')}${[...text].length > VALUE_MAX ? '…' : ''}`);
+  out.push(`${prefix || 'value'}=${cleanValue(value)}`);
 }
 
 // An audit row's detail as one line of key=value pairs, at most DETAIL_MAX characters; null when it holds nothing.
@@ -112,7 +117,11 @@ function where(orgId: string, filter: AuditFilter, before: AuditCursor | undefin
   if (filter.targetId) parts.push(sql`(target_id = ${filter.targetId}::uuid OR proposal_id = ${filter.targetId}::uuid)`);
   if (filter.from) parts.push(sql`occurred_at >= (${filter.from}::date::timestamp AT TIME ZONE ${TZ})`);
   if (filter.to) parts.push(sql`occurred_at < ((${filter.to}::date + 1)::timestamp AT TIME ZONE ${TZ})`);
-  if (before) parts.push(sql`(occurred_at, id) < (${before.at}::timestamptz, ${before.id}::uuid)`);
+  // The cursor row's stored time (microseconds), not the page's millisecond copy of it, so rows within the same
+  // millisecond are neither skipped nor shown twice. A cursor naming no row of the org matches nothing.
+  if (before) {
+    parts.push(sql`(occurred_at, id) < (SELECT c.occurred_at, c.id FROM crove_kernel.audit_event c WHERE c.org_id = ${orgId}::uuid AND c.id = ${before.id}::uuid)`);
+  }
   return sql.join(parts, sql` AND `);
 }
 
