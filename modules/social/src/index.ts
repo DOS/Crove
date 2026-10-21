@@ -10,6 +10,8 @@ export * from './publisher.ts';
 export * from './metrics.ts';
 export * from './evergreen.ts';
 export * from './library.ts';
+export * from './domain/media-tags.ts';
+export * from './media-tags.ts';
 export * from './policy.ts';
 export * from './assign.ts';
 export * from './snippets.ts';
