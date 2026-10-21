@@ -17,8 +17,8 @@ export interface CalendarItem {
 
 export const DAY_MS = 86_400_000;
 // What the calendar shows a channel at: its schedule, its publish time, or the post's planned time while it is not
-// scheduled yet. Cancelled channels are left out.
-const SHOWN: readonly VariantStatus[] = ['draft', 'in_review', 'changes_requested', 'approved', 'scheduled', 'paused', 'publishing', 'processing', 'published', 'failed', 'ambiguous', 'needs_attention'];
+// scheduled yet. Cancelled channels are left out; a channel removed from its platform (#860) stays at its publish time.
+const SHOWN: readonly VariantStatus[] = ['draft', 'in_review', 'changes_requested', 'approved', 'scheduled', 'paused', 'publishing', 'processing', 'published', 'failed', 'ambiguous', 'needs_attention', 'removed'];
 const PLANNED: readonly VariantStatus[] = ['draft', 'in_review', 'changes_requested', 'approved'];
 
 export function startOfDay(d: Date): Date {

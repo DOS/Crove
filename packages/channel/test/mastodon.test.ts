@@ -164,3 +164,31 @@ describe('Mastodon publish', () => {
     expect([...new Set(hosts)]).toEqual([INSTANCE]);
   });
 });
+
+describe('Mastodon remove (#860)', () => {
+  const DELETE = 'DELETE mastodon.example/api/v1/statuses/109302436954721999';
+  const remove = (fetchImpl: Fetch, externalId = '109302436954721999') => new MastodonPublisher(fetchImpl).remove({ externalAccountId: ACCOUNT, secret: SECRET, externalId });
+
+  it('deletes the status with the account token', async () => {
+    const { fetchImpl, calls } = instance({ [DELETE]: [{ body: { id: '109302436954721999', text: 'Khai trương!' } }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => [c.route, c.auth])).toEqual([[DELETE, `Bearer ${TOKEN}`]]);
+  });
+
+  it('counts a status the instance no longer has as removed', async () => {
+    const { fetchImpl } = instance({ [DELETE]: [{ status: 404, body: { error: 'Record not found' } }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+  });
+
+  it('maps a revoked token, a rate limit and a server error, and calls nothing for a malformed id', async () => {
+    const revoked = instance({ [DELETE]: [{ status: 401, body: { error: 'The access token was revoked' } }] });
+    expect(await remove(revoked.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'MASTODON_401' });
+    const limited = instance({ [DELETE]: [{ status: 429, body: { error: 'Too many requests' } }] });
+    expect(await remove(limited.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    const down = instance({ [DELETE]: [{ status: 503, body: { error: 'Service Unavailable' } }] });
+    expect(await remove(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'MASTODON_503' });
+    const none = instance({});
+    expect(await remove(none.fetchImpl, '../accounts/1')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(none.calls).toHaveLength(0);
+  });
+});

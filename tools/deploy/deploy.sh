@@ -5,15 +5,18 @@
 # roll back from a shell on the host with one command.
 #
 #   deploy.sh deploy --release <id> --image <repo@sha256:...> --extract-image <repo@sha256:...> --compose <file>
-#                    [--dir <dir>] [--env-file <file>] [--registry <host> --registry-user <user>
+#                    [--build <id>] [--dir <dir>] [--env-file <file>] [--registry <host> --registry-user <user>
 #                    --registry-password-stdin]
 #   deploy.sh rollback [--dir <dir>] [--env-file <file>]
 #   deploy.sh status   [--dir <dir>]
-#   deploy.sh smoke <base url>
+#   deploy.sh smoke <base url> [build id]
 #
 # Smoke: the checks a user needs to sign in (health, readiness, config, Supabase Auth, the sign-in page), and, with
 # SMOKE_EMAIL, SMOKE_PASSWORD and SMOKE_ORG set, an account step that signs in and uploads one synthetic e-invoice
-# (see smoke_account). Without them it says the account step is skipped.
+# (see smoke_account). Without them it says the account step is skipped. With a build id (#892: the git SHA the image
+# was built from, its CROVE_BUILD) it also checks that /version reports that build and no missing migration, so an
+# old container that still answers fails the test. A deploy given --build checks the same, and so does a rollback to
+# a release that was deployed with one; a release without a build id (deployed before /version) skips that step.
 #
 # Deploy: pull both images by digest, start the database, run `migrate`, start Supabase Auth and run `auth-grants`,
 # start the other services, then the app: the worker before the API when they run as separate services (`worker`
@@ -63,6 +66,8 @@ die() {
 valid_release() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; }
 # An image pinned by digest: registry/name@sha256:<64 hex>, with an optional tag before the digest.
 valid_image() { [[ "$1" =~ ^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$ ]]; }
+# A build id (#892): the git SHA the image was built from, or another id of letters, digits, dot, dash and underscore.
+valid_build() { [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]]; }
 # An absolute path with no spaces or shell characters (it is written into generated files and the history log).
 valid_path() { [[ "$1" =~ ^/[A-Za-z0-9._/@+-]*$ || "$1" =~ ^[A-Za-z]:/[A-Za-z0-9._/@+-]*$ ]]; }
 
@@ -126,6 +131,16 @@ smoke_invoice() {
   </DLHDon>
 </HDon>
 EOF
+}
+
+# smoke_version <base> <build>: /version reports this build and no committed migration missing from the ledger.
+smoke_version() {
+  local body
+  body="$(smoke_get "$1/version")" || return 1
+  if [[ "$body" != *"\"build\":\"$2\""* || "$body" != *'"migrationsMissing":[]'* ]]; then
+    err "smoke: expected build $2 with no missing migration; /version answered: ${body:0:500}"
+    return 1
+  fi
 }
 
 # smoke_api <headers file> <url> [curl args...]: like smoke_get, as the signed-in user, without following redirects.
@@ -221,11 +236,12 @@ smoke_account() {
   return "$rc"
 }
 
-# smoke <base url> [account]: with "account" (the `smoke` command), the account step runs too when its settings are
-# there. The deploy's own smoke test on the host never runs it: the workflow's public smoke test does, and a rollback
-# must not depend on the smoke account, or a broken account would fail the rollback too.
+# smoke <base url> [account] [build]: with "account" (the `smoke` command), the account step runs too when its settings
+# are there. The deploy's own smoke test on the host never runs it: the workflow's public smoke test does, and a
+# rollback must not depend on the smoke account, or a broken account would fail the rollback too. With a build id,
+# /version must report it (#892).
 smoke() {
-  local base="${1%/}" account="${2:-}" failed=0
+  local base="${1%/}" account="${2:-}" build="${3:-}" failed=0
   smoke_check() {
     local name="$1"
     shift
@@ -237,6 +253,9 @@ smoke() {
   smoke_check '/healthz answers ok' smoke_body "$base/healthz" '"ok":true'
   # Every committed migration is in the ledger, and the session check can read Supabase Auth's tables.
   smoke_check '/readyz answers ready' smoke_body "$base/readyz" '"ready":true'
+  if [ -n "$build" ]; then
+    smoke_check "/version answers build $build with every migration applied" smoke_version "$base" "$build"
+  fi
   smoke_check '/api/config answers' smoke_body "$base/api/config" '"authUrl"'
   # Supabase Auth through the kernel's /auth/v1 proxy, the way signing in goes.
   smoke_check '/auth/v1/health answers (Supabase Auth through the proxy)' smoke_body "$base/auth/v1/health" ''
@@ -339,6 +358,7 @@ EOF
 }
 
 # Makes a release directory the active files and exports its images.
+ACTIVE_BUILD=''
 activate() {
   local rel="$DEPLOY_DIR/releases/$1"
   [ -f "$rel/release.env" ] || die "$EXIT_USAGE" "release directory $rel is incomplete"
@@ -349,6 +369,8 @@ activate() {
   CROVE_IMAGE="$(release_field "$1" IMAGE)"
   CROVE_EXTRACT_IMAGE="$(release_field "$1" EXTRACT_IMAGE)"
   export CROVE_IMAGE CROVE_EXTRACT_IMAGE
+  # The build the release's image reports on /version; empty for a release deployed without --build.
+  ACTIVE_BUILD="$(release_field "$1" BUILD)"
 }
 
 release_field() { sed -n "s/^$2=//p" "$DEPLOY_DIR/releases/$1/release.env" | head -n 1; }
@@ -446,7 +468,7 @@ roll_services() {
   wait_ready "$url" || return 1
   if has_service prober; then up prober || return 1; fi
   log "smoke test on $url"
-  smoke "$url"
+  smoke "$url" '' "$ACTIVE_BUILD"
 }
 
 pull_images() {
@@ -562,13 +584,14 @@ read_registry_password() {
 }
 
 do_deploy() {
-  local release="" image="" extract="" compose=""
+  local release="" image="" extract="" compose="" build="" build_given=0
   while (($# > 0)); do
     case "$1" in
       --release) release="${2:-}"; shift 2 ;;
       --image) image="${2:-}"; shift 2 ;;
       --extract-image) extract="${2:-}"; shift 2 ;;
       --compose) compose="${2:-}"; shift 2 ;;
+      --build) build="${2:-}"; build_given=1; shift 2 ;;
       *)
         common_option "$@"
         ((OPT_SHIFT > 0)) || die "$EXIT_USAGE" "unknown option $1"
@@ -580,6 +603,7 @@ do_deploy() {
   valid_image "$image" || die "$EXIT_USAGE" "--image must be pinned by digest (name@sha256:...): '$image'"
   valid_image "$extract" || die "$EXIT_USAGE" "--extract-image must be pinned by digest (name@sha256:...): '$extract'"
   [ -f "$compose" ] || die "$EXIT_USAGE" "--compose file not found: '$compose'"
+  ((build_given == 0)) || valid_build "$build" || die "$EXIT_USAGE" "--build must match [A-Za-z0-9._-]{1,64}: '$build'"
   read_registry_password
   preflight
   acquire_lock
@@ -597,7 +621,7 @@ do_deploy() {
   mkdir -p "$dir"
   cp -f "$compose" "$dir/docker-compose.yml"
   write_override "$image" "$extract" >"$dir/docker-compose.override.yml"
-  printf 'RELEASE=%s\nIMAGE=%s\nEXTRACT_IMAGE=%s\nSTAGED_AT=%s\n' "$release" "$image" "$extract" "$(date -u +%Y%m%dT%H%M%S.%NZ)" >"$dir/release.env"
+  printf 'RELEASE=%s\nIMAGE=%s\nEXTRACT_IMAGE=%s\nBUILD=%s\nSTAGED_AT=%s\n' "$release" "$image" "$extract" "$build" "$(date -u +%Y%m%dT%H%M%S.%NZ)" >"$dir/release.env"
 
   if ! pull_images "$image" "$extract" "$REGISTRY" "$REGISTRY_USER" "$REGISTRY_PASSWORD"; then
     record "deploy $name failed: pull"
@@ -691,8 +715,9 @@ main() {
     rollback) do_rollback "$@" ;;
     status) do_status "$@" ;;
     smoke)
-      [ -n "${1:-}" ] || die "$EXIT_USAGE" 'usage: deploy.sh smoke <base url>'
-      smoke "$1" account || die "$EXIT_FAILED" "smoke test failed on $1"
+      [ -n "${1:-}" ] || die "$EXIT_USAGE" 'usage: deploy.sh smoke <base url> [build id]'
+      [ -z "${2:-}" ] || valid_build "$2" || die "$EXIT_USAGE" "the build id must match [A-Za-z0-9._-]{1,64}: '$2'"
+      smoke "$1" account "${2:-}" || die "$EXIT_FAILED" "smoke test failed on $1"
       ;;
     *) die "$EXIT_USAGE" 'usage: deploy.sh deploy|rollback|status|smoke (see the header of this file)' ;;
   esac

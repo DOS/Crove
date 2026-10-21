@@ -61,6 +61,7 @@ import {
   SOCIAL_LABEL_COLORS,
   SOCIAL_WATERMARK_CORNERS,
   SOCIAL_POST_STATUSES,
+  SOCIAL_VARIANT_STATUSES,
   MAX_BATCH_FILES,
   zBatchFile,
   zFileStatus,
@@ -80,6 +81,7 @@ import {
   zOrgExport,
   zOrgSummary,
   zParty,
+  zDuplicateHint,
   zProposalStatus,
   zPurchaseDocument,
   zDocumentExport,
@@ -550,6 +552,11 @@ export const contract = {
       cancel: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
       // Publish failed or needs_attention variants again now (a new attempt).
       retry: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
+      // Take a published channel down from its platform (#860), owners and admins, with an optional reason. The worker
+      // makes the call; queued false: an earlier ask is still on its way, or it is removed already.
+      remove: oc
+        .input(z.strictObject({ variantId: zId, reason: z.string().trim().max(500).optional() }))
+        .output(z.object({ postId: zId, variantId: zId, status: z.enum(SOCIAL_VARIANT_STATUSES), queued: z.boolean() })),
       // Settle needs_attention variants: on the platform after all, or dropped.
       resolve: oc
         .input(z.strictObject({ variantIds: z.array(zId).min(1).max(20), outcome: z.enum(['published', 'dropped']), url: z.url({ protocol: /^https?$/ }).max(2000).nullable().optional() }))
@@ -701,6 +708,12 @@ export const contract = {
         }),
       )
       .output(z.object({ partyId: zId, version: z.number().int() })),
+    // Owners and admins (R1, #887): partyId becomes a duplicate of keepId, hidden from lists and search and reported
+    // under it; nothing is deleted. unmarkDuplicate undoes it.
+    markDuplicate: oc.input(z.object({ partyId: zId, keepId: zId })).output(z.object({ partyId: zId, keepId: zId })),
+    unmarkDuplicate: oc.input(z.object({ partyId: zId })).output(z.object({ partyId: zId })),
+    // Owners, admins and members: pairs of parties that look like duplicates, strongest first.
+    duplicateHints: oc.input(z.object({})).output(z.array(zDuplicateHint)),
   },
   documents: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zPurchaseDocument)),

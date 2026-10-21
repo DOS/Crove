@@ -6,8 +6,8 @@
 // token lives two hours and the refresh schedule renews it, keeping whichever refresh token X hands back.
 // Publish: each image is uploaded first (nothing is visible until a post names it), then one POST /2/tweets; a video
 // goes through the chunked upload and X's processing first (#449). An unclear answer is checked against the account's recent posts by text and time.
-import type { AccountMetricsInput, AccountMetricsResult, CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
-import { commentResult } from './comment.ts';
+import type { AccountMetricsInput, AccountMetricsResult, CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -97,7 +97,7 @@ class XClient {
     return json as TokenAnswer;
   }
 
-  async call<T>(method: 'GET' | 'POST', path: string, token: string, body?: { json: unknown } | { form: FormData }): Promise<T | null> {
+  async call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, token: string, body?: { json: unknown } | { form: FormData }): Promise<T | null> {
     const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
     let payload: string | FormData | undefined;
     if (body && 'json' in body) {
@@ -349,6 +349,21 @@ export class XPublisher implements Publisher {
       return { kind: 'accepted', externalId: `retweet:${input.externalAccountId}:${input.externalId}` };
     } catch (error) {
       return commentResult(publishResult(error));
+    }
+  }
+
+  // Deletes the account's own post (#860): DELETE /2/tweets/:id, answered { data: { deleted: true } }. A post X no
+  // longer has (404) is gone already; any other answer leaves it unclear.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const s = xSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!POST_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      const answer = await this.client.call<{ data?: { deleted?: unknown } }>('DELETE', `/tweets/${input.externalId}`, s.accessToken);
+      return answer?.data?.deleted === true ? { kind: 'removed' } : { kind: 'unknown', code: 'NOT_DELETED' };
+    } catch (error) {
+      if (error instanceof XError && (error.status === 404 || error.status === 410)) return { kind: 'removed' };
+      return removeResult(publishResult(error));
     }
   }
 

@@ -630,6 +630,7 @@ export interface KernelPartyTable {
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
   search: ColumnType<string | null, never, never>;
+  duplicate_of: string | null;
 }
 
 /** crove_kernel.position */
@@ -1094,6 +1095,10 @@ export interface SocialPostVariantTable {
   review_since: ColumnType<Date | null, Date | string | null, Date | string | null>;
   reminded_waiting_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   reminded_due_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  removed_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  removed_by: string | null;
+  remove_reason: string | null;
+  remove_requested_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.queue_slot */

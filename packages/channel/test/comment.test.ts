@@ -257,3 +257,17 @@ describe('reposts', () => {
     expect(seen).toEqual([{ url: 'https://mastodon.example/api/v1/statuses/103254962155278888/reblog', key: 'social.publish:v:1:1:repost' }]);
   });
 });
+
+describe('Sandbox remove (#860)', () => {
+  it('takes the post off the sandbox, counts one already gone as removed, and refuses a token it never issued', async () => {
+    const sandbox = new SandboxPublisher();
+    const secret = JSON.stringify({ accessToken: 'sbx_test' });
+    const published = await sandbox.publish({ externalAccountId: 'sandbox-a', secret, content: { body: 'Khai trương', title: null, linkUrl: null, media: [] }, readMedia: async () => new Uint8Array(), mediaUrl: async () => null, settings: {}, callKey: 'k-1', contentHash: `sha256:${'0'.repeat(64)}` });
+    const externalId = published.kind === 'accepted' ? published.externalId : '';
+    expect(sandbox.posts('sandbox-a')).toHaveLength(1);
+    expect(await sandbox.remove({ externalAccountId: 'sandbox-a', secret, externalId })).toEqual({ kind: 'removed' });
+    expect(sandbox.posts('sandbox-a')).toHaveLength(0);
+    expect(await sandbox.remove({ externalAccountId: 'sandbox-a', secret, externalId })).toEqual({ kind: 'removed' });
+    expect(await sandbox.remove({ externalAccountId: 'sandbox-a', secret: JSON.stringify({ accessToken: 'other' }), externalId })).toEqual({ kind: 'rejected', error: 'token_expired', code: 'SANDBOX_TOKEN' });
+  });
+});

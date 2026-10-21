@@ -47,6 +47,7 @@ const PENDING_TABLES = new Set<string>([
   'crove_kernel.notification_mute',
   'crove_social.chat_alert',
   'crove_social.chat_alert_target',
+  'crove_social.media_tag',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -638,6 +639,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_social.link_preview': {
     make: (o) => ({ row: { org_id: o.id, id: randomUUID(), url: `https://example.com/rls-${tag()}`, url_sha256: hex64(), status: 'pending', requested_at: new Date().toISOString() } }),
   },
+  // A tag on a media library file (#904): one name per file (case-insensitive), so every row gets its own name.
+  'crove_social.media_tag': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), file_id: o.file, tag: `rls-${tag()}`, created_by: o.owner } }) },
   'crove_social.metric_snapshot': {
     make: (o) => {
       const { setup, variant } = socialVariantRows(o);

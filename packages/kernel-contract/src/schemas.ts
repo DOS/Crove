@@ -484,8 +484,15 @@ export const zParty = z.object({
   documentCount: z.number().int(),
   // The debit account proposed first for this vendor's invoices (set by approving one, or by hand), or null.
   defaultAccount: z.string().nullable(),
+  // The parties marked as duplicates of this one (#887): hidden from lists and search, their documents counted here.
+  duplicates: z.array(z.object({ id: zId, name: z.string(), taxCode: z.string().nullable() })),
 });
 export type Party = z.infer<typeof zParty>;
+
+const zPartyName = z.object({ id: zId, name: z.string(), taxCode: z.string().nullable() });
+// Two parties that look like one (#887), and why: one enterprise's tax codes, the same phone, or names alike. keep is
+// the one to keep (the one with a tax code, else the older).
+export const zDuplicateHint = z.object({ keep: zPartyName, duplicate: zPartyName, reasons: z.array(z.enum(['tax_code', 'phone', 'name'])) });
 
 // An export a recorded document went out in (issue #878): the journal, or the MISA file of its direction, whose date
 // range took in the document's entry date; from and to are null for an open end.
@@ -820,6 +827,8 @@ export const SOCIAL_VARIANT_STATUSES = [
   'needs_attention',
   'paused',
   'cancelled',
+  // Taken down from its platform (#860).
+  'removed',
 ] as const;
 export const SOCIAL_POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled'] as const;
 export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as const;
@@ -949,6 +958,11 @@ export const zSocialVariant = z.object({
   attempt: z.number().int(),
   externalUrl: z.string().nullable(),
   publishedAt: z.string().nullable(),
+  // Taken down from its platform (#860): when, who asked and why; removal: where an ask on a published channel stands.
+  removedAt: z.string().nullable(),
+  removedBy: zId.nullable(),
+  removeReason: z.string().nullable(),
+  removal: z.object({ state: z.enum(['pending', 'failed', 'unknown']), code: z.string().nullable() }).nullable(),
   error: z
     .object({ kind: z.string().nullable(), code: z.string().nullable(), action: z.string().nullable(), message: z.string().nullable(), retryAt: z.string().nullable() })
     .nullable(),
@@ -1097,7 +1111,7 @@ export const zSocialReviewLinks = z.object({
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
 export const zSocialActivityItem = z.object({
   id: z.string(),
-  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed']),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed']),
   at: z.string(),
   userId: zId.nullable(),
   name: z.string().nullable(),
