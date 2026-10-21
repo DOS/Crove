@@ -126,7 +126,7 @@ import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconci
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
-import { zPersonalDataQuery, zPersonalDataResult } from './personal-data.ts';
+import { zPersonalDataErasure, zPersonalDataQuery, zPersonalDataResult } from './personal-data.ts';
 
 // Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told.
 export const zProposalPolicy = z.object({
@@ -172,6 +172,9 @@ export const contract = {
     // Owners and admins (issue #923, PDPL): every row of the org that holds a person's email, phone, or tax code or
     // national ID, with what an erasure would do to each, for the person's request to see or export their data.
     personalData: oc.input(zPersonalDataQuery).output(zPersonalDataResult),
+    // Owners only (issue #923). R3: needs fresh MFA. Erases the person's data the finder shows as "erase" and lists
+    // what it kept and why. A retry with the same idempotencyKey returns the first result.
+    personalDataErase: oc.input(zPersonalDataQuery.extend({ idempotencyKey: zId })).output(zPersonalDataErasure),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
     invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),

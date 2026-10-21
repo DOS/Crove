@@ -1,6 +1,9 @@
-// Finding a person's data under the PDPL (issue #923), on PostgreSQL 17: an owner or admin looks up an email address,
+// A person's data under the PDPL (issue #923), on PostgreSQL 17. Finding: an owner or admin looks up an email address,
 // a phone number in any common spelling, or a tax code, and gets every matching row of the org with what an erasure
 // would do to it; another org's rows never show; members cannot search; a value that is none of these is refused.
+// Erasing (owners, R3): the contact fields go, a party nothing in the books names loses its name and tax code too, a
+// party in the books keeps them, the mail recipient goes but its hash stays, a report schedule loses the address (and
+// goes when nobody is left), and the audit row holds counts only.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import type { PersonalDataResult } from '@crove/kernel-contract';
+import type { PersonalDataErasure, PersonalDataResult } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -23,7 +26,7 @@ suite('finding a person in the org (#923)', () => {
   let db: Db;
   let rt: Runtime;
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
-  let org = { orgId: '', owner: '', member: '' };
+  let org = { orgId: '', owner: '', admin: '', member: '' };
   let other = { orgId: '', owner: '' };
   let person = '';
 
@@ -41,6 +44,9 @@ suite('finding a person in the org (#923)', () => {
   const find = (value: string, user = org.owner, orgId = org.orgId) =>
     rt.query<PersonalDataResult>('kernel.personal_data.find', { value }, { actor: asUser(user), orgId });
   const columns = (result: PersonalDataResult) => result.matches.map((m) => m.column).sort();
+  const asMfa = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal2' as const, sessionId: randomUUID(), mfaAt: Math.floor(Date.now() / 1000) });
+  const erase = (value: string, user = org.owner) =>
+    rt.execute<PersonalDataErasure>('kernel.personal_data.erase', { value }, { actor: asMfa(user), orgId: org.orgId, idempotencyKey: randomUUID() });
 
   beforeAll(async () => {
     const root = new pg.Client({ connectionString: ADMIN });
@@ -60,8 +66,10 @@ suite('finding a person in the org (#923)', () => {
     rt = new Runtime(db).register({ commands: kernelCommands, queries: kernelQueries({ inboundDomain: null }) });
 
     const owner = await identity('owner');
-    org = { orgId: (await createOrg(rt, asUser(owner), `Org ${randomUUID().slice(0, 6)}`)).orgId, owner, member: await identity('member') };
-    await admin((c) => c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [org.orgId, org.member]));
+    org = { orgId: (await createOrg(rt, asUser(owner), `Org ${randomUUID().slice(0, 6)}`)).orgId, owner, admin: await identity('admin'), member: await identity('member') };
+    await admin((c) =>
+      c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'member')`, [org.orgId, org.admin, org.member]),
+    );
     const otherOwner = await identity('other');
     other = { orgId: (await createOrg(rt, asUser(otherOwner), `Other ${randomUUID().slice(0, 6)}`)).orgId, owner: otherOwner };
 
@@ -118,5 +126,91 @@ suite('finding a person in the org (#923)', () => {
     await expect(find('mau.nguyen@example.vn', org.member)).rejects.toMatchObject({ status: 403 });
     await expect(find('Nguyễn Văn Mẫu')).rejects.toMatchObject({ code: 'PERSONAL_DATA_QUERY', status: 422 });
     expect((await find('nobody@example.vn')).matches).toEqual([]);
+  });
+
+  it('erases the contact fields and keeps what the books name, telling which and why', async () => {
+    // A second person, in the books: a supplier on a recorded invoice (inserted as the superuser without the posting
+    // checks, which this test is not about).
+    const { rows } = await admin((c) =>
+      c.query<{ id: string }>(
+        `INSERT INTO crove_kernel.party (org_id, kind, name, tax_code, email, phone, address)
+         VALUES ($1, 'person', 'Trần Thị Sổ', '0309876546', 'so.tran@example.vn', '0987 654 321', '1 Đường Sổ') RETURNING id`,
+        [org.orgId],
+      ),
+    );
+    const booked = String(rows[0]?.id);
+    await admin(async (c) => {
+      await c.query('BEGIN');
+      await c.query("SET LOCAL session_replication_role = 'replica'");
+      await c.query(
+        `INSERT INTO crove_finance.purchase_document (org_id, party_id, invoice_series, invoice_number, invoice_date, subtotal, vat_amount, total)
+         VALUES ($1, $2, 'C26TAA', '1', '2026-09-01', 100, 10, 110)`,
+        [org.orgId, booked],
+      );
+      await c.query('COMMIT');
+    });
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_social.report_schedule (org_id, name, cadence, weekday, period, recipients, next_run_at, created_by)
+         VALUES ($1, 'Báo cáo tuần', 'weekly', 1, 'previous_week', ARRAY['so.tran@example.vn', 'ke.toan@example.vn'], now(), $2),
+                ($1, 'Chỉ một người', 'weekly', 1, 'previous_week', ARRAY['SO.TRAN@example.vn'], now(), $2)`,
+        [org.orgId, org.owner],
+      ),
+    );
+
+    // Owners only, with a fresh second factor (R3); an admin may search but not erase.
+    expect(columns(await find('so.tran@example.vn', org.admin))).toContain('crove_kernel.party.email');
+    await expect(erase('so.tran@example.vn', org.admin)).rejects.toMatchObject({ status: 403 });
+    await expect(erase('so.tran@example.vn', org.member)).rejects.toMatchObject({ status: 403 });
+    await expect(
+      rt.execute('kernel.personal_data.erase', { value: 'so.tran@example.vn' }, { actor: asUser(org.owner), orgId: org.orgId, idempotencyKey: randomUUID() }),
+    ).rejects.toMatchObject({ code: 'STEP_UP_REQUIRED' });
+
+    const result = await erase('So.Tran@example.vn');
+    expect(Object.fromEntries(result.erased.map((e) => [e.column, e.rows]))).toEqual({
+      'crove_kernel.party.email': 1,
+      'crove_kernel.party.phone': 1,
+      'crove_kernel.party.address': 1,
+      'crove_social.report_schedule.recipients': 2,
+    });
+    const party = (await admin((c) => c.query('SELECT name, tax_code, email, phone, address FROM crove_kernel.party WHERE id = $1', [booked]))).rows[0];
+    expect(party).toEqual({ name: 'Trần Thị Sổ', tax_code: '0309876546', email: null, phone: null, address: null });
+    const schedules = (await admin((c) => c.query('SELECT name, recipients FROM crove_social.report_schedule WHERE org_id = $1', [org.orgId]))).rows;
+    expect(schedules).toEqual([{ name: 'Báo cáo tuần', recipients: ['ke.toan@example.vn'] }]);
+    // Erasing by the tax code now keeps the party's name and code, as the books need them.
+    const byCode = await erase('0309876546');
+    expect(byCode.erased).toEqual([]);
+    expect(byCode.kept).toEqual([{ column: 'crove_kernel.party.tax_code', rows: 1, reason: expect.stringContaining('accounting records') }]);
+  });
+
+  it('forgets a party the books do not name, drops the mail recipient but keeps its hash, and audits counts only', async () => {
+    const result = await erase('mau.nguyen@example.vn');
+    expect(Object.fromEntries(result.erased.map((e) => [e.column, e.rows]))).toEqual({
+      'crove_kernel.party.email': 1,
+      'crove_kernel.party.phone': 1,
+      'crove_kernel.party.name': 1,
+      'crove_kernel.party.tax_code': 1,
+      'crove_kernel.mail_message.to_address': 1,
+      'crove_kernel.tenant.contact_email': 1,
+    });
+    expect(result.kept).toEqual([]);
+    const party = (await admin((c) => c.query('SELECT name, tax_code, email, phone FROM crove_kernel.party WHERE id = $1', [person]))).rows[0];
+    expect(party).toEqual({ name: 'Đã xóa theo yêu cầu', tax_code: null, email: null, phone: null });
+    const mail = (await admin((c) => c.query('SELECT to_address, to_hash FROM crove_kernel.mail_message WHERE org_id = $1', [org.orgId]))).rows[0];
+    expect(mail).toEqual({ to_address: null, to_hash: 'a'.repeat(63) + '0' });
+    // Nothing is left to find, and the other org still has its copy.
+    expect((await find('mau.nguyen@example.vn')).matches).toEqual([]);
+    expect((await find('mau.nguyen@example.vn', other.owner, other.orgId)).matches.length).toBeGreaterThan(0);
+    // The audit row carries the counts, not the address.
+    const audit = (
+      await admin((c) =>
+        c.query<{ detail: unknown }>(
+          `SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.personal_data.erase' AND outcome = 'ok' ORDER BY id DESC LIMIT 1`,
+          [org.orgId],
+        ),
+      )
+    ).rows[0];
+    expect(JSON.stringify(audit)).not.toContain('mau.nguyen');
+    expect(audit?.detail).toMatchObject({ kind: 'email', erased: { 'crove_kernel.party.email': 1 } });
   });
 });

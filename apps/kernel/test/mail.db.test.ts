@@ -325,7 +325,8 @@ suite('outbound mail in the kernel (#538)', () => {
       ),
     ).rejects.toThrow(/MAIL_MESSAGE_INSERT|mail_message_sent/);
 
-    // The tenant role updates only the status columns, and deletes nothing.
+    // The tenant role updates only the status columns, and the recipient address, which the guard lets only be dropped
+    // (a PDPL erasure, #923); it deletes nothing.
     const privileges = await admin(
       async (c) =>
         (
@@ -335,7 +336,7 @@ suite('outbound mail in the kernel (#538)', () => {
           )
         ).rows,
     );
-    expect(privileges.filter((p) => p.upd).map((p) => p.col)).toEqual(['attempts', 'error_code', 'provider', 'provider_message_id', 'sent_at', 'status', 'updated_at']);
+    expect(privileges.filter((p) => p.upd).map((p) => p.col)).toEqual(['attempts', 'error_code', 'provider', 'provider_message_id', 'sent_at', 'status', 'to_address', 'updated_at']);
     expect(await admin(async (c) => (await c.query<{ d: boolean }>("SELECT has_table_privilege('crove_tenant', 'crove_kernel.mail_message', 'DELETE') AS d")).rows[0]?.d)).toBe(false);
 
     // A suppression: lifted once, then frozen; its identity never changes.
