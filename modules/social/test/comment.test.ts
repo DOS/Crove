@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COMMENT_STALE_MS, commentStatus, type CommentCall } from '../src/comments.ts';
+import { pinStatus, wantsPin } from '../src/pin.ts';
 import { threadStatus } from '../src/thread.ts';
 import { autoReplyOf, repostRuleOf, type Provider } from '../src/domain/channels.ts';
 import { validateVariant } from '../src/domain/validate.ts';
@@ -117,5 +118,25 @@ describe('first comments (#587)', () => {
     expect(commentStatus([{ ...call('failed', old, 'a'), error_code: 'RECONNECT_FOR_COMMENTS' }, call('failed', fresh, 'b')], now, ago(old))).toBe('failed');
     // An older call answered after a newer one began still counts as posted.
     expect(commentStatus([call('succeeded', old, 'a'), call('started', fresh, 'b')], now, ago(old))).toBe('posted');
+  });
+
+  it('shows a Telegram pin like a first comment, and a bot without the right as its own warning (#982)', () => {
+    const now = new Date('2026-10-20T10:00:00Z');
+    const ago = (ms: number) => new Date(now.getTime() - ms);
+    const call = (state: CommentCall['state'], startedMs: number, error_code: string | null = null): CommentCall => ({ key: 'k', state, external_ref: null, error_code, started_at: ago(startedMs) });
+    const old = COMMENT_STALE_MS + 1;
+    expect(pinStatus(undefined, now, ago(60_000))).toBe('pending');
+    expect(pinStatus(undefined, now, ago(old))).toBe('failed');
+    expect(pinStatus(call('started', 60_000), now, ago(old))).toBe('pending');
+    expect(pinStatus(call('started', old), now, ago(old))).toBe('unknown');
+    expect(pinStatus(call('succeeded', 60_000), now, ago(old))).toBe('pinned');
+    expect(pinStatus(call('failed', 60_000, 'TELEGRAM_CANNOT_PIN'), now, ago(old))).toBe('not_allowed');
+    expect(pinStatus(call('failed', 60_000, 'TELEGRAM_400'), now, ago(old))).toBe('failed');
+    expect(pinStatus(call('ambiguous', 60_000), now, ago(old))).toBe('unknown');
+    // Only a Telegram variant that asks for it is pinned.
+    expect(wantsPin({ provider: 'telegram', settings: { telegram: { pin: true } } })).toBe(true);
+    expect(wantsPin({ provider: 'telegram', settings: { telegram: { silent: true } } })).toBe(false);
+    expect(wantsPin({ provider: 'telegram', settings: { telegram: { pin: 'yes' } } })).toBe(false);
+    expect(wantsPin({ provider: 'mastodon', settings: { telegram: { pin: true } } })).toBe(false);
   });
 });

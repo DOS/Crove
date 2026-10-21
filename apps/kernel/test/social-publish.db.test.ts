@@ -6,12 +6,12 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { FacebookPagePublisher, SandboxPublisher, TikTokPublisher, type Publisher, type PublishInput, type PublishResult, type ReconcileInput, type ReconcileResult, type RetrySafety } from '@crove/channel';
+import { FacebookPagePublisher, SandboxPublisher, TelegramPublisher, TikTokPublisher, type Publisher, type PublishInput, type PublishResult, type ReconcileInput, type ReconcileResult, type RetrySafety } from '@crove/channel';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey, type BlobStore } from '@crove/kernel-runtime';
-import { captureKey, runCommentJob, runPublishJob, runThreadJob, socialCommands, socialQueries, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
+import { captureKey, runCommentJob, runPinJob, runPublishJob, runThreadJob, socialCommands, socialQueries, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
 import { shortLinkTarget } from '../src/short-link.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -963,6 +963,99 @@ suite('social publishing on PostgreSQL (S4)', () => {
       ),
     );
     expect(rows.map((r) => r.role)).toEqual(['crove_worker']);
+  });
+
+  // #982: the Telegram publisher through the same pipeline, against recorded Bot API answers: a silent post, and a pin
+  // as its own step after it.
+  describe('Telegram silent and pinned posts', () => {
+    const TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw1';
+    const CHAT = '-1001234567890';
+    function botApi(answers: Record<string, { status?: number; body: unknown }[]>) {
+      const asked: { method: string; json: Record<string, unknown> }[] = [];
+      const fetchImpl = async (input: string, init?: RequestInit) => {
+        const method = new URL(input).pathname.split('/').at(-1) as string;
+        asked.push({ method, json: typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {} });
+        const answer = answers[method]?.shift() ?? { status: 500, body: { ok: false, error_code: 500, description: `no answer for ${method}` } };
+        return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
+      };
+      return { asked, publisher: new TelegramPublisher(fetchImpl) };
+    }
+    const ok = (result: unknown) => ({ body: { ok: true, result } });
+
+    // A Telegram post with these settings, approved and due on a fresh channel.
+    async function dueTelegram(o: { orgId: string; owner: string }, settings: Record<string, unknown>) {
+      const sealed = vault.seal(JSON.stringify({ botToken: TOKEN, username: 'quanpho' }), { orgId: o.orgId, provider: 'telegram', externalAccountId: CHAT });
+      const { connectionId } = await exec<{ connectionId: string }>(o, 'kernel.channel.connect', {
+        provider: 'telegram',
+        externalAccountId: CHAT,
+        displayName: 'Quán Phở',
+        scopes: [],
+        expiresAt: null,
+        credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+      });
+      const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Khai trương', channels: [{ connectionId, settings }] });
+      await exec(o, 'social.post.submit', { postId });
+      const post = await get(o, postId);
+      await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+      await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+      await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+      return { postId, id: post.variants[0]?.id as string };
+    }
+    const runOn = (o: { orgId: string }, id: string, telegram: Publisher) => runPublishJob({ runtime: worker, broker: vault, publishers: { telegram }, callTimeoutMs: 2_000 }, o.orgId, id, 'telegram');
+
+    it('sends a silent post without a sound and pins it afterwards, as its own step', async () => {
+      const o = await org();
+      const { asked, publisher } = botApi({ sendMessage: [ok({ message_id: 42 })], pinChatMessage: [ok(true)] });
+      const { postId, id } = await dueTelegram(o, { telegram: { silent: true, pin: true } });
+      expect(await runOn(o, id, publisher)).toEqual({ action: 'call', status: 'published' });
+      expect(asked).toEqual([
+        { method: 'sendMessage', json: { chat_id: CHAT, text: 'Khai trương', disable_notification: true } },
+        { method: 'pinChatMessage', json: { chat_id: CHAT, message_id: 42, disable_notification: true } },
+      ]);
+      const v = await variant(o, postId);
+      expect([v.status, v.externalUrl, v.pinStatus]).toEqual(['published', 'https://t.me/quanpho/42', 'pinned']);
+      expect(await calls(id)).toEqual([
+        { key: `social.publish:${id}:1:1:publish`, state: 'succeeded', calls: 1 },
+        { key: `social.publish:${id}:1:1:pin`, state: 'succeeded', calls: 1 },
+      ]);
+    });
+
+    it('leaves the post published with a warning when the bot may not pin, and never posts or pins again', async () => {
+      const o = await org();
+      const { asked, publisher } = botApi({ sendMessage: [ok({ message_id: 43 })], pinChatMessage: [{ status: 400, body: { ok: false, error_code: 400, description: 'Bad Request: not enough rights to manage pinned messages in the chat' } }] });
+      const { postId, id } = await dueTelegram(o, { telegram: { pin: true } });
+      expect(await runOn(o, id, publisher)).toEqual({ action: 'call', status: 'published' });
+      const v = await variant(o, postId);
+      expect([v.status, v.error, v.pinStatus]).toEqual(['published', null, 'not_allowed']);
+      expect((await get(o, postId)).status).toBe('published');
+      // Not silent: the post and the pin go out as usual.
+      expect(asked).toEqual([
+        { method: 'sendMessage', json: { chat_id: CHAT, text: 'Khai trương' } },
+        { method: 'pinChatMessage', json: { chat_id: CHAT, message_id: 43 } },
+      ]);
+      expect(await calls(id)).toEqual([
+        { key: `social.publish:${id}:1:1:publish`, state: 'succeeded', calls: 1 },
+        { key: `social.publish:${id}:1:1:pin`, state: 'failed', calls: 1 },
+      ]);
+      const events = await admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.variant.pin_failed'", [o.orgId])).rows);
+      expect(events.map((e) => e.payload)).toEqual([{ post_id: postId, variant_id: id, code: 'TELEGRAM_CANNOT_PIN' }]);
+      // Another run, or another pin job, sends nothing more.
+      expect(await runOn(o, id, publisher)).toEqual({ action: 'none', reason: 'published' });
+      expect(await runPinJob({ runtime: worker, broker: vault, publishers: { telegram: publisher }, callTimeoutMs: 2_000 }, o.orgId, id, 'telegram')).toEqual({ action: 'none', reason: 'done' });
+      expect(asked).toHaveLength(2);
+      // The worker alone begins a pin.
+      await expect(exec(o, 'social.pin.begin', { variantId: id, provider: 'telegram' })).rejects.toMatchObject({ status: 403 });
+    });
+
+    it('sends a post as usual without either option, with no pin', async () => {
+      const o = await org();
+      const { asked, publisher } = botApi({ sendMessage: [ok({ message_id: 44 })] });
+      const { postId, id } = await dueTelegram(o, {});
+      expect(await runOn(o, id, publisher)).toEqual({ action: 'call', status: 'published' });
+      expect(asked).toEqual([{ method: 'sendMessage', json: { chat_id: CHAT, text: 'Khai trương' } }]);
+      expect((await variant(o, postId)).pinStatus).toBeNull();
+      expect(await calls(id)).toEqual([{ key: `social.publish:${id}:1:1:publish`, state: 'succeeded', calls: 1 }]);
+    });
   });
 
   // S6.2 (#371): the Facebook Page publisher through the same pipeline, against recorded Graph answers.

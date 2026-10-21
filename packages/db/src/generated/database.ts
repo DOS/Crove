@@ -629,7 +629,7 @@ export interface KernelMailMessageTable {
   source_id: ColumnType<string | null, string | null, NotGranted>;
   template_key: ColumnType<string, string, NotGranted>;
   template_version: ColumnType<number, number | undefined, NotGranted>;
-  to_address: ColumnType<string | null, string | null, NotGranted>;
+  to_address: string | null;
   to_hash: ColumnType<string, string, NotGranted>;
   subject: ColumnType<string | null, string | null, NotGranted>;
   payload: ColumnType<unknown, string | null | undefined, NotGranted>;

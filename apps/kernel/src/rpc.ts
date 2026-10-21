@@ -310,6 +310,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       auditCommands: os.org.auditCommands.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.audit.commands', {}, { actor, orgId }))),
       auditExport: os.org.auditExport.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.audit.export', input, { actor, orgId }))),
       personalData: os.org.personalData.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.personal_data.find', input, { actor, orgId }))),
+      personalDataErase: os.org.personalDataErase.handler(({ context, input }) => keyed(context, 'kernel.personal_data.erase', input)),
       // No idempotency key: the answer carries the invite token, which must never be stored with a key. The mail
       // goes out after the command has committed (invite-mail.ts says why), unless the org stopped mail to the
       // address (#538); its outcome is recorded on the invite's mail_message row and never changes the answer, which
