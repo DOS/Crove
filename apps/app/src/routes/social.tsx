@@ -25,7 +25,7 @@ import { ReportSchedules } from '../components/social-report-schedules.tsx';
 import type { BulkAction } from '../lib/social-bulk.ts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
-import { AccountGrowth, TopPosts } from '../components/social-growth.tsx';
+import { AccountGrowth, ChangeChip, ChannelTotals, TopPosts } from '../components/social-growth.tsx';
 import { WhatWorks } from '../components/social-insights.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
@@ -118,6 +118,9 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
   // Clicks on Crove's short links (#706), where a channel sends its links through them.
   const clicks = totals.data ? totals.data.clicks : data.some((r) => r.clicks !== null) ? data.reduce((sum, r) => sum + (r.clicks ?? 0), 0) : null;
   const hasClicks = clicks !== null;
+  // The same totals of the window just before (#947), for the change next to each.
+  const previous = totals.data?.previous;
+  const against = t('growth.change.days', { days: String(days) });
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -142,19 +145,29 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {totals.data && (
+              <Card className="block p-4">
+                <p className="text-xs text-subtle-foreground">{t('growth.posts')}</p>
+                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{f.number(totals.data.posts)}</p>
+                <ChangeChip current={totals.data.posts} previous={previous?.posts} against={against} withPrevious className="mt-1" />
+              </Card>
+            )}
             {METRIC_COLUMNS.map((m) => (
               <Card key={m} className="block p-4">
                 <p className="text-xs text-subtle-foreground">{t(`metric.${m}`)}</p>
                 <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{totals.isLoading ? '…' : f.number(total(m))}</p>
+                {previous && <ChangeChip current={total(m)} previous={previous.metrics[m]} against={against} withPrevious className="mt-1" />}
               </Card>
             ))}
             {hasClicks && (
               <Card className="block p-4">
                 <p className="text-xs text-subtle-foreground">{t('metricsClicks')}</p>
                 <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{totals.isLoading ? '…' : f.number(clicks ?? 0)}</p>
+                {previous && <ChangeChip current={clicks} previous={previous.clicks} against={against} withPrevious className="mt-1" />}
               </Card>
             )}
           </div>
+          {totals.data && totals.data.channels.length > 0 && <ChannelTotals current={totals.data.channels} previous={previous?.channels ?? []} days={days} names={names} />}
           {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t(totals.data ? 'metricsCapped' : 'metricsCappedPartial')}</p>}
           <BestTimes rows={data} names={names} />
       <WhatWorks slug={slug} days={days} labelId={labelId} names={names} />

@@ -49,6 +49,12 @@ function useLine() {
         return t('text.feed_paused', { feed: n.detail.feed ?? '' });
       case 'review_reminder':
         return t(n.detail.stage === 'due' ? 'text.reminder_due' : 'text.reminder_waiting');
+      // The org's publishing held or released (#946).
+      case 'publishing_hold': {
+        if (n.detail.state !== 'released') return t('text.publishing_held', { actor, reason: n.detail.reason ?? '' });
+        const count = Number(n.detail.heldTooLong ?? 0);
+        return count > 0 ? t('text.publishing_released_stale', { actor, count }) : t('text.publishing_released', { actor });
+      }
       default:
         return t(`text.${n.kind}`, { actor });
     }

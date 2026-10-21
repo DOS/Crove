@@ -55,6 +55,9 @@ export type VariantEvent =
   // nextAction said 'manual': the outcome cannot be found out, a human decides.
   | { type: 'needs_human' }
   | { type: 'reconciled'; found: boolean }
+  // The org's publishing hold (#946) kept a scheduled variant more than an hour past its time: on release it does not go
+  // out by itself. Nothing was sent, so it ends like a refused post: a person publishes it now, edits it or cancels it.
+  | { type: 'held_too_long' }
   // A human's call on a failed or needs_attention variant: publish again, drop it, or confirm that it is on the
   // platform after all (they looked).
   | { type: 'retry' }
@@ -97,6 +100,7 @@ const TABLE: Readonly<Record<Exclude<VariantEvent['type'], 'edit' | 'cancel' | '
   rate_limited: { publishing: 'scheduled' },
   unknown: { publishing: 'ambiguous', processing: 'ambiguous' },
   needs_human: { publishing: 'needs_attention', ambiguous: 'needs_attention' },
+  held_too_long: { scheduled: 'failed' },
   retry: { needs_attention: 'scheduled', failed: 'scheduled' },
   drop: { needs_attention: 'cancelled' },
   confirm_published: { needs_attention: 'published' },

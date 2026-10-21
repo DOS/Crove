@@ -1959,6 +1959,8 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
       if (v.error?.code && v.error.code in WORDPRESS_TERM_OUTCOMES) {
         return <p className="text-destructive [overflow-wrap:anywhere]">{t(`outcome.${WORDPRESS_TERM_OUTCOMES[v.error.code] as WordPressTermOutcome}`, { name: v.error.message ?? '' })}</p>;
       }
+      // Kept by the org's publishing hold until more than an hour past its time (#946): nothing was sent.
+      if (v.error?.code === 'HELD_TOO_LONG') return <p className="text-warning">{t('outcome.heldTooLong')}</p>;
       // TikTok refused an inbox upload for the missing video.upload grant (#903): a reconnect fixes it.
       if (v.error?.code === 'CHANNEL_SCOPE_MISSING') {
         return (

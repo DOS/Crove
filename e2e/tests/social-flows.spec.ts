@@ -306,7 +306,7 @@ test('shows the latest metrics of a published channel on the post and in the Met
   const row = panel.getByRole('row').filter({ has: page.getByRole('link', { name: body }) });
   await expect(row.getByRole('cell')).toHaveText([new RegExp(`^${body}`), '1.234', '56', '7', '3']);
   await expect(row).toContainText(channel);
-  await expect(panel.locator('[data-slot="card"]').filter({ hasText: 'Người tiếp cận' })).toContainText('1.234');
+  await expect(panel.locator('[data-slot="card"]').filter({ hasText: 'Người tiếp cận', hasNot: page.locator('table') })).toContainText('1.234');
   // The best post of the window (#645), and the channel's followers over it from the daily snapshots.
   await expect(panel.locator('[data-slot="card"]').filter({ hasText: 'Bài nổi bật trong khoảng này' })).toContainText(body);
   exec(
@@ -337,7 +337,7 @@ test('shows the latest metrics of a published channel on the post and in the Met
     await client.goto(link);
     await expect(client.getByRole('heading', { name: 'Báo cáo hôm nay' })).toBeVisible();
     await expect(client.getByText('Công ty Số Liệu')).toBeVisible();
-    await expect(client.locator('[data-slot="card"]').filter({ hasText: 'Người tiếp cận' })).toContainText('1.234');
+    await expect(client.locator('[data-slot="card"]').filter({ hasText: 'Người tiếp cận', hasNot: client.locator('table') })).toContainText('1.234');
     await expect(client.getByRole('row').filter({ hasText: channel })).toContainText('1.234');
     await expect(client.getByRole('listitem').filter({ hasText: body })).toContainText('Cảm xúc: 56');
     await expect(client.getByRole('button', { name: 'In hoặc lưu PDF' })).toBeVisible();

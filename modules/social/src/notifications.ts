@@ -4,7 +4,7 @@
 // channel that failed or needs attention tells the owners, the admins and the author; an expired channel tells the
 // owners and admins; an internal comment or a client's answer tells the author and the people who commented before;
 // an assignment tells the assignee; a reminder of a post still waiting for review (#703) tells the owners and admins who
-// have not approved its current content yet. Never the person who acted, never a kind the person turned off, and only people
+// have not approved its current content yet; a publishing hold put on or taken off (#946) tells the whole team. Never the person who acted, never a kind the person turned off, and only people
 // who are members when it is written. Each member reads and marks only their own (a restrictive policy).
 //
 // Email (#579): the kinds someone must act on (a post to review, a decision, a failed or stuck post, an expired channel)
@@ -43,6 +43,9 @@ export const NOTIFYING_EVENTS = [
   'social.post.assigned',
   'social.review.reminder',
   'social.feed.paused',
+  // The org's publishing held and released (#946): the whole team is told.
+  'social.publishing.held',
+  'social.publishing.released',
   // Not a notice: a member's links stop working when they lose the right to make them (#625).
   'kernel.member.removed',
   'kernel.member.role_changed',
@@ -188,6 +191,22 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
       const feed = await ctx.trx.selectFrom('crove_social.feed').select(['url', 'title']).where('org_id', '=', ctx.orgId).where('id', '=', e.data.feed_id).executeTakeFirst();
       if (!feed) return null;
       return { ...base, kind: 'feed_paused', users: await deciders(ctx), postId: null, detail: { feed: (feed.title ?? feed.url).slice(0, 300) } };
+    }
+    case 'social.publishing.held':
+    case 'social.publishing.released': {
+      const e = z.object({ hold_id: zId, held_too_long: z.number().int().min(0).optional() }).safeParse(payload);
+      if (!e.success) return null;
+      const hold = await ctx.trx.selectFrom('crove_social.publish_hold').select('reason').where('org_id', '=', ctx.orgId).where('id', '=', e.data.hold_id).executeTakeFirst();
+      if (!hold) return null;
+      const team = await ctx.trx.selectFrom('crove_kernel.tenant_member').select('user_id').where('org_id', '=', ctx.orgId).execute();
+      const released = type === 'social.publishing.released';
+      return {
+        ...base,
+        kind: 'publishing_hold',
+        users: team.map((m) => m.user_id),
+        postId: null,
+        detail: { state: released ? 'released' : 'held', reason: [...hold.reason].slice(0, 300).join(''), ...(released ? { heldTooLong: String(e.data.held_too_long ?? 0) } : {}) },
+      };
     }
     case 'social.review.reminder': {
       const e = z.object({ post_id: zId, stage: z.enum(['waiting', 'due']), variant_ids: z.array(zId).min(1).max(100) }).safeParse(payload);

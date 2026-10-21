@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { engagementOf, growthOf, sparkline, topPosts } from '../src/lib/social-growth.ts';
+import { changeOf, engagementOf, growthOf, sparkline, topPosts } from '../src/lib/social-growth.ts';
 
 describe('account growth (#645)', () => {
   it('gives the latest followers, the change over the window and the latest reach', () => {
@@ -30,5 +30,38 @@ describe('account growth (#645)', () => {
     expect(engagementOf(rows[1]?.metrics ?? {})).toBe(10);
     expect(topPosts(rows, 2).map((r) => r.id)).toEqual(['b', 'a']);
     expect(topPosts(rows, 5).map((r) => r.id)).toEqual(['b', 'a', 'd']);
+  });
+});
+
+describe('change against the period before (#947)', () => {
+  it('gives no change when the period before has no data or is zero', () => {
+    expect(changeOf(120, null)).toBeNull();
+    expect(changeOf(120, undefined)).toBeNull();
+    expect(changeOf(120, 0)).toBeNull();
+    expect(changeOf(0, 0)).toBeNull();
+    expect(changeOf(null, null)).toBeNull();
+    expect(changeOf(5, Number.NaN)).toBeNull();
+  });
+
+  it('goes up and down, and counts a missing count now as none', () => {
+    expect(changeOf(112, 100)).toEqual({ percent: 12, direction: 'up' });
+    expect(changeOf(75, 100)).toEqual({ percent: -25, direction: 'down' });
+    expect(changeOf(0, 40)).toEqual({ percent: -100, direction: 'down' });
+    expect(changeOf(undefined, 40)).toEqual({ percent: -100, direction: 'down' });
+    expect(changeOf(300, 100)).toEqual({ percent: 200, direction: 'up' });
+    expect(changeOf(100, 100)).toEqual({ percent: 0, direction: 'same' });
+  });
+
+  it('rounds to a whole percent from 10% up and to one decimal below, the same way both ways', () => {
+    expect(changeOf(1123, 1000)).toEqual({ percent: 12, direction: 'up' });
+    expect(changeOf(1125, 1000)).toEqual({ percent: 13, direction: 'up' });
+    expect(changeOf(875, 1000)).toEqual({ percent: -13, direction: 'down' });
+    expect(changeOf(1034, 1000)).toEqual({ percent: 3.4, direction: 'up' });
+    expect(changeOf(966, 1000)).toEqual({ percent: -3.4, direction: 'down' });
+    expect(changeOf(2, 3)).toEqual({ percent: -33, direction: 'down' });
+    // Below a twentieth of a percent: no change, and no negative zero.
+    const tiny = changeOf(99_999, 100_000);
+    expect(tiny).toEqual({ percent: 0, direction: 'same' });
+    expect(Object.is(tiny?.percent, -0)).toBe(false);
   });
 });

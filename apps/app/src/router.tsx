@@ -47,6 +47,7 @@ import { PortalListPage } from './routes/portal-list.tsx';
 import { VendorsPage } from './routes/vendors.tsx';
 import { CustomersPage } from './routes/customers.tsx';
 import { VouchersPage } from './routes/vouchers.tsx';
+import { PublishHoldBanner } from './components/social-publish-hold.tsx';
 import { FixedAssetsPage } from './routes/fixed-assets.tsx';
 
 async function requireSession() {
@@ -232,7 +233,18 @@ const guideRoute = createRoute({ getParentRoute: () => orgRoute, path: 'guide', 
 const requireSocial = ({ params }: { params: { slug: string } }) => {
   if (!getConfig().modules.includes('social')) throw redirect({ to: '/o/$slug/inbox', params: { slug: params.slug } });
 };
-const socialRoute = createRoute({ getParentRoute: () => orgRoute, path: 'social', beforeLoad: requireSocial, component: () => <Outlet /> });
+// Every Social page shows the org's publishing hold (#946) above it while one is on.
+const socialRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: 'social',
+  beforeLoad: requireSocial,
+  component: () => (
+    <>
+      <PublishHoldBanner />
+      <Outlet />
+    </>
+  ),
+});
 const socialIndexRoute = createRoute({ getParentRoute: () => socialRoute, path: '/', validateSearch: parseSocialSearch, component: SocialPage });
 // ?at=<ISO time>: the calendar starts a post planned for that time (#580); ?idea=<id>: a draft made from an idea (#701).
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

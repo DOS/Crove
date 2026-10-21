@@ -95,6 +95,7 @@ export interface CroveSocialSchema {
   'crove_social.post_label': SocialPostLabelTable;
   'crove_social.post_media': SocialPostMediaTable;
   'crove_social.post_variant': SocialPostVariantTable;
+  'crove_social.publish_hold': SocialPublishHoldTable;
   'crove_social.queue': SocialQueueTable;
   'crove_social.queue_slot': SocialQueueSlotTable;
   'crove_social.report_link': SocialReportLinkTable;
@@ -1236,6 +1237,17 @@ export interface SocialPostVariantTable {
   removed_by: string | null;
   remove_reason: string | null;
   remove_requested_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
+/** crove_social.publish_hold */
+export interface SocialPublishHoldTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  reason: ColumnType<string, string, NotGranted>;
+  held_by: ColumnType<string, string, NotGranted>;
+  held_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  released_by: string | null;
+  released_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.queue_slot */
