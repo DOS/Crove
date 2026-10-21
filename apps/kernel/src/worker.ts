@@ -6,7 +6,7 @@ import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
 import { vietnamToday } from '@crove/kernel-contract';
 import { DomainError, inboundKey, type AgentProgram, type BlobStore, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
-import { KERNEL_NOTIFYING_EVENTS, PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges } from '@crove/kernel';
+import { KERNEL_NOTIFYING_EVENTS, PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges, type UsageLimits } from '@crove/kernel';
 import type { InvoiceReader } from '@crove/agent';
 import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
@@ -212,6 +212,10 @@ export interface WorkerDeps {
   // The WORM fact stream (worm.ts, #891): the store batches go to and how long after a row is written it is archived.
   // Unset: nothing is archived.
   archive?: { store: ArchiveStore; lagSeconds: number };
+  // The per-org abuse limits (#675). Unset: nothing is checked (use is still recorded).
+  usageLimits?: UsageLimits;
+  // The AI model's price per million input and output tokens, in the unit of the ai_cost limit. Unset: AI costs 0.
+  aiPrice?: { inputPerMTok: string; outputPerMTok: string };
 }
 
 // A person asked for a published variant to come down from its platform (#860).
@@ -347,7 +351,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         const { fileIds } = await expandArchive({ runtime: deps.runtime, store: deps.store, extract: deps.extract }, orgId, archive, job.retryCount);
         console.log(`[extract] archive ${fileId}: ${fileIds.length} file(s)`);
       } else {
-        await extractAndPropose({ runtime: deps.runtime, store: deps.store, extractor: deps.extractor, extract: deps.extract }, orgId, fileId, version);
+        const done = await extractAndPropose(
+          { runtime: deps.runtime, store: deps.store, extractor: deps.extractor, extract: deps.extract, limits: deps.usageLimits, aiPrice: deps.aiPrice },
+          orgId,
+          fileId,
+          version,
+        );
+        // Over its org's daily limit (#675): read once the org is back under it, in its org's group as before.
+        if (done.deferred) {
+          await boss.send(QUEUES.extract, job.data, {
+            group: { id: orgId },
+            startAfter: new Date(done.deferred),
+            retryLimit: EXTRACT_RETRY_LIMIT,
+            retryDelay: 20,
+            retryBackoff: true,
+          });
+          console.log(`[extract] file ${fileId}: over the org's daily limit, deferred to ${done.deferred}`);
+        }
       }
     } catch (error) {
       console.error(`[extract] file ${fileId}${version ? ` version ${version}` : ''} attempt ${job.retryCount + 1}`, error);
@@ -394,10 +414,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     const label = job.data.sha256.slice(0, 12);
     try {
       const result = await processInboundEmail(
-        { runtime: deps.runtime, store: deps.store, domain: deps.inboundDomain, extract: deps.extract },
+        { runtime: deps.runtime, store: deps.store, domain: deps.inboundDomain, extract: deps.extract, limits: deps.usageLimits },
         job.data,
         job.retryCount,
       );
+      // Over its org's daily limit (#675): queued again for when the org is back under it, with its blob kept.
+      if ('deferred' in result) {
+        await boss.send(QUEUES.inbound, job.data, { singletonKey: job.data.blobId, startAfter: new Date(result.deferred), retryLimit: INBOUND_RETRY_LIMIT, retryDelay: 20, retryBackoff: true });
+        console.log(`[inbound] message ${label}: over the org's daily limit, deferred to ${result.deferred}`);
+        return;
+      }
       console.log(`[inbound] message ${label}: ${'bounce' in result ? `bounce report, ${result.bounce}` : result.duplicate ? 'duplicate' : `${result.fileIds.length} file(s)`}`);
     } catch (error) {
       // A message no org can receive (unknown or closed recipient, invalid content) is dropped, not retried.

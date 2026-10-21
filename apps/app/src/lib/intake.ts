@@ -20,6 +20,8 @@ export type IntakeState =
   // The server refused the upload (or it never arrived); error says why.
   | 'upload_failed'
   | 'processing'
+  // Kept for the org's next daily budget (#675).
+  | 'waiting'
   | 'proposed'
   | 'duplicate'
   | 'failed'
@@ -106,7 +108,7 @@ export function applyBatch(items: readonly IntakeItem[], batch: readonly BatchFi
   });
 }
 
-const SETTLED: ReadonlySet<IntakeState> = new Set(['upload_failed', 'proposed', 'duplicate', 'failed', 'rejected']);
+const SETTLED: ReadonlySet<IntakeState> = new Set(['upload_failed', 'waiting', 'proposed', 'duplicate', 'failed', 'rejected']);
 
 // The documents of the batch: an opened archive counts as the entries it held, anything else as itself.
 export function leaves(items: readonly IntakeItem[]): IntakeItem[] {
