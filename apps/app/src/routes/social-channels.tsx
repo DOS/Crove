@@ -13,6 +13,7 @@ import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { VoiceEditor } from '../components/social-brand-voice.tsx';
+import { WatermarkCard } from '../components/social-watermark.tsx';
 import { ChannelSetsCard } from '../components/social-channel-sets.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -404,6 +405,13 @@ export function SocialChannelsPage() {
               <p className="text-xs text-subtle-foreground">{t('voice.orgHint')}</p>
             </div>
             {!voices.isLoading && <VoiceEditor key={orgVoice?.updatedAt ?? 'none'} connectionId={null} voice={orgVoice} canEdit={isAdmin} />}
+          </Card>
+          <Card className="block space-y-2 p-4">
+            <div>
+              <p className="text-sm font-medium text-foreground">{t('watermark.title')}</p>
+              <p className="text-xs text-subtle-foreground">{t('watermark.hint')}</p>
+            </div>
+            <WatermarkCard canEdit={isAdmin} />
           </Card>
           {/* Once the channels are loaded: before, every set would read as having none left. */}
           {channels.data && <ChannelSetsCard channels={channels.data.filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />}
