@@ -369,6 +369,10 @@ export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> 
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
 export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram', 'mastodon', 'bluesky', 'pinterest', 'discord']);
 
+// The channels whose Crove adapter takes a published post down (#860); the others answer REMOVE_NOT_SUPPORTED until
+// their adapter learns it. Telegram lets a bot delete a channel post only within 48 hours of it.
+export const REMOVE_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'bluesky', 'mastodon', 'telegram', 'discord', 'x']);
+
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
   sandbox: {

@@ -9,7 +9,8 @@
 // disk posts them too. Mentions are never parsed: a post's text cannot ping @everyone, a role or a member. A webhook
 // has no idempotency key and cannot read the channel's history, so an unclear answer is left to a person
 // (publishSafety 'never').
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
+import type { ConnectedAccount, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type Fetch } from './oauth.ts';
 
@@ -65,11 +66,12 @@ class DiscordClient {
     this.fetch = allowlistedFetch(DISCORD_HOSTS, fetchImpl, timeoutMs);
   }
 
-  // One call on a webhook. The token is in the path, as the API takes it, and never logged.
-  async call<T>(webhookId: string, token: string, init: { method: 'GET' } | { method: 'POST'; body: string | FormData }): Promise<T | null> {
+  // One call on a webhook, or on one of its messages (DELETE). The token is in the path, as the API takes it, and never
+  // logged.
+  async call<T>(webhookId: string, token: string, init: { method: 'GET' } | { method: 'POST'; body: string | FormData } | { method: 'DELETE'; messageId: string }): Promise<T | null> {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (init.method === 'POST' && typeof init.body === 'string') headers['content-type'] = 'application/json';
-    const url = `${API}/webhooks/${webhookId}/${token}${init.method === 'POST' ? '?wait=true' : ''}`;
+    const url = `${API}/webhooks/${webhookId}/${token}${init.method === 'POST' ? '?wait=true' : init.method === 'DELETE' ? `/messages/${init.messageId}` : ''}`;
     const response = await this.fetch(url, { method: init.method, headers, ...(init.method === 'POST' ? { body: init.body } : {}) });
     const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
     if (!response.ok) throw new DiscordError(response.status, json, response.headers.get('retry-after'));
@@ -218,5 +220,23 @@ export class DiscordPublisher implements Publisher {
     const messageId = message?.id;
     if (typeof messageId !== 'string' || !/^\d{1,20}$/.test(messageId)) return { kind: 'unknown', code: 'NO_MESSAGE_ID' };
     return { kind: 'accepted', externalId: messageId, url: `https://discord.com/channels/${s.guildId}/${s.channelId}/${messageId}` };
+  }
+
+  // Deletes the webhook's message (#860): DELETE /webhooks/{id}/{token}/messages/{message}, answered 204. A message
+  // already gone (Unknown Message, 10008) counts as removed; a webhook gone (10015) or a changed token needs connecting
+  // again.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const s = discordSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_WEBHOOK_TOKEN' };
+    if (!SNOWFLAKE.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_WEBHOOK_ID' };
+    if (!/^\d{1,20}$/.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    const client = new DiscordClient(this.fetchImpl);
+    try {
+      await client.call(input.externalAccountId, s.token, { method: 'DELETE', messageId: input.externalId });
+      return { kind: 'removed' };
+    } catch (error) {
+      if (error instanceof DiscordError && error.status === 404 && error.code === 10008) return { kind: 'removed' };
+      return removeResult(discordResult(error));
+    }
   }
 }

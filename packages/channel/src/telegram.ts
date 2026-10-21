@@ -8,7 +8,8 @@
 // for an album of 2 to 10 photos and videos, the caption on the first. Files are uploaded with the call (photos up to
 // 10 MB, videos up to 50 MB), so a deployment storing files on local disk posts them too. The Bot API has no
 // idempotency key and cannot read a channel's history, so an unclear answer is left to a person (publishSafety 'never').
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
+import type { ConnectedAccount, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type Fetch } from './oauth.ts';
 
@@ -21,6 +22,8 @@ const ALBUM_MAX = 10;
 const TOKEN = /^\d{5,15}:[A-Za-z0-9_-]{30,64}$/;
 const USERNAME = /^@?([A-Za-z][A-Za-z0-9_]{4,31})$/;
 const CHAT_ID = /^-100\d{5,20}$/;
+// A post's id as publish returns it: the channel and the message.
+const POST_ID = /^(-100\d{5,20}):(\d{1,20})$/;
 
 export interface TelegramSecret {
   botToken: string;
@@ -239,5 +242,27 @@ export class TelegramPublisher implements Publisher {
     }
     if (typeof messageId !== 'number') return { kind: 'unknown', code: 'NO_MESSAGE_ID' };
     return { kind: 'accepted', externalId: `${chat}:${messageId}`, url: s.username ? `https://t.me/${s.username}/${messageId}` : null };
+  }
+
+  // Deletes the channel's message (#860) with deleteMessage. An album is named by its first message, the one with the
+  // caption, so only that one goes. A bot may delete a channel post only within 48 hours of it: Telegram then answers
+  // "message can't be deleted", which is TELEGRAM_CANNOT_DELETE (a person removes it in Telegram). A message already
+  // gone counts as removed.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const s = telegramSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_BOT_TOKEN' };
+    const parts = POST_ID.exec(input.externalId);
+    if (!parts || parts[1] !== input.externalAccountId) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    const client = new TelegramClient(this.fetchImpl);
+    try {
+      await client.call<boolean>(s.botToken, 'deleteMessage', { chat_id: parts[1], message_id: Number(parts[2]) });
+      return { kind: 'removed' };
+    } catch (error) {
+      if (error instanceof TelegramError && error.status === 400 && /message to delete not found/i.test(error.message)) return { kind: 'removed' };
+      if (error instanceof TelegramError && error.status === 400 && /can't be deleted/i.test(error.message)) {
+        return { kind: 'rejected', error: 'bad_request', code: 'TELEGRAM_CANNOT_DELETE', message: error.message };
+      }
+      return removeResult(telegramResult(error));
+    }
   }
 }

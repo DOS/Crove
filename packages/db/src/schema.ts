@@ -361,6 +361,8 @@ export const SOCIAL_VARIANT_STATUSES = [
   'needs_attention',
   'paused',
   'cancelled',
+  // Taken down from its platform (#860).
+  'removed',
 ] as const;
 export const SOCIAL_ORIGINS = ['human', 'ai'] as const;
 export const SOCIAL_ACTOR_ORIGINS = ['ui', 'api', 'mcp', 'agent', 'system'] as const;
