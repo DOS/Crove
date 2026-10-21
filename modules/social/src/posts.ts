@@ -44,6 +44,7 @@ import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { reviewInboxQueries } from './review-inbox.ts';
 import { attentionInboxQueries } from './attention-inbox.ts';
 import { libraryQueries, likeTerm } from './library.ts';
+import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
 import { commentCallsOf, commentCommands, commentStatus, type CommentStatus } from './comments.ts';
@@ -53,7 +54,7 @@ import { repostCommands } from './repost.ts';
 import { removeCallsOf, removeCommands, removeState, type RemoveState } from './remove.ts';
 import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { clientReviewCommands } from './client-review.ts';
-import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
+import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -690,6 +691,7 @@ export const variantSchedule = defineCommand({
         const at = timeOf(v);
         if (!at) throw new DomainError('SCHEDULE_REQUIRED', 422, 'Hãy chọn giờ đăng hoặc dùng hàng đợi');
         if (at.getTime() <= ctx.now.getTime()) throw new DomainError('SCHEDULE_IN_PAST', 422, 'Giờ đăng phải ở tương lai', { variantId: v.id });
+        refuseRemoveAtMisfit(v, at);
       }
     }
     const scheduled: Array<{ variantId: string; at: string }> = [];
@@ -707,6 +709,7 @@ export const variantSchedule = defineCommand({
         // A post's labels pick the slots of their content categories first (#745).
         const slot = nextFreeSlot(queue.spec, ctx.now.getTime(), await takenSlots(ctx.trx, ctx.orgId, v.channel_connection_id, v.id), 366, await postLabels());
         if (slot === null) throw new DomainError('QUEUE_FULL', 409, 'Hàng đợi của kênh này đã kín trong năm tới', { variantId: v.id });
+        refuseRemoveAtMisfit(v, new Date(slot));
         await setVariant(ctx, v.id, { status, queue_slot_at: new Date(slot), scheduled_at: null, error_retry_at: null });
         scheduled.push({ variantId: v.id, at: new Date(slot).toISOString() });
       } else {
@@ -754,6 +757,7 @@ export const variantReschedule = defineCommand({
     if (v.status !== 'scheduled') throw new DomainError('VARIANT_STATE', 409, 'Chỉ đổi giờ được kênh đã lên lịch', { variantId: v.id, status: v.status });
     const at = new Date(Date.parse(input.at));
     if (at.getTime() <= ctx.now.getTime()) throw new DomainError('SCHEDULE_IN_PAST', 422, 'Giờ đăng phải ở tương lai', { variantId: v.id });
+    refuseRemoveAtMisfit(v, at);
     // A variant waiting on a slot of a paused queue stays held by the pause: moving it to an exact time would let it go out.
     if (v.queue_slot_at && !v.scheduled_at && !v.error_retry_at) {
       const queue = await ctx.trx.selectFrom('crove_social.queue').select('paused').where('org_id', '=', ctx.orgId).where('channel_connection_id', '=', v.channel_connection_id).executeTakeFirst();
@@ -1368,6 +1372,7 @@ export const socialCommands = [
   ...assignCommands,
   ...snippetCommands,
   ...labelCommands,
+  ...mediaTagCommands,
   ...ideaCommands,
   ...bioCommands,
   ...feedCommands,
@@ -1427,4 +1432,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];
+export const socialQueries = [postGet, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];

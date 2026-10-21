@@ -37,6 +37,7 @@ import {
   zSocialIdeaUpdate,
   zSocialLibraryItem,
   zSocialLibraryUse,
+  zSocialMediaTagCount,
   zSocialReportLink,
   zSocialReportSchedule,
   zSocialReportScheduleSave,
@@ -106,6 +107,7 @@ import {
   zVoucherType,
 } from './schemas.ts';
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
+import { zJournalVoucherRequest } from './journal-voucher.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
@@ -556,12 +558,23 @@ export const contract = {
       // postId is null for a plan link.
       revoke: oc.input(z.strictObject({ linkId: zId })).output(z.object({ linkId: zId, postId: zId.nullable() })),
     },
-    // The media library (S9): the org's post images, newest first, and the posts that show one.
+    // The media library (S9): the org's post images, newest first, and the posts that show one. Members tag files and
+    // the list filters by one tag, whatever its case (#904); tags lists the org's tags for the filter.
     media: {
       list: oc
-        .input(z.object({ search: z.string().trim().max(200).optional(), before: z.strictObject({ createdAt: z.iso.datetime({ offset: true }), fileId: zId }).optional(), limit: z.number().int().min(1).max(100).optional() }))
+        .input(
+          z.object({
+            search: z.string().trim().max(200).optional(),
+            tag: z.string().max(200).optional(),
+            before: z.strictObject({ createdAt: z.iso.datetime({ offset: true }), fileId: zId }).optional(),
+            limit: z.number().int().min(1).max(100).optional(),
+          }),
+        )
         .output(z.object({ items: z.array(zSocialLibraryItem), more: z.boolean() })),
       usage: oc.input(z.object({ fileId: zId })).output(z.array(zSocialLibraryUse)),
+      tags: oc.input(z.object({})).output(z.array(zSocialMediaTagCount)),
+      tag: oc.input(z.strictObject({ fileId: zId, tags: z.array(z.string().max(200)).min(1).max(20) })).output(z.object({ fileId: zId, tags: z.array(z.string()) })),
+      untag: oc.input(z.strictObject({ fileId: zId, tags: z.array(z.string().max(200)).min(1).max(20) })).output(z.object({ fileId: zId, tags: z.array(z.string()) })),
     },
     variants: {
       update: oc.input(zSocialVariantUpdate).output(z.object({ variantId: zId, revision: z.number().int(), changed: z.boolean() })),
@@ -696,6 +709,8 @@ export const contract = {
         z.discriminatedUnion('command', [
           z.object({ command: z.literal('finance.journal.reverse'), input: zJournalReversal, idempotencyKey: zId }),
           z.object({ command: z.literal('finance.voucher.record'), input: zCashVoucherRequest, idempotencyKey: zId }),
+          // A general journal voucher (NVK, #888) entered by hand.
+          z.object({ command: z.literal('finance.journal_voucher.record'), input: zJournalVoucherRequest, idempotencyKey: zId }),
         ]),
       )
       .output(z.object({ proposalId: zId })),

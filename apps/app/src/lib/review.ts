@@ -28,10 +28,10 @@ export function bulkSelectable(item: { status: string; failedChecks: number; kin
 // "matched" would claim a verification that never happened.
 export function showMatched(
   item: { kind: string; failedChecks: number; warnChecks: number; duplicateOf: string | null; requestedByAgent: unknown; extracted: boolean },
-  reversalKind: string,
-  voucherKind: string,
+  // The kinds approved as shown, with no checks: a reversal, a cash or bank voucher, a general journal voucher (#888).
+  ...plainKinds: string[]
 ): boolean {
-  if (item.kind === reversalKind || item.kind === voucherKind) return false;
+  if (plainKinds.includes(item.kind)) return false;
   if (item.requestedByAgent && !item.extracted) return false;
   return item.failedChecks === 0 && item.warnChecks === 0 && !item.duplicateOf;
 }

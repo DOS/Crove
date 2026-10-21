@@ -4,6 +4,7 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tans
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
+import { MAX_TAGS_PER_FILE, MEDIA_TAG_MAX_LENGTH, mediaTagKey, splitMediaTags } from '@crove/mod-social/contract';
 import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { cn } from '@crove/ui/lib/utils';
@@ -29,12 +30,12 @@ export const MAX_POST_MEDIA = 20;
 
 export type LibraryItem = Awaited<ReturnType<typeof client.social.media.list>>['items'][number];
 
-// The org's library (S9), page by page, newest first; search matches the file name.
-export function useLibrary(search: string, enabled = true) {
+// The org's library (S9), page by page, newest first; search matches the file name, tag one of its tags (#904).
+export function useLibrary(search: string, tag: string | null = null, enabled = true) {
   const term = search.trim();
   return useInfiniteQuery({
-    queryKey: ['social-library', term],
-    queryFn: ({ pageParam }) => client.social.media.list({ ...(term ? { search: term } : {}), ...(pageParam ? { before: pageParam } : {}) }),
+    queryKey: ['social-library', term, tag],
+    queryFn: ({ pageParam }) => client.social.media.list({ ...(term ? { search: term } : {}), ...(tag ? { tag } : {}), ...(pageParam ? { before: pageParam } : {}) }),
     initialPageParam: null as { createdAt: string; fileId: string } | null,
     getNextPageParam: (page) => {
       const last = page.items.at(-1);
@@ -45,6 +46,119 @@ export function useLibrary(search: string, enabled = true) {
   });
 }
 
+// The org's tags with how many files carry each (#904), under the library's key so a tag change refreshes both.
+export function useMediaTags() {
+  return useQuery({ queryKey: ['social-library', 'tags'], queryFn: () => client.social.media.tags({}) });
+}
+
+// The tag filter of the library: one tag at a time; a click on the chosen one shows every file again. A chosen tag no
+// file carries any more stays shown, so it can be cleared.
+export function TagFilter({ value, onChange }: { value: string | null; onChange: (tag: string | null) => void }) {
+  const t = useTranslations('social');
+  const tags = useMediaTags();
+  const all = tags.data ?? [];
+  const shown = value && !all.some((x) => mediaTagKey(x.tag) === mediaTagKey(value)) ? [{ tag: value, files: 0 }, ...all] : all;
+  if (shown.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('libraryTagFilter')}>
+      <span className="text-xs text-subtle-foreground">{t('libraryTagFilter')}</span>
+      {shown.map((x) => {
+        const on = value !== null && mediaTagKey(x.tag) === mediaTagKey(value);
+        return (
+          <button
+            key={mediaTagKey(x.tag)}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChange(on ? null : x.tag)}
+            className={cn(
+              'max-w-48 truncate rounded-4xl border px-2 py-0.5 text-xs transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
+              on ? 'border-primary bg-primary text-primary-foreground' : 'text-muted-foreground hover:border-ring/60 hover:text-foreground',
+            )}
+            title={x.tag}
+          >
+            {x.tag}
+            {x.files > 0 && <span className="ml-1 tabular-nums opacity-70">{x.files}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// A file's tags as chips (#904); members remove one with its button and add several at once, separated by commas.
+// Shown from the last answer of the server, so the chips are right even when the list moved on.
+export function MediaTagEditor({ fileId, tags: initial, canWrite }: { fileId: string; tags: readonly string[]; canWrite: boolean }) {
+  const t = useTranslations('social');
+  const [tags, setTags] = useState<readonly string[]>(initial);
+  const [typed, setTyped] = useState('');
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: ['social-library'] });
+  const add = useMutation({
+    mutationFn: (next: string[]) => client.social.media.tag({ fileId, tags: next }),
+    onSuccess: (r) => {
+      setTags(r.tags);
+      setTyped('');
+    },
+    onSettled: refresh,
+  });
+  const remove = useMutation({
+    mutationFn: (tag: string) => client.social.media.untag({ fileId, tags: [tag] }),
+    onSuccess: (r) => setTags(r.tags),
+    onSettled: refresh,
+  });
+  const fresh = splitMediaTags(typed).filter((x) => !tags.some((y) => mediaTagKey(y) === mediaTagKey(x)));
+  const full = tags.length + fresh.length > MAX_TAGS_PER_FILE;
+  const tooLong = fresh.some((x) => [...x].length > MEDIA_TAG_MAX_LENGTH);
+  const busy = add.isPending || remove.isPending;
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-medium text-muted-foreground">{t('libraryTags')}</p>
+      {tags.length === 0 ? (
+        <p className="text-xs text-subtle-foreground">{t('libraryTagNone')}</p>
+      ) : (
+        <ul className="flex flex-wrap gap-1.5">
+          {tags.map((tag) => (
+            <li key={tag} className="flex max-w-full items-center gap-0.5 rounded-4xl border px-2 py-0.5 text-xs text-foreground">
+              <span className="truncate" title={tag}>
+                {tag}
+              </span>
+              {canWrite && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-label={t('libraryTagRemove', { tag })}
+                  onClick={() => remove.mutate(tag)}
+                  className="rounded-full px-1 text-subtle-foreground hover:text-destructive focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50"
+                >
+                  ×
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {canWrite && (
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (fresh.length > 0 && !full && !tooLong && !busy) add.mutate(fresh);
+          }}
+        >
+          <Input value={typed} maxLength={400} placeholder={t('libraryTagPlaceholder')} aria-label={t('libraryTagAdd')} onChange={(e) => setTyped(e.target.value)} className="h-8 text-sm" />
+          <Button type="submit" size="sm" variant="outline" disabled={fresh.length === 0 || full || tooLong || busy}>
+            {add.isPending ? <Spinner className="text-current" /> : null}
+            {t('libraryTagAdd')}
+          </Button>
+        </form>
+      )}
+      {canWrite && full && <p className="text-xs text-warning">{t('libraryTagLimit', { max: String(MAX_TAGS_PER_FILE) })}</p>}
+      {canWrite && tooLong && <p className="text-xs text-warning">{t('libraryTagTooLong', { max: String(MEDIA_TAG_MAX_LENGTH) })}</p>}
+      {add.error && <ErrorText>{errorMessage(add.error)}</ErrorText>}
+      {remove.error && <ErrorText>{errorMessage(remove.error)}</ErrorText>}
+    </div>
+  );
+}
+
 export const sizeLabel = (bytes: number) => (bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
 // Images from the library to add to a post: a click adds one, a second click takes it out again. only: the file types
@@ -52,7 +166,8 @@ export const sizeLabel = (bytes: number) => (bytes >= 1_048_576 ? `${(bytes / 1_
 function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; onChange: (media: MediaItem[]) => void; only?: readonly string[] }) {
   const t = useTranslations('social');
   const [search, setSearch] = useState('');
-  const library = useLibrary(search);
+  const [tag, setTag] = useState<string | null>(null);
+  const library = useLibrary(search, tag);
   const all = library.data?.pages.flatMap((p) => p.items) ?? [];
   const items = all.filter((item) => !only || only.includes(item.mime));
   const chosen = new Set(media.map((m) => m.fileId));
@@ -61,12 +176,13 @@ function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; onChange
   return (
     <div className="space-y-3 rounded-xl border bg-muted/40 p-3">
       <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('librarySearch')} aria-label={t('librarySearch')} className="h-8 max-w-xs text-sm" />
+      <TagFilter value={tag} onChange={setTag} />
       {library.isLoading ? (
         <Spinner />
       ) : library.error ? (
         <ErrorText>{errorMessage(library.error)}</ErrorText>
       ) : items.length === 0 ? (
-        <p className="text-xs text-subtle-foreground">{search.trim() || all.length > 0 ? t('libraryNoMatch') : t('libraryEmpty')}</p>
+        <p className="text-xs text-subtle-foreground">{tag ? t('libraryNoTagMatch') : search.trim() || all.length > 0 ? t('libraryNoMatch') : t('libraryEmpty')}</p>
       ) : (
         <ul className="grid grid-cols-3 gap-2 sm:grid-cols-5">
           {items.map((item) => (
@@ -74,7 +190,7 @@ function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; onChange
               <button
                 type="button"
                 aria-pressed={chosen.has(item.fileId)}
-                title={item.filename}
+                title={item.tags.length > 0 ? `${item.filename} · ${item.tags.join(', ')}` : item.filename}
                 disabled={!chosen.has(item.fileId) && media.length >= MAX_POST_MEDIA}
                 onClick={() => toggle(item)}
                 className={cn(

@@ -12,7 +12,7 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
-import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
+import { MediaTagEditor, TagFilter, Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
 import { CalendarFeedCard } from '../components/social-calendar-feed.tsx';
 import { InstagramGrid } from '../components/social-instagram-grid.tsx';
@@ -255,16 +255,20 @@ function Usage({ fileId, slug }: { fileId: string; slug: string }) {
   );
 }
 
-// The media library (S9): the org's post images, searchable by name, each with the posts that show it.
+// The media library (S9): the org's post images, searchable by name and filtered by tag (#904), each with the posts
+// that show it and its tags.
 function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   const t = useTranslations('social');
   const f = useFormat();
   const [search, setSearch] = useState('');
-  const [open, setOpen] = useState<LibraryItem | null>(null);
+  const [tag, setTag] = useState<string | null>(null);
+  const [chosen, setOpen] = useState<LibraryItem | null>(null);
   const picker = useRef<HTMLInputElement>(null);
-  const library = useLibrary(search);
+  const library = useLibrary(search, tag);
   const upload = useMutation({ mutationFn: (files: File[]) => uploadFiles(files, 'social'), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['social-library'] }) });
   const items = library.data?.pages.flatMap((p) => p.items) ?? [];
+  // The chosen file as the list has it now (its tags may have changed), or as it was when it left the list.
+  const open = chosen ? (items.find((i) => i.fileId === chosen.fileId) ?? chosen) : null;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -290,6 +294,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
           </>
         )}
       </div>
+      <TagFilter value={tag} onChange={setTag} />
       <p className="text-xs text-subtle-foreground">{t('libraryHint')}</p>
       {upload.error && <ErrorText>{errorMessage(upload.error)}</ErrorText>}
       {library.isLoading ? (
@@ -297,7 +302,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
       ) : library.error ? (
         <ErrorText>{errorMessage(library.error)}</ErrorText>
       ) : items.length === 0 ? (
-        <Empty title={search.trim() ? t('libraryNoMatch') : t('libraryEmpty')} />
+        <Empty title={tag ? t('libraryNoTagMatch') : search.trim() ? t('libraryNoMatch') : t('libraryEmpty')} />
       ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-5">
@@ -319,6 +324,11 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
                   <span className="block text-xs text-subtle-foreground tabular-nums">
                     {sizeLabel(item.sizeBytes)} · {item.usedIn > 0 ? t('libraryUsedIn', { count: String(item.usedIn) }) : t('libraryUnused')}
                   </span>
+                  {item.tags.length > 0 && (
+                    <span className="block truncate text-xs text-muted-foreground" title={item.tags.join(', ')}>
+                      {item.tags.join(' · ')}
+                    </span>
+                  )}
                 </button>
               </li>
             ))}
@@ -328,6 +338,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
               <Thumb fileId={open.fileId} alt={open.filename} mime={open.mime} durationMs={open.durationMs} className="aspect-[4/3]" />
               <p className="text-sm font-medium [overflow-wrap:anywhere] text-foreground">{open.filename}</p>
               <p className="text-xs text-subtle-foreground">{f.dateTime(open.createdAt)}</p>
+              <MediaTagEditor key={`${open.fileId}:${open.tags.join('\n')}`} fileId={open.fileId} tags={open.tags} canWrite={canWrite} />
               <p className="text-sm font-medium text-muted-foreground">{t('libraryUsageTitle')}</p>
               <Usage fileId={open.fileId} slug={slug} />
 

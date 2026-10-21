@@ -48,6 +48,8 @@ const POLICIES: Record<string, CommandPolicy> = {
   'finance.journal.reverse': { roles: ['owner', 'admin'], fourEyes: true },
   // A cash or bank voucher (phiếu thu, phiếu chi, báo Có, báo Nợ, #327) posts to the ledger: the same rule.
   'finance.voucher.record': { roles: ['owner', 'admin'], fourEyes: true },
+  // A general journal voucher (NVK, #888) posts to the ledger: the same rule.
+  'finance.journal_voucher.record': { roles: ['owner', 'admin'], fourEyes: true },
 };
 
 const NOBODY: CommandPolicy = { roles: [], fourEyes: true };

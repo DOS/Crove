@@ -366,6 +366,32 @@ export const zCashVoucherProposal = z.object({
 });
 export type CashVoucherProposal = z.infer<typeof zCashVoucherProposal>;
 
+// General journal vouchers (issue #888; journal-voucher.ts has the rest). A whole number of VND, at most 15 digits; 0
+// on the side a line does not use.
+export const zJournalAmount = z.string().regex(/^\d{1,15}$/, 'whole VND amount');
+export const JOURNAL_VOUCHER_MAX_LINES = 50;
+
+// The payload of a finance.journal_voucher proposal, built by the server from the request (each party as found, the
+// total of the debits). finance.journal_voucher.record checks it all again when the proposal is approved.
+export const zJournalVoucherProposal = z.object({
+  date: zLocalDate,
+  description: z.string().min(1).max(300),
+  lines: z
+    .array(
+      z.object({
+        account: zAccountCode,
+        party: z.object({ id: zId, name: z.string().max(500), taxCode: z.string().max(20).nullable() }).nullable(),
+        debit: zJournalAmount,
+        credit: zJournalAmount,
+        memo: z.string().max(300).optional(),
+      }),
+    )
+    .min(2)
+    .max(JOURNAL_VOUCHER_MAX_LINES),
+  total: zJournalAmount,
+});
+export type JournalVoucherProposal = z.infer<typeof zJournalVoucherProposal>;
+
 // Payload of a finance.journal_reversal proposal (#138), asked for with inbox.request and executed by
 // finance.journal.reverse on approval.
 export const zJournalReversal = z.object({
@@ -383,6 +409,8 @@ export const zInboxDetail = zInboxItem.extend({
   payload: zPurchaseProposal.nullable(),
   reversal: zJournalReversal.nullable(),
   voucher: zCashVoucherProposal.nullable(),
+  // A general journal voucher (kind finance.journal_voucher, #888).
+  journalVoucher: zJournalVoucherProposal.nullable(),
   error: z.string().nullable(),
   file: z.object({ id: zId, filename: z.string(), contentType: z.string(), sizeBytes: z.string() }).nullable(),
   decidedAt: z.string().nullable(),
@@ -1007,8 +1035,10 @@ export const zSocialPost = z.object({
 });
 
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
-// A media library item (S9): an image of the org uploaded for posts, and how many posts show it.
-export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int() });
+// A media library item (S9): an image of the org uploaded for posts, how many posts show it and its tags (#904).
+export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int(), tags: z.array(z.string()) });
+// A tag of the library and how many files carry it (#904).
+export const zSocialMediaTagCount = z.object({ tag: z.string(), files: z.number().int() });
 // A saved snippet (#584): hashtags, a signature, or a whole post to start from (isTemplate).
 export const zSocialSnippet = z.object({
   id: zId,
