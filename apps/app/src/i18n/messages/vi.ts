@@ -220,6 +220,13 @@ export const vi = {
       sale: 'Bán ra',
     },
     voidReason: 'Lý do: {reason}',
+    correction: {
+      replaces: 'Thay thế hóa đơn {invoice}',
+      adjusts: 'Điều chỉnh hóa đơn {invoice}',
+      notInBooks: '(hóa đơn gốc chưa có trong sổ)',
+      replacedBy: 'Đã được thay thế bởi hóa đơn {invoice}',
+      adjustedBy: 'Được điều chỉnh bởi hóa đơn {invoice}',
+    },
   },
   customers: {
     title: 'Khách hàng',

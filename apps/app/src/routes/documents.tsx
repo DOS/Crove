@@ -9,6 +9,7 @@ import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/
 import { errorMessage, orpc } from '../lib/api.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { documentNumber, matchesDocument } from '../lib/search.ts';
+import { InvoiceCorrections } from '../components/invoice-corrections.tsx';
 
 export function DocumentsPage() {
   const t = useTranslations('documents');
@@ -81,6 +82,7 @@ export function DocumentsPage() {
                 ) : (
                   <Badge variant="success">{t('status.recorded')}</Badge>
                 )}
+                <InvoiceCorrections corrects={d.corrects} correctedBy={d.correctedBy} />
               </TableCell>
             </TableRow>
           ))}
