@@ -29,6 +29,7 @@ import {
   zSocialPostUpdate,
   zSocialQueue,
   zSocialMetricsRow,
+  zSocialPlanRow,
   zSocialWindowTotals,
   zSocialChannelInsights,
   zSocialBioPage,
@@ -395,6 +396,23 @@ export const contract = {
       export: oc
         .input(z.strictObject({ days: z.number().int().min(1).max(365), labelId: zId.optional() }))
         .output(z.object({ filename: z.string(), csv: z.string(), truncated: z.boolean() })),
+    },
+    // The content plan for a client (#978): the channel posts of [from, to), at most 92 days, as a CSV file whose first
+    // columns re-import as drafts (format csv) or as rows for the print layout (format print), at most 500 of them.
+    // Members and above; every export is audited.
+    plan: {
+      export: oc
+        .input(
+          z.strictObject({
+            from: z.iso.datetime({ offset: true }),
+            to: z.iso.datetime({ offset: true }),
+            timeZone: z.string().min(1).max(64),
+            connectionIds: z.array(zId).min(1).max(50).optional(),
+            labelIds: z.array(zId).min(1).max(20).optional(),
+            format: z.enum(['csv', 'print']).optional(),
+          }),
+        )
+        .output(z.object({ filename: z.string(), csv: z.string().nullable(), rows: z.array(zSocialPlanRow).nullable(), truncated: z.boolean() })),
     },
     // Labels for posts (#639): members create them and put them on posts; owners and admins rename and delete them.
     labels: {

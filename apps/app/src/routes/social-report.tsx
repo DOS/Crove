@@ -2,7 +2,7 @@
 // went out in the period on the link's channels, the totals, the counts per channel and the posts that did best, and
 // prints cleanly to PDF from the browser. The token stays after the # and goes to the API in a POST body only.
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -11,6 +11,7 @@ import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage } from '../lib/api.ts';
 import { apiErrorFromResponse } from '../lib/errors.ts';
+import { usePrintInLight } from '../lib/print.ts';
 import { REPORT_METRICS } from '../lib/social-report.ts';
 import { providerName } from '../lib/social.ts';
 
@@ -54,23 +55,7 @@ export function SocialReportPage() {
   const metrics = data ? shown(data.totals) : [];
   const against = t('against');
   // A printed report is on paper: the light theme while printing, whatever the screen uses.
-  useEffect(() => {
-    const root = document.documentElement;
-    let dark = false;
-    const before = () => {
-      dark = root.classList.contains('dark');
-      root.classList.remove('dark');
-    };
-    const after = () => {
-      if (dark) root.classList.add('dark');
-    };
-    window.addEventListener('beforeprint', before);
-    window.addEventListener('afterprint', after);
-    return () => {
-      window.removeEventListener('beforeprint', before);
-      window.removeEventListener('afterprint', after);
-    };
-  }, []);
+  usePrintInLight();
   return (
     <div className="min-h-screen bg-background px-4 py-6 text-foreground print:px-0 print:py-0">
       <div className="mx-auto max-w-4xl space-y-5">
