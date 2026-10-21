@@ -81,7 +81,7 @@ export function CustomersPage() {
   const [q, setQ] = useState(search.q ?? '');
   // A link followed while the screen is open (from the receivables report, the command palette) sets the search again.
   useEffect(() => {
-    if (search.q !== undefined) setQ(search.q);
+    setQ(search.q ?? '');
   }, [search.q]);
   const term = useDeferredValue(q.trim());
   const org = useQuery(orpc.org.get.queryOptions());

@@ -136,7 +136,7 @@ export function VendorsPage() {
   const search: { q?: string } = useSearch({ strict: false });
   const [q, setQ] = useState(search.q ?? '');
   useEffect(() => {
-    if (search.q !== undefined) setQ(search.q);
+    setQ(search.q ?? '');
   }, [search.q]);
   const term = useDeferredValue(q.trim());
   const vendors = useQuery(orpc.parties.list.queryOptions({ input: term ? { q: term } : {} }));

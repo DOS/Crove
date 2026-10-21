@@ -22,7 +22,6 @@ export const customersList = defineQuery({
   handler: async (ctx, input): Promise<CustomerPage> => {
     // The party a row counts under: the kept one for a duplicate, the party itself otherwise.
     const kept = sql<string>`coalesce(x.duplicate_of, x.id)`;
-    const group = sql<string>`(SELECT m.id FROM crove_kernel.party m WHERE m.org_id = p.org_id AND (m.id = p.id OR m.duplicate_of = p.id))`;
     let query = ctx.trx
       // Per customer, the sales documents still in the books: a voided one (#165) is no longer a sale of the org.
       .with('sales', (db) =>
@@ -68,9 +67,10 @@ export const customersList = defineQuery({
       // One more than a page, to tell whether another page follows.
       .limit(CUSTOMER_PAGE_SIZE + 1);
     if (input.q) {
+      // Found by the name or tax code of the customer or of any of its duplicates.
       const term = `%${input.q.toLowerCase()}%`;
       query = query.where(
-        sql<boolean>`EXISTS (SELECT 1 FROM crove_kernel.party m WHERE m.org_id = p.org_id AND m.id IN ${group} AND (lower(m.name) LIKE ${term} OR m.tax_code LIKE ${term}))`,
+        sql<boolean>`EXISTS (SELECT 1 FROM crove_kernel.party m WHERE m.org_id = p.org_id AND (m.id = p.id OR m.duplicate_of = p.id) AND (lower(m.name) LIKE ${term} OR m.tax_code LIKE ${term}))`,
       );
     }
     if (input.after) query = query.where(sql<boolean>`(p.name, p.id) > (${input.after.name}, ${input.after.id}::uuid)`);
