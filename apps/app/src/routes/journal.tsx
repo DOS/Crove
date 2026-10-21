@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useParams } from '@tanstack/react-router';
-import { useState } from 'react';
+import { Link, useParams, useSearch } from '@tanstack/react-router';
+import { useEffect, useState } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { Alert, AlertDescription } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
@@ -128,8 +128,17 @@ export function JournalPage() {
   const ob = useTranslations('openingBalance');
   const f = useFormat();
   const { slug } = useParams({ strict: false }) as { slug: string };
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  // The range a link opened the journal with (an entry found by the command palette, #673).
+  const search: { from?: string; to?: string } = useSearch({ strict: false });
+  const [from, setFrom] = useState(search.from ?? '');
+  const [to, setTo] = useState(search.to ?? '');
+  // A link followed while the journal is open keeps this page: take its range too.
+  useEffect(() => {
+    if (search.from !== undefined || search.to !== undefined) {
+      setFrom(search.from ?? '');
+      setTo(search.to ?? '');
+    }
+  }, [search.from, search.to]);
   const [reversing, setReversing] = useState<string | null>(null);
   const range = { ...(from ? { from } : {}), ...(to ? { to } : {}) };
   const journal = useQuery(orpc.journal.list.queryOptions({ input: range }));
@@ -157,6 +166,11 @@ export function JournalPage() {
     mutationFn: () => download('/api/export/misa/sales.xlsx', t('exportMisaSalesFile', { org: getCurrentOrg() ?? 'org' })),
   });
   const nothingToExport = (journal.data?.length ?? 0) === 0;
+  // A link to one entry (#entry-<id>) can arrive before the entries do: scroll once they are shown.
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (journal.data && hash.startsWith('#entry-')) document.getElementById(hash.slice(1))?.scrollIntoView({ block: 'start' });
+  }, [journal.data]);
 
   return (
     <>

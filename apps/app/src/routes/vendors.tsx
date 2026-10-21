@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useDeferredValue, useState } from 'react';
+import { useDeferredValue, useEffect, useState } from 'react';
+import { useSearch } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
@@ -41,7 +42,12 @@ function DefaultAccount({ vendor, accounts, canManage }: { vendor: { id: string;
 export function VendorsPage() {
   const t = useTranslations('vendors');
   const f = useFormat();
-  const [q, setQ] = useState('');
+  // ?q= from a link (a party found by the command palette, #673) starts the filter.
+  const search: { q?: string } = useSearch({ strict: false });
+  const [q, setQ] = useState(search.q ?? '');
+  useEffect(() => {
+    if (search.q !== undefined) setQ(search.q);
+  }, [search.q]);
   const term = useDeferredValue(q.trim());
   const vendors = useQuery(orpc.parties.list.queryOptions({ input: term ? { q: term } : {} }));
   const accounts = useQuery(orpc.accounts.list.queryOptions());
