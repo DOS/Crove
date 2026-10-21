@@ -16,7 +16,7 @@ docker compose up
 
 Open http://localhost:8080, create an account, create your organization, and drop an e-invoice XML into the Inbox. Emails sent by the bundled auth service (confirmation, password reset) and Crove's member invites are caught by Mailpit at http://localhost:8025.
 
-The defaults are for local use. Before anyone else can reach your instance, copy `.env.example` to `.env` and change every secret.
+The defaults are for local use. Before anyone else can reach your instance, copy `.env.example` to `.env` and change every secret: [docs/self-host/](docs/self-host/README.md) walks through a server setup (TLS, mail, storage, sign-up, backups, upgrades).
 
 ## What works today (MVP)
 
