@@ -18,6 +18,7 @@ import { getConfig } from '../lib/auth.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal } from '../lib/decimal.ts';
 import { nextDay, postingDateAllowed } from '../lib/period-lock.ts';
 import { useFormat } from '../i18n/provider.tsx';
+import { invoiceCheckMessage } from '../lib/invoice-checks.ts';
 import { reversalErrorMessage } from '../lib/reversal.ts';
 import { previewVoucherJournal, voucherProblem } from '../lib/vouchers.ts';
 import { nextPendingId, previousPendingId, reviewShortcut, type ReviewAction } from '../lib/review.ts';
@@ -658,7 +659,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                 {payload.checks.map((c) => (
                   <li key={c.id} className="flex items-start gap-2 text-sm">
                     <Badge variant={CHECK_TONE[c.status]}>{CHECK_ICON[c.status]}</Badge>
-                    <span className="text-muted-foreground">{c.message}</span>
+                    <span className="text-muted-foreground">{invoiceCheckMessage(c, root, money)}</span>
                   </li>
                 ))}
               </ul>

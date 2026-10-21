@@ -2373,6 +2373,22 @@ export const vi = {
   },
   // Kernel errors worded by the SPA (lib/kernel-errors.ts). The kernel sends the same text with the
   // code, and Vietnamese screens show the kernel's own message; these are used when an answer has none.
+  invoiceChecks: {
+    currency: { unsupported: 'Hóa đơn bằng {currency}; chưa hỗ trợ ghi sổ ngoại tệ' },
+    lines_sum: { ok: 'Tổng các dòng khớp tiền trước thuế', mismatch: 'Tổng các dòng ({lines}) lệch tiền trước thuế ({subtotal})' },
+    total: { ok: 'Tiền trước thuế + VAT khớp tổng thanh toán', mismatch: 'Tiền trước thuế + VAT lệch tổng thanh toán' },
+    vat_breakdown: { ok: 'Bảng thuế suất khớp tổng VAT', mismatch: 'Bảng thuế suất lệch tổng VAT' },
+    seller_tax_code: {
+      unreadable: 'Không đọc được MST người bán',
+      checksum: 'MST người bán {taxCode} sai số kiểm tra',
+      ok: 'MST người bán {taxCode} hợp lệ',
+    },
+    issue_date: { invalid: 'Ngày lập hóa đơn không hợp lệ', future: 'Ngày lập hóa đơn ở tương lai', ok: 'Ngày lập {date}' },
+    tax_authority_code: { present: 'Có mã của cơ quan thuế', missing: 'Không có mã của cơ quan thuế' },
+    signature: { unverified: 'Có chữ ký số, chưa xác minh với nguồn chính thức', missing: 'Không có chữ ký số' },
+    source: { ai: 'Đọc bằng AI từ ảnh/PDF, cần người kiểm tra' },
+    duplicate: { found: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' },
+  },
   kernelErrors: {
     codes: {
       UNAUTHENTICATED: 'Phiên đăng nhập đã hết hiệu lực, hãy đăng nhập lại',

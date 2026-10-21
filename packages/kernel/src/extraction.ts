@@ -8,7 +8,7 @@
 // A pending run is at most one per file (partial UNIQUE index), and the database numbers versions.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zId } from '@crove/kernel-contract';
+import { zCheck, zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { actorRef, addAuthor, eligibleApprovers, parseAuthors, type ActorRef } from './approval.ts';
@@ -207,7 +207,8 @@ export const recordExtraction = defineCommand({
     method: z.enum(['einvoice_xml', 'pdf_text_ai', 'image_ai', 'unsupported']),
     status: z.enum(['done', 'failed']),
     result: z.unknown().nullable(),
-    checks: z.array(z.object({ id: z.string(), status: z.enum(['pass', 'warn', 'fail']), message: z.string() })),
+    // zCheck, so a check's code and parameters (#677) reach the run row and the proposal.
+    checks: z.array(zCheck),
     error: z.string().max(2000).nullable(),
     proposal: zProposalDraft.nullable(),
   }),
