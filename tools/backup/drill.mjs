@@ -278,7 +278,14 @@ async function seed() {
   for (const id of fileIds) proposals.push(await proposalOf(SRC, token, org.slug, id));
   const detail = await rpc(SRC, token, 'inbox/get', { id: proposals[0] }, org.slug);
   assert(detail.canApprove, `the proposal can be approved (${detail.approveReason})`);
-  const approved = await rpc(SRC, token, 'inbox/approve', { id: proposals[0], revision: detail.revision, idempotencyKey: randomUUID() }, org.slug);
+  // The drill's invoice carries no real digital signature, so its approval confirms the unverified signature (#674).
+  const approved = await rpc(
+    SRC,
+    token,
+    'inbox/approve',
+    { id: proposals[0], revision: detail.revision, acceptUnverifiedSignature: true, idempotencyKey: randomUUID() },
+    org.slug,
+  );
   assert(typeof approved.journalEntryId === 'string', 'the approval posts a journal entry');
   const journal = await rpc(SRC, token, 'journal/list', {}, org.slug);
   assert(journal.length === 1, `one journal entry (found ${journal.length})`);
