@@ -202,12 +202,15 @@ async function queueRun(ctx: CommandContext, s: ScheduleRow, kind: 'scheduled' |
     .executeTakeFirstOrThrow();
   let mails = 0;
   let suppressed = 0;
-  for (const to of recipients) {
-    let capped = false;
-    if (kind === 'scheduled') {
+  // Gated in one order, sorted by address, so two runs holding inbox locks never wait on each other in a cycle.
+  const capped = new Set<string>();
+  if (kind === 'scheduled') {
+    for (const to of [...recipients].sort()) {
       const gate = await sql<{ ok: boolean }>`SELECT crove_social.report_mail_recipient_gate(${to}, ${REPORT_MAILS_PER_RECIPIENT_PER_DAY}::int) AS ok`.execute(ctx.trx);
-      capped = gate.rows[0]?.ok !== true;
+      if (gate.rows[0]?.ok !== true) capped.add(to);
     }
+  }
+  for (const to of recipients) {
     const mail = await createMailMessage(ctx, {
       stream: 'transactional',
       source: MAIL_SOURCE,
@@ -216,7 +219,7 @@ async function queueRun(ctx: CommandContext, s: ScheduleRow, kind: 'scheduled' |
       to,
       subject: `Báo cáo mạng xã hội: ${s.name}`,
       payload: { name: s.name, periodStart: start.toISOString(), periodEnd: end.toISOString(), timeZone: s.time_zone, test: kind === 'test', ...(org?.name ? { orgName: org.name } : {}), ...numbers },
-      ...(capped ? { status: 'suppressed' as const, errorCode: 'recipient_daily_cap' } : { status: 'queued' as const }),
+      ...(capped.has(to) ? { status: 'suppressed' as const, errorCode: 'recipient_daily_cap' } : { status: 'queued' as const }),
     });
     if (mail.status === 'suppressed') suppressed++;
     else mails++;

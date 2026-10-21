@@ -167,6 +167,25 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
       ['chi.lan@gmail.com', 'suppressed', 'recipient_daily_cap'],
     ]);
     expect(mails[0]?.payload.orgName).toBeTruthy();
+
+    // The boundary: four report mails in the last day (plus a suppressed one and one older than a day) leave room for a fifth.
+    const third = await org();
+    const send = (address: string, status: string, age: string) =>
+      admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.mail_message (org_id, stream, source, template_key, to_address, to_hash, message_id_header, status, created_at)
+           VALUES ($1, 'transactional', 'social.report_schedule.run', 'social.report', $2, $3, $4, $5, now() - $6::interval)`,
+          [other.orgId, address, 'b'.repeat(63) + String(Math.floor(Math.random() * 10)), `<edge-${randomUUID()}@test>`, status, age],
+        ),
+      );
+    for (let i = 0; i < 4; i++) await send('edge@example.vn', 'queued', '1 hour');
+    await send('edge@example.vn', 'suppressed', '1 hour');
+    await send('edge@example.vn', 'queued', '25 hours');
+    const edge = await exec<{ scheduleId: string }>(third, third.owner, 'social.report_schedule.save', { ...weekly, recipients: ['edge@example.vn'] });
+    await admin((c) => c.query("UPDATE crove_social.report_schedule SET next_run_at = now() - interval '1 hour' WHERE id = $1", [edge.scheduleId]));
+    expect(await sweepReportSchedules({ runtime: worker, workerDb })).toBe(1);
+    const fifth = await admin(async (c) => (await c.query<{ status: string }>("SELECT status FROM crove_kernel.mail_message WHERE org_id = $1 AND source = 'social.report_schedule.run'", [third.orgId])).rows);
+    expect(fifth.map((m) => m.status)).toEqual(['queued']);
     // Only the worker's system context may ask the gate.
     const app = new URL(adminUrl);
     app.username = 'crove_app';
