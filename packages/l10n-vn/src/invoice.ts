@@ -31,6 +31,18 @@ export interface TaxBreakdown {
   vatAmount: Money;
 }
 
+// The invoice an e-invoice corrects (issue #916), from its TTHDLQuan block: a replacement (thay thế) takes the
+// original's place, an adjustment (điều chỉnh) changes its amounts by the difference it carries. The original is named
+// by its template, series, number and issue date.
+export interface RelatedInvoice {
+  kind: 'replacement' | 'adjustment';
+  template: string | null;
+  series: string;
+  number: string;
+  issueDate: string | null;
+  note: string | null;
+}
+
 export interface ParsedInvoice {
   source: 'einvoice_xml' | 'ai';
   invoiceType: string | null;
@@ -51,6 +63,8 @@ export interface ParsedInvoice {
   totalInWords: string | null;
   taxAuthorityCode: string | null;
   hasSignature: boolean;
+  // Set only on a replacement or an adjustment invoice whose XML names the invoice it corrects.
+  related?: RelatedInvoice | undefined;
 }
 
 export type CheckStatus = 'pass' | 'warn' | 'fail';
