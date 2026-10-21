@@ -77,7 +77,8 @@ services:
   minio-init:
     image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
     entrypoint: ['sh', '-c']
-    command: ['mc mb --ignore-existing local/crove-files && mc version enable local/crove-files']
+    # crove-archive: the WORM fact stream (#891) needs a bucket created with Object Lock (which also turns versioning on).
+    command: ['mc mb --ignore-existing local/crove-files && mc version enable local/crove-files && mc mb --ignore-existing --with-lock local/crove-archive']
     environment:
       MC_HOST_local: http://crove-split:crove-split-minio-secret@minio:9000
     depends_on:
@@ -118,6 +119,10 @@ services:
       <<: *crove-env
       WORKER_DATABASE_URL: postgres://crove_worker:${CROVE_WORKER_DB_PASSWORD:-local-worker-password}@db:5432/postgres
       EXTRACT_URL: http://crove-extract:8090
+      # The WORM fact stream (#891) in the Object Lock bucket, with the shortest lag so the run sees a batch.
+      ARCHIVE_STORE: s3
+      ARCHIVE_S3_BUCKET: crove-archive
+      ARCHIVE_LAG_SECONDS: '60'
     networks:
       - default
       - extract

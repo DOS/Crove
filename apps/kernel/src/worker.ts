@@ -25,6 +25,7 @@ import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from '.
 import { runLinkPreviewJob } from './link-preview.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
 import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
+import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, runArchiveVerification, writeArchive, type ArchiveStore } from './worm.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 
 const SOCIAL_PUBLISH_RETRY_LIMIT = 2;
@@ -191,6 +192,9 @@ export interface WorkerDeps {
   // Queued mail (#548): the mailer, the templates queued mail is rendered from, and the bounce domain. Unset: queued
   // mail waits.
   mail?: Omit<MailQueueDeps, 'runtime' | 'publicUrl'>;
+  // The WORM fact stream (worm.ts, #891): the store batches go to and how long after a row is written it is archived.
+  // Unset: nothing is archived.
+  archive?: { store: ArchiveStore; lagSeconds: number };
 }
 
 // A person asked for a published variant to come down from its platform (#860).
@@ -466,6 +470,28 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     }
   });
   await boss.schedule(QUEUES.retention, RETENTION_CRON, null, { tz: RETENTION_TZ, missed: 'once' });
+
+  // The WORM fact stream (plan §4.10, #891): batches every minute, the verifier nightly. A failure fails the job: a
+  // batch write after its retries, a verifier mismatch at once (retryLimit 0). pg-boss keeps the failed job and the
+  // prober alerts on the dead letter (docs/runbooks/worm-archive.md).
+  if (deps.archive) {
+    const { store, lagSeconds } = deps.archive;
+    await boss.work(QUEUES.archiveWrite, { batchSize: 1 }, async () => {
+      const written = await writeArchive(deps.workerDb, store, { lagSeconds });
+      if (written > 0) console.log(`[archive] wrote ${written} batch(es)`);
+    });
+    await boss.schedule(QUEUES.archiveWrite, ARCHIVE_WRITE_CRON, null, { tz: RETENTION_TZ });
+    await boss.work(QUEUES.archiveVerify, { batchSize: 1 }, async () => {
+      try {
+        const result = await runArchiveVerification(deps.workerDb, store);
+        console.log(`[archive] verified ${result.batches} batch(es), ${result.rows} row(s)`);
+      } catch (error) {
+        console.error(`[archive] ALERT ${error instanceof Error ? error.message : 'verification could not run'}`);
+        throw error;
+      }
+    });
+    await boss.schedule(QUEUES.archiveVerify, ARCHIVE_VERIFY_CRON, null, { tz: RETENTION_TZ, missed: 'once', retryLimit: 0 });
+  }
 
   // Inbox triage: tasks for the agents whose template subscribes to the event. The command reads the event from the
   // outbox; the job carries only its id.
