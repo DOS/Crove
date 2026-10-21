@@ -8,6 +8,7 @@ import { pendingInvite, rememberInvite, takeTokenFromHash } from './lib/invite.t
 import { signOut } from './lib/session-actions.ts';
 import { AgentsPage } from './routes/agents.tsx';
 import { AuditPage } from './routes/audit.tsx';
+import { PersonalDataPage } from './routes/personal-data.tsx';
 import { AuthPage } from './routes/auth.tsx';
 import { ClientsPage } from './routes/clients.tsx';
 import { DocumentsPage } from './routes/documents.tsx';
@@ -36,6 +37,8 @@ import { SocialFeedsPage } from './routes/social-feeds.tsx';
 import { OCCASION_IDS } from './lib/social-occasions.ts';
 import { SocialReviewPage } from './routes/social-review.tsx';
 import { SocialReportPage } from './routes/social-report.tsx';
+import { SocialPlanPrintPage } from './routes/social-plan-print.tsx';
+import { parsePlanSearch } from './lib/social-plan-export.ts';
 import { parseSocialSearch } from './lib/social.ts';
 import { parseJournalSearch, parseTextSearch } from './lib/search.ts';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
@@ -158,17 +161,20 @@ const onboardingRoute = createRoute({
   component: OnboardingPage,
 });
 
+// Signed in, and the org in the address is the one API calls name.
+async function enterOrg(slug: string) {
+  await requireAuth();
+  if (getCurrentOrg() !== slug) {
+    // Cached data belongs to one org; never show it under another.
+    queryClient.clear();
+    setCurrentOrg(slug);
+  }
+}
+
 export const orgRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/o/$slug',
-  beforeLoad: async ({ params }) => {
-    await requireAuth();
-    if (getCurrentOrg() !== params.slug) {
-      // Cached data belongs to one org; never show it under another.
-      queryClient.clear();
-      setCurrentOrg(params.slug);
-    }
-  },
+  beforeLoad: ({ params }) => enterOrg(params.slug),
   component: OrgLayout,
 });
 
@@ -268,6 +274,17 @@ const socialIdeasRoute = createRoute({ getParentRoute: () => socialRoute, path: 
 const socialBioRoute = createRoute({ getParentRoute: () => socialRoute, path: 'bio', component: SocialBioPage });
 const socialFeedsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'feeds', component: SocialFeedsPage });
 const socialPostRoute = createRoute({ getParentRoute: () => socialRoute, path: '$id', component: SocialPostPage });
+// The content plan to print (#978), outside the org's frame so only the plan reaches the paper.
+const socialPlanPrintRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/o/$slug/print/social-plan',
+  beforeLoad: async ({ params }) => {
+    await enterOrg(params.slug);
+    requireSocial({ params });
+  },
+  validateSearch: parsePlanSearch,
+  component: SocialPlanPrintPage,
+});
 // ?invite=<email> fills the invite form: onboarding sends a firm here to invite the new client's contact (issue #324).
 const settingsRoute = createRoute({
   getParentRoute: () => orgRoute,
@@ -277,6 +294,7 @@ const settingsRoute = createRoute({
 });
 // The audit log (#672): owners and admins only, which the page checks and the server enforces.
 const auditRoute = createRoute({ getParentRoute: () => orgRoute, path: 'audit', component: AuditPage });
+const personalDataRoute = createRoute({ getParentRoute: () => orgRoute, path: 'personal-data', component: PersonalDataPage });
 // AI agents and tasks (ADR-0029) belong to the kernel, so every deployment has them.
 // In-app notifications of the kernel and finance (#671).
 const notificationsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'notifications', component: NotificationsPage });
@@ -289,13 +307,14 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   reviewRoute,
   reportRoute,
+  socialPlanPrintRoute,
   inviteRoute,
   mfaRoute,
   resetPasswordRoute,
   onboardingRoute,
   clientsRoute,
   oauthCallbackRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, customersRoute, vendorsRoute, journalRoute, vouchersRoute, fixedAssetsRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialFeedsRoute, socialBioRoute, socialNotificationsRoute, socialPostRoute]), notificationsRoute, agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, auditRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, customersRoute, vendorsRoute, journalRoute, vouchersRoute, fixedAssetsRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialFeedsRoute, socialBioRoute, socialNotificationsRoute, socialPostRoute]), notificationsRoute, agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, auditRoute, personalDataRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

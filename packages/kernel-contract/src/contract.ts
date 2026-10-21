@@ -29,6 +29,7 @@ import {
   zSocialPostUpdate,
   zSocialQueue,
   zSocialMetricsRow,
+  zSocialPlanRow,
   zSocialWindowTotals,
   zSocialChannelInsights,
   zSocialBioPage,
@@ -126,6 +127,7 @@ import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconci
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
+import { zPersonalDataQuery, zPersonalDataResult } from './personal-data.ts';
 
 // Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told.
 export const zProposalPolicy = z.object({
@@ -168,6 +170,9 @@ export const contract = {
     audit: oc.input(zAuditFilter.extend({ before: zAuditCursor.optional() })).output(zAuditPage),
     auditCommands: oc.output(z.array(z.string())),
     auditExport: oc.input(zAuditFilter).output(zAuditExport),
+    // Owners and admins (issue #923, PDPL): every row of the org that holds a person's email, phone, or tax code or
+    // national ID, with what an erasure would do to each, for the person's request to see or export their data.
+    personalData: oc.input(zPersonalDataQuery).output(zPersonalDataResult),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
     invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),
@@ -391,6 +396,23 @@ export const contract = {
       export: oc
         .input(z.strictObject({ days: z.number().int().min(1).max(365), labelId: zId.optional() }))
         .output(z.object({ filename: z.string(), csv: z.string(), truncated: z.boolean() })),
+    },
+    // The content plan for a client (#978): the channel posts of [from, to), at most 92 days, as a CSV file whose first
+    // columns re-import as drafts (format csv) or as rows for the print layout (format print), at most 500 of them.
+    // Members and above; every export is audited.
+    plan: {
+      export: oc
+        .input(
+          z.strictObject({
+            from: z.iso.datetime({ offset: true }),
+            to: z.iso.datetime({ offset: true }),
+            timeZone: z.string().min(1).max(64),
+            connectionIds: z.array(zId).min(1).max(50).optional(),
+            labelIds: z.array(zId).min(1).max(20).optional(),
+            format: z.enum(['csv', 'print']).optional(),
+          }),
+        )
+        .output(z.object({ filename: z.string(), csv: z.string().nullable(), rows: z.array(zSocialPlanRow).nullable(), truncated: z.boolean() })),
     },
     // Labels for posts (#639): members create them and put them on posts; owners and admins rename and delete them.
     labels: {

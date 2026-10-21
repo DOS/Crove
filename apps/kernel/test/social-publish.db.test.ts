@@ -835,6 +835,41 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect((await calls(id)).map((c) => c.state)).toEqual(['failed']);
   });
 
+  it('records a post the site keeps as a draft as published with no address and its note, and nothing reads it as out (#981)', async () => {
+    const o = await org();
+    const platform = new FakePlatform('reconcile_only');
+    platform.answers.push({ kind: 'accepted', externalId: '141', url: null, draft: 'draft' });
+    const { postId, variants } = await duePost(o);
+    const id = variants[0] as string;
+    expect(await run(o, id, platform)).toEqual({ action: 'call', status: 'published' });
+    const done = await variant(o, postId);
+    expect([done.status, done.externalUrl, done.error]).toEqual(['published', null, { kind: null, code: 'WORDPRESS_DRAFT', action: null, message: null, retryAt: null }]);
+    const row = await admin(async (c) => (await c.query<{ external_post_id: string | null }>('SELECT external_post_id FROM crove_social.post_variant WHERE id = $1', [id])).rows[0]);
+    expect(row?.external_post_id).toBeNull();
+    // The site's post id stays on the call ledger; no counts are read for it.
+    const ledger = await admin(async (c) => (await c.query<{ external_ref: string }>("SELECT external_ref FROM crove_kernel.external_call WHERE key LIKE $1 AND state = 'succeeded'", [`social.publish:${id}:%`])).rows);
+    expect(ledger).toEqual([{ external_ref: '141' }]);
+    await expect(worker.query('social.metrics.target', { variantId: id }, { actor: system, orgId: o.orgId })).rejects.toMatchObject({ code: 'VARIANT_NOT_FOUND' });
+    const timeline = await api.query<{ items: Array<{ kind: string; code: string | null; url: string | null }> }>('social.post.activity', { postId }, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(timeline.items.find((i) => i.kind === 'published')).toMatchObject({ code: 'WORDPRESS_DRAFT', url: null });
+  });
+
+  it('records a post found pending review by a reconcile the same way (#981)', async () => {
+    const o = await org();
+    const platform = new FakePlatform('reconcile_only');
+    platform.reconcile = async () => ({ found: true, externalId: '142', url: null, draft: 'pending' });
+    const { postId, variants } = await duePost(o);
+    const id = variants[0] as string;
+    // The worker makes the call and dies before recording it; once stale, the next run asks the site.
+    const begun = await worker.execute<BeginResult>('social.publish.begin', { variantId: id, provider: 'sandbox', safety: 'reconcile_only' }, { actor: system, orgId: o.orgId });
+    expect(begun.action).toBe('call');
+    await age(id, 700);
+    expect(await run(o, id, platform)).toEqual({ action: 'reconcile', status: 'published' });
+    const done = await variant(o, postId);
+    expect([done.status, done.externalUrl, done.error?.code]).toEqual(['published', null, 'WORDPRESS_PENDING']);
+    expect(platform.posts).toHaveLength(0);
+  });
+
   it('reconciles a post still processing after a day, and records it published when the platform has it', async () => {
     const o = await org();
     const platform = new FakePlatform();

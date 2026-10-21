@@ -6,7 +6,7 @@ import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
-import { SENT_TO_APP, mentionsForEditing, mentionsForStoring } from '@crove/mod-social/contract';
+import { SENT_TO_APP, WORDPRESS_DRAFT, WORDPRESS_PENDING, mentionsForEditing, mentionsForStoring } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { CommentBody, MentionBox, useMemberNames, type Picked } from './social-mentions.tsx';
 import { ErrorText, Spinner } from './ui.tsx';
@@ -35,10 +35,12 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
       ? t(`decision.${item.decision === 'approved' ? 'approved' : item.decision === 'rejected' ? 'rejected' : 'changes_requested'}`)
       : item.kind === 'created' && item.code === 'ai'
         ? t('createdAi')
-        : // A draft sent to the TikTok app (#903) is not out yet.
+        : // A draft sent to the TikTok app (#903) or kept on the WordPress site (#981) is not out yet.
           item.kind === 'published' && item.code === SENT_TO_APP
           ? t('sentToApp')
-          : t(`kind.${item.kind}`);
+          : item.kind === 'published' && (item.code === WORDPRESS_DRAFT || item.code === WORDPRESS_PENDING)
+            ? t(item.code === WORDPRESS_DRAFT ? 'wordpressDraft' : 'wordpressPending')
+            : t(`kind.${item.kind}`);
   return (
     <li className={cn('space-y-1 border-l-2 py-1 pl-3 text-sm', item.kind === 'comment' ? 'border-primary' : 'border-border')}>
       <p className="text-xs text-muted-foreground">

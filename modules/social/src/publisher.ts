@@ -73,7 +73,7 @@ const clip = (s: string | undefined, max: number) => (s === undefined ? undefine
 function fromPublish(r: PublishResult): PublishRecord {
   switch (r.kind) {
     case 'accepted':
-      return { kind: 'accepted', externalId: r.externalId.slice(0, 500), url: r.url, ...(r.sentToApp ? { sentToApp: true as const } : {}) };
+      return { kind: 'accepted', externalId: r.externalId.slice(0, 500), url: r.url, ...(r.sentToApp ? { sentToApp: true as const } : {}), ...(r.draft ? { draft: r.draft } : {}) };
     case 'pending':
       return { kind: 'pending', externalRef: r.externalRef.slice(0, 500), checkAfterSeconds: Math.min(86_400, Math.max(5, Math.round(r.checkAfterSeconds))) };
     case 'rejected': {
@@ -94,7 +94,7 @@ function fromPublish(r: PublishResult): PublishRecord {
 }
 
 function fromReconcile(r: ReconcileResult): PublishRecord {
-  if (r.found === true) return { kind: 'found', externalId: r.externalId.slice(0, 500), url: r.url };
+  if (r.found === true) return { kind: 'found', externalId: r.externalId.slice(0, 500), url: r.url, ...(r.draft ? { draft: r.draft } : {}) };
   return r.found === false ? { kind: 'missing' } : { kind: 'unknowable' };
 }
 
@@ -225,8 +225,8 @@ export async function runPublishJob(deps: PublishDeps, orgId: string, variantId:
     { actor: ACTOR, orgId },
   );
   // Published now: its first comment, if it has one (#587). A failure there never touches the post. A draft sent to
-  // the platform's app (#903) is not out yet and has no post to comment on.
-  if ((result.kind === 'accepted' && !result.sentToApp) || result.kind === 'found') {
+  // the platform's app (#903) or kept on the site (#981) is not out yet and has no post to comment on.
+  if ((result.kind === 'accepted' && !result.sentToApp && !result.draft) || (result.kind === 'found' && !result.draft)) {
     await runCommentJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-comment] variant ${variantId.slice(0, 8)}`, (error as Error).message));
     // And its thread (#742), part after part.
     await runThreadJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-thread] variant ${variantId.slice(0, 8)}`, (error as Error).message));

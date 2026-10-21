@@ -433,6 +433,22 @@ export const TELEGRAM_PIN_SCOPE = 'can_pin_messages';
 // What social.publish.record stores as a published variant's note (error_code, with no error kind) when the platform
 // took the post as a draft in its own app (#903): not public yet and with no post id, so it is never read as out.
 export const SENT_TO_APP = 'SENT_TO_APP';
+// The same for a WordPress post kept on the site as a draft, or pending an editor's review (#981): on the site with an
+// id, but not public, so it is recorded with no post id or address and never read as out.
+export const WORDPRESS_DRAFT = 'WORDPRESS_DRAFT';
+export const WORDPRESS_PENDING = 'WORDPRESS_PENDING';
+// Every note of a published variant that is not public yet.
+export const NOT_PUBLIC_NOTES: readonly string[] = [SENT_TO_APP, WORDPRESS_DRAFT, WORDPRESS_PENDING];
+
+// WordPress options (#981), in `settings.wordpress`: category and tag names, an excerpt and a status. The adapter's
+// wordpressOptionsOf in @crove/channel reads the same shape.
+export const WORDPRESS_STATUSES = ['publish', 'draft', 'pending'] as const;
+export type WordPressStatus = (typeof WORDPRESS_STATUSES)[number];
+export const WORDPRESS_CATEGORIES_MAX = 10;
+export const WORDPRESS_TAGS_MAX = 20;
+export const WORDPRESS_EXCERPT_MAX = 500;
+// WordPress keeps a term's name in a 200-character column.
+export const WORDPRESS_TERM_MAX = 200;
 
 // YouTube refuses a thumbnail over 2 MB (thumbnails.set).
 export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> = { youtube: 2 * 1024 * 1024 };

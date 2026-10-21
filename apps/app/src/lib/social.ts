@@ -1,6 +1,6 @@
 // Shared pieces of the Social screens: status tones, provider names, the effective text of a variant as the composer
 // shows it, and grouping by day for the agenda.
-import { CAPABILITIES, SENT_TO_APP, countText, isProvider, needsPublicUrls, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
+import { CAPABILITIES, SENT_TO_APP, WORDPRESS_DRAFT, WORDPRESS_PENDING, countText, isProvider, needsPublicUrls, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
 import { getConfig } from './auth.ts';
 
 export type VariantStatus =
@@ -40,15 +40,25 @@ export const VARIANT_TONE: Record<VariantStatus, Tone> = {
   removed: 'outline',
 };
 
-// The key of a variant's status label (social.status.*): a draft sent to the platform's app (#903, TikTok's inbox) is
-// published for Crove but not out yet, so it says so instead of "Published".
-export function variantStatusKey(v: { status: VariantStatus; error?: { code: string | null } | null }): VariantStatus | 'sent_to_app' {
-  return v.status === 'published' && v.error?.code === SENT_TO_APP ? 'sent_to_app' : v.status;
+// A published variant that is not public yet, by its note: a draft sent to the platform's app (#903, TikTok's inbox),
+// or a post the WordPress site keeps as a draft or pending review (#981).
+export type NotPublicKey = 'sent_to_app' | 'wordpress_draft' | 'wordpress_pending';
+const NOT_PUBLIC: Readonly<Record<string, NotPublicKey>> = { [SENT_TO_APP]: 'sent_to_app', [WORDPRESS_DRAFT]: 'wordpress_draft', [WORDPRESS_PENDING]: 'wordpress_pending' };
+
+export function notPublicKey(v: { status: VariantStatus; error?: { code: string | null } | null }): NotPublicKey | null {
+  const code = v.error?.code;
+  return v.status === 'published' && code ? (NOT_PUBLIC[code] ?? null) : null;
 }
 
-// Its tone: a draft waiting in the platform's app still needs a person, so it is not shown as done.
+// The key of a variant's status label (social.status.*): a published variant that is not out yet says so instead of
+// "Published".
+export function variantStatusKey(v: { status: VariantStatus; error?: { code: string | null } | null }): VariantStatus | NotPublicKey {
+  return notPublicKey(v) ?? v.status;
+}
+
+// Its tone: a draft waiting in the platform's app or on the site still needs a person, so it is not shown as done.
 export function variantTone(v: { status: VariantStatus; error?: { code: string | null } | null }): Tone {
-  return variantStatusKey(v) === 'sent_to_app' ? 'warning' : VARIANT_TONE[v.status];
+  return notPublicKey(v) ? 'warning' : VARIANT_TONE[v.status];
 }
 
 // Short names of the providers, the same in every language.

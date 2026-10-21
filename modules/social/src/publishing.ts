@@ -17,7 +17,7 @@ import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
 import { shortOfPolicy } from './policy.ts';
-import { PUBLISH_LIMITS, SENT_TO_APP, STATUS_PUBLISHES, isProvider, limitWait } from './domain/channels.ts';
+import { PUBLISH_LIMITS, SENT_TO_APP, STATUS_PUBLISHES, isProvider, limitWait, WORDPRESS_DRAFT, WORDPRESS_PENDING } from './domain/channels.ts';
 import { sentLink } from './domain/utm.ts';
 import { withShortLink } from './short-links.ts';
 import { nextAction, publishCallKey, type RetrySafety } from './domain/publish.ts';
@@ -408,7 +408,14 @@ export const publishBegin = defineCommand({
 const zText = (max: number) => z.string().max(max);
 const zResult = z.discriminatedUnion('kind', [
   // sentToApp: a draft the account finishes in the platform's own app (#903); externalId is the platform's tracking id.
-  z.strictObject({ kind: z.literal('accepted'), externalId: z.string().min(1).max(500), url: z.url({ protocol: /^https?$/ }).max(2000).nullable(), sentToApp: z.literal(true).optional() }),
+  // draft: a post the site keeps unpublished, a draft or pending review (WordPress, #981); externalId is its post id.
+  z.strictObject({
+    kind: z.literal('accepted'),
+    externalId: z.string().min(1).max(500),
+    url: z.url({ protocol: /^https?$/ }).max(2000).nullable(),
+    sentToApp: z.literal(true).optional(),
+    draft: z.enum(['draft', 'pending']).optional(),
+  }),
   z.strictObject({ kind: z.literal('pending'), externalRef: z.string().min(1).max(500), checkAfterSeconds: z.number().int().min(5).max(86_400) }),
   z.strictObject({
     kind: z.literal('rejected'),
@@ -420,7 +427,7 @@ const zResult = z.discriminatedUnion('kind', [
   }),
   z.strictObject({ kind: z.literal('unknown'), code: zText(200).optional(), message: zText(2000).optional() }),
   // Reconcile answers: the post is on the platform, it is not, or the provider cannot tell.
-  z.strictObject({ kind: z.literal('found'), externalId: z.string().min(1).max(500), url: z.url({ protocol: /^https?$/ }).max(2000).nullable() }),
+  z.strictObject({ kind: z.literal('found'), externalId: z.string().min(1).max(500), url: z.url({ protocol: /^https?$/ }).max(2000).nullable(), draft: z.enum(['draft', 'pending']).optional() }),
   z.strictObject({ kind: z.literal('missing') }),
   z.strictObject({ kind: z.literal('unknowable'), code: zText(200).optional() }),
   // Nothing was called: the channel's credential could not be used (disconnected, its connector left the org, no
@@ -485,6 +492,19 @@ export const publishRecord = defineCommand({
           await move(ctx, v, { type: 'accepted' }, { ...published(r.externalId, null), external_post_id: null, error_code: SENT_TO_APP });
           if (input.phase !== 'status') await setCall(ctx, key, { state: 'succeeded', external_ref: r.externalId, error_kind: null, error_code: null, ...done });
           event = 'social.variant.sent_to_app';
+          break;
+        }
+        if (r.draft) {
+          // A post the site keeps unpublished (#981, a WordPress draft or one pending review), recorded the same way:
+          // published with no post id or address and its note, so nothing acts on it as a public post. Found again by
+          // a reconcile, it is recorded the same. The site's post id stays on the call ledger row.
+          await move(ctx, v, input.phase === 'reconcile' ? { type: 'reconciled', found: true } : { type: 'accepted' }, {
+            ...published(r.externalId, null),
+            external_post_id: null,
+            error_code: r.draft === 'pending' ? WORDPRESS_PENDING : WORDPRESS_DRAFT,
+          });
+          if (input.phase !== 'status') await setCall(ctx, key, { state: 'succeeded', external_ref: r.externalId, error_kind: null, error_code: null, ...done });
+          event = 'social.variant.saved_as_draft';
           break;
         }
         await move(ctx, v, input.phase === 'reconcile' ? { type: 'reconciled', found: true } : { type: 'accepted' }, published(r.externalId, r.url));

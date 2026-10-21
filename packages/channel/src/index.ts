@@ -134,7 +134,9 @@ export interface PublishInput {
 export type PublishResult =
   // sentToApp: the platform took the post as a draft that the account finishes and posts in the platform's own app
   // (TikTok's inbox upload, #903). It is not public yet and has no post id: externalId is the platform's tracking id.
-  | { kind: 'accepted'; externalId: string; url: string | null; sentToApp?: true }
+  // draft: the site keeps the post unpublished, as a draft or pending an editor's review (WordPress, #981); it is not
+  // public, has no address, and is recorded like the inbox draft. externalId is the site's post id.
+  | { kind: 'accepted'; externalId: string; url: string | null; sentToApp?: true; draft?: 'draft' | 'pending' }
   // Accepted, still processing on the platform (an Instagram container, a Zalo article): check again later.
   | { kind: 'pending'; externalRef: string; checkAfterSeconds: number }
   | { kind: 'rejected'; error: Exclude<PublishErrorKind, 'unknown'>; code?: string; message?: string; httpStatus?: number; retryAt?: Date }
@@ -159,8 +161,9 @@ export interface ReconcileInput {
   before: Date;
 }
 
-// found: the post is on the platform; missing: it is not; unknown: the provider cannot be asked or did not answer.
-export type ReconcileResult = { found: true; externalId: string; url: string | null } | { found: false } | { found: 'unknown' };
+// found: the post is on the platform (draft: kept unpublished there, as in PublishResult); missing: it is not; unknown:
+// the provider cannot be asked or did not answer.
+export type ReconcileResult = { found: true; externalId: string; url: string | null; draft?: 'draft' | 'pending' } | { found: false } | { found: 'unknown' };
 
 // Renews a connection's tokens before they expire (providers with short-lived tokens and refresh tokens, such as Zalo
 // OA). refused: the provider turned the refresh down and the connection needs reconnecting; failed: try again later.
