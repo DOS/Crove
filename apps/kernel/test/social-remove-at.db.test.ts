@@ -220,8 +220,11 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
     const stale = await publishedPost(o, sandbox, { removeAt: inVietnam(Date.now() - 60_000), publishedAgoMs: 49 * 3_600_000 });
     const fresh = await publishedPost(o, sandbox, { removeAt: inVietnam(Date.now() - 60_000), publishedAgoMs: 47 * 3_600_000 });
     await admin((c) => c.query("UPDATE crove_social.post_variant SET provider = 'telegram' WHERE id = ANY($1::uuid[])", [[stale.id, fresh.id]]));
+    // Planned exactly a year after the post, and swept half an hour late: still taken down.
+    const yearly = await publishedPost(o, sandbox, { removeAt: inVietnam(Date.now() - 1_800_000), publishedAgoMs: 365 * 86_400_000 + 1_800_000 });
 
     await sweep(['sandbox', 'telegram', 'facebook_page']);
+    expect(await requested(o, yearly.id)).toEqual([{ post_id: yearly.postId, variant_id: yearly.id, provider: 'sandbox', after: null }]);
     for (const v of [other, late, later, broken, garbled, close, far, stale]) {
       expect(await requested(o, v.id)).toEqual([]);
       expect((await variant(o, v.postId)).status).toBe('published');

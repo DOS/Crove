@@ -53,7 +53,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
     JOIN ROWS FROM (pg_catalog.unnest(p_providers), pg_catalog.unnest(p_windows)) AS w(provider, seconds) ON w.provider = v.provider
     JOIN crove_kernel.tenant t ON t.org_id = v.org_id AND t.status = 'active'
     WHERE v.status = 'published' AND v.remove_requested_at IS NULL AND v.external_post_id IS NOT NULL AND v.settings ? 'removeAt'
-      AND v.published_at >= pg_catalog.now() - pg_catalog.make_interval(secs => 31536000)
+      -- A year back, plus a day for a late sweep: a takedown set a full year after the post is still due when it comes.
+      AND v.published_at >= pg_catalog.now() - pg_catalog.make_interval(secs => 31536000 + 86400)
   ) d
   WHERE d.remove_at <= pg_catalog.now()
     AND d.remove_at >= d.published_at + pg_catalog.make_interval(mins => 5)
