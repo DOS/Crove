@@ -11,7 +11,7 @@ import { DomainError, defineCommand, defineQuery, type CommandContext } from '@c
 import { AUTO_REPLY_STALE_MS, autoReplyCallsOf } from './auto-reply.ts';
 import { REPOST_STALE_MS, repostCallsOf } from './repost.ts';
 import { mentionsOf } from './domain/mentions.ts';
-import { SENT_TO_APP } from './domain/channels.ts';
+import { NOT_PUBLIC_NOTES } from './domain/channels.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -140,7 +140,9 @@ export interface ActivityItem {
   editedAt: string | null;
   // The viewer may still change this comment.
   editable: boolean;
-  // A published channel's link, a failed channel's error code; SENT_TO_APP on a draft sent to the platform's app (#903).
+  // A published channel's link, a failed channel's error code; on a published channel not public yet, its note:
+  // SENT_TO_APP on a draft sent to the platform's app (#903), WORDPRESS_DRAFT or WORDPRESS_PENDING on a post the site
+  // keeps unpublished (#981).
   url: string | null;
   code: string | null;
 }
@@ -231,8 +233,9 @@ export const postActivity = defineQuery({
         variantId: a.target_type === 'social.post_variant' ? a.target_id : null,
       })),
       ...variants.flatMap((v): ActivityItem[] => {
-        // A draft sent to the platform's app (#903) carries its SENT_TO_APP note, so the timeline does not call it out.
-        if (v.status === 'published' && v.published_at) return [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id, url: v.external_url, code: v.error_code === SENT_TO_APP ? SENT_TO_APP : null }];
+        // A draft sent to the platform's app (#903) or kept on the site (#981) carries its note, so the timeline does not
+        // call it out.
+        if (v.status === 'published' && v.published_at) return [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id, url: v.external_url, code: v.error_code !== null && NOT_PUBLIC_NOTES.includes(v.error_code) ? v.error_code : null }];
         if (v.status === 'removed' && v.removed_at) {
           const removed: ActivityItem = { ...none, id: `removed:${v.id}`, kind: 'removed', at: v.removed_at.toISOString(), userId: v.removed_by, variantId: v.id, body: v.remove_reason };
           return v.published_at ? [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id }, removed] : [removed];

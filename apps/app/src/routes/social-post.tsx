@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, X_REPLY_SETTINGS, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, X_REPLY_SETTINGS, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -41,6 +41,7 @@ import {
   takeFlash,
   textBudget,
   toLocalInput,
+  notPublicKey,
   variantStatusKey,
   variantTone,
   type VariantStatus,
@@ -197,6 +198,94 @@ function YouTubeSettings({ settings, onChange, disabled }: { settings: Record<st
   );
 }
 
+// WordPress category or tag names typed as text (#981), separated by commas; a name may hold spaces. The text is kept
+// as typed while the field has focus, so a comma can be typed.
+function NamesField({ label, hint, names, max, onChange, disabled }: { label: string; hint: string; names: readonly string[]; max: number; onChange: (names: string[]) => void; disabled: boolean }) {
+  const id = useId();
+  const [text, setText] = useState<string | null>(null);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={id} className="text-xs">
+          {label}
+        </Label>
+        <span className={cn('font-mono text-xs tabular-nums', names.length > max ? 'text-destructive' : 'text-subtle-foreground')}>
+          {names.length}/{max}
+        </span>
+      </div>
+      <Input
+        id={id}
+        value={text ?? names.join(', ')}
+        disabled={disabled}
+        onFocus={() => setText(names.join(', '))}
+        onBlur={() => setText(null)}
+        onChange={(e) => {
+          setText(e.target.value);
+          const seen = new Set<string>();
+          onChange(
+            e.target.value
+              .split(',')
+              .map((name) => name.trim().replace(/\s+/g, ' '))
+              .filter((name) => name && !seen.has(name.toLowerCase()) && seen.add(name.toLowerCase())),
+          );
+        }}
+      />
+      <p className="text-xs text-subtle-foreground">{hint}</p>
+    </div>
+  );
+}
+
+// WordPress (#981): published at once, saved as a draft or sent for review; its categories (names the site has), tags
+// and excerpt. Each is optional and is stored only when set, so a variant saved before keeps its content hash.
+function WordPressSettings({ settings, onChange, disabled }: { settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const { wordpress: raw, ...others } = settings;
+  const w = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const names = (key: 'categories' | 'tags') => (Array.isArray(w[key]) ? (w[key] as unknown[]).filter((v): v is string => typeof v === 'string') : []);
+  const set = (key: 'categories' | 'tags' | 'excerpt' | 'status', value: string | string[] | null) => {
+    const { [key]: _gone, ...rest } = w;
+    const next = value === null || value.length === 0 ? rest : { ...rest, [key]: value };
+    onChange(Object.keys(next).length > 0 ? { ...others, wordpress: next } : others);
+  };
+  const status = typeof w.status === 'string' ? w.status : 'publish';
+  const known = (WORDPRESS_STATUSES as readonly string[]).includes(status);
+  const excerpt = typeof w.excerpt === 'string' ? w.excerpt : '';
+  const excerptUsed = [...excerpt.trim()].length;
+  return (
+    <div className="space-y-2">
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-status`} className="text-xs">
+          {t('wpStatus')}
+        </Label>
+        <NativeSelect id={`${id}-status`} size="sm" className="w-full max-w-xs" value={status} disabled={disabled} onChange={(e) => set('status', e.target.value === 'publish' ? null : e.target.value)}>
+          {!known && <NativeSelectOption value={status}>{status}</NativeSelectOption>}
+          {WORDPRESS_STATUSES.map((s) => (
+            <NativeSelectOption key={s} value={s}>
+              {t(`wpStatusOption.${s}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        {status !== 'publish' && <p className="text-xs text-subtle-foreground">{t('wpStatusHint')}</p>}
+      </div>
+      <NamesField label={t('wpCategories')} hint={t('wpCategoriesHint')} names={names('categories')} max={WORDPRESS_CATEGORIES_MAX} disabled={disabled} onChange={(v) => set('categories', v)} />
+      <NamesField label={t('wpTags')} hint={t('wpTagsHint')} names={names('tags')} max={WORDPRESS_TAGS_MAX} disabled={disabled} onChange={(v) => set('tags', v)} />
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <Label htmlFor={`${id}-excerpt`} className="text-xs">
+            {t('wpExcerpt')}
+          </Label>
+          <span className={cn('font-mono text-xs tabular-nums', excerptUsed > WORDPRESS_EXCERPT_MAX ? 'text-destructive' : 'text-subtle-foreground')}>
+            {excerptUsed}/{WORDPRESS_EXCERPT_MAX}
+          </span>
+        </div>
+        <Textarea id={`${id}-excerpt`} rows={3} value={excerpt} disabled={disabled} onChange={(e) => set('excerpt', e.target.value.trim() ? e.target.value : null)} />
+        <p className="text-xs text-subtle-foreground">{t('wpExcerptHint')}</p>
+      </div>
+    </div>
+  );
+}
+
 // The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
 // inboxOffered: the channel's connection was granted video.upload, which Crove asks for only where the deployment turns
 // TikTok's inbox mode on (CHANNEL_TIKTOK_INBOX, #903).
@@ -273,6 +362,7 @@ function ProviderSettings({ provider, settings, onChange, disabled, inboxOffered
     );
   }
   if (provider === 'youtube') return <YouTubeSettings settings={settings} onChange={onChange} disabled={disabled} />;
+  if (provider === 'wordpress') return <WordPressSettings settings={settings} onChange={onChange} disabled={disabled} />;
   // Zalo OA (#943): whether the article takes comments. On is the default and is not stored, so a variant saved before
   // keeps its content hash.
   if (provider === 'zalo_oa') {
@@ -639,6 +729,14 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('GBP_INVALID', { limit: limit || 58 });
       case 'TOPIC_TAG_INVALID':
         return t('TOPIC_TAG_INVALID', { limit });
+      case 'WORDPRESS_TOO_MANY_CATEGORIES':
+        return t('WORDPRESS_TOO_MANY_CATEGORIES', { limit, actual });
+      case 'WORDPRESS_TOO_MANY_TAGS':
+        return t('WORDPRESS_TOO_MANY_TAGS', { limit, actual });
+      case 'WORDPRESS_TERM_INVALID':
+        return t('WORDPRESS_TERM_INVALID', { limit });
+      case 'WORDPRESS_EXCERPT_TOO_LONG':
+        return t('WORDPRESS_EXCERPT_TOO_LONG', { limit, actual });
       // Which image: media.<index> on the issue, counted from 1 for the person.
       case 'IMAGE_RATIO_NOT_ALLOWED':
         return t('IMAGE_RATIO_NOT_ALLOWED', { n: Number(issue.field.split('.')[1] ?? 0) + 1 });
@@ -1800,6 +1898,17 @@ function EvergreenPanel({ post, onDone }: { post: Post; onDone: () => void }) {
   );
 }
 
+// When a published variant that is not public yet went to its platform, in words.
+const NOT_PUBLIC_AT: Readonly<Record<string, 'sentToAppAt' | 'wordpressDraftAt' | 'wordpressPendingAt'>> = { sent_to_app: 'sentToAppAt', wordpress_draft: 'wordpressDraftAt', wordpress_pending: 'wordpressPendingAt' };
+
+// The WordPress adapter's refusals of a category or tag (#981), by the outcome text that names it.
+type WordPressTermOutcome = 'wordpressCategoryNotFound' | 'wordpressCategoryAmbiguous' | 'wordpressTagNotAllowed';
+const WORDPRESS_TERM_OUTCOMES: Readonly<Record<string, WordPressTermOutcome>> = {
+  WORDPRESS_CATEGORY_NOT_FOUND: 'wordpressCategoryNotFound',
+  WORDPRESS_CATEGORY_AMBIGUOUS: 'wordpressCategoryAmbiguous',
+  WORDPRESS_TAG_NOT_ALLOWED: 'wordpressTagNotAllowed',
+};
+
 // What happened to a variant on its way out, in words: a retry time, a pending or unknown outcome, a pause on its
 // channel, a refusal with what the platform said.
 function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
@@ -1846,6 +1955,10 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
     case 'failed':
       // A draft for the TikTok app on a deployment that has not turned inbox mode on (#903).
       if (v.error?.code === 'TIKTOK_INBOX_NOT_ENABLED') return <p className="text-destructive">{t('outcome.inboxNotEnabled')}</p>;
+      // A category or tag the WordPress site refused before anything was posted (#981); the message is its name.
+      if (v.error?.code && v.error.code in WORDPRESS_TERM_OUTCOMES) {
+        return <p className="text-destructive [overflow-wrap:anywhere]">{t(`outcome.${WORDPRESS_TERM_OUTCOMES[v.error.code] as WordPressTermOutcome}`, { name: v.error.message ?? '' })}</p>;
+      }
       // TikTok refused an inbox upload for the missing video.upload grant (#903): a reconnect fixes it.
       if (v.error?.code === 'CHANNEL_SCOPE_MISSING') {
         return (
@@ -1865,7 +1978,10 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
       );
     case 'published':
       // A draft sent to the TikTok app (#903): not public until the account posts it there.
-      return v.error?.code === SENT_TO_APP ? <p className="text-warning">{t('outcome.sentToApp')}</p> : null;
+      if (v.error?.code === SENT_TO_APP) return <p className="text-warning">{t('outcome.sentToApp')}</p>;
+      // A draft or a post pending review on the WordPress site (#981): not public until someone publishes it there.
+      if (v.error?.code === WORDPRESS_DRAFT || v.error?.code === WORDPRESS_PENDING) return <p className="text-warning">{t(v.error.code === WORDPRESS_DRAFT ? 'outcome.wordpressDraft' : 'outcome.wordpressPending')}</p>;
+      return null;
     default:
       return null;
   }
@@ -2333,7 +2449,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 footer={
                   <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
                     {v.effectiveAt && ['scheduled', 'paused', 'publishing', 'processing', 'published'].includes(v.status) && (
-                      <p>{t(variantStatusKey(v) === 'sent_to_app' ? 'sentToAppAt' : v.status === 'published' ? 'publishedAt' : 'goesOutAt', { when: f.dateTime(v.effectiveAt) })}{v.queueSlotAt && v.status !== 'published' ? ` · ${t('fromQueue')}` : ''}</p>
+                      <p>{t(NOT_PUBLIC_AT[notPublicKey(v) ?? ''] ?? (v.status === 'published' ? 'publishedAt' : 'goesOutAt'), { when: f.dateTime(v.effectiveAt) })}{v.queueSlotAt && v.status !== 'published' ? ` · ${t('fromQueue')}` : ''}</p>
                     )}
                     {decision && decision.comment && ['changes_requested', 'rejected'].includes(v.status) && <p className="text-warning">{t('reviewerSaid', { comment: decision.comment })}</p>}
                     {v.status === 'in_review' && v.review.required > 1 && <p>{t('reviewSteps', { given: String(v.review.approvedBy.length), required: String(v.review.required) })}</p>}
