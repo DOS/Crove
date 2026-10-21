@@ -12,6 +12,7 @@ export * from './agents.ts';
 export * from './channels.ts';
 export * from './timeline.ts';
 export * from './proposal-reminders.ts';
+export * from './tax-calendar.ts';
 export * from './audit-log.ts';
 export * from './usage-limits.ts';
 export * from './user-status.ts';

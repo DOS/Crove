@@ -1,0 +1,186 @@
+// The tax calendar of an org (issue #921): which recurring tax obligations apply to it, what is due soon or overdue,
+// and what a member marked done. The rules are data in @crove/kernel-contract (tax-calendar.ts); this module keeps the
+// org's choices (crove_kernel.tax_profile, one row per org) and the done marks (crove_kernel.tax_obligation_done).
+//
+// The home screen (overview.ts) lists, per org, the obligations due in the next TAX_DUE_WINDOW_DAYS days and the ones
+// overdue and not marked done, from the day the org first saved its profile (at most a year back): an org that just
+// set its calendar is not shown a year of overdue returns it filed elsewhere.
+import { sql } from 'kysely';
+import { z } from 'zod';
+import {
+  TAX_OBLIGATIONS,
+  TAX_RULES,
+  rulesOf,
+  taxDues,
+  zTaxObligationMark,
+  zTaxProfile,
+  type TaxDueView,
+  type TaxObligation,
+  type TaxProfile,
+  type TaxProfileSettings,
+  type VatFilingPeriod,
+} from '@crove/kernel-contract';
+import type { MemberRole } from '@crove/db';
+import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
+
+const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
+const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
+const MARKERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
+
+export const TAX_DUE_WINDOW_DAYS = 30;
+// How far back an overdue obligation is still listed, and how many items one org lists at most.
+const OVERDUE_DAYS = 365;
+const MAX_DUES = 50;
+const DAY_MS = 86_400_000;
+
+export const TAX_OBLIGATION_LABELS: Record<TaxObligation, string> = {
+  vat_return: 'Tờ khai thuế GTGT',
+  pit_withholding: 'Tờ khai thuế TNCN khấu trừ',
+  cit_provisional: 'Tạm nộp thuế TNDN',
+  cit_finalization: 'Quyết toán thuế TNDN',
+  pit_finalization: 'Quyết toán thuế TNCN',
+  financial_statements: 'Báo cáo tài chính năm',
+  license_fee: 'Lệ phí môn bài',
+};
+
+export interface StoredTaxProfile extends TaxProfile {
+  // The day (Vietnam time) the profile was first saved, or null when the org never saved one.
+  since: string | null;
+}
+
+const addDays = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
+const vietnamDay = (at: Date) => new Date(at.getTime() + 7 * 3_600_000).toISOString().slice(0, 10);
+
+export async function readTaxProfile(ctx: Pick<QueryContext, 'trx' | 'orgId'>): Promise<StoredTaxProfile> {
+  const row = await ctx.trx
+    .selectFrom('crove_kernel.tax_profile')
+    .select(['obligations', 'pit_filing_period', 'fiscal_year_end_month', 'created_at'])
+    .where('org_id', '=', ctx.orgId)
+    .orderBy('created_at')
+    .orderBy('id')
+    .limit(1)
+    .executeTakeFirst();
+  if (!row) return { obligations: [], pitFilingPeriod: null, fiscalYearEndMonth: 12, since: null };
+  return {
+    obligations: row.obligations.filter((o): o is TaxProfile['obligations'][number] => o !== 'vat_return'),
+    pitFilingPeriod: row.pit_filing_period,
+    fiscalYearEndMonth: row.fiscal_year_end_month,
+    since: vietnamDay(new Date(row.created_at)),
+  };
+}
+
+/**
+ * The org's obligations still to do as of `today`: due within the window, or overdue since the profile was first saved
+ * (at most a year back), without a done mark; by due date. Without a saved profile, only the VAT return from today.
+ */
+export async function taxDuesOf(ctx: Pick<QueryContext, 'trx' | 'orgId'>, vatFilingPeriod: VatFilingPeriod | null, today: string): Promise<TaxDueView[]> {
+  const profile = await readTaxProfile(ctx);
+  const settings: TaxProfileSettings = { ...profile, vatFilingPeriod };
+  if (rulesOf(settings).length === 0) return [];
+  const yearBack = addDays(today, -OVERDUE_DAYS);
+  const from = profile.since ? (profile.since > yearBack ? profile.since : yearBack) : today;
+  const dues = taxDues(settings, from < today ? from : today, addDays(today, TAX_DUE_WINDOW_DAYS));
+  if (dues.length === 0) return [];
+  const done = await ctx.trx
+    .selectFrom('crove_kernel.tax_obligation_done')
+    .select(['obligation', 'period'])
+    .where('org_id', '=', ctx.orgId)
+    .where('period', 'in', [...new Set(dues.map((d) => d.period))])
+    .execute();
+  const marked = new Set(done.map((d) => `${d.obligation}:${d.period}`));
+  const day = (date: string) => Date.parse(`${date}T00:00:00Z`);
+  return dues
+    .filter((d) => !marked.has(`${d.obligation}:${d.period}`))
+    .slice(0, MAX_DUES)
+    .map((d) => ({
+      obligation: d.obligation,
+      period: d.period,
+      dueDate: d.dueDate,
+      daysLeft: Math.round((day(d.dueDate) - day(today)) / DAY_MS),
+      legalBasis: d.legalBasis,
+      confirmed: d.confirmed,
+    }));
+}
+
+export const taxProfileGet = defineQuery({
+  name: 'kernel.tax_profile.get',
+  input: z.strictObject({}),
+  access: ALL,
+  handler: async (ctx): Promise<StoredTaxProfile> => readTaxProfile(ctx),
+});
+
+export const taxProfileSave = defineCommand({
+  name: 'kernel.tax_profile.save',
+  input: zTaxProfile,
+  risk: 'R1',
+  access: ADMINS,
+  handler: async (ctx, input): Promise<StoredTaxProfile> => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    if (input.obligations.includes('pit_withholding') && input.pitFilingPeriod === null) {
+      throw new DomainError('PIT_FILING_PERIOD_REQUIRED', 422, 'Hãy chọn kỳ khai thuế TNCN khấu trừ (tháng hoặc quý)');
+    }
+    const obligations = TAX_OBLIGATIONS.filter((o) => (input.obligations as readonly string[]).includes(o)) as TaxProfile['obligations'];
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(${`crove_kernel.tax_profile:${ctx.orgId}`}))`.execute(ctx.trx);
+    const before = await readTaxProfile(ctx);
+    const values = { obligations, pit_filing_period: input.pitFilingPeriod, fiscal_year_end_month: input.fiscalYearEndMonth, updated_by: ctx.actor.userId, updated_at: ctx.now };
+    const updated = await ctx.trx.updateTable('crove_kernel.tax_profile').set(values).where('org_id', '=', ctx.orgId).executeTakeFirst();
+    if (Number(updated.numUpdatedRows) === 0) {
+      await ctx.trx.insertInto('crove_kernel.tax_profile').values({ org_id: ctx.orgId, ...values, created_at: ctx.now }).execute();
+    }
+    const { since: _since, ...previous } = before;
+    ctx.audit({ previous, profile: { obligations, pitFilingPeriod: input.pitFilingPeriod, fiscalYearEndMonth: input.fiscalYearEndMonth } });
+    await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_profile_saved', 'Cập nhật lịch thuế');
+    return readTaxProfile(ctx);
+  },
+});
+
+// The frequency a period key names: "2026" a year, "2026-09" a month, "2026-Q3" a quarter.
+function frequencyOf(period: string): 'year' | 'month' | 'quarter' {
+  return period.length === 4 ? 'year' : period.includes('Q') ? 'quarter' : 'month';
+}
+
+export const taxObligationDone = defineCommand({
+  name: 'kernel.tax_obligation.done',
+  input: zTaxObligationMark,
+  risk: 'R1',
+  access: MARKERS,
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    // A period of the obligation's own frequency: a monthly return is not marked done for a quarter.
+    if (!TAX_RULES.some((r) => r.obligation === input.obligation && r.frequency === frequencyOf(input.period))) {
+      throw new DomainError('TAX_PERIOD_MISMATCH', 422, `${TAX_OBLIGATION_LABELS[input.obligation]} không có kỳ ${input.period}`);
+    }
+    const inserted = await ctx.trx
+      .insertInto('crove_kernel.tax_obligation_done')
+      .values({ org_id: ctx.orgId, obligation: input.obligation, period: input.period, done_by: ctx.actor.userId })
+      .onConflict((oc) => oc.columns(['org_id', 'obligation', 'period']).doNothing())
+      .returning('id')
+      .executeTakeFirst();
+    ctx.audit({ obligation: input.obligation, period: input.period, already: inserted === undefined });
+    if (inserted) await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_obligation_done', `Đã xong: ${TAX_OBLIGATION_LABELS[input.obligation]} kỳ ${input.period}`);
+    return { obligation: input.obligation, period: input.period, done: true as const };
+  },
+});
+
+export const taxObligationUndo = defineCommand({
+  name: 'kernel.tax_obligation.undo',
+  input: zTaxObligationMark,
+  risk: 'R1',
+  access: MARKERS,
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const removed = await ctx.trx
+      .deleteFrom('crove_kernel.tax_obligation_done')
+      .where('org_id', '=', ctx.orgId)
+      .where('obligation', '=', input.obligation)
+      .where('period', '=', input.period)
+      .executeTakeFirst();
+    const found = Number(removed.numDeletedRows) > 0;
+    ctx.audit({ obligation: input.obligation, period: input.period, found });
+    if (found) await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_obligation_undone', `Bỏ đánh dấu đã xong: ${TAX_OBLIGATION_LABELS[input.obligation]} kỳ ${input.period}`);
+    return { obligation: input.obligation, period: input.period, done: false as const };
+  },
+});
+
+export const taxCalendarCommands = [taxProfileSave, taxObligationDone, taxObligationUndo];
+export const taxCalendarQueries = [taxProfileGet];

@@ -306,6 +306,14 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       setProposalPolicy: os.org.setProposalPolicy.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.proposal_policy.save', input, { actor, orgId })),
       ),
+      taxProfile: os.org.taxProfile.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.tax_profile.get', {}, { actor, orgId }))),
+      setTaxProfile: os.org.setTaxProfile.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.tax_profile.save', input, { actor, orgId }))),
+      markTaxObligation: os.org.markTaxObligation.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          const { done, ...mark } = input;
+          return runtime.execute(done ? 'kernel.tax_obligation.done' : 'kernel.tax_obligation.undo', mark, { actor, orgId });
+        }),
+      ),
       audit: os.org.audit.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.audit.list', input, { actor, orgId }))),
       auditCommands: os.org.auditCommands.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.audit.commands', {}, { actor, orgId }))),
       auditExport: os.org.auditExport.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.audit.export', input, { actor, orgId }))),

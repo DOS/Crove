@@ -1,19 +1,21 @@
 // The multi-client home screen (issue #318): every org the user belongs to, with what waits in it and when its next VAT
-// return is due; one click opens the org. Each org's figures are read in that org on the server (me.clients).
-import { useQuery } from '@tanstack/react-query';
+// return is due, and the tax calendar of every client (#921): what is due in the next 30 days or overdue, which a member
+// marks done here; one click opens the org. Each org's figures are read in that org on the server (me.clients).
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
-import { buttonVariants } from '@crove/ui/components/button';
+import { Button, buttonVariants } from '@crove/ui/components/button';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { cn } from '@crove/ui/lib/utils';
 import { SupportLink } from '../components/support-link.tsx';
 import { DataTable, Empty, ErrorText, Logo, OrgLeftNotice, PageHeader, Spinner } from '../components/ui.tsx';
 import { LocaleSwitcher, useFormat, useLocaleSetting } from '../i18n/provider.tsx';
-import { errorMessage, orpc } from '../lib/api.ts';
+import { clientForOrg, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { deadlineTone, periodParts, sortClients, type ClientDeadline } from '../lib/clients.ts';
 import { signOut } from '../lib/session-actions.ts';
+import { canMarkTaxDone, dueAcrossClients, taxPeriodParts, type TaxDueRow } from '../lib/tax-calendar.ts';
 
 const TONE_CLASS = { urgent: 'text-destructive', soon: 'text-warning', later: 'text-foreground' } as const;
 
@@ -51,6 +53,84 @@ function Deadline({ deadline, slug, canChoose }: { deadline: ClientDeadline | nu
   );
 }
 
+// "Tháng 9/2026", "Quý 3/2026" or "Năm 2026".
+function usePeriodLabel() {
+  const t = useTranslations('clients');
+  const tt = useTranslations('taxCalendar');
+  return (period: string) => {
+    const parts = taxPeriodParts(period);
+    if (!parts) return period;
+    if (parts.kind === 'year') return tt('periodYear', { year: String(parts.year) });
+    return parts.kind === 'month'
+      ? t('periodMonth', { month: String(parts.index), year: String(parts.year) })
+      : t('periodQuarter', { quarter: String(parts.index), year: String(parts.year) });
+  };
+}
+
+function DueWhen({ due }: { due: { dueDate: string; daysLeft: number } }) {
+  const tt = useTranslations('taxCalendar');
+  const f = useFormat();
+  const tone = due.daysLeft < 0 ? 'text-destructive' : TONE_CLASS[deadlineTone(due.daysLeft)];
+  return (
+    <span className="block">
+      <span className={cn('font-medium tabular-nums', tone)}>{f.date(due.dueDate)}</span>
+      <span className="block text-xs text-subtle-foreground">{due.daysLeft < 0 ? tt('overdue', { days: -due.daysLeft }) : tt('daysLeft', { days: due.daysLeft })}</span>
+    </span>
+  );
+}
+
+// Every client's tax obligations due in the next 30 days or overdue, by due date. Marking one done (owners, admins and
+// members of that client) runs in the client's own org and removes it from the list.
+function TaxCalendar({ rows }: { rows: TaxDueRow[] }) {
+  const tt = useTranslations('taxCalendar');
+  const periodLabel = usePeriodLabel();
+  const done = useMutation({
+    mutationFn: (row: TaxDueRow) => clientForOrg(row.slug).org.markTaxObligation({ obligation: row.obligation, period: row.period, done: true }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: orpc.me.clients.key() });
+    },
+  });
+  return (
+    <section className="mt-8" aria-label={tt('title')}>
+      <h2 className="text-sm font-semibold">{tt('title')}</h2>
+      <p className="mt-1 mb-3 text-xs text-subtle-foreground">{tt('subtitle')}</p>
+      {rows.length === 0 ? (
+        <Empty title={tt('empty')} hint={tt('emptyHint')} />
+      ) : (
+        <div className="overflow-x-auto">
+          <DataTable head={[tt('columns.due'), tt('columns.company'), tt('columns.obligation'), tt('columns.period'), '']}>
+            {rows.map((r) => (
+              <TableRow key={`${r.orgId}:${r.obligation}:${r.period}`}>
+                <TableCell className="px-4 py-3">
+                  <DueWhen due={r} />
+                </TableCell>
+                <TableCell className="px-4 py-3">
+                  <Link to="/o/$slug/inbox" params={{ slug: r.slug }} className="font-medium text-foreground hover:text-link hover:underline">
+                    {r.name}
+                  </Link>
+                </TableCell>
+                <TableCell className="px-4 py-3" title={r.legalBasis}>
+                  {tt(`obligations.${r.obligation}`)}
+                </TableCell>
+                <TableCell className="px-4 py-3 text-muted-foreground">{periodLabel(r.period)}</TableCell>
+                <TableCell className="px-4 py-3 text-right">
+                  {canMarkTaxDone(r.role) && (
+                    <Button size="sm" variant="outline" onClick={() => done.mutate(r)} disabled={done.isPending}>
+                      {tt('markDone')}
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </DataTable>
+        </div>
+      )}
+      {done.error && <ErrorText>{errorMessage(done.error)}</ErrorText>}
+      <p className="mt-3 text-xs text-subtle-foreground">{tt('unconfirmed')}</p>
+    </section>
+  );
+}
+
 export function ClientsPage() {
   const t = useTranslations('clients');
   const tc = useTranslations('common');
@@ -63,7 +143,10 @@ export function ClientsPage() {
   const clients = useQuery({ ...orpc.me.clients.queryOptions(), staleTime: 60_000 });
   const finance = getConfig().modules.includes('finance');
   const rows = clients.data ? sortClients(clients.data.clients, locale) : [];
-  const head = [t('columns.company'), t('columns.pending'), t('columns.failed'), t('columns.lastActivity'), ...(finance ? [t('columns.vatDeadline')] : [])];
+  const head = [t('columns.company'), t('columns.pending'), t('columns.failed'), t('columns.lastActivity'), ...(finance ? [t('columns.vatDeadline'), t('columns.nextObligation')] : [])];
+  const dues = clients.data ? dueAcrossClients(clients.data.clients, locale) : [];
+  const periodLabel = usePeriodLabel();
+  const tt = useTranslations('taxCalendar');
 
   return (
     <div className="min-h-full bg-background">
@@ -133,6 +216,19 @@ export function ClientsPage() {
                         <Deadline deadline={c.overview.vatDeadline} slug={c.slug} canChoose={c.role === 'owner' || c.role === 'admin'} />
                       </TableCell>
                     )}
+                    {finance && (
+                      <TableCell className="px-4 py-3">
+                        {c.overview.taxDues[0] ? (
+                          <span className="block">
+                            <span className="block">{tt(`obligations.${c.overview.taxDues[0].obligation}`)}</span>
+                            <span className="block text-xs text-subtle-foreground">{periodLabel(c.overview.taxDues[0].period)}</span>
+                            <DueWhen due={c.overview.taxDues[0]} />
+                          </span>
+                        ) : (
+                          <span className="text-subtle-foreground">{tt('nothingDue')}</span>
+                        )}
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </DataTable>
@@ -141,6 +237,7 @@ export function ClientsPage() {
               <p className="mt-3 text-xs text-muted-foreground">{t('truncated', { shown: f.number(clients.data.clients.length), total: f.number(clients.data.total) })}</p>
             )}
             {finance && <p className="mt-3 text-xs text-subtle-foreground">{t('deadlineNote')}</p>}
+            {finance && <TaxCalendar rows={dues} />}
           </>
         )}
       </main>

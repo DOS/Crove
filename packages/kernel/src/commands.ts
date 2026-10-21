@@ -47,6 +47,7 @@ import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 import { proposalReminderCommands } from './proposal-reminders.ts';
 import { usageCommands } from './usage-limits.ts';
 import { userStatusCommands } from './user-status.ts';
+import { taxCalendarCommands } from './tax-calendar.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // The command that records an invoice proposal (a purchase or a sale).
@@ -909,6 +910,7 @@ const otherKernelCommands = [
   ...partyCommands,
   ...mailCommands,
   ...proposalReminderCommands,
+  ...taxCalendarCommands,
   ...auditLogCommands,
   ...usageCommands,
   ...userStatusCommands,

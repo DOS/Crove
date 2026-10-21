@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import type { ExtractClient } from '@crove/extract-contract';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { nextVatDeadline, vietnamToday } from '@crove/kernel-contract';
+import { nextVatDeadline, taxDues, vietnamToday, type TaxProfile } from '@crove/kernel-contract';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries, recordExtractionFailure } from '@crove/mod-finance';
@@ -66,6 +66,7 @@ interface ClientRow {
     lastActivityAt: string | null;
     vatFilingPeriod: 'month' | 'quarter' | null;
     vatDeadline: { period: string; dueDate: string; daysLeft: number } | null;
+    taxDues: Array<{ obligation: string; period: string; dueDate: string; daysLeft: number; confirmed: boolean }>;
   };
 }
 
@@ -308,6 +309,57 @@ suite('multi-client home screen (#318)', () => {
     // Clearing it brings the deadline back to unknown.
     expect(await setPeriod(accountant, firm, null)).toMatchObject({ status: 200, body: { vatFilingPeriod: null } });
     expect(row(await clients(accountant), firm)?.overview).toMatchObject({ vatFilingPeriod: null, vatDeadline: null });
+  });
+
+  it('keeps a tax calendar per org: owners and admins choose the obligations, members mark them done (#921)', async () => {
+    const profile: TaxProfile = { obligations: ['pit_withholding', 'cit_provisional', 'cit_finalization', 'pit_finalization', 'financial_statements'], pitFilingPeriod: 'quarter', fiscalYearEndMonth: 12 };
+    // A member may not choose them; PIT withholding needs its frequency.
+    expect((await rpc('org/setTaxProfile', await tokenFor(accountant), profile, clientOrg.slug)).status).toBe(403);
+    expect(await rpc('org/setTaxProfile', await tokenFor(accountant), { ...profile, pitFilingPeriod: null }, firm.slug)).toMatchObject({ status: 422, body: { code: 'PIT_FILING_PERIOD_REQUIRED' } });
+    const saved = await rpc('org/setTaxProfile', await tokenFor(accountant), profile, firm.slug);
+    expect(saved).toMatchObject({ status: 200, body: { ...profile, since: vietnamToday() } });
+    expect((await rpc('org/taxProfile', await tokenFor(accountant), undefined, firm.slug)).body).toEqual(saved.body);
+    expect(await setPeriod(accountant, firm, 'month')).toMatchObject({ status: 200 });
+
+    // The home screen lists what the rules give for the next 30 days (the profile is new, so nothing overdue).
+    const today = vietnamToday();
+    const inMonth = new Date(Date.parse(`${today}T00:00:00Z`) + 30 * 86_400_000).toISOString().slice(0, 10);
+    const expected = taxDues({ ...profile, vatFilingPeriod: 'month' }, today, inMonth).map((d) => [d.obligation, d.period, d.dueDate]);
+    const listed = () => clients(accountant).then((rows) => row(rows, firm)?.overview.taxDues ?? []);
+    const first = await listed();
+    expect(first.map((d) => [d.obligation, d.period, d.dueDate])).toEqual(expected);
+    expect(first.length).toBeGreaterThan(0);
+    expect(first.every((d) => d.confirmed === false && d.daysLeft >= 0 && d.daysLeft <= 30)).toBe(true);
+    // An org without a profile or VAT period lists nothing.
+    expect(row(await clients(accountant), quiet)?.overview.taxDues).toEqual([]);
+
+    // Marked done, it leaves the list; the mark is audited, and taking it back brings the item back.
+    const item = first[0] as (typeof first)[number];
+    const mark = async (done: boolean) => rpc('org/markTaxObligation', await tokenFor(accountant), { obligation: item.obligation, period: item.period, done }, firm.slug);
+    expect(await mark(true)).toMatchObject({ status: 200, body: { done: true } });
+    expect((await listed()).map((d) => [d.obligation, d.period])).not.toContainEqual([item.obligation, item.period]);
+    // Twice is the same as once.
+    expect((await mark(true)).status).toBe(200);
+    expect((await mark(false)).status).toBe(200);
+    expect((await listed()).map((d) => [d.obligation, d.period, d.dueDate])).toEqual(expected);
+    // A period of another frequency is refused.
+    expect(await rpc('org/markTaxObligation', await tokenFor(accountant), { obligation: 'vat_return', period: '2026', done: true }, firm.slug)).toMatchObject({
+      status: 422,
+      body: { code: 'TAX_PERIOD_MISMATCH' },
+    });
+
+    const audit = await admin(
+      async (c) =>
+        (
+          await c.query(`SELECT command, detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command LIKE 'kernel.tax_%' AND outcome = 'ok' ORDER BY occurred_at`, [
+            firm.orgId,
+          ])
+        ).rows,
+    );
+    expect(audit.map((r) => r.command)).toEqual(['kernel.tax_profile.save', 'kernel.tax_obligation.done', 'kernel.tax_obligation.done', 'kernel.tax_obligation.undo']);
+    expect(audit[1]?.detail).toMatchObject({ obligation: item.obligation, period: item.period, already: false });
+    expect(audit[2]?.detail).toMatchObject({ already: true });
+    expect(await setPeriod(accountant, firm, null)).toMatchObject({ status: 200 });
   });
 
   it("shows the newest entry of the org's activity feed as its last activity", async () => {

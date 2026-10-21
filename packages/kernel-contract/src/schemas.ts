@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ACCOUNT_CODE_PATTERN } from './accounts.ts';
 import { VAT_FILING_PERIODS } from './vat-deadline.ts';
+import { zTaxDueView } from './tax-calendar.ts';
 
 // Wire conventions: snake_case is not used on the wire for the MVP API; decimals are strings,
 // accounting dates are YYYY-MM-DD, ids are UUIDs.
@@ -248,6 +249,8 @@ export const zClientOverview = zOrgSummary.extend({
         daysLeft: z.number().int().nonnegative(),
       })
       .nullable(),
+    // The tax calendar (#921): what is due in the next 30 days, or overdue and not marked done, by due date.
+    taxDues: z.array(zTaxDueView),
   }),
 });
 // The home screen's answer (#495): at most 200 orgs, and how many the user has, so a cut list says so.
