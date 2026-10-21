@@ -2,9 +2,9 @@
 // export command after the file is built, and only then answers with the file. Here the export commands fail as a
 // failed audit write would, and each route must answer an error instead of a file: the journal, both MISA exports, the
 // VAT working and its HTKK XML (finance.vat.export), the ledger reports (finance.ledger.export), the financial
-// statements and the register of fixed assets (#919). On a real PostgreSQL 17; the commands themselves are covered
-// by the export tests of each report. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own
-// database.
+// statements, also as HTKK XML (#920), and the register of fixed assets (#919). On a real PostgreSQL 17; the commands
+// themselves are covered by the export tests of each report. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run
+// creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { SignJWT } from 'jose';
@@ -139,6 +139,7 @@ suite('finance exports: no audit row, no download (#365)', () => {
     ['the VAT return as HTKK XML', '/api/export/vat-01gtgt.xml?period=2026-09', 'finance.vat.export'],
     ['the ledger reports', '/api/export/ledger.xlsx?period=2026-09', 'finance.ledger.export'],
     ['the financial statements', '/api/export/statements.xlsx?period=2026-09', 'finance.statements.export'],
+    ['the financial statements as HTKK XML', '/api/export/statements-htkk.xml?year=2026', 'finance.statements.export'],
     ['the register of fixed assets', '/api/export/fixed-assets.xlsx', 'finance.fixed_asset.export'],
   ])('answers an error, not a file, for %s', async (_name, path, command) => {
     reached.length = 0;

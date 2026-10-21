@@ -1198,6 +1198,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       statements: os.ledger.statements.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.statements.period', input, { actor, orgId })),
       ),
+      statementsHtkkCheck: os.ledger.statementsHtkkCheck.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.statements.htkk_check', input, { actor, orgId })),
+      ),
     },
     yearArchive: {
       list: os.yearArchive.list.handler(({ context }) =>

@@ -211,12 +211,12 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
       expect(await (await fetch(`${origin}/api/config`)).json()).toMatchObject({ modules: ['kernel'] });
 
       // Finance routes are not registered.
-      for (const file of ['journal.xlsx', 'misa/purchases.xlsx', 'misa/receipts.xlsx', 'misa/payments.xlsx', 'vat.xlsx?period=2026-09', 'ledger.xlsx?period=2026-09', 'statements.xlsx?period=2026-09', 'fixed-assets.xlsx']) {
+      for (const file of ['journal.xlsx', 'misa/purchases.xlsx', 'misa/receipts.xlsx', 'misa/payments.xlsx', 'vat.xlsx?period=2026-09', 'ledger.xlsx?period=2026-09', 'statements.xlsx?period=2026-09', 'fixed-assets.xlsx', 'statements-htkk.xml?year=2026']) {
         const exported = await fetch(`${origin}/api/export/${file}`, { headers });
         expect(exported.status, file).toBe(404);
         expect(await exported.json()).toEqual({ code: 'NOT_FOUND' });
       }
-      for (const [path, input] of [['journal/list', {}], ['accounts/list', {}], ['parties/list', {}], ['documents/list', {}], ['vat/period', { period: '2026-09' }], ['ledger/period', { period: '2026-09' }], ['ledger/account', { period: '2026-09', accountCode: '331' }], ['ledger/statements', { period: '2026-09' }], ['fixedAssets/list', {}], ['bank/lines', { bankAccount: '1121', period: '2026-09' }]] as const) {
+      for (const [path, input] of [['journal/list', {}], ['accounts/list', {}], ['parties/list', {}], ['documents/list', {}], ['vat/period', { period: '2026-09' }], ['ledger/period', { period: '2026-09' }], ['ledger/account', { period: '2026-09', accountCode: '331' }], ['ledger/statements', { period: '2026-09' }], ['ledger/statementsHtkkCheck', { year: 2026 }], ['fixedAssets/list', {}], ['bank/lines', { bankAccount: '1121', period: '2026-09' }]] as const) {
         expect((await rpc(path, input)).status, path).toBe(404);
       }
 

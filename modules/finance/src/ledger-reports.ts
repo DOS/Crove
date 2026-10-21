@@ -186,6 +186,12 @@ async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<Le
   };
 }
 
+// The trial balance of a calendar year, for the HTKK statements (#920).
+export async function yearTrialBalance(ctx: QueryContext, year: number): Promise<TrialBalance> {
+  const data = await loadLedgerData(ctx, String(year));
+  return trialBalance(data.chart, data.opening, data.lines);
+}
+
 function report(data: LedgerData): LedgerReport {
   return {
     period: data.period,

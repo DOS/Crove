@@ -118,6 +118,7 @@ import {
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
 import { zDepreciationRequest, zJournalVoucherRequest, zYearClosingRequest } from './journal-voucher.ts';
 import { zFixedAsset, zFixedAssetCreate, zFixedAssetEnd } from './fixed-asset.ts';
+import { zStatementsHtkkCheck, zStatementsHtkkYear } from './statements-htkk.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
@@ -881,6 +882,9 @@ export const contract = {
     // Issue #154: the DRAFT B01-DNN at the period's last day and B02-DNN for the period. The Excel workbook is
     // GET /api/export/statements.xlsx?period=<period>.
     statements: oc.input(z.object({ period: zLedgerPeriod })).output(zFinancialStatements),
+    // Issue #920: what the HTKK XML of a year's statements (GET /api/export/statements-htkk.xml?year=<year>) would get
+    // wrong or leave out, for the screen to say before the download.
+    statementsHtkkCheck: oc.input(z.object({ year: zStatementsHtkkYear })).output(zStatementsHtkkCheck),
   },
   // Period lock (#329): every member reads it; owners and admins lock the next month once it has ended; only owners
   // unlock the last locked month (R3: fresh MFA), with a reason. A retry with the same idempotencyKey returns the first

@@ -57,3 +57,4 @@ export interface StreamHint {
 export const STREAM_CLOSE_REASONS = ['session', 'session_revoked_in_org', 'mfa', 'membership', 'expired', 'unavailable', 'shutdown'] as const;
 export type StreamCloseReason = (typeof STREAM_CLOSE_REASONS)[number];
 export * from './fixed-asset.ts';
+export * from './statements-htkk.ts';
