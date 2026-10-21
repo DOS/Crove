@@ -7,7 +7,8 @@
 // schedule in the worker renews tokens before they expire and seals the new pair at once.
 //
 // Publish: an article is created asynchronously (`article/create` answers a token), then `article/verify` turns the
-// token into the article id once Zalo has processed it. The cover is fetched by Zalo from a public URL (1 MB at most).
+// token into the article id once Zalo has processed it. Zalo fetches every image from a public URL (1 MB at most each):
+// the first is the cover, the others follow the text as image blocks (#943).
 import type { ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, Refresher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -20,6 +21,10 @@ const CHECK_AFTER_SECONDS = 20;
 const TITLE_MAX = 150;
 const DESCRIPTION_MAX = 300;
 const AUTHOR_MAX = 50;
+// Images per article (#943): Zalo's article docs set no count, so this is Crove's cap, kept in step with the zalo_oa
+// media rule of @crove/mod-social. Zalo refuses an image file over 1 MB.
+const IMAGES_MAX = 10;
+const IMAGE_MAX_BYTES = 1024 * 1024;
 
 export interface ZaloAppConfig {
   appId: string;
@@ -237,22 +242,35 @@ function zaloPublishResult(error: unknown): PublishResult {
   return { kind: 'rejected', error: 'bad_request', code, message: error.message, httpStatus: error.status };
 }
 
-// The article Zalo shows: the post's title and text, the text's first lines as the description, the image as cover.
-function articleOf(input: PublishInput, coverUrl: string) {
+// One image of the article: the URL Zalo fetches it from, and its alt text as the caption Zalo shows under it.
+interface ArticleImage {
+  url: string;
+  caption: string | null;
+}
+
+// The article Zalo shows: the post's title and text, the text's first lines as the description, the first image as
+// the cover. The cover is shown at the top of the article, so the other images follow the text as image blocks, in
+// order, each captioned with its alt text (Zalo's caption is optional). Comments are on unless settings.comments is
+// false (#943).
+function articleOf(input: PublishInput, images: readonly ArticleImage[]) {
   const body = input.content.body.trim();
   const description = (body.split('\n').find((line) => line.trim()) ?? body).trim().slice(0, DESCRIPTION_MAX);
   const author = typeof input.settings.author === 'string' && input.settings.author.trim() ? input.settings.author.trim().slice(0, AUTHOR_MAX) : 'Crove';
   const paragraphs = body.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
   if (input.content.linkUrl) paragraphs.push(input.content.linkUrl);
+  const [cover, ...rest] = images;
   return {
     type: 'normal',
     title: (input.content.title ?? '').trim().slice(0, TITLE_MAX),
     author,
-    cover: { cover_type: 'photo', photo_url: coverUrl, status: 'show' },
+    cover: { cover_type: 'photo', photo_url: cover?.url ?? '', status: 'show' },
     description,
-    body: paragraphs.map((content) => ({ type: 'text', content })),
+    body: [
+      ...paragraphs.map((content) => ({ type: 'text', content })),
+      ...rest.map((image) => ({ type: 'image', url: image.url, ...(image.caption ? { caption: image.caption } : {}) })),
+    ],
     status: 'show',
-    comment: 'show',
+    comment: input.settings.comments === false ? 'hide' : 'show',
   };
 }
 
@@ -268,14 +286,19 @@ export class ZaloOaPublisher implements Publisher {
   async publish(input: PublishInput): Promise<PublishResult> {
     const s = zaloSecretOf(input.secret);
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
-    const cover = input.content.media[0];
-    if (!cover) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_REQUIRED' };
+    const media = input.content.media;
+    if (media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_REQUIRED' };
+    // The channel checks hold these back already; a post past them is refused whole, never cut.
+    if (media.length > IMAGES_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_MEDIA' };
+    if (media.some((m) => m.sizeBytes > IMAGE_MAX_BYTES)) return { kind: 'rejected', error: 'bad_request', code: 'IMAGE_TOO_LARGE' };
     if (!(input.content.title ?? '').trim()) return { kind: 'rejected', error: 'bad_request', code: 'TITLE_REQUIRED' };
-    const coverUrl = await input.mediaUrl(cover.fileId).catch(() => null);
-    if (!coverUrl) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+    // One URL per image, as for the cover alone before: Zalo fetches them itself, so this makes no call to Zalo.
+    const urls = await Promise.all(media.map((m) => input.mediaUrl(m.fileId).catch(() => null)));
+    if (urls.some((url) => !url)) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+    const images = media.map((m, i) => ({ url: urls[i] as string, caption: m.altText?.trim() || null }));
     let token: string;
     try {
-      const answer = await this.client.api<CreateAnswer>('POST', 'article/create', s.accessToken, { json: articleOf(input, coverUrl) });
+      const answer = await this.client.api<CreateAnswer>('POST', 'article/create', s.accessToken, { json: articleOf(input, images) });
       if (typeof answer?.token !== 'string' || !answer.token) return { kind: 'unknown', code: 'NO_ARTICLE_TOKEN' };
       token = answer.token;
     } catch (error) {

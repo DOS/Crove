@@ -144,6 +144,7 @@ export function createResendProvider(options: ResendOptions): MailProvider {
             subject: mail.subject,
             text: mail.text,
             html: mail.html,
+            ...(mail.replyTo ? { reply_to: mail.replyTo } : {}),
             ...(mail.messageId ? { headers: { 'Message-ID': mail.messageId } } : {}),
           }),
         });

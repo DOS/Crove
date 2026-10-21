@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { sql } from '../lib/db.ts';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { confirmUnverifiedSignature } from '../lib/inbox.ts';
 import { nextTotp } from '../lib/totp.ts';
 
 const FIXTURE = readFileSync(fileURLToPath(new URL('../../apps/extract/test/fixtures/einvoice-basic.xml', import.meta.url)), 'utf8');
@@ -61,6 +62,7 @@ test('post an invoice of a locked month in the first open month, keeping its inv
     await expect(late.getByText(`Hãy chọn một ngày từ ${dmy(FIRST_OPEN_DAY)} đến hôm nay.`)).toBeVisible();
     await expect(page.getByRole('button', { name: 'Duyệt và ghi sổ' })).toBeDisabled();
     await page.getByLabel('Ngày ghi sổ').fill(FIRST_OPEN_DAY);
+    await confirmUnverifiedSignature(page);
     await expect(page.getByRole('button', { name: 'Duyệt và ghi sổ' })).toBeEnabled();
   });
 

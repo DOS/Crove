@@ -87,6 +87,7 @@ describe('ZaloOaPublisher', () => {
     ...over,
   });
 
+  // A post with one image is the article it was before #943: the image is the cover alone, comments on.
   it('creates the article with its cover and text, and returns its id once Zalo has processed it', async () => {
     const { fetchImpl, calls } = zalo({
       'POST openapi.zalo.me/v2.0/article/create': [{ body: { error: 0, data: { token: 'tok-1' } } }],
@@ -108,6 +109,66 @@ describe('ZaloOaPublisher', () => {
       comment: 'show',
     });
     expect(calls[1]?.json).toEqual({ token: 'tok-1' });
+  });
+
+  it('sends every image in order: the first as the cover, the others after the text, captioned with their alt text (#943)', async () => {
+    const { fetchImpl, calls } = zalo({
+      'POST openapi.zalo.me/v2.0/article/create': [{ body: { error: 0, data: { token: 'tok-4' } } }],
+      'POST openapi.zalo.me/v2.0/article/verify': [{ body: { error: 0, data: { id: 'art-4' } } }],
+    });
+    const media = [
+      { fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 500_000, altText: 'Mặt tiền cửa hàng' },
+      { fileId: 'f-2', mime: 'image/png', sizeBytes: 300_000, altText: 'Quầy bánh mì' },
+      { fileId: 'f-3', mime: 'image/jpeg', sizeBytes: 1024 * 1024, altText: null },
+      { fileId: 'f-4', mime: 'image/webp', sizeBytes: 200_000, altText: '  Bàn ghế ngoài trời ' },
+    ];
+    const asked: string[] = [];
+    const publish = input({
+      content: { ...input().content, media },
+      mediaUrl: async (fileId) => {
+        asked.push(fileId);
+        return `https://bucket.example/${fileId}?sig=1`;
+      },
+    });
+    expect(await new ZaloOaPublisher(APP, fetchImpl).publish(publish)).toEqual({ kind: 'accepted', externalId: 'art-4', url: null });
+    expect(asked).toEqual(['f-1', 'f-2', 'f-3', 'f-4']);
+    // Still one article and one check: Zalo fetches the images itself.
+    expect(calls.map((c) => c.route)).toEqual(['POST openapi.zalo.me/v2.0/article/create', 'POST openapi.zalo.me/v2.0/article/verify']);
+    expect(calls[0]?.json).toMatchObject({
+      cover: { cover_type: 'photo', photo_url: 'https://bucket.example/f-1?sig=1', status: 'show' },
+      body: [
+        { type: 'text', content: 'Khai trương chi nhánh mới.' },
+        { type: 'text', content: 'Giảm 20% tuần đầu.' },
+        { type: 'text', content: 'https://example.com/a' },
+        { type: 'image', url: 'https://bucket.example/f-2?sig=1', caption: 'Quầy bánh mì' },
+        { type: 'image', url: 'https://bucket.example/f-3?sig=1' },
+        { type: 'image', url: 'https://bucket.example/f-4?sig=1', caption: 'Bàn ghế ngoài trời' },
+      ],
+      comment: 'show',
+    });
+  });
+
+  it('turns comments off when settings.comments is false, and keeps them on otherwise (#943)', async () => {
+    const { fetchImpl, calls } = zalo({
+      'POST openapi.zalo.me/v2.0/article/create': [{ body: { error: 0, data: { token: 'tok-5' } } }, { body: { error: 0, data: { token: 'tok-6' } } }],
+      'POST openapi.zalo.me/v2.0/article/verify': [{ body: { error: 0, data: { id: 'art-5' } } }, { body: { error: 0, data: { id: 'art-6' } } }],
+    });
+    const publisher = new ZaloOaPublisher(APP, fetchImpl);
+    await publisher.publish(input({ settings: { comments: false } }));
+    await publisher.publish(input({ settings: { comments: true } }));
+    expect(calls[0]?.json).toMatchObject({ comment: 'hide' });
+    expect(calls[2]?.json).toMatchObject({ comment: 'show' });
+  });
+
+  it('creates nothing for more than 10 images, an image over 1 MB, or an image without a URL (#943)', async () => {
+    const { fetchImpl, calls } = zalo({});
+    const publisher = new ZaloOaPublisher(APP, fetchImpl);
+    const image = (i: number, sizeBytes = 100_000) => ({ fileId: `f-${i}`, mime: 'image/jpeg', sizeBytes, altText: null });
+    expect(await publisher.publish(input({ content: { ...input().content, media: Array.from({ length: 11 }, (_, i) => image(i)) } }))).toMatchObject({ kind: 'rejected', code: 'TOO_MANY_MEDIA' });
+    expect(await publisher.publish(input({ content: { ...input().content, media: [image(1), image(2, 1024 * 1024 + 1)] } }))).toMatchObject({ kind: 'rejected', code: 'IMAGE_TOO_LARGE' });
+    const third = input({ content: { ...input().content, media: [image(1), image(2), image(3)] }, mediaUrl: async (fileId) => (fileId === 'f-3' ? null : `https://bucket.example/${fileId}`) });
+    expect(await publisher.publish(third)).toMatchObject({ kind: 'rejected', code: 'MEDIA_URL_UNAVAILABLE' });
+    expect(calls).toHaveLength(0);
   });
 
   it('reports a token still processing as pending and finishes it on the status check', async () => {

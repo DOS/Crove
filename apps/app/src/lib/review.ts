@@ -44,6 +44,8 @@ export function canApproveProposals(role: string | null | undefined): boolean {
 export interface BulkItem {
   id: string;
   revision: number;
+  // The approver confirmed this revision of an invoice whose digital signature is unverified (#674).
+  acceptUnverifiedSignature?: true;
 }
 
 // One request of a bulk approval. Its idempotency key is fixed when the batches are planned, so a retry (after a

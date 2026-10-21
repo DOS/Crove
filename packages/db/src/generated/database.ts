@@ -16,6 +16,9 @@ export interface CroveFinanceSchema {
   'crove_finance.account': FinanceAccountTable;
   'crove_finance.bank_line': FinanceBankLineTable;
   'crove_finance.cash_voucher': FinanceCashVoucherTable;
+  'crove_finance.depreciation_line': FinanceDepreciationLineTable;
+  'crove_finance.fixed_asset': FinanceFixedAssetTable;
+  'crove_finance.input_vat_check': FinanceInputVatCheckTable;
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
   'crove_finance.journal_voucher': FinanceJournalVoucherTable;
@@ -50,6 +53,8 @@ export interface CroveKernelSchema {
   'crove_kernel.mail_message': KernelMailMessageTable;
   'crove_kernel.mail_suppression': KernelMailSuppressionTable;
   'crove_kernel.member_invite': KernelMemberInviteTable;
+  'crove_kernel.notification': KernelNotificationTable;
+  'crove_kernel.notification_mute': KernelNotificationMuteTable;
   'crove_kernel.outbox_event': KernelOutboxEventTable;
   'crove_kernel.party': KernelPartyTable;
   'crove_kernel.position': KernelPositionTable;
@@ -146,6 +151,50 @@ export interface FinanceCashVoucherTable {
   bank_line_id: ColumnType<string | null, string | null, NotGranted>;
 }
 
+/** crove_finance.depreciation_line */
+export interface FinanceDepreciationLineTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  asset_id: ColumnType<string, string, NotGranted>;
+  month: ColumnType<string, string, NotGranted>;
+  amount: ColumnType<string, string, NotGranted>;
+  entry_id: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_finance.fixed_asset */
+export interface FinanceFixedAssetTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  kind: ColumnType<string, string, NotGranted>;
+  name: ColumnType<string, string, NotGranted>;
+  cost: ColumnType<string, string, NotGranted>;
+  asset_account: ColumnType<string, string, NotGranted>;
+  accumulated_account: ColumnType<string | null, string | null, NotGranted>;
+  expense_account: ColumnType<string, string, NotGranted>;
+  start_month: ColumnType<string, string, NotGranted>;
+  months: ColumnType<number, number, NotGranted>;
+  source_document_id: ColumnType<string | null, string | null, NotGranted>;
+  source_line_no: ColumnType<number | null, number | null, NotGranted>;
+  ended_month: string | null;
+  end_reason: string | null;
+  ended_by: string | null;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_finance.input_vat_check */
+export interface FinanceInputVatCheckTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  document_id: ColumnType<string, string, NotGranted>;
+  outcome: ColumnType<string, string, NotGranted>;
+  voucher_id: ColumnType<string | null, string | null, NotGranted>;
+  note: ColumnType<string | null, string | null, NotGranted>;
+  marked_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
 /** crove_finance.journal_entry */
 export interface FinanceJournalEntryTable {
   org_id: ColumnType<string, NotGranted, NotGranted>;
@@ -184,6 +233,7 @@ export interface FinanceJournalVoucherTable {
   proposal_id: ColumnType<string | null, string | null, NotGranted>;
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  closing_year: ColumnType<number | null, number | null, NotGranted>;
 }
 
 /** crove_finance.org_account */
@@ -276,6 +326,16 @@ export interface FinancePurchaseDocumentTable {
   replaces_document_id: ColumnType<string | null, string | null, NotGranted>;
   direction: ColumnType<string, string | undefined, NotGranted>;
   search: ColumnType<string | null, never, NotGranted>;
+  correction_kind: ColumnType<string | null, string | null, NotGranted>;
+  corrects_document_id: ColumnType<string | null, string | null, NotGranted>;
+  corrected_series: ColumnType<string | null, string | null, NotGranted>;
+  corrected_number: ColumnType<string | null, string | null, NotGranted>;
+  corrected_date: ColumnType<string | null, string | null, NotGranted>;
+  exchange_rate: ColumnType<string | null, string | null, NotGranted>;
+  exchange_rate_source: ColumnType<string | null, string | null, NotGranted>;
+  foreign_subtotal: ColumnType<string | null, string | null, NotGranted>;
+  foreign_vat_amount: ColumnType<string | null, string | null, NotGranted>;
+  foreign_total: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_finance.purchase_document_void */
@@ -614,6 +674,29 @@ export interface KernelMemberInviteTable {
   revoked_by: string | null;
 }
 
+/** crove_kernel.notification_mute */
+export interface KernelNotificationMuteTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  kind: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_kernel.notification */
+export interface KernelNotificationTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  kind: ColumnType<string, string, NotGranted>;
+  dedupe_key: ColumnType<string, string, NotGranted>;
+  event_id: ColumnType<string | null, string | null, NotGranted>;
+  subject_type: ColumnType<string | null, string | null, NotGranted>;
+  subject_id: ColumnType<string | null, string | null, NotGranted>;
+  detail: ColumnType<unknown, string | undefined, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  read_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
 /** crove_kernel.outbox_event */
 export interface KernelOutboxEventTable {
   org_id: ColumnType<string, NotGranted, NotGranted>;
@@ -769,6 +852,8 @@ export interface KernelTenantTable {
   tax_code: string | null;
   vat_filing_period: string | null;
   address: string | null;
+  contact_email: string | null;
+  missing_invoice_reminder_day: number | null;
 }
 
 /** crove_social.account_snapshot */

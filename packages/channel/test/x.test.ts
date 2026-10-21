@@ -138,6 +138,42 @@ describe('XPublisher', () => {
     expect(none.calls).toHaveLength(0);
   });
 
+  it('sends a poll and who may reply in POST /2/tweets (#948), and nothing extra by default', async () => {
+    const { fetchImpl, calls } = x({ 'POST api.x.com/2/tweets': [{ status: 201, body: { data: { id: '1445880548472328192', text: 'Bánh nào?' } } }, { status: 201, body: { data: { id: '1445880548472328193' } } }, { status: 201, body: { data: { id: '1445880548472328194' } } }] });
+    const publisher = new XPublisher(APP, fetchImpl);
+    const settings = { poll: { options: [' Bánh mì ', 'Bánh bao', 'Bánh cuốn'], durationMinutes: 4320 }, replySettings: 'following' };
+    expect(await publisher.publish(input({ settings }))).toMatchObject({ kind: 'accepted', externalId: '1445880548472328192' });
+    expect(calls[0]?.body).toEqual({
+      text: 'Khai trương chi nhánh mới & ưu đãi\n\nhttps://example.com/a',
+      poll: { options: ['Bánh mì', 'Bánh bao', 'Bánh cuốn'], duration_minutes: 4320 },
+      reply_settings: 'following',
+    });
+    // A poll without a length runs a day; mentioned people only, without a poll.
+    await publisher.publish(input({ settings: { poll: { options: ['Có', 'Không'] }, replySettings: 'everyone' } }));
+    expect(calls[1]?.body).toEqual({ text: 'Khai trương chi nhánh mới & ưu đãi\n\nhttps://example.com/a', poll: { options: ['Có', 'Không'], duration_minutes: 1440 } });
+    await publisher.publish(input({ settings: { replySettings: 'mentionedUsers' } }));
+    expect(calls[2]?.body).toEqual({ text: 'Khai trương chi nhánh mới & ưu đãi\n\nhttps://example.com/a', reply_settings: 'mentionedUsers' });
+  });
+
+  it('refuses a poll with media, a bad poll or an unknown reply setting before any call', async () => {
+    const none = x({});
+    const publisher = new XPublisher(APP, none.fetchImpl);
+    const poll = { options: ['a', 'b'] };
+    let read = 0;
+    const readMedia = async () => {
+      read++;
+      return new Uint8Array([0xff, 0xd8, 0xff]);
+    };
+    expect(await publisher.publish(input({ content: { ...input().content, media: [image] }, readMedia, settings: { poll } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' });
+    expect(await publisher.publish(input({ content: { ...input().content, media: [{ ...image, mime: 'video/mp4' }] }, readMedia, settings: { poll } }))).toMatchObject({ kind: 'rejected', code: 'POLL_WITH_MEDIA' });
+    for (const bad of [{ options: ['a'] }, { options: ['a', 'b', 'c', 'd', 'e'] }, { options: ['a', 'x'.repeat(26)] }, { options: ['a', 'b'], durationMinutes: 4 }, { options: ['a', 'b'], durationMinutes: 10081 }, { options: ['a', 'b'], durationMinutes: 60.5 }, 'có']) {
+      expect(await publisher.publish(input({ settings: { poll: bad } }))).toMatchObject({ kind: 'rejected', code: 'POLL_INVALID' });
+    }
+    expect(await publisher.publish(input({ settings: { replySettings: 'verified' } }))).toMatchObject({ kind: 'rejected', code: 'REPLY_SETTINGS_INVALID' });
+    expect(read).toBe(0);
+    expect(none.calls).toHaveLength(0);
+  });
+
   describe('video', () => {
     const MB4 = 4 * 1024 * 1024;
     const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: MB4 + 10, altText: null };

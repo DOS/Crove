@@ -4,7 +4,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { INVOICE_CHECK_CODES, zCheck } from '@crove/kernel-contract';
-import { checkInvoice, enterpriseCheckDigit, type InvoiceCheck, type ParsedInvoice } from '@crove/l10n-vn';
+import { checkInvoice, enterpriseCheckDigit, SIGNATURE_REASONS, type InvoiceCheck, type ParsedInvoice } from '@crove/l10n-vn';
+import { relatedCheck } from '../src/extract.ts';
+import { enteredRateCheck } from '../src/record.ts';
 
 const parsed = JSON.parse(readFileSync(new URL('../../../packages/l10n-vn/test/fixtures/einvoice-basic.parsed.json', import.meta.url), 'utf8')) as ParsedInvoice;
 // A checksum-valid code for the "valid" outcome, computed here rather than written out, so no valid code sits in a
@@ -19,8 +21,14 @@ const invoice = (change: (i: ParsedInvoice) => void = () => {}): ParsedInvoice =
 // One invoice per outcome, so that every branch of checkInvoice runs at least once.
 const VARIANTS: ParsedInvoice[] = [
   invoice(),
+  // A foreign-currency e-invoice with its own rate (#918), booked at it.
   invoice((i) => {
     i.currency = 'USD';
+    i.exchangeRate = '25450';
+  }),
+  invoice((i) => {
+    i.currency = 'USD';
+    i.exchangeRate = null;
     i.subtotal = '1';
     i.total = '1';
     i.taxBreakdown = i.taxBreakdown.map((t) => ({ ...t, vatAmount: '1' }));
@@ -36,12 +44,41 @@ const VARIANTS: ParsedInvoice[] = [
     i.seller.taxCode = VALID_CODE;
     i.source = 'ai';
   }),
+  // The signature verification (#674): verified, each reason, and an answer from a sandbox without it.
+  invoice((i) => {
+    i.signature = { status: 'verified', reason: null, signer: 'CÔNG TY TNHH DỊCH VỤ MẪU', issuer: 'CA', signedAt: '2026-09-15T03:00:00.000Z' };
+  }),
+  ...SIGNATURE_REASONS.map((reason) =>
+    invoice((i) => {
+      i.signature = { status: 'unverified', reason, signer: null, issuer: null, signedAt: null };
+    }),
+  ),
+  invoice((i) => {
+    delete i.signature;
+  }),
+  invoice((i) => {
+    delete i.signature;
+    i.hasSignature = false;
+  }),
 ];
 // The extraction job adds this one (modules/finance/src/extract.ts).
 const DUPLICATE: InvoiceCheck = { id: 'duplicate', status: 'fail', code: 'duplicate.found', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' };
 
 describe('invoice check codes', () => {
-  const checks = [...VARIANTS.flatMap((v) => checkInvoice(v, '2026-10-13')), DUPLICATE];
+  // And these, for a replacement or an adjustment invoice whose original is in the books or not (#916).
+  const related = (kind: 'replacement' | 'adjustment', documentId: string | null) =>
+    relatedCheck({ kind, template: '1', series: 'C26TAB', number: '1234', issueDate: '2026-09-15', documentId });
+  const ORIGINAL = '00000000-0000-7000-8000-000000000001';
+  const checks = [
+    ...VARIANTS.flatMap((v) => checkInvoice(v, '2026-10-13')),
+    DUPLICATE,
+    related('replacement', ORIGINAL),
+    related('adjustment', ORIGINAL),
+    related('replacement', null),
+    related('adjustment', null),
+    // And the reviser this one, for a rate the accountant entered (#918).
+    enteredRateCheck('USD', '25450'),
+  ];
 
   it('gives every check a listed code named after its id, and fits the stored check schema', () => {
     for (const check of checks) {
@@ -58,6 +95,8 @@ describe('invoice check codes', () => {
   it('carries the values of the sentence as parameters', () => {
     const byCode = new Map(checks.map((c) => [c.code, c]));
     expect(byCode.get('currency.unsupported')?.params).toEqual({ currency: 'USD' });
+    expect(byCode.get('currency.converted')?.params).toEqual({ currency: 'USD', rate: '25450' });
+    expect(byCode.get('currency.rate_entered')?.params).toEqual({ currency: 'USD', rate: '25450' });
     expect(byCode.get('lines_sum.mismatch')?.params).toEqual({ lines: expect.any(String), subtotal: '1' });
     expect(byCode.get('seller_tax_code.ok')?.params).toEqual({ taxCode: VALID_CODE });
     expect(byCode.get('issue_date.ok')?.params).toEqual({ date: parsed.issueDate });

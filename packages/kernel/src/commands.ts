@@ -9,8 +9,10 @@ import {
   VOUCHER_TYPES,
   zAccountCode,
   zBulkApproveItems,
+  zExchangeRate,
   zId,
   zLocalDate,
+  zProposalSignature,
   zPurchaseProposal,
   zRole,
   zSessionRevoke,
@@ -33,11 +35,12 @@ import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
-import { mailCommands } from './mail.ts';
+import { mailCommands, queueContactMail } from './mail.ts';
 import { auditLogCommands } from './audit-log.ts';
+import { notificationCommands } from './notifications.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
-import { setAddress } from './org-address.ts';
+import { setAddress, setContactEmail } from './org-address.ts';
 import { partyCommands } from './parties.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 import { proposalReminderCommands } from './proposal-reminders.ts';
@@ -47,14 +50,24 @@ const MEMBERS = ['owner', 'admin', 'member'] as const;
 const PURCHASE_COMMAND = 'finance.purchase.record';
 // Commands a proposal may execute when approved (they must also declare access: 'proposal', which the runtime checks
 // against the proposal row: state 'approved' for that command, approved by the running kernel.proposal.approve).
-const PROPOSAL_COMMANDS = new Set([PURCHASE_COMMAND, 'finance.journal.reverse', 'finance.voucher.record', 'finance.journal_voucher.record']);
+const PROPOSAL_COMMANDS = new Set([
+  PURCHASE_COMMAND,
+  'finance.journal.reverse',
+  'finance.voucher.record',
+  'finance.journal_voucher.record',
+  'finance.closing.record',
+  'finance.depreciation.record',
+]);
 // Proposals a user may ask for (kernel.proposal.request), and the module command that checks the request and builds
 // the proposal from the database; it writes nothing. The title and payload come from it, never from the requester.
-// A cash or bank voucher (#327) and a general journal voucher (NVK, #888) are entered by hand this way.
+// A cash or bank voucher (#327) and a general journal voucher (NVK, #888) are entered by hand this way; a year-end
+// closing (#889) is built from the ledger for the year named, and a month's depreciation (#919) from the register.
 const PROPOSAL_PREPARERS = {
   'finance.journal.reverse': 'finance.journal.prepare_reversal',
   'finance.voucher.record': 'finance.voucher.prepare',
   'finance.journal_voucher.record': 'finance.journal_voucher.prepare',
+  'finance.closing.record': 'finance.closing.prepare',
+  'finance.depreciation.record': 'finance.depreciation.prepare',
 } as const;
 type RequestableCommand = keyof typeof PROPOSAL_PREPARERS;
 const REQUESTABLE = Object.keys(PROPOSAL_PREPARERS) as [RequestableCommand, ...RequestableCommand[]];
@@ -459,7 +472,10 @@ function changesContent(payload: unknown, lineAccounts: z.infer<typeof zLineAcco
 export const editProposal = defineCommand({
   name: 'kernel.proposal.edit',
   proposalEditor: true,
-  input: z.object({ id: zId, revision: z.number().int().positive(), lineAccounts: zLineAccounts.min(1) }),
+  // lineAccounts, an exchangeRate for a foreign-currency invoice read without one (#918), or both.
+  input: z
+    .object({ id: zId, revision: z.number().int().positive(), lineAccounts: zLineAccounts.min(1).optional(), exchangeRate: zExchangeRate.optional() })
+    .refine((v) => v.lineAccounts !== undefined || v.exchangeRate !== undefined, 'lineAccounts or exchangeRate'),
   risk: 'R1',
   access: MEMBERS,
   target: (input) => ({ type: 'kernel.proposal', id: input.id }),
@@ -474,7 +490,7 @@ export const editProposal = defineCommand({
     if (!authors) throw new DomainError('NOT_EDITABLE', 422, 'Đề xuất thiếu thông tin người soạn nên không chỉnh sửa được');
     const revised = await ctx.run<{ changed: boolean; payload: unknown }>(
       reviser,
-      { payload: proposal.payload, lineAccounts: input.lineAccounts },
+      { payload: proposal.payload, lineAccounts: input.lineAccounts ?? [], ...(input.exchangeRate ? { exchangeRate: input.exchangeRate } : {}) },
       { proposalId: proposal.id },
     );
     if (!revised.changed) return { revision: proposal.revision, changed: false };
@@ -491,6 +507,18 @@ export const editProposal = defineCommand({
   },
 });
 
+// The signature verification stored on an invoice proposal (#674), and whether approving it needs the approver's
+// confirmation: an invoice read from e-invoice XML whose signature is not verified, including one read before #674
+// (no verification stored) and an unsigned cash register invoice (unverified, cash_register).
+function signatureOf(payload: unknown): { status: string | null; reason: string | null; needsConfirmation: boolean } {
+  const body = payload as { signature?: unknown; extractionMethod?: unknown } | null;
+  const parsed = zProposalSignature.safeParse(body?.signature);
+  const status = parsed.success ? parsed.data.status : null;
+  const reason = parsed.success ? parsed.data.reason : null;
+  const xml = body?.extractionMethod === 'einvoice_xml';
+  return { status, reason, needsConfirmation: status === 'unverified' || (xml && status !== 'verified') };
+}
+
 export const approveProposal = defineCommand({
   name: 'kernel.proposal.approve',
   input: z.object({
@@ -500,6 +528,11 @@ export const approveProposal = defineCommand({
     lineAccounts: zLineAccounts.optional(),
     note: z.string().max(500).optional(),
     acceptFailedChecks: z.boolean().optional(),
+    // The approver confirmed this revision of an invoice whose digital signature is unverified (#674). Required for
+    // such an invoice (SIGNATURE_UNVERIFIED otherwise); the revision above binds it to what the approver saw. An
+    // approval of such an invoice that went through was therefore confirmed: its audit row and the revision's payload
+    // (signature.status) say so.
+    acceptUnverifiedSignature: z.boolean().optional(),
     // A purchase invoice dated in a locked month (#478): the approver posts its entry on this date, in an open month.
     // An approval-time choice like acceptFailedChecks, never part of the revision: finance.purchase.record checks it
     // and the audit row records it. Only a user's single approval sets it; a bulk approval and an agent never do.
@@ -528,6 +561,12 @@ export const approveProposal = defineCommand({
     if (decision.reason !== 'ok') {
       throw new DomainError('NOT_ELIGIBLE', 403, 'Bạn không có quyền duyệt đề xuất này', { rule: 'P12' });
     }
+    // An invoice whose digital signature could not be verified (#674) is approved only with the approver's explicit
+    // confirmation of this revision. It never blocks the invoice otherwise: confirmed, it is approved as any other.
+    const signature = proposal.command === PURCHASE_COMMAND ? signatureOf(proposal.payload) : null;
+    if (signature?.needsConfirmation && input.acceptUnverifiedSignature !== true) {
+      throw new DomainError('SIGNATURE_UNVERIFIED', 422, 'Chưa xác minh được chữ ký số của hóa đơn này; hãy kiểm tra hóa đơn gốc rồi xác nhận khi duyệt');
+    }
     ctx.audit({
       revision: proposal.revision,
       aal: ctx.actor.aal,
@@ -535,6 +574,10 @@ export const approveProposal = defineCommand({
       eligible_approvers: decision.eligibleCount,
       self_approved: decision.selfApproved,
       accept_failed_checks: input.acceptFailedChecks ?? false,
+      // An invoice's signature verification and whether the approver confirmed it (#674).
+      ...(signature
+        ? { accept_unverified_signature: input.acceptUnverifiedSignature === true, signature_status: signature.status, signature_reason: signature.reason }
+        : {}),
       ...(input.postingDate !== undefined ? { posting_date: input.postingDate } : {}),
     });
     // Approved for its command by this command: the runtime's proposal state gate lets the command run only now.
@@ -583,6 +626,8 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   // The approval policy (decideApproval): P10 and P12.
   'FOUR_EYES_REQUIRED',
   'NOT_ELIGIBLE',
+  // An invoice whose digital signature is unverified, sent without its confirmation (#674).
+  'SIGNATURE_UNVERIFIED',
   // Recording a purchase (finance.purchase.record and its account check).
   'CHECKS_BLOCKING',
   'CHECKS_FAILED',
@@ -678,7 +723,9 @@ export const approveProposals = defineCommand({
     const voucherTypes = new Map(vouchers.map((v) => [v.id, v.voucher_type ?? '']));
     const outcomes = new Map<string, BulkApproveResult>();
     for (const item of bulkApproveOrder(input.items, voucherTypes)) {
-      const attempt = await ctx.tryRun<Record<string, unknown>>('kernel.proposal.approve', { id: item.id, revision: item.revision }, { recover: isBulkItemRefusal });
+      // An item's confirmation of an unverified signature (#674) is passed on with its own id and revision.
+      const confirm = item.acceptUnverifiedSignature === true ? { acceptUnverifiedSignature: true } : {};
+      const attempt = await ctx.tryRun<Record<string, unknown>>('kernel.proposal.approve', { id: item.id, revision: item.revision, ...confirm }, { recover: isBulkItemRefusal });
       if (attempt.status === 'ok') {
         outcomes.set(item.id, { id: item.id, outcome: 'approved', result: attempt.value });
       } else {
@@ -691,7 +738,14 @@ export const approveProposals = defineCommand({
     ctx.audit({
       approved: results.filter((r) => r.outcome === 'approved').length,
       refused: results.filter((r) => r.outcome === 'refused').length,
-      items: results.map((r) => (r.outcome === 'approved' ? { id: r.id, outcome: r.outcome } : { id: r.id, outcome: r.outcome, code: r.code, rule: r.rule })),
+      // Each item's confirmation of an unverified signature as the batch sent it (#674); the item's own approval row
+      // records the signature it confirmed.
+      items: results.map((r, i) => {
+        const accept_unverified_signature = input.items[i]?.acceptUnverifiedSignature === true;
+        return r.outcome === 'approved'
+          ? { id: r.id, outcome: r.outcome, accept_unverified_signature }
+          : { id: r.id, outcome: r.outcome, code: r.code, rule: r.rule, accept_unverified_signature };
+      }),
     });
     return { results };
   },
@@ -825,6 +879,7 @@ const otherKernelCommands = [
   ...extractionCommands,
   ...archiveCommands,
   ...imageSizeCommands,
+  ...notificationCommands,
   requestProposal,
   editProposal,
   approveProposal,
@@ -837,6 +892,8 @@ const otherKernelCommands = [
   setTaxCode,
   setVatFilingPeriod,
   setAddress,
+  setContactEmail,
+  queueContactMail,
   ...partyCommands,
   ...mailCommands,
   ...proposalReminderCommands,

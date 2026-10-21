@@ -80,5 +80,12 @@
   "total": "1980000",
   "totalInWords": "Một triệu chín trăm tám mươi nghìn đồng",
   "taxAuthorityCode": "M2-26-ABCDE-00001234567",
-  "hasSignature": true
+  "hasSignature": true,
+  "signature": {
+    "status": "unverified",
+    "reason": "malformed",
+    "signer": null,
+    "issuer": null,
+    "signedAt": null
+  }
 }

@@ -392,6 +392,9 @@ export type QueuedMailBegin =
       payload: Record<string, unknown>;
       messageIdHeader: string;
       bounceToken: string | null;
+      // The org's inbound token (#669): a template whose replies should reach the Inbox names the org's inbound address
+      // as the Reply-To.
+      inboundToken: string;
     };
 
 // A mail that cannot be sent leaves the queue as 'failed' with the reason, so no later pass picks it up again.
@@ -460,6 +463,7 @@ export const beginQueuedMail = defineCommand({
       .where('id', '=', mail.id)
       .execute();
     const { rows } = await sql<{ token: string | null }>`SELECT crove_kernel.mail_bounce_token(${mail.id}) AS token`.execute(ctx.trx);
+    const tenant = await ctx.trx.selectFrom('crove_kernel.tenant').select('inbound_token').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
     const payload = mail.payload && typeof mail.payload === 'object' && !Array.isArray(mail.payload) ? (mail.payload as Record<string, unknown>) : {};
     return {
       action: 'send',
@@ -472,6 +476,7 @@ export const beginQueuedMail = defineCommand({
       payload,
       messageIdHeader: mail.message_id_header,
       bounceToken: rows[0]?.token ?? null,
+      inboundToken: tenant.inbound_token,
     };
   },
 });
@@ -558,6 +563,52 @@ export const recordQueuedMail = defineCommand({
     }
     ctx.audit({ message_id: mail.id, attempt: input.attempt, outcome: input.outcome, ...(stop ? { suppressed: stop } : {}) });
     return { recorded: true };
+  },
+});
+
+// Mail to the org's own contact (#669): the address an owner or admin set in Settings (tenant.contact_email), never
+// one the caller names, so a module's command can queue mail for its org without being able to mail anyone else. Run
+// by module commands through ctx.run (Finance's request for missing invoices, and its monthly reminder in the system
+// context), never routed to the API. The worker renders the mail from templateKey and payload (apps/kernel/src
+// mail-templates.ts).
+export const CONTACT_MAIL_ROLES: readonly MemberRole[] = ['owner', 'admin', 'member'];
+// Merge data of one queued mail, as JSON.
+export const MAIL_PAYLOAD_MAX_BYTES = 64 * 1024;
+
+export const queueContactMail = defineCommand({
+  name: 'kernel.mail.contact.queue',
+  input: z.object({
+    source: zSource,
+    sourceId: zId.optional(),
+    templateKey: zSource,
+    // One line: a subject never carries a line break or a control character.
+    subject: z
+      .string()
+      .trim()
+      .min(1)
+      .max(300)
+      .refine((v) => !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(v), 'one line'),
+    payload: z.record(z.string().max(64), z.unknown()).refine((p) => Buffer.byteLength(JSON.stringify(p), 'utf8') <= MAIL_PAYLOAD_MAX_BYTES, 'too large'),
+  }),
+  risk: 'R1',
+  access: CONTACT_MAIL_ROLES,
+  handler: async (ctx, input) => {
+    const tenant = await ctx.trx.selectFrom('crove_kernel.tenant').select('contact_email').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
+    if (!tenant.contact_email) {
+      throw new DomainError('CONTACT_EMAIL_REQUIRED', 409, 'Công ty chưa có email liên hệ; chủ sở hữu hoặc quản trị viên nhập email này trong Cài đặt');
+    }
+    const mail = await createMailMessage(ctx, {
+      stream: 'transactional',
+      source: input.source,
+      sourceId: input.sourceId ?? null,
+      templateKey: input.templateKey,
+      to: tenant.contact_email,
+      subject: input.subject,
+      payload: input.payload,
+      status: 'queued',
+    });
+    ctx.audit({ message_id: mail.id, status: mail.status, source: input.source });
+    return { messageId: mail.id, status: mail.status as 'queued' | 'suppressed' };
   },
 });
 

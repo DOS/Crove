@@ -284,6 +284,8 @@ export const recordExtraction = defineCommand({
 
     if (!input.proposal) {
       await ctx.activity('kernel.file', input.fileId, 'extraction.failed', input.error ?? 'Không đọc được chứng từ');
+      // Whoever is waiting for this reading is told (#671, kernel.notification.dispatch).
+      if (input.status === 'failed') await ctx.emit('kernel.file.read_failed', { fileId: input.fileId, version: run.version });
       if (applies && current?.status === 'pending') {
         await ctx.activity('kernel.proposal', current.id, 'proposal.reextract_failed', `Đọc lại không thành công (lần đọc ${run.version}); đề xuất giữ nguyên bản ${current.revision}`);
       }

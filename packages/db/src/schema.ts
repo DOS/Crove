@@ -283,6 +283,12 @@ export type BudgetPolicyTable = Refine<G.KernelBudgetPolicyTable, { scope: Agent
 // customer), issue #313. Both live in purchase_document; the table keeps its name.
 export const DOCUMENT_DIRECTIONS = ['purchase', 'sale'] as const;
 export type DocumentDirection = (typeof DOCUMENT_DIRECTIONS)[number];
+// A replacement (thay thế) or an adjustment (điều chỉnh) invoice of another (#916).
+export const CORRECTION_KINDS = ['replacement', 'adjustment'] as const;
+export type CorrectionKind = (typeof CORRECTION_KINDS)[number];
+// Where the exchange rate of a foreign-currency document comes from (#918): the e-invoice's own TGia, or the accountant.
+export const EXCHANGE_RATE_SOURCES = ['invoice', 'entered'] as const;
+export type ExchangeRateSource = (typeof EXCHANGE_RATE_SOURCES)[number];
 
 export type PurchaseDocumentTable = Refine<
   G.FinancePurchaseDocumentTable,
@@ -290,6 +296,13 @@ export type PurchaseDocumentTable = Refine<
     // The voided document of the same invoice that this one replaces (#165), or null for the first one.
     replaces_document_id: ColumnType<string | null, string | null | undefined, never>;
     direction: ColumnType<DocumentDirection, DocumentDirection | undefined, never>;
+    correction_kind: ColumnType<CorrectionKind | null, CorrectionKind | null | undefined, never>;
+    // A foreign-currency document's rate and original totals (#918); null on a VND document.
+    exchange_rate: ColumnType<string | null, string | null | undefined, never>;
+    exchange_rate_source: ColumnType<ExchangeRateSource | null, ExchangeRateSource | null | undefined, never>;
+    foreign_subtotal: ColumnType<string | null, string | null | undefined, never>;
+    foreign_vat_amount: ColumnType<string | null, string | null | undefined, never>;
+    foreign_total: ColumnType<string | null, string | null | undefined, never>;
   }
 >;
 
@@ -328,6 +341,29 @@ export type CashVoucherTable = Refine<
     number: ColumnType<number, never, never>;
   },
   'number'
+>;
+
+// The accountant's marks on input invoices that need proof of non-cash payment (#917). Append-only; the latest mark
+// of a document is its state.
+export const INPUT_VAT_CHECK_OUTCOMES = ['paid_by_bank', 'not_deductible', 'cleared'] as const;
+export type InputVatCheckOutcome = (typeof INPUT_VAT_CHECK_OUTCOMES)[number];
+export type InputVatCheckTable = Refine<G.FinanceInputVatCheckTable, { outcome: ColumnType<InputVatCheckOutcome, InputVatCheckOutcome, never> }>;
+
+// The register of fixed assets and prepaid costs (#919). Tenant roles update only the end of a schedule, once.
+export const FIXED_ASSET_KINDS = ['fixed_asset', 'prepaid_cost'] as const;
+export type FixedAssetKind = (typeof FIXED_ASSET_KINDS)[number];
+export type FixedAssetTable = Refine<
+  G.FinanceFixedAssetTable,
+  {
+    kind: ColumnType<FixedAssetKind, FixedAssetKind, never>;
+    accumulated_account: ColumnType<string | null, string | null | undefined, never>;
+    source_document_id: ColumnType<string | null, string | null | undefined, never>;
+    source_line_no: ColumnType<number | null, number | null | undefined, never>;
+    ended_month: ColumnType<string | null, string | null | undefined, string | null>;
+    end_reason: ColumnType<string | null, string | null | undefined, string | null>;
+    ended_by: ColumnType<string | null, string | null | undefined, string | null>;
+    created_by: ColumnType<string | null, string | null | undefined, never>;
+  }
 >;
 
 // General journal vouchers (#888): phiếu kế toán khác, NVK. The insert trigger numbers each one per org (any number
@@ -485,6 +521,8 @@ type Refined = Tables<{
   'crove_finance.journal_entry': JournalEntryTable;
   'crove_finance.org_account': OrgAccountTable;
   'crove_finance.cash_voucher': CashVoucherTable;
+  'crove_finance.fixed_asset': FixedAssetTable;
+  'crove_finance.input_vat_check': InputVatCheckTable;
   'crove_finance.journal_voucher': JournalVoucherTable;
   'crove_finance.portal_invoice_list': PortalInvoiceListTable;
   'crove_finance.portal_invoice_row': PortalInvoiceRowTable;

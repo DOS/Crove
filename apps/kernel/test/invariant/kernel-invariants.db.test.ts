@@ -104,7 +104,7 @@ suite('kernel invariants on PostgreSQL', () => {
     const { fileId } = await ingest(orgA, users.owner, bytes);
     const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, orgA, fileId);
     const detail = await runtime.query<{ revision: number }>('kernel.inbox.get', { id: proposalId }, { actor: asUser(users.owner), orgId: orgA });
-    return { id: proposalId, revision: detail.revision };
+    return { id: proposalId, revision: detail.revision, acceptUnverifiedSignature: true };
   }
 
   async function withAdmin<T>(fn: (admin: pg.Client) => Promise<T>): Promise<T> {
@@ -867,7 +867,7 @@ suite('kernel invariants on PostgreSQL', () => {
   const view = (orgId: string, userId: string, id: string) =>
     runtime.query<Decision & { payload: { lines: Array<{ lineNo: number; debitAccount: string }> } }>('kernel.inbox.get', { id }, { actor: asUser(userId), orgId });
   const approveAs = (orgId: string, userId: string, id: string, revision: number) =>
-    runtime.execute<{ journalEntryId: string }>('kernel.proposal.approve', { id, revision }, { actor: asMfa(userId), orgId });
+    runtime.execute<{ journalEntryId: string }>('kernel.proposal.approve', { acceptUnverifiedSignature: true, id, revision }, { actor: asMfa(userId), orgId });
 
   async function approvalAudit(proposalId: string) {
     return withAdmin(async (admin) => {
@@ -891,7 +891,18 @@ suite('kernel invariants on PostgreSQL', () => {
     await expect(approveAs(orgId, owner, id, asOwner.revision)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED', status: 403 });
     await expect(approveAs(orgId, admin, id, asOwner.revision)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
 
-    expect(await approvalAudit(id)).toEqual([
+    // #674 records the invoice's signature verification and the approver's confirmation on the approval row; a row
+    // written before it has none of the three keys. Both are accepted here, and the keys are checked when present.
+    const audits = await approvalAudit(id);
+    expect(audits).toHaveLength(2);
+    const signatureKeys = ['accept_unverified_signature', 'signature_status', 'signature_reason'];
+    const approvedDetail: Record<string, unknown> = { ...audits[1]?.detail };
+    const signature = Object.fromEntries(signatureKeys.filter((k) => k in approvedDetail).map((k) => [k, approvedDetail[k]]));
+    for (const key of signatureKeys) delete approvedDetail[key];
+    expect(signature).toEqual(
+      Object.keys(signature).length === 0 ? {} : { accept_unverified_signature: true, signature_status: 'unverified', signature_reason: 'malformed' },
+    );
+    expect([audits[0], { ...audits[1], detail: approvedDetail }]).toEqual([
       {
         actor_id: owner,
         outcome: 'denied',
@@ -1015,7 +1026,7 @@ suite('kernel invariants on PostgreSQL', () => {
 
     // Approve never carries an edit.
     await expect(
-      runtime.execute('kernel.proposal.approve', { id, revision: 1, lineAccounts: changed }, { actor: asMfa(owner), orgId }),
+      runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id, revision: 1, lineAccounts: changed }, { actor: asMfa(owner), orgId }),
     ).rejects.toMatchObject({ code: 'CONTENT_CHANGED' });
     // An edit that changes nothing creates no revision.
     await expect(

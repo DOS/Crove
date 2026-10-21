@@ -68,6 +68,9 @@ export function hintMatches(hint: StreamHint, query: Query): boolean {
     // A notification written or read (#637), of anyone in the org: the bell reads its own again.
     case 'social_notification':
       return path === 'social.notifications.list';
+    // The kernel's own (#671): the bell in the org shell reads them again.
+    case 'notification':
+      return path === 'notifications.list';
   }
 }
 

@@ -42,15 +42,9 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
-  'crove_kernel.notification',
-  'crove_kernel.notification_mute',
   'crove_kernel.org_usage',
   'crove_kernel.usage_deferral',
-  'crove_social.chat_alert',
-  'crove_social.chat_alert_target',
-  'crove_social.media_tag',
   'crove_social.publish_hold',
-  'crove_social.review_link_post',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -186,6 +180,20 @@ const portalListRow = (o: { id: string; file: string }) => ({
   file_id: o.file,
   filename: 'rls-matrix.xlsx',
 });
+// A fixed asset of the register (#919): equipment of 36,000,000 VND depreciated over 36 months from October 2026.
+const fixedAssetRow = (o: { id: string; owner: string }) => ({
+  org_id: o.id,
+  id: randomUUID(),
+  kind: 'fixed_asset',
+  name: 'RLS matrix asset',
+  cost: '36000000',
+  asset_account: '2111',
+  accumulated_account: '2141',
+  expense_account: '6422',
+  start_month: '2026-10-01',
+  months: 36,
+  created_by: o.owner,
+});
 const journalEntry = (org: string, id: string): Row => ({
   table: 'crove_finance.journal_entry',
   values: { org_id: org, id, entry_date: '2026-10-01', description: 'rls matrix', source_type: 'rls.matrix', source_id: randomUUID() },
@@ -219,6 +227,29 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         ],
       };
     },
+  },
+  // Monthly depreciation and allocation of the register (#919): append-only, one row per asset and month, naming the
+  // journal entry that posted it. Tenant roles read and insert; nothing updates or deletes a line.
+  'crove_finance.depreciation_line': {
+    make: (o) => {
+      const asset = fixedAssetRow(o);
+      return {
+        setup: [{ table: 'crove_finance.fixed_asset', values: asset }],
+        row: { org_id: o.id, id: randomUUID(), asset_id: asset.id, month: '2026-10-01', amount: '1000000', entry_id: randomUUID() },
+      };
+    },
+  },
+  // The register of fixed assets and prepaid costs (#919): one row per asset, never deleted. Tenant roles update only
+  // the end of its schedule (a column grant), so the update probes assign end_reason to itself.
+  'crove_finance.fixed_asset': {
+    update: { set: 'end_reason = end_reason' },
+    make: (o) => ({ row: fixedAssetRow(o) }),
+  },
+  // The accountant's marks on input invoices that need proof of non-cash payment (#917): append-only, the latest mark of
+  // a document wins (paid by bank, optionally with its bank voucher, not deductible, or cleared). Tenant roles read and
+  // insert; nothing updates or deletes a mark.
+  'crove_finance.input_vat_check': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), document_id: o.document, outcome: 'paid_by_bank', marked_by: o.owner } }),
   },
   'crove_finance.journal_entry': {
     make: (o) => {

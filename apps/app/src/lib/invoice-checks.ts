@@ -18,12 +18,20 @@ export function invoiceCheckMessage(check: Check, t: Translate, money: (amount: 
   switch (code) {
     case 'currency.unsupported':
       return has('currency') ? t('invoiceChecks.currency.unsupported', { currency: p.currency ?? '' }) : check.message;
+    case 'currency.converted':
+    case 'currency.rate_entered':
+      return has('currency', 'rate') ? t(`invoiceChecks.${code}`, { currency: p.currency ?? '', rate: p.rate ?? '' }) : check.message;
     case 'lines_sum.mismatch':
       return has('lines', 'subtotal') ? t('invoiceChecks.lines_sum.mismatch', { lines: money(p.lines ?? ''), subtotal: money(p.subtotal ?? '') }) : check.message;
     case 'seller_tax_code.checksum':
       return has('taxCode') ? t('invoiceChecks.seller_tax_code.checksum', { taxCode: p.taxCode ?? '' }) : check.message;
     case 'seller_tax_code.ok':
       return has('taxCode') ? t('invoiceChecks.seller_tax_code.ok', { taxCode: p.taxCode ?? '' }) : check.message;
+    case 'related.replaces':
+    case 'related.adjusts':
+    case 'related.replaces_missing':
+    case 'related.adjusts_missing':
+      return has('invoice') ? t(`invoiceChecks.${code}`, { invoice: p.invoice ?? '' }) : check.message;
     case 'issue_date.ok':
       return has('date') ? t('invoiceChecks.issue_date.ok', { date: p.date ?? '' }) : check.message;
     case 'lines_sum.ok':
@@ -36,8 +44,25 @@ export function invoiceCheckMessage(check: Check, t: Translate, money: (amount: 
     case 'issue_date.future':
     case 'tax_authority_code.present':
     case 'tax_authority_code.missing':
+    case 'signature.verified':
+      return has('signer') ? t('invoiceChecks.signature.verifiedBy', { signer: p.signer ?? '' }) : t('invoiceChecks.signature.verified');
     case 'signature.unverified':
     case 'signature.missing':
+    case 'signature.malformed':
+    case 'signature.ambiguous':
+    case 'signature.not_covering':
+    case 'signature.digest_mismatch':
+    case 'signature.bad_signature':
+    case 'signature.unsupported_algorithm':
+    case 'signature.no_certificate':
+    case 'signature.untrusted_certificate':
+    case 'signature.certificate_expired':
+    case 'signature.signer_mismatch':
+    case 'signature.tax_authority_missing':
+    case 'signature.tax_authority_invalid':
+    case 'signature.tax_authority_untrusted':
+    case 'signature.cash_register':
+    case 'signature.too_large':
     case 'source.ai':
     case 'duplicate.found':
       return t(`invoiceChecks.${code}`);

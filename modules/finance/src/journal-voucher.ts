@@ -17,7 +17,7 @@ import {
   type JournalVoucherProposal,
 } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { DomainError, defineCommand, type QueryContext } from '@crove/kernel-runtime';
+import { DomainError, defineCommand, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { journalIsBalanced } from '@crove/l10n-vn';
 import { assertUsableAccounts } from './accounts.ts';
 import {
@@ -107,6 +107,47 @@ export const prepareJournalVoucher = defineCommand({
   },
 });
 
+// Inserts the voucher (the database numbers it) and posts its entry, in the command's transaction: the approval of a
+// general journal voucher, and of a year-end closing (year-closing.ts, closingYear set). The payload has been checked.
+export async function postJournalVoucher(ctx: CommandContext, payload: JournalVoucherProposal, closingYear: number | null = null) {
+  if (!ctx.proposalId) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt');
+  const total = journalVoucherTotal(payload.lines);
+  const journal = buildJournalVoucherJournal(payload);
+  if (!journalIsBalanced(journal)) throw new DomainError('UNBALANCED', 422, 'Bút toán không cân');
+  const voucher = await ctx.trx
+    .insertInto('crove_finance.journal_voucher')
+    .values({
+      org_id: ctx.orgId,
+      voucher_date: payload.date,
+      description: payload.description,
+      proposal_id: ctx.proposalId,
+      closing_year: closingYear,
+      created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
+    })
+    .returning(['id', 'number'])
+    .executeTakeFirstOrThrow();
+  const code = journalVoucherCode(voucher.number);
+  const journalEntryId = await postJournalEntry(ctx, {
+    entryDate: payload.date,
+    description: journalVoucherEntryDescription(code, payload.description),
+    sourceType: JOURNAL_VOUCHER_SOURCE,
+    sourceId: voucher.id,
+    beforeOpening: 'later_date',
+    lines: journal.map((j, i) => ({
+      lineNo: j.lineNo,
+      accountCode: j.accountCode,
+      debit: j.debit,
+      credit: j.credit,
+      partyId: payload.lines[i]?.party?.id ?? null,
+      memo: j.memo,
+    })),
+  });
+  ctx.audit({ number: voucher.number, total, lines: payload.lines.length, ...(closingYear ? { closingYear } : {}) });
+  await ctx.activity('finance.journal_voucher', voucher.id, 'journal_voucher.recorded', `Ghi sổ ${JOURNAL_VOUCHER_LABEL.toLowerCase()} ${code}: ${payload.description}`);
+  await ctx.emit('finance.journal_voucher.recorded', { voucherId: voucher.id, journalEntryId, number: voucher.number });
+  return { voucherId: voucher.id, journalEntryId, code };
+}
+
 export const recordJournalVoucher = defineCommand({
   name: JOURNAL_VOUCHER_COMMAND,
   input: z.object({ payload: zJournalVoucherProposal, acceptFailedChecks: z.boolean().default(false) }),
@@ -119,41 +160,9 @@ export const recordJournalVoucher = defineCommand({
     // The stored payload is checked as if new: a sub-account deactivated or a party gone since it was asked for is
     // refused here. The total is the lines' sum, never taken from the payload as is.
     await checkVoucher(ctx, lines, true);
-    const total = journalVoucherTotal(lines);
-    if (total !== payload.total) throw new DomainError('JOURNAL_VOUCHER_INVALID', 422, 'Tổng số tiền không khớp các dòng của phiếu', { problems: ['TOTAL_MISMATCH'] });
-    const journal = buildJournalVoucherJournal(payload);
-    if (!journalIsBalanced(journal)) throw new DomainError('UNBALANCED', 422, 'Bút toán không cân');
-
-    const voucher = await ctx.trx
-      .insertInto('crove_finance.journal_voucher')
-      .values({
-        org_id: ctx.orgId,
-        voucher_date: payload.date,
-        description: payload.description,
-        proposal_id: ctx.proposalId,
-        created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
-      })
-      .returning(['id', 'number'])
-      .executeTakeFirstOrThrow();
-    const code = journalVoucherCode(voucher.number);
-    const journalEntryId = await postJournalEntry(ctx, {
-      entryDate: payload.date,
-      description: journalVoucherEntryDescription(code, payload.description),
-      sourceType: JOURNAL_VOUCHER_SOURCE,
-      sourceId: voucher.id,
-      beforeOpening: 'later_date',
-      lines: journal.map((j, i) => ({
-        lineNo: j.lineNo,
-        accountCode: j.accountCode,
-        debit: j.debit,
-        credit: j.credit,
-        partyId: payload.lines[i]?.party?.id ?? null,
-        memo: j.memo,
-      })),
-    });
-    ctx.audit({ number: voucher.number, total, lines: payload.lines.length });
-    await ctx.activity('finance.journal_voucher', voucher.id, 'journal_voucher.recorded', `Ghi sổ ${JOURNAL_VOUCHER_LABEL.toLowerCase()} ${code}: ${payload.description}`);
-    await ctx.emit('finance.journal_voucher.recorded', { voucherId: voucher.id, journalEntryId, number: voucher.number });
-    return { voucherId: voucher.id, journalEntryId, code };
+    if (journalVoucherTotal(lines) !== payload.total) {
+      throw new DomainError('JOURNAL_VOUCHER_INVALID', 422, 'Tổng số tiền không khớp các dòng của phiếu', { problems: ['TOTAL_MISMATCH'] });
+    }
+    return postJournalVoucher(ctx, payload);
   },
 });

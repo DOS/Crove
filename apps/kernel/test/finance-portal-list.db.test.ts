@@ -137,7 +137,7 @@ suite('tax portal purchase list (#465)', () => {
     if (!approve) return { proposalId, documentId: null, journalEntryId: null };
     const done = await runtime.execute<{ documentId: string; journalEntryId: string }>(
       'kernel.proposal.approve',
-      { id: proposalId, revision: 1 },
+      { acceptUnverifiedSignature: true, id: proposalId, revision: 1 },
       { actor: asMfa(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() },
     );
     return { proposalId, ...done };
@@ -237,7 +237,7 @@ suite('tax portal purchase list (#465)', () => {
       idempotencyKey: randomUUID(),
     });
     expect(asked.status).toBe(200);
-    const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
+    const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { acceptUnverifiedSignature: true, id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
     expect(approved.body).toMatchObject({ voidedDocumentId: voided.documentId });
   });
 
