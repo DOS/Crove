@@ -1943,6 +1943,23 @@ export const vi = {
       published: 'Đã đăng',
       empty: 'Chưa có bài Instagram nào có ảnh hoặc video trong hai tháng qua và bốn tháng tới.',
     },
+    calendarFeed: {
+      title: 'Đăng ký lịch',
+      hint: 'Xem lịch đăng bài ngay trong Google Calendar hoặc Outlook, cạnh lịch làm việc của bạn: các bài đã lên lịch và đã đăng, từ 30 ngày trước đến 60 ngày tới.',
+      none: 'Chưa có địa chỉ đăng ký lịch.',
+      live: 'Đang có một địa chỉ đăng ký lịch, tạo lúc {at}.',
+      askAdmin: 'Chủ sở hữu hoặc quản trị viên có thể tạo địa chỉ đăng ký lịch.',
+      create: 'Tạo địa chỉ đăng ký',
+      recreate: 'Tạo lại địa chỉ',
+      recreateConfirm: 'Địa chỉ cũ sẽ ngừng hoạt động, các lịch đã đăng ký bằng địa chỉ đó sẽ không cập nhật nữa. Tiếp tục?',
+      revoke: 'Thu hồi',
+      revokeConfirm: 'Thu hồi địa chỉ đăng ký lịch? Các lịch đã đăng ký sẽ không cập nhật nữa.',
+      madeHint: 'Dán địa chỉ này vào Google Calendar (Thêm lịch > Từ URL) hoặc Outlook. Ai có địa chỉ này đều xem được lịch đăng bài; hãy tạo lại để vô hiệu địa chỉ cũ.',
+      once: 'Địa chỉ chỉ hiện một lần, hãy sao chép ngay.',
+      link: 'Địa chỉ đăng ký lịch',
+      copy: 'Sao chép',
+      copied: 'Đã sao chép',
+    },
     calendarNotes: {
       add: 'Thêm ghi chú',
       edit: 'Sửa ghi chú',
@@ -2373,6 +2390,22 @@ export const vi = {
   },
   // Kernel errors worded by the SPA (lib/kernel-errors.ts). The kernel sends the same text with the
   // code, and Vietnamese screens show the kernel's own message; these are used when an answer has none.
+  invoiceChecks: {
+    currency: { unsupported: 'Hóa đơn bằng {currency}; chưa hỗ trợ ghi sổ ngoại tệ' },
+    lines_sum: { ok: 'Tổng các dòng khớp tiền trước thuế', mismatch: 'Tổng các dòng ({lines}) lệch tiền trước thuế ({subtotal})' },
+    total: { ok: 'Tiền trước thuế + VAT khớp tổng thanh toán', mismatch: 'Tiền trước thuế + VAT lệch tổng thanh toán' },
+    vat_breakdown: { ok: 'Bảng thuế suất khớp tổng VAT', mismatch: 'Bảng thuế suất lệch tổng VAT' },
+    seller_tax_code: {
+      unreadable: 'Không đọc được MST người bán',
+      checksum: 'MST người bán {taxCode} sai số kiểm tra',
+      ok: 'MST người bán {taxCode} hợp lệ',
+    },
+    issue_date: { invalid: 'Ngày lập hóa đơn không hợp lệ', future: 'Ngày lập hóa đơn ở tương lai', ok: 'Ngày lập {date}' },
+    tax_authority_code: { present: 'Có mã của cơ quan thuế', missing: 'Không có mã của cơ quan thuế' },
+    signature: { unverified: 'Có chữ ký số, chưa xác minh với nguồn chính thức', missing: 'Không có chữ ký số' },
+    source: { ai: 'Đọc bằng AI từ ảnh/PDF, cần người kiểm tra' },
+    duplicate: { found: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' },
+  },
   kernelErrors: {
     codes: {
       UNAUTHENTICATED: 'Phiên đăng nhập đã hết hiệu lực, hãy đăng nhập lại',

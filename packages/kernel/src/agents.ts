@@ -10,7 +10,7 @@
 // - The worker starts and finishes runs as the system; an agent enters a context only through a live run.
 import { sql, type Transaction } from 'kysely';
 import { z } from 'zod';
-import { zCheck, zId } from '@crove/kernel-contract';
+import { zCheck, zId, type Check } from '@crove/kernel-contract';
 import type { AgentScope, Database, MemberRole, TaskStatus } from '@crove/db';
 import {
   DomainError,
@@ -1291,7 +1291,7 @@ export const taskGet = defineQuery({
       .limit(200)
       .execute();
     // checks: null when the payload carries no readable checks (never an empty list, which would read as "all clear").
-    let proposal: { id: string; title: string; status: string; checks: Array<{ id: string; status: string; message: string }> | null } | null = null;
+    let proposal: { id: string; title: string; status: string; checks: Check[] | null } | null = null;
     const ref = zProposalRef.safeParse(task.source_ref);
     if (ref.success) {
       const row = await ctx.trx

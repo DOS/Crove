@@ -395,6 +395,13 @@ export const contract = {
       save: oc.input(z.strictObject({ setId: zId.optional(), name: z.string().trim().min(1).max(80), connectionIds: z.array(zId).min(1).max(20) })).output(z.object({ setId: zId })),
       remove: oc.input(z.strictObject({ setId: zId })).output(z.object({ setId: zId, removed: z.boolean() })),
     },
+    // The posting calendar feed (#862): owners and admins make (replacing the live one) and revoke it; the token is in
+    // the create answer only. Everyone sees whether there is one.
+    calendarFeed: {
+      get: oc.input(z.object({})).output(z.object({ createdAt: z.string(), createdBy: zId }).nullable()),
+      create: oc.input(z.strictObject({})).output(z.object({ token: z.string() })),
+      revoke: oc.input(z.strictObject({})).output(z.object({ revoked: z.boolean() })),
+    },
     // Notes on calendar dates (#794): owners, admins and members save and remove them; everyone reads the ones that
     // overlap the days shown.
     calendarNotes: {
