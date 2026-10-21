@@ -361,7 +361,7 @@ suite('sales e-invoices (#313)', () => {
       async (c) =>
         (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.journal.export' AND outcome = 'ok'`, [org.orgId])).rows,
     );
-    expect(audits.map((a) => a.detail)).toContainEqual({ entries: 1, format: 'misa_sme_sales' });
+    expect(audits.map((a) => a.detail)).toContainEqual({ entries: 1, format: 'misa_sme_sales', from: null, to: null });
   });
 
   it('books an invoice on the side the tax code says when it is approved', async () => {

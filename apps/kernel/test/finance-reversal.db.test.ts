@@ -233,6 +233,39 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     expect((await rpc('inbox/get', await tokenFor(owner), { id: firstProposal })).body).toMatchObject({ voided: false, canReextract: false });
   });
 
+  // #878: the exports a document went out in, for its history; the entry is dated 15 September 2026.
+  const download = async (path: string) => {
+    const response = await app.request(path, { headers: { authorization: `Bearer ${await tokenFor(viewer)}`, 'x-crove-org': org.slug } });
+    expect(response.status, path).toBe(200);
+    await response.arrayBuffer();
+  };
+  const exportsOf = async (documentId: string) => (await rpc('documents/exports', await tokenFor(viewer), { documentId })).body as any[];
+
+  it('names the exports whose range and format took the document in, and never guesses at older ones (#878)', async () => {
+    await download('/api/export/journal.xlsx?from=2026-09-01&to=2026-09-30');
+    await download('/api/export/misa/purchases.xlsx?from=2026-09-01&to=2026-09-30');
+    // Not this document: a sales file, and a range that ends before its date.
+    await download('/api/export/misa/sales.xlsx?from=2026-09-01&to=2026-09-30');
+    await download('/api/export/journal.xlsx?to=2026-08-31');
+    // An export recorded before #878 has no range: left out.
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.audit_event (org_id, actor_type, actor_id, command, command_id, outcome, input_sha256, detail)
+         VALUES ($1, 'user', $2, 'finance.journal.export', gen_random_uuid(), 'ok', repeat('a', 64), '{"entries": 1}')`,
+        [org.orgId, viewer.userId],
+      ),
+    );
+    const found = await exportsOf(firstDocument);
+    expect(found).toEqual([
+      { id: expect.any(String), at: expect.any(String), format: 'journal', from: '2026-09-01', to: '2026-09-30', actorName: viewer.email },
+      { id: expect.any(String), at: expect.any(String), format: 'misa_sme_purchases', from: '2026-09-01', to: '2026-09-30', actorName: viewer.email },
+    ]);
+    // An open-ended export takes every date.
+    await download('/api/export/journal.xlsx');
+    expect((await exportsOf(firstDocument)).at(-1)).toMatchObject({ format: 'journal', from: null, to: null });
+    expect(await rpc('documents/exports', await tokenFor(viewer), { documentId: randomUUID() })).toMatchObject({ status: 404, body: { code: 'NOT_FOUND' } });
+  });
+
   it('asks for a reversal through the API, once per idempotency key, and only as a member', async () => {
     const key = randomUUID();
     const input = { entryId: firstEntry, entryDate: '2026-10-15', reason: 'Ghi nhầm tài khoản chi phí' };
@@ -319,6 +352,34 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     expect(audit?.detail).toMatchObject({ reversed_entry_id: firstEntry, reversal_entry_id: reversalEntry, voided_document_id: firstDocument });
   });
 
+  it('shows the document\'s history to every member: received, proposed, approved, recorded and voided (#672)', async () => {
+    const timeline = await rpc('inbox/timeline', await tokenFor(viewer), { id: firstProposal });
+    expect(timeline.status).toBe(200);
+    const items = timeline.body.items as any[];
+    const kinds = items.map((i) => i.kind);
+    // Entries of one transaction share its time, so only the order across transactions is fixed.
+    expect(kinds.slice(0, 2)).toEqual(['file.received', 'proposal.created']);
+    expect(kinds.slice(2, 4).sort()).toEqual(['proposal.approved', 'purchase.recorded']);
+    expect(kinds.slice(4).sort()).toEqual(['journal_entry.reversed', 'purchase.voided']);
+    expect(items.map((i) => i.at)).toEqual(items.map((i) => i.at).sort());
+    expect(items.find((i) => i.kind === 'proposal.approved')).toMatchObject({ recordType: 'kernel.proposal', actorType: 'user', actorName: owner.email });
+    expect(items.find((i) => i.kind === 'purchase.voided')).toMatchObject({ recordType: 'finance.purchase_document', summary: expect.stringContaining('Hủy chứng từ mua') });
+    expect(timeline.body.more).toBe(false);
+    // The copy that was refused as a duplicate shows its rejection.
+    const rejected = await rpc('inbox/list', await tokenFor(owner), { status: 'rejected' });
+    const copy = (rejected.body as any[])[0];
+    const copyTimeline = await rpc('inbox/timeline', await tokenFor(owner), { id: copy.id });
+    expect((copyTimeline.body.items as any[]).map((i) => i.kind)).toEqual(['file.received', 'proposal.created', 'proposal.rejected']);
+    expect(await rpc('inbox/timeline', await tokenFor(owner), { id: randomUUID() })).toMatchObject({ status: 404, body: { code: 'NOT_FOUND' } });
+    // After the void a MISA file leaves the document out, while the journal still holds its entry (#878).
+    const before = (await exportsOf(firstDocument)).length;
+    await download('/api/export/misa/purchases.xlsx?from=2026-09-01&to=2026-09-30');
+    await download('/api/export/journal.xlsx?from=2026-09-01&to=2026-09-30');
+    const after = await exportsOf(firstDocument);
+    expect(after).toHaveLength(before + 1);
+    expect(after.at(-1)).toMatchObject({ format: 'journal', from: '2026-09-01', to: '2026-09-30' });
+  });
+
   it('records the same invoice again from its file after the void, with the corrected accounts', async () => {
     expect((await rpc('inbox/get', await tokenFor(owner), { id: firstProposal })).body).toMatchObject({ voided: true, canReextract: true });
     const files = await rpc('files/recent', await tokenFor(owner), undefined);
@@ -398,7 +459,7 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
       async (c) =>
         (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.journal.export' AND outcome = 'ok'`, [org.orgId])).rows,
     );
-    expect(audits.map((a) => a.detail)).toContainEqual({ entries: 1, format: 'misa_sme_purchases' });
+    expect(audits.map((a) => a.detail)).toContainEqual({ entries: 1, format: 'misa_sme_purchases', from: null, to: null });
   });
 
   it('holds every writer to the void and replacement rules', async () => {

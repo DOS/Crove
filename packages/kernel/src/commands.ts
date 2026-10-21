@@ -34,6 +34,7 @@ import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
 import { mailCommands } from './mail.ts';
+import { auditLogCommands } from './audit-log.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
 import { setAddress } from './org-address.ts';
@@ -836,6 +837,7 @@ const otherKernelCommands = [
   setAddress,
   ...mailCommands,
   ...proposalReminderCommands,
+  ...auditLogCommands,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),
