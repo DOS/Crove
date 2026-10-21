@@ -52,6 +52,7 @@ export {
   type RemindResult,
   type RenderedMail,
 } from './missing-invoices.ts';
+import { yearArchiveCommands, yearArchiveQueries } from './year-archive.ts';
 export * from './domain/portal-reconcile.ts';
 export { foldVietnamese, portalStatus } from './domain/portal-status.ts';
 export { buildJournalWorkbook } from './export.ts';
@@ -100,9 +101,10 @@ export {
 export { LEDGER_LINE_LIMIT, type AccountLedgerView, type LedgerBook, type LedgerReport } from './ledger-reports.ts';
 export { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, sweepPeriodClosing } from './notifications.ts';
 export { SEARCH_LIMIT, searchAmount, type SearchResult } from './search.ts';
+export { ARCHIVE_FORMAT, type ArchiveSource, type ArchiveSourceFile, type RecordedArchive } from './year-archive.ts';
 export { type FinancialStatements, type StatementLine, type UnmappedRow } from './statements.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind, ...financeNotificationCommands];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind, ...financeNotificationCommands, ...yearArchiveCommands];
 export const financeQueries = [
   fileForExtraction,
   purchaseLookup,
@@ -135,4 +137,5 @@ export const financeQueries = [
   bankSuggestions,
   bankOpenLines,
   searchQuery,
+  ...yearArchiveQueries,
 ];

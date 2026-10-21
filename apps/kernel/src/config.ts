@@ -93,6 +93,9 @@ const schema = z.object({
   ARCHIVE_RETENTION_DAYS: z.coerce.number().int().min(1).max(36_500).default(3650),
   // How long after a row is written it is archived at the earliest, so a transaction still open is not cut off.
   ARCHIVE_LAG_SECONDS: z.coerce.number().int().min(60).max(86_400).default(600),
+  // Fiscal year archive packages (issue #922) in the STORAGE=s3 bucket: lock each part in ARCHIVE_LOCK_MODE for this
+  // many days (the bucket needs Object Lock). 0: the bucket's default retention, if any. Local disk has no lock.
+  S3_ARCHIVE_LOCK_DAYS: z.coerce.number().int().min(0).max(36_500).default(0),
   // Staged upload completions one API process runs at once (issue #223): each buffers the staged file (up to 25 MB)
   // while it hashes and writes it. Past it, and past half of it for one user, completions answer 503 UPLOAD_BUSY with
   // Retry-After and their grant stays unused. Uploads through POST /api/files (#432) get twice as many slots, on the

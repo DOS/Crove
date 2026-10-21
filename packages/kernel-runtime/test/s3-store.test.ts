@@ -11,6 +11,7 @@ import {
   DOWNLOAD_TTL_SECONDS,
   S3BlobStore,
   UPLOAD_TTL_SECONDS,
+  archiveKey,
   createS3Client,
   fileKey,
   inboundKey,
@@ -84,6 +85,31 @@ describe('S3BlobStore with a mocked client', () => {
     await expect(store.put(fileKey(orgId, sha256Hex('other')), bytes, 'application/xml')).rejects.toThrow(/does not match/);
     await expect(store.get('org/x/y')).rejects.toThrow(/invalid storage key/);
     await expect(store.delete('../x')).rejects.toThrow(/invalid storage key/);
+    expect(sent).toEqual([]);
+  });
+
+  it('locks the parts of a year archive package until their retention ends, and nothing else (#922)', async () => {
+    const now = new Date('2026-10-21T00:00:00Z');
+    const { store, sent } = fakeStore(() => ({ ChecksumSHA256: checksum, VersionId: 'v1' }), {
+      archiveLock: { mode: 'COMPLIANCE', retentionDays: 3653 },
+      now: () => now,
+    });
+    await store.put(archiveKey(orgId, 2025, sha256), bytes, 'application/xml');
+    expect(sent[0]?.input).toMatchObject({ ObjectLockMode: 'COMPLIANCE', ObjectLockRetainUntilDate: new Date('2036-10-21T00:00:00Z') });
+    await store.put(key, bytes, 'application/xml');
+    expect(sent[1]?.input).not.toHaveProperty('ObjectLockMode');
+    expect(sent[1]?.input).not.toHaveProperty('ObjectLockRetainUntilDate');
+    // Without archiveLock the bucket's default retention applies: no lock header.
+    const plain = fakeStore(() => ({ ChecksumSHA256: checksum, VersionId: 'v1' }));
+    await plain.store.put(archiveKey(orgId, 2025, sha256), bytes, 'application/xml');
+    expect(plain.sent[0]?.input).not.toHaveProperty('ObjectLockMode');
+  });
+
+  it('accepts archive keys only for a year and the sha256 of their bytes', async () => {
+    const { store, sent } = fakeStore(() => ({ ChecksumSHA256: checksum, VersionId: 'v1' }));
+    await expect(store.put(archiveKey(orgId, 2025, sha256Hex('other')), bytes, 'application/xml')).rejects.toThrow(/does not match/);
+    await expect(store.put(`archive/${orgId}/25/${sha256}`, bytes, 'application/xml')).rejects.toThrow(/invalid storage key/);
+    await expect(store.put(`archive/${orgId}/${sha256}`, bytes, 'application/xml')).rejects.toThrow(/invalid storage key/);
     expect(sent).toEqual([]);
   });
 

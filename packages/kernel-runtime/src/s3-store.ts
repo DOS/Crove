@@ -48,6 +48,14 @@ export interface S3StoreOptions {
   // The endpoint browsers reach, when it differs from `endpoint` (for example http://localhost:9000 for a MinIO the
   // kernel reaches as http://minio:9000). The host is part of the signature, so presigned URLs are signed for it.
   publicEndpoint?: string | undefined;
+  // Object Lock retention on the parts of fiscal year archive packages (archive/ keys, issue #922). The bucket must
+  // have Object Lock enabled. Absent: the bucket's default retention, if any, applies.
+  archiveLock?: ArchiveLock | undefined;
+}
+
+export interface ArchiveLock {
+  mode: 'GOVERNANCE' | 'COMPLIANCE';
+  retentionDays: number;
 }
 
 // The only client method the store uses; S3Client satisfies it and unit tests pass a fake.
@@ -171,6 +179,8 @@ export interface S3BlobStoreOptions {
   presigner?: S3Client | undefined;
   // gcs when the endpoint is GCS interoperability: generations are tagged gcs: instead of s3:.
   flavor?: 's3' | 'gcs' | undefined;
+  archiveLock?: ArchiveLock | undefined;
+  now?: () => Date;
 }
 
 // S3-compatible object storage (AWS S3, MinIO, Cloudflare R2, GCS interoperability). Shared by the API and the
@@ -195,6 +205,8 @@ export class S3BlobStore implements BlobStore {
   private readonly bucket: string;
   private readonly versioning: S3Versioning;
   private readonly flavor: 's3' | 'gcs';
+  private readonly archiveLock: ArchiveLock | undefined;
+  private readonly now: () => Date;
   readonly direct: DirectTransfers | undefined;
 
   constructor(client: S3Sender, bucket: string, options: S3BlobStoreOptions = {}) {
@@ -202,6 +214,8 @@ export class S3BlobStore implements BlobStore {
     this.bucket = bucket;
     this.versioning = options.versioning ?? 'required';
     this.flavor = options.flavor ?? 's3';
+    this.archiveLock = options.archiveLock;
+    this.now = options.now ?? (() => new Date());
     const presigner = options.presigner;
     this.direct = presigner
       ? {
@@ -226,6 +240,7 @@ export class S3BlobStore implements BlobStore {
       versioning: options.versioning,
       presigner,
       flavor: isGoogle(options.endpoint) ? 'gcs' : 's3',
+      archiveLock: options.archiveLock,
     });
   }
 
@@ -243,6 +258,12 @@ export class S3BlobStore implements BlobStore {
     const sha256 = digest.toString('hex');
     assertContentAddress(key, sha256);
     const checksum = digest.toString('base64');
+    // A part of a year's archive package is locked until its retention ends (archiveLock); everything else follows
+    // the bucket's defaults.
+    const lock =
+      this.archiveLock && key.startsWith('archive/')
+        ? { ObjectLockMode: this.archiveLock.mode, ObjectLockRetainUntilDate: new Date(this.now().getTime() + this.archiveLock.retentionDays * 86_400_000) }
+        : {};
 
     let retriedMissing = false;
     for (let attempt = 1; ; attempt++) {
@@ -258,6 +279,7 @@ export class S3BlobStore implements BlobStore {
             ContentLength: bytes.byteLength,
             ChecksumSHA256: checksum,
             IfNoneMatch: '*',
+            ...lock,
           }),
         );
         confirmed = out.ChecksumSHA256;

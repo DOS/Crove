@@ -106,6 +106,9 @@ import {
   zLedgerReport,
   zPeriodLockInput,
   zPeriodLockState,
+  zArchiveYear,
+  zYearArchive,
+  zYearArchives,
   zPeriodUnlockInput,
   zTaxRegistryEntry,
   zVoucherType,
@@ -864,6 +867,13 @@ export const contract = {
     state: oc.output(zPeriodLockState),
     lock: oc.input(zPeriodLockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
     unlock: oc.input(zPeriodUnlockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
+  },
+  // Fiscal year archive packages (#922), owners only: list them, and ask for one (R3: fresh MFA) for a year whose
+  // months are all locked. The package is GET /api/finance-archive/<year>/manifest and /api/finance-archive/<year>/<sha256>
+  // (a part), and GET /api/finance-archive/<year>/verify checks it (zYearArchiveVerification).
+  yearArchive: {
+    list: oc.output(zYearArchives),
+    build: oc.input(z.object({ year: zArchiveYear, idempotencyKey: zId })).output(zYearArchive),
   },
   // Bank statements (#326): owners, admins and members import a bank's export into an account's statement lines
   // (preview writes nothing; import stores the new and ambiguous lines); every member reads them, each with its state

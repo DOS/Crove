@@ -27,6 +27,7 @@ import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from '.
 import { runLinkPreviewJob } from './link-preview.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
 import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
+import { runYearArchive } from './year-archive.ts';
 import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, runArchiveVerification, writeArchive, type ArchiveStore } from './worm.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 
@@ -116,6 +117,14 @@ interface ExtractJob {
 interface OrgExportJob {
   orgId: string;
 }
+
+// A fiscal year's archive package (#922): the year and the command that asked for it.
+interface YearArchiveJob {
+  orgId: string;
+  year: number;
+  requestCommandId: string | null;
+}
+const YEAR_ARCHIVE_RETRY_LIMIT = 3;
 
 interface PortalListJob {
   orgId: string;
@@ -360,6 +369,20 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       console.error(`[portal-list] list ${listId} attempt ${job.retryCount + 1}`, error);
       if (job.retryCount < PORTAL_LIST_RETRY_LIMIT) throw error;
       await recordPortalListFailure(deps.runtime, orgId, listId, 'Không đọc được danh sách sau nhiều lần thử; hãy nhập lại tệp');
+    }
+  });
+
+  // Fiscal year archive packages (#922). A build that keeps failing is logged after its last attempt, as for the org
+  // export; the owner sees the request as still in progress until it is recorded, and may ask again an hour later.
+  if (finance) await boss.work<YearArchiveJob>(QUEUES.yearArchive, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const { orgId, year, requestCommandId } = job.data;
+    try {
+      const done = await runYearArchive({ runtime: deps.runtime, store: deps.store }, orgId, year, { requestCommandId });
+      console.log(`[year-archive] org ${orgId} year ${year}: ${done.recorded ? 'built' : 'already built'}`);
+    } catch (error) {
+      if (job.retryCount < YEAR_ARCHIVE_RETRY_LIMIT) throw error;
+      console.error(`[year-archive] ALERT archive of org ${orgId} year ${year} failed after ${job.retryCount + 1} attempts`, error);
     }
   });
 
@@ -872,7 +895,13 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           // A failed send rolls back the claim; singletonKey makes the retry idempotent.
           await Promise.all(
             rows.map(async (row) => {
-              if (!finance && (row.type === 'kernel.file.ingested' || row.type === 'kernel.file.reextract_requested' || row.type === 'finance.portal_list.import_requested')) {
+              if (
+                !finance &&
+                (row.type === 'kernel.file.ingested' ||
+                  row.type === 'kernel.file.reextract_requested' ||
+                  row.type === 'finance.portal_list.import_requested' ||
+                  row.type === 'finance.archive_requested')
+              ) {
                 return null;
               }
               if (row.type === 'finance.portal_list.import_requested') {
@@ -881,6 +910,17 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   singletonKey: `${row.org_id}:${listId}`,
                   retryLimit: PORTAL_LIST_RETRY_LIMIT,
                   retryDelay: 20,
+                  retryBackoff: true,
+                });
+              }
+              if (row.type === 'finance.archive_requested') {
+                const year = Number(row.payload.year);
+                const requestCommandId = typeof row.payload.requestCommandId === 'string' ? row.payload.requestCommandId : null;
+                return boss.send(QUEUES.yearArchive, { orgId: row.org_id, year, requestCommandId } satisfies YearArchiveJob, {
+                  // One build per org and year queued or running at a time.
+                  singletonKey: `${row.org_id}:${year}`,
+                  retryLimit: YEAR_ARCHIVE_RETRY_LIMIT,
+                  retryDelay: 60,
                   retryBackoff: true,
                 });
               }

@@ -26,6 +26,7 @@ import {
   BlobNotFoundError,
   BlobTooLargeError,
   DomainError,
+  archiveKey,
   fileKey,
   putFile,
   readVerified,
@@ -54,10 +55,12 @@ import {
   type FinancialStatements,
   type LedgerBook,
   type PurchaseVoucher,
+  type RecordedArchive,
   type SalesVoucher,
   type VatDeclaration,
   type VatReport,
 } from '@crove/mod-finance';
+import { readYearArchiveManifest, verifyYearArchive } from './year-archive.ts';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
 import {
   createDbInviteChecks,
@@ -1419,6 +1422,55 @@ export function createHttpApp(deps: HttpDeps) {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': `attachment; filename="crove-bao-cao-tai-chinh-${statements.period.period}-${orgSlug}.xlsx"`,
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // A fiscal year's archive package (issue #922), owners only (finance.archive.get): /verify reads every part and
+    // original at its recorded version and reports what is missing or changed; /manifest is the manifest (JSON), and
+    // /<sha256> one part of it. The manifest's key, version and sha256 come from the build's audit row, and a part is
+    // served only when the manifest lists it under the package's own prefix, so the request names nothing but a year.
+    const recordedArchive = async (c: Context<{ Variables: { user: AuthUser } }>) => {
+      const user = c.get('user');
+      const orgSlug = c.req.header(ORG_HEADER) ?? null;
+      const orgId = await resolveOrg(runtime, user, orgSlug);
+      const year = Number(c.req.param('year'));
+      if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new DomainError('NOT_FOUND', 404, 'Không có gói lưu trữ của năm này');
+      const archive = await runtime.query<RecordedArchive | null>('finance.archive.get', { year }, { actor: actorOf(user), orgId });
+      if (!archive) throw new DomainError('NOT_FOUND', 404, 'Năm này chưa được đóng gói lưu trữ');
+      return { orgId, orgSlug, archive };
+    };
+    app.get('/api/finance-archive/:year/verify', async (c) => {
+      try {
+        const { orgId, archive } = await recordedArchive(c);
+        return c.json(await verifyYearArchive(store, orgId, archive), 200, { 'cache-control': 'private, no-store' });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    app.get('/api/finance-archive/:year/:part', async (c) => {
+      try {
+        const { orgId, orgSlug, archive } = await recordedArchive(c);
+        const manifest = await readYearArchiveManifest(store, archive);
+        const part = c.req.param('part');
+        if (part === 'manifest') {
+          return c.json(manifest, 200, {
+            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'luu-tru', String(archive.year), ORG_SLUG, 'manifest'], 'json'),
+            'cache-control': 'private, no-store',
+          });
+        }
+        const ref = manifest.parts.find((p) => p.sha256 === part && p.key === archiveKey(orgId, archive.year, p.sha256));
+        if (!ref) throw new DomainError('NOT_FOUND', 404, 'Gói lưu trữ không có phần này');
+        const bytes = await readVerified(store, { key: ref.key, generation: ref.generation, sha256: ref.sha256 });
+        const xml = ref.kind === 'vat_xml';
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': xml ? 'application/xml; charset=utf-8' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': `attachment; filename="${ref.name.replace(/[^A-Za-z0-9._-]/g, '-')}"`,
             'cache-control': 'private, no-store',
           },
         });
