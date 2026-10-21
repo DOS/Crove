@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { voucherCode, zId, zLocalDate, type DocumentDirection, type VoucherType } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
-import { RECEIVABLE_ACCOUNT, VAT_OUTPUT } from '@crove/l10n-vn';
+import { RECEIVABLE_ACCOUNT, VAT_OUTPUT, money } from '@crove/l10n-vn';
 import { chartAccounts, type OrgChartAccount } from './accounts.ts';
 import { OPEN_REVERSAL_STATUSES, REVERSAL_KIND } from './reversal.ts';
 import { VOUCHER_SOURCE } from './domain/cash-voucher.ts';
@@ -105,6 +105,10 @@ export const documentsList = defineQuery({
         'd.total',
         'd.source_file_id',
         'd.replaces_document_id',
+        'd.currency',
+        'd.exchange_rate',
+        'd.exchange_rate_source',
+        'd.foreign_total',
         'j.id as journal_entry_id',
         'v.reversal_entry_id as void_entry_id',
         'v.reason as void_reason',
@@ -134,6 +138,10 @@ export const documentsList = defineQuery({
           ? { reversalEntryId: r.void_entry_id, reason: r.void_reason ?? '', voidedAt: new Date(r.voided_at).toISOString() }
           : null,
       replacesDocumentId: r.replaces_document_id,
+      foreign:
+        r.exchange_rate && r.exchange_rate_source && r.foreign_total
+          ? { currency: r.currency, rate: money(r.exchange_rate).toFixed(), source: r.exchange_rate_source, total: money(r.foreign_total).toFixed() }
+          : null,
     }));
   },
 });

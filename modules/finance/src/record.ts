@@ -10,7 +10,7 @@
 // (kernel.proposal.edit); it writes nothing.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { BLOCKING_CHECK_IDS, isRevenueAccount, zAccountCode, zLocalDate, zPurchaseProposal, type DocumentDirection, type PurchaseProposal, type RelatedInvoiceRef } from '@crove/kernel-contract';
+import { BLOCKING_CHECK_IDS, isRevenueAccount, zAccountCode, zExchangeRate, zLocalDate, zPurchaseProposal, type DocumentDirection, type PurchaseProposal, type RelatedInvoiceRef } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import {
   PAYABLE_ACCOUNT,
@@ -29,6 +29,7 @@ import { postReversal } from './reversal.ts';
 import { journalMemo } from './memo.ts';
 import { isOwnTaxCode } from './own-tax-code.ts';
 import { databaseToday, dateLabel, liveOpeningDate } from './period-lock.ts';
+import { BOOK_CURRENCY, checkRate, convertInvoice, foreignNote, toDong } from './domain/foreign-currency.ts';
 
 function directionOf(payload: PurchaseProposal): DocumentDirection {
   return payload.direction ?? 'purchase';
@@ -239,12 +240,15 @@ export const revisePurchase = defineCommand({
   input: z.object({
     payload: zPurchaseProposal,
     // debitAccount: the account a line is posted to (a revenue account on a sale line; see zProposedLine).
-    lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).min(1).max(1000),
+    lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).max(1000),
+    // The rate of a foreign-currency invoice read without one (#918): the proposal is converted to VND at it.
+    exchangeRate: zExchangeRate.optional(),
   }),
   risk: 'R1',
   access: 'proposal_revision',
   revises: 'finance.purchase.record',
-  handler: async (ctx, { payload, lineAccounts }) => {
+  handler: async (ctx, { payload: before, lineAccounts, exchangeRate }) => {
+    const payload = exchangeRate ? withEnteredRate(before, exchangeRate) : before;
     const lineNos = new Set(payload.lines.map((l) => l.lineNo));
     if (lineAccounts.some((l) => !lineNos.has(l.lineNo))) throw new DomainError('UNKNOWN_LINE', 422, 'Có dòng không thuộc hóa đơn này');
     const overrides = new Map(lineAccounts.map((l) => [l.lineNo, l.debitAccount]));
@@ -255,7 +259,7 @@ export const revisePurchase = defineCommand({
       chosen.push({ lineNo: l.lineNo, debitAccount: account });
       return { ...l, debitAccount: account, reason: 'Người dùng chọn' };
     });
-    if (chosen.length === 0) return { changed: false as const, payload };
+    if (chosen.length === 0 && !exchangeRate) return { changed: false as const, payload };
     // The accounts the user picked now; the others are checked again when the proposal is approved.
     assertDirectionAccounts(directionOf(payload), chosen);
     await assertUsableAccounts(ctx, chosen.map((l) => l.debitAccount));
@@ -263,6 +267,37 @@ export const revisePurchase = defineCommand({
     return { changed: true as const, payload: revised };
   },
 });
+
+// The currency check of a proposal converted at a rate a user entered (#918): a warning naming the rate.
+export function enteredRateCheck(currency: string, rate: string) {
+  return {
+    id: 'currency',
+    status: 'warn' as const,
+    code: 'currency.rate_entered',
+    params: { currency, rate },
+    message: `Hóa đơn bằng ${currency}; ghi sổ bằng VND theo tỷ giá ${rate} do người dùng nhập`,
+  };
+}
+
+// A foreign-currency proposal without a rate, converted to VND at the one the accountant entered (#918). Its failed
+// currency check becomes a warning naming the rate, so the approver (never the person who entered it, P10) sees it.
+function withEnteredRate(payload: PurchaseProposal, rate: string): PurchaseProposal {
+  const currency = payload.invoice.currency.toUpperCase();
+  if (currency === BOOK_CURRENCY || payload.invoice.foreign || !/^[A-Z]{3}$/.test(currency)) {
+    throw new DomainError('RATE_NOT_EDITABLE', 422, 'Chỉ nhập tỷ giá cho hóa đơn ngoại tệ chưa có tỷ giá');
+  }
+  type Line = PurchaseProposal['lines'][number];
+  const { invoice, foreign } = convertInvoice<Line, PurchaseProposal['invoice'] & { lines: Line[] }>(
+    { ...payload.invoice, lines: payload.lines },
+    rate,
+    (l) => l.amount,
+    (l, amount) => ({ ...l, amount }),
+  );
+  const { lines, ...converted } = invoice;
+  const check = enteredRateCheck(currency, foreign.rate);
+  const checks = payload.checks.some((c) => c.id === 'currency') ? payload.checks.map((c) => (c.id === 'currency' ? check : c)) : [check, ...payload.checks];
+  return { ...payload, invoice: { ...converted, foreign: { ...foreign, source: 'entered' } }, lines, checks };
+}
 
 export const recordPurchase = defineCommand({
   name: 'finance.purchase.record',
@@ -288,8 +323,21 @@ export const recordPurchase = defineCommand({
       if (refusal) throw refusal;
     }
     // The checks shown in the Inbox are enforced here, not only in the UI.
-    if (invoice.currency.toUpperCase() !== 'VND') {
-      throw new DomainError('UNSUPPORTED_CURRENCY', 422, 'Chưa hỗ trợ ghi sổ hóa đơn ngoại tệ');
+    // A foreign-currency invoice is recorded only once converted to VND at a rate (#918): the invoice's own, or the one
+    // the accountant entered on a revision. Its VND totals are worked out again from the invoice's own.
+    const foreign = invoice.foreign ?? null;
+    if (invoice.currency.toUpperCase() !== BOOK_CURRENCY) {
+      if (foreign?.currency !== invoice.currency.toUpperCase()) {
+        throw new DomainError('UNSUPPORTED_CURRENCY', 422, 'Hóa đơn ngoại tệ chưa có tỷ giá; hãy nhập tỷ giá khi sửa đề xuất rồi duyệt lại');
+      }
+      const rate = checkRate(foreign.rate);
+      const subtotal = toDong(foreign.subtotal, rate);
+      const vat = toDong(foreign.vatTotal, rate);
+      if (!subtotal.equals(money(invoice.subtotal)) || !vat.equals(money(invoice.vatTotal)) || !subtotal.plus(vat).equals(money(invoice.total))) {
+        throw new DomainError('FOREIGN_MISMATCH', 422, 'Số tiền quy đổi sang VND không khớp tỷ giá của hóa đơn');
+      }
+    } else if (foreign) {
+      throw new DomainError('FOREIGN_MISMATCH', 422, 'Hóa đơn VND không có tỷ giá quy đổi');
     }
     const failed = payload.checks.filter((c) => c.status === 'fail');
     if (failed.some((c) => BLOCKING_CHECK_IDS.includes(c.id))) {
@@ -305,7 +353,9 @@ export const recordPurchase = defineCommand({
     assertDirectionAccounts(direction, lines);
     await assertUsableAccounts(ctx, lines.map((l) => l.debitAccount));
 
-    const memo = journalMemo(payload);
+    // A foreign-currency invoice says what it was in its entry's description, which the journal and the MISA export
+    // show (#918).
+    const memo = foreign ? `${journalMemo(payload)} (${foreignNote(foreign)})` : journalMemo(payload);
     const journal = invoiceJournal(direction, lines, invoice.vatTotal, memo);
     if (!journalIsBalanced(journal)) throw new DomainError('UNBALANCED', 422, 'Bút toán không cân');
     // The payable (purchase) or receivable (sale) booked must equal the invoice total exactly.
@@ -350,6 +400,15 @@ export const recordPurchase = defineCommand({
         invoice_number: invoice.number,
         invoice_date: invoice.issueDate,
         currency: invoice.currency,
+        ...(foreign
+          ? {
+              exchange_rate: foreign.rate,
+              exchange_rate_source: foreign.source,
+              foreign_subtotal: foreign.subtotal,
+              foreign_vat_amount: foreign.vatTotal,
+              foreign_total: foreign.total,
+            }
+          : {}),
         subtotal: invoice.subtotal,
         vat_amount: invoice.vatTotal,
         total: invoice.total,

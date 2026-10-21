@@ -73,6 +73,9 @@ export const KERNEL_ERROR_CODES = [
   'UNKNOWN_ACCOUNT',
   'UNKNOWN_LINE',
   'UNSUPPORTED_CURRENCY',
+  // Foreign-currency invoices booked in VND (#918).
+  'FOREIGN_MISMATCH',
+  'RATE_NOT_EDITABLE',
   'TOTAL_MISMATCH',
   // Sales invoices and the org's tax code (#313).
   'NOT_OWN_SALE',

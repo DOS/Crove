@@ -100,6 +100,7 @@ import {
   zVatPeriod,
   zVatFilingPeriod,
   zVatReport,
+  zExchangeRate,
   zInputVatCheckOutcome,
   zAccountLedger,
   zFinancialStatements,
@@ -700,13 +701,16 @@ export const contract = {
           ),
         }),
       ),
-    // Saves changed line accounts as a new revision authored by the caller; it never approves.
+    // Saves changed line accounts, or the exchange rate of a foreign-currency invoice read without one (#918), as a new
+    // revision authored by the caller (who then cannot approve it, P10); it never approves. RATE_NOT_EDITABLE (422):
+    // the invoice is in VND or already has its rate.
     edit: oc
       .input(
         z.object({
           id: zId,
           revision: z.number().int().positive(),
-          lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).min(1).max(1000),
+          lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).min(1).max(1000).optional(),
+          exchangeRate: zExchangeRate.optional(),
           idempotencyKey: zId,
         }),
       )

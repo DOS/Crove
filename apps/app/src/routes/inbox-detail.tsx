@@ -301,6 +301,8 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const accounts = useQuery({ ...orpc.accounts.list.queryOptions(), enabled: finance });
   const [lineAccounts, setLineAccounts] = useState<Record<number, string>>({});
   const [idempotencyKey] = useState(() => crypto.randomUUID());
+  // The rate typed for a foreign-currency invoice read without one (#918).
+  const [exchangeRate, setExchangeRate] = useState('');
   const [acceptFailed, setAcceptFailed] = useState(false);
   // An invoice whose digital signature is unverified (#674): the approver confirms they checked the original first.
   // The confirmation holds for the revision it was given on: a new reading of the file (a new revision) asks again.
@@ -440,7 +442,11 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   if (detail.isLoading) return <Spinner />;
   if (detail.error) return <ErrorText>{errorMessage(detail.error)}</ErrorText>;
   if (!item) return null;
-  const currency = payload?.invoice.currency ?? 'VND';
+  // A foreign-currency invoice converted at a rate is shown in VND, its amounts as booked (#918).
+  const foreign = payload?.invoice.foreign ?? null;
+  const currency = foreign ? 'VND' : (payload?.invoice.currency ?? 'VND');
+  // Still in its own currency and waiting for the rate the accountant enters (a new revision).
+  const needsRate = !!payload && !foreign && payload.invoice.currency.toUpperCase() !== 'VND';
   const money = (value: string | null | undefined) => f.money(value, currency);
   const reading = item.extraction?.inFlight ?? false;
   const fileId = item.file?.id;
@@ -758,7 +764,37 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                   <p className="text-xs text-subtle-foreground">{t('total')}</p>
                   <p className="text-base font-semibold text-foreground tabular-nums">{money(payload.invoice.total)}</p>
                 </div>
-                <p className="text-xs text-subtle-foreground sm:col-span-3">{t('currency', { currency })}</p>
+                {foreign ? (
+                  <p className="text-xs text-subtle-foreground sm:col-span-3">
+                    {t(foreign.source === 'entered' ? 'foreignEntered' : 'foreignInvoice', {
+                      currency: foreign.currency,
+                      total: f.money(foreign.total, foreign.currency),
+                      rate: f.number(foreign.rate),
+                    })}
+                  </p>
+                ) : (
+                  <p className="text-xs text-subtle-foreground sm:col-span-3">{t('currency', { currency })}</p>
+                )}
+                {needsRate && pending && item?.canEdit && (
+                  <form
+                    className="flex flex-wrap items-end gap-2 sm:col-span-3"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const rate = exchangeRate.trim().replace(/\s/g, '').replace(',', '.');
+                      if (!item || !/^\d+(\.\d+)?$/.test(rate)) return;
+                      edit.mutate({ id, revision: item.revision, idempotencyKey: crypto.randomUUID(), exchangeRate: rate });
+                    }}
+                  >
+                    <Label className="text-xs">
+                      {t('exchangeRate', { currency: payload.invoice.currency })}
+                      <Input className="mt-1 w-40" inputMode="decimal" value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)} placeholder="25450" />
+                    </Label>
+                    <Button type="submit" variant="outline" size="sm" disabled={busy || exchangeRate.trim() === ''}>
+                      {t('saveExchangeRate')}
+                    </Button>
+                    <p className="w-full text-xs text-subtle-foreground">{t('exchangeRateHint')}</p>
+                  </form>
+                )}
               </div>
             </Card>
           )}

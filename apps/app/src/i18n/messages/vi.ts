@@ -195,6 +195,7 @@ export const vi = {
     subtitle:
       'Hóa đơn mua vào và bán ra đã được duyệt và ghi sổ. Chứng từ đã hủy là chứng từ có bút toán đã bị đảo: Crove không còn tính nó, còn hóa đơn của người bán không thay đổi.',
     empty: 'Chưa có chứng từ nào được ghi sổ',
+    foreign: '{total} theo tỷ giá {rate}',
     emptyHint: 'Duyệt đề xuất trong Hộp thư chứng từ để ghi sổ.',
     search: 'Lọc theo số hóa đơn, đối tác hoặc ngày',
     noMatch: 'Không có chứng từ nào khớp với bộ lọc',
@@ -1185,6 +1186,11 @@ export const vi = {
     vat: 'Thuế GTGT',
     total: 'Tổng thanh toán',
     currency: 'Đơn vị tiền: {currency}',
+    foreignInvoice: 'Hóa đơn bằng {currency}: tổng {total}, quy đổi sang VND theo tỷ giá {rate} của hóa đơn',
+    foreignEntered: 'Hóa đơn bằng {currency}: tổng {total}, quy đổi sang VND theo tỷ giá {rate} do người dùng nhập',
+    exchangeRate: 'Tỷ giá (VND cho 1 {currency})',
+    saveExchangeRate: 'Lưu tỷ giá',
+    exchangeRateHint: 'Hóa đơn không ghi tỷ giá nên chưa ghi sổ được. Nhập tỷ giá của ngày giao dịch; Crove quy đổi các dòng, thuế và tổng sang VND và lưu thành bản mới. Người khác duyệt bản này.',
     checks: 'Kiểm tra tự động',
     lines: 'Dòng hàng hóa, dịch vụ',
     description: 'Diễn giải',
@@ -2810,7 +2816,11 @@ export const vi = {
   // Kernel errors worded by the SPA (lib/kernel-errors.ts). The kernel sends the same text with the
   // code, and Vietnamese screens show the kernel's own message; these are used when an answer has none.
   invoiceChecks: {
-    currency: { unsupported: 'Hóa đơn bằng {currency}; chưa hỗ trợ ghi sổ ngoại tệ' },
+    currency: {
+      unsupported: 'Hóa đơn bằng {currency}, chưa có tỷ giá để ghi sổ; nhập tỷ giá khi sửa đề xuất',
+      converted: 'Hóa đơn bằng {currency}; ghi sổ bằng VND theo tỷ giá {rate} của hóa đơn',
+      rate_entered: 'Hóa đơn bằng {currency}; ghi sổ bằng VND theo tỷ giá {rate} do người dùng nhập',
+    },
     lines_sum: { ok: 'Tổng các dòng khớp tiền trước thuế', mismatch: 'Tổng các dòng ({lines}) lệch tiền trước thuế ({subtotal})' },
     total: { ok: 'Tiền trước thuế + VAT khớp tổng thanh toán', mismatch: 'Tiền trước thuế + VAT lệch tổng thanh toán' },
     vat_breakdown: { ok: 'Bảng thuế suất khớp tổng VAT', mismatch: 'Bảng thuế suất lệch tổng VAT' },
@@ -2908,7 +2918,9 @@ export const vi = {
       UNBALANCED: 'Bút toán không cân',
       UNKNOWN_ACCOUNT: 'Có tài khoản không có trong hệ thống tài khoản của tổ chức',
       UNKNOWN_LINE: 'Có dòng không thuộc hóa đơn này',
-      UNSUPPORTED_CURRENCY: 'Chưa hỗ trợ ghi sổ hóa đơn ngoại tệ',
+      UNSUPPORTED_CURRENCY: 'Hóa đơn ngoại tệ chưa có tỷ giá; hãy nhập tỷ giá khi sửa đề xuất rồi duyệt lại',
+      FOREIGN_MISMATCH: 'Số tiền quy đổi sang VND không khớp tỷ giá của hóa đơn; hãy đọc lại chứng từ',
+      RATE_NOT_EDITABLE: 'Chỉ nhập tỷ giá cho hóa đơn ngoại tệ chưa có tỷ giá',
       TOTAL_MISMATCH: 'Tổng các dòng và thuế không khớp tổng thanh toán của hóa đơn',
       NOT_OWN_SALE: 'Mã số thuế người bán không phải mã số thuế của tổ chức nên không ghi sổ như hóa đơn bán ra được; hãy kiểm tra mã số thuế trong Cài đặt rồi đọc lại tệp',
       OWN_INVOICE: 'Người bán là chính tổ chức nên đây là hóa đơn bán ra; hãy đọc lại tệp để ghi sổ như hóa đơn bán ra',

@@ -286,6 +286,9 @@ export type DocumentDirection = (typeof DOCUMENT_DIRECTIONS)[number];
 // A replacement (thay thế) or an adjustment (điều chỉnh) invoice of another (#916).
 export const CORRECTION_KINDS = ['replacement', 'adjustment'] as const;
 export type CorrectionKind = (typeof CORRECTION_KINDS)[number];
+// Where the exchange rate of a foreign-currency document comes from (#918): the e-invoice's own TGia, or the accountant.
+export const EXCHANGE_RATE_SOURCES = ['invoice', 'entered'] as const;
+export type ExchangeRateSource = (typeof EXCHANGE_RATE_SOURCES)[number];
 
 export type PurchaseDocumentTable = Refine<
   G.FinancePurchaseDocumentTable,
@@ -294,6 +297,12 @@ export type PurchaseDocumentTable = Refine<
     replaces_document_id: ColumnType<string | null, string | null | undefined, never>;
     direction: ColumnType<DocumentDirection, DocumentDirection | undefined, never>;
     correction_kind: ColumnType<CorrectionKind | null, CorrectionKind | null | undefined, never>;
+    // A foreign-currency document's rate and original totals (#918); null on a VND document.
+    exchange_rate: ColumnType<string | null, string | null | undefined, never>;
+    exchange_rate_source: ColumnType<ExchangeRateSource | null, ExchangeRateSource | null | undefined, never>;
+    foreign_subtotal: ColumnType<string | null, string | null | undefined, never>;
+    foreign_vat_amount: ColumnType<string | null, string | null | undefined, never>;
+    foreign_total: ColumnType<string | null, string | null | undefined, never>;
   }
 >;
 

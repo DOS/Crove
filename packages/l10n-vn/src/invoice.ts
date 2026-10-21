@@ -188,6 +188,15 @@ export function isCalendarDate(value: string): boolean {
   return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value);
 }
 
+// The exchange rate a foreign-currency invoice is booked at (#918), or null: only an e-invoice XML's own TGia, positive,
+// on a three-letter currency code. A rate read by AI from a PDF or a photo is never used: a hidden instruction could set
+// it, so the accountant enters the rate instead (finance.purchase.revise).
+export function invoiceExchangeRate(invoice: Pick<ParsedInvoice, 'source' | 'currency' | 'exchangeRate'>): Money | null {
+  if (invoice.source !== 'einvoice_xml' || !/^[A-Za-z]{3}$/.test(invoice.currency) || invoice.exchangeRate === null) return null;
+  const rate = money(invoice.exchangeRate);
+  return rate.greaterThan(0) ? toMoney(rate) : null;
+}
+
 // Deterministic checks. Confidence comes from these, never from a model's self-assessment.
 export function checkInvoice(
   invoice: ParsedInvoice,
@@ -196,9 +205,16 @@ export function checkInvoice(
 ): InvoiceCheck[] {
   const checks: InvoiceCheck[] = [];
   if (invoice.currency.toUpperCase() !== baseCurrency) {
-    // The code as read can be any text (an XML element, a model's answer): only its start is shown.
-    const currency = Array.from(invoice.currency.trim()).slice(0, 20).join('');
-    checks.push({ id: 'currency', status: 'fail', code: 'currency.unsupported', params: { currency }, message: `Hóa đơn bằng ${currency}; chưa hỗ trợ ghi sổ ngoại tệ` });
+    const rate = invoiceExchangeRate(invoice);
+    if (rate) {
+      // Booked in the base currency at the invoice's own rate (#918): a warning, so the approver sees the conversion.
+      const currency = invoice.currency.toUpperCase();
+      checks.push({ id: 'currency', status: 'warn', code: 'currency.converted', params: { currency, rate }, message: `Hóa đơn bằng ${currency}; ghi sổ bằng ${baseCurrency} theo tỷ giá ${rate} của hóa đơn` });
+    } else {
+      // The code as read can be any text (an XML element, a model's answer): only its start is shown.
+      const currency = Array.from(invoice.currency.trim()).slice(0, 20).join('');
+      checks.push({ id: 'currency', status: 'fail', code: 'currency.unsupported', params: { currency }, message: `Hóa đơn bằng ${currency}, chưa có tỷ giá để ghi sổ; nhập tỷ giá khi sửa đề xuất` });
+    }
   }
   const linesTotal = sum(invoice.lines.map(lineContribution));
 

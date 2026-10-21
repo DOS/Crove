@@ -421,7 +421,7 @@ suite('kernel on PostgreSQL', () => {
     expect(outsiderView).toBe('NOT_A_MEMBER');
   });
 
-  it('records an invoice with failed checks only after explicit confirmation, and never a foreign-currency one', async () => {
+  it('records an invoice with failed checks only after explicit confirmation, and a foreign-currency one only in VND at a rate (#918)', async () => {
     // The owner uploads these and org A gets an admin, so four-eyes (P10) makes the admin approve.
     const admin = await upsertIdentity(db, { issuer: 'test', subject: 'admin', email: 'admin@example.com', name: null });
     await join(orgA, users.owner, admin, 'admin@example.com', 'admin');
@@ -444,10 +444,94 @@ suite('kernel on PostgreSQL', () => {
       code: 'CHECKS_BLOCKING',
     });
 
-    const usd = await propose(variant('1236', (xml) => xml.replace('<DVTTe>VND</DVTTe>', '<DVTTe>USD</DVTTe>')));
+    // In USD without a rate (no TGia): its amounts stay the invoice's and it cannot be recorded, even when confirmed.
+    const usd = await propose(variant('1236', (xml) => xml.replace('<DVTTe>VND</DVTTe>', '<DVTTe>USD</DVTTe>').replace('<TGia>1</TGia>', '')));
     await expect(runtime.execute('kernel.proposal.approve', { ...usd, acceptFailedChecks: true }, asAdmin)).rejects.toMatchObject({
       code: 'UNSUPPORTED_CURRENCY',
     });
+
+    type Payload = { invoice: { currency: string; subtotal: string; vatTotal: string; total: string; foreign?: unknown }; lines: Array<{ amount: string }>; checks: Array<{ id: string; status: string; code: string }> };
+    const payloadOf = async (id: string) => (await runtime.query<{ payload: Payload; revision: number }>('kernel.inbox.get', { id }, asAdmin));
+    const documentOf = (proposalId: string) =>
+      withAdmin(async (c) => (await c.query(
+        `SELECT currency, subtotal::text, vat_amount::text, total::text, exchange_rate::text, exchange_rate_source, foreign_subtotal::text, foreign_vat_amount::text, foreign_total::text
+           FROM crove_finance.purchase_document WHERE org_id = $1 AND proposal_id = $2`,
+        [orgA, proposalId],
+      )).rows[0]);
+
+    // The accountant enters the rate: a new revision in VND, which its editor may not approve (P10).
+    await expect(
+      runtime.execute('kernel.proposal.edit', { id: usd.id, revision: usd.revision, exchangeRate: '0' }, { actor: asUser(users.owner), orgId: orgA }),
+    ).rejects.toBeTruthy();
+    const entered = await runtime.execute<{ revision: number; changed: boolean }>(
+      'kernel.proposal.edit',
+      { id: usd.id, revision: usd.revision, exchangeRate: '25450.5' },
+      { actor: asUser(users.owner), orgId: orgA },
+    );
+    expect(entered).toEqual({ revision: usd.revision + 1, changed: true });
+    const revised = await payloadOf(usd.id);
+    // 1,800,000 USD before VAT and 180,000 VAT at 25,450.5.
+    expect(revised.payload.invoice).toMatchObject({
+      currency: 'USD',
+      subtotal: '45810900000',
+      vatTotal: '4581090000',
+      total: '50391990000',
+      foreign: { currency: 'USD', rate: '25450.5', source: 'entered', subtotal: '1800000', vatTotal: '180000', total: '1980000' },
+    });
+    expect(revised.payload.lines.reduce((acc, l) => acc + Number(l.amount), 0)).toBe(45810900000);
+    expect(revised.payload.checks.find((c) => c.id === 'currency')).toMatchObject({ status: 'warn', code: 'currency.rate_entered' });
+    // A second rate on the same proposal is refused: it already has one.
+    await expect(
+      runtime.execute('kernel.proposal.edit', { id: usd.id, revision: entered.revision, exchangeRate: '25000' }, { actor: asUser(users.owner), orgId: orgA }),
+    ).rejects.toMatchObject({ code: 'RATE_NOT_EDITABLE' });
+    await expect(
+      runtime.execute('kernel.proposal.approve', { id: usd.id, revision: entered.revision, acceptUnverifiedSignature: true }, { actor: asMfa(users.owner), orgId: orgA }),
+    ).rejects.toBeTruthy();
+    await expect(
+      runtime.execute('kernel.proposal.approve', { id: usd.id, revision: entered.revision, acceptUnverifiedSignature: true }, asAdmin),
+    ).resolves.toMatchObject({ journalEntryId: expect.any(String) });
+    expect(await documentOf(usd.id)).toEqual({
+      currency: 'USD',
+      subtotal: '45810900000.0000',
+      vat_amount: '4581090000.0000',
+      total: '50391990000.0000',
+      exchange_rate: '25450.5000000000',
+      exchange_rate_source: 'entered',
+      foreign_subtotal: '1800000.0000',
+      foreign_vat_amount: '180000.0000',
+      foreign_total: '1980000.0000',
+    });
+
+    // An e-invoice in USD with its own rate is proposed in VND at it, and recorded with a balanced entry whose
+    // description names the original amount and rate.
+    const own = await propose(variant('1238', (xml) => xml.replace('<DVTTe>VND</DVTTe>', '<DVTTe>USD</DVTTe>').replace('<TGia>1</TGia>', '<TGia>25450</TGia>')));
+    const ownPayload = await payloadOf(own.id);
+    expect(ownPayload.payload.invoice).toMatchObject({ currency: 'USD', total: '50391000000', foreign: { rate: '25450', source: 'invoice', total: '1980000' } });
+    expect(ownPayload.payload.checks.find((c) => c.id === 'currency')).toMatchObject({ status: 'warn', code: 'currency.converted' });
+    const recorded = await runtime.execute<{ journalEntryId: string }>('kernel.proposal.approve', own, asAdmin);
+    const entry = await withAdmin(async (c) => ({
+      description: (await c.query(`SELECT description FROM crove_finance.journal_entry WHERE org_id = $1 AND id = $2`, [orgA, recorded.journalEntryId])).rows[0].description,
+      lines: (await c.query(`SELECT account_code, debit::text, credit::text FROM crove_finance.journal_line WHERE org_id = $1 AND entry_id = $2 ORDER BY line_no`, [orgA, recorded.journalEntryId])).rows,
+    }));
+    expect(entry.description).toContain('(USD 1980000, tỷ giá 25450)');
+    const debit = entry.lines.reduce((acc: number, l: { debit: string }) => acc + Number(l.debit), 0);
+    const credit = entry.lines.reduce((acc: number, l: { credit: string }) => acc + Number(l.credit), 0);
+    expect(debit).toBe(credit);
+    expect(entry.lines.find((l: { account_code: string }) => l.account_code === '331')).toMatchObject({ credit: '50391000000.0000' });
+    expect(await documentOf(own.id)).toMatchObject({ currency: 'USD', exchange_rate_source: 'invoice', foreign_total: '1980000.0000' });
+    // The database refuses a foreign-currency document without its rate, and a VND one with a rate.
+    const party = (await withAdmin((c) => c.query(`SELECT party_id FROM crove_finance.purchase_document WHERE org_id = $1 AND proposal_id = $2`, [orgA, own.id]))).rows[0].party_id;
+    for (const [currency, rate] of [['USD', null], ['VND', '25450']] as const) {
+      await expect(
+        withAdmin((c) =>
+          c.query(
+            `INSERT INTO crove_finance.purchase_document (org_id, party_id, invoice_number, invoice_date, currency, exchange_rate, subtotal, vat_amount, total)
+             VALUES ($1, $2, $3, '2026-10-01', $4, $5, 100, 10, 110)`,
+            [orgA, party, `FX-${currency}`, currency, rate],
+          ),
+        ),
+      ).rejects.toThrow(/purchase_document_foreign_amounts/);
+    }
   });
 
   it('marks a file as failed when extraction keeps failing, so it never stays "processing"', async () => {

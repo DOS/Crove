@@ -56,7 +56,7 @@ export interface VoucherLine {
   vatRate: string | null;
 }
 
-/** An approved purchase document with its journal entry (VND only: Crove refuses other currencies). */
+/** An approved purchase document with its journal entry, in VND (a foreign-currency invoice is booked in VND, #918). */
 export interface PurchaseVoucher {
   entryId: string;
   /** Journal entry date, YYYY-MM-DD. */

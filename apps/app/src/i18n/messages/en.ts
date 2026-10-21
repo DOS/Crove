@@ -197,6 +197,7 @@ export const en = {
     subtitle:
       'Purchase and sales invoices that were approved and posted. A voided document is one whose entry was reversed: Crove no longer counts it, and the invoice of the seller is unchanged.',
     empty: 'No documents posted yet',
+    foreign: '{total} at a rate of {rate}',
     emptyHint: 'Approve a proposal in the Document inbox to post it.',
     search: 'Filter by invoice number, party or date',
     noMatch: 'No document matches the filter',
@@ -1189,6 +1190,11 @@ export const en = {
     vat: 'VAT',
     total: 'Total payable',
     currency: 'Currency: {currency}',
+    foreignInvoice: 'Invoice in {currency}: total {total}, converted to VND at the invoice rate of {rate}',
+    foreignEntered: 'Invoice in {currency}: total {total}, converted to VND at the rate of {rate} a user entered',
+    exchangeRate: 'Exchange rate (VND per 1 {currency})',
+    saveExchangeRate: 'Save the rate',
+    exchangeRateHint: 'The invoice states no exchange rate, so it cannot be posted yet. Enter the rate of the transaction date; Crove converts the lines, VAT and totals to VND and saves them as a new revision, which someone else approves.',
     checks: 'Automatic checks',
     lines: 'Goods and services',
     description: 'Description',
@@ -2810,7 +2816,11 @@ export const en = {
   },
   // Kernel errors worded by the SPA (lib/kernel-errors.ts). Shown instead of the kernel's Vietnamese message.
   invoiceChecks: {
-    currency: { unsupported: 'The invoice is in {currency}; posting in a foreign currency is not supported yet' },
+    currency: {
+      unsupported: 'The invoice is in {currency} and has no exchange rate to post it; enter the rate when you edit the proposal',
+      converted: 'The invoice is in {currency}; posted in VND at the invoice rate of {rate}',
+      rate_entered: 'The invoice is in {currency}; posted in VND at the rate of {rate} a user entered',
+    },
     lines_sum: { ok: 'The lines add up to the amount before VAT', mismatch: 'The lines add up to {lines}, not to the amount before VAT ({subtotal})' },
     total: { ok: 'Amount before VAT plus VAT matches the total', mismatch: 'Amount before VAT plus VAT does not match the total' },
     vat_breakdown: { ok: 'The VAT table matches the VAT total', mismatch: 'The VAT table does not match the VAT total' },
@@ -2908,7 +2918,9 @@ export const en = {
       UNBALANCED: 'The journal entry does not balance.',
       UNKNOWN_ACCOUNT: "An account is not in the organization's chart of accounts.",
       UNKNOWN_LINE: 'A line does not belong to this invoice.',
-      UNSUPPORTED_CURRENCY: 'Invoices in foreign currencies cannot be recorded yet.',
+      UNSUPPORTED_CURRENCY: 'This foreign-currency invoice has no exchange rate yet; enter the rate when you edit the proposal, then approve it.',
+      FOREIGN_MISMATCH: 'The VND amounts do not match the exchange rate of the invoice; read the document again.',
+      RATE_NOT_EDITABLE: 'An exchange rate can only be entered for a foreign-currency invoice that has none.',
       TOTAL_MISMATCH: 'The lines and VAT do not add up to the invoice total.',
       NOT_OWN_SALE: 'The seller\'s tax code is not your organization\'s, so this cannot be posted as a sale. Check the tax code in Settings, then read the file again.',
       OWN_INVOICE: 'The seller is your own organization, so this is a sales invoice. Read the file again to post it as a sale.',
