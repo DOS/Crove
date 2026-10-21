@@ -18,6 +18,7 @@ import {
   ORG_HEADER,
   SOCIAL_IMAGE_TYPES,
   XLSX_CONTENT_TYPE,
+  type FixedAsset,
   type UploadPurpose,
 } from '@crove/kernel-contract';
 import {
@@ -44,6 +45,7 @@ import {
   buildJournalWorkbook,
   buildLedgerWorkbook,
   buildStatementsWorkbook,
+  buildFixedAssetsWorkbook,
   buildMisaWorkbook,
   buildVat01Xml,
   buildVatWorkbook,
@@ -1430,6 +1432,28 @@ export function createHttpApp(deps: HttpDeps) {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': `attachment; filename="crove-bao-cao-tai-chinh-${statements.period.period}-${orgSlug}.xlsx"`,
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // The register of fixed assets and prepaid costs (#919), every entry with what it posted and what is left.
+    app.get('/api/export/fixed-assets.xlsx', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const assets = await runtime.query<FixedAsset[]>('finance.fixed_assets.list', {}, { actor: actorOf(user), orgId });
+        const bytes = await buildFixedAssetsWorkbook(assets, orgSlug ?? '');
+        // The export's audit row (the number of entries). No row, no download.
+        await runtime.execute('finance.fixed_asset.export', { assets: assets.length }, { actor: actorOf(user), orgId });
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'so-tai-san', ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });

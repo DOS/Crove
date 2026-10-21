@@ -50,16 +50,24 @@ const MEMBERS = ['owner', 'admin', 'member'] as const;
 const PURCHASE_COMMAND = 'finance.purchase.record';
 // Commands a proposal may execute when approved (they must also declare access: 'proposal', which the runtime checks
 // against the proposal row: state 'approved' for that command, approved by the running kernel.proposal.approve).
-const PROPOSAL_COMMANDS = new Set([PURCHASE_COMMAND, 'finance.journal.reverse', 'finance.voucher.record', 'finance.journal_voucher.record', 'finance.closing.record']);
+const PROPOSAL_COMMANDS = new Set([
+  PURCHASE_COMMAND,
+  'finance.journal.reverse',
+  'finance.voucher.record',
+  'finance.journal_voucher.record',
+  'finance.closing.record',
+  'finance.depreciation.record',
+]);
 // Proposals a user may ask for (kernel.proposal.request), and the module command that checks the request and builds
 // the proposal from the database; it writes nothing. The title and payload come from it, never from the requester.
 // A cash or bank voucher (#327) and a general journal voucher (NVK, #888) are entered by hand this way; a year-end
-// closing (#889) is built from the ledger for the year named.
+// closing (#889) is built from the ledger for the year named, and a month's depreciation (#919) from the register.
 const PROPOSAL_PREPARERS = {
   'finance.journal.reverse': 'finance.journal.prepare_reversal',
   'finance.voucher.record': 'finance.voucher.prepare',
   'finance.journal_voucher.record': 'finance.journal_voucher.prepare',
   'finance.closing.record': 'finance.closing.prepare',
+  'finance.depreciation.record': 'finance.depreciation.prepare',
 } as const;
 type RequestableCommand = keyof typeof PROPOSAL_PREPARERS;
 const REQUESTABLE = Object.keys(PROPOSAL_PREPARERS) as [RequestableCommand, ...RequestableCommand[]];

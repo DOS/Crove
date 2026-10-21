@@ -35,6 +35,7 @@ const ALL_NAV = [
   { to: '/o/$slug/vendors', label: 'vendors', module: 'finance' },
   { to: '/o/$slug/journal', label: 'journal', module: 'finance' },
   { to: '/o/$slug/vouchers', label: 'vouchers', module: 'finance' },
+  { to: '/o/$slug/fixed-assets', label: 'fixedAssets', module: 'finance' },
   { to: '/o/$slug/vat', label: 'vat', module: 'finance' },
   { to: '/o/$slug/portal-invoices', label: 'portalList', module: 'finance' },
   { to: '/o/$slug/ledger', label: 'ledger', module: 'finance' },

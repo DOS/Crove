@@ -162,6 +162,17 @@ export const KERNEL_ERROR_CODES = [
   'CLOSING_EMPTY',
   'CLOSING_UNSUPPORTED',
   'CLOSING_STALE',
+  // Fixed assets, prepaid costs and their monthly depreciation (#919).
+  'ASSET_ACCOUNTS',
+  'SOURCE_MISMATCH',
+  'ASSET_EXISTS',
+  'ASSET_ENDED',
+  'ASSET_END_BEFORE_START',
+  'ASSET_END_BEFORE_POSTED',
+  'DEPRECIATION_EMPTY',
+  'DEPRECIATION_DONE',
+  'DEPRECIATION_UNSUPPORTED',
+  'DEPRECIATION_STALE',
   // A replacement invoice posted before its original (#916).
   'REPLACEMENT_BEFORE_ORIGINAL',
   'BANK_LINE_NOT_FOUND',

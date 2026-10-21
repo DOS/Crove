@@ -116,7 +116,8 @@ import {
   zVoucherType,
 } from './schemas.ts';
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
-import { zJournalVoucherRequest, zYearClosingRequest } from './journal-voucher.ts';
+import { zDepreciationRequest, zJournalVoucherRequest, zYearClosingRequest } from './journal-voucher.ts';
+import { zFixedAsset, zFixedAssetCreate, zFixedAssetEnd } from './fixed-asset.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
@@ -730,6 +731,8 @@ export const contract = {
           z.object({ command: z.literal('finance.journal_voucher.record'), input: zJournalVoucherRequest, idempotencyKey: zId }),
           // The year-end closing (#889): the server builds the lines from the ledger.
           z.object({ command: z.literal('finance.closing.record'), input: zYearClosingRequest, idempotencyKey: zId }),
+          // A month's depreciation and allocation (#919): the server builds the lines from the register.
+          z.object({ command: z.literal('finance.depreciation.record'), input: zDepreciationRequest, idempotencyKey: zId }),
         ]),
       )
       .output(z.object({ proposalId: zId })),
@@ -886,6 +889,15 @@ export const contract = {
     state: oc.output(zPeriodLockState),
     lock: oc.input(zPeriodLockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
     unlock: oc.input(zPeriodUnlockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
+  },
+  // The register of fixed assets and prepaid costs (#919): every member reads it with what each asset has posted and
+  // what is left; owners, admins and members add an entry (from an approved purchase line or by hand) and stop one
+  // early. A month's depreciation is asked for with inbox.request (finance.depreciation.record). The Excel workbook is
+  // GET /api/export/fixed-assets.xlsx. A retry with the same idempotencyKey returns the first result.
+  fixedAssets: {
+    list: oc.output(z.array(zFixedAsset)),
+    create: oc.input(zFixedAssetCreate.extend({ idempotencyKey: zId })).output(z.object({ assetId: zId })),
+    end: oc.input(zFixedAssetEnd.extend({ idempotencyKey: zId })).output(z.object({ assetId: zId })),
   },
   // Fiscal year archive packages (#922), owners only: list them, and ask for one (R3: fresh MFA) for a year whose
   // months are all locked. The package is GET /api/finance-archive/<year>/manifest and /api/finance-archive/<year>/<sha256>

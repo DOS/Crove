@@ -16,6 +16,8 @@ export interface CroveFinanceSchema {
   'crove_finance.account': FinanceAccountTable;
   'crove_finance.bank_line': FinanceBankLineTable;
   'crove_finance.cash_voucher': FinanceCashVoucherTable;
+  'crove_finance.depreciation_line': FinanceDepreciationLineTable;
+  'crove_finance.fixed_asset': FinanceFixedAssetTable;
   'crove_finance.input_vat_check': FinanceInputVatCheckTable;
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
@@ -147,6 +149,38 @@ export interface FinanceCashVoucherTable {
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   bank_line_id: ColumnType<string | null, string | null, NotGranted>;
+}
+
+/** crove_finance.depreciation_line */
+export interface FinanceDepreciationLineTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  asset_id: ColumnType<string, string, NotGranted>;
+  month: ColumnType<string, string, NotGranted>;
+  amount: ColumnType<string, string, NotGranted>;
+  entry_id: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_finance.fixed_asset */
+export interface FinanceFixedAssetTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  kind: ColumnType<string, string, NotGranted>;
+  name: ColumnType<string, string, NotGranted>;
+  cost: ColumnType<string, string, NotGranted>;
+  asset_account: ColumnType<string, string, NotGranted>;
+  accumulated_account: ColumnType<string | null, string | null, NotGranted>;
+  expense_account: ColumnType<string, string, NotGranted>;
+  start_month: ColumnType<string, string, NotGranted>;
+  months: ColumnType<number, number, NotGranted>;
+  source_document_id: ColumnType<string | null, string | null, NotGranted>;
+  source_line_no: ColumnType<number | null, number | null, NotGranted>;
+  ended_month: string | null;
+  end_reason: string | null;
+  ended_by: string | null;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_finance.input_vat_check */

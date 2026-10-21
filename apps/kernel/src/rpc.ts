@@ -1210,6 +1210,23 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         }),
       ),
     },
+    fixedAssets: {
+      list: os.fixedAssets.list.handler(({ context }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.fixed_assets.list', {}, { actor, orgId })),
+      ),
+      create: os.fixedAssets.create.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('finance.fixed_asset.create', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+      end: os.fixedAssets.end.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('finance.fixed_asset.end', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+    },
     periodLock: {
       state: os.periodLock.state.handler(({ context }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.period.lock_state', {}, { actor, orgId })),

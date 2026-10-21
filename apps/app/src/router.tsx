@@ -47,6 +47,7 @@ import { PortalListPage } from './routes/portal-list.tsx';
 import { VendorsPage } from './routes/vendors.tsx';
 import { CustomersPage } from './routes/customers.tsx';
 import { VouchersPage } from './routes/vouchers.tsx';
+import { FixedAssetsPage } from './routes/fixed-assets.tsx';
 
 async function requireSession() {
   if (!(await accessToken())) throw redirect({ to: '/login' });
@@ -199,6 +200,8 @@ const customersRoute = createRoute({
 const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, validateSearch: parseJournalSearch, component: JournalPage });
 // Cash and bank vouchers (issue #327).
 const vouchersRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vouchers', beforeLoad: requireFinance, component: VouchersPage });
+// The register of fixed assets and prepaid costs (issue #919).
+const fixedAssetsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'fixed-assets', beforeLoad: requireFinance, component: FixedAssetsPage });
 // VAT working per month or quarter (issue #316).
 const vatRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vat', beforeLoad: requireFinance, component: VatPage });
 // Reconciliation with the tax portal's purchase list (issue #465).
@@ -280,7 +283,7 @@ const routeTree = rootRoute.addChildren([
   onboardingRoute,
   clientsRoute,
   oauthCallbackRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, customersRoute, vendorsRoute, journalRoute, vouchersRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialFeedsRoute, socialBioRoute, socialNotificationsRoute, socialPostRoute]), notificationsRoute, agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, auditRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, customersRoute, vendorsRoute, journalRoute, vouchersRoute, fixedAssetsRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialFeedsRoute, socialBioRoute, socialNotificationsRoute, socialPostRoute]), notificationsRoute, agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, auditRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });
