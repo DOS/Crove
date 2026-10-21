@@ -82,6 +82,17 @@ const schema = z.object({
   // The S3 endpoint browsers reach, when it differs from S3_ENDPOINT (presigned URLs are signed for this host). On a
   // public PUBLIC_URL it must be https: it is where browsers send files, and it lands in the CSP connect-src.
   S3_PUBLIC_ENDPOINT: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
+  // The WORM fact stream (plan §4.10, issue #891, worm.ts): where the worker anchors audit events and journal entries.
+  // s3: ARCHIVE_S3_BUCKET, a bucket with Object Lock, reached with the S3_ENDPOINT, S3_REGION, credentials and path
+  // style above; objects are locked in ARCHIVE_LOCK_MODE for ARCHIVE_RETENTION_DAYS. local: read-only files under
+  // ARCHIVE_DIR, which whoever controls the host can still rewrite (docs/runbooks/worm-archive.md).
+  ARCHIVE_STORE: z.enum(['local', 's3']).default('local'),
+  ARCHIVE_DIR: z.string().default(here('../../../.data/archive')),
+  ARCHIVE_S3_BUCKET: optional,
+  ARCHIVE_LOCK_MODE: z.enum(['GOVERNANCE', 'COMPLIANCE']).default('GOVERNANCE'),
+  ARCHIVE_RETENTION_DAYS: z.coerce.number().int().min(1).max(36_500).default(3650),
+  // How long after a row is written it is archived at the earliest, so a transaction still open is not cut off.
+  ARCHIVE_LAG_SECONDS: z.coerce.number().int().min(60).max(86_400).default(600),
   // Staged upload completions one API process runs at once (issue #223): each buffers the staged file (up to 25 MB)
   // while it hashes and writes it. Past it, and past half of it for one user, completions answer 503 UPLOAD_BUSY with
   // Retry-After and their grant stays unused. Uploads through POST /api/files (#432) get twice as many slots, on the
@@ -377,6 +388,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   if (config.STORAGE === 's3' && !config.S3_BUCKET) throw new Error('STORAGE=s3 needs S3_BUCKET');
+  if (config.ARCHIVE_STORE === 's3' && !config.ARCHIVE_S3_BUCKET) throw new Error('ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET');
   // Fails the boot on a malformed key rather than at the first export or download.
   exportSealer(config);
   if (config.REFUSAL_AUDIT_RESERVE_PER_ACTOR > config.REFUSAL_AUDIT_LIMIT_PER_ACTOR) {

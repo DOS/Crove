@@ -188,6 +188,13 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+      # The WORM fact stream (#891): read-only files on the `archive` volume unless ARCHIVE_STORE=s3 with an Object Lock
+      # bucket (docs/runbooks/worm-archive.md).
+      ARCHIVE_STORE: ${ARCHIVE_STORE:-local}
+      ARCHIVE_S3_BUCKET: ${ARCHIVE_S3_BUCKET:-}
+      ARCHIVE_LOCK_MODE: ${ARCHIVE_LOCK_MODE:-GOVERNANCE}
+      ARCHIVE_RETENTION_DAYS: ${ARCHIVE_RETENTION_DAYS:-3650}
+      ARCHIVE_LAG_SECONDS: ${ARCHIVE_LAG_SECONDS:-600}
       S3_VERSIONING: ${S3_VERSIONING:-required}
       S3_PRESIGNED_URLS: ${S3_PRESIGNED_URLS:-true}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
@@ -227,6 +234,7 @@ services:
       CHANNEL_PINTEREST_APP_SECRET: ${CHANNEL_PINTEREST_APP_SECRET:-}
     volumes:
       - files:/data/files
+      - archive:/data/archive
       - keys:/data/keys
       - status:/data/status:ro
     ports:
@@ -340,6 +348,7 @@ networks:
 volumes:
   db-data:
   files:
+  archive:
   keys:
   # The prober's last result for the status page (#678): written by the prober, read by the API.
   status:
