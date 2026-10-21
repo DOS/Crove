@@ -26,6 +26,7 @@ export const VAT_WARNING_LABELS: Readonly<Record<VatWarning, string>> = {
   lines_mismatch: 'Tổng các dòng lệch tiền trước thuế của hóa đơn; số tổng cộng theo các dòng',
   vat_mismatch: 'Thuế GTGT lệch giá trị trước thuế nhân thuế suất',
   declared_late: 'Hóa đơn của kỳ trước, ghi sổ và kê khai vào kỳ này vì tháng của hóa đơn đã khóa sổ',
+  check_payment: 'Đạt ngưỡng phải thanh toán không dùng tiền mặt mà chưa rõ đã thanh toán qua ngân hàng: kiểm tra chứng từ trước khi khấu trừ',
 };
 
 function invoiceSheet(workbook: ExcelJS.Workbook, name: string, side: VatSide, partyHeader: string, taxCodeHeader: string): void {

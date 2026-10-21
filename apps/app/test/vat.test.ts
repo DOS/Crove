@@ -1,7 +1,7 @@
 // The VAT working screen's period picker (issue #316).
 import { describe, expect, it } from 'vitest';
 import { VAT_PERIOD_PATTERN } from '@crove/kernel-contract';
-import { defaultPeriod, periodKey, switchKind, yearOptions } from '../src/lib/vat.ts';
+import { canMarkPayment, deductParams, defaultPeriod, periodKey, switchKind, yearOptions } from '../src/lib/vat.ts';
 
 describe('VAT period picker', () => {
   it('builds the period the server expects', () => {
@@ -28,5 +28,16 @@ describe('VAT period picker', () => {
 
   it('offers this year and the five before it', () => {
     expect(yearOptions(new Date(2026, 9, 17))).toEqual([2026, 2025, 2024, 2023, 2022, 2021]);
+  });
+});
+
+describe('VAT working: [25] in the XML and payment marks (#917)', () => {
+  it('asks the server for 0, all of [24] or the suggestion', () => {
+    expect(deductParams('none')).toEqual({});
+    expect(deductParams('all')).toEqual({ deductInput: '1' });
+    expect(deductParams('suggested')).toEqual({ deduct: 'suggested' });
+  });
+  it('lets owners, admins and members mark an invoice, not viewers', () => {
+    expect(['owner', 'admin', 'member', 'viewer', null].map((r) => canMarkPayment(r))).toEqual([true, true, true, false, false]);
   });
 });

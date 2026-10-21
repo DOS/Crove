@@ -19,7 +19,7 @@
 // invoice always stays in its invoice period: a sale is never posted late (record.ts).
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { VAT_WARNINGS, zVatPeriod, type DocumentDirection } from '@crove/kernel-contract';
+import { INPUT_VAT_CHECK_OUTCOMES, VAT_WARNINGS, zId, zVatPeriod, type DocumentDirection } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { money, type Money } from '@crove/l10n-vn';
 import {
@@ -35,6 +35,7 @@ import {
   type SideTotals,
   type VatPeriod,
 } from './domain/vat-return.ts';
+import { needsPaymentCheck, nonCashThreshold, paymentMethodKind, type PaymentMethodKind } from './domain/non-cash-payment.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
@@ -71,11 +72,32 @@ export interface VatSide {
   totals: SideTotals;
 }
 
+// An input invoice that needs proof of non-cash payment before its VAT is deducted (#917), with the accountant's mark.
+export interface VatPaymentCheck {
+  documentId: string;
+  paymentMethod: string | null;
+  methodKind: PaymentMethodKind;
+  threshold: Money;
+  total: Money;
+  vatAmount: Money;
+  mark: { outcome: 'paid_by_bank' | 'not_deductible'; voucherId: string | null; note: string | null; markedAt: string } | null;
+}
+
+export interface VatPaymentChecks {
+  items: VatPaymentCheck[];
+  vatAtRisk: Money;
+  notDeductibleVat: Money;
+  unchecked: number;
+  // [24] minus the VAT marked not deductible: what [25] may hold once every item is checked.
+  suggested25: Money;
+}
+
 export interface VatReport {
   period: VatPeriod;
   input: VatSide;
   output: VatSide;
   indicators: FormIndicator[];
+  paymentChecks: VatPaymentChecks;
 }
 
 function invoiceView(
@@ -126,7 +148,12 @@ function invoiceView(
 // party is the supplier or the customer. Each document has exactly one entry of its own: journal_entry is unique by
 // source, and a document commits only together with its entry (purchase_document_entry, #560), so the inner join drops
 // none. A reversal is an entry of another source.
-async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: DocumentDirection): Promise<VatInvoiceView[]> {
+interface PeriodInvoice {
+  view: VatInvoiceView;
+  paymentMethod: string | null;
+}
+
+async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: DocumentDirection): Promise<PeriodInvoice[]> {
   const periodDate = direction === 'purchase' ? 'j.entry_date' : 'd.invoice_date';
   const docs = await ctx.trx
     .selectFrom('crove_finance.purchase_document as d')
@@ -134,7 +161,7 @@ async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: D
     .innerJoin('crove_finance.journal_entry as j', (join) =>
       join.onRef('j.org_id', '=', 'd.org_id').onRef('j.source_id', '=', 'd.id').on('j.source_type', '=', 'finance.purchase_document'),
     )
-    .select(['d.id', 'd.invoice_date', 'j.entry_date', 'd.invoice_series', 'd.invoice_number', 'd.subtotal', 'd.vat_amount', 'd.total', 'p.name', 'p.tax_code'])
+    .select(['d.id', 'd.invoice_date', 'j.entry_date', 'd.invoice_series', 'd.invoice_number', 'd.subtotal', 'd.vat_amount', 'd.total', 'd.payment_method', 'p.name', 'p.tax_code'])
     .where('d.org_id', '=', ctx.orgId)
     .where('d.direction', '=', direction)
     .where(periodDate, '>=', period.from)
@@ -194,8 +221,9 @@ async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: D
     list.push({ rate: row.vat_rate, taxable: row.taxable_amount, vat: row.vat_amount });
     ratesByDocument.set(row.document_id, list);
   }
-  return docs.map((d) =>
-    invoiceView(
+  return docs.map((d) => ({
+    paymentMethod: d.payment_method,
+    view: invoiceView(
       period,
       {
         id: d.id,
@@ -212,22 +240,88 @@ async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: D
       byDocument.get(d.id) ?? [],
       ratesByDocument.get(d.id) ?? [],
     ),
-  );
+  }));
 }
 
 function side(available: boolean, documents: VatInvoiceView[]): VatSide {
   return { available, documents, totals: sideTotals(documents) };
 }
 
+type CheckMark = NonNullable<VatPaymentCheck['mark']>;
+
+// The latest mark of each of the org's documents in ids (#917); a cleared mark counts as none.
+async function latestMarks(ctx: QueryContext, ids: string[]): Promise<Map<string, CheckMark>> {
+  const marks = new Map<string, CheckMark>();
+  if (ids.length === 0) return marks;
+  const rows = await ctx.trx
+    .selectFrom('crove_finance.input_vat_check')
+    .select(['document_id', 'outcome', 'voucher_id', 'note', 'created_at'])
+    .distinctOn('document_id')
+    .where('org_id', '=', ctx.orgId)
+    .where('document_id', 'in', ids)
+    .orderBy('document_id')
+    .orderBy('created_at', 'desc')
+    .orderBy('id', 'desc')
+    .execute();
+  for (const row of rows) {
+    if (row.outcome === 'cleared') continue;
+    marks.set(row.document_id, { outcome: row.outcome, voucherId: row.voucher_id, note: row.note, markedAt: new Date(row.created_at).toISOString() });
+  }
+  return marks;
+}
+
+// The input invoices of the period that need proof of non-cash payment, and the [25] they leave (#917).
+function paymentChecks(input: PeriodInvoice[], marks: Map<string, CheckMark>, vat24: Money): VatPaymentChecks {
+  const items: VatPaymentCheck[] = [];
+  let atRisk = money(0);
+  let notDeductible = money(0);
+  let unchecked = 0;
+  for (const { view, paymentMethod } of input) {
+    if (!needsPaymentCheck({ issueDate: view.issueDate, total: view.total, paymentMethod })) continue;
+    const mark = marks.get(view.id) ?? null;
+    if (mark?.outcome !== 'paid_by_bank') atRisk = atRisk.plus(money(view.vatAmount));
+    if (mark?.outcome === 'not_deductible') notDeductible = notDeductible.plus(money(view.vatAmount));
+    if (!mark) {
+      unchecked += 1;
+      // Flagged on its row too, until the accountant marks it.
+      view.warnings.push('check_payment');
+    }
+    items.push({
+      documentId: view.id,
+      paymentMethod,
+      methodKind: paymentMethodKind(paymentMethod),
+      threshold: nonCashThreshold(view.issueDate).amount,
+      total: view.total,
+      vatAmount: view.vatAmount,
+      mark,
+    });
+  }
+  return {
+    items,
+    vatAtRisk: atRisk.toFixed(),
+    notDeductibleVat: notDeductible.toFixed(),
+    unchecked,
+    suggested25: money(vat24).minus(notDeductible).toFixed(),
+  };
+}
+
 export async function loadVatReport(ctx: QueryContext, periodText: string): Promise<VatReport> {
   const period = vatPeriod(periodText);
-  const input = side(true, await periodInvoices(ctx, period, 'purchase'));
+  const purchases = await periodInvoices(ctx, period, 'purchase');
+  const marks = await latestMarks(
+    ctx,
+    purchases.map((p) => p.view.id),
+  );
+  const input = side(
+    true,
+    purchases.map((p) => p.view),
+  );
   // Sales are told apart by the org's tax code (#313). Without one Crove cannot know them, so the output side says it
   // is not available, unless sales were recorded while a tax code was set (they stay in the books and count).
   const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
-  const sales = await periodInvoices(ctx, period, 'sale');
+  const sales = (await periodInvoices(ctx, period, 'sale')).map((p) => p.view);
   const output = side(Boolean(org?.tax_code) || sales.length > 0, sales);
-  return { period, input, output, indicators: form01Indicators(input.totals, output.totals) };
+  return { period, input, output, indicators: form01Indicators(input.totals, output.totals), paymentChecks: paymentChecks(purchases, marks, input.totals.vat) };
 }
 
 export const vatPeriodQuery = defineQuery({
@@ -289,8 +383,9 @@ export const vatExport = defineCommand({
   input: zVatPeriodInput.extend({
     documents: z.number().int().nonnegative().max(2 * VAT_PERIOD_LIMIT),
     format: z.enum(VAT_EXPORT_FORMATS).optional(),
-    // The HTKK XML with [25] = [24] (#692), the accountant's choice for that download.
+    // The HTKK XML with [25] = [24] (#692), or with the suggested [25] (#917), the accountant's choice for that download.
     deductInput: z.boolean().optional(),
+    deductSuggested: z.boolean().optional(),
   }),
   risk: 'R0',
   access: ALL,
@@ -300,7 +395,63 @@ export const vatExport = defineCommand({
       documents: input.documents,
       ...(input.format ? { format: input.format } : {}),
       ...(input.deductInput ? { deduct_input: true } : {}),
+      ...(input.deductSuggested ? { deduct_suggested: true } : {}),
     });
     return { ok: true as const };
+  },
+});
+
+const MARKERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
+
+// The accountant's mark on an input invoice that needs proof of non-cash payment (#917): paid_by_bank (optionally
+// with the bank voucher, báo Nợ, that paid it), not_deductible, or cleared. One appended row per mark; the latest is the
+// invoice's state, and the audit row records each one. It changes no figure of the books: only the suggested [25].
+export const vatPaymentMark = defineCommand({
+  name: 'finance.vat.payment_mark',
+  input: z.object({
+    documentId: zId,
+    outcome: z.enum(INPUT_VAT_CHECK_OUTCOMES),
+    voucherId: zId.nullable().optional(),
+    note: z.string().trim().min(1).max(500).nullable().optional(),
+  }),
+  risk: 'R1',
+  access: MARKERS,
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới đánh dấu được hóa đơn');
+    const doc = await ctx.trx
+      .selectFrom('crove_finance.purchase_document as d')
+      .select(['d.id', 'd.direction', 'd.invoice_date', 'd.total', 'd.payment_method'])
+      .where('d.org_id', '=', ctx.orgId)
+      .where('d.id', '=', input.documentId)
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom('crove_finance.purchase_document_void as v').select('v.document_id').whereRef('v.org_id', '=', 'd.org_id').whereRef('v.document_id', '=', 'd.id'),
+          ),
+        ),
+      )
+      .executeTakeFirst();
+    if (!doc || doc.direction !== 'purchase') throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy hóa đơn mua vào');
+    if (!needsPaymentCheck({ issueDate: doc.invoice_date, total: doc.total, paymentMethod: doc.payment_method })) {
+      throw new DomainError('NOT_FLAGGED', 409, 'Hóa đơn này không cần kiểm tra chứng từ thanh toán không dùng tiền mặt');
+    }
+    const voucherId = input.voucherId ?? null;
+    if (voucherId !== null) {
+      if (input.outcome !== 'paid_by_bank') throw new DomainError('VOUCHER_NOT_BANK', 422, 'Chỉ gắn chứng từ ngân hàng khi hóa đơn đã thanh toán qua ngân hàng');
+      const voucher = await ctx.trx
+        .selectFrom('crove_finance.cash_voucher')
+        .select('voucher_type')
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', voucherId)
+        .executeTakeFirst();
+      if (voucher?.voucher_type !== 'bank_debit') throw new DomainError('VOUCHER_NOT_BANK', 422, 'Chứng từ này không phải giấy báo Nợ của tổ chức');
+    }
+    const note = input.note ?? null;
+    await ctx.trx
+      .insertInto('crove_finance.input_vat_check')
+      .values({ org_id: ctx.orgId, document_id: doc.id, outcome: input.outcome, voucher_id: voucherId, note, marked_by: ctx.actor.userId })
+      .execute();
+    ctx.audit({ document_id: doc.id, outcome: input.outcome, ...(voucherId ? { voucher_id: voucherId } : {}) });
+    return { documentId: doc.id, outcome: input.outcome };
   },
 });

@@ -710,8 +710,9 @@ export const zVatPeriod = z.string().regex(VAT_PERIOD_PATTERN, 'YYYY-MM or YYYY-
 export const VAT_RATES = ['0', '5', '8', '10', 'KCT', 'KKKNT', 'other'] as const;
 export const zVatRate = z.enum(VAT_RATES);
 // declared_late (#478): a purchase invoice of an earlier period, recorded late (its own month was locked), so it is
-// declared in the period of its posting date.
-export const VAT_WARNINGS = ['rate_unknown', 'rate_split', 'reduced_rate_outside_period', 'lines_mismatch', 'vat_mismatch', 'declared_late'] as const;
+// declared in the period of its posting date. check_payment (#917): a purchase at or above the non-cash payment
+// threshold of its date, not shown as paid by bank and not marked by the accountant yet.
+export const VAT_WARNINGS = ['rate_unknown', 'rate_split', 'reduced_rate_outside_period', 'lines_mismatch', 'vat_mismatch', 'declared_late', 'check_payment'] as const;
 export const zVatWarning = z.enum(VAT_WARNINGS);
 const zRateAmounts = z.object({ rate: zVatRate, taxable: zMoney, vat: zMoney });
 export const zVatInvoice = z.object({
@@ -736,11 +737,43 @@ const zVatSide = z.object({
   documents: z.array(zVatInvoice),
   totals: z.object({ byRate: z.array(zRateAmounts), taxable: zMoney, vat: zMoney, documents: z.number().int().nonnegative() }),
 });
+// Input invoices that need proof of non-cash payment before their VAT is deducted (#917): at or above the threshold of
+// their invoice date (5 million VND from 2025-07-01, 20 million before), VAT included, and not shown as paid by bank.
+// The accountant marks each one paid_by_bank (optionally with its bank voucher) or not_deductible; cleared takes a mark
+// back. suggested25 is [24] minus the VAT marked not deductible.
+export const INPUT_VAT_CHECK_OUTCOMES = ['paid_by_bank', 'not_deductible', 'cleared'] as const;
+export const zInputVatCheckOutcome = z.enum(INPUT_VAT_CHECK_OUTCOMES);
+export const PAYMENT_METHOD_KINDS = ['bank', 'cash', 'unknown'] as const;
+export const zVatPaymentCheck = z.object({
+  documentId: zId,
+  paymentMethod: z.string().nullable(),
+  methodKind: z.enum(PAYMENT_METHOD_KINDS),
+  threshold: zMoney,
+  total: zMoney,
+  vatAmount: zMoney,
+  mark: z
+    .object({
+      outcome: z.enum(['paid_by_bank', 'not_deductible']),
+      voucherId: zId.nullable(),
+      note: z.string().nullable(),
+      markedAt: z.string(),
+    })
+    .nullable(),
+});
+export const zVatPaymentChecks = z.object({
+  items: z.array(zVatPaymentCheck),
+  // VAT of the invoices not marked paid by bank: unchecked or not deductible.
+  vatAtRisk: zMoney,
+  notDeductibleVat: zMoney,
+  unchecked: z.number().int().nonnegative(),
+  suggested25: zMoney,
+});
 export const zVatReport = z.object({
   period: z.object({ period: zVatPeriod, kind: z.enum(['month', 'quarter']), from: zLocalDate, to: zLocalDate }),
   input: zVatSide,
   output: zVatSide,
   indicators: z.array(z.object({ code: z.string(), label: z.string(), amount: zMoney })),
+  paymentChecks: zVatPaymentChecks,
 });
 
 // Ledger reports for a month ("2026-09"), a quarter ("2026-Q3") or a year ("2026") (issue #321): the trial balance,

@@ -71,6 +71,9 @@ export interface Vat01Taxpayer {
 export interface Vat01Values {
   // Put [24] in [25]: every input VAT of the period deducted, before the accountant takes out what may not be.
   deductInput?: boolean;
+  // Put this amount in [25] instead: the suggestion of the VAT working, [24] minus the VAT the accountant marked not
+  // deductible for want of a non-cash payment (#917). Wins over deductInput.
+  deductible?: Money;
 }
 
 function wholeDong(value: Money | DecimalValue): DecimalValue {
@@ -81,7 +84,7 @@ function wholeDong(value: Money | DecimalValue): DecimalValue {
  * Every indicator of the form as a whole number of dong (a decimal string; [21] is 0, the box not ticked). The
  * computed indicators are rounded half up to whole dong, then the totals and the payable or carried-forward VAT are
  * worked out from the rounded values with the form's formulas:
- * [25] is 0, or [24] when options.deductInput is set. [36] = [35] - [25]; with x = [36] - [22] + [37] - [38] - [39a]: [40a] = x when x >= 0, [41] = -x when x < 0;
+ * [25] is 0, options.deductible when given, or [24] when options.deductInput is set. [36] = [35] - [25]; with x = [36] - [22] + [37] - [38] - [39a]: [40a] = x when x >= 0, [41] = -x when x < 0;
  * [40] = [40a] - [40b]; [43] = [41] - [42]. Refuses an amount HTKK cannot hold.
  */
 export function form01XmlValues(indicators: ReadonlyArray<FormIndicator>, options: Vat01Values = {}): Record<Form01Code, string> {
@@ -90,7 +93,8 @@ export function form01XmlValues(indicators: ReadonlyArray<FormIndicator>, option
     if (COMPUTED.has(indicator.code)) v.set(indicator.code as Form01Code, wholeDong(indicator.amount));
   }
   const get = (code: Form01Code) => v.get(code) ?? money(0);
-  if (options.deductInput) v.set('25', get('24'));
+  if (options.deductible !== undefined) v.set('25', wholeDong(options.deductible));
+  else if (options.deductInput) v.set('25', get('24'));
   // Re-derive the sums from the rounded parts, so the file obeys the form's formulas to the dong.
   v.set('27', get('29').plus(get('30')).plus(get('32')).plus(get('32a')));
   v.set('28', get('31').plus(get('33')));

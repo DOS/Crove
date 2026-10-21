@@ -488,4 +488,87 @@ suite('VAT working per month or quarter (#316)', () => {
     expect(await refusal(`UPDATE crove_finance.purchase_tax_rate SET vat_amount = 50001 WHERE org_id = $1 AND row_no = 1`, [org.orgId])).not.toBeNull();
     expect(await refusal(`DELETE FROM crove_finance.purchase_tax_rate WHERE org_id = $1`, [org.orgId])).not.toBeNull();
   });
+
+  // The fixture scaled to 9,000,000 at 10% (VAT 900,000, total 9,900,000), above the 5 million VND threshold, paid as given.
+  const bigPurchase = (number: string, date: string, method: string) =>
+    new TextEncoder().encode(
+      FIXTURE.replace('<SHDon>1234</SHDon>', `<SHDon>${number}</SHDon>`)
+        .replace('<NLap>2026-09-15</NLap>', `<NLap>${date}</NLap>`)
+        .replace('<HTTToan>TM/CK</HTTToan>', `<HTTToan>${method}</HTTToan>`)
+        .replace('<DGia>1000000</DGia><ThTien>1000000</ThTien>', '<DGia>5000000</DGia><ThTien>5000000</ThTien>')
+        .replace('<DGia>500000</DGia><ThTien>1000000</ThTien>', '<DGia>2500000</DGia><ThTien>5000000</ThTien>')
+        .replace('<ThTien>200000</ThTien>', '<ThTien>1000000</ThTien>')
+        .replace('<ThTien>1800000</ThTien><TThue>180000</TThue>', '<ThTien>9000000</ThTien><TThue>900000</TThue>')
+        .replace('<TgTCThue>1800000</TgTCThue>', '<TgTCThue>9000000</TgTCThue>')
+        .replace('<TgTThue>180000</TgTThue>', '<TgTThue>900000</TgTThue>')
+        .replace('<TgTTTBSo>1980000</TgTTTBSo>', '<TgTTTBSo>9900000</TgTTTBSo>'),
+    );
+
+  it('flags input invoices that need proof of non-cash payment, takes the marks and suggests [25] (#917)', async () => {
+    const cash = await record('5001', '2026-05-10', bigPurchase('5001', '2026-05-10', 'TM'));
+    const bank = await record('5002', '2026-05-11', bigPurchase('5002', '2026-05-11', 'CK'));
+    const either = await record('5003', '2026-05-12', bigPurchase('5003', '2026-05-12', 'TM/CK'));
+    // 1,980,000 in total: below the threshold, whatever its payment method.
+    const small = await record('5004', '2026-05-13');
+    const owned = await tokenFor(owner);
+    const period = async () => (await rpc('vat/period', await tokenFor(viewer), { period: '2026-05' })).body;
+
+    const before = await period();
+    expect(before.indicators.find((i: { code: string }) => i.code === '24').amount).toBe('2880000');
+    expect(before.paymentChecks).toMatchObject({ vatAtRisk: '1800000', notDeductibleVat: '0', unchecked: 2, suggested25: '2880000' });
+    expect(before.paymentChecks.items).toEqual([
+      { documentId: cash.documentId, paymentMethod: 'TM', methodKind: 'cash', threshold: '5000000', total: '9900000', vatAmount: '900000', mark: null },
+      { documentId: either.documentId, paymentMethod: 'TM/CK', methodKind: 'unknown', threshold: '5000000', total: '9900000', vatAmount: '900000', mark: null },
+    ]);
+    const warningsOf = (report: { input: { documents: Array<{ id: string; warnings: string[] }> } }, id: string) => report.input.documents.find((d) => d.id === id)?.warnings;
+    expect(warningsOf(before, cash.documentId)).toContain('check_payment');
+    expect(warningsOf(before, bank.documentId)).not.toContain('check_payment');
+    expect(warningsOf(before, small.documentId)).not.toContain('check_payment');
+
+    // Viewers only read; an invoice that needs no check, a voucher that is not a báo Nợ of the org, and a voucher on any
+    // outcome but paid_by_bank are refused.
+    expect((await rpc('vat/markPayment', await tokenFor(viewer), { documentId: cash.documentId, outcome: 'not_deductible' })).status).toBe(403);
+    expect((await rpc('vat/markPayment', owned, { documentId: small.documentId, outcome: 'not_deductible' })).body).toMatchObject({ code: 'NOT_FLAGGED' });
+    expect((await rpc('vat/markPayment', owned, { documentId: bank.documentId, outcome: 'paid_by_bank' })).body).toMatchObject({ code: 'NOT_FLAGGED' });
+    expect((await rpc('vat/markPayment', owned, { documentId: cash.documentId, outcome: 'paid_by_bank', voucherId: randomUUID() })).body).toMatchObject({ code: 'VOUCHER_NOT_BANK' });
+    expect((await rpc('vat/markPayment', owned, { documentId: cash.documentId, outcome: 'not_deductible', voucherId: randomUUID() })).body).toMatchObject({ code: 'VOUCHER_NOT_BANK' });
+    // Another org's member cannot mark this org's invoice.
+    expect((await rpc('vat/markPayment', await tokenFor(outsider), { documentId: cash.documentId, outcome: 'paid_by_bank' }, otherOrg.slug)).status).toBe(404);
+
+    expect((await rpc('vat/markPayment', owned, { documentId: either.documentId, outcome: 'not_deductible', note: 'Trả tiền mặt' })).body).toEqual({ documentId: either.documentId, outcome: 'not_deductible' });
+    // A change of mind: the latest mark wins.
+    expect((await rpc('vat/markPayment', owned, { documentId: either.documentId, outcome: 'paid_by_bank' })).status).toBe(200);
+    expect((await rpc('vat/markPayment', owned, { documentId: cash.documentId, outcome: 'not_deductible' })).status).toBe(200);
+    const marked = await period();
+    expect(marked.paymentChecks).toMatchObject({ vatAtRisk: '900000', notDeductibleVat: '900000', unchecked: 0, suggested25: '1980000' });
+    expect(marked.paymentChecks.items.map((i: { mark: { outcome: string } | null }) => i.mark?.outcome)).toEqual(['not_deductible', 'paid_by_bank']);
+    expect(warningsOf(marked, cash.documentId)).not.toContain('check_payment');
+
+    // The HTKK XML takes the suggestion when asked, and the audit says so.
+    const xml = await app.request(`/api/export/vat-01gtgt.xml?${new URLSearchParams({ period: '2026-05', deduct: 'suggested' })}`, {
+      headers: { authorization: `Bearer ${owned}`, 'x-crove-org': org.slug },
+    });
+    expect(xml.status).toBe(200);
+    const text = await xml.text();
+    expect(['ct24', 'ct25'].map((tag) => valueOf(text, tag))).toEqual(['2880000', '1980000']);
+    expect((await xmlAudits()).at(-1)?.detail).toEqual({ period: '2026-05', documents: 4, format: 'htkk_01gtgt_xml', deduct_suggested: true });
+
+    // Cleared: back to unchecked.
+    expect((await rpc('vat/markPayment', owned, { documentId: cash.documentId, outcome: 'cleared' })).status).toBe(200);
+    expect((await period()).paymentChecks).toMatchObject({ unchecked: 1, notDeductibleVat: '0', suggested25: '2880000' });
+
+    // Every mark is a row and an audit event; the rows never change.
+    const rows = await admin(async (c) => (await c.query(`SELECT outcome, note, marked_by FROM crove_finance.input_vat_check WHERE org_id = $1 ORDER BY created_at, id`, [org.orgId])).rows);
+    expect(rows).toEqual([
+      { outcome: 'not_deductible', note: 'Trả tiền mặt', marked_by: owner.userId },
+      { outcome: 'paid_by_bank', note: null, marked_by: owner.userId },
+      { outcome: 'not_deductible', note: null, marked_by: owner.userId },
+      { outcome: 'cleared', note: null, marked_by: owner.userId },
+    ]);
+    const audits = await admin(async (c) => (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.vat.payment_mark' AND outcome = 'ok' ORDER BY occurred_at`, [org.orgId])).rows);
+    expect(audits.map((a: { detail: { outcome: string } }) => a.detail.outcome)).toEqual(['not_deductible', 'paid_by_bank', 'not_deductible', 'cleared']);
+    const refusal = (sql: string, params: unknown[]) => admin((c) => c.query(sql, params).then(() => null, (error: { message: string }) => error.message));
+    expect(await refusal(`UPDATE crove_finance.input_vat_check SET outcome = 'paid_by_bank' WHERE org_id = $1`, [org.orgId])).not.toBeNull();
+    expect(await refusal(`DELETE FROM crove_finance.input_vat_check WHERE org_id = $1`, [org.orgId])).not.toBeNull();
+  });
 });

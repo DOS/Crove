@@ -29,7 +29,7 @@ function declaration(period: string, input: VatInvoiceView[], output: VatInvoice
   const inputSide = { available: true, documents: input, totals: sideTotals(input) };
   const outputSide = { available: true, documents: output, totals: sideTotals(output) };
   return {
-    report: { period: vatPeriod(period), input: inputSide, output: outputSide, indicators: form01Indicators(inputSide.totals, outputSide.totals) },
+    report: { period: vatPeriod(period), input: inputSide, output: outputSide, indicators: form01Indicators(inputSide.totals, outputSide.totals), paymentChecks: { items: [], vatAtRisk: '0', notDeductibleVat: '0', unchecked: 0, suggested25: inputSide.totals.vat } },
     taxpayer: { taxCode: '0101234564', name, address },
   };
 }
@@ -320,6 +320,14 @@ describe('buildVat01Xml', () => {
       { deductInput: true },
     );
     expect([rounded['24'], rounded['25'], rounded['36']]).toEqual(['101', '101', '199']);
+  });
+
+  it('puts the suggested [25] when given, rounded to the dong, over the all-of-[24] choice (#917)', () => {
+    const indicators = declaration('2026-09', purchases, sales).report.indicators;
+    // [24] is 220000; 40000 of it was marked not deductible.
+    const v = form01XmlValues(indicators, { deductible: '180000', deductInput: true });
+    expect([v['24'], v['25'], v['35'], v['36']]).toEqual(['220000', '180000', '1340000', '1160000']);
+    expect(form01XmlValues(indicators, { deductible: '180000.5' })['25']).toBe('180001');
   });
 
   it('refuses a taxpayer without a valid tax code and a malformed date', () => {
