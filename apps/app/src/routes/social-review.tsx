@@ -186,7 +186,7 @@ function PlanReview({ token, data, files, onAnswered }: { token: string; data: P
         <p className="text-xs text-subtle-foreground">{t('planNote')}</p>
       </Card>
       {data.posts.map((item, i) => (
-        <PlanPostCard key={item.id} token={token} item={item} index={i} name={name} files={files} onAnswered={onAnswered} />
+        <PlanPostCard key={`${token}:${item.id}`} token={token} item={item} index={i} name={name} files={files} onAnswered={onAnswered} />
       ))}
     </>
   );
