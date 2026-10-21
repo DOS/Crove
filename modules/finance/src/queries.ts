@@ -18,6 +18,9 @@ export const vendorsList = defineQuery({
   input: z.object({ q: z.string().max(100).optional(), all: z.boolean().optional() }),
   access: ALL,
   handler: async (ctx, input) => {
+    // A party and the parties marked as its duplicates (#887) are one: the list shows the kept party alone, with the
+    // documents of all of them, and finds it by the name or tax code of any of them.
+    const group = sql<string>`(SELECT x.id FROM crove_kernel.party x WHERE x.org_id = p.org_id AND (x.id = p.id OR x.duplicate_of = p.id))`;
     let query = ctx.trx
       .selectFrom('crove_kernel.party as p')
       .select(['p.id', 'p.name', 'p.tax_code', 'p.address', 'p.email', 'p.phone', 'p.version'])
@@ -34,31 +37,32 @@ export const vendorsList = defineQuery({
           .selectFrom('crove_finance.purchase_document as d')
           .select(eb.fn.countAll<string>().as('n'))
           .whereRef('d.org_id', '=', 'p.org_id')
-          .whereRef('d.party_id', '=', 'p.id')
+          .where(sql<boolean>`d.party_id IN ${group}`)
           .where('d.direction', '=', 'purchase')
           .as('document_count'),
       )
+      .select(
+        sql<Array<{ id: string; name: string; taxCode: string | null }>>`(
+          SELECT coalesce(json_agg(json_build_object('id', x.id, 'name', x.name, 'taxCode', x.tax_code) ORDER BY x.name, x.id), '[]'::json)
+            FROM crove_kernel.party x WHERE x.org_id = p.org_id AND x.duplicate_of = p.id)`.as('duplicates'),
+      )
       .where('p.org_id', '=', ctx.orgId)
+      .where('p.duplicate_of', 'is', null)
       .orderBy('p.name')
       .limit(500);
     // Vendors: every party but the customers of sales (issue #313) that never sold to the org.
     if (!input.all) {
-      query = query.where(({ not, exists, selectFrom, and }) =>
-        not(
-          and([
-            exists(selectFrom('crove_finance.purchase_document as s').select('s.id').whereRef('s.org_id', '=', 'p.org_id').whereRef('s.party_id', '=', 'p.id').where('s.direction', '=', 'sale')),
-            not(
-              exists(
-                selectFrom('crove_finance.purchase_document as b').select('b.id').whereRef('b.org_id', '=', 'p.org_id').whereRef('b.party_id', '=', 'p.id').where('b.direction', '=', 'purchase'),
-              ),
-            ),
-          ]),
-        ),
+      query = query.where(
+        sql<boolean>`NOT (
+          EXISTS (SELECT 1 FROM crove_finance.purchase_document s WHERE s.org_id = p.org_id AND s.party_id IN ${group} AND s.direction = 'sale')
+          AND NOT EXISTS (SELECT 1 FROM crove_finance.purchase_document b WHERE b.org_id = p.org_id AND b.party_id IN ${group} AND b.direction = 'purchase'))`,
       );
     }
     if (input.q) {
       const term = `%${input.q.toLowerCase()}%`;
-      query = query.where((eb) => eb.or([eb(eb.fn('lower', ['p.name']), 'like', term), eb('p.tax_code', 'like', term)]));
+      query = query.where(
+        sql<boolean>`EXISTS (SELECT 1 FROM crove_kernel.party m WHERE m.org_id = p.org_id AND m.id IN ${group} AND (lower(m.name) LIKE ${term} OR m.tax_code LIKE ${term}))`,
+      );
     }
     return (await query.execute()).map((r) => ({
       id: r.id,
@@ -70,6 +74,7 @@ export const vendorsList = defineQuery({
       version: r.version,
       documentCount: Number(r.document_count ?? 0),
       defaultAccount: r.default_account ?? null,
+      duplicates: r.duplicates,
     }));
   },
 });
