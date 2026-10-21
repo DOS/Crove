@@ -1,7 +1,7 @@
 // The Phase 1 load test's arguments, percentiles and verdicts (issue #998). The run itself is
 // load-test.db.test.ts.
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LOAD_ARGS, formatReport, guardCostUs, judge, parseLoadArgs, percentile, type LoadResult } from '../load/load-test.ts';
+import { DEFAULT_LOAD_ARGS, formatReport, guardCostUs, judge, parseLoadArgs, percentile, sampleLocks, type LoadResult } from '../load/load-test.ts';
 
 const result = (over: Partial<LoadResult['outbox']> = {}, p95 = 20, failed = 0): LoadResult => ({
   parties: 100_000,
@@ -56,5 +56,31 @@ describe('load test', () => {
     expect(text).toContain('Locks held server-wide during the commands: n=40 p50=60 p95=100 max=200');
     expect(text).toContain('40.0 us at p95, 67.0 us at max');
     expect(formatReport({ ...result(), locks: { samples: 0, p50: null, p95: null, max: null } }, [])).toContain('during the commands: no sample');
+  });
+
+  it('keeps the lock counts taken so far when the sampler fails, and never fails the run', async () => {
+    let calls = 0;
+    const failing = sampleLocks('postgres://unused', 1, () => ({
+      connect: async () => {},
+      end: async () => {},
+      query: async () => {
+        calls += 1;
+        if (calls > 2) throw new Error('connection terminated');
+        return { rows: [{ n: 5 }] };
+      },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(await failing.stop()).toEqual({ counts: [5, 5], error: 'connection terminated' });
+
+    const unreachable = sampleLocks('postgres://unused', 1, () => ({
+      connect: async () => {
+        throw new Error('ECONNREFUSED');
+      },
+      end: async () => {
+        throw new Error('not connected');
+      },
+      query: async () => ({ rows: [] }),
+    }));
+    expect(await unreachable.stop()).toEqual({ counts: [], error: 'ECONNREFUSED' });
   });
 });

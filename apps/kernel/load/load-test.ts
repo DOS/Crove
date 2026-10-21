@@ -178,27 +178,41 @@ export function formatReport(result: LoadResult, verdicts: readonly LoadVerdict[
 
 const sleep = (msec: number) => new Promise((resolve) => setTimeout(resolve, msec));
 
-// Counts pg_locks every intervalMs on its own connection until stop() is called, and returns the counts.
-function sampleLocks(adminUrl: string, intervalMs: number): { stop: () => Promise<number[]> } {
+// Counts pg_locks every intervalMs on its own connection until stop() is called, and returns the counts. A failing
+// sampler never fails the run: it stops, keeps the counts taken so far and reports why.
+export interface LockCountClient {
+  connect(): Promise<unknown>;
+  query(text: string): Promise<{ rows: { n: number }[] }>;
+  end(): Promise<unknown>;
+}
+
+export function sampleLocks(
+  adminUrl: string,
+  intervalMs: number,
+  connect: (url: string) => LockCountClient = (url) => new pg.Client({ connectionString: url }),
+): { stop: () => Promise<{ counts: number[]; error: string | null }> } {
   const counts: number[] = [];
   let running = true;
+  let error: string | null = null;
   const loop = (async () => {
-    const client = new pg.Client({ connectionString: adminUrl });
-    await client.connect();
+    const client = connect(adminUrl);
     try {
+      await client.connect();
       while (running) {
-        counts.push((await client.query<{ n: number }>('SELECT count(*)::int AS n FROM pg_catalog.pg_locks')).rows[0]?.n ?? 0);
+        counts.push((await client.query('SELECT count(*)::int AS n FROM pg_catalog.pg_locks')).rows[0]?.n ?? 0);
         await sleep(intervalMs);
       }
+    } catch (e) {
+      error = e instanceof Error ? e.message.slice(0, 200) : String(e);
     } finally {
-      await client.end();
+      await client.end().catch(() => undefined);
     }
   })();
   return {
     stop: async () => {
       running = false;
       await loop;
-      return counts;
+      return { counts, error };
     },
   };
 }
@@ -309,7 +323,8 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
       );
     };
     const ingestRun = await pool(args.commands, args.concurrency, ingest);
-    const lockCounts = await lockSampler.stop();
+    const { counts: lockCounts, error: lockError } = await lockSampler.stop();
+    if (lockError) log(`lock sampler stopped early after ${lockCounts.length} samples: ${lockError}`);
 
     log(`running the party queries ${args.queries} times each`);
     const queries: LoadResult['queries'] = [];
