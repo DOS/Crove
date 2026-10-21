@@ -203,7 +203,7 @@ describe('WordPress publish', () => {
     const before = new Date('2026-10-21T03:05:00Z');
     const ask = { externalAccountId: ACCOUNT, secret: SECRET, callKey: 'social.publish:v:1:1:publish', contentHash: `sha256:${'0'.repeat(64)}`, content: { body: 'Tiệm & Bánh khai trương\nChi tiết', title: null, linkUrl: null, media: [] }, after, before };
     const { fetchImpl, calls } = site({
-      [ME]: [{ body: { id: 3 } }, { body: { id: 3 } }],
+      [ME]: [{ body: { id: 3 } }, { body: { id: 3 } }, { body: { id: 3 } }],
       [LIST]: [
         {
           body: [
@@ -213,14 +213,36 @@ describe('WordPress publish', () => {
           ],
         },
         { body: [{ id: 119, link: `${SITE}/khac/`, date_gmt: '2026-10-21T03:01:00', title: { raw: 'Bài khác' } }] },
+        { body: [{ id: 118, link: `${SITE}/cu/`, date_gmt: '2026-10-20T03:01:00', title: { raw: 'Bài cũ' } }] },
       ],
     });
     const publisher = new WordPressPublisher(fetchImpl);
     expect(await publisher.reconcile(ask)).toEqual({ found: true, externalId: '120', url: `${SITE}/khai-truong/` });
     const list = new URL(calls[1]?.url ?? '');
-    expect(Object.fromEntries(list.searchParams)).toEqual({ context: 'edit', status: 'publish', per_page: '20', after: '2026-10-20T03:00:00.000Z', author: '3' });
+    expect(Object.fromEntries(list.searchParams)).toEqual({ context: 'edit', status: 'publish,future,pending', per_page: '20', after: '2026-10-20T03:00:00.000Z', author: '3', _fields: 'id,link,date_gmt,title' });
+    // Another title in the window (a plugin may rewrite titles): unclear, for a person, never a second post.
+    expect(await publisher.reconcile(ask)).toEqual({ found: 'unknown' });
+    // Nothing of the user's in the window: not there.
     expect(await publisher.reconcile(ask)).toEqual({ found: false });
     expect(await publisher.reconcile({ ...ask, secret: '{}' })).toEqual({ found: 'unknown' });
+  });
+
+  it('takes an http media address on the site host as https, and refuses one elsewhere without retrying', async () => {
+    const answers = (sourceUrl: string) => {
+      const calls: string[] = [];
+      const fetchImpl: Fetch = async (url, init) => {
+        const u = new URL(url);
+        calls.push(`${init?.method ?? 'GET'} ${u.pathname}`);
+        const body = u.pathname.endsWith('/media') ? { id: 41, source_url: sourceUrl } : { id: 120, link: `${SITE}/p/` };
+        return new Response(JSON.stringify(body), { status: 201 });
+      };
+      return { calls, publisher: new WordPressPublisher(fetchImpl) };
+    };
+    const same = answers('http://tiemcuaban.vn/wp-content/uploads/a.jpg');
+    expect(await same.publisher.publish(input({ content: { body: 'x', title: null, linkUrl: null, media: [image('f1', '')] } }))).toMatchObject({ kind: 'accepted' });
+    const elsewhere = answers('http://cdn.example/a.jpg');
+    expect(await elsewhere.publisher.publish(input({ content: { body: 'x', title: null, linkUrl: null, media: [image('f1', '')] } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_NOT_HTTPS' });
+    expect(elsewhere.calls.some((c) => c === 'POST /wp-json/wp/v2/posts')).toBe(false);
   });
 
   it('calls only the site host, over https, through the fetch it was given, never following a redirect', async () => {

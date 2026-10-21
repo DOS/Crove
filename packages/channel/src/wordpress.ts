@@ -231,7 +231,24 @@ function linkOn(site: string, link: unknown): string | null {
   }
 }
 
-const postId = (id: unknown) => (typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null);
+// An uploaded image's address for the post: https anywhere (a CDN may serve it), or plain http on the site's own host
+// served over https (a site behind a proxy that ends TLS often names its media http); null for anything else.
+function mediaUrl(site: string, raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol === 'https:') return url.toString();
+    if (url.protocol === 'http:' && url.hostname === new URL(site).hostname && !url.port) {
+      url.protocol = 'https:';
+      return url.toString();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+const postId = (id: unknown) =>(typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null);
 
 interface PostRow {
   id?: unknown;
@@ -267,11 +284,15 @@ export class WordPressPublisher implements Publisher {
     // Every image is read before the first upload, so a read failure sends nothing.
     const files: Uint8Array[] = [];
     for (const m of media) {
+      let bytes: Uint8Array;
       try {
-        files.push(await input.readMedia(m.fileId));
+        bytes = await input.readMedia(m.fileId);
       } catch {
         return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
       }
+      // The size read, not the size stored.
+      if (bytes.byteLength > IMAGE_MAX_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_TOO_LARGE' };
+      files.push(bytes);
     }
     // Uploads make nothing visible: a failure here publishes nothing. Images already uploaded stay in the site's media
     // library (WordPress keeps unattached media), and a retry uploads them again.
@@ -280,8 +301,10 @@ export class WordPressPublisher implements Publisher {
       try {
         const uploaded = await this.client.call<{ id?: unknown; source_url?: unknown }>(s, 'POST', '/wp/v2/media', { bytes: files[i] as Uint8Array, type: m.mime, filename: `image-${i + 1}.${EXTENSIONS[m.mime] ?? 'jpg'}` });
         const id = postId(uploaded.id);
-        const url = uploaded.source_url;
-        if (id === null || typeof url !== 'string' || !url.startsWith('https://')) return { kind: 'rejected', error: 'transient', code: 'NO_MEDIA_ID' };
+        if (id === null) return { kind: 'rejected', error: 'transient', code: 'NO_MEDIA_ID' };
+        const url = mediaUrl(s.site, uploaded.source_url);
+        // A site that names its media over plain http on another host: a retry would only upload them again.
+        if (!url) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_NOT_HTTPS' };
         const alt = m.altText ? [...m.altText.trim()].slice(0, ALT_TEXT_MAX).join('') : '';
         if (alt) await this.client.call(s, 'POST', `/wp/v2/media/${id}`, { json: { alt_text: alt } });
         images.push({ id, url, alt });
@@ -304,8 +327,10 @@ export class WordPressPublisher implements Publisher {
     }
   }
 
-  // The user's latest published posts since a day before the window (WordPress compares `after` with the site's local
-  // time), matched by title and by their UTC time within the window.
+  // The user's latest posts since a day before the window (WordPress compares `after` with the site's local time),
+  // matched by title and by their UTC time within the window, with 10 minutes either way for the site's clock. Missing
+  // only when the user has no post at all in that time: a post there with another title (a plugin may rewrite titles)
+  // leaves it unclear, for a person, rather than posting twice.
   async reconcile(input: ReconcileInput): Promise<ReconcileResult> {
     const s = wordpressSecretOf(input.secret);
     if (!s || input.externalAccountId !== siteId(s.site)) return { found: 'unknown' };
@@ -316,18 +341,18 @@ export class WordPressPublisher implements Publisher {
       const author = postId(me.id);
       if (author === null) return { found: 'unknown' };
       const after = new Date(input.after.getTime() - 24 * 3_600_000).toISOString();
-      const rows = await this.client.call<PostRow[]>(s, 'GET', `/wp/v2/posts?context=edit&status=publish&per_page=${RECONCILE_PAGE}&after=${encodeURIComponent(after)}&author=${author}`);
+      const rows = await this.client.call<PostRow[]>(s, 'GET', `/wp/v2/posts?context=edit&status=publish,future,pending&per_page=${RECONCILE_PAGE}&after=${encodeURIComponent(after)}&author=${author}&_fields=id,link,date_gmt,title`);
       if (!Array.isArray(rows)) return { found: 'unknown' };
-      const from = input.after.getTime() - 60_000;
+      const from = input.after.getTime() - 10 * 60_000;
       const to = input.before.getTime() + 10 * 60_000;
-      const match = rows.find((p) => {
+      const inWindow = rows.filter((p) => {
         const at = typeof p.date_gmt === 'string' ? Date.parse(p.date_gmt.endsWith('Z') ? p.date_gmt : `${p.date_gmt}Z`) : Number.NaN;
-        const raw = p.title?.raw;
-        return postId(p.id) !== null && at >= from && at <= to && typeof raw === 'string' && decodeEntities(raw).trim() === title;
+        return postId(p.id) !== null && at >= from && at <= to;
       });
+      const match = inWindow.find((p) => typeof p.title?.raw === 'string' && decodeEntities(p.title.raw).trim() === title);
       if (match) return { found: true, externalId: String(match.id), url: linkOn(s.site, match.link) };
-      // Not among the latest: missing only when the page held every post since then; else it may be further down.
-      return rows.length < RECONCILE_PAGE ? { found: false } : { found: 'unknown' };
+      // Not among the latest: missing only when the page held every post since then and none falls in the window.
+      return rows.length < RECONCILE_PAGE && inWindow.length === 0 ? { found: false } : { found: 'unknown' };
     } catch {
       return { found: 'unknown' };
     }
