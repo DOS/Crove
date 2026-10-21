@@ -58,6 +58,7 @@ import {
   zSocialVariantUpdate,
   zSocialChannelInput,
   SOCIAL_LABEL_COLORS,
+  SOCIAL_WATERMARK_CORNERS,
   SOCIAL_POST_STATUSES,
   MAX_BATCH_FILES,
   zBatchFile,
@@ -182,6 +183,12 @@ export const contract = {
     // token with the instance through the egress guard, then seals it.
     connectMastodon: oc
       .input(z.object({ instance: z.string().trim().min(1).max(260), accessToken: z.string().trim().min(1).max(300) }))
+      .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
+    // A WordPress site (#833): its address (https, with the path WordPress lives under, if any), a user name and an
+    // application password from that user's profile. The server checks the user may publish, through the egress guard,
+    // then seals the password; the formats are checked by the server, in words.
+    connectWordPress: oc
+      .input(z.object({ site: z.string().trim().min(1).max(300), username: z.string().trim().min(1).max(100), appPassword: z.string().trim().min(1).max(100) }))
       .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
     connectTelegram: oc
       .input(z.object({ botToken: z.string().trim().min(1).max(100), channel: z.string().trim().min(1).max(100) }))
@@ -413,6 +420,14 @@ export const contract = {
         .input(z.strictObject({ connectionId: zId.nullable().optional(), description: z.string().trim().min(1).max(600), useWords: z.array(z.string().trim().min(1).max(40)).max(20), avoidWords: z.array(z.string().trim().min(1).max(40)).max(20), emoji: z.boolean() }))
         .output(z.object({ connectionId: zId.nullable() })),
       remove: oc.input(z.strictObject({ connectionId: zId.nullable().optional() })).output(z.object({ connectionId: zId.nullable(), removed: z.boolean() })),
+    },
+    // The org's logo watermark for post images (#834): the composer draws it on a copy of an image.
+    watermark: {
+      get: oc.input(z.object({})).output(z.object({ fileId: zId, mime: z.string(), corner: z.enum(SOCIAL_WATERMARK_CORNERS), scalePercent: z.number().int(), opacityPercent: z.number().int(), updatedAt: z.string() }).nullable()),
+      save: oc
+        .input(z.strictObject({ fileId: zId, corner: z.enum(SOCIAL_WATERMARK_CORNERS), scalePercent: z.number().int().min(5).max(50), opacityPercent: z.number().int().min(10).max(100) }))
+        .output(z.object({ saved: z.boolean() })),
+      remove: oc.input(z.strictObject({})).output(z.object({ removed: z.boolean() })),
     },
     // Scheduled client report mail (#704): owners and admins set, pause, test and remove schedules.
     reportSchedules: {

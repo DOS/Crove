@@ -197,6 +197,9 @@ const schema = z.object({
   // Discord channels (#832): a server admin makes a webhook in the channel's settings and pastes its URL; no app of the
   // deployment's own is needed. On by default, like Telegram.
   CHANNEL_DISCORD: z.enum(['true', 'false']).default('true'),
+  // WordPress sites (#833): a user of a self-hosted or WordPress.com Business site connects with an application password;
+  // every call to a site goes through the egress guard. On unless false.
+  CHANNEL_WORDPRESS: z.enum(['true', 'false']).default('true'),
   // The deployment's Meta app (Facebook Pages, Social plan S6). Set both to offer Facebook Pages; neither hides them.
   // The app's valid OAuth redirect URI is PUBLIC_URL/channels/oauth/facebook_page/callback.
   CHANNEL_META_APP_ID: optional,

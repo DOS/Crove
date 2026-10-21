@@ -757,6 +757,8 @@ export const SOCIAL_POST_STATUSES = ['draft', 'scheduled', 'publishing', 'publis
 export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as const;
 // The palette a label's colour comes from (#639).
 export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
+// The corner of an image the org's logo watermark goes in (#834); the same list as crove_social.watermark's CHECK.
+export const SOCIAL_WATERMARK_CORNERS = ['top_left', 'top_right', 'bottom_left', 'bottom_right'] as const;
 // The stages of an idea on the ideas board (#701).
 export const SOCIAL_IDEA_STAGES = ['new', 'planned', 'drafted', 'archived'] as const;
 
