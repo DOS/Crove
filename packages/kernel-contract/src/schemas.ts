@@ -533,8 +533,9 @@ export const zFileStatus = z.object({
   id: zId,
   filename: z.string(),
   contentType: z.string(),
-  // expanded: a ZIP archive whose entries were filed as documents of their own (#314).
-  status: z.enum(['processing', 'proposed', 'failed', 'duplicate', 'expanded']),
+  // expanded: a ZIP archive whose entries were filed as documents of their own (#314). waiting: kept unread because
+  // the org used its daily extraction limit (#675); it is read once the org is back under it.
+  status: z.enum(['processing', 'waiting', 'proposed', 'failed', 'duplicate', 'expanded']),
   // The newest run's error, when that run failed.
   error: z.string().nullable(),
   proposalId: zId.nullable(),

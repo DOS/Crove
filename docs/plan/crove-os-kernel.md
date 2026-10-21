@@ -947,6 +947,10 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
   - attachment MB;
   - extraction pages;
   - LLM cost per day (Crove-side pre-flight and hard cap; Cloud adds the DOS.AI wallet hard cap).
+  - On `main` since #675: `crove_kernel.org_usage` counts each use over a sliding 24 hours, and the worker checks the limits (`ORG_LIMIT_*`, with AI cost priced by `AI_PRICE_*_PER_MTOK`) before it files a message or reads a document.
+    - An item over a limit is kept, not dropped: it is recorded in `crove_kernel.usage_deferral` and queued again for when the org is back under the limit. A document shows as waiting in the Inbox; a requested re-extraction fails with when to ask again.
+    - The owners get one mail per limit in any 24 hours. The totals are not in the weekly usage report yet (#895).
+    - The check comes before use and is not a locked reservation, so jobs running at the same time can pass a limit by a few items.
 - **Kill switches:** table `crove_kernel.kill_switch(key, scope global|org)`.
   - Checked at: agent writes, automations, outbound sends, relay per type, extraction.
   - Flipped by a break-glass definer (audited, no outbox), from the `crove-ops` job.

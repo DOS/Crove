@@ -1097,6 +1097,7 @@ export const en = {
     },
     fileStatus: {
       processing: 'Reading',
+      waiting: "Waiting for tomorrow's limit",
       proposed: 'Proposal ready',
       duplicate: 'Duplicate invoice',
       failed: 'Could not read',
@@ -1117,6 +1118,7 @@ export const en = {
         uploading: 'Uploading',
         upload_failed: 'Not uploaded',
         processing: 'Reading',
+        waiting: "Waiting for tomorrow's limit",
         proposed: 'Proposal ready',
         duplicate: 'Duplicate',
         failed: 'Could not read',
