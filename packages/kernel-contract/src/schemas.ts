@@ -482,6 +482,18 @@ export const zParty = z.object({
   defaultAccount: z.string().nullable(),
 });
 
+// An export a recorded document went out in (issue #878): the journal, or the MISA file of its direction, whose date
+// range took in the document's entry date; from and to are null for an open end.
+export const zDocumentExport = z.object({
+  id: zId,
+  at: z.string(),
+  format: z.enum(['journal', 'misa_sme_purchases', 'misa_sme_sales']),
+  from: zLocalDate.nullable(),
+  to: zLocalDate.nullable(),
+  actorName: z.string().nullable(),
+});
+export type DocumentExport = z.infer<typeof zDocumentExport>;
+
 export const zPurchaseDocument = z.object({
   id: zId,
   // A purchase (partyId is the supplier) or a sale (partyId is the customer), issue #313.

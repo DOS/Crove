@@ -658,7 +658,7 @@ suite('cash and bank vouchers (#327)', () => {
       const audits = await admin(
         async (c) => (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.journal.export' AND outcome = 'ok'`, [org.orgId])).rows,
       );
-      expect(audits.map((a) => a.detail)).toContainEqual({ entries, format });
+      expect(audits.map((a) => a.detail)).toContainEqual({ entries, format, from: '2026-11-01', to: '2026-11-30' });
     }
     // A bad date is refused before any file is built; another org's member gets nothing of this org.
     const bad = await app.request('/api/export/misa/payments.xlsx?from=2026-13-01', { headers: { authorization: `Bearer ${await tokenFor(viewer)}`, 'x-crove-org': org.slug } });

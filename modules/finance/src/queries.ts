@@ -306,7 +306,9 @@ export const journalExport = defineCommand({
   risk: 'R0',
   access: ALL,
   handler: async (ctx, input) => {
-    ctx.audit(input.format ? { entries: input.entries, format: input.format } : { entries: input.entries });
+    // The range too, null for an open end (#878), so a document's history can name the exports it was in.
+    const range = { from: input.from ?? null, to: input.to ?? null };
+    ctx.audit(input.format ? { entries: input.entries, format: input.format, ...range } : { entries: input.entries, ...range });
     return { ok: true as const };
   },
 });

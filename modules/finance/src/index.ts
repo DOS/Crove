@@ -13,6 +13,7 @@ import { bankLineVoucher, bankOpenLines, bankSuggestions } from './bank-match.ts
 import { periodLock, periodLockStateQuery, periodUnlock } from './period-lock.ts';
 import { statementsExport, statementsPeriodQuery } from './statements.ts';
 import { searchQuery } from './search.ts';
+import { documentExports } from './document-exports.ts';
 
 export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
 export {
@@ -80,6 +81,7 @@ export const financeQueries = [
   purchaseLookup,
   vendorsList,
   documentsList,
+  documentExports,
   journalList,
   journalGet,
   accountsList,
