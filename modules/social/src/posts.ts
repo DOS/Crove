@@ -1171,6 +1171,111 @@ export const postGet = defineQuery({
   },
 });
 
+// What a variant says, as the review diff compares it (#944): its text, its images or video in order with their
+// descriptions, and its settings.
+export interface ReviewContent {
+  body: string;
+  title: string | null;
+  linkUrl: string | null;
+  // mime: null for a file the org no longer has.
+  media: Array<{ fileId: string; altText: string | null; mime: string | null }>;
+  settings: Record<string, unknown>;
+}
+
+export interface ReviewDiffVariant {
+  variantId: string;
+  current: ReviewContent;
+  // The variant's last decision (an approval, a request for changes or a rejection) with the content it was made on;
+  // null before the first. changed: the content is no longer the one decided on (another revision or content hash).
+  lastDecision: { decision: SocialDecision; at: string; decidedBy: string; decidedByName: string | null; revision: number; changed: boolean; content: ReviewContent } | null;
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+const textOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+
+// A decision's snapshot as social.variant.decide writes it. Read defensively: a field it lacks reads as empty.
+function snapshotContent(raw: unknown, mimes: ReadonlyMap<string, string>): ReviewContent {
+  const s = isRecord(raw) ? raw : {};
+  const media = Array.isArray(s.media) ? s.media.filter(isRecord).filter((m) => typeof m.file_id === 'string') : [];
+  return {
+    body: typeof s.body === 'string' ? s.body : '',
+    title: textOrNull(s.title),
+    linkUrl: textOrNull(s.link_url),
+    media: media.map((m) => ({ fileId: m.file_id as string, altText: textOrNull(m.alt_text), mime: mimes.get(m.file_id as string) ?? null })),
+    settings: isRecord(s.settings) ? s.settings : {},
+  };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// What changed since the last review (#944): per variant, the content of its last decision next to its content now,
+// for the review panel's diff. Whoever may read the post may read this; it changes nothing.
+export const postReviewDiff = defineQuery({
+  name: 'social.post.review_diff',
+  input: z.strictObject({ postId: zId }),
+  access: ALL,
+  handler: async (ctx, input): Promise<{ postId: string; variants: ReviewDiffVariant[] }> => {
+    const [view] = await viewPosts(ctx, [input.postId]);
+    if (!view) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
+    const ids = view.variants.map((v) => v.id);
+    const decisions =
+      ids.length === 0
+        ? []
+        : await ctx.trx
+            .selectFrom('crove_social.post_approval')
+            .select(['id', 'variant_id', 'decision', 'decided_by', 'created_at', 'revision', 'content_hash', 'snapshot'])
+            .where('org_id', '=', ctx.orgId)
+            .where('post_id', '=', view.id)
+            // The newest per variant, by id as viewPosts orders them: written under the post lock, unlike created_at.
+            .distinctOn('variant_id')
+            .orderBy('variant_id')
+            .orderBy('id', 'desc')
+            .execute();
+    const last = new Map(decisions.map((d) => [d.variant_id, d]));
+    // The type of each file a snapshot names, to show a removed video as a video.
+    const fileIds = [
+      ...new Set(
+        decisions.flatMap((d) => {
+          const media = isRecord(d.snapshot) && Array.isArray(d.snapshot.media) ? d.snapshot.media : [];
+          return media.filter(isRecord).map((m) => m.file_id).filter((id): id is string => typeof id === 'string' && UUID.test(id));
+        }),
+      ),
+    ];
+    const mimes = new Map(
+      fileIds.length === 0 ? [] : (await ctx.trx.selectFrom('crove_kernel.file').select(['id', 'content_type']).where('org_id', '=', ctx.orgId).where('id', 'in', fileIds).execute()).map((f) => [f.id, f.content_type]),
+    );
+    // Names while they are members (crove_kernel.member_profiles answers only members of the org).
+    const people = [...new Set(decisions.map((d) => d.decided_by))];
+    const names = new Map<string, string>();
+    if (people.length > 0) {
+      const { rows } = await sql<{ user_id: string; email: string; display_name: string | null }>`
+        SELECT user_id, email, display_name FROM crove_kernel.member_profiles(${people}::uuid[])`.execute(ctx.trx);
+      for (const r of rows) names.set(r.user_id, r.display_name ?? r.email);
+    }
+    return {
+      postId: view.id,
+      variants: view.variants.map((v) => {
+        const d = last.get(v.id);
+        return {
+          variantId: v.id,
+          current: { body: v.effective.body, title: v.effective.title, linkUrl: v.effective.linkUrl, media: v.media.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime })), settings: v.settings },
+          lastDecision: d
+            ? {
+                decision: d.decision as SocialDecision,
+                at: iso(d.created_at) ?? '',
+                decidedBy: d.decided_by,
+                decidedByName: names.get(d.decided_by) ?? null,
+                revision: d.revision,
+                changed: d.revision !== v.revision || d.content_hash !== v.contentHash,
+                content: snapshotContent(d.snapshot, mimes),
+              }
+            : null,
+        };
+      }),
+    };
+  },
+});
+
 // A post's taint (AI-drafted or AI-assisted), for the agent task its submission makes (#799); unknown counts as tainted.
 async function postTainted(ctx: CommandContext, postId: string): Promise<boolean> {
   const row = await ctx.trx.selectFrom('crove_social.post').select('tainted').where('org_id', '=', ctx.orgId).where('id', '=', postId).executeTakeFirst();
@@ -1432,4 +1537,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview,postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];

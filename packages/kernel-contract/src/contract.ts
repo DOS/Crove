@@ -24,6 +24,7 @@ import {
   zOAuthState,
   zSocialDecide,
   zSocialPost,
+  zSocialReviewDiff,
   zSocialPostCreate,
   zSocialPostUpdate,
   zSocialQueue,
@@ -281,6 +282,8 @@ export const contract = {
         )
         .output(z.array(zSocialPost)),
       get: oc.input(z.object({ postId: zId })).output(zSocialPost),
+      // Per channel, the content of its last review decision next to its content now (#944), for the review panel's diff.
+      reviewDiff: oc.input(z.strictObject({ postId: zId })).output(zSocialReviewDiff),
       // Who should move the post along and by when (#640): owners, admins and the author; null clears.
       assign: oc
         .input(z.strictObject({ postId: zId, assigneeUserId: zId.nullable(), dueAt: z.iso.datetime({ offset: true }).nullable() }))

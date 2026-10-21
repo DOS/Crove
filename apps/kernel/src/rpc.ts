@@ -394,6 +394,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       posts: {
         list: os.social.posts.list.handler(socialQuery('social.post.list')),
         get: os.social.posts.get.handler(socialQuery('social.post.get')),
+        reviewDiff: os.social.posts.reviewDiff.handler(socialQuery('social.post.review_diff')),
         assign: os.social.posts.assign.handler(socialCommand('social.post.assign')),
         create: os.social.posts.create.handler(({ context, input }) =>
           inSocial(context, (orgId, actor) => {

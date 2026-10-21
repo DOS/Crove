@@ -1216,6 +1216,30 @@ export const zSocialPost = z.object({
   idea: z.object({ id: zId, title: z.string() }).nullable().optional(),
 });
 
+// What a variant says, as the review diff compares it (#944); a media file's mime is null when the org no longer has it.
+const zSocialReviewContent = z.object({
+  body: z.string(),
+  title: z.string().nullable(),
+  linkUrl: z.string().nullable(),
+  media: z.array(z.object({ fileId: zId, altText: z.string().nullable(), mime: z.string().nullable() })),
+  settings: z.record(z.string(), z.unknown()),
+});
+
+// Per variant, the content of its last decision next to its content now (#944); lastDecision is null before the first.
+// changed: the content is no longer the one decided on.
+export const zSocialReviewDiff = z.object({
+  postId: zId,
+  variants: z.array(
+    z.object({
+      variantId: zId,
+      current: zSocialReviewContent,
+      lastDecision: z
+        .object({ decision: z.enum(SOCIAL_DECISIONS), at: z.string(), decidedBy: zId, decidedByName: z.string().nullable(), revision: z.number().int(), changed: z.boolean(), content: zSocialReviewContent })
+        .nullable(),
+    }),
+  ),
+});
+
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
 // A media library item (S9): an image of the org uploaded for posts, how many posts show it and its tags (#904).
 export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int(), tags: z.array(z.string()) });
