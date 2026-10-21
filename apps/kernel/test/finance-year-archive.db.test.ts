@@ -131,7 +131,7 @@ suite('fiscal year archive packages (#922)', () => {
       { actor: asUser(owner), orgId: org.orgId },
     );
     const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-21' }, org.orgId, fileId);
-    const approved = await rpc('inbox/approve', await tokenFor(adminUser, { mfa: true }), { id: proposalId, revision: 1, idempotencyKey: randomUUID() });
+    const approved = await rpc('inbox/approve', await tokenFor(adminUser, { mfa: true }), { acceptUnverifiedSignature: true, id: proposalId, revision: 1, idempotencyKey: randomUUID() });
     expect(approved.status).toBe(200);
   }
 
