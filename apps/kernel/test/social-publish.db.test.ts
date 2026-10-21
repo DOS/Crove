@@ -753,6 +753,33 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect((await calls(id)).map((c) => c.state)).toEqual(['succeeded']);
   });
 
+  it('keeps checking an unclear status for a day, then asks a person when the platform cannot say (#848)', async () => {
+    const o = await org();
+    const platform = new FakePlatform();
+    platform.answers.push({ kind: 'pending', externalRef: 'container-3', checkAfterSeconds: 30 });
+    platform.statuses.push({ kind: 'unknown', code: 'STATUS_UNREADABLE' }, { kind: 'pending', externalRef: 'container-3', checkAfterSeconds: 30 });
+    platform.reconcileEnabled = false;
+    const { postId, variants } = await duePost(o);
+    const id = variants[0] as string;
+    expect(await run(o, id, platform)).toEqual({ action: 'call', status: 'processing' });
+    const checkNow = () => admin((c) => c.query("UPDATE crove_social.post_variant SET next_check_at = now() - interval '1 second' WHERE id = $1", [id]));
+    // Within the day, an unclear or pending answer is checked again later.
+    for (let i = 0; i < 2; i++) {
+      await checkNow();
+      expect(await run(o, id, platform)).toEqual({ action: 'status', status: 'processing' });
+    }
+    expect((await variant(o, postId)).status).toBe('processing');
+    await admin(async (c) => {
+      await c.query("SET session_replication_role = 'replica'");
+      await c.query("UPDATE crove_kernel.external_call SET started_at = now() - interval '25 hours' WHERE key LIKE $1", [`social.publish:${id}:%`]);
+      await c.query("UPDATE crove_social.post_variant SET next_check_at = now() - interval '1 second' WHERE id = $1", [id]);
+    });
+    // A day on, the platform cannot say whether it went out: a person decides, nothing is posted again.
+    expect(await run(o, id, platform)).toMatchObject({ action: 'reconcile', status: 'needs_attention' });
+    expect((await variant(o, postId)).status).toBe('needs_attention');
+    expect(platform.posts).toHaveLength(1);
+  });
+
   it('ignores an answer for a key that is no longer the variant’s', async () => {
     const o = await org();
     const { variants } = await duePost(o);
