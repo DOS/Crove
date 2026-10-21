@@ -155,14 +155,31 @@ export async function runYearArchive(
 // Reads the recorded manifest of a year (at its version, checked against its sha256).
 export async function readYearArchiveManifest(store: BlobStore, archive: RecordedArchive): Promise<YearArchiveManifest> {
   const bytes = await readVerified(store, { key: archive.manifestKey, generation: archive.manifestGeneration, sha256: archive.manifestSha256 });
-  return JSON.parse(new TextDecoder().decode(bytes)) as YearArchiveManifest;
+  let manifest: Partial<YearArchiveManifest> | null = null;
+  try {
+    manifest = JSON.parse(new TextDecoder().decode(bytes)) as Partial<YearArchiveManifest> | null;
+  } catch {
+    // Reported below like any other manifest of another shape.
+  }
+  // The hash matches the record, so this is what the build wrote; a manifest of another format is not one Crove reads.
+  if (manifest?.format !== ARCHIVE_FORMAT || !Array.isArray(manifest.parts) || !Array.isArray(manifest.documents)) {
+    throw new ArchiveManifestFormatError(archive.manifestKey);
+  }
+  return manifest as YearArchiveManifest;
+}
+
+export class ArchiveManifestFormatError extends Error {
+  constructor(key: string) {
+    super(`archive manifest is not ${ARCHIVE_FORMAT}: ${key}`);
+    this.name = 'ArchiveManifestFormatError';
+  }
 }
 
 export async function verifyYearArchive(store: BlobStore, orgId: string, archive: RecordedArchive): Promise<YearArchiveVerification> {
   const problems: YearArchiveVerification['problems'] = [];
   const outcome = (error: unknown): 'missing' | 'changed' | null => {
     if (error instanceof BlobNotFoundError) return 'missing';
-    if (error instanceof BlobIntegrityError) return 'changed';
+    if (error instanceof BlobIntegrityError || error instanceof ArchiveManifestFormatError) return 'changed';
     return null;
   };
   let manifest: YearArchiveManifest;
@@ -176,7 +193,7 @@ export async function verifyYearArchive(store: BlobStore, orgId: string, archive
   let checked = 1;
   // Only the org's own keys are read: a part outside the package's prefix, or an original outside the org's files, was
   // not written by the build.
-  const parts = manifest.parts.filter((p) => p.key.startsWith(`archive/${orgId}/${archive.year}/`));
+  const parts = manifest.parts.filter((p) => p.key === archiveKey(orgId, archive.year, p.sha256));
   const documents = manifest.documents.filter((d) => d.key.startsWith(`org/${orgId}/`));
   if (parts.length !== manifest.parts.length || documents.length !== manifest.documents.length) problems.push({ code: 'manifest_changed', name: 'manifest' });
   const items = [...parts.map((p) => ({ name: p.name, ref: p })), ...documents.map((d) => ({ name: d.filename, ref: d }))];

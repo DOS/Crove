@@ -27,7 +27,7 @@ The manifest (JSON, format `crove-year-archive-v1`, stored under the same prefix
 
 The package is only as durable as the blob store under it.
 
-- **S3 (production):** use a bucket created with Object Lock (it implies versioning) and set `S3_ARCHIVE_LOCK_DAYS=3653` with `ARCHIVE_LOCK_MODE=COMPLIANCE`. Every part under `archive/` is then written with that retention; nobody, the root account included, can delete or overwrite it before the date. Use `GOVERNANCE` while trying it out. A bucket without Object Lock refuses the lock headers and the build fails, which is the intended alarm.
+- **S3 (production):** use a bucket created with Object Lock (it implies versioning) and set `S3_ARCHIVE_LOCK_DAYS=3653` with `ARCHIVE_LOCK_MODE=COMPLIANCE`. The credentials also need `s3:PutObjectRetention`: a part already stored without the lock (a failed build retried after the lock was turned on) is locked when the build reuses it. Every part under `archive/` is then written with that retention; nobody, the root account included, can delete or overwrite it before the date. Use `GOVERNANCE` while trying it out. A bucket without Object Lock refuses the lock headers and the build fails, which is the intended alarm.
 - **Local disk (`STORAGE=local`):** files are written create-only, but anyone with access to the volume can delete them. This is not WORM. Back the volume up with the rest of the data (docs/runbooks/backup-and-restore.md), and move to S3 with Object Lock before relying on the package for the legal period.
 
 ## A build failed

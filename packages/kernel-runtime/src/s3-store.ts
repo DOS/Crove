@@ -1,6 +1,14 @@
 import { createHash } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client, type S3ClientConfig } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  PutObjectRetentionCommand,
+  S3Client,
+  type S3ClientConfig,
+} from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
@@ -171,6 +179,7 @@ function attachment(filename: string): string {
 interface Fetched {
   bytes: Uint8Array;
   versionId: string | undefined;
+  retainUntil: Date | undefined;
 }
 
 export interface S3BlobStoreOptions {
@@ -260,10 +269,8 @@ export class S3BlobStore implements BlobStore {
     const checksum = digest.toString('base64');
     // A part of a year's archive package is locked until its retention ends (archiveLock); everything else follows
     // the bucket's defaults.
-    const lock =
-      this.archiveLock && key.startsWith('archive/')
-        ? { ObjectLockMode: this.archiveLock.mode, ObjectLockRetainUntilDate: new Date(this.now().getTime() + this.archiveLock.retentionDays * 86_400_000) }
-        : {};
+    const retainUntil = this.archiveLock && key.startsWith('archive/') ? new Date(this.now().getTime() + this.archiveLock.retentionDays * 86_400_000) : null;
+    const lock = this.archiveLock && retainUntil ? { ObjectLockMode: this.archiveLock.mode, ObjectLockRetainUntilDate: retainUntil } : {};
 
     let retriedMissing = false;
     for (let attempt = 1; ; attempt++) {
@@ -292,6 +299,18 @@ export class S3BlobStore implements BlobStore {
           try {
             const current = await this.fetch(key);
             if (sha256Hex(current.bytes) !== sha256) throw new BlobConflictError(key);
+            // An archive part stored before the lock was configured (a failed build retried) gets it now, on the
+            // version that holds the bytes; a longer retention it already has is kept.
+            if (this.archiveLock && retainUntil && !(current.retainUntil && current.retainUntil >= retainUntil)) {
+              await this.client.send(
+                new PutObjectRetentionCommand({
+                  Bucket: this.bucket,
+                  Key: key,
+                  ...(current.versionId ? { VersionId: current.versionId } : {}),
+                  Retention: { Mode: this.archiveLock.mode, RetainUntilDate: retainUntil },
+                }),
+              );
+            }
             return this.generation(key, current.versionId, sha256);
           } catch (readError) {
             if (!(readError instanceof BlobNotFoundError)) throw readError;
@@ -324,7 +343,7 @@ export class S3BlobStore implements BlobStore {
     try {
       const out = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key, ...(versionId ? { VersionId: versionId } : {}) }));
       if (!out.Body) throw new BlobNotFoundError(key);
-      return { bytes: await out.Body.transformToByteArray(), versionId: out.VersionId };
+      return { bytes: await out.Body.transformToByteArray(), versionId: out.VersionId, retainUntil: out.ObjectLockRetainUntilDate };
     } catch (error) {
       if (error instanceof BlobNotFoundError) throw error;
       if (isMissingObject(error)) throw new BlobNotFoundError(key);

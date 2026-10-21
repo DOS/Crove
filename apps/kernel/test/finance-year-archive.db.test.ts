@@ -12,7 +12,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import type { ExtractClient } from '@crove/extract-contract';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
-import { BlobNotFoundError, Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
+import { BlobNotFoundError, Runtime, archiveKey, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
@@ -279,5 +279,22 @@ suite('fiscal year archive packages (#922)', () => {
         { code: 'missing', name: original?.filename },
       ]),
     );
+  });
+
+  it('reports a recorded manifest of another shape as changed, never as a server error', async () => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ format: 'something-else' }));
+    const sha256 = sha256Hex(bytes);
+    const manifestKey = archiveKey(org.orgId, 2024, sha256);
+    const manifestGeneration = await store.put(manifestKey, bytes);
+    await workerRuntime.execute('finance.archive.record', { year: 2024, manifestKey, manifestSha256: sha256, manifestGeneration, parts: 0, documents: 0 }, {
+      actor: { type: 'system', component: 'finance.archive' },
+      orgId: org.orgId,
+    });
+    expect(await (await get('/api/finance-archive/2024/verify')).json()).toEqual({
+      year: 2024,
+      ok: false,
+      checked: 1,
+      problems: [{ code: 'manifest_changed', name: 'manifest' }],
+    });
   });
 });
