@@ -50,6 +50,8 @@ export interface CroveKernelSchema {
   'crove_kernel.mail_message': KernelMailMessageTable;
   'crove_kernel.mail_suppression': KernelMailSuppressionTable;
   'crove_kernel.member_invite': KernelMemberInviteTable;
+  'crove_kernel.notification': KernelNotificationTable;
+  'crove_kernel.notification_mute': KernelNotificationMuteTable;
   'crove_kernel.outbox_event': KernelOutboxEventTable;
   'crove_kernel.party': KernelPartyTable;
   'crove_kernel.position': KernelPositionTable;
@@ -618,6 +620,29 @@ export interface KernelMemberInviteTable {
   accepted_by: ColumnType<string | null, string | null, NotGranted>;
   revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   revoked_by: string | null;
+}
+
+/** crove_kernel.notification_mute */
+export interface KernelNotificationMuteTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  kind: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_kernel.notification */
+export interface KernelNotificationTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  kind: ColumnType<string, string, NotGranted>;
+  dedupe_key: ColumnType<string, string, NotGranted>;
+  event_id: ColumnType<string | null, string | null, NotGranted>;
+  subject_type: ColumnType<string | null, string | null, NotGranted>;
+  subject_id: ColumnType<string | null, string | null, NotGranted>;
+  detail: ColumnType<unknown, string | undefined, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  read_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_kernel.outbox_event */

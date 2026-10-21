@@ -15,6 +15,7 @@
     "@crove/agent": "workspace:*",
     "@crove/db": "workspace:*",
     "@crove/extract-contract": "workspace:*",
+    "@crove/kernel": "workspace:*",
     "@crove/kernel-contract": "workspace:*",
     "@crove/kernel-runtime": "workspace:*",
     "@crove/l10n-vn": "workspace:*",

@@ -92,6 +92,8 @@ import {
   zPurchaseDocument,
   zDocumentExport,
   zSearchResult,
+  zNotificationKind,
+  zNotifications,
   zRole,
   zSession,
   zSessionRevoke,
@@ -772,6 +774,12 @@ export const contract = {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zPurchaseDocument)),
     // Every role (issue #878): the exports a recorded document went out in, for its history.
     exports: oc.input(z.object({ documentId: zId })).output(z.array(zDocumentExport)),
+  },
+  // In-app notifications of the kernel and finance (#671): each member reads, marks and turns off only their own.
+  notifications: {
+    list: oc.input(z.object({})).output(zNotifications),
+    read: oc.input(z.union([z.strictObject({ ids: z.array(zId).min(1).max(100) }), z.strictObject({ all: z.literal(true) })])).output(z.object({ read: z.number().int() })),
+    mute: oc.input(z.strictObject({ kind: zNotificationKind, muted: z.boolean() })).output(z.object({ kind: zNotificationKind, muted: z.boolean() })),
   },
   // Every role (#673): parties by name or tax code, documents by series, number or party, journal entries by
   // description or amount. Vietnamese marks and case are ignored, and each word matches the start of a word.

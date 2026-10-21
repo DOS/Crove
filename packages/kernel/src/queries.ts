@@ -31,6 +31,7 @@ import { inviteQueries } from './invites.ts';
 import { mailQueries } from './mail.ts';
 import { timelineQueries } from './timeline.ts';
 import { auditLogQueries } from './audit-log.ts';
+import { notificationQueries } from './notifications.ts';
 import { offboardingQueries } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
 import { orgOverview, RECENT_FILES } from './overview.ts';
@@ -398,5 +399,5 @@ export const streamCheck = defineQuery({
 });
 
 export function kernelQueries(options: OrgDetailOptions) {
-  return [orgDetailQuery(options), orgOverview, streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...timelineQueries, ...auditLogQueries, ...partyQueries];
+  return [orgDetailQuery(options), orgOverview, streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...timelineQueries, ...auditLogQueries, ...partyQueries, ...notificationQueries];
 }

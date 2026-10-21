@@ -221,6 +221,8 @@ export const portalListRecord = defineCommand({
         .execute();
       ctx.audit({ status: 'failed' });
       await ctx.activity('finance.portal_invoice_list', list.id, 'portal_list.failed', `Không đọc được danh sách hóa đơn kỳ ${list.period}`);
+      // The importer and the owners and admins hear about it (#671, finance.notification.dispatch).
+      await ctx.emit('finance.portal_list.recorded', { listId: list.id });
       return { listId: list.id, recorded: true };
     };
     if (input.status === 'failed') return fail(input.error);
@@ -283,6 +285,8 @@ export const portalListRecord = defineCommand({
       .execute();
     ctx.audit({ status: 'done', rows: input.rows.length, skipped: input.skippedCount, own_sales: input.ownSalesCount, other_buyers: input.otherBuyerCount });
     await ctx.activity('finance.portal_invoice_list', list.id, 'portal_list.read', `Đọc ${input.rows.length} hóa đơn từ danh sách của cổng thuế, kỳ ${list.period}`);
+    // Missing or different invoices are told to the importer and the owners and admins (#671).
+    await ctx.emit('finance.portal_list.recorded', { listId: list.id });
     return { listId: list.id, recorded: true };
   },
 });

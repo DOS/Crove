@@ -36,6 +36,7 @@ import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type 
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
 import { mailCommands, queueContactMail } from './mail.ts';
 import { auditLogCommands } from './audit-log.ts';
+import { notificationCommands } from './notifications.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
 import { setAddress, setContactEmail } from './org-address.ts';
@@ -866,6 +867,7 @@ const otherKernelCommands = [
   ...extractionCommands,
   ...archiveCommands,
   ...imageSizeCommands,
+  ...notificationCommands,
   requestProposal,
   editProposal,
   approveProposal,

@@ -161,6 +161,8 @@ export const bankImport = defineCommand({
       'bank.statement_imported',
       `Nhập sao kê ${input.bankAccount}: ${preview.counts.new + preview.counts.ambiguous} dòng mới, ${preview.counts.duplicate} dòng đã có`,
     );
+    // Lines that need a look: the owners and admins are told (#671, finance.notification.dispatch).
+    if (preview.counts.ambiguous > 0) await ctx.emit('finance.bank.imported', { importId, bankAccount: input.bankAccount, ambiguous: preview.counts.ambiguous });
     return result;
   },
 });

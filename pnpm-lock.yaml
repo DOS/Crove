@@ -595,6 +595,9 @@ importers:
       '@crove/extract-contract':
         specifier: workspace:*
         version: link:../../packages/extract-contract
+      '@crove/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
       '@crove/kernel-contract':
         specifier: workspace:*
         version: link:../../packages/kernel-contract

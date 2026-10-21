@@ -650,6 +650,27 @@ export const zJournalEntry = z.object({
   voucher: z.object({ id: zId, type: zVoucherType, code: z.string(), partyName: z.string().nullable() }).optional(),
 });
 
+// The viewer's in-app notifications (#671), newest first, of every module but Social (which has its own, #637). kind is
+// '<module>.<kind>'; subjectType and subjectId name what it is about, detail the few words the line shows. unread is
+// capped at 100 (the app shows 99+).
+export const zNotificationKind = z.string().max(64).regex(/^[a-z]+\.[a-z0-9_]+$/);
+export const zNotifications = z.object({
+  items: z.array(
+    z.object({
+      id: zId,
+      kind: zNotificationKind,
+      subjectType: z.string().nullable(),
+      subjectId: zId.nullable(),
+      detail: z.record(z.string(), z.string()),
+      createdAt: z.string(),
+      read: z.boolean(),
+    }),
+  ),
+  unread: z.number().int().nonnegative(),
+  muted: z.array(zNotificationKind),
+});
+export type Notifications = z.infer<typeof zNotifications>;
+
 // What the command palette's search found (#673): at most 8 rows per group. A party that is customerOnly (a customer of
 // sales that never sold to the org) is not among the vendors. A document's proposalId opens it in the Inbox.
 export const zSearchResult = z.object({
