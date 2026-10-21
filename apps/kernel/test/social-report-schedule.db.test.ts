@@ -145,6 +145,41 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
     }
   });
 
+  it('caps scheduled report mail to one inbox across orgs, and names the sending org (#735)', async () => {
+    const o = await org();
+    const other = await org();
+    // Five report mails to the same Gmail inbox from another org in the last day (dots and a +tag fold together).
+    for (let i = 0; i < 5; i++) {
+      await admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.mail_message (org_id, stream, source, template_key, to_address, to_hash, message_id_header, status)
+           VALUES ($1, 'transactional', 'social.report_schedule.run', 'social.report', $2, $3, $4, 'queued')`,
+          [other.orgId, i % 2 ? 'chi.lan+bao.cao@gmail.com' : 'chilan@gmail.com', 'a'.repeat(63) + String(i), `<cap-${i}-${randomUUID()}@test>`],
+        ),
+      );
+    }
+    const { scheduleId } = await exec<{ scheduleId: string }>(o, o.owner, 'social.report_schedule.save', { ...weekly, recipients: ['chi.lan@gmail.com', 'cap-other@example.vn'] });
+    await admin((c) => c.query("UPDATE crove_social.report_schedule SET next_run_at = now() - interval '1 hour' WHERE id = $1", [scheduleId]));
+    expect(await sweepReportSchedules({ runtime: worker, workerDb })).toBe(1);
+    const mails = await admin(async (c) => (await c.query<{ to_address: string; status: string; error_code: string | null; payload: { orgName?: string } }>("SELECT to_address, status, error_code, payload FROM crove_kernel.mail_message WHERE org_id = $1 AND source = 'social.report_schedule.run' ORDER BY to_address", [o.orgId])).rows);
+    expect(mails.map((m) => [m.to_address, m.status, m.error_code])).toEqual([
+      ['cap-other@example.vn', 'queued', null],
+      ['chi.lan@gmail.com', 'suppressed', 'recipient_daily_cap'],
+    ]);
+    expect(mails[0]?.payload.orgName).toBeTruthy();
+    // Only the worker's system context may ask the gate.
+    const app = new URL(adminUrl);
+    app.username = 'crove_app';
+    app.password = 'test-app-pw';
+    const c = new pg.Client({ connectionString: app.toString() });
+    await c.connect();
+    try {
+      await expect(c.query("SELECT crove_social.report_mail_recipient_gate('x@example.vn', 5)")).rejects.toMatchObject({ code: '42501' });
+    } finally {
+      await c.end();
+    }
+  });
+
   it('runs a due schedule: one mail per recipient with the numbers and a link of its own to the report of the period', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);
@@ -179,6 +214,8 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
     expect(mail.text).toContain('Bài đã đăng: 1');
     expect(mail.text).toContain('Lượt tiếp cận: 1.200');
     expect(mail.text).toContain('Lượt tương tác: 45');
+    // The sending org is named (#735).
+    expect(mail.text).toMatch(/Thư này được .+ gửi tự động qua Crove/);
     // Each recipient's own link opens the report of the period.
     const tokens = ours.map((m) => /\/-\/report#([A-Za-z0-9_-]{43})/.exec(m.text)?.[1]);
     expect(new Set(tokens).size).toBe(2);

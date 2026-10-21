@@ -5,6 +5,8 @@ import type { MailTemplate, MailTemplateInput } from './mail-queue.ts';
 
 interface ReportMailData {
   name: string;
+  // The org that sends it (#735), named in the footer; absent from mails queued before.
+  orgName: string | null;
   periodStart: string;
   periodEnd: string;
   timeZone: string;
@@ -19,12 +21,12 @@ const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&a
 const oneLine = (text: string) => text.replace(/[\r\n\t]+/g, ' ').trim();
 
 function dataOf(payload: Readonly<Record<string, unknown>>): ReportMailData | null {
-  const { name, periodStart, periodEnd, timeZone, test, posts, reach, impressions, engagement } = payload;
+  const { name, orgName, periodStart, periodEnd, timeZone, test, posts, reach, impressions, engagement } = payload;
   const numbers = [posts, reach, impressions, engagement];
   if (typeof name !== 'string' || typeof periodStart !== 'string' || typeof periodEnd !== 'string' || typeof timeZone !== 'string') return null;
   if (!numbers.every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0)) return null;
   if (Number.isNaN(Date.parse(periodStart)) || Number.isNaN(Date.parse(periodEnd))) return null;
-  return { name: oneLine(name), periodStart, periodEnd, timeZone, test: test === true, posts: posts as number, reach: reach as number, impressions: impressions as number, engagement: engagement as number };
+  return { name: oneLine(name), orgName: typeof orgName === 'string' && orgName.trim() ? oneLine(orgName).slice(0, 200) : null, periodStart, periodEnd, timeZone, test: test === true, posts: posts as number, reach: reach as number, impressions: impressions as number, engagement: engagement as number };
 }
 
 function day(iso: string, timeZone: string): string {
@@ -62,7 +64,7 @@ export async function renderReportMail(input: MailTemplateInput): Promise<{ subj
     `Xem báo cáo đầy đủ: ${url}`,
     `Liên kết dùng được đến ngày ${until}.`,
     '',
-    'Thư này được gửi tự động từ Crove theo lịch gửi báo cáo.',
+    data.orgName ? `Thư này được ${data.orgName} gửi tự động qua Crove theo lịch gửi báo cáo.` : 'Thư này được gửi tự động từ Crove theo lịch gửi báo cáo.',
   ]
     .filter((line) => line !== null)
     .join('\n');
@@ -75,7 +77,7 @@ ${rows.map(([label, value]) => `<tr><td style="padding:4px 16px 4px 0">${escapeH
 </table>
 <p style="margin:0 0 8px"><a href="${escapeHtml(url)}" style="color:#b91c1c">Xem báo cáo đầy đủ</a></p>
 <p style="margin:0 0 16px;font-size:13px;color:#52525b">Liên kết dùng được đến ngày ${escapeHtml(until)}.</p>
-<p style="font-size:12px;color:#71717a">Thư này được gửi tự động từ Crove theo lịch gửi báo cáo.</p>
+<p style="font-size:12px;color:#71717a">${data.orgName ? `Thư này được ${escapeHtml(data.orgName)} gửi tự động qua Crove theo lịch gửi báo cáo.` : 'Thư này được gửi tự động từ Crove theo lịch gửi báo cáo.'}</p>
 </body></html>`;
   return { subject, text, html };
 }
