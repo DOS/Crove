@@ -111,6 +111,8 @@ export const ACTIVITY_KINDS = [
   'scheduled',
   'rescheduled',
   'evergreen',
+  // The post's repeat on weekdays (#979) set, changed or turned off.
+  'recurrence',
   'published',
   'failed',
   'cancelled',
@@ -155,6 +157,8 @@ const AUDITED: Record<string, ActivityKind> = {
   'social.variant.schedule': 'scheduled',
   'social.variant.reschedule': 'rescheduled',
   'social.post.set_evergreen': 'evergreen',
+  'social.post.recurrence_set': 'recurrence',
+  'social.post.recurrence_clear': 'recurrence',
 };
 
 export const postActivity = defineQuery({

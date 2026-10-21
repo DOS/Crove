@@ -419,6 +419,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         editComment: os.social.posts.editComment.handler(socialCommand('social.post_comment.edit')),
         activity: os.social.posts.activity.handler(socialQuery('social.post.activity')),
         setEvergreen: os.social.posts.setEvergreen.handler(socialCommand('social.post.set_evergreen')),
+        setRecurrence: os.social.posts.setRecurrence.handler(socialCommand('social.post.recurrence_set')),
+        clearRecurrence: os.social.posts.clearRecurrence.handler(socialCommand('social.post.recurrence_clear')),
         draftWithAi: os.social.posts.draftWithAi.handler(({ context, input }) =>
           inSocial(context, async (orgId, actor) => {
             // The model costs money: only those who may write posts get to call it, checked before anything else (the

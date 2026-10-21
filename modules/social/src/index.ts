@@ -10,6 +10,8 @@ export * from './publisher.ts';
 export * from './publish-hold.ts';
 export * from './metrics.ts';
 export * from './evergreen.ts';
+export * from './domain/recurrence.ts';
+export * from './recurring.ts';
 export * from './library.ts';
 export * from './domain/media-tags.ts';
 export * from './media-tags.ts';

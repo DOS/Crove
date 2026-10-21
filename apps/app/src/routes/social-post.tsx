@@ -13,7 +13,8 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, X_REPLY_SETTINGS, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, X_REPLY_SETTINGS, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, localTime } from '@crove/mod-social/contract';
+import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -1800,6 +1801,119 @@ function EvergreenPanel({ post, onDone }: { post: Post; onDone: () => void }) {
   );
 }
 
+// Recurring posts (#979): weekdays in the Vietnamese week order, T2 to CN (0 = Sunday, as the rule stores them).
+const RECURRENCE_DAYS = [1, 2, 3, 4, 5, 6, 0] as const;
+const DAY_KEY = { 0: 'sun', 1: 'mon', 2: 'tue', 3: 'wed', 4: 'thu', 5: 'fri', 6: 'sat' } as const;
+type RecurrenceEnd = 'never' | 'date' | 'times';
+
+// Where a new rule starts: the weekday and local time the post is planned or went out at, else Monday 09:00.
+function recurrenceStart(post: Post): { weekday: number; time: string } {
+  const at = post.variants.map((v) => v.effectiveAt).find((x) => x !== null) ?? post.scheduledAt;
+  if (!at) return { weekday: 1, time: '09:00' };
+  const l = localTime(Date.parse(at), post.timeZone);
+  return { weekday: l.weekday % 7, time: `${String(l.hour).padStart(2, '0')}:${String(l.minute).padStart(2, '0')}` };
+}
+
+// A post repeated every N weeks on chosen weekdays at a local time, until a date or for a number of times. After each
+// copy is done the worker drafts the next, planned for its occurrence and sent to review.
+function RecurrencePanel({ post, published, onDone }: { post: Post; published: boolean; onDone: () => void }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const rule = post.recurrence;
+  const start = recurrenceStart(post);
+  const [everyWeeks, setEveryWeeks] = useState(rule?.everyWeeks ?? 1);
+  const [weekdays, setWeekdays] = useState<number[]>(rule?.weekdays ?? [start.weekday]);
+  const [time, setTime] = useState(rule?.time ?? start.time);
+  const [end, setEnd] = useState<RecurrenceEnd>(rule?.until ? 'date' : rule?.times ? 'times' : 'never');
+  const [until, setUntil] = useState(rule?.until ?? '');
+  const [times, setTimes] = useState(String(rule?.times ?? 4));
+  const count = Number(times);
+  const valid =
+    weekdays.length > 0 &&
+    /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(time) &&
+    (end !== 'date' || /^\d{4}-\d{2}-\d{2}$/.test(until)) &&
+    (end !== 'times' || (Number.isInteger(count) && count >= 1 && count <= SOCIAL_RECURRENCE_TIMES_MAX));
+  const save = useMutation({
+    mutationFn: () =>
+      client.social.posts.setRecurrence({
+        postId: post.id,
+        recurrence: { everyWeeks, weekdays, time, until: end === 'date' ? until : null, times: end === 'times' ? count : null },
+      }),
+    onSuccess: onDone,
+  });
+  const clear = useMutation({ mutationFn: () => client.social.posts.clearRecurrence({ postId: post.id }), onSuccess: onDone });
+  const busy = save.isPending || clear.isPending;
+  const toggle = (day: number, on: boolean) => setWeekdays(on ? [...new Set([...weekdays, day])].sort((a, b) => a - b) : weekdays.filter((d) => d !== day));
+  return (
+    <Card className="block space-y-3 p-4">
+      <p className="text-sm font-medium text-foreground">{t('recurrence.title')}</p>
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-every`} className="text-xs">
+          {t('recurrence.frequency')}
+        </Label>
+        <NativeSelect id={`${id}-every`} size="sm" className="w-full max-w-xs" value={String(everyWeeks)} disabled={busy} onChange={(e) => setEveryWeeks(Number(e.target.value))}>
+          {(['1', '2', '3', '4'] as const).map((n) => (
+            <NativeSelectOption key={n} value={n}>
+              {t(`recurrence.every.${n}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      <fieldset className="space-y-1.5">
+        <legend className="text-xs font-medium text-foreground">{t('recurrence.days')}</legend>
+        <div className="flex flex-wrap gap-3">
+          {RECURRENCE_DAYS.map((day) => (
+            <label key={day} className="flex items-center gap-1.5 text-sm text-muted-foreground" title={t(`weekday.${DAY_KEY[day]}`)}>
+              <Checkbox checked={weekdays.includes(day)} disabled={busy} aria-label={t(`weekday.${DAY_KEY[day]}`)} onCheckedChange={(on) => toggle(day, on === true)} />
+              {t(`weekdayShort.${DAY_KEY[day]}`)}
+            </label>
+          ))}
+        </div>
+        {weekdays.length === 0 && <p className="text-xs text-destructive">{t('recurrence.pickDay')}</p>}
+      </fieldset>
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-time`} className="text-xs">
+          {t('recurrence.time')}
+        </Label>
+        <div className="flex flex-wrap items-center gap-2">
+          <Input id={`${id}-time`} type="time" className="w-32" value={time} disabled={busy} onChange={(e) => setTime(e.target.value)} />
+          <span className="text-xs text-subtle-foreground">{t('recurrence.timeZone', { zone: post.timeZone })}</span>
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-end`} className="text-xs">
+          {t('recurrence.end')}
+        </Label>
+        <div className="flex flex-wrap items-center gap-2">
+          <NativeSelect id={`${id}-end`} size="sm" className="w-48" value={end} disabled={busy} onChange={(e) => setEnd(e.target.value as RecurrenceEnd)}>
+            <NativeSelectOption value="never">{t('recurrence.endNever')}</NativeSelectOption>
+            <NativeSelectOption value="date">{t('recurrence.endDate')}</NativeSelectOption>
+            <NativeSelectOption value="times">{t('recurrence.endTimes')}</NativeSelectOption>
+          </NativeSelect>
+          {end === 'date' && <Input type="date" aria-label={t('recurrence.untilLabel')} className="w-40" value={until} disabled={busy} onChange={(e) => setUntil(e.target.value)} />}
+          {end === 'times' && (
+            <Input type="number" aria-label={t('recurrence.timesLabel')} min={1} max={SOCIAL_RECURRENCE_TIMES_MAX} className="w-24" value={times} disabled={busy} onChange={(e) => setTimes(e.target.value)} />
+          )}
+        </div>
+      </div>
+      <p className="text-xs text-subtle-foreground">{t('recurrence.hint')}</p>
+      {rule && !published && <p className="text-xs text-muted-foreground">{t('recurrence.waiting')}</p>}
+      {post.recurrenceCount > 0 && <p className="text-xs text-muted-foreground">{t(rule ? 'recurrence.count' : 'recurrence.ended', { count: post.recurrenceCount })}</p>}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={busy || !valid} onClick={() => save.mutate()}>
+          {t('recurrence.save')}
+        </Button>
+        {rule && (
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => clear.mutate()}>
+            {t('recurrence.turnOff')}
+          </Button>
+        )}
+      </div>
+      {(save.error || clear.error) && <ErrorText>{errorMessage(save.error ?? clear.error)}</ErrorText>}
+    </Card>
+  );
+}
+
 // What happened to a variant on its way out, in words: a retry time, a pending or unknown outcome, a pause on its
 // channel, a refusal with what the platform said.
 function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
@@ -2278,13 +2392,22 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           </Link>
         </div>
       )}
-      {p.repostOf && (
+      {p.recurrenceSourceId ? (
         <div className="mb-4 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
-          {t('repostOf')}{' '}
-          <Link to="/o/$slug/social/$id" params={{ slug, id: p.repostOf }} className="text-link hover:underline">
-            {t('repostOfLink')}
+          {t('recurrence.copyOf')}{' '}
+          <Link to="/o/$slug/social/$id" params={{ slug, id: p.recurrenceSourceId }} className="text-link hover:underline">
+            {t('recurrence.copyOfLink')}
           </Link>
         </div>
+      ) : (
+        p.repostOf && (
+          <div className="mb-4 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
+            {t('repostOf')}{' '}
+            <Link to="/o/$slug/social/$id" params={{ slug, id: p.repostOf }} className="text-link hover:underline">
+              {t('repostOfLink')}
+            </Link>
+          </div>
+        )
       )}
       {stale && (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-foreground">
@@ -2305,7 +2428,11 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} />}
           {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
           <LabelPicker slug={slug} postId={p.id} labelIds={p.labelIds} canWrite={canWrite} />
-          {canWrite && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
+          {canWrite && p.recurrence === null && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
+          {/* One kind of repeat per post (#979); a copy of a series repeats with its series post. */}
+          {canWrite && p.evergreenDays === null && p.recurrenceSourceId === null && (
+            <RecurrencePanel key={`${JSON.stringify(p.recurrence)}:${p.recurrenceCount}`} post={p} published={published} onDone={refresh} />
+          )}
             <ReviewLinks postId={p.id} canDecide={canDecide} />
             <AssignCard post={p} canEdit={canDecide || (canWrite && p.authorUserId !== null && p.authorUserId === userId)} />
           {dirty && <p className="text-xs text-subtle-foreground">{t('unsaved')}</p>}

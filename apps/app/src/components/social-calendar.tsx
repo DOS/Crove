@@ -27,13 +27,15 @@ function Chip({ item, slug, name, draggable }: { item: CalendarItem; slug: strin
     e.dataTransfer.setData('text/plain', item.v.id);
     e.dataTransfer.effectAllowed = 'move';
   };
+  // A series post or one of its copies (#979).
+  const recurring = item.post.recurrence !== null || item.post.recurrenceSourceId !== null;
   return (
     <Link
       to="/o/$slug/social/$id"
       params={{ slug, id: item.post.id }}
       draggable={draggable}
       onDragStart={draggable ? onDragStart : undefined}
-      title={`${f.time(item.at.toISOString())} · ${providerName(item.v.provider)}${name ? ` · ${name}` : ''}${item.planned ? ` · ${t('calendar.planned')}` : ''}${item.v.status === 'removed' ? ` · ${t('status.removed')}` : ''}`}
+      title={`${f.time(item.at.toISOString())} · ${providerName(item.v.provider)}${name ? ` · ${name}` : ''}${item.planned ? ` · ${t('calendar.planned')}` : ''}${recurring ? ` · ${t('calendar.recurring')}` : ''}${item.v.status === 'removed' ? ` · ${t('status.removed')}` : ''}`}
       className={cn(
         'block truncate rounded-md border px-1.5 py-0.5 text-xs text-foreground transition-colors hover:border-ring/60',
         item.planned ? 'border-dashed bg-background text-muted-foreground' : 'bg-card',
@@ -42,7 +44,16 @@ function Chip({ item, slug, name, draggable }: { item: CalendarItem; slug: strin
         draggable && 'cursor-grab active:cursor-grabbing',
       )}
     >
-      <span className="font-mono tabular-nums">{f.time(item.at.toISOString())}</span> <span className="text-subtle-foreground">{providerName(item.v.provider)}</span>{' '}
+      <span className="font-mono tabular-nums">{f.time(item.at.toISOString())}</span>{' '}
+      {recurring && (
+        <>
+          <span aria-hidden="true" className="text-primary">
+            ↻
+          </span>
+          <span className="sr-only">{t('calendar.recurring')}</span>{' '}
+        </>
+      )}
+      <span className="text-subtle-foreground">{providerName(item.v.provider)}</span>{' '}
       {excerpt(item.v.effective.body) || t('emptyText')}
     </Link>
   );

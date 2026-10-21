@@ -48,6 +48,8 @@ import { libraryQueries, likeTerm } from './library.ts';
 import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
+import { recurringCommands } from './recurring.ts';
+import { parseRecurrence, type Recurrence } from './domain/recurrence.ts';
 import { commentCallsOf, commentCommands, commentStatus, type CommentStatus } from './comments.ts';
 import { threadCallsOf, threadCommands, threadStatus } from './thread.ts';
 import { autoReplyCommands } from './auto-reply.ts';
@@ -987,6 +989,10 @@ export interface PostView {
   // Reposted every N days (S9), or null; and the post this one reposts.
   evergreenDays: number | null;
   repostOf: string | null;
+  // A series post's rule and the copies of its current run; on a copy, the series post it was made for (#979).
+  recurrence: Recurrence | null;
+  recurrenceCount: number;
+  recurrenceSourceId: string | null;
   timeZone: string;
   scheduledAt: string | null;
   revision: number;
@@ -1096,6 +1102,9 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
         media: mediaView(b.media),
         evergreenDays: p.evergreen_days,
         repostOf: p.repost_of,
+        recurrence: parseRecurrence(p.recurrence),
+        recurrenceCount: p.recurrence_count,
+        recurrenceSourceId: p.recurrence_source_id,
         timeZone: p.time_zone,
         scheduledAt: iso(p.scheduled_at),
         revision: p.revision,
@@ -1469,6 +1478,7 @@ export const socialCommands = [
   ...publishHoldCommands,
   ...metricsCommands,
   ...evergreenCommands,
+  ...recurringCommands,
   ...commentCommands,
   ...threadCommands,
   ...autoReplyCommands,
