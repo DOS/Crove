@@ -628,6 +628,15 @@ export type Customer = z.infer<typeof zCustomer>;
 export const zCustomerPage = z.object({ items: z.array(zCustomer), more: z.boolean() });
 export type CustomerPage = z.infer<typeof zCustomerPage>;
 
+// One link between a replacement or an adjustment invoice and the invoice it corrects (#916), seen from either side.
+export const zDocumentCorrection = z.object({
+  kind: z.enum(CORRECTION_KINDS),
+  series: z.string(),
+  number: z.string(),
+  documentId: zId.nullable(),
+});
+export type DocumentCorrection = z.infer<typeof zDocumentCorrection>;
+
 export const zPurchaseDocument = z.object({
   id: zId,
   // A purchase (partyId is the supplier) or a sale (partyId is the customer), issue #313.
@@ -648,6 +657,10 @@ export const zPurchaseDocument = z.object({
   replacesDocumentId: zId.nullable(),
   // An invoice in a foreign currency (#918): the amounts above are in VND at this rate; total is the invoice's own.
   foreign: z.object({ currency: z.string(), rate: z.string(), source: z.enum(['invoice', 'entered']), total: zMoney }).nullable(),
+  // A replacement or an adjustment invoice (#916): the invoice it corrects, and that invoice's document when it is in
+  // the books; and, the other way, the documents that correct this one.
+  corrects: zDocumentCorrection.nullable(),
+  correctedBy: z.array(zDocumentCorrection.extend({ documentId: zId })),
 });
 
 const zEntryRef = z.object({ id: zId, entryDate: zLocalDate });
@@ -668,7 +681,18 @@ export const zJournalEntry = z.object({
   pendingReversalId: zId.nullable(),
   // The purchase document this entry records, when it does (absent otherwise).
   document: z
-    .object({ id: zId, direction: zDocumentDirection, series: z.string(), number: z.string(), issueDate: zLocalDate, partyName: z.string(), voided: z.boolean() })
+    .object({
+      id: zId,
+      direction: zDocumentDirection,
+      series: z.string(),
+      number: z.string(),
+      issueDate: zLocalDate,
+      partyName: z.string(),
+      voided: z.boolean(),
+      // The correction links of the document, both ways (#916), as on zPurchaseDocument.
+      corrects: zDocumentCorrection.nullable().optional(),
+      correctedBy: z.array(zDocumentCorrection.extend({ documentId: zId })).optional(),
+    })
     .optional(),
   // The cash or bank voucher this entry posts, when it does (#327; absent otherwise).
   voucher: z.object({ id: zId, type: zVoucherType, code: z.string(), partyName: z.string().nullable() }).optional(),
