@@ -20,6 +20,7 @@ import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
 import { ReviewLinks } from '../components/social-review-links.tsx';
 import { PostActivity } from '../components/social-activity.tsx';
+import { ReviewChanges } from '../components/social-review-diff.tsx';
 import { LabelPicker } from '../components/social-labels.tsx';
 import { AssignCard } from '../components/social-assign.tsx';
 import { EmojiPicker } from '../components/social-emoji.tsx';
@@ -1597,6 +1598,8 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
           ))}
         </div>
       )}
+      {/* What changed since each channel's last decision (#944); nothing on a first review. */}
+      <ReviewChanges postId={post.id} variants={waiting.map((v) => ({ id: v.id, name: names.get(v.connectionId) ?? providerName(v.provider), revision: v.revision, contentHash: v.contentHash }))} />
       <Textarea value={comment} rows={2} aria-label={t('commentPlaceholder')} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
       {decide.error && <ErrorText>{errorMessage(decide.error)}</ErrorText>}
       <div className="flex flex-wrap gap-2">
