@@ -495,6 +495,26 @@ export const zJournalEntry = z.object({
   voucher: z.object({ id: zId, type: zVoucherType, code: z.string(), partyName: z.string().nullable() }).optional(),
 });
 
+// What the command palette's search found (#673): at most 8 rows per group. A party that is customerOnly (a customer of
+// sales that never sold to the org) is not among the vendors. A document's proposalId opens it in the Inbox.
+export const zSearchResult = z.object({
+  parties: z.array(z.object({ id: zId, name: z.string(), taxCode: z.string().nullable(), customerOnly: z.boolean() })),
+  documents: z.array(
+    z.object({
+      id: zId,
+      direction: zDocumentDirection,
+      series: z.string(),
+      number: z.string(),
+      issueDate: zLocalDate,
+      partyName: z.string(),
+      total: zMoney,
+      proposalId: zId.nullable(),
+      voided: z.boolean(),
+    }),
+  ),
+  entries: z.array(z.object({ id: zId, entryDate: zLocalDate, description: z.string(), amount: zMoney })),
+});
+
 // One account of the org's chart: a TT133 account (custom false, always active) or one of the org's sub-accounts
 // (#319). rootCode is the TT133 account it rolls up to (its own code for a TT133 account).
 export const zAccount = z.object({

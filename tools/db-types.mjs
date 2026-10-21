@@ -69,6 +69,8 @@ const TYPE_MAP = {
   'pg_catalog.numeric': 'string',
   'pg_catalog.text': 'string',
   'pg_catalog.timestamptz': 'Date',
+  // The search columns (#673): pg returns a tsvector as its text form.
+  'pg_catalog.tsvector': 'string',
   'pg_catalog.uuid': 'string',
   'pg_catalog.xid8': 'string',
 };

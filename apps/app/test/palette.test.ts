@@ -1,6 +1,7 @@
-// The command palette's matching, order, shortcut and arrow keys (issue #439).
+// The command palette's matching, order, shortcut and arrow keys (issue #439), and how the org's search results join
+// the list (#673).
 import { describe, expect, it } from 'vitest';
-import { filterPalette, fold, isPaletteShortcut, moveActive, type PaletteItem } from '../src/lib/palette.ts';
+import { filterPalette, fold, isPaletteShortcut, moveActive, searchTerm, withFound, type PaletteItem } from '../src/lib/palette.ts';
 
 const items: PaletteItem[] = [
   { id: 'go:inbox', group: 'go', label: 'Hộp thư chứng từ' },
@@ -82,5 +83,30 @@ describe('moveActive', () => {
     expect(moveActive('End', 0, 3)).toBeNull();
     expect(moveActive('a', 0, 3)).toBeNull();
     expect(moveActive('ArrowDown', 0, 0)).toBeNull();
+  });
+});
+
+describe('searchTerm', () => {
+  it('asks the server for two characters or more with a letter or a digit', () => {
+    expect(searchTerm('  dien  ')).toBe('dien');
+    expect(searchTerm('12')).toBe('12');
+    expect(searchTerm('đ')).toBeNull();
+    expect(searchTerm('  ')).toBeNull();
+    expect(searchTerm('!!')).toBeNull();
+    expect(searchTerm('x'.repeat(150))).toHaveLength(100);
+  });
+});
+
+describe('withFound', () => {
+  it('places found entries in group order, unfiltered, so the arrows walk the list as shown', () => {
+    const local = filterPalette(items, 'dien');
+    const found: PaletteItem[] = [
+      { id: 'entry:1', group: 'entries', label: 'Tiền điện tháng 9' },
+      { id: 'party:1', group: 'parties', label: 'Công ty Điện lực', detail: 'MST 0101234564' },
+      // An amount match: nothing in the label says "dien", and it stays.
+      { id: 'entry:2', group: 'entries', label: 'Mua hàng', detail: '1.980.000 ₫' },
+    ];
+    expect(withFound(local, found).map((i) => i.id)).toEqual(['p2', 'party:1', 'entry:1', 'entry:2']);
+    expect(withFound(filterPalette(items, 'xyz'), []).map((i) => i.id)).toEqual([]);
   });
 });

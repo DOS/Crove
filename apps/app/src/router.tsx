@@ -35,6 +35,7 @@ import { OCCASION_IDS } from './lib/social-occasions.ts';
 import { SocialReviewPage } from './routes/social-review.tsx';
 import { SocialReportPage } from './routes/social-report.tsx';
 import { parseSocialSearch } from './lib/social.ts';
+import { parseJournalSearch, parseTextSearch } from './lib/search.ts';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
 import { OAuthCallbackPage } from './routes/social-oauth.tsx';
 import { SocialComposePage, SocialPostPage } from './routes/social-post.tsx';
@@ -180,9 +181,11 @@ export const inboxDetailRoute = createRoute({ getParentRoute: () => orgRoute, pa
 const requireFinance = ({ params }: { params: { slug: string } }) => {
   if (!getConfig().modules.includes('finance')) throw redirect({ to: '/o/$slug/inbox', params: { slug: params.slug } });
 };
-const documentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'documents', beforeLoad: requireFinance, component: DocumentsPage });
-const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendors', beforeLoad: requireFinance, component: VendorsPage });
-const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, component: JournalPage });
+// ?q= starts the documents and vendors filters, and ?from=&to= sets the journal's range: where the command palette's
+// search results go (#673).
+const documentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'documents', beforeLoad: requireFinance, validateSearch: parseTextSearch, component: DocumentsPage });
+const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendors', beforeLoad: requireFinance, validateSearch: parseTextSearch, component: VendorsPage });
+const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, validateSearch: parseJournalSearch, component: JournalPage });
 // Cash and bank vouchers (issue #327).
 const vouchersRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vouchers', beforeLoad: requireFinance, component: VouchersPage });
 // VAT working per month or quarter (issue #316).
