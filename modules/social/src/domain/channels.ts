@@ -404,6 +404,28 @@ export function scopeNeeded(provider: Provider, settings: Readonly<Record<string
   return provider === 'tiktok' && tiktokModeOf(settings) === 'inbox' ? 'video.upload' : null;
 }
 
+// Telegram's silent and pinned posts (#982), in `settings.telegram`: { silent?: true, pin?: true }. silent sends the
+// post without a sound (the adapter reads the same value); pin pins it to the top of the channel once it is out, as a
+// step of its own (pin.ts). Neither is stored when off, so a variant saved before keeps its content hash.
+export interface TelegramOptions {
+  silent: boolean;
+  pin: boolean;
+}
+// The options in a variant's settings: null when there are none, 'invalid' when they are not an object of those two
+// true-or-false keys.
+export function telegramOptionsOf(settings: Readonly<Record<string, unknown>> | undefined): TelegramOptions | 'invalid' | null {
+  const raw = settings?.telegram;
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const r = raw as Record<string, unknown>;
+  const flag = (v: unknown) => v === undefined || typeof v === 'boolean';
+  if (Object.keys(r).some((k) => k !== 'silent' && k !== 'pin') || !flag(r.silent) || !flag(r.pin)) return 'invalid';
+  return { silent: r.silent === true, pin: r.pin === true };
+}
+// The scope a Telegram connection carries when its bot may pin in the channel (TELEGRAM_PIN_SCOPE in @crove/channel,
+// read at connect): the editor greys the pin out without it.
+export const TELEGRAM_PIN_SCOPE = 'can_pin_messages';
+
 // What social.publish.record stores as a published variant's note (error_code, with no error kind) when the platform
 // took the post as a draft in its own app (#903): not public yet and with no post id, so it is never read as out.
 export const SENT_TO_APP = 'SENT_TO_APP';

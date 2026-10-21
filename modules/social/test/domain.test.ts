@@ -24,6 +24,8 @@ import {
   publishJobKey,
   scopeNeeded,
   startsNewAttempt,
+  TELEGRAM_PIN_SCOPE,
+  telegramOptionsOf,
   transitionVariant,
   validateVariant,
   VARIANT_STATUSES,
@@ -157,6 +159,25 @@ describe('validateVariant', () => {
     expect(zalo([jpeg()], { comments: false })).toEqual([]);
     expect(zalo([jpeg()], { comments: true })).toEqual([]);
     expect(zalo([jpeg()], { comments: 'hide' })).toEqual([{ code: 'ZALO_COMMENTS_INVALID', field: 'settings.comments', limit: null, actual: null }]);
+  });
+
+  it('takes a silent post and a pin on Telegram only, each true or false (#982)', () => {
+    const on = (provider: 'telegram' | 'mastodon', settings: Record<string, unknown>) => validateVariant({ provider, body: 'Khai trương', title: null, media: [], settings });
+    expect(on('telegram', {})).toEqual([]);
+    expect(on('telegram', { telegram: { silent: true, pin: true } })).toEqual([]);
+    expect(on('telegram', { telegram: { pin: false } })).toEqual([]);
+    const invalid = [{ code: 'TELEGRAM_INVALID', field: 'settings.telegram', limit: null, actual: null }];
+    expect(on('telegram', { telegram: { silent: 'yes' } })).toEqual(invalid);
+    expect(on('telegram', { telegram: { pin: true, notify: true } })).toEqual(invalid);
+    expect(on('telegram', { telegram: true })).toEqual(invalid);
+    expect(on('telegram', { telegram: null })).toEqual(invalid);
+    expect(on('mastodon', { telegram: { pin: true } })).toEqual([{ code: 'TELEGRAM_NOT_SUPPORTED', field: 'settings.telegram', limit: null, actual: null }]);
+    expect(telegramOptionsOf({ telegram: { pin: true } })).toEqual({ silent: false, pin: true });
+    expect(telegramOptionsOf({})).toBeNull();
+  });
+
+  it('names the pin right with the scope the Telegram adapter stores at connect (#982)', () => {
+    expect(TELEGRAM_PIN_SCOPE).toBe(channel.TELEGRAM_PIN_SCOPE);
   });
 
   it('requires media on Instagram and accepts only JPEG images', () => {

@@ -51,6 +51,7 @@ import { commentCallsOf, commentCommands, commentStatus, type CommentStatus } fr
 import { threadCallsOf, threadCommands, threadStatus } from './thread.ts';
 import { autoReplyCommands } from './auto-reply.ts';
 import { repostCommands } from './repost.ts';
+import { pinCallsOf, pinCommands, pinStatus, wantsPin, type PinStatus } from './pin.ts';
 import { removeCallsOf, removeCommands, removeState, type RemoveState } from './remove.ts';
 import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { clientReviewCommands } from './client-review.ts';
@@ -945,6 +946,8 @@ export interface VariantView {
   effectiveAt: string | null;
   queueSlotAt: string | null;
   commentStatus: CommentStatus | null;
+  // The pin of a published Telegram channel that asks for one (#982); null without one.
+  pinStatus: PinStatus | null;
   // The thread of a published channel (#742): how many parts are out (the post counts as one) and the next one's state.
   threadStatus: { state: 'pending' | 'posted' | 'failed' | 'unknown'; posted: number; total: number } | null;
   queuePaused: boolean;
@@ -1053,6 +1056,10 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
   const calls = await commentCallsOf(ctx.trx, ctx.orgId, commented);
   const now = new Date();
   const comments = new Map<string, CommentStatus>(commented.map((v) => [v.id, commentStatus(calls.get(v.id) ?? [], now, v.published_at)]));
+  // The pin of each published channel that asks for one (#982).
+  const pinned = variants.filter((v) => v.status === 'published' && v.external_post_id && wantsPin(v));
+  const pinCalls = await pinCallsOf(ctx.trx, ctx.orgId, pinned);
+  const pins = new Map<string, PinStatus>(pinned.map((v) => [v.id, pinStatus(pinCalls.get(v.id), now, v.published_at)]));
   // The thread of each published channel that has one (#742).
   const threaded = variants.filter((v) => v.status === 'published' && v.external_post_id && threadPartsOf(settingsOf(v)));
   const partCalls = await threadCallsOf(ctx.trx, ctx.orgId, threaded);
@@ -1128,6 +1135,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               effectiveAt: iso(v.status === 'published' || v.status === 'removed' ? v.published_at : (v.error_retry_at ?? v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at)),
               queueSlotAt: iso(v.queue_slot_at),
               commentStatus: comments.get(v.id) ?? null,
+              pinStatus: pins.get(v.id) ?? null,
               threadStatus: threads.get(v.id) ?? null,
               // As the publisher decides it (queuePaused in publishing.ts): a retry time goes out whatever the queue does.
               queuePaused: v.queue_slot_at !== null && v.scheduled_at === null && v.error_retry_at === null && pausedQueues.has(v.channel_connection_id),
@@ -1471,6 +1479,7 @@ export const socialCommands = [
   ...threadCommands,
   ...autoReplyCommands,
   ...repostCommands,
+  ...pinCommands,
   ...removeCommands,
   ...policyCommands,
   ...clientReviewCommands,
