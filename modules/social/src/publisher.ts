@@ -10,7 +10,7 @@
 // - record failing: the job throws, pg-boss retries it, and the retry's begin finds the variant in flight.
 import { withCallSignal, type Publisher, type PublishResult, type ReconcileResult } from '@crove/channel';
 import { DomainError, readVerified, type BlobStore, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
-import { COVER_RULES, THREAD_PARTS_MAX, VIDEO_READY, coverKind, coverOf, type Provider } from './domain/channels.ts';
+import { COVER_RULES, THREAD_PARTS_MAX, VIDEO_READY, coverKind, coverOf, isProvider, scopeNeeded, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
 import type { CommentWork } from './comments.ts';
 import type { RemoveRecord, RemoveWork } from './remove.ts';
@@ -72,7 +72,7 @@ const clip = (s: string | undefined, max: number) => (s === undefined ? undefine
 function fromPublish(r: PublishResult): PublishRecord {
   switch (r.kind) {
     case 'accepted':
-      return { kind: 'accepted', externalId: r.externalId.slice(0, 500), url: r.url };
+      return { kind: 'accepted', externalId: r.externalId.slice(0, 500), url: r.url, ...(r.sentToApp ? { sentToApp: true as const } : {}) };
     case 'pending':
       return { kind: 'pending', externalRef: r.externalRef.slice(0, 500), checkAfterSeconds: Math.min(86_400, Math.max(5, Math.round(r.checkAfterSeconds))) };
     case 'rejected': {
@@ -140,7 +140,7 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
   const content = work.shortLink && deps.publicUrl ? shortened(work.content, { target: work.shortLink.target, url: shortUrl(deps.publicUrl, work.shortLink.code) }) : work.content;
   try {
     switch (work.action) {
-      case 'call':
+      case 'call': {
         // The channel rules hold a video back from a channel whose adapter cannot post it; this keeps it so if a rule changed.
         if (!VIDEO_READY.has(publisher.provider as Provider) && work.content.media.some((m) => m.mime.startsWith('video/'))) {
           return fromPublish({ kind: 'rejected', error: 'bad_request', code: 'VIDEO_NOT_SUPPORTED' });
@@ -149,11 +149,20 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
         if (cover && !COVER_RULES[publisher.provider as Provider]?.includes(coverKind(cover))) {
           return fromPublish({ kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' });
         }
+        // Settings this deployment's adapter cannot send (#903: TikTok's inbox mode without CHANNEL_TIKTOK_INBOX):
+        // refused for good with nothing sent, before the permission check, since no reconnect would bring it.
+        const refusal = publisher.refusal?.(work.settings);
+        if (refusal) return fromPublish({ kind: 'rejected', error: 'bad_request', code: refusal });
+        // A permission the variant needs that its connection was not granted (#903: a TikTok connection made before
+        // Crove asked for video.upload): nothing is sent, and the variant waits paused for a reconnect.
+        const scope = isProvider(publisher.provider) ? scopeNeeded(publisher.provider, work.settings) : null;
+        if (scope && !work.scopes.includes(scope)) return { kind: 'blocked', code: 'CHANNEL_SCOPE_MISSING' };
         return fromPublish(
           await withTimeout(timeout, () =>
             publisher.publish({ ...credential, content, readMedia, mediaUrl, settings: work.settings, callKey: work.callKey, contentHash: work.contentHash }),
           ),
         );
+      }
       case 'status':
         if (!publisher.status || !work.externalRef) return { kind: 'unknown', code: 'STATUS_UNAVAILABLE' };
         return fromPublish(await withTimeout(timeout, () => publisher.status!({ ...credential, externalRef: work.externalRef as string })));
@@ -214,8 +223,9 @@ export async function runPublishJob(deps: PublishDeps, orgId: string, variantId:
     { variantId, callKey: begun.callKey, phase: begun.action, result, connectionVersion: begun.connectionVersion },
     { actor: ACTOR, orgId },
   );
-  // Published now: its first comment, if it has one (#587). A failure there never touches the post.
-  if (result.kind === 'accepted' || result.kind === 'found') {
+  // Published now: its first comment, if it has one (#587). A failure there never touches the post. A draft sent to
+  // the platform's app (#903) is not out yet and has no post to comment on.
+  if ((result.kind === 'accepted' && !result.sentToApp) || result.kind === 'found') {
     await runCommentJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-comment] variant ${variantId.slice(0, 8)}`, (error as Error).message));
     // And its thread (#742), part after part.
     await runThreadJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-thread] variant ${variantId.slice(0, 8)}`, (error as Error).message));

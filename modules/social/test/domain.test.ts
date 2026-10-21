@@ -22,10 +22,13 @@ import {
   VIDEO_READY,
   publishCallKey,
   publishJobKey,
+  scopeNeeded,
   startsNewAttempt,
   transitionVariant,
   validateVariant,
   VARIANT_STATUSES,
+  YOUTUBE_CATEGORIES,
+  youtubeTagsLength,
   type CallState,
   type HashedVariant,
   type MediaItem,
@@ -301,6 +304,23 @@ describe('validateVariant', () => {
     expect(long([{ kind: 'video', mime: 'video/mp4', sizeBytes: 1000, durationSeconds: 10 }], 2201)).toEqual(['TEXT_TOO_LONG']);
   });
 
+  it('asks no privacy level of a TikTok draft sent to the inbox, and no cover (#903)', () => {
+    const tt = (settings: Record<string, unknown>, media: MediaItem[] = [mp4(30)]) => validateVariant({ provider: 'tiktok', body: 'Khai trương', title: null, media, settings }).map((i) => i.code);
+    expect(tt({ tiktokMode: 'inbox' })).toEqual([]);
+    expect(tt({ tiktokMode: 'inbox' }, [jpeg(), jpeg()])).toEqual([]);
+    // Direct, stored or by default, still needs it, as variants saved before #903 did.
+    expect(tt({})).toEqual(['PRIVACY_REQUIRED']);
+    expect(tt({ tiktokMode: 'direct' })).toEqual(['PRIVACY_REQUIRED']);
+    expect(tt({ tiktokMode: 'direct', privacyLevel: 'SELF_ONLY' })).toEqual([]);
+    expect(tt({ tiktokMode: 'draft', privacyLevel: 'SELF_ONLY' })).toEqual(['TIKTOK_MODE_INVALID']);
+    expect(tt({ tiktokMode: 'inbox', cover: { atMs: 1000 } })).toEqual(['COVER_NOT_SUPPORTED']);
+    expect(tt({ privacyLevel: 'SELF_ONLY', cover: { atMs: 1000 } })).toEqual([]);
+    // Only an inbox draft needs video.upload on its connection.
+    expect(scopeNeeded('tiktok', { tiktokMode: 'inbox' })).toBe('video.upload');
+    expect(scopeNeeded('tiktok', {})).toBeNull();
+    expect(scopeNeeded('youtube', { tiktokMode: 'inbox' })).toBeNull();
+  });
+
   it('checks a Mastodon post: 500 characters by default, its visibility and content warning (#748)', () => {
     const md = (body: string, settings: Record<string, unknown> = {}) => validateVariant({ provider: 'mastodon', body, title: null, media: [], settings }).map((i) => i.code);
     expect(md('x'.repeat(500))).toEqual([]);
@@ -309,6 +329,40 @@ describe('validateVariant', () => {
     expect(md('Khai trương', { visibility: 'direct' })).toEqual(['VISIBILITY_INVALID']);
     expect(md('Khai trương', { contentWarning: 'x'.repeat(501) })).toEqual(['CONTENT_WARNING_TOO_LONG']);
     expect(md('Khai trương', { contentWarning: 7 })).toEqual(['CONTENT_WARNING_TOO_LONG']);
+  });
+
+  it('checks a YouTube video: its audience, a category from the assignable list and tags as YouTube counts them (#905)', () => {
+    const yt = (settings: Record<string, unknown>) => validateVariant({ provider: 'youtube', body: '', title: 'Khai trương', media: [mp4()], settings });
+    const codes = (settings: Record<string, unknown>) => yt(settings).map((i) => i.code);
+    // A variant saved before these settings existed is fine as it is.
+    expect(codes({})).toEqual([]);
+    expect(codes({ madeForKids: true, categoryId: '27', tags: ['bánh mì', 'Sài Gòn', 'ẩm-thực'] })).toEqual([]);
+    expect(codes({ madeForKids: false, categoryId: '22' })).toEqual([]);
+    expect(codes({ madeForKids: 'yes' })).toEqual(['YT_AUDIENCE_INVALID']);
+    // 18 (Short Movies) is listed by YouTube but not assignable; a number is not a category id.
+    expect(codes({ categoryId: '18' })).toEqual(['YT_CATEGORY_INVALID']);
+    expect(codes({ categoryId: 22 })).toEqual(['YT_CATEGORY_INVALID']);
+    expect(yt({ tags: 'bánh mì' })).toEqual([{ code: 'YT_TAG_INVALID', field: 'settings.tags', limit: null, actual: null }]);
+    expect(yt({ tags: ['phở', ' ', 'a<b>'] }).map((i) => i.field)).toEqual(['settings.tags.1', 'settings.tags.2']);
+    // 500 characters in all: a Vietnamese letter with its marks is one, composed or not.
+    expect(codes({ tags: ['ệ'.repeat(500)] })).toEqual([]);
+    expect(codes({ tags: ['ệ'.normalize('NFD').repeat(500)] })).toEqual([]);
+    expect(yt({ tags: ['ệ'.repeat(501)] })).toEqual([{ code: 'YT_TAGS_TOO_LONG', field: 'settings.tags', limit: 500, actual: 501 }]);
+    // A tag with a space counts its two quotes, and every comma between tags counts.
+    expect(codes({ tags: [`${'ệ'.repeat(248)} ${'ệ'.repeat(249)}`] })).toEqual([]);
+    expect(yt({ tags: [`${'ệ'.repeat(249)} ${'ệ'.repeat(249)}`] })[0]).toMatchObject({ code: 'YT_TAGS_TOO_LONG', actual: 501 });
+    expect(yt({ tags: Array.from({ length: 100 }, () => 'ẩmthực') })[0]).toMatchObject({ code: 'YT_TAGS_TOO_LONG', actual: 100 * 6 + 99 });
+  });
+
+  it('counts YouTube tags as YouTube does: quotes around a tag with a space, commas between tags (#905)', () => {
+    expect(youtubeTagsLength([])).toBe(0);
+    expect(youtubeTagsLength(['Foo-Baz'])).toBe(7);
+    expect(youtubeTagsLength(['Foo Baz'])).toBe(9);
+    expect(youtubeTagsLength(['bánh mì', 'cà-phê'])).toBe(9 + 1 + 6);
+    // Counted trimmed, as the adapter sends it.
+    expect(youtubeTagsLength(['  phở  '])).toBe(3);
+    expect(YOUTUBE_CATEGORIES).toContain('22');
+    expect(YOUTUBE_CATEGORIES).not.toContain('18');
   });
 
   it('checks a WordPress post: text required, an optional title, up to 10 images and no video (#833)', () => {

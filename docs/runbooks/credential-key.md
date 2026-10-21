@@ -26,18 +26,19 @@ Rotate when someone who could read the key loses that access, when the key may h
 
 1. Generate a new key: `openssl rand -base64 32`.
 2. Set `CREDENTIAL_KEY` to the new key and `CREDENTIAL_KEY_PREVIOUS` to the old one, on the API and the worker, and restart both. New tokens are sealed with the new key; tokens sealed before still open with the previous key.
-3. Wait for the worker to reseal the old envelopes. Every 10 minutes it opens each credential of an active connection still sealed with the previous key and seals it again with the new one (a batch of up to 200 per pass, #776), and logs:
+3. Wait for the worker to reseal the old envelopes. Every 10 minutes it opens each credential of an active connection still sealed with the previous key and seals it again with the new one (a batch of up to 200 per pass, #776), and does the same for the sealed targets of team chat alerts (the Telegram bot token or Discord webhook an org's Social alerts go to, #863, `crove_social.chat_alert_target`) when the Social module is on. It logs:
 
    ```text
    [credential-reseal] resealed 12, failed 0; left under an older key: 0 active, 3 to reconnect
    ```
 
-   "Active" counts what the next passes will reseal. "To reconnect" counts credentials of connections that are expired, in error or revoked, or whose connecting member left: their tokens no longer work anyway, and they are sealed with the new key when an owner or admin reconnects them. A token refresh and a reconnect also seal with the new key. To check by hand (as the database owner; no Crove role can read the table):
+   The counts include team chat alert targets. "Active" counts what the next passes will reseal. "To reconnect" counts credentials of connections that are expired, in error or revoked, or whose connecting member left, and chat alert targets whose saver is no longer an owner or admin: their tokens are not used anyway, and they are sealed with the new key when an owner or admin reconnects the channel or saves the team chat again. A token refresh and a reconnect also seal with the new key. To check by hand (as the database owner; no Crove role can read the tables):
 
    ```sql
    SELECT key_id, count(*) FROM crove_kernel.credential GROUP BY key_id;
+   SELECT key_id, count(*) FROM crove_social.chat_alert_target GROUP BY key_id;
    ```
-4. When the log shows 0 active left (and the channels left to reconnect are ones you are ready to reconnect), remove `CREDENTIAL_KEY_PREVIOUS` and restart. A credential still under the old key after that no longer opens: its channel shows as needing a reconnect.
+4. When the log shows 0 active left (and the channels and team chats left to reconnect are ones you are ready to reconnect or save again), remove `CREDENTIAL_KEY_PREVIOUS` and restart. A credential still under the old key after that no longer opens: its channel shows as needing a reconnect. A team chat alert target still under the old key no longer opens either: its alerts stop, and a test line from the Channels page says the chat must be saved again.
 
 Only one previous key is kept: finish one rotation (step 4) before starting the next, or envelopes sealed with the oldest key stop opening.
 

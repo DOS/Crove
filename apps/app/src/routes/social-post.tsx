@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -40,7 +40,8 @@ import {
   takeFlash,
   textBudget,
   toLocalInput,
-  VARIANT_TONE,
+  variantStatusKey,
+  variantTone,
   type VariantStatus,
 } from '../lib/social.ts';
 
@@ -101,8 +102,104 @@ function PeopleField({ id, label, hint, names, onChange, disabled }: { id: strin
   );
 }
 
+// YouTube tags typed as text (#905), separated by commas; a tag may hold spaces. The text is kept as typed while the
+// field has focus, so a comma can be typed, and the count is YouTube's own (commas, and quotes around a tag with a space).
+function TagsField({ tags, onChange, disabled }: { tags: readonly string[]; onChange: (tags: string[]) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const [text, setText] = useState<string | null>(null);
+  const used = youtubeTagsLength(tags);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={id} className="text-xs">
+          {t('ytTags')}
+        </Label>
+        <span className={cn('font-mono text-xs tabular-nums', used > YOUTUBE_TAGS_MAX ? 'text-destructive' : 'text-subtle-foreground')}>
+          {used}/{YOUTUBE_TAGS_MAX}
+        </span>
+      </div>
+      <Input
+        id={id}
+        value={text ?? tags.join(', ')}
+        disabled={disabled}
+        onFocus={() => setText(tags.join(', '))}
+        onBlur={() => setText(null)}
+        onChange={(e) => {
+          setText(e.target.value);
+          onChange([...new Set(e.target.value.split(',').map((tag) => tag.trim().replace(/\s+/g, ' ')).filter(Boolean))]);
+        }}
+      />
+      <p className="text-xs text-subtle-foreground">{t('ytTagsHint')}</p>
+    </div>
+  );
+}
+
+// YouTube (#905): who can watch, whether the video is made for kids (YouTube requires the answer; absent is no, as for
+// every video Crove posted before), its category from YouTube's fixed list, and its tags.
+function YouTubeSettings({ settings, onChange, disabled }: { settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const locale = useLocale();
+  const id = useId();
+  const without = (key: string) => {
+    const { [key]: _gone, ...rest } = settings;
+    return rest;
+  };
+  const category = typeof settings.categoryId === 'string' ? settings.categoryId : YOUTUBE_DEFAULT_CATEGORY;
+  // A category set through the API outside the list still shows, so it can be changed.
+  const known = (YOUTUBE_CATEGORIES as readonly string[]).includes(category);
+  const collator = new Intl.Collator(locale);
+  const categories = [...YOUTUBE_CATEGORIES].sort((a, b) => collator.compare(t(`ytCategoryOption.${a}`), t(`ytCategoryOption.${b}`)));
+  const tags = Array.isArray(settings.tags) ? (settings.tags as unknown[]).filter((v): v is string => typeof v === 'string') : [];
+  return (
+    <div className="space-y-2">
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-privacy`} className="text-xs">
+          {t('ytPrivacy')}
+        </Label>
+        <NativeSelect id={`${id}-privacy`} size="sm" className="w-full max-w-xs" value={typeof settings.privacy === 'string' ? settings.privacy : 'public'} disabled={disabled} onChange={(e) => onChange({ ...settings, privacy: e.target.value })}>
+          {(['public', 'unlisted', 'private'] as const).map((p) => (
+            <NativeSelectOption key={p} value={p}>
+              {t(`ytPrivacyOption.${p}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-kids`} className="text-xs">
+          {t('ytAudience')}
+        </Label>
+        <NativeSelect id={`${id}-kids`} size="sm" className="w-full max-w-xs" value={settings.madeForKids === true ? 'yes' : 'no'} disabled={disabled} onChange={(e) => onChange({ ...settings, madeForKids: e.target.value === 'yes' })}>
+          {(['no', 'yes'] as const).map((a) => (
+            <NativeSelectOption key={a} value={a}>
+              {t(`ytAudienceOption.${a}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <p className="text-xs text-subtle-foreground">{t('ytAudienceHint')}</p>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-category`} className="text-xs">
+          {t('ytCategory')}
+        </Label>
+        <NativeSelect id={`${id}-category`} size="sm" className="w-full max-w-xs" value={category} disabled={disabled} onChange={(e) => onChange({ ...settings, categoryId: e.target.value })}>
+          {!known && <NativeSelectOption value={category}>{category}</NativeSelectOption>}
+          {categories.map((c) => (
+            <NativeSelectOption key={c} value={c}>
+              {t(`ytCategoryOption.${c}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      <TagsField tags={tags} disabled={disabled} onChange={(next) => onChange(next.length > 0 ? { ...settings, tags: next } : without('tags'))} />
+    </div>
+  );
+}
+
 // The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
-function ProviderSettings({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+// inboxOffered: the channel's connection was granted video.upload, which Crove asks for only where the deployment turns
+// TikTok's inbox mode on (CHANNEL_TIKTOK_INBOX, #903).
+function ProviderSettings({ provider, settings, onChange, disabled, inboxOffered = false }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean; inboxOffered?: boolean }) {
   const t = useTranslations('social');
   // Mastodon (#748): who sees the post, and an optional content warning shown before it.
   if (provider === 'mastodon') {
@@ -144,20 +241,7 @@ function ProviderSettings({ provider, settings, onChange, disabled }: { provider
       </div>
     );
   }
-  if (provider === 'youtube') {
-    return (
-      <div className="space-y-1.5">
-        <Label className="text-xs">{t('ytPrivacy')}</Label>
-        <NativeSelect size="sm" className="w-full max-w-xs" value={typeof settings.privacy === 'string' ? settings.privacy : 'public'} disabled={disabled} onChange={(e) => onChange({ ...settings, privacy: e.target.value })}>
-          {(['public', 'unlisted', 'private'] as const).map((p) => (
-            <NativeSelectOption key={p} value={p}>
-              {t(`ytPrivacyOption.${p}`)}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </div>
-    );
-  }
+  if (provider === 'youtube') return <YouTubeSettings settings={settings} onChange={onChange} disabled={disabled} />;
   if (provider !== 'tiktok') return null;
   const toggle = (key: 'allowComments' | 'allowDuet' | 'allowStitch') => (
     <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -165,23 +249,54 @@ function ProviderSettings({ provider, settings, onChange, disabled }: { provider
       {t(`ttToggle.${key}`)}
     </label>
   );
+  // Posted now, or sent to the TikTok app as a draft (#903). The draft takes no privacy level, interactions or cover
+  // (the creator picks them in TikTok), so they are dropped on the switch; direct is the default and is not stored.
+  const inbox = tiktokModeOf(settings) === 'inbox';
+  // Offered where the connection can send drafts; a variant already in inbox mode keeps the choice, to switch back.
+  const offered = inboxOffered || inbox;
+  const setMode = (next: 'direct' | 'inbox') => {
+    if (next === 'inbox') {
+      const { privacyLevel: _privacy, allowComments: _comments, allowDuet: _duet, allowStitch: _stitch, autoAddMusic: _music, cover: _cover, ...rest } = settings;
+      onChange({ ...rest, tiktokMode: 'inbox' });
+    } else {
+      const { tiktokMode: _mode, ...rest } = settings;
+      onChange(rest);
+    }
+  };
   return (
     <div className="space-y-2 rounded-lg border p-3">
-      <div className="space-y-1.5">
-        <Label className="text-xs">{t('ttPrivacy')}</Label>
-        <NativeSelect size="sm" className="w-full max-w-xs" value={typeof settings.privacyLevel === 'string' ? settings.privacyLevel : ''} disabled={disabled} onChange={(e) => onChange({ ...settings, privacyLevel: e.target.value })}>
-          <NativeSelectOption value="">{t('ttPrivacyChoose')}</NativeSelectOption>
-          {(['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'] as const).map((p) => (
-            <NativeSelectOption key={p} value={p}>
-              {t(`ttPrivacyOption.${p}`)}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </div>
-      {toggle('allowComments')}
-      {toggle('allowDuet')}
-      {toggle('allowStitch')}
-      <p className="text-xs text-subtle-foreground">{t('ttConsent')}</p>
+      {offered && (
+        <div className="space-y-1.5">
+          <Label htmlFor="tt-mode" className="text-xs">
+            {t('ttMode')}
+          </Label>
+          <NativeSelect id="tt-mode" size="sm" className="w-full max-w-md" value={inbox ? 'inbox' : 'direct'} disabled={disabled} onChange={(e) => setMode(e.target.value === 'inbox' ? 'inbox' : 'direct')}>
+            <NativeSelectOption value="direct">{t('ttModeOption.direct')}</NativeSelectOption>
+            <NativeSelectOption value="inbox">{t('ttModeOption.inbox')}</NativeSelectOption>
+          </NativeSelect>
+        </div>
+      )}
+      {inbox ? (
+        <p className="text-xs text-subtle-foreground">{t('ttInboxHint')}</p>
+      ) : (
+        <>
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t('ttPrivacy')}</Label>
+            <NativeSelect size="sm" className="w-full max-w-xs" value={typeof settings.privacyLevel === 'string' ? settings.privacyLevel : ''} disabled={disabled} onChange={(e) => onChange({ ...settings, privacyLevel: e.target.value })}>
+              <NativeSelectOption value="">{t('ttPrivacyChoose')}</NativeSelectOption>
+              {(['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'] as const).map((p) => (
+                <NativeSelectOption key={p} value={p}>
+                  {t(`ttPrivacyOption.${p}`)}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </div>
+          {toggle('allowComments')}
+          {toggle('allowDuet')}
+          {toggle('allowStitch')}
+          <p className="text-xs text-subtle-foreground">{t('ttConsent')}</p>
+        </>
+      )}
     </div>
   );
 }
@@ -229,7 +344,8 @@ function CoverField({ provider, media, settings, onChange, disabled }: { provide
   const cover = coverOf(settings);
   // An image chosen as the kind, before a file is: nothing is stored until there is one.
   const [pickingImage, setPickingImage] = useState(false);
-  const kinds = isProvider(provider) ? COVER_RULES[provider] : undefined;
+  // A draft sent to the TikTok app (#903) takes no cover: the creator picks it in TikTok.
+  const kinds = isProvider(provider) && !(provider === 'tiktok' && tiktokModeOf(settings) === 'inbox') ? COVER_RULES[provider] : undefined;
   const video = media.length === 1 && media[0]?.mime.startsWith('video/') ? media[0] : null;
   if (!kinds || (!video && settings.cover === undefined)) return null;
   const set = (next: Cover | null) => {
@@ -413,6 +529,8 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TOO_MANY_MEDIA', { limit });
       case 'TOO_MANY_LINKS':
         return t('TOO_MANY_LINKS', { limit, actual });
+      case 'YT_TAGS_TOO_LONG':
+        return t('YT_TAGS_TOO_LONG', { limit, actual });
       case 'CONTENT_WARNING_TOO_LONG':
         return t('CONTENT_WARNING_TOO_LONG', { limit, actual });
       case 'IG_COLLABORATORS_INVALID':
@@ -791,8 +909,10 @@ function ChannelEditor({
   onChange,
   disabled,
   status,
+  statusError,
   footer,
   connectionId,
+  scopes,
   onAiUsed,
   slug,
 }: {
@@ -803,8 +923,12 @@ function ChannelEditor({
   onChange: (own: Own) => void;
   disabled: boolean;
   status?: VariantStatus;
+  // The variant's error or note (#903: SENT_TO_APP on a draft sent to the TikTok app), for its status label.
+  statusError?: { code: string | null } | null;
   footer?: ReactNode;
   connectionId?: string;
+  // What the platform granted the channel's connection (#903: video.upload offers TikTok's inbox mode).
+  scopes?: readonly string[];
   onAiUsed?: () => void;
   slug?: string;
 }) {
@@ -831,7 +955,7 @@ function ChannelEditor({
         <div className="flex min-w-0 items-center gap-2">
           <Badge variant="outline">{providerName(provider)}</Badge>
           <span className="truncate text-sm font-medium text-foreground">{channel}</span>
-          {status && <Badge variant={VARIANT_TONE[status]}>{t(`status.${status}`)}</Badge>}
+          {status && <Badge variant={variantTone({ status, error: statusError ?? null })}>{t(`status.${variantStatusKey({ status, error: statusError ?? null })}`)}</Badge>}
         </div>
         <Counter provider={provider} body={content.body} linkUrl={content.linkUrl} mediaCount={content.media.length} />
       </div>
@@ -887,7 +1011,7 @@ function ChannelEditor({
           />
         </div>
       )}
-      <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
+      <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} inboxOffered={scopes?.includes('video.upload') ?? false} onChange={(settings) => onChange({ ...own, settings })} />
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
       <PlatformPreview channel={channel} provider={provider} content={content} readLink />
@@ -1317,6 +1441,7 @@ export function SocialComposePage() {
                 disabled={create.isPending}
                 onChange={(next) => setOwn({ ...own, [c.id]: next })}
                 connectionId={c.id}
+                scopes={c.scopes}
                 onAiUsed={() => setAiUsed(true)}
               />
             ))
@@ -1558,7 +1683,15 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
       return (
         <div className="space-y-1">
           <p className="text-warning">
-            {t(v.error?.code === 'CHANNEL_OWNER_LEFT' ? 'outcome.ownerLeft' : v.error?.code === 'CHANNEL_REVOKED' ? 'outcome.revoked' : 'outcome.paused')}
+            {t(
+              v.error?.code === 'CHANNEL_OWNER_LEFT'
+                ? 'outcome.ownerLeft'
+                : v.error?.code === 'CHANNEL_REVOKED'
+                  ? 'outcome.revoked'
+                  : v.error?.code === 'CHANNEL_SCOPE_MISSING'
+                    ? 'outcome.scopeMissing'
+                    : 'outcome.paused',
+            )}
           </p>
           {v.error?.code !== 'CHANNEL_REVOKED' && (
             <Link to="/o/$slug/social/channels" params={{ slug }} className="text-link hover:underline">
@@ -1568,12 +1701,28 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
         </div>
       );
     case 'failed':
+      // A draft for the TikTok app on a deployment that has not turned inbox mode on (#903).
+      if (v.error?.code === 'TIKTOK_INBOX_NOT_ENABLED') return <p className="text-destructive">{t('outcome.inboxNotEnabled')}</p>;
+      // TikTok refused an inbox upload for the missing video.upload grant (#903): a reconnect fixes it.
+      if (v.error?.code === 'CHANNEL_SCOPE_MISSING') {
+        return (
+          <div className="space-y-1">
+            <p className="text-destructive">{t('outcome.scopeMissingFailed')}</p>
+            <Link to="/o/$slug/social/channels" params={{ slug }} className="text-link hover:underline">
+              {t('reconnect')}
+            </Link>
+          </div>
+        );
+      }
       return (
         <div className="space-y-1">
           <p className="text-destructive">{t('outcome.failed')}</p>
           {said}
         </div>
       );
+    case 'published':
+      // A draft sent to the TikTok app (#903): not public until the account posts it there.
+      return v.error?.code === SENT_TO_APP ? <p className="text-warning">{t('outcome.sentToApp')}</p> : null;
     default:
       return null;
   }
@@ -1728,6 +1877,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const metrics = useQuery({ ...orpc.social.metrics.summary.queryOptions({ input: { postId } }), enabled: post.data?.variants.some((v) => v.status === 'published') ?? false });
   const channels = useQuery(orpc.channels.list.queryOptions({ input: { includeRevoked: true } }));
   const names = useMemo(() => new Map((channels.data ?? []).map((c: Channel) => [c.id, c.displayName])), [channels.data]);
+  const grants = useMemo(() => new Map((channels.data ?? []).map((c: Channel) => [c.id, c.scopes])), [channels.data]);
   const [base, setBase] = useState<Base | null>(null);
   const [own, setOwn] = useState<Record<string, Own>>({});
   // The post's UTM tags as the screen shows them; changing them changes every editable channel's settings (#585).
@@ -2015,14 +2165,16 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 // A frozen channel keeps its settings (its cover, first comment, UTM) to show what went out.
                 own={frozen ? { ...EMPTY_OWN, settings: v.settings } : (own[v.id] ?? ownOf(v))}
                 connectionId={v.connectionId}
+                scopes={grants.get(v.connectionId) ?? []}
                 onAiUsed={() => setAiUsed(true)}
                 disabled={frozen || !canWrite || save.isPending}
                 status={v.status}
+                statusError={v.error}
                 onChange={(next) => setOwn({ ...own, [v.id]: next })}
                 footer={
                   <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
                     {v.effectiveAt && ['scheduled', 'paused', 'publishing', 'processing', 'published'].includes(v.status) && (
-                      <p>{t(v.status === 'published' ? 'publishedAt' : 'goesOutAt', { when: f.dateTime(v.effectiveAt) })}{v.queueSlotAt && v.status !== 'published' ? ` · ${t('fromQueue')}` : ''}</p>
+                      <p>{t(variantStatusKey(v) === 'sent_to_app' ? 'sentToAppAt' : v.status === 'published' ? 'publishedAt' : 'goesOutAt', { when: f.dateTime(v.effectiveAt) })}{v.queueSlotAt && v.status !== 'published' ? ` · ${t('fromQueue')}` : ''}</p>
                     )}
                     {decision && decision.comment && ['changes_requested', 'rejected'].includes(v.status) && <p className="text-warning">{t('reviewerSaid', { comment: decision.comment })}</p>}
                     {v.status === 'in_review' && v.review.required > 1 && <p>{t('reviewSteps', { given: String(v.review.approvedBy.length), required: String(v.review.required) })}</p>}

@@ -69,6 +69,7 @@ export interface CroveSocialSchema {
   'crove_social.calendar_note': SocialCalendarNoteTable;
   'crove_social.channel_policy': SocialChannelPolicyTable;
   'crove_social.channel_set': SocialChannelSetTable;
+  'crove_social.chat_alert': SocialChatAlertTable;
   'crove_social.feed': SocialFeedTable;
   'crove_social.feed_item': SocialFeedItemTable;
   'crove_social.idea': SocialIdeaTable;
@@ -856,6 +857,20 @@ export interface SocialChannelSetTable {
   updated_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.chat_alert */
+export interface SocialChatAlertTable {
+  org_id: string;
+  id: Generated<string>;
+  kind: string;
+  label: string | null;
+  events: string[];
+  updated_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  last_test_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  last_test_code: string | null;
 }
 
 /** crove_social.feed_item */

@@ -61,6 +61,8 @@ import {
   zSocialChannelInput,
   SOCIAL_LABEL_COLORS,
   SOCIAL_WATERMARK_CORNERS,
+  SOCIAL_CHAT_ALERT_KINDS,
+  SOCIAL_CHAT_ALERT_TARGETS,
   SOCIAL_POST_STATUSES,
   SOCIAL_VARIANT_STATUSES,
   MAX_BATCH_FILES,
@@ -458,6 +460,36 @@ export const contract = {
         .input(z.strictObject({ fileId: zId, corner: z.enum(SOCIAL_WATERMARK_CORNERS), scalePercent: z.number().int().min(5).max(50), opacityPercent: z.number().int().min(10).max(100) }))
         .output(z.object({ saved: z.boolean() })),
       remove: oc.input(z.strictObject({})).output(z.object({ removed: z.boolean() })),
+    },
+    // The org's team chat for Social alerts (#863): a Telegram chat (bot token and chat) or a Discord webhook, and the
+    // kinds of alert it gets. The server checks the target with the platform and seals it; no answer carries it back.
+    chatAlert: {
+      get: oc
+        .input(z.object({}))
+        .output(
+          z
+            .object({
+              kind: z.enum(SOCIAL_CHAT_ALERT_TARGETS),
+              events: z.array(z.enum(SOCIAL_CHAT_ALERT_KINDS)),
+              label: z.string().nullable(),
+              updatedAt: z.string(),
+              // The last test line: when the worker tried it, and the code of why it did not go out (null: it did).
+              lastTestAt: z.string().nullable(),
+              lastTestCode: z.string().nullable(),
+            })
+            .nullable(),
+        ),
+      save: oc
+        .input(
+          z.discriminatedUnion('kind', [
+            z.strictObject({ kind: z.literal('telegram'), botToken: z.string().trim().min(1).max(100), chatId: z.string().trim().min(1).max(100), events: z.array(z.enum(SOCIAL_CHAT_ALERT_KINDS)).min(1).max(4) }),
+            z.strictObject({ kind: z.literal('discord'), webhookUrl: z.string().trim().min(1).max(300), events: z.array(z.enum(SOCIAL_CHAT_ALERT_KINDS)).min(1).max(4) }),
+          ]),
+        )
+        .output(z.object({ saved: z.boolean() })),
+      remove: oc.input(z.strictObject({})).output(z.object({ removed: z.boolean() })),
+      // Asks the worker for one test line to the saved chat now; its outcome shows in get (lastTestAt, lastTestCode).
+      test: oc.input(z.strictObject({})).output(z.object({ queued: z.boolean() })),
     },
     // Scheduled client report mail (#704): owners and admins set, pause, test and remove schedules.
     reportSchedules: {

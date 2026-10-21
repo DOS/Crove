@@ -3,8 +3,8 @@
 //
 // Connect: Google's consent screen for youtube.upload and youtube.readonly with offline access, so a refresh token
 // comes back; the access token lives an hour and the refresh schedule renews it. One grant is one YouTube channel.
-// Publish: a resumable upload session (the video's title, description and privacy), then one PUT of the bytes; the
-// answer names the video. The project's quota allows about 100 uploads a day; a quota refusal waits, never fails.
+// Publish: a resumable upload session (the video's title, description, privacy, and since #905 its category, tags and
+// audience), then one PUT of the bytes; the answer names the video. The project's quota allows about 100 uploads a day; a quota refusal waits, never fails.
 // An unclear answer is checked by listing the channel's latest uploads (one quota unit), matched by title and time.
 // Metrics: views, likes and comments from videos.list (one quota unit each).
 // First comment (#791): commentThreads.insert on the video, with the force-ssl scope (50 quota units).
@@ -256,6 +256,11 @@ const descriptionOf = (content: { body: string; linkUrl: string | null }) => {
   return clipBytes(text.replace(/[<>]/g, ''), DESCRIPTION_MAX);
 };
 
+// The video's tags (#905): settings.tags, a list of strings. The composer checks YouTube's 500-character total and
+// refuses angle brackets; here each tag is trimmed, an empty one dropped, and angle brackets removed as in the title.
+const tagsOf = (settings: Readonly<Record<string, unknown>>): string[] =>
+  Array.isArray(settings.tags) ? settings.tags.filter((t): t is string => typeof t === 'string').map((t) => t.replace(/[<>]/g, '').trim()).filter(Boolean) : [];
+
 interface PlaylistItems {
   items?: { snippet?: { title?: unknown; description?: unknown; publishedAt?: unknown; resourceId?: { videoId?: unknown } } }[];
 }
@@ -295,8 +300,15 @@ export class YouTubePublisher implements Publisher {
       return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
     }
     const privacy = PRIVACY.find((p) => p === input.settings.privacy) ?? 'public';
+    const tags = tagsOf(input.settings);
     const metadata = {
-      snippet: { title, description: descriptionOf(input.content), categoryId: typeof input.settings.categoryId === 'string' && /^\d{1,3}$/.test(input.settings.categoryId) ? input.settings.categoryId : '22' },
+      snippet: {
+        title,
+        description: descriptionOf(input.content),
+        categoryId: typeof input.settings.categoryId === 'string' && /^\d{1,3}$/.test(input.settings.categoryId) ? input.settings.categoryId : '22',
+        ...(tags.length > 0 ? { tags } : {}),
+      },
+      // A variant saved before the audience could be chosen (#905) goes out as not made for kids, as it always did.
       status: { privacyStatus: privacy, selfDeclaredMadeForKids: input.settings.madeForKids === true, embeddable: true },
     };
     let session: string;
