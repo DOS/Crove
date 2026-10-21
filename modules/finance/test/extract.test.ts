@@ -3,14 +3,14 @@
 import { describe, expect, it } from 'vitest';
 import { ExtractServiceError, type ExtractClient, type ExtractResponse } from '@crove/extract-contract';
 import { sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
-import { extractAndPropose } from '../src/extract.ts';
+import { AI_STOPPED_MESSAGE, extractAndPropose } from '../src/extract.ts';
 
 const ORG = '00000000-0000-4000-8000-000000000001';
 const FILE = '00000000-0000-4000-8000-000000000002';
 const BYTES = new TextEncoder().encode('<HDon/>');
 const SHA256 = sha256Hex(BYTES);
 
-function harness(answer: () => Promise<ExtractResponse>, file = { filename: 'hd.xml', content_type: 'application/xml' }) {
+function harness(answer: () => Promise<ExtractResponse>, file: { filename: string; content_type: string; aiStopped?: boolean } = { filename: 'hd.xml', content_type: 'application/xml' }) {
   const executed: Array<{ name: string; input: Record<string, unknown> }> = [];
   const asked: string[] = [];
   const runtime = {
@@ -88,5 +88,33 @@ describe('extraction through crove-extract', () => {
     await extractAndPropose(deps, ORG, FILE);
     expect(asked).toEqual([]);
     expect(executed[0]?.input).toMatchObject({ status: 'failed', error: expect.stringMatching(/Chưa cấu hình AI/) });
+  });
+
+  // #886: "Dừng AI" for the org (or the finance module) stops the AI reads; XML needs no AI and goes on.
+  it('reads no PDF or photo with AI while AI is stopped, and still parses XML', async () => {
+    const read: string[] = [];
+    const extractor = {
+      fromText: async () => {
+        read.push('text');
+        return null;
+      },
+      fromImage: async () => {
+        read.push('image');
+        return null;
+      },
+    };
+    for (const file of [
+      { filename: 'hd.pdf', content_type: 'application/pdf', aiStopped: true },
+      { filename: 'hd.png', content_type: 'image/png', aiStopped: true },
+    ]) {
+      const { deps, executed, asked } = harness(async () => ({ ok: true, kind: 'pdf_text', text: 'x'.repeat(100), pages: 1 }), file);
+      await extractAndPropose({ ...deps, extractor: extractor as never }, ORG, FILE);
+      expect(asked, file.filename).toEqual([]);
+      expect(executed[0]?.input, file.filename).toMatchObject({ status: 'failed', error: AI_STOPPED_MESSAGE, proposal: null });
+    }
+    expect(read).toEqual([]);
+    const xml = harness(async () => ({ ok: false, code: 'invalid', message: 'x' }), { filename: 'hd.xml', content_type: 'application/xml', aiStopped: true });
+    await extractAndPropose(xml.deps, ORG, FILE);
+    expect(xml.asked).toEqual(['einvoice_xml']);
   });
 });

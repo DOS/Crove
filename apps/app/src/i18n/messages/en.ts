@@ -1314,7 +1314,7 @@ export const en = {
     manageHint: 'Changing the chart, AI agents and budgets: owners only, with two-factor authentication in the last 5 minutes.',
     stop: 'Stop AI',
     stopTitle: 'Stop every AI agent of the organization?',
-    stopBody: 'Runs in progress are cancelled at once, and no new run starts until an owner turns AI back on.',
+    stopBody: 'Runs in progress are cancelled at once, and no new run starts until an owner turns AI back on. New PDF and photo documents are not read by AI either (XML e-invoices still are); once AI is back on, use "Read again" on the file.',
     stopReason: 'Reason (optional)',
     stopConfirm: 'Stop AI now',
     stopped: 'AI stopped. Runs cancelled: {count}.',

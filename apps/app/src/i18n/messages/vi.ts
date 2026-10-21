@@ -1314,7 +1314,7 @@ export const vi = {
     manageHint: 'Thay đổi sơ đồ, tác tử AI và ngân sách: chỉ chủ sở hữu, cần xác thực hai lớp trong 5 phút gần nhất.',
     stop: 'Dừng AI',
     stopTitle: 'Dừng mọi tác tử AI của tổ chức?',
-    stopBody: 'Các lượt chạy đang diễn ra bị hủy ngay, và không lượt mới nào bắt đầu cho đến khi chủ sở hữu bật lại.',
+    stopBody: 'Các lượt chạy đang diễn ra bị hủy ngay, và không lượt mới nào bắt đầu cho đến khi chủ sở hữu bật lại. Chứng từ PDF và ảnh mới cũng chưa được AI đọc (hóa đơn XML vẫn đọc bình thường); sau khi bật lại, bấm "Đọc lại" trên tệp.',
     stopReason: 'Lý do (không bắt buộc)',
     stopConfirm: 'Dừng AI ngay',
     stopped: 'Đã dừng AI. Số lượt chạy bị hủy: {count}.',
