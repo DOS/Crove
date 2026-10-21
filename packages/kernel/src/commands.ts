@@ -37,6 +37,7 @@ import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type 
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
 import { mailCommands, queueContactMail } from './mail.ts';
 import { auditLogCommands } from './audit-log.ts';
+import { personalDataCommands } from './personal-data.ts';
 import { notificationCommands } from './notifications.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
@@ -911,6 +912,7 @@ const otherKernelCommands = [
   ...auditLogCommands,
   ...usageCommands,
   ...userStatusCommands,
+  ...personalDataCommands,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),
