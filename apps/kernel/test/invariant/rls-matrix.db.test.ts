@@ -42,6 +42,8 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_kernel.notification',
+  'crove_kernel.notification_mute',
   'crove_social.chat_alert',
   'crove_social.chat_alert_target',
 ]);
@@ -490,6 +492,14 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.member_invite': {
     make: (o) => ({ row: { org_id: o.id, email: `invite-${tag()}@rls.test`, role: 'member', invited_by: o.owner } }),
   },
+  // A notification for one member (#671), the kernel's own for every module (a finance proposal to approve, a file
+  // that failed to read). A restrictive policy shows each member only their own; the factory's rows belong to the
+  // owner, the user every member-context actor enters as. Members change only read_at.
+  'crove_kernel.notification': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner, kind: 'kernel.rls_matrix', dedupe_key: `rls-${tag()}` } }),
+  },
+  // A kind of notification a member turned off (#671), under the same restrictive policy; a kind of its own per row.
+  'crove_kernel.notification_mute': { make: (o) => ({ row: { org_id: o.id, user_id: o.owner, kind: `kernel.rls_${tag()}` } }) },
   // Definer-only machinery (Social plan §3.5, S6): one single-use OAuth state per connect attempt, holding the hash of
   // the state parameter and the PKCE verifier; only the start and callback definers touch it.
   'crove_kernel.oauth_state': {
