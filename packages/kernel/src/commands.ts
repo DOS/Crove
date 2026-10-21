@@ -38,6 +38,7 @@ import { auditLogCommands } from './audit-log.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
 import { setAddress } from './org-address.ts';
+import { partyCommands } from './parties.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 import { proposalReminderCommands } from './proposal-reminders.ts';
 
@@ -835,6 +836,7 @@ const otherKernelCommands = [
   setTaxCode,
   setVatFilingPeriod,
   setAddress,
+  ...partyCommands,
   ...mailCommands,
   ...proposalReminderCommands,
   ...auditLogCommands,
