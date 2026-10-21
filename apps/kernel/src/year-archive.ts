@@ -122,7 +122,8 @@ export async function runYearArchive(
     await store1(`gtgt-${period}.xlsx`, 'vat_working', await buildVatWorkbook(report, source.orgSlug), XLSX);
     if (!source.hasTaxCode) continue;
     const declaration = await runtime.query<VatDeclaration>('finance.vat.declaration', { period }, scope);
-    const xml = buildVat01Xml(declaration, (options.now?.() ?? new Date()).toISOString().slice(0, 10));
+    // The filing date is the day in Vietnam, not in UTC.
+    const xml = buildVat01Xml(declaration, (options.now?.() ?? new Date()).toLocaleDateString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }));
     await store1(`01gtgt-${period}.xml`, 'vat_xml', new TextEncoder().encode(xml), 'application/xml');
   }
   if (!source.hasTaxCode) notes.push('Tổ chức chưa có mã số thuế nên gói không có tờ khai 01/GTGT dạng XML');
