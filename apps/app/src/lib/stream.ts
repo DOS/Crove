@@ -40,13 +40,22 @@ export function hintMatches(hint: StreamHint, query: Query): boolean {
     case 'journal_entry': {
       // The ledger reports (#321) read every posted entry, so any new one changes them. A voucher (#327) is posted, and
       // shown as reversed, with an entry.
-      if (path === 'journal.list' || path === 'documents.list' || path === 'ledger.period' || path === 'ledger.account' || path === 'vouchers.list') return true;
+      // The customers screen (#670) shows each customer's balance on 131.
+      if (
+        path === 'journal.list' ||
+        path === 'documents.list' ||
+        path === 'ledger.period' ||
+        path === 'ledger.account' ||
+        path === 'vouchers.list' ||
+        path === 'parties.customers'
+      )
+        return true;
       if (path === 'journal.get') return inputId(query) === id;
       const result = detail(query)?.result;
       return path === 'inbox.get' && (result?.journalEntryId === id || result?.reversedEntryId === id);
     }
     case 'document': {
-      if (path === 'documents.list' || path === 'parties.list') return true;
+      if (path === 'documents.list' || path === 'parties.list' || path === 'parties.customers') return true;
       const result = detail(query)?.result;
       return path === 'inbox.get' && (result?.documentId === id || result?.voidedDocumentId === id);
     }

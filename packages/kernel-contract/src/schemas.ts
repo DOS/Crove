@@ -534,6 +534,24 @@ export const zDocumentExport = z.object({
 });
 export type DocumentExport = z.infer<typeof zDocumentExport>;
 
+// Customers (#670): the parties on the org's sales documents, and any party with a line on 131 (an opening balance or
+// a receipt). The list goes by name, CUSTOMER_PAGE_SIZE at a time; a page starts after the last customer shown.
+export const CUSTOMER_PAGE_SIZE = 50;
+export const zCustomerCursor = z.object({ name: z.string().max(2000), id: zId });
+export type CustomerCursor = z.infer<typeof zCustomerCursor>;
+// A customer is a party (with its contact details, version and duplicates, for the editor shared with vendors) and
+// its sales: the documents still in the books (a voided one, #165, no longer counts) and the latest invoice date among
+// them, and what it owes today: debit minus credit of every posted line on 131 and its sub-accounts naming it or one
+// of its duplicates (#887). Negative when the customer paid ahead.
+export const zCustomer = zParty.omit({ documentCount: true, defaultAccount: true }).extend({
+  invoiceCount: z.number().int(),
+  lastInvoiceDate: zLocalDate.nullable(),
+  receivable: zMoney,
+});
+export type Customer = z.infer<typeof zCustomer>;
+export const zCustomerPage = z.object({ items: z.array(zCustomer), more: z.boolean() });
+export type CustomerPage = z.infer<typeof zCustomerPage>;
+
 export const zPurchaseDocument = z.object({
   id: zId,
   // A purchase (partyId is the supplier) or a sale (partyId is the customer), issue #313.
